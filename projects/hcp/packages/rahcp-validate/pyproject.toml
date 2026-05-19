@@ -1,0 +1,10 @@
+[project]
+name = "rahcp-validate"
+version = "0.1.0"
+description = "Pre-upload file validation for HCP workflows"
+requires-python = ">=3.13"
+dependencies = ["pillow>=11.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

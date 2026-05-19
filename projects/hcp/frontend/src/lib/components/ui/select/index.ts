@@ -1,0 +1,26 @@
+import { Select as SelectPrimitive } from "bits-ui";
+import Content from "./select-content.svelte";
+import GroupHeading from "./select-group-heading.svelte";
+import Item from "./select-item.svelte";
+import Separator from "./select-separator.svelte";
+import Trigger from "./select-trigger.svelte";
+
+const Root = SelectPrimitive.Root;
+const Group = SelectPrimitive.Group;
+
+export {
+  Content,
+  Content as SelectContent,
+  Group,
+  Group as SelectGroup,
+  GroupHeading,
+  GroupHeading as SelectGroupHeading,
+  Item,
+  Item as SelectItem,
+  Root,
+  Root as Select,
+  Separator,
+  Separator as SelectSeparator,
+  Trigger,
+  Trigger as SelectTrigger,
+};

@@ -1,0 +1,30 @@
+{% extends "main.html" %}
+
+{% block tabs %}
+  {{ super() }}
+
+  <section class="tx-container">
+    <div class="md-grid md-typeset">
+      <div class="tx-hero">
+        <div class="tx-hero__content">
+          <h1>ra-hcp</h1>
+          <p>
+            Unified platform for <strong>Hitachi Content Platform</strong> &mdash;
+            S3 storage, management API, and IIIF image workflows.
+          </p>
+          <a href="getting-started/" class="md-button md-button--primary">
+            Get started
+          </a>
+          <a href="api/" class="md-button">
+            API docs
+          </a>
+        </div>
+        <div class="tx-hero__image">
+          <img src="assets/ra.svg" alt="Riksarkivet" draggable="false" width="160">
+        </div>
+      </div>
+    </div>
+  </section>
+{% endblock %}
+
+{% block hero %}{% endblock %}

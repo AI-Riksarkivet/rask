@@ -1,0 +1,16 @@
+[project]
+name = "rahcp-tracker"
+version = "0.1.0"
+description = "Pluggable transfer state tracking (SQLite, Postgres)"
+requires-python = ">=3.13"
+dependencies = ["sqlmodel>=0.0.22"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

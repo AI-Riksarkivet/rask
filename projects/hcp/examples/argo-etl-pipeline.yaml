@@ -1,0 +1,181 @@
+# ETL pipeline: extract → transform → load using the rahcp SDK.
+#
+# Each step runs in a pod with HCP credentials injected from a K8s Secret.
+# The SDK handles authentication, presigned URLs, and retries automatically.
+#
+# Prerequisites:
+#   kubectl create secret generic hcp-credentials \
+#     --from-literal=username="<username>" \
+#     --from-literal=password="<password>" \
+#     --from-literal=tenant="<tenant>" \
+#     -n argo
+#
+# Submit:
+#   argo submit examples/argo-etl-pipeline.yaml
+
+# --8<-- [start:workflow]
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: hcp-etl-
+  labels:
+    app: rahcp-example
+spec:
+  entrypoint: etl-pipeline
+  activeDeadlineSeconds: 1800            # 30 min timeout
+  artifactGC:
+    strategy: OnWorkflowDeletion
+
+  arguments:
+    parameters:
+      - name: hcp-endpoint
+        value: "http://hcp-api.default.svc:8000/api/v1"
+      - name: input-bucket
+        value: "datasets"
+      - name: input-key
+        value: "manifests/latest.json"
+      - name: output-bucket
+        value: "results"
+
+  templates:
+    # ── DAG orchestrator ─────────────────────────────────────────
+    - name: etl-pipeline
+      dag:
+        tasks:
+          - name: extract
+            template: extract-data
+          - name: transform
+            template: transform-data
+            dependencies: [extract]
+          - name: load
+            template: load-results
+            dependencies: [transform]
+
+    # ── Step 1: Download manifest from HCP ───────────────────────
+    - name: extract-data
+      retryStrategy:
+        limit: 3
+        backoff:
+          duration: "5s"
+          factor: 2
+          maxDuration: "1m"
+      script:
+        image: my-registry/hcp-sdk:3.13
+        command: [python]
+        env: &hcp-env
+          - name: HCP_ENDPOINT
+            value: "{{workflow.parameters.hcp-endpoint}}"
+          - name: HCP_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: hcp-credentials
+                key: username
+          - name: HCP_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: hcp-credentials
+                key: password
+          - name: HCP_TENANT
+            valueFrom:
+              secretKeyRef:
+                name: hcp-credentials
+                key: tenant
+        source: |
+          import asyncio, json
+          from pathlib import Path
+          from rahcp_client import HCPClient
+
+          async def main():
+              async with HCPClient.from_env() as client:
+                  data = await client.s3.download_bytes(
+                      "{{workflow.parameters.input-bucket}}",
+                      "{{workflow.parameters.input-key}}",
+                  )
+                  manifest = json.loads(data)
+                  print(f"Extracted {len(manifest.get('files', []))} entries")
+                  Path("/tmp/extracted.json").write_text(json.dumps(manifest))
+
+          asyncio.run(main())
+      outputs:
+        artifacts:
+          - name: extracted
+            path: /tmp/extracted.json
+
+    # ── Step 2: Transform the data ───────────────────────────────
+    - name: transform-data
+      retryStrategy:
+        limit: 3
+        backoff:
+          duration: "5s"
+          factor: 2
+          maxDuration: "1m"
+      inputs:
+        artifacts:
+          - name: extracted
+            path: /tmp/input/extracted.json
+      script:
+        image: python:3.13-slim
+        command: [python]
+        source: |
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("/tmp/input/extracted.json").read_text())
+
+          # Transform: enrich each file entry with a processed flag
+          for entry in data.get("files", []):
+              entry["processed"] = True
+              entry["format"] = entry.get("name", "").rsplit(".", 1)[-1].upper()
+
+          results = {
+              "total": len(data.get("files", [])),
+              "files": data.get("files", []),
+              "status": "transformed",
+          }
+          Path("/tmp/results.json").write_text(json.dumps(results, indent=2))
+          print(f"Transformed {results['total']} entries")
+      outputs:
+        artifacts:
+          - name: results
+            path: /tmp/results.json
+
+    # ── Step 3: Upload results back to HCP ───────────────────────
+    - name: load-results
+      retryStrategy:
+        limit: 3
+        backoff:
+          duration: "5s"
+          factor: 2
+          maxDuration: "1m"
+      inputs:
+        artifacts:
+          - name: results
+            path: /tmp/input/results.json
+      script:
+        image: my-registry/hcp-sdk:3.13
+        command: [python]
+        env: *hcp-env
+        source: |
+          import asyncio
+          from pathlib import Path
+          from rahcp_client import HCPClient
+
+          async def main():
+              async with HCPClient.from_env() as client:
+                  result_path = Path("/tmp/input/results.json")
+                  output_key = "etl/{{workflow.name}}/results.json"
+
+                  await client.s3.upload(
+                      "{{workflow.parameters.output-bucket}}",
+                      output_key,
+                      result_path,
+                  )
+                  # Verify upload succeeded (head raises NotFoundError if missing)
+                  await client.s3.head(
+                      "{{workflow.parameters.output-bucket}}",
+                      output_key,
+                  )
+                  print(f"Uploaded and verified → {output_key}")
+
+          asyncio.run(main())
+# --8<-- [end:workflow]

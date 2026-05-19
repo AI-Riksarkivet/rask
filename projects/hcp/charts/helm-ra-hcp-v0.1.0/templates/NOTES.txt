@@ -1,0 +1,52 @@
+ra-hcp has been deployed!
+
+1. Get the application URL:
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else if eq .Values.service.type "NodePort" }}
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+
+  Backend API:
+  echo "API docs: http://$NODE_IP:{{ .Values.service.nodePort }}/docs"
+  echo "Health:   http://$NODE_IP:{{ .Values.service.nodePort }}/health"
+{{- if .Values.frontend.enabled }}
+
+  Frontend:
+  echo "Frontend: http://$NODE_IP:{{ .Values.frontend.service.nodePort }}"
+{{- end }}
+{{- else if eq .Values.service.type "LoadBalancer" }}
+  NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+  kubectl get --namespace {{ .Release.Namespace }} svc {{ include "ra-hcp.fullname" . }} -w
+{{- else }}
+  Backend:
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "ra-hcp.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  echo "API docs: http://127.0.0.1:{{ .Values.service.port }}/docs"
+  echo "Health:   http://127.0.0.1:{{ .Values.service.port }}/health"
+{{- if .Values.frontend.enabled }}
+
+  Frontend:
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "ra-hcp.frontendFullname" . }} {{ .Values.frontend.service.port }}:{{ .Values.frontend.service.port }}
+  echo "Frontend: http://127.0.0.1:{{ .Values.frontend.service.port }}"
+{{- end }}
+{{- end }}
+
+2. Check the health endpoint:
+  curl http://127.0.0.1:{{ .Values.service.port }}/health
+{{- if and .Values.ingress.enabled .Values.ingress.className }}
+
+3. Ingress requires an nginx ingress controller. Install one per namespace:
+
+  helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+  helm repo update
+  helm install {{ .Release.Name }}-nginx-controller ingress-nginx/ingress-nginx \
+    --namespace {{ .Release.Namespace }} \
+    --set controller.service.type=LoadBalancer \
+    --set controller.ingressClassResource.name="{{ .Values.ingress.className }}" \
+    --set controller.ingressClassResource.controller="k8s.io/ingress-nginx-{{ .Release.Name }}" \
+    --set controller.ingressClassResource.default=false \
+    --set controller.ingressClass="{{ .Values.ingress.className }}" \
+    --set controller.scope.enabled=true \
+    --set controller.scope.namespace="{{ .Release.Namespace }}"
+{{- end }}

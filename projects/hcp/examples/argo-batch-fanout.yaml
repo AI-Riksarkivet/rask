@@ -1,0 +1,202 @@
+# Batch fan-out: list objects → process each in parallel → aggregate results.
+#
+# Uses the rahcp SDK for all HCP operations. Credentials are injected from
+# a K8s Secret as environment variables.
+#
+# Prerequisites:
+#   kubectl create secret generic hcp-credentials \
+#     --from-literal=username="<username>" \
+#     --from-literal=password="<password>" \
+#     --from-literal=tenant="<tenant>" \
+#     -n argo
+#
+# Submit:
+#   argo submit examples/argo-batch-fanout.yaml
+
+# --8<-- [start:workflow]
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: hcp-batch-
+  labels:
+    app: rahcp-example
+spec:
+  entrypoint: batch-pipeline
+  activeDeadlineSeconds: 3600            # 1 hour timeout
+
+  arguments:
+    parameters:
+      - name: hcp-endpoint
+        value: "http://hcp-api.default.svc:8000/api/v1"
+      - name: bucket
+        value: "datasets"
+      - name: input-prefix
+        value: "incoming/"
+      - name: output-prefix
+        value: "processed/"
+
+  templates:
+    # ── DAG orchestrator ─────────────────────────────────────────
+    - name: batch-pipeline
+      dag:
+        tasks:
+          - name: discover
+            template: list-objects
+          - name: process
+            template: fan-out
+            dependencies: [discover]
+            arguments:
+              parameters:
+                - name: object-keys
+                  value: "{{tasks.discover.outputs.parameters.keys}}"
+          - name: summarize
+            template: aggregate
+            dependencies: [process]
+
+    # ── Step 1: List objects from HCP ────────────────────────────
+    - name: list-objects
+      retryStrategy:
+        limit: 3
+        backoff:
+          duration: "5s"
+          factor: 2
+      script:
+        image: my-registry/hcp-sdk:3.13
+        command: [python]
+        env: &hcp-env
+          - name: HCP_ENDPOINT
+            value: "{{workflow.parameters.hcp-endpoint}}"
+          - name: HCP_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: hcp-credentials
+                key: username
+          - name: HCP_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: hcp-credentials
+                key: password
+          - name: HCP_TENANT
+            valueFrom:
+              secretKeyRef:
+                name: hcp-credentials
+                key: tenant
+        source: |
+          import asyncio, json
+          from pathlib import Path
+          from rahcp_client import HCPClient
+
+          async def main():
+              async with HCPClient.from_env() as client:
+                  result = await client.s3.list_objects(
+                      "{{workflow.parameters.bucket}}",
+                      prefix="{{workflow.parameters.input-prefix}}",
+                      max_keys=200,
+                  )
+                  keys = [obj["key"] for obj in result["objects"]]
+                  print(f"Found {len(keys)} objects under {{workflow.parameters.input-prefix}}")
+                  Path("/tmp/keys.json").write_text(json.dumps(keys))
+
+          asyncio.run(main())
+      outputs:
+        parameters:
+          - name: keys
+            valueFrom:
+              path: /tmp/keys.json
+
+    # ── Step 2: Fan out — one pod per object ─────────────────────
+    - name: fan-out
+      inputs:
+        parameters:
+          - name: object-keys
+      steps:
+        - - name: process-object
+            template: process-single
+            arguments:
+              parameters:
+                - name: key
+                  value: "{{item}}"
+            withParam: "{{inputs.parameters.object-keys}}"
+
+    - name: process-single
+      retryStrategy:
+        limit: 2
+        backoff:
+          duration: "10s"
+          factor: 2
+      inputs:
+        parameters:
+          - name: key
+      script:
+        image: my-registry/hcp-sdk:3.13
+        command: [python]
+        env: *hcp-env
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+        source: |
+          import asyncio, json
+          from pathlib import Path
+          from rahcp_client import HCPClient
+
+          BUCKET = "{{workflow.parameters.bucket}}"
+          KEY = "{{inputs.parameters.key}}"
+          OUTPUT_PREFIX = "{{workflow.parameters.output-prefix}}"
+
+          async def main():
+              async with HCPClient.from_env() as client:
+                  # Download input via presigned URL
+                  data = await client.s3.download_bytes(BUCKET, KEY)
+                  print(f"Downloaded {KEY} ({len(data)} bytes)")
+
+                  # ── Your processing logic here ──────────────────
+                  result = {
+                      "source_key": KEY,
+                      "size_bytes": len(data),
+                      "status": "processed",
+                      "workflow": "{{workflow.name}}",
+                  }
+
+                  # Upload result
+                  filename = KEY.split("/")[-1]
+                  result_key = f"{OUTPUT_PREFIX}{filename}.result.json"
+                  await client.s3.upload(BUCKET, result_key, json.dumps(result).encode())
+                  print(f"Result → {result_key}")
+
+          asyncio.run(main())
+
+    # ── Step 3: Aggregate results ────────────────────────────────
+    - name: aggregate
+      retryStrategy:
+        limit: 2
+      script:
+        image: my-registry/hcp-sdk:3.13
+        command: [python]
+        env: *hcp-env
+        source: |
+          import asyncio, json
+          from rahcp_client import HCPClient
+
+          BUCKET = "{{workflow.parameters.bucket}}"
+          OUTPUT_PREFIX = "{{workflow.parameters.output-prefix}}"
+
+          async def main():
+              async with HCPClient.from_env() as client:
+                  result = await client.s3.list_objects(BUCKET, prefix=OUTPUT_PREFIX, max_keys=1000)
+                  count = len(result["objects"])
+
+                  summary = {
+                      "workflow": "{{workflow.name}}",
+                      "objects_processed": count,
+                      "output_prefix": OUTPUT_PREFIX,
+                      "status": "complete",
+                  }
+                  summary_key = f"summaries/{{workflow.name}}.json"
+                  await client.s3.upload(BUCKET, summary_key, json.dumps(summary).encode())
+                  print(f"Summary ({count} objects) → {summary_key}")
+
+          asyncio.run(main())
+# --8<-- [end:workflow]

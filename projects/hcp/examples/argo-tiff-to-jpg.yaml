@@ -1,0 +1,282 @@
+# Cross-tenant TIFF→JPG conversion with staging, verification, and cleanup.
+#
+# Reads TIFFs from a source tenant, converts to JPG, writes to a destination
+# tenant via staging/ prefix, then commits atomically. Exit handler cleans up
+# on failure.
+#
+# Prerequisites:
+#   kubectl create secret generic hcp-source-creds \
+#     --from-literal=username="<src-user>" \
+#     --from-literal=password="<src-pass>" \
+#     --from-literal=tenant="<src-tenant>" \
+#     -n argo
+#
+#   kubectl create secret generic hcp-dest-creds \
+#     --from-literal=username="<dst-user>" \
+#     --from-literal=password="<dst-pass>" \
+#     --from-literal=tenant="<dst-tenant>" \
+#     -n argo
+#
+# Submit:
+#   argo submit examples/argo-tiff-to-jpg.yaml
+
+# --8<-- [start:workflow]
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: hcp-tiff-to-jpg-
+  labels:
+    app: rahcp-example
+spec:
+  entrypoint: convert-pipeline
+  activeDeadlineSeconds: 7200            # 2 hours max
+  onExit: cleanup
+
+  arguments:
+    parameters:
+      - name: hcp-endpoint
+        value: "http://hcp-api.default.svc:8000/api/v1"
+      - name: source-bucket
+        value: "scans"
+      - name: source-prefix
+        value: "ingest/"
+      - name: dest-bucket
+        value: "images"
+
+  templates:
+    # ── DAG orchestrator ─────────────────────────────────────────
+    - name: convert-pipeline
+      dag:
+        tasks:
+          - name: discover
+            template: list-tiffs
+          - name: convert
+            template: fan-out
+            dependencies: [discover]
+            arguments:
+              parameters:
+                - name: object-keys
+                  value: "{{tasks.discover.outputs.parameters.keys}}"
+          - name: verify
+            template: verify-and-commit
+            dependencies: [convert]
+
+    # ── List TIFF files in source tenant ─────────────────────────
+    - name: list-tiffs
+      retryStrategy:
+        limit: 3
+        backoff:
+          duration: "5s"
+          factor: 2
+      script:
+        image: my-registry/hcp-sdk:3.13
+        command: [python]
+        env: &source-env
+          - name: HCP_ENDPOINT
+            value: "{{workflow.parameters.hcp-endpoint}}"
+          - name: HCP_USERNAME
+            valueFrom:
+              secretKeyRef: { name: hcp-source-creds, key: username }
+          - name: HCP_PASSWORD
+            valueFrom:
+              secretKeyRef: { name: hcp-source-creds, key: password }
+          - name: HCP_TENANT
+            valueFrom:
+              secretKeyRef: { name: hcp-source-creds, key: tenant }
+        source: |
+          import asyncio, json
+          from pathlib import Path
+          from rahcp_client import HCPClient
+
+          async def main():
+              async with HCPClient.from_env() as client:
+                  result = await client.s3.list_objects(
+                      "{{workflow.parameters.source-bucket}}",
+                      prefix="{{workflow.parameters.source-prefix}}",
+                      max_keys=500,
+                  )
+                  keys = [
+                      o["key"] for o in result["objects"]
+                      if o["key"].lower().endswith((".tiff", ".tif"))
+                  ]
+                  print(f"Found {len(keys)} TIFF files")
+                  Path("/tmp/keys.json").write_text(json.dumps(keys))
+
+          asyncio.run(main())
+      outputs:
+        parameters:
+          - name: keys
+            valueFrom:
+              path: /tmp/keys.json
+
+    # ── Fan out — one conversion pod per TIFF ────────────────────
+    - name: fan-out
+      inputs:
+        parameters:
+          - name: object-keys
+      steps:
+        - - name: convert-tiff
+            template: convert-single
+            arguments:
+              parameters:
+                - name: key
+                  value: "{{item}}"
+            withParam: "{{inputs.parameters.object-keys}}"
+
+    - name: convert-single
+      retryStrategy:
+        limit: 2
+        retryPolicy: Always
+        backoff:
+          duration: "15s"
+          factor: 2
+          maxDuration: "2m"
+      activeDeadlineSeconds: 600          # 10 min per image
+      inputs:
+        parameters:
+          - name: key
+      script:
+        image: my-registry/hcp-sdk:3.13
+        command: [python]
+        env:
+          # Source tenant credentials
+          - name: HCP_ENDPOINT
+            value: "{{workflow.parameters.hcp-endpoint}}"
+          - name: HCP_USERNAME
+            valueFrom:
+              secretKeyRef: { name: hcp-source-creds, key: username }
+          - name: HCP_PASSWORD
+            valueFrom:
+              secretKeyRef: { name: hcp-source-creds, key: password }
+          - name: HCP_TENANT
+            valueFrom:
+              secretKeyRef: { name: hcp-source-creds, key: tenant }
+          # Destination tenant credentials
+          - name: DST_USERNAME
+            valueFrom:
+              secretKeyRef: { name: hcp-dest-creds, key: username }
+          - name: DST_PASSWORD
+            valueFrom:
+              secretKeyRef: { name: hcp-dest-creds, key: password }
+          - name: DST_TENANT
+            valueFrom:
+              secretKeyRef: { name: hcp-dest-creds, key: tenant }
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+        source: |
+          import asyncio, os
+          from pathlib import Path
+          from PIL import Image
+          from rahcp_client import HCPClient
+          from rahcp_validate.images import validate_tiff, validate_jpg
+
+          async def main():
+              endpoint = os.environ["HCP_ENDPOINT"]
+              SRC_BUCKET = "{{workflow.parameters.source-bucket}}"
+              DST_BUCKET = "{{workflow.parameters.dest-bucket}}"
+              KEY = "{{inputs.parameters.key}}"
+              WF = "{{workflow.name}}"
+
+              src = HCPClient(
+                  endpoint=endpoint,
+                  username=os.environ["HCP_USERNAME"],
+                  password=os.environ["HCP_PASSWORD"],
+                  tenant=os.environ["HCP_TENANT"],
+              )
+              dst = HCPClient(
+                  endpoint=endpoint,
+                  username=os.environ["DST_USERNAME"],
+                  password=os.environ["DST_PASSWORD"],
+                  tenant=os.environ["DST_TENANT"],
+              )
+
+              async with src, dst:
+                  # 1. Download and validate TIFF
+                  tiff_path = Path("/tmp/input.tiff")
+                  size = await src.s3.download(SRC_BUCKET, KEY, tiff_path)
+                  validate_tiff(tiff_path)
+                  print(f"Downloaded and validated {KEY} ({size} bytes)")
+
+                  # 2. Convert TIFF → JPG
+                  jpg_path = Path("/tmp/output.jpg")
+                  img = Image.open(tiff_path)
+                  img.convert("RGB").save(jpg_path, "JPEG", quality=85)
+                  validate_jpg(jpg_path)
+                  print(f"Converted to JPG ({img.size[0]}x{img.size[1]})")
+
+                  # 3. Upload to staging prefix in destination tenant
+                  filename = KEY.split("/")[-1].rsplit(".", 1)[0] + ".jpg"
+                  staging_key = f"staging/{WF}/{filename}"
+                  await dst.s3.upload(DST_BUCKET, staging_key, jpg_path)
+
+                  # 4. Verify upload (head raises NotFoundError if missing)
+                  await dst.s3.head(DST_BUCKET, staging_key)
+                  print(f"Uploaded and verified {staging_key}")
+
+          asyncio.run(main())
+
+    # ── Commit staging → published ───────────────────────────────
+    - name: verify-and-commit
+      retryStrategy:
+        limit: 2
+      script:
+        image: my-registry/hcp-sdk:3.13
+        command: [python]
+        env: &dest-env
+          - name: HCP_ENDPOINT
+            value: "{{workflow.parameters.hcp-endpoint}}"
+          - name: HCP_USERNAME
+            valueFrom:
+              secretKeyRef: { name: hcp-dest-creds, key: username }
+          - name: HCP_PASSWORD
+            valueFrom:
+              secretKeyRef: { name: hcp-dest-creds, key: password }
+          - name: HCP_TENANT
+            valueFrom:
+              secretKeyRef: { name: hcp-dest-creds, key: tenant }
+        source: |
+          import asyncio
+          from rahcp_client import HCPClient
+
+          async def main():
+              async with HCPClient.from_env() as client:
+                  count = await client.s3.commit_staging(
+                      "{{workflow.parameters.dest-bucket}}",
+                      "staging/{{workflow.name}}/",
+                      "published/",
+                  )
+                  print(f"Committed {count} JPGs to published/")
+
+          asyncio.run(main())
+
+    # ── Exit handler — clean up staging on failure ───────────────
+    - name: cleanup
+      script:
+        image: my-registry/hcp-sdk:3.13
+        command: [python]
+        env: *dest-env
+        source: |
+          import asyncio
+
+          STATUS = "{{workflow.status}}"
+          if STATUS == "Succeeded":
+              print("Workflow succeeded — no cleanup needed")
+              exit(0)
+
+          from rahcp_client import HCPClient
+
+          async def main():
+              async with HCPClient.from_env() as client:
+                  print(f"Workflow {STATUS} — cleaning up staging/...")
+                  deleted = await client.s3.cleanup_staging(
+                      "{{workflow.parameters.dest-bucket}}",
+                      "staging/{{workflow.name}}/",
+                  )
+                  print(f"Deleted {deleted} staged objects")
+
+          asyncio.run(main())
+# --8<-- [end:workflow]

@@ -1,0 +1,48 @@
+name: Storybook
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/storybook.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency: preview-${{ github.event.number }}
+
+jobs:
+  preview:
+    name: Storybook Preview
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Deno
+        if: github.event.action != 'closed'
+        uses: denoland/setup-deno@667a34cdef165d8d2b2e98dde39547c9daac7282 # v2.0.4
+        with:
+          deno-version: v2.x
+
+      - name: Install dependencies
+        if: github.event.action != 'closed'
+        working-directory: frontend
+        run: deno install
+
+      - name: Build Storybook
+        if: github.event.action != 'closed'
+        working-directory: frontend
+        env:
+          STORYBOOK_BASE: /ra-hcp/_preview/pr-${{ github.event.number }}/
+        run: deno task build-storybook
+
+      - name: Deploy preview
+        uses: rossjrw/pr-preview-action@ffa7509e91a3ec8dfc2e5536c4d5c1acdf7a6de9 # v1
+        with:
+          source-dir: frontend/storybook-static
+          preview-branch: gh-pages
+          umbrella-dir: _preview

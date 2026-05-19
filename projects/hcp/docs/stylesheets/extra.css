@@ -1,0 +1,118 @@
+/* ── Landing page hero ─────────────────────────────────────────── */
+
+.tx-container {
+  padding-top: 1rem;
+  background:
+    linear-gradient(
+      to bottom,
+      var(--md-primary-fg-color),
+      hsla(211, 100%, 40%, 0.8) 99%,
+      var(--md-default-bg-color) 99%
+    );
+}
+
+[data-md-color-scheme="slate"] .tx-container {
+  background:
+    linear-gradient(
+      to bottom,
+      var(--md-primary-fg-color),
+      hsla(211, 40%, 18%, 0.9) 99%,
+      var(--md-default-bg-color) 99%
+    );
+}
+
+.tx-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4rem 0 6rem;
+  color: var(--md-primary-bg-color);
+}
+
+.tx-hero h1 {
+  margin-bottom: 1rem;
+  color: currentcolor;
+  font-weight: 700;
+  font-size: 2.4rem;
+  line-height: 1.2;
+}
+
+.tx-hero p {
+  margin-bottom: 2rem;
+  color: hsla(0, 0%, 100%, 0.85);
+  font-size: 1.2rem;
+  line-height: 1.5;
+  max-width: 28rem;
+}
+
+.tx-hero .md-button {
+  margin-right: 0.5rem;
+  margin-bottom: 0.5rem;
+  color: var(--md-primary-bg-color);
+  border-color: var(--md-primary-bg-color);
+}
+
+.tx-hero .md-button--primary {
+  color: var(--md-primary-fg-color);
+  background-color: var(--md-primary-bg-color);
+  border-color: var(--md-primary-bg-color);
+}
+
+.tx-hero .md-button:hover,
+.tx-hero .md-button:focus {
+  color: var(--md-primary-fg-color);
+  background-color: var(--md-primary-bg-color);
+  border-color: var(--md-primary-bg-color);
+  opacity: 0.9;
+}
+
+.tx-hero__image {
+  order: 1;
+  min-width: 10rem;
+  padding-left: 3rem;
+  opacity: 0.9;
+}
+
+.tx-hero__image img {
+  width: 100%;
+  max-width: 10rem;
+  filter: brightness(0) invert(1);
+}
+
+[data-md-color-scheme="slate"] .tx-hero__image img {
+  filter: brightness(0) invert(1) opacity(0.8);
+}
+
+/* Responsive: stack vertically on small screens */
+@media screen and (max-width: 70em) {
+  .tx-hero {
+    flex-direction: column-reverse;
+    text-align: center;
+    padding: 3rem 0 4rem;
+  }
+
+  .tx-hero p {
+    max-width: none;
+  }
+
+  .tx-hero__image {
+    padding-left: 0;
+    padding-bottom: 2rem;
+  }
+}
+
+/* ── Landing page feature cards ───────────────────────────────── */
+
+.md-typeset .home-grid .grid.cards {
+  margin-top: 0;
+}
+
+.md-typeset .home-grid .grid.cards > li {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.md-typeset .home-grid .grid.cards > li:hover {
+  border-color: var(--md-accent-fg-color);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
