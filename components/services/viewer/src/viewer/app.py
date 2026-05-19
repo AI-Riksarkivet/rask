@@ -28,8 +28,8 @@ from storage import build_source, derive_hcp_creds
 from viewer import ray_dashboard
 
 
-# Repo root: .../apps/ra-viewer/src/viewer/app.py → up 4
-_REPO = Path(__file__).resolve().parents[4]
+# Repo root: .../components/services/viewer/src/viewer/app.py → up 5
+_REPO = Path(__file__).resolve().parents[5]
 _BATCHES_DB = _REPO / ".cache" / "batches.db"
 _SYNC_SCRIPT = _REPO / "scripts" / "sync_from_s3.py"
 
@@ -137,8 +137,8 @@ def create_app() -> FastAPI:
     # Optional: serve SvelteKit static build at /. The adapter-static fallback
     # is `index.html` — for unknown paths (client-side routes like /viewer/...)
     # we serve that file so the SPA router can take over.
-    # __file__ is .../apps/ra-viewer/src/viewer/app.py — go up 4 to repo root.
-    spa_build = Path(__file__).resolve().parents[4] / "frontend" / "build"
+    # __file__ is .../components/services/viewer/src/viewer/app.py — go up 5 to repo root.
+    spa_build = Path(__file__).resolve().parents[5] / "frontend" / "build"
     if spa_build.is_dir():
         app.mount("/_app", StaticFiles(directory=spa_build / "_app"), name="spa-app")
 
