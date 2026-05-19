@@ -1,20 +1,45 @@
 [[repos]]
+repo = "https://github.com/pre-commit/pre-commit-hooks"
+rev = "v5.0.0"
+hooks = [
+  { id = "trailing-whitespace" },
+  { id = "end-of-file-fixer" },
+  { id = "check-yaml" },
+  { id = "check-toml" },
+  { id = "check-added-large-files" },
+  { id = "check-merge-conflict" },
+]
+
+[[repos]]
+repo = "https://github.com/astral-sh/ruff-pre-commit"
+rev = "v0.15.13"
+hooks = [
+  { id = "ruff-format" },
+  { id = "ruff", args = ["--fix"] },
+]
+
+[[repos]]
+repo = "https://github.com/compilerla/conventional-pre-commit"
+rev = "v4.3.0"
+
+[[repos.hooks]]
+id = "conventional-pre-commit"
+stages = ["commit-msg"]
+args = ["feat", "fix", "docs", "refactor", "test", "chore", "perf", "ci", "build", "revert"]
+
+[[repos]]
 repo = "local"
 
 [[repos.hooks]]
-id = "ruff"
-entry = "uv run ruff check --fix"
+id = "ty-check"
+name = "ty type check"
+entry = "uvx ty check"
 language = "system"
-types = ["python"]
+pass_filenames = false
 
 [[repos.hooks]]
-id = "cargo-fmt"
-entry = "cargo fmt --all --"
+id = "no-co-authored-by-claude"
+name = "reject Co-Authored-By Claude"
+entry = "sh -c '! grep -qi \"co-authored-by.*claude\" \"$1\"' --"
 language = "system"
-types = ["rust"]
-
-[[repos.hooks]]
-id = "prettier"
-entry = "bunx prettier --write"
-language = "system"
-types_or = ["javascript", "ts", "svelte", "json", "yaml", "markdown"]
+stages = ["commit-msg"]
