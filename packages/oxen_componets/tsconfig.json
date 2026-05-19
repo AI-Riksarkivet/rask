@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "verbatimModuleSyntax": true,
+    "types": ["svelte"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.svelte", ".storybook/**/*.ts"]
+}

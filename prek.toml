@@ -1,0 +1,20 @@
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "ruff"
+entry = "uv run ruff check --fix"
+language = "system"
+types = ["python"]
+
+[[repos.hooks]]
+id = "cargo-fmt"
+entry = "cargo fmt --all --"
+language = "system"
+types = ["rust"]
+
+[[repos.hooks]]
+id = "prettier"
+entry = "bunx prettier --write"
+language = "system"
+types_or = ["javascript", "ts", "svelte", "json", "yaml", "markdown"]

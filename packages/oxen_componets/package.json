@@ -1,0 +1,73 @@
+{
+  "name": "@your-repo/oxen",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "files": ["dist", "!dist/**/*.test.*", "!dist/**/*.stories.*"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "svelte": "./dist/index.js"
+    },
+    "./button": {
+      "types": "./dist/components/button/index.d.ts",
+      "svelte": "./dist/components/button/index.js"
+    },
+    "./dialog": {
+      "types": "./dist/components/dialog/index.d.ts",
+      "svelte": "./dist/components/dialog/index.js"
+    },
+    "./card": {
+      "types": "./dist/components/card/index.d.ts",
+      "svelte": "./dist/components/card/index.js"
+    },
+    "./utils": {
+      "types": "./dist/utils/index.d.ts",
+      "default": "./dist/utils/index.js"
+    },
+    "./styles/tokens.css": "./src/lib/styles/tokens.css"
+  },
+  "scripts": {
+    "dev": "svelte-package -w",
+    "build": "svelte-package && publint",
+    "package": "svelte-package",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build"
+  },
+  "peerDependencies": {
+    "svelte": "^5.0.0"
+  },
+  "dependencies": {
+    "bits-ui": "^2.18.0",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^2.5.0",
+    "tailwind-variants": "^0.3.0"
+  },
+  "devDependencies": {
+    "@storybook/addon-essentials": "^8.4.0",
+    "@storybook/addon-interactions": "^8.4.0",
+    "@storybook/addon-svelte-csf": "^4.2.0",
+    "@storybook/blocks": "^8.4.0",
+    "@storybook/svelte": "^8.4.0",
+    "@storybook/sveltekit": "^8.4.0",
+    "@storybook/test": "^8.4.0",
+    "@sveltejs/package": "^2.3.7",
+    "@sveltejs/vite-plugin-svelte": "^4.0.0",
+    "@tailwindcss/vite": "^4.0.0",
+    "publint": "^0.2.12",
+    "storybook": "^8.4.0",
+    "svelte": "^5.0.0",
+    "svelte-check": "^4.0.0",
+    "tailwindcss": "^4.0.0",
+    "tailwindcss-animate": "^1.0.7",
+    "tslib": "^2.7.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0"
+  },
+  "svelte": "./dist/index.js",
+  "types": "./dist/index.d.ts"
+}

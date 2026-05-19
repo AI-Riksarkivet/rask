@@ -1,0 +1,19 @@
+{
+  "name": "your-repo",
+  "private": true,
+  "workspaces": [
+    "compontens/apps/webapp",
+    "packages/oxen_componets"
+  ],
+  "scripts": {
+    "build": "bun run --filter '*' build",
+    "test": "bun run --filter '*' test",
+    "lint": "bun run --filter '*' lint",
+    "dev:ui": "bun run --cwd packages/oxen_componets dev",
+    "storybook": "bun run --cwd packages/oxen_componets storybook"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}
