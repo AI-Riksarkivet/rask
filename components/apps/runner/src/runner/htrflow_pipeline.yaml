@@ -1,0 +1,42 @@
+# HTRflow pipeline used by HTRFlowDeployment (Ray Serve wrapper).
+#
+# CPU-only for now — GPUs on this host are held by another user's training
+# run, so we want to verify wiring + correctness first; switch `device: cpu`
+# to `device: cuda` per step (or just delete the line, it auto-detects) once
+# we have a GPU budget.
+#
+# Notes:
+#   - No `Export` step. The wrapping deployment calls
+#     `get_serializer("alto").serialize(doc)` directly so we get the ALTO
+#     string back in memory instead of writing to a directory.
+#   - Segmentation runs twice: first the region YOLO, then the line YOLO
+#     constrained to those regions. This matches HTRflow's recommended
+#     handwritten-text pipeline.
+#   - TrOCR model is the Swedish historical handwritten variant — same as
+#     `transcribe_service.py` uses today.
+
+steps:
+  - step: Segmentation
+    settings:
+      model: yolo
+      model_settings:
+        model: Riksarkivet/yolov9-regions-1
+        device: cpu
+
+  - step: Segmentation
+    settings:
+      model: yolo
+      model_settings:
+        model: Riksarkivet/yolov9-lines-within-regions-1
+        device: cpu
+
+  - step: TextRecognition
+    settings:
+      model: trocr
+      model_settings:
+        model: Riksarkivet/trocr-base-handwritten-hist-swe-2
+        device: cpu
+      generation_settings:
+        batch_size: 8
+
+  - step: OrderLines
