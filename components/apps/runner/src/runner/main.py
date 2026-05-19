@@ -1,7 +1,7 @@
-"""ra-runner — batch driver for HTR pipelines via Ray Data.
+"""runner — batch driver for HTR pipelines via Ray Data.
 
 Example:
-    uv run ra-runner --input s3://images-batch --output s3://images-batch-alto \\
+    uv run runner --input s3://images-batch --output s3://images-batch-alto \\
         --prefix A0060198/ --pipeline htr
 """
 
@@ -23,7 +23,7 @@ from storage import DEFAULT_IIIF_BASE, IIIFCachedSource, build_sink, build_sourc
 load_dotenv()
 derive_hcp_creds()
 
-app = typer.Typer(name="ra-runner", help="Ray Data batch driver for HTR.")
+app = typer.Typer(name="runner", help="Ray Data batch driver for HTR.")
 console = Console()
 
 

@@ -1,6 +1,6 @@
-# ra-runner
+# runner
 
-Ray Data batch driver for HTR pipelines built from `ra-htr` actors.
+Ray Data batch driver for HTR pipelines built from `htr` actors.
 
 Replaces the legacy `ra-batch` CLI: no YAML, no custom Stage/Runner kernel — just a thin `ray.data.map_batches` chain.
 
@@ -8,17 +8,17 @@ Replaces the legacy `ra-batch` CLI: no YAML, no custom Stage/Runner kernel — j
 
 ```bash
 # Local mode (single process, no cluster)
-uv run ra-runner --input ./images --output ./alto --pipeline fake
+uv run runner --input ./images --output ./alto --pipeline fake
 
 # Against MinIO / HCP
-uv run ra-runner \
+uv run runner \
     --input s3://images-batch \
     --output s3://images-batch-alto \
     --prefix A0060198/ \
     --pipeline htr
 
 # Against a Ray cluster
-uv run ra-runner --input ... --output ... \
+uv run runner --input ... --output ... \
     --address ray://dev-kuberay.ra.se:10001
 ```
 
