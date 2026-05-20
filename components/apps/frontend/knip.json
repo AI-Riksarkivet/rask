@@ -1,0 +1,6 @@
+{
+  "$schema": "https://unpkg.com/knip@latest/schema.json",
+  "entry": ["src/**/*.ts", "src/**/*.svelte"],
+  "project": ["src/**/*.ts", "src/**/*.svelte"],
+  "ignoreDependencies": ["tw-animate-css"]
+}

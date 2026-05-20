@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Pre-commit: format and lint staged files
+set -euo pipefail
+
+make -C "$(git rev-parse --show-toplevel)" fmt 2>&1 | tail -3
+
+if ! make -C "$(git rev-parse --show-toplevel)" lint 2>&1; then
+  echo ""
+  echo "Commit blocked: lint errors found. Run 'make check' to investigate."
+  exit 1
+fi
+
+CHANGED=$(git diff --name-only -- '*.py')
+if [ -n "$CHANGED" ]; then
+  echo "$CHANGED" | xargs git add
+  echo "Auto-formatted and re-staged: $(echo "$CHANGED" | wc -l) file(s)"
+fi
