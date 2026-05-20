@@ -27,7 +27,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[2]
 DB_PATH = REPO / ".cache" / "batches.db"
 RAYJOB_DIR = REPO / ".cache" / "rayjobs"
 DEFAULT_DASHBOARD = "http://localhost:8265"
@@ -58,9 +58,9 @@ def build_entrypoint(
     iiif_url: str,
     pipeline: str,
 ) -> str:
-    """Build an `ra-runner` invocation that processes all batch_ids in one job."""
+    """Build a `runner` invocation that processes all batch_ids in one job."""
     parts = [
-        "uv run ra-runner",
+        "uv run --project projects/runner runner",
         f"--cache-bucket {cache_bucket}",
         f"--output {output}",
         f"--iiif-url {iiif_url}",
@@ -159,7 +159,7 @@ def submit_local(
             "working_dir": str(working_dir),
             "env_vars": {
                 # Pass through MinIO/HCP creds + IIIF endpoint so workers can talk to S3.
-                **{k: v for k, v in os.environ.items() if k.startswith(("AWS_", "HCP_", "IIIF_"))},
+                **{k: v for k, v in os.environ.items() if k.startswith(("AWS_", "HCP_", "IIIF_", "RASK_"))},
             },
         },
         metadata={
