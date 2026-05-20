@@ -1,0 +1,16 @@
+[project]
+name = "viewer-project"
+version = "0.1.0"
+description = "Deployable: FastAPI viewer service."
+requires-python = ">=3.13"
+dependencies = ["viewer"]
+
+[tool.uv.sources]
+viewer = { workspace = true }
+storage = { workspace = true }
+
+[tool.uv.workspace]
+members = [
+    "../../components/services/viewer",
+    "../../libraries/storage",
+]

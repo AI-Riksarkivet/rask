@@ -1,0 +1,19 @@
+[project]
+name = "runner-project"
+version = "0.1.0"
+description = "Deployable: runner CLI + Ray Data HTR pipeline."
+requires-python = ">=3.13"
+dependencies = ["runner"]
+
+[tool.uv.sources]
+runner = { workspace = true }
+htr = { workspace = true }
+storage = { workspace = true }
+htrflow = { path = "/home/morgan/htrflow", editable = false }
+
+[tool.uv.workspace]
+members = [
+    "../../components/apps/runner",
+    "../../libraries/htr",
+    "../../libraries/storage",
+]
