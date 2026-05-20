@@ -48,7 +48,7 @@ import httpx
 from dotenv import load_dotenv
 
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[2]
 DB_PATH = REPO / ".cache" / "batches.db"
 SUBMIT_SCRIPT = REPO / "scripts" / "submit_chunks.py"
 SYNC_SCRIPT = REPO / "scripts" / "sync_from_s3.py"

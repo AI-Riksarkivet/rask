@@ -462,7 +462,7 @@ def main():
     import time
 
     parser = argparse.ArgumentParser(description="Ingest Riksarkivet EAD metadata into LanceDB")
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     default_data = os.path.join(repo_root, ".cache", "lejonet-xml")
     parser.add_argument("data_dir", nargs="?", default=default_data, help="Path to XML directory (default: <repo>/.cache/lejonet-xml)")
     parser.add_argument(

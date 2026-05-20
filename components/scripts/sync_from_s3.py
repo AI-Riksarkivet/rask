@@ -25,7 +25,7 @@ from botocore.config import Config
 from dotenv import load_dotenv
 
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[2]
 DB_PATH = REPO / ".cache" / "batches.db"
 DEFAULT_CACHE_BUCKET = "images-batch"
 DEFAULT_OUTPUT_BUCKET = "images-batch-alto"

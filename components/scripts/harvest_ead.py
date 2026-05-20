@@ -165,7 +165,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Harvest Riksarkivet EAD XML via OAI-PMH")
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     default_dir = os.path.join(repo_root, ".cache", "lejonet-xml")
     parser.add_argument("--output-dir", default=default_dir, help="Output directory (default: <repo>/.cache/lejonet-xml)")
     parser.add_argument("--codes", nargs="*", default=None, help="Archive codes to harvest (default: all)")

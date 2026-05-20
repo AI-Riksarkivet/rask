@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[2]
 DEFAULT_CSV = "/home/morgan/!_output/Serier och volymer att HTRa 2026- - Prel lista batchar 2026.csv"
 MANIFEST_CSV = REPO / ".cache" / "manifest-counts.csv"
 DB_PATH = REPO / ".cache" / "batches.db"

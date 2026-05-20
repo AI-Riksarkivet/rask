@@ -522,7 +522,7 @@ def cmd_index_all(args: argparse.Namespace) -> int:
     """Loop over every batch in batches.db with htr_status='done' and index it."""
     import sqlite3
 
-    db_path = args.db or str(Path(__file__).resolve().parents[1] / ".cache" / "batches.db")
+    db_path = args.db or str(Path(__file__).resolve().parents[2] / ".cache" / "batches.db")
     if not Path(db_path).exists():
         log.error("batches.db not found at %s", db_path)
         return 1

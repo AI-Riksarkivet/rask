@@ -68,7 +68,7 @@ async def main() -> None:
                 print(f"  {done}/{len(batches)} ({rate:.1f}/s)", file=sys.stderr)
 
     elapsed = time.monotonic() - t0
-    repo = Path(__file__).resolve().parents[1]
+    repo = Path(__file__).resolve().parents[2]
     out = repo / ".cache" / "manifest-counts.csv"
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", newline="") as f:
