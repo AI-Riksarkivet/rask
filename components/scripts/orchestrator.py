@@ -50,8 +50,8 @@ from dotenv import load_dotenv
 
 REPO = Path(__file__).resolve().parents[2]
 DB_PATH = REPO / ".cache" / "batches.db"
-SUBMIT_SCRIPT = REPO / "scripts" / "submit_chunks.py"
-SYNC_SCRIPT = REPO / "scripts" / "sync_from_s3.py"
+SUBMIT_SCRIPT = REPO / "components" / "scripts" / "submit_chunks.py"
+SYNC_SCRIPT = REPO / "components" / "scripts" / "sync_from_s3.py"
 DASHBOARD_URL = os.environ.get("RAY_DASHBOARD_URL", "http://localhost:8265")
 HTR_READY_FRACTION = 0.95  # treat a chunk as "prefetched enough" once 95% of pages are cached
 FAIL_COOLDOWN_SECS = 600  # don't auto-resubmit a chunk whose previous run FAILED less than this ago
