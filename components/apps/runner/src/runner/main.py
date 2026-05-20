@@ -64,13 +64,13 @@ def main(
     log_level: Annotated[str, typer.Option("--log-level")] = "INFO",
     profile: Annotated[
         bool,
-        typer.Option("--profile", help="Print Ray Data per-operator stats and dump a Chrome timeline to /tmp/ra-runner-timeline.json."),
+        typer.Option("--profile", help="Print Ray Data per-operator stats and dump a Chrome timeline to /tmp/runner-timeline.json."),
     ] = False,
     torch_profile: Annotated[
         bool,
         typer.Option(
             "--torch-profile",
-            help="Have each TranscribeActor wrap __call__ in torch.profiler and emit per-actor Kineto traces to /tmp/ra-runner-torch-traces/.",
+            help="Have each TranscribeActor wrap __call__ in torch.profiler and emit per-actor Kineto traces to /tmp/runner-torch-traces/.",
         ),
     ] = False,
 ) -> None:
@@ -99,7 +99,7 @@ def main(
         source_label = f"input={input_uri} prefix={prefix!r}"
     sink = build_sink(output_uri, s3_endpoint=s3_endpoint, prefix=prefix)
 
-    console.print(f"[bold]ra-runner[/bold] — listing keys ({source_label})...")
+    console.print(f"[bold]runner[/bold] — listing keys ({source_label})...")
     if pipeline == "prefetch":
         # Resume against the cache bucket — skip JPGs we've already pulled.
         # Prefetch *needs* `keys()` (IIIF manifest) here: the cache is what we're
@@ -138,7 +138,7 @@ def main(
 
     pipeline_kwargs: dict[str, object] = {}
     if torch_profile:
-        torch_trace_dir = Path("/tmp/ra-runner-torch-traces")  # noqa: S108 — local debug artifact
+        torch_trace_dir = Path("/tmp/runner-torch-traces")  # noqa: S108 — local debug artifact
         torch_trace_dir.mkdir(parents=True, exist_ok=True)
         pipeline_kwargs["transcribe_profile_dir"] = torch_trace_dir
         console.print(f"[bold]TranscribeActor profiling[/bold] -> {torch_trace_dir}/transcribe-pid*-call*.json")
@@ -149,7 +149,7 @@ def main(
         console.print(f"[bold green]Done[/bold green] — ok={n_done}, skipped={skipped}")
         console.rule("[bold]Ray Data stats")
         console.print(ds.stats())
-        timeline_path = Path("/tmp/ra-runner-timeline.json")  # noqa: S108 — local debug artifact, not a security boundary
+        timeline_path = Path("/tmp/runner-timeline.json")  # noqa: S108 — local debug artifact, not a security boundary
         ray.timeline(filename=str(timeline_path))
         console.print(f"[bold]Timeline trace[/bold] -> {timeline_path} (open in chrome://tracing)")
     else:

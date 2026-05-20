@@ -1,4 +1,4 @@
-"""ra-viewer entry point — runs `uvicorn viewer.app:app`."""
+"""viewer entry point — runs `uvicorn viewer.app:app`."""
 
 import argparse
 import os
@@ -7,7 +7,7 @@ import uvicorn
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ra-viewer FastAPI server")
+    parser = argparse.ArgumentParser(description="viewer FastAPI server")
     parser.add_argument("--input", "-i", help="Input source URI (s3://bucket or filesystem path)")
     parser.add_argument("--output", "-o", help="Output source URI (s3://bucket or filesystem path)")
     parser.add_argument("--host", default="0.0.0.0")

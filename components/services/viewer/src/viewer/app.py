@@ -56,14 +56,14 @@ def create_app() -> FastAPI:
     # corp proxies) often block via CSP, leaving the docs page blank. We
     # serve our own bundles same-origin under /api/_static/ instead.
     app = FastAPI(
-        title="ra-viewer",
+        title="viewer",
         version="0.1.0",
         docs_url=None,
         redoc_url=None,
         openapi_url="/api/openapi.json",
     )
 
-    # Vendored swagger-ui + redoc bundles (apps/ra-viewer/src/viewer/static/).
+    # Vendored swagger-ui + redoc bundles (components/services/viewer/src/viewer/static/).
     static_dir = Path(__file__).parent / "static"
     if static_dir.is_dir():
         app.mount("/api/_static", StaticFiles(directory=str(static_dir)), name="api-static")
@@ -705,7 +705,7 @@ def _register_ray_routes(app: FastAPI) -> None:
 
     # Ray Dashboard reverse-proxy routes — pure plumbing, not first-class APIs.
     # `include_in_schema=False` keeps them out of /api/openapi.json so the
-    # Swagger page only shows ra-viewer's own endpoints.
+    # Swagger page only shows viewer's own endpoints.
     @app.api_route("/ray-dashboard/{path:path}", methods=_RAY_PROXY_METHODS, include_in_schema=False)
     async def ray_dashboard_spa(path: str, request: Request) -> Response:
         return await _proxy(path, request)

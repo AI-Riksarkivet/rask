@@ -16,7 +16,7 @@ _TEMPLATES_DIR = str(files("htr.alto").joinpath("templates"))
 
 _METADATA = {
     "Author-email": "ai@riksarkivet.se",
-    "Name": "ra-htr",
+    "Name": "htr",
     "Version": "0.1.0",
     "Summary": "HTR pipeline stages for Riksarkivet historical documents",
 }

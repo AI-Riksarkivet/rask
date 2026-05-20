@@ -1,4 +1,4 @@
-"""ra-storage — bucket and filesystem helpers (no Ray dependency)."""
+"""storage — bucket and filesystem helpers (no Ray dependency)."""
 
 from storage.client import derive_hcp_creds, s3_client
 from storage.fs import FSSink, FSSource

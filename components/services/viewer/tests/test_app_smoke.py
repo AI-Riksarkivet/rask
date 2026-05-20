@@ -1,4 +1,4 @@
-"""Smoke tests for the ra-viewer FastAPI app — catches signature mismatches at import time."""
+"""Smoke tests for the viewer FastAPI app — catches signature mismatches at import time."""
 
 
 def test_create_app_imports_and_constructs(monkeypatch, tmp_path):
@@ -9,7 +9,7 @@ def test_create_app_imports_and_constructs(monkeypatch, tmp_path):
     from viewer.app import create_app
 
     app = create_app()
-    assert app.title == "ra-viewer"
+    assert app.title == "viewer"
 
 
 def test_list_pages_endpoint_returns_empty(monkeypatch, tmp_path):

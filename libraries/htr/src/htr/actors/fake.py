@@ -14,7 +14,7 @@ _TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
   <Description><MeasurementUnit>pixel</MeasurementUnit>
     <sourceImageInformation><fileName>{name}</fileName></sourceImageInformation>
     <Processing ID="P1"><processingSoftware>
-      <softwareName>ra-htr-fake</softwareName><softwareVersion>0.1.0</softwareVersion>
+      <softwareName>htr-fake</softwareName><softwareVersion>0.1.0</softwareVersion>
     </processingSoftware></Processing>
   </Description>
   <Layout>

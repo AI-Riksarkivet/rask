@@ -10,7 +10,7 @@ Ray Serve dispatches by round-robin (or other configured policies) and is
 oblivious to the data pipeline's backpressure. Fronting the GPU stage with a
 Serve deployment moves the work-spreading concern out of Ray Data entirely.
 
-Bonus: models stay loaded across job submissions. Each `ra-runner` invocation
+Bonus: models stay loaded across job submissions. Each `runner` invocation
 no longer pays the ~30 s per-actor TrOCR cold-start.
 
 Deployment:

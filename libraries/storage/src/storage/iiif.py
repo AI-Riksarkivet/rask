@@ -1,4 +1,4 @@
-"""IIIF Image API client + S3-cached Source for ra-runner.
+"""IIIF Image API client + S3-cached Source for runner.
 
 Vendored from rahcp-iiif (manifest parsing) so we don't pull in the full
 rahcp-tracker / async download stack just to fetch a few image bytes.

@@ -1,1 +1,1 @@
-"""ra-runner — Ray Data batch driver for HTR pipelines."""
+"""runner — Ray Data batch driver for HTR pipelines."""

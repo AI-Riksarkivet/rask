@@ -1,4 +1,4 @@
-"""Deploy / undeploy Ray Serve apps for ra-runner.
+"""Deploy / undeploy Ray Serve apps for runner.
 
 Two apps live behind this script:
   - transcribe : the TrOCR-only deployment (existing; what HTR uses today

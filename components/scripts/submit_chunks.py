@@ -125,7 +125,7 @@ spec:
           image: {image}
           envFrom:
             - secretRef:
-                name: ra-batch-hcp
+                name: rask-hcp
 """
 
 

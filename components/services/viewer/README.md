@@ -1,6 +1,6 @@
-# ra-viewer
+# viewer
 
-FastAPI backend for the ra-batch viewer. Serves images and ALTO XML from any
+FastAPI backend for the rask viewer. Serves images and ALTO XML from any
 `Source` (filesystem, MinIO, HCP) and optionally hosts the SvelteKit SPA.
 
 ## Endpoints
@@ -32,8 +32,7 @@ RASK_VIEWER_INPUT=s3://images-batch RASK_VIEWER_OUTPUT=s3://images-batch-alto \
   uv run uvicorn viewer.app:app --host 0.0.0.0 --port 8888
 ```
 
-For HCP, `.env` should also set `HCP_USERNAME`/`HCP_PASSWORD`/`HCP_ENDPOINT`
-(see ra-batch's `.env.example`).
+For HCP, `.env` should also set `HCP_USERNAME`/`HCP_PASSWORD`/`HCP_ENDPOINT`.
 
 ## Frontend
 

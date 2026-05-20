@@ -25,7 +25,7 @@ def alto_url(volume: str, page: int) -> str:
 
 
 def fetch(url: str, dest: Path) -> tuple[str, str]:
-    req = Request(url, headers={"Accept": "application/xml, text/xml, */*", "User-Agent": "ra-batch/0.1"})  # noqa: S310 (trusted https URL)
+    req = Request(url, headers={"Accept": "application/xml, text/xml, */*", "User-Agent": "rask/0.1"})  # noqa: S310 (trusted https URL)
     try:
         with urlopen(req, timeout=30) as resp:  # noqa: S310 (trusted base URL)
             data = resp.read()

@@ -1,9 +1,9 @@
 """Build .cache/batches.db from the master CSV + manifest counts.
 
-Inputs (paths relative to ra-batch repo root):
+Inputs (paths relative to rask repo root):
   - The master CSV listing the 1633 batches we plan to HTR.
     Default: $RASK_BATCH_MASTER_CSV or /home/morgan/!_output/Serier och volymer att HTRa 2026- - Prel lista batchar 2026.csv
-  - .cache/manifest-counts.csv produced by scripts/count_manifests.py
+  - .cache/manifest-counts.csv produced by components/scripts/count_manifests.py
     (run that first to refresh page_count + manifest_status).
 
 Output:

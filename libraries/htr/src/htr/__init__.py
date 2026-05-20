@@ -1,4 +1,4 @@
-"""ra-htr — HTR pipeline stages built on ra-pipeline."""
+"""htr — HTR pipeline stages built on Ray Data."""
 
 from htr.schemas import (
     Line,
