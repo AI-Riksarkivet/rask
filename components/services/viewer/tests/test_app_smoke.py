@@ -19,6 +19,7 @@ def test_list_pages_endpoint_returns_empty(monkeypatch, tmp_path):
     (tmp_path / "out").mkdir()
 
     from fastapi.testclient import TestClient
+
     from viewer.app import create_app
 
     client = TestClient(create_app())

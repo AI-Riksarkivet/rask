@@ -15,6 +15,7 @@ bypass-selection = true
 
 [tool.uv.workspace]
 members = ["libraries/*", "components/apps/*", "components/services/*"]
+exclude = ["components/apps/frontend"]
 
 [dependency-groups]
 dev = [

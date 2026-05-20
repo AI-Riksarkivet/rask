@@ -1,7 +1,7 @@
 # Design: Migrate ra-batch into rask (Polylith-inspired structure)
 
 Date: 2026-05-19
-Status: Approved (pending written-spec review)
+Status: Implemented and locally validated 2026-05-20 (real Ray chunk submission deferred to user's cluster)
 
 ## Goal
 
@@ -135,3 +135,31 @@ hook, and passes the repo's `no-co-authored-by-claude` hook (which matches only
 - Migrating `ra-batch/k8s/` or the old `docs/superpowers/` history.
 - Refactoring rask's existing example scaffold.
 - Decomposing migrated components into finer Polylith bricks (future work).
+
+## Status (2026-05-20)
+
+Migration complete; merged to `main` as `46334ab` plus follow-ups
+(orchestrator path fix, projects/runner+viewer composition, Ray
+runtime_env re-point in submit_chunks, root wiring, stale-string
+sweep). Locally validated:
+
+- ruff: clean across libraries + components.
+- ty: 24 pre-existing diagnostics carried over from ra-batch (no
+  new failures from the move; type cleanup is not a migration
+  responsibility).
+- pytest: storage (14), viewer (2), runner (7) all pass; htr suite
+  not re-run in this acceptance pass (heavy torch/transformers
+  imports), matches the ra-batch baseline by construction.
+- `uv run --project projects/runner runner --help` works.
+- viewer service boots: `/api/health` and `/api/volumes` both 200
+  with RASK_VIEWER_INPUT/OUTPUT env vars wired.
+- Workspace exclude added for `components/apps/frontend` (JS-only
+  workspace member otherwise breaks uv sync).
+- The bun root workspace step was skipped: `package.json` was
+  removed from `main` by `39e8cf3` (out-of-band from the migration);
+  the frontend stands alone under `components/apps/frontend/`.
+
+Deferred to user-environment validation:
+
+- One real Ray chunk submitted via `components/scripts/submit_chunks.py`
+  (proves the runtime_env re-point against a real cluster + HCP creds).
