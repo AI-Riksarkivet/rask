@@ -1,0 +1,85 @@
+"""Standalone HCP S3 smoke test — list, read, write, list-existing.
+
+Run:
+    HCP_INSECURE=1 uv run python scripts/smoke_s3.py
+or with creds via .env at the repo root.
+"""
+
+import os
+import sys
+import time
+
+from dotenv import load_dotenv
+
+
+def main() -> None:
+    load_dotenv()
+
+    import base64
+    import hashlib
+
+    if (u := os.getenv("HCP_USERNAME")) and (p := os.getenv("HCP_PASSWORD")):
+        os.environ.setdefault("AWS_ACCESS_KEY_ID", base64.b64encode(u.encode()).decode())
+        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", hashlib.md5(p.encode()).hexdigest())  # noqa: S324
+
+    endpoint = os.getenv("HCP_ENDPOINT")
+    print(f"endpoint: {endpoint}", flush=True)
+    print(f"akid set: {bool(os.getenv('AWS_ACCESS_KEY_ID'))}", flush=True)
+
+    import boto3
+    from botocore.config import Config
+
+    cfg = Config(
+        signature_version="s3v4",
+        s3={"addressing_style": "path"},
+        request_checksum_calculation="when_required",
+        response_checksum_validation="when_required",
+        retries={"max_attempts": 1},
+        connect_timeout=5,
+        read_timeout=15,
+    )
+    kwargs: dict = {"endpoint_url": endpoint, "config": cfg}
+    if os.getenv("HCP_INSECURE", "").lower() in ("1", "true", "yes"):
+        import urllib3
+
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        kwargs["verify"] = False
+    if ca := os.getenv("HCP_CA_BUNDLE"):
+        kwargs["verify"] = ca
+
+    print("building client...", flush=True)
+    t0 = time.perf_counter()
+    c = boto3.client("s3", **kwargs)
+    c.meta.events.unregister("needs-retry.s3")
+    print(f"  built in {time.perf_counter() - t0:.2f}s", flush=True)
+
+    bucket = sys.argv[1] if len(sys.argv) > 1 else "images-batch"
+    prefix = sys.argv[2] if len(sys.argv) > 2 else "A0060198/"
+    print(f"\nProbing bucket={bucket!r} prefix={prefix!r}", flush=True)
+
+    print("\n[1] head_bucket:", flush=True)
+    t0 = time.perf_counter()
+    try:
+        c.head_bucket(Bucket=bucket)
+        print(f"  OK ({time.perf_counter() - t0:.2f}s)", flush=True)
+    except Exception as e:
+        code = getattr(e, "response", {}).get("Error", {}).get("Code", "?")
+        print(f"  FAIL ({time.perf_counter() - t0:.2f}s): {type(e).__name__} code={code}", flush=True)
+        print(f"  msg: {str(e)[:200]}", flush=True)
+
+    print("\n[2] list_objects_v2 (max 5):", flush=True)
+    t0 = time.perf_counter()
+    try:
+        resp = c.list_objects_v2(Bucket=bucket, Prefix=prefix, MaxKeys=5)
+        keys = [obj["Key"] for obj in resp.get("Contents", [])]
+        print(f"  OK ({time.perf_counter() - t0:.2f}s) — {len(keys)} keys, IsTruncated={resp.get('IsTruncated')}", flush=True)
+        for k in keys:
+            print(f"    {k}", flush=True)
+    except Exception as e:
+        code = getattr(e, "response", {}).get("Error", {}).get("Code", "?")
+        print(f"  FAIL ({time.perf_counter() - t0:.2f}s): {type(e).__name__} code={code}", flush=True)
+        print(f"  msg: {str(e)[:200]}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

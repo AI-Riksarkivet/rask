@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<alto xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.loc.gov/standards/alto/ns-v4#" xsi:schemaLocation="http://www.loc.gov/standards/alto/ns-v4# http://www.loc.gov/standards/alto/v4/alto-4-4.xsd">
+    <Description>
+        <MeasurementUnit>pixel</MeasurementUnit>
+        <sourceImageInformation>
+            <fileName>{{ document.image_name }}</fileName>
+        </sourceImageInformation>
+        <Processing ID="general">
+            <processingDateTime>{{ timestamp }}</processingDateTime>
+            <processingSoftware>
+                <softwareCreator>{{ metadata.get("Author-email") }}</softwareCreator>
+                <softwareName>{{ metadata.get("Name") }}</softwareName>
+                <softwareVersion>{{ metadata.get("Version") }}</softwareVersion>
+                <applicationDescription>{{ metadata.get("Summary") }}</applicationDescription>
+            </processingSoftware>
+        </Processing>
+    </Description>
+    {%- if document.regions %}
+    <ReadingOrder>
+        <OrderedGroup ID="ro">
+        {%- for line in document.regions %}
+            <ElementRef ID="ro_{{ document.image_name }}_textline{{ loop.index0 }}" REF="{{ document.image_name }}_textline{{ loop.index0 }}" />
+        {%- endfor %}
+        </OrderedGroup>
+    </ReadingOrder>
+    {%- endif %}
+    <Layout>
+        <Page WIDTH="{{ document.image.width }}" HEIGHT="{{ document.image.height }}"{% if page_confidence is not none %} PC="{{ '%.4f' % page_confidence }}"{% endif %} PHYSICAL_IMG_NR="0" ID="_{{ document.image_name }}">
+            <TopMargin />
+            <LeftMargin />
+            <RightMargin />
+            <BottomMargin />
+            <PrintSpace>
+                {%- if document.regions %}
+                <TextBlock ID="{{ document.image_name }}" HPOS="0" VPOS="0" HEIGHT="{{ document.image.height }}" WIDTH="{{ document.image.width }}" CS="false">
+                    <Shape>
+                        <Polygon POINTS="0,0 {{ document.image.width }},0 {{ document.image.width }},{{ document.image.height }} 0,{{ document.image.height }}"/>
+                    </Shape>
+                    {%- for line in document.regions %}
+                    {%- set bbox = line.polygon.bbox %}
+                    <TextLine ID="{{ document.image_name }}_textline{{ loop.index0 }}"  HPOS="{{ bbox.xmin }}" VPOS="{{ bbox.ymin }}" HEIGHT="{{ bbox.height }}" WIDTH="{{ bbox.width }}">
+                        <Shape>
+                            <Polygon POINTS="{{ line.polygon }}"/>
+                        </Shape>
+                        {%- if line.transcription %}
+                        {%- if line.words %}
+                        {%- for word in line.words %}
+                        <String HPOS="{{ word.x | int }}" VPOS="{{ word.y | int }}" HEIGHT="{{ word.h | int }}" WIDTH="{{ word.w | int }}" CONTENT="{{ word.text | e }}" WC="{{ word.confidence }}"/>
+                        {%- if not loop.last %}
+                        <SP WIDTH="{{ word.space_w | default(0) | int }}" HPOS="{{ (word.x + word.w) | int }}" VPOS="{{ word.y | int }}"/>
+                        {%- endif %}
+                        {%- endfor %}
+                        {%- else %}
+                        <String HPOS="{{ bbox.xmin }}" VPOS="{{ bbox.ymin }}" HEIGHT="{{ bbox.height }}" WIDTH="{{ bbox.width }}" CONTENT="{{ line.transcription[0].text | e }}" WC="{{ line.transcription[0].confidence }}"/>
+                        {%- endif %}
+                        {%- endif %}
+                    </TextLine>
+                    {%- endfor %}
+                </TextBlock>
+                {%- endif %}
+            </PrintSpace>
+        </Page>
+    </Layout>
+</alto>

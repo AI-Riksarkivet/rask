@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+.coverage
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+.venv/
+.env
+
+# JS / SvelteKit
+node_modules/
+.svelte-kit/
+storybook-static/
+
+# Local SQLite catalog + manifest dump (built by components/scripts/{build,sync,count}_*.py)
+.cache/
+batches.db
