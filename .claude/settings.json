@@ -1,0 +1,13 @@
+{
+  "enabledPlugins": {
+    "mcp-essentials@claude-code-toolkit": true,
+    "analytics@claude-code-toolkit": true,
+    "toolkit-skills@claude-code-toolkit": true,
+    "deno-skills@denoland-skills": true,
+    "redis-development@redis": true,
+    "svelte@svelte": true,
+    "astral@astral-sh": true,
+    "svelte-flow@linehaulai-claude-marketplace": true,
+    "svelte-skills@svelte-skills-kit": true
+  }
+}

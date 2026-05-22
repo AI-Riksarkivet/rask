@@ -1,0 +1,12 @@
+{
+  "name": "rask",
+  "private": true,
+  "workspaces": [
+    "packages/oxen_componets"
+  ],
+  "scripts": {
+    "dev:ui": "bun --cwd packages/oxen_componets run dev",
+    "storybook": "bun --cwd packages/oxen_componets run storybook",
+    "build-storybook": "bun --cwd packages/oxen_componets run build-storybook"
+  }
+}
