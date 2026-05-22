@@ -27,4 +27,4 @@ packages = ["src/runner"]
 [tool.uv.sources]
 htr = { workspace = true }
 storage = { workspace = true }
-htrflow = { path = "/home/morgan/htrflow", editable = false }
+htrflow = { git = "https://github.com/AI-Riksarkivet/htrflow.git" }
