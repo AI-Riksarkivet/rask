@@ -12,5 +12,5 @@ storage = { workspace = true }
 [tool.uv.workspace]
 members = [
     "../../components/services/viewer",
-    "../../libraries/storage",
+    "../../packages/storage",
 ]
