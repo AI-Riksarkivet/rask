@@ -127,7 +127,7 @@
 </script>
 
 <svelte:head>
-	<title>Browse — ra-batch</title>
+	<title>Browse — RASK</title>
 </svelte:head>
 
 <RayShell title="Browse">

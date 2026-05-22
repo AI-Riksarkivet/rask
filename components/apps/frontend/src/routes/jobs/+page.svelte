@@ -69,7 +69,7 @@
 </script>
 
 <svelte:head>
-	<title>Jobs — ra-batch</title>
+	<title>Jobs — RASK</title>
 </svelte:head>
 
 <RayShell title="Jobs">

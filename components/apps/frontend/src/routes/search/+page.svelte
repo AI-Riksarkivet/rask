@@ -227,7 +227,7 @@
 </script>
 
 <svelte:head>
-	<title>Search — ra-batch</title>
+	<title>Search — RASK</title>
 </svelte:head>
 
 <RayShell title="Search">

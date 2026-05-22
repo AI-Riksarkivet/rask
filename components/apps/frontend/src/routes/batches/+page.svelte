@@ -271,7 +271,7 @@
 </script>
 
 <svelte:head>
-	<title>Batches — ra-batch</title>
+	<title>Batches — RASK</title>
 </svelte:head>
 
 <RayShell title="Batches">

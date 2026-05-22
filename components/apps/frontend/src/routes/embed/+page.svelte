@@ -39,7 +39,7 @@
 </script>
 
 <svelte:head>
-	<title>Ray — ra-batch</title>
+	<title>Ray — RASK</title>
 </svelte:head>
 
 <RayShell title={`Ray ${targetPath || ''}`} flush>

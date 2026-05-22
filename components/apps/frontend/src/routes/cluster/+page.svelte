@@ -37,7 +37,7 @@
 </script>
 
 <svelte:head>
-	<title>Cluster — ra-batch</title>
+	<title>Cluster — RASK</title>
 </svelte:head>
 
 <RayShell title="Cluster">

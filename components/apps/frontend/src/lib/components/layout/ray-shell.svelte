@@ -121,7 +121,7 @@
 					<path d="M5 6l7 6-7 6" />
 					<path d="M13 6l7 6-7 6" />
 				</svg>
-				<span>ra-batch</span>
+				<span>RASK</span>
 				<span class="text-[oklch(0.6_0.01_260)]">/</span>
 				<span class="truncate text-[oklch(0.85_0.005_260)]">{title ?? path}</span>
 			</button>

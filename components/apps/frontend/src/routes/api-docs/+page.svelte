@@ -13,7 +13,7 @@
 </script>
 
 <svelte:head>
-	<title>API — ra-batch</title>
+	<title>API — RASK</title>
 </svelte:head>
 
 <RayShell title="API" flush>
