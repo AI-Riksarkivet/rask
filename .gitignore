@@ -17,3 +17,4 @@ storybook-static/
 # Local SQLite catalog + manifest dump (built by components/scripts/{build,sync,count}_*.py)
 .cache/
 batches.db
+components/scripts/batch_ids.txt
