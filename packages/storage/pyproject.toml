@@ -3,7 +3,7 @@ name = "storage"
 version = "0.1.0"
 description = "Filesystem and S3/HCP source/sink helpers used by runner and viewer."
 requires-python = ">=3.10"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 dependencies = [
     "boto3>=1.35",
     "httpx>=0.27",

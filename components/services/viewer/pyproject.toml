@@ -3,7 +3,7 @@ name = "viewer"
 version = "0.1.0"
 description = "FastAPI backend for the viewer — proxies images/ALTO from object storage."
 requires-python = ">=3.13"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 dependencies = [
     "storage",
     "fastapi>=0.115",

@@ -3,7 +3,7 @@ name = "htr"
 version = "0.1.0"
 description = "HTR actors (layout, lines, TrOCR, ALTO) for use with Ray Data."
 requires-python = ">=3.13"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 dependencies = [
     "storage",
     "pillow>=11.0",
