@@ -74,10 +74,10 @@ viewer:
 		uv run uvicorn viewer.app:app --host 0.0.0.0 --port 8888 --reload
 
 viewer-frontend:
-	cd components/apps/frontend && bun run dev
+	bun --cwd components/apps/frontend run dev
 
 viewer-frontend-build:
-	cd components/apps/frontend && bun install && bun run build
+	bun --cwd components/apps/frontend run build
 
 # ---- ray -------------------------------------------------------------------
 RAY_HEAD_PORT       ?= 6379

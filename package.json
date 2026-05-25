@@ -3,11 +3,13 @@
   "private": true,
   "license": "AGPL-3.0-only",
   "workspaces": [
-    "packages/oxen_componets"
+    "components/apps/frontend",
+    "packages/component-lib"
   ],
   "scripts": {
-    "dev:ui": "bun --cwd packages/oxen_componets run dev",
-    "storybook": "bun --cwd packages/oxen_componets run storybook",
-    "build-storybook": "bun --cwd packages/oxen_componets run build-storybook"
+    "dev:ui": "bun --cwd packages/component-lib run dev",
+    "dev:frontend": "bun --cwd components/apps/frontend run dev",
+    "storybook": "bun --cwd packages/component-lib run storybook",
+    "build-storybook": "bun --cwd packages/component-lib run build-storybook"
   }
 }
