@@ -14,8 +14,6 @@ Fundamental design principles for maintainable Python code: KISS, single respons
 - Rule of three
 - Function size
 - Dependency injection
-- Don't expose internal types
-- Don't mix I/O with business logic
 - Guard clauses — exit early, keep the happy path flat
 - SOLID in Python — what actually matters
 - Law of Demeter — no train wrecks
@@ -303,39 +301,6 @@ service = UserService(
 ```
 
 In FastAPI, do the same via `Depends` + `Annotated`. See the `fastapi` skill.
-
-## Don't expose internal types
-
-```python
-# Bad: leaking ORM model to API
-@app.get("/users/{id}")
-def get_user(id: str) -> UserModel:  # SQLAlchemy model
-    return db.query(UserModel).get(id)
-
-# Good: explicit response schema (Pydantic)
-@app.get("/users/{id}")
-def get_user(id: str) -> UserResponse:
-    user = db.query(UserModel).get(id)
-    return UserResponse.model_validate(user, from_attributes=True)
-```
-
-## Don't mix I/O with business logic
-
-```python
-# Bad: SQL embedded in business logic
-def calculate_discount(user_id: str) -> float:
-    user = db.query("SELECT * FROM users WHERE id = ?", user_id)
-    orders = db.query("SELECT * FROM orders WHERE user_id = ?", user_id)
-    if len(orders) > 10:
-        return 0.15
-    return 0.0
-
-# Good: repository pattern, pure business logic
-def calculate_discount(user: User, order_history: list[Order]) -> float:
-    if len(order_history) > 10:
-        return 0.15
-    return 0.0
-```
 
 ## Guard clauses — exit early, keep the happy path flat
 
