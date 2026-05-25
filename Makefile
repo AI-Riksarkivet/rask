@@ -1,4 +1,4 @@
-.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer viewer-frontend viewer-frontend-build ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index
+.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer viewer-frontend viewer-frontend-build ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index claude-bootstrap
 
 help:
 	@echo "Targets:"
@@ -8,6 +8,7 @@ help:
 	@echo "  ray-up ray-down ray-status"
 	@echo "  serve-up serve-down serve-status"
 	@echo "  search-index search-index-fresh harvest-ead catalog-index"
+	@echo "  claude-bootstrap                       — install Claude Code skills & verify config"
 
 install:
 	bun install
@@ -47,6 +48,20 @@ typecheck:
 check: fmt lint typecheck
 
 ci: check test
+
+# ---- claude code -----------------------------------------------------------
+claude-bootstrap:
+	@command -v claude >/dev/null 2>&1 || { echo "  !! claude CLI not found — install Claude Code first"; exit 1; }
+	@command -v bunx   >/dev/null 2>&1 || { echo "  !! bunx not found — install bun first (https://bun.sh)"; exit 1; }
+	@echo "==> Installing svelte MCP server (local scope, project-scoped section of ~/.claude.json)..."
+	@claude mcp add -t stdio -s local svelte -- bunx -y @sveltejs/mcp || echo "    (already installed — skipping)"
+	@echo
+	@echo "==> Verifying Claude config..."
+	@test -f .claude/settings.json && echo "    OK  .claude/settings.json" || echo "    !!  missing .claude/settings.json"
+	@echo
+	@echo "==> Manual steps that can't be scripted (see .claude/README.md):"
+	@echo "    1. In Claude Code: /plugin marketplace add (and /plugin install) entries from README."
+	@echo "    2. Authenticate any MCP servers if prompted on first use."
 
 # ---- viewer ----------------------------------------------------------------
 # Port must be 8888 — components/apps/frontend Vite proxy defaults
