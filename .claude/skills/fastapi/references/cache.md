@@ -1,6 +1,6 @@
 # Caching (FastAPI-specific)
 
-What's different about caching *inside a FastAPI service*. Everything else — Redis connection-pool tuning, TTL strategies, invalidation patterns (TTL / events / tags / dependency), cache-warming algorithms, stale-while-revalidate — lives in the **`python-infrastructure`** skill (`References/caching.md`). Don't duplicate it here.
+What's different about caching *inside a FastAPI service*. Framework-agnostic patterns — single-flight stampede protection, dedup windows, invalidate-on-write specifics — live in the **`python-infrastructure`** skill (`References/caching.md`). Redis connection-pool tuning and `RedisDep` wiring live in [`redis.md`](redis.md). Don't duplicate.
 
 ## Contents
 
@@ -84,7 +84,7 @@ async def update_user(
     return user
 ```
 
-For patterns more sophisticated than `del key` (tag-based invalidation, dependency cascades, pub/sub fan-out across replicas), see `python-infrastructure` § caching — those are stack-level concerns, not FastAPI-specific.
+For multi-replica invalidation (one pod writes, all pods must drop the cached row), publish the invalidation via NATS and have every pod subscribe — same pattern as cross-pod broadcast in [`websockets.md`](websockets.md) and [`microservices.md`](microservices.md). Pure `del key` is enough only when all reads happen on the writer pod.
 
 ## Lifespan cache-warming hook
 

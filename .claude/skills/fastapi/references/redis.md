@@ -1,6 +1,6 @@
 # Redis (the design-choice view)
 
-Adding Redis is a deliberate choice — not every FastAPI service needs it. This file is the **decision matrix + wiring hub**: when Redis is the right tool vs when NATS/Postgres/in-process is, how the single shared client is built, and one explicit example of each thing we actually use Redis for. Pattern deep-dives live in [`cache.md`](cache.md) and [`rate-limiting.md`](rate-limiting.md); Redis fundamentals (eviction, persistence, cluster sizing) live in `python-infrastructure`.
+Adding Redis is a deliberate choice — not every FastAPI service needs it. This file is the **decision matrix + wiring hub**: when Redis is the right tool vs when NATS/Postgres/in-process is, how the single shared client is built, and one explicit example of each thing we actually use Redis for. Pattern deep-dives live in [`cache.md`](cache.md) and [`rate-limiting.md`](rate-limiting.md); framework-agnostic patterns (stampede protection, dedup windows) live in `python-infrastructure` § caching. Redis-operator concerns (eviction policy, persistence config, cluster sizing) are not in any skill — defer to the upstream Redis docs.
 
 ## Contents
 
