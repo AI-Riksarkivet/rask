@@ -36,19 +36,19 @@ processors:
   resourcedetection:
     detectors: [env, system]
 
-  k8sattributes: {}  # populates k8s.* on every signal
+  k8sattributes: {} # populates k8s.* on every signal
 
 exporters:
   otlp:
     endpoint: <backend-otlp-endpoint>:4317
     headers:
-      Authorization: "Bearer ${env:BACKEND_TOKEN}"
+      Authorization: 'Bearer ${env:BACKEND_TOKEN}'
     sending_queue:
       enabled: true
       storage: file_storage
 
   debug:
-    verbosity: detailed  # use during validation, then remove
+    verbosity: detailed # use during validation, then remove
 
 service:
   pipelines:
@@ -92,12 +92,12 @@ Wrong order = silent data loss or dropped enrichment.
 
 ## Deployment shapes
 
-| Shape | When | How |
-|---|---|---|
-| **DaemonSet (per node)** | Default for K8s. Apps export to `localhost:4317` (node IP). | Helm chart with `mode: daemonset` or raw manifests. |
-| **Sidecar (per pod)** | Apps need their own buffer/redaction; multi-tenant cluster. | OTel Operator `Sidecar` mode. |
-| **Gateway (cluster-wide)** | Tail sampling needs all spans of a trace at one node; centralized routing. | Deployment + Service. |
-| **Agent + Gateway** | DaemonSets enrich at the edge, forward to a gateway that samples/routes. | Both above. |
+| Shape                      | When                                                                       | How                                                 |
+| -------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------- |
+| **DaemonSet (per node)**   | Default for K8s. Apps export to `localhost:4317` (node IP).                | Helm chart with `mode: daemonset` or raw manifests. |
+| **Sidecar (per pod)**      | Apps need their own buffer/redaction; multi-tenant cluster.                | OTel Operator `Sidecar` mode.                       |
+| **Gateway (cluster-wide)** | Tail sampling needs all spans of a trace at one node; centralized routing. | Deployment + Service.                               |
+| **Agent + Gateway**        | DaemonSets enrich at the edge, forward to a gateway that samples/routes.   | Both above.                                         |
 
 For Docker Compose dev, a single Collector container alongside the app works fine.
 
@@ -115,16 +115,16 @@ service:
     traces:
       receivers: [otlp]
       processors: [memory_limiter]
-      exporters: [debug]   # swap back to [otlp] once verified
+      exporters: [debug] # swap back to [otlp] once verified
 ```
 
 ## Sampling
 
-| Strategy | Where | Notes |
-|---|---|---|
-| `AlwaysOn` | SDK (default) | **Project default.** Every span exported. |
-| `probabilisticsampler` | Collector | Head sampling — random subset based on trace ID. |
-| `tailsampling` | Collector | Decides after all spans of a trace arrive — can keep errors and slow traces, drop the rest. |
+| Strategy               | Where         | Notes                                                                                       |
+| ---------------------- | ------------- | ------------------------------------------------------------------------------------------- |
+| `AlwaysOn`             | SDK (default) | **Project default.** Every span exported.                                                   |
+| `probabilisticsampler` | Collector     | Head sampling — random subset based on trace ID.                                            |
+| `tailsampling`         | Collector     | Decides after all spans of a trace arrive — can keep errors and slow traces, drop the rest. |
 
 Tail sampling needs all spans of a trace at the same Collector instance — use a load balancer that hashes by trace ID, or run a gateway tier. The standard way: a gateway Collector with the `loadbalancing` exporter fanning out to a pool of tail-sampling Collectors.
 
@@ -135,13 +135,13 @@ exporters:
     routing_key: traceID
     protocol:
       otlp:
-        tls: {insecure: true}
+        tls: { insecure: true }
     resolver:
       # Headless K8s Service backing the tail-sampling Deployment
       dns:
         hostname: otel-tail-sampler-headless.observability.svc.cluster.local
         port: 4317
-        interval: 10s   # re-resolve to pick up new replicas
+        interval: 10s # re-resolve to pick up new replicas
 ```
 
 All spans with the same `trace_id` land on the same sampler replica, so `tail_sampling` sees the complete trace before deciding.

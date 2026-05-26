@@ -43,14 +43,14 @@
 <RayShell title="Cluster">
 	<div class="flex flex-col gap-4 p-6 text-sm">
 		{#if error}
-			<Card class="border-destructive/40 bg-destructive/10 p-3 text-destructive">{error}</Card>
+			<Card class="border-destructive/40 bg-destructive/10 text-destructive p-3">{error}</Card>
 		{/if}
 
 		{#if payload && !payload.ok}
 			<Card class="border-amber-500/40 bg-amber-500/10 p-3">
 				Ray dashboard unreachable at <span class="font-mono">{payload.dashboard_url}</span>
 				{#if payload.error}
-					<div class="mt-1 text-xs text-muted-foreground">{payload.error}</div>
+					<div class="text-muted-foreground mt-1 text-xs">{payload.error}</div>
 				{/if}
 			</Card>
 		{/if}
@@ -61,50 +61,56 @@
 
 			<section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
 				<Card class="p-4">
-					<div class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+					<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
 						Nodes
 					</div>
 					<div class="mt-1 font-mono text-2xl tabular-nums">
 						{payload.alive_count}/{payload.node_count}
 					</div>
-					<div class="text-xs text-muted-foreground">alive / total</div>
+					<div class="text-muted-foreground text-xs">alive / total</div>
 				</Card>
 				<Card class="p-4">
-					<div class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+					<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
 						GPU
 					</div>
 					<div class="mt-1 font-mono text-2xl tabular-nums">
-						{ur.GPU.toFixed(1)}<span class="text-base text-muted-foreground"
+						{ur.GPU.toFixed(1)}<span class="text-muted-foreground text-base"
 							>/{tr.GPU.toFixed(0)}</span
 						>
 					</div>
-					<div class="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
-						<div class="h-full bg-emerald-500 transition-all" style:width={`${pct(ur.GPU, tr.GPU)}%`}></div>
+					<div class="bg-muted mt-1.5 h-1.5 w-full overflow-hidden rounded-full">
+						<div
+							class="h-full bg-emerald-500 transition-all"
+							style:width={`${pct(ur.GPU, tr.GPU)}%`}
+						></div>
 					</div>
 				</Card>
 				<Card class="p-4">
-					<div class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+					<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
 						CPU
 					</div>
 					<div class="mt-1 font-mono text-2xl tabular-nums">
-						{ur.CPU.toFixed(0)}<span class="text-base text-muted-foreground"
+						{ur.CPU.toFixed(0)}<span class="text-muted-foreground text-base"
 							>/{tr.CPU.toFixed(0)}</span
 						>
 					</div>
-					<div class="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
-						<div class="h-full bg-sky-500 transition-all" style:width={`${pct(ur.CPU, tr.CPU)}%`}></div>
+					<div class="bg-muted mt-1.5 h-1.5 w-full overflow-hidden rounded-full">
+						<div
+							class="h-full bg-sky-500 transition-all"
+							style:width={`${pct(ur.CPU, tr.CPU)}%`}
+						></div>
 					</div>
 				</Card>
 				<Card class="p-4">
-					<div class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+					<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
 						Memory
 					</div>
 					<div class="mt-1 font-mono text-2xl tabular-nums">
-						{bytesGb(ur.memory).toFixed(0)}<span class="text-base text-muted-foreground"
+						{bytesGb(ur.memory).toFixed(0)}<span class="text-muted-foreground text-base"
 							>/{bytesGb(tr.memory).toFixed(0)} GiB</span
 						>
 					</div>
-					<div class="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+					<div class="bg-muted mt-1.5 h-1.5 w-full overflow-hidden rounded-full">
 						<div
 							class="h-full bg-violet-500 transition-all"
 							style:width={`${pct(ur.memory, tr.memory)}%`}
@@ -114,15 +120,17 @@
 			</section>
 
 			<Card class="overflow-hidden">
-				<div class="border-b px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+				<div
+					class="text-muted-foreground border-b px-4 py-2 text-[11px] font-medium tracking-wide uppercase"
+				>
 					Nodes
 				</div>
 				<div class="max-h-[60vh] overflow-auto">
 					<table class="w-full border-collapse text-xs">
-						<thead class="sticky top-0 z-10 bg-card text-left">
+						<thead class="bg-card sticky top-0 z-10 text-left">
 							<tr class="border-b">
 								{#each ['state', 'node_id', 'ip', 'GPU', 'CPU', 'memory'] as h (h)}
-									<th class="px-3 py-2 font-medium text-muted-foreground">{h}</th>
+									<th class="text-muted-foreground px-3 py-2 font-medium">{h}</th>
 								{/each}
 							</tr>
 						</thead>
@@ -134,7 +142,7 @@
 								{@const cpuU = n.resources_used.CPU ?? 0}
 								{@const memT = n.resources_total.memory ?? 0}
 								{@const memU = n.resources_used.memory ?? 0}
-								<tr class="border-b border-border/40 hover:bg-muted/40">
+								<tr class="border-border/40 hover:bg-muted/40 border-b">
 									<td class="px-3 py-1.5">
 										{#if n.alive}
 											<Badge variant="success">alive</Badge>
@@ -142,7 +150,8 @@
 											<Badge variant="destructive">dead</Badge>
 										{/if}
 									</td>
-									<td class="px-3 py-1.5 font-mono text-[11px]">{n.node_id?.slice(0, 12) ?? '—'}</td>
+									<td class="px-3 py-1.5 font-mono text-[11px]">{n.node_id?.slice(0, 12) ?? '—'}</td
+									>
 									<td class="px-3 py-1.5 font-mono">{n.node_ip ?? '—'}</td>
 									<td class="px-3 py-1.5 font-mono tabular-nums">
 										{gpuU.toFixed(1)}/{gpuT.toFixed(0)}
@@ -160,7 +169,7 @@
 				</div>
 			</Card>
 
-			<div class="text-xs text-muted-foreground">
+			<div class="text-muted-foreground text-xs">
 				dashboard: <a
 					class="text-primary hover:underline"
 					href={payload.dashboard_url}

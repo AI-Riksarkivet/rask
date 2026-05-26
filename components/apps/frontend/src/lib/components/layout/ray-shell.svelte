@@ -117,7 +117,15 @@
 				onclick={() => goto('/batches')}
 				aria-label="Home"
 			>
-				<svg viewBox="0 0 24 24" class="h-5 w-5 text-[oklch(0.78_0.18_220)]" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+				<svg
+					viewBox="0 0 24 24"
+					class="h-5 w-5 text-[oklch(0.78_0.18_220)]"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2.2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+				>
 					<path d="M5 6l7 6-7 6" />
 					<path d="M13 6l7 6-7 6" />
 				</svg>
@@ -182,14 +190,17 @@
 				<button
 					type="button"
 					class={`relative mx-1 flex flex-col items-center gap-0.5 rounded-md px-1 py-2 text-[10px] font-medium tracking-tight transition
-						${active
-							? 'bg-primary/10 text-primary dark:bg-primary/15'
-							: 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'}`}
+						${
+							active
+								? 'bg-primary/10 text-primary dark:bg-primary/15'
+								: 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+						}`}
 					onclick={() => handleNavClick(item)}
 					title={item.label}
 				>
 					{#if active}
-						<span class="absolute left-0 top-1.5 h-[calc(100%-12px)] w-[3px] rounded-r bg-primary"></span>
+						<span class="bg-primary absolute top-1.5 left-0 h-[calc(100%-12px)] w-[3px] rounded-r"
+						></span>
 					{/if}
 					<item.icon class="h-5 w-5" />
 					<span>{item.label}</span>
@@ -197,7 +208,11 @@
 			{/each}
 		</nav>
 
-		<main class={flush ? 'flex flex-1 overflow-hidden bg-background' : 'flex-1 overflow-auto bg-background'}>
+		<main
+			class={flush
+				? 'bg-background flex flex-1 overflow-hidden'
+				: 'bg-background flex-1 overflow-auto'}
+		>
 			{@render children()}
 		</main>
 	</div>

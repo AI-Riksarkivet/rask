@@ -189,9 +189,7 @@
 		// what we get from messy or compound date strings.
 		if (h.date_text) return h.date_text;
 		if (h.date_start && h.date_end) {
-			return h.date_start === h.date_end
-				? String(h.date_start)
-				: `${h.date_start}–${h.date_end}`;
+			return h.date_start === h.date_end ? String(h.date_start) : `${h.date_start}–${h.date_end}`;
 		}
 		return '';
 	}
@@ -206,10 +204,7 @@
 	 * Case-insensitive whole-substring match (the FTS itself is token-based,
 	 * so this covers what the index returns). */
 	function splitForHighlight(text: string, query: string): { text: string; match: boolean }[] {
-		const tokens = query
-			.toLowerCase()
-			.split(/\s+/)
-			.filter(Boolean);
+		const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
 		if (tokens.length === 0) return [{ text, match: false }];
 		const escaped = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
 		const re = new RegExp(`(${escaped.join('|')})`, 'gi');
@@ -236,38 +231,38 @@
 		     EAD volume metadata (archive hierarchy + dates + descriptions). The
 		     two indexes have different schemas and result rendering, so the
 		     toggle just flips which API + card layout we use. -->
-		<div class="flex items-center gap-1 border-b border-border">
+		<div class="border-border flex items-center gap-1 border-b">
 			<button
 				type="button"
 				class="border-b-2 px-3 py-2 text-sm font-medium transition {scope === 'lines'
 					? 'border-primary text-foreground'
-					: 'border-transparent text-muted-foreground hover:text-foreground'}"
+					: 'text-muted-foreground hover:text-foreground border-transparent'}"
 				onclick={() => setScope('lines')}>Lines</button
 			>
 			<button
 				type="button"
 				class="border-b-2 px-3 py-2 text-sm font-medium transition {scope === 'catalog'
 					? 'border-primary text-foreground'
-					: 'border-transparent text-muted-foreground hover:text-foreground'}"
+					: 'text-muted-foreground hover:text-foreground border-transparent'}"
 				onclick={() => setScope('catalog')}>Catalog</button
 			>
 		</div>
 
 		<form onsubmit={runSearch} class="flex items-center gap-2">
 			<div class="relative flex-1">
-				<Search class="absolute top-2.5 left-3 h-4 w-4 text-muted-foreground" />
+				<Search class="text-muted-foreground absolute top-2.5 left-3 h-4 w-4" />
 				<input
 					type="text"
 					bind:value={q}
 					placeholder={scope === 'lines'
 						? 'search transcribed lines… (FTS — exact tokens)'
 						: 'search archive catalog (volume titles, descriptions, dates)…'}
-					class="w-full rounded-md border border-input bg-background py-2 pr-3 pl-9 text-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
+					class="border-input bg-background ring-offset-background focus-visible:ring-ring w-full rounded-md border py-2 pr-3 pl-9 text-sm outline-none focus-visible:ring-2"
 				/>
 			</div>
 			<select
 				bind:value={limit}
-				class="rounded-md border border-input bg-background px-2 py-2 text-sm"
+				class="border-input bg-background rounded-md border px-2 py-2 text-sm"
 			>
 				<option value={20}>20</option>
 				<option value={50}>50</option>
@@ -276,14 +271,14 @@
 			</select>
 			<button
 				type="submit"
-				class="rounded-md bg-primary px-4 py-2 text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+				class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-2 disabled:opacity-50"
 				disabled={loading || !q.trim()}
 			>
 				{#if loading}<Loader2 class="h-4 w-4 animate-spin" />{:else}Search{/if}
 			</button>
 		</form>
 
-		<div class="flex items-center gap-3 text-xs text-muted-foreground">
+		<div class="text-muted-foreground flex items-center gap-3 text-xs">
 			{#if scope === 'lines' && stats}
 				<Badge variant="secondary">
 					{stats.available ? `${stats.rows.toLocaleString()} lines indexed` : 'index unavailable'}
@@ -312,7 +307,7 @@
 					<span>Show:</span>
 					<select
 						bind:value={localFilter}
-						class="cursor-pointer rounded border border-input bg-background px-1.5 py-0.5 text-xs"
+						class="border-input bg-background cursor-pointer rounded border px-1.5 py-0.5 text-xs"
 					>
 						<option value="all">all</option>
 						<option value="listed">listed</option>
@@ -324,7 +319,7 @@
 		</div>
 
 		{#if error}
-			<Card class="border-destructive/40 bg-destructive/10 p-3 text-destructive">{error}</Card>
+			<Card class="border-destructive/40 bg-destructive/10 text-destructive p-3">{error}</Card>
 		{/if}
 
 		{#if scope === 'lines'}
@@ -334,7 +329,7 @@
 						<div
 							role="button"
 							tabindex="0"
-							class="flex cursor-pointer flex-col gap-2 rounded-md border bg-card p-3 text-left transition hover:border-primary/50 hover:bg-accent/30 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+							class="bg-card hover:border-primary/50 hover:bg-accent/30 focus-visible:ring-ring flex cursor-pointer flex-col gap-2 rounded-md border p-3 text-left transition focus-visible:ring-2 focus-visible:outline-none"
 							onclick={() => gotoHit(h)}
 							onkeydown={(e) => onCardKey(e, h)}
 						>
@@ -346,10 +341,10 @@
 								     (viewBox = "hpos vpos width height"), so it auto-aligns with
 								     the cropped image. `non-scaling-stroke` keeps the line crisp
 								     regardless of zoom. -->
-								<div class="relative overflow-x-auto rounded border bg-background">
+								<div class="bg-background relative overflow-x-auto rounded border">
 									<button
 										type="button"
-										class="absolute top-1.5 right-1.5 z-10 rounded bg-background/85 p-1.5 text-muted-foreground shadow-sm backdrop-blur-sm transition hover:bg-background hover:text-foreground"
+										class="bg-background/85 text-muted-foreground hover:bg-background hover:text-foreground absolute top-1.5 right-1.5 z-10 rounded p-1.5 shadow-sm backdrop-blur-sm transition"
 										onclick={(e) => copyImage(e, h)}
 										title="Copy image to clipboard"
 										aria-label="Copy image to clipboard"
@@ -390,7 +385,7 @@
 									<div class="truncate font-mono text-base">
 										{#each splitForHighlight(h.text, highlightedQuery) as seg}
 											{#if seg.match}
-												<mark class="rounded bg-amber-300/70 px-0.5 text-foreground"
+												<mark class="text-foreground rounded bg-amber-300/70 px-0.5"
 													>{seg.text}</mark
 												>
 											{:else}{seg.text}{/if}
@@ -406,12 +401,12 @@
 											{#if h.catalog.date_text}
 												<span class="text-muted-foreground"> · {h.catalog.date_text}</span>
 											{/if}
-											<span class="ml-1 font-mono text-muted-foreground"
+											<span class="text-muted-foreground ml-1 font-mono"
 												>{h.catalog.reference_code}</span
 											>
 										</div>
 									{/if}
-									<div class="mt-0.5 truncate text-[11px] text-muted-foreground">
+									<div class="text-muted-foreground mt-0.5 truncate text-[11px]">
 										{h.batch_id} · {h.page_id} · L{h.line_idx}
 									</div>
 								</div>
@@ -421,7 +416,7 @@
 					{/each}
 				</div>
 			{:else if !loading && q.trim()}
-				<Card class="p-6 text-center text-muted-foreground">No hits.</Card>
+				<Card class="text-muted-foreground p-6 text-center">No hits.</Card>
 			{/if}
 		{:else if visibleCatalogHits.length > 0}
 			<!-- Catalog hits: each one is a digitised volume in some archive's
@@ -445,13 +440,13 @@
 						href={localHref || externalHref || '#'}
 						target={localHref ? undefined : '_blank'}
 						rel={localHref ? undefined : 'noopener'}
-						class="flex flex-col gap-2 rounded-md border bg-card p-3 text-left transition hover:border-primary/50 hover:bg-accent/30 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none {accentClass}"
+						class="bg-card hover:border-primary/50 hover:bg-accent/30 focus-visible:ring-ring flex flex-col gap-2 rounded-md border p-3 text-left transition focus-visible:ring-2 focus-visible:outline-none {accentClass}"
 					>
 						<div class="flex items-start gap-3">
 							<div class="min-w-0 flex-1">
 								<div class="flex flex-wrap items-center gap-2 text-base font-medium">
 									{#each splitForHighlight(h.fonds_title || '(untitled fonds)', highlightedQuery) as seg}
-										{#if seg.match}<mark class="rounded bg-amber-300/70 px-0.5 text-foreground"
+										{#if seg.match}<mark class="text-foreground rounded bg-amber-300/70 px-0.5"
 												>{seg.text}</mark
 											>{:else}{seg.text}{/if}
 									{/each}
@@ -459,8 +454,7 @@
 										<span class="text-muted-foreground">›</span>
 										<span>
 											{#each splitForHighlight(h.series_title, highlightedQuery) as seg}
-												{#if seg.match}<mark
-														class="rounded bg-amber-300/70 px-0.5 text-foreground"
+												{#if seg.match}<mark class="text-foreground rounded bg-amber-300/70 px-0.5"
 														>{seg.text}</mark
 													>{:else}{seg.text}{/if}
 											{/each}
@@ -470,8 +464,7 @@
 										<span class="text-muted-foreground">›</span>
 										<span class="font-mono text-sm">
 											{#each splitForHighlight(h.volume_title, highlightedQuery) as seg}
-												{#if seg.match}<mark
-														class="rounded bg-amber-300/70 px-0.5 text-foreground"
+												{#if seg.match}<mark class="text-foreground rounded bg-amber-300/70 px-0.5"
 														>{seg.text}</mark
 													>{:else}{seg.text}{/if}
 											{/each}
@@ -479,15 +472,15 @@
 									{/if}
 								</div>
 								{#if h.description}
-									<div class="mt-1 line-clamp-2 text-sm text-muted-foreground">
+									<div class="text-muted-foreground mt-1 line-clamp-2 text-sm">
 										{#each splitForHighlight(h.description, highlightedQuery) as seg}
-											{#if seg.match}<mark class="rounded bg-amber-300/70 px-0.5 text-foreground"
+											{#if seg.match}<mark class="text-foreground rounded bg-amber-300/70 px-0.5"
 													>{seg.text}</mark
 												>{:else}{seg.text}{/if}
 										{/each}
 									</div>
 								{/if}
-								<div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+								<div class="text-muted-foreground mt-1 flex flex-wrap items-center gap-2 text-xs">
 									<Badge variant="secondary">{h.archive_code}</Badge>
 									{#if fmtDate(h)}<span>{fmtDate(h)}</span>{/if}
 									<span class="font-mono">{h.reference_code}</span>
@@ -495,26 +488,20 @@
 									     (transcribed > cached > listed). Skipped entirely for volumes
 									     unknown to batches.db — those just route to Riksarkivet. -->
 									{#if h.transcribed}
-										<Badge
-											class="bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
-										>
+										<Badge class="bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
 											Transcribed
 										</Badge>
 									{:else if h.cached}
-										<Badge class="bg-blue-500/20 text-blue-700 dark:text-blue-300">
-											Cached
-										</Badge>
+										<Badge class="bg-blue-500/20 text-blue-700 dark:text-blue-300">Cached</Badge>
 									{:else if h.listed}
-										<Badge class="bg-amber-500/20 text-amber-700 dark:text-amber-300">
-											Listed
-										</Badge>
+										<Badge class="bg-amber-500/20 text-amber-700 dark:text-amber-300">Listed</Badge>
 									{/if}
 								</div>
 							</div>
 							{#if localHref}
 								<Search class="mt-1 h-4 w-4 shrink-0 text-emerald-600" />
 							{:else if externalHref}
-								<ExternalLink class="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
+								<ExternalLink class="text-muted-foreground mt-1 h-4 w-4 shrink-0" />
 							{/if}
 						</div>
 					</a>
@@ -525,13 +512,13 @@
 			     Show: filter hides them all" — the latter is recoverable by
 			     switching back to "all". -->
 			{#if scope === 'catalog' && localFilter !== 'all' && catalogHits.length > 0}
-				<Card class="p-6 text-center text-muted-foreground">
+				<Card class="text-muted-foreground p-6 text-center">
 					{catalogHits.length} hit{catalogHits.length === 1 ? '' : 's'}, none
 					<span class="font-medium">{localFilter}</span>. Switch
 					<span class="font-medium">Show</span> to <span class="font-medium">all</span> to see them.
 				</Card>
 			{:else}
-				<Card class="p-6 text-center text-muted-foreground">No hits.</Card>
+				<Card class="text-muted-foreground p-6 text-center">No hits.</Card>
 			{/if}
 		{/if}
 	</div>

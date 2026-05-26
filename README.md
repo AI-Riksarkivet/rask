@@ -43,17 +43,17 @@ make storybook
 
 ## Common Make targets
 
-| Target | What it does |
-| --- | --- |
-| `make install` | `bun install` + `uv sync` |
-| `make build` | Build everything (uv + bun, plus cargo if present) |
-| `make test` | Run pytest + bun test (plus cargo test if present) |
-| `make check` | `fmt` + `lint` + `typecheck` |
-| `make viewer` | Run the viewer FastAPI on `:8888` |
-| `make viewer-frontend` | Run the viewer SvelteKit frontend (proxies to `:8888`) |
-| `make ray-up` / `make ray-down` | Start / stop a local Ray head node |
-| `make serve-up` / `make serve-down` | Deploy / tear down Ray Serve apps |
-| `make search-index` / `make catalog-index` / `make harvest-ead` | Indexing & EAD pipelines |
+| Target                                                          | What it does                                           |
+| --------------------------------------------------------------- | ------------------------------------------------------ |
+| `make install`                                                  | `bun install` + `uv sync`                              |
+| `make build`                                                    | Build everything (uv + bun, plus cargo if present)     |
+| `make test`                                                     | Run pytest + bun test (plus cargo test if present)     |
+| `make check`                                                    | `fmt` + `lint` + `typecheck`                           |
+| `make viewer`                                                   | Run the viewer FastAPI on `:8888`                      |
+| `make viewer-frontend`                                          | Run the viewer SvelteKit frontend (proxies to `:8888`) |
+| `make ray-up` / `make ray-down`                                 | Start / stop a local Ray head node                     |
+| `make serve-up` / `make serve-down`                             | Deploy / tear down Ray Serve apps                      |
+| `make search-index` / `make catalog-index` / `make harvest-ead` | Indexing & EAD pipelines                               |
 
 See the `Makefile` for the complete list.
 

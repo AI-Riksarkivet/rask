@@ -65,9 +65,9 @@ def process_items(items: list[Item | None]) -> list[ProcessedItem]:
 
 **Why generics?** They let you write a class or function once and reuse it for many element types **without losing type information**. `list[int]` and `list[str]` aren't compatible — `ty` will catch passing one where the other is expected. Without generics, you'd either lose the element type (`list` → "list of anything") or duplicate the class per element type.
 
-A generic also keeps the *relationship* between inputs and outputs intact. In `Result[T, E]` below, the type checker knows that `.unwrap()` on a `Result[Config, ConfigError]` returns a `Config` — not "some value of unknown type". That's the whole point.
+A generic also keeps the _relationship_ between inputs and outputs intact. In `Result[T, E]` below, the type checker knows that `.unwrap()` on a `Result[Config, ConfigError]` returns a `Config` — not "some value of unknown type". That's the whole point.
 
-Use PEP 695 type-parameter syntax — it's the form in this project. The `[T, E: Exception]` declares two type parameters; `E: Exception` is a *bound* meaning "any subclass of `Exception`".
+Use PEP 695 type-parameter syntax — it's the form in this project. The `[T, E: Exception]` declares two type parameters; `E: Exception` is a _bound_ meaning "any subclass of `Exception`".
 
 ```python
 class Result[T, E: Exception]:
@@ -233,7 +233,7 @@ class OnProgress(Protocol):
 
 **Why this matters.** An untyped decorator silently destroys its wrapped function's type information — call sites see `Any`, autocomplete dies, `ty` stops catching wrong arguments. The `**P` / `R` pattern preserves the wrapped function's full signature so callers get the same type-checking they'd get without the decorator.
 
-`**P` (a *parameter spec*) stands in for "whatever parameters the wrapped function takes". `R` stands in for "whatever it returns". The decorator passes them through unchanged, and `ty` does the rest.
+`**P` (a _parameter spec_) stands in for "whatever parameters the wrapped function takes". `R` stands in for "whatever it returns". The decorator passes them through unchanged, and `ty` does the rest.
 
 Reach for this whenever you write a decorator. Otherwise it lies about types.
 

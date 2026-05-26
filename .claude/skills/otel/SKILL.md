@@ -11,12 +11,12 @@ Layered above `python-infrastructure` → `References/observability.md`, which p
 
 ## Scope routing
 
-| If you need to… | Read |
-|---|---|
+| If you need to…                                                                                                          | Read                       |
+| ------------------------------------------------------------------------------------------------------------------------ | -------------------------- |
 | Install the Python SDK, auto-instrument, set env vars, custom spans, structured logs, graceful shutdown, troubleshooting | `references/python-sdk.md` |
-| Name spans, pick span kind, set status, choose metric instrument types, structure log records, manage cardinality | `references/signals.md` |
-| Look up the right attribute name, decide resource vs span placement, find a semconv namespace | `references/attributes.md` |
-| Run a Collector pipeline, order processors, send to a backend over OTLP | `references/collector.md` |
+| Name spans, pick span kind, set status, choose metric instrument types, structure log records, manage cardinality        | `references/signals.md`    |
+| Look up the right attribute name, decide resource vs span placement, find a semconv namespace                            | `references/attributes.md` |
+| Run a Collector pipeline, order processors, send to a backend over OTLP                                                  | `references/collector.md`  |
 
 ## Key principles
 

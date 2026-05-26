@@ -14,9 +14,7 @@
 	// Cached-or-better volumes open in our viewer; the rest route out to
 	// Riksarkivet's bildvisning. Listed-but-not-cached has no images on disk
 	// so opening it locally would 404 — keep those external too.
-	const localHref = $derived(
-		hit.cached ? `/viewer/${encodeURIComponent(hit.bild_id)}` : null,
-	);
+	const localHref = $derived(hit.cached ? `/viewer/${encodeURIComponent(hit.bild_id)}` : null);
 	const externalHref = $derived(hit.bildvisning_url || null);
 
 	const accentClass = $derived(
@@ -32,9 +30,7 @@
 	function fmtDate(h: CatalogHit): string {
 		if (h.date_text) return h.date_text;
 		if (h.date_start && h.date_end) {
-			return h.date_start === h.date_end
-				? String(h.date_start)
-				: `${h.date_start}–${h.date_end}`;
+			return h.date_start === h.date_end ? String(h.date_start) : `${h.date_start}–${h.date_end}`;
 		}
 		return '';
 	}
@@ -63,13 +59,13 @@
 	href={localHref || externalHref || '#'}
 	target={localHref ? undefined : '_blank'}
 	rel={localHref ? undefined : 'noopener'}
-	class="flex flex-col gap-2 rounded-md border bg-card p-3 text-left transition hover:border-primary/50 hover:bg-accent/30 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none {accentClass}"
+	class="bg-card hover:border-primary/50 hover:bg-accent/30 focus-visible:ring-ring flex flex-col gap-2 rounded-md border p-3 text-left transition focus-visible:ring-2 focus-visible:outline-none {accentClass}"
 >
 	<div class="flex items-start gap-3">
 		<div class="min-w-0 flex-1">
 			<div class="flex flex-wrap items-center gap-2 text-base font-medium">
 				{#each splitForHighlight(hit.fonds_title || '(untitled fonds)', highlightQuery) as seg}
-					{#if seg.match}<mark class="rounded bg-amber-300/70 px-0.5 text-foreground"
+					{#if seg.match}<mark class="text-foreground rounded bg-amber-300/70 px-0.5"
 							>{seg.text}</mark
 						>{:else}{seg.text}{/if}
 				{/each}
@@ -77,7 +73,7 @@
 					<span class="text-muted-foreground">›</span>
 					<span>
 						{#each splitForHighlight(hit.series_title, highlightQuery) as seg}
-							{#if seg.match}<mark class="rounded bg-amber-300/70 px-0.5 text-foreground"
+							{#if seg.match}<mark class="text-foreground rounded bg-amber-300/70 px-0.5"
 									>{seg.text}</mark
 								>{:else}{seg.text}{/if}
 						{/each}
@@ -87,7 +83,7 @@
 					<span class="text-muted-foreground">›</span>
 					<span class="font-mono text-sm">
 						{#each splitForHighlight(hit.volume_title, highlightQuery) as seg}
-							{#if seg.match}<mark class="rounded bg-amber-300/70 px-0.5 text-foreground"
+							{#if seg.match}<mark class="text-foreground rounded bg-amber-300/70 px-0.5"
 									>{seg.text}</mark
 								>{:else}{seg.text}{/if}
 						{/each}
@@ -95,20 +91,21 @@
 				{/if}
 			</div>
 			{#if hit.description}
-				<div class="mt-1 line-clamp-2 text-sm text-muted-foreground">
+				<div class="text-muted-foreground mt-1 line-clamp-2 text-sm">
 					{#each splitForHighlight(hit.description, highlightQuery) as seg}
-						{#if seg.match}<mark class="rounded bg-amber-300/70 px-0.5 text-foreground"
+						{#if seg.match}<mark class="text-foreground rounded bg-amber-300/70 px-0.5"
 								>{seg.text}</mark
 							>{:else}{seg.text}{/if}
 					{/each}
 				</div>
 			{/if}
-			<div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+			<div class="text-muted-foreground mt-1 flex flex-wrap items-center gap-2 text-xs">
 				<Badge variant="secondary">{hit.archive_code}</Badge>
 				{#if fmtDate(hit)}<span>{fmtDate(hit)}</span>{/if}
 				<span class="font-mono">{hit.reference_code}</span>
 				{#if hit.transcribed}
-					<Badge class="bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">Transcribed</Badge>
+					<Badge class="bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">Transcribed</Badge
+					>
 				{:else if hit.cached}
 					<Badge class="bg-blue-500/20 text-blue-700 dark:text-blue-300">Cached</Badge>
 				{:else if hit.listed}
@@ -119,7 +116,7 @@
 		{#if localHref}
 			<Search class="mt-1 h-4 w-4 shrink-0 text-emerald-600" />
 		{:else if externalHref}
-			<ExternalLink class="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
+			<ExternalLink class="text-muted-foreground mt-1 h-4 w-4 shrink-0" />
 		{/if}
 	</div>
 </a>

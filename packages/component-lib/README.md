@@ -20,26 +20,26 @@ bun run storybook
 
 ```jsonc
 {
-  "dependencies": {
-    "@your-repo/oxen": "workspace:*",
-    "bits-ui": "^2.18.0"
-  }
+	"dependencies": {
+		"@your-repo/oxen": "workspace:*",
+		"bits-ui": "^2.18.0",
+	},
 }
 ```
 
 ```svelte
 <script lang="ts">
-  import { Button, Dialog, Card } from "@your-repo/oxen";
+	import { Button, Dialog, Card } from '@your-repo/oxen';
 </script>
 ```
 
 In the app's CSS:
 
 ```css
-@import "tailwindcss";
-@source "../../../../packages/oxen_componets/dist";
-@source "../../../../packages/oxen_componets/src";
-@import "@your-repo/oxen/styles/tokens.css";
+@import 'tailwindcss';
+@source '../../../../packages/oxen_componets/dist';
+@source '../../../../packages/oxen_componets/src';
+@import '@your-repo/oxen/styles/tokens.css';
 ```
 
 ## Adding a component

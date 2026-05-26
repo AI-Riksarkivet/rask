@@ -4,12 +4,12 @@ This project uses **OpenTelemetry** (OTLP) for the three signals — traces, met
 
 ## Where to look first
 
-| If you need to… | Read |
-|---|---|
+| If you need to…                                                                              | Read                                                  |
+| -------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
 | Set up the OTel SDK, configure exporters, instrument a service (manual + auto), troubleshoot | sibling skill **`otel`** → `references/python-sdk.md` |
-| Design a Collector pipeline (receivers, processors, exporters) | sibling skill **`otel`** → `references/collector.md` |
-| Pick attribute names/values that match the spec (HTTP, DB, messaging, etc.) | sibling skill **`otel`** → `references/attributes.md` |
-| Span naming/kind/status, metric instrument types, log structure | sibling skill **`otel`** → `references/signals.md` |
+| Design a Collector pipeline (receivers, processors, exporters)                               | sibling skill **`otel`** → `references/collector.md`  |
+| Pick attribute names/values that match the spec (HTTP, DB, messaging, etc.)                  | sibling skill **`otel`** → `references/attributes.md` |
+| Span naming/kind/status, metric instrument types, log structure                              | sibling skill **`otel`** → `references/signals.md`    |
 
 This file documents the **project-specific conventions** layered on top of the `otel` skill. Read that for the deep reference.
 
@@ -17,11 +17,11 @@ This file documents the **project-specific conventions** layered on top of the `
 
 Every service sets these on `Resource.create({...})` at startup:
 
-| Key | Value | Source |
-|---|---|---|
-| `service.name` | The service name, e.g. `rask-api`, `rask-worker` | env: `OTEL_SERVICE_NAME` |
-| `service.version` | App version | env: `SERVICE_VERSION` |
-| `deployment.environment` | `local` / `staging` / `production` | env: `ENVIRONMENT` |
+| Key                      | Value                                            | Source                   |
+| ------------------------ | ------------------------------------------------ | ------------------------ |
+| `service.name`           | The service name, e.g. `rask-api`, `rask-worker` | env: `OTEL_SERVICE_NAME` |
+| `service.version`        | App version                                      | env: `SERVICE_VERSION`   |
+| `deployment.environment` | `local` / `staging` / `production`               | env: `ENVIRONMENT`       |
 
 Set via env or in code:
 
@@ -56,12 +56,12 @@ log.error("payment_failed", extra={"order_id": order.id, "provider": "stripe"}, 
 
 **Log-level discipline:**
 
-| Level | Use for | Examples |
-|---|---|---|
-| `DEBUG` | Development diagnostics | Variable values, internal state |
-| `INFO` | Request lifecycle, operations | Request start/end, job completion |
-| `WARNING` | Recoverable anomalies | Retry attempts, fallback used |
-| `ERROR` | Failures needing attention | Exceptions, service unavailable |
+| Level     | Use for                       | Examples                          |
+| --------- | ----------------------------- | --------------------------------- |
+| `DEBUG`   | Development diagnostics       | Variable values, internal state   |
+| `INFO`    | Request lifecycle, operations | Request start/end, job completion |
+| `WARNING` | Recoverable anomalies         | Retry attempts, fallback used     |
+| `ERROR`   | Failures needing attention    | Exceptions, service unavailable   |
 
 Never log expected behavior at `ERROR`. A user typing the wrong password is `INFO`, not `ERROR`.
 

@@ -32,7 +32,7 @@ lint:
 fmt:
 	cargo fmt --all
 	uv run ruff format .
-	bun run --filter '*' format
+	bun run format
 
 storybook:
 	bun run storybook

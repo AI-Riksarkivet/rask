@@ -349,13 +349,13 @@ def dashboard(request):
 
 SOLID was written for Java. Naively bolting all five onto Python produces Java-in-Python: ABC hierarchies for things that should be functions, `IUserRepository` interfaces with one implementation, DI containers for a 200-line script. **Don't.** Here's what Python keeps and what it drops:
 
-| Principle | Python verdict |
-|---|---|
-| **S** — Single Responsibility | **Keep.** Always useful. Already covered above. |
-| **O** — Open/Closed | **Reframe.** In Python, "open for extension" means "add a new function and put it in a dict / Protocol", not "make a new subclass". Don't build inheritance hierarchies for it. |
-| **L** — Liskov Substitution | **Barely applies.** Python uses duck typing — if it quacks, it's a duck. Liskov shows up only when you actually subclass, which you should rarely do. |
-| **I** — Interface Segregation | **Use `Protocol`, sparingly.** Define a `Protocol` only when there are 2+ implementations and you want to type-check them. One-implementation interfaces are pure ceremony. |
-| **D** — Dependency Inversion | **Keep, but lightweight.** Pass dependencies through `__init__` (or FastAPI `Depends`). No containers, no factories. Constructor + `Protocol` is enough. |
+| Principle                     | Python verdict                                                                                                                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **S** — Single Responsibility | **Keep.** Always useful. Already covered above.                                                                                                                                 |
+| **O** — Open/Closed           | **Reframe.** In Python, "open for extension" means "add a new function and put it in a dict / Protocol", not "make a new subclass". Don't build inheritance hierarchies for it. |
+| **L** — Liskov Substitution   | **Barely applies.** Python uses duck typing — if it quacks, it's a duck. Liskov shows up only when you actually subclass, which you should rarely do.                           |
+| **I** — Interface Segregation | **Use `Protocol`, sparingly.** Define a `Protocol` only when there are 2+ implementations and you want to type-check them. One-implementation interfaces are pure ceremony.     |
+| **D** — Dependency Inversion  | **Keep, but lightweight.** Pass dependencies through `__init__` (or FastAPI `Depends`). No containers, no factories. Constructor + `Protocol` is enough.                        |
 
 **Default to functions and modules. Reach for classes when you have state. Reach for `Protocol` when you have multiple implementations. Reach for inheritance almost never.** Composition + dict dispatch + module-level functions cover 90% of what SOLID-in-Java tries to solve with class hierarchies.
 
@@ -385,11 +385,11 @@ def discount(user) -> float:
     return 0.15 if user.is_premium() else 0.0
 ```
 
-**Pydantic exception.** Reaching into `model.field.subfield` on a Pydantic value object is fine — it's data, not behavior. Demeter is about not chaining through *behavior* boundaries (services, repositories, sessions).
+**Pydantic exception.** Reaching into `model.field.subfield` on a Pydantic value object is fine — it's data, not behavior. Demeter is about not chaining through _behavior_ boundaries (services, repositories, sessions).
 
 ## DRY — knowledge, not code
 
-DRY is about **eliminating duplicated knowledge** (the same business rule expressed in multiple places), not eliminating code that *looks* similar.
+DRY is about **eliminating duplicated knowledge** (the same business rule expressed in multiple places), not eliminating code that _looks_ similar.
 
 ```python
 # Same business rule duplicated — UNIFY
@@ -424,19 +424,19 @@ def insurance_premium(value: float, risk_factor: float) -> float:
 
 When asked to "implement pattern X in Python", default to the Python form. The Java-shape implementation is almost always over-engineered here.
 
-| Pattern | Don't (Java-in-Python) | Do (Python form) |
-|---|---|---|
-| **Singleton** | `__new__` + `threading.Lock` + double-checked locking | A module-level instance: `settings = Settings()` in `config.py`. Modules are imported once. |
-| **Factory / Factory Method** | `ABC` + concrete factory classes + `register()` | A dict mapping key → class or callable: `FORMATTERS: dict[str, type[Formatter]] = {...}`. |
-| **Builder** | Fluent `.method().url().header().build()` chains | Keyword arguments on a Pydantic model: `HttpRequest(method=..., url=..., headers=...)`. |
-| **Strategy** | `ABC` + N strategy subclasses | A dict of functions: `PAY_STRATEGIES: dict[str, Callable[[Employee], float]] = {...}`. See `anti-patterns.md` G23. |
-| **Observer / Pub-sub** | `Observable` / `Observer` / `update()` ABCs | A callback list, `asyncio.Queue`, or a NATS JetStream subject (cross-process). |
-| **Adapter** | Heavy ABC hierarchy wrapping two SDKs | A `Protocol` plus two concrete classes implementing it. See "Composition over inheritance". |
-| **Decorator** | Wrapper class with `__call__` and inheritance | A function decorator: `@retry`, `@traced`. See `python-infrastructure/References/resilience.md`. |
-| **Template Method** | ABC with abstract steps overridden by subclasses | Pass a function (or `Protocol`) as a parameter. |
-| **Command** | `Command` class with `execute()` method | A callable (function or closure). |
-| **Iterator** | `__iter__` / `__next__` boilerplate | A generator function (`def gen(): yield ...`) or comprehension. |
-| **Chain of Responsibility** | Linked-list of `Handler` subclasses | A list of functions in a loop, or `functools.reduce`. |
+| Pattern                      | Don't (Java-in-Python)                                | Do (Python form)                                                                                                   |
+| ---------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| **Singleton**                | `__new__` + `threading.Lock` + double-checked locking | A module-level instance: `settings = Settings()` in `config.py`. Modules are imported once.                        |
+| **Factory / Factory Method** | `ABC` + concrete factory classes + `register()`       | A dict mapping key → class or callable: `FORMATTERS: dict[str, type[Formatter]] = {...}`.                          |
+| **Builder**                  | Fluent `.method().url().header().build()` chains      | Keyword arguments on a Pydantic model: `HttpRequest(method=..., url=..., headers=...)`.                            |
+| **Strategy**                 | `ABC` + N strategy subclasses                         | A dict of functions: `PAY_STRATEGIES: dict[str, Callable[[Employee], float]] = {...}`. See `anti-patterns.md` G23. |
+| **Observer / Pub-sub**       | `Observable` / `Observer` / `update()` ABCs           | A callback list, `asyncio.Queue`, or a NATS JetStream subject (cross-process).                                     |
+| **Adapter**                  | Heavy ABC hierarchy wrapping two SDKs                 | A `Protocol` plus two concrete classes implementing it. See "Composition over inheritance".                        |
+| **Decorator**                | Wrapper class with `__call__` and inheritance         | A function decorator: `@retry`, `@traced`. See `python-infrastructure/References/resilience.md`.                   |
+| **Template Method**          | ABC with abstract steps overridden by subclasses      | Pass a function (or `Protocol`) as a parameter.                                                                    |
+| **Command**                  | `Command` class with `execute()` method               | A callable (function or closure).                                                                                  |
+| **Iterator**                 | `__iter__` / `__next__` boilerplate                   | A generator function (`def gen(): yield ...`) or comprehension.                                                    |
+| **Chain of Responsibility**  | Linked-list of `Handler` subclasses                   | A list of functions in a loop, or `functools.reduce`.                                                              |
 
 If you're asked to implement a named pattern and the Python form isn't in this table, the answer is almost always "use a function or a `Protocol`, not a class hierarchy".
 

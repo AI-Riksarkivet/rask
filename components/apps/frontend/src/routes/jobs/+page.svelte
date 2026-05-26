@@ -75,14 +75,14 @@
 <RayShell title="Jobs">
 	<div class="flex flex-col gap-4 p-6 text-sm">
 		{#if error}
-			<Card class="border-destructive/40 bg-destructive/10 p-3 text-destructive">{error}</Card>
+			<Card class="border-destructive/40 bg-destructive/10 text-destructive p-3">{error}</Card>
 		{/if}
 
 		{#if payload && !payload.ok}
 			<Card class="border-amber-500/40 bg-amber-500/10 p-3 text-sm">
 				Ray dashboard unreachable at <span class="font-mono">{payload.dashboard_url}</span>
 				{#if payload.error}
-					<div class="mt-1 text-xs text-muted-foreground">{payload.error}</div>
+					<div class="text-muted-foreground mt-1 text-xs">{payload.error}</div>
 				{/if}
 			</Card>
 		{/if}
@@ -111,31 +111,31 @@
 			<Card class="overflow-hidden">
 				<div class="max-h-[70vh] overflow-auto">
 					<table class="w-full border-collapse text-xs">
-						<thead class="sticky top-0 z-10 bg-card text-left">
+						<thead class="bg-card sticky top-0 z-10 text-left">
 							<tr class="border-b">
 								{#each ['status', 'submission_id', 'started', 'runtime', 'batches', 'message'] as col (col)}
-									<th class="px-3 py-2 font-medium text-muted-foreground">{col}</th>
+									<th class="text-muted-foreground px-3 py-2 font-medium">{col}</th>
 								{/each}
-								<th class="px-3 py-2 font-medium text-muted-foreground">logs</th>
+								<th class="text-muted-foreground px-3 py-2 font-medium">logs</th>
 							</tr>
 						</thead>
 						<tbody>
 							{#each jobs as j (j.submission_id)}
-								<tr class="border-b border-border/40 hover:bg-muted/40">
+								<tr class="border-border/40 hover:bg-muted/40 border-b">
 									<td class="px-3 py-1.5">
 										<Badge
 											variant={variantFor(j.status)}
-											class={j.status === 'RUNNING' ? 'animate-pulse' : ''}
-										>{j.status}</Badge>
+											class={j.status === 'RUNNING' ? 'animate-pulse' : ''}>{j.status}</Badge
+										>
 									</td>
 									<td class="px-3 py-1.5 font-mono">{j.submission_id}</td>
-									<td class="px-3 py-1.5 font-mono text-muted-foreground">
+									<td class="text-muted-foreground px-3 py-1.5 font-mono">
 										{fmtTime(j.start_time)}
 									</td>
 									<td class="px-3 py-1.5 font-mono tabular-nums">
 										{fmtRuntime(j.start_time, j.end_time)}
 									</td>
-									<td class="px-3 py-1.5 text-muted-foreground">
+									<td class="text-muted-foreground px-3 py-1.5">
 										{j.batches.length}
 										{#if j.batches.length}
 											<span class="ml-1 text-[10px]">
@@ -146,7 +146,7 @@
 										{/if}
 									</td>
 									<td
-										class="max-w-[24rem] truncate px-3 py-1.5 text-muted-foreground"
+										class="text-muted-foreground max-w-[24rem] truncate px-3 py-1.5"
 										title={j.message ?? ''}
 									>
 										{#if j.error_type}
@@ -167,7 +167,7 @@
 							{/each}
 							{#if jobs.length === 0}
 								<tr>
-									<td class="px-3 py-6 text-center text-muted-foreground" colspan="7">
+									<td class="text-muted-foreground px-3 py-6 text-center" colspan="7">
 										No jobs match this filter.
 									</td>
 								</tr>

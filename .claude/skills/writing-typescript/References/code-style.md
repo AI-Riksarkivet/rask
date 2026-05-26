@@ -4,14 +4,14 @@ Toolchain, `tsconfig.json`, file organization, import style. Project-aligned: Bu
 
 ## Toolchain
 
-| Tool | Purpose | Notes |
-|---|---|---|
-| **bun** | Runtime + package manager + test runner | Replaces `npm`/`pnpm`/`yarn`/`node`/`jest`. |
-| **vite** | Frontend dev server + library bundler | Used by SvelteKit and the component library. |
-| **vitest** | Test runner | Compatible with Jest API; Vite-native. |
-| **eslint** | Linter | Project config in `eslint.config.js` (flat config). |
-| **prettier** | Formatter | Project config in `.prettierrc`. |
-| **TypeScript** | Type checker | Run via `bun run check` (which usually wraps `svelte-check` + `tsc --noEmit`). |
+| Tool           | Purpose                                 | Notes                                                                          |
+| -------------- | --------------------------------------- | ------------------------------------------------------------------------------ |
+| **bun**        | Runtime + package manager + test runner | Replaces `npm`/`pnpm`/`yarn`/`node`/`jest`.                                    |
+| **vite**       | Frontend dev server + library bundler   | Used by SvelteKit and the component library.                                   |
+| **vitest**     | Test runner                             | Compatible with Jest API; Vite-native.                                         |
+| **eslint**     | Linter                                  | Project config in `eslint.config.js` (flat config).                            |
+| **prettier**   | Formatter                               | Project config in `.prettierrc`.                                               |
+| **TypeScript** | Type checker                            | Run via `bun run check` (which usually wraps `svelte-check` + `tsc --noEmit`). |
 
 ## `tsconfig.json` essentials
 
@@ -19,20 +19,20 @@ Required compiler options for any project module:
 
 ```json
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
-    "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
-    "isolatedModules": true,
-    "verbatimModuleSyntax": true,
-    "skipLibCheck": true,
-    "esModuleInterop": false
-  }
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"exactOptionalPropertyTypes": true,
+		"noImplicitReturns": true,
+		"noFallthroughCasesInSwitch": true,
+		"isolatedModules": true,
+		"verbatimModuleSyntax": true,
+		"skipLibCheck": true,
+		"esModuleInterop": false
+	}
 }
 ```
 
@@ -110,24 +110,24 @@ Barrel exports are fine for **library entry points** (`packages/oxen_componets/s
 
 ## File and identifier naming
 
-| Item | Style | Example |
-|---|---|---|
-| Files (utility) | `kebab-case.ts` | `api-client.ts`, `parse-config.ts` |
-| Files (Svelte components) | `PascalCase.svelte` | `Button.svelte`, `OrderCard.svelte` |
-| Functions, variables | `camelCase` | `fetchUser`, `parseConfig` |
-| Types, interfaces, classes | `PascalCase` | `User`, `OrderService` |
-| Type parameters | `PascalCase`, descriptive | `<TItem>` not `<T>` when scope is large |
-| Constants (module-level) | `SCREAMING_SNAKE_CASE` | `MAX_RETRIES`, `API_BASE_URL` |
-| Booleans | prefix with `is`/`has`/`can`/`should` | `isLoading`, `hasPermission` |
-| Event handlers (props) | `onX` (lowercase, Svelte 5 convention) | `onclick`, `onsubmit` |
-| Event handler implementations | `handleX` | `handleSubmit`, `handleClose` |
+| Item                          | Style                                  | Example                                 |
+| ----------------------------- | -------------------------------------- | --------------------------------------- |
+| Files (utility)               | `kebab-case.ts`                        | `api-client.ts`, `parse-config.ts`      |
+| Files (Svelte components)     | `PascalCase.svelte`                    | `Button.svelte`, `OrderCard.svelte`     |
+| Functions, variables          | `camelCase`                            | `fetchUser`, `parseConfig`              |
+| Types, interfaces, classes    | `PascalCase`                           | `User`, `OrderService`                  |
+| Type parameters               | `PascalCase`, descriptive              | `<TItem>` not `<T>` when scope is large |
+| Constants (module-level)      | `SCREAMING_SNAKE_CASE`                 | `MAX_RETRIES`, `API_BASE_URL`           |
+| Booleans                      | prefix with `is`/`has`/`can`/`should`  | `isLoading`, `hasPermission`            |
+| Event handlers (props)        | `onX` (lowercase, Svelte 5 convention) | `onclick`, `onsubmit`                   |
+| Event handler implementations | `handleX`                              | `handleSubmit`, `handleClose`           |
 
 ## Style guidelines
 
 - Use `const` by default. `let` only when reassignment is needed. Never `var`.
 - Prefer `interface` for **object shapes that might be extended** (component props, public APIs). Use `type` for **unions, intersections, mapped types, computed types**. When in doubt, `type`.
 - Mark fields `readonly` when they shouldn't mutate. Doesn't change runtime behavior; catches bugs at compile time.
-- Don't write JSDoc to repeat types — the types ARE the docs. Write JSDoc only when there's a *why* that's non-obvious.
+- Don't write JSDoc to repeat types — the types ARE the docs. Write JSDoc only when there's a _why_ that's non-obvious.
 - One responsibility per file. If you have `utils.ts` over 200 lines, it's two files pretending to be one.
 
 ## Bun-specific notes

@@ -98,7 +98,7 @@ on every worker. Under the new layout this must be re-pointed:
   change beyond paths.
 - **uv workspace.** Root `pyproject.toml`:
   `[tool.uv.workspace] members = ["libraries/*", "components/apps/*",
-  "components/services/*"]`. `components/scripts/` is not a member. Each
+"components/services/*"]`. `components/scripts/` is not a member. Each
   `projects/<name>` is a standalone project pulling members via
   `[tool.uv.sources] {workspace = true}`.
 - **bun workspace.** Root `package.json` `workspaces` gains

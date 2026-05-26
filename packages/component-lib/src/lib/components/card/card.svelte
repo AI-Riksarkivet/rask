@@ -1,17 +1,13 @@
 <script lang="ts">
-  import type { HTMLAttributes } from "svelte/elements";
-  import { cn } from "../../utils/cn.js";
+	import type { HTMLAttributes } from 'svelte/elements';
+	import { cn } from '../../utils/cn.js';
 
-  let {
-    class: className,
-    children,
-    ...rest
-  }: HTMLAttributes<HTMLDivElement> = $props();
+	let { class: className, children, ...rest }: HTMLAttributes<HTMLDivElement> = $props();
 </script>
 
 <div
-  class={cn("rounded-lg border border-border bg-card text-card-foreground shadow-sm", className)}
-  {...rest}
+	class={cn('border-border bg-card text-card-foreground rounded-lg border shadow-sm', className)}
+	{...rest}
 >
-  {@render children?.()}
+	{@render children?.()}
 </div>

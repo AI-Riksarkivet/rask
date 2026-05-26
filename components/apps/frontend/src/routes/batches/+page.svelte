@@ -266,7 +266,12 @@
 		const sameDay = d.toDateString() === new Date().toDateString();
 		return sameDay
 			? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-			: d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+			: d.toLocaleString([], {
+					month: 'short',
+					day: 'numeric',
+					hour: '2-digit',
+					minute: '2-digit',
+				});
 	}
 </script>
 
@@ -277,8 +282,13 @@
 <RayShell title="Batches">
 	{#snippet actions()}
 		{#if payload}
-			<span class="mr-1 hidden text-[11px] text-[oklch(0.78_0.005_260)] sm:inline" title={`last synced ${payload.generated_at ?? 'never'}`}>
-				{payload.summary.total_batches.toLocaleString()} batches · synced {fmtSync(payload.generated_at)}
+			<span
+				class="mr-1 hidden text-[11px] text-[oklch(0.78_0.005_260)] sm:inline"
+				title={`last synced ${payload.generated_at ?? 'never'}`}
+			>
+				{payload.summary.total_batches.toLocaleString()} batches · synced {fmtSync(
+					payload.generated_at,
+				)}
 			</span>
 		{/if}
 		<Button size="sm" variant="outline" onclick={runSync} disabled={syncing}>
@@ -288,10 +298,8 @@
 	{/snippet}
 
 	<div class="flex flex-col gap-4 p-6 text-sm">
-
-
 		{#if error}
-			<Card class="border-destructive/40 bg-destructive/10 p-3 text-destructive">
+			<Card class="border-destructive/40 bg-destructive/10 text-destructive p-3">
 				{error}
 			</Card>
 		{/if}
@@ -302,42 +310,42 @@
 			<!-- Summary tiles -->
 			<section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
 				<Card class="p-4">
-					<div class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+					<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
 						Pages expected
 					</div>
 					<div class="mt-1 font-mono text-2xl tabular-nums">{totalExpected.toLocaleString()}</div>
-					<div class="text-xs text-muted-foreground">
+					<div class="text-muted-foreground text-xs">
 						{payload.summary.accessible.batches} accessible batches
 					</div>
 				</Card>
 				<Card class="p-4">
-					<div class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+					<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
 						Cached in S3
 					</div>
 					<div class="mt-1 font-mono text-2xl tabular-nums">{totalCached.toLocaleString()}</div>
-					<div class="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+					<div class="bg-muted mt-1.5 h-1.5 w-full overflow-hidden rounded-full">
 						<div class="h-full bg-sky-500 transition-all" style:width={`${cachedPct}%`}></div>
 					</div>
-					<div class="mt-1 text-xs text-muted-foreground">{cachedPct.toFixed(2)}%</div>
+					<div class="text-muted-foreground mt-1 text-xs">{cachedPct.toFixed(2)}%</div>
 				</Card>
 				<Card class="p-4">
-					<div class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+					<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
 						Transcribed
 					</div>
 					<div class="mt-1 font-mono text-2xl tabular-nums">
 						{totalTranscribed.toLocaleString()}
 					</div>
-					<div class="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+					<div class="bg-muted mt-1.5 h-1.5 w-full overflow-hidden rounded-full">
 						<div
 							class="h-full bg-emerald-500 transition-all"
 							style:width={`${transcribedPct}%`}
 						></div>
 					</div>
-					<div class="mt-1 text-xs text-muted-foreground">{transcribedPct.toFixed(2)}%</div>
+					<div class="text-muted-foreground mt-1 text-xs">{transcribedPct.toFixed(2)}%</div>
 				</Card>
 				<Card class="p-4">
 					<div class="flex items-baseline gap-2">
-						<span class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+						<span class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
 							Ray cluster
 						</span>
 						{#if ray.cluster?.ok}
@@ -352,14 +360,14 @@
 						<div class="mt-1 font-mono text-2xl tabular-nums">
 							{ur.GPU.toFixed(0)}/{tr.GPU.toFixed(0)} GPU
 						</div>
-						<div class="text-xs text-muted-foreground">
-							{ur.CPU.toFixed(0)}/{tr.CPU.toFixed(0)} CPU · {ray.cluster.alive_count}/{ray
-								.cluster.node_count} nodes
+						<div class="text-muted-foreground text-xs">
+							{ur.CPU.toFixed(0)}/{tr.CPU.toFixed(0)} CPU · {ray.cluster.alive_count}/{ray.cluster
+								.node_count} nodes
 						</div>
 					{:else}
-						<div class="mt-1 font-mono text-sm text-muted-foreground">no dashboard</div>
+						<div class="text-muted-foreground mt-1 font-mono text-sm">no dashboard</div>
 						<div
-							class="truncate text-[10px] text-muted-foreground"
+							class="text-muted-foreground truncate text-[10px]"
 							title={ray.cluster?.error ?? ray.jobs?.error ?? ''}
 						>
 							{ray.cluster?.dashboard_url ?? ''}
@@ -377,7 +385,7 @@
 						{@const cd = (orch.cooldowns ?? []).filter((c) => c.pipeline === kind)}
 						<Card class="p-4">
 							<div class="flex items-baseline justify-between">
-								<div class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+								<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
 									{kind === 'prefetch' ? 'Prefetch slot' : 'HTR slot'}
 								</div>
 								{#if slot.running}
@@ -391,11 +399,11 @@
 							{#if slot.running}
 								<div class="mt-1 font-mono">
 									chunk {slot.running.chunk_id}
-									<span class="text-xs text-muted-foreground">
+									<span class="text-muted-foreground text-xs">
 										· {fmtRuntime(slot.running.start_time, null)}
 									</span>
 								</div>
-								<div class="truncate text-[11px] text-muted-foreground">
+								<div class="text-muted-foreground truncate text-[11px]">
 									{slot.running.submission_id}
 								</div>
 								{#if slot.stages?.length}
@@ -411,26 +419,28 @@
 												class="flex items-center gap-2 text-[10px] tabular-nums"
 												title={`${st.stage}\nfinished: ${st.finished}\nrunning: ${st.running}\npending: ${st.pending}\nfailed: ${st.failed}\ntotal: ${st.total}`}
 											>
-												<span class="w-20 truncate text-muted-foreground"
+												<span class="text-muted-foreground w-20 truncate"
 													>{st.stage.replace('Actor', '')}</span
 												>
-												<div class="relative flex h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+												<div
+													class="bg-muted relative flex h-1.5 flex-1 overflow-hidden rounded-full"
+												>
 													<div class="h-full bg-emerald-500/70" style:width={`${wFinished}%`}></div>
 													<div class="h-full bg-amber-500/80" style:width={`${wRunning}%`}></div>
 													<div class="h-full bg-sky-500/60" style:width={`${wPending}%`}></div>
 												</div>
-												<span class="w-28 text-right font-mono text-muted-foreground">
+												<span class="text-muted-foreground w-28 text-right font-mono">
 													{st.finished}{#if st.running}<span
 															class="ml-0.5 text-amber-600 dark:text-amber-400">+{st.running}</span
-														>{/if}{#if st.pending}<span class="ml-0.5 text-sky-600 dark:text-sky-400"
-															>→{st.pending}</span
-														>{/if}{#if st.failed}<span class="ml-0.5 text-destructive"
+														>{/if}{#if st.pending}<span
+															class="ml-0.5 text-sky-600 dark:text-sky-400">→{st.pending}</span
+														>{/if}{#if st.failed}<span class="text-destructive ml-0.5"
 															>✗{st.failed}</span
 														>{/if}
 												</span>
 											</div>
 										{/each}
-										<div class="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground">
+										<div class="text-muted-foreground mt-1 flex items-center gap-2 text-[10px]">
 											<span class="inline-block h-1.5 w-2 rounded-sm bg-emerald-500/70"></span>
 											finished
 											<span class="inline-block h-1.5 w-2 rounded-sm bg-amber-500/80"></span>
@@ -443,17 +453,17 @@
 							{:else if slot.next !== null}
 								<div class="mt-1 font-mono">next: chunk {slot.next}</div>
 							{:else}
-								<div class="mt-1 font-mono text-muted-foreground">
+								<div class="text-muted-foreground mt-1 font-mono">
 									{kind === 'htr' ? 'no chunk ≥ 95% cached' : 'all chunks cached'}
 								</div>
 							{/if}
-							<div class="mt-1 text-xs text-muted-foreground">
+							<div class="text-muted-foreground mt-1 text-xs">
 								{slot.queue_len} chunk{slot.queue_len === 1 ? '' : 's'}
 								{kind === 'htr' ? 'ready for HTR' : 'pending prefetch'}
 							</div>
 							{#if cd.length}
 								<div class="mt-2 border-t pt-2 text-[11px]">
-									<div class="mb-0.5 text-muted-foreground">cooldown:</div>
+									<div class="text-muted-foreground mb-0.5">cooldown:</div>
 									<div class="flex flex-wrap gap-1">
 										{#each cd as c (c.submission_id)}
 											<button
@@ -461,7 +471,8 @@
 												class="rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] hover:bg-amber-500/20"
 												onclick={() => (chunkFilter = c.chunk_id)}
 												title="cooldown {c.expires_in_secs}s remaining"
-											>chunk {c.chunk_id} · {c.expires_in_secs}s</button>
+												>chunk {c.chunk_id} · {c.expires_in_secs}s</button
+											>
 										{/each}
 									</div>
 								</div>
@@ -475,15 +486,12 @@
 			{#if ray.jobs?.ok && ray.jobs.jobs && ray.jobs.jobs.length}
 				<Card class="overflow-hidden">
 					<div class="flex items-center justify-between border-b px-4 py-2">
-						<div class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+						<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
 							Recent RayJobs
 						</div>
-						<a
-							class="text-xs text-primary hover:underline"
-							href="/jobs"
-						>view all →</a>
+						<a class="text-primary text-xs hover:underline" href="/jobs">view all →</a>
 					</div>
-					<div class="flex max-h-44 flex-col divide-y divide-border overflow-auto">
+					<div class="divide-border flex max-h-44 flex-col divide-y overflow-auto">
 						{#each ray.jobs.jobs.slice(0, 10) as j (j.submission_id)}
 							<div class="flex items-center gap-3 px-4 py-1.5 text-xs">
 								<Badge
@@ -492,10 +500,10 @@
 								>
 									{j.status}
 								</Badge>
-								<span class="font-mono text-foreground">{j.submission_id.slice(0, 24)}</span>
+								<span class="text-foreground font-mono">{j.submission_id.slice(0, 24)}</span>
 								<span class="text-muted-foreground">{fmtRuntime(j.start_time, j.end_time)}</span>
 								{#if j.batches.length}
-									<span class="truncate text-muted-foreground">
+									<span class="text-muted-foreground truncate">
 										{j.batches.length} batch{j.batches.length === 1 ? '' : 'es'}: {j.batches
 											.slice(0, 3)
 											.join(', ')}{j.batches.length > 3 ? ` +${j.batches.length - 3}` : ''}
@@ -503,7 +511,7 @@
 								{/if}
 								{#if j.submission_id}
 									<a
-										class="ml-auto text-primary hover:underline"
+										class="text-primary ml-auto hover:underline"
 										href={`/embed?path=/jobs/${encodeURIComponent(j.submission_id)}`}
 										title="Open in embedded Ray dashboard">logs</a
 									>
@@ -518,10 +526,9 @@
 			{#if chunks.length}
 				<Card class="p-4">
 					<div class="mb-2 flex items-center justify-between gap-3">
-						<div class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-							{chunks.length} chunks · ~{Math.round(
-								chunks[0].expected_pages,
-							).toLocaleString()} pages each
+						<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
+							{chunks.length} chunks · ~{Math.round(chunks[0].expected_pages).toLocaleString()} pages
+							each
 						</div>
 						{#if chunkFilter !== 'all'}
 							<div class="flex items-center gap-2">
@@ -535,16 +542,14 @@
 										? `submitting chunk ${chunkFilter}…`
 										: `submit chunk ${chunkFilter}`}
 								</Button>
-								<Button
-									size="sm"
-									variant="ghost"
-									onclick={() => (chunkFilter = 'all')}
-								>clear filter</Button>
+								<Button size="sm" variant="ghost" onclick={() => (chunkFilter = 'all')}
+									>clear filter</Button
+								>
 							</div>
 						{/if}
 					</div>
 					{#if submitMsg}
-						<div class="mb-2 rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs">
+						<div class="border-primary/30 bg-primary/10 mb-2 rounded-md border px-3 py-1.5 text-xs">
 							{submitMsg}
 						</div>
 					{/if}
@@ -554,13 +559,12 @@
 							{@const isPrefetch = prefetchingChunks.has(c.chunk_id) && !isHtr}
 							<button
 								type="button"
-								class={`h-5 w-3 rounded-[2px] transition hover:ring-1 hover:ring-ring ${chunkColor(c)}
-									${chunkFilter === c.chunk_id ? 'ring-2 ring-primary ring-offset-1 ring-offset-card' : ''}
-									${isHtr ? 'ring-2 ring-amber-400 animate-pulse' : ''}
-									${isPrefetch ? 'ring-2 ring-sky-400 animate-pulse' : ''}`}
+								class={`hover:ring-ring h-5 w-3 rounded-[2px] transition hover:ring-1 ${chunkColor(c)}
+									${chunkFilter === c.chunk_id ? 'ring-primary ring-offset-card ring-2 ring-offset-1' : ''}
+									${isHtr ? 'animate-pulse ring-2 ring-amber-400' : ''}
+									${isPrefetch ? 'animate-pulse ring-2 ring-sky-400' : ''}`}
 								title={`${chunkTitle(c)}${isHtr ? '\n[ray: htr in-flight]' : ''}${isPrefetch ? '\n[ray: prefetch in-flight]' : ''}`}
-								onclick={() =>
-									(chunkFilter = chunkFilter === c.chunk_id ? 'all' : c.chunk_id)}
+								onclick={() => (chunkFilter = chunkFilter === c.chunk_id ? 'all' : c.chunk_id)}
 								aria-label={`chunk ${c.chunk_id}`}
 							></button>
 						{/each}
@@ -574,13 +578,13 @@
 					type="text"
 					placeholder="Search batch_id, title, volym…"
 					bind:value={search}
-					class="flex-1 min-w-[14rem] rounded-md border bg-background px-3 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					class="bg-background focus-visible:ring-ring min-w-[14rem] flex-1 rounded-md border px-3 py-1.5 text-sm outline-none focus-visible:ring-2"
 				/>
-				<label class="flex items-center gap-2 text-xs text-muted-foreground">
+				<label class="text-muted-foreground flex items-center gap-2 text-xs">
 					chunk
 					<select
 						bind:value={chunkFilter}
-						class="rounded-md border bg-background px-2 py-1 text-sm"
+						class="bg-background rounded-md border px-2 py-1 text-sm"
 					>
 						<option value="all">all</option>
 						{#each chunks as c (c.chunk_id)}
@@ -590,11 +594,11 @@
 						{/each}
 					</select>
 				</label>
-				<label class="flex items-center gap-2 text-xs text-muted-foreground">
+				<label class="text-muted-foreground flex items-center gap-2 text-xs">
 					HTR
 					<select
 						bind:value={statusFilter}
-						class="rounded-md border bg-background px-2 py-1 text-sm"
+						class="bg-background rounded-md border px-2 py-1 text-sm"
 					>
 						<option value="all">all</option>
 						{#each htrStatuses as s (s)}
@@ -602,11 +606,11 @@
 						{/each}
 					</select>
 				</label>
-				<label class="flex items-center gap-2 text-xs text-muted-foreground">
+				<label class="text-muted-foreground flex items-center gap-2 text-xs">
 					manifest
 					<select
 						bind:value={manifestFilter}
-						class="rounded-md border bg-background px-2 py-1 text-sm"
+						class="bg-background rounded-md border px-2 py-1 text-sm"
 					>
 						<option value="all">all</option>
 						{#each manifestStatuses as s (s)}
@@ -614,7 +618,7 @@
 						{/each}
 					</select>
 				</label>
-				<span class="ml-auto text-xs text-muted-foreground">
+				<span class="text-muted-foreground ml-auto text-xs">
 					{filtered.length.toLocaleString()} shown
 				</span>
 			</Card>
@@ -623,23 +627,11 @@
 			<Card class="overflow-hidden">
 				<div class="max-h-[60vh] overflow-auto">
 					<table class="w-full border-collapse text-xs">
-						<thead class="sticky top-0 z-10 bg-card text-left">
+						<thead class="bg-card sticky top-0 z-10 text-left">
 							<tr class="border-b">
-								{#each [
-									{ k: 'batch_id', label: 'batch_id' },
-									{ k: 'arkiv_titel', label: 'titel' },
-									{ k: 'volym', label: 'volym' },
-									{ k: 'chunk_id', label: 'chunk' },
-									{ k: 'page_count', label: 'pages' },
-									{ k: 'cached_pages', label: 'cached' },
-									{ k: 'transcribed_pages', label: 'transcribed' },
-									{ k: 'htr_status', label: 'status' },
-									{ k: 'current_rayjob_id', label: 'rayjob' },
-									{ k: 'iiif_endpoint', label: 'iiif' },
-									{ k: 'last_synced_at', label: 'synced' },
-								] as col (col.k)}
+								{#each [{ k: 'batch_id', label: 'batch_id' }, { k: 'arkiv_titel', label: 'titel' }, { k: 'volym', label: 'volym' }, { k: 'chunk_id', label: 'chunk' }, { k: 'page_count', label: 'pages' }, { k: 'cached_pages', label: 'cached' }, { k: 'transcribed_pages', label: 'transcribed' }, { k: 'htr_status', label: 'status' }, { k: 'current_rayjob_id', label: 'rayjob' }, { k: 'iiif_endpoint', label: 'iiif' }, { k: 'last_synced_at', label: 'synced' }] as col (col.k)}
 									<th
-										class="cursor-pointer px-3 py-2 font-medium text-muted-foreground hover:bg-muted/50"
+										class="text-muted-foreground hover:bg-muted/50 cursor-pointer px-3 py-2 font-medium"
 										onclick={() => setSort(col.k as keyof BatchRow)}
 									>
 										{col.label}
@@ -652,19 +644,16 @@
 						</thead>
 						<tbody>
 							{#each filtered as b (b.batch_id)}
-								<tr class="border-b border-border/40 hover:bg-muted/40">
+								<tr class="border-border/40 hover:bg-muted/40 border-b">
 									<td class="px-3 py-1.5 font-mono">
 										<a class="text-primary hover:underline" href={`/viewer/${b.batch_id}`}
 											>{b.batch_id}</a
 										>
 									</td>
-									<td
-										class="max-w-[18rem] truncate px-3 py-1.5"
-										title={b.arkiv_titel ?? ''}
-									>
+									<td class="max-w-[18rem] truncate px-3 py-1.5" title={b.arkiv_titel ?? ''}>
 										{b.arkiv_titel ?? ''}
 									</td>
-									<td class="px-3 py-1.5 text-muted-foreground">{b.volym ?? ''}</td>
+									<td class="text-muted-foreground px-3 py-1.5">{b.volym ?? ''}</td>
 									<td class="px-3 py-1.5 text-right font-mono">
 										{#if b.chunk_id !== null}
 											<button
@@ -689,7 +678,7 @@
 									<td class="px-3 py-1.5">
 										<Badge variant={statusBadgeVariant(b.htr_status)}>{b.htr_status}</Badge>
 									</td>
-									<td class="px-3 py-1.5 font-mono text-[10px] text-muted-foreground">
+									<td class="text-muted-foreground px-3 py-1.5 font-mono text-[10px]">
 										{#if b.current_rayjob_id && liveJobStatus.has(b.current_rayjob_id)}
 											<Badge variant="warning" class="animate-pulse">
 												{liveJobStatus.get(b.current_rayjob_id)}
@@ -703,8 +692,8 @@
 											<span>{b.current_rayjob_id.slice(0, 16)}</span>
 										{:else}—{/if}
 									</td>
-									<td class="px-3 py-1.5 text-muted-foreground">{b.iiif_endpoint ?? ''}</td>
-									<td class="px-3 py-1.5 text-muted-foreground">
+									<td class="text-muted-foreground px-3 py-1.5">{b.iiif_endpoint ?? ''}</td>
+									<td class="text-muted-foreground px-3 py-1.5">
 										{b.last_synced_at?.slice(0, 19) ?? ''}
 									</td>
 								</tr>

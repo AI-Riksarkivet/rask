@@ -8,12 +8,14 @@ How to use the type system to prevent bugs at compile time.
 
 ```typescript
 // BAD — caller can pass anything, callee can do anything
-function parse(data: any): User { return data; }
+function parse(data: any): User {
+	return data;
+}
 
 // GOOD — caller must check before use; callee must narrow before access
 function parse(data: unknown): User {
-  if (!isUser(data)) throw new Error('Invalid user data');
-  return data;
+	if (!isUser(data)) throw new Error('Invalid user data');
+	return data;
 }
 ```
 
@@ -25,24 +27,24 @@ A function that returns `value is T` narrows the type for the caller.
 
 ```typescript
 function isString(value: unknown): value is string {
-  return typeof value === 'string';
+	return typeof value === 'string';
 }
 
 function isUser(value: unknown): value is User {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'id' in value &&
-    typeof (value as { id: unknown }).id === 'string'
-  );
+	return (
+		typeof value === 'object' &&
+		value !== null &&
+		'id' in value &&
+		typeof (value as { id: unknown }).id === 'string'
+	);
 }
 
 // Usage
 function processInput(input: unknown) {
-  if (isUser(input)) {
-    // input is now typed as User
-    console.log(input.email);
-  }
+	if (isUser(input)) {
+		// input is now typed as User
+		console.log(input.email);
+	}
 }
 ```
 
@@ -54,30 +56,30 @@ The single most useful type pattern in TypeScript. Tagged variants with exhausti
 
 ```typescript
 type RequestState<T> =
-  | { status: 'idle' }
-  | { status: 'loading' }
-  | { status: 'success'; data: T }
-  | { status: 'error'; error: Error };
+	| { status: 'idle' }
+	| { status: 'loading' }
+	| { status: 'success'; data: T }
+	| { status: 'error'; error: Error };
 
 function render<T>(state: RequestState<T>): string {
-  switch (state.status) {
-    case 'idle':
-      return 'Idle';
-    case 'loading':
-      return 'Loading…';
-    case 'success':
-      // state.data is in scope and typed as T
-      return `Got ${state.data}`;
-    case 'error':
-      // state.error is in scope and typed as Error
-      return `Error: ${state.error.message}`;
-    default: {
-      // Exhaustiveness check — if a new variant is added,
-      // this assignment fails to compile.
-      const _exhaustive: never = state;
-      return _exhaustive;
-    }
-  }
+	switch (state.status) {
+		case 'idle':
+			return 'Idle';
+		case 'loading':
+			return 'Loading…';
+		case 'success':
+			// state.data is in scope and typed as T
+			return `Got ${state.data}`;
+		case 'error':
+			// state.error is in scope and typed as Error
+			return `Error: ${state.error.message}`;
+		default: {
+			// Exhaustiveness check — if a new variant is added,
+			// this assignment fails to compile.
+			const _exhaustive: never = state;
+			return _exhaustive;
+		}
+	}
 }
 ```
 
@@ -88,18 +90,14 @@ The `never` assignment in `default` catches non-exhaustive switches at compile t
 ```typescript
 // Pluck a typed value from an object
 function getProperty<T, K extends keyof T>(obj: T, key: K): T[K] {
-  return obj[key];
+	return obj[key];
 }
 
 // Require an `id` field
 type WithId = { id: string };
 
-function updateById<T extends WithId>(
-  items: readonly T[],
-  id: string,
-  update: Partial<T>,
-): T[] {
-  return items.map((item) => (item.id === id ? { ...item, ...update } : item));
+function updateById<T extends WithId>(items: readonly T[], id: string, update: Partial<T>): T[] {
+	return items.map((item) => (item.id === id ? { ...item, ...update } : item));
 }
 ```
 
@@ -107,30 +105,32 @@ Name type parameters descriptively when scope is large:
 
 ```typescript
 // In a 3-line generic, T is fine
-function id<T>(x: T): T { return x; }
+function id<T>(x: T): T {
+	return x;
+}
 
 // In a 50-line generic, give it a name
 function paginate<TItem>(items: readonly TItem[], page: number, size: number): TItem[] {
-  return items.slice((page - 1) * size, page * size);
+	return items.slice((page - 1) * size, page * size);
 }
 ```
 
 ## Utility types
 
-| Utility | What it does | Use for |
-|---|---|---|
-| `Partial<T>` | All fields optional | Update payloads |
-| `Required<T>` | All fields required | After validation |
-| `Readonly<T>` | All fields readonly | Immutable shapes |
-| `Pick<T, K>` | Subset of fields | API response projections |
-| `Omit<T, K>` | All fields except K | Strip sensitive fields |
-| `Record<K, V>` | Object with K keys, V values | Lookup tables |
-| `Exclude<T, U>` | Remove members of union | Narrow union types |
-| `Extract<T, U>` | Keep members of union | Filter union types |
-| `NonNullable<T>` | Remove null/undefined | After null check |
-| `ReturnType<F>` | Return type of function | Avoid type duplication |
-| `Awaited<T>` | Unwrap Promise | Async return types |
-| `Parameters<F>` | Argument tuple | Forward function types |
+| Utility          | What it does                 | Use for                  |
+| ---------------- | ---------------------------- | ------------------------ |
+| `Partial<T>`     | All fields optional          | Update payloads          |
+| `Required<T>`    | All fields required          | After validation         |
+| `Readonly<T>`    | All fields readonly          | Immutable shapes         |
+| `Pick<T, K>`     | Subset of fields             | API response projections |
+| `Omit<T, K>`     | All fields except K          | Strip sensitive fields   |
+| `Record<K, V>`   | Object with K keys, V values | Lookup tables            |
+| `Exclude<T, U>`  | Remove members of union      | Narrow union types       |
+| `Extract<T, U>`  | Keep members of union        | Filter union types       |
+| `NonNullable<T>` | Remove null/undefined        | After null check         |
+| `ReturnType<F>`  | Return type of function      | Avoid type duplication   |
+| `Awaited<T>`     | Unwrap Promise               | Async return types       |
+| `Parameters<F>`  | Argument tuple               | Forward function types   |
 
 ```typescript
 // Real-world example
@@ -169,12 +169,12 @@ const config3 = { canEdit: true, canDelete: false } as const;
 const config4 = { canEdit: true, canDelete: false } as const satisfies RoleConfig;
 ```
 
-| Tool | Validates shape | Preserves literals | Makes readonly |
-|---|---|---|---|
-| `as Foo` | NO (assertion only) | NO | NO |
-| `satisfies Foo` | YES | YES | NO |
-| `as const` | NO | YES | YES |
-| `as const satisfies Foo` | YES | YES | YES |
+| Tool                     | Validates shape     | Preserves literals | Makes readonly |
+| ------------------------ | ------------------- | ------------------ | -------------- |
+| `as Foo`                 | NO (assertion only) | NO                 | NO             |
+| `satisfies Foo`          | YES                 | YES                | NO             |
+| `as const`               | NO                  | YES                | YES            |
+| `as const satisfies Foo` | YES                 | YES                | YES            |
 
 **Rule:** Use `satisfies` when defining typed configs. Use `as const` for lookup tables / enum-like objects. Use `as` only when you genuinely know better than the compiler AND have written a comment saying why.
 
@@ -190,11 +190,11 @@ const items = ['a', 'b', 'c'];
 
 const first = items[0];
 if (first !== undefined) {
-  console.log(first.toUpperCase());
+	console.log(first.toUpperCase());
 }
 
 // Or use .at() which has the same type
-const last = items.at(-1);  // string | undefined
+const last = items.at(-1); // string | undefined
 ```
 
 ## Type assertions that aren't lies
@@ -207,19 +207,23 @@ const user = response as User;
 
 // BETTER — narrow assertion via guard
 function assertIsUser(value: unknown): asserts value is User {
-  if (!isUser(value)) throw new Error('Expected User');
+	if (!isUser(value)) throw new Error('Expected User');
 }
-assertIsUser(response);  // response is now typed as User
+assertIsUser(response); // response is now typed as User
 
 // BEST — parse, don't assert
-const user = UserSchema.parse(response);  // Zod
+const user = UserSchema.parse(response); // Zod
 ```
 
 ## Literal union types, not enums
 
 ```typescript
 // BAD — enum (emits runtime code, doesn't narrow as cleanly)
-enum Role { Admin = 'admin', User = 'user', Guest = 'guest' }
+enum Role {
+	Admin = 'admin',
+	User = 'user',
+	Guest = 'guest',
+}
 
 // GOOD — literal union (zero runtime cost, fully type-safe)
 type Role = 'admin' | 'user' | 'guest';
@@ -227,7 +231,7 @@ const ROLES = ['admin', 'user', 'guest'] as const satisfies readonly Role[];
 
 // Type guard for runtime checks
 function isRole(value: string): value is Role {
-  return (ROLES as readonly string[]).includes(value);
+	return (ROLES as readonly string[]).includes(value);
 }
 ```
 
@@ -238,19 +242,19 @@ Enums have legitimate uses (numeric flag enums for interop with C-style APIs) bu
 ```typescript
 // This doesn't work as expected
 function isRole(value: string): boolean {
-  return ['admin', 'user', 'guest'].includes(value);
-  //                                          ^ Type error: value not in union
+	return ['admin', 'user', 'guest'].includes(value);
+	//                                          ^ Type error: value not in union
 }
 
 // Workaround 1: widen the array
 function isRole(value: string): value is Role {
-  return (ROLES as readonly string[]).includes(value);
+	return (ROLES as readonly string[]).includes(value);
 }
 
 // Workaround 2: typed Set
 const ROLE_SET = new Set<Role>(['admin', 'user', 'guest']);
 function isRole(value: string): value is Role {
-  return ROLE_SET.has(value as Role);
+	return ROLE_SET.has(value as Role);
 }
 ```
 
@@ -258,17 +262,17 @@ function isRole(value: string): value is Role {
 
 ```typescript
 const STATUS_MESSAGES = {
-  idle: 'Ready',
-  loading: 'Working…',
-  success: 'Done',
-  error: 'Failed',
+	idle: 'Ready',
+	loading: 'Working…',
+	success: 'Done',
+	error: 'Failed',
 } as const;
 
 type Status = keyof typeof STATUS_MESSAGES;
 // 'idle' | 'loading' | 'success' | 'error'
 
 function getMessage(status: Status): string {
-  return STATUS_MESSAGES[status];
+	return STATUS_MESSAGES[status];
 }
 ```
 
@@ -281,13 +285,15 @@ type UserId = string & { readonly __brand: 'UserId' };
 type OrderId = string & { readonly __brand: 'OrderId' };
 
 function makeUserId(s: string): UserId {
-  return s as UserId;
+	return s as UserId;
 }
 
-function getUser(id: UserId): User { /* ... */ }
+function getUser(id: UserId): User {
+	/* ... */
+}
 
 const orderId = 'order_123' as OrderId;
-getUser(orderId);  // Compile error — UserId expected, OrderId given
+getUser(orderId); // Compile error — UserId expected, OrderId given
 ```
 
 Branded types prevent mixing up IDs of different entities. Costs zero at runtime.
@@ -295,7 +301,9 @@ Branded types prevent mixing up IDs of different entities. Costs zero at runtime
 ## `Awaited` for async return types
 
 ```typescript
-async function fetchUser(id: string): Promise<User> { /* ... */ }
+async function fetchUser(id: string): Promise<User> {
+	/* ... */
+}
 
 // Without Awaited — type is Promise<User>
 type R1 = ReturnType<typeof fetchUser>;

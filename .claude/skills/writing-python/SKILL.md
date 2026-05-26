@@ -10,18 +10,18 @@ Language-level Python for this project: stdlib first, Pydantic for any structure
 
 ## Scope routing
 
-| If you need to… | Read |
-|---|---|
-| Configure ruff/ty, naming, imports, docstrings (Google style) | `References/code-style.md` |
-| Add type annotations, generics, protocols, narrowing | `References/type-safety.md` |
-| Decide between composition vs inheritance, layer code, inject dependencies | `References/design-patterns.md` |
-| Audit code against a checklist of known bad patterns | `References/anti-patterns.md` |
-| Validate inputs, design exception hierarchies, handle partial failures | `References/error-handling.md` |
-| Manage connections/file handles/streams via context managers | `References/resource-management.md` |
-| Load env vars, set up `pydantic-settings`, validate config at boot | `References/configuration.md` |
-| Look up everyday patterns (project layout, async, logging, pathlib) | `References/patterns.md` |
-| Build a CLI (`typer`, output formats, progress, exit codes) | `References/cli.md` |
-| Write tests with `pytest` (fixtures, async, parametrize, coverage) | `References/testing.md` |
+| If you need to…                                                            | Read                                |
+| -------------------------------------------------------------------------- | ----------------------------------- |
+| Configure ruff/ty, naming, imports, docstrings (Google style)              | `References/code-style.md`          |
+| Add type annotations, generics, protocols, narrowing                       | `References/type-safety.md`         |
+| Decide between composition vs inheritance, layer code, inject dependencies | `References/design-patterns.md`     |
+| Audit code against a checklist of known bad patterns                       | `References/anti-patterns.md`       |
+| Validate inputs, design exception hierarchies, handle partial failures     | `References/error-handling.md`      |
+| Manage connections/file handles/streams via context managers               | `References/resource-management.md` |
+| Load env vars, set up `pydantic-settings`, validate config at boot         | `References/configuration.md`       |
+| Look up everyday patterns (project layout, async, logging, pathlib)        | `References/patterns.md`            |
+| Build a CLI (`typer`, output formats, progress, exit codes)                | `References/cli.md`                 |
+| Write tests with `pytest` (fixtures, async, parametrize, coverage)         | `References/testing.md`             |
 
 ## House style — non-negotiable
 
@@ -33,7 +33,7 @@ Language-level Python for this project: stdlib first, Pydantic for any structure
 - **Stdlib first.** Only add a dep when stdlib genuinely doesn't fit (e.g. `httpx` for async HTTP, `pydantic` for validation).
 - **Explicit over clever.** Readable beats elegant.
 - **Fail fast.** Validate at boundaries; raise informative errors immediately.
-- **Self-documenting code, not noise comments.** Reach for a comment when the *why* is non-obvious (workaround, constraint, surprising invariant). When you'd write one to explain *what* the code does, ask first whether a clearer name or a small extracted function would read better — usually it does, sometimes the inline code is fine and a split would just add noise. Judgment call. Never restate what the code already says. See `References/code-style.md`.
+- **Self-documenting code, not noise comments.** Reach for a comment when the _why_ is non-obvious (workaround, constraint, surprising invariant). When you'd write one to explain _what_ the code does, ask first whether a clearer name or a small extracted function would read better — usually it does, sometimes the inline code is fine and a split would just add noise. Judgment call. Never restate what the code already says. See `References/code-style.md`.
 
 ## Quick patterns
 

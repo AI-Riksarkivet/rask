@@ -9,6 +9,6 @@
 <ModeWatcher defaultMode="dark" />
 <Toaster />
 
-<div class="flex h-screen flex-col overflow-hidden relative z-[1]">
+<div class="relative z-[1] flex h-screen flex-col overflow-hidden">
 	{@render children()}
 </div>

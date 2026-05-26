@@ -10,11 +10,11 @@ Throw for **bugs and programmer errors**. Return `Result<T, E>` for **expected f
 type Result<T, E = Error> = { ok: true; value: T } | { ok: false; error: E };
 
 function ok<T>(value: T): Result<T, never> {
-  return { ok: true, value };
+	return { ok: true, value };
 }
 
 function err<E>(error: E): Result<never, E> {
-  return { ok: false, error };
+	return { ok: false, error };
 }
 ```
 
@@ -22,24 +22,24 @@ Usage:
 
 ```typescript
 async function fetchUser(id: string): Promise<Result<User, ApiError>> {
-  try {
-    const response = await fetch(`/users/${id}`);
-    if (response.status === 404) return err(new ApiError('NOT_FOUND', 404));
-    if (!response.ok) return err(new ApiError('REQUEST_FAILED', response.status));
-    const data = await response.json();
-    return ok(UserSchema.parse(data));
-  } catch (e) {
-    return err(new ApiError('NETWORK', 0, { cause: e }));
-  }
+	try {
+		const response = await fetch(`/users/${id}`);
+		if (response.status === 404) return err(new ApiError('NOT_FOUND', 404));
+		if (!response.ok) return err(new ApiError('REQUEST_FAILED', response.status));
+		const data = await response.json();
+		return ok(UserSchema.parse(data));
+	} catch (e) {
+		return err(new ApiError('NETWORK', 0, { cause: e }));
+	}
 }
 
 // Caller
 const result = await fetchUser(userId);
 if (!result.ok) {
-  if (result.error.code === 'NOT_FOUND') return showNotFound();
-  return showError(result.error);
+	if (result.error.code === 'NOT_FOUND') return showNotFound();
+	return showError(result.error);
 }
-const user = result.value;  // typed as User
+const user = result.value; // typed as User
 ```
 
 The compiler forces the caller to discriminate on `result.ok` before touching `value` or `error`. No try/catch needed at the call site — failure is a value.
@@ -50,32 +50,32 @@ Subclass `Error`, set `name`, optionally add `cause`.
 
 ```typescript
 export class AppError extends Error {
-  constructor(
-    message: string,
-    public readonly code: string,
-    options?: { cause?: unknown },
-  ) {
-    super(message, options);
-    this.name = 'AppError';
-  }
+	constructor(
+		message: string,
+		public readonly code: string,
+		options?: { cause?: unknown },
+	) {
+		super(message, options);
+		this.name = 'AppError';
+	}
 }
 
 export class NotFoundError extends AppError {
-  constructor(resource: string, id: string) {
-    super(`${resource} not found: ${id}`, 'NOT_FOUND');
-    this.name = 'NotFoundError';
-  }
+	constructor(resource: string, id: string) {
+		super(`${resource} not found: ${id}`, 'NOT_FOUND');
+		this.name = 'NotFoundError';
+	}
 }
 
 export class ApiError extends AppError {
-  constructor(
-    code: string,
-    public readonly statusCode: number,
-    options?: { cause?: unknown },
-  ) {
-    super(`API ${code} (${statusCode})`, code, options);
-    this.name = 'ApiError';
-  }
+	constructor(
+		code: string,
+		public readonly statusCode: number,
+		options?: { cause?: unknown },
+	) {
+		super(`API ${code} (${statusCode})`, code, options);
+		this.name = 'ApiError';
+	}
 }
 ```
 
@@ -93,22 +93,22 @@ Project standard for any external input — HTTP responses, env vars, message pa
 import { z } from 'zod';
 
 const UserSchema = z.object({
-  id: z.string().uuid(),
-  email: z.string().email(),
-  name: z.string().min(1),
-  role: z.enum(['admin', 'user', 'guest']),
+	id: z.string().uuid(),
+	email: z.string().email(),
+	name: z.string().min(1),
+	role: z.enum(['admin', 'user', 'guest']),
 });
 
-type User = z.infer<typeof UserSchema>;  // type derived from schema — single source of truth
+type User = z.infer<typeof UserSchema>; // type derived from schema — single source of truth
 
 function parseUser(data: unknown): User {
-  return UserSchema.parse(data);  // throws on invalid
+	return UserSchema.parse(data); // throws on invalid
 }
 
 function safeParseUser(data: unknown): Result<User, z.ZodError> {
-  const result = UserSchema.safeParse(data);
-  if (result.success) return ok(result.data);
-  return err(result.error);
+	const result = UserSchema.safeParse(data);
+	if (result.success) return ok(result.data);
+	return err(result.error);
 }
 ```
 
@@ -118,11 +118,11 @@ For environment variables:
 
 ```typescript
 const EnvSchema = z.object({
-  PUBLIC_API_URL: z.string().url(),
-  PUBLIC_FEATURE_FLAG: z.enum(['on', 'off']).default('off'),
+	PUBLIC_API_URL: z.string().url(),
+	PUBLIC_FEATURE_FLAG: z.enum(['on', 'off']).default('off'),
 });
 
-export const env = EnvSchema.parse(import.meta.env);  // Vite / SvelteKit
+export const env = EnvSchema.parse(import.meta.env); // Vite / SvelteKit
 ```
 
 Validation happens **once at boundary entry**. After that, the data is typed and trustworthy.
@@ -134,16 +134,16 @@ Validation happens **once at boundary entry**. After that, the data is typed and
 ```typescript
 // All or nothing — first failure rejects the whole call
 async function fetchAll<T>(urls: string[]): Promise<T[]> {
-  const responses = await Promise.all(urls.map((u) => fetch(u)));
-  return Promise.all(responses.map((r) => r.json() as Promise<T>));
+	const responses = await Promise.all(urls.map((u) => fetch(u)));
+	return Promise.all(responses.map((r) => r.json() as Promise<T>));
 }
 
 // All complete, even if some fail — get individual outcomes
 async function fetchAllSettled<T>(urls: string[]): Promise<Result<T>[]> {
-  const settled = await Promise.allSettled(
-    urls.map((u) => fetch(u).then((r) => r.json() as Promise<T>)),
-  );
-  return settled.map((s) => (s.status === 'fulfilled' ? ok(s.value) : err(s.reason)));
+	const settled = await Promise.allSettled(
+		urls.map((u) => fetch(u).then((r) => r.json() as Promise<T>)),
+	);
+	return settled.map((s) => (s.status === 'fulfilled' ? ok(s.value) : err(s.reason)));
 }
 ```
 
@@ -153,26 +153,26 @@ Use `Promise.all` when failure of any one means the whole operation fails. Use `
 
 ```typescript
 async function retry<T>(
-  fn: () => Promise<T>,
-  options: { attempts: number; baseDelayMs: number; maxDelayMs?: number } = {
-    attempts: 3,
-    baseDelayMs: 1000,
-  },
+	fn: () => Promise<T>,
+	options: { attempts: number; baseDelayMs: number; maxDelayMs?: number } = {
+		attempts: 3,
+		baseDelayMs: 1000,
+	},
 ): Promise<T> {
-  const { attempts, baseDelayMs, maxDelayMs = 30_000 } = options;
-  let lastError: unknown;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      return await fn();
-    } catch (e) {
-      lastError = e;
-      if (i === attempts - 1) break;
-      const delay = Math.min(baseDelayMs * 2 ** i, maxDelayMs);
-      const jitter = Math.random() * delay * 0.5;
-      await new Promise((r) => setTimeout(r, delay + jitter));
-    }
-  }
-  throw lastError;
+	const { attempts, baseDelayMs, maxDelayMs = 30_000 } = options;
+	let lastError: unknown;
+	for (let i = 0; i < attempts; i++) {
+		try {
+			return await fn();
+		} catch (e) {
+			lastError = e;
+			if (i === attempts - 1) break;
+			const delay = Math.min(baseDelayMs * 2 ** i, maxDelayMs);
+			const jitter = Math.random() * delay * 0.5;
+			await new Promise((r) => setTimeout(r, delay + jitter));
+		}
+	}
+	throw lastError;
 }
 ```
 
@@ -182,13 +182,13 @@ Only retry **idempotent** operations. A failed POST can mean two charges if you 
 
 ```typescript
 async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	try {
+		return await fetch(url, { signal: controller.signal });
+	} finally {
+		clearTimeout(timer);
+	}
 }
 ```
 
@@ -224,8 +224,8 @@ Inside the same package, prefer direct paths over barrels. Barrels slow down IDE
 
 ```typescript
 // In components/apps/frontend/src/lib/api.ts
-import { parseConfig } from './parse-config';  // direct
-import { logger } from '$lib/logger';          // aliased — also direct
+import { parseConfig } from './parse-config'; // direct
+import { logger } from '$lib/logger'; // aliased — also direct
 ```
 
 ## Dependency injection (when needed)
@@ -234,29 +234,29 @@ Most TS code in this project doesn't need DI containers — closures and plain f
 
 ```typescript
 type Dependencies = {
-  fetchUser: (id: string) => Promise<User>;
-  logger: Logger;
+	fetchUser: (id: string) => Promise<User>;
+	logger: Logger;
 };
 
 export function createUserService({ fetchUser, logger }: Dependencies) {
-  return {
-    async getProfile(id: string) {
-      logger.info('Fetching user', { id });
-      return fetchUser(id);
-    },
-  };
+	return {
+		async getProfile(id: string) {
+			logger.info('Fetching user', { id });
+			return fetchUser(id);
+		},
+	};
 }
 
 // Wire at startup
 const service = createUserService({
-  fetchUser: realFetchUser,
-  logger: realLogger,
+	fetchUser: realFetchUser,
+	logger: realLogger,
 });
 
 // Test with fakes
 const testService = createUserService({
-  fetchUser: async () => fakeUser,
-  logger: silentLogger,
+	fetchUser: async () => fakeUser,
+	logger: silentLogger,
 });
 ```
 
@@ -268,9 +268,9 @@ Closure-based "constructor functions" return objects implementing a typed interf
 import { z } from 'zod';
 
 const ConfigSchema = z.object({
-  PORT: z.coerce.number().int().positive().default(3000),
-  PUBLIC_API_URL: z.string().url(),
-  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+	PORT: z.coerce.number().int().positive().default(3000),
+	PUBLIC_API_URL: z.string().url(),
+	NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
 });
 
 export const config = ConfigSchema.parse(import.meta.env);

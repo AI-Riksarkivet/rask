@@ -71,6 +71,7 @@ Exported methods on the main struct become Dagger Functions. Unexported methods
 are private helpers (useful for shared logic like base containers).
 
 Use Go doc comments for descriptions. Key pragmas for arguments:
+
 - `// +optional` — argument not required
 - `// +default "value"` — default value
 - `// +defaultPath="/"` — default to module root directory (for `*dagger.Directory`)
@@ -176,6 +177,7 @@ dagger install github.com/kpenfound/dagger-modules/golang@v0.2.1
 ```
 
 Access in code via `dag`:
+
 ```go
 func (m *Myproject) Test(ctx context.Context, src *dagger.Directory) (string, error) {
     return dag.Golang().WithProject(src).Test(ctx)
@@ -210,22 +212,22 @@ $ dagger
 
 ## Core types quick reference
 
-| Type | Go type | Description |
-|------|---------|-------------|
-| Container | `*dagger.Container` | OCI container — build, exec, publish, mount, export |
-| Directory | `*dagger.Directory` | Filesystem dir — local path, git ref, or in-container |
-| File | `*dagger.File` | Single file — contents, export, mount |
-| Secret | `*dagger.Secret` | Credential — never in logs/cache |
-| Service | `*dagger.Service` | Long-running process — TCP connectivity, bind to containers |
-| CacheVolume | `*dagger.CacheVolume` | Persistent dir across runs — for pip/npm/go caches |
-| GitRepository | `*dagger.GitRepository` | Git repo — branch, tag, commit, tree |
-| LLM | `*dagger.LLM` | Large language model — native AI agent support |
-| Env | `*dagger.Env` | Typed environment with inputs/outputs — for LLM workflows |
-| CurrentModule | `*dagger.CurrentModule` | Module introspection — source dir, workdir |
-| Socket | `*dagger.Socket` | Unix or TCP/IP socket — mount into containers |
-| Terminal | `*dagger.Terminal` | Interactive terminal session |
-| Port | `*dagger.Port` | Port exposed by a container |
-| Platform | `dagger.Platform` | Target platform string — e.g. `"linux/amd64"` |
+| Type          | Go type                 | Description                                                 |
+| ------------- | ----------------------- | ----------------------------------------------------------- |
+| Container     | `*dagger.Container`     | OCI container — build, exec, publish, mount, export         |
+| Directory     | `*dagger.Directory`     | Filesystem dir — local path, git ref, or in-container       |
+| File          | `*dagger.File`          | Single file — contents, export, mount                       |
+| Secret        | `*dagger.Secret`        | Credential — never in logs/cache                            |
+| Service       | `*dagger.Service`       | Long-running process — TCP connectivity, bind to containers |
+| CacheVolume   | `*dagger.CacheVolume`   | Persistent dir across runs — for pip/npm/go caches          |
+| GitRepository | `*dagger.GitRepository` | Git repo — branch, tag, commit, tree                        |
+| LLM           | `*dagger.LLM`           | Large language model — native AI agent support              |
+| Env           | `*dagger.Env`           | Typed environment with inputs/outputs — for LLM workflows   |
+| CurrentModule | `*dagger.CurrentModule` | Module introspection — source dir, workdir                  |
+| Socket        | `*dagger.Socket`        | Unix or TCP/IP socket — mount into containers               |
+| Terminal      | `*dagger.Terminal`      | Interactive terminal session                                |
+| Port          | `*dagger.Port`          | Port exposed by a container                                 |
+| Platform      | `dagger.Platform`       | Target platform string — e.g. `"linux/amd64"`               |
 
 ### Key methods by type
 
@@ -266,6 +268,7 @@ Option structs follow the pattern `<Type><Method>Opts`:
 ## Finding answers beyond this skill
 
 Fastest method discovery: use `.help` in Dagger Shell:
+
 ```
 $ dagger
 > container | .help                          # all Container methods

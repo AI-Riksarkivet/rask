@@ -9,26 +9,26 @@ System-reliability concerns for Python services in this project, grouped because
 
 ## Preferred stack
 
-| Concern | Tool | Notes |
-|---|---|---|
-| Message bus / task queue | **NATS JetStream** (via `nats-py`) | Durable streams, consumer groups, replay. Replaces Celery/RabbitMQ here. |
-| Durable multi-step workflows | **DBOS** | Step-level recovery on Postgres. Use only when a workflow has multiple non-idempotent steps and JetStream's "redeliver the whole message" model isn't enough. |
-| HTTP | **FastAPI** | See sibling `fastapi` skill. |
-| Cache | **Redis** | `redis.asyncio` for async workers. |
-| Retries / backoff | **tenacity** | Exponential + jitter, by default. |
-| Observability | **OpenTelemetry** (OTLP) | Traces + metrics + logs. See sibling `otel`. |
-| Logging | stdlib `logging` → OTel handler | Don't pull in `structlog`; OTel forwards stdlib records. |
-| HTTP client | **httpx** (async) | Replaces `requests`. |
+| Concern                      | Tool                               | Notes                                                                                                                                                         |
+| ---------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Message bus / task queue     | **NATS JetStream** (via `nats-py`) | Durable streams, consumer groups, replay. Replaces Celery/RabbitMQ here.                                                                                      |
+| Durable multi-step workflows | **DBOS**                           | Step-level recovery on Postgres. Use only when a workflow has multiple non-idempotent steps and JetStream's "redeliver the whole message" model isn't enough. |
+| HTTP                         | **FastAPI**                        | See sibling `fastapi` skill.                                                                                                                                  |
+| Cache                        | **Redis**                          | `redis.asyncio` for async workers.                                                                                                                            |
+| Retries / backoff            | **tenacity**                       | Exponential + jitter, by default.                                                                                                                             |
+| Observability                | **OpenTelemetry** (OTLP)           | Traces + metrics + logs. See sibling `otel`.                                                                                                                  |
+| Logging                      | stdlib `logging` → OTel handler    | Don't pull in `structlog`; OTel forwards stdlib records.                                                                                                      |
+| HTTP client                  | **httpx** (async)                  | Replaces `requests`.                                                                                                                                          |
 
 ## Scope routing
 
-| If you need to… | Read |
-|---|---|
-| Queue a task, design a worker, persist job state, retry/DLQ patterns (NATS JetStream + `nats-py`) | `References/background-jobs.md` |
+| If you need to…                                                                                                 | Read                              |
+| --------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| Queue a task, design a worker, persist job state, retry/DLQ patterns (NATS JetStream + `nats-py`)               | `References/background-jobs.md`   |
 | Survive crashes mid-workflow with step-level recovery (DBOS workflows, steps, queues, scheduled, communication) | `References/durable-workflows.md` |
-| Decide what to retry, with what backoff, when to stop, circuit-breakers | `References/resilience.md` |
-| Instrument a service with OTel traces/metrics/logs, four golden signals | `References/observability.md` |
-| Use Redis as a cache (TTL, invalidation, async client patterns) | `References/caching.md` |
+| Decide what to retry, with what backoff, when to stop, circuit-breakers                                         | `References/resilience.md`        |
+| Instrument a service with OTel traces/metrics/logs, four golden signals                                         | `References/observability.md`     |
+| Use Redis as a cache (TTL, invalidation, async client patterns)                                                 | `References/caching.md`           |
 
 ## Decision tree
 
@@ -55,9 +55,9 @@ All five at once for one feature?
 
 ## Cross-skill boundaries
 
-- **`writing-python`** — *how* to write the function. This skill — *how it survives in production*.
-- **`writing-python` → `References/error-handling.md`** — *what exception to raise*. This skill — *what to do when it's raised across a network boundary*.
-- **`writing-python` → `References/resource-management.md`** — *how to clean up resources* (context managers). This skill — *how to keep retrying when resources fail to acquire*.
+- **`writing-python`** — _how_ to write the function. This skill — _how it survives in production_.
+- **`writing-python` → `References/error-handling.md`** — _what exception to raise_. This skill — _what to do when it's raised across a network boundary_.
+- **`writing-python` → `References/resource-management.md`** — _how to clean up resources_ (context managers). This skill — _how to keep retrying when resources fail to acquire_.
 - **`fastapi`** — request handlers and DI. This skill — what runs around them.
 - **`otel`** — full OTel reference (Python SDK, signals, attributes, Collector). This skill's `observability.md` pins project conventions on top.
 

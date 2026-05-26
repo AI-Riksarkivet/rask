@@ -1,8 +1,8 @@
 {
-  "name": "rask",
-  "engineVersion": "v0.20.3",
-  "sdk": {
-    "source": "go"
-  },
-  "source": ".dagger"
+	"name": "rask",
+	"engineVersion": "v0.20.3",
+	"sdk": {
+		"source": "go"
+	},
+	"source": ".dagger"
 }

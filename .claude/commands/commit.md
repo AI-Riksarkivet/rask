@@ -10,6 +10,7 @@ Then follow these rules for the commit format:
 **[optional footer(s)]**
 
 **RULES:**
+
 1. **Type is REQUIRED** (feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert)
 2. **Scope is OPTIONAL** - noun describing codebase section in parentheses
 3. **Description is REQUIRED** - short summary in imperative present tense
@@ -20,6 +21,7 @@ Then follow these rules for the commit format:
 6. **Footer is OPTIONAL** - uses format: token: value or BREAKING CHANGE: description
 
 **IMPORTANT INSTRUCTIONS:**
+
 - Do NOT add any co-author information
 - Do NOT add "Generated with Claude Code"
 - Do NOT add robot emojis or any Claude attribution
@@ -29,14 +31,18 @@ Then follow these rules for the commit format:
 - Description should be imperative: "add" not "added" or "adds"
 
 **WORKFLOW:**
+
 1. Analyze the changes shown above
 2. Stage appropriate files with git add
 3. Create commit with git commit -m (for single line) or heredoc for multiline
 4. For multiline commits with body/footer, use:
+
    ```bash
    git commit -m "type(scope): description" -m "" -m "body" -m "" -m "footer"
    ```
+
    OR use heredoc:
+
    ```bash
    git commit -F- <<'END'
    type(scope): description

@@ -1,6 +1,7 @@
 # CLI & Dagger Shell Reference
 
 ## Contents
+
 - Installation
 - CLI commands
 - Dagger Shell (interactive REPL)
@@ -164,7 +165,7 @@ jobs:
           verb: call
           args: checks
           cloud-token: ${{ secrets.DAGGER_CLOUD_TOKEN }}
-          version: "latest"
+          version: 'latest'
 
       - name: Run Tests
         uses: dagger/dagger-for-github@v8
@@ -172,10 +173,11 @@ jobs:
           verb: call
           args: test
           cloud-token: ${{ secrets.DAGGER_CLOUD_TOKEN }}
-          version: "latest"
+          version: 'latest'
 ```
 
 Pin action SHAs in production for supply-chain security:
+
 ```yaml
 uses: dagger/dagger-for-github@456fc3af63a2ba6f9789af9c55045b459115541b # v8.3.0
 uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -229,6 +231,7 @@ func (m *Myproject) Debug(src *dagger.Directory) *dagger.Container {
 ```
 
 From Shell:
+
 ```
 > container | from alpine | with-exec apk add curl | terminal
 ```
@@ -266,17 +269,17 @@ The module config file tracks SDK, dependencies, and metadata:
 
 ```json
 {
-  "name": "myproject",
-  "engineVersion": "v0.19.10",
-  "sdk": {
-    "source": "go"
-  },
-  "dependencies": [
-    {
-      "name": "golang",
-      "source": "github.com/kpenfound/dagger-modules/golang@v0.2.1"
-    }
-  ]
+	"name": "myproject",
+	"engineVersion": "v0.19.10",
+	"sdk": {
+		"source": "go"
+	},
+	"dependencies": [
+		{
+			"name": "golang",
+			"source": "github.com/kpenfound/dagger-modules/golang@v0.2.1"
+		}
+	]
 }
 ```
 

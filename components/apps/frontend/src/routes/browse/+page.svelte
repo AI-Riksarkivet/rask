@@ -114,9 +114,7 @@
 	function fmtDate(h: CatalogHit): string {
 		if (h.date_text) return h.date_text;
 		if (h.date_start && h.date_end) {
-			return h.date_start === h.date_end
-				? String(h.date_start)
-				: `${h.date_start}–${h.date_end}`;
+			return h.date_start === h.date_end ? String(h.date_start) : `${h.date_start}–${h.date_end}`;
 		}
 		return '';
 	}
@@ -137,7 +135,7 @@
 				<span class="text-muted-foreground">Show:</span>
 				<select
 					bind:value={tier}
-					class="cursor-pointer rounded-md border border-input bg-background px-2 py-1 text-sm"
+					class="border-input bg-background cursor-pointer rounded-md border px-2 py-1 text-sm"
 				>
 					<option value="listed">listed</option>
 					<option value="cached">cached</option>
@@ -146,17 +144,17 @@
 			</label>
 			<Badge variant="secondary">{total.toLocaleString()} {tier} volumes</Badge>
 			{#if hits.length < total}
-				<span class="text-xs text-muted-foreground"
+				<span class="text-muted-foreground text-xs"
 					>showing first {hits.length.toLocaleString()} (limit {FETCH_LIMIT.toLocaleString()})</span
 				>
 			{/if}
 			{#if loading}
-				<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+				<Loader2 class="text-muted-foreground h-4 w-4 animate-spin" />
 			{/if}
 		</div>
 
 		{#if error}
-			<Card class="border-destructive/40 bg-destructive/10 p-3 text-destructive">{error}</Card>
+			<Card class="border-destructive/40 bg-destructive/10 text-destructive p-3">{error}</Card>
 		{/if}
 
 		{#if tree.length > 0}
@@ -166,33 +164,33 @@
 			     2rem per level. -->
 			<div class="flex flex-col gap-1">
 				{#each tree as arch (arch.code)}
-					<details class="rounded-md border bg-card">
+					<details class="bg-card rounded-md border">
 						<summary
-							class="flex cursor-pointer items-center gap-2 px-3 py-2 font-medium hover:bg-accent/30"
+							class="hover:bg-accent/30 flex cursor-pointer items-center gap-2 px-3 py-2 font-medium"
 						>
 							<span>{arch.code}</span>
-							<span class="text-xs text-muted-foreground">
+							<span class="text-muted-foreground text-xs">
 								{arch.fonds.length} fonds · {arch.total} volumes
 							</span>
 						</summary>
 						<div class="flex flex-col gap-1 px-3 py-1">
 							{#each arch.fonds as f (f.id)}
-								<details class="rounded border border-border/40">
+								<details class="border-border/40 rounded border">
 									<summary
-										class="flex cursor-pointer flex-wrap items-baseline gap-2 px-3 py-1.5 text-sm hover:bg-accent/30"
+										class="hover:bg-accent/30 flex cursor-pointer flex-wrap items-baseline gap-2 px-3 py-1.5 text-sm"
 									>
 										<span class="font-medium">{f.title}</span>
-										<span class="font-mono text-xs text-muted-foreground">{f.id}</span>
-										<span class="text-xs text-muted-foreground">· {fondsCount(f)} volumes</span>
+										<span class="text-muted-foreground font-mono text-xs">{f.id}</span>
+										<span class="text-muted-foreground text-xs">· {fondsCount(f)} volumes</span>
 									</summary>
 									<div class="flex flex-col gap-1 px-3 py-1">
 										{#each f.series as s (s.id)}
-											<details class="rounded border border-border/40 bg-muted/20">
+											<details class="border-border/40 bg-muted/20 rounded border">
 												<summary
-													class="flex cursor-pointer flex-wrap items-baseline gap-2 px-3 py-1.5 text-xs hover:bg-accent/30"
+													class="hover:bg-accent/30 flex cursor-pointer flex-wrap items-baseline gap-2 px-3 py-1.5 text-xs"
 												>
 													<span class="font-medium">{s.title}</span>
-													<span class="font-mono text-muted-foreground">{s.id}</span>
+													<span class="text-muted-foreground font-mono">{s.id}</span>
 													<span class="text-muted-foreground">· {s.volumes.length}</span>
 												</summary>
 												<ul class="flex flex-col">
@@ -203,7 +201,7 @@
 																href={link.href}
 																target={link.external ? '_blank' : undefined}
 																rel={link.external ? 'noopener' : undefined}
-																class="flex items-center gap-3 border-t border-border/40 px-3 py-1.5 text-xs transition hover:bg-accent/30"
+																class="border-border/40 hover:bg-accent/30 flex items-center gap-3 border-t px-3 py-1.5 text-xs transition"
 															>
 																<span class="w-24 shrink-0 font-mono">{v.bild_id}</span>
 																<span class="min-w-0 flex-1 truncate">
@@ -232,7 +230,7 @@
 																	</Badge>
 																{/if}
 																{#if link.external}
-																	<ExternalLink class="h-3 w-3 shrink-0 text-muted-foreground" />
+																	<ExternalLink class="text-muted-foreground h-3 w-3 shrink-0" />
 																{:else}
 																	<Search class="h-3 w-3 shrink-0 text-emerald-600" />
 																{/if}
@@ -250,7 +248,7 @@
 				{/each}
 			</div>
 		{:else if !loading}
-			<Card class="p-6 text-center text-muted-foreground">
+			<Card class="text-muted-foreground p-6 text-center">
 				No <span class="font-medium">{tier}</span> volumes yet.
 			</Card>
 		{/if}

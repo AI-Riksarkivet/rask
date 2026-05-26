@@ -20,13 +20,13 @@ How to pick the right attribute name and put it at the right level. Vendor-neutr
 
 ## Attribute placement
 
-| Level | What belongs here | Examples |
-|---|---|---|
-| **Resource** | Stable identity & environment of the producer | `service.name`, `service.version`, `deployment.environment.name`, `k8s.pod.name`, `host.name` |
-| **Scope** | Identity of the instrumentation library | `otel.scope.name`, `otel.scope.version` |
-| **Span** | Request-specific context for one operation | `http.request.method`, `http.response.status_code`, `db.operation.name`, `order.id` |
-| **Log record** | Structured log entry context | `log.file.path`, body fields, severity |
-| **Metric data point** | Low-cardinality dimensions for aggregation | `http.request.method`, `http.response.status_code`, `http.route` |
+| Level                 | What belongs here                             | Examples                                                                                      |
+| --------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| **Resource**          | Stable identity & environment of the producer | `service.name`, `service.version`, `deployment.environment.name`, `k8s.pod.name`, `host.name` |
+| **Scope**             | Identity of the instrumentation library       | `otel.scope.name`, `otel.scope.version`                                                       |
+| **Span**              | Request-specific context for one operation    | `http.request.method`, `http.response.status_code`, `db.operation.name`, `order.id`           |
+| **Log record**        | Structured log entry context                  | `log.file.path`, body fields, severity                                                        |
+| **Metric data point** | Low-cardinality dimensions for aggregation    | `http.request.method`, `http.response.status_code`, `http.route`                              |
 
 ### Common placement mistakes
 
@@ -40,20 +40,20 @@ How to pick the right attribute name and put it at the right level. Vendor-neutr
 
 ### Required
 
-| Attribute | Purpose | How to set |
-|---|---|---|
+| Attribute      | Purpose                                                                     | How to set              |
+| -------------- | --------------------------------------------------------------------------- | ----------------------- |
 | `service.name` | Identifies the service. Without it, telemetry falls into `unknown_service`. | env `OTEL_SERVICE_NAME` |
 
 Pick names that are **stable** (don't change between deployments), **unique per logical service**, **human-readable** (`checkout-service`, not `svc-42`), and **case-consistent** (`checkout`, not sometimes `CheckOut`). Pick a convention (kebab-case for this project) and apply across the fleet.
 
 ### Highly recommended
 
-| Attribute | Purpose | How to set |
-|---|---|---|
-| `service.version` | Deployment tracking, regression detection | Derive from build pipeline (git tag, build number); env `OTEL_RESOURCE_ATTRIBUTES=service.version=1.4.2` |
-| `service.instance.id` | Unique per process instance (one per pod). Required for instance-level analysis. | Generate at startup (UUID v4) or via K8s downward API. Triplet `(service.namespace, service.name, service.instance.id)` must be globally unique. |
-| `deployment.environment.name` | Distinguish production from staging/dev. Without it, dashboards mix environments. | Inject from deployment pipeline, never application code. |
-| `service.namespace` | Groups related services under a product (`acme-webstore` → `checkout`, `payment`, `inventory`). | env `OTEL_RESOURCE_ATTRIBUTES` |
+| Attribute                     | Purpose                                                                                         | How to set                                                                                                                                       |
+| ----------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `service.version`             | Deployment tracking, regression detection                                                       | Derive from build pipeline (git tag, build number); env `OTEL_RESOURCE_ATTRIBUTES=service.version=1.4.2`                                         |
+| `service.instance.id`         | Unique per process instance (one per pod). Required for instance-level analysis.                | Generate at startup (UUID v4) or via K8s downward API. Triplet `(service.namespace, service.name, service.instance.id)` must be globally unique. |
+| `deployment.environment.name` | Distinguish production from staging/dev. Without it, dashboards mix environments.               | Inject from deployment pipeline, never application code.                                                                                         |
+| `service.namespace`           | Groups related services under a product (`acme-webstore` → `checkout`, `payment`, `inventory`). | env `OTEL_RESOURCE_ATTRIBUTES`                                                                                                                   |
 
 In Kubernetes, `k8s.pod.uid` is required for telemetry correlation by the `k8sattributes` processor. Prefer it over `k8s.pod.ip`, which breaks with service meshes (Istio, Linkerd). Set all `k8s.*` via the downward API or the processor — never in application code.
 
@@ -61,63 +61,63 @@ In Kubernetes, `k8s.pod.uid` is required for telemetry correlation by the `k8sat
 
 ### HTTP
 
-| Attribute | Type | Notes |
-|---|---|---|
-| `http.request.method` | string | Required. Normalized to `GET`/`POST`/...; unknown values → `_OTHER` with original in `http.request.method_original`. |
-| `http.response.status_code` | int | Conditionally required. |
-| `url.scheme` | string | Required. |
-| `url.path` | string | **Server spans only.** Replaces part of deprecated `http.target`. |
-| `url.query` | string | Server spans only. |
-| `url.full` | string | **Client spans only.** Replaces deprecated `http.url`. |
-| `http.route` | string | Server spans, conditionally required — the route template, not the raw path. **Use this on metrics, not `url.path`.** |
-| `server.address`, `server.port` | string, int | Required. Replaces `net.peer.name` / `net.host.name`. |
-| `client.address` | string | Recommended on server spans. |
-| `network.protocol.version` | string | `1.1`, `2`, `3`. |
-| `user_agent.original` | string | Recommended. |
-| `error.type` | string | Set whenever span status is `ERROR`. |
+| Attribute                       | Type        | Notes                                                                                                                 |
+| ------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------- |
+| `http.request.method`           | string      | Required. Normalized to `GET`/`POST`/...; unknown values → `_OTHER` with original in `http.request.method_original`.  |
+| `http.response.status_code`     | int         | Conditionally required.                                                                                               |
+| `url.scheme`                    | string      | Required.                                                                                                             |
+| `url.path`                      | string      | **Server spans only.** Replaces part of deprecated `http.target`.                                                     |
+| `url.query`                     | string      | Server spans only.                                                                                                    |
+| `url.full`                      | string      | **Client spans only.** Replaces deprecated `http.url`.                                                                |
+| `http.route`                    | string      | Server spans, conditionally required — the route template, not the raw path. **Use this on metrics, not `url.path`.** |
+| `server.address`, `server.port` | string, int | Required. Replaces `net.peer.name` / `net.host.name`.                                                                 |
+| `client.address`                | string      | Recommended on server spans.                                                                                          |
+| `network.protocol.version`      | string      | `1.1`, `2`, `3`.                                                                                                      |
+| `user_agent.original`           | string      | Recommended.                                                                                                          |
+| `error.type`                    | string      | Set whenever span status is `ERROR`.                                                                                  |
 
 **Critical:** `url.full` is for `CLIENT` spans only. `url.path`/`url.query` are for `SERVER` spans only. Mixing them is a regression error.
 
 ### Database
 
-| Attribute | Type | Notes |
-|---|---|---|
-| `db.system.name` | string | Required. `postgresql`, `mysql`, `redis`, etc. Replaces `db.system`. |
-| `db.operation.name` | string | Conditionally required. `SELECT`, `INSERT`, `GET`, etc. |
-| `db.collection.name` | string | The table/collection name. Replaces `db.sql.table`. |
-| `db.namespace` | string | DB/schema name. Replaces `db.name`. |
-| `db.query.text` | string | **Opt-in only** (may contain PII). Replaces `db.statement`. |
-| `db.response.status_code` | string | Conditionally required. |
-| `server.address`, `server.port` | string, int | Required. |
-| `error.type` | string | Conditionally required. |
+| Attribute                       | Type        | Notes                                                                |
+| ------------------------------- | ----------- | -------------------------------------------------------------------- |
+| `db.system.name`                | string      | Required. `postgresql`, `mysql`, `redis`, etc. Replaces `db.system`. |
+| `db.operation.name`             | string      | Conditionally required. `SELECT`, `INSERT`, `GET`, etc.              |
+| `db.collection.name`            | string      | The table/collection name. Replaces `db.sql.table`.                  |
+| `db.namespace`                  | string      | DB/schema name. Replaces `db.name`.                                  |
+| `db.query.text`                 | string      | **Opt-in only** (may contain PII). Replaces `db.statement`.          |
+| `db.response.status_code`       | string      | Conditionally required.                                              |
+| `server.address`, `server.port` | string, int | Required.                                                            |
+| `error.type`                    | string      | Conditionally required.                                              |
 
 ### Messaging
 
-| Attribute | Type | Notes |
-|---|---|---|
-| `messaging.system` | string | Required. `kafka`, `rabbitmq`, `nats`, etc. |
-| `messaging.operation.name` | string | Required. `publish`, `receive`, `process`. |
-| `messaging.destination.name` | string | The topic/queue name. |
-| `messaging.message.id` | string | Recommended. |
+| Attribute                       | Type   | Notes                                                    |
+| ------------------------------- | ------ | -------------------------------------------------------- |
+| `messaging.system`              | string | Required. `kafka`, `rabbitmq`, `nats`, etc.              |
+| `messaging.operation.name`      | string | Required. `publish`, `receive`, `process`.               |
+| `messaging.destination.name`    | string | The topic/queue name.                                    |
+| `messaging.message.id`          | string | Recommended.                                             |
 | `messaging.consumer.group.name` | string | Conditionally required for systems with consumer groups. |
 
 ### RPC
 
-| Attribute | Type | Notes |
-|---|---|---|
-| `rpc.system` | string | Required. `grpc`, `connect_rpc`, etc. |
-| `rpc.service`, `rpc.method` | string, string | Recommended. |
-| `rpc.grpc.status_code` | int | Required for gRPC. |
-| `server.address`, `server.port` | string, int | Required. |
+| Attribute                       | Type           | Notes                                 |
+| ------------------------------- | -------------- | ------------------------------------- |
+| `rpc.system`                    | string         | Required. `grpc`, `connect_rpc`, etc. |
+| `rpc.service`, `rpc.method`     | string, string | Recommended.                          |
+| `rpc.grpc.status_code`          | int            | Required for gRPC.                    |
+| `server.address`, `server.port` | string, int    | Required.                             |
 
 ### Errors
 
-| Attribute | Where | Notes |
-|---|---|---|
-| `error.type` | Span attribute | Set whenever span status is `ERROR`. Use a stable identifier — the error class name, an error code, or a typed enum. |
-| `exception.type` | Log record | The error class name. |
-| `exception.message` | Log record | Human-readable message. |
-| `exception.stacktrace` | Log record | Full traceback as a single string. |
+| Attribute              | Where          | Notes                                                                                                                |
+| ---------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `error.type`           | Span attribute | Set whenever span status is `ERROR`. Use a stable identifier — the error class name, an error code, or a typed enum. |
+| `exception.type`       | Log record     | The error class name.                                                                                                |
+| `exception.message`    | Log record     | Human-readable message.                                                                                              |
+| `exception.stacktrace` | Log record     | Full traceback as a single string.                                                                                   |
 
 Stack traces on **log records**, not span events — span events are being deprecated. See `signals.md`.
 

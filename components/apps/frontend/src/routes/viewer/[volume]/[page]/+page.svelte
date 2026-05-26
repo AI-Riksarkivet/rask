@@ -414,13 +414,13 @@
 	{/snippet}
 
 	<!-- Canvas pane -->
-	<div class="relative flex-1 bg-muted/40">
+	<div class="bg-muted/40 relative flex-1">
 		<canvas bind:this={canvasEl} class="h-full w-full" style:filter={filterCss}></canvas>
 
 		<!-- Top-right: view controls (fit, filter) -->
-		<div class="pointer-events-none absolute right-3 top-3">
+		<div class="pointer-events-none absolute top-3 right-3">
 			<div
-				class="pointer-events-auto flex items-center gap-0.5 rounded-md border bg-card/90 p-0.5 shadow-sm backdrop-blur"
+				class="bg-card/90 pointer-events-auto flex items-center gap-0.5 rounded-md border p-0.5 shadow-sm backdrop-blur"
 			>
 				<Button variant="ghost" size="icon-sm" onclick={fit} title="Fit (f)">
 					<Maximize class="h-4 w-4" />
@@ -443,11 +443,9 @@
 		</div>
 
 		<!-- Bottom-center: page navigation -->
-		<div
-			class="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center"
-		>
+		<div class="pointer-events-none absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center">
 			<div
-				class="pointer-events-auto flex items-center rounded-md border bg-card/90 shadow-sm backdrop-blur"
+				class="bg-card/90 pointer-events-auto flex items-center rounded-md border shadow-sm backdrop-blur"
 			>
 				<Button
 					variant="ghost"
@@ -456,16 +454,15 @@
 					disabled={!prevPage}
 					onclick={() =>
 						prevPage &&
-						goto(
-							`/viewer/${encodeURIComponent(volume)}/${encodeURIComponent(prevPage.key)}`,
-							{ noScroll: true },
-						)}
+						goto(`/viewer/${encodeURIComponent(volume)}/${encodeURIComponent(prevPage.key)}`, {
+							noScroll: true,
+						})}
 					title="Previous (←)"
 				>
 					<ChevronLeft class="h-4 w-4" />
 				</Button>
 				<span
-					class="min-w-[64px] border-x px-2 text-center font-mono text-xs tabular-nums text-muted-foreground"
+					class="text-muted-foreground min-w-[64px] border-x px-2 text-center font-mono text-xs tabular-nums"
 				>
 					{idx >= 0 ? idx + 1 : '?'} / {pages.length}
 				</span>
@@ -476,10 +473,9 @@
 					disabled={!nextPage}
 					onclick={() =>
 						nextPage &&
-						goto(
-							`/viewer/${encodeURIComponent(volume)}/${encodeURIComponent(nextPage.key)}`,
-							{ noScroll: true },
-						)}
+						goto(`/viewer/${encodeURIComponent(volume)}/${encodeURIComponent(nextPage.key)}`, {
+							noScroll: true,
+						})}
 					title="Next (→)"
 				>
 					<ChevronRight class="h-4 w-4" />
@@ -493,57 +489,59 @@
 	     user has the panel toggled on AND we have catalog metadata. That way
 	     batches without ALTO yet still show their archival context. -->
 	{#if showPanel && (alto || catalog)}
-		<aside class="flex w-96 shrink-0 flex-col overflow-hidden border-l bg-card">
+		<aside class="bg-card flex w-96 shrink-0 flex-col overflow-hidden border-l">
 			{#if catalog}
 				<!-- EAD metadata for the current batch. fonds_title › series_title is
 				     usually the most useful framing; volume_title + date_text answers
 				     "what year is this", description fills in the human note (e.g.
 				     "jan-sept, supplement"). The bildvisning link lets the user
 				     compare against Riksarkivet's own viewer. -->
-				<div class="border-b bg-muted/40 px-3 py-2 text-xs">
-					<div class="flex items-center justify-between text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+				<div class="bg-muted/40 border-b px-3 py-2 text-xs">
+					<div
+						class="text-muted-foreground flex items-center justify-between text-[11px] font-medium tracking-wide uppercase"
+					>
 						<span>Volume</span>
 						{#if catalog.bildvisning_url}
 							<a
 								href={catalog.bildvisning_url}
 								target="_blank"
 								rel="noopener"
-								class="font-normal normal-case text-primary hover:underline"
+								class="text-primary font-normal normal-case hover:underline"
 							>
 								Riksarkivet ↗
 							</a>
 						{/if}
 					</div>
-					<div class="mt-1 text-sm font-medium leading-snug text-foreground">
+					<div class="text-foreground mt-1 text-sm leading-snug font-medium">
 						{catalog.fonds_title || '(untitled fonds)'}
 					</div>
 					{#if catalog.series_title && catalog.series_title !== catalog.fonds_title}
-						<div class="text-xs text-muted-foreground">{catalog.series_title}</div>
+						<div class="text-muted-foreground text-xs">{catalog.series_title}</div>
 					{/if}
 					<div class="mt-1 flex flex-wrap items-center gap-1.5">
 						{#if catalog.volume_title}
 							<span class="font-mono text-xs">{catalog.volume_title}</span>
 						{/if}
 						{#if catalog.date_text && catalog.date_text !== catalog.volume_title}
-							<span class="text-xs text-muted-foreground">·</span>
-							<span class="text-xs text-muted-foreground">{catalog.date_text}</span>
+							<span class="text-muted-foreground text-xs">·</span>
+							<span class="text-muted-foreground text-xs">{catalog.date_text}</span>
 						{/if}
 					</div>
 					{#if catalog.description}
-						<div class="mt-1.5 text-xs text-muted-foreground">{catalog.description}</div>
+						<div class="text-muted-foreground mt-1.5 text-xs">{catalog.description}</div>
 					{/if}
 					<div class="mt-1.5 flex items-center gap-2 text-[11px]">
 						<Badge variant="secondary" class="text-[10px]">{catalog.archive_code}</Badge>
-						<span class="font-mono text-muted-foreground">{catalog.reference_code}</span>
+						<span class="text-muted-foreground font-mono">{catalog.reference_code}</span>
 					</div>
 				</div>
 			{/if}
 
 			{#if alto || xmlText}
 				<div
-					class="flex items-center justify-between gap-2 border-b px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
+					class="text-muted-foreground flex items-center justify-between gap-2 border-b px-3 py-2 text-[11px] font-medium tracking-wide uppercase"
 				>
-					<div class="flex items-center gap-0.5 rounded-md border bg-muted/40 p-0.5">
+					<div class="bg-muted/40 flex items-center gap-0.5 rounded-md border p-0.5">
 						<button
 							type="button"
 							onclick={() => (view = 'lines')}
@@ -569,7 +567,7 @@
 						<button
 							type="button"
 							onclick={copyXml}
-							class="rounded border px-2 py-0.5 text-[11px] tracking-wide uppercase text-muted-foreground transition hover:bg-muted hover:text-foreground"
+							class="text-muted-foreground hover:bg-muted hover:text-foreground rounded border px-2 py-0.5 text-[11px] tracking-wide uppercase transition"
 						>
 							{copied ? 'Copied' : 'Copy'}
 						</button>
@@ -584,27 +582,27 @@
 									onmouseenter={() => (hoveredLine = i)}
 									onmouseleave={() => (hoveredLine = -1)}
 									onclick={() => focusLine(line)}
-									class={`block w-full border-b border-border/40 px-3 py-2 text-left text-sm transition
-										${i === hoveredLine ? 'bg-amber-500/15 text-foreground' : 'hover:bg-muted/50'}`}
+									class={`border-border/40 block w-full border-b px-3 py-2 text-left text-sm transition
+										${i === hoveredLine ? 'text-foreground bg-amber-500/15' : 'hover:bg-muted/50'}`}
 								>
 									<span>{line.text || '∅'}</span>
-									<span class="ml-2 font-mono text-[10px] text-muted-foreground">
+									<span class="text-muted-foreground ml-2 font-mono text-[10px]">
 										{line.confidence.toFixed(2)}
 									</span>
 								</button>
 							{/each}
 						</div>
 					{:else}
-						<div class="flex-1 px-3 py-4 text-xs text-muted-foreground">
+						<div class="text-muted-foreground flex-1 px-3 py-4 text-xs">
 							No ALTO available for this page.
 						</div>
 					{/if}
 				{:else if view === 'xml'}
 					{#if xmlText}
 						<pre
-							class="flex-1 overflow-auto px-3 py-2 font-mono text-[11px] leading-snug whitespace-pre-wrap break-words">{xmlText}</pre>
+							class="flex-1 overflow-auto px-3 py-2 font-mono text-[11px] leading-snug break-words whitespace-pre-wrap">{xmlText}</pre>
 					{:else}
-						<div class="flex-1 px-3 py-4 text-xs text-muted-foreground">
+						<div class="text-muted-foreground flex-1 px-3 py-4 text-xs">
 							No ALTO available for this page.
 						</div>
 					{/if}

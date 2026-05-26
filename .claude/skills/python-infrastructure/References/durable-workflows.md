@@ -4,11 +4,11 @@ DBOS is a Python durable-execution framework. Decorate functions as workflows an
 
 ## When to use DBOS vs JetStream
 
-| You have… | Use |
-|---|---|
-| Events to fan out, work to queue, messages to publish/consume | **NATS JetStream** (`background-jobs.md`) |
-| One logical workflow with multiple non-idempotent steps that can't safely be re-run from step 1 | **DBOS** (this file) |
-| Both — events feed a multi-step workflow | JetStream consumer kicks off a DBOS workflow |
+| You have…                                                                                       | Use                                          |
+| ----------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| Events to fan out, work to queue, messages to publish/consume                                   | **NATS JetStream** (`background-jobs.md`)    |
+| One logical workflow with multiple non-idempotent steps that can't safely be re-run from step 1 | **DBOS** (this file)                         |
+| Both — events feed a multi-step workflow                                                        | JetStream consumer kicks off a DBOS workflow |
 
 Examples that justify DBOS:
 
@@ -48,12 +48,12 @@ Call `DBOS.launch()` once at process start, **after** all `@DBOS.workflow` / `@D
 
 ## Workflows, steps, transactions
 
-| Decorator | Purpose |
-|---|---|
-| `@DBOS.workflow()` | Durable, recoverable execution unit. Resumes from last completed step on crash. |
-| `@DBOS.step()` | Non-deterministic operation (I/O, time, randomness). Step output is checkpointed. |
+| Decorator             | Purpose                                                                             |
+| --------------------- | ----------------------------------------------------------------------------------- |
+| `@DBOS.workflow()`    | Durable, recoverable execution unit. Resumes from last completed step on crash.     |
+| `@DBOS.step()`        | Non-deterministic operation (I/O, time, randomness). Step output is checkpointed.   |
 | `@DBOS.transaction()` | A step that's executed inside a single Postgres transaction via `DBOS.sql_session`. |
-| `@DBOS.scheduled()` | Cron-scheduled workflow. |
+| `@DBOS.scheduled()`   | Cron-scheduled workflow.                                                            |
 
 ```python
 import requests
@@ -383,16 +383,19 @@ def test_workflow(dbos_test):
 4. **No threads in workflows** — use child workflows or queues for concurrency.
 
 **Steps:**
+
 - Inputs and outputs must be JSON-serializable (Pydantic models are fine via `model_dump`).
 - Should be idempotent (workflows resume; steps can be re-run on retry).
 - Use `retries_allowed=True` for transient failures.
 
 **Workflows:**
+
 - Decorated with `@DBOS.workflow()`.
 - Inputs and return value JSON-serializable.
 - `DBOS.launch()` must be called before any workflow runs.
 
 **Transactions:**
+
 - `@DBOS.transaction()` is for DB ops only.
 - Access the session via `DBOS.sql_session` (SQLAlchemy).
 

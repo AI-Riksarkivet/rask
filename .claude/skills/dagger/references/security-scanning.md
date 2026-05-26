@@ -1,6 +1,7 @@
 # Security Scanning & Supply Chain
 
 ## Contents
+
 - Trivy vulnerability scanning
 - SBOM generation (SPDX, CycloneDX)
 - SARIF output for GitHub Security
@@ -264,7 +265,7 @@ Full publish workflow with SBOM, provenance, and cosign signing:
 name: Publish
 on:
   push:
-    tags: ["v*"]
+    tags: ['v*']
 
 permissions:
   contents: write
@@ -295,7 +296,7 @@ jobs:
           verb: call
           args: checks
           cloud-token: ${{ secrets.DAGGER_CLOUD_TOKEN }}
-          version: "latest"
+          version: 'latest'
 
       # Build with BuildKit attestations
       - uses: docker/setup-buildx-action@v3
@@ -325,16 +326,16 @@ jobs:
         uses: dagger/dagger-for-github@v8
         with:
           verb: call
-          args: "generate-sbom --format spdx-json export --path ./sbom.spdx.json"
-          version: "latest"
+          args: 'generate-sbom --format spdx-json export --path ./sbom.spdx.json'
+          version: 'latest'
 
       # Extract provenance via Dagger
       - name: Extract provenance
         uses: dagger/dagger-for-github@v8
         with:
           verb: call
-          args: "extract-provenance-attestation --image-ref myorg/myapp:${{ steps.version.outputs.tag }} export --path ./provenance.intoto.jsonl"
-          version: "latest"
+          args: 'extract-provenance-attestation --image-ref myorg/myapp:${{ steps.version.outputs.tag }} export --path ./provenance.intoto.jsonl'
+          version: 'latest'
 
       # Upload as release assets
       - uses: softprops/action-gh-release@v2
@@ -369,17 +370,18 @@ jobs:
           verb: call
           args: checks
           cloud-token: ${{ secrets.DAGGER_CLOUD_TOKEN }}
-          version: "latest"
+          version: 'latest'
       - name: Tests
         uses: dagger/dagger-for-github@v8
         with:
           verb: call
           args: test
           cloud-token: ${{ secrets.DAGGER_CLOUD_TOKEN }}
-          version: "latest"
+          version: 'latest'
 ```
 
 Pin action SHAs in production for supply-chain security:
+
 ```yaml
 uses: dagger/dagger-for-github@456fc3af63a2ba6f9789af9c55045b459115541b # v8.3.0
 uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

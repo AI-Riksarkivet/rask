@@ -14,11 +14,11 @@ How to author each of the three signals correctly. Vendor-neutral. Examples are 
 
 > Metrics surface problems → Traces pinpoint location → Logs explain causation.
 
-| Signal | Use for |
-|---|---|
-| **Metrics** | Alerting, SLOs, dashboards, trends, capacity. |
-| **Traces** | Request flow, latency breakdown, dependency map, error locality. |
-| **Logs** | Audit trails, event detail, why something failed once you've localized it. |
+| Signal      | Use for                                                                    |
+| ----------- | -------------------------------------------------------------------------- |
+| **Metrics** | Alerting, SLOs, dashboards, trends, capacity.                              |
+| **Traces**  | Request flow, latency breakdown, dependency map, error locality.           |
+| **Logs**    | Audit trails, event detail, why something failed once you've localized it. |
 
 Every signal carries the active `trace_id` / `span_id` so you can navigate from an alert → trace → log line.
 
@@ -28,34 +28,34 @@ Every signal carries the active `trace_id` / `span_id` so you can navigate from 
 
 Span names must be bounded. The number of unique names in a system is small and finite.
 
-| Anti-pattern | Correct | Fix |
-|---|---|---|
-| `GET /api/users/12345` | `GET /api/users/{id}` | Use route template, not raw path |
-| `SELECT * FROM orders WHERE id=99` | `SELECT orders` | Use table name, not the query |
-| `process_payment_for_user_jane` | `process payment` | User identity is an attribute |
-| `validation_failed` | `validate user_input` | Name the operation, not the outcome |
+| Anti-pattern                       | Correct               | Fix                                 |
+| ---------------------------------- | --------------------- | ----------------------------------- |
+| `GET /api/users/12345`             | `GET /api/users/{id}` | Use route template, not raw path    |
+| `SELECT * FROM orders WHERE id=99` | `SELECT orders`       | Use table name, not the query       |
+| `process_payment_for_user_jane`    | `process payment`     | User identity is an attribute       |
+| `validation_failed`                | `validate user_input` | Name the operation, not the outcome |
 
 Per-signal patterns:
 
-| Signal | Format | Example |
-|---|---|---|
-| HTTP server | `{method} {http.route}` | `GET /users/{id}` |
-| HTTP client | `{method} {url.template}` or `{method}` | `POST /checkout` |
-| Database | `{db.operation.name} {db.collection.name}` | `SELECT orders` |
-| RPC | `{rpc.service}/{rpc.method}` | `UserService/GetUser` |
-| Messaging | `{operation} {destination}` | `publish shop.orders` |
+| Signal      | Format                                     | Example               |
+| ----------- | ------------------------------------------ | --------------------- |
+| HTTP server | `{method} {http.route}`                    | `GET /users/{id}`     |
+| HTTP client | `{method} {url.template}` or `{method}`    | `POST /checkout`      |
+| Database    | `{db.operation.name} {db.collection.name}` | `SELECT orders`       |
+| RPC         | `{rpc.service}/{rpc.method}`               | `UserService/GetUser` |
+| Messaging   | `{operation} {destination}`                | `publish shop.orders` |
 
 Path parameterization: replace IDs and UUIDs with placeholders before they reach a span name or attribute. Most frameworks expose `request.route` or equivalent — use that. Fall back to regex only if no framework value is available.
 
 ### Span kind — match the communication pattern
 
-| Kind | Use when | Examples |
-|---|---|---|
-| `SERVER` | Handling an inbound synchronous request | Incoming HTTP, incoming gRPC |
-| `CLIENT` | Making an outbound synchronous request | HTTP call, DB query, outbound RPC |
-| `PRODUCER` | Initiating an async operation | Publishing to a queue/topic |
-| `CONSUMER` | Processing an async operation | Receiving from a queue |
-| `INTERNAL` | No remote counterpart | In-memory computation |
+| Kind       | Use when                                | Examples                          |
+| ---------- | --------------------------------------- | --------------------------------- |
+| `SERVER`   | Handling an inbound synchronous request | Incoming HTTP, incoming gRPC      |
+| `CLIENT`   | Making an outbound synchronous request  | HTTP call, DB query, outbound RPC |
+| `PRODUCER` | Initiating an async operation           | Publishing to a queue/topic       |
+| `CONSUMER` | Processing an async operation           | Receiving from a queue            |
+| `INTERNAL` | No remote counterpart                   | In-memory computation             |
 
 Common mistakes:
 
@@ -65,10 +65,10 @@ Common mistakes:
 
 ### Status code
 
-| Span kind | HTTP 1xx-3xx | 4xx | 5xx | No response |
-|---|---|---|---|---|
-| `CLIENT` | `UNSET` | **`ERROR`** | **`ERROR`** | **`ERROR`** |
-| `SERVER` | `UNSET` | `UNSET` (server did its job) | **`ERROR`** | **`ERROR`** |
+| Span kind | HTTP 1xx-3xx | 4xx                          | 5xx         | No response |
+| --------- | ------------ | ---------------------------- | ----------- | ----------- |
+| `CLIENT`  | `UNSET`      | **`ERROR`**                  | **`ERROR`** | **`ERROR`** |
+| `SERVER`  | `UNSET`      | `UNSET` (server did its job) | **`ERROR`** | **`ERROR`** |
 
 A 400 on a server span is **not** an error — the server correctly rejected a bad request. The same 400 on the matching client span **is** an error — the client's request failed.
 
@@ -110,14 +110,14 @@ except Exception as e:
 
 ### Span attributes
 
-Auto-instrumentation sets protocol-level attributes (`http.request.method`, `db.operation.name`). Add domain attributes that answer: *"when investigating this span during an incident, what context would I need?"*
+Auto-instrumentation sets protocol-level attributes (`http.request.method`, `db.operation.name`). Add domain attributes that answer: _"when investigating this span during an incident, what context would I need?"_
 
-| Domain | Examples |
-|---|---|
-| Commerce | `order.id`, `cart.item_count`, `payment.method` |
-| Auth | `user.id`, `user.role`, `auth.method` |
-| Multi-tenant | `tenant.id`, `tenant.plan` |
-| Feature flags | `feature_flag.key`, `feature_flag.variant` |
+| Domain        | Examples                                        |
+| ------------- | ----------------------------------------------- |
+| Commerce      | `order.id`, `cart.item_count`, `payment.method` |
+| Auth          | `user.id`, `user.role`, `auth.method`           |
+| Multi-tenant  | `tenant.id`, `tenant.plan`                      |
+| Feature flags | `feature_flag.key`, `feature_flag.variant`      |
 
 Naming: dot-separated namespaces (`order.id`, not `orderId`). See `attributes.md` for the registry.
 
@@ -139,12 +139,12 @@ If you sample in the Collector, materialize RED metrics from spans **before** th
 
 ### Instrument types
 
-| Type | Use for | Example |
-|---|---|---|
-| **Counter** | Monotonic totals (only goes up) | Requests served, errors, bytes sent |
-| **UpDownCounter** | Totals that go both ways | Active connections, queue depth |
-| **Histogram** | Distributions (p50/p95/p99) | Request latency, response size |
-| **Gauge** | Point-in-time snapshots | CPU %, memory, temperature |
+| Type              | Use for                         | Example                             |
+| ----------------- | ------------------------------- | ----------------------------------- |
+| **Counter**       | Monotonic totals (only goes up) | Requests served, errors, bytes sent |
+| **UpDownCounter** | Totals that go both ways        | Active connections, queue depth     |
+| **Histogram**     | Distributions (p50/p95/p99)     | Request latency, response size      |
+| **Gauge**         | Point-in-time snapshots         | CPU %, memory, temperature          |
 
 Decision tree:
 
@@ -162,12 +162,12 @@ Sync vs async (observable):
 
 Many semconv metrics are already emitted by auto-instrumentation packages. Duplicating them wastes money and creates conflicting series.
 
-| Domain | Library | Metric emitted |
-|---|---|---|
+| Domain      | Library                                                      | Metric emitted                                                |
+| ----------- | ------------------------------------------------------------ | ------------------------------------------------------------- |
 | HTTP server | `opentelemetry-instrumentation-fastapi`, `-flask`, `-django` | `http.server.request.duration`, `http.server.active_requests` |
-| HTTP client | `opentelemetry-instrumentation-httpx`, `-requests` | `http.client.request.duration` |
-| DB | `opentelemetry-instrumentation-psycopg`, `-asyncpg` | `db.client.operation.duration` |
-| Messaging | `opentelemetry-instrumentation-kafka`, `-celery` | `messaging.process.duration`, `messaging.publish.duration` |
+| HTTP client | `opentelemetry-instrumentation-httpx`, `-requests`           | `http.client.request.duration`                                |
+| DB          | `opentelemetry-instrumentation-psycopg`, `-asyncpg`          | `db.client.operation.duration`                                |
+| Messaging   | `opentelemetry-instrumentation-kafka`, `-celery`             | `messaging.process.duration`, `messaging.publish.duration`    |
 
 Before creating a custom metric:
 
@@ -185,12 +185,12 @@ Before creating a custom metric:
 
 Use [UCUM](https://ucum.org/) notation. A metric without a unit is uninterpretable.
 
-| Unit | Meaning |
-|---|---|
-| `s` | Seconds |
-| `ms` | Milliseconds |
-| `By` | Bytes |
-| `1` | Dimensionless |
+| Unit         | Meaning                                   |
+| ------------ | ----------------------------------------- |
+| `s`          | Seconds                                   |
+| `ms`         | Milliseconds                              |
+| `By`         | Bytes                                     |
+| `1`          | Dimensionless                             |
 | `{requests}` | Annotation — counts of something specific |
 
 Consistency: all emitters of the same metric name must use the same unit and (for histograms) the same bucket boundaries.
@@ -207,14 +207,14 @@ instances: 10
 → 5 × 50 × 5 × 10 = 12,500 series
 ```
 
-| Series | Zone | Action |
-|---|---|---|
-| <1,000 | Minimal | Room to add dimensions |
-| 1,000–10,000 | Ideal | Good balance |
-| 10,000–50,000 | Acceptable | Monitor monthly |
-| 50,000–100,000 | Caution | Review attributes |
-| >100,000 | Danger | Remove unbounded attributes |
-| >1,000,000 | Critical | Backend instability, massive cost |
+| Series         | Zone       | Action                            |
+| -------------- | ---------- | --------------------------------- |
+| <1,000         | Minimal    | Room to add dimensions            |
+| 1,000–10,000   | Ideal      | Good balance                      |
+| 10,000–50,000  | Acceptable | Monitor monthly                   |
+| 50,000–100,000 | Caution    | Review attributes                 |
+| >100,000       | Danger     | Remove unbounded attributes       |
+| >1,000,000     | Critical   | Backend instability, massive cost |
 
 **Never on metrics:** `user.id`, `request.id`, `order.id`, `url.full`, `timestamp`, `ip.address`, raw `url.path` (likely contains IDs).
 
@@ -247,12 +247,12 @@ Don't spread entire request objects — explicitly pick safe fields. A request b
 
 Always set a numeric severity. Records left at `UNSET` lose filtering and alerting capability.
 
-| Level | Use for | Examples |
-|---|---|---|
-| `DEBUG` (5) | Development diagnostics | Variable values |
-| `INFO` (9) | Request lifecycle, operations | Request start/end, job completion |
-| `WARNING` (13) | Recoverable anomalies | Retry attempts, fallback used |
-| `ERROR` (17) | Failures needing attention | Exceptions, unavailable service |
+| Level          | Use for                       | Examples                          |
+| -------------- | ----------------------------- | --------------------------------- |
+| `DEBUG` (5)    | Development diagnostics       | Variable values                   |
+| `INFO` (9)     | Request lifecycle, operations | Request start/end, job completion |
+| `WARNING` (13) | Recoverable anomalies         | Retry attempts, fallback used     |
+| `ERROR` (17)   | Failures needing attention    | Exceptions, unavailable service   |
 
 Never log expected behavior at `ERROR`. A user typing the wrong password is `INFO`, not `ERROR`. Use `9` (`INFO`) for access/audit logs.
 
@@ -299,17 +299,23 @@ log.exception("order.failed", extra={"order.id": order_id})
 ```
 
 Output:
+
 ```json
-{"level":"error","message":"order.failed","order.id":"abc-123","exc_info":"TypeError: ...\n  at ..."}
+{
+	"level": "error",
+	"message": "order.failed",
+	"order.id": "abc-123",
+	"exc_info": "TypeError: ...\n  at ..."
+}
 ```
 
 ### Stdout vs OTLP for log delivery
 
-| Method | Pros | Cons |
-|---|---|---|
-| Stdout only + filelog collector | All logs visible via `kubectl logs`; library/bootstrap/crash logs included | Needs a collector to forward |
-| OTLP only (Logs SDK) | Native OTLP, no parsing | Bypasses runtime — `kubectl logs` empty; bootstrap/crash logs lost; outage = silent loss |
-| Both | Belt-and-suspenders | **Duplicate records** at the backend — doubles cost |
+| Method                          | Pros                                                                       | Cons                                                                                     |
+| ------------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Stdout only + filelog collector | All logs visible via `kubectl logs`; library/bootstrap/crash logs included | Needs a collector to forward                                                             |
+| OTLP only (Logs SDK)            | Native OTLP, no parsing                                                    | Bypasses runtime — `kubectl logs` empty; bootstrap/crash logs lost; outage = silent loss |
+| Both                            | Belt-and-suspenders                                                        | **Duplicate records** at the backend — doubles cost                                      |
 
 **Default: stdout/stderr only.** Write structured JSON; let the Collector's filelog receiver pick them up. Do not run both the OTel Logs SDK exporter and a filelog receiver without explicit deduplication.
 

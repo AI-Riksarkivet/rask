@@ -2,7 +2,7 @@
 
 Decouple long-running or unreliable work from request/response cycles. This project uses **NATS JetStream** (via `nats-py`) as the primary task queue.
 
-> **JetStream vs DBOS — pick the right tool.** JetStream gives you *message durability*: the message survives, handlers are idempotent, retry means redelivering the whole message. **DBOS** (`durable-workflows.md`) gives you *workflow durability*: the function's execution state survives crashes; on resume it picks up at the last completed step. Use JetStream for fanout/work-queue/event distribution. Reach for DBOS when one logical workflow has multiple non-idempotent steps and you can't safely re-run from step 1 (checkout: charge → reserve → ship → notify).
+> **JetStream vs DBOS — pick the right tool.** JetStream gives you _message durability_: the message survives, handlers are idempotent, retry means redelivering the whole message. **DBOS** (`durable-workflows.md`) gives you _workflow durability_: the function's execution state survives crashes; on resume it picks up at the last completed step. Use JetStream for fanout/work-queue/event distribution. Reach for DBOS when one logical workflow has multiple non-idempotent steps and you can't safely re-run from step 1 (checkout: charge → reserve → ship → notify).
 
 ## Core concepts
 

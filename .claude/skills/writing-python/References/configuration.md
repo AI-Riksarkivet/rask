@@ -279,7 +279,7 @@ class Settings(BaseSettings):
 
 ## Gotchas
 
-- **`pydantic-settings` reads env at instantiation, not import** — but tests that monkeypatch env *after* instantiating see cached values. Instantiate after patching, or build a new `Settings()` in the test.
+- **`pydantic-settings` reads env at instantiation, not import** — but tests that monkeypatch env _after_ instantiating see cached values. Instantiate after patching, or build a new `Settings()` in the test.
 - **Nested `BaseSettings` need `env_nested_delimiter` explicitly set** — without it, `DB__HOST` won't auto-bind to `Settings.db.host`.
 - **`SecretStr` redacts in `__repr__` but NOT in `__str__`** — `print(secret)` leaks; `f"{secret}"` leaks; only `repr(secret)` and `secret.get_secret_value()` are explicit.
 - **`.env` file precedence vs process env**: pydantic-settings reads `.env` first then overlays process env. A CI secret wins over a developer's `.env` — but stale `.env` values stick if process env is missing the key.

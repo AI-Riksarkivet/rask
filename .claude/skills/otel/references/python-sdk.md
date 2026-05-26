@@ -27,19 +27,19 @@ Re-run `opentelemetry-bootstrap -a install` whenever you add a new library that 
 
 ## Environment variables
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `OTEL_SERVICE_NAME` | `unknown_service` | **Required.** Identifies the service. |
-| `OTEL_RESOURCE_ATTRIBUTES` | – | Comma-separated `key=value` pairs. Set `service.version`, `deployment.environment.name`, optionally `service.namespace`, `service.instance.id`. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP endpoint — gRPC on 4317, HTTP/protobuf on 4318. |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` | `grpc`, `http/protobuf`, or `http/json`. |
-| `OTEL_EXPORTER_OTLP_HEADERS` | – | Auth headers, e.g. `Authorization=Bearer <token>`. |
-| `OTEL_TRACES_EXPORTER` | `otlp` | Defaults to `otlp` in Python (unlike Node.js). Use `console` for local dev. |
-| `OTEL_METRICS_EXPORTER` | `none` | **Must be set explicitly to `otlp`** if you want metrics exported. |
-| `OTEL_LOGS_EXPORTER` | `otlp` | Defaults to `otlp` in Python. |
-| `OTEL_TRACES_SAMPLER` | `parentbased_always_on` | Leave as default. Sample in the Collector. |
-| `OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED` | `false` | Set to `true` to wire stdlib `logging` to OTel log records. |
-| `OTEL_LOG_LEVEL` | `info` | Set to `debug` to see SDK internals. |
+| Variable                                           | Default                 | Purpose                                                                                                                                         |
+| -------------------------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OTEL_SERVICE_NAME`                                | `unknown_service`       | **Required.** Identifies the service.                                                                                                           |
+| `OTEL_RESOURCE_ATTRIBUTES`                         | –                       | Comma-separated `key=value` pairs. Set `service.version`, `deployment.environment.name`, optionally `service.namespace`, `service.instance.id`. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`                      | `http://localhost:4317` | OTLP endpoint — gRPC on 4317, HTTP/protobuf on 4318.                                                                                            |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`                      | `grpc`                  | `grpc`, `http/protobuf`, or `http/json`.                                                                                                        |
+| `OTEL_EXPORTER_OTLP_HEADERS`                       | –                       | Auth headers, e.g. `Authorization=Bearer <token>`.                                                                                              |
+| `OTEL_TRACES_EXPORTER`                             | `otlp`                  | Defaults to `otlp` in Python (unlike Node.js). Use `console` for local dev.                                                                     |
+| `OTEL_METRICS_EXPORTER`                            | `none`                  | **Must be set explicitly to `otlp`** if you want metrics exported.                                                                              |
+| `OTEL_LOGS_EXPORTER`                               | `otlp`                  | Defaults to `otlp` in Python.                                                                                                                   |
+| `OTEL_TRACES_SAMPLER`                              | `parentbased_always_on` | Leave as default. Sample in the Collector.                                                                                                      |
+| `OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED` | `false`                 | Set to `true` to wire stdlib `logging` to OTel log records.                                                                                     |
+| `OTEL_LOG_LEVEL`                                   | `info`                  | Set to `debug` to see SDK internals.                                                                                                            |
 
 ## Activating the SDK
 
@@ -69,17 +69,17 @@ atexit.register(logger_provider.shutdown)
 
 ## Auto-instrumentation
 
-| Category | Libraries covered |
-|---|---|
-| HTTP server | FastAPI, Flask, Django, Starlette, ASGI |
-| HTTP client | httpx, requests, urllib3, aiohttp |
-| Database | psycopg, psycopg2, asyncpg, pymongo, redis |
-| ORM | SQLAlchemy, Tortoise ORM |
-| Messaging | Celery, aiokafka, confluent-kafka, pika |
-| AWS | boto3, botocore |
-| gRPC | grpcio |
-| Logging | stdlib `logging` (via `LoggingInstrumentor`) |
-| AI/LLM | [OpenLLMetry](https://github.com/traceloop/openllmetry), [OpenLit](https://github.com/openlit/openlit) |
+| Category    | Libraries covered                                                                                      |
+| ----------- | ------------------------------------------------------------------------------------------------------ |
+| HTTP server | FastAPI, Flask, Django, Starlette, ASGI                                                                |
+| HTTP client | httpx, requests, urllib3, aiohttp                                                                      |
+| Database    | psycopg, psycopg2, asyncpg, pymongo, redis                                                             |
+| ORM         | SQLAlchemy, Tortoise ORM                                                                               |
+| Messaging   | Celery, aiokafka, confluent-kafka, pika                                                                |
+| AWS         | boto3, botocore                                                                                        |
+| gRPC        | grpcio                                                                                                 |
+| Logging     | stdlib `logging` (via `LoggingInstrumentor`)                                                           |
+| AI/LLM      | [OpenLLMetry](https://github.com/traceloop/openllmetry), [OpenLit](https://github.com/openlit/openlit) |
 
 Full list: <https://opentelemetry.io/ecosystem/registry/?language=python>.
 
@@ -124,12 +124,12 @@ async def create_order(payload: OrderIn):
 
 ### Span status rules in Python
 
-| Outcome | Status | Notes |
-|---|---|---|
-| Operation completed and was explicitly verified | `OK` | Don't set speculatively. |
-| No error encountered, but no explicit success check | `UNSET` (default) | Leave it alone. |
-| Final failure (after retries exhausted) | `ERROR` + message | Include error class: `f"TimeoutError: payment service did not respond"`. |
-| Retry attempts that ultimately succeeded | `UNSET` | Record each failed attempt as a log record, not as `ERROR`. |
+| Outcome                                             | Status            | Notes                                                                    |
+| --------------------------------------------------- | ----------------- | ------------------------------------------------------------------------ |
+| Operation completed and was explicitly verified     | `OK`              | Don't set speculatively.                                                 |
+| No error encountered, but no explicit success check | `UNSET` (default) | Leave it alone.                                                          |
+| Final failure (after retries exhausted)             | `ERROR` + message | Include error class: `f"TimeoutError: payment service did not respond"`. |
+| Retry attempts that ultimately succeeded            | `UNSET`           | Record each failed attempt as a log record, not as `ERROR`.              |
 
 ```python
 # BAD: no message
@@ -196,14 +196,14 @@ from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
 Psycopg2Instrumentor().instrument(capture_parameters=True)
 ```
 
-| | |
-|---|---|
-| Default | `False` |
-| Attribute key | `db.statement.parameters` — non-standard, singular attribute with plural name |
-| Value shape | The entire DBAPI parameter tuple stringified via `str(args[1])` |
-| Coverage | `psycopg`, `psycopg2`, `asyncpg`, `tortoiseorm`, dbapi base |
-| Silently dropped | `mysql`, `pymysql`, `pymssql`, `sqlite3`, `aiopg` |
-| No-op | `sqlalchemy` (has no parameter capture at all) |
+|                  |                                                                               |
+| ---------------- | ----------------------------------------------------------------------------- |
+| Default          | `False`                                                                       |
+| Attribute key    | `db.statement.parameters` — non-standard, singular attribute with plural name |
+| Value shape      | The entire DBAPI parameter tuple stringified via `str(args[1])`               |
+| Coverage         | `psycopg`, `psycopg2`, `asyncpg`, `tortoiseorm`, dbapi base                   |
+| Silently dropped | `mysql`, `pymysql`, `pymssql`, `sqlite3`, `aiopg`                             |
+| No-op            | `sqlalchemy` (has no parameter capture at all)                                |
 
 Treat the Python attribute as **opaque debugging context**, not as a structured replacement for `db.query.parameter.<key>`. Pair it with a redaction processor in the Collector before sending anywhere.
 

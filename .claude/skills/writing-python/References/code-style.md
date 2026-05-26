@@ -147,7 +147,7 @@ __all__ = ["UserService"]
 Rules of thumb:
 
 - Internal helpers, intermediate state, "implementation details" — prefix with `_`.
-- Anything callers are *allowed* to depend on — no underscore.
+- Anything callers are _allowed_ to depend on — no underscore.
 - `__double_leading_underscore` triggers name mangling on classes (`obj._ClassName__foo`). You almost never want this — use single `_` instead.
 - `__dunder__` names are reserved for Python protocols (`__init__`, `__enter__`, `__iter__`, etc.). Don't invent your own.
 - `_unused` is also the convention for "I'm receiving this but ignoring it" — e.g. `for _ in range(n):` or `_, value = pair`.
@@ -242,8 +242,8 @@ class UserService:
 
 Reach for a comment only when:
 
-- The *why* is non-obvious — a hidden constraint, subtle invariant, workaround for a specific bug, or behavior that would surprise a careful reader.
-- A docstring on a public API explains *what callers need to know* (args, return shape, raised exceptions, edge cases) — not what the implementation does.
+- The _why_ is non-obvious — a hidden constraint, subtle invariant, workaround for a specific bug, or behavior that would surprise a careful reader.
+- A docstring on a public API explains _what callers need to know_ (args, return shape, raised exceptions, edge cases) — not what the implementation does.
 
 **No metadata in comments (C1).** Git owns authorship, dates, tickets, and change history. Comments don't.
 

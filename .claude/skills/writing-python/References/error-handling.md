@@ -97,15 +97,15 @@ except ValidationError as e:
 
 ## Map errors to standard exception types
 
-| Failure type | Exception | Example |
-|--------------|-----------|---------|
-| Invalid input | `ValueError` | Bad parameter values |
-| Wrong type | `TypeError` | Expected string, got int |
-| Missing item | `KeyError` | Dict key not found |
-| Operational failure | `RuntimeError` | Service unavailable |
-| Timeout | `TimeoutError` | Operation took too long |
-| File not found | `FileNotFoundError` | Path doesn't exist |
-| Permission denied | `PermissionError` | Access forbidden |
+| Failure type        | Exception           | Example                  |
+| ------------------- | ------------------- | ------------------------ |
+| Invalid input       | `ValueError`        | Bad parameter values     |
+| Wrong type          | `TypeError`         | Expected string, got int |
+| Missing item        | `KeyError`          | Dict key not found       |
+| Operational failure | `RuntimeError`      | Service unavailable      |
+| Timeout             | `TimeoutError`      | Operation took too long  |
+| File not found      | `FileNotFoundError` | Path doesn't exist       |
+| Permission denied   | `PermissionError`   | Access forbidden         |
 
 ```python
 # Good: specific exception with context

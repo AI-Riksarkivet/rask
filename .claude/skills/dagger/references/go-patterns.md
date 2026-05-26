@@ -1,6 +1,7 @@
 # Go SDK Patterns
 
 ## Contents
+
 - Dockerfile-based builds with build args
 - Tool injection (copying binaries from tool images)
 - Code quality checks (linting, formatting, type checking)
@@ -257,6 +258,7 @@ func (m *Myproject) PublishDocker(
 ```
 
 Call:
+
 ```bash
 dagger call publish-docker \
     --docker-username=env:DOCKER_USER \
@@ -495,6 +497,7 @@ container.WithMountedSecret("/run/secrets/token", tokenSecret)
 ```
 
 From CLI:
+
 ```bash
 --token=env:MY_TOKEN          # from env var
 --token=file:./secret.txt     # from file

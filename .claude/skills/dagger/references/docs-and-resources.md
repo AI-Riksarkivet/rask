@@ -8,6 +8,7 @@ method, option struct, or advanced feature. Listed in priority order.
 ## Dagger Shell `.help`
 
 Interactive discovery — fastest way to find methods on any type:
+
 ```
 $ dagger
 > container | .help                          # all Container methods
@@ -35,33 +36,37 @@ Conceptual guides and tutorials organized by topic:
 
 **Core types** (each type has its own sub-page with examples):
 → https://docs.dagger.io/getting-started/types
-  - Container: https://docs.dagger.io/getting-started/types/container
-  - Directory: https://docs.dagger.io/getting-started/types/directory
-  - File: https://docs.dagger.io/getting-started/types/file
-  - Secret: https://docs.dagger.io/getting-started/types/secret
-  - Service: https://docs.dagger.io/getting-started/types/service
-  - CacheVolume: https://docs.dagger.io/getting-started/types/cachevolume
-  - LLM: https://docs.dagger.io/getting-started/types/llm
-  - Env: https://docs.dagger.io/getting-started/types/env
-  - GitRepository: https://docs.dagger.io/getting-started/types/git
+
+- Container: https://docs.dagger.io/getting-started/types/container
+- Directory: https://docs.dagger.io/getting-started/types/directory
+- File: https://docs.dagger.io/getting-started/types/file
+- Secret: https://docs.dagger.io/getting-started/types/secret
+- Service: https://docs.dagger.io/getting-started/types/service
+- CacheVolume: https://docs.dagger.io/getting-started/types/cachevolume
+- LLM: https://docs.dagger.io/getting-started/types/llm
+- Env: https://docs.dagger.io/getting-started/types/env
+- GitRepository: https://docs.dagger.io/getting-started/types/git
 
 **Writing modules & functions**:
-  - Functions: https://docs.dagger.io/extending/functions
-  - Arguments & pragmas: https://docs.dagger.io/extending/arguments
-  - Return types: https://docs.dagger.io/extending/return-types
-  - Chaining: https://docs.dagger.io/extending/chaining
-  - Module dependencies: https://docs.dagger.io/extending/module-dependencies
-  - Custom types: https://docs.dagger.io/extending
+
+- Functions: https://docs.dagger.io/extending/functions
+- Arguments & pragmas: https://docs.dagger.io/extending/arguments
+- Return types: https://docs.dagger.io/extending/return-types
+- Chaining: https://docs.dagger.io/extending/chaining
+- Module dependencies: https://docs.dagger.io/extending/module-dependencies
+- Custom types: https://docs.dagger.io/extending
 
 **Core concepts**:
-  - Toolchains & checks: https://docs.dagger.io/core-concepts/toolchains
-  - Functions: https://docs.dagger.io/core-concepts/functions
+
+- Toolchains & checks: https://docs.dagger.io/core-concepts/toolchains
+- Functions: https://docs.dagger.io/core-concepts/functions
 
 **Recipes & integrations**:
-  - Cookbook: https://docs.dagger.io/cookbook
-  - GitHub Actions: https://docs.dagger.io/getting-started/ci-integrations/github-actions
-  - GitLab CI: https://docs.dagger.io/getting-started/ci-integrations/gitlab
-  - Use cases: https://docs.dagger.io/use-cases
+
+- Cookbook: https://docs.dagger.io/cookbook
+- GitHub Actions: https://docs.dagger.io/getting-started/ci-integrations/github-actions
+- GitLab CI: https://docs.dagger.io/getting-started/ci-integrations/gitlab
+- Use cases: https://docs.dagger.io/use-cases
 
 **Full API reference**: https://docs.dagger.io/reference/
 
@@ -76,9 +81,11 @@ helm, golangci-lint, argocd, terraform, and many more.
 ### Notable modules
 
 **docker-compose** — native Dagger reimplementation of Docker Compose:
+
 ```bash
 dagger install github.com/shykes/daggerverse/docker-compose@f82c283510bac0399451dff7ffbec0274bfc3bd4
 ```
+
 API: `dag.DockerCompose().Project(source).Service("name").Up()` — see
 go-patterns.md for full usage.
 
@@ -97,6 +104,7 @@ dagger install github.com/kpenfound/dagger-modules/golang@v0.2.1
 ```
 
 Then use in Go code via `dag`:
+
 ```go
 func (m *Myproject) Test(ctx context.Context, src *dagger.Directory) (string, error) {
     return dag.Golang().WithProject(src).Test(ctx)
@@ -116,6 +124,7 @@ dagger functions  # lists all functions including from dependencies
 ## When to search the web
 
 Search the web when you need:
+
 - A method or type not documented in this skill or references
 - Version-specific API changes (the Dagger API evolves across versions)
 - Integration patterns for specific tools (e.g. Argo CD, Terraform, Helm)

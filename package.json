@@ -1,15 +1,50 @@
 {
-  "name": "rask",
-  "private": true,
-  "license": "AGPL-3.0-only",
-  "workspaces": [
-    "components/apps/frontend",
-    "packages/component-lib"
-  ],
-  "scripts": {
-    "dev:ui": "bun --cwd packages/component-lib run dev",
-    "dev:frontend": "bun --cwd components/apps/frontend run dev",
-    "storybook": "bun --cwd packages/component-lib run storybook",
-    "build-storybook": "bun --cwd packages/component-lib run build-storybook"
-  }
+	"name": "rask",
+	"private": true,
+	"license": "AGPL-3.0-only",
+	"workspaces": [
+		"components/apps/frontend",
+		"packages/component-lib"
+	],
+	"scripts": {
+		"dev:ui": "bun --cwd packages/component-lib run dev",
+		"dev:frontend": "bun --cwd components/apps/frontend run dev",
+		"storybook": "bun --cwd packages/component-lib run storybook",
+		"build-storybook": "bun --cwd packages/component-lib run build-storybook",
+		"lint": "prettier --check '{components/apps/frontend,packages/component-lib}/**/*.{ts,js,svelte,css,html,json,md}' '*.{json,md}' --ignore-path .gitignore && eslint components/apps/frontend packages/component-lib",
+		"lint:fix": "eslint components/apps/frontend packages/component-lib --fix",
+		"format": "prettier --write '{components/apps/frontend,packages/component-lib}/**/*.{ts,js,svelte,css,html,json,md}' '*.{json,md}' --ignore-path .gitignore"
+	},
+	"devDependencies": {
+		"@eslint/compat": "^2",
+		"@eslint/js": "^9",
+		"eslint": "^9",
+		"eslint-config-prettier": "^10",
+		"eslint-plugin-svelte": "^3",
+		"globals": "^17",
+		"prettier": "^3",
+		"prettier-plugin-svelte": "^3",
+		"prettier-plugin-tailwindcss": "^0.7",
+		"svelte-check": "^4",
+		"typescript": "~5.9",
+		"typescript-eslint": "^8"
+	},
+	"prettier": {
+		"useTabs": true,
+		"singleQuote": true,
+		"trailingComma": "all",
+		"printWidth": 100,
+		"plugins": [
+			"prettier-plugin-svelte",
+			"prettier-plugin-tailwindcss"
+		],
+		"overrides": [
+			{
+				"files": "*.svelte",
+				"options": {
+					"parser": "svelte"
+				}
+			}
+		]
+	}
 }

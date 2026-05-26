@@ -66,15 +66,13 @@
 
 	<div class="relative flex flex-1 flex-col">
 		{#if !iframeLoaded}
-			<div
-				class="pointer-events-none absolute inset-x-0 top-0 z-10 h-0.5 progress-shimmer"
-			></div>
+			<div class="progress-shimmer pointer-events-none absolute inset-x-0 top-0 z-10 h-0.5"></div>
 		{/if}
 		<iframe
 			bind:this={iframeEl}
 			src={iframeSrc}
 			onload={() => (iframeLoaded = true)}
-			class="h-full w-full flex-1 border-0 bg-background"
+			class="bg-background h-full w-full flex-1 border-0"
 			title="Ray Dashboard"
 			referrerpolicy="same-origin"
 		></iframe>

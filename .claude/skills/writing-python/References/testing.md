@@ -300,7 +300,7 @@ Use `pytest.mark.parametrize` when you'd otherwise duplicate the body across cas
 
 ## `@pytest.mark.skip` is a question, not an answer
 
-A skipped test marks an ambiguity ("is this still valid?"). Either fix it or delete it. If you genuinely have to skip, write *why* and what unblocks it.
+A skipped test marks an ambiguity ("is this still valid?"). Either fix it or delete it. If you genuinely have to skip, write _why_ and what unblocks it.
 
 ```python
 # BAD
@@ -312,7 +312,7 @@ def test_async_operation(): ...
 def test_cache_invalidation(): ...
 ```
 
-`@pytest.mark.xfail` is for tests that *currently* fail in a known way and should start passing when the fix lands. Add a `strict=True` so an unexpected pass becomes a failure — that's how you find out the bug got fixed.
+`@pytest.mark.xfail` is for tests that _currently_ fail in a known way and should start passing when the fix lands. Add a `strict=True` so an unexpected pass becomes a failure — that's how you find out the bug got fixed.
 
 ## Guidelines
 

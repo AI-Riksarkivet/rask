@@ -64,11 +64,11 @@ claude mcp add -t stdio -s local <name> -- bunx -y <package>
 
 The three scopes Claude Code supports for MCP:
 
-| Scope | Stored in | Notes |
-|---|---|---|
-| `local` | Project-scoped section of `~/.claude.json` | Per-developer, this project only. **Used here.** Not a repo file. |
-| `project` | `.mcp.json` at repo root | Team-shared, committed. **Not used here** — we explicitly avoid root-level files. |
-| `user` | Global section of `~/.claude.json` | Per-developer, all projects. Use for personal MCPs unrelated to any single repo. |
+| Scope     | Stored in                                  | Notes                                                                             |
+| --------- | ------------------------------------------ | --------------------------------------------------------------------------------- |
+| `local`   | Project-scoped section of `~/.claude.json` | Per-developer, this project only. **Used here.** Not a repo file.                 |
+| `project` | `.mcp.json` at repo root                   | Team-shared, committed. **Not used here** — we explicitly avoid root-level files. |
+| `user`    | Global section of `~/.claude.json`         | Per-developer, all projects. Use for personal MCPs unrelated to any single repo.  |
 
 The install command in `Makefile`'s `claude-bootstrap` target is the source of truth — that's where you can see "which MCP servers does this project need". The actual config rows land in `~/.claude.json`, which is per-developer and not in the repo at all. If a new MCP should be required for everyone, append another `claude mcp add` line to that target.
 
@@ -98,13 +98,13 @@ Useful flags: `--all` (install every discovered skill non-interactively), `-s <n
 
 ## Marketplaces
 
-| Marketplace | Repo | Plugins |
-|---|---|---|
-| svelte-skills-kit | [spences10/svelte-skills-kit](https://github.com/spences10/svelte-skills-kit) | svelte-skills (runes, SvelteKit data flow, components, deployment) |
-| claude-code-toolkit | [spences10/claude-code-toolkit](https://github.com/spences10/claude-code-toolkit) | mcp-essentials, analytics, toolkit-skills |
-| denoland-skills | [denoland/skills](https://github.com/denoland/skills) | deno-skills |
-| redis | [redis/agent-skills](https://github.com/redis/agent-skills) | redis-development |
-| sveltejs-ai-tools | [sveltejs/ai-tools](https://github.com/sveltejs/ai-tools) | svelte |
+| Marketplace         | Repo                                                                              | Plugins                                                            |
+| ------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| svelte-skills-kit   | [spences10/svelte-skills-kit](https://github.com/spences10/svelte-skills-kit)     | svelte-skills (runes, SvelteKit data flow, components, deployment) |
+| claude-code-toolkit | [spences10/claude-code-toolkit](https://github.com/spences10/claude-code-toolkit) | mcp-essentials, analytics, toolkit-skills                          |
+| denoland-skills     | [denoland/skills](https://github.com/denoland/skills)                             | deno-skills                                                        |
+| redis               | [redis/agent-skills](https://github.com/redis/agent-skills)                       | redis-development                                                  |
+| sveltejs-ai-tools   | [sveltejs/ai-tools](https://github.com/sveltejs/ai-tools)                         | svelte                                                             |
 
 ## Activation hook (recommended)
 
@@ -131,11 +131,11 @@ bunx claude-skills-cli stats .claude/skills
 
 Skills load in 3 levels (progressive disclosure):
 
-| Level | Content | When Loaded | Size Limit |
-|---|---|---|---|
-| 1 | SKILL.md metadata (YAML) | Always in context | <200 chars |
-| 2 | SKILL.md body (Markdown) | When skill triggers | ~50 lines |
-| 3 | references/, scripts/, assets/ | As needed | Unlimited |
+| Level | Content                        | When Loaded         | Size Limit |
+| ----- | ------------------------------ | ------------------- | ---------- |
+| 1     | SKILL.md metadata (YAML)       | Always in context   | <200 chars |
+| 2     | SKILL.md body (Markdown)       | When skill triggers | ~50 lines  |
+| 3     | references/, scripts/, assets/ | As needed           | Unlimited  |
 
 ## Troubleshooting
 

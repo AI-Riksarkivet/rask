@@ -9,13 +9,13 @@ Language-level TypeScript for this project: strict typing, parse-don't-validate 
 
 ## Scope routing
 
-| If you need to… | Read |
-|---|---|
-| Configure `tsconfig.json`, set up Bun/Vite, organize imports, file naming | `References/code-style.md` |
-| Use `unknown`/generics/discriminated unions/type guards, narrow types, `satisfies` vs `as` | `References/type-safety.md` |
-| Look up everyday patterns — Result types, Zod validation, async, custom errors, module organization | `References/patterns.md` |
-| Audit code against Clean Code rules (functions, names, comments, general, tests) | `References/clean-code.md` |
-| Write tests with Vitest (unit, async, mocking, coverage, boundary cases) | `References/testing.md` |
+| If you need to…                                                                                     | Read                        |
+| --------------------------------------------------------------------------------------------------- | --------------------------- |
+| Configure `tsconfig.json`, set up Bun/Vite, organize imports, file naming                           | `References/code-style.md`  |
+| Use `unknown`/generics/discriminated unions/type guards, narrow types, `satisfies` vs `as`          | `References/type-safety.md` |
+| Look up everyday patterns — Result types, Zod validation, async, custom errors, module organization | `References/patterns.md`    |
+| Audit code against Clean Code rules (functions, names, comments, general, tests)                    | `References/clean-code.md`  |
+| Write tests with Vitest (unit, async, mocking, coverage, boundary cases)                            | `References/testing.md`     |
 
 ## House style — non-negotiable
 
@@ -26,7 +26,7 @@ Language-level TypeScript for this project: strict typing, parse-don't-validate 
 - **`satisfies` for validation, `as` only as a last resort.** `as` widens silently; `satisfies` preserves literal types AND verifies shape.
 - **`bun` for everything Node-level.** Not `npm`, not `pnpm`, not `yarn` — `bun install`, `bun run`, `bun test`.
 - **No `enum`s.** Use literal union types (`type Role = 'admin' | 'user'`). Enums emit runtime code and don't narrow as cleanly.
-- **Result types over throw for expected failures.** Throw for *bugs*; return `Result<T, E>` for *expected* failures (validation, not found, conflict).
+- **Result types over throw for expected failures.** Throw for _bugs_; return `Result<T, E>` for _expected_ failures (validation, not found, conflict).
 
 ## Quick patterns
 
@@ -37,22 +37,22 @@ type User = { id: string; email: string; role: Role };
 
 // Type guard — narrows unknown to a typed shape
 function isUser(value: unknown): value is User {
-  return typeof value === 'object' && value !== null && 'id' in value;
+	return typeof value === 'object' && value !== null && 'id' in value;
 }
 
 // Discriminated union — exhaustive switch with `never` check
 type Result<T, E = Error> = { ok: true; value: T } | { ok: false; error: E };
 
 function unwrap<T>(r: Result<T>): T {
-  if (r.ok) return r.value;
-  throw r.error;
+	if (r.ok) return r.value;
+	throw r.error;
 }
 
 // satisfies — verifies shape without widening
 const ROLES = {
-  admin: { canEdit: true, canDelete: true },
-  user: { canEdit: true, canDelete: false },
-  guest: { canEdit: false, canDelete: false },
+	admin: { canEdit: true, canDelete: true },
+	user: { canEdit: true, canDelete: false },
+	guest: { canEdit: false, canDelete: false },
 } satisfies Record<Role, { canEdit: boolean; canDelete: boolean }>;
 // ROLES.admin.canEdit is still typed as `true`, not `boolean`
 ```
@@ -72,11 +72,11 @@ bun run format           # prettier
 
 ## Project layout
 
-| Location | Purpose | Notes |
-|---|---|---|
-| `components/apps/frontend/` | SvelteKit 2 application | `+page.svelte` routes, `+page.ts` loaders. See `svelte-skills:sveltekit-structure`. |
-| `packages/oxen_componets/` | Shared Svelte 5 component library | Published via Bun workspaces. See `svelte-skills:svelte-components`. |
-| `packages/oxen_componets/vite.config.ts` | Library build config | Bun + Vite. |
+| Location                                 | Purpose                           | Notes                                                                               |
+| ---------------------------------------- | --------------------------------- | ----------------------------------------------------------------------------------- |
+| `components/apps/frontend/`              | SvelteKit 2 application           | `+page.svelte` routes, `+page.ts` loaders. See `svelte-skills:sveltekit-structure`. |
+| `packages/oxen_componets/`               | Shared Svelte 5 component library | Published via Bun workspaces. See `svelte-skills:svelte-components`.                |
+| `packages/oxen_componets/vite.config.ts` | Library build config              | Bun + Vite.                                                                         |
 
 ## Cross-skill boundaries
 
@@ -105,9 +105,9 @@ Keep changes proportional to the task. Don't refactor unrelated modules; do clea
 
 - **`as` silently widens; `satisfies` preserves literals.** `const x = { foo: 1 } as { foo: number }` loses `1` (becomes `number`). Use `satisfies` when you want both validation AND narrow types.
 - **`Array<T>.includes(x)` requires `x: T`.** Narrowing-from-union doesn't work. Wrap in a type-predicate helper: `function isRole(v: string): v is Role { return ROLES.includes(v as Role); }`.
-- **`tsconfig.json` `extends` doesn't merge `compilerOptions.paths`.** Child paths *replace* parent paths entirely. Re-declare everything in the child.
+- **`tsconfig.json` `extends` doesn't merge `compilerOptions.paths`.** Child paths _replace_ parent paths entirely. Re-declare everything in the child.
 - **`import type` with `verbatimModuleSyntax` + named exports** breaks if you mix value and type imports. Use inline: `import { type Foo, bar } from "mod"`.
-- **`strictNullChecks: false` is contagious.** Without it, `T` silently means `T | null | undefined` for *every* type. Partial migrations leave types that lie about nullability — keep it `true` always.
+- **`strictNullChecks: false` is contagious.** Without it, `T` silently means `T | null | undefined` for _every_ type. Partial migrations leave types that lie about nullability — keep it `true` always.
 - **`as const` ≠ `as Foo` ≠ `satisfies Foo`.** `as const` freezes + narrows to literals. `as Foo` asserts (lying allowed). `satisfies Foo` validates without widening. Use `as const` for lookup tables, `satisfies` for typed configs, never `as` without a comment explaining why.
 - **Mutable default parameters share state in arrow functions too.** `const f = (xs: number[] = []) => xs.push(1)` reuses the same array. Use `xs?: number[]` and create inside.
 - **Bun-only APIs leak into shared code.** `Bun.file()`, `Bun.serve()` aren't available in browser bundles. Frontend code must stay Bun-API-free.

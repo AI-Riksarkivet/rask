@@ -22,17 +22,21 @@
 			<button
 				type="button"
 				class={`rounded px-2 py-0.5 transition ${
-					view === 'swagger' ? 'bg-white/15 text-white' : 'text-[oklch(0.78_0.005_260)] hover:bg-white/10'
+					view === 'swagger'
+						? 'bg-white/15 text-white'
+						: 'text-[oklch(0.78_0.005_260)] hover:bg-white/10'
 				}`}
-				onclick={() => (view = 'swagger')}
-			>Swagger</button>
+				onclick={() => (view = 'swagger')}>Swagger</button
+			>
 			<button
 				type="button"
 				class={`rounded px-2 py-0.5 transition ${
-					view === 'redoc' ? 'bg-white/15 text-white' : 'text-[oklch(0.78_0.005_260)] hover:bg-white/10'
+					view === 'redoc'
+						? 'bg-white/15 text-white'
+						: 'text-[oklch(0.78_0.005_260)] hover:bg-white/10'
 				}`}
-				onclick={() => (view = 'redoc')}
-			>ReDoc</button>
+				onclick={() => (view = 'redoc')}>ReDoc</button
+			>
 		</div>
 	{/snippet}
 
@@ -60,7 +64,7 @@
 	<div class="flex flex-1 flex-col">
 		<iframe
 			src={iframeSrc}
-			class="h-full w-full flex-1 border-0 bg-background"
+			class="bg-background h-full w-full flex-1 border-0"
 			title={view === 'swagger' ? 'Swagger UI' : 'ReDoc'}
 			referrerpolicy="same-origin"
 		></iframe>
