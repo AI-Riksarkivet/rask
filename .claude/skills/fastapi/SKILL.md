@@ -190,8 +190,6 @@ The return type doesn't have to be a Pydantic model, it could be a different typ
 If the return type is not the same as the type that you want to use to validate, filter, or serialize, use the `response_model` parameter on the decorator instead.
 
 ```python
-from typing import Any
-
 from fastapi import FastAPI
 from pydantic import BaseModel
 
@@ -204,15 +202,13 @@ class Item(BaseModel):
 
 
 @app.get("/items/me", response_model=Item)
-async def get_item() -> Any:
+async def get_item() -> dict[str, object]:
     return {"name": "Foo", "description": "A very nice Item"}
 ```
 
 This can be particularly useful when filtering data to expose only the public fields and avoid exposing sensitive information.
 
 ```python
-from typing import Any
-
 from fastapi import FastAPI
 from pydantic import BaseModel
 
@@ -231,11 +227,10 @@ class Item(BaseModel):
 
 
 @app.get("/items/me", response_model=Item)
-async def get_item() -> Any:
-    item = InternalItem(
+async def get_item() -> InternalItem:
+    return InternalItem(
         name="Foo", description="A very nice Item", secret_key="supersecret"
     )
-    return item
 ```
 
 ## Performance
@@ -243,6 +238,10 @@ async def get_item() -> Any:
 Do not use `ORJSONResponse` or `UJSONResponse`, they are deprecated.
 
 Instead, declare a return type or response model. Pydantic will handle the data serialization on the Rust side.
+
+## OpenAPI / docs flags
+
+`include_in_schema=False` hides internal endpoints; `deprecated=True` strikethroughs during a deprecation window. Prod-wide `docs_url=None` lives in [`production-patterns.md`](references/production-patterns.md).
 
 ## Including Routers
 
@@ -299,6 +298,58 @@ Use dependencies when the logic can't be declared in Pydantic validation, depend
 
 Apply shared dependencies at the router level via `dependencies=[Depends(...)]`.
 
+## Production patterns
+
+See [`production-patterns.md`](references/production-patterns.md) for: lifespan (`@asynccontextmanager`, never `on_event`); graceful shutdown (uvicorn already handles SIGTERM, don't add your own); DI via `app.state` wrappers; middleware order (CORS → RequestID → Timing → Logging); `ContextVar` for request-scoped data; hiding `/docs` in prod.
+
+Exception handlers → [`exception-handlers.md`](references/exception-handlers.md) — RFC 9457 Problem Details, `DomainError` hierarchy, `RequestValidationError` override, `RateLimitError` + `Retry-After`.
+
+## Health checks
+
+See [the health-checks reference](references/health-checks.md) — `/livez` and `/readyz` endpoints, healthy / degraded / unhealthy states, per-component reporting, and how the `app.state.startup_complete` / `shutting_down` flags wire in from the lifespan.
+
+## Database
+
+See [the database reference](references/database.md) — **SQLModel** preferred (Pydantic + SQLAlchemy 2.0), **PostgreSQL** for prod, **SQLite** OK for local tests. Covers `AsyncEngine` setup, the pool flags that matter (`pool_pre_ping`, `pool_recycle`), sizing formula, and when PgBouncer pays off.
+
+## Caching
+
+See [`cache.md`](references/cache.md) — `RedisDep` from lifespan, `cache_aside` helper for service methods, mutation→invalidation pattern, "don't use response-caching middleware" anti-pattern, lifespan cache-warming. Redis fundamentals (connection pools, TTL strategies, invalidation patterns) live in `python-infrastructure`.
+
+## Kubernetes
+
+See [the kubernetes reference](references/kubernetes.md) for the deployment side: shutdown sequence diagram, full Deployment YAML (probes / resources / lifecycle / preStop), PodDisruptionBudget, HPA on RPS vs CPU, `terminationGracePeriodSeconds` math, and the explicit "DO NOT install signal handlers" rule. Probe endpoints (`/livez`, `/readyz`) come from `production-patterns.md`.
+
+## File handling (downloads, uploads, range requests)
+
+See [the file-handling reference](references/file-handling.md) for `FileResponse` (downloads from disk with path-traversal guard), `StreamingResponse` for generated content (CSV, ZIP), HTTP-range requests for video / resumable downloads, `UploadFile` patterns with chunked reads, and two temp-file cleanup approaches (generator-with-`finally` vs `BackgroundTasks`).
+
+## Observability
+
+See [the observability reference](references/observability.md) for FastAPI-specific OTel usage: when auto-instrumentation is enough, `FastAPIInstrumentor.instrument_app(...)`, `excluded_urls` for `/livez` / `/readyz` / `/metrics`, `server_request_hook` for per-request attributes, and the rule for when to wrap a business operation in a manual span vs let the framework do it. SDK setup, samplers, semconv, Collector pipelines all live in the **`otel`** skill — this reference doesn't duplicate them.
+
+## Anti-patterns
+
+See [the anti-patterns reference](references/anti-patterns.md) for the quick-lookup table of common mistakes — blocking I/O in `async def`, `python-jose`, deprecated `json_encoders`, contradictory `Field(ge=..., default=None)`, `ORJSONResponse`, long-lived `httpx.AsyncClient` per request, mocking the DB in integration tests, and ~25 more. Scan it when reviewing a diff.
+
+## Authentication & Authorization
+
+Split across two references — pick the one that matches the question.
+
+[`authn.md`](references/authn.md) — **who is the request?**
+
+- Password hashing with `pwdlib` (Argon2 + bcrypt fallback).
+- Self-issued JWT with `PyJWT`.
+- External OIDC token verification (rolled in-house, no wrapper lib) — provider quick-start for Keycloak / Dex / Okta / Auth0 / Entra / Google + local-dev IdP.
+- Protected-routes patterns on endpoints.
+
+[`authz.md`](references/authz.md) — **what may they do?**
+
+- Coarse role / scope checks (`require_active`, `require_superuser`).
+- Fine-grained relational permissions with **OpenFGA** — model, `check` / `batch_check` / `list_objects` / `list_users`, writing tuples after DB mutations, service-layer integration with post-filtering, local Playground.
+
+Rule of thumb: smallest mechanism that fits. Local JWT / OIDC → coarse deps → OpenFGA on top, never the reverse.
+
 ## Async vs Sync _path operations_
 
 Use `async` _path operations_ only when fully certain that the logic called inside is compatible with async and await (it's called with `await`) or that doesn't block.
@@ -329,23 +380,32 @@ The same rules apply to dependencies.
 
 Make sure blocking code is not run inside of `async` functions. The logic will work, but will damage the performance heavily.
 
-When needing to mix blocking and async code, see Asyncer in [the other tools reference](references/other-tools.md).
+When needing to mix blocking and async code, see the Asyncer pattern in [`production-patterns.md`](references/production-patterns.md) § Bridging sync ↔ async.
+
+## Constrained query values + pagination
+
+For fixed-set query values (sort order, status, format) use `StrEnum` — auto-documents as a dropdown in `/docs` and beats `Query(pattern="^(asc|desc)$")`:
+
+```python
+from enum import StrEnum
+class SortOrder(StrEnum):
+    asc = "asc"
+    desc = "desc"
+```
+
+For list endpoints, see [the pagination reference](references/pagination.md) — offset / cursor / keyset strategies, reusable `PaginationParams` dep, generic `Page[Item]` envelope (PEP 695), combined filter+sort+pagination dep, index requirements, approximate counts, `MAX_OFFSET` guards.
 
 ## Streaming (JSON Lines, SSE, bytes)
 
 See [the streaming reference](references/streaming.md) for JSON Lines, Server-Sent Events (`EventSourceResponse`, `ServerSentEvent`), and byte streaming (`StreamingResponse`) patterns.
 
-## Tooling
+## Tooling & libraries
 
-See [the other tools reference](references/other-tools.md) for details on uv, Ruff, ty for package management, linting, type checking, formatting, etc.
+Single source of truth in sibling skills + linked references: **`uv` / `ruff` / `ty`** (writing-python + astral:*), **`SQLModel`** over SQLAlchemy ([`database.md`](references/database.md)), **`HTTPX`** over requests (lifespan + `HttpDep`), **`Asyncer`** for sync↔async ([`production-patterns.md`](references/production-patterns.md)), **`PyJWT`** over python-jose, **`pwdlib`** over passlib ([`authn.md`](references/authn.md)).
 
-## Other Libraries
+## Microservices
 
-See [the other tools reference](references/other-tools.md) for details on other libraries:
-
-- Asyncer for handling async and await, concurrency, mixing async and blocking code, prefer it over AnyIO or asyncio.
-- SQLModel for working with SQL databases, prefer it over SQLAlchemy.
-- HTTPX for interacting with HTTP (other APIs), prefer it over Requests.
+See [`microservices.md`](references/microservices.md) — when to split, one-DB-per-service, sync (`httpx` ≤2 hops) vs async (NATS JetStream), outbox pattern, trace context, service-to-service authn, contract sharing, anti-patterns. **No Dapr, no Kafka.**
 
 ## Do not use Pydantic RootModels
 
