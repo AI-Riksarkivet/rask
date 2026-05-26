@@ -13,50 +13,7 @@ What's different about caching *inside a FastAPI service*. Everything else — R
 
 ## `RedisDep` from lifespan
 
-Same pattern as `SessionDep` / `HttpDep` (see `production-patterns.md` § Lifespan + DI from `app.state`). One client per process, opened in startup, closed in shutdown.
-
-```python
-# core/redis.py
-import redis.asyncio as redis
-from app.core.config import settings
-
-
-def make_redis() -> redis.Redis:
-    return redis.Redis.from_pool(redis.ConnectionPool.from_url(
-        str(settings.REDIS_URL),
-        max_connections=50,
-        decode_responses=True,
-        socket_timeout=5.0,
-        retry_on_timeout=True,
-    ))
-```
-
-```python
-# main.py — extend the lifespan
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # ... db_engine, http ...
-    app.state.redis = make_redis()
-    await app.state.redis.ping()           # fail-fast on bad URL / unreachable host
-    yield
-    await app.state.redis.aclose()
-```
-
-```python
-# api/deps.py
-from typing import Annotated
-from fastapi import Depends, Request
-import redis.asyncio as redis
-
-
-def get_redis(request: Request) -> redis.Redis:
-    return request.app.state.redis
-
-
-RedisDep = Annotated[redis.Redis, Depends(get_redis)]
-```
-
-Routes consume `RedisDep` — never `request.app.state.redis` directly.
+The shared `make_redis()` + lifespan ping + `RedisDep` wiring lives in [`redis.md`](redis.md) § One shared client. Every section below assumes `app.state.redis` is already built and `RedisDep` is importable.
 
 ## `cache_aside` helper
 
@@ -171,10 +128,4 @@ CDN-edge caching is a separate concern — that lives in your CDN / reverse prox
 
 ## We use stateless JWT, not Redis sessions
 
-Some Redis tutorials build a session manager (Redis keys keyed by random session ID, sliding TTL, cookie-based login). We don't:
-
-- **Local auth** issues a self-signed JWT (`authn.md` § Self-issued JWT).
-- **External IdP** verifies an OIDC token (`authn.md` § OIDC).
-- Either way the token is stateless — no server-side session storage to invalidate. The Redis we already have is for *caching*, not user state.
-
-If you genuinely need server-side session revocation (compliance, "log out everywhere"), add a **revocation list** in Redis keyed by `jti` claim — not a full session manager.
+The Redis client built for caching is **not** also a session store. We use stateless JWT throughout ([`authn.md`](authn.md)); if you need explicit revocation, see [`redis.md`](redis.md) § Use 3 — JWT `jti` revocation list.
