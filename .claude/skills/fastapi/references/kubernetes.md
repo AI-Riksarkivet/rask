@@ -237,4 +237,5 @@ If your slowest endpoint is much longer (e.g. a streaming export), either bump t
 
 - **Lifespan + health endpoints**: [`production-patterns.md`](production-patterns.md) — what your FastAPI code needs to expose.
 - **Tracing / metrics setup**: [`observability.md`](observability.md) + the `otel` skill.
-- **Background work that survives shutdown**: `python-infrastructure` skill — NATS JetStream + DBOS.
+- **Background work that survives shutdown**: `python-infrastructure` skill — NATS JetStream (`background-jobs.md`) for fanout/work-queue, Dapr Workflow (`dapr-workflows.md`) for multi-step sagas.
+- **Dapr sidecar deployment** (`dapr.io/*` annotations, components.yaml, sidecar resource overhead): [`microservices.md`](microservices.md) § Dapr + Kubernetes interplay.

@@ -24,7 +24,7 @@ Default to **no Redis**. Add it only when one of these is true and the existing 
 | Per-IP / per-user rate limit shared across pods | **Redis** | `slowapi` in-memory backend = per-pod limits = wrong number |
 | Stateless-JWT revocation ("log out everywhere", leaked-token rotation) | **Redis** | TTL'd `jti` set; small footprint; perfect fit |
 | Cross-pod broadcast to WebSocket clients | **NATS JetStream**, *not Redis* | One broker (we already run NATS); persistence, replay, consumer groups |
-| Reliable background jobs / sagas | **DBOS workflows**, *not Redis* | Durable execution; survives pod crashes |
+| Reliable background jobs / sagas | **Dapr Workflow**, *not Redis* | Activity-level checkpointing; survives pod crashes. See `python-infrastructure` § dapr-workflows. |
 | Session storage | **Stateless JWT**, *not Redis* | No revocation needed; no shared mutable state |
 | Cache full HTTP responses | **CDN / reverse proxy**, *not in-app middleware* | Auth-aware caching is a foot-gun (see [`cache.md`](cache.md)) |
 | Pub/Sub across services | **NATS**, *not Redis pub/sub* | We don't run two brokers |
@@ -228,7 +228,7 @@ async with lock(app.state.redis, name="daily-reconcile", ttl_ms=30 * 60 * 1000) 
         await run_reconciliation()
 ```
 
-**Caveats:** the single-node `SET NX PX` pattern is not safe under Redis failover. For true correctness (financial, exactly-once) use a DBOS workflow ([`microservices.md`](microservices.md)) or Postgres advisory locks. The Redis lock is a *good-enough* tool for the "don't run two of these at once" use case where double execution is annoying but not catastrophic.
+**Caveats:** the single-node `SET NX PX` pattern is not safe under Redis failover. For true correctness (financial, exactly-once) use a Dapr Workflow ([`microservices.md`](microservices.md) § Dapr + Kubernetes interplay) or Postgres advisory locks. The Redis lock is a *good-enough* tool for the "don't run two of these at once" use case where double execution is annoying but not catastrophic.
 
 ## What we do NOT use Redis for
 
@@ -239,7 +239,7 @@ These are explicit no's — each has a documented alternative we prefer:
 | **Sessions** (random session ID → user data) | Forces a Redis lookup on every authenticated request; revocation list achieves the same with stateless JWT | Stateless JWT + `jti` revocation list (above) |
 | **Response-caching middleware** | Auth/locale leaks, streaming bodies break, `Vary` ignored, invalidation has nowhere to hook | Service-method `cache_aside` ([`cache.md`](cache.md)); CDN for public responses |
 | **Cross-service event bus** | Two brokers to operate; Redis pub/sub has no persistence or consumer groups | NATS JetStream ([`microservices.md`](microservices.md)) |
-| **Reliable background jobs** (Celery, ARQ, RQ) | We use durable workflows that survive pod crashes; no second broker | DBOS workflows ([`microservices.md`](microservices.md)) |
+| **Reliable background jobs** (Celery, ARQ, RQ) | We use durable workflows that survive pod crashes; no second broker | Dapr Workflow (`python-infrastructure` § dapr-workflows) or NATS JetStream consumers ([`microservices.md`](microservices.md)) |
 | **Redis Streams as primary event log** | Same as cross-service event bus — NATS JetStream does the same with our existing infra | NATS JetStream consumer groups |
 | **Storing PII** (user emails, addresses, etc.) | Redis isn't your durable database; eviction can drop it silently | Postgres + cache the projection if needed |
 | **Writing custom rate-limit algorithms** | One bug away from letting everything through or blocking everything | `slowapi` (off-the-shelf) — [`rate-limiting.md`](rate-limiting.md) |

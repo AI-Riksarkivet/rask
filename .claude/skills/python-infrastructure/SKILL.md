@@ -1,6 +1,6 @@
 ---
 name: python-infrastructure
-description: Python patterns for system reliability — background jobs and task queues (NATS JetStream via nats-py), durable multi-step workflows (DBOS), resilience and recovery (retries, backoff, timeouts, circuit breakers via tenacity), caching (Redis), and observability (OpenTelemetry traces, metrics, logs via OTLP). USE WHEN building async workers, queueing tasks, designing fault-tolerant multi-step workflows that must survive crashes, handling transient network/IO failures, instrumenting Python services for production, designing retry policies, configuring tracing/metrics, or caching with Redis. NOT FOR language idioms or type hygiene (use `writing-python`), HTTP routing (use `fastapi`), or deep OTel reference (use `otel`).
+description: Python patterns for system reliability — background jobs and task queues (NATS JetStream via nats-py), durable multi-step workflows (Dapr Workflow via dapr-ext-workflow), resilience and recovery (retries, backoff, timeouts, circuit breakers via tenacity), caching (Redis), and observability (OpenTelemetry traces, metrics, logs via OTLP). USE WHEN building async workers, queueing tasks, designing fault-tolerant multi-step workflows that must survive crashes, handling transient network/IO failures, instrumenting Python services for production, designing retry policies, configuring tracing/metrics, or caching with Redis. NOT FOR language idioms or type hygiene (use `writing-python`), HTTP routing (use `fastapi`), or deep OTel reference (use `otel`).
 ---
 
 # Python Infrastructure
@@ -12,7 +12,7 @@ System-reliability concerns for Python services in this project, grouped because
 | Concern                      | Tool                               | Notes                                                                                                                                                         |
 | ---------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Message bus / task queue     | **NATS JetStream** (via `nats-py`) | Durable streams, consumer groups, replay. Replaces Celery/RabbitMQ here.                                                                                      |
-| Durable multi-step workflows | **DBOS**                           | Step-level recovery on Postgres. Use only when a workflow has multiple non-idempotent steps and JetStream's "redeliver the whole message" model isn't enough. |
+| Durable multi-step workflows | **Dapr Workflow** (via `dapr-ext-workflow`) | Activity-level checkpointing via the Dapr sidecar. Use only when a workflow has multiple non-idempotent steps and JetStream's "redeliver the whole message" model isn't enough. Requires a Dapr sidecar per pod (see `fastapi/references/microservices.md` § Dapr + Kubernetes). |
 | HTTP                         | **FastAPI**                        | See sibling `fastapi` skill.                                                                                                                                  |
 | Cache                        | **Redis**                          | `redis.asyncio` for async workers.                                                                                                                            |
 | Retries / backoff            | **tenacity**                       | Exponential + jitter, by default.                                                                                                                             |
@@ -25,7 +25,7 @@ System-reliability concerns for Python services in this project, grouped because
 | If you need to…                                                                                                 | Read                              |
 | --------------------------------------------------------------------------------------------------------------- | --------------------------------- |
 | Queue a task, design a worker, persist job state, retry/DLQ patterns (NATS JetStream + `nats-py`)               | `References/background-jobs.md`   |
-| Survive crashes mid-workflow with step-level recovery (DBOS workflows, steps, queues, scheduled, communication) | `References/durable-workflows.md` |
+| Survive crashes mid-workflow with activity-level recovery (Dapr Workflow — workflows, activities, retry policies, scheduling)        | `References/dapr-workflows.md`    |
 | Decide what to retry, with what backoff, when to stop, circuit-breakers                                         | `References/resilience.md`        |
 | Instrument a service with OTel traces/metrics/logs, four golden signals                                         | `References/observability.md`     |
 | Use Redis as a cache (TTL, invalidation, async client patterns)                                                 | `References/caching.md`           |
@@ -41,7 +41,7 @@ Operation runs out-of-request (email, image processing, batch)?
     -> background-jobs.md (NATS JetStream)
   Is it a multi-step workflow where re-running step 1 on crash is bad
   (charge -> reserve -> ship -> notify)?
-    -> durable-workflows.md (DBOS)
+    -> dapr-workflows.md (Dapr Workflow — sidecar required)
 
 Need to know what's happening in production?
   -> observability.md (OTel)

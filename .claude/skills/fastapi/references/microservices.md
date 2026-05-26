@@ -1,6 +1,13 @@
 # Microservices with FastAPI
 
-How a FastAPI service behaves when it's one of many. This file is opinionated about *our* stack — pure FastAPI + the `python-infrastructure` primitives (NATS JetStream, DBOS, Redis, OpenFGA, OTel). **No Dapr, no service mesh, no Kafka.**
+How a FastAPI service behaves when it's one of many. Opinionated stack:
+
+- **NATS JetStream** — the broker (durable streams, consumer groups, replay).
+- **Dapr** — sidecar that exposes Workflow + a `pubsub.jetstream` component that *backs onto NATS*. Apps that already have a Dapr sidecar for Workflow can publish/subscribe via Dapr (`DaprClient.publish_event(...)`) instead of running a second NATS client; messages still land in JetStream. Apps with no need for Workflow can use **`nats-py` directly** and skip the sidecar.
+- **Redis** — cache, rate-limit storage, JWT `jti` revocation (direct, not via Dapr state).
+- **OpenFGA** — authz. **OTel** — observability.
+
+**No service mesh, no Kafka.** See § Dapr + Kubernetes interplay below for the components.yaml + deployment annotation pattern.
 
 > If you're building a single service, skip this file. Everything here costs operational complexity; only pay for it once a second team owns a second deployable.
 
@@ -8,12 +15,13 @@ How a FastAPI service behaves when it's one of many. This file is opinionated ab
 
 - When to split (and when not to)
 - Service boundary rules
-- Inter-service comms — sync (httpx) vs async (NATS JetStream)
+- Inter-service comms — sync (httpx) vs async (NATS JetStream or Dapr pub/sub on JetStream)
 - The outbox pattern (atomic write + event)
 - Trace context propagation across services
 - Service-to-service authn (short-lived JWT from a shared IdP)
 - Sharing types — when, and how to keep it from rotting
 - API versioning
+- **Dapr + Kubernetes interplay** (sidecar wiring, components.yaml, deployment annotations)
 - Anti-patterns
 
 ## When to split (and when not to)
@@ -92,7 +100,7 @@ The "publish after commit" rule is naive — if the process crashes between `com
 
 ## The outbox pattern
 
-When event delivery must be **at-least-once** with respect to DB state, write the event into an `outbox` table in the same transaction as the business write. A separate process (DBOS workflow, NATS connector, or polling worker) reads from `outbox` and publishes:
+When event delivery must be **at-least-once** with respect to DB state, write the event into an `outbox` table in the same transaction as the business write. A separate process (Dapr Workflow activity, NATS connector, or polling worker) reads from `outbox` and publishes:
 
 ```python
 # services/orders.py
@@ -117,7 +125,7 @@ async def create_order(session: AsyncSession, *, payload: OrderCreate) -> Order:
 
 A background worker drains the outbox, publishes, marks `published_at`. Idempotency on the consumer side (de-dupe by event `id`) handles the at-least-once.
 
-Pick **outbox** when the event going missing causes data drift across services. Pick **publish-after-commit** when the event is purely informational (a Slack ping). DBOS workflows from `python-infrastructure` handle the outbox drain end-to-end.
+Pick **outbox** when the event going missing causes data drift across services. Pick **publish-after-commit** when the event is purely informational (a Slack ping). **Dapr Workflow** from `python-infrastructure` § dapr-workflows handles the outbox drain end-to-end as a single durable workflow (one activity reads the outbox row, the next publishes to JetStream, the next marks `published_at` — checkpoint at every step).
 
 ## Trace context propagation
 
@@ -180,19 +188,139 @@ app.include_router(v2)
 - Keep `v1` alive until consumer traffic drops below a measured threshold (OTel route metrics).
 - Breaking event-schema changes follow the same pattern — publish to `orders.created.v2`, keep `orders.created` for the deprecation window.
 
+## Dapr + Kubernetes interplay
+
+Dapr lands as a **sidecar container** injected by the Dapr operator into every pod with the right annotations. The app talks to the sidecar over `127.0.0.1:50001` (gRPC) or `:3500` (HTTP); the sidecar talks to NATS, the workflow state store, etc. From the app's point of view, Dapr is a localhost service.
+
+### Components (cluster-level, applied once per namespace)
+
+```yaml
+# k8s/dapr-components/pubsub-jetstream.yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: pubsub                              # the name apps use in DaprClient.publish_event
+  namespace: default
+spec:
+  type: pubsub.jetstream
+  version: v1
+  metadata:
+    - name: natsURL
+      value: "nats://nats.messaging.svc.cluster.local:4222"
+    - name: name                            # NATS client name; shows up in `nats consumer info`
+      value: "dapr"
+    - name: durableName
+      value: "dapr-consumer"
+    - name: queueGroupName                  # load-balance across pods of one app
+      value: "{{ .app_id }}"                # templated by Helm/Kustomize per app
+    - name: ackWait
+      value: "30s"
+    - name: maxDeliver
+      value: "5"
+    - name: backOff
+      value: "1s,5s,10s,30s,60s"
+```
+
+```yaml
+# k8s/dapr-components/workflow-statestore.yaml — Dapr Workflow uses an actor state store for checkpointing
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: actorstatestore
+  namespace: default
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: "redis-master.default.svc.cluster.local:6379"
+    - name: actorStateStore                 # MUST be "true" for the workflow runtime
+      value: "true"
+    - name: redisPassword
+      secretKeyRef:
+        name: redis-secret
+        key: redis-password
+auth:
+  secretStore: kubernetes
+```
+
+`secretKeyRef` + `auth.secretStore: kubernetes` — **never** put a password in `metadata.value`. The pattern is identical to k8s Secret references everywhere.
+
+### Deployment — sidecar injection via annotations
+
+```yaml
+# k8s/deployments/checkout.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout
+spec:
+  replicas: 3
+  template:
+    metadata:
+      labels: { app: checkout }
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "checkout"          # used as default queueGroupName above
+        dapr.io/app-port: "8000"            # FastAPI port
+        dapr.io/app-protocol: "http"
+        dapr.io/log-level: "info"
+        dapr.io/metrics-port: "9090"        # sidecar exposes Prometheus metrics here
+        dapr.io/sidecar-cpu-request: "100m"
+        dapr.io/sidecar-memory-request: "128Mi"
+        dapr.io/sidecar-cpu-limit: "500m"
+        dapr.io/sidecar-memory-limit: "256Mi"
+    spec:
+      terminationGracePeriodSeconds: 60     # see kubernetes.md — must accommodate sidecar shutdown too
+      containers:
+        - name: checkout
+          image: registry.example.com/checkout:1.2.3
+          ports:
+            - { name: http, containerPort: 8000 }
+          # ... probes, resources, env, OTel — see kubernetes.md
+```
+
+The Dapr operator watches for `dapr.io/enabled: "true"` and mutates the Pod to add the `daprd` container. No app code changes needed.
+
+### What changes vs the no-sidecar deployment
+
+| Concern | No sidecar (nats-py direct) | With Dapr sidecar |
+| ------- | --------------------------- | ----------------- |
+| `terminationGracePeriodSeconds` | preStop + in-flight + lifespan + buffer | **+ sidecar drain time** (~10 s — Dapr flushes pending acks) |
+| Resource requests | App only | App + sidecar (~100m CPU / 128Mi memory baseline) |
+| Liveness probe | Hits app's `/livez` | Same — but sidecar has its own at `:3500/v1.0/healthz` |
+| Pull policy | One image | Two images (app + `daprio/daprd`); pin `daprd` version cluster-wide |
+| First-deploy ordering | App up → ready | App up → sidecar up → app calls sidecar → ready (extra ~2 s) |
+| Cost surface | App pod | App pod + ~128Mi RAM per pod for the sidecar |
+
+The added complexity is justified **only** for services that need Dapr Workflow. Pure HTTP / read-cache services should run without the sidecar — annotations omitted.
+
+### Local dev — `dapr init`
+
+```bash
+dapr init                                   # installs dapr-placement, dapr-scheduler, redis (for state)
+dapr run --app-id checkout \
+         --app-port 8000 \
+         --resources-path ./k8s/dapr-components \
+         -- uv run fastapi dev
+```
+
+Same `components/` directory used in k8s. Local NATS via `docker run -d -p 4222:4222 nats:latest -js` or a compose file in `Makefile`.
+
 ## Anti-patterns
 
 | Pattern | Why it's wrong | Fix |
 | ------- | -------------- | --- |
 | Sync chain `A → B → C → D` | Tail latency multiplies; any slow link tanks the front | Flip the second hop to NATS event; let downstream catch up async |
 | Cross-service DB joins / shared DB | Couples schema migrations across teams; outage in one DB takes down many services | Each service owns its DB; cross-service reads via API or event projection |
-| Two-phase commits / distributed transactions across services | Operationally hellish; locks span network boundaries | Saga pattern via DBOS workflows (`python-infrastructure`), or outbox + idempotent consumers |
+| Two-phase commits / distributed transactions across services | Operationally hellish; locks span network boundaries | Saga pattern via Dapr Workflow (`python-infrastructure` § dapr-workflows), or outbox + idempotent consumers |
 | Synchronous HTTP call inside a NATS message handler | The handler is supposed to be retryable; the sync call adds failure modes the retry can't fix | Pre-fetch what you need before the publish; or make the handler enqueue another async job |
 | Per-service `BaseSettings` reading 50 env vars from a shared `.env` | Couples deploy config across services | Each service has its own `.env`; share only what genuinely crosses (OTel endpoint, IdP issuer) |
 | One huge `shared/` lib with models + clients + helpers | Bumping it forces every service redeploy; sneaky distributed monolith | At most a `contracts/` lib with Pydantic schemas, nothing else |
 | Service emitting events with no schema versioning | Consumer breaks silently when producer evolves payload | `subject.vN` discipline (`orders.created.v1`); add new subject for breaking change |
 | Building a "framework" wrapping FastAPI for "consistency" across services | Now every service upgrade is blocked on the framework lib | Use the references in this skill; consistency comes from review, not abstraction |
-| Adopting Dapr / service-mesh sidecars to "solve" microservices | Adds a sidecar per pod, duplicates every primitive we already have | Pure FastAPI + `python-infrastructure` primitives. Sidecars only when the platform team mandates them |
+| Adopting a service mesh (Istio, Linkerd) to "solve" microservices | Sidecar per pod with overlapping concerns to what Dapr already covers; mTLS + routing are platform-team mandates, not app concerns | Dapr sidecar handles workflow + pub/sub; if the platform team mandates a mesh, run both — don't roll one yourself |
+| Putting Dapr in front of every primitive (state, secrets, configuration, actors) | Sidecar overhead for primitives we already have (Redis-direct for cache/rate-limit, k8s Secrets for secrets, pydantic-settings for config) | Use Dapr **only** for Workflow + `pubsub.jetstream`. Other primitives stay native. |
 | `import requests` inside a NATS message handler | Sync blocking call in async path; pool not reused | `httpx.AsyncClient` from lifespan, injected |
 
 ## Cross-references
@@ -201,4 +329,4 @@ app.include_router(v2)
 - [`authn.md`](authn.md) — OIDC verification, service-to-service JWT.
 - [`authz.md`](authz.md) — OpenFGA for both user and service identities.
 - [`observability.md`](observability.md) + `otel` skill — trace context propagation across services.
-- `python-infrastructure` — NATS JetStream client patterns, DBOS workflows, retry/backoff, outbox drain.
+- `python-infrastructure` — NATS JetStream client patterns (`background-jobs.md`), Dapr Workflow (`dapr-workflows.md`), retry/backoff, outbox drain.
