@@ -399,6 +399,10 @@ For list endpoints, see [the pagination reference](references/pagination.md) —
 
 See [the streaming reference](references/streaming.md) for JSON Lines, Server-Sent Events (`EventSourceResponse`, `ServerSentEvent`), and byte streaming (`StreamingResponse`) patterns.
 
+## WebSockets & rate limiting
+
+[`websockets.md`](references/websockets.md) — authn BEFORE `accept()`, `ConnectionManager` on `app.state`, server-side heartbeat, NATS JetStream for horizontal scaling, manual OTel spans; prefer SSE for one-way push. [`rate-limiting.md`](references/rate-limiting.md) — `slowapi` per-route (not global middleware), Redis-backed via `app.state.redis`, key by `user_id` not IP; mandatory on `/login`, `/token`, `/forgot-password`.
+
 ## Tooling & libraries
 
 Single source of truth in sibling skills + linked references: **`uv` / `ruff` / `ty`** (writing-python + astral:*), **`SQLModel`** over SQLAlchemy ([`database.md`](references/database.md)), **`HTTPX`** over requests (lifespan + `HttpDep`), **`Asyncer`** for sync↔async ([`production-patterns.md`](references/production-patterns.md)), **`PyJWT`** over python-jose, **`pwdlib`** over passlib ([`authn.md`](references/authn.md)).
