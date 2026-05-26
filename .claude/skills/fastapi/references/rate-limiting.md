@@ -25,7 +25,7 @@ What to put on `/login`, `/token`, `/forgot-password`, and any expensive route. 
 
 ## Setup — Redis-backed limiter on `app.state`
 
-Reuses the `app.state.redis` client from [`cache.md`](cache.md) — one Redis pool, multiple consumers.
+Reuses the same `app.state.redis` Redis client built in lifespan — one pool, multiple consumers (cache + rate limit + JWT revocation). If you don't already have it, see [`redis.md`](redis.md) § One shared client. Otherwise the wiring is just two extra lines (the limiter creation + `storage_uri` binding):
 
 ```python
 # core/rate_limit.py

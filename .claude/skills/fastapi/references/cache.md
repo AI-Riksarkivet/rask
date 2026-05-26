@@ -13,7 +13,29 @@ What's different about caching *inside a FastAPI service*. Framework-agnostic pa
 
 ## `RedisDep` from lifespan
 
-The shared `make_redis()` + lifespan ping + `RedisDep` wiring lives in [`redis.md`](redis.md) § One shared client. Every section below assumes `app.state.redis` is already built and `RedisDep` is importable.
+Every section below assumes `app.state.redis` is built in lifespan and exposed as `RedisDep`. The minimum needed:
+
+```python
+# core/redis.py
+import redis.asyncio as redis
+
+def make_redis() -> redis.Redis:
+    return redis.Redis.from_pool(redis.ConnectionPool.from_url(
+        str(settings.REDIS_URL), max_connections=50, decode_responses=True,
+        socket_timeout=5.0, retry_on_timeout=True,
+    ))
+
+# main.py — inside lifespan
+app.state.redis = make_redis()
+await app.state.redis.ping()       # fail-fast
+# ... yield ...
+await app.state.redis.aclose()
+
+# api/deps.py
+RedisDep = Annotated[redis.Redis, Depends(lambda r: r.app.state.redis)]
+```
+
+Full design rationale (when to add Redis vs NATS/Postgres, pool tuning details, other uses): [`redis.md`](redis.md).
 
 ## `cache_aside` helper
 

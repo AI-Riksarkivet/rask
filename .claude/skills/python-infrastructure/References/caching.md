@@ -4,6 +4,18 @@ This project uses **Redis** as the cache for hot reads and as a coordination poi
 
 > Project-specific Redis recipes (e.g. session shape, namespace conventions, eviction policy) will land here once examples are in place. The patterns below are the baseline.
 
+## Contents
+
+- Async client setup
+- Read-through cache
+- Invalidate on write
+- Cache stampede protection (single-flight)
+- Rate limiting (token bucket)
+- Dedup window (idempotency)
+- Don't cache what changes faster than you can serve it
+- Summary
+- Gotchas
+
 ## Async client setup
 
 ```python

@@ -2,6 +2,18 @@
 
 This project uses **OpenTelemetry** (OTLP) for the three signals — traces, metrics, logs — exported to an OTel Collector that fans out to backends. Don't pull in `structlog`, Prometheus client libs, or ad-hoc tracing — OTel's stdlib-`logging` handler, metrics API, and tracer cover all three.
 
+## Contents
+
+- Where to look first
+- Required resource attributes
+- Logging — stdlib `logging`, not structlog
+- What to instrument
+- The four golden signals
+- Bounded cardinality
+- Trace context across queue boundaries
+- Cross-cutting decorator (timed + traced)
+- Summary
+
 ## Where to look first
 
 | If you need to…                                                                              | Read                                                  |
