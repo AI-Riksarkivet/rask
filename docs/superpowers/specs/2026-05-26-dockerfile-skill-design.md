@@ -68,7 +68,10 @@ Sections, in order:
 - **OCI labels.** Each dockerfile declares `ARG BUILD_DATE`, `ARG VCS_REF`, `ARG VERSION` and sets `org.opencontainers.image.{created,revision,version,source,title,description}` labels. The build system (dagger) supplies the ARGs; the dockerfile is self-documenting about what it expects.
 - **Read-only rootfs design.** Final image runs cleanly under `--read-only --tmpfs /tmp`. Any writable runtime path is `/tmp` or an explicit volume mount.
 - `tini` as PID 1 for Python entrypoints.
-- `HEALTHCHECK` only when no orchestrator probe owns readiness; `--start-period` set; stdlib HTTP check.
+- **`HEALTHCHECK` — lightweight idiom only.** Only when no orchestrator probe owns readiness; `--start-period` set. Avoid `python -c "import urllib.request,..."` — `urllib.request` cold-imports ssl/http.client (~30-80ms). Prefer raw socket connect: `CMD python -c "import socket,sys; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',<PORT>))"` or `curl --fail --silent --max-time 2 http://127.0.0.1:<PORT>/health` if curl is in the image. Pick one idiom across the project — don't mix.
+- **`--provenance=mode=max` + `--sbom=true` CI flags pair with secret-mount discipline.** `mode=max` records full `ARG` values into the public SLSA attestation. Any secret-as-ARG becomes public. This reinforces the rule: secrets enter via `--mount=type=secret`, never `ARG`.
+- **BuildKit cache export for CI (build-invocation, not dockerfile).** Local cache mounts cover dev; CI needs cross-runner cache. Recommendation: `--cache-to=type=gha` on GitHub Actions (requires buildx ≥ v0.21.0 / BuildKit ≥ v0.20.0 after the April 2025 API v2 migration); `--cache-to=type=registry,ref=<registry>/<image>:cache,mode=max --cache-from=type=registry,ref=<registry>/<image>:cache` elsewhere. `mode=max` caches intermediate layers; `mode=inline` is dev-only.
+- **Reproducible builds (optional, build-invocation only).** Buildx ≥ v0.10 auto-propagates `SOURCE_DATE_EPOCH` from host env to image timestamps. Buildx ≥ v0.13 adds `--output type=image,name=...,rewrite-timestamp=true` for file-level timestamp rewrites. No dockerfile change needed; mention in CI snippet for projects that care about bit-reproducibility.
 - **Digest pinning + bump workflow.** Inspect via `docker buildx imagetools inspect <ref>`. Before bumping: (a) refuse digests older than ~90 days unless explicitly approved; (b) scan with Trivy or Grype or Docker Scout. **Reference:** CVE-2024-3094 (xz-utils backdoor) was still being detected in Docker Hub images by Binarly in August 2025 — digest pinning alone doesn't protect against pinning to a poisoned snapshot.
 - **Provenance (out of skill scope; pointer only).** If the project ever claims SLSA provenance, claim the right level: cosign-sign in the same build job is SLSA-1 (forgeable). SLSA-3 requires an isolated reusable workflow (`slsa-framework/slsa-github-generator`).
 - Hadolint rules to obey: DL3007 (no `latest`), DL3008 (pin apt versions), DL3009 (`apt-get clean`), DL3015 (`--no-install-recommends`), DL3042 (`pip --no-cache-dir`), DL3059 (consolidate `RUN`), DL4006 (`SHELL ["/bin/bash","-eo","pipefail","-c"]`). Configure `.hadolint.yaml` `trustedRegistries` so `nvidia/cuda` and `nginxinc/nginx-unprivileged` don't false-positive.
@@ -96,6 +99,9 @@ Sections, in order:
 - **`HF_HUB_ENABLE_HF_TRANSFER=1` for >500 MB/s downloads.** Trade-off: no progress bars and tail-end slowdowns can look like a hung download. Document the caveat so operators don't kill a healthy download.
 - **`--mount=type=secret,id=hf_token` for gated weights.** Keeps the token out of layer history. Pattern: `RUN --mount=type=secret,id=hf_token HF_TOKEN=$(cat /run/secrets/hf_token) python -m runner.fetch_models`. Build invocation: `docker buildx build --secret id=hf_token,src=$HOME/.cache/huggingface/token ...`.
 - Optional build-arg-gated CUDA smoke test (`python -c "import torch; assert torch.cuda.is_available()"`).
+- **Thread-storm env vars baked as ENV defaults.** Without these, every Ray actor spawns `cpu_count()` OpenMP threads → 100s of threads contending. Bake into runner.dockerfile: `ENV OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1`. **OpenBLAS must be set before `import numpy`** — only an ENV line in the dockerfile is reliable; a Python-side `os.environ` assignment is too late. Ray can still override per-actor via `runtime_env={"env_vars": {...}}`.
+- **`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` baked as ENV default.** Addresses CUDA memory fragmentation that OOMs long-running Ray Serve replicas after hours. **Caveat:** conflicts with NCCL VMM allocators in multi-GPU setups (pytorch/pytorch#165419). rask's Ray Serve replicas are single-GPU per `pipeline.py`, so it's safe — but document the caveat for anyone tempted to move to multi-GPU NCCL.
+- **HF telemetry off by default for a government archive.** Bake `ENV HF_HUB_DISABLE_TELEMETRY=1 HF_HUB_DISABLE_IMPLICIT_TOKEN=1` into runner.dockerfile. The cross-ecosystem `DO_NOT_TRACK=1` also covers `gradio`, `datasets`, `diffusers` if any are added later. `HF_HUB_OFFLINE=1` is **runtime-only** (don't bake; image must still be able to fetch on first warm-up unless explicitly air-gapped).
 - **Runtime config that pairs with this image (out of scope but document the pointer).** Ray containers need `--shm-size` ≥ 30% of RAM (or Ray silently degrades the object store to `/tmp`) and `--ulimit nofile=65535` (Ray Serve warns below 8192). The dockerfile can't set these; the deploy manifest must. References: ray-project/ray #13619, #14535, #13045, #16820.
 
 ### `references/static-nginx.md` — frontend-class images
@@ -120,12 +126,17 @@ Each template is a complete, working dockerfile (or config file). All `FROM` ref
 ### `templates/viewer.dockerfile`
 - Base: `python:3.13-slim-bookworm@sha256:...`
 - Builder: `uv` from `ghcr.io/astral-sh/uv` pinned; `UV_PROJECT_ENVIRONMENT=/opt/venv`; bind-mount `uv.lock` + relevant `pyproject.toml`s; `uv sync --frozen --no-install-workspace --package viewer --no-editable`; COPY sources; `uv sync --locked --package viewer --no-editable`. Setuid-strip at end of stage.
-- Final: same slim base, `tini` only; `RUN --network=none` for `COPY --from=builder --link /opt/venv /opt/venv`; `useradd -r --no-create-home --shell /usr/sbin/nologin --uid 10001 app`; OCI labels emitted from ARGs; `EXPOSE 8888`; `HEALTHCHECK` on `/health`; `ENTRYPOINT ["/usr/bin/tini","--"]`; `CMD ["uvicorn","viewer.app:app","--host","0.0.0.0","--port","8888"]`.
+- Final: same slim base, `tini` only; `RUN --network=none` for `COPY --from=builder --link /opt/venv /opt/venv`; `useradd -r --no-create-home --shell /usr/sbin/nologin --uid 10001 app`; OCI labels emitted from ARGs; `EXPOSE 8888`.
+- HEALTHCHECK uses the lightweight socket-connect idiom (no urllib import); template has a commented-out `curl --fail` variant for environments that ship curl.
+- `ENTRYPOINT ["/usr/bin/tini","--"]`; `CMD ["uvicorn","viewer.app:app","--host","0.0.0.0","--port","8888","--proxy-headers","--forwarded-allow-ips","<set-to-nginx-CIDR-at-deploy-time>","--no-access-log","--loop","uvloop","--http","httptools"]`. **Do not set `--workers`** — orchestrator scales replicas. **Do not use `--forwarded-allow-ips=*`** — header spoofing risk; pass the actual nginx network CIDR via deploy config.
 
 ### `templates/runner.dockerfile`
 - Base: `nvidia/cuda:12.4.0-runtime-ubuntu22.04@sha256:...`
 - Builder: install `libgomp1 git tini ca-certificates`; `uv` binary; `UV_PYTHON_INSTALL_DIR=/opt/uv/python UV_PYTHON_PREFERENCE=only-managed UV_PROJECT_ENVIRONMENT=/opt/venv`; two-step sync `--frozen` then `--locked` with `--package runner`; bind-mount lockfile + `projects/runner/pyproject.toml` + `packages/` + `components/`. Optional `--mount=type=secret,id=hf_token` step for gated model fetches. Setuid-strip at end of stage.
-- Final: same runtime base, `libgomp1 tini ca-certificates`; `RUN --network=none` for `COPY --from=builder --link /opt/uv/python /opt/uv/python` and `/opt/venv`; PATH = `/opt/venv/bin:$PATH` (the `.venv/bin/python` shebang points back to uv-managed interpreter inside `/opt/uv/python`); `HF_HOME=/cache/hf HF_HUB_ENABLE_HF_TRANSFER=1`; non-root `app` user with `--no-create-home --shell /usr/sbin/nologin --uid 10001`; OCI labels; `ENTRYPOINT ["/usr/bin/tini","--"]`; `CMD ["python","-m","runner"]`.
+- Final: same runtime base, `libgomp1 tini ca-certificates`; `RUN --network=none` for `COPY --from=builder --link /opt/uv/python /opt/uv/python` and `/opt/venv`; PATH = `/opt/venv/bin:$PATH` (the `.venv/bin/python` shebang points back to uv-managed interpreter inside `/opt/uv/python`); non-root `app` user with `--no-create-home --shell /usr/sbin/nologin --uid 10001`; OCI labels.
+- Runtime ENV defaults: `HF_HOME=/cache/hf HF_HUB_ENABLE_HF_TRANSFER=1 HF_HUB_DISABLE_TELEMETRY=1 HF_HUB_DISABLE_IMPLICIT_TOKEN=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`.
+- HEALTHCHECK uses the lightweight socket-connect idiom (or omit entirely if running under K8s with readiness probes).
+- `ENTRYPOINT ["/usr/bin/tini","--"]`; `CMD ["python","-m","runner"]`.
 
 ### `templates/frontend.dockerfile`
 - Builder: `oven/bun:1-debian@sha256:...`; cache mount on `/root/.bun/install/cache`. To resolve bun workspaces, bind-mount **root `package.json` + root `bun.lock` + every workspace member's `package.json`** (`components/apps/frontend/package.json`, `packages/component-lib/package.json`); run `bun install --frozen-lockfile` from repo root. Then COPY `components/apps/frontend/` + `packages/component-lib/` sources; build via `bun --cwd components/apps/frontend run build`.
@@ -149,6 +160,12 @@ Each template is a complete, working dockerfile (or config file). All `FROM` ref
   - `trustedRegistries: ["nvidia/cuda", "nginxinc/nginx-unprivileged", "ghcr.io", "docker.io/python", "docker.io/oven"]`.
   - `failure-threshold: warning`.
   - Override-comment workflow: when a rule must be ignored, use `# hadolint ignore=DLxxxx` on the offending line with a `# Reason: ...` comment immediately above. The skill instructs reviewers to gate on the reason being plausible.
+
+## Considered alternatives
+
+- **Distroless Python final stage.** Considered for the viewer (no shell, smallest CVE surface). Rejected — distroless `python3-debian12` ships Python 3.11; the 3.13 variant lives on `python3-debian13` (trixie), per distroless issues #1703 and #1409. If anyone revisits this decision, that's the right base — but pragmatic slim debugging wins for now.
+- **Chainguard / Wolfi.** Considered for lower CVE surface. Rejected to avoid an extra registry dependency; revisit if Snyk findings warrant.
+- **Alpine for Python.** Rejected — manylinux wheels (pydantic-core, watchfiles) ship glibc binaries; Alpine forces musl rebuilds.
 
 ## Out of scope
 
@@ -199,6 +216,21 @@ The skill is "done" when:
 - HF cache race: [huggingface_hub #2543](https://github.com/huggingface/huggingface_hub/issues/2543), [#2038](https://github.com/huggingface/huggingface_hub/issues/2038), [v0.24.7 release](https://github.com/huggingface/huggingface_hub/releases/tag/v0.24.7).
 - [hf_transfer](https://github.com/huggingface/hf_transfer) — speed/visibility trade-off.
 - SvelteKit static + nginx: [kit#15150](https://github.com/sveltejs/kit/issues/15150), [kit#3194 (version.json)](https://github.com/sveltejs/kit/issues/3194), [svelte#14014 (inline event handlers)](https://github.com/sveltejs/svelte/issues/14014).
+
+**Runtime tuning + observability**
+- [Ray scheduling: resources](https://docs.ray.io/en/latest/ray-core/scheduling/resources.html) + Ray PR #6998 — `OMP_NUM_THREADS=1` thread-storm defaults.
+- pytorch/pytorch [#119547](https://github.com/pytorch/pytorch/issues/119547), [#165419](https://github.com/pytorch/pytorch/issues/165419) — `expandable_segments:True` for long-running CUDA processes and NCCL caveat.
+- [HuggingFace env vars](https://huggingface.co/docs/huggingface_hub/package_reference/environment_variables) — telemetry/offline/transfer toggles.
+- [uvicorn deployment](https://www.uvicorn.org/deployment/) — `--proxy-headers`, `--forwarded-allow-ips`, `--workers` guidance.
+
+**CI / build invocation (paired with the dockerfiles)**
+- [Docker BuildKit cache backends](https://docs.docker.com/build/cache/backends/) — `type=gha`, `type=registry`, `mode=max`.
+- [Docker BuildKit cache for GitHub Actions](https://docs.docker.com/build/ci/github-actions/cache/) — April 2025 v2 API migration.
+- [Docker attestations: SLSA provenance](https://docs.docker.com/build/metadata/attestations/slsa-provenance/) — `--provenance=mode=max` ARG-secrets gotcha.
+- [moby/buildkit build-repro](https://github.com/moby/buildkit/blob/master/docs/build-repro.md) — `SOURCE_DATE_EPOCH`, `rewrite-timestamp=true`.
+
+**Considered-alternative sources**
+- distroless [#1703](https://github.com/GoogleContainerTools/distroless/issues/1703), [#1409](https://github.com/GoogleContainerTools/distroless/issues/1409) — Python 3.13 lives on `-debian13`, not `-debian12`.
 
 **Supply chain + tradeoffs**
 - [CVE-2024-3094 (xz-utils backdoor)](https://en.wikipedia.org/wiki/XZ_Utils_backdoor) + [Binarly Aug 2025 follow-up](https://thehackernews.com/2025/08/researchers-spot-xz-utils-backdoor-in.html).
