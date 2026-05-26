@@ -312,9 +312,9 @@ See [the health-checks reference](references/health-checks.md) — `/livez` and 
 
 See [the database reference](references/database.md) — **SQLModel** preferred (Pydantic + SQLAlchemy 2.0), **PostgreSQL** for prod, **SQLite** OK for local tests. Covers `AsyncEngine` setup, the pool flags that matter (`pool_pre_ping`, `pool_recycle`), sizing formula, and when PgBouncer pays off.
 
-## Caching
+## Caching & Redis
 
-See [`cache.md`](references/cache.md) — `RedisDep` from lifespan, `cache_aside` helper for service methods, mutation→invalidation pattern, "don't use response-caching middleware" anti-pattern, lifespan cache-warming. Redis fundamentals (connection pools, TTL strategies, invalidation patterns) live in `python-infrastructure`.
+[`cache.md`](references/cache.md) — `RedisDep` from lifespan, `cache_aside` for service methods, mutation→invalidation, lifespan warming, "no response-cache middleware". [`redis.md`](references/redis.md) — design-choice hub: when to add Redis vs NATS/Postgres, shared client wiring, JWT `jti` revocation, single-process SSE pub/sub, distributed locks, what we explicitly DON'T use Redis for.
 
 ## Kubernetes
 
