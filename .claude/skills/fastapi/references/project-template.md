@@ -106,7 +106,8 @@ def get_settings() -> Settings:
 # core/database.py
 from collections.abc import AsyncIterator
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.orm import declarative_base
 
 from app.core.config import get_settings
@@ -135,7 +136,7 @@ Declare reusable typed dependencies once:
 from typing import Annotated
 
 from fastapi import Depends
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.database import get_db
 
@@ -148,7 +149,7 @@ DbSessionDep = Annotated[AsyncSession, Depends(get_db)]
 # repositories/base_repository.py — PEP 695 generics (3.12+)
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 
 class BaseRepository[Model, CreateSchema: BaseModel, UpdateSchema: BaseModel]:
@@ -192,7 +193,7 @@ class BaseRepository[Model, CreateSchema: BaseModel, UpdateSchema: BaseModel]:
 ```python
 # repositories/user_repository.py
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.user import User
 from app.repositories.base_repository import BaseRepository
@@ -212,7 +213,7 @@ user_repository = UserRepository(User)
 
 ```python
 # services/user_service.py
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.security import get_password_hash, verify_password
 from app.models.user import User
@@ -344,7 +345,8 @@ Place all of these in `core/` (not `api/`) so they're testable without spinning 
 # tests/conftest.py
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.database import Base, get_db
 from app.main import app

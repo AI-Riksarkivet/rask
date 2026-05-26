@@ -27,27 +27,32 @@ When using dependencies with `yield`, they can have a `scope` that defines when 
 Use the default scope `"request"` to run the exit code after the response is sent back.
 
 ```python
+from collections.abc import AsyncGenerator
 from typing import Annotated
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 app = FastAPI()
 
 
-def get_db():
-    db = DBSession()
-    try:
-        yield db
-    finally:
-        db.close()
+async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
+    async with AsyncSession(request.app.state.db_engine, expire_on_commit=False) as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
-DBDep = Annotated[DBSession, Depends(get_db)]
+SessionDep = Annotated[AsyncSession, Depends(get_db)]
 
 
 @app.get("/items/")
-async def read_items(db: DBDep):
-    return db.query(Item).all()
+async def read_items(db: SessionDep):
+    result = await db.exec(select(Item))
+    return result.all()
 ```
 
 Use the scope `"function"` when they should run the exit code after the response data is generated but before the response is sent back to the client.

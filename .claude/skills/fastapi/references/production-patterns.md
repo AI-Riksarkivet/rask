@@ -212,7 +212,7 @@ Stashed clients are retrieved through a small dep wrapper, never imported direct
 from collections.abc import AsyncGenerator
 from typing import Annotated
 from fastapi import Depends, Request
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel.ext.asyncio.session import AsyncSession
 import httpx
 
 
