@@ -132,12 +132,26 @@ def main(
         console.print("[bold green]Nothing to do.[/bold green]")
         raise typer.Exit(0)
 
+    # Forward AWS_/HCP_/IIIF_/RASK_ env vars to Ray workers. When invoked via
+    # Ray Jobs (orchestrator → submit_chunks path), the Job's runtime_env
+    # already carries these — Ray then rejects any ray.init runtime_env that
+    # repeats the same keys ("Failed to merge … because of a conflict"). Try
+    # with runtime_env first (standalone case), fall back to plain ray.init on
+    # conflict (Job case — the Job's env is already in effect).
     worker_env = {k: v for k, v in os.environ.items() if k.startswith(("AWS_", "HCP_", "IIIF_", "RASK_"))}
     runtime_env = {"env_vars": worker_env} if worker_env else None
+    init_kwargs = {"runtime_env": runtime_env} if runtime_env else {}
     if address:
-        ray.init(address=address, runtime_env=runtime_env)
+        init_kwargs["address"] = address
     else:
-        ray.init(ignore_reinit_error=True, runtime_env=runtime_env)
+        init_kwargs["ignore_reinit_error"] = True
+    try:
+        ray.init(**init_kwargs)
+    except ValueError as exc:
+        if "Failed to merge" not in str(exc):
+            raise
+        init_kwargs.pop("runtime_env", None)
+        ray.init(**init_kwargs)
 
     pipeline_kwargs: dict[str, object] = {}
     if torch_profile:

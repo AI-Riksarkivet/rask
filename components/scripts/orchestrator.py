@@ -56,6 +56,13 @@ DASHBOARD_URL = os.environ.get("RAY_DASHBOARD_URL", "http://localhost:8265")
 HTR_READY_FRACTION = 0.95  # treat a chunk as "prefetched enough" once 95% of pages are cached
 FAIL_COOLDOWN_SECS = 600  # don't auto-resubmit a chunk whose previous run FAILED less than this ago
 
+# Which runner pipeline to submit for the HTR slot. "htr" = actor pipeline (default,
+# matches existing submission_id prefix "htr-chunk-..."); "htrflow" = single Serve
+# replica that collapses Layout+Line+Transcribe+Alto. The submission_id derives
+# from this so the slot's running/fail detection still matches.
+HTR_PIPELINE = os.environ.get("RASK_HTR_PIPELINE", "htr")
+HTR_SUBMISSION_PREFIX = f"{HTR_PIPELINE}-"
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
@@ -234,7 +241,7 @@ def _do_orchestrate() -> None:
 
         # HTR slot — re-fetch jobs in case the prefetch submit changed state.
         jobs = _fetch_jobs() or jobs
-        running = _running_for(jobs, "htr-")
+        running = _running_for(jobs, HTR_SUBMISSION_PREFIX)
         if os.environ.get("RASK_ORCHESTRATOR_SKIP_HTR") == "1":
             # Operator-controlled pause: we still log so it's obvious in the
             # tick log that HTR is intentionally idle, not stuck.
@@ -243,14 +250,14 @@ def _do_orchestrate() -> None:
             _log(f"htr slot:      BUSY ({running['submission_id']} {running['status']})")
         else:
             for cid in _chunks_needing_htr(db):
-                sid = _submission_id(cid, "htr")
+                sid = _submission_id(cid, HTR_PIPELINE)
                 prior = _job_for(jobs, sid)
                 if _recently_failed(prior):
                     _log(f"htr slot:      skipping chunk {cid} — recent FAILED ({sid}); cooldown {FAIL_COOLDOWN_SECS}s")
                     continue
                 if prior:
                     _delete_job(sid)
-                _submit(cid, "htr")
+                _submit(cid, HTR_PIPELINE)
                 break
             else:
                 _log("htr slot:      idle, nothing eligible")
