@@ -17,6 +17,7 @@ bypass-selection = true
 members = [
     "packages/htr",
     "packages/storage",
+    "packages/control",
     "components/apps/runner",
     "components/services/viewer",
 ]
@@ -55,7 +56,7 @@ indent-style = "space"
 
 [tool.ruff.lint.isort]
 lines-after-imports = 2
-known-first-party = ["htr", "storage", "runner", "viewer"]
+known-first-party = ["htr", "storage", "control", "runner", "viewer"]
 
 [tool.ty.terminal]
 error-on-warning = true

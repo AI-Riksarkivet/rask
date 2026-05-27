@@ -1,7 +1,21 @@
 """S3/HCP source and sink — picklable for Ray actors via lazy client factory."""
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from typing import Any
+
+
+def iter_keys(client: Any, bucket: str, prefix: str = "", suffix: str = "") -> Iterator[str]:  # noqa: ANN401 — boto3 client has no public stub
+    """Yield keys under `bucket`/`prefix`, optionally filtered by case-insensitive `suffix`.
+
+    Sync — wrap in `anyio.to_thread.run_sync` if called from an event loop.
+    """
+    paginator = client.get_paginator("list_objects_v2")
+    suffix_lc = suffix.lower()
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if not suffix_lc or key.lower().endswith(suffix_lc):
+                yield key
 
 
 class S3Source:
