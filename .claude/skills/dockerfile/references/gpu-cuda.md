@@ -24,10 +24,13 @@ manage a hermetic Python:
 
 ```dockerfile
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python \
-    UV_PYTHON_PREFERENCE=only-managed
-RUN pip install --no-cache-dir uv && \
-    uv python install 3.13
+    UV_PYTHON_PREFERENCE=only-managed \
+    UV_PYTHON_DOWNLOADS=only-managed
+COPY --from=ghcr.io/astral-sh/uv:0.5@sha256:<DIGEST> /uv /usr/local/bin/uv
+RUN uv python install 3.13
 ```
+
+The `COPY --from=ghcr.io/astral-sh/uv:0.5@sha256:<DIGEST>` pattern keeps uv digest-pinned (per the principles.md "digest-pinned FROM" rule) and avoids needing pip in the CUDA base. The viewer template uses the same pattern — see `templates/runner.dockerfile`.
 
 `UV_PYTHON_PREFERENCE=only-managed` ensures uv never falls back to the system Python. This costs roughly
 +50 MB in the final image but guarantees exact version parity with the slim viewer. Mitigate the size cost
@@ -229,5 +232,4 @@ missed in first deploys:
   workers, and the dashboard all hold persistent file descriptors. References: ray-project/ray #13045,
   ray-project/ray #16820.
 
-Set both in `docker-compose.yml` under the `runner` service or in the equivalent K8s pod spec
-(`resources.limits.hugepages`, `securityContext.sysctls`, or an `initContainer` that sets the ulimit).
+Set both in `docker-compose.yml` under the `runner` service (`shm_size:` and `ulimits.nofile:`) or in the equivalent K8s pod spec — typically an `emptyDir` with `medium: Memory` mounted at `/dev/shm` for shared memory, plus pod-level ulimit configuration (the exact mechanism depends on cluster-level kubelet config and is outside the dockerfile's reach).
