@@ -6,7 +6,6 @@ same decisions the cron-driven tick would make. Pure derivation; no writes.
 
 import re
 import time
-from typing import Any
 
 import anyio
 import httpx
@@ -15,6 +14,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from viewer.repositories import batch as batch_repo
 from viewer.schemas.orchestrator import Cooldown, OrchestratorState, SlimJob, SlotState, StageStat
+from viewer.schemas.ray import RayJob
 from viewer.services import ray_dashboard
 
 
@@ -33,13 +33,17 @@ HTR_STAGES: tuple[str, ...] = (
 PREFETCH_STAGES: tuple[str, ...] = ("PrefetchActor",)
 
 
-def _slim_job(j: dict[str, Any]) -> SlimJob:
-    sid = j.get("submission_id") or ""
+def _ms_to_sec(v: int | None) -> float | None:
+    return None if v is None else float(v) / 1000.0
+
+
+def _slim_job(j: RayJob) -> SlimJob:
+    sid = j.submission_id or ""
     m = _CHUNK_RE.search(sid)
     return SlimJob(
         submission_id=sid,
-        status=j.get("status"),
-        start_time=j.get("start_time"),
+        status=j.status,
+        start_time=_ms_to_sec(j.start_time),
         chunk_id=int(m.group(1)) if m else None,
     )
 
@@ -103,12 +107,12 @@ async def derive_state(
     jobs_payload = await ray_dashboard.list_jobs(client, dashboard_url)
     if not jobs_payload.ok:
         return OrchestratorState(ok=False, error=jobs_payload.error or "ray dashboard unreachable")
-    jobs_raw = [j.model_dump() for j in jobs_payload.jobs]
+    jobs = jobs_payload.jobs
 
-    def running_for(prefix: str) -> dict[str, Any] | None:
-        for j in jobs_raw:
-            sid = j.get("submission_id") or ""
-            if sid.startswith(prefix) and j.get("status") in ("RUNNING", "PENDING"):
+    def running_for(prefix: str) -> RayJob | None:
+        for j in jobs:
+            sid = j.submission_id or ""
+            if sid.startswith(prefix) and j.status in ("RUNNING", "PENDING"):
                 return j
         return None
 
@@ -117,16 +121,13 @@ async def derive_state(
 
     now = time.time()
     cooldowns: list[Cooldown] = []
-    for j in jobs_raw:
-        if j.get("status") != "FAILED":
+    for j in jobs:
+        if j.status != "FAILED" or j.end_time is None:
             continue
-        end = j.get("end_time")
-        if not end:
-            continue
-        elapsed = now - float(end)
+        elapsed = now - (j.end_time / 1000.0)
         if elapsed >= FAIL_COOLDOWN_SECS:
             continue
-        sid = j.get("submission_id") or ""
+        sid = j.submission_id or ""
         m = _CHUNK_RE.search(sid)
         if not m:
             continue
@@ -141,7 +142,11 @@ async def derive_state(
 
     prefetch_pending = await batch_repo.prefetch_pending_chunk_ids(session)
     progress = await batch_repo.chunks_with_progress(session)
-    ready_for_htr = [cid for cid, expected, cached, transcribed in progress if expected and transcribed < expected and cached / expected >= HTR_READY_FRACTION]
+    ready_for_htr = [
+        cid
+        for cid, expected, cached, transcribed in progress
+        if expected and transcribed < expected and cached / expected >= HTR_READY_FRACTION
+    ]
 
     cooldown_pf = {c.chunk_id for c in cooldowns if c.pipeline == "prefetch"}
     cooldown_htr = {c.chunk_id for c in cooldowns if c.pipeline == "htr"}
@@ -165,14 +170,14 @@ async def _build_slot(
     http: httpx.AsyncClient,
     client: JobSubmissionClient | None,
     dashboard_url: str,
-    running: dict[str, Any] | None,
+    running: RayJob | None,
     next_chunk: int | None,
     queue_len: int,
     stages: tuple[str, ...],
 ) -> SlotState:
     stage_stats: list[StageStat] = []
     if running:
-        jid = await _driver_job_id(client, running.get("submission_id") or "")
+        jid = await _driver_job_id(client, running.submission_id or "")
         if jid:
             stage_stats = await _task_summary_for_job(http, dashboard_url, jid, stages)
     return SlotState(

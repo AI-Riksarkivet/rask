@@ -5,7 +5,6 @@ status code via the registered handler — one place to change the response shap
 """
 
 import logging
-from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -47,7 +46,7 @@ class UpstreamTimeoutError(DomainError):
     title = "Gateway Timeout"
 
 
-def _problem(exc: DomainError) -> dict[str, Any]:
+def _problem(exc: DomainError) -> dict[str, str | int]:
     return {
         "type": f"about:blank#{exc.__class__.__name__.lower()}",
         "title": exc.title,
