@@ -27,7 +27,7 @@ class RayJob(JobDetails):
 class RayJobsPayload(BaseModel):
     ok: bool
     dashboard_url: str
-    jobs: list[RayJob] = []
+    jobs: list[RayJob] = Field(default_factory=list)
     error: str | None = None
 
 
@@ -35,8 +35,8 @@ class RayNode(BaseModel):
     node_id: str | None = None
     node_ip: str | None = None
     alive: bool = False
-    resources_total: dict[str, float] = {}
-    resources_used: dict[str, float] = {}
+    resources_total: dict[str, float] = Field(default_factory=dict)
+    resources_used: dict[str, float] = Field(default_factory=dict)
 
 
 class RayClusterPayload(BaseModel):
@@ -44,7 +44,7 @@ class RayClusterPayload(BaseModel):
     dashboard_url: str
     node_count: int = 0
     alive_count: int = 0
-    total_resources: dict[str, float] = {}
-    used_resources: dict[str, float] = {}
-    nodes: list[RayNode] = []
+    total_resources: dict[str, float] = Field(default_factory=dict)
+    used_resources: dict[str, float] = Field(default_factory=dict)
+    nodes: list[RayNode] = Field(default_factory=list)
     error: str | None = None

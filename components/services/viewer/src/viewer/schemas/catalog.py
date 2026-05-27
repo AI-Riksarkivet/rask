@@ -1,5 +1,7 @@
 from pydantic import BaseModel
 
+from viewer.models.enums import BrowseTier
+
 
 class CatalogHit(BaseModel):
     id: str | None = None
@@ -33,7 +35,7 @@ class CatalogSearchResponse(BaseModel):
 
 class CatalogBrowseResponse(BaseModel):
     ok: bool
-    tier: str
+    tier: BrowseTier
     count: int
     total: int
     offset: int = 0

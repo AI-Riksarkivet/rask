@@ -1,10 +1,11 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from ray.dashboard.modules.job.common import JobStatus
 
-from viewer.models.enums import Pipeline
+from viewer.models.enums import Pipeline, RayStage
 
 
 class StageStat(BaseModel):
-    stage: str
+    stage: RayStage
     finished: int
     running: int
     scheduled: int
@@ -15,7 +16,7 @@ class StageStat(BaseModel):
 
 class SlimJob(BaseModel):
     submission_id: str
-    status: str | None = None
+    status: JobStatus | None = None
     start_time: float | None = None
     chunk_id: int | None = None
 
@@ -24,7 +25,7 @@ class SlotState(BaseModel):
     running: SlimJob | None = None
     next: int | None = None
     queue_len: int
-    stages: list[StageStat] = []
+    stages: list[StageStat] = Field(default_factory=list)
 
 
 class Cooldown(BaseModel):
@@ -39,6 +40,6 @@ class OrchestratorState(BaseModel):
     error: str | None = None
     prefetch: SlotState | None = None
     htr: SlotState | None = None
-    cooldowns: list[Cooldown] = []
+    cooldowns: list[Cooldown] = Field(default_factory=list)
     ready_threshold: float | None = None
     cooldown_secs: int | None = None
