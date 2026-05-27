@@ -5,7 +5,9 @@ description: FastAPI best practices, conventions, and production project templat
 
 # FastAPI
 
-Routing index for the FastAPI skill. Each topic links to a reference with full patterns and code. New projects start at [`project-template.md`](references/project-template.md); day-to-day code-style rules live in [`core-conventions.md`](references/core-conventions.md).
+FastAPI is the project standard for HTTP services — Pydantic v2 native, async-first, autogenerates OpenAPI from type hints, threadpool fallback for sync handlers. **Flask / Django / Starlette-direct aren't used here** — pick FastAPI for any new HTTP service unless you're writing a non-HTTP CLI (use `typer` instead, see `writing-python`).
+
+Routing index. Each topic links to a reference with full patterns and code. New projects start at [`project-template.md`](references/project-template.md); day-to-day code-style rules live in [`core-conventions.md`](references/core-conventions.md).
 
 ## Scope routing
 

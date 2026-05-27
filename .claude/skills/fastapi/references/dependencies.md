@@ -247,3 +247,6 @@ async def test_create_item(client: AsyncClient) -> None:
 - **`async with AsyncClient + ASGITransport`** for tests, not the legacy `async_asgi_testclient` (unmaintained).
 - **Don't override the database session** with a mock — use testcontainers + a real ephemeral schema. Mock/prod divergence eventually fires in prod. See `anti-patterns.md`.
 - **`app.dependency_overrides.clear()`** in fixture teardown so tests don't bleed.
+- **Two testing layers — pick the right one:**
+  - `app.dependency_overrides[get_X]` swaps the **dependency itself** (auth, user, session factory).
+  - **`respx`** keeps the real dep — including the real `httpx.AsyncClient` from `HttpDep` — and intercepts the **HTTP transport** so external requests return mocked `httpx.Response`s instead of hitting the network. Use this when the route calls an external API and you want the real request pipeline (URL building, headers, retry policy) to run. See `writing-python` § Mocking HTTPX with `respx`. **`respx` is test-only — never use it at runtime.**

@@ -9,6 +9,7 @@ Tests use `pytest` + `pytest-asyncio` + `pytest-cov`. Coverage gate in CI; aim f
 - Parametrize
 - Fixtures
 - Mocking
+- Mocking HTTPX with `respx`
 - Async tests
 - Test organization
 - conftest.py
@@ -117,6 +118,90 @@ def test_with_patch(mock_api):
 
     assert result == "test"
 ```
+
+## Mocking HTTPX with `respx`
+
+`unittest.mock` is wrong for HTTPX — patching `httpx.AsyncClient.get` skips the request lifecycle (URL building, headers, retries) and fails to catch bugs that surface only on the wire. Use **`respx`** instead — it intercepts at the transport layer, so your code goes through the real HTTPX request pipeline up to the point of sending.
+
+```bash
+uv add --dev respx
+```
+
+### The `respx_mock` fixture (default)
+
+```python
+import httpx
+import pytest
+
+
+@pytest.mark.respx(base_url="https://api.example.com")
+async def test_get_user(respx_mock):
+    respx_mock.get("/users/42").mock(return_value=httpx.Response(200, json={"id": 42, "name": "Ada"}))
+
+    async with httpx.AsyncClient(base_url="https://api.example.com") as client:
+        r = await client.get("/users/42")
+
+    assert r.json() == {"id": 42, "name": "Ada"}
+    assert respx_mock["/users/42"].called  # if named, or use route var
+```
+
+`@pytest.mark.respx(...)` accepts `base_url=`, `assert_all_called=True/False`, `assert_all_mocked=True/False`. By default both asserts are on — every routed call must fire, and every unrouted call raises. That's usually what you want; flip `assert_all_mocked=False` for tests that only want to mock a subset.
+
+### Side effects — callable / exception / iterable
+
+```python
+# 1. Function side-effect — inspect the request, return a dynamic Response
+def _create_user(request: httpx.Request) -> httpx.Response:
+    payload = httpx.Request.read(request)
+    return httpx.Response(201, json={"id": 1, **payload})
+
+respx_mock.post("/users").mock(side_effect=_create_user)
+
+# 2. Exception side-effect — simulate a transport failure
+respx_mock.get("/flaky").mock(side_effect=httpx.ConnectError)
+
+# 3. Iterable side-effect — different response per call (for retry tests)
+respx_mock.get("/eventually-ok").mock(side_effect=[
+    httpx.Response(503),
+    httpx.Response(503),
+    httpx.Response(200, json={"ok": True}),
+])
+```
+
+### Assertions via `route.calls`
+
+```python
+route = respx_mock.post("/orders").mock(return_value=httpx.Response(201))
+# ... exercise code that calls the API ...
+assert route.call_count == 1
+sent = route.calls.last.request
+assert sent.headers["Authorization"] == "Bearer test-token"
+assert sent.read() == b'{"item_id": 42}'
+```
+
+### Without patching — `httpx.MockTransport`
+
+For unit tests that construct their own `httpx.Client` (not relying on a global), skip the patching machinery entirely:
+
+```python
+import respx
+
+router = respx.Router()
+router.get("https://api.example.com/health").respond(200)
+
+def test_with_transport():
+    transport = httpx.MockTransport(router.handler)
+    with httpx.Client(transport=transport) as client:
+        assert client.get("https://api.example.com/health").status_code == 200
+    router.assert_all_called()  # explicit — no auto post-check in this style
+```
+
+### Rules
+
+- **Never `@patch("module.httpx_client.get")`** — patches a method, misses the request pipeline. Use `respx` so the code under test goes through real HTTPX up to the transport.
+- **Tight URL matching.** Prefer `respx_mock.get("/users/42")` over loose regexes — a route matching too widely hides bugs where the wrong URL gets built.
+- **One route per outbound call site.** If your service hits three endpoints, register three routes. Don't combine into one regex catch-all.
+- **For FastAPI route tests** that call external HTTPX clients, combine `respx_mock` with `app.dependency_overrides` for the `HttpDep`. See `fastapi/references/dependencies.md` § Overriding dependencies in tests.
 
 ## Async tests
 
