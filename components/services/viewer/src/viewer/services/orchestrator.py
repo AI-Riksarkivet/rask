@@ -6,15 +6,13 @@ same decisions the cron-driven tick would make. Pure derivation; no writes.
 
 import re
 import time
-from enum import StrEnum
 
 import anyio
 import httpx
-from ray.dashboard.modules.job.common import JobStatus
 from ray.job_submission import JobSubmissionClient
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from viewer.models.batch import Pipeline
+from viewer.models.enums import JobStatus, Pipeline, RayStage, TaskState
 from viewer.repositories import batch as batch_repo
 from viewer.schemas.orchestrator import Cooldown, OrchestratorState, SlimJob, SlotState, StageStat
 from viewer.schemas.ray import RayJob
@@ -27,39 +25,6 @@ _CHUNK_RE = re.compile(r"chunk-(\d+)-of-")
 _MS_PER_SECOND = 1000.0
 
 _ACTIVE_STATUSES: frozenset[JobStatus] = frozenset({JobStatus.RUNNING, JobStatus.PENDING})
-
-
-class TaskState(StrEnum):
-    """Ray Data task-scheduler state keys from /api/v0/tasks/summarize.
-
-    Not a Ray public enum — these are external API keys. The viewer collapses
-    them into four UI buckets (finished/running/scheduled/pending/failed).
-    `PENDING` is the **prefix** for several substates (PENDING_NODE_ASSIGNMENT,
-    PENDING_ARGS_AVAIL, …), used with `str.startswith()` rather than equality.
-    """
-
-    FINISHED = "FINISHED"
-    RUNNING = "RUNNING"
-    SCHEDULED = "SUBMITTED_TO_WORKER"
-    FAILED = "FAILED"
-    WAITING = "WAITING"
-    PENDING = "PENDING"
-
-class RayStage(StrEnum):
-    """Ray actor names matching the pipeline stages in `components/apps/runner/src/runner/pipeline.py`.
-
-    Used to query `/api/v0/tasks/summarize` (the stage name appears inside
-    `MapWorker(MapBatches(<stage>)).submit`) — string-equality with Ray's task
-    naming is the contract.
-    """
-
-    PAGE_LOADER = "PageLoaderActor"
-    LAYOUT = "LayoutActor"
-    LINE = "LineActor"
-    TRANSCRIBE = "TranscribeViaServe"
-    ALTO_EXPORT = "AltoExportActor"
-    ALTO_WRITER = "AltoWriterActor"
-    PREFETCH = "PrefetchActor"
 
 
 HTR_STAGES: tuple[RayStage, ...] = (
