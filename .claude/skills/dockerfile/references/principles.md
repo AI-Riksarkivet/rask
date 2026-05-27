@@ -45,7 +45,7 @@ COPY --from=builder /app/.venv /app/.venv
 
 ## Layer cache order
 
-Arrange `COPY` and `RUN` instructions so that the least-frequently-changing content comes first. The canonical order is: lockfile and metadata files first (e.g., `pyproject.toml`, `uv.lock`, `package.json`, `bun.lockb`), application source code second, and any generated artefacts (compiled assets, migrations, etc.) last.
+Arrange `COPY` and `RUN` instructions so that the least-frequently-changing content comes first. The canonical order is: lockfile and metadata files first (e.g., `pyproject.toml`, `uv.lock`, `package.json`, `bun.lock`), application source code second, and any generated artefacts (compiled assets, migrations, etc.) last.
 
 The reason is that Docker invalidates every layer below the first changed layer. If you copy source code before copying the lockfile, any source change busts the expensive dependency-install layer. Example of the wrong order causing an unnecessary cache bust:
 
@@ -106,16 +106,16 @@ The bind mount reads from the build context at `source=` and presents it at `tar
 
 After all dependencies are installed in the builder stage, the final assembly step (copying the venv or built assets into the runtime image) should run with `--network=none`. This prevents a compromised dependency or a rogue postinstall script from reaching the network at a point where it already has access to installed packages.
 
+`--network=none` is a `RUN` decorator, not a `COPY` decorator. To honor the no-network guarantee on a final-stage copy from the builder, use a bind-mount from the builder stage inside a `RUN --network=none`:
+
 ```dockerfile
 # ── final: runtime image ───────────────────────────────────────────────────────
 FROM python:3.12-slim AS final
-# Network disabled: no outbound calls permitted during final assembly
-RUN --network=none echo "assembly only"
-COPY --link --from=builder /app/.venv /app/.venv
-COPY --link --from=builder /app/src /app/src
+RUN --network=none --mount=from=builder,source=/opt/venv,target=/tmp/venv \
+    cp -a /tmp/venv /opt/venv
 ```
 
-Note that `--network=none` applies to `RUN` instructions, not `COPY`. The `COPY --from=builder` lines themselves do not involve the network; the guard is on any `RUN` that executes in the final stage before or alongside those copies.
+`COPY --from=builder` is the simpler alternative — it doesn't itself touch the network — but you lose the explicit guard against any inadvertent `RUN` slipping into the final stage with network access. The bind-mount pattern keeps the guarantee mechanical: every final-stage data movement is wrapped in a no-network `RUN`.
 
 ## `.dockerignore`
 
