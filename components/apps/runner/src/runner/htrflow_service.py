@@ -10,11 +10,9 @@ Approach (no upstream patches):
 - The stock `Export` step writes ALTO files to disk; we drop it from the
   YAML and call `get_serializer("alto").serialize(doc)` ourselves so the
   ALTO string comes back in-process.
-- CPU-only configuration for now (`num_gpus=0`, `device: cpu` in YAML)
-  because the GPUs are held by another workload. Throughput will be slow
-  in this mode — the smoke test is for correctness of wiring, not
-  production rate. Flipping to GPU is a one-line change in YAML and
-  `ray_actor_options`.
+- 3 replicas × 1 GPU each (htrflow auto-detects CUDA via the YAML).
+  SHARDS in the pipeline-side wrappers below matches this replica count
+  so a single Ray Data task can saturate all three replicas in parallel.
 
 This module also exposes `HTRFlowViaServe` — an actor analogous to
 `TranscribeViaServe` in `transcribe_service.py` — that the HTR pipeline
@@ -55,8 +53,8 @@ def _shard(items: list, num_shards: int) -> list[list]:
 
 @serve.deployment(
     name="HTRFlowService",
-    num_replicas=1,
-    ray_actor_options={"num_cpus": 4, "num_gpus": 0},
+    num_replicas=3,
+    ray_actor_options={"num_cpus": 2, "num_gpus": 1},
     max_ongoing_requests=4,
 )
 class HTRFlowDeployment:

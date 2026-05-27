@@ -6,6 +6,7 @@ Example:
 """
 
 import logging
+import os
 from itertools import islice
 from pathlib import Path
 from typing import Annotated
@@ -131,10 +132,12 @@ def main(
         console.print("[bold green]Nothing to do.[/bold green]")
         raise typer.Exit(0)
 
+    worker_env = {k: v for k, v in os.environ.items() if k.startswith(("AWS_", "HCP_", "IIIF_", "RASK_"))}
+    runtime_env = {"env_vars": worker_env} if worker_env else None
     if address:
-        ray.init(address=address)
+        ray.init(address=address, runtime_env=runtime_env)
     else:
-        ray.init(ignore_reinit_error=True)
+        ray.init(ignore_reinit_error=True, runtime_env=runtime_env)
 
     pipeline_kwargs: dict[str, object] = {}
     if torch_profile:

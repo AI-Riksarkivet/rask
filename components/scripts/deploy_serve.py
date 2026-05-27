@@ -48,9 +48,20 @@ APPS = {
 
 
 def _connect() -> None:
-    """Attach to the running Ray cluster (does not start a new one)."""
+    """Attach to the running Ray cluster (does not start a new one).
+
+    `py_executable` is pinned to `sys.executable` so Ray's runtime-env
+    plugin doesn't autodetect the uploaded `pyproject.toml` and rebuild a
+    fresh worker venv via `uv run` — that path strips `ray` itself from
+    the worker because root pyproject has `dependencies = []`.
+    """
     address = os.environ.get("RAY_ADDRESS", "auto")
-    ray.init(address=address, ignore_reinit_error=True, log_to_driver=False)
+    ray.init(
+        address=address,
+        runtime_env={"py_executable": sys.executable},
+        ignore_reinit_error=True,
+        log_to_driver=False,
+    )
 
 
 def cmd_up(app_name: str) -> int:
