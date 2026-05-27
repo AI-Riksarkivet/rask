@@ -8,8 +8,7 @@ trustedRegistries:
   - nvidia/cuda
   - nginxinc/nginx-unprivileged
   - ghcr.io
-  - docker.io/python
-  - docker.io/oven
+  - docker.io
 
 failure-threshold: warning
 
