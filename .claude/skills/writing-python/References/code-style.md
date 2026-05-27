@@ -162,7 +162,7 @@ Stdlib → third-party → local, each group separated by a blank line. Absolute
 # Stdlib
 import os
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING
 
 # Third-party
 import httpx
@@ -172,9 +172,15 @@ from sqlalchemy import Column
 # Local
 from myproject.models import User
 from myproject.services import UserService
+
+# Type-checking-only imports (no runtime cost; breaks circular imports)
+if TYPE_CHECKING:
+    from myproject.heavy_module import HeavyClass
 ```
 
 Avoid relative imports (`from ..utils import x`) — absolute paths are easier to grep and survive moves.
+
+`if TYPE_CHECKING:` is the standard way to import symbols you only need in annotations — the block is skipped at runtime, so it costs nothing and lets two modules reference each other in types without circular-import errors. Use string annotations (`"HeavyClass"`) or `from __future__ import annotations` to keep the references valid at runtime.
 
 ## Google-style docstrings
 
