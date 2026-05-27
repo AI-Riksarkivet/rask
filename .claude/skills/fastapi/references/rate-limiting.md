@@ -23,9 +23,17 @@ What to put on `/login`, `/token`, `/forgot-password`, and any expensive route. 
 
 **Don't write your own.** The article-style sliding-window / token-bucket implementations break at the second pod (state in `defaultdict` is per-process). If you genuinely need bursts or load-aware throttling, that's an API-gateway concern (Envoy, Kong) — not in-process Python.
 
+## Install
+
+```bash
+uv add slowapi redis
+```
+
+slowapi 0.x uses the **synchronous** `redis-py` client for its storage backend, not async — its internal strategies (`FixedWindowRateLimiter` etc.) are sync-only. The blocking rate-limit check is ~1 ms (one `INCR + EXPIRE`) and FastAPI handles it in the threadpool, so it's not a meaningful event-loop hazard. Don't use `async+redis://` URIs with slowapi 0.x — it fails at construction with `AssertionError` because the sync strategies reject async storage.
+
 ## Setup — Redis-backed limiter on `app.state`
 
-Reuses the same `app.state.redis` Redis client built in lifespan — one pool, multiple consumers (cache + rate limit + JWT revocation). If you don't already have it, see [`redis.md`](redis.md) § One shared client. Otherwise the wiring is just two extra lines (the limiter creation + `storage_uri` binding):
+slowapi opens its own (sync) redis-py connection, separate from your `app.state.redis` async client. They share the broker (one Redis cluster); the keys live alongside your cache keys under a `LIMITER/` prefix that slowapi sets automatically.
 
 ```python
 # core/rate_limit.py
@@ -33,21 +41,23 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 
-def make_limiter() -> Limiter:
-    # storage_uri set in lifespan after app.state.redis exists; default keying is IP
-    return Limiter(key_func=get_remote_address)
+def make_limiter(redis_url: str) -> Limiter:
+    # redis://... — sync backend; slowapi 0.x does NOT support async+redis://
+    return Limiter(key_func=get_remote_address, storage_uri=redis_url)
 ```
 
 ```python
-# main.py — lifespan extension
+# main.py — lifespan
 from slowapi.errors import RateLimitExceeded
 
 from app.core.rate_limit import make_limiter
 
-limiter = make_limiter()
-app.state.limiter = limiter
-# Bind to the Redis we already built — uri form: "async+redis://host:port/0"
-limiter.storage_uri = str(settings.REDIS_URL).replace("redis://", "async+redis://")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ... db, http, redis ...
+    app.state.limiter = make_limiter(str(settings.REDIS_URL))
+    yield
 ```
 
 ```python
