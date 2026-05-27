@@ -37,7 +37,6 @@ class Settings(BaseSettings):
     repo_root: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[6])
     batches_db: Path | None = Field(default=None, alias="RASK_BATCHES_DB")
     spa_build_dir: Path | None = Field(default=None, alias="RASK_SPA_BUILD")
-    scripts_dir: Path | None = Field(default=None, alias="RASK_SCRIPTS_DIR")
 
     database_url: str | None = Field(default=None, alias="DATABASE_URL")
     db_pool_size: int = Field(default=10, ge=1, le=100, alias="DB_POOL_SIZE")
@@ -47,8 +46,6 @@ class Settings(BaseSettings):
 
     http_timeout: float = 15.0
     ray_proxy_timeout: float = 15.0
-    sync_timeout_seconds: int = 600
-    submit_timeout_seconds: int = 120
     lance_query_timeout_seconds: int = Field(default=30, ge=1, alias="RASK_LANCE_QUERY_TIMEOUT_SECONDS")
 
     @property
@@ -70,10 +67,6 @@ class Settings(BaseSettings):
     @property
     def resolved_spa_build(self) -> Path:
         return self.spa_build_dir or (self.repo_root / "components" / "apps" / "frontend" / "build")
-
-    @property
-    def resolved_scripts_dir(self) -> Path:
-        return self.scripts_dir or (self.repo_root / "components" / "scripts")
 
     @property
     def lance_db_uri(self) -> str:

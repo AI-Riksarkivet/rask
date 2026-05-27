@@ -1,5 +1,7 @@
 from pydantic import BaseModel
 
+from control import SubmitResult
+
 
 class Chunk(BaseModel):
     chunk_id: int
@@ -15,6 +17,5 @@ class ChunkListResponse(BaseModel):
     chunks: list[Chunk]
 
 
-class SubmitChunkResponse(BaseModel):
-    chunk_id: int
-    stdout: str
+# Wire response == library result; viewer doesn't add any fields on top.
+SubmitChunkResponse = SubmitResult
