@@ -3,7 +3,9 @@ from pydantic import BaseModel
 from viewer.schemas.catalog import CatalogHit
 
 
-class SearchHit(BaseModel):
+class LineRow(BaseModel):
+    """Lance columns for `lines`. Field order = projection order."""
+
     batch_id: str
     page_id: str | None = None
     page_idx: int | None = None
@@ -17,6 +19,9 @@ class SearchHit(BaseModel):
     height: float | None = None
     polygon: list[list[float]] | None = None
     thumb_key: str | None = None
+
+
+class SearchHit(LineRow):
     thumb_url: str | None = None
     catalog: CatalogHit | None = None
 

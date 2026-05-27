@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from fastapi import APIRouter
 
 from viewer.api.dependencies import CatalogTblDep, SessionDep, SettingsDep
@@ -31,9 +33,9 @@ async def get_batch(batch_id: str, session: SessionDep) -> BatchPublic:
 
 
 @router.get("/{batch_id}/catalog")
-async def get_batch_catalog(batch_id: str, tbl: CatalogTblDep) -> CatalogHit:
+async def get_batch_catalog(batch_id: str, tbl: CatalogTblDep, settings: SettingsDep) -> CatalogHit:
     """EAD catalog row for a batch — joined by `bild_id == batch_id`."""
-    hit = await catalog_service.by_bild_id(tbl, batch_id)
+    hit = await catalog_service.by_bild_id(tbl, batch_id, timedelta(seconds=settings.lance_query_timeout_seconds))
     if hit is None:
         raise NotFoundError(f"no catalog entry for {batch_id}")
     return hit

@@ -1,3 +1,4 @@
+from datetime import timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Query
@@ -17,10 +18,11 @@ _THUMB_CACHE_MAX_AGE_SECS = 24 * 60 * 60  # 24h — line-crop thumbs are immutab
 @router.get("/")
 async def search_lines(
     tbl: LinesTblDep,
+    settings: SettingsDep,
     q: Annotated[str, Query(min_length=1, max_length=500)],
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
 ) -> SearchResponse:
-    return await search_service.search_lines(tbl, q, limit)
+    return await search_service.search_lines(tbl, q, limit, timedelta(seconds=settings.lance_query_timeout_seconds))
 
 
 @router.get("/stats")

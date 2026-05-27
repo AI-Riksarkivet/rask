@@ -3,7 +3,9 @@ from pydantic import BaseModel
 from viewer.models.enums import BrowseTier
 
 
-class CatalogHit(BaseModel):
+class CatalogRow(BaseModel):
+    """Lance columns for `archive_catalog`. Field order = projection order."""
+
     id: str | None = None
     reference_code: str | None = None
     archive_code: str | None = None
@@ -21,6 +23,9 @@ class CatalogHit(BaseModel):
     bildvisning_url: str | None = None
     iiif_manifest: str | None = None
     thumbnail_url: str | None = None
+
+
+class CatalogHit(CatalogRow):
     listed: bool | None = None
     cached: bool | None = None
     transcribed: bool | None = None

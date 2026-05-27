@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     ray_proxy_timeout: float = 15.0
     sync_timeout_seconds: int = 600
     submit_timeout_seconds: int = 120
+    lance_query_timeout_seconds: int = Field(default=30, ge=1, alias="RASK_LANCE_QUERY_TIMEOUT_SECONDS")
 
     @property
     def resolved_batches_db(self) -> Path:
