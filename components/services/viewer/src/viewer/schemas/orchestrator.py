@@ -1,5 +1,7 @@
 from pydantic import BaseModel
 
+from viewer.models.batch import Pipeline
+
 
 class StageStat(BaseModel):
     stage: str
@@ -28,7 +30,7 @@ class SlotState(BaseModel):
 class Cooldown(BaseModel):
     submission_id: str
     chunk_id: int
-    pipeline: str
+    pipeline: Pipeline
     expires_in_secs: int
 
 

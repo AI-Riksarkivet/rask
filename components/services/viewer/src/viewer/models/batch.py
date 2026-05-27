@@ -35,6 +35,19 @@ class BrowseTier(StrEnum):
     TRANSCRIBED = "transcribed"
 
 
+class Pipeline(StrEnum):
+    """The two Ray Data pipelines viewer tracks. Submission IDs are namespaced
+    with `<pipeline>-chunk-<id>-of-<total>` so the prefix identifies which
+    pipeline a running job belongs to."""
+
+    PREFETCH = "prefetch"
+    HTR = "htr"
+
+    @property
+    def submission_id_prefix(self) -> str:
+        return f"{self.value}-"
+
+
 class BatchBase(SQLModel):
     batch_id: str
     arkiv_referenskod: str | None = None

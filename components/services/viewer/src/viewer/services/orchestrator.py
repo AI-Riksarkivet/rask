@@ -9,9 +9,11 @@ import time
 
 import anyio
 import httpx
+from ray.dashboard.modules.job.common import JobStatus
 from ray.job_submission import JobSubmissionClient
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from viewer.models.batch import Pipeline
 from viewer.repositories import batch as batch_repo
 from viewer.schemas.orchestrator import Cooldown, OrchestratorState, SlimJob, SlotState, StageStat
 from viewer.schemas.ray import RayJob
@@ -21,6 +23,8 @@ from viewer.services import ray_dashboard
 HTR_READY_FRACTION = 0.95
 FAIL_COOLDOWN_SECS = 600
 _CHUNK_RE = re.compile(r"chunk-(\d+)-of-")
+
+_ACTIVE_STATUSES: frozenset[JobStatus] = frozenset({JobStatus.RUNNING, JobStatus.PENDING})
 
 HTR_STAGES: tuple[str, ...] = (
     "PageLoaderActor",
@@ -35,6 +39,14 @@ PREFETCH_STAGES: tuple[str, ...] = ("PrefetchActor",)
 
 def _ms_to_sec(v: int | None) -> float | None:
     return None if v is None else float(v) / 1000.0
+
+
+def _pipeline_for(submission_id: str) -> Pipeline:
+    """Infer pipeline from the submission_id prefix. Defaults to HTR for any
+    id that doesn't carry the PREFETCH prefix."""
+    if submission_id.startswith(Pipeline.PREFETCH.submission_id_prefix):
+        return Pipeline.PREFETCH
+    return Pipeline.HTR
 
 
 def _slim_job(j: RayJob) -> SlimJob:
@@ -109,20 +121,21 @@ async def derive_state(
         return OrchestratorState(ok=False, error=jobs_payload.error or "ray dashboard unreachable")
     jobs = jobs_payload.jobs
 
-    def running_for(prefix: str) -> RayJob | None:
+    def running_for(pipeline: Pipeline) -> RayJob | None:
+        prefix = pipeline.submission_id_prefix
         for j in jobs:
             sid = j.submission_id or ""
-            if sid.startswith(prefix) and j.status in ("RUNNING", "PENDING"):
+            if sid.startswith(prefix) and j.status in _ACTIVE_STATUSES:
                 return j
         return None
 
-    prefetch_running = running_for("prefetch-")
-    htr_running = running_for("htr-")
+    prefetch_running = running_for(Pipeline.PREFETCH)
+    htr_running = running_for(Pipeline.HTR)
 
     now = time.time()
     cooldowns: list[Cooldown] = []
     for j in jobs:
-        if j.status != "FAILED" or j.end_time is None:
+        if j.status != JobStatus.FAILED or j.end_time is None:
             continue
         elapsed = now - (j.end_time / 1000.0)
         if elapsed >= FAIL_COOLDOWN_SECS:
@@ -135,7 +148,7 @@ async def derive_state(
             Cooldown(
                 submission_id=sid,
                 chunk_id=int(m.group(1)),
-                pipeline="prefetch" if sid.startswith("prefetch-") else "htr",
+                pipeline=_pipeline_for(sid),
                 expires_in_secs=max(0, int(FAIL_COOLDOWN_SECS - elapsed)),
             )
         )
@@ -148,8 +161,8 @@ async def derive_state(
         if expected and transcribed < expected and cached / expected >= HTR_READY_FRACTION
     ]
 
-    cooldown_pf = {c.chunk_id for c in cooldowns if c.pipeline == "prefetch"}
-    cooldown_htr = {c.chunk_id for c in cooldowns if c.pipeline == "htr"}
+    cooldown_pf = {c.chunk_id for c in cooldowns if c.pipeline is Pipeline.PREFETCH}
+    cooldown_htr = {c.chunk_id for c in cooldowns if c.pipeline is Pipeline.HTR}
     next_prefetch = next((cid for cid in prefetch_pending if cid not in cooldown_pf), None)
     next_htr = next((cid for cid in ready_for_htr if cid not in cooldown_htr), None)
 
