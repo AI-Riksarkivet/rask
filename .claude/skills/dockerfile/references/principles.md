@@ -276,6 +276,8 @@ docker buildx build --secret id=hf_token,src=$HOME/.cache/huggingface/token ...
 
 The secret file at `src=` is read from the host at build time and is never written to the image filesystem or build cache.
 
+Pair `--provenance=mode=max` with `--sbom=true` in CI so the attestation carries a software bill of materials alongside the build provenance; the two flags together are the SLSA-attestation-quality contract for rask images.
+
 ## BuildKit cache export for CI
 
 Local cache mounts (type=cache) cover developer machines. CI runners are ephemeral and need cross-runner cache persistence. Two patterns:
