@@ -57,7 +57,9 @@ def _slim_job(j: RayJob) -> SlimJob:
     return SlimJob(
         submission_id=sid,
         status=j.status,
-        start_time=_ms_to_sec(j.start_time),
+        # Keep in milliseconds, matching RayJob.start_time everywhere else.
+        # The frontend's fmtRuntime expects ms.
+        start_time=float(j.start_time) if j.start_time is not None else None,
         chunk_id=int(m.group(1)) if m else None,
     )
 
