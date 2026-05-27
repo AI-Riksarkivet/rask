@@ -4,6 +4,17 @@ Reference layout and patterns for production FastAPI projects: structure, config
 
 Examples follow the parent skill's conventions — `Annotated` for parameters and dependencies, no `...` for required fields, return types on path operations, and one HTTP operation per function.
 
+## Contents
+
+- Recommended project layout
+- Application entry, settings, database
+- Repository pattern
+- Service layer
+- API endpoints
+- Authentication → [`authn.md`](authn.md) · Authorization → [`authz.md`](authz.md)
+- Testing
+- Common pitfalls
+
 ## Recommended Project Layout
 
 ```
@@ -95,7 +106,8 @@ def get_settings() -> Settings:
 # core/database.py
 from collections.abc import AsyncIterator
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.orm import declarative_base
 
 from app.core.config import get_settings
@@ -124,7 +136,7 @@ Declare reusable typed dependencies once:
 from typing import Annotated
 
 from fastapi import Depends
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.database import get_db
 
@@ -134,33 +146,27 @@ DbSessionDep = Annotated[AsyncSession, Depends(get_db)]
 ## Repository Pattern
 
 ```python
-# repositories/base_repository.py
-from typing import Generic, TypeVar
-
+# repositories/base_repository.py — PEP 695 generics (3.12+)
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-ModelType = TypeVar("ModelType")
-CreateSchemaType = TypeVar("CreateSchemaType", bound=BaseModel)
-UpdateSchemaType = TypeVar("UpdateSchemaType", bound=BaseModel)
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 
-class BaseRepository(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
-    def __init__(self, model: type[ModelType]):
+class BaseRepository[Model, CreateSchema: BaseModel, UpdateSchema: BaseModel]:
+    def __init__(self, model: type[Model]) -> None:
         self.model = model
 
-    async def get(self, db: AsyncSession, id: int) -> ModelType | None:
+    async def get(self, db: AsyncSession, id: int) -> Model | None:
         result = await db.execute(select(self.model).where(self.model.id == id))
         return result.scalars().first()
 
     async def get_multi(
-        self, db: AsyncSession, skip: int = 0, limit: int = 100
-    ) -> list[ModelType]:
+        self, db: AsyncSession, skip: int = 0, limit: int = 100,
+    ) -> list[Model]:
         result = await db.execute(select(self.model).offset(skip).limit(limit))
         return list(result.scalars().all())
 
-    async def create(self, db: AsyncSession, obj_in: CreateSchemaType) -> ModelType:
+    async def create(self, db: AsyncSession, obj_in: CreateSchema) -> Model:
         db_obj = self.model(**obj_in.model_dump())
         db.add(db_obj)
         await db.flush()
@@ -187,7 +193,7 @@ class BaseRepository(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
 ```python
 # repositories/user_repository.py
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.user import User
 from app.repositories.base_repository import BaseRepository
@@ -207,7 +213,7 @@ user_repository = UserRepository(User)
 
 ```python
 # services/user_service.py
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.security import get_password_hash, verify_password
 from app.models.user import User
@@ -319,76 +325,19 @@ async def delete_user(
 
 ## Authentication & Authorization
 
-```python
-# core/security.py
-from datetime import datetime, timedelta, timezone
+Full coverage is split:
 
-from jose import jwt
-from passlib.context import CryptContext
+- [`authn.md`](authn.md) — password hashing (`pwdlib`), self-issued JWT (`PyJWT`), external OIDC token verification (rolled in-house), provider quick-start (Keycloak / Dex / Okta / Auth0 / Entra / Google), protected-routes patterns.
+- [`authz.md`](authz.md) — coarse role / scope deps, fine-grained authz with **OpenFGA** (model, `check`/`batch_check`/`list_objects`/`list_users`, writing tuples, service-layer integration).
 
-from app.core.config import get_settings
+The two modules that fall out of that reference for a project laid out like this template:
 
-settings = get_settings()
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-ALGORITHM = "HS256"
+- `core/security.py` — `password_hash` (Argon2+bcrypt via `pwdlib`), `create_access_token`, JWT verification primitives.
+- `core/oidc.py` — JWKS cache + `verify_oidc_token` when users come from an external IdP.
+- `core/fga.py` — `OpenFgaClient` factory + `check` helper when permissions are relational.
+- `api/deps.py` — `CurrentUserDep` (local JWT), `OIDCUserDep` (external), `require_active` / `require_superuser`, plus `require_permission("reader", "document:{document_id}")` for per-object guards.
 
-
-def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
-    to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=15))
-    to_encode["exp"] = expire
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
-
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
-
-
-def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
-```
-
-```python
-# api/security_deps.py
-from typing import Annotated
-
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
-
-from app.api.dependencies import DbSessionDep
-from app.core.config import get_settings
-from app.core.security import ALGORITHM
-from app.models.user import User
-from app.repositories.user_repository import user_repository
-
-settings = get_settings()
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
-TokenDep = Annotated[str, Depends(oauth2_scheme)]
-
-
-async def get_current_user(db: DbSessionDep, token: TokenDep) -> User:
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("sub")
-        if user_id is None:
-            raise credentials_exception
-    except JWTError as e:
-        raise credentials_exception from e
-
-    user = await user_repository.get(db, int(user_id))
-    if user is None:
-        raise credentials_exception
-    return user
-
-
-CurrentUserDep = Annotated[User, Depends(get_current_user)]
-```
+Place all of these in `core/` (not `api/`) so they're testable without spinning up FastAPI.
 
 ## Testing
 
@@ -396,7 +345,8 @@ CurrentUserDep = Annotated[User, Depends(get_current_user)]
 # tests/conftest.py
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.database import Base, get_db
 from app.main import app

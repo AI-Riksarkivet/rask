@@ -1,10 +1,19 @@
 # CLI Patterns
 
-Build CLIs with `typer` (built on Click, type-hint-driven). Fall back to stdlib `argparse` only for tiny scripts with no third-party deps.
+**`typer` + `rich` is the project standard for CLIs.** `typer` (type-hint-driven, built on Click) defines commands and arguments; `rich` handles all terminal output — progress bars, tables, panels, syntax highlighting, error styling. Together they give you a modern, accessible CLI in under 50 lines.
+
+- **Don't reach for `click` directly** — Typer is built on Click and gives you the same power with type-hint ergonomics.
+- **Don't print with bare `print()` for user output** — use `rich.print` or a `Console()` instance so colors, wrapping, and Unicode width are handled.
+- **Fall back to stdlib `argparse`** only for tiny throwaway scripts with no third-party deps.
+
+```bash
+uv add typer rich
+```
 
 ## Contents
 
-- Typer
+- Typer + Rich (the standard combo)
+- Rich output — Console, tables, panels, error styling
 - argparse (stdlib fallback)
 - Output formats
 - Progress display
@@ -13,14 +22,20 @@ Build CLIs with `typer` (built on Click, type-hint-driven). Fall back to stdlib 
 - Exit codes
 - Entry point
 
-## Typer
+## Typer + Rich (the standard combo)
+
+`Typer()` defines commands; one shared `Console()` from `rich` handles all output (so colors, theming, and pipe-detection work consistently). Use the `rich_markup_mode="rich"` flag so docstrings render `[bold]`, `[red]`, etc. in `--help`.
 
 ```python
 from pathlib import Path
 import json
 import typer
+from rich.console import Console
 
-app = typer.Typer()
+app = typer.Typer(rich_markup_mode="rich")
+console = Console()
+err_console = Console(stderr=True, style="bold red")
+
 
 @app.command()
 def process(
@@ -29,13 +44,18 @@ def process(
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     dry_run: bool = typer.Option(False, "--dry-run"),
 ) -> None:
-    """Process input files."""
+    """Process input files.
+
+    Reads [bold]input_file[/bold] and writes JSON to [cyan]output[/cyan].
+    """
     if dry_run:
-        typer.echo(f"Would process {input_file} -> {output}")
+        console.print(f"[yellow]Would process[/yellow] {input_file} → {output}")
         return
 
     result = do_process(input_file)
     output.write_text(json.dumps(result))
+    console.print(f"[green]✓[/green] wrote {len(result)} records to {output}")
+
 
 @app.command()
 def list_items(
@@ -45,9 +65,58 @@ def list_items(
     items = fetch_items()
     print_items(items, format)
 
+
 if __name__ == "__main__":
     app()
 ```
+
+## Rich output — Console, tables, panels, error styling
+
+One `Console()` instance per CLI, plus a separate `stderr` console for errors so `tool > out.json 2> err.log` redirects work correctly.
+
+```python
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.syntax import Syntax
+
+console = Console()
+err_console = Console(stderr=True)
+
+
+# Tables — preferred over hand-rolled column-width math
+def show_items(items: list[dict[str, object]]) -> None:
+    table = Table(title="Items")
+    table.add_column("ID", style="dim", no_wrap=True)
+    table.add_column("Name", style="bold")
+    table.add_column("Status")
+    for item in items:
+        style = "green" if item["status"] == "ok" else "red"
+        table.add_row(str(item["id"]), str(item["name"]), f"[{style}]{item['status']}[/{style}]")
+    console.print(table)
+
+
+# Panels — for grouped output (banners, summaries, error context)
+console.print(Panel("Processing complete", title="Done", border_style="green"))
+
+
+# Syntax highlighting — for showing config snippets, JSON, etc.
+console.print(Syntax(json.dumps(data, indent=2), "json", theme="monokai"))
+
+
+# Errors — to stderr, styled, with non-zero exit
+def fail(msg: str) -> None:
+    err_console.print(f"[bold red]error:[/bold red] {msg}")
+    raise typer.Exit(code=1)
+```
+
+**Rules:**
+
+- **One `Console()` per CLI**, module-level — passing it through every function is noise. A second `Console(stderr=True)` for errors.
+- **Use `console.print(...)`, not `print(...)`** — rich-print respects terminal width, color settings, and `NO_COLOR`.
+- **Errors go to stderr.** `Console(stderr=True)` + `typer.Exit(code=1)` (not `sys.exit(1)` — Typer wraps cleanly).
+- **Don't decorate every string with markup tags.** Use `style=` on Console/Table columns where possible; reserve inline `[bold]...[/bold]` for one-off emphasis.
+- **For `--help` markup**, set `typer.Typer(rich_markup_mode="rich")` once on the app.
 
 ## argparse (stdlib fallback)
 

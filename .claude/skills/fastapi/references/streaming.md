@@ -1,5 +1,13 @@
 # Streaming
 
+API-level streaming responses — JSON Lines, Server-Sent Events, raw byte streams. For file downloads / uploads with filenames + MIME types + range requests, see [`file-handling.md`](file-handling.md).
+
+## Contents
+
+- Stream JSON Lines
+- Server-Sent Events (SSE)
+- Stream bytes
+
 ## Stream JSON Lines
 
 To stream JSON Lines, declare the return type and use `yield` to return the data.
@@ -63,7 +71,9 @@ yield ServerSentEvent(raw_data="plain text line", event="log")
 
 ## Stream bytes
 
-To stream bytes, declare a `response_class=` of `StreamingResponse` or a sub-class, and use `yield` to return the data.
+For **dynamic byte responses inside an API endpoint** (rendered images, generated thumbnails, programmatic blobs). For file-on-disk downloads with `Content-Disposition`, range requests, and uploads, use [`file-handling.md`](file-handling.md) — don't reimplement those patterns here.
+
+Declare a `response_class=` of `StreamingResponse` or a sub-class, and use `yield` to return the data.
 
 ```python
 from fastapi import FastAPI

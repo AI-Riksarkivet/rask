@@ -2,7 +2,21 @@
 
 Decouple long-running or unreliable work from request/response cycles. This project uses **NATS JetStream** (via `nats-py`) as the primary task queue.
 
-> **JetStream vs DBOS — pick the right tool.** JetStream gives you _message durability_: the message survives, handlers are idempotent, retry means redelivering the whole message. **DBOS** (`durable-workflows.md`) gives you _workflow durability_: the function's execution state survives crashes; on resume it picks up at the last completed step. Use JetStream for fanout/work-queue/event distribution. Reach for DBOS when one logical workflow has multiple non-idempotent steps and you can't safely re-run from step 1 (checkout: charge → reserve → ship → notify).
+> **JetStream vs Dapr Workflow — pick the right tool.** JetStream gives you _message durability_: the message survives, handlers are idempotent, retry means redelivering the whole message. **Dapr Workflow** (`dapr-workflows.md`) gives you _workflow durability_: the function's execution state survives crashes; on resume it picks up at the last completed activity. Use JetStream for fanout/work-queue/event distribution. Reach for Dapr Workflow when one logical workflow has multiple non-idempotent steps and you can't safely re-run from step 1 (checkout: charge → reserve → ship → notify). Dapr Workflow requires a Dapr sidecar per pod (see `fastapi/references/microservices.md` § Dapr + Kubernetes).
+
+## Contents
+
+- Core concepts
+- Connecting (`nats-py`)
+- Stream + consumer setup (one-time, idempotent)
+- Return a job ID immediately
+- Make tasks idempotent
+- Job state management
+- Dead letter handling
+- Status polling endpoint (FastAPI)
+- Worker shape (asyncio pull consumer)
+- Push consumer (when you want NATS to drive)
+- Summary
 
 ## Core concepts
 

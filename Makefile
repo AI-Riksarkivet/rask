@@ -71,7 +71,7 @@ VIEWER_OUTPUT ?= s3://images-batch-alto
 
 viewer:
 	RASK_VIEWER_INPUT=$(VIEWER_INPUT) RASK_VIEWER_OUTPUT=$(VIEWER_OUTPUT) \
-		uv run uvicorn viewer.app:app --host 0.0.0.0 --port 8888 --reload
+		uv run uvicorn viewer.main:app --host 0.0.0.0 --port 8888 --reload
 
 viewer-frontend:
 	bun --cwd components/apps/frontend run dev

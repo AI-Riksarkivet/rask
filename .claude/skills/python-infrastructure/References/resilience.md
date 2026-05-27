@@ -2,6 +2,20 @@
 
 Retries, exponential backoff with jitter, timeouts, fault-tolerant decorators. `tenacity` is the default.
 
+## Contents
+
+- Basic retry
+- Retry only appropriate errors
+- HTTP status code retries
+- Combined exception and status retry
+- Logging retry attempts
+- Timeout decorator
+- Stack cross-cutting concerns
+- Inject infrastructure for testability
+- Fail-safe defaults
+- Circuit breakers
+- Summary
+
 ## Basic retry
 
 ```python
