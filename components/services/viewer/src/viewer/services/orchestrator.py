@@ -124,10 +124,14 @@ async def derive_state(
     jobs = jobs_payload.jobs
 
     def running_for(pipeline: Pipeline) -> RayJob | None:
-        prefix = pipeline.submission_id_prefix
+        # Use _pipeline_for to classify: "htrflow-chunk-…" and any future
+        # non-prefetch pipeline collapse to Pipeline.HTR (the slot semantics),
+        # while a literal-prefix match would only catch "htr-…".
         for j in jobs:
             sid = j.submission_id or ""
-            if sid.startswith(prefix) and j.status in _ACTIVE_STATUSES:
+            if not sid:
+                continue
+            if _pipeline_for(sid) is pipeline and j.status in _ACTIVE_STATUSES:
                 return j
         return None
 
