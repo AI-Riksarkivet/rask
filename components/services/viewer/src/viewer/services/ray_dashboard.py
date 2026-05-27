@@ -97,7 +97,7 @@ async def health(client: JobSubmissionClient | None, dashboard_url: str) -> RayH
         info = await anyio.to_thread.run_sync(client.get_version)
     except Exception as exc:
         return RayHealth(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
-    return RayHealth(ok=True, dashboard_url=dashboard_url, ray_version=info.get("ray_version"))
+    return RayHealth(ok=True, dashboard_url=dashboard_url, ray_version=info if isinstance(info, str) else info.get("ray_version"))
 
 
 async def list_jobs(client: JobSubmissionClient | None, dashboard_url: str) -> RayJobsPayload:

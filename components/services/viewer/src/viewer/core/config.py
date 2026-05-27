@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     catalog_table: str = Field(default="archive_catalog", alias="RASK_CATALOG_TABLE")
     ray_dashboard_url: str = Field(default="http://localhost:8265", alias="RAY_DASHBOARD_URL")
 
-    repo_root: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[5])
+    repo_root: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[6])
     batches_db: Path | None = Field(default=None, alias="RASK_BATCHES_DB")
     spa_build_dir: Path | None = Field(default=None, alias="RASK_SPA_BUILD")
     scripts_dir: Path | None = Field(default=None, alias="RASK_SCRIPTS_DIR")

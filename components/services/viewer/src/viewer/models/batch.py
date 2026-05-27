@@ -11,9 +11,15 @@ Schema mirrors what `scripts/build_batches_db.py` creates; viewer reads, the
 script seeds. Once the heavy refactor merges, both come from one place.
 """
 
+from sqlalchemy import Column
+from sqlalchemy import Enum as SAEnum
 from sqlmodel import Field, SQLModel
 
 from viewer.models.enums import HtrStatus, ManifestStatus
+
+
+def _str_enum_col(enum_cls: type) -> Column:
+    return Column(SAEnum(enum_cls, values_callable=lambda x: [e.value for e in x]))
 
 
 class BatchBase(SQLModel):
@@ -52,6 +58,8 @@ class Batch(BatchBase, table=True):
     __tablename__ = "batches"
 
     batch_id: str = Field(primary_key=True)
+    manifest_status: ManifestStatus | None = Field(default=None, sa_column=_str_enum_col(ManifestStatus))
+    htr_status: HtrStatus = Field(default=HtrStatus.PENDING, sa_column=_str_enum_col(HtrStatus))
 
 
 class BatchPublic(BatchBase):
