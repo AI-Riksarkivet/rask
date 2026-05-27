@@ -18,3 +18,4 @@ storybook-static/
 .cache/
 batches.db
 components/scripts/batch_ids.txt
+batches.db.20260527T105358Z
