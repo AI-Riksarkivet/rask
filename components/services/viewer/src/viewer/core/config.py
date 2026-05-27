@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     db_max_overflow: int = Field(default=20, ge=0, le=200, alias="DB_MAX_OVERFLOW")
     db_pool_recycle_seconds: int = Field(default=1800, ge=60, alias="DB_POOL_RECYCLE_SECONDS")
     db_pool_timeout_seconds: int = Field(default=30, ge=1, alias="DB_POOL_TIMEOUT_SECONDS")
+    db_query_timeout_seconds: int = Field(default=60, ge=1, alias="DB_QUERY_TIMEOUT_SECONDS")
 
     http_timeout: float = 15.0
     ray_proxy_timeout: float = 15.0

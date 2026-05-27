@@ -22,6 +22,7 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = ["asyncpg>=0.30"]
+migrations = ["alembic>=1.13"]
 
 [project.scripts]
 viewer = "viewer.main:main"

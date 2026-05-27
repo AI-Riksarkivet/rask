@@ -1,4 +1,4 @@
-.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer viewer-frontend viewer-frontend-build ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index claude-bootstrap
+.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer viewer-frontend viewer-frontend-build ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap
 
 help:
 	@echo "Targets:"
@@ -8,6 +8,7 @@ help:
 	@echo "  ray-up ray-down ray-status"
 	@echo "  serve-up serve-down serve-status"
 	@echo "  search-index search-index-fresh harvest-ead catalog-index"
+	@echo "  pg-up pg-down pg-status pg-migrate pg-revision MSG='...'"
 	@echo "  claude-bootstrap                       — install Claude Code skills & verify config"
 
 install:
@@ -120,3 +121,35 @@ harvest-ead:
 
 catalog-index:
 	uv run python components/scripts/index_catalog.py --no-embed --digitized-only
+
+# ---- local postgres (for alembic + viewer testing) -------------------------
+# Local dev postgres in a docker container. Connect from the VS Code
+# `ms-ossdata.vscode-pgsql` extension or any psql client at:
+#   postgresql://rask:rask@localhost:5432/rask
+PG_URL ?= postgresql+asyncpg://rask:rask@localhost:5432/rask
+
+pg-up:
+	docker run -d --name rask-pg \
+	  -e POSTGRES_USER=rask -e POSTGRES_PASSWORD=rask -e POSTGRES_DB=rask \
+	  -p 5432:5432 postgres:16
+	@echo "Postgres up. Connect via:"
+	@echo "  - VS Code (ms-ossdata.vscode-pgsql): host=localhost port=5432 db=rask user=rask password=rask"
+	@echo "  - psql:    psql postgresql://rask:rask@localhost:5432/rask"
+	@echo "  - alembic: make pg-migrate"
+
+pg-down:
+	docker rm -f rask-pg
+
+pg-status:
+	docker ps --filter name=rask-pg --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+
+pg-deps:
+	uv sync --package viewer --extra postgres --extra migrations
+
+pg-migrate: pg-deps
+	cd components/services/viewer && \
+	  DATABASE_URL=$(PG_URL) uv run --package viewer alembic upgrade head
+
+pg-revision: pg-deps
+	cd components/services/viewer && \
+	  DATABASE_URL=$(PG_URL) uv run --package viewer alembic revision --autogenerate -m "$(MSG)"

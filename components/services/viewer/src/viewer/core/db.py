@@ -7,19 +7,9 @@ gets the defaults (single connection, no pool).
 """
 
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
-from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from viewer.core.config import Settings
-
-
-SQLModel.metadata.naming_convention = {
-    "ix": "ix_%(column_0_label)s",
-    "uq": "uq_%(table_name)s_%(column_0_name)s",
-    "ck": "ck_%(table_name)s_%(constraint_name)s",
-    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
-    "pk": "pk_%(table_name)s",
-}
 
 
 def _is_sqlite(url: str) -> bool:
@@ -38,6 +28,7 @@ def make_engine(settings: Settings) -> AsyncEngine:
         pool_pre_ping=True,
         pool_recycle=settings.db_pool_recycle_seconds,
         pool_timeout=settings.db_pool_timeout_seconds,
+        connect_args={"command_timeout": settings.db_query_timeout_seconds},
     )
 
 

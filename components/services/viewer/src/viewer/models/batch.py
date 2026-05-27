@@ -18,6 +18,18 @@ from sqlmodel import Field, SQLModel
 from viewer.models.enums import HtrStatus, ManifestStatus
 
 
+# Naming convention must be applied to SQLModel.metadata BEFORE any
+# `table=True` class is defined — otherwise Alembic autogenerates anonymous
+# constraint names and rollbacks fail. Per `fastapi/database.md`.
+SQLModel.metadata.naming_convention = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+
+
 def _str_enum_col(enum_cls: type) -> Column:
     return Column(SAEnum(enum_cls, values_callable=lambda x: [e.value for e in x]))
 

@@ -9,11 +9,10 @@ import argparse
 import os
 
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
-
-from dotenv import load_dotenv
 
 from storage import derive_hcp_creds
 from viewer.api.v1.endpoints import ray, spa
