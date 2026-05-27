@@ -14,6 +14,7 @@ of bubbling 5xx.
 
 import logging
 import re
+from http import HTTPStatus
 
 import anyio
 import httpx
@@ -25,6 +26,7 @@ from viewer.schemas.ray import RayClusterPayload, RayHealth, RayJob, RayJobsPayl
 log = logging.getLogger(__name__)
 
 _BATCH_RE = re.compile(r"--batch[\s=]+(\S+)")
+_ERROR_MSG_MAX_LEN = 400  # truncate exception strings so they fit in one log/UI line
 _HOP_BY_HOP = {
     "connection",
     "keep-alive",
@@ -75,7 +77,7 @@ async def health(client: JobSubmissionClient | None, dashboard_url: str) -> RayH
     try:
         info = await anyio.to_thread.run_sync(client.get_version)
     except Exception as exc:
-        return RayHealth(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:400])
+        return RayHealth(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
     return RayHealth(ok=True, dashboard_url=dashboard_url, ray_version=info.get("ray_version"))
 
 
@@ -85,7 +87,7 @@ async def list_jobs(client: JobSubmissionClient | None, dashboard_url: str) -> R
     try:
         details = await anyio.to_thread.run_sync(client.list_jobs)
     except Exception as exc:
-        return RayJobsPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:400])
+        return RayJobsPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
     jobs: list[RayJob] = []
     for d in details:
         ray_job = RayJob.model_validate(d.model_dump())
@@ -167,7 +169,7 @@ async def cluster_status(http: httpx.AsyncClient, dashboard_url: str) -> RayClus
         except httpx.HTTPError:
             log.debug("per-node detail unavailable; aggregates still returned", exc_info=True)
     except httpx.HTTPError as exc:
-        return RayClusterPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:400])
+        return RayClusterPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
 
     return RayClusterPayload(
         ok=True,
@@ -196,6 +198,6 @@ async def proxy(
     try:
         resp = await http.request(method, url, params=qs, headers=fwd, content=body or None)
     except httpx.HTTPError as exc:
-        return (f"ray dashboard unreachable: {exc}".encode(), 502, {"content-type": "text/plain"})
+        return (f"ray dashboard unreachable: {exc}".encode(), HTTPStatus.BAD_GATEWAY, {"content-type": "text/plain"})
     out_headers = {k: v for k, v in resp.headers.items() if k.lower() not in _HOP_BY_HOP}
     return (resp.content, resp.status_code, out_headers)

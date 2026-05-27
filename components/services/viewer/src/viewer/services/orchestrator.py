@@ -23,8 +23,20 @@ from viewer.services import ray_dashboard
 HTR_READY_FRACTION = 0.95
 FAIL_COOLDOWN_SECS = 600
 _CHUNK_RE = re.compile(r"chunk-(\d+)-of-")
+_MS_PER_SECOND = 1000.0
 
 _ACTIVE_STATUSES: frozenset[JobStatus] = frozenset({JobStatus.RUNNING, JobStatus.PENDING})
+
+# Ray Data task-scheduler states as they appear in /api/v0/tasks/summarize
+# `state_counts`. Not part of any Ray public enum — these are external API
+# keys we collapse into the UI's four buckets (finished/running/scheduled/
+# pending/failed).
+_TASK_STATE_FINISHED = "FINISHED"
+_TASK_STATE_RUNNING = "RUNNING"
+_TASK_STATE_SCHEDULED = "SUBMITTED_TO_WORKER"
+_TASK_STATE_FAILED = "FAILED"
+_TASK_STATE_WAITING = "WAITING"
+_TASK_STATE_PENDING_PREFIX = "PENDING"
 
 HTR_STAGES: tuple[str, ...] = (
     "PageLoaderActor",
@@ -38,7 +50,7 @@ PREFETCH_STAGES: tuple[str, ...] = ("PrefetchActor",)
 
 
 def _ms_to_sec(v: int | None) -> float | None:
-    return None if v is None else float(v) / 1000.0
+    return None if v is None else float(v) / _MS_PER_SECOND
 
 
 def _pipeline_for(submission_id: str) -> Pipeline:
@@ -80,11 +92,11 @@ async def _task_summary_for_job(
     for stage in stage_names:
         info = summary.get(f"MapWorker(MapBatches({stage})).submit") or {}
         sc = info.get("state_counts") or {}
-        finished = int(sc.get("FINISHED", 0))
-        running = int(sc.get("RUNNING", 0))
-        scheduled = int(sc.get("SUBMITTED_TO_WORKER", 0))
-        failed = int(sc.get("FAILED", 0))
-        pending = sum(int(v) for k, v in sc.items() if k.startswith("PENDING") or k == "WAITING")
+        finished = int(sc.get(_TASK_STATE_FINISHED, 0))
+        running = int(sc.get(_TASK_STATE_RUNNING, 0))
+        scheduled = int(sc.get(_TASK_STATE_SCHEDULED, 0))
+        failed = int(sc.get(_TASK_STATE_FAILED, 0))
+        pending = sum(int(v) for k, v in sc.items() if k.startswith(_TASK_STATE_PENDING_PREFIX) or k == _TASK_STATE_WAITING)
         total = sum(int(v) for v in sc.values())
         out.append(
             StageStat(
@@ -135,9 +147,12 @@ async def derive_state(
     now = time.time()
     cooldowns: list[Cooldown] = []
     for j in jobs:
-        if j.status != JobStatus.FAILED or j.end_time is None:
+        if j.status != JobStatus.FAILED:
             continue
-        elapsed = now - (j.end_time / 1000.0)
+        end_sec = _ms_to_sec(j.end_time)
+        if end_sec is None:
+            continue
+        elapsed = now - end_sec
         if elapsed >= FAIL_COOLDOWN_SECS:
             continue
         sid = j.submission_id or ""

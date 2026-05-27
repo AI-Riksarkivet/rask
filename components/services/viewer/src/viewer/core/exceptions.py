@@ -5,6 +5,7 @@ status code via the registered handler — one place to change the response shap
 """
 
 import logging
+from http import HTTPStatus
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -15,34 +16,34 @@ log = logging.getLogger(__name__)
 
 
 class DomainError(Exception):
-    status_code = 500
-    title = "Internal Server Error"
+    status_code: int = HTTPStatus.INTERNAL_SERVER_ERROR
+    title: str = "Internal Server Error"
 
 
 class NotFoundError(DomainError):
-    status_code = 404
+    status_code = HTTPStatus.NOT_FOUND
     title = "Not Found"
 
 
 class ValidationError(DomainError):
-    status_code = 400
+    status_code = HTTPStatus.BAD_REQUEST
     title = "Bad Request"
 
 
 class ServiceUnavailableError(DomainError):
-    status_code = 503
+    status_code = HTTPStatus.SERVICE_UNAVAILABLE
     title = "Service Unavailable"
 
 
 class UpstreamUnavailableError(DomainError):
-    status_code = 502
+    status_code = HTTPStatus.BAD_GATEWAY
     title = "Bad Gateway"
 
 
 class UpstreamTimeoutError(DomainError):
     """504 — use for `asyncio.TimeoutError` / `httpx.TimeoutException` boundaries."""
 
-    status_code = 504
+    status_code = HTTPStatus.GATEWAY_TIMEOUT
     title = "Gateway Timeout"
 
 
@@ -58,7 +59,7 @@ def _problem(exc: DomainError) -> dict[str, str | int]:
 def register_handlers(app: FastAPI) -> None:
     @app.exception_handler(DomainError)
     async def _domain(_: Request, exc: DomainError) -> JSONResponse:
-        if exc.status_code >= 500:
+        if exc.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR:
             log.exception("domain error", exc_info=exc)
         return JSONResponse(
             status_code=exc.status_code,
@@ -69,11 +70,11 @@ def register_handlers(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
     async def _validation(_: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(
-            status_code=422,
+            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
             content={
                 "type": "about:blank#validation",
                 "title": "Validation Error",
-                "status": 422,
+                "status": HTTPStatus.UNPROCESSABLE_ENTITY,
                 "errors": [
                     {
                         "field": ".".join(str(p) for p in e["loc"]),

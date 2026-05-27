@@ -11,6 +11,8 @@ from viewer.services import search as search_service
 
 router = APIRouter(tags=["search"])
 
+_THUMB_CACHE_MAX_AGE_SECS = 24 * 60 * 60  # 24h — line-crop thumbs are immutable per dataset version
+
 
 @router.get("/api/search")
 async def search_lines(
@@ -31,4 +33,4 @@ def search_thumb(thumb_path: str, s3: S3Dep, settings: SettingsDep) -> Response:
     data = search_service.fetch_thumb(s3, settings.search_bucket, thumb_path)
     if data is None:
         raise NotFoundError("thumbnail not found")
-    return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+    return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": f"public, max-age={_THUMB_CACHE_MAX_AGE_SECS}"})

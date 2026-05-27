@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 # underscores, dots. Anything else can't reach LanceDB's filter string — its
 # filter language has no parameterized form to fall back on.
 _BILD_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_FTS_COLUMN = "search_text"
 
 
 def _validate_bild_ids(bild_ids: list[str]) -> None:
@@ -66,7 +67,7 @@ async def search_catalog(
 ) -> CatalogSearchResponse:
     if tbl is None:
         return CatalogSearchResponse(ok=True, query=query, count=0, hits=[])
-    fts = await tbl.search(query, query_type="fts")
+    fts = await tbl.search(query, query_type="fts", fts_columns=_FTS_COLUMN)
     rows = await fts.select(_COLS).limit(limit).to_list()
     bild_ids = [r["bild_id"] for r in rows if r.get("bild_id")]
     listed, cached, transcribed = await local_batch_status(session, bild_ids)
