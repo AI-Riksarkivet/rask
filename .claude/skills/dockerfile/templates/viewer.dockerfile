@@ -79,10 +79,10 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
 ENTRYPOINT ["/usr/bin/tini", "--"]
 # Note: --forwarded-allow-ips MUST be set to the nginx network CIDR at deploy time,
 # never '*' (header-spoofing risk). --workers is intentionally unset — orchestrator scales.
+# uvloop/httptools are NOT installed by default; the viewer's pyproject.toml uses the stock
+# uvicorn extras. If you want the perf, add `uvicorn[standard]` to
+# components/services/viewer/pyproject.toml and append `--loop uvloop --http httptools` here.
 CMD ["uvicorn", "viewer.app:app", \
      "--host", "0.0.0.0", "--port", "8888", \
      "--proxy-headers", \
-     "--forwarded-allow-ips", "127.0.0.1", \
-     "--no-access-log", \
-     "--loop", "uvloop", \
-     "--http", "httptools"]
+     "--forwarded-allow-ips", "127.0.0.1"]
