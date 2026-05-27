@@ -9,10 +9,11 @@ import time
 
 import anyio
 import httpx
+from ray.dashboard.modules.job.common import JobStatus
 from ray.job_submission import JobSubmissionClient
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from viewer.models.enums import JobStatus, Pipeline, RayStage, TaskState
+from viewer.models.enums import Pipeline, RayStage, TaskState
 from viewer.repositories import batch as batch_repo
 from viewer.schemas.orchestrator import Cooldown, OrchestratorState, SlimJob, SlotState, StageStat
 from viewer.schemas.ray import RayJob

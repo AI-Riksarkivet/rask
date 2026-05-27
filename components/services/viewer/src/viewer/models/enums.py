@@ -1,13 +1,11 @@
-"""All viewer-defined StrEnums in one place.
+"""Viewer-defined StrEnums.
 
-Re-exports `JobStatus` / `JobType` / `DriverInfo` from Ray for callers that
-want a single import surface. Viewer's own enums live here directly.
+Ray's own enums (`JobStatus`, `JobType`, `DriverInfo`) are imported directly
+from `ray.dashboard.modules.job.*` at the call site — they're not re-exported
+here, since the source-of-truth import is more honest than a viewer-side alias.
 """
 
 from enum import StrEnum
-
-from ray.dashboard.modules.job.common import JobStatus
-from ray.dashboard.modules.job.pydantic_models import DriverInfo, JobType
 
 
 # ── batches.db domain ────────────────────────────────────────────────────
