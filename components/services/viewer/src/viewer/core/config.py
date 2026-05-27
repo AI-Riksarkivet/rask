@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     viewer_output: str = Field(alias="RASK_VIEWER_OUTPUT")
 
     api_prefix: str = Field(default="/api/v1", alias="RASK_API_PREFIX")
+    cors_origins: list[str] = Field(default_factory=list, alias="RASK_CORS_ORIGINS")
 
     hcp_endpoint: str | None = Field(default=None, alias="HCP_ENDPOINT")
     aws_access_key_id: str | None = Field(default=None, alias="AWS_ACCESS_KEY_ID")

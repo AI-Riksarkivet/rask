@@ -19,6 +19,7 @@ from viewer.api.v1.router import api_router
 from viewer.core.config import Settings
 from viewer.core.exceptions import register_handlers
 from viewer.core.lifespan import make_lifespan
+from viewer.core.middleware import register_middleware
 
 
 _DEFAULT_HOST = "0.0.0.0"
@@ -46,6 +47,7 @@ def create_app() -> FastAPI:
         generate_unique_id_function=_generate_unique_id,
     )
     register_handlers(app)
+    register_middleware(app, settings)
 
     app.include_router(api_router, prefix=settings.api_prefix)
     app.include_router(ray.proxy_router)
