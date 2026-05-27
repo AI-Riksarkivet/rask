@@ -1,0 +1,72 @@
+# rask .dockerignore
+# Install: cp .claude/skills/dockerfile/templates/dockerignore .dockerignore
+# Single source of truth for ALL .docker/*.dockerfile builds (build context = repo root).
+
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# CI / docker / build orchestration (in the source tree, but never inside the image)
+.docker/
+.dagger/
+Dockerfile
+*.dockerfile
+.dockerignore
+
+# Python venvs and caches
+.venv
+.venv*/
+**/__pycache__
+**/*.pyc
+**/*.pyo
+*.egg-info/
+*.dist-info/
+.mypy_cache
+.ruff_cache
+.pytest_cache
+
+# JS/TS build artefacts and caches
+node_modules
+node_modules/.cache
+dist
+build
+.svelte-kit
+storybook-static
+
+# Test/coverage outputs
+coverage/
+htmlcov/
+.coverage
+.coverage.*
+
+# Editor / IDE / OS junk
+.idea/
+.vscode/
+.cursor*
+.DS_Store
+*.swp
+*.swo
+
+# Infra-as-code state
+.terraform/
+.terraform.lock.hcl
+
+# Secrets and local config
+.env
+.env.*
+.secret
+.secret.*
+
+# Claude Code project state
+.claude/
+
+# Logs
+*.log
+logs/
+
+# Model weights (large; should never be in build context — mount at runtime)
+**/weights/
+**/*.pt
+**/*.bin
+**/*.safetensors
