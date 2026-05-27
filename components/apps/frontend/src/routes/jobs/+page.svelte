@@ -55,8 +55,8 @@
 
 	function fmtRuntime(start: number | null, end: number | null): string {
 		if (!start) return '—';
-		const endTs = end ?? Date.now() / 1000;
-		const secs = Math.max(0, endTs - start);
+		const endMs = end ?? Date.now();
+		const secs = Math.max(0, (endMs - start) / 1000);
 		if (secs < 90) return `${secs.toFixed(0)}s`;
 		if (secs < 5400) return `${(secs / 60).toFixed(1)}m`;
 		return `${(secs / 3600).toFixed(1)}h`;
@@ -64,7 +64,7 @@
 
 	function fmtTime(ts: number | null): string {
 		if (!ts) return '—';
-		return new Date(ts * 1000).toISOString().replace('T', ' ').slice(0, 19);
+		return new Date(ts).toISOString().replace('T', ' ').slice(0, 19);
 	}
 </script>
 
@@ -120,7 +120,7 @@
 							</tr>
 						</thead>
 						<tbody>
-							{#each jobs as j (j.submission_id)}
+							{#each jobs as j (j.submission_id ?? j.job_id)}
 								<tr class="border-border/40 hover:bg-muted/40 border-b">
 									<td class="px-3 py-1.5">
 										<Badge

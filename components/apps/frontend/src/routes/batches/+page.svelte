@@ -240,8 +240,8 @@
 
 	function fmtRuntime(start: number | null, end: number | null): string {
 		if (!start) return '—';
-		const endTs = end ?? Date.now() / 1000;
-		const secs = Math.max(0, endTs - start);
+		const endMs = end ?? Date.now();
+		const secs = Math.max(0, (endMs - start) / 1000);
 		if (secs < 90) return `${secs.toFixed(0)}s`;
 		if (secs < 5400) return `${(secs / 60).toFixed(1)}m`;
 		return `${(secs / 3600).toFixed(1)}h`;
@@ -492,7 +492,7 @@
 						<a class="text-primary text-xs hover:underline" href="/jobs">view all →</a>
 					</div>
 					<div class="divide-border flex max-h-44 flex-col divide-y overflow-auto">
-						{#each ray.jobs.jobs.slice(0, 10) as j (j.submission_id)}
+						{#each ray.jobs.jobs.slice(0, 10) as j (j.submission_id ?? j.job_id)}
 							<div class="flex items-center gap-3 px-4 py-1.5 text-xs">
 								<Badge
 									variant={jobBadgeVariant(j.status)}
@@ -500,7 +500,7 @@
 								>
 									{j.status}
 								</Badge>
-								<span class="text-foreground font-mono">{j.submission_id.slice(0, 24)}</span>
+								<span class="text-foreground font-mono">{(j.submission_id ?? '—').slice(0, 24)}</span>
 								<span class="text-muted-foreground">{fmtRuntime(j.start_time, j.end_time)}</span>
 								{#if j.batches.length}
 									<span class="text-muted-foreground truncate">
