@@ -20,6 +20,11 @@ from viewer.core.exceptions import register_handlers
 from viewer.core.lifespan import make_lifespan
 
 
+_DEFAULT_HOST = "0.0.0.0"
+_DEFAULT_PORT = 8888
+_DEFAULT_OPENAPI_URL = "/api/openapi.json"
+
+
 def create_app() -> FastAPI:
     derive_hcp_creds()
     settings = Settings()  # type: ignore[call-arg]  # values loaded from env at runtime
@@ -30,7 +35,7 @@ def create_app() -> FastAPI:
         lifespan=make_lifespan(settings),
         docs_url="/api/docs",
         redoc_url="/api/redoc",
-        openapi_url="/api/openapi.json",
+        openapi_url=_DEFAULT_OPENAPI_URL,
     )
     register_handlers(app)
 
@@ -52,8 +57,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="viewer FastAPI server")
     parser.add_argument("--input", "-i", help="Input source URI (s3://bucket or filesystem path)")
     parser.add_argument("--output", "-o", help="Output source URI (s3://bucket or filesystem path)")
-    parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", "-p", type=int, default=8888)
+    parser.add_argument("--host", default=_DEFAULT_HOST)
+    parser.add_argument("--port", "-p", type=int, default=_DEFAULT_PORT)
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload (dev)")
     args = parser.parse_args()
 

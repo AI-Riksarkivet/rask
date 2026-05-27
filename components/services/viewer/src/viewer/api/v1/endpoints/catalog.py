@@ -4,7 +4,7 @@ from fastapi import APIRouter, Query
 
 from viewer.api.dependencies import CatalogTblDep, SessionDep
 from viewer.core.exceptions import NotFoundError
-from viewer.models.batch import BrowseTier
+from viewer.models.enums import BrowseTier
 from viewer.schemas.catalog import CatalogBrowseResponse, CatalogHit, CatalogSearchResponse, CatalogStats
 from viewer.services import catalog as catalog_service
 

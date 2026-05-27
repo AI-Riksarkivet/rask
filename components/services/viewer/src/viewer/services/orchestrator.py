@@ -29,7 +29,7 @@ _MS_PER_SECOND = 1000.0
 _ACTIVE_STATUSES: frozenset[JobStatus] = frozenset({JobStatus.RUNNING, JobStatus.PENDING})
 
 
-class _TaskState(StrEnum):
+class TaskState(StrEnum):
     """Ray Data task-scheduler state keys from /api/v0/tasks/summarize.
 
     Not a Ray public enum — these are external API keys. The viewer collapses
@@ -45,15 +45,32 @@ class _TaskState(StrEnum):
     WAITING = "WAITING"
     PENDING = "PENDING"
 
-HTR_STAGES: tuple[str, ...] = (
-    "PageLoaderActor",
-    "LayoutActor",
-    "LineActor",
-    "TranscribeViaServe",
-    "AltoExportActor",
-    "AltoWriterActor",
+class RayStage(StrEnum):
+    """Ray actor names matching the pipeline stages in `components/apps/runner/src/runner/pipeline.py`.
+
+    Used to query `/api/v0/tasks/summarize` (the stage name appears inside
+    `MapWorker(MapBatches(<stage>)).submit`) — string-equality with Ray's task
+    naming is the contract.
+    """
+
+    PAGE_LOADER = "PageLoaderActor"
+    LAYOUT = "LayoutActor"
+    LINE = "LineActor"
+    TRANSCRIBE = "TranscribeViaServe"
+    ALTO_EXPORT = "AltoExportActor"
+    ALTO_WRITER = "AltoWriterActor"
+    PREFETCH = "PrefetchActor"
+
+
+HTR_STAGES: tuple[RayStage, ...] = (
+    RayStage.PAGE_LOADER,
+    RayStage.LAYOUT,
+    RayStage.LINE,
+    RayStage.TRANSCRIBE,
+    RayStage.ALTO_EXPORT,
+    RayStage.ALTO_WRITER,
 )
-PREFETCH_STAGES: tuple[str, ...] = ("PrefetchActor",)
+PREFETCH_STAGES: tuple[RayStage, ...] = (RayStage.PREFETCH,)
 
 
 def _ms_to_sec(v: int | None) -> float | None:
@@ -83,7 +100,7 @@ async def _task_summary_for_job(
     http: httpx.AsyncClient,
     dashboard_url: str,
     driver_job_id: str,
-    stage_names: tuple[str, ...],
+    stage_names: tuple[RayStage, ...],
 ) -> list[StageStat]:
     try:
         r = await http.get(
@@ -99,11 +116,11 @@ async def _task_summary_for_job(
     for stage in stage_names:
         info = summary.get(f"MapWorker(MapBatches({stage})).submit") or {}
         sc = info.get("state_counts") or {}
-        finished = int(sc.get(_TaskState.FINISHED, 0))
-        running = int(sc.get(_TaskState.RUNNING, 0))
-        scheduled = int(sc.get(_TaskState.SCHEDULED, 0))
-        failed = int(sc.get(_TaskState.FAILED, 0))
-        pending = sum(int(v) for k, v in sc.items() if k.startswith(_TaskState.PENDING) or k == _TaskState.WAITING)
+        finished = int(sc.get(TaskState.FINISHED, 0))
+        running = int(sc.get(TaskState.RUNNING, 0))
+        scheduled = int(sc.get(TaskState.SCHEDULED, 0))
+        failed = int(sc.get(TaskState.FAILED, 0))
+        pending = sum(int(v) for k, v in sc.items() if k.startswith(TaskState.PENDING) or k == TaskState.WAITING)
         total = sum(int(v) for v in sc.values())
         out.append(
             StageStat(
@@ -208,7 +225,7 @@ async def _build_slot(
     running: RayJob | None,
     next_chunk: int | None,
     queue_len: int,
-    stages: tuple[str, ...],
+    stages: tuple[RayStage, ...],
 ) -> SlotState:
     stage_stats: list[StageStat] = []
     if running:

@@ -7,7 +7,8 @@ non-DB work here is the subprocess-driven sync (see `services/submission.py`).
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from viewer.core.exceptions import NotFoundError
-from viewer.models.batch import BatchPublic, HtrStatus
+from viewer.models.batch import BatchPublic
+from viewer.models.enums import HtrStatus
 from viewer.repositories import batch as batch_repo
 from viewer.schemas.batch import (
     BatchAccessibleSummary,

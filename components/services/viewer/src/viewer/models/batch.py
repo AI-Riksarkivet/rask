@@ -1,4 +1,7 @@
-"""SQLModel trinity for the batches table + domain enums.
+"""SQLModel trinity for the batches table.
+
+Domain enums (HtrStatus, ManifestStatus, BrowseTier, Pipeline, …) live in
+`models.enums` so every StrEnum has one import surface.
 
   - `BatchBase`   — shared field definitions (single source of truth).
   - `Batch`       — DB row (`table=True`); the only thing repositories touch.
@@ -8,44 +11,9 @@ Schema mirrors what `scripts/build_batches_db.py` creates; viewer reads, the
 script seeds. Once the heavy refactor merges, both come from one place.
 """
 
-from enum import StrEnum
-
 from sqlmodel import Field, SQLModel
 
-
-class HtrStatus(StrEnum):
-    PENDING = "pending"
-    CACHED = "cached"
-    PARTIAL = "partial"
-    DONE = "done"
-    VERIFICATION_FAILED = "verification_failed"
-
-
-class ManifestStatus(StrEnum):
-    OK = "ok"
-    HTTP_403 = "http_403"
-    HTTP_400 = "http_400"
-    ERROR = "error"
-    PENDING = "pending"
-
-
-class BrowseTier(StrEnum):
-    LISTED = "listed"
-    CACHED = "cached"
-    TRANSCRIBED = "transcribed"
-
-
-class Pipeline(StrEnum):
-    """The two Ray Data pipelines viewer tracks. Submission IDs are namespaced
-    with `<pipeline>-chunk-<id>-of-<total>` so the prefix identifies which
-    pipeline a running job belongs to."""
-
-    PREFETCH = "prefetch"
-    HTR = "htr"
-
-    @property
-    def submission_id_prefix(self) -> str:
-        return f"{self.value}-"
+from viewer.models.enums import HtrStatus, ManifestStatus
 
 
 class BatchBase(SQLModel):

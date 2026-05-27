@@ -27,6 +27,25 @@ log = logging.getLogger(__name__)
 
 _BATCH_RE = re.compile(r"--batch[\s=]+(\S+)")
 _ERROR_MSG_MAX_LEN = 400  # truncate exception strings so they fit in one log/UI line
+
+# Ray Dashboard JSON keys we read from /api/version, /api/cluster_status, and /nodes
+# responses. Grouped here so a Ray-side rename is a one-spot edit.
+_RAY_KEY_VERSION = "ray_version"
+_RAY_KEY_DATA = "data"
+_RAY_KEY_CLUSTER_STATUS = "clusterStatus"
+_RAY_KEY_LOAD_METRICS = "loadMetricsReport"
+_RAY_KEY_USAGE = "usage"
+_RAY_KEY_SUMMARY = "summary"
+_RAY_KEY_NODE_LOGICAL_RESOURCES = "nodeLogicalResources"
+_RAY_KEY_RAYLET = "raylet"
+_RAY_KEY_NODE_ID = "nodeId"
+_RAY_KEY_RESOURCES_TOTAL = "resourcesTotal"
+_RAY_KEY_NODE_MANAGER_ADDRESS = "nodeManagerAddress"
+_RAY_KEY_IP = "ip"
+_RAY_KEY_RAYLET_STATE = "state"
+_RAY_KEY_JOBS = "jobs"
+_RAYLET_STATE_ALIVE = "ALIVE"
+_NODES_VIEW_PARAM = "view=summary"
 _HOP_BY_HOP = {
     "connection",
     "keep-alive",
@@ -136,8 +155,8 @@ async def cluster_status(http: httpx.AsyncClient, dashboard_url: str) -> RayClus
     try:
         cs_resp = await http.get(f"{dashboard_url}/api/cluster_status")
         cs_resp.raise_for_status()
-        cs = (cs_resp.json().get("data") or {}).get("clusterStatus", {})
-        usage = (cs.get("loadMetricsReport") or {}).get("usage") or {}
+        cs = (cs_resp.json().get(_RAY_KEY_DATA) or {}).get(_RAY_KEY_CLUSTER_STATUS, {})
+        usage = (cs.get(_RAY_KEY_LOAD_METRICS) or {}).get(_RAY_KEY_USAGE) or {}
         for k in total:
             pair = usage.get(k)
             if isinstance(pair, list) and len(pair) == 2:
@@ -145,23 +164,23 @@ async def cluster_status(http: httpx.AsyncClient, dashboard_url: str) -> RayClus
                 total[k] = float(pair[1] or 0)
 
         try:
-            ns_resp = await http.get(f"{dashboard_url}/nodes?view=summary")
+            ns_resp = await http.get(f"{dashboard_url}/nodes?{_NODES_VIEW_PARAM}")
             ns_resp.raise_for_status()
-            data = ns_resp.json().get("data") or {}
-            summary = data.get("summary") or []
-            logical = data.get("nodeLogicalResources") or {}
+            data = ns_resp.json().get(_RAY_KEY_DATA) or {}
+            summary = data.get(_RAY_KEY_SUMMARY) or []
+            logical = data.get(_RAY_KEY_NODE_LOGICAL_RESOURCES) or {}
             for n in summary:
-                raylet = n.get("raylet") or {}
-                node_id = raylet.get("nodeId")
+                raylet = n.get(_RAY_KEY_RAYLET) or {}
+                node_id = raylet.get(_RAY_KEY_NODE_ID)
                 if not node_id:
                     continue
                 parsed_used = _parse_logical(logical.get(node_id, ""))
-                rtotal = raylet.get("resourcesTotal") or {}
+                rtotal = raylet.get(_RAY_KEY_RESOURCES_TOTAL) or {}
                 nodes.append(
                     RayNode(
                         node_id=node_id,
-                        node_ip=raylet.get("nodeManagerAddress") or n.get("ip"),
-                        alive=raylet.get("state") == "ALIVE",
+                        node_ip=raylet.get(_RAY_KEY_NODE_MANAGER_ADDRESS) or n.get(_RAY_KEY_IP),
+                        alive=raylet.get(_RAY_KEY_RAYLET_STATE) == _RAYLET_STATE_ALIVE,
                         resources_total={k: float(rtotal.get(k, 0) or 0) for k in total},
                         resources_used={k: parsed_used.get(k, 0.0) for k in total},
                     )

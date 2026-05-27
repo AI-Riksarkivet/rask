@@ -21,6 +21,7 @@ log = logging.getLogger(__name__)
 
 _FTS_COLUMN = "text"
 _THUMB_KEY_PREFIX = "thumbs/"
+_LANCE_QUERY_TYPE_FTS = "fts"
 
 _LINE_COLS = [
     "batch_id",
@@ -42,7 +43,7 @@ _LINE_COLS = [
 async def search_lines(tbl: AsyncTable | None, query: str, limit: int) -> SearchResponse:
     if tbl is None:
         return SearchResponse(ok=True, query=query, count=0, hits=[])
-    fts = await tbl.search(query, query_type="fts", fts_columns=_FTS_COLUMN)
+    fts = await tbl.search(query, query_type=_LANCE_QUERY_TYPE_FTS, fts_columns=_FTS_COLUMN)
     rows = await fts.select(_LINE_COLS).limit(limit).to_list()
     hits: list[SearchHit] = []
     for row in rows:

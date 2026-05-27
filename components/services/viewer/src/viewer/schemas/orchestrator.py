@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-from viewer.models.batch import Pipeline
+from viewer.models.enums import Pipeline
 
 
 class StageStat(BaseModel):

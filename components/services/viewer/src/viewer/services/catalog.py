@@ -12,7 +12,7 @@ from lancedb.table import AsyncTable
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from viewer.core.exceptions import ValidationError
-from viewer.models.batch import BrowseTier
+from viewer.models.enums import BrowseTier
 from viewer.repositories import batch as batch_repo
 from viewer.schemas.catalog import (
     CatalogBrowseResponse,
@@ -30,6 +30,7 @@ log = logging.getLogger(__name__)
 # filter language has no parameterized form to fall back on.
 _BILD_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _FTS_COLUMN = "search_text"
+_LANCE_QUERY_TYPE_FTS = "fts"
 
 
 def _validate_bild_ids(bild_ids: list[str]) -> None:
@@ -67,7 +68,7 @@ async def search_catalog(
 ) -> CatalogSearchResponse:
     if tbl is None:
         return CatalogSearchResponse(ok=True, query=query, count=0, hits=[])
-    fts = await tbl.search(query, query_type="fts", fts_columns=_FTS_COLUMN)
+    fts = await tbl.search(query, query_type=_LANCE_QUERY_TYPE_FTS, fts_columns=_FTS_COLUMN)
     rows = await fts.select(_COLS).limit(limit).to_list()
     bild_ids = [r["bild_id"] for r in rows if r.get("bild_id")]
     listed, cached, transcribed = await local_batch_status(session, bild_ids)

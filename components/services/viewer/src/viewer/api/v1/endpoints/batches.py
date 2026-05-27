@@ -1,7 +1,8 @@
 from fastapi import APIRouter
 
 from viewer.api.dependencies import SessionDep, SettingsDep
-from viewer.models.batch import BatchPublic, HtrStatus
+from viewer.models.batch import BatchPublic
+from viewer.models.enums import HtrStatus
 from viewer.schemas.batch import BatchListResponse, RandomBatchResponse, SyncResponse
 from viewer.services import batches as batches_service
 from viewer.services import submission

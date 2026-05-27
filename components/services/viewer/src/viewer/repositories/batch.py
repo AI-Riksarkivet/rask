@@ -9,7 +9,8 @@ from sqlalchemy import case, func
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from viewer.models.batch import Batch, BrowseTier, HtrStatus, ManifestStatus
+from viewer.models.batch import Batch
+from viewer.models.enums import BrowseTier, HtrStatus, ManifestStatus
 
 
 async def list_all(session: AsyncSession) -> list[Batch]:
