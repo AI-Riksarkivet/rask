@@ -29,12 +29,13 @@ Always also load `references/principles.md` — applies to every dockerfile.
 2. **Single `.dockerignore`** at repo root. No per-image ignore files. Install: `cp .claude/skills/dockerfile/templates/dockerignore .dockerignore`.
 3. **Multi-stage.** Final stage = minimum runtime surface, non-root UID ≥ 10000, created with `useradd -r --no-create-home --shell /usr/sbin/nologin`.
 4. **Digest-pinned `FROM`.** Every base image referenced by `@sha256:<digest>`, not a floating tag. Bump workflow in `references/principles.md`.
-5. **BuildKit cache mounts.** `--mount=type=cache,target=/root/.cache/uv` and `target=/root/.bun/install/cache`. Caches never ship in image layers.
+5. **BuildKit cache mounts.** `--mount=type=cache,target=/root/.cache/uv` (uv) and `--mount=type=cache,target=/root/.bun/install/cache` (bun). Caches never ship in image layers.
 6. **PID 1.** `tini --` as ENTRYPOINT for Python processes. `nginx-unprivileged` already has its own init.
-7. **OCI labels.** Declare `ARG BUILD_DATE`, `ARG VCS_REF`, `ARG VERSION` and emit `org.opencontainers.image.{created,revision,version,source,title,description}` labels.
+7. **OCI labels.** Declare `ARG BUILD_DATE/VCS_REF/VERSION` and emit `org.opencontainers.image.*` labels (full set in `references/principles.md`).
 8. **Read-only-rootfs ready.** Final image runs cleanly under `--read-only --tmpfs /tmp`. Writable paths are `/tmp` or explicit volumes.
 9. **Secrets via `--mount=type=secret`, never `ARG`.** With `--provenance=mode=max` (SLSA), ARG values become public in the attestation.
 10. **No build leakage.** Final image must not contain build toolchain (gcc, make), package managers (apt, the `uv` binary), `.git`, tests, or dev-dependencies.
+11. **First line is `# syntax=docker/dockerfile:1.11`** — pins the BuildKit frontend version. Required for the cache/bind/secret mount syntax used elsewhere in these rules.
 
 ## When to load each reference
 
@@ -45,8 +46,7 @@ Always also load `references/principles.md` — applies to every dockerfile.
 
 ## After authoring
 
-1. Pin the syntax frontend: first line is `# syntax=docker/dockerfile:1.11`.
-2. Run `docker buildx build --check -f .docker/<name>.dockerfile .` — catches `SecretsUsedInArgOrEnv`, missing stage-description comments.
-3. Run `hadolint --config .hadolint.yaml .docker/<name>.dockerfile`. CI gates on this.
-4. Build twice: `docker buildx build -f .docker/<name>.dockerfile --build-arg BUILD_DATE=$(date -u +%FT%TZ) --build-arg VCS_REF=$(git rev-parse HEAD) --build-arg VERSION=$(git describe --always) -t <name>:dev .`. The second build should be dominated by `CACHED` layers — that confirms the cache mount + bind mount + COPY-order discipline are correct.
-5. When bumping a base image: `docker buildx imagetools inspect <ref>` → record digest. **Refuse digests older than ~90 days** unless explicitly approved; scan with Trivy/Grype/Docker Scout (CVE-2024-3094 was still found in pinned images in mid-2025).
+1. Run `docker buildx build --check -f .docker/<name>.dockerfile .` — catches `SecretsUsedInArgOrEnv`, missing stage-description comments.
+2. Run `hadolint --config .hadolint.yaml .docker/<name>.dockerfile`. CI gates on this.
+3. Build twice: `docker buildx build -f .docker/<name>.dockerfile --build-arg BUILD_DATE=$(date -u +%FT%TZ) --build-arg VCS_REF=$(git rev-parse HEAD) --build-arg VERSION=$(git describe --always) -t <name>:dev .`. The second build should be dominated by `CACHED` layers — that confirms the cache mount + bind mount + COPY-order discipline are correct.
+4. When bumping a base image: `docker buildx imagetools inspect <ref>` → record digest. **Refuse digests older than ~90 days** (see bump workflow in `references/principles.md`); scan with Trivy/Grype/Docker Scout (CVE-2024-3094 was still found in pinned images in mid-2025).
