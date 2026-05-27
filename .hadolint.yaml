@@ -1,0 +1,19 @@
+# rask .hadolint.yaml
+# Install: cp .claude/skills/dockerfile/templates/hadolint.yaml .hadolint.yaml
+# Hadolint config — paired with the dockerfile skill at .claude/skills/dockerfile/.
+
+ignored: []
+
+trustedRegistries:
+  - nvidia/cuda
+  - nginxinc/nginx-unprivileged
+  - ghcr.io
+  - docker.io
+
+failure-threshold: warning
+
+# Override-comment workflow: when a rule MUST be ignored, use:
+#   # hadolint ignore=DLxxxx
+#   # Reason: <why this case is justified>
+#   RUN ...
+# Reviewers gate merges on the reason being plausible.
