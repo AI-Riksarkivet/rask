@@ -34,14 +34,14 @@ Three environment variables should be set in the builder stage of every Python d
 ```dockerfile
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
-    UV_PYTHON_DOWNLOADS=0
+    UV_PYTHON_DOWNLOADS=never
 ```
 
 `UV_LINK_MODE=copy` is required when using `--mount=type=cache`. The uv cache and the venv target live on different mount points inside the build container; uv defaults to hard-linking wheel files from the cache into the venv, but hard links cannot cross mount-point boundaries. Without `copy` mode, uv silently falls back to a slower copy anyway — setting it explicitly avoids the warning and makes the intent clear.
 
 `UV_COMPILE_BYTECODE=1` pre-compiles all installed `.py` files to `.pyc` at install time. This shifts the bytecode compilation cost from the first container cold start to build time. For images that start frequently (autoscaling, spot teardown) this is a meaningful latency improvement.
 
-`UV_PYTHON_DOWNLOADS` must be set per base image. For `python:3.13-slim`-based images, Python is already provided by the base image — set `UV_PYTHON_DOWNLOADS=0` to prevent uv from attempting to download a managed Python distribution. For CUDA-based images (e.g. `nvidia/cuda:12.x-runtime-ubuntu22.04`) where Python is not pre-installed, set `UV_PYTHON_DOWNLOADS=1` or `UV_PYTHON_DOWNLOADS=only-managed` to allow uv to install its own Python.
+`UV_PYTHON_DOWNLOADS` controls whether uv may auto-download a managed Python distribution. The supported values (as of uv 0.5) are `auto`/`true`, `manual`, and `never`/`false` — `only-managed` is NOT a valid value for this variable (it belongs to `UV_PYTHON_PREFERENCE`). For `python:3.13-slim`-based images, Python is already provided by the base image — set `UV_PYTHON_DOWNLOADS=never` so uv never tries to fetch its own. For CUDA-based images (e.g. `nvidia/cuda:12.x-runtime-ubuntu22.04`) where Python is not pre-installed, leave it at `auto` (or set explicitly) and pair with `UV_PYTHON_PREFERENCE=only-managed` so uv installs its own Python and never falls back to a system one.
 
 ## `UV_PROJECT_ENVIRONMENT=/opt/venv`
 

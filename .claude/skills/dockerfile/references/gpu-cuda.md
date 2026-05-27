@@ -25,10 +25,12 @@ manage a hermetic Python:
 ```dockerfile
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python \
     UV_PYTHON_PREFERENCE=only-managed \
-    UV_PYTHON_DOWNLOADS=only-managed
+    UV_PYTHON_DOWNLOADS=auto
 COPY --from=ghcr.io/astral-sh/uv:0.5@sha256:<DIGEST> /uv /usr/local/bin/uv
 RUN uv python install 3.13
 ```
+
+`UV_PYTHON_DOWNLOADS=auto` is the variable that gates network access for managed-Python downloads (valid values: `auto`/`true`, `manual`, `never`/`false`). `UV_PYTHON_PREFERENCE=only-managed` is the variable that controls system-vs-managed selection. These are distinct settings — `only-managed` is NOT a valid value for `UV_PYTHON_DOWNLOADS`.
 
 The `COPY --from=ghcr.io/astral-sh/uv:0.5@sha256:<DIGEST>` pattern keeps uv digest-pinned (per the principles.md "digest-pinned FROM" rule) and avoids needing pip in the CUDA base. The viewer template uses the same pattern — see `templates/runner.dockerfile`.
 

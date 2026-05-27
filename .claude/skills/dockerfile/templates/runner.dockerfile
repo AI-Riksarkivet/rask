@@ -30,10 +30,13 @@ ENV UV_LINK_MODE=copy \
 COPY --from=ghcr.io/astral-sh/uv:0.5@sha256:7bff3c3776ec467fc1437960f2c469d8beb30f536a6465a3350c647ccd260ec2 /uv /usr/local/bin/uv
 
 # git is for htrflow (git-source dep), kept in builder ONLY.
+# Reason: nvidia/cuda apt indexes ship rolling minor-versions; pinning every transitive
+# dep would force constant base-image bumps. The digest pin on the base + nvidia's signed
+# repo metadata bound the supply-chain risk.
 # hadolint ignore=DL3008
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates git tini libgomp1 \
+      ca-certificates git libgomp1 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -76,6 +79,8 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.description="rask runner — Ray Data HTR pipelines"
 
 ENV DEBIAN_FRONTEND=noninteractive
+# Reason: see builder stage. The digest pin on the CUDA base is the supply-chain anchor;
+# apt version-pinning these transitives would require chasing rolling updates.
 # hadolint ignore=DL3008
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
