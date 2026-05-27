@@ -6,6 +6,7 @@ same decisions the cron-driven tick would make. Pure derivation; no writes.
 
 import re
 import time
+from enum import StrEnum
 
 import anyio
 import httpx
@@ -27,16 +28,22 @@ _MS_PER_SECOND = 1000.0
 
 _ACTIVE_STATUSES: frozenset[JobStatus] = frozenset({JobStatus.RUNNING, JobStatus.PENDING})
 
-# Ray Data task-scheduler states as they appear in /api/v0/tasks/summarize
-# `state_counts`. Not part of any Ray public enum — these are external API
-# keys we collapse into the UI's four buckets (finished/running/scheduled/
-# pending/failed).
-_TASK_STATE_FINISHED = "FINISHED"
-_TASK_STATE_RUNNING = "RUNNING"
-_TASK_STATE_SCHEDULED = "SUBMITTED_TO_WORKER"
-_TASK_STATE_FAILED = "FAILED"
-_TASK_STATE_WAITING = "WAITING"
-_TASK_STATE_PENDING_PREFIX = "PENDING"
+
+class _TaskState(StrEnum):
+    """Ray Data task-scheduler state keys from /api/v0/tasks/summarize.
+
+    Not a Ray public enum — these are external API keys. The viewer collapses
+    them into four UI buckets (finished/running/scheduled/pending/failed).
+    `PENDING` is the **prefix** for several substates (PENDING_NODE_ASSIGNMENT,
+    PENDING_ARGS_AVAIL, …), used with `str.startswith()` rather than equality.
+    """
+
+    FINISHED = "FINISHED"
+    RUNNING = "RUNNING"
+    SCHEDULED = "SUBMITTED_TO_WORKER"
+    FAILED = "FAILED"
+    WAITING = "WAITING"
+    PENDING = "PENDING"
 
 HTR_STAGES: tuple[str, ...] = (
     "PageLoaderActor",
@@ -92,11 +99,11 @@ async def _task_summary_for_job(
     for stage in stage_names:
         info = summary.get(f"MapWorker(MapBatches({stage})).submit") or {}
         sc = info.get("state_counts") or {}
-        finished = int(sc.get(_TASK_STATE_FINISHED, 0))
-        running = int(sc.get(_TASK_STATE_RUNNING, 0))
-        scheduled = int(sc.get(_TASK_STATE_SCHEDULED, 0))
-        failed = int(sc.get(_TASK_STATE_FAILED, 0))
-        pending = sum(int(v) for k, v in sc.items() if k.startswith(_TASK_STATE_PENDING_PREFIX) or k == _TASK_STATE_WAITING)
+        finished = int(sc.get(_TaskState.FINISHED, 0))
+        running = int(sc.get(_TaskState.RUNNING, 0))
+        scheduled = int(sc.get(_TaskState.SCHEDULED, 0))
+        failed = int(sc.get(_TaskState.FAILED, 0))
+        pending = sum(int(v) for k, v in sc.items() if k.startswith(_TaskState.PENDING) or k == _TaskState.WAITING)
         total = sum(int(v) for v in sc.values())
         out.append(
             StageStat(
