@@ -3,16 +3,15 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 
 from viewer.api.dependencies import CatalogTblDep, SessionDep
-from viewer.core.exceptions import NotFoundError
 from viewer.models.enums import BrowseTier
-from viewer.schemas.catalog import CatalogBrowseResponse, CatalogHit, CatalogSearchResponse, CatalogStats
+from viewer.schemas.catalog import CatalogBrowseResponse, CatalogSearchResponse, CatalogStats
 from viewer.services import catalog as catalog_service
 
 
-router = APIRouter(tags=["catalog"])
+router = APIRouter(prefix="/catalog", tags=["catalog"])
 
 
-@router.get("/api/catalog/search")
+@router.get("/search")
 async def catalog_search(
     tbl: CatalogTblDep,
     session: SessionDep,
@@ -22,20 +21,12 @@ async def catalog_search(
     return await catalog_service.search_catalog(tbl, session, q, limit)
 
 
-@router.get("/api/catalog/search/stats")
+@router.get("/search/stats")
 async def catalog_stats(tbl: CatalogTblDep) -> CatalogStats:
     return await catalog_service.catalog_stats(tbl)
 
 
-@router.get("/api/batches/{batch_id}/catalog")
-async def catalog_for_batch(batch_id: str, tbl: CatalogTblDep) -> CatalogHit:
-    hit = await catalog_service.by_bild_id(tbl, batch_id)
-    if hit is None:
-        raise NotFoundError(f"no catalog entry for {batch_id}")
-    return hit
-
-
-@router.get("/api/catalog/browse")
+@router.get("/browse")
 async def catalog_browse(
     tbl: CatalogTblDep,
     session: SessionDep,

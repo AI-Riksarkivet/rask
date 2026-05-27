@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     viewer_input: str = Field(alias="RASK_VIEWER_INPUT")
     viewer_output: str = Field(alias="RASK_VIEWER_OUTPUT")
 
+    api_prefix: str = Field(default="/api/v1", alias="RASK_API_PREFIX")
+
     hcp_endpoint: str | None = Field(default=None, alias="HCP_ENDPOINT")
     aws_access_key_id: str | None = Field(default=None, alias="AWS_ACCESS_KEY_ID")
     aws_secret_access_key: str | None = Field(default=None, alias="AWS_SECRET_ACCESS_KEY")
