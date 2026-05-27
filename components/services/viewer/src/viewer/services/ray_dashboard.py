@@ -94,10 +94,12 @@ async def health(client: JobSubmissionClient | None, dashboard_url: str) -> RayH
     if client is None:
         return RayHealth(ok=False, dashboard_url=dashboard_url, error="Ray dashboard unreachable")
     try:
-        info = await anyio.to_thread.run_sync(client.get_version)
+        await anyio.to_thread.run_sync(client.get_version)
     except Exception as exc:
         return RayHealth(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
-    return RayHealth(ok=True, dashboard_url=dashboard_url, ray_version=info if isinstance(info, str) else info.get("ray_version"))
+    import ray as _ray
+
+    return RayHealth(ok=True, dashboard_url=dashboard_url, ray_version=_ray.__version__)
 
 
 async def list_jobs(client: JobSubmissionClient | None, dashboard_url: str) -> RayJobsPayload:
@@ -109,11 +111,11 @@ async def list_jobs(client: JobSubmissionClient | None, dashboard_url: str) -> R
         return RayJobsPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
     jobs: list[RayJob] = []
     for d in details:
-        ray_job = RayJob.model_validate(d.model_dump())
-        ray_job.batches = _parse_batches(d.entrypoint)
-        ray_job.logs_url = f"{dashboard_url}/#/jobs/{d.submission_id}" if d.submission_id else None
-        jobs.append(ray_job)
-    jobs.sort(key=lambda j: j.start_time or 0, reverse=True)
+        payload = d.dict()
+        payload["batches"] = _parse_batches(d.entrypoint)
+        payload["logs_url"] = f"{dashboard_url}/#/jobs/{d.submission_id}" if d.submission_id else None
+        jobs.append(RayJob.model_validate(payload))
+    jobs.sort(key=lambda j: getattr(j, "start_time", None) or 0, reverse=True)
     return RayJobsPayload(ok=True, dashboard_url=dashboard_url, jobs=jobs)
 
 
@@ -125,7 +127,7 @@ async def get_job_info(client: JobSubmissionClient | None, submission_id: str) -
         details = await anyio.to_thread.run_sync(client.get_job_info, submission_id)
     except Exception:
         return None
-    return RayJob.model_validate(details.model_dump())
+    return RayJob.model_validate(details.dict())
 
 
 def _parse_res_value(s: str) -> float:

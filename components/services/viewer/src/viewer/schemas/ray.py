@@ -1,15 +1,13 @@
 """Schemas for `/api/ray/*` responses.
 
-We import Ray's own Pydantic types where they exist (`JobDetails`, `JobStatus`,
-`JobType`, `DriverInfo`) so the API contract follows upstream. `RayJob` is a
-thin subclass of `JobDetails` that adds viewer-specific augmentations:
-
-  - `batches` — list parsed from the entrypoint's `--batch <id>` args.
-  - `logs_url` — dashboard deep-link to the job's logs page.
+`RayJob` mirrors Ray's `JobDetails` payload (transported as a dict) plus two
+viewer-specific augmentations — `batches` and `logs_url`. We can't subclass
+`JobDetails` directly because Ray ships it as a Pydantic V1 model, and the
+rest of the viewer's schemas are V2; mixing V1 models inside V2 containers
+breaks validation. `extra='allow'` keeps every upstream field accessible.
 """
 
-from pydantic import BaseModel, Field
-from ray.dashboard.modules.job.pydantic_models import JobDetails
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RayHealth(BaseModel):
@@ -19,7 +17,8 @@ class RayHealth(BaseModel):
     error: str | None = None
 
 
-class RayJob(JobDetails):
+class RayJob(BaseModel):
+    model_config = ConfigDict(extra="allow")
     batches: list[str] = Field(default_factory=list)
     logs_url: str | None = None
 
