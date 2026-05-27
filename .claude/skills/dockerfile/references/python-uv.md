@@ -15,6 +15,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=projects/viewer/pyproject.toml,target=projects/viewer/pyproject.toml \
     --mount=type=bind,source=packages/htr/pyproject.toml,target=packages/htr/pyproject.toml \
     --mount=type=bind,source=packages/storage/pyproject.toml,target=packages/storage/pyproject.toml \
+    --mount=type=bind,source=components/apps/runner/pyproject.toml,target=components/apps/runner/pyproject.toml \
     --mount=type=bind,source=components/services/viewer/pyproject.toml,target=components/services/viewer/pyproject.toml \
     uv sync --frozen --no-install-workspace --package viewer --no-editable
 
@@ -24,7 +25,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --package viewer --no-editable
 ```
 
-The bind-mount list in step 1 must include every `pyproject.toml` that uv reads during workspace resolution: the root `pyproject.toml`, the `uv.lock`, the project-under-build (`projects/viewer/pyproject.toml`), and every workspace member's `pyproject.toml` (`packages/htr`, `packages/storage`, `components/services/viewer`). Missing any one of these causes uv to fail with a workspace-member-not-found error even in `--frozen` mode.
+The bind-mount list in step 1 must include every `pyproject.toml` that uv reads during workspace resolution: the root `pyproject.toml`, the `uv.lock`, the project-under-build (`projects/viewer/pyproject.toml`), and every workspace member declared in `[tool.uv.workspace] members` regardless of whether the selected `--package` depends on it (currently `packages/htr`, `packages/storage`, `components/apps/runner`, `components/services/viewer`). Missing any one causes uv to fail with a workspace-member-not-found error even in `--frozen` mode.
 
 ## uv environment variables
 
@@ -64,14 +65,13 @@ The two flags are not contradictory. `UV_COMPILE_BYTECODE=1` ensures installed p
 
 Rask's deployable projects live in `projects/<name>/pyproject.toml` and compose workspace members rather than containing code. During the step 1 `uv sync --frozen` call, uv needs to read every `pyproject.toml` in the workspace to construct the dependency graph, but the source files must not be present yet (they would bust the layer cache on every source change).
 
-Bind-mount the following `pyproject.toml` files for the viewer deployable:
+Bind-mount the following `pyproject.toml` files:
 - `pyproject.toml` (root workspace manifest)
 - `uv.lock` (lockfile)
-- `projects/viewer/pyproject.toml` (the deployable being built)
-- `packages/htr/pyproject.toml`, `packages/storage/pyproject.toml` (workspace libraries)
-- `components/services/viewer/pyproject.toml` (the service workspace member)
+- `projects/<name>/pyproject.toml` (the deployable being built)
+- Every member declared in `[tool.uv.workspace] members` — currently `packages/htr/pyproject.toml`, `packages/storage/pyproject.toml`, `components/apps/runner/pyproject.toml`, `components/services/viewer/pyproject.toml`
 
-After the first sync, `COPY` the actual source trees before running `uv sync --locked`. Use `--package viewer` consistently in both sync steps to scope the install to the correct deployable. For the runner deployable, replace `viewer` with `runner` throughout and adjust the bind-mount list to include `components/apps/runner/pyproject.toml`.
+After the first sync, `COPY` only the source trees the deployable actually needs (e.g. `packages/` + the relevant `components/<layer>/<name>/`) before running `uv sync --locked`. Use `--package <name>` consistently in both sync steps to scope the install to the correct deployable. Switching deployables (viewer ↔ runner) is a one-flag change; the workspace-wide bind-mount list does not need to change unless `[tool.uv.workspace] members` itself changes.
 
 ## arm64 cache-mount is load-bearing
 
