@@ -10,6 +10,7 @@ import os
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 
 from storage import derive_hcp_creds
@@ -18,11 +19,18 @@ from viewer.api.v1.router import api_router
 from viewer.core.config import Settings
 from viewer.core.exceptions import register_handlers
 from viewer.core.lifespan import make_lifespan
+from viewer.core.middleware import register_middleware
 
 
 _DEFAULT_HOST = "0.0.0.0"
 _DEFAULT_PORT = 8888
-_DEFAULT_OPENAPI_URL = "/api/openapi.json"
+
+
+def _generate_unique_id(route: APIRoute) -> str:
+    """Build OpenAPI operation IDs as `<tag>-<name>` so generated TS clients read cleanly."""
+    if route.tags:
+        return f"{route.tags[0]}-{route.name}"
+    return route.name
 
 
 def create_app() -> FastAPI:
@@ -33,13 +41,15 @@ def create_app() -> FastAPI:
         title="viewer",
         version="0.1.0",
         lifespan=make_lifespan(settings),
-        docs_url="/api/docs",
-        redoc_url="/api/redoc",
-        openapi_url=_DEFAULT_OPENAPI_URL,
+        docs_url=f"{settings.api_prefix}/docs",
+        redoc_url=f"{settings.api_prefix}/redoc",
+        openapi_url=f"{settings.api_prefix}/openapi.json",
+        generate_unique_id_function=_generate_unique_id,
     )
     register_handlers(app)
+    register_middleware(app, settings)
 
-    app.include_router(api_router)
+    app.include_router(api_router, prefix=settings.api_prefix)
     app.include_router(ray.proxy_router)
 
     if settings.resolved_spa_build.is_dir():

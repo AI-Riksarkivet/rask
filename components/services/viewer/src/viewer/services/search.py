@@ -5,11 +5,12 @@ module is stateless and async-native (LanceDB exposes an async API).
 """
 
 import logging
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from lancedb.table import AsyncTable
 
-from viewer.schemas.search import SearchHit, SearchResponse, SearchStats
+from viewer.schemas.search import LineRow, SearchHit, SearchResponse, SearchStats
 
 
 if TYPE_CHECKING:
@@ -21,30 +22,14 @@ log = logging.getLogger(__name__)
 
 _FTS_COLUMN = "text"
 _THUMB_KEY_PREFIX = "thumbs/"
-_LANCE_QUERY_TYPE_FTS = "fts"
-
-_LINE_COLS = [
-    "batch_id",
-    "page_id",
-    "page_idx",
-    "line_id",
-    "line_idx",
-    "text",
-    "confidence",
-    "hpos",
-    "vpos",
-    "width",
-    "height",
-    "polygon",
-    "thumb_key",
-]
+_LINE_COLS = list(LineRow.model_fields)
 
 
-async def search_lines(tbl: AsyncTable | None, query: str, limit: int) -> SearchResponse:
+async def search_lines(tbl: AsyncTable | None, query: str, limit: int, timeout: timedelta) -> SearchResponse:
     if tbl is None:
         return SearchResponse(ok=True, query=query, count=0, hits=[])
-    fts = await tbl.search(query, query_type=_LANCE_QUERY_TYPE_FTS, fts_columns=_FTS_COLUMN)
-    rows = await fts.select(_LINE_COLS).limit(limit).to_list()
+    fts = tbl.query().nearest_to_text(query, columns=_FTS_COLUMN)
+    rows = await fts.select(_LINE_COLS).limit(limit).to_list(timeout=timeout)
     hits: list[SearchHit] = []
     for row in rows:
         if row.get("thumb_key"):

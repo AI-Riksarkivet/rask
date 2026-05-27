@@ -23,6 +23,6 @@ def test_list_pages_endpoint_returns_empty(monkeypatch, tmp_path):
     from viewer.main import create_app
 
     with TestClient(create_app()) as client:
-        resp = client.get("/api/volumes/VOL/pages")
+        resp = client.get("/api/v1/volumes/VOL/pages")
     assert resp.status_code == 200
     assert resp.json() == []

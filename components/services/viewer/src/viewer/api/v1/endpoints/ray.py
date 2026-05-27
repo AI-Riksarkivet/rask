@@ -1,11 +1,20 @@
 """Ray Dashboard endpoints.
 
-Two surfaces:
-  - Viewer's normalized `/api/ray/*` (health/jobs/cluster) — Pydantic responses
-    backed by `ray.job_submission.JobSubmissionClient` where the SDK models it.
-  - Reverse-proxy paths Ray's bundled JS expects (`/api/v0/*`, `/api/jobs/*`,
-    `/logs/*`, `/ray-dashboard/*`, plus a few exact paths) — pure plumbing,
-    `include_in_schema=False`.
+Two routers:
+
+  - `router` — viewer's normalized `/api/v1/ray/*` (health/jobs/cluster),
+    Pydantic responses. Mounted under the v1 API prefix.
+
+  - `proxy_router` — reverse-proxy paths Ray's bundled JS expects
+    (`/api/v0/*`, `/api/jobs/*`, `/logs/*`, `/ray-dashboard/*`, plus a few
+    exact paths). These are Ray's URLs, not viewer's, so the proxy_router
+    is mounted at the **root** (no `/api/v1/` prefix) and `include_in_schema=False`
+    keeps the proxy off the OpenAPI document.
+
+    The proxy uses `api_route(methods=…)` deliberately — `core-conventions.md`
+    § One HTTP operation per function targets application routes, not
+    transparent reverse proxies. We don't know what method the iframe will
+    issue, so we forward whatever comes in.
 """
 
 from fastapi import APIRouter, Request
@@ -16,23 +25,23 @@ from viewer.schemas.ray import RayClusterPayload, RayHealth, RayJobsPayload
 from viewer.services import ray_dashboard
 
 
-router = APIRouter(tags=["ray"])
+router = APIRouter(prefix="/ray", tags=["ray"])
 proxy_router = APIRouter(include_in_schema=False)
 
 _PROXY_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"]
 
 
-@router.get("/api/ray/health")
+@router.get("/health")
 async def ray_health(client: RayClientDep, settings: SettingsDep) -> RayHealth:
     return await ray_dashboard.health(client, settings.ray_dashboard_url)
 
 
-@router.get("/api/ray/jobs")
+@router.get("/jobs")
 async def ray_jobs(client: RayClientDep, settings: SettingsDep) -> RayJobsPayload:
     return await ray_dashboard.list_jobs(client, settings.ray_dashboard_url)
 
 
-@router.get("/api/ray/cluster")
+@router.get("/cluster")
 async def ray_cluster(http: HttpDep, settings: SettingsDep) -> RayClusterPayload:
     return await ray_dashboard.cluster_status(http, settings.ray_dashboard_url)
 

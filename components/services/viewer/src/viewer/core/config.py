@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     viewer_input: str = Field(alias="RASK_VIEWER_INPUT")
     viewer_output: str = Field(alias="RASK_VIEWER_OUTPUT")
 
+    api_prefix: str = Field(default="/api/v1", alias="RASK_API_PREFIX")
+    cors_origins: list[str] = Field(default_factory=list, alias="RASK_CORS_ORIGINS")
+
     hcp_endpoint: str | None = Field(default=None, alias="HCP_ENDPOINT")
     aws_access_key_id: str | None = Field(default=None, alias="AWS_ACCESS_KEY_ID")
     aws_secret_access_key: str | None = Field(default=None, alias="AWS_SECRET_ACCESS_KEY")
@@ -46,6 +49,7 @@ class Settings(BaseSettings):
     ray_proxy_timeout: float = 15.0
     sync_timeout_seconds: int = 600
     submit_timeout_seconds: int = 120
+    lance_query_timeout_seconds: int = Field(default=30, ge=1, alias="RASK_LANCE_QUERY_TIMEOUT_SECONDS")
 
     @property
     def resolved_batches_db(self) -> Path:

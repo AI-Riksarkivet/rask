@@ -5,10 +5,10 @@ from viewer.schemas.orchestrator import OrchestratorState
 from viewer.services import orchestrator as orchestrator_service
 
 
-router = APIRouter(tags=["orchestrator"])
+router = APIRouter(prefix="/orchestrator", tags=["orchestrator"])
 
 
-@router.get("/api/orchestrator/state")
+@router.get("/state")
 async def orchestrator_state(
     settings: SettingsDep,
     http: HttpDep,

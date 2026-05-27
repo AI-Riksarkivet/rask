@@ -84,6 +84,12 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         finally:
             app.state.shutting_down = True
             await app.state.http.aclose()
+            if app.state.lines_tbl is not None:
+                app.state.lines_tbl.close()
+            if app.state.catalog_tbl is not None:
+                app.state.catalog_tbl.close()
+            if app.state.lance_db is not None:
+                app.state.lance_db.close()
             await app.state.db_engine.dispose()
             log.info("shutdown_complete")
 
