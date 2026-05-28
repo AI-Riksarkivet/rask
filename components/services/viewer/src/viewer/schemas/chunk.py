@@ -1,7 +1,5 @@
 from pydantic import BaseModel
 
-from viewer.services.submission import StopResult, SubmitResult
-
 
 class Chunk(BaseModel):
     chunk_id: int
@@ -17,5 +15,15 @@ class ChunkListResponse(BaseModel):
     chunks: list[Chunk]
 
 
-SubmitChunkResponse = SubmitResult
-StopChunkResponse = StopResult
+class SubmitResult(BaseModel):
+    chunk_id: int
+    chunk_total: int
+    pipeline: str
+    submission_id: str
+    batches: list[str]
+
+
+class StopResult(BaseModel):
+    chunk_id: int
+    stopped_submission_id: str
+    stopped: bool

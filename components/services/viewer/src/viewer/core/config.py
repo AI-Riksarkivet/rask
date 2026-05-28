@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     aws_region: str = Field(default="us-east-1", alias="AWS_REGION")
 
     search_bucket: str = Field(default="images-batch-search", alias="RASK_SEARCH_BUCKET")
+    cache_bucket: str = Field(default="images-batch", alias="RASK_CACHE_BUCKET")
+    output_bucket: str = Field(default="images-batch-alto", alias="RASK_OUTPUT_BUCKET")
+    iiif_url: str = Field(default="https://iiifintern-ai.ra.se", alias="RASK_IIIF_URL")
     lines_table: str = Field(default="lines", alias="RASK_LINES_TABLE")
     catalog_table: str = Field(default="archive_catalog", alias="RASK_CATALOG_TABLE")
     ray_dashboard_url: str = Field(default="http://localhost:8265", alias="RAY_DASHBOARD_URL")

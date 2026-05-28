@@ -45,6 +45,11 @@ async def get_batch_catalog(batch_id: str, tbl: CatalogTblDep, settings: Setting
 async def sync_batches(session: SessionDep, settings: SettingsDep) -> SyncResponse:
     if not settings.hcp_endpoint:
         raise ServiceUnavailableError("HCP_ENDPOINT not configured")
-    await reconcile_from_s3(session, hcp_endpoint=settings.hcp_endpoint)
+    await reconcile_from_s3(
+        session,
+        hcp_endpoint=settings.hcp_endpoint,
+        cache_bucket=settings.cache_bucket,
+        output_bucket=settings.output_bucket,
+    )
     payload = await batches_service.list_batches(session)
     return SyncResponse(**payload.model_dump())

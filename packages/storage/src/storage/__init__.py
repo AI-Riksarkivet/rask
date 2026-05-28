@@ -1,5 +1,6 @@
 """storage — bucket and filesystem helpers (no Ray dependency)."""
 
+from storage.client import S3Client as S3Client
 from storage.client import derive_hcp_creds as derive_hcp_creds
 from storage.client import s3_client as s3_client
 from storage.fs import FSSink as FSSink

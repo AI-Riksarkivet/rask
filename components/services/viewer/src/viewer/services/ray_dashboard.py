@@ -17,6 +17,7 @@ import re
 from http import HTTPStatus
 
 import httpx
+import ray
 from anyio import to_thread
 from ray.job_submission import JobSubmissionClient
 
@@ -86,7 +87,7 @@ def build_client(dashboard_url: str) -> JobSubmissionClient | None:
     try:
         return JobSubmissionClient(address=dashboard_url)
     except Exception as exc:
-        log.info("Ray dashboard unreachable at %s: %s", dashboard_url, exc)
+        log.info(f"Ray dashboard unreachable at {dashboard_url}: {exc}")
         return None
 
 
@@ -97,9 +98,7 @@ async def health(client: JobSubmissionClient | None, dashboard_url: str) -> RayH
         await to_thread.run_sync(client.get_version)
     except Exception as exc:
         return RayHealth(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
-    import ray as _ray
-
-    return RayHealth(ok=True, dashboard_url=dashboard_url, ray_version=_ray.__version__)
+    return RayHealth(ok=True, dashboard_url=dashboard_url, ray_version=ray.__version__)
 
 
 async def list_jobs(client: JobSubmissionClient | None, dashboard_url: str) -> RayJobsPayload:
@@ -127,7 +126,8 @@ async def get_job_info(client: JobSubmissionClient | None, submission_id: str) -
         return None
     try:
         details = await to_thread.run_sync(client.get_job_info, submission_id)
-    except Exception:
+    except Exception as exc:
+        log.warning(f"ray get_job_info failed for {submission_id}: {exc}")
         return None
     if details is None:
         return None

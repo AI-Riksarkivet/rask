@@ -33,3 +33,13 @@ class RandomBatchResponse(BaseModel):
 
 class SyncResponse(BatchListResponse):
     pass
+
+
+class SyncResult(BaseModel):
+    """Returned by `services.sync.reconcile_from_s3` — internal-ish summary
+    of one S3 → DB reconciliation pass."""
+
+    cached_total: int
+    transcribed_total: int
+    rows_updated: int
+    by_status: dict[str, int]

@@ -23,21 +23,17 @@ from fastapi import FastAPI
 from lancedb.db import AsyncConnection
 from lancedb.table import AsyncTable
 
-from storage import s3_client
+from storage import S3Client, s3_client
 from viewer.core.config import Settings
 from viewer.core.db import make_engine, make_sessionmaker
 from viewer.services.orchestrator import run_loop as run_orchestrator_loop
 from viewer.services.ray_dashboard import build_client as build_ray_client
 
 
-if TYPE_CHECKING:
-    from mypy_boto3_s3 import S3Client
-
-
 log = logging.getLogger(__name__)
 
 
-def _build_s3(settings: Settings) -> "S3Client | None":
+def _build_s3(settings: Settings) -> S3Client | None:
     if not settings.hcp_endpoint:
         return None
     return s3_client(endpoint=settings.hcp_endpoint)
@@ -47,7 +43,7 @@ async def _open_lance_table(db: AsyncConnection, name: str) -> AsyncTable | None
     try:
         return await db.open_table(name)
     except (OSError, RuntimeError, ValueError) as exc:
-        log.warning("could not open lancedb table %s: %s", name, exc)
+        log.warning(f"could not open lancedb table {name}: {exc}")
         return None
 
 
@@ -61,7 +57,7 @@ async def _open_lancedb(
     try:
         db = await lancedb.connect_async(settings.lance_db_uri, storage_options=storage_options)
     except (OSError, RuntimeError) as exc:
-        log.warning("could not connect to lancedb at %s: %s", settings.lance_db_uri, exc)
+        log.warning(f"could not connect to lancedb at {settings.lance_db_uri}: {exc}")
         return None, None, None
     lines = await _open_lance_table(db, settings.lines_table)
     catalog = await _open_lance_table(db, settings.catalog_table)

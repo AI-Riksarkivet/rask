@@ -6,6 +6,12 @@ import os
 from typing import Any
 
 
+# Public alias for the boto3 S3 client. boto3 ships no public stubs, so this
+# resolves to `Any` at the type level; callers get a usable name without
+# reaching past storage's boundary into `mypy_boto3_s3`.
+type S3Client = Any
+
+
 def derive_hcp_creds() -> None:
     """If HCP_USERNAME/HCP_PASSWORD are set and AWS_* are not, derive S3 creds.
 

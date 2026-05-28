@@ -8,54 +8,47 @@ Idempotent — safe to call from the lifespan orchestrator loop and from
 POST /batches/sync without coordination.
 """
 
-import logging
 from collections import defaultdict
 from datetime import UTC, datetime
 
 from anyio import to_thread
-from pydantic import BaseModel
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from storage import iter_keys, s3_client
+from storage import S3Client, iter_keys, s3_client
 from viewer.models.batch import Batch
 from viewer.models.enums import HtrStatus
-
-
-log = logging.getLogger(__name__)
-
-
-class SyncResult(BaseModel):
-    cached_total: int
-    transcribed_total: int
-    rows_updated: int
-    by_status: dict[str, int]
+from viewer.schemas.batch import SyncResult
 
 
 def _classify(expected: int | None, cached: int, transcribed: int) -> HtrStatus:
-    if expected is None:
-        if transcribed > 0:
-            return HtrStatus.PARTIAL
-        if cached > 0:
-            return HtrStatus.CACHED
-        return HtrStatus.PENDING
-    if transcribed >= expected:
+    """Bucket a batch by progress.
+
+    Priority order: DONE > PARTIAL (any transcripts) > CACHED (full cache,
+    no transcripts) > PARTIAL (partial cache, no transcripts) > PENDING.
+    When `expected` is unknown, "any cache" counts as full cache.
+    """
+    fully_done = expected is not None and transcribed >= expected
+    has_full_cache = cached > 0 and (expected is None or cached >= expected)
+
+    if fully_done:
         return HtrStatus.DONE
     if transcribed > 0:
         return HtrStatus.PARTIAL
-    if cached >= expected:
+    if has_full_cache:
         return HtrStatus.CACHED
     if cached > 0:
         return HtrStatus.PARTIAL
     return HtrStatus.PENDING
 
 
-def _count_per_batch(client: object, bucket: str, suffix: str) -> dict[str, int]:
+def _count_per_batch(client: S3Client, bucket: str, suffix: str) -> dict[str, int]:
     counts: dict[str, int] = defaultdict(int)
     for key in iter_keys(client, bucket, suffix=suffix):
         batch_id, _, _ = key.partition("/")
-        if batch_id:
-            counts[batch_id] += 1
+        if not batch_id:
+            continue
+        counts[batch_id] += 1
     return dict(counts)
 
 
@@ -63,8 +56,8 @@ async def reconcile_from_s3(
     session: AsyncSession,
     *,
     hcp_endpoint: str,
-    cache_bucket: str = "images-batch",
-    output_bucket: str = "images-batch-alto",
+    cache_bucket: str,
+    output_bucket: str,
 ) -> SyncResult:
     """Reconcile the batches table with the actual S3 buckets. Idempotent."""
     client = s3_client(endpoint=hcp_endpoint)

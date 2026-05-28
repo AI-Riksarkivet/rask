@@ -14,33 +14,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from anyio import to_thread
-from pydantic import BaseModel
 from ray.job_submission import JobSubmissionClient
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from viewer.models.batch import Batch
 from viewer.models.enums import ManifestStatus
+from viewer.schemas.chunk import StopResult, SubmitResult
 
 
 log = logging.getLogger(__name__)
 
 _ENV_PASSTHROUGH_PREFIXES = ("AWS_", "HCP_", "IIIF_", "RASK_")
 _HTR_PIPELINES = frozenset({"htr", "htrflow"})
-
-
-class SubmitResult(BaseModel):
-    chunk_id: int
-    chunk_total: int
-    pipeline: str
-    submission_id: str
-    batches: list[str]
-
-
-class StopResult(BaseModel):
-    chunk_id: int
-    stopped_submission_id: str
-    stopped: bool
 
 
 def chunk_name(chunk_id: int, chunk_total: int, pipeline: str = "htr") -> str:
@@ -50,7 +36,7 @@ def chunk_name(chunk_id: int, chunk_total: int, pipeline: str = "htr") -> str:
     duplicate submission_ids (even for previously-completed or -deleted jobs),
     so without it, stopping and re-submitting the same chunk would fail. The
     prefix (`htr-` / `prefetch-` / `htrflow-`) is still parseable by the
-    pipeline classifier in `viewer.services.orchestrator._pipeline_for`.
+    pipeline classifier in `viewer.services.orchestrator.derive._pipeline_for`.
     """
     suffix = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     return f"{pipeline}-chunk-{chunk_id:03d}-of-{chunk_total:03d}-{suffix}"
@@ -102,9 +88,9 @@ async def submit_chunk(
     *,
     chunk_id: int,
     repo_root: Path,
-    cache_bucket: str = "images-batch",
-    output: str = "s3://images-batch-alto",
-    iiif_url: str = "https://iiifintern-ai.ra.se",
+    cache_bucket: str,
+    output: str,
+    iiif_url: str,
     pipeline: str = "htr",
     env: Mapping[str, str] | None = None,
 ) -> SubmitResult:

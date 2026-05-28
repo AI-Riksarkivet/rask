@@ -56,5 +56,5 @@ def fetch_thumb(s3: "S3Client", bucket: str, thumb_key: str) -> bytes | None:
         resp = s3.get_object(Bucket=bucket, Key=thumb_key)
         return resp["Body"].read()
     except Exception as exc:
-        log.warning("thumb GET %s/%s failed: %s", bucket, thumb_key, exc)
+        log.warning(f"thumb GET {bucket}/{thumb_key} failed: {exc}")
         return None

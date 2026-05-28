@@ -99,7 +99,7 @@ async def _task_summary_for_job(
         r.raise_for_status()
         data = r.json()
     except httpx.HTTPError as exc:
-        log.warning("ray tasks/summarize failed for job %s: %s", driver_job_id, exc)
+        log.warning(f"ray tasks/summarize failed for job {driver_job_id}: {exc}")
         return []
 
     summary = _cluster_summary(data)
@@ -133,7 +133,7 @@ async def _driver_job_id(client: JobSubmissionClient | None, submission_id: str)
     try:
         details = await to_thread.run_sync(client.get_job_info, submission_id)
     except Exception as exc:
-        log.warning("ray get_job_info failed for %s: %s", submission_id, exc)
+        log.warning(f"ray get_job_info failed for {submission_id}: {exc}")
         return None
     if details is None:
         return None
