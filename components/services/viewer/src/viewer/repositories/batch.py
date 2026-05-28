@@ -5,7 +5,7 @@ ORM → API schema (`BatchPublic`) so the API contract stays decoupled from the
 DB layout.
 """
 
-from sqlalchemy import case, func
+from sqlalchemy import func
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -67,25 +67,44 @@ async def latest_sync_timestamp(session: AsyncSession) -> str | None:
 async def chunks_summary(
     session: AsyncSession,
 ) -> list[tuple[int, int, int, int, int, int, int]]:
-    """Returns per-chunk: (chunk_id, chunk_total, batches, expected, cached, transcribed, done_batches)."""
+    """Returns per-chunk: (chunk_id, chunk_total, batches, expected, cached, transcribed, done_batches).
+
+    Implemented as three small queries — sqlmodel's typed `select()` overload
+    set caps at 4 columns, so one 7-column aggregate doesn't fit. Same result,
+    one extra round-trip on a dashboard read.
+    """
     chunk_id = col(Batch.chunk_id)
-    rows = await session.exec(
-        select(
-            chunk_id,
-            func.max(Batch.chunk_total),
-            func.count(),
-            func.coalesce(func.sum(Batch.page_count), 0),
-            func.coalesce(func.sum(Batch.cached_pages), 0),
-            func.coalesce(func.sum(Batch.transcribed_pages), 0),
-            func.sum(case((col(Batch.htr_status) == HtrStatus.DONE, 1), else_=0)),
+    rows = (
+        await session.exec(
+            select(chunk_id, func.max(Batch.chunk_total), func.count(), func.coalesce(func.sum(Batch.page_count), 0))
+            .where(chunk_id.is_not(None))
+            .group_by(chunk_id)
+            .order_by(chunk_id)
         )
-        .where(chunk_id.is_not(None))
-        .group_by(chunk_id)
-        .order_by(chunk_id)
-    )
+    ).all()
+    cached_rows = (
+        await session.exec(
+            select(chunk_id, func.coalesce(func.sum(Batch.cached_pages), 0), func.coalesce(func.sum(Batch.transcribed_pages), 0))
+            .where(chunk_id.is_not(None))
+            .group_by(chunk_id)
+        )
+    ).all()
+    cached_by_chunk = {cid: (c, t) for cid, c, t in cached_rows}
+    done_rows = (
+        await session.exec(select(chunk_id, func.count()).where(chunk_id.is_not(None), col(Batch.htr_status) == HtrStatus.DONE).group_by(chunk_id))
+    ).all()
+    done_by_chunk = dict(done_rows)
     return [
-        (int(cid or 0), int(ctotal or 0), int(n), int(expected or 0), int(cached or 0), int(transcribed or 0), int(done or 0))
-        for cid, ctotal, n, expected, cached, transcribed, done in rows.all()
+        (
+            int(cid or 0),
+            int(ctotal or 0),
+            int(n),
+            int(expected or 0),
+            int(cached_by_chunk.get(cid, (0, 0))[0] or 0),
+            int(cached_by_chunk.get(cid, (0, 0))[1] or 0),
+            int(done_by_chunk.get(cid, 0)),
+        )
+        for cid, ctotal, n, expected in rows
     ]
 
 

@@ -37,7 +37,7 @@ def _generate_unique_id(route: APIRoute) -> str:
 def create_app() -> FastAPI:
     load_dotenv()
     derive_hcp_creds()
-    settings = Settings()  # type: ignore[call-arg]  # values loaded from env at runtime
+    settings = Settings.model_validate({})
 
     app = FastAPI(
         title="viewer",
