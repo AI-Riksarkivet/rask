@@ -33,6 +33,11 @@ class Cooldown(BaseModel):
     chunk_id: int
     pipeline: Pipeline
     expires_in_secs: int
+    # Why the job failed (from Ray's JobDetails) so the cooldown card is
+    # self-explanatory instead of just "FAILED". driver_exit_code == 137 = OOM.
+    error_type: str | None = None
+    message: str | None = None
+    driver_exit_code: int | None = None
 
 
 class OrchestratorState(BaseModel):

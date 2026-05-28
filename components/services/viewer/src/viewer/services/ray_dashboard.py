@@ -106,10 +106,9 @@ async def health(client: JobSubmissionClient | None, dashboard_url: str) -> RayH
         await to_thread.run_sync(client.get_version)
     except RAY_TRANSIENT_ERRORS as exc:
         return RayHealth(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
-    # `ray_version` is the client's Ray version (what the viewer is built against).
-    # The SDK's get_version() returns the Jobs-API version, not the cluster Ray
-    # version, so we don't use it here; it's called purely as a liveness probe.
-    return RayHealth(ok=True, dashboard_url=dashboard_url, ray_version=ray.__version__)
+    # get_version() is called purely as a liveness probe (its return is the
+    # Jobs-API version, not the cluster Ray version — see RayHealth).
+    return RayHealth(ok=True, dashboard_url=dashboard_url, client_ray_version=ray.__version__)
 
 
 async def list_jobs(client: JobSubmissionClient | None, dashboard_url: str) -> RayJobsPayload:

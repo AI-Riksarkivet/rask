@@ -199,6 +199,9 @@ async def derive_state(
                 chunk_id=int(m.group(1)),
                 pipeline=_pipeline_for(sid),
                 expires_in_secs=max(0, int(FAIL_COOLDOWN_SECS - elapsed)),
+                error_type=j.error_type,
+                message=j.message,
+                driver_exit_code=j.driver_exit_code,
             )
         )
 
