@@ -12,24 +12,18 @@ Replaces the cron-driven `scripts/orchestrator.py`. On each tick:
 # See python-infrastructure/References/background-jobs.md.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
-from typing import TYPE_CHECKING
 
+import httpx
+from ray.job_submission import JobSubmissionClient
+from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from viewer.core.config import Settings
 from viewer.services import orchestrator as derive
 from viewer.services.submission import submit_chunk
 from viewer.services.sync import reconcile_from_s3
-
-
-if TYPE_CHECKING:
-    import httpx
-    from ray.job_submission import JobSubmissionClient
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-    from sqlmodel.ext.asyncio.session import AsyncSession
-
-    from viewer.core.config import Settings
 
 
 log = logging.getLogger(__name__)

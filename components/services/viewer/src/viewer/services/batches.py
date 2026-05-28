@@ -1,7 +1,8 @@
 """Business logic for the batches resource.
 
-Composes repository calls + maps ORM rows to the public schema. The only
-non-DB work here is the subprocess-driven sync (see `services/submission.py`).
+Composes repository calls and maps ORM rows to the public schema. The S3
+reconciliation lives in `services/sync.py`; RayJob submission in
+`services/submission.py`; both are orchestrated by `services/orchestrator_loop.py`.
 """
 
 from sqlmodel.ext.asyncio.session import AsyncSession

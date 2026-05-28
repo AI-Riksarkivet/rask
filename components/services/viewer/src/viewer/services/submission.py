@@ -7,26 +7,20 @@ on every batch in the chunk.
 The Ray SDK is sync, so the submit call is wrapped in `anyio.to_thread`.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from anyio import to_thread
 from pydantic import BaseModel
+from ray.job_submission import JobSubmissionClient
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from viewer.models.batch import Batch
 from viewer.models.enums import ManifestStatus
-
-
-if TYPE_CHECKING:
-    from ray.job_submission import JobSubmissionClient
 
 
 log = logging.getLogger(__name__)
