@@ -26,7 +26,7 @@ from lancedb.table import AsyncTable
 from storage import s3_client
 from viewer.core.config import Settings
 from viewer.core.db import make_engine, make_sessionmaker
-from viewer.services.orchestrator_loop import run_loop as run_orchestrator_loop
+from viewer.services.orchestrator import run_loop as run_orchestrator_loop
 from viewer.services.ray_dashboard import build_client as build_ray_client
 
 

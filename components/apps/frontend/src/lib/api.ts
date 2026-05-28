@@ -149,9 +149,9 @@ export async function syncBatches(): Promise<BatchesPayload> {
 
 // ---------- Orchestrator state ----------
 //
-// Mirrors the decisions scripts/orchestrator.py would make on its next tick:
-// which chunk is currently in each pipeline slot, what's queued, what's in
-// failure-cooldown. Pure derivation from /api/ray/jobs + batches.db.
+// Mirrors the decisions the viewer's orchestrator loop (services/orchestrator_loop.py)
+// would make on its next tick: which chunk is in each pipeline slot, what's queued,
+// what's in failure-cooldown. Pure derivation from /api/ray/jobs + the batches table.
 
 export interface OrchestratorJobSlim {
 	submission_id: string;

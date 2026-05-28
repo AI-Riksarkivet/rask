@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from viewer.core.config import Settings
-from viewer.services import orchestrator as derive
+from viewer.services.orchestrator.derive import derive_state
 from viewer.services.submission import submit_chunk
 from viewer.services.sync import reconcile_from_s3
 
@@ -41,7 +41,7 @@ async def tick(
         if settings.hcp_endpoint:
             await reconcile_from_s3(session, hcp_endpoint=settings.hcp_endpoint)
 
-        state = await derive.derive_state(http, ray_client, settings.ray_dashboard_url, session)
+        state = await derive_state(http, ray_client, settings.ray_dashboard_url, session)
         if not state.ok or ray_client is None or state.prefetch is None or state.htr is None:
             return
 

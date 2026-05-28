@@ -1,15 +1,4 @@
-"""SQLModel trinity for the batches table.
-
-Domain enums (HtrStatus, ManifestStatus, BrowseTier, Pipeline, …) live in
-`models.enums` so every StrEnum has one import surface.
-
-  - `BatchBase`   — shared field definitions (single source of truth).
-  - `Batch`       — DB row (`table=True`); the only thing repositories touch.
-  - `BatchPublic` — what's exposed via the API.
-
-Schema mirrors what `scripts/build_batches_db.py` creates; viewer reads, the
-script seeds. Once the heavy refactor merges, both come from one place.
-"""
+"""SQLModel for the `batches` table — `Batch` is the DB row, `BatchPublic` is the API shape."""
 
 from enum import StrEnum
 

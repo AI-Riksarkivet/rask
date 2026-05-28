@@ -6,7 +6,7 @@ from fastapi import APIRouter, Request
 from viewer.api.dependencies import HttpDep, RayClientDep, SessionDep, SettingsDep
 from viewer.core.lifespan import create_orchestrator_task, is_orchestrator_running
 from viewer.schemas.orchestrator import OrchestratorControlResponse, OrchestratorState
-from viewer.services import orchestrator as orchestrator_service
+from viewer.services.orchestrator import derive_state
 
 
 router = APIRouter(prefix="/orchestrator", tags=["orchestrator"])
@@ -20,7 +20,7 @@ async def orchestrator_state(
     client: RayClientDep,
     session: SessionDep,
 ) -> OrchestratorState:
-    state = await orchestrator_service.derive_state(http, client, settings.ray_dashboard_url, session)
+    state = await derive_state(http, client, settings.ray_dashboard_url, session)
     state.running = is_orchestrator_running(request.app)
     return state
 

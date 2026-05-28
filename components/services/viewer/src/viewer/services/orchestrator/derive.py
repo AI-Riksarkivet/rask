@@ -1,7 +1,9 @@
 """Derive what the orchestrator would do next from current Ray + DB state.
 
-Mirrors the constants used by `scripts/orchestrator.py` so the UI shows the
-same decisions the cron-driven tick would make. Pure derivation; no writes.
+Pure derivation — no writes. Consumed by both the `GET /orchestrator/state`
+endpoint (so the UI can render the current decision) and by
+`viewer.services.orchestrator_loop.tick`, which acts on the same derived
+state.
 """
 
 import re

@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS batches (
     chunk_id INTEGER,                           -- 0..chunk_total-1, or NULL if not chunked
     chunk_total INTEGER,                        -- total number of chunks at assignment time
 
-    -- Ray submission state (set by scripts/submit_chunks.py --mode local)
+    -- Ray submission state (set by viewer's submission service when a chunk
+    -- is submitted via POST /api/v1/chunks/{id}/submit or the orchestrator loop)
     current_rayjob_id TEXT,                     -- last submitted submission_id (audit trail)
     current_rayjob_submitted_at TEXT
 );

@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     # `autostart` controls whether the loop starts on viewer boot; operators can
     # also POST /api/v1/orchestrator/start and /stop at runtime to override.
     # TODO(post-NATS): when NATS JetStream lands, retire this lifespan task and move
-    # the tick into a JetStream consumer. See viewer/services/orchestrator_loop.py.
+    # the tick into a JetStream consumer. See viewer/services/orchestrator/loop.py.
     orchestrator_autostart: bool = Field(default=False, alias="RASK_ORCHESTRATOR_AUTOSTART")
     orchestrator_interval_seconds: int = Field(default=60, ge=10, alias="RASK_ORCHESTRATOR_INTERVAL_SECONDS")
     htr_pipeline: str = Field(default="htr", alias="RASK_HTR_PIPELINE")
