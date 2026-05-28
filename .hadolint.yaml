@@ -4,13 +4,19 @@
 
 ignored: []
 
+# DL3026 matches the parsed REGISTRY SEGMENT only (==/glob), never the image path.
+# rask's FROM images are all on docker.io (python, nvidia/cuda, oven/bun, nginxinc);
+# uv is pulled via COPY --from=ghcr.io/... which DL3026 does NOT inspect. So listing
+# image paths like `nvidia/cuda` here is a silent no-op — only the host needs trusting.
 trustedRegistries:
-  - nvidia/cuda
-  - nginxinc/nginx-unprivileged
-  - ghcr.io
   - docker.io
+  - ghcr.io
 
 failure-threshold: warning
+
+# No label-schema: rask sets OCI labels from ARG values (e.g. "${VERSION}"), which
+# hadolint validates as literal strings at lint time — semver/rfc3339 validators would
+# falsely fail (DL3056/DL3053) on the un-interpolated "${...}".
 
 # Override-comment workflow: when a rule MUST be ignored, use:
 #   # hadolint ignore=DLxxxx
