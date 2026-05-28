@@ -2,8 +2,8 @@ from fastapi import APIRouter
 
 from viewer.api.dependencies import RayClientDep, SessionDep, SettingsDep
 from viewer.core.exceptions import ServiceUnavailableError
+from viewer.repositories import batch as batch_repo
 from viewer.schemas.chunk import ChunkListResponse, StopResult, SubmitResult
-from viewer.services import chunks as chunks_service
 from viewer.services import submission as submission_service
 
 
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/chunks", tags=["chunks"])
 
 @router.get("/")
 async def list_chunks(session: SessionDep) -> ChunkListResponse:
-    return await chunks_service.list_chunks(session)
+    return ChunkListResponse(chunks=await batch_repo.chunks_summary(session))
 
 
 @router.post("/{chunk_id}/submit")
