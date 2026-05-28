@@ -6,7 +6,7 @@ from fastapi import APIRouter, Query
 from viewer.api.dependencies import CatalogTblDep, SessionDep, SettingsDep
 from viewer.models.enums import BrowseTier
 from viewer.schemas.catalog import CatalogBrowseResponse, CatalogSearchResponse, CatalogStats
-from viewer.services import catalog as catalog_service
+from viewer.services.discover import catalog as catalog_service
 
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])

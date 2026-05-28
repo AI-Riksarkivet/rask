@@ -7,7 +7,7 @@ from fastapi.responses import Response
 from viewer.api.dependencies import LinesTblDep, S3Dep, SettingsDep
 from viewer.core.exceptions import NotFoundError
 from viewer.schemas.search import SearchResponse, SearchStats
-from viewer.services import search as search_service
+from viewer.services.discover import search as search_service
 
 
 router = APIRouter(prefix="/search", tags=["search"])

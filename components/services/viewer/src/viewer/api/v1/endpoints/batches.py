@@ -10,7 +10,7 @@ from viewer.schemas.batch import BatchListResponse, RandomBatchResponse
 from viewer.schemas.sync import SyncResponse
 from viewer.schemas.catalog import CatalogHit
 from viewer.services import batches as batches_service
-from viewer.services import catalog as catalog_service
+from viewer.services.discover import catalog as catalog_service
 from viewer.services.sync import reconcile_from_s3
 
 
