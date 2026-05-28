@@ -18,7 +18,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from storage import S3Client, iter_keys, s3_client
 from viewer.models.batch import Batch
 from viewer.models.enums import HtrStatus
-from viewer.schemas.batch import SyncResult
+from viewer.schemas.sync import SyncResult
 
 
 def _classify(expected: int | None, cached: int, transcribed: int) -> HtrStatus:

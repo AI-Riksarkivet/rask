@@ -12,7 +12,6 @@ from viewer.models.batch import BatchPublic
 from viewer.models.enums import HtrStatus
 from viewer.repositories import batch as batch_repo
 from viewer.schemas.batch import (
-    BatchAccessibleSummary,
     BatchListResponse,
     BatchSummary,
 )
@@ -20,16 +19,16 @@ from viewer.schemas.batch import (
 
 async def list_batches(session: AsyncSession) -> BatchListResponse:
     rows = await batch_repo.list_all(session)
-    by_manifest, by_htr = await batch_repo.status_counts(session)
-    n, expected, cached, transcribed = await batch_repo.accessible_summary(session)
+    counts = await batch_repo.status_counts(session)
+    accessible = await batch_repo.accessible_summary(session)
     generated_at = await batch_repo.latest_sync_timestamp(session)
     return BatchListResponse(
         generated_at=generated_at,
         summary=BatchSummary(
             total_batches=len(rows),
-            accessible=BatchAccessibleSummary(batches=n, expected=expected, cached=cached, transcribed=transcribed),
-            by_manifest_status=by_manifest,
-            by_htr_status=by_htr,
+            accessible=accessible,
+            by_manifest_status=counts.by_manifest_status,
+            by_htr_status=counts.by_htr_status,
         ),
         batches=[BatchPublic.model_validate(r) for r in rows],
     )

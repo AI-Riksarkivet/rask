@@ -6,7 +6,8 @@ from viewer.api.dependencies import CatalogTblDep, SessionDep, SettingsDep
 from viewer.core.exceptions import NotFoundError, ServiceUnavailableError
 from viewer.models.batch import BatchPublic
 from viewer.models.enums import HtrStatus
-from viewer.schemas.batch import BatchListResponse, RandomBatchResponse, SyncResponse
+from viewer.schemas.batch import BatchListResponse, RandomBatchResponse
+from viewer.schemas.sync import SyncResponse
 from viewer.schemas.catalog import CatalogHit
 from viewer.services import batches as batches_service
 from viewer.services import catalog as catalog_service

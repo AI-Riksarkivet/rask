@@ -101,9 +101,9 @@ async def browse(
 ) -> CatalogBrowseResponse:
     total = await batch_repo.count_at_tier(session, tier)
     rows = await batch_repo.browse_at_tier(session, tier, limit, offset)
-    bild_ids = [bid for bid, _, _ in rows]
-    cached = {bid for bid, c, _ in rows if c > 0}
-    transcribed = {bid for bid, _, t in rows if t > 0}
+    bild_ids = [r.batch_id for r in rows]
+    cached = {r.batch_id for r in rows if r.cached_pages > 0}
+    transcribed = {r.batch_id for r in rows if r.transcribed_pages > 0}
     catalog_rows = await by_bild_ids(tbl, bild_ids, timeout)
 
     hits: list[CatalogHit] = []

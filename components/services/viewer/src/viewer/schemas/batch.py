@@ -1,5 +1,7 @@
-"""Wrapper response schemas — the public row schema (`BatchPublic`) lives in
-`viewer.models.batch` so it shares a base with the ORM model."""
+"""Schemas for the batches resource — list/summary/random + the repository
+row models used internally by services. `BatchPublic` (the row schema)
+lives in `viewer.models.batch` so it shares a base with the ORM model.
+"""
 
 from pydantic import BaseModel
 
@@ -31,15 +33,17 @@ class RandomBatchResponse(BaseModel):
     status: str
 
 
-class SyncResponse(BatchListResponse):
-    pass
+class BrowseRow(BaseModel):
+    """One row of `repositories.batch.browse_at_tier`."""
+
+    batch_id: str
+    cached_pages: int
+    transcribed_pages: int
 
 
-class SyncResult(BaseModel):
-    """Returned by `services.sync.reconcile_from_s3` — internal-ish summary
-    of one S3 → DB reconciliation pass."""
+class StatusCounts(BaseModel):
+    """Returned by `repositories.batch.status_counts` — two named dicts so
+    callers don't need to remember the tuple order."""
 
-    cached_total: int
-    transcribed_total: int
-    rows_updated: int
-    by_status: dict[str, int]
+    by_manifest_status: dict[str, int]
+    by_htr_status: dict[str, int]

@@ -193,7 +193,9 @@ async def derive_state(
 
     prefetch_pending = await batch_repo.prefetch_pending_chunk_ids(session)
     progress = await batch_repo.chunks_with_progress(session)
-    ready_for_htr = [cid for cid, expected, cached, transcribed in progress if expected and transcribed < expected and cached / expected >= HTR_READY_FRACTION]
+    ready_for_htr = [
+        p.chunk_id for p in progress if p.expected_pages and p.transcribed_pages < p.expected_pages and p.cached_pages / p.expected_pages >= HTR_READY_FRACTION
+    ]
 
     cooldown_pf = {c.chunk_id for c in cooldowns if c.pipeline is Pipeline.PREFETCH}
     cooldown_htr = {c.chunk_id for c in cooldowns if c.pipeline is Pipeline.HTR}
