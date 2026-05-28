@@ -1,11 +1,10 @@
 """RayJob submission for one chunk.
 
-Public helpers `chunk_name` / `build_entrypoint` are exposed so the yaml-mode
-script in `components/scripts/submit_chunks.py` can share them with the live
-(local) submission path here.
+Reads chunk membership from `batches`, builds the runner entrypoint, submits
+via the Ray SDK, and (for the htr/htrflow pipelines) tags `current_rayjob_id`
+on every batch in the chunk.
 
-Caller injects the `JobSubmissionClient` (typed via TYPE_CHECKING so this
-package doesn't pull in `ray` at install time).
+The Ray SDK is sync, so the submit call is wrapped in `anyio.to_thread`.
 """
 
 from __future__ import annotations
@@ -19,8 +18,11 @@ from typing import TYPE_CHECKING
 
 import anyio
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
+
+from viewer.models.batch import Batch
+from viewer.models.enums import ManifestStatus
 
 
 if TYPE_CHECKING:
@@ -29,8 +31,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-_PIPELINE_HTR = "htr"
 _ENV_PASSTHROUGH_PREFIXES = ("AWS_", "HCP_", "IIIF_", "RASK_")
+_HTR_PIPELINES = frozenset({"htr", "htrflow"})
 
 
 class SubmitResult(BaseModel):
@@ -41,12 +43,9 @@ class SubmitResult(BaseModel):
     batches: list[str]
 
 
-def chunk_name(chunk_id: int, chunk_total: int, pipeline: str = _PIPELINE_HTR) -> str:
-    """Job submission ID. ``htr`` stays unprefixed for backwards compat with
-    rows already tagged in batches.db; other pipelines get a ``<name>-`` prefix
-    so they don't collide with a future HTR submission for the same chunk."""
-    prefix = "htr" if pipeline == _PIPELINE_HTR else pipeline
-    return f"{prefix}-chunk-{chunk_id:03d}-of-{chunk_total:03d}"
+def chunk_name(chunk_id: int, chunk_total: int, pipeline: str = "htr") -> str:
+    """Submission ID: ``<pipeline>-chunk-NNN-of-MMM``."""
+    return f"{pipeline}-chunk-{chunk_id:03d}-of-{chunk_total:03d}"
 
 
 def build_entrypoint(
@@ -57,7 +56,7 @@ def build_entrypoint(
     iiif_url: str,
     pipeline: str,
 ) -> str:
-    """Build a `runner` invocation that processes all batch_ids in one job."""
+    """Build the `runner` invocation that processes all batch_ids in one job."""
     parts = [
         "uv run --project projects/runner runner",
         f"--cache-bucket {cache_bucket}",
@@ -74,20 +73,19 @@ def _passthrough_env(env: Mapping[str, str]) -> dict[str, str]:
 
 
 async def _fetch_chunk_batches(session: AsyncSession, chunk_id: int) -> tuple[int, list[str]]:
-    """Returns (chunk_total, [batch_id, ...]) for batches in chunk with manifest_status='ok'."""
-    rows = (
-        await session.execute(
-            text(
-                "SELECT chunk_total, batch_id FROM batches "
-                "WHERE chunk_id = :cid AND manifest_status = 'ok' "
-                "ORDER BY batch_id"
-            ),
-            {"cid": chunk_id},
-        )
-    ).all()
+    """Returns (chunk_total, [batch_id, ...]) for batches with manifest_status='ok'."""
+    rows = list(
+        (
+            await session.exec(
+                select(Batch.chunk_total, Batch.batch_id)
+                .where(col(Batch.chunk_id) == chunk_id, col(Batch.manifest_status) == ManifestStatus.OK)
+                .order_by(Batch.batch_id)
+            )
+        ).all()
+    )
     if not rows:
         return 0, []
-    return int(rows[0][0]), [r[1] for r in rows]
+    return int(rows[0][0] or 0), [r[1] for r in rows]
 
 
 async def submit_chunk(
@@ -99,13 +97,10 @@ async def submit_chunk(
     cache_bucket: str = "images-batch",
     output: str = "s3://images-batch-alto",
     iiif_url: str = "https://iiifintern-ai.ra.se",
-    pipeline: str = _PIPELINE_HTR,
+    pipeline: str = "htr",
     env: Mapping[str, str] | None = None,
 ) -> SubmitResult:
-    """Submit one chunk to Ray and (for htr) tag `current_rayjob_id` on its batches.
-
-    Sync Ray SDK call is wrapped in `anyio.to_thread`.
-    """
+    """Submit one chunk to Ray. For htr/htrflow, also tag current_rayjob_id on the rows."""
     chunk_total, batch_ids = await _fetch_chunk_batches(session, chunk_id)
     if not batch_ids:
         raise ValueError(f"no batches found for chunk_id={chunk_id}")
@@ -135,15 +130,13 @@ async def submit_chunk(
 
     submission_id = await anyio.to_thread.run_sync(_submit)
 
-    if pipeline == _PIPELINE_HTR:
+    if pipeline in _HTR_PIPELINES:
         now = datetime.now(UTC).isoformat(timespec="seconds")
-        await session.execute(
-            text(
-                "UPDATE batches SET current_rayjob_id = :sid, current_rayjob_submitted_at = :now "
-                "WHERE chunk_id = :cid"
-            ),
-            {"sid": submission_id, "now": now, "cid": chunk_id},
-        )
+        result = await session.exec(select(Batch).where(col(Batch.chunk_id) == chunk_id))
+        for batch in result.all():
+            batch.current_rayjob_id = submission_id
+            batch.current_rayjob_submitted_at = now
+            session.add(batch)
         await session.commit()
 
     return SubmitResult(

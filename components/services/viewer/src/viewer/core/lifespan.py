@@ -3,8 +3,12 @@
 Resources are stashed on `app.state` so dependencies pull them without
 recreating per request. Tolerant of missing optional deps (HCP, LanceDB
 tables, batches.db) so tests run offline.
+
+If `RASK_ORCHESTRATOR_ENABLED=1`, also start the orchestrator loop as a
+lifespan-managed `asyncio.Task` — see `viewer/services/orchestrator_loop.py`.
 """
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -20,6 +24,7 @@ from lancedb.table import AsyncTable
 from storage import s3_client
 from viewer.core.config import Settings
 from viewer.core.db import make_engine, make_sessionmaker
+from viewer.services.orchestrator_loop import run_loop as run_orchestrator_loop
 from viewer.services.ray_dashboard import build_client as build_ray_client
 
 
@@ -76,6 +81,10 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         app.state.db_engine = make_engine(settings)
         app.state.db_sessionmaker = make_sessionmaker(app.state.db_engine)
 
+        orchestrator_task: asyncio.Task[None] | None = None
+        if settings.orchestrator_enabled:
+            orchestrator_task = asyncio.create_task(run_orchestrator_loop(app), name="orchestrator-loop")
+
         app.state.startup_complete = True
         log.info("startup_complete")
 
@@ -83,6 +92,12 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
             yield
         finally:
             app.state.shutting_down = True
+            if orchestrator_task is not None:
+                orchestrator_task.cancel()
+                try:
+                    await orchestrator_task
+                except asyncio.CancelledError:
+                    pass
             await app.state.http.aclose()
             if app.state.lines_tbl is not None:
                 app.state.lines_tbl.close()

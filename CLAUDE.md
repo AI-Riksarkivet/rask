@@ -57,13 +57,12 @@ Three brick layers — **don't blur them**:
 - `packages/` — reusable libraries, **no entrypoints**. uv + Bun workspace members.
   - `packages/htr` — Ray actors (PageLoader, Layout, Lines, Transcribe, AltoExport) + schemas
   - `packages/storage` — `FSSource/Sink`, `S3Source/Sink`, `IIIFCachedSource`, `iter_keys`, `s3_client`
-  - `packages/control` — async ops library: `reconcile_from_s3` (S3 → batches.db sync), `submit_chunk` (RayJob submit). Consumed by viewer + the thin scripts in `components/scripts/`
   - `packages/component-lib` — Svelte 5 + Bits UI + Tailwind 4 component library w/ Storybook
 - `components/` — runnable code.
   - `components/apps/runner` — Typer CLI that submits Ray Data jobs
   - `components/apps/frontend` — SvelteKit SPA (adapter-static)
-  - `components/services/viewer` — FastAPI service on `:8888` (only HTTP backend). Owns `alembic/` (migrations) and `models/batch.py` (SQLModel schema) until Phase 2C moves them into `packages/control`.
-  - `components/scripts/` — one-shot Python tools. `sync_from_s3.py` and `submit_chunks.py` are now thin wrappers around `control.*`; the rest are ad-hoc ops (`bench_framework`, `download_*`, `harvest_ead`, `index_alto`, `index_catalog`, …)
+  - `components/services/viewer` — FastAPI service on `:8888` (only HTTP backend; owns `alembic/`, `models/batch.py`, and the orchestrator loop). Sync + submission live in `services/sync.py` + `services/submission.py`.
+  - `components/scripts/` — one-shot setup / debug tools (`build_batches_db`, `chunk_batches`, `harvest_ead`, `index_alto`, `index_catalog`, `download_*`, `bench_framework`, `smoke_s3`, …). **No production-state-changing CLIs** — sync / submit / orchestrate all run through the viewer (HTTP endpoints + the lifespan-managed orchestrator task).
 - `projects/<name>/pyproject.toml` — **deployable composition only, no code**. Lists workspace members for that deployable (`hcp`, `runner`, `viewer`).
 
 **Workspace membership is explicit, never globbed.** Adding a new brick requires editing **both**:
@@ -84,6 +83,7 @@ Plus the relevant `projects/<name>/pyproject.toml` if it's deployable.
 - **GPU sizing is hardcoded** in `components/apps/runner/src/runner/pipeline.py` for a 3-GPU node. Changing target hardware means editing that file.
 - **Viewer has no auth, no middleware.** Assumes localhost / trusted network. SPA hits `/api/*`; `/api/ray/*` is a dashboard proxy.
 - **State surface:** relational DB behind a backend-agnostic ORM (SQLModel + SQLAlchemy async). **SQLite for dev** (`.cache/batches.db`, not committed); **Postgres for prod** via `DATABASE_URL=postgresql+asyncpg://…`. Schema changes go through **Alembic** (`components/services/viewer/alembic/`) — never `SQLModel.metadata.create_all` in app startup. The `Batch` SQLModel uses `SAEnum(values_callable=...)` so `htr_status`/`manifest_status` round-trip as lowercase strings against postgres-native ENUM types or sqlite VARCHAR. Plus S3 two-bucket setup (`images-batch` input, `images-batch-alto` output). **No Redis, no queue, no event bus, no docker-compose, no Helm.** The `Makefile` is the only runbook.
+- **Orchestrator runs inside the viewer.** A lifespan-managed `asyncio.Task` (gated by `RASK_ORCHESTRATOR_ENABLED`) ticks every `RASK_ORCHESTRATOR_INTERVAL_SECONDS`: reconcile S3 → submit next prefetch / htr chunk. See `viewer/services/orchestrator_loop.py`. **Transitional — to be replaced by a NATS JetStream consumer (`python-infrastructure`) once that lands.**
 - **Source images:** IIIF (Riksarkivet) with S3 read-through cache. `PageLoaderActor` hits S3 first, IIIF on miss.
 - **Remote KubeRay:** the runner accepts `--address ray://...:10001`. No K8s manifests live in this repo — the remote cluster is managed elsewhere.
 

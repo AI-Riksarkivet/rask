@@ -1,10 +1,10 @@
 from fastapi import APIRouter
 
-from control import submit_chunk as control_submit_chunk
 from viewer.api.dependencies import RayClientDep, SessionDep, SettingsDep
 from viewer.core.exceptions import ServiceUnavailableError
 from viewer.schemas.chunk import ChunkListResponse, SubmitChunkResponse
 from viewer.services import chunks as chunks_service
+from viewer.services.submission import submit_chunk as submit_chunk_op
 
 
 router = APIRouter(prefix="/chunks", tags=["chunks"])
@@ -24,7 +24,7 @@ async def submit_chunk(
 ) -> SubmitChunkResponse:
     if ray_client is None:
         raise ServiceUnavailableError("Ray dashboard unreachable")
-    return await control_submit_chunk(
+    return await submit_chunk_op(
         session,
         ray_client,
         chunk_id=chunk_id,

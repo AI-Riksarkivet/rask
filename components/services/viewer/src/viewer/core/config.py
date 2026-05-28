@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     ray_proxy_timeout: float = 15.0
     lance_query_timeout_seconds: int = Field(default=30, ge=1, alias="RASK_LANCE_QUERY_TIMEOUT_SECONDS")
 
+    # In-process orchestrator loop (replaces the old scripts/orchestrator.py cron).
+    # TODO(post-NATS): when NATS JetStream lands, retire this lifespan task and move
+    # the tick into a JetStream consumer. See viewer/services/orchestrator_loop.py.
+    orchestrator_enabled: bool = Field(default=False, alias="RASK_ORCHESTRATOR_ENABLED")
+    orchestrator_interval_seconds: int = Field(default=60, ge=10, alias="RASK_ORCHESTRATOR_INTERVAL_SECONDS")
+    htr_pipeline: str = Field(default="htr", alias="RASK_HTR_PIPELINE")
+
     @property
     def resolved_batches_db(self) -> Path:
         return self.batches_db or (self.repo_root / ".cache" / "batches.db")
