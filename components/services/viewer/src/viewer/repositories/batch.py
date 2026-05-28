@@ -56,7 +56,7 @@ async def accessible_summary(session: AsyncSession) -> tuple[int, int, int, int]
             ).where(Batch.manifest_status == ManifestStatus.OK)
         )
     ).one()
-    return int(row[0]), int(row[1]), int(row[2]), int(row[3])
+    return int(row[0] or 0), int(row[1] or 0), int(row[2] or 0), int(row[3] or 0)
 
 
 async def latest_sync_timestamp(session: AsyncSession) -> str | None:
@@ -68,19 +68,20 @@ async def chunks_summary(
     session: AsyncSession,
 ) -> list[tuple[int, int, int, int, int, int, int]]:
     """Returns per-chunk: (chunk_id, chunk_total, batches, expected, cached, transcribed, done_batches)."""
+    chunk_id = col(Batch.chunk_id)
     rows = await session.exec(
         select(
-            Batch.chunk_id,
+            chunk_id,
             func.max(Batch.chunk_total),
             func.count(),
             func.coalesce(func.sum(Batch.page_count), 0),
             func.coalesce(func.sum(Batch.cached_pages), 0),
             func.coalesce(func.sum(Batch.transcribed_pages), 0),
-            func.sum(case((Batch.htr_status == HtrStatus.DONE, 1), else_=0)),
+            func.sum(case((col(Batch.htr_status) == HtrStatus.DONE, 1), else_=0)),
         )
-        .where(col(Batch.chunk_id).is_not(None))
-        .group_by(Batch.chunk_id)
-        .order_by(Batch.chunk_id)
+        .where(chunk_id.is_not(None))
+        .group_by(chunk_id)
+        .order_by(chunk_id)
     )
     return [
         (int(cid or 0), int(ctotal or 0), int(n), int(expected or 0), int(cached or 0), int(transcribed or 0), int(done or 0))
@@ -90,21 +91,23 @@ async def chunks_summary(
 
 async def prefetch_pending_chunk_ids(session: AsyncSession) -> list[int]:
     """Chunks where any batch still has cached_pages < page_count."""
+    chunk_id = col(Batch.chunk_id)
     rows = await session.exec(
         select(Batch.chunk_id)
         .where(
-            col(Batch.chunk_id).is_not(None),
-            Batch.manifest_status == ManifestStatus.OK,
+            chunk_id.is_not(None),
+            col(Batch.manifest_status) == ManifestStatus.OK,
             func.coalesce(Batch.cached_pages, 0) < func.coalesce(Batch.page_count, 0),
         )
-        .group_by(Batch.chunk_id)
-        .order_by(Batch.chunk_id)
+        .group_by(chunk_id)
+        .order_by(chunk_id)
     )
     return [r for r in rows.all() if r is not None]
 
 
 async def chunks_with_progress(session: AsyncSession) -> list[tuple[int, int, int, int]]:
     """Per-chunk totals (chunk_id, expected, cached, transcribed) — used by orchestrator."""
+    chunk_id = col(Batch.chunk_id)
     rows = await session.exec(
         select(
             Batch.chunk_id,
@@ -112,9 +115,9 @@ async def chunks_with_progress(session: AsyncSession) -> list[tuple[int, int, in
             func.coalesce(func.sum(Batch.cached_pages), 0),
             func.coalesce(func.sum(Batch.transcribed_pages), 0),
         )
-        .where(col(Batch.chunk_id).is_not(None), Batch.manifest_status == ManifestStatus.OK)
-        .group_by(Batch.chunk_id)
-        .order_by(Batch.chunk_id)
+        .where(chunk_id.is_not(None), col(Batch.manifest_status) == ManifestStatus.OK)
+        .group_by(chunk_id)
+        .order_by(chunk_id)
     )
     return [(int(cid or 0), int(e or 0), int(c or 0), int(t or 0)) for cid, e, c, t in rows.all()]
 

@@ -12,7 +12,7 @@ import logging
 from collections import defaultdict
 from datetime import UTC, datetime
 
-import anyio
+from anyio import to_thread
 from pydantic import BaseModel
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -69,8 +69,8 @@ async def reconcile_from_s3(
     """Reconcile the batches table with the actual S3 buckets. Idempotent."""
     client = s3_client(endpoint=hcp_endpoint)
 
-    cached = await anyio.to_thread.run_sync(_count_per_batch, client, cache_bucket, ".jpg")
-    transcribed = await anyio.to_thread.run_sync(_count_per_batch, client, output_bucket, ".xml")
+    cached = await to_thread.run_sync(_count_per_batch, client, cache_bucket, ".jpg")
+    transcribed = await to_thread.run_sync(_count_per_batch, client, output_bucket, ".xml")
 
     now = datetime.now(UTC).isoformat(timespec="seconds")
     rows = list((await session.exec(select(Batch))).all())

@@ -11,6 +11,8 @@ Schema mirrors what `scripts/build_batches_db.py` creates; viewer reads, the
 script seeds. Once the heavy refactor merges, both come from one place.
 """
 
+from enum import StrEnum
+
 from sqlalchemy import Column
 from sqlalchemy import Enum as SAEnum
 from sqlmodel import Field, SQLModel
@@ -30,7 +32,7 @@ SQLModel.metadata.naming_convention = {
 }
 
 
-def _str_enum_col(enum_cls: type) -> Column:
+def _str_enum_col(enum_cls: type[StrEnum]) -> Column:
     return Column(SAEnum(enum_cls, values_callable=lambda x: [e.value for e in x]))
 
 

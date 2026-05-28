@@ -16,8 +16,8 @@ import logging
 import re
 from http import HTTPStatus
 
-import anyio
 import httpx
+from anyio import to_thread
 from ray.job_submission import JobSubmissionClient
 
 from viewer.schemas.ray import RayClusterPayload, RayHealth, RayJob, RayJobsPayload, RayNode
@@ -94,7 +94,7 @@ async def health(client: JobSubmissionClient | None, dashboard_url: str) -> RayH
     if client is None:
         return RayHealth(ok=False, dashboard_url=dashboard_url, error="Ray dashboard unreachable")
     try:
-        await anyio.to_thread.run_sync(client.get_version)
+        await to_thread.run_sync(client.get_version)
     except Exception as exc:
         return RayHealth(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
     import ray as _ray
@@ -106,11 +106,13 @@ async def list_jobs(client: JobSubmissionClient | None, dashboard_url: str) -> R
     if client is None:
         return RayJobsPayload(ok=False, dashboard_url=dashboard_url, error="Ray dashboard unreachable")
     try:
-        details = await anyio.to_thread.run_sync(client.list_jobs)
+        details = await to_thread.run_sync(client.list_jobs)
     except Exception as exc:
         return RayJobsPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
     jobs: list[RayJob] = []
     for d in details:
+        if d is None:
+            continue
         payload = d.dict()
         payload["batches"] = _parse_batches(d.entrypoint)
         payload["logs_url"] = f"{dashboard_url}/#/jobs/{d.submission_id}" if d.submission_id else None
@@ -124,8 +126,10 @@ async def get_job_info(client: JobSubmissionClient | None, submission_id: str) -
     if client is None:
         return None
     try:
-        details = await anyio.to_thread.run_sync(client.get_job_info, submission_id)
+        details = await to_thread.run_sync(client.get_job_info, submission_id)
     except Exception:
+        return None
+    if details is None:
         return None
     return RayJob.model_validate(details.dict())
 

@@ -11,12 +11,12 @@ lifespan-managed `asyncio.Task` — see `viewer/services/orchestrator_loop.py`.
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from typing import TYPE_CHECKING
 
-import anyio
 import httpx
 import lancedb
+from anyio import to_thread
 from fastapi import FastAPI
 from lancedb.db import AsyncConnection
 from lancedb.table import AsyncTable
@@ -76,7 +76,7 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         app.state.http = httpx.AsyncClient(timeout=settings.http_timeout)
         app.state.s3 = _build_s3(settings)
         app.state.lance_db, app.state.lines_tbl, app.state.catalog_tbl = await _open_lancedb(settings)
-        app.state.ray_client = await anyio.to_thread.run_sync(build_ray_client, settings.ray_dashboard_url)
+        app.state.ray_client = await to_thread.run_sync(build_ray_client, settings.ray_dashboard_url)
 
         app.state.db_engine = make_engine(settings)
         app.state.db_sessionmaker = make_sessionmaker(app.state.db_engine)
@@ -94,10 +94,8 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
             app.state.shutting_down = True
             if orchestrator_task is not None:
                 orchestrator_task.cancel()
-                try:
+                with suppress(asyncio.CancelledError):
                     await orchestrator_task
-                except asyncio.CancelledError:
-                    pass
             await app.state.http.aclose()
             if app.state.lines_tbl is not None:
                 app.state.lines_tbl.close()

@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import anyio
+from anyio import to_thread
 from pydantic import BaseModel
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -128,7 +128,7 @@ async def submit_chunk(
             },
         )
 
-    submission_id = await anyio.to_thread.run_sync(_submit)
+    submission_id = await to_thread.run_sync(_submit)
 
     if pipeline in _HTR_PIPELINES:
         now = datetime.now(UTC).isoformat(timespec="seconds")

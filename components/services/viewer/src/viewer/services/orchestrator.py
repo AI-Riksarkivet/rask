@@ -7,8 +7,8 @@ same decisions the cron-driven tick would make. Pure derivation; no writes.
 import re
 import time
 
-import anyio
 import httpx
+from anyio import to_thread
 from ray.dashboard.modules.job.common import JobStatus
 from ray.job_submission import JobSubmissionClient
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -108,8 +108,10 @@ async def _driver_job_id(client: JobSubmissionClient | None, submission_id: str)
     if client is None:
         return None
     try:
-        details = await anyio.to_thread.run_sync(client.get_job_info, submission_id)
+        details = await to_thread.run_sync(client.get_job_info, submission_id)
     except Exception:
+        return None
+    if details is None:
         return None
     return details.job_id
 
@@ -166,11 +168,7 @@ async def derive_state(
 
     prefetch_pending = await batch_repo.prefetch_pending_chunk_ids(session)
     progress = await batch_repo.chunks_with_progress(session)
-    ready_for_htr = [
-        cid
-        for cid, expected, cached, transcribed in progress
-        if expected and transcribed < expected and cached / expected >= HTR_READY_FRACTION
-    ]
+    ready_for_htr = [cid for cid, expected, cached, transcribed in progress if expected and transcribed < expected and cached / expected >= HTR_READY_FRACTION]
 
     cooldown_pf = {c.chunk_id for c in cooldowns if c.pipeline is Pipeline.PREFETCH}
     cooldown_htr = {c.chunk_id for c in cooldowns if c.pipeline is Pipeline.HTR}
