@@ -83,7 +83,15 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
 
         orchestrator_task: asyncio.Task[None] | None = None
         if settings.orchestrator_enabled:
-            orchestrator_task = asyncio.create_task(run_orchestrator_loop(app), name="orchestrator-loop")
+            orchestrator_task = asyncio.create_task(
+                run_orchestrator_loop(
+                    settings=settings,
+                    sessionmaker=app.state.db_sessionmaker,
+                    ray_client=app.state.ray_client,
+                    http=app.state.http,
+                ),
+                name="orchestrator-loop",
+            )
 
         app.state.startup_complete = True
         log.info("startup_complete")

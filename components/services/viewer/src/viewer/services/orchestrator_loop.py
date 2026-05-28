@@ -18,26 +18,31 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from viewer.services import orchestrator as derive
 from viewer.services.submission import submit_chunk
 from viewer.services.sync import reconcile_from_s3
 
 
 if TYPE_CHECKING:
-    from fastapi import FastAPI
+    import httpx
+    from ray.job_submission import JobSubmissionClient
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from sqlmodel.ext.asyncio.session import AsyncSession
+
+    from viewer.core.config import Settings
 
 
 log = logging.getLogger(__name__)
 
 
-async def tick(app: FastAPI) -> None:
+async def tick(
+    *,
+    settings: Settings,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    ray_client: JobSubmissionClient | None,
+    http: httpx.AsyncClient,
+) -> None:
     """One full tick: sync + decide + submit. Idempotent end-to-end."""
-    from viewer.services import orchestrator as derive
-
-    settings = app.state.settings
-    sessionmaker = app.state.db_sessionmaker
-    ray_client = app.state.ray_client
-    http = app.state.http
-
     async with sessionmaker() as session:
         if settings.hcp_endpoint:
             await reconcile_from_s3(session, hcp_endpoint=settings.hcp_endpoint)
@@ -66,13 +71,19 @@ async def tick(app: FastAPI) -> None:
             )
 
 
-async def run_loop(app: FastAPI) -> None:
+async def run_loop(
+    *,
+    settings: Settings,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    ray_client: JobSubmissionClient | None,
+    http: httpx.AsyncClient,
+) -> None:
     """Tick forever until cancelled. A failure in one tick is logged and the loop continues."""
-    interval = app.state.settings.orchestrator_interval_seconds
+    interval = settings.orchestrator_interval_seconds
     log.info("orchestrator loop started, interval=%ds", interval)
     while True:
         try:
-            await tick(app)
+            await tick(settings=settings, sessionmaker=sessionmaker, ray_client=ray_client, http=http)
         except Exception:
             log.exception("orchestrator tick failed; continuing")
         try:

@@ -46,9 +46,7 @@ async def ray_cluster(http: HttpDep, settings: SettingsDep) -> RayClusterPayload
     return await ray_dashboard.cluster_status(http, settings.ray_dashboard_url)
 
 
-async def _proxy(request: Request, path: str) -> Response:
-    settings = request.app.state.settings
-    http = request.app.state.http
+async def _proxy(request: Request, http: HttpDep, settings: SettingsDep, path: str) -> Response:
     body = await request.body()
     content, status, hdrs = await ray_dashboard.proxy(
         http,
@@ -66,11 +64,11 @@ def _register_proxy(prefix: str) -> None:
     """Forward `<prefix>` and `<prefix>/{path:path}` to the Ray Dashboard."""
     suffix = prefix.lstrip("/")
 
-    async def catchall(request: Request, path: str) -> Response:
-        return await _proxy(request, f"{suffix}/{path}")
+    async def catchall(request: Request, http: HttpDep, settings: SettingsDep, path: str) -> Response:
+        return await _proxy(request, http, settings, f"{suffix}/{path}")
 
-    async def catchall_root(request: Request) -> Response:
-        return await _proxy(request, suffix)
+    async def catchall_root(request: Request, http: HttpDep, settings: SettingsDep) -> Response:
+        return await _proxy(request, http, settings, suffix)
 
     proxy_router.add_api_route(f"{prefix}/{{path:path}}", catchall, methods=_PROXY_METHODS, name=f"ray-proxy-{prefix}")
     proxy_router.add_api_route(prefix, catchall_root, methods=["GET", "HEAD"], name=f"ray-proxy-{prefix}-root")
@@ -79,20 +77,20 @@ def _register_proxy(prefix: str) -> None:
 def _register_exact(path: str) -> None:
     suffix = path.lstrip("/")
 
-    async def exact(request: Request) -> Response:
-        return await _proxy(request, suffix)
+    async def exact(request: Request, http: HttpDep, settings: SettingsDep) -> Response:
+        return await _proxy(request, http, settings, suffix)
 
     proxy_router.add_api_route(path, exact, methods=["GET", "POST", "HEAD"], name=f"ray-proxy-{path}")
 
 
 @proxy_router.api_route("/ray-dashboard/{path:path}", methods=_PROXY_METHODS)
-async def ray_dashboard_spa(request: Request, path: str) -> Response:
-    return await _proxy(request, path)
+async def ray_dashboard_spa(request: Request, http: HttpDep, settings: SettingsDep, path: str) -> Response:
+    return await _proxy(request, http, settings, path)
 
 
 @proxy_router.api_route("/ray-dashboard", methods=["GET", "HEAD"])
-async def ray_dashboard_root(request: Request) -> Response:
-    return await _proxy(request, "")
+async def ray_dashboard_root(request: Request, http: HttpDep, settings: SettingsDep) -> Response:
+    return await _proxy(request, http, settings, "")
 
 
 for _prefix in ("/api/v0", "/api/jobs", "/logs"):
