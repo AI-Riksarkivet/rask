@@ -41,7 +41,12 @@ async def tick(
         if settings.hcp_endpoint:
             await reconcile_from_s3(session, hcp_endpoint=settings.hcp_endpoint)
 
-        state = await derive_state(http, ray_client, settings.ray_dashboard_url, session)
+        state = await derive_state(
+            http=http,
+            client=ray_client,
+            dashboard_url=settings.ray_dashboard_url,
+            session=session,
+        )
         if not state.ok or ray_client is None or state.prefetch is None or state.htr is None:
             return
 

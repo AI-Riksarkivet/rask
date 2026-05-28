@@ -20,7 +20,12 @@ async def orchestrator_state(
     client: RayClientDep,
     session: SessionDep,
 ) -> OrchestratorState:
-    state = await derive_state(http, client, settings.ray_dashboard_url, session)
+    state = await derive_state(
+        http=http,
+        client=client,
+        dashboard_url=settings.ray_dashboard_url,
+        session=session,
+    )
     state.running = is_orchestrator_running(request.app)
     return state
 

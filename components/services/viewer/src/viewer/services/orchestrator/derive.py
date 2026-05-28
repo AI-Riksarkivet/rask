@@ -2,10 +2,11 @@
 
 Pure derivation — no writes. Consumed by both the `GET /orchestrator/state`
 endpoint (so the UI can render the current decision) and by
-`viewer.services.orchestrator_loop.tick`, which acts on the same derived
+`viewer.services.orchestrator.loop.tick`, which acts on the same derived
 state.
 """
 
+import logging
 import re
 import time
 
@@ -20,6 +21,9 @@ from viewer.repositories import batch as batch_repo
 from viewer.schemas.orchestrator import Cooldown, OrchestratorState, SlimJob, SlotState, StageStat
 from viewer.schemas.ray import RayJob
 from viewer.services import ray_dashboard
+
+
+log = logging.getLogger(__name__)
 
 
 HTR_READY_FRACTION = 0.95
@@ -66,7 +70,22 @@ def _slim_job(j: RayJob) -> SlimJob:
     )
 
 
+def _cluster_summary(data: dict) -> dict:
+    """Unwrap Ray's deeply-nested `/api/v0/tasks/summarize` envelope.
+
+    Ray returns `{data: {result: {result: {node_id_to_summary: {cluster: {summary: {...}}}}}}}`.
+    Any missing layer yields an empty dict so the caller can keep walking.
+    """
+    cursor: dict = data
+    for key in ("data", "result", "result", "node_id_to_summary", "cluster", "summary"):
+        if not isinstance(cursor, dict):
+            return {}
+        cursor = cursor.get(key) or {}
+    return cursor
+
+
 async def _task_summary_for_job(
+    *,
     http: httpx.AsyncClient,
     dashboard_url: str,
     driver_job_id: str,
@@ -79,9 +98,11 @@ async def _task_summary_for_job(
         )
         r.raise_for_status()
         data = r.json()
-    except httpx.HTTPError:
+    except httpx.HTTPError as exc:
+        log.warning("ray tasks/summarize failed for job %s: %s", driver_job_id, exc)
         return []
-    summary = ((data.get("data") or {}).get("result") or {}).get("result", {}).get("node_id_to_summary", {}).get("cluster", {}).get("summary", {})
+
+    summary = _cluster_summary(data)
     out: list[StageStat] = []
     for stage in stage_names:
         info = summary.get(f"MapWorker(MapBatches({stage})).submit") or {}
@@ -111,7 +132,8 @@ async def _driver_job_id(client: JobSubmissionClient | None, submission_id: str)
         return None
     try:
         details = await to_thread.run_sync(client.get_job_info, submission_id)
-    except Exception:
+    except Exception as exc:
+        log.warning("ray get_job_info failed for %s: %s", submission_id, exc)
         return None
     if details is None:
         return None
@@ -119,6 +141,7 @@ async def _driver_job_id(client: JobSubmissionClient | None, submission_id: str)
 
 
 async def derive_state(
+    *,
     http: httpx.AsyncClient,
     client: JobSubmissionClient | None,
     dashboard_url: str,
@@ -177,8 +200,24 @@ async def derive_state(
     next_prefetch = next((cid for cid in prefetch_pending if cid not in cooldown_pf), None)
     next_htr = next((cid for cid in ready_for_htr if cid not in cooldown_htr), None)
 
-    prefetch_slot = await _build_slot(http, client, dashboard_url, prefetch_running, next_prefetch, len(prefetch_pending), PREFETCH_STAGES)
-    htr_slot = await _build_slot(http, client, dashboard_url, htr_running, next_htr, len(ready_for_htr), HTR_STAGES)
+    prefetch_slot = await _build_slot(
+        http=http,
+        client=client,
+        dashboard_url=dashboard_url,
+        running=prefetch_running,
+        next_chunk=next_prefetch,
+        queue_len=len(prefetch_pending),
+        stages=PREFETCH_STAGES,
+    )
+    htr_slot = await _build_slot(
+        http=http,
+        client=client,
+        dashboard_url=dashboard_url,
+        running=htr_running,
+        next_chunk=next_htr,
+        queue_len=len(ready_for_htr),
+        stages=HTR_STAGES,
+    )
 
     return OrchestratorState(
         ok=True,
@@ -191,6 +230,7 @@ async def derive_state(
 
 
 async def _build_slot(
+    *,
     http: httpx.AsyncClient,
     client: JobSubmissionClient | None,
     dashboard_url: str,
@@ -203,7 +243,7 @@ async def _build_slot(
     if running:
         jid = await _driver_job_id(client, running.submission_id or "")
         if jid:
-            stage_stats = await _task_summary_for_job(http, dashboard_url, jid, stages)
+            stage_stats = await _task_summary_for_job(http=http, dashboard_url=dashboard_url, driver_job_id=jid, stage_names=stages)
     return SlotState(
         running=_slim_job(running) if running else None,
         next=next_chunk,
