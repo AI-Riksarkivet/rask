@@ -1,7 +1,11 @@
-from fastapi import APIRouter
+import asyncio
+from contextlib import suppress
+
+from fastapi import APIRouter, Request
 
 from viewer.api.dependencies import HttpDep, RayClientDep, SessionDep, SettingsDep
-from viewer.schemas.orchestrator import OrchestratorState
+from viewer.core.lifespan import create_orchestrator_task, is_orchestrator_running
+from viewer.schemas.orchestrator import OrchestratorControlResponse, OrchestratorState
 from viewer.services import orchestrator as orchestrator_service
 
 
@@ -10,9 +14,36 @@ router = APIRouter(prefix="/orchestrator", tags=["orchestrator"])
 
 @router.get("/state")
 async def orchestrator_state(
+    request: Request,
     settings: SettingsDep,
     http: HttpDep,
     client: RayClientDep,
     session: SessionDep,
 ) -> OrchestratorState:
-    return await orchestrator_service.derive_state(http, client, settings.ray_dashboard_url, session)
+    state = await orchestrator_service.derive_state(http, client, settings.ray_dashboard_url, session)
+    state.running = is_orchestrator_running(request.app)
+    return state
+
+
+@router.post("/start")
+async def orchestrator_start(request: Request) -> OrchestratorControlResponse:
+    """Start the periodic orchestrator loop. Idempotent — calling while
+    already running is a no-op."""
+    app = request.app
+    if not is_orchestrator_running(app):
+        app.state.orchestrator_task = create_orchestrator_task(app)
+    return OrchestratorControlResponse(running=True)
+
+
+@router.post("/stop")
+async def orchestrator_stop(request: Request) -> OrchestratorControlResponse:
+    """Cancel the orchestrator loop. Already-submitted Ray jobs keep running
+    on the cluster; only the periodic tick stops. Idempotent."""
+    app = request.app
+    task = app.state.orchestrator_task
+    if task is not None and not task.done():
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+    app.state.orchestrator_task = None
+    return OrchestratorControlResponse(running=False)

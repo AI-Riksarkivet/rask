@@ -37,9 +37,23 @@ class SubmitResult(BaseModel):
     batches: list[str]
 
 
+class StopResult(BaseModel):
+    chunk_id: int
+    stopped_submission_id: str
+    stopped: bool
+
+
 def chunk_name(chunk_id: int, chunk_total: int, pipeline: str = "htr") -> str:
-    """Submission ID: ``<pipeline>-chunk-NNN-of-MMM``."""
-    return f"{pipeline}-chunk-{chunk_id:03d}-of-{chunk_total:03d}"
+    """Submission ID: ``<pipeline>-chunk-NNN-of-MMM-YYYYMMDDTHHMMSS``.
+
+    The timestamp suffix makes every submission unique. Ray's REST API rejects
+    duplicate submission_ids (even for previously-completed or -deleted jobs),
+    so without it, stopping and re-submitting the same chunk would fail. The
+    prefix (`htr-` / `prefetch-` / `htrflow-`) is still parseable by the
+    pipeline classifier in `viewer.services.orchestrator._pipeline_for`.
+    """
+    suffix = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+    return f"{pipeline}-chunk-{chunk_id:03d}-of-{chunk_total:03d}-{suffix}"
 
 
 def build_entrypoint(
@@ -140,3 +154,32 @@ async def submit_chunk(
         submission_id=submission_id,
         batches=batch_ids,
     )
+
+
+async def stop_chunk(
+    session: AsyncSession,
+    ray_client: JobSubmissionClient,
+    *,
+    chunk_id: int,
+) -> StopResult:
+    """Stop the Ray job currently bound to a chunk and clear the row markers.
+
+    All batches in the chunk share one `current_rayjob_id` (set by
+    `submit_chunk`), so we pick any row to read it from. Ray's `stop_job`
+    returns False if the job was already in a terminal state — which we
+    still treat as "stopped" from the operator's POV.
+    """
+    submission_id = (await session.exec(select(Batch.current_rayjob_id).where(col(Batch.chunk_id) == chunk_id).limit(1))).first()
+    if not submission_id:
+        raise ValueError(f"no running job for chunk_id={chunk_id}")
+
+    stopped = await to_thread.run_sync(ray_client.stop_job, submission_id)
+
+    batches = await session.exec(select(Batch).where(col(Batch.chunk_id) == chunk_id))
+    for batch in batches.all():
+        batch.current_rayjob_id = None
+        batch.current_rayjob_submitted_at = None
+        session.add(batch)
+    await session.commit()
+
+    return StopResult(chunk_id=chunk_id, stopped_submission_id=submission_id, stopped=stopped)

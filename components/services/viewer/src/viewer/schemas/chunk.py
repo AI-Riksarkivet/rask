@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-from viewer.services.submission import SubmitResult
+from viewer.services.submission import StopResult, SubmitResult
 
 
 class Chunk(BaseModel):
@@ -18,3 +18,4 @@ class ChunkListResponse(BaseModel):
 
 
 SubmitChunkResponse = SubmitResult
+StopChunkResponse = StopResult

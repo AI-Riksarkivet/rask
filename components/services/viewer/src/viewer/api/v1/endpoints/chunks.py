@@ -2,7 +2,7 @@ from fastapi import APIRouter
 
 from viewer.api.dependencies import RayClientDep, SessionDep, SettingsDep
 from viewer.core.exceptions import ServiceUnavailableError
-from viewer.schemas.chunk import ChunkListResponse, SubmitChunkResponse
+from viewer.schemas.chunk import ChunkListResponse, StopChunkResponse, SubmitChunkResponse
 from viewer.services import chunks as chunks_service
 from viewer.services import submission as submission_service
 
@@ -30,3 +30,14 @@ async def submit_chunk(
         chunk_id=chunk_id,
         repo_root=settings.repo_root,
     )
+
+
+@router.post("/{chunk_id}/stop")
+async def stop_chunk(
+    chunk_id: int,
+    session: SessionDep,
+    ray_client: RayClientDep,
+) -> StopChunkResponse:
+    if ray_client is None:
+        raise ServiceUnavailableError("Ray dashboard unreachable")
+    return await submission_service.stop_chunk(session, ray_client, chunk_id=chunk_id)

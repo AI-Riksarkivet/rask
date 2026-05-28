@@ -37,9 +37,16 @@ class Cooldown(BaseModel):
 
 class OrchestratorState(BaseModel):
     ok: bool
+    running: bool = False
     error: str | None = None
     prefetch: SlotState | None = None
     htr: SlotState | None = None
     cooldowns: list[Cooldown] = Field(default_factory=list)
     ready_threshold: float | None = None
     cooldown_secs: int | None = None
+
+
+class OrchestratorControlResponse(BaseModel):
+    """Response shape for POST /orchestrator/start and /stop."""
+
+    running: bool

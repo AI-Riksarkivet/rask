@@ -4,8 +4,10 @@ Resources are stashed on `app.state` so dependencies pull them without
 recreating per request. Tolerant of missing optional deps (HCP, LanceDB
 tables, batches.db) so tests run offline.
 
-If `RASK_ORCHESTRATOR_ENABLED=1`, also start the orchestrator loop as a
-lifespan-managed `asyncio.Task` — see `viewer/services/orchestrator_loop.py`.
+`app.state.orchestrator_task` holds the orchestrator loop's `asyncio.Task`
+(or None when stopped). Lifespan creates it on boot if `RASK_ORCHESTRATOR_AUTOSTART=1`;
+the `/api/v1/orchestrator/start` and `/stop` endpoints flip it at runtime.
+`create_orchestrator_task(app)` is the single factory both paths use.
 """
 
 import asyncio
@@ -66,6 +68,29 @@ async def _open_lancedb(
     return db, lines, catalog
 
 
+def create_orchestrator_task(app: FastAPI) -> asyncio.Task[None]:
+    """Spawn the orchestrator loop using the deps stashed on `app.state`.
+
+    Single factory used by lifespan (autostart) and the `/start` endpoint
+    (runtime control), so both paths produce identical tasks.
+    """
+    return asyncio.create_task(
+        run_orchestrator_loop(
+            settings=app.state.settings,
+            sessionmaker=app.state.db_sessionmaker,
+            ray_client=app.state.ray_client,
+            http=app.state.http,
+        ),
+        name="orchestrator-loop",
+    )
+
+
+def is_orchestrator_running(app: FastAPI) -> bool:
+    """True iff the orchestrator task exists and hasn't finished."""
+    task: asyncio.Task[None] | None = app.state.orchestrator_task
+    return task is not None and not task.done()
+
+
 def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -81,17 +106,9 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         app.state.db_engine = make_engine(settings)
         app.state.db_sessionmaker = make_sessionmaker(app.state.db_engine)
 
-        orchestrator_task: asyncio.Task[None] | None = None
-        if settings.orchestrator_enabled:
-            orchestrator_task = asyncio.create_task(
-                run_orchestrator_loop(
-                    settings=settings,
-                    sessionmaker=app.state.db_sessionmaker,
-                    ray_client=app.state.ray_client,
-                    http=app.state.http,
-                ),
-                name="orchestrator-loop",
-            )
+        app.state.orchestrator_task = None
+        if settings.orchestrator_autostart:
+            app.state.orchestrator_task = create_orchestrator_task(app)
 
         app.state.startup_complete = True
         log.info("startup_complete")
@@ -100,10 +117,12 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
             yield
         finally:
             app.state.shutting_down = True
-            if orchestrator_task is not None:
-                orchestrator_task.cancel()
+            task: asyncio.Task[None] | None = app.state.orchestrator_task
+            if task is not None:
+                task.cancel()
                 with suppress(asyncio.CancelledError):
-                    await orchestrator_task
+                    await task
+                app.state.orchestrator_task = None
             await app.state.http.aclose()
             if app.state.lines_tbl is not None:
                 app.state.lines_tbl.close()

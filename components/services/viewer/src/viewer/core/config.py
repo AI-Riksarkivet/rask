@@ -50,9 +50,11 @@ class Settings(BaseSettings):
     lance_query_timeout_seconds: int = Field(default=30, ge=1, alias="RASK_LANCE_QUERY_TIMEOUT_SECONDS")
 
     # In-process orchestrator loop (replaces the old scripts/orchestrator.py cron).
+    # `autostart` controls whether the loop starts on viewer boot; operators can
+    # also POST /api/v1/orchestrator/start and /stop at runtime to override.
     # TODO(post-NATS): when NATS JetStream lands, retire this lifespan task and move
     # the tick into a JetStream consumer. See viewer/services/orchestrator_loop.py.
-    orchestrator_enabled: bool = Field(default=False, alias="RASK_ORCHESTRATOR_ENABLED")
+    orchestrator_autostart: bool = Field(default=False, alias="RASK_ORCHESTRATOR_AUTOSTART")
     orchestrator_interval_seconds: int = Field(default=60, ge=10, alias="RASK_ORCHESTRATOR_INTERVAL_SECONDS")
     htr_pipeline: str = Field(default="htr", alias="RASK_HTR_PIPELINE")
 
