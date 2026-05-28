@@ -47,6 +47,11 @@ def get_image(vol: str, key: str, settings: SettingsDep) -> Response:
     """Stream the source image for `key`. `key` must be under `{vol}/` (path-traversal guard)."""
     _require_under_volume(vol, key)
     src = build_source(settings.viewer_input, s3_endpoint=settings.hcp_endpoint)
+    # storage.Source.read can raise FileNotFoundError (FSSource), botocore
+    # ClientError (S3Source), or httpx errors (IIIFCachedSource on cold cache).
+    # The viewer rule is "no reach into boto3 / botocore", so we catch broadly
+    # at this boundary and treat any read failure as 404. TODO(storage): expose
+    # a `storage.NotFoundError` so this can narrow without piercing the package.
     try:
         data = src.read(key)
     except Exception as exc:

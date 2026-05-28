@@ -16,6 +16,7 @@ import asyncio
 import logging
 
 import httpx
+from anyio import to_thread
 from ray.job_submission import JobSubmissionClient
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -23,6 +24,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from viewer.core.config import Settings
 from viewer.models.enums import Pipeline
 from viewer.services.orchestrator.derive import derive_state
+from viewer.services.ray_dashboard import build_client
 from viewer.services.submission import submit_chunk
 from viewer.services.sync import reconcile_from_s3
 
@@ -57,7 +59,9 @@ async def tick(
             return
         if ray_client is None:
             return
-        if state.prefetch is None or state.htr is None:
+        if state.prefetch is None:
+            return
+        if state.htr is None:
             return
 
         output_uri = f"s3://{settings.output_bucket}"
@@ -94,12 +98,23 @@ async def run_loop(
     ray_client: JobSubmissionClient | None,
     http: httpx.AsyncClient,
 ) -> None:
-    """Tick forever until cancelled. A failure in one tick is logged and the loop continues."""
+    """Tick forever until cancelled. A failure in one tick is logged and the loop continues.
+
+    If Ray was unreachable at viewer boot, `ray_client` is None and stays that way for
+    the task's life — so we re-attempt the (cheap) build each tick while it's None.
+    A client that connected once is reused: it's a stateless HTTP wrapper that
+    reconnects per request, so a Ray restart needs no rebuild.
+    """
     interval = settings.orchestrator_interval_seconds
     log.info(f"orchestrator loop started, interval={interval}s")
+    client = ray_client
     while True:
+        if client is None:
+            client = await to_thread.run_sync(build_client, settings.ray_dashboard_url)
+            if client is not None:
+                log.info("orchestrator: connected to Ray dashboard")
         try:
-            await tick(settings=settings, sessionmaker=sessionmaker, ray_client=ray_client, http=http)
+            await tick(settings=settings, sessionmaker=sessionmaker, ray_client=client, http=http)
         except Exception:
             log.exception("orchestrator tick failed; continuing")
         try:

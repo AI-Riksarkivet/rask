@@ -18,20 +18,28 @@ from http import HTTPStatus
 
 import httpx
 import ray
+import requests
 from anyio import to_thread
+from ray.exceptions import AuthenticationError
 from ray.job_submission import JobSubmissionClient
 
-from viewer.schemas.ray import RayClusterPayload, RayHealth, RayJob, RayJobsPayload, RayNode
+from viewer.schemas.ray import ProxyResponse, RayClusterPayload, RayHealth, RayJob, RayJobsPayload, RayNode
 
 
 log = logging.getLogger(__name__)
 
+# Errors meaning "Ray is unreachable / refused us", raised by the Job SDK at runtime.
+# `requests.*` subclass OSError (NOT builtin ConnectionError); the SDK only translates
+# its construct-time check to builtin ConnectionError, so live calls can still raise
+# requests exceptions directly. AuthenticationError (a RayError) surfaces on 401/403
+# from an authenticated cluster. Shared with submission.py + orchestrator/derive.py.
+RAY_TRANSIENT_ERRORS = (RuntimeError, ConnectionError, requests.exceptions.RequestException, AuthenticationError)
+
 _BATCH_RE = re.compile(r"--batch[\s=]+(\S+)")
 _ERROR_MSG_MAX_LEN = 400  # truncate exception strings so they fit in one log/UI line
 
-# Ray Dashboard JSON keys we read from /api/version, /api/cluster_status, and /nodes
-# responses. Grouped here so a Ray-side rename is a one-spot edit.
-_RAY_KEY_VERSION = "ray_version"
+# Ray Dashboard JSON keys we read from /api/cluster_status and /nodes responses.
+# Grouped here so a Ray-side rename is a one-spot edit.
 _RAY_KEY_DATA = "data"
 _RAY_KEY_CLUSTER_STATUS = "clusterStatus"
 _RAY_KEY_LOAD_METRICS = "loadMetricsReport"
@@ -44,7 +52,6 @@ _RAY_KEY_RESOURCES_TOTAL = "resourcesTotal"
 _RAY_KEY_NODE_MANAGER_ADDRESS = "nodeManagerAddress"
 _RAY_KEY_IP = "ip"
 _RAY_KEY_RAYLET_STATE = "state"
-_RAY_KEY_JOBS = "jobs"
 _RAYLET_STATE_ALIVE = "ALIVE"
 _NODES_VIEW_PARAM = "view=summary"
 _HOP_BY_HOP = {
@@ -81,12 +88,13 @@ def _parse_batches(entrypoint: str | None) -> list[str]:
 def build_client(dashboard_url: str) -> JobSubmissionClient | None:
     """Construct the SDK client. Returns None if Ray's dashboard is unreachable.
 
-    The constructor issues HTTP calls to verify the API version, so wrap in
-    try/except to keep the viewer tolerant of a cold Ray cluster.
+    The constructor issues HTTP calls to verify the API version. Ray's SDK
+    documents `RuntimeError` for protocol failures and raises `ConnectionError`
+    when the dashboard isn't listening; we treat both as "offline".
     """
     try:
         return JobSubmissionClient(address=dashboard_url)
-    except Exception as exc:
+    except RAY_TRANSIENT_ERRORS as exc:
         log.info(f"Ray dashboard unreachable at {dashboard_url}: {exc}")
         return None
 
@@ -96,8 +104,11 @@ async def health(client: JobSubmissionClient | None, dashboard_url: str) -> RayH
         return RayHealth(ok=False, dashboard_url=dashboard_url, error="Ray dashboard unreachable")
     try:
         await to_thread.run_sync(client.get_version)
-    except Exception as exc:
+    except RAY_TRANSIENT_ERRORS as exc:
         return RayHealth(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
+    # `ray_version` is the client's Ray version (what the viewer is built against).
+    # The SDK's get_version() returns the Jobs-API version, not the cluster Ray
+    # version, so we don't use it here; it's called purely as a liveness probe.
     return RayHealth(ok=True, dashboard_url=dashboard_url, ray_version=ray.__version__)
 
 
@@ -106,32 +117,20 @@ async def list_jobs(client: JobSubmissionClient | None, dashboard_url: str) -> R
         return RayJobsPayload(ok=False, dashboard_url=dashboard_url, error="Ray dashboard unreachable")
     try:
         details = await to_thread.run_sync(client.list_jobs)
-    except Exception as exc:
+    except RAY_TRANSIENT_ERRORS as exc:
         return RayJobsPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
     jobs: list[RayJob] = []
     for d in details:
         if d is None:
             continue
+        # `.dict()` (V1 API) is required: Ray ships `JobDetails` as a Pydantic V1 model
+        # so `model_dump()` doesn't exist. See `schemas/ray.py` for the rationale.
         payload = d.dict()
         payload["batches"] = _parse_batches(d.entrypoint)
         payload["logs_url"] = f"{dashboard_url}/#/jobs/{d.submission_id}" if d.submission_id else None
         jobs.append(RayJob.model_validate(payload))
     jobs.sort(key=lambda j: getattr(j, "start_time", None) or 0, reverse=True)
     return RayJobsPayload(ok=True, dashboard_url=dashboard_url, jobs=jobs)
-
-
-async def get_job_info(client: JobSubmissionClient | None, submission_id: str) -> RayJob | None:
-    """Fetch one JobDetails by submission_id. None on miss or unreachable Ray."""
-    if client is None:
-        return None
-    try:
-        details = await to_thread.run_sync(client.get_job_info, submission_id)
-    except Exception as exc:
-        log.warning(f"ray get_job_info failed for {submission_id}: {exc}")
-        return None
-    if details is None:
-        return None
-    return RayJob.model_validate(details.dict())
 
 
 def _parse_res_value(s: str) -> float:
@@ -215,7 +214,7 @@ async def proxy(
     query: bytes | str,
     headers: dict[str, str],
     body: bytes,
-) -> tuple[bytes, int, dict[str, str]]:
+) -> ProxyResponse:
     """Forward an arbitrary path to the Ray Dashboard, same-origin to the browser."""
     url = dashboard_url + "/" + path.lstrip("/")
     fwd = {k: v for k, v in headers.items() if k.lower() not in _HOP_BY_HOP and k.lower() != "host"}
@@ -223,6 +222,13 @@ async def proxy(
     try:
         resp = await http.request(method, url, params=qs, headers=fwd, content=body or None)
     except httpx.HTTPError as exc:
-        return (f"ray dashboard unreachable: {exc}".encode(), HTTPStatus.BAD_GATEWAY, {"content-type": "text/plain"})
-    out_headers = {k: v for k, v in resp.headers.items() if k.lower() not in _HOP_BY_HOP}
-    return (resp.content, resp.status_code, out_headers)
+        return ProxyResponse(
+            content=f"ray dashboard unreachable: {exc}".encode(),
+            status_code=HTTPStatus.BAD_GATEWAY,
+            headers={"content-type": "text/plain"},
+        )
+    return ProxyResponse(
+        content=resp.content,
+        status_code=resp.status_code,
+        headers={k: v for k, v in resp.headers.items() if k.lower() not in _HOP_BY_HOP},
+    )

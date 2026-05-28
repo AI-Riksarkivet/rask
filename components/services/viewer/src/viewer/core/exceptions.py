@@ -35,18 +35,6 @@ class ServiceUnavailableError(DomainError):
     title = "Service Unavailable"
 
 
-class UpstreamUnavailableError(DomainError):
-    status_code = HTTPStatus.BAD_GATEWAY
-    title = "Bad Gateway"
-
-
-class UpstreamTimeoutError(DomainError):
-    """504 — use for `asyncio.TimeoutError` / `httpx.TimeoutException` boundaries."""
-
-    status_code = HTTPStatus.GATEWAY_TIMEOUT
-    title = "Gateway Timeout"
-
-
 def _problem(exc: DomainError) -> dict[str, str | int]:
     return {
         "type": f"about:blank#{exc.__class__.__name__.lower()}",

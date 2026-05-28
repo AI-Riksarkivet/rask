@@ -49,7 +49,6 @@ class Settings(BaseSettings):
     db_query_timeout_seconds: int = Field(default=60, ge=1, alias="DB_QUERY_TIMEOUT_SECONDS")
 
     http_timeout: float = 15.0
-    ray_proxy_timeout: float = 15.0
     lance_query_timeout_seconds: int = Field(default=30, ge=1, alias="RASK_LANCE_QUERY_TIMEOUT_SECONDS")
 
     # In-process orchestrator loop (replaces the old scripts/orchestrator.py cron).

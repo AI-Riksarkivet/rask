@@ -48,7 +48,7 @@ async def ray_cluster(http: HttpDep, settings: SettingsDep) -> RayClusterPayload
 
 async def _proxy(request: Request, http: HttpDep, settings: SettingsDep, path: str) -> Response:
     body = await request.body()
-    content, status, hdrs = await ray_dashboard.proxy(
+    resp = await ray_dashboard.proxy(
         http,
         settings.ray_dashboard_url,
         path,
@@ -57,7 +57,7 @@ async def _proxy(request: Request, http: HttpDep, settings: SettingsDep, path: s
         dict(request.headers),
         body,
     )
-    return Response(content=content, status_code=status, headers=hdrs)
+    return Response(content=resp.content, status_code=resp.status_code, headers=resp.headers)
 
 
 def _register_proxy(prefix: str) -> None:

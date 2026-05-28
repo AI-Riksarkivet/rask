@@ -54,3 +54,11 @@ class RayClusterPayload(BaseModel):
     used_resources: dict[str, float] = Field(default_factory=dict)
     nodes: list[RayNode] = Field(default_factory=list)
     error: str | None = None
+
+
+class ProxyResponse(BaseModel):
+    """Forwarded response from the Ray Dashboard — fed into fastapi `Response(...)` at the call site."""
+
+    content: bytes
+    status_code: int
+    headers: dict[str, str] = Field(default_factory=dict)

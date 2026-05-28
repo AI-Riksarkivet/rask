@@ -40,3 +40,10 @@ class StopResult(BaseModel):
     chunk_id: int
     stopped_submission_id: str
     stopped: bool
+
+
+class ChunkBatches(BaseModel):
+    """Membership of one chunk — returned by `submission._fetch_chunk_batches`."""
+
+    chunk_total: int
+    batch_ids: list[str]

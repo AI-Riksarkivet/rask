@@ -14,7 +14,6 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
-from typing import TYPE_CHECKING
 
 import httpx
 import lancedb
@@ -81,6 +80,23 @@ def create_orchestrator_task(app: FastAPI) -> asyncio.Task[None]:
     )
 
 
+async def stop_orchestrator_task(app: FastAPI) -> None:
+    """Cancel the orchestrator loop and clear `app.state.orchestrator_task`.
+
+    Idempotent — calling when already stopped is a no-op. Used by the
+    `/stop` endpoint AND by lifespan shutdown so the cancel-and-await
+    sequence lives in one place.
+    """
+    task: asyncio.Task[None] | None = app.state.orchestrator_task
+    if task is None:
+        return
+    if not task.done():
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+    app.state.orchestrator_task = None
+
+
 def is_orchestrator_running(app: FastAPI) -> bool:
     """True iff the orchestrator task exists and hasn't finished."""
     task: asyncio.Task[None] | None = app.state.orchestrator_task
@@ -91,9 +107,6 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = settings
-        app.state.startup_complete = False
-        app.state.shutting_down = False
-
         app.state.http = httpx.AsyncClient(timeout=settings.http_timeout)
         app.state.s3 = _build_s3(settings)
         app.state.lance_db, app.state.lines_tbl, app.state.catalog_tbl = await _open_lancedb(settings)
@@ -106,19 +119,12 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         if settings.orchestrator_autostart:
             app.state.orchestrator_task = create_orchestrator_task(app)
 
-        app.state.startup_complete = True
         log.info("startup_complete")
 
         try:
             yield
         finally:
-            app.state.shutting_down = True
-            task: asyncio.Task[None] | None = app.state.orchestrator_task
-            if task is not None:
-                task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await task
-                app.state.orchestrator_task = None
+            await stop_orchestrator_task(app)
             await app.state.http.aclose()
             if app.state.lines_tbl is not None:
                 app.state.lines_tbl.close()

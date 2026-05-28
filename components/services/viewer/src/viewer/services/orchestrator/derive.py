@@ -9,6 +9,7 @@ state.
 import logging
 import re
 import time
+from typing import cast
 
 import httpx
 from anyio import to_thread
@@ -70,17 +71,34 @@ def _slim_job(j: RayJob) -> SlimJob:
     )
 
 
-def _cluster_summary(data: dict) -> dict:
+def _as_dict(v: object) -> dict[str, object]:
+    """Narrow `v` to `dict[str, object]` (or empty) — used at the JSON boundary.
+
+    Cast is intentional: at runtime the value is JSON-decoded so its keys are
+    strings; the type-checker can't see that, so we assert it here once for
+    every reader downstream.
+    """
+    if not isinstance(v, dict):
+        return {}
+    return cast(dict[str, object], v)
+
+
+def _as_int(v: object) -> int:
+    """Narrow `v` to `int` (or 0) — used at the JSON boundary."""
+    return v if isinstance(v, int) else 0
+
+
+def _cluster_summary(data: dict[str, object]) -> dict[str, object]:
     """Unwrap Ray's deeply-nested `/api/v0/tasks/summarize` envelope.
 
     Ray returns `{data: {result: {result: {node_id_to_summary: {cluster: {summary: {...}}}}}}}`.
     Any missing layer yields an empty dict so the caller can keep walking.
     """
-    cursor: dict = data
+    cursor: dict[str, object] = data
     for key in ("data", "result", "result", "node_id_to_summary", "cluster", "summary"):
-        if not isinstance(cursor, dict):
+        cursor = _as_dict(cursor.get(key))
+        if not cursor:
             return {}
-        cursor = cursor.get(key) or {}
     return cursor
 
 
@@ -102,26 +120,19 @@ async def _task_summary_for_job(
         log.warning(f"ray tasks/summarize failed for job {driver_job_id}: {exc}")
         return []
 
-    summary = _cluster_summary(data)
+    summary = _cluster_summary(_as_dict(data))
     out: list[StageStat] = []
     for stage in stage_names:
-        info = summary.get(f"MapWorker(MapBatches({stage})).submit") or {}
-        sc = info.get("state_counts") or {}
-        finished = int(sc.get(TaskState.FINISHED, 0))
-        running = int(sc.get(TaskState.RUNNING, 0))
-        scheduled = int(sc.get(TaskState.SCHEDULED, 0))
-        failed = int(sc.get(TaskState.FAILED, 0))
-        pending = sum(int(v) for k, v in sc.items() if k.startswith(TaskState.PENDING) or k == TaskState.WAITING)
-        total = sum(int(v) for v in sc.values())
+        sc = _as_dict(_as_dict(summary.get(f"MapWorker(MapBatches({stage})).submit")).get("state_counts"))
         out.append(
             StageStat(
                 stage=stage,
-                finished=finished,
-                running=running,
-                scheduled=scheduled,
-                pending=pending,
-                failed=failed,
-                total=total,
+                finished=_as_int(sc.get(TaskState.FINISHED)),
+                running=_as_int(sc.get(TaskState.RUNNING)),
+                scheduled=_as_int(sc.get(TaskState.SCHEDULED)),
+                failed=_as_int(sc.get(TaskState.FAILED)),
+                pending=sum(_as_int(v) for k, v in sc.items() if k.startswith(TaskState.PENDING) or k == TaskState.WAITING),
+                total=sum(_as_int(v) for v in sc.values()),
             )
         )
     return out
@@ -132,7 +143,7 @@ async def _driver_job_id(client: JobSubmissionClient | None, submission_id: str)
         return None
     try:
         details = await to_thread.run_sync(client.get_job_info, submission_id)
-    except Exception as exc:
+    except ray_dashboard.RAY_TRANSIENT_ERRORS as exc:
         log.warning(f"ray get_job_info failed for {submission_id}: {exc}")
         return None
     if details is None:

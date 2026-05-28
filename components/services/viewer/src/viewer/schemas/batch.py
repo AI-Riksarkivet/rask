@@ -6,6 +6,7 @@ lives in `viewer.models.batch` so it shares a base with the ORM model.
 from pydantic import BaseModel
 
 from viewer.models.batch import BatchPublic
+from viewer.models.enums import HtrStatus
 
 
 class BatchAccessibleSummary(BaseModel):
@@ -30,7 +31,7 @@ class BatchListResponse(BaseModel):
 
 class RandomBatchResponse(BaseModel):
     batch_id: str
-    status: str
+    status: HtrStatus
 
 
 class BrowseRow(BaseModel):
@@ -47,3 +48,14 @@ class StatusCounts(BaseModel):
 
     by_manifest_status: dict[str, int]
     by_htr_status: dict[str, int]
+
+
+class BatchStatusSets(BaseModel):
+    """Per-tier set of batch_ids for a given list of bild_ids.
+
+    Strictly nested: `transcribed ⊆ cached ⊆ listed`.
+    """
+
+    listed: set[str]
+    cached: set[str]
+    transcribed: set[str]
