@@ -6,15 +6,11 @@ module is stateless and async-native (LanceDB exposes an async API).
 
 import logging
 from datetime import timedelta
-from typing import TYPE_CHECKING
 
 from lancedb.table import AsyncTable
 
+from storage import S3Client
 from viewer.schemas.search import LineRow, SearchHit, SearchResponse, SearchStats
-
-
-if TYPE_CHECKING:
-    from mypy_boto3_s3 import S3Client
 
 
 log = logging.getLogger(__name__)
@@ -44,11 +40,15 @@ async def stats(tbl: AsyncTable | None) -> SearchStats:
     return SearchStats(available=True, rows=await tbl.count_rows())
 
 
-def fetch_thumb(s3: "S3Client", bucket: str, thumb_key: str) -> bytes | None:
+def fetch_thumb(s3: S3Client, bucket: str, thumb_key: str) -> bytes | None:
     """GET a line thumbnail from the search bucket. Returns bytes or None on miss.
 
     `thumb_key` MUST start with `thumbs/` — defense in depth so the proxy
     can't be tricked into fetching arbitrary keys.
+
+    The catch is broad because `s3.get_object` raises `botocore.ClientError`
+    (NoSuchKey, Forbidden, etc.) and the viewer rule is no reach into
+    botocore from above storage. "Any failure → None" matches the intent.
     """
     if not thumb_key.startswith(_THUMB_KEY_PREFIX):
         return None

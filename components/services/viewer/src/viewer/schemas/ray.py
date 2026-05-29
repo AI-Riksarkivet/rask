@@ -15,7 +15,11 @@ from ray.dashboard.modules.job.common import JobStatus
 class RayHealth(BaseModel):
     ok: bool
     dashboard_url: str
-    ray_version: str | None = None
+    # The viewer's own Ray client version, NOT the cluster's — the SDK's
+    # get_version() returns the Jobs-API version, and the server Ray version
+    # isn't worth an extra round-trip here. Named honestly to avoid implying
+    # it's the cluster version (relevant under client/server skew on KubeRay).
+    client_ray_version: str | None = None
     error: str | None = None
 
 
@@ -28,6 +32,12 @@ class RayJob(BaseModel):
     end_time: int | None = None
     batches: list[str] = Field(default_factory=list)
     logs_url: str | None = None
+    # Failure cause — already on Ray's JobDetails and carried through `d.dict()`
+    # + extra="allow", just declared here so it's typed and surfaced. exit 137 =
+    # SIGKILL (host-RAM OOM), the dominant silent HTR failure.
+    error_type: str | None = None
+    message: str | None = None
+    driver_exit_code: int | None = None
 
 
 class RayJobsPayload(BaseModel):
@@ -54,3 +64,11 @@ class RayClusterPayload(BaseModel):
     used_resources: dict[str, float] = Field(default_factory=dict)
     nodes: list[RayNode] = Field(default_factory=list)
     error: str | None = None
+
+
+class ProxyResponse(BaseModel):
+    """Forwarded response from the Ray Dashboard — fed into fastapi `Response(...)` at the call site."""
+
+    content: bytes
+    status_code: int
+    headers: dict[str, str] = Field(default_factory=dict)

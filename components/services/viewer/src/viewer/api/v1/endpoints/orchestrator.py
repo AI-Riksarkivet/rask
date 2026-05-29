@@ -1,10 +1,7 @@
-import asyncio
-from contextlib import suppress
-
 from fastapi import APIRouter, Request
 
 from viewer.api.dependencies import HttpDep, RayClientDep, SessionDep, SettingsDep
-from viewer.core.lifespan import create_orchestrator_task, is_orchestrator_running
+from viewer.core.lifespan import create_orchestrator_task, is_orchestrator_running, stop_orchestrator_task
 from viewer.schemas.orchestrator import OrchestratorControlResponse, OrchestratorState
 from viewer.services.orchestrator import derive_state
 
@@ -44,11 +41,5 @@ async def orchestrator_start(request: Request) -> OrchestratorControlResponse:
 async def orchestrator_stop(request: Request) -> OrchestratorControlResponse:
     """Cancel the orchestrator loop. Already-submitted Ray jobs keep running
     on the cluster; only the periodic tick stops. Idempotent."""
-    app = request.app
-    task = app.state.orchestrator_task
-    if task is not None and not task.done():
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
-    app.state.orchestrator_task = None
+    await stop_orchestrator_task(request.app)
     return OrchestratorControlResponse(running=False)

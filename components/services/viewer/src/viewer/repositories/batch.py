@@ -7,6 +7,7 @@ mapping lives at the row layer via `BatchPublic.model_validate(row)`.
 """
 
 from sqlalchemy import func
+from sqlalchemy.sql import ColumnElement
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -154,7 +155,7 @@ async def chunks_with_progress(session: AsyncSession) -> list[ChunkProgress]:
     ]
 
 
-def _tier_predicate(tier: BrowseTier):  # noqa: ANN202 — SQLAlchemy ColumnElement type is internal
+def _tier_predicate(tier: BrowseTier) -> ColumnElement[bool] | bool:
     if tier == BrowseTier.TRANSCRIBED:
         return func.coalesce(Batch.transcribed_pages, 0) > 0
     if tier == BrowseTier.CACHED:

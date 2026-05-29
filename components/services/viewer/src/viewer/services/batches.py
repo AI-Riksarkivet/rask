@@ -13,6 +13,7 @@ from viewer.models.enums import HtrStatus
 from viewer.repositories import batch as batch_repo
 from viewer.schemas.batch import (
     BatchListResponse,
+    BatchStatusSets,
     BatchSummary,
 )
 
@@ -48,18 +49,18 @@ async def random_batch(session: AsyncSession, status: HtrStatus) -> str:
     return row.batch_id
 
 
-async def local_batch_status(session: AsyncSession, bild_ids: list[str]) -> tuple[set[str], set[str], set[str]]:
-    """For a list of bild_ids, return (listed, cached, transcribed) sets.
+async def local_batch_status(session: AsyncSession, bild_ids: list[str]) -> BatchStatusSets:
+    """Bucket bild_ids by local-DB tier (strictly nested).
 
-    Three tiers, each strictly nested:
-      listed       = batch_id exists in batches.db
-      cached       = also has cached_pages > 0
-      transcribed  = also has transcribed_pages > 0
+    listed       = batch_id exists in batches.db
+    cached       = also has cached_pages > 0
+    transcribed  = also has transcribed_pages > 0
     """
     if not bild_ids:
-        return set(), set(), set()
+        return BatchStatusSets(listed=set(), cached=set(), transcribed=set())
     rows = await batch_repo.by_ids(session, bild_ids)
-    listed = {r.batch_id for r in rows}
-    cached = {r.batch_id for r in rows if r.cached_pages > 0}
-    transcribed = {r.batch_id for r in rows if r.transcribed_pages > 0}
-    return listed, cached, transcribed
+    return BatchStatusSets(
+        listed={r.batch_id for r in rows},
+        cached={r.batch_id for r in rows if r.cached_pages > 0},
+        transcribed={r.batch_id for r in rows if r.transcribed_pages > 0},
+    )

@@ -21,6 +21,10 @@ from viewer.models.enums import HtrStatus
 from viewer.schemas.sync import SyncResult
 
 
+_CACHE_IMAGE_SUFFIX = ".jpg"  # cache_bucket holds JPEGs (one per page)
+_ALTO_OUTPUT_SUFFIX = ".xml"  # output_bucket holds ALTO XMLs (one per page)
+
+
 def _classify(expected: int | None, cached: int, transcribed: int) -> HtrStatus:
     """Bucket a batch by progress.
 
@@ -43,6 +47,7 @@ def _classify(expected: int | None, cached: int, transcribed: int) -> HtrStatus:
 
 
 def _count_per_batch(client: S3Client, bucket: str, suffix: str) -> dict[str, int]:
+    """`batch_id → count` for every key under `bucket` whose name ends in `suffix`."""
     counts: dict[str, int] = defaultdict(int)
     for key in iter_keys(client, bucket, suffix=suffix):
         batch_id, _, _ = key.partition("/")
@@ -62,8 +67,8 @@ async def reconcile_from_s3(
     """Reconcile the batches table with the actual S3 buckets. Idempotent."""
     client = s3_client(endpoint=hcp_endpoint)
 
-    cached = await to_thread.run_sync(_count_per_batch, client, cache_bucket, ".jpg")
-    transcribed = await to_thread.run_sync(_count_per_batch, client, output_bucket, ".xml")
+    cached = await to_thread.run_sync(_count_per_batch, client, cache_bucket, _CACHE_IMAGE_SUFFIX)
+    transcribed = await to_thread.run_sync(_count_per_batch, client, output_bucket, _ALTO_OUTPUT_SUFFIX)
 
     now = datetime.now(UTC).isoformat(timespec="seconds")
     rows = list((await session.exec(select(Batch))).all())

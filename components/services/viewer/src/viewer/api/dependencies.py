@@ -5,7 +5,7 @@ Resources come from `app.state` (set in lifespan), never module-level globals.
 """
 
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
 import httpx
 from fastapi import Depends, Request
@@ -13,12 +13,9 @@ from lancedb.table import AsyncTable
 from ray.job_submission import JobSubmissionClient
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from storage import S3Client
 from viewer.core.config import Settings
 from viewer.core.exceptions import ServiceUnavailableError
-
-
-if TYPE_CHECKING:
-    from mypy_boto3_s3 import S3Client
 
 
 def get_settings(request: Request) -> Settings:
@@ -29,7 +26,7 @@ def get_http(request: Request) -> httpx.AsyncClient:
     return request.app.state.http
 
 
-def get_s3(request: Request) -> "S3Client":
+def get_s3(request: Request) -> S3Client:
     s3 = request.app.state.s3
     if s3 is None:
         raise ServiceUnavailableError("S3 client not configured (HCP_ENDPOINT missing)")
@@ -61,7 +58,7 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 HttpDep = Annotated[httpx.AsyncClient, Depends(get_http)]
-S3Dep = Annotated["S3Client", Depends(get_s3)]
+S3Dep = Annotated[S3Client, Depends(get_s3)]
 LinesTblDep = Annotated[AsyncTable | None, Depends(get_lines_tbl)]
 CatalogTblDep = Annotated[AsyncTable | None, Depends(get_catalog_tbl)]
 RayClientDep = Annotated[JobSubmissionClient | None, Depends(get_ray_client)]

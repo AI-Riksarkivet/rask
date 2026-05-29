@@ -16,13 +16,15 @@ import asyncio
 import logging
 
 import httpx
+from anyio import to_thread
 from ray.job_submission import JobSubmissionClient
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from viewer.core.config import Settings
-from viewer.models.enums import Pipeline
+from viewer.models.pipelines import PIPELINE_SPECS
 from viewer.services.orchestrator.derive import derive_state
+from viewer.services.ray_dashboard import build_client
 from viewer.services.submission import submit_chunk
 from viewer.services.sync import reconcile_from_s3
 
@@ -57,34 +59,23 @@ async def tick(
             return
         if ray_client is None:
             return
-        if state.prefetch is None or state.htr is None:
+        if state.prefetch is None:
+            return
+        if state.htr is None:
             return
 
-        output_uri = f"s3://{settings.output_bucket}"
-        if state.prefetch.running is None and state.prefetch.next is not None:
-            log.info(f"orchestrator: submitting prefetch for chunk {state.prefetch.next}")
-            await submit_chunk(
-                session,
-                ray_client,
-                chunk_id=state.prefetch.next,
-                repo_root=settings.repo_root,
-                cache_bucket=settings.cache_bucket,
-                output=output_uri,
-                iiif_url=settings.iiif_url,
-                pipeline=Pipeline.PREFETCH.value,
-            )
-        if state.htr.running is None and state.htr.next is not None:
-            log.info(f"orchestrator: submitting {settings.htr_pipeline} for chunk {state.htr.next}")
-            await submit_chunk(
-                session,
-                ray_client,
-                chunk_id=state.htr.next,
-                repo_root=settings.repo_root,
-                cache_bucket=settings.cache_bucket,
-                output=output_uri,
-                iiif_url=settings.iiif_url,
-                pipeline=settings.htr_pipeline,
-            )
+        # Submit EVERY eligible chunk per lane; Ray/Kueue queue what doesn't fit.
+        # derive_state already excludes in-flight + cooled-down chunks, so this
+        # can't re-submit a running chunk.
+        params = settings.runner_params()
+        prefetch_spec = PIPELINE_SPECS[settings.prefetch_pipeline]
+        for cid in state.prefetch.eligible:
+            log.info(f"orchestrator: submitting {settings.prefetch_pipeline} for chunk {cid}")
+            await submit_chunk(session, ray_client, chunk_id=cid, params=params, spec=prefetch_spec)
+        htr_spec = PIPELINE_SPECS[settings.htr_pipeline]
+        for cid in state.htr.eligible:
+            log.info(f"orchestrator: submitting {settings.htr_pipeline} for chunk {cid}")
+            await submit_chunk(session, ray_client, chunk_id=cid, params=params, spec=htr_spec)
 
 
 async def run_loop(
@@ -94,12 +85,23 @@ async def run_loop(
     ray_client: JobSubmissionClient | None,
     http: httpx.AsyncClient,
 ) -> None:
-    """Tick forever until cancelled. A failure in one tick is logged and the loop continues."""
+    """Tick forever until cancelled. A failure in one tick is logged and the loop continues.
+
+    If Ray was unreachable at viewer boot, `ray_client` is None and stays that way for
+    the task's life — so we re-attempt the (cheap) build each tick while it's None.
+    A client that connected once is reused: it's a stateless HTTP wrapper that
+    reconnects per request, so a Ray restart needs no rebuild.
+    """
     interval = settings.orchestrator_interval_seconds
     log.info(f"orchestrator loop started, interval={interval}s")
+    client = ray_client
     while True:
+        if client is None:
+            client = await to_thread.run_sync(build_client, settings.ray_dashboard_url)
+            if client is not None:
+                log.info("orchestrator: connected to Ray dashboard")
         try:
-            await tick(settings=settings, sessionmaker=sessionmaker, ray_client=ray_client, http=http)
+            await tick(settings=settings, sessionmaker=sessionmaker, ray_client=client, http=http)
         except Exception:
             log.exception("orchestrator tick failed; continuing")
         try:

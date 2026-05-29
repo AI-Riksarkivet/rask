@@ -33,20 +33,11 @@ class BrowseTier(StrEnum):
     TRANSCRIBED = "transcribed"
 
 
-# ── HTR pipeline + Ray actor names ───────────────────────────────────────
+# ── Ray actor names ──────────────────────────────────────────────────────
 
-
-class Pipeline(StrEnum):
-    """The two Ray Data pipelines viewer tracks. Submission IDs are namespaced
-    `<pipeline>-chunk-<id>-of-<total>` — the prefix identifies which pipeline
-    a running job belongs to."""
-
-    PREFETCH = "prefetch"
-    HTR = "htr"
-
-    @property
-    def submission_id_prefix(self) -> str:
-        return f"{self.value}-"
+# Pipeline identity + concurrency lanes now live in
+# `viewer.models.pipelines` (the `Slot` StrEnum + `PIPELINE_SPECS` registry),
+# which replaced the old `Pipeline` StrEnum that lived here.
 
 
 class RayStage(StrEnum):

@@ -7,8 +7,8 @@ from viewer.core.exceptions import NotFoundError, ServiceUnavailableError
 from viewer.models.batch import BatchPublic
 from viewer.models.enums import HtrStatus
 from viewer.schemas.batch import BatchListResponse, RandomBatchResponse
-from viewer.schemas.sync import SyncResponse
 from viewer.schemas.catalog import CatalogHit
+from viewer.schemas.sync import SyncResponse
 from viewer.services import batches as batches_service
 from viewer.services.discover import catalog as catalog_service
 from viewer.services.sync import reconcile_from_s3

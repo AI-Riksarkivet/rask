@@ -21,6 +21,7 @@ from viewer.core.config import Settings
 from viewer.core.exceptions import register_handlers
 from viewer.core.lifespan import make_lifespan
 from viewer.core.middleware import register_middleware
+from viewer.models.pipelines import PIPELINE_SPECS
 
 
 _DEFAULT_HOST = "0.0.0.0"
@@ -34,10 +35,18 @@ def _generate_unique_id(route: APIRoute) -> str:
     return route.name
 
 
+def _validate_pipeline_settings(settings: Settings) -> None:
+    """Fail fast if the configured slot pipelines aren't in the registry."""
+    for field, value in (("htr_pipeline", settings.htr_pipeline), ("prefetch_pipeline", settings.prefetch_pipeline)):
+        if value not in PIPELINE_SPECS:
+            raise ValueError(f"settings.{field}={value!r} is not a registered pipeline; choose from {sorted(PIPELINE_SPECS)}")
+
+
 def create_app() -> FastAPI:
     load_dotenv()
     derive_hcp_creds()
     settings = Settings.model_validate({})
+    _validate_pipeline_settings(settings)
 
     app = FastAPI(
         title="viewer",

@@ -56,14 +56,14 @@ async def search_catalog(
     fts = tbl.query().nearest_to_text(query, columns=_FTS_COLUMN)
     rows = await fts.select(_CATALOG_COLS).limit(limit).to_list(timeout=timeout)
     bild_ids = [r["bild_id"] for r in rows if r.get("bild_id")]
-    listed, cached, transcribed = await local_batch_status(session, bild_ids)
+    status = await local_batch_status(session, bild_ids)
     hits: list[CatalogHit] = []
     for row in rows:
         bid = row.get("bild_id")
         hit = CatalogHit.model_validate(row)
-        hit.listed = bid in listed
-        hit.cached = bid in cached
-        hit.transcribed = bid in transcribed
+        hit.listed = bid in status.listed
+        hit.cached = bid in status.cached
+        hit.transcribed = bid in status.transcribed
         hits.append(hit)
     return CatalogSearchResponse(ok=True, query=query, count=len(hits), hits=hits)
 
