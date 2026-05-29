@@ -1,4 +1,25 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from viewer.models.pipelines import DEFAULT_PIPELINE, PIPELINE_SPECS
+
+
+class SubmitRequest(BaseModel):
+    """Body for POST /chunks/{id}/submit.
+
+    `pipeline` is an open string validated against the registry (not a
+    StrEnum/Literal) so adding a runner pipeline only touches PIPELINE_SPECS —
+    the API surface stays open. An unknown name raises a ValidationError, which
+    the RequestValidationError handler renders as 422.
+    """
+
+    pipeline: str = DEFAULT_PIPELINE
+
+    @field_validator("pipeline")
+    @classmethod
+    def _known_pipeline(cls, v: str) -> str:
+        if v not in PIPELINE_SPECS:
+            raise ValueError(f"unknown pipeline {v!r}; choose from {sorted(PIPELINE_SPECS)}")
+        return v
 
 
 class Chunk(BaseModel):

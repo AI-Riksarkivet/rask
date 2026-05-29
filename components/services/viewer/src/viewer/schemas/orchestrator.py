@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 from ray.dashboard.modules.job.common import JobStatus
 
-from viewer.models.enums import Pipeline, RayStage
+from viewer.models.enums import RayStage
 
 
 class StageStat(BaseModel):
@@ -19,19 +19,29 @@ class SlimJob(BaseModel):
     status: JobStatus | None = None
     start_time: float | None = None
     chunk_id: int | None = None
+    # Per-stage task counts for THIS job (from /api/v0/tasks/summarize), resolved
+    # via the job's own pipeline spec — htrflow → empty, not the htr actor names.
+    stages: list[StageStat] = Field(default_factory=list)
 
 
 class SlotState(BaseModel):
-    running: SlimJob | None = None
-    next: int | None = None
+    # All active (RUNNING/PENDING) jobs in this lane. The viewer no longer caps
+    # concurrency — Ray/Kueue queue what doesn't fit the cluster's resources.
+    running: list[SlimJob] = Field(default_factory=list)
+    # Chunk ids ready to submit now: ready, minus in-flight, minus cooldown.
+    # The loop submits ALL of these each tick.
+    eligible: list[int] = Field(default_factory=list)
+    # Total ready chunks in the lane (informational; len(eligible) <= queue_len).
     queue_len: int
-    stages: list[StageStat] = Field(default_factory=list)
 
 
 class Cooldown(BaseModel):
     submission_id: str
     chunk_id: int
-    pipeline: Pipeline
+    # Pipeline NAME (registry key in viewer.models.pipelines.PIPELINE_SPECS),
+    # e.g. "prefetch" / "htr" / "htrflow". The concurrency lane is derivable via
+    # PIPELINE_SPECS[pipeline].slot.
+    pipeline: str
     expires_in_secs: int
     # Why the job failed (from Ray's JobDetails) so the cooldown card is
     # self-explanatory instead of just "FAILED". driver_exit_code == 137 = OOM.

@@ -6,8 +6,24 @@ re-read env vars in routes or services.
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class RunnerParams(BaseModel):
+    """The runner's I/O config for one job submission — where its code lives
+    (`repo_root` → Ray working_dir) and the S3/IIIF endpoints it reads/writes.
+
+    Built once from `Settings.runner_params()` and threaded as a single value
+    through `submit_chunk` → `build_entrypoint`, instead of four separate args.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    repo_root: Path
+    cache_bucket: str
+    output: str
+    iiif_url: str
 
 
 class Settings(BaseSettings):
@@ -58,7 +74,10 @@ class Settings(BaseSettings):
     # the tick into a JetStream consumer. See viewer/services/orchestrator/loop.py.
     orchestrator_autostart: bool = Field(default=False, alias="RASK_ORCHESTRATOR_AUTOSTART")
     orchestrator_interval_seconds: int = Field(default=60, ge=10, alias="RASK_ORCHESTRATOR_INTERVAL_SECONDS")
+    # Pipeline names the orchestrator submits per slot. Both must be registered in
+    # viewer.models.pipelines.PIPELINE_SPECS (validated at app startup).
     htr_pipeline: str = Field(default="htr", alias="RASK_HTR_PIPELINE")
+    prefetch_pipeline: str = Field(default="prefetch", alias="RASK_PREFETCH_PIPELINE")
 
     @property
     def resolved_batches_db(self) -> Path:
@@ -79,6 +98,15 @@ class Settings(BaseSettings):
     @property
     def resolved_spa_build(self) -> Path:
         return self.spa_build_dir or (self.repo_root / "components" / "apps" / "frontend" / "build")
+
+    def runner_params(self) -> RunnerParams:
+        """Bundle the runner's I/O config; centralizes the s3:// output prefix."""
+        return RunnerParams(
+            repo_root=self.repo_root,
+            cache_bucket=self.cache_bucket,
+            output=f"s3://{self.output_bucket}",
+            iiif_url=self.iiif_url,
+        )
 
     @property
     def lance_db_uri(self) -> str:

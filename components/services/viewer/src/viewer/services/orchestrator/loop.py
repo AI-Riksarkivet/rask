@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from viewer.core.config import Settings
-from viewer.models.enums import Pipeline
+from viewer.models.pipelines import PIPELINE_SPECS
 from viewer.services.orchestrator.derive import derive_state
 from viewer.services.ray_dashboard import build_client
 from viewer.services.submission import submit_chunk
@@ -64,31 +64,18 @@ async def tick(
         if state.htr is None:
             return
 
-        output_uri = f"s3://{settings.output_bucket}"
-        if state.prefetch.running is None and state.prefetch.next is not None:
-            log.info(f"orchestrator: submitting prefetch for chunk {state.prefetch.next}")
-            await submit_chunk(
-                session,
-                ray_client,
-                chunk_id=state.prefetch.next,
-                repo_root=settings.repo_root,
-                cache_bucket=settings.cache_bucket,
-                output=output_uri,
-                iiif_url=settings.iiif_url,
-                pipeline=Pipeline.PREFETCH.value,
-            )
-        if state.htr.running is None and state.htr.next is not None:
-            log.info(f"orchestrator: submitting {settings.htr_pipeline} for chunk {state.htr.next}")
-            await submit_chunk(
-                session,
-                ray_client,
-                chunk_id=state.htr.next,
-                repo_root=settings.repo_root,
-                cache_bucket=settings.cache_bucket,
-                output=output_uri,
-                iiif_url=settings.iiif_url,
-                pipeline=settings.htr_pipeline,
-            )
+        # Submit EVERY eligible chunk per lane; Ray/Kueue queue what doesn't fit.
+        # derive_state already excludes in-flight + cooled-down chunks, so this
+        # can't re-submit a running chunk.
+        params = settings.runner_params()
+        prefetch_spec = PIPELINE_SPECS[settings.prefetch_pipeline]
+        for cid in state.prefetch.eligible:
+            log.info(f"orchestrator: submitting {settings.prefetch_pipeline} for chunk {cid}")
+            await submit_chunk(session, ray_client, chunk_id=cid, params=params, spec=prefetch_spec)
+        htr_spec = PIPELINE_SPECS[settings.htr_pipeline]
+        for cid in state.htr.eligible:
+            log.info(f"orchestrator: submitting {settings.htr_pipeline} for chunk {cid}")
+            await submit_chunk(session, ray_client, chunk_id=cid, params=params, spec=htr_spec)
 
 
 async def run_loop(
