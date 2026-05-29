@@ -21,7 +21,7 @@ _THUMB_KEY_PREFIX = "thumbs/"
 _LINE_COLS = list(LineRow.model_fields)
 
 
-async def search_lines(tbl: AsyncTable | None, query: str, limit: int, timeout: timedelta) -> SearchResponse:
+async def search_lines(tbl: AsyncTable | None, query: str, limit: int, timeout: timedelta, *, api_prefix: str) -> SearchResponse:
     if tbl is None:
         return SearchResponse(ok=True, query=query, count=0, hits=[])
     fts = tbl.query().nearest_to_text(query, columns=_FTS_COLUMN)
@@ -29,7 +29,7 @@ async def search_lines(tbl: AsyncTable | None, query: str, limit: int, timeout: 
     hits: list[SearchHit] = []
     for row in rows:
         if row.get("thumb_key"):
-            row["thumb_url"] = f"/api/search/thumb/{row['thumb_key']}"
+            row["thumb_url"] = f"{api_prefix}/search/thumb/{row['thumb_key']}"
         hits.append(SearchHit.model_validate(row))
     return SearchResponse(ok=True, query=query, count=len(hits), hits=hits)
 

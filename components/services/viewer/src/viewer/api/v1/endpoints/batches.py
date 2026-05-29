@@ -2,8 +2,8 @@ from datetime import timedelta
 
 from fastapi import APIRouter
 
-from viewer.api.dependencies import CatalogTblDep, SessionDep, SettingsDep
-from viewer.core.exceptions import NotFoundError, ServiceUnavailableError
+from viewer.api.dependencies import CatalogTblDep, S3Dep, SessionDep, SettingsDep
+from viewer.core.exceptions import NotFoundError
 from viewer.models.batch import BatchPublic
 from viewer.models.enums import HtrStatus
 from viewer.schemas.batch import BatchListResponse, RandomBatchResponse
@@ -43,14 +43,9 @@ async def get_batch_catalog(batch_id: str, tbl: CatalogTblDep, settings: Setting
 
 
 @router.post("/sync")
-async def sync_batches(session: SessionDep, settings: SettingsDep) -> SyncResponse:
-    if not settings.hcp_endpoint:
-        raise ServiceUnavailableError("HCP_ENDPOINT not configured")
-    await reconcile_from_s3(
-        session,
-        hcp_endpoint=settings.hcp_endpoint,
-        cache_bucket=settings.cache_bucket,
-        output_bucket=settings.output_bucket,
-    )
+async def sync_batches(session: SessionDep, settings: SettingsDep, s3: S3Dep) -> SyncResponse:
+    # S3Dep yields a 503 when S3 is unconfigured (HCP_ENDPOINT unset), so this
+    # needs no explicit hcp_endpoint guard.
+    await reconcile_from_s3(session, s3, cache_bucket=settings.cache_bucket, output_bucket=settings.output_bucket)
     payload = await batches_service.list_batches(session)
     return SyncResponse(**payload.model_dump())

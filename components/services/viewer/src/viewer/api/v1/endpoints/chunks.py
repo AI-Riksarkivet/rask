@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, Path
 
 from viewer.api.dependencies import RayClientDep, SessionDep, SettingsDep
 from viewer.core.exceptions import ServiceUnavailableError
@@ -24,7 +24,7 @@ async def list_chunks(session: SessionDep) -> ChunkListResponse:
 
 @router.post("/{chunk_id}/submit")
 async def submit_chunk(
-    chunk_id: int,
+    chunk_id: Annotated[int, Path(ge=1)],
     session: SessionDep,
     settings: SettingsDep,
     ray_client: RayClientDep,
@@ -47,7 +47,7 @@ async def submit_chunk(
 
 @router.post("/{chunk_id}/stop")
 async def stop_chunk(
-    chunk_id: int,
+    chunk_id: Annotated[int, Path(ge=1)],
     session: SessionDep,
     ray_client: RayClientDep,
 ) -> StopResult:

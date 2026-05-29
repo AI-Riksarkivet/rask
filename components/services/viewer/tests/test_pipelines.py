@@ -396,3 +396,33 @@ def test_prefetch_can_be_stopped_via_http(client: TestClient, fake_ray: _FakeRay
     assert stop.status_code == 200, stop.text
     assert stop.json()["stopped_submission_id"] == sid
     assert fake_ray.stopped == [sid]
+
+
+# ── audit-fix regression guards: error paths return RFC 9457, not 500/404-by-luck ──
+
+
+def test_submit_unknown_chunk_returns_404(client: TestClient, fake_ray: _FakeRayClient) -> None:
+    """A chunk with no manifest-ok batches is a client condition → 404 (NotFoundError),
+    not a generic 500. Guards the submission.py ValueError-as-500 fix; nothing is submitted."""
+    resp = client.post("/api/v1/chunks/999/submit", json={"pipeline": "testrunner"})
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["status"] == 404
+    assert fake_ray.submitted == []
+
+
+def test_stop_chunk_with_no_running_job_returns_404(client: TestClient) -> None:
+    """Stopping a chunk that was never submitted (no current_rayjob_id) → 404, not a 500.
+    Guards the stop_chunk ValueError-as-500 fix."""
+    resp = client.post("/api/v1/chunks/1/stop")
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["status"] == 404
+
+
+def test_non_positive_chunk_id_rejected_at_boundary(client: TestClient, fake_ray: _FakeRayClient) -> None:
+    """chunk_id is 1-based; Path(ge=1) rejects 0/negative with 422 at the boundary,
+    before the service runs (which would otherwise surface as a 500)."""
+    submit = client.post("/api/v1/chunks/0/submit", json={"pipeline": "testrunner"})
+    stop = client.post("/api/v1/chunks/0/stop")
+    assert submit.status_code == 422, submit.text
+    assert stop.status_code == 422, stop.text
+    assert fake_ray.submitted == []

@@ -2,7 +2,8 @@
 
 Lists each bucket once, groups keys by `<batch_id>/...` prefix, then updates
 row state (cached_pages, transcribed_pages, htr_status, timestamps). Async
-on top of sync boto3 via `anyio.to_thread`.
+on top of the synchronous storage client (`storage.s3_client` / `iter_keys`)
+via `anyio.to_thread`.
 
 Idempotent — safe to call from the lifespan orchestrator loop and from
 POST /batches/sync without coordination.
@@ -15,7 +16,7 @@ from anyio import to_thread
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from storage import S3Client, iter_keys, s3_client
+from storage import S3Client, iter_keys
 from viewer.models.batch import Batch
 from viewer.models.enums import HtrStatus
 from viewer.schemas.sync import SyncResult
@@ -59,14 +60,16 @@ def _count_per_batch(client: S3Client, bucket: str, suffix: str) -> dict[str, in
 
 async def reconcile_from_s3(
     session: AsyncSession,
+    client: S3Client,
     *,
-    hcp_endpoint: str,
     cache_bucket: str,
     output_bucket: str,
 ) -> SyncResult:
-    """Reconcile the batches table with the actual S3 buckets. Idempotent."""
-    client = s3_client(endpoint=hcp_endpoint)
+    """Reconcile the batches table with the actual S3 buckets. Idempotent.
 
+    `client` is the lifespan-owned S3 client (`app.state.s3`), threaded in so the
+    reconcile reuses it instead of building a fresh client per call/tick.
+    """
     cached = await to_thread.run_sync(_count_per_batch, client, cache_bucket, _CACHE_IMAGE_SUFFIX)
     transcribed = await to_thread.run_sync(_count_per_batch, client, output_bucket, _ALTO_OUTPUT_SUFFIX)
 

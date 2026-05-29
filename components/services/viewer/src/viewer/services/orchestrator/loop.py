@@ -21,6 +21,7 @@ from ray.job_submission import JobSubmissionClient
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from storage import S3Client
 from viewer.core.config import Settings
 from viewer.models.pipelines import PIPELINE_SPECS
 from viewer.services.orchestrator.derive import derive_state
@@ -38,16 +39,12 @@ async def tick(
     sessionmaker: async_sessionmaker[AsyncSession],
     ray_client: JobSubmissionClient | None,
     http: httpx.AsyncClient,
+    s3: S3Client | None,
 ) -> None:
     """One full tick: sync + decide + submit. Idempotent end-to-end."""
     async with sessionmaker() as session:
-        if settings.hcp_endpoint:
-            await reconcile_from_s3(
-                session,
-                hcp_endpoint=settings.hcp_endpoint,
-                cache_bucket=settings.cache_bucket,
-                output_bucket=settings.output_bucket,
-            )
+        if s3 is not None:
+            await reconcile_from_s3(session, s3, cache_bucket=settings.cache_bucket, output_bucket=settings.output_bucket)
 
         state = await derive_state(
             http=http,
@@ -84,6 +81,7 @@ async def run_loop(
     sessionmaker: async_sessionmaker[AsyncSession],
     ray_client: JobSubmissionClient | None,
     http: httpx.AsyncClient,
+    s3: S3Client | None,
 ) -> None:
     """Tick forever until cancelled. A failure in one tick is logged and the loop continues.
 
@@ -101,7 +99,7 @@ async def run_loop(
             if client is not None:
                 log.info("orchestrator: connected to Ray dashboard")
         try:
-            await tick(settings=settings, sessionmaker=sessionmaker, ray_client=client, http=http)
+            await tick(settings=settings, sessionmaker=sessionmaker, ray_client=client, http=http, s3=s3)
         except Exception:
             log.exception("orchestrator tick failed; continuing")
         try:
