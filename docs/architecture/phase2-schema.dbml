@@ -1,0 +1,80 @@
+Enum manifest_status {
+  ok
+  http_403
+  http_400
+  error
+  pending
+}
+
+Enum htr_status {
+  pending
+  cached
+  partial
+  done
+  verification_failed
+}
+
+// Which Ray job ran on the chunk — matches the pipeline part of the
+// submission_id "<pipeline>-chunk-NNN-of-MMM".
+Enum pipeline {
+  prefetch
+  htr
+  htrflow
+}
+
+// A processing run. Has many chunks.
+Table projects {
+  project_id     varchar      [pk]
+  name           varchar
+  rask_version   varchar
+  ordered_by     varchar
+  created_at     timestamp
+}
+
+// Operational unit (job). Belongs to a project, holds some batches.
+// chunk_total is the global "of-MMM"; current rayjob is chunk-grain.
+Table chunks {
+  chunk_id                      integer    [pk]
+  project_id                    varchar    [not null]  // FK -> projects
+  chunk_total                   integer
+  current_rayjob_id             varchar
+  current_rayjob_pipeline       pipeline               // which job was ran
+  current_rayjob_submitted_at   varchar
+}
+
+// A batch = one volume. Descriptive metadata from the EAD catalog — immutable.
+// start_date/end_date = the historical range the records COVER (not processing).
+Table batches {
+  batch_id                varchar    [pk, not null]
+  chunk_id                integer                       // FK -> chunks, nullable
+  reference_code          varchar                       // arkiv_referenskod
+  archive_title           varchar                       // arkiv_titel
+  volume                  varchar                       // volym
+  start_date              varchar                       // startdatum — content date range
+  end_date                varchar                       // slutdatum  — content date range
+  page_count              integer
+  iiif_endpoint           varchar
+  htr_done_previously     varchar                       // htrad_tidigare
+  rights_marking_volume   varchar                       // rattighetsmarkning_volym
+  rights_marking_batch    varchar                       // rattighetsmarkning_batch
+}
+
+// Mutable processing state — written by sync.py / orchestrator. 1:1 with batches.
+// started_at/finished_at = when the PIPELINE ran (not the content date range).
+Table batch_state {
+  batch_id            varchar          [pk]   // FK -> batches, 1:1
+  cached_pages        integer          [not null, default: 0]
+  transcribed_pages   integer          [not null, default: 0]
+  htr_status          htr_status       [not null, default: 'pending']
+  manifest_status     manifest_status
+  manifest_error      varchar
+  fetched_at          varchar                 // when manifest was fetched
+  started_at          varchar                 // when HTR processing began
+  finished_at         varchar                 // when HTR processing finished
+  last_error          varchar
+  last_synced_at      varchar
+}
+
+Ref: chunks.project_id     > projects.project_id
+Ref: batches.chunk_id      > chunks.chunk_id
+Ref: batch_state.batch_id  - batches.batch_id   // one-to-one
