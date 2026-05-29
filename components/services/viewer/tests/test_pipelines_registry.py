@@ -7,12 +7,17 @@ validator) need no I/O. The submit/stop tests run against an in-memory async
 sqlite with a fake Ray client so the prefetch-stop fix is exercised end-to-end.
 """
 
+import time
 from collections.abc import AsyncIterator
+from datetime import timedelta
 from typing import cast
 
+import httpx
 import pytest
 import pytest_asyncio
+from lancedb.table import AsyncTable
 from pydantic import ValidationError
+from ray.dashboard.modules.job.common import JobStatus
 from ray.job_submission import JobSubmissionClient
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel
@@ -24,6 +29,7 @@ from viewer.models.enums import ManifestStatus, RayStage
 from viewer.models.pipelines import DEFAULT_PIPELINE, PIPELINE_SPECS, Slot, spec_for_submission_id
 from viewer.schemas.chunk import SubmitRequest
 from viewer.services import submission as submission_service
+from viewer.services.discover import search as search_service
 from viewer.services.orchestrator import derive
 
 
@@ -167,3 +173,138 @@ async def test_prefetch_can_be_submitted_then_stopped(session: AsyncSession, tmp
     assert stop.stopped is True
     assert stop.stopped_submission_id == result.submission_id
     assert fake.stopped == [result.submission_id]
+
+
+# ── thumb_url carries the api_prefix (regression guard for the missing-/v1 bug) ──
+
+
+class _FakeLinesTbl:
+    """Async LanceDB table stand-in: the query() chain returns the seeded rows."""
+
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self._rows = rows
+
+    def query(self) -> "_FakeLinesTbl":
+        return self
+
+    def nearest_to_text(self, query: str, columns: str) -> "_FakeLinesTbl":
+        return self
+
+    def select(self, cols: list[str]) -> "_FakeLinesTbl":
+        return self
+
+    def limit(self, n: int) -> "_FakeLinesTbl":
+        return self
+
+    async def to_list(self, timeout: timedelta) -> list[dict[str, object]]:
+        return self._rows
+
+
+@pytest.mark.asyncio
+async def test_search_thumb_url_includes_api_prefix() -> None:
+    """The bug emitted /api/search/thumb/... (no /v1) so every line thumbnail 404'd
+    through the SPA. The URL must be built from settings.api_prefix."""
+    tbl = _FakeLinesTbl([{"batch_id": "VOL_A", "text": "hej", "thumb_key": "thumbs/VOL_A/0001.jpg"}])
+    resp = await search_service.search_lines(cast(AsyncTable, tbl), "hej", 10, timedelta(seconds=5), api_prefix="/api/v1")
+    assert resp.hits[0].thumb_url == "/api/v1/search/thumb/thumbs/VOL_A/0001.jpg"
+
+
+# ── derive_state eligibility: eligible = ready - in-flight - cooldown ──────
+
+
+class _FakeJob:
+    """Minimal Ray JobDetails stand-in for the list_jobs surface derive reads."""
+
+    def __init__(self, submission_id: str, status: JobStatus, *, start_time: int = 0, end_time: int | None = None) -> None:
+        self.submission_id = submission_id
+        self.status = status
+        self.entrypoint = ""
+        self.start_time = start_time
+        self.end_time = end_time
+
+    def dict(self) -> dict[str, object]:
+        return {
+            "submission_id": self.submission_id,
+            "status": self.status,
+            "entrypoint": self.entrypoint,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+        }
+
+
+class _FakeDeriveClient:
+    """list_jobs returns configurable jobs; get_job_info → None (skip per-stage telemetry)."""
+
+    def __init__(self, jobs: list[_FakeJob]) -> None:
+        self._jobs = jobs
+
+    def list_jobs(self) -> list[_FakeJob]:
+        return self._jobs
+
+    def get_job_info(self, submission_id: str) -> None:
+        return None
+
+
+@pytest_asyncio.fixture
+async def derive_session() -> AsyncIterator[AsyncSession]:
+    """chunk 2 prefetch-pending (cached < page_count); chunk 3 HTR-ready (fully cached, untranscribed)."""
+    engine = create_async_engine("sqlite+aiosqlite://")
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+    async with AsyncSession(engine) as s:
+        s.add(
+            Batch(
+                batch_id="B2", manifest_status=ManifestStatus.OK, page_count=40, cached_pages=20,
+                transcribed_pages=0, chunk_id=2, chunk_total=1, last_synced_at="2026-01-01T00:00:00+00:00",
+            )
+        )
+        s.add(
+            Batch(
+                batch_id="B3", manifest_status=ManifestStatus.OK, page_count=10, cached_pages=10,
+                transcribed_pages=0, chunk_id=3, chunk_total=1, last_synced_at="2026-01-01T00:00:00+00:00",
+            )
+        )
+        await s.commit()
+        yield s
+    await engine.dispose()
+
+
+async def _derive_state(jobs: list[_FakeJob], session: AsyncSession) -> derive.OrchestratorState:
+    async with httpx.AsyncClient() as http:
+        return await derive.derive_state(
+            http=http,
+            client=cast(JobSubmissionClient, _FakeDeriveClient(jobs)),
+            dashboard_url="http://127.0.0.1:1",
+            session=session,
+        )
+
+
+@pytest.mark.asyncio
+async def test_derive_eligibility_baseline(derive_session: AsyncSession) -> None:
+    """No Ray jobs: chunk 2 is prefetch-eligible, chunk 3 is htr-eligible."""
+    state = await _derive_state([], derive_session)
+    assert state.ok
+    assert state.prefetch is not None and state.prefetch.eligible == [2]
+    assert state.htr is not None and state.htr.eligible == [3]
+
+
+@pytest.mark.asyncio
+async def test_derive_eligibility_excludes_in_flight(derive_session: AsyncSession) -> None:
+    """A chunk with an active RUNNING job in its lane is excluded from eligible."""
+    jobs = [
+        _FakeJob("prefetch-chunk-002-of-001-20260101T000000", JobStatus.RUNNING),
+        _FakeJob("htr-chunk-003-of-001-20260101T000000", JobStatus.RUNNING),
+    ]
+    state = await _derive_state(jobs, derive_session)
+    assert state.prefetch is not None and state.prefetch.eligible == []
+    assert state.htr is not None and state.htr.eligible == []
+
+
+@pytest.mark.asyncio
+async def test_derive_eligibility_excludes_cooldown(derive_session: AsyncSession) -> None:
+    """A chunk whose recent job FAILED within the 600s cooldown is excluded, and a Cooldown is recorded."""
+    now_ms = int(time.time() * 1000)
+    jobs = [_FakeJob("htr-chunk-003-of-001-20260101T000000", JobStatus.FAILED, end_time=now_ms)]
+    state = await _derive_state(jobs, derive_session)
+    assert state.htr is not None and 3 not in state.htr.eligible
+    assert any(c.chunk_id == 3 for c in state.cooldowns)

@@ -215,7 +215,7 @@ async def proxy(
     body: bytes,
 ) -> ProxyResponse:
     """Forward an arbitrary path to the Ray Dashboard, same-origin to the browser."""
-    url = dashboard_url + "/" + path.lstrip("/")
+    url = f"{dashboard_url}/{path.lstrip('/')}"
     fwd = {k: v for k, v in headers.items() if k.lower() not in _HOP_BY_HOP and k.lower() != "host"}
     qs = query.decode() if isinstance(query, bytes) else query
     try:

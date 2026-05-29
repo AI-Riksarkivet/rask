@@ -75,6 +75,7 @@ def create_orchestrator_task(app: FastAPI) -> asyncio.Task[None]:
             sessionmaker=app.state.db_sessionmaker,
             ray_client=app.state.ray_client,
             http=app.state.http,
+            s3=app.state.s3,
         ),
         name="orchestrator-loop",
     )

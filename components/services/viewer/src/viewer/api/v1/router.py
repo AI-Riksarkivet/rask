@@ -1,8 +1,10 @@
 """Aggregator router for v1.
 
-Endpoint modules own their full `/api/...` paths (no prefix added here) so the
-include site in `main.py` doesn't have to special-case paths that live outside
-`/api/` (e.g. the SPA fallback)."""
+Each endpoint module declares only its own resource prefix (`/batches`,
+`/search`, …); this aggregator adds none, and `main.py` applies the v1 prefix
+(`settings.api_prefix`, default `/api/v1`) once at the include site. So any
+server-generated URL must be built from `settings.api_prefix`, never a
+hardcoded `/api/...` literal."""
 
 from fastapi import APIRouter
 

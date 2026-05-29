@@ -18,7 +18,7 @@ from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from viewer.core.config import RunnerParams
-from viewer.core.exceptions import ServiceUnavailableError
+from viewer.core.exceptions import NotFoundError, ServiceUnavailableError
 from viewer.models.batch import Batch
 from viewer.models.enums import ManifestStatus
 from viewer.models.pipelines import PipelineSpec
@@ -91,7 +91,7 @@ async def submit_chunk(
     """Submit one chunk to Ray. When `spec.tracks_rayjob_id`, also tag current_rayjob_id on the rows."""
     membership = await _fetch_chunk_batches(session, chunk_id)
     if not membership.batch_ids:
-        raise ValueError(f"no batches found for chunk_id={chunk_id}")
+        raise NotFoundError(f"no batches found for chunk_id={chunk_id}")
 
     entrypoint = build_entrypoint(membership.batch_ids, params=params, spec=spec)
 
@@ -149,7 +149,7 @@ async def stop_chunk(
     """
     submission_id = (await session.exec(select(Batch.current_rayjob_id).where(col(Batch.chunk_id) == chunk_id).limit(1))).first()
     if not submission_id:
-        raise ValueError(f"no running job for chunk_id={chunk_id}")
+        raise NotFoundError(f"no running job for chunk_id={chunk_id}")
 
     try:
         stopped = await to_thread.run_sync(ray_client.stop_job, submission_id)

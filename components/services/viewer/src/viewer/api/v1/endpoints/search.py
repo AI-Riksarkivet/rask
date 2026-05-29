@@ -22,7 +22,7 @@ async def search_lines(
     q: Annotated[str, Query(min_length=1, max_length=500)],
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
 ) -> SearchResponse:
-    return await search_service.search_lines(tbl, q, limit, timedelta(seconds=settings.lance_query_timeout_seconds))
+    return await search_service.search_lines(tbl, q, limit, timedelta(seconds=settings.lance_query_timeout_seconds), api_prefix=settings.api_prefix)
 
 
 @router.get("/stats")
