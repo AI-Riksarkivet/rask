@@ -23,6 +23,7 @@ AltoExport) chain.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,12 @@ from ray import serve
 
 
 logger = logging.getLogger(__name__)
+
+# Replica/GPU sizing shares the same env knobs as transcribe_service so both
+# HTR Serve apps co-reside on a 2-GPU pool: 2 apps x 2 replicas x 0.49 = 1.96
+# GPU total. See transcribe_service.SERVE_REPLICAS for the budgeting rationale.
+SERVE_REPLICAS = int(os.environ.get("RASK_SERVE_REPLICAS", "2"))
+SERVE_GPU_FRAC = float(os.environ.get("RASK_SERVE_GPU_FRAC", "0.49"))
 
 
 PIPELINE_YAML = Path(__file__).parent / "htrflow_pipeline.yaml"
@@ -53,8 +60,8 @@ def _shard(items: list, num_shards: int) -> list[list]:
 
 @serve.deployment(
     name="HTRFlowService",
-    num_replicas=3,
-    ray_actor_options={"num_cpus": 2, "num_gpus": 1},
+    num_replicas=SERVE_REPLICAS,
+    ray_actor_options={"num_cpus": 2, "num_gpus": SERVE_GPU_FRAC},
     max_ongoing_requests=4,
 )
 class HTRFlowDeployment:

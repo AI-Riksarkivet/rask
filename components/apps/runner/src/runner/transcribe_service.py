@@ -24,6 +24,7 @@ method bodies.
 """
 
 import logging
+import os
 
 from PIL import Image
 from ray import serve
@@ -39,12 +40,18 @@ PREPROCESS_WORKERS = 4
 DEFAULT_MODEL = "Riksarkivet/trocr-base-handwritten-hist-swe-2"
 
 
-# `num_replicas=3` packs one replica per physical GPU (0.99 GPU each, 0.997
-# claimed total). `max_ongoing_requests=2` lets each replica pipeline two
-# batches (one preprocessing on CPU while the previous runs on GPU).
+# Replica/GPU sizing is env-driven so transcribe + htrflow can co-reside on a
+# sub-3-GPU pool. Defaults pack both apps onto a 2-GPU Ray head: 2 apps x 2
+# replicas x 0.49 = 1.96 GPU, leaving ~0.04 for the htr pipeline's Layout/Line
+# fractions (num_gpus=0.001 each). `max_ongoing_requests=2` lets each replica
+# pipeline two batches (one preprocessing on CPU while the previous runs on GPU).
+SERVE_REPLICAS = int(os.environ.get("RASK_SERVE_REPLICAS", "2"))
+SERVE_GPU_FRAC = float(os.environ.get("RASK_SERVE_GPU_FRAC", "0.49"))
+
+
 @serve.deployment(
-    num_replicas=3,
-    ray_actor_options={"num_gpus": 0.99, "num_cpus": 1},
+    num_replicas=SERVE_REPLICAS,
+    ray_actor_options={"num_gpus": SERVE_GPU_FRAC, "num_cpus": 1},
     max_ongoing_requests=2,
 )
 class TranscribeService:

@@ -1,12 +1,13 @@
-.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer viewer-frontend viewer-frontend-build ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap
+.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer viewer-frontend viewer-frontend-build ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve
 
 help:
 	@echo "Targets:"
 	@echo "  install build test lint fmt clean storybook"
 	@echo "  typecheck check ci"
 	@echo "  viewer viewer-frontend viewer-frontend-build"
-	@echo "  ray-up ray-down ray-status"
-	@echo "  serve-up serve-down serve-status"
+	@echo "  ray-up ray-down ray-status   ray-up-htr (2-GPU pool, GPUs 0,1)"
+	@echo "  serve-up serve-down serve-status   serve-up-both (transcribe+htrflow)"
+	@echo "  qwen-serve                             — vLLM Qwen3.6-27B on GPU 2 for OpenCode"
 	@echo "  search-index search-index-fresh harvest-ead catalog-index"
 	@echo "  pg-up pg-down pg-status pg-migrate pg-revision MSG='...'"
 	@echo "  claude-bootstrap                       — install Claude Code skills & verify config"
@@ -108,6 +109,56 @@ serve-down:
 
 serve-status:
 	uv run python components/scripts/deploy_serve.py status
+
+# ---- GPU split: HTR on 2 GPUs, Qwen LLM on the 3rd -------------------------
+# transcribe + htrflow co-reside on a 2-GPU Ray pool (GPUs 0,1) via fractional
+# Serve reservations: 2 apps x RASK_SERVE_REPLICAS x RASK_SERVE_GPU_FRAC.
+# Defaults: 2 x 2 x 0.49 = 1.96 GPU, leaving headroom for the htr pipeline's
+# Layout/Line num_gpus=0.001 fractions. GPU 2 is reserved for qwen-serve.
+HTR_CUDA_DEVICES    ?= 0,1
+RASK_SERVE_REPLICAS ?= 2
+RASK_SERVE_GPU_FRAC ?= 0.49
+
+ray-up-htr:
+	@if ray status >/dev/null 2>&1; then \
+	  echo "Ray already running. ray-down first to re-pin the GPU pool."; \
+	else \
+	  CUDA_VISIBLE_DEVICES=$(HTR_CUDA_DEVICES) RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 \
+	    uv run --no-sync ray start --head --port=$(RAY_HEAD_PORT) --num-gpus=2 \
+	    --dashboard-host=0.0.0.0 --dashboard-port=$(RAY_DASHBOARD_PORT); \
+	  echo "Ray (2-GPU HTR pool, devices $(HTR_CUDA_DEVICES)) dashboard: http://localhost:$(RAY_DASHBOARD_PORT)"; \
+	fi
+
+serve-up-both:
+	RASK_SERVE_REPLICAS=$(RASK_SERVE_REPLICAS) RASK_SERVE_GPU_FRAC=$(RASK_SERVE_GPU_FRAC) \
+	  RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --no-sync python components/scripts/deploy_serve.py up --app transcribe
+	RASK_SERVE_REPLICAS=$(RASK_SERVE_REPLICAS) RASK_SERVE_GPU_FRAC=$(RASK_SERVE_GPU_FRAC) \
+	  RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --no-sync python components/scripts/deploy_serve.py up --app htrflow
+
+# ---- Qwen3.6-27B LLM backend for OpenCode (external, isolated venv) --------
+# Lives outside the rask uv workspace: vLLM pins torch/transformers that clash
+# with the HTR venv. Pinned to GPU 2 so it never contends with the HTR pool.
+# Exposes an OpenAI-compatible API at http://localhost:$(QWEN_PORT)/v1.
+QWEN_VENV        ?= $(HOME)/qwen-serve/.venv
+QWEN_MODEL       ?= Qwen/Qwen3.6-27B
+# Port 8001, not 8000: Ray Serve's HTTP proxy holds :8000 (unused by the HTR
+# pipeline, which calls Serve via in-process handles, but it owns the port).
+QWEN_PORT        ?= 8001
+QWEN_CTX         ?= 131072
+QWEN_CUDA_DEVICE ?= 2
+# Gated-DeltaNet (Mamba-style) needs one state-cache block per concurrent
+# sequence. The default 1024 exceeds what fits alongside 131K-token KV cache;
+# a single-user OpenCode backend needs only a handful, so cap well under that.
+QWEN_MAX_SEQS    ?= 256
+
+# VLLM_USE_FLASHINFER_SAMPLER=0: this box has no CUDA toolkit (nvcc), so
+# flashinfer's JIT-compiled sampler kernel can't build. Fall back to vLLM's
+# native PyTorch top-k/top-p sampler (no compiler needed, negligible impact).
+qwen-serve:
+	CUDA_VISIBLE_DEVICES=$(QWEN_CUDA_DEVICE) VLLM_USE_FLASHINFER_SAMPLER=0 \
+	  $(QWEN_VENV)/bin/vllm serve $(QWEN_MODEL) \
+	  --port $(QWEN_PORT) --tensor-parallel-size 1 \
+	  --max-model-len $(QWEN_CTX) --max-num-seqs $(QWEN_MAX_SEQS) --reasoning-parser qwen3
 
 # ---- search / catalog index ------------------------------------------------
 search-index:
