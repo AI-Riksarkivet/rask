@@ -197,6 +197,14 @@ async def cluster_status(http: httpx.AsyncClient, dashboard_url: str) -> RayClus
     except httpx.HTTPError as exc:
         return RayClusterPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
 
+    # The autoscaler's loadMetricsReport is empty on non-autoscaling clusters
+    # (e.g. the dev KubeRay) -> cluster totals stay 0. The per-node /nodes data
+    # is authoritative, so sum it whenever loadMetrics gave us nothing.
+    if nodes and not any(total.values()):
+        for k in total:
+            total[k] = sum(n.resources_total.get(k, 0.0) for n in nodes)
+            used[k] = sum(n.resources_used.get(k, 0.0) for n in nodes)
+
     return RayClusterPayload(
         ok=True,
         dashboard_url=dashboard_url,
