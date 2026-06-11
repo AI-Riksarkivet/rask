@@ -93,14 +93,32 @@ export interface RayClusterPayload {
 	alive_count?: number;
 	total_resources?: { CPU: number; GPU: number; memory: number };
 	used_resources?: { CPU: number; GPU: number; memory: number };
-	nodes?: Array<{
-		node_id: string | null;
-		node_ip: string | null;
-		alive: boolean;
-		resources_total: Record<string, number>;
-		resources_used: Record<string, number>;
-	}>;
+	nodes?: RayNode[];
 	error?: string;
+}
+
+export interface RayGpu {
+	index: number | null;
+	name: string | null;
+	utilization_percent: number | null;
+	memory_used_mb: number | null;
+	memory_total_mb: number | null;
+	temperature_c: number | null;
+}
+
+export interface RayNode {
+	node_id: string | null;
+	node_ip: string | null;
+	hostname: string | null;
+	node_type: string | null;
+	is_head: boolean;
+	alive: boolean;
+	resources_total: Record<string, number>;
+	resources_used: Record<string, number>;
+	host_cpu_percent: number | null;
+	host_mem_total: number | null;
+	host_mem_used: number | null;
+	gpus: RayGpu[];
 }
 
 export async function rayHealth(): Promise<RayHealth> {

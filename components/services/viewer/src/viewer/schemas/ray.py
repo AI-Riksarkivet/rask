@@ -47,12 +47,33 @@ class RayJobsPayload(BaseModel):
     error: str | None = None
 
 
+class RayGpu(BaseModel):
+    """Real per-GPU hardware telemetry (from the node's `gpus[]`), distinct from
+    Ray's logical GPU reservation."""
+
+    index: int | None = None
+    name: str | None = None
+    utilization_percent: float | None = None
+    memory_used_mb: float | None = None
+    memory_total_mb: float | None = None
+    temperature_c: float | None = None
+
+
 class RayNode(BaseModel):
     node_id: str | None = None
     node_ip: str | None = None
+    hostname: str | None = None
+    node_type: str | None = None  # worker-group / tier, e.g. gpu-ada, gpu-a5000
+    is_head: bool = False
     alive: bool = False
+    # Ray's LOGICAL accounting — what actors/tasks have reserved.
     resources_total: dict[str, float] = Field(default_factory=dict)
     resources_used: dict[str, float] = Field(default_factory=dict)
+    # REAL host telemetry — what the hardware is actually doing.
+    host_cpu_percent: float | None = None
+    host_mem_total: float | None = None
+    host_mem_used: float | None = None
+    gpus: list[RayGpu] = Field(default_factory=list)
 
 
 class RayClusterPayload(BaseModel):

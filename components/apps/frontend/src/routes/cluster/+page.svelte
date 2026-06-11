@@ -30,10 +30,23 @@
 		return b / 1024 ** 3;
 	}
 
+	function mbGb(mb: number): number {
+		return mb / 1024;
+	}
+
 	function pct(used: number, total: number): number {
 		if (!total) return 0;
 		return Math.min(100, (used / total) * 100);
 	}
+
+	// Real host memory aggregated across nodes (Ray's logical memory is ~0 used).
+	let realMem = $derived.by(() => {
+		const ns = payload?.nodes ?? [];
+		return {
+			used: ns.reduce((a, n) => a + (n.host_mem_used ?? 0), 0),
+			total: ns.reduce((a, n) => a + (n.host_mem_total ?? 0), 0)
+		};
+	});
 </script>
 
 <svelte:head>
@@ -103,17 +116,17 @@
 				</Card>
 				<Card class="p-4">
 					<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
-						Memory
+						Memory <span class="text-muted-foreground/60 normal-case">(host)</span>
 					</div>
 					<div class="mt-1 font-mono text-2xl tabular-nums">
-						{bytesGb(ur.memory).toFixed(0)}<span class="text-muted-foreground text-base"
-							>/{bytesGb(tr.memory).toFixed(0)} GiB</span
+						{bytesGb(realMem.used).toFixed(0)}<span class="text-muted-foreground text-base"
+							>/{bytesGb(realMem.total).toFixed(0)} GiB</span
 						>
 					</div>
 					<div class="bg-muted mt-1.5 h-1.5 w-full overflow-hidden rounded-full">
 						<div
 							class="h-full bg-violet-500 transition-all"
-							style:width={`${pct(ur.memory, tr.memory)}%`}
+							style:width={`${pct(realMem.used, realMem.total)}%`}
 						></div>
 					</div>
 				</Card>
@@ -129,7 +142,7 @@
 					<table class="w-full border-collapse text-xs">
 						<thead class="bg-card sticky top-0 z-10 text-left">
 							<tr class="border-b">
-								{#each ['state', 'node_id', 'ip', 'GPU', 'CPU', 'memory'] as h (h)}
+								{#each ['state', 'tier', 'node', 'GPU (util · resv)', 'VRAM · temp', 'CPU', 'memory (host)'] as h (h)}
 									<th class="text-muted-foreground px-3 py-2 font-medium">{h}</th>
 								{/each}
 							</tr>
@@ -140,8 +153,6 @@
 								{@const gpuU = n.resources_used.GPU ?? 0}
 								{@const cpuT = n.resources_total.CPU ?? 0}
 								{@const cpuU = n.resources_used.CPU ?? 0}
-								{@const memT = n.resources_total.memory ?? 0}
-								{@const memU = n.resources_used.memory ?? 0}
 								<tr class="border-border/40 hover:bg-muted/40 border-b">
 									<td class="px-3 py-1.5">
 										{#if n.alive}
@@ -149,18 +160,52 @@
 										{:else}
 											<Badge variant="destructive">dead</Badge>
 										{/if}
+										{#if n.is_head}
+											<Badge variant="secondary" class="ml-1">head</Badge>
+										{/if}
 									</td>
-									<td class="px-3 py-1.5 font-mono text-[11px]">{n.node_id?.slice(0, 12) ?? '—'}</td
-									>
-									<td class="px-3 py-1.5 font-mono">{n.node_ip ?? '—'}</td>
-									<td class="px-3 py-1.5 font-mono tabular-nums">
-										{gpuU.toFixed(1)}/{gpuT.toFixed(0)}
+									<td class="px-3 py-1.5 font-mono">{n.node_type ?? '—'}</td>
+									<td class="px-3 py-1.5">
+										<div class="font-mono">{n.hostname ?? n.node_id?.slice(0, 12) ?? '—'}</div>
+										<div class="text-muted-foreground font-mono text-[10px]">{n.node_ip ?? ''}</div>
 									</td>
 									<td class="px-3 py-1.5 font-mono tabular-nums">
-										{cpuU.toFixed(0)}/{cpuT.toFixed(0)}
+										{#if n.gpus.length}
+											{#each n.gpus as g (g.index)}
+												<div title={g.name ?? ''}>
+													{(g.utilization_percent ?? 0).toFixed(0)}%
+													<span class="text-muted-foreground"
+														>· {gpuU.toFixed(1)}/{gpuT.toFixed(0)}</span
+													>
+												</div>
+											{/each}
+										{:else}
+											<span class="text-muted-foreground">—</span>
+										{/if}
 									</td>
 									<td class="px-3 py-1.5 font-mono tabular-nums">
-										{bytesGb(memU).toFixed(0)}/{bytesGb(memT).toFixed(0)} GiB
+										{#if n.gpus.length}
+											{#each n.gpus as g (g.index)}
+												<div>
+													{mbGb(g.memory_used_mb ?? 0).toFixed(1)}/{mbGb(
+														g.memory_total_mb ?? 0
+													).toFixed(0)} GB
+													<span class="text-muted-foreground">· {(g.temperature_c ?? 0).toFixed(0)}°C</span
+													>
+												</div>
+											{/each}
+										{:else}
+											<span class="text-muted-foreground">—</span>
+										{/if}
+									</td>
+									<td class="px-3 py-1.5 font-mono tabular-nums">
+										{(n.host_cpu_percent ?? 0).toFixed(1)}%
+										<span class="text-muted-foreground">· {cpuU.toFixed(0)}/{cpuT.toFixed(0)}</span>
+									</td>
+									<td class="px-3 py-1.5 font-mono tabular-nums">
+										{bytesGb(n.host_mem_used ?? 0).toFixed(1)}/{bytesGb(n.host_mem_total ?? 0).toFixed(
+											0
+										)} GiB
 									</td>
 								</tr>
 							{/each}

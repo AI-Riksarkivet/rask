@@ -23,7 +23,7 @@ from anyio import to_thread
 from ray.exceptions import AuthenticationError
 from ray.job_submission import JobSubmissionClient
 
-from viewer.schemas.ray import ProxyResponse, RayClusterPayload, RayHealth, RayJob, RayJobsPayload, RayNode
+from viewer.schemas.ray import ProxyResponse, RayClusterPayload, RayGpu, RayHealth, RayJob, RayJobsPayload, RayNode
 
 
 log = logging.getLogger(__name__)
@@ -54,6 +54,13 @@ _RAY_KEY_IP = "ip"
 _RAY_KEY_RAYLET_STATE = "state"
 _RAYLET_STATE_ALIVE = "ALIVE"
 _NODES_VIEW_PARAM = "view=summary"
+# Per-node host telemetry (top-level node dict) + raylet identity fields.
+_RAY_KEY_HOSTNAME = "hostname"
+_RAY_KEY_CPU = "cpu"  # host CPU utilization %
+_RAY_KEY_MEM = "mem"  # [total, available, percent, used] bytes
+_RAY_KEY_GPUS = "gpus"
+_RAY_KEY_NODE_TYPE_NAME = "nodeTypeName"
+_RAY_KEY_IS_HEAD = "isHeadNode"
 _HOP_BY_HOP = {
     "connection",
     "keep-alive",
@@ -151,6 +158,17 @@ def _parse_logical(text: str) -> dict[str, float]:
     return used
 
 
+def _parse_gpu(g: dict) -> RayGpu:
+    return RayGpu(
+        index=g.get("index"),
+        name=g.get("name"),
+        utilization_percent=g.get("utilizationGpu"),
+        memory_used_mb=g.get("memoryUsed"),
+        memory_total_mb=g.get("memoryTotal"),
+        temperature_c=g.get("temperatureC"),
+    )
+
+
 async def cluster_status(http: httpx.AsyncClient, dashboard_url: str) -> RayClusterPayload:
     total = {"CPU": 0.0, "GPU": 0.0, "memory": 0.0}
     used = {"CPU": 0.0, "GPU": 0.0, "memory": 0.0}
@@ -183,13 +201,21 @@ async def cluster_status(http: httpx.AsyncClient, dashboard_url: str) -> RayClus
                     continue
                 parsed_used = _parse_logical(logical.get(node_id, ""))
                 rtotal = raylet.get(_RAY_KEY_RESOURCES_TOTAL) or {}
+                mem = n.get(_RAY_KEY_MEM) or []  # [total, available, percent, used]
                 nodes.append(
                     RayNode(
                         node_id=node_id,
                         node_ip=raylet.get(_RAY_KEY_NODE_MANAGER_ADDRESS) or n.get(_RAY_KEY_IP),
+                        hostname=n.get(_RAY_KEY_HOSTNAME),
+                        node_type=raylet.get(_RAY_KEY_NODE_TYPE_NAME),
+                        is_head=bool(raylet.get(_RAY_KEY_IS_HEAD)),
                         alive=raylet.get(_RAY_KEY_RAYLET_STATE) == _RAYLET_STATE_ALIVE,
                         resources_total={k: float(rtotal.get(k, 0) or 0) for k in total},
                         resources_used={k: parsed_used.get(k, 0.0) for k in total},
+                        host_cpu_percent=n.get(_RAY_KEY_CPU),
+                        host_mem_total=float(mem[0]) if len(mem) >= 1 else None,
+                        host_mem_used=float(mem[3]) if len(mem) >= 4 else None,
+                        gpus=[_parse_gpu(g) for g in (n.get(_RAY_KEY_GPUS) or [])],
                     )
                 )
         except httpx.HTTPError:
