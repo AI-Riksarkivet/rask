@@ -19,8 +19,8 @@ version must match the cluster's ray (currently 3.0.0.dev0) — rask's pinned
 2.55.1 will not do; submit from the `rayproject/ray-llm` image or a matching venv.
 
 Key deployment decisions (learned the hard way — keep them):
-  - Pinned to the **Ada** tier via the `gpu_ada` custom resource (0.5 GPU x 4
-    replicas). Gemma owns the Blackwell GPU; HTR must not land there.
+  - Pinned to the **Ada** tier via the `gpu_ada` custom resource (1 whole GPU x
+    4 replicas = the entire Ada tier). Gemma owns Blackwell; HTR owns Ada.
   - `runtime_env` installs deps with **uv** and lists `opencv-python-headless`
     BEFORE htrflow: uv resolves deterministically, so the GL-free cv2 wins over
     the full `opencv-python` htrflow pulls in (otherwise the replica dies on a
@@ -72,7 +72,7 @@ api = FastAPI()
     name="HTRFlow",
     num_replicas=4,
     ray_actor_options={
-        "num_gpus": 0.5,
+        "num_gpus": 1,
         "resources": {"gpu_ada": 0.001},
         # uv (like rask) resolves deterministically so opencv-python-headless's
         # GL-free cv2 wins over the full opencv-python htrflow pulls in -> no libGL.
