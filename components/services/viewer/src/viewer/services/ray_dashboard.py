@@ -159,7 +159,10 @@ async def cluster_status(http: httpx.AsyncClient, dashboard_url: str) -> RayClus
     try:
         cs_resp = await http.get(f"{dashboard_url}/api/cluster_status")
         cs_resp.raise_for_status()
-        cs = (cs_resp.json().get(_RAY_KEY_DATA) or {}).get(_RAY_KEY_CLUSTER_STATUS, {})
+        # `.get(key, {})` returns the *actual* value when the key exists — and
+        # non-autoscaling clusters (e.g. the dev KubeRay) report clusterStatus:
+        # null, which then crashed `.get` below. `or {}` coerces null -> {}.
+        cs = (cs_resp.json().get(_RAY_KEY_DATA) or {}).get(_RAY_KEY_CLUSTER_STATUS) or {}
         usage = (cs.get(_RAY_KEY_LOAD_METRICS) or {}).get(_RAY_KEY_USAGE) or {}
         for k in total:
             pair = usage.get(k)
