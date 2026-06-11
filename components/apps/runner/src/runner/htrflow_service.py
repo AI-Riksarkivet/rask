@@ -39,6 +39,18 @@ logger = logging.getLogger(__name__)
 SERVE_REPLICAS = int(os.environ.get("RASK_SERVE_REPLICAS", "2"))
 SERVE_GPU_FRAC = float(os.environ.get("RASK_SERVE_GPU_FRAC", "0.49"))
 
+# Optional GPU-tier pin. When set to a custom Ray resource advertised by a
+# worker group (e.g. "gpu_ada" on the dev-kuberay cluster), HTRFlow replicas
+# are constrained to that hardware tier. Unset locally — a single-node
+# serve-up advertises no such resource, so the default places replicas on any
+# available GPU. The value is a placement tag, reserved as a tiny fraction;
+# `num_gpus` above is the real GPU budget.
+SERVE_GPU_RESOURCE = os.environ.get("RASK_SERVE_GPU_RESOURCE") or None
+
+_HTR_ACTOR_OPTIONS: dict[str, Any] = {"num_cpus": 2, "num_gpus": SERVE_GPU_FRAC}
+if SERVE_GPU_RESOURCE:
+    _HTR_ACTOR_OPTIONS["resources"] = {SERVE_GPU_RESOURCE: 0.001}
+
 
 PIPELINE_YAML = Path(__file__).parent / "htrflow_pipeline.yaml"
 
@@ -61,7 +73,7 @@ def _shard(items: list, num_shards: int) -> list[list]:
 @serve.deployment(
     name="HTRFlowService",
     num_replicas=SERVE_REPLICAS,
-    ray_actor_options={"num_cpus": 2, "num_gpus": SERVE_GPU_FRAC},
+    ray_actor_options=_HTR_ACTOR_OPTIONS,
     max_ongoing_requests=4,
 )
 class HTRFlowDeployment:
