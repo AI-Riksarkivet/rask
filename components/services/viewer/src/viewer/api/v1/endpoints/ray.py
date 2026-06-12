@@ -21,7 +21,15 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from viewer.api.dependencies import HttpDep, RayClientDep, SettingsDep
-from viewer.schemas.ray import RayActorsPayload, RayClusterPayload, RayHealth, RayJobsPayload
+from viewer.schemas.ray import (
+    RayActorsPayload,
+    RayClusterPayload,
+    RayHealth,
+    RayJobsPayload,
+    RayLogsPayload,
+    RayOverviewPayload,
+    RayTasksPayload,
+)
 from viewer.services import ray_dashboard
 
 
@@ -49,6 +57,27 @@ async def ray_cluster(http: HttpDep, settings: SettingsDep) -> RayClusterPayload
 @router.get("/actors")
 async def ray_actors(http: HttpDep, settings: SettingsDep) -> RayActorsPayload:
     return await ray_dashboard.list_actors(http, settings.ray_dashboard_url)
+
+
+@router.get("/tasks")
+async def ray_tasks(http: HttpDep, settings: SettingsDep) -> RayTasksPayload:
+    return await ray_dashboard.list_tasks(http, settings.ray_dashboard_url)
+
+
+@router.get("/overview")
+async def ray_overview(http: HttpDep, settings: SettingsDep) -> RayOverviewPayload:
+    return await ray_dashboard.overview(http, settings.ray_dashboard_url)
+
+
+@router.get("/logs")
+async def ray_logs(
+    http: HttpDep,
+    settings: SettingsDep,
+    node_id: str,
+    filename: str | None = None,
+    lines: int = 200,
+) -> RayLogsPayload:
+    return await ray_dashboard.logs(http, settings.ray_dashboard_url, node_id, filename, lines)
 
 
 async def _proxy(request: Request, http: HttpDep, settings: SettingsDep, path: str) -> Response:

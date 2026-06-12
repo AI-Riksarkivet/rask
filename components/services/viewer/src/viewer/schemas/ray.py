@@ -132,6 +132,62 @@ class RayActorsPayload(BaseModel):
     error: str | None = None
 
 
+class RayTask(BaseModel):
+    """A Ray task from the state API (`/api/v0/tasks`)."""
+
+    task_id: str | None = None
+    name: str | None = None
+    func_or_class_name: str | None = None
+    type: str | None = None  # NORMAL_TASK | ACTOR_TASK | ACTOR_CREATION_TASK | ...
+    state: str = ""
+    job_id: str | None = None
+    actor_id: str | None = None
+    node_id: str | None = None
+    worker_pid: int | None = None
+    attempt_number: int | None = None
+    error_type: str | None = None
+    error_message: str | None = None
+    required_resources: dict[str, float] = Field(default_factory=dict)
+    creation_time_ms: int | None = None
+    start_time_ms: int | None = None
+    end_time_ms: int | None = None
+
+
+class RayTasksPayload(BaseModel):
+    ok: bool
+    dashboard_url: str
+    tasks: list[RayTask] = Field(default_factory=list)
+    error: str | None = None
+
+
+class RayEvent(BaseModel):
+    event_id: str | None = None
+    severity: str = "INFO"
+    message: str = ""
+    time: str | None = None
+    source_type: str | None = None
+
+
+class RayOverviewPayload(BaseModel):
+    ok: bool
+    dashboard_url: str
+    ray_version: str | None = None
+    session_name: str | None = None
+    events: list[RayEvent] = Field(default_factory=list)
+    error: str | None = None
+
+
+class RayLogsPayload(BaseModel):
+    """Log file listing (when `filename` omitted) or a file's tail."""
+
+    ok: bool
+    node_id: str | None = None
+    filename: str | None = None
+    files: dict[str, list[str]] = Field(default_factory=dict)
+    text: str | None = None
+    error: str | None = None
+
+
 class ProxyResponse(BaseModel):
     """Forwarded response from the Ray Dashboard — fed into fastapi `Response(...)` at the call site."""
 

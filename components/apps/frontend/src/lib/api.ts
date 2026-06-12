@@ -76,6 +76,7 @@ export interface RayJob {
 	end_time: number | null;
 	message: string | null;
 	error_type: string | null;
+	driver_exit_code: number | null;
 	logs_url: string | null;
 	metadata: Record<string, string>;
 }
@@ -185,6 +186,89 @@ export async function actorsList(): Promise<ActorInfo[]> {
 	const payload: ActorsPayload = await res.json();
 	if (!payload.ok) throw new Error(payload.error ?? 'actors unavailable');
 	return payload.actors ?? [];
+}
+
+export interface TaskInfo {
+	task_id: string | null;
+	name: string | null;
+	func_or_class_name: string | null;
+	type: string | null;
+	state: string;
+	job_id: string | null;
+	actor_id: string | null;
+	node_id: string | null;
+	worker_pid: number | null;
+	attempt_number: number | null;
+	error_type: string | null;
+	error_message: string | null;
+	required_resources: Record<string, number>;
+	creation_time_ms: number | null;
+	start_time_ms: number | null;
+	end_time_ms: number | null;
+}
+
+export interface TasksPayload {
+	ok: boolean;
+	dashboard_url: string;
+	tasks: TaskInfo[];
+	error?: string | null;
+}
+
+export async function tasksList(): Promise<TaskInfo[]> {
+	const res = await fetch('/api/ray/tasks');
+	if (!res.ok) throw new Error(`tasksList: HTTP ${res.status}`);
+	const payload: TasksPayload = await res.json();
+	if (!payload.ok) throw new Error(payload.error ?? 'tasks unavailable');
+	return payload.tasks ?? [];
+}
+
+export interface RayEvent {
+	event_id: string | null;
+	severity: string;
+	message: string;
+	time: string | null;
+	source_type: string | null;
+}
+
+export interface OverviewPayload {
+	ok: boolean;
+	dashboard_url: string;
+	ray_version: string | null;
+	session_name: string | null;
+	events: RayEvent[];
+	error?: string | null;
+}
+
+export async function rayOverview(): Promise<OverviewPayload> {
+	const res = await fetch('/api/ray/overview');
+	if (!res.ok) throw new Error(`rayOverview: HTTP ${res.status}`);
+	return res.json();
+}
+
+export interface LogsPayload {
+	ok: boolean;
+	node_id: string | null;
+	filename: string | null;
+	files: Record<string, string[]>;
+	text: string | null;
+	error?: string | null;
+}
+
+export async function rayLogFiles(nodeId: string): Promise<LogsPayload> {
+	const res = await fetch(`/api/ray/logs?node_id=${encodeURIComponent(nodeId)}`);
+	if (!res.ok) throw new Error(`rayLogFiles: HTTP ${res.status}`);
+	return res.json();
+}
+
+export async function rayLogContent(
+	nodeId: string,
+	filename: string,
+	lines = 500
+): Promise<LogsPayload> {
+	const qs = new URLSearchParams({ node_id: nodeId, filename, lines: String(lines) });
+	const res = await fetch(`/api/ray/logs?${qs}`);
+	if (!res.ok) throw new Error(`rayLogContent: HTTP ${res.status}`);
+	return res.json();
 }
 
 export interface ServeReplica {

@@ -15,6 +15,7 @@ of bubbling 5xx.
 import logging
 import re
 from http import HTTPStatus
+from urllib.parse import urlencode
 
 import httpx
 import ray
@@ -23,7 +24,22 @@ from anyio import to_thread
 from ray.exceptions import AuthenticationError
 from ray.job_submission import JobSubmissionClient
 
-from viewer.schemas.ray import ProxyResponse, RayActor, RayActorsPayload, RayClusterPayload, RayGpu, RayHealth, RayJob, RayJobsPayload, RayNode
+from viewer.schemas.ray import (
+    ProxyResponse,
+    RayActor,
+    RayActorsPayload,
+    RayClusterPayload,
+    RayEvent,
+    RayGpu,
+    RayHealth,
+    RayJob,
+    RayJobsPayload,
+    RayLogsPayload,
+    RayNode,
+    RayOverviewPayload,
+    RayTask,
+    RayTasksPayload,
+)
 
 
 log = logging.getLogger(__name__)
@@ -320,6 +336,116 @@ async def list_actors(http: httpx.AsyncClient, dashboard_url: str) -> RayActorsP
 
     actors = [_merge_actor(row, logical.get(row.get("actor_id"))) for row in state_rows]
     return RayActorsPayload(ok=True, dashboard_url=dashboard_url, actors=actors)
+
+
+def _state_rows(payload: dict) -> list[dict]:
+    return (((payload.get("data") or {}).get("result") or {}).get("result")) or []
+
+
+async def list_tasks(http: httpx.AsyncClient, dashboard_url: str) -> RayTasksPayload:
+    """Tasks from the state API (`/api/v0/tasks`)."""
+    try:
+        resp = await http.get(f"{dashboard_url}/api/v0/tasks?detail=1&limit=10000")
+        resp.raise_for_status()
+        rows = _state_rows(resp.json())
+    except httpx.HTTPError as exc:
+        return RayTasksPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
+
+    tasks = [
+        RayTask(
+            task_id=t.get("task_id"),
+            name=t.get("name"),
+            func_or_class_name=t.get("func_or_class_name"),
+            type=t.get("type"),
+            state=t.get("state") or "",
+            job_id=t.get("job_id"),
+            actor_id=t.get("actor_id"),
+            node_id=t.get("node_id"),
+            worker_pid=_int_or_none(t.get("worker_pid")),
+            attempt_number=_int_or_none(t.get("attempt_number")),
+            error_type=t.get("error_type"),
+            error_message=(t.get("error_message") or "").split("\n")[0][:_ERROR_MSG_MAX_LEN] or None,
+            required_resources={k: float(v) for k, v in (t.get("required_resources") or {}).items()},
+            creation_time_ms=_int_or_none(t.get("creation_time_ms")),
+            start_time_ms=_int_or_none(t.get("start_time_ms")),
+            end_time_ms=_int_or_none(t.get("end_time_ms")),
+        )
+        for t in rows
+    ]
+    return RayTasksPayload(ok=True, dashboard_url=dashboard_url, tasks=tasks)
+
+
+async def overview(http: httpx.AsyncClient, dashboard_url: str) -> RayOverviewPayload:
+    """Cluster version/session + recent events feed (newest first)."""
+    version: dict = {}
+    try:
+        v_resp = await http.get(f"{dashboard_url}/api/version")
+        v_resp.raise_for_status()
+        version = v_resp.json() or {}
+    except httpx.HTTPError as exc:
+        return RayOverviewPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
+
+    events: list[RayEvent] = []
+    try:
+        e_resp = await http.get(f"{dashboard_url}/api/v0/cluster_events")
+        e_resp.raise_for_status()
+        rows = _state_rows(e_resp.json())
+        events = [
+            RayEvent(
+                event_id=e.get("event_id"),
+                severity=e.get("severity") or "INFO",
+                message=e.get("message") or "",
+                time=e.get("time"),
+                source_type=e.get("source_type"),
+            )
+            for e in rows
+        ]
+        events.sort(key=lambda e: e.time or "", reverse=True)
+    except httpx.HTTPError:
+        log.debug("cluster events unavailable", exc_info=True)
+
+    return RayOverviewPayload(
+        ok=True,
+        dashboard_url=dashboard_url,
+        ray_version=version.get("ray_version"),
+        session_name=version.get("session_name"),
+        events=events,
+    )
+
+
+async def logs(
+    http: httpx.AsyncClient,
+    dashboard_url: str,
+    node_id: str,
+    filename: str | None = None,
+    lines: int = 200,
+) -> RayLogsPayload:
+    """List a node's log files, or (with `filename`) return that file's tail."""
+    try:
+        if filename:
+            qs = urlencode({"node_id": node_id, "filename": filename, "lines": lines})
+            resp = await http.get(f"{dashboard_url}/api/v0/logs/file?{qs}")
+            # Ray's log endpoint 500s on empty files — surface that as a clean note
+            # rather than a stack-trace-y error.
+            if resp.status_code >= HTTPStatus.BAD_REQUEST:
+                return RayLogsPayload(ok=True, node_id=node_id, filename=filename, text="(empty or unavailable)")
+            # Ray streams logs with a 1-byte success framing prefix on each chunk;
+            # strip a leading non-printable so the viewer shows clean text.
+            text = resp.text.lstrip("\x00\x01")
+            return RayLogsPayload(ok=True, node_id=node_id, filename=filename, text=text)
+        resp = await http.get(f"{dashboard_url}/api/v0/logs?node_id={node_id}")
+        resp.raise_for_status()
+        raw = (resp.json().get("data") or {}).get("result") or {}
+        # Drop directory entries (e.g. "old/") — only real files are readable.
+        files = {
+            k: [f for f in v if isinstance(f, str) and not f.endswith("/")]
+            for k, v in raw.items()
+            if isinstance(v, list)
+        }
+        files = {k: v for k, v in files.items() if v}
+        return RayLogsPayload(ok=True, node_id=node_id, files=files)
+    except httpx.HTTPError as exc:
+        return RayLogsPayload(ok=False, node_id=node_id, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
 
 
 async def proxy(

@@ -9,9 +9,11 @@
 		Moon,
 		LayoutGrid,
 		ListTree,
+		Gauge,
 		Server,
 		ServerCog,
 		Boxes,
+		FileText,
 		Image as ImageIcon,
 		ScrollText,
 		BookOpen,
@@ -51,6 +53,7 @@
 		click?: () => Promise<boolean | void>;
 	};
 	const nav: NavItem[] = [
+		{ href: '/overview', label: 'Overview', icon: Gauge, match: (p) => p.startsWith('/overview') },
 		{ href: '/batches', label: 'Batches', icon: LayoutGrid, match: (p) => p === '/batches' },
 		{ href: '/search', label: 'Search', icon: Search, match: (p) => p.startsWith('/search') },
 		{ href: '/browse', label: 'Browse', icon: Library, match: (p) => p.startsWith('/browse') },
@@ -58,6 +61,7 @@
 		{ href: '/cluster', label: 'Cluster', icon: Server, match: (p) => p.startsWith('/cluster') },
 		{ href: '/serve', label: 'Serve', icon: ServerCog, match: (p) => p.startsWith('/serve') },
 		{ href: '/actors', label: 'Actors', icon: Boxes, match: (p) => p.startsWith('/actors') },
+		{ href: '/logviewer', label: 'Logs', icon: FileText, match: (p) => p.startsWith('/logviewer') },
 		{ href: '/embed', label: 'Ray', icon: ScrollText, match: (p) => p.startsWith('/embed') },
 		{ href: '/api-docs', label: 'API', icon: BookOpen, match: (p) => p.startsWith('/api-docs') },
 		{

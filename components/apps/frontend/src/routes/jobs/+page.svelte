@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import { goto } from '$app/navigation';
+	import { ChevronRight } from 'lucide-svelte';
 	import { rayJobs, type RayJobsPayload, type RayJob } from '$lib/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import SortHeader from '$lib/components/layout/sort-header.svelte';
@@ -158,12 +160,15 @@
 								{#each ['status', 'submission_id', 'started', 'runtime', 'batches', 'message'] as col (col)}
 									<SortHeader label={col} {col} {sortKey} {sortDir} onsort={setSort} />
 								{/each}
-								<th class="text-muted-foreground px-3 py-2 font-medium">logs</th>
+								<th class="px-3 py-2"></th>
 							</tr>
 						</thead>
 						<tbody>
 							{#each jobs as j (j.submission_id ?? j.job_id)}
-								<tr class="border-border/40 hover:bg-muted/40 border-b">
+								<tr
+									class="border-border/40 hover:bg-muted/40 cursor-pointer border-b"
+									onclick={() => goto(`/jobs/${encodeURIComponent(j.submission_id)}`)}
+								>
 									<td class="px-3 py-1.5">
 										<Badge
 											variant={variantFor(j.status)}
@@ -196,14 +201,8 @@
 										{/if}
 										{j.message ?? ''}
 									</td>
-									<td class="px-3 py-1.5">
-										{#if j.submission_id}
-											<a
-												href={`/embed?path=/jobs/${encodeURIComponent(j.submission_id)}`}
-												class="text-primary hover:underline"
-												title="Open in embedded Ray dashboard">logs</a
-											>
-										{:else}—{/if}
+									<td class="px-3 py-1.5 text-right">
+										<ChevronRight class="text-muted-foreground inline h-3.5 w-3.5" />
 									</td>
 								</tr>
 							{/each}

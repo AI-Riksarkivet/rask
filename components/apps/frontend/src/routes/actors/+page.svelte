@@ -13,7 +13,8 @@
 		ListTree,
 		Cpu,
 		TriangleAlert,
-		ChevronRight
+		ChevronRight,
+		FileText
 	} from 'lucide-svelte';
 
 	let actors = $state<ActorInfo[]>([]);
@@ -312,6 +313,14 @@
 								{#if open}
 									<tr class="bg-muted/20 border-border/40 border-b">
 										<td colspan="9" class="px-4 py-3">
+											{#if a.node_id}
+												<a
+													href={`/logviewer?node=${encodeURIComponent(a.node_id)}${a.worker_id ? `&q=${encodeURIComponent(a.worker_id)}` : ''}`}
+													class="text-primary mb-2 inline-flex items-center gap-1 text-[11px] hover:underline"
+												>
+													<FileText class="h-3 w-3" /> view logs
+												</a>
+											{/if}
 											<div class="grid grid-cols-2 gap-x-6 gap-y-1 font-mono text-[11px] sm:grid-cols-3 lg:grid-cols-4">
 												{#each [
 													{ k: 'actor_id', v: a.actor_id },
