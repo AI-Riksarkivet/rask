@@ -165,7 +165,11 @@ def _parse_res_value(s: str) -> float:
 def _parse_logical(text: str) -> dict[str, float]:
     used: dict[str, float] = {}
     for raw in (text or "").splitlines():
-        line = raw.strip()
+        # Placement-group reservations (e.g. Serve-LLM engines) append a suffix:
+        #   "1.0/1.0 GPU (1.0 used of 1.0 reserved in placement groups)"
+        # Strip it, or rpartition(" ") reads the name as "groups)" and the GPU
+        # count is silently dropped (the viewer under-reported cluster GPU use).
+        line = raw.strip().split(" (")[0]
         if "/" not in line or " " not in line:
             continue
         ratio, _, name = line.rpartition(" ")
@@ -177,12 +181,35 @@ def _parse_logical(text: str) -> dict[str, float]:
 def _parse_gpu(g: dict) -> RayGpu:
     return RayGpu(
         index=g.get("index"),
+        uuid=g.get("uuid"),
         name=g.get("name"),
         utilization_percent=g.get("utilizationGpu"),
         memory_used_mb=g.get("memoryUsed"),
         memory_total_mb=g.get("memoryTotal"),
         temperature_c=g.get("temperatureC"),
     )
+
+
+def _assign_physical_gpus(nodes: list[RayNode]) -> None:
+    """Trim each node's `gpus[]` so a physical GPU (by uuid) shows on only one node.
+
+    Co-located KubeRay pods all enumerate every host GPU via nvidia-smi, so the
+    same uuid appears on multiple rows. Greedily assign each uuid to the first node
+    that can take it, capped to that node's logical GPU allocation. Mutates in place.
+    """
+    claimed: set[str] = set()
+    for n in nodes:
+        cap = int(n.resources_total.get("GPU", 0) or 0)
+        kept: list[RayGpu] = []
+        for g in n.gpus:
+            if len(kept) >= cap:
+                break
+            if g.uuid and g.uuid in claimed:
+                continue
+            kept.append(g)
+            if g.uuid:
+                claimed.add(g.uuid)
+        n.gpus = kept
 
 
 async def cluster_status(http: httpx.AsyncClient, dashboard_url: str) -> RayClusterPayload:
@@ -246,6 +273,13 @@ async def cluster_status(http: httpx.AsyncClient, dashboard_url: str) -> RayClus
         for k in total:
             total[k] = sum(n.resources_total.get(k, 0.0) for n in nodes)
             used[k] = sum(n.resources_used.get(k, 0.0) for n in nodes)
+
+    # KubeRay runs N worker pods per physical host, and each pod's nvidia-smi
+    # enumerates ALL host GPUs — so co-located pods report the same physical GPUs
+    # (same uuid), double-counting them across rows. Assign each physical GPU to
+    # exactly one node, capped to that node's logical GPU allocation, so a GPU
+    # never shows up twice. Greedy over uuid; nodes with no uuid telemetry pass through.
+    _assign_physical_gpus(nodes)
 
     return RayClusterPayload(
         ok=True,

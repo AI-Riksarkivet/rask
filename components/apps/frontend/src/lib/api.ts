@@ -101,6 +101,7 @@ export interface RayClusterPayload {
 
 export interface RayGpu {
 	index: number | null;
+	uuid: string | null;
 	name: string | null;
 	utilization_percent: number | null;
 	memory_used_mb: number | null;

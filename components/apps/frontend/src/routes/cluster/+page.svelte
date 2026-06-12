@@ -232,8 +232,8 @@
 									<td class="px-3 py-1.5 font-mono tabular-nums">
 										{#if n.gpus.length}
 											<div class="flex flex-col gap-0.5">
-												{#each n.gpus as g, i (g.index ?? i)}
-													<div class="flex items-center gap-1.5" title={g.name ?? ''}>
+												{#each n.gpus as g, i (g.uuid ?? g.index ?? i)}
+													<div class="flex items-center gap-1.5" title={`${g.name ?? ''}${g.uuid ? `\n${g.uuid}` : ''}`}>
 														<div class="bg-muted h-1.5 w-12 shrink-0 overflow-hidden rounded-full">
 															<div class="h-full bg-emerald-500" style:width={`${g.utilization_percent ?? 0}%`}></div>
 														</div>
@@ -251,7 +251,7 @@
 
 									<td class="px-3 py-1.5 font-mono tabular-nums">
 										{#if n.gpus.length}
-											{#each n.gpus as g, i (g.index ?? i)}
+											{#each n.gpus as g, i (g.uuid ?? g.index ?? i)}
 												<div>
 													{mbGb(g.memory_used_mb ?? 0).toFixed(1)}/{mbGb(g.memory_total_mb ?? 0).toFixed(0)} GB
 													<span class="text-muted-foreground">· {(g.temperature_c ?? 0).toFixed(0)}°C</span>

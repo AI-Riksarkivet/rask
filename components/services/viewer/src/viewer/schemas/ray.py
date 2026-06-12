@@ -55,6 +55,7 @@ class RayGpu(BaseModel):
     Ray's logical GPU reservation."""
 
     index: int | None = None
+    uuid: str | None = None
     name: str | None = None
     utilization_percent: float | None = None
     memory_used_mb: float | None = None
