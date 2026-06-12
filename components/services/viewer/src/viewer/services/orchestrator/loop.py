@@ -14,6 +14,7 @@ Replaces the cron-driven `scripts/orchestrator.py`. On each tick:
 
 import asyncio
 import logging
+import time
 
 import httpx
 from anyio import to_thread
@@ -22,7 +23,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from storage import S3Client
-from viewer.core.config import Settings
+from viewer.core.config import PIPELINE_DISABLED, Settings
 from viewer.models.pipelines import PIPELINE_SPECS
 from viewer.services.orchestrator.derive import derive_state
 from viewer.services.ray_dashboard import build_client
@@ -40,10 +41,15 @@ async def tick(
     ray_client: JobSubmissionClient | None,
     http: httpx.AsyncClient,
     s3: S3Client | None,
+    reconcile: bool = True,
 ) -> None:
-    """One full tick: sync + decide + submit. Idempotent end-to-end."""
+    """One full tick: (optionally) sync + decide + submit. Idempotent end-to-end.
+
+    `reconcile=False` skips the slow full-bucket S3 walk and decides from existing
+    DB state — the run_loop throttles reconcile so it doesn't block every tick.
+    """
     async with sessionmaker() as session:
-        if s3 is not None:
+        if reconcile and s3 is not None:
             await reconcile_from_s3(session, s3, cache_bucket=settings.cache_bucket, output_bucket=settings.output_bucket)
 
         state = await derive_state(
@@ -65,12 +71,22 @@ async def tick(
         # derive_state already excludes in-flight + cooled-down chunks, so this
         # can't re-submit a running chunk.
         params = settings.runner_params()
-        prefetch_spec = PIPELINE_SPECS[settings.prefetch_pipeline]
-        for cid in state.prefetch.eligible:
-            log.info(f"orchestrator: submitting {settings.prefetch_pipeline} for chunk {cid}")
-            await submit_chunk(session, ray_client, chunk_id=cid, params=params, spec=prefetch_spec)
+        # Prefetch lane is optional — `RASK_PREFETCH_PIPELINE=none` runs HTR-only.
+        if settings.prefetch_pipeline.lower() not in PIPELINE_DISABLED:
+            prefetch_spec = PIPELINE_SPECS[settings.prefetch_pipeline]
+            for cid in state.prefetch.eligible:
+                log.info(f"orchestrator: submitting {settings.prefetch_pipeline} for chunk {cid}")
+                await submit_chunk(session, ray_client, chunk_id=cid, params=params, spec=prefetch_spec)
         htr_spec = PIPELINE_SPECS[settings.htr_pipeline]
-        for cid in state.htr.eligible:
+        # Concurrency cap: only top up to `htr_max_inflight` running jobs so a
+        # batch run can't flood the head with driver subprocesses. 0 = unlimited.
+        htr_eligible = state.htr.eligible
+        if settings.htr_max_inflight > 0:
+            free = max(0, settings.htr_max_inflight - len(state.htr.running))
+            if free < len(htr_eligible):
+                log.info(f"orchestrator: htr cap {settings.htr_max_inflight} ({len(state.htr.running)} running) — submitting {free} of {len(htr_eligible)} eligible")
+            htr_eligible = htr_eligible[:free]
+        for cid in htr_eligible:
             log.info(f"orchestrator: submitting {settings.htr_pipeline} for chunk {cid}")
             await submit_chunk(session, ray_client, chunk_id=cid, params=params, spec=htr_spec)
 
@@ -91,15 +107,24 @@ async def run_loop(
     reconnects per request, so a Ray restart needs no rebuild.
     """
     interval = settings.orchestrator_interval_seconds
-    log.info(f"orchestrator loop started, interval={interval}s")
+    recon_secs = settings.orchestrator_reconcile_seconds
+    log.info(f"orchestrator loop started, interval={interval}s, reconcile_every={recon_secs}s")
     client = ray_client
+    # Skip reconcile on the first tick so submission starts immediately from the
+    # existing DB; the slow S3 walk then runs at most every `recon_secs`.
+    last_reconcile = time.monotonic()
+    first = True
     while True:
         if client is None:
             client = await to_thread.run_sync(build_client, settings.ray_dashboard_url)
             if client is not None:
                 log.info("orchestrator: connected to Ray dashboard")
+        do_reconcile = recon_secs == 0 or (not first and time.monotonic() - last_reconcile >= recon_secs)
+        first = False
         try:
-            await tick(settings=settings, sessionmaker=sessionmaker, ray_client=client, http=http, s3=s3)
+            await tick(settings=settings, sessionmaker=sessionmaker, ray_client=client, http=http, s3=s3, reconcile=do_reconcile)
+            if do_reconcile:
+                last_reconcile = time.monotonic()
         except Exception:
             log.exception("orchestrator tick failed; continuing")
         try:

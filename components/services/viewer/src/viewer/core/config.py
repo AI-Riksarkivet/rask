@@ -9,6 +9,10 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Lane-pipeline sentinels (case-insensitive) that mean "disabled" — set
+# RASK_PREFETCH_PIPELINE to one of these to run the orchestrator HTR-only.
+PIPELINE_DISABLED = frozenset({"none", "off", "disabled", ""})
+
 
 class RunnerParams(BaseModel):
     """The runner's I/O config for one job submission — where its code lives
@@ -74,10 +78,19 @@ class Settings(BaseSettings):
     # the tick into a JetStream consumer. See viewer/services/orchestrator/loop.py.
     orchestrator_autostart: bool = Field(default=False, alias="RASK_ORCHESTRATOR_AUTOSTART")
     orchestrator_interval_seconds: int = Field(default=60, ge=10, alias="RASK_ORCHESTRATOR_INTERVAL_SECONDS")
+    # S3 reconcile walks the whole cache bucket (~600k keys) — far too slow to run
+    # every tick, so it's throttled: reconcile at most this often, and derive/submit
+    # from the DB on the other ticks. 0 = reconcile every tick (legacy). The first
+    # tick skips reconcile so submission starts immediately from existing DB state.
+    orchestrator_reconcile_seconds: int = Field(default=600, ge=0, alias="RASK_ORCHESTRATOR_RECONCILE_SECONDS")
     # Pipeline names the orchestrator submits per slot. Both must be registered in
     # viewer.models.pipelines.PIPELINE_SPECS (validated at app startup).
     htr_pipeline: str = Field(default="htr", alias="RASK_HTR_PIPELINE")
     prefetch_pipeline: str = Field(default="prefetch", alias="RASK_PREFETCH_PIPELINE")
+    # Max HTR jobs the orchestrator keeps in flight at once (0 = unlimited). Caps
+    # concurrent job drivers so a batch run can't OOM/flood the Ray head. The
+    # loop submits at most (cap - currently-running) eligible chunks per tick.
+    htr_max_inflight: int = Field(default=0, ge=0, alias="RASK_HTR_MAX_INFLIGHT")
 
     @property
     def resolved_batches_db(self) -> Path:
