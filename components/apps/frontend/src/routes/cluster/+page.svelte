@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { rayCluster, type RayClusterPayload, type RayNode } from '$lib/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
+	import SortHeader from '$lib/components/layout/sort-header.svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Server, Cpu } from 'lucide-svelte';
@@ -58,6 +59,51 @@
 			used: ns.reduce((a, n) => a + (n.host_mem_used ?? 0), 0),
 			total: ns.reduce((a, n) => a + (n.host_mem_total ?? 0), 0)
 		};
+	});
+
+	let sortKey = $state('tier');
+	let sortDir = $state<'asc' | 'desc'>('asc');
+	function setSort(col: string) {
+		if (sortKey === col) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+		else {
+			sortKey = col;
+			sortDir = 'asc';
+		}
+	}
+	function nodeVal(n: RayNode, key: string): string | number | null {
+		switch (key) {
+			case 'state':
+				return n.alive ? 'alive' : 'dead';
+			case 'node':
+				return n.hostname ?? n.node_ip ?? n.node_id;
+			case 'tier':
+				return n.node_type;
+			case 'gpu':
+				return n.gpus.length ? Math.max(...n.gpus.map((g) => g.utilization_percent ?? 0)) : null;
+			case 'vram':
+				return n.gpus.reduce((a, g) => a + (g.memory_used_mb ?? 0), 0) || null;
+			case 'cpu':
+				return n.host_cpu_percent;
+			case 'mem':
+				return n.host_mem_used;
+			default:
+				return null;
+		}
+	}
+	const sortedNodes = $derived.by(() => {
+		const dir = sortDir === 'asc' ? 1 : -1;
+		return [...(payload?.nodes ?? [])].sort((x, y) => {
+			const a = nodeVal(x, sortKey);
+			const b = nodeVal(y, sortKey);
+			if (a == null && b == null) return 0;
+			if (a == null) return 1;
+			if (b == null) return -1;
+			const c =
+				typeof a === 'number' && typeof b === 'number'
+					? a - b
+					: String(a).localeCompare(String(b), undefined, { numeric: true });
+			return c * dir;
+		});
 	});
 </script>
 
@@ -142,13 +188,17 @@
 					<table class="w-full border-collapse text-xs">
 						<thead class="bg-card sticky top-0 z-10 text-left">
 							<tr class="border-b">
-								{#each ['state', 'node', 'tier', 'GPU util', 'VRAM · temp', 'CPU', 'memory (host)'] as h (h)}
-									<th class="text-muted-foreground px-3 py-2 font-medium">{h}</th>
-								{/each}
+								<SortHeader label="state" col="state" {sortKey} {sortDir} onsort={setSort} />
+								<SortHeader label="node" col="node" {sortKey} {sortDir} onsort={setSort} />
+								<SortHeader label="tier" col="tier" {sortKey} {sortDir} onsort={setSort} />
+								<SortHeader label="GPU util" col="gpu" {sortKey} {sortDir} onsort={setSort} />
+								<SortHeader label="VRAM · temp" col="vram" {sortKey} {sortDir} onsort={setSort} />
+								<SortHeader label="CPU" col="cpu" {sortKey} {sortDir} onsort={setSort} />
+								<SortHeader label="memory (host)" col="mem" {sortKey} {sortDir} onsort={setSort} />
 							</tr>
 						</thead>
 						<tbody>
-							{#each payload.nodes ?? [] as n (n.node_id)}
+							{#each sortedNodes as n (n.node_id)}
 								{@const gpuT = n.resources_total.GPU ?? 0}
 								{@const gpuU = n.resources_used.GPU ?? 0}
 								{@const cpuT = n.resources_total.CPU ?? 0}

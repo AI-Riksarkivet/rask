@@ -8,6 +8,7 @@
 		type ServeReplica
 	} from '$lib/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
+	import SortHeader from '$lib/components/layout/sort-header.svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
 	import {
@@ -54,6 +55,31 @@
 	const liveReplicas = $derived(allDeployments.reduce((n, d) => n + (d.replicas?.length ?? 0), 0));
 	const proxies = $derived(Object.values(payload?.proxies ?? {}));
 	const ctrl = $derived(payload?.controller_health_metrics);
+
+	let proxySortKey = $state('node_ip');
+	let proxySortDir = $state<'asc' | 'desc'>('asc');
+	function setProxySort(col: string) {
+		if (proxySortKey === col) proxySortDir = proxySortDir === 'asc' ? 'desc' : 'asc';
+		else {
+			proxySortKey = col;
+			proxySortDir = 'asc';
+		}
+	}
+	const sortedProxies = $derived.by(() => {
+		const dir = proxySortDir === 'asc' ? 1 : -1;
+		const val = (p: (typeof proxies)[number]) =>
+			({ status: p.status, node_ip: p.node_ip, pod: p.node_instance_id, log: p.log_file_path })[
+				proxySortKey
+			] ?? null;
+		return [...proxies].sort((x, y) => {
+			const a = val(x);
+			const b = val(y);
+			if (a == null && b == null) return 0;
+			if (a == null) return 1;
+			if (b == null) return -1;
+			return String(a).localeCompare(String(b), undefined, { numeric: true }) * dir;
+		});
+	});
 
 	const stats = $derived([
 		{ label: 'Applications', value: runningApps, total: apps.length as number | null, dot: 'bg-emerald-500', sub: 'running / total' },
@@ -210,13 +236,14 @@
 						<table class="w-full border-collapse text-xs">
 							<thead class="bg-card text-left">
 								<tr class="border-b">
-									{#each ['status', 'node ip', 'pod', 'log'] as h (h)}
-										<th class="text-muted-foreground px-3 py-2 font-medium">{h}</th>
-									{/each}
+									<SortHeader label="status" col="status" sortKey={proxySortKey} sortDir={proxySortDir} onsort={setProxySort} />
+									<SortHeader label="node ip" col="node_ip" sortKey={proxySortKey} sortDir={proxySortDir} onsort={setProxySort} />
+									<SortHeader label="pod" col="pod" sortKey={proxySortKey} sortDir={proxySortDir} onsort={setProxySort} />
+									<SortHeader label="log" col="log" sortKey={proxySortKey} sortDir={proxySortDir} onsort={setProxySort} />
 								</tr>
 							</thead>
 							<tbody>
-								{#each proxies as p (p.node_id)}
+								{#each sortedProxies as p (p.node_id)}
 									<tr class="border-border/40 hover:bg-muted/40 border-b last:border-b-0">
 										<td class="px-3 py-1.5">
 											<Badge variant={statusVariant(p.status ?? '')}>{p.status ?? '—'}</Badge>
