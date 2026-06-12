@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { rayJobs, type RayJobsPayload, type RayJob } from '$lib/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
+	import SortHeader from '$lib/components/layout/sort-header.svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
 
@@ -9,6 +10,16 @@
 	let error = $state<string | null>(null);
 	let timer: ReturnType<typeof setInterval> | null = null;
 	let filter = $state<'all' | RayJob['status']>('all');
+	let sortKey = $state('started');
+	let sortDir = $state<'asc' | 'desc'>('desc');
+
+	function setSort(col: string) {
+		if (sortKey === col) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+		else {
+			sortKey = col;
+			sortDir = col === 'started' ? 'desc' : 'asc';
+		}
+	}
 
 	async function refresh() {
 		try {
@@ -27,10 +38,41 @@
 		if (timer) clearInterval(timer);
 	});
 
+	function jobVal(j: RayJob, key: string): string | number | null {
+		switch (key) {
+			case 'status':
+				return j.status;
+			case 'submission_id':
+				return j.submission_id;
+			case 'started':
+				return j.start_time;
+			case 'runtime':
+				return j.start_time ? (j.end_time ?? Date.now()) - j.start_time : null;
+			case 'batches':
+				return j.batches.length;
+			case 'message':
+				return j.message;
+			default:
+				return null;
+		}
+	}
+
 	const jobs = $derived.by(() => {
 		const all = payload?.jobs ?? [];
 		const f = filter === 'all' ? all : all.filter((j) => j.status === filter);
-		return [...f].sort((a, b) => (b.start_time ?? 0) - (a.start_time ?? 0));
+		const dir = sortDir === 'asc' ? 1 : -1;
+		return [...f].sort((x, y) => {
+			const a = jobVal(x, sortKey);
+			const b = jobVal(y, sortKey);
+			if (a == null && b == null) return 0;
+			if (a == null) return 1; // nulls always last
+			if (b == null) return -1;
+			const c =
+				typeof a === 'number' && typeof b === 'number'
+					? a - b
+					: String(a).localeCompare(String(b), undefined, { numeric: true });
+			return c * dir;
+		});
 	});
 
 	const counts = $derived.by(() => {
@@ -114,7 +156,7 @@
 						<thead class="bg-card sticky top-0 z-10 text-left">
 							<tr class="border-b">
 								{#each ['status', 'submission_id', 'started', 'runtime', 'batches', 'message'] as col (col)}
-									<th class="text-muted-foreground px-3 py-2 font-medium">{col}</th>
+									<SortHeader label={col} {col} {sortKey} {sortDir} onsort={setSort} />
 								{/each}
 								<th class="text-muted-foreground px-3 py-2 font-medium">logs</th>
 							</tr>

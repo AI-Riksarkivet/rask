@@ -26,6 +26,9 @@ class RayHealth(BaseModel):
 class RayJob(BaseModel):
     model_config = ConfigDict(extra="allow")
     submission_id: str | None = None
+    # Ray's driver job id, distinct from submission_id; carried via extra="allow"
+    # but declared so the SPA can fall back to it as a row key.
+    job_id: str | None = None
     status: JobStatus | None = None
     entrypoint: str | None = None
     start_time: int | None = None

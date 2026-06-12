@@ -68,6 +68,7 @@ export interface RayHealth {
 
 export interface RayJob {
 	submission_id: string;
+	job_id: string | null;
 	status: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'STOPPED' | string;
 	entrypoint: string | null;
 	batches: string[];
