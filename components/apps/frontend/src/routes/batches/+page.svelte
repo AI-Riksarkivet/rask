@@ -400,8 +400,8 @@
 								{#if j.submission_id}
 									<a
 										class="text-primary ml-auto hover:underline"
-										href={`/embed?path=/jobs/${encodeURIComponent(j.submission_id)}`}
-										title="Open in embedded Ray dashboard">logs</a
+										href={`/jobs/${encodeURIComponent(j.submission_id)}`}
+										title="Open job detail">details</a
 									>
 								{/if}
 							</div>

@@ -5,16 +5,16 @@ Two routers:
   - `router` — viewer's normalized `/api/v1/ray/*` (health/jobs/cluster),
     Pydantic responses. Mounted under the v1 API prefix.
 
-  - `proxy_router` — reverse-proxy paths Ray's bundled JS expects
-    (`/api/v0/*`, `/api/jobs/*`, `/logs/*`, `/ray-dashboard/*`, plus a few
-    exact paths). These are Ray's URLs, not viewer's, so the proxy_router
-    is mounted at the **root** (no `/api/v1/` prefix) and `include_in_schema=False`
-    keeps the proxy off the OpenAPI document.
+  - `proxy_router` — transparent reverse proxy for the Ray Serve status API
+    (`/api/serve/*`), which the SPA's /serve page reads raw. These are Ray's
+    URLs, not viewer's, so the proxy_router is mounted at the **root** (no
+    `/api/v1/` prefix) and `include_in_schema=False` keeps it off the OpenAPI
+    document. (The embedded-dashboard proxy paths — /ray-dashboard, /api/v0,
+    /logs, … — were removed along with the /embed page.)
 
     The proxy uses `api_route(methods=…)` deliberately — `core-conventions.md`
     § One HTTP operation per function targets application routes, not
-    transparent reverse proxies. We don't know what method the iframe will
-    issue, so we forward whatever comes in.
+    transparent reverse proxies.
 """
 
 from fastapi import APIRouter, Request
@@ -108,34 +108,8 @@ def _register_proxy(prefix: str) -> None:
     proxy_router.add_api_route(prefix, catchall_root, methods=["GET", "HEAD"], name=f"ray-proxy-{prefix}-root")
 
 
-def _register_exact(path: str) -> None:
-    suffix = path.lstrip("/")
-
-    async def exact(request: Request, http: HttpDep, settings: SettingsDep) -> Response:
-        return await _proxy(request, http, settings, suffix)
-
-    proxy_router.add_api_route(path, exact, methods=["GET", "POST", "HEAD"], name=f"ray-proxy-{path}")
-
-
-@proxy_router.api_route("/ray-dashboard/{path:path}", methods=_PROXY_METHODS)
-async def ray_dashboard_spa(request: Request, http: HttpDep, settings: SettingsDep, path: str) -> Response:
-    return await _proxy(request, http, settings, path)
-
-
-@proxy_router.api_route("/ray-dashboard", methods=["GET", "HEAD"])
-async def ray_dashboard_root(request: Request, http: HttpDep, settings: SettingsDep) -> Response:
-    return await _proxy(request, http, settings, "")
-
-
-for _prefix in ("/api/v0", "/api/serve", "/api/jobs", "/logs"):
+# Only the Serve status API is still proxied — the SPA's /serve page reads it
+# raw. Everything else moved to normalized /api/ray/* endpoints, and the
+# embedded dashboard (which needed /ray-dashboard, /api/v0, /logs, …) is gone.
+for _prefix in ("/api/serve",):
     _register_proxy(_prefix)
-
-for _exact in (
-    "/api/cluster_status",
-    "/api/version",
-    "/api/grafana_health",
-    "/api/prometheus_health",
-    "/api/authenticate",
-    "/api/authentication_mode",
-):
-    _register_exact(_exact)

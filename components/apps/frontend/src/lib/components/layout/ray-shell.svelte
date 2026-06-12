@@ -15,7 +15,6 @@
 		Boxes,
 		FileText,
 		Image as ImageIcon,
-		ScrollText,
 		BookOpen,
 		Search,
 		Library,
@@ -62,7 +61,6 @@
 		{ href: '/serve', label: 'Serve', icon: ServerCog, match: (p) => p.startsWith('/serve') },
 		{ href: '/actors', label: 'Actors', icon: Boxes, match: (p) => p.startsWith('/actors') },
 		{ href: '/logviewer', label: 'Logs', icon: FileText, match: (p) => p.startsWith('/logviewer') },
-		{ href: '/embed', label: 'Ray', icon: ScrollText, match: (p) => p.startsWith('/embed') },
 		{ href: '/api-docs', label: 'API', icon: BookOpen, match: (p) => p.startsWith('/api-docs') },
 		{
 			href: '/batches',
