@@ -5,13 +5,11 @@
 		listChunks,
 		rayCluster,
 		rayJobs,
-		rayOrchestrator,
 		submitChunk,
 		syncBatches,
 		type BatchRow,
 		type BatchesPayload,
 		type ChunkRow,
-		type OrchestratorState,
 		type RayClusterPayload,
 		type RayJobsPayload,
 	} from '$lib/api';
@@ -26,11 +24,9 @@
 	let ray = $state<{
 		jobs: RayJobsPayload | null;
 		cluster: RayClusterPayload | null;
-		orchestrator: OrchestratorState | null;
 	}>({
 		jobs: null,
 		cluster: null,
-		orchestrator: null,
 	});
 	let error = $state<string | null>(null);
 	let loading = $state(true);
@@ -47,16 +43,15 @@
 		loading = true;
 		error = null;
 		try {
-			const [b, c, rj, rc, ro] = await Promise.all([
+			const [b, c, rj, rc] = await Promise.all([
 				listBatches(),
 				listChunks(),
 				rayJobs().catch(() => null),
 				rayCluster().catch(() => null),
-				rayOrchestrator().catch(() => null),
 			]);
 			payload = b;
 			chunks = c.chunks;
-			ray = { jobs: rj, cluster: rc, orchestrator: ro };
+			ray = { jobs: rj, cluster: rc };
 		} catch (e: unknown) {
 			error = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -65,12 +60,11 @@
 	}
 
 	async function refreshRay() {
-		const [rj, rc, ro] = await Promise.all([
+		const [rj, rc] = await Promise.all([
 			rayJobs().catch(() => null),
 			rayCluster().catch(() => null),
-			rayOrchestrator().catch(() => null),
 		]);
-		ray = { jobs: rj, cluster: rc, orchestrator: ro };
+		ray = { jobs: rj, cluster: rc };
 	}
 
 	async function runSync() {
@@ -375,112 +369,6 @@
 					{/if}
 				</Card>
 			</section>
-
-			<!-- Orchestrator -->
-			{#if ray.orchestrator?.ok}
-				{@const orch = ray.orchestrator}
-				<section class="grid gap-3 sm:grid-cols-2">
-					{#each ['prefetch', 'htr'] as kind (kind)}
-						{@const slot = kind === 'prefetch' ? orch.prefetch! : orch.htr!}
-						{@const cd = (orch.cooldowns ?? []).filter((c) => c.pipeline === kind)}
-						<Card class="p-4">
-							<div class="flex items-baseline justify-between">
-								<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
-									{kind === 'prefetch' ? 'Prefetch slot' : 'HTR slot'}
-								</div>
-								{#if slot.running}
-									<Badge variant="warning" class="animate-pulse text-[10px]">
-										{slot.running.status}
-									</Badge>
-								{:else}
-									<Badge variant="secondary" class="text-[10px]">idle</Badge>
-								{/if}
-							</div>
-							{#if slot.running}
-								<div class="mt-1 font-mono">
-									chunk {slot.running.chunk_id}
-									<span class="text-muted-foreground text-xs">
-										· {fmtRuntime(slot.running.start_time, null)}
-									</span>
-								</div>
-								<div class="text-muted-foreground truncate text-[11px]">
-									{slot.running.submission_id}
-								</div>
-								{#if slot.stages?.length}
-									{@const denom = Math.max(
-										...slot.stages.map((s) => s.total || s.finished + s.running + s.pending),
-									)}
-									<div class="mt-2 space-y-0.5">
-										{#each slot.stages as st (st.stage)}
-											{@const wFinished = denom ? (st.finished / denom) * 100 : 0}
-											{@const wRunning = denom ? (st.running / denom) * 100 : 0}
-											{@const wPending = denom ? (st.pending / denom) * 100 : 0}
-											<div
-												class="flex items-center gap-2 text-[10px] tabular-nums"
-												title={`${st.stage}\nfinished: ${st.finished}\nrunning: ${st.running}\npending: ${st.pending}\nfailed: ${st.failed}\ntotal: ${st.total}`}
-											>
-												<span class="text-muted-foreground w-20 truncate"
-													>{st.stage.replace('Actor', '')}</span
-												>
-												<div
-													class="bg-muted relative flex h-1.5 flex-1 overflow-hidden rounded-full"
-												>
-													<div class="h-full bg-emerald-500/70" style:width={`${wFinished}%`}></div>
-													<div class="h-full bg-amber-500/80" style:width={`${wRunning}%`}></div>
-													<div class="h-full bg-sky-500/60" style:width={`${wPending}%`}></div>
-												</div>
-												<span class="text-muted-foreground w-28 text-right font-mono">
-													{st.finished}{#if st.running}<span
-															class="ml-0.5 text-amber-600 dark:text-amber-400">+{st.running}</span
-														>{/if}{#if st.pending}<span
-															class="ml-0.5 text-sky-600 dark:text-sky-400">→{st.pending}</span
-														>{/if}{#if st.failed}<span class="text-destructive ml-0.5"
-															>✗{st.failed}</span
-														>{/if}
-												</span>
-											</div>
-										{/each}
-										<div class="text-muted-foreground mt-1 flex items-center gap-2 text-[10px]">
-											<span class="inline-block h-1.5 w-2 rounded-sm bg-emerald-500/70"></span>
-											finished
-											<span class="inline-block h-1.5 w-2 rounded-sm bg-amber-500/80"></span>
-											running
-											<span class="inline-block h-1.5 w-2 rounded-sm bg-sky-500/60"></span>
-											pending
-										</div>
-									</div>
-								{/if}
-							{:else if slot.next !== null}
-								<div class="mt-1 font-mono">next: chunk {slot.next}</div>
-							{:else}
-								<div class="text-muted-foreground mt-1 font-mono">
-									{kind === 'htr' ? 'no chunk ≥ 95% cached' : 'all chunks cached'}
-								</div>
-							{/if}
-							<div class="text-muted-foreground mt-1 text-xs">
-								{slot.queue_len} chunk{slot.queue_len === 1 ? '' : 's'}
-								{kind === 'htr' ? 'ready for HTR' : 'pending prefetch'}
-							</div>
-							{#if cd.length}
-								<div class="mt-2 border-t pt-2 text-[11px]">
-									<div class="text-muted-foreground mb-0.5">cooldown:</div>
-									<div class="flex flex-wrap gap-1">
-										{#each cd as c (c.submission_id)}
-											<button
-												type="button"
-												class="rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] hover:bg-amber-500/20"
-												onclick={() => (chunkFilter = c.chunk_id)}
-												title="cooldown {c.expires_in_secs}s remaining"
-												>chunk {c.chunk_id} · {c.expires_in_secs}s</button
-											>
-										{/each}
-									</div>
-								</div>
-							{/if}
-						</Card>
-					{/each}
-				</section>
-			{/if}
 
 			<!-- Recent RayJobs -->
 			{#if ray.jobs?.ok && ray.jobs.jobs && ray.jobs.jobs.length}
