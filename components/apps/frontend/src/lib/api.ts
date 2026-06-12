@@ -139,6 +139,128 @@ export async function rayCluster(): Promise<RayClusterPayload> {
 	return res.json();
 }
 
+export interface ServeReplica {
+	replica_id: string;
+	state: string;
+	node_id?: string;
+	node_ip?: string;
+	node_instance_id?: string;
+	actor_name?: string;
+	pid?: number;
+	start_time_s?: number;
+	log_file_path?: string;
+}
+
+export interface ServeRuntimeEnv {
+	uv?: string[];
+	pip?: string[];
+	working_dir?: string;
+	env_vars?: Record<string, string>;
+}
+
+export interface ServeRayActorOptions {
+	num_cpus?: number;
+	num_gpus?: number;
+	resources?: Record<string, number>;
+	runtime_env?: ServeRuntimeEnv;
+}
+
+export interface ServeDeploymentConfig {
+	num_replicas?: number;
+	max_ongoing_requests?: number;
+	max_queued_requests?: number;
+	health_check_period_s?: number;
+	health_check_timeout_s?: number;
+	graceful_shutdown_wait_loop_s?: number;
+	graceful_shutdown_timeout_s?: number;
+	rolling_update_percentage?: number;
+	autoscaling_config?: Record<string, unknown> | null;
+	user_config?: unknown;
+	ray_actor_options?: ServeRayActorOptions;
+	request_router_config?: { request_router_class?: string };
+}
+
+export interface ServeDeployment {
+	name: string;
+	status: string;
+	status_trigger?: string;
+	message?: string;
+	target_num_replicas?: number;
+	required_resources?: Record<string, number>;
+	replicas: ServeReplica[];
+	recent_dead_replicas?: ServeReplica[];
+	deployment_config?: ServeDeploymentConfig;
+}
+
+export interface ServeTopologyNode {
+	name: string;
+	is_ingress: boolean;
+	outbound_deployments: { name: string }[];
+}
+
+export interface ServeTopology {
+	app_name: string;
+	nodes: Record<string, ServeTopologyNode>;
+	ingress_deployment?: string;
+}
+
+export interface ServeApplication {
+	name: string;
+	route_prefix: string | null;
+	docs_path: string | null;
+	status: string;
+	message?: string;
+	source?: string;
+	external_scaler_enabled?: boolean;
+	last_deployed_time_s?: number;
+	deployments: Record<string, ServeDeployment>;
+	deployment_topology?: ServeTopology;
+}
+
+export interface ServeProxy {
+	status?: string;
+	node_id?: string;
+	node_ip?: string;
+	node_instance_id?: string;
+	log_file_path?: string;
+}
+
+export interface ServeControllerInfo {
+	node_ip?: string;
+	node_instance_id?: string;
+	log_file_path?: string;
+}
+
+export interface ServeControllerHealth {
+	uptime_s?: number;
+	num_control_loops?: number;
+	loops_per_second?: number;
+	num_asyncio_tasks?: number;
+}
+
+export interface ServeTargetGroup {
+	targets: { ip: string; port: number; instance_id?: string; name?: string }[];
+}
+
+/** Raw Ray Serve status, proxied straight from the dashboard's /api/serve/applications/. */
+export interface ServePayload {
+	applications: Record<string, ServeApplication>;
+	proxies?: Record<string, ServeProxy>;
+	proxy_location?: string;
+	http_options?: { host?: string; port?: number };
+	grpc_options?: { port?: number };
+	target_capacity?: number | null;
+	controller_info?: ServeControllerInfo;
+	controller_health_metrics?: ServeControllerHealth;
+	target_groups?: ServeTargetGroup[];
+}
+
+export async function serveApplications(): Promise<ServePayload> {
+	const res = await fetch('/api/serve/applications/');
+	if (!res.ok) throw new Error(`serveApplications: HTTP ${res.status}`);
+	return res.json();
+}
+
 export interface BatchesPayload {
 	generated_at: string | null;
 	summary: {

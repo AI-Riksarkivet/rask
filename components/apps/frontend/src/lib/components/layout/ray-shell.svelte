@@ -10,6 +10,7 @@
 		LayoutGrid,
 		ListTree,
 		Server,
+		ServerCog,
 		Image as ImageIcon,
 		ScrollText,
 		BookOpen,
@@ -54,6 +55,7 @@
 		{ href: '/browse', label: 'Browse', icon: Library, match: (p) => p.startsWith('/browse') },
 		{ href: '/jobs', label: 'Jobs', icon: ListTree, match: (p) => p.startsWith('/jobs') },
 		{ href: '/cluster', label: 'Cluster', icon: Server, match: (p) => p.startsWith('/cluster') },
+		{ href: '/serve', label: 'Serve', icon: ServerCog, match: (p) => p.startsWith('/serve') },
 		{ href: '/embed', label: 'Ray', icon: ScrollText, match: (p) => p.startsWith('/embed') },
 		{ href: '/api-docs', label: 'API', icon: BookOpen, match: (p) => p.startsWith('/api-docs') },
 		{

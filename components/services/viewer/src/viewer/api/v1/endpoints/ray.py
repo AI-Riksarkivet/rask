@@ -93,7 +93,7 @@ async def ray_dashboard_root(request: Request, http: HttpDep, settings: Settings
     return await _proxy(request, http, settings, "")
 
 
-for _prefix in ("/api/v0", "/api/jobs", "/logs"):
+for _prefix in ("/api/v0", "/api/serve", "/api/jobs", "/logs"):
     _register_proxy(_prefix)
 
 for _exact in (
