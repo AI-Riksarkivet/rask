@@ -246,6 +246,19 @@ export async function rayOverview(): Promise<OverviewPayload> {
 	return res.json();
 }
 
+export interface JobLogsPayload {
+	ok: boolean;
+	submission_id: string;
+	logs: string;
+	error?: string | null;
+}
+
+export async function rayJobLogs(submissionId: string, tail = 2000): Promise<JobLogsPayload> {
+	const res = await fetch(`/api/ray/jobs/${encodeURIComponent(submissionId)}/logs?tail=${tail}`);
+	if (!res.ok) throw new Error(`rayJobLogs: HTTP ${res.status}`);
+	return res.json();
+}
+
 export interface LogsPayload {
 	ok: boolean;
 	node_id: string | null;

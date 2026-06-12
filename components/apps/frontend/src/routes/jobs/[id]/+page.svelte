@@ -1,29 +1,61 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { page } from '$app/state';
-	import { rayJobs, tasksList, rayCluster, type RayJob, type TaskInfo, type RayNode } from '$lib/api';
+	import {
+		rayJobs,
+		rayJobLogs,
+		tasksList,
+		rayCluster,
+		listBatches,
+		type RayJob,
+		type TaskInfo,
+		type RayNode,
+		type BatchRow
+	} from '$lib/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
 	import SortHeader from '$lib/components/layout/sort-header.svelte';
-	import { ArrowLeft, TriangleAlert, FileText } from 'lucide-svelte';
+	import { ArrowLeft, TriangleAlert, FileText, ChevronRight, RefreshCw } from 'lucide-svelte';
 
 	const id = $derived(decodeURIComponent(page.params.id ?? ''));
 
 	let jobs = $state<RayJob[]>([]);
 	let tasks = $state<TaskInfo[]>([]);
 	let nodes = $state<RayNode[]>([]);
+	let batches = $state<BatchRow[]>([]);
+	let logText = $state('');
+	let logsLoading = $state(false);
 	let loaded = $state(false);
 	let error = $state<string | null>(null);
 	let timer: ReturnType<typeof setInterval> | null = null;
+	let tickCount = 0;
+	let logPre: HTMLElement | null = $state(null);
+	let logStick = $state(true);
+
 	let sortKey = $state('started');
 	let sortDir = $state<'asc' | 'desc'>('desc');
-
 	function setSort(col: string) {
 		if (sortKey === col) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
 		else {
 			sortKey = col;
 			sortDir = col === 'started' || col === 'duration' ? 'desc' : 'asc';
+		}
+	}
+
+	const job = $derived(jobs.find((j) => j.submission_id === id) ?? null);
+	const running = $derived(job?.status === 'RUNNING' || job?.status === 'PENDING');
+
+	async function refreshLogs() {
+		if (!id) return;
+		logsLoading = true;
+		try {
+			const p = await rayJobLogs(id);
+			if (p.ok) logText = p.logs;
+		} catch {
+			/* job may have aged out */
+		} finally {
+			logsLoading = false;
 		}
 	}
 
@@ -38,11 +70,22 @@
 		} finally {
 			loaded = true;
 		}
+		// Heavier fetches on a slower cadence: batches (1MB+) every 3rd tick,
+		// logs every tick while the job is live (else only on demand).
+		if (tickCount % 3 === 0) {
+			try {
+				batches = (await listBatches()).batches;
+			} catch {
+				/* progress card is a nicety */
+			}
+		}
+		if (running || tickCount === 0) await refreshLogs();
 		try {
 			nodes = (await rayCluster()).nodes ?? [];
 		} catch {
 			/* node names optional */
 		}
+		tickCount += 1;
 	}
 
 	onMount(() => {
@@ -53,9 +96,29 @@
 		if (timer) clearInterval(timer);
 	});
 
-	const job = $derived(jobs.find((j) => j.submission_id === id) ?? null);
+	// Tail behaviour for the log pane.
+	function onLogScroll() {
+		if (logPre) logStick = logPre.scrollHeight - logPre.scrollTop - logPre.clientHeight < 40;
+	}
+	$effect(() => {
+		logText;
+		if (logPre && logStick) logPre.scrollTop = logPre.scrollHeight;
+	});
+
 	const nodeMap = $derived(new Map(nodes.map((n) => [n.node_id, n])));
 	const jobTasks = $derived(job?.job_id ? tasks.filter((t) => t.job_id === job.job_id) : []);
+
+	// Per-batch progress for this job (chunk jobs carry their batch ids).
+	const jobBatches = $derived.by<BatchRow[]>(() => {
+		if (!job?.batches.length || !batches.length) return [];
+		const want = new Set(job.batches);
+		return batches.filter((b) => want.has(b.batch_id));
+	});
+	const progress = $derived.by(() => {
+		const total = jobBatches.reduce((a, b) => a + (b.page_count ?? 0), 0);
+		const done = jobBatches.reduce((a, b) => a + (b.transcribed_pages ?? 0), 0);
+		return { total, done, pct: total ? (done / total) * 100 : 0 };
+	});
 
 	const sortedTasks = $derived.by(() => {
 		const dir = sortDir === 'asc' ? 1 : -1;
@@ -83,6 +146,11 @@
 	function taskStateVariant(s: string): 'success' | 'secondary' | 'destructive' {
 		if (s === 'FINISHED') return 'success';
 		if (s === 'FAILED') return 'destructive';
+		return 'secondary';
+	}
+	function batchVariant(s: string | null): 'success' | 'secondary' | 'warning' {
+		if (s === 'done') return 'success';
+		if (s === 'partial') return 'warning';
 		return 'secondary';
 	}
 	const typeLabel = (t: string | null) =>
@@ -142,6 +210,12 @@
 		if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
 		return `${Math.floor(s / 86400)}d ago`;
 	}
+	function logLineClass(t: string): string {
+		if (/\b(ERROR|CRITICAL|FATAL)\b|Traceback|Exception|Error:/.test(t)) return 'text-destructive';
+		if (/\bWARN(ING)?\b/.test(t)) return 'text-amber-600 dark:text-amber-400';
+		return '';
+	}
+	const logLines = $derived(logText ? logText.split('\n') : []);
 </script>
 
 <svelte:head>
@@ -165,30 +239,31 @@
 		{/if}
 
 		{#if job}
-			<!-- Job header -->
-			<Card class="p-4">
-				<div class="flex flex-wrap items-center gap-3">
-					<Badge variant={jobVariant(job.status)} class={job.status === 'RUNNING' ? 'animate-pulse' : ''}>{job.status}</Badge>
+			<!-- Header -->
+			<Card class="overflow-hidden border-l-2 {job.status === 'FAILED' ? 'border-l-destructive' : job.status === 'SUCCEEDED' ? 'border-l-emerald-500' : 'border-l-amber-500'}">
+				<div class="flex flex-wrap items-center gap-3 px-4 py-3">
+					<Badge variant={jobVariant(job.status)} class={running ? 'animate-pulse' : ''}>{job.status}</Badge>
 					<span class="font-mono font-semibold">{job.submission_id}</span>
-					{#if job.start_time}
-						<span class="text-muted-foreground ml-auto text-xs">started {fmtAgo(job.start_time)}</span>
-					{/if}
+					<span class="text-muted-foreground ml-auto text-xs">
+						{#if job.start_time}started {fmtAgo(job.start_time)} ·{/if}
+						runtime {fmtDur(job.start_time ? ((job.end_time ?? Date.now()) - job.start_time) / 1000 : null)}
+					</span>
 				</div>
 
 				{#if job.error_type || job.message}
-					<div class="text-destructive mt-3 flex items-start gap-1.5 rounded-md border border-destructive/30 bg-destructive/5 p-2 font-mono text-[11px]">
+					<div class="border-destructive/30 bg-destructive/5 text-destructive mx-4 mb-3 flex items-start gap-1.5 rounded-md border p-2 font-mono text-[11px]">
 						<TriangleAlert class="mt-0.5 h-3.5 w-3.5 shrink-0" />
 						<span class="break-words">{#if job.error_type}<span class="font-semibold">{job.error_type}: </span>{/if}{job.message}</span>
 					</div>
 				{/if}
 
-				<div class="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 font-mono text-[11px] sm:grid-cols-3 lg:grid-cols-4">
+				<div class="grid grid-cols-2 gap-x-6 gap-y-1.5 border-t px-4 py-3 font-mono text-[11px] sm:grid-cols-3 lg:grid-cols-6">
 					{#each [
 						{ k: 'job_id', v: job.job_id },
 						{ k: 'started', v: fmtTime(job.start_time) },
 						{ k: 'ended', v: fmtTime(job.end_time) },
-						{ k: 'runtime', v: fmtDur(job.start_time ? ((job.end_time ?? Date.now()) - job.start_time) / 1000 : null) },
 						{ k: 'batches', v: job.batches.length },
+						{ k: 'chunk', v: job.metadata?.chunk_id != null ? `${job.metadata.chunk_id}/${job.metadata.chunk_total ?? '?'}` : '—' },
 						{ k: 'driver_exit', v: job.driver_exit_code ?? '—' }
 					] as row (row.k)}
 						<div class="flex justify-between gap-2 border-b border-dashed py-0.5">
@@ -198,32 +273,77 @@
 				</div>
 
 				{#if job.entrypoint}
-					<div class="mt-3">
-						<div class="text-muted-foreground text-[10px] uppercase">entrypoint</div>
-						<pre class="bg-muted/50 mt-1 overflow-auto rounded-md p-2 font-mono text-[10px] whitespace-pre-wrap">{job.entrypoint}</pre>
-					</div>
-				{/if}
-
-				{#if job.batches.length}
-					<div class="mt-3 flex flex-wrap items-center gap-1">
-						<span class="text-muted-foreground text-[10px] uppercase">batches</span>
-						{#each job.batches as b (b)}<span class="bg-muted rounded px-1.5 py-0.5 font-mono text-[10px]">{b}</span>{/each}
-					</div>
+					<details class="group border-t">
+						<summary class="text-muted-foreground hover:bg-muted/40 flex cursor-pointer list-none items-center gap-1 px-4 py-1.5 text-[11px]">
+							<ChevronRight class="h-3 w-3 transition-transform group-open:rotate-90" /> entrypoint
+						</summary>
+						<pre class="bg-muted/50 mx-4 mb-3 overflow-auto rounded-md p-2 font-mono text-[10px] whitespace-pre-wrap">{job.entrypoint}</pre>
+					</details>
 				{/if}
 			</Card>
 
-			<!-- Tasks for this job -->
-			<Card class="overflow-hidden">
-				<div class="text-muted-foreground border-b px-4 py-2 text-[11px] font-medium tracking-wide uppercase">
-					Tasks ({jobTasks.length})
-				</div>
-				{#if !jobTasks.length}
-					<div class="text-muted-foreground flex items-center gap-2 px-4 py-6 text-xs">
-						<FileText class="h-4 w-4" />
-						No Ray tasks for this job{#if job.job_id} — htr_http jobs run as a plain HTTP driver (work happens in the Serve replicas, visible on the Actors page){/if}.
+			<!-- Batch progress -->
+			{#if jobBatches.length}
+				<Card class="overflow-hidden">
+					<div class="flex items-center gap-3 border-b px-4 py-2">
+						<span class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">Progress</span>
+						<div class="bg-muted h-1.5 w-44 overflow-hidden rounded-full">
+							<div class="h-full bg-emerald-500 transition-all" style:width={`${progress.pct}%`}></div>
+						</div>
+						<span class="font-mono text-xs tabular-nums">{progress.done.toLocaleString()}/{progress.total.toLocaleString()} pages ({progress.pct.toFixed(1)}%)</span>
 					</div>
-				{:else}
-					<div class="max-h-[60vh] overflow-auto">
+					<div class="grid gap-x-6 px-4 py-2 sm:grid-cols-2 lg:grid-cols-3">
+						{#each jobBatches as b (b.batch_id)}
+							{@const pct = b.page_count ? ((b.transcribed_pages ?? 0) / b.page_count) * 100 : 0}
+							<div class="flex items-center gap-2 py-1 text-xs">
+								<span class="w-20 shrink-0 font-mono">{b.batch_id}</span>
+								<Badge variant={batchVariant(b.htr_status)} class="scale-90">{b.htr_status}</Badge>
+								<div class="bg-muted h-1.5 min-w-0 flex-1 overflow-hidden rounded-full">
+									<div class="h-full bg-emerald-500 transition-all" style:width={`${pct}%`}></div>
+								</div>
+								<span class="text-muted-foreground w-24 shrink-0 text-right font-mono text-[10px] tabular-nums">
+									{b.transcribed_pages ?? 0}/{b.page_count ?? 0}
+								</span>
+							</div>
+						{/each}
+					</div>
+				</Card>
+			{/if}
+
+			<!-- Driver logs -->
+			<Card class="overflow-hidden">
+				<div class="flex items-center gap-2 border-b px-4 py-2">
+					<span class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">Driver logs</span>
+					{#if running}
+						<span class="flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">
+							<span class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500"></span>live
+						</span>
+					{/if}
+					<button
+						class="hover:bg-muted ml-auto inline-flex h-6 items-center gap-1 rounded-md border px-2 text-[11px] disabled:opacity-50"
+						onclick={refreshLogs}
+						disabled={logsLoading}
+					>
+						<RefreshCw class="h-3 w-3 {logsLoading ? 'animate-spin' : ''}" /> refresh
+					</button>
+				</div>
+				<div bind:this={logPre} onscroll={onLogScroll} class="max-h-[40vh] overflow-auto py-1 font-mono text-[11px] leading-relaxed">
+					{#each logLines as l, i (i)}
+						<div class="hover:bg-muted/40 px-3 whitespace-pre-wrap {logLineClass(l)}">{l || ' '}</div>
+					{/each}
+					{#if !logLines.length}
+						<div class="text-muted-foreground p-3">{logsLoading ? 'loading…' : '(no driver logs)'}</div>
+					{/if}
+				</div>
+			</Card>
+
+			<!-- Tasks (runner-pipeline jobs) -->
+			{#if jobTasks.length}
+				<Card class="overflow-hidden">
+					<div class="text-muted-foreground border-b px-4 py-2 text-[11px] font-medium tracking-wide uppercase">
+						Tasks ({jobTasks.length})
+					</div>
+					<div class="max-h-[50vh] overflow-auto">
 						<table class="w-full border-collapse text-xs">
 							<thead class="bg-card sticky top-0 z-10 text-left">
 								<tr class="border-b">
@@ -258,8 +378,13 @@
 							</tbody>
 						</table>
 					</div>
-				{/if}
-			</Card>
+				</Card>
+			{:else}
+				<div class="text-muted-foreground flex items-center gap-2 text-xs">
+					<FileText class="h-4 w-4" />
+					No Ray tasks for this job — htr_http jobs run as a plain HTTP driver; the work happens in the Serve replicas (Actors page).
+				</div>
+			{/if}
 		{/if}
 	</div>
 </RayShell>

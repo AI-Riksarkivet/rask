@@ -33,6 +33,7 @@ from viewer.schemas.ray import (
     RayGpu,
     RayHealth,
     RayJob,
+    RayJobLogsPayload,
     RayJobsPayload,
     RayLogsPayload,
     RayNode,
@@ -445,6 +446,20 @@ async def overview(http: httpx.AsyncClient, dashboard_url: str) -> RayOverviewPa
         session_name=version.get("session_name"),
         events=events,
     )
+
+
+async def job_logs(client: JobSubmissionClient | None, submission_id: str, tail: int = 2000) -> RayJobLogsPayload:
+    """Driver logs for one submitted job (last `tail` lines), via the Jobs SDK."""
+    if client is None:
+        return RayJobLogsPayload(ok=False, submission_id=submission_id, error="Ray dashboard unreachable")
+    try:
+        text = await to_thread.run_sync(client.get_job_logs, submission_id)
+    except Exception as exc:  # SDK raises plain RuntimeError on unknown ids
+        return RayJobLogsPayload(ok=False, submission_id=submission_id, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
+    lines = text.splitlines()
+    if len(lines) > tail:
+        lines = lines[-tail:]
+    return RayJobLogsPayload(ok=True, submission_id=submission_id, logs="\n".join(lines))
 
 
 async def logs(

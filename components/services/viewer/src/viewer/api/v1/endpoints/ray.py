@@ -25,6 +25,7 @@ from viewer.schemas.ray import (
     RayActorsPayload,
     RayClusterPayload,
     RayHealth,
+    RayJobLogsPayload,
     RayJobsPayload,
     RayLogsPayload,
     RayOverviewPayload,
@@ -47,6 +48,11 @@ async def ray_health(client: RayClientDep, settings: SettingsDep) -> RayHealth:
 @router.get("/jobs")
 async def ray_jobs(client: RayClientDep, settings: SettingsDep) -> RayJobsPayload:
     return await ray_dashboard.list_jobs(client, settings.ray_dashboard_url)
+
+
+@router.get("/jobs/{submission_id}/logs")
+async def ray_job_logs(client: RayClientDep, submission_id: str, tail: int = 2000) -> RayJobLogsPayload:
+    return await ray_dashboard.job_logs(client, submission_id, tail)
 
 
 @router.get("/cluster")

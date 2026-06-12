@@ -178,6 +178,13 @@ class RayOverviewPayload(BaseModel):
     error: str | None = None
 
 
+class RayJobLogsPayload(BaseModel):
+    ok: bool
+    submission_id: str
+    logs: str = ""
+    error: str | None = None
+
+
 class RayLogsPayload(BaseModel):
     """Log file listing (when `filename` omitted) or a file's tail."""
 
