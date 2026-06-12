@@ -139,6 +139,53 @@ export async function rayCluster(): Promise<RayClusterPayload> {
 	return res.json();
 }
 
+export interface ActorInfo {
+	actor_id: string | null;
+	class_name: string;
+	name: string | null;
+	repr_name: string | null;
+	state: string;
+	pid: number | null;
+	node_id: string | null;
+	job_id: string | null;
+	ray_namespace: string | null;
+	num_restarts: number;
+	is_detached: boolean;
+	placement_group_id: string | null;
+	required_resources: Record<string, number>;
+	death_reason: string | null;
+	// Live telemetry (from /logical/actors; null when unavailable).
+	start_time_ms: number | null;
+	end_time_ms: number | null;
+	cpu_percent: number | null;
+	rss_bytes: number | null;
+	num_fds: number | null;
+	gpu_util: number | null;
+	gpu_mem_mb: number | null;
+	num_executed_tasks: number | null;
+	num_running_tasks: number | null;
+	num_pending_tasks: number | null;
+	task_queue_length: number | null;
+	ip_address: string | null;
+	worker_id: string | null;
+}
+
+export interface ActorsPayload {
+	ok: boolean;
+	dashboard_url: string;
+	actors: ActorInfo[];
+	error?: string | null;
+}
+
+/** Ray actors, merged from the state API + /logical/actors by the viewer backend. */
+export async function actorsList(): Promise<ActorInfo[]> {
+	const res = await fetch('/api/ray/actors');
+	if (!res.ok) throw new Error(`actorsList: HTTP ${res.status}`);
+	const payload: ActorsPayload = await res.json();
+	if (!payload.ok) throw new Error(payload.error ?? 'actors unavailable');
+	return payload.actors ?? [];
+}
+
 export interface ServeReplica {
 	replica_id: string;
 	state: string;

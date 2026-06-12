@@ -21,7 +21,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from viewer.api.dependencies import HttpDep, RayClientDep, SettingsDep
-from viewer.schemas.ray import RayClusterPayload, RayHealth, RayJobsPayload
+from viewer.schemas.ray import RayActorsPayload, RayClusterPayload, RayHealth, RayJobsPayload
 from viewer.services import ray_dashboard
 
 
@@ -44,6 +44,11 @@ async def ray_jobs(client: RayClientDep, settings: SettingsDep) -> RayJobsPayloa
 @router.get("/cluster")
 async def ray_cluster(http: HttpDep, settings: SettingsDep) -> RayClusterPayload:
     return await ray_dashboard.cluster_status(http, settings.ray_dashboard_url)
+
+
+@router.get("/actors")
+async def ray_actors(http: HttpDep, settings: SettingsDep) -> RayActorsPayload:
+    return await ray_dashboard.list_actors(http, settings.ray_dashboard_url)
 
 
 async def _proxy(request: Request, http: HttpDep, settings: SettingsDep, path: str) -> Response:

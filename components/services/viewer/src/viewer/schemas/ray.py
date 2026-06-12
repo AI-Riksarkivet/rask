@@ -87,6 +87,48 @@ class RayClusterPayload(BaseModel):
     error: str | None = None
 
 
+class RayActor(BaseModel):
+    """A Ray actor, merged from the state API (`/api/v0/actors`) and the
+    dashboard's `/logical/actors` (live process/GPU telemetry + task counts)."""
+
+    actor_id: str | None = None
+    class_name: str = ""
+    name: str | None = None
+    repr_name: str | None = None
+    state: str = ""
+    pid: int | None = None
+    node_id: str | None = None
+    job_id: str | None = None
+    ray_namespace: str | None = None
+    num_restarts: int = 0
+    is_detached: bool = False
+    placement_group_id: str | None = None
+    required_resources: dict[str, float] = Field(default_factory=dict)
+    # First line of the death cause / exit detail, DEAD actors only.
+    death_reason: str | None = None
+    # Live telemetry from /logical/actors — absent when that endpoint is unreachable.
+    start_time_ms: int | None = None
+    end_time_ms: int | None = None
+    cpu_percent: float | None = None
+    rss_bytes: float | None = None
+    num_fds: int | None = None
+    gpu_util: float | None = None
+    gpu_mem_mb: float | None = None
+    num_executed_tasks: int | None = None
+    num_running_tasks: int | None = None
+    num_pending_tasks: int | None = None
+    task_queue_length: int | None = None
+    ip_address: str | None = None
+    worker_id: str | None = None
+
+
+class RayActorsPayload(BaseModel):
+    ok: bool
+    dashboard_url: str
+    actors: list[RayActor] = Field(default_factory=list)
+    error: str | None = None
+
+
 class ProxyResponse(BaseModel):
     """Forwarded response from the Ray Dashboard — fed into fastapi `Response(...)` at the call site."""
 

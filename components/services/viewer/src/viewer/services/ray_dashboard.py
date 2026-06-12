@@ -23,7 +23,7 @@ from anyio import to_thread
 from ray.exceptions import AuthenticationError
 from ray.job_submission import JobSubmissionClient
 
-from viewer.schemas.ray import ProxyResponse, RayClusterPayload, RayGpu, RayHealth, RayJob, RayJobsPayload, RayNode
+from viewer.schemas.ray import ProxyResponse, RayActor, RayActorsPayload, RayClusterPayload, RayGpu, RayHealth, RayJob, RayJobsPayload, RayNode
 
 
 log = logging.getLogger(__name__)
@@ -240,6 +240,86 @@ async def cluster_status(http: httpx.AsyncClient, dashboard_url: str) -> RayClus
         used_resources=used,
         nodes=nodes,
     )
+
+
+def _int_or_none(v: object) -> int | None:
+    if not isinstance(v, (int, float, str)):
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _merge_actor(state: dict, logical: dict | None) -> RayActor:
+    """Combine a state-API actor row with its /logical/actors counterpart (if any).
+
+    State API owns namespace + structured death cause; /logical owns live process,
+    GPU and task telemetry plus uptime timestamps. Keyed by actor_id upstream.
+    """
+    lg = logical or {}
+    ps = lg.get("processStats") or {}
+    mem = ps.get("memoryInfo") or {}
+    addr = lg.get("address") or {}
+    death_ctx = (state.get("death_cause") or {}).get("actor_died_error_context") or {}
+    # /logical reports exitDetail "-" (and "" ) as the no-death placeholder for
+    # live actors — treat both as "no reason" so alive actors don't show a death.
+    reason = death_ctx.get("error_message") or lg.get("exitDetail") or None
+    if reason in ("-", ""):
+        reason = None
+    if reason:
+        reason = reason.split("\n")[0][:_ERROR_MSG_MAX_LEN]
+    return RayActor(
+        actor_id=state.get("actor_id"),
+        class_name=state.get("class_name") or lg.get("className") or "",
+        name=state.get("name") or lg.get("name"),
+        repr_name=state.get("repr_name") or lg.get("reprName") or None,
+        state=state.get("state") or lg.get("state") or "",
+        pid=_int_or_none(state.get("pid")),
+        node_id=state.get("node_id") or addr.get("nodeId"),
+        job_id=state.get("job_id"),
+        ray_namespace=state.get("ray_namespace"),
+        num_restarts=_int_or_none(state.get("num_restarts")) or 0,
+        is_detached=bool(state.get("is_detached")),
+        placement_group_id=state.get("placement_group_id"),
+        required_resources={k: float(v) for k, v in (state.get("required_resources") or {}).items()},
+        death_reason=reason,
+        start_time_ms=_int_or_none(lg.get("startTime")) or None,
+        end_time_ms=_int_or_none(lg.get("endTime")) or None,
+        cpu_percent=ps.get("cpuPercent"),
+        rss_bytes=mem.get("rss"),
+        num_fds=_int_or_none(ps.get("numFds")),
+        gpu_util=ps.get("gpuUtilization"),
+        gpu_mem_mb=ps.get("gpuMemoryUsage"),
+        num_executed_tasks=_int_or_none(lg.get("numExecutedTasks")),
+        num_running_tasks=_int_or_none(lg.get("numRunningTasks")),
+        num_pending_tasks=_int_or_none(lg.get("numPendingTasks")),
+        task_queue_length=_int_or_none(lg.get("taskQueueLength")),
+        ip_address=addr.get("ipAddress"),
+        worker_id=addr.get("workerId"),
+    )
+
+
+async def list_actors(http: httpx.AsyncClient, dashboard_url: str) -> RayActorsPayload:
+    """Actors merged from the state API + /logical/actors. The latter is best-effort:
+    if it's unreachable, actors still return with telemetry fields left null."""
+    try:
+        st_resp = await http.get(f"{dashboard_url}/api/v0/actors?detail=1&limit=1000")
+        st_resp.raise_for_status()
+        state_rows = (((st_resp.json().get("data") or {}).get("result") or {}).get("result")) or []
+    except httpx.HTTPError as exc:
+        return RayActorsPayload(ok=False, dashboard_url=dashboard_url, error=f"{type(exc).__name__}: {exc!s}"[:_ERROR_MSG_MAX_LEN])
+
+    logical: dict[str, dict] = {}
+    try:
+        lg_resp = await http.get(f"{dashboard_url}/logical/actors")
+        lg_resp.raise_for_status()
+        logical = (lg_resp.json().get("data") or {}).get("actors") or {}
+    except httpx.HTTPError:
+        log.debug("logical actors unavailable; telemetry omitted", exc_info=True)
+
+    actors = [_merge_actor(row, logical.get(row.get("actor_id"))) for row in state_rows]
+    return RayActorsPayload(ok=True, dashboard_url=dashboard_url, actors=actors)
 
 
 async def proxy(
