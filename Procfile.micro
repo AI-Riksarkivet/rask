@@ -1,0 +1,11 @@
+# Local microservice fleet for `make dev-micro` (honcho).
+# Each line is one process. Run external deps first: `make ray-up`, `make pg-up`
+# (+ `make pg-migrate`); S3/HCP comes from .env (honcho auto-loads it).
+# RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 is the documented Ray/uv gotcha; --no-sync
+# assumes `uv sync --all-packages` already ran (the dev-micro target does it).
+gateway:      RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --no-sync uvicorn backends.gateway:app --host 127.0.0.1 --port 8888
+core-api:     RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --no-sync uvicorn backends.core_api:app --host 127.0.0.1 --port 8801
+search-api:   RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --no-sync uvicorn backends.search_api:app --host 127.0.0.1 --port 8802
+volumes-api:  RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --no-sync uvicorn backends.volumes_api:app --host 127.0.0.1 --port 8803
+ray-api:      RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --no-sync uvicorn backends.ray_api:app --host 127.0.0.1 --port 8804
+orchestrator: RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 RASK_ORCHESTRATOR_AUTOSTART=1 uv run --no-sync uvicorn backends.orchestrator:app --host 127.0.0.1 --port 8810

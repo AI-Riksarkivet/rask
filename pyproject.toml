@@ -19,6 +19,7 @@ members = [
     "packages/storage",
     "components/apps/runner",
     "components/services/viewer",
+    "components/services/backends",
 ]
 
 [dependency-groups]
@@ -32,6 +33,7 @@ dev = [
     "datasets>=4.8.4",
     "pylance>=0.20",
     "lancedb>=0.20",
+    "honcho>=2.0",
 ]
 
 [tool.ruff]
@@ -55,7 +57,7 @@ indent-style = "space"
 
 [tool.ruff.lint.isort]
 lines-after-imports = 2
-known-first-party = ["htr", "storage", "runner", "viewer"]
+known-first-party = ["htr", "storage", "runner", "viewer", "backends"]
 
 [tool.ty.terminal]
 error-on-warning = true

@@ -1,10 +1,11 @@
-.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer viewer-frontend viewer-frontend-build ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve
+.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer viewer-frontend viewer-frontend-build dev-micro ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve
 
 help:
 	@echo "Targets:"
 	@echo "  install build test lint fmt clean storybook"
 	@echo "  typecheck check ci"
 	@echo "  viewer viewer-frontend viewer-frontend-build"
+	@echo "  dev-micro                              — local microservice fleet (gateway + backends)"
 	@echo "  ray-up ray-down ray-status   ray-up-htr (2-GPU pool, GPUs 0,1)"
 	@echo "  serve-up serve-down serve-status   serve-up-both (transcribe+htrflow)"
 	@echo "  qwen-serve                             — vLLM Qwen3.6-27B on GPU 2 for OpenCode"
@@ -77,6 +78,13 @@ viewer:
 
 viewer-frontend:
 	bun --cwd components/apps/frontend run dev
+
+# Local microservice fleet (gateway + per-domain backends) via honcho.
+# Bring up deps first: `make ray-up`, `make pg-up` (+ `make pg-migrate`); S3/HCP
+# from .env. The gateway listens on :8888 so `make viewer-frontend` works as-is.
+dev-micro:
+	RASK_VIEWER_INPUT=$(VIEWER_INPUT) RASK_VIEWER_OUTPUT=$(VIEWER_OUTPUT) \
+		uv sync --all-packages && uv run --no-sync honcho start -f Procfile.micro
 
 viewer-frontend-build:
 	bun --cwd components/apps/frontend run build

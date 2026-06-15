@@ -1,0 +1,18 @@
+[project]
+name = "backends-project"
+version = "0.1.0"
+description = "Deployable: local microservice processes (gateway + per-domain backends)."
+requires-python = ">=3.13"
+dependencies = ["backends"]
+
+[tool.uv.sources]
+backends = { workspace = true }
+viewer = { workspace = true }
+storage = { workspace = true }
+
+[tool.uv.workspace]
+members = [
+    "../../components/services/backends",
+    "../../components/services/viewer",
+    "../../packages/storage",
+]
