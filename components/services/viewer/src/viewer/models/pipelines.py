@@ -17,6 +17,7 @@ nothing is discovered or registered at runtime.
 """
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -56,6 +57,12 @@ class PipelineSpec(BaseModel):
     stages: tuple[RayStage, ...]
     tracks_rayjob_id: bool = True
     extra_args: tuple[tuple[str, str | int], ...] = ()
+    # "runner" (default) → `uv run … runner --pipeline <name>`. "http" → a
+    # standalone python job (htr_chunk_job.py) that POSTs to the /htr endpoint;
+    # http specs are viewer-only and have no matching runner --pipeline.
+    entrypoint_kind: Literal["runner", "http"] = "runner"
+    # Extra pip packages for the job's runtime_env (http specs need boto3).
+    pip: tuple[str, ...] = ()
 
 
 _HTR_STAGES: tuple[RayStage, ...] = (
@@ -105,6 +112,16 @@ PIPELINE_SPECS: dict[str, PipelineSpec] = {
         # Smoke pipeline shares the HTR lane and writes ALTO, so tagging the
         # rayjob id keeps stop/telemetry working the same way as a real HTR job.
         stages=(),
+        tracks_rayjob_id=True,
+    ),
+    "htr_http": PipelineSpec(
+        name="htr_http",
+        label="HTR (HTTP → /htr endpoint)",
+        slot=Slot.HTR,
+        # No Ray actors → no per-stage telemetry; progress comes from S3 reconcile.
+        stages=(),
+        entrypoint_kind="http",
+        pip=("boto3",),
         tracks_rayjob_id=True,
     ),
 }

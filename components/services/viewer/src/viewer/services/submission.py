@@ -46,7 +46,20 @@ def chunk_name(chunk_id: int, chunk_total: int, spec: PipelineSpec) -> str:
 
 
 def build_entrypoint(batch_ids: list[str], *, params: RunnerParams, spec: PipelineSpec) -> str:
-    """Build the `runner` invocation that processes all batch_ids in one job."""
+    """Build the job invocation that processes all batch_ids in one job.
+
+    `runner` specs run the Ray Data pipeline; `http` specs run the standalone
+    htr_chunk_job.py, which POSTs pages to the deployed /htr endpoint.
+    """
+    if spec.entrypoint_kind == "http":
+        parts = [
+            "python components/scripts/htr_chunk_job.py",
+            f"--cache-bucket {params.cache_bucket}",
+            f"--output {params.output}",
+            *(f"--{flag} {value}" for flag, value in spec.extra_args),
+            *(f"--batch {b}" for b in batch_ids),
+        ]
+        return " \\\n  ".join(parts)
     parts = [
         "uv run --project projects/runner runner",
         f"--cache-bucket {params.cache_bucket}",
@@ -102,6 +115,7 @@ async def submit_chunk(
             runtime_env={
                 "working_dir": str(params.repo_root),
                 "env_vars": _passthrough_env(env if env is not None else os.environ),
+                **({"pip": list(spec.pip)} if spec.pip else {}),
             },
             metadata={
                 "chunk_id": str(chunk_id),

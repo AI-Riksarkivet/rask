@@ -111,15 +111,6 @@ def test_build_entrypoint_renders_extra_args_before_batches() -> None:
 _EXPECTED_RUNNER_PIPELINES = {"htr", "htrflow", "fake", "prefetch"}
 
 
-def test_registry_keys_equal_runner_pipelines_exactly() -> None:
-    """The registry must list EXACTLY the runner's pipelines — no more, no less.
-    Ends the silent divergence the old Pipeline StrEnum allowed."""
-    assert set(PIPELINE_SPECS) == _EXPECTED_RUNNER_PIPELINES
-
-    runner_pipelines = pytest.importorskip("runner.pipeline", reason="runner not on the viewer test path").PIPELINES
-    assert set(PIPELINE_SPECS) == set(runner_pipelines)
-
-
 def test_default_pipeline_is_registered() -> None:
     assert DEFAULT_PIPELINE in PIPELINE_SPECS
 
@@ -149,16 +140,28 @@ async def repo_session() -> AsyncIterator[AsyncSession]:
         # chunk 1: fully cached + transcribed (done) — not prefetch-pending.
         s.add(
             Batch(
-                batch_id="DONE", htr_status=HtrStatus.DONE, manifest_status=ManifestStatus.OK,
-                page_count=10, cached_pages=10, transcribed_pages=10, chunk_id=1, chunk_total=2,
+                batch_id="DONE",
+                htr_status=HtrStatus.DONE,
+                manifest_status=ManifestStatus.OK,
+                page_count=10,
+                cached_pages=10,
+                transcribed_pages=10,
+                chunk_id=1,
+                chunk_total=2,
                 last_synced_at="2026-01-01T00:00:00+00:00",
             )
         )
         # chunk 2: partially cached, not transcribed — prefetch-pending.
         s.add(
             Batch(
-                batch_id="PARTIAL", htr_status=HtrStatus.PARTIAL, manifest_status=ManifestStatus.OK,
-                page_count=40, cached_pages=20, transcribed_pages=0, chunk_id=2, chunk_total=2,
+                batch_id="PARTIAL",
+                htr_status=HtrStatus.PARTIAL,
+                manifest_status=ManifestStatus.OK,
+                page_count=40,
+                cached_pages=20,
+                transcribed_pages=0,
+                chunk_id=2,
+                chunk_total=2,
                 last_synced_at="2026-01-01T00:00:00+00:00",
             )
         )
@@ -426,3 +429,36 @@ def test_non_positive_chunk_id_rejected_at_boundary(client: TestClient, fake_ray
     assert submit.status_code == 422, submit.text
     assert stop.status_code == 422, stop.text
     assert fake_ray.submitted == []
+
+
+def test_htr_http_spec_is_http_kind_with_boto3() -> None:
+    spec = PIPELINE_SPECS["htr_http"]
+    assert spec.entrypoint_kind == "http"
+    assert spec.slot is Slot.HTR
+    assert spec.pip == ("boto3",)
+    assert spec.stages == ()
+
+
+def test_runner_kind_specs_match_runner_pipelines() -> None:
+    runner_kind = {k for k, v in PIPELINE_SPECS.items() if v.entrypoint_kind == "runner"}
+    assert runner_kind == _EXPECTED_RUNNER_PIPELINES
+    runner_pipelines = pytest.importorskip("runner.pipeline", reason="runner not on the viewer test path").PIPELINES
+    assert runner_kind == set(runner_pipelines)
+
+
+def test_build_entrypoint_http_kind_runs_the_job_script() -> None:
+    spec = PIPELINE_SPECS["htr_http"]
+    params = RunnerParams(
+        repo_root=Path("/repo"),
+        cache_bucket="images-batch",
+        output="s3://images-batch-alto",
+        iiif_url="https://iiifintern-ai.ra.se",
+    )
+    out = build_entrypoint(["VOL_A", "VOL_B"], params=params, spec=spec)
+    assert out == (
+        "python components/scripts/htr_chunk_job.py \\\n"
+        "  --cache-bucket images-batch \\\n"
+        "  --output s3://images-batch-alto \\\n"
+        "  --batch VOL_A \\\n"
+        "  --batch VOL_B"
+    )
