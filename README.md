@@ -1,5 +1,7 @@
 # rask
 
+> ⚠️ **Work in progress — don't use.**
+
 Polyglot monorepo for Riksarkivet HTR + search infrastructure. Python managed with [uv]; JS/TS managed with [Bun]; documentation built with [Zensical]; Dagger is wired for build/release.
 
 ## Layout
