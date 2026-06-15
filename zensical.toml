@@ -20,6 +20,7 @@ nav = [
     { "Overview" = "architecture/index.md" },
     { "Monorepo Layout" = "architecture/layout.md" },
     { "Data Flow" = "architecture/data-flow.md" },
+    { "Data Model" = "architecture/data-model.md" },
     { "Deployment" = "architecture/deployment.md" },
     { "Deep Dives" = [
       { "System Overview" = "architecture/system-overview.md" },
