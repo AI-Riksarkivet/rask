@@ -49,7 +49,7 @@ def main() -> int:
     sid = args.submission_id or f"search-index-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
 
     entrypoint_parts = [
-        "uv run python scripts/index_alto.py index-all",
+        "uv run python components/scripts/index_alto.py index-all",
         f"--concurrency {args.concurrency}",
     ]
     if args.skip_existing:

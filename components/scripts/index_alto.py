@@ -63,6 +63,9 @@ def s3_client() -> object:
     return boto3.client(
         "s3",
         endpoint_url=os.environ.get("HCP_ENDPOINT"),
+        # HCP serves a self-signed cert; skip verification when HCP_INSECURE is set
+        # (mirrors storage.s3_client; without this boto3 raises SSLError).
+        verify=os.environ.get("HCP_INSECURE") in (None, "", "0", "false", "False"),
         config=Config(
             s3={"addressing_style": "path"},
             retries={"max_attempts": 5, "mode": "adaptive"},
@@ -76,7 +79,7 @@ def s3_client() -> object:
 def lance_storage_options() -> dict:
     """object_store-style options for Lance against HCP/MinIO."""
     endpoint = os.environ["HCP_ENDPOINT"]
-    return {
+    opts = {
         "aws_endpoint": endpoint,
         "aws_access_key_id": os.environ["AWS_ACCESS_KEY_ID"],
         "aws_secret_access_key": os.environ["AWS_SECRET_ACCESS_KEY"],
@@ -84,6 +87,11 @@ def lance_storage_options() -> dict:
         "aws_virtual_hosted_style_request": "false",  # HCP/MinIO use path-style
         "allow_http": "true" if endpoint.startswith("http://") else "false",
     }
+    # HCP's self-signed cert: object_store verifies TLS by default and fails the
+    # handshake. HCP_INSECURE mirrors what boto3 does for the rest of the stack.
+    if os.environ.get("HCP_INSECURE") not in (None, "", "0", "false", "False"):
+        opts["allow_invalid_certificates"] = "true"
+    return opts
 
 
 def ensure_bucket(client: object, bucket: str) -> None:
@@ -432,7 +440,7 @@ def _index_s3(args: argparse.Namespace, thumb_writer: ThumbWriter | None, indexe
     # AWS/HCP creds via runtime_env. Idempotent: ignore_reinit_error means
     # re-entry from index-all's loop is a no-op (the first init's runtime_env
     # applies to every job task).
-    _aws_env = {k: os.environ[k] for k in ("HCP_ENDPOINT", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION") if k in os.environ}
+    _aws_env = {k: os.environ[k] for k in ("HCP_ENDPOINT", "HCP_INSECURE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION") if k in os.environ}
     ray.init(
         address="auto",
         ignore_reinit_error=True,
@@ -635,6 +643,12 @@ def cmd_info(args: argparse.Namespace) -> int:
 
 def main() -> int:
     load_dotenv()
+    # HCP S3 creds (AWS_ACCESS_KEY_ID/SECRET) are derived from HCP_USERNAME/
+    # HCP_PASSWORD; without this boto3 reports "Unable to locate credentials".
+    # Runs on the driver, then ray.init forwards the derived vars to workers.
+    from storage import derive_hcp_creds
+
+    derive_hcp_creds()
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
 

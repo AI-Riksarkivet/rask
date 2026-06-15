@@ -9,6 +9,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 # Lane-pipeline sentinels (case-insensitive) that mean "disabled" — set
 # RASK_PREFETCH_PIPELINE to one of these to run the orchestrator HTR-only.
 PIPELINE_DISABLED = frozenset({"none", "off", "disabled", ""})
@@ -45,6 +46,7 @@ class Settings(BaseSettings):
     cors_origins: list[str] = Field(default_factory=list, alias="RASK_CORS_ORIGINS")
 
     hcp_endpoint: str | None = Field(default=None, alias="HCP_ENDPOINT")
+    hcp_insecure: bool = Field(default=False, alias="HCP_INSECURE")
     aws_access_key_id: str | None = Field(default=None, alias="AWS_ACCESS_KEY_ID")
     aws_secret_access_key: str | None = Field(default=None, alias="AWS_SECRET_ACCESS_KEY")
     aws_region: str = Field(default="us-east-1", alias="AWS_REGION")
@@ -128,7 +130,7 @@ class Settings(BaseSettings):
     def lance_storage_options(self) -> dict[str, str] | None:
         if not self.hcp_endpoint or not self.aws_access_key_id or not self.aws_secret_access_key:
             return None
-        return {
+        opts = {
             "aws_endpoint": self.hcp_endpoint,
             "aws_access_key_id": self.aws_access_key_id,
             "aws_secret_access_key": self.aws_secret_access_key,
@@ -136,3 +138,10 @@ class Settings(BaseSettings):
             "aws_virtual_hosted_style_request": "false",
             "allow_http": "true" if self.hcp_endpoint.startswith("http://") else "false",
         }
+        # HCP serves a self-signed cert; boto3 skips verification via HCP_INSECURE,
+        # but LanceDB's Rust S3 client (object_store) verifies by default and fails
+        # the TLS handshake ("error sending request"). Mirror the insecure flag so
+        # the search tables can be opened over https.
+        if self.hcp_insecure:
+            opts["allow_invalid_certificates"] = "true"
+        return opts
