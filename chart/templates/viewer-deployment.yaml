@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rask.fullname" . }}-viewer
+  labels:
+    {{- include "rask.labels" . | nindent 4 }}
+    app.kubernetes.io/component: viewer
+spec:
+  replicas: {{ .Values.viewer.replicas }}
+  strategy:
+    type: Recreate   # singleton orchestrator: never overlap two viewers
+  selector:
+    matchLabels:
+      {{- include "rask.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: viewer
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "rask.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: viewer
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "rask.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.viewer.podSecurityContext | nindent 8 }}
+      containers:
+        - name: viewer
+          image: "{{ .Values.viewer.image.repository }}:{{ .Values.viewer.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.viewer.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.viewer.securityContext | nindent 12 }}
+          command: ["uvicorn"]
+          args:
+            - "viewer.app:app"
+            - "--host=0.0.0.0"
+            - "--port={{ .Values.viewer.service.port }}"
+            - "--proxy-headers"
+            - "--forwarded-allow-ips={{ .Values.viewer.forwardedAllowIps }}"
+          ports:
+            - name: http
+              containerPort: {{ .Values.viewer.service.port }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "rask.fullname" . }}-config
+            - secretRef:
+                name: {{ required "existingSecret is required (DATABASE_URL, AWS_*, HF_TOKEN)" .Values.existingSecret }}
+          livenessProbe:
+            httpGet: {path: /api/v1/health, port: http}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /api/v1/health, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.viewer.resources | nindent 12 }}
+      {{- with .Values.viewer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.viewer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.viewer.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
