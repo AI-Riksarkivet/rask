@@ -6,7 +6,9 @@ is exposed. The eventual production form is a NATS JetStream consumer.
 """
 
 from backends._common import make_service_app
-from viewer.api.v1.endpoints import health
+from viewer.api.v1.endpoints import health, orchestrator
 
 
-app = make_service_app(title="orchestrator", routers=[health.router])
+# Serves /api/orchestrator/{state,start,stop} so this process's own loop can be
+# controlled at runtime (start/stop flip app.state.orchestrator_task here).
+app = make_service_app(title="orchestrator", routers=[health.router, orchestrator.router])

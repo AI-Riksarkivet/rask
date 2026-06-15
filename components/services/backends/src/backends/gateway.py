@@ -38,11 +38,13 @@ def _routes() -> list[tuple[str, str]]:
     search = os.environ.get("RASK_SEARCH_API_URL", "http://127.0.0.1:8802")
     volumes = os.environ.get("RASK_VOLUMES_API_URL", "http://127.0.0.1:8803")
     ray = os.environ.get("RASK_RAY_API_URL", "http://127.0.0.1:8804")
+    orch = os.environ.get("RASK_ORCH_API_URL", "http://127.0.0.1:8810")
     # longest / most-specific prefixes first; the prefix itself is the catch-all
     return [
         (f"{prefix}/search", search),
         (f"{prefix}/volumes", volumes),
         (f"{prefix}/ray", ray),
+        (f"{prefix}/orchestrator", orch),
         ("/api/serve", ray),
         (prefix, core),
         ("/api", core),

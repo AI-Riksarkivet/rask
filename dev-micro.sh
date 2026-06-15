@@ -24,6 +24,11 @@ VOLUMES_PORT="${VOLUMES_PORT:-8803}"
 RAY_PORT="${RAY_PORT:-8804}"
 ORCH_PORT="${ORCH_PORT:-8810}"
 
+# Only the orchestrator process runs the loop. We force it OFF for every other
+# service (regardless of what .env says) so there is exactly one orchestrator.
+# Set ORCH_AUTOSTART=false to bring the fleet up without submitting any jobs.
+ORCH_AUTOSTART="${ORCH_AUTOSTART:-true}"
+
 # Kill the whole process group on exit so no uvicorn lingers.
 trap 'trap - INT TERM EXIT; echo; echo "stopping fleet..."; kill 0' INT TERM EXIT
 
@@ -34,11 +39,11 @@ run() {  # run <name> <port> <module> [extra env assignments...]
 }
 
 run gateway     "$GATEWAY_PORT" backends.gateway:app
-run core-api    "$CORE_PORT"    backends.core_api:app
-run search-api  "$SEARCH_PORT"  backends.search_api:app
-run volumes-api "$VOLUMES_PORT" backends.volumes_api:app
-run ray-api     "$RAY_PORT"     backends.ray_api:app
-run orchestrator "$ORCH_PORT"   backends.orchestrator:app env RASK_ORCHESTRATOR_AUTOSTART=1
+run core-api    "$CORE_PORT"    backends.core_api:app    env RASK_ORCHESTRATOR_AUTOSTART=false
+run search-api  "$SEARCH_PORT"  backends.search_api:app  env RASK_ORCHESTRATOR_AUTOSTART=false
+run volumes-api "$VOLUMES_PORT" backends.volumes_api:app env RASK_ORCHESTRATOR_AUTOSTART=false
+run ray-api     "$RAY_PORT"     backends.ray_api:app     env RASK_ORCHESTRATOR_AUTOSTART=false
+run orchestrator "$ORCH_PORT"   backends.orchestrator:app env RASK_ORCHESTRATOR_AUTOSTART="$ORCH_AUTOSTART"
 
 echo "fleet up — gateway on http://127.0.0.1:${GATEWAY_PORT} (Ctrl-C to stop)"
 wait
