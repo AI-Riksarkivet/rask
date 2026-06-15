@@ -1,0 +1,19 @@
+[project]
+name = "gateway"
+version = "0.1.0"
+description = "API gateway — path-routes /api/* to the per-domain backends."
+requires-python = ">=3.13"
+license = "AGPL-3.0-only"
+dependencies = [
+    "fastapi>=0.115",
+    "httpx>=0.27",
+    "uvicorn>=0.30",
+    "python-dotenv>=1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gateway"]

@@ -20,6 +20,7 @@ members = [
     "packages/service-kit",
     "components/apps/runner",
     "components/services/viewer",
+    "components/services/gateway",
     "components/services/backends",
 ]
 
@@ -57,7 +58,7 @@ indent-style = "space"
 
 [tool.ruff.lint.isort]
 lines-after-imports = 2
-known-first-party = ["htr", "storage", "runner", "viewer", "backends", "service_kit"]
+known-first-party = ["htr", "storage", "runner", "viewer", "gateway", "backends", "service_kit"]
 
 [tool.ty.terminal]
 error-on-warning = true
