@@ -58,6 +58,7 @@ flowchart TB
 - **[Monorepo Layout](layout.md)** — the three brick layers and what lives where.
 - **[Data Flow](data-flow.md)** — image → ALTO XML, the batch lifecycle, and the SPA ↔ API ↔ storage map.
 - **[Deployment](deployment.md)** — clusters, container images, CI, and how it ships.
+- **[Microservices (proposed)](microservices.md)** — analysis of splitting the viewer into backends, the gateway choice, and why not Dapr.
 
 ## Deep-dive notes (in-repo)
 

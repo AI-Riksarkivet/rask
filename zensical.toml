@@ -22,6 +22,7 @@ nav = [
     { "Data Flow" = "architecture/data-flow.md" },
     { "Data Model" = "architecture/data-model.md" },
     { "Deployment" = "architecture/deployment.md" },
+    { "Microservices (proposed)" = "architecture/microservices.md" },
     { "Deep Dives" = [
       { "System Overview" = "architecture/system-overview.md" },
       { "Viewer Backend" = "architecture/viewer-backend.md" },
