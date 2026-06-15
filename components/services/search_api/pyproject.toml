@@ -1,0 +1,22 @@
+[project]
+name = "search-api"
+version = "0.1.0"
+description = "search-api backend — line-level FTS + thumbnails over the viewer routers."
+requires-python = ">=3.13"
+license = "AGPL-3.0-only"
+dependencies = [
+    "service-kit",
+    "viewer",
+    "uvicorn>=0.30",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/search_api"]
+
+[tool.uv.sources]
+service-kit = { workspace = true }
+viewer = { workspace = true }
