@@ -81,7 +81,12 @@ async def proxy(path: str, request: Request) -> StreamingResponse:
     url = httpx.URL(f"{upstream}{request.url.path}").copy_with(query=request.url.query.encode("utf-8") or None)
     headers = [(k, v) for k, v in request.headers.raw if k.lower() not in _HOP_BY_HOP]
     upstream_req = client.build_request(request.method, url, headers=headers, content=await request.body())
-    upstream_resp = await client.send(upstream_req, stream=True)
+    try:
+        upstream_resp = await client.send(upstream_req, stream=True)
+    except httpx.RequestError as exc:
+        # Upstream unreachable (not started yet, crashed, wrong port) — surface a
+        # clean 502 rather than a 500 traceback.
+        raise HTTPException(status_code=502, detail=f"upstream {upstream} unreachable: {exc}") from exc
 
     return StreamingResponse(
         upstream_resp.aiter_raw(),

@@ -87,12 +87,15 @@ Dependencies via existing tooling:
 - LanceDB tables on that S3 (`make search-index` / `catalog-index` to populate)
 
 New tooling:
-- `Procfile.micro` — one line per service (uvicorn). Each command sets
-  `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` (the documented Ray/uv gotcha) and uses
-  `uv run --no-sync`; the orchestrator line adds `RASK_ORCHESTRATOR_AUTOSTART=1`.
-- `honcho` added to the root `dev` dependency group.
-- `make dev-micro` → `uv sync --all-packages` then `honcho start -f Procfile.micro`.
-  honcho auto-loads `.env`, so HCP/S3 creds and `RASK_VIEWER_INPUT/OUTPUT` flow in.
+- `dev-micro.sh` — a dependency-free bash launcher. Loads `.env` (so HCP/S3 creds
+  and `RASK_*` reach every process), exports `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0`
+  (the documented Ray/uv gotcha), starts each service with `uv run --no-sync`
+  (the orchestrator with `RASK_ORCHESTRATOR_AUTOSTART=1`), prefixes per-service
+  logs, and kills the whole group on Ctrl-C. Ports are overridable via `*_PORT`.
+- `make dev-micro` → `uv sync --all-packages` then `./dev-micro.sh`.
+
+No new runtime/dev dependency is added — a plain shell script replaces a process
+manager (honcho/foreman) on purpose, to keep the trial dependency-free.
 
 The frontend is untouched: `make viewer-frontend`'s Vite proxy already targets
 `:8888`, which is now the gateway.

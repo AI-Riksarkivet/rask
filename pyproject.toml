@@ -33,7 +33,6 @@ dev = [
     "datasets>=4.8.4",
     "pylance>=0.20",
     "lancedb>=0.20",
-    "honcho>=2.0",
 ]
 
 [tool.ruff]
