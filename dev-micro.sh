@@ -38,12 +38,12 @@ run() {  # run <name> <port> <module> [extra env assignments...]
   ( "$@" uv run --no-sync uvicorn "$module" --host 127.0.0.1 --port "$port" 2>&1 | sed "s/^/[$name] /" ) &
 }
 
-run gateway     "$GATEWAY_PORT" backends.gateway:app
-run core-api    "$CORE_PORT"    backends.core_api:app    env RASK_ORCHESTRATOR_AUTOSTART=false
-run search-api  "$SEARCH_PORT"  backends.search_api:app  env RASK_ORCHESTRATOR_AUTOSTART=false
-run volumes-api "$VOLUMES_PORT" backends.volumes_api:app env RASK_ORCHESTRATOR_AUTOSTART=false
-run ray-api     "$RAY_PORT"     backends.ray_api:app     env RASK_ORCHESTRATOR_AUTOSTART=false
-run orchestrator "$ORCH_PORT"   backends.orchestrator:app env RASK_ORCHESTRATOR_AUTOSTART="$ORCH_AUTOSTART"
+run gateway     "$GATEWAY_PORT" gateway:app
+run core-api    "$CORE_PORT"    core_api:app    env RASK_ORCHESTRATOR_AUTOSTART=false
+run search-api  "$SEARCH_PORT"  search_api:app  env RASK_ORCHESTRATOR_AUTOSTART=false
+run volumes-api "$VOLUMES_PORT" volumes_api:app env RASK_ORCHESTRATOR_AUTOSTART=false
+run ray-api     "$RAY_PORT"     ray_api:app     env RASK_ORCHESTRATOR_AUTOSTART=false
+run orchestrator "$ORCH_PORT"   orchestrator:app env RASK_ORCHESTRATOR_AUTOSTART="$ORCH_AUTOSTART"
 
 echo "fleet up — gateway on http://127.0.0.1:${GATEWAY_PORT} (Ctrl-C to stop)"
 wait
