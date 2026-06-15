@@ -1,18 +1,20 @@
 [project]
-name = "backends-project"
+name = "ray-api-project"
 version = "0.1.0"
-description = "Deployable: local microservice processes (gateway + per-domain backends)."
+description = "Deployable: ray-api service."
 requires-python = ">=3.13"
-dependencies = ["backends"]
+dependencies = ["ray-api"]
 
 [tool.uv.sources]
-backends = { workspace = true }
+ray-api = { workspace = true }
 viewer = { workspace = true }
 storage = { workspace = true }
+service-kit = { workspace = true }
 
 [tool.uv.workspace]
 members = [
-    "../../components/services/backends",
+    "../../components/services/ray_api",
     "../../components/services/viewer",
     "../../packages/storage",
+    "../../packages/service-kit",
 ]

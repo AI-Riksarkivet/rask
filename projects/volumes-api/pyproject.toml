@@ -1,0 +1,20 @@
+[project]
+name = "volumes-api-project"
+version = "0.1.0"
+description = "Deployable: volumes-api service."
+requires-python = ">=3.13"
+dependencies = ["volumes-api"]
+
+[tool.uv.sources]
+volumes-api = { workspace = true }
+viewer = { workspace = true }
+storage = { workspace = true }
+service-kit = { workspace = true }
+
+[tool.uv.workspace]
+members = [
+    "../../components/services/volumes_api",
+    "../../components/services/viewer",
+    "../../packages/storage",
+    "../../packages/service-kit",
+]

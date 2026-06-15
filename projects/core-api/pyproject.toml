@@ -1,0 +1,20 @@
+[project]
+name = "core-api-project"
+version = "0.1.0"
+description = "Deployable: core-api service."
+requires-python = ">=3.13"
+dependencies = ["core-api"]
+
+[tool.uv.sources]
+core-api = { workspace = true }
+viewer = { workspace = true }
+storage = { workspace = true }
+service-kit = { workspace = true }
+
+[tool.uv.workspace]
+members = [
+    "../../components/services/core_api",
+    "../../components/services/viewer",
+    "../../packages/storage",
+    "../../packages/service-kit",
+]

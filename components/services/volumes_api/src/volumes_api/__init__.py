@@ -1,6 +1,6 @@
 """volumes-api — image + ALTO serving over S3/IIIF (+ health). No DB."""
 
-from backends._common import make_service_app
+from service_kit import make_service_app
 from viewer.api.v1.endpoints import health, volumes
 
 

@@ -1,4 +1,4 @@
-"""Shared factory for the per-domain backend services.
+"""Shared factory for rask backend services (was backends/_common.py).
 
 Every backend is a thin composition over the existing viewer code: it reuses
 `viewer.core.lifespan.make_lifespan` (which builds all resources tolerantly —

@@ -5,7 +5,7 @@ it when `RASK_ORCHESTRATOR_AUTOSTART=1` (set in `Procfile.micro`). Only `/health
 is exposed. The eventual production form is a NATS JetStream consumer.
 """
 
-from backends._common import make_service_app
+from service_kit import make_service_app
 from viewer.api.v1.endpoints import health, orchestrator
 
 

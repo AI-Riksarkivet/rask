@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
 
-log = logging.getLogger("backends.gateway")
+log = logging.getLogger("gateway")
 
 # Hop-by-hop headers must not be forwarded (RFC 7230 §6.1).
 _HOP_BY_HOP = frozenset(
