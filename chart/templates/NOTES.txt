@@ -1,0 +1,16 @@
+rask {{ .Chart.AppVersion }} deployed as release "{{ .Release.Name }}".
+
+Components:
+  - viewer   (singleton, replicas={{ .Values.viewer.replicas }})  Service: {{ include "rask.fullname" . }}-viewer:{{ .Values.viewer.service.port }}
+  - frontend (replicas={{ .Values.frontend.replicas }})           Service: {{ include "rask.fullname" . }}-frontend:{{ .Values.frontend.service.port }}
+
+{{- if .Values.ingress.enabled }}
+Ingress host: http://{{ .Values.ingress.host }}/   (UI)   and   /api/v1/health  (backend)
+{{- else }}
+Ingress disabled — reach the viewer via: kubectl port-forward svc/{{ include "rask.fullname" . }}-viewer {{ .Values.viewer.service.port }}
+{{- end }}
+
+Reminders:
+  * existingSecret "{{ .Values.existingSecret }}" must hold DATABASE_URL, AWS_*, HCP_ENDPOINT, HF_TOKEN.
+  * The orchestrator starts only if RASK_ORCHESTRATOR_AUTOSTART=true; otherwise POST /api/v1/orchestrator/start.
+  * DO NOT scale the viewer above 1 replica (the orchestrator is a singleton).
