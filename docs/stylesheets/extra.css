@@ -1,0 +1,21 @@
+/* rask docs — small tweaks on top of the Zensical/Material theme. */
+
+:root {
+  --md-primary-fg-color: #1565c0;
+  --md-accent-fg-color: #29b6f6;
+}
+
+/* Tighten the logo in the header. */
+.md-header__button.md-logo img {
+  height: 1.6rem;
+}
+
+/* Slightly roomier code blocks. */
+.md-typeset pre > code {
+  border-radius: 0.2rem;
+}
+
+/* Make wide mermaid diagrams scroll rather than overflow. */
+.md-typeset .mermaid {
+  overflow-x: auto;
+}

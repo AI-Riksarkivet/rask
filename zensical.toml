@@ -21,6 +21,12 @@ nav = [
     { "Monorepo Layout" = "architecture/layout.md" },
     { "Data Flow" = "architecture/data-flow.md" },
     { "Deployment" = "architecture/deployment.md" },
+    { "Deep Dives" = [
+      { "System Overview" = "architecture/system-overview.md" },
+      { "Viewer Backend" = "architecture/viewer-backend.md" },
+      { "Viewer Design" = "architecture/viewer-design.md" },
+      { "Frontend Monorepo" = "architecture/frontend-monorepo.md" },
+    ]},
   ]},
   { "Packages" = [
     { "Overview" = "packages/index.md" },
@@ -45,6 +51,10 @@ nav = [
     { "Runner" = "reference/runner.md" },
     { "Viewer" = "reference/viewer.md" },
   ]},
+  { "Runbooks" = [
+    { "LLM Cluster" = "runbooks/llm-cluster.md" },
+  ]},
+  { "Contributing" = "contributions/CONTRIBUTING.md" },
 ]
 
 extra_css = ["stylesheets/extra.css"]
@@ -56,7 +66,7 @@ extra_css = ["stylesheets/extra.css"]
 language = "en"
 custom_dir = "docs/overrides"
 logo = "assets/ra.svg"
-favicon = "assets/favicon.ico"
+favicon = "assets/ra.svg"
 
 features = [
     "announce.dismiss",
