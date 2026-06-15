@@ -24,7 +24,7 @@ jobs:
       - run: pip install zensical mkdocstrings-python
       - run: zensical build --clean
 
-      # Build Storybook (oxen_componets) and embed in docs site
+      # Build Storybook (component-lib) and embed in docs site
       - name: Install Bun
         uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2
         with:
@@ -32,10 +32,10 @@ jobs:
       - name: Install dependencies
         run: bun install
       - name: Build Storybook
-        working-directory: packages/oxen_componets
+        working-directory: packages/component-lib
         run: bun run build-storybook
       - name: Copy Storybook into docs site
-        run: cp -r packages/oxen_componets/storybook-static site/storybook
+        run: cp -r packages/component-lib/storybook-static site/storybook
 
       - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@d92aa235d04922e8f08b40ce78cc5442fcfbfa2f # v4
