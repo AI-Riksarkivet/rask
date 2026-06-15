@@ -1,8 +1,10 @@
 # Deployment
 
-rask deliberately has **no Helm chart, no Kubernetes manifests, no
-docker-compose** in this repo. The `Makefile` is the runbook for local/dev
-operation; container images and a remote KubeRay cluster carry production.
+rask ships a **Helm chart at `chart/`** that deploys the application services
+(viewer + frontend + an Alembic migration job) to Kubernetes. Postgres, S3/MinIO,
+and the KubeRay cluster are **external dependencies** referenced via config and an
+operator-created Secret — the chart does not provision them. The `Makefile`
+remains the runbook for local/dev operation.
 
 ## Container images (`.docker/`)
 
@@ -38,10 +40,25 @@ flowchart LR
 
 ## Remote KubeRay
 
-The runner accepts `--address ray://…:10001` and passes it to `ray.init`; it
-forwards `AWS_*` / `HCP_*` / `IIIF_*` / `RASK_*` to workers as a `runtime_env`.
-**No KubeRay manifests live in this repo** — the remote cluster is managed
-elsewhere (Argo/Helm). The `chart/` directory is an empty placeholder.
+The runner accepts `--address ray://…:10001`; the viewer's orchestrator submits
+jobs to the Ray dashboard REST API at `RAY_DASHBOARD_URL`. **No KubeRay manifests
+live in this repo** — the cluster is managed elsewhere (Argo/Helm). The rask Helm
+chart (`chart/`) deploys only the app services and points at that cluster via
+`config.RAY_DASHBOARD_URL`.
+
+## Helm chart (`chart/`)
+
+`helm install rask chart/ --set existingSecret=<name>` deploys:
+
+- **viewer** — singleton Deployment (`replicas: 1`, `strategy: Recreate`) because
+  the in-process orchestrator must not run concurrently. Reaches Ray via
+  `RAY_DASHBOARD_URL`, Postgres via `DATABASE_URL`, S3 via `AWS_*`/`HCP_*`.
+- **frontend** — scalable Deployment serving the SPA on `:8080`.
+- **migration** — pre-install/pre-upgrade hook Job running `alembic upgrade head`.
+- **Ingress** — `/api` → viewer:8888, `/` → frontend:8080.
+
+Sensitive config comes from an operator-created Secret (`existingSecret`);
+non-sensitive config from `values.yaml` → ConfigMap. See `chart/README.md`.
 
 ## CI
 
