@@ -1,16 +1,16 @@
 """Shared factory for rask backend services (was backends/_common.py).
 
-Every backend is a thin composition over the existing viewer code: it reuses
-`viewer.core.lifespan.make_lifespan` (which builds all resources tolerantly —
-missing HCP/Lance/DB just yield `None`) and includes only the routers it owns.
-The viewer package is imported as a library; we deliberately do NOT import
-`viewer.main`, which would instantiate a full viewer app as an import side effect.
+`make_service_app` builds a FastAPI app with shared config, exception handlers,
+middleware, and logging. The lifespan is injectable: stateless services get the
+minimal `default_lifespan` (settings only); services needing resources (DB, Lance,
+Ray, S3) pass their own factory, e.g. `viewer.core.lifespan.make_lifespan`.
 """
 
 import logging
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI
@@ -18,7 +18,6 @@ from fastapi import APIRouter, FastAPI
 from storage import derive_hcp_creds
 from viewer.core.config import Settings
 from viewer.core.exceptions import register_handlers
-from viewer.core.lifespan import make_lifespan
 from viewer.core.middleware import register_middleware
 
 
@@ -42,19 +41,44 @@ def build_settings() -> Settings:
     return Settings.model_validate({})
 
 
-def make_service_app(*, title: str, routers: Sequence[APIRouter], proxy_router: APIRouter | None = None) -> FastAPI:
-    """Build a backend FastAPI app sharing the viewer's lifespan and config.
+def default_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
+    """Minimal lifespan for stateless services: expose `settings` on `app.state`.
+
+    Services that need resources (DB, Lance, Ray, S3) inject their own factory.
+    """
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        app.state.settings = settings
+        yield
+
+    return lifespan
+
+
+type LifespanFactory = Callable[[Settings], Callable[[FastAPI], AbstractAsyncContextManager[None]]]
+
+
+def make_service_app(
+    *,
+    title: str,
+    routers: Sequence[APIRouter],
+    proxy_router: APIRouter | None = None,
+    lifespan: LifespanFactory | None = None,
+) -> FastAPI:
+    """Build a backend FastAPI app with shared config/handlers/middleware.
 
     `routers` are mounted under `settings.api_prefix`; `proxy_router` (the Ray
-    Serve proxy) is mounted at the root, matching `viewer.main`.
+    Serve proxy) is mounted at the root, matching `viewer.main`. The lifespan
+    defaults to the minimal `default_lifespan` unless `lifespan=` is passed.
     """
     _setup_logging()
     settings = build_settings()
+    lifespan_factory: LifespanFactory = lifespan if lifespan is not None else default_lifespan
 
     app = FastAPI(
         title=title,
         version="0.1.0",
-        lifespan=make_lifespan(settings),
+        lifespan=lifespan_factory(settings),
         docs_url=f"{settings.api_prefix}/docs",
         redoc_url=f"{settings.api_prefix}/redoc",
         openapi_url=f"{settings.api_prefix}/openapi.json",
