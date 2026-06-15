@@ -15,8 +15,9 @@ from contextlib import asynccontextmanager
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
 
@@ -58,10 +59,40 @@ def _pick_upstream(path: str, routes: list[tuple[str, str]]) -> str | None:
     return None
 
 
+def _distinct_upstreams(routes: list[tuple[str, str]]) -> list[str]:
+    """Unique upstream base URLs, preserving first-seen order."""
+    return list(dict.fromkeys(upstream for _, upstream in routes))
+
+
+async def _merged_openapi(client: httpx.AsyncClient, prefix: str, upstreams: list[str]) -> dict:
+    """Fetch each backend's OpenAPI and merge into one spec so the gateway's
+    /docs shows every service's endpoints, not just core's. Unreachable backends
+    are skipped (logged) rather than failing the whole page."""
+    merged: dict = {
+        "openapi": "3.1.0",
+        "info": {"title": "rask API (gateway)", "version": "0.1.0"},
+        "paths": {},
+        "components": {"schemas": {}},
+    }
+    for base in upstreams:
+        try:
+            resp = await client.get(f"{base}{prefix}/openapi.json", timeout=10.0)
+            resp.raise_for_status()
+            spec = resp.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            log.warning(f"openapi fetch failed for {base}: {exc}")
+            continue
+        merged["openapi"] = spec.get("openapi", merged["openapi"])
+        merged["paths"].update(spec.get("paths", {}))
+        merged["components"]["schemas"].update(spec.get("components", {}).get("schemas", {}))
+    return merged
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0))
     app.state.routes = _routes()
+    app.state.api_prefix = os.environ.get("RASK_API_PREFIX", "/api/v1").rstrip("/")
     for prefix, upstream in app.state.routes:
         log.info(f"route {prefix} -> {upstream}")
     try:
@@ -74,12 +105,21 @@ app = FastAPI(title="gateway", version="0.1.0", lifespan=lifespan)
 
 
 @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
-async def proxy(path: str, request: Request) -> StreamingResponse:
+async def proxy(path: str, request: Request) -> Response:
+    prefix: str = request.app.state.api_prefix
+    client: httpx.AsyncClient = request.app.state.http
+
+    # Serve a unified API page aggregating every backend's schema, instead of
+    # proxying /docs + /openapi.json to core-api only.
+    if request.url.path == f"{prefix}/openapi.json":
+        return JSONResponse(await _merged_openapi(client, prefix, _distinct_upstreams(request.app.state.routes)))
+    if request.url.path == f"{prefix}/docs":
+        return get_swagger_ui_html(openapi_url=f"{prefix}/openapi.json", title="rask API (gateway)")
+
     upstream = _pick_upstream(request.url.path, request.app.state.routes)
     if upstream is None:
         raise HTTPException(status_code=404, detail=f"no upstream for {request.url.path}")
 
-    client: httpx.AsyncClient = request.app.state.http
     url = httpx.URL(f"{upstream}{request.url.path}").copy_with(query=request.url.query.encode("utf-8") or None)
     headers = [(k, v) for k, v in request.headers.raw if k.lower() not in _HOP_BY_HOP]
     upstream_req = client.build_request(request.method, url, headers=headers, content=await request.body())
