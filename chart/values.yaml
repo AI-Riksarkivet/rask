@@ -1,0 +1,85 @@
+# -- Global image pull secrets (names of existing Secrets of type kubernetes.io/dockerconfigjson)
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Operator-created Secret holding DATABASE_URL, AWS_*, HCP_ENDPOINT, HF_TOKEN.
+# REQUIRED. Nothing sensitive is rendered by this chart.
+existingSecret: ""
+
+# Non-sensitive env, rendered into a ConfigMap and shared by viewer + migrations.
+config:
+  RASK_ORCHESTRATOR_AUTOSTART: "false"
+  RASK_ORCHESTRATOR_INTERVAL_SECONDS: "60"
+  RASK_ORCHESTRATOR_RECONCILE_SECONDS: "600"
+  RAY_DASHBOARD_URL: "http://rask-ray-head:8265"
+  RASK_CACHE_BUCKET: "images-batch"
+  RASK_OUTPUT_BUCKET: "images-batch-alto"
+  RASK_SEARCH_BUCKET: "images-batch-search"
+  RASK_IIIF_URL: "https://iiifintern-ai.ra.se"
+  AWS_REGION: "us-east-1"
+  HCP_INSECURE: "false"
+
+viewer:
+  replicas: 1   # MUST stay 1 — the in-process orchestrator is a singleton.
+  image:
+    repository: rask-viewer
+    tag: ""        # defaults to .Chart.AppVersion when empty
+    pullPolicy: IfNotPresent
+  # CIDR of the ingress controller pods; passed to uvicorn --forwarded-allow-ips. Never "*".
+  forwardedAllowIps: "127.0.0.1"
+  service:
+    port: 8888
+  resources:
+    requests: {cpu: "250m", memory: "512Mi"}
+    limits: {cpu: "2", memory: "2Gi"}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podSecurityContext:
+    runAsNonRoot: true
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities: {drop: ["ALL"]}
+
+frontend:
+  replicas: 2
+  image:
+    repository: rask-frontend
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    port: 8080
+  resources:
+    requests: {cpu: "50m", memory: "64Mi"}
+    limits: {cpu: "500m", memory: "256Mi"}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 101
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities: {drop: ["ALL"]}
+
+migrations:
+  enabled: true
+  # Command run from the alembic directory inside the viewer image.
+  command: ["sh", "-c", "cd /app/components/services/viewer && alembic upgrade head"]
+  resources:
+    requests: {cpu: "100m", memory: "256Mi"}
+    limits: {cpu: "1", memory: "1Gi"}
+
+ingress:
+  enabled: true
+  className: "nginx"
+  host: rask.local
+  annotations: {}
+  tls: []   # e.g. [{secretName: rask-tls, hosts: [rask.example.org]}]

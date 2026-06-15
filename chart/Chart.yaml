@@ -1,0 +1,9 @@
+apiVersion: v2
+name: rask
+description: rask application services (viewer + frontend) for the Swedish National Archives HTR pipeline
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/AI-Riksarkivet/rask
+maintainers:
+  - name: Riksarkivet
