@@ -49,8 +49,9 @@ flowchart TB
 - **The orchestrator runs inside the viewer** as a lifespan-managed `asyncio`
   task — reconcile S3, then submit the next eligible prefetch and HTR chunks.
 - **State** is a relational DB (SQLModel + SQLAlchemy async) plus two S3 buckets
-  and optional Lance tables. No Redis, no queue, no event bus, no Helm — the
-  `Makefile` is the only runbook.
+  and optional Lance tables. No Redis, no queue, no event bus; a Helm chart in
+  `chart/` deploys the app services to Kubernetes, while the `Makefile` is the
+  local/dev runbook.
 
 ## In this section
 

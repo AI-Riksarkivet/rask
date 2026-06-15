@@ -69,11 +69,6 @@ non-sensitive config from `values.yaml` → ConfigMap. See `chart/README.md`.
   `dagger call migrate-up` (alembic against an ephemeral Postgres — proof of a
   clean from-zero migration) and `dagger call test-pg` (migrate + viewer pytest).
 
-!!! warning "Known docs CI issue"
-    `docs.yml` builds Storybook from `packages/oxen_componets`, but the real
-    directory is `packages/component-lib`. That step fails until the path is
-    corrected.
-
 ## State stores
 
 - **Postgres** (prod) via `DATABASE_URL=postgresql+asyncpg://…`; **SQLite** (dev)
