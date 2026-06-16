@@ -16,9 +16,9 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI
 
 from storage import derive_hcp_creds
-from viewer.core.config import Settings
-from viewer.core.exceptions import register_handlers
-from viewer.core.middleware import register_middleware
+from service_kit.config import Settings
+from service_kit.exceptions import register_handlers
+from service_kit.middleware import register_middleware
 
 
 def _setup_logging() -> None:

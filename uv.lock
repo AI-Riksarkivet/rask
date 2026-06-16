@@ -3233,17 +3233,19 @@ version = "0.1.0"
 source = { editable = "packages/service-kit" }
 dependencies = [
     { name = "fastapi" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "storage" },
-    { name = "viewer" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "storage", editable = "packages/storage" },
-    { name = "viewer", editable = "components/services/viewer" },
 ]
 
 [[package]]
