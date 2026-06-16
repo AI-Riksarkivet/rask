@@ -3215,16 +3215,18 @@ name = "search-api"
 version = "0.1.0"
 source = { editable = "components/services/search_api" }
 dependencies = [
+    { name = "lancedb" },
     { name = "service-kit" },
+    { name = "storage" },
     { name = "uvicorn" },
-    { name = "viewer" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "lancedb", specifier = ">=0.20" },
     { name = "service-kit", editable = "packages/service-kit" },
+    { name = "storage", editable = "packages/storage" },
     { name = "uvicorn", specifier = ">=0.30" },
-    { name = "viewer", editable = "components/services/viewer" },
 ]
 
 [[package]]

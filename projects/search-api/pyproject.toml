@@ -7,14 +7,12 @@ dependencies = ["search-api"]
 
 [tool.uv.sources]
 search-api = { workspace = true }
-viewer = { workspace = true }
 storage = { workspace = true }
 service-kit = { workspace = true }
 
 [tool.uv.workspace]
 members = [
     "../../components/services/search_api",
-    "../../components/services/viewer",
     "../../packages/storage",
     "../../packages/service-kit",
 ]

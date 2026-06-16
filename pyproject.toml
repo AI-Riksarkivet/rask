@@ -71,7 +71,7 @@ error-on-warning = true
 python-version = "3.13"
 
 [tool.pytest.ini_options]
-testpaths = ["packages/htr/tests", "packages/storage/tests", "components/services/viewer/tests", "components/apps/runner/tests", "components/services/volumes_api/tests"]
+testpaths = ["packages/htr/tests", "packages/storage/tests", "components/services/viewer/tests", "components/apps/runner/tests", "components/services/volumes_api/tests", "components/services/search_api/tests"]
 addopts = "--cov --cov-report=term-missing:skip-covered --import-mode=importlib"
 markers = ["slow: marks tests requiring real models or long runtimes (deselect with '-m \"not slow\"')"]
 

@@ -1,12 +1,13 @@
 [project]
 name = "search-api"
 version = "0.1.0"
-description = "search-api backend — line-level FTS + thumbnails over the viewer routers."
+description = "search-api backend — line-level FTS + thumbnails over LanceDB."
 requires-python = ">=3.13"
 license = "AGPL-3.0-only"
 dependencies = [
     "service-kit",
-    "viewer",
+    "storage",
+    "lancedb>=0.20",
     "uvicorn>=0.30",
 ]
 
@@ -19,4 +20,4 @@ packages = ["src/search_api"]
 
 [tool.uv.sources]
 service-kit = { workspace = true }
-viewer = { workspace = true }
+storage = { workspace = true }
