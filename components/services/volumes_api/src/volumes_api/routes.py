@@ -1,11 +1,11 @@
-"""Image + ALTO endpoints — thin wrappers over `services/volumes.py`."""
+"""Image + ALTO endpoints — thin wrappers over `service.py`."""
 
 from fastapi import APIRouter
 from fastapi.responses import Response
 
-from viewer.api.dependencies import SettingsDep
-from viewer.schemas.page import PageEntry
-from viewer.services import volumes as volumes_service
+from service_kit.dependencies import SettingsDep
+from volumes_api import service as volumes_service
+from volumes_api.schemas import PageEntry
 
 
 router = APIRouter(prefix="/volumes", tags=["volumes"])
