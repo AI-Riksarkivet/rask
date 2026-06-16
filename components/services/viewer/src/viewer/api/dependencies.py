@@ -10,9 +10,9 @@ from typing import Annotated
 import httpx
 from fastapi import Depends, Request
 from lancedb.table import AsyncTable
-from ray.job_submission import JobSubmissionClient
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from ray_kit import JobSubmissionClient
 from service_kit.dependencies import SettingsDep, get_settings  # noqa: F401  (re-exported for viewer endpoints)
 from storage import S3Client
 from viewer.core.exceptions import ServiceUnavailableError
