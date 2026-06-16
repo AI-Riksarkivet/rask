@@ -24,14 +24,15 @@ flowchart LR
    with TrOCR model weights kept warm in **Ray Serve**.
 2. Transcriptions are written back to S3 as **ALTO XML**.
 3. An indexer builds **Lance** full-text tables over the transcribed lines.
-4. A **FastAPI viewer** service and **SvelteKit** SPA let you inspect pages,
-   drive batches, and search the corpus.
+4. A **gateway** (`:8888`) routes API traffic to per-domain backend services
+   (core-api, search-api, volumes-api, ray-api, orchestrator) that the
+   **SvelteKit** SPA consumes.
 
 ## Where to go next
 
 - **[Getting Started](getting-started/index.md)** — install, run the stack locally, and submit your first batch.
 - **[Concepts](getting-started/concepts.md)** — the vocabulary: batches, chunks, pipelines, the orchestrator.
-- **[Architecture](architecture/index.md)** — how runner, Ray, the viewer, the SPA, and storage fit together.
+- **[Architecture](architecture/index.md)** — how runner, Ray, the services, the SPA, and storage fit together.
 - **[Packages](packages/index.md)** / **[Components](components/index.md)** / **[Projects](projects/index.md)** — the monorepo, layer by layer.
 - **[API Reference](reference/htr.md)** — auto-generated from source docstrings.
 

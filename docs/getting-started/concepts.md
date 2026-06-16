@@ -43,9 +43,9 @@ models over in-process handles or HTTP.
 
 ## Orchestrator
 
-The **orchestrator** is an in-process `asyncio` task inside the viewer that
-replaces the old cron. Each tick it reconciles S3, then submits the next
-eligible prefetch and HTR chunks to the Ray cluster. It is gated by
+The **orchestrator** is a lifespan-managed `asyncio` task running in the
+`orchestrator` service (`:8810`). Each tick it reconciles S3, then submits the
+next eligible prefetch and HTR chunks to the Ray cluster. It is gated by
 `RASK_ORCHESTRATOR_AUTOSTART` and can be toggled at runtime via
 `POST /api/v1/orchestrator/start` and `/stop`.
 

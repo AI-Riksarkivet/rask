@@ -1,5 +1,13 @@
 # Viewer
 
+!!! warning "Superseded (June 2026)"
+    The `viewer` deployable described here no longer exists. The viewer monolith
+    was dissolved into a gateway + per-domain services over a shared `core` brick;
+    the API endpoints now live in `core-api` (batches/chunks/catalog) and
+    `orchestrator`, fronted by the gateway on :8888. See
+    `docs/architecture/microservices.md`. The text below is retained for
+    historical reference.
+
 `projects/viewer` composes the FastAPI viewer service (`viewer` + `storage`) into
 a deployable. The viewer is the only HTTP backend — `/api/v1/*` on port **8888** —
 and hosts the in-process orchestrator that drives the pipeline.

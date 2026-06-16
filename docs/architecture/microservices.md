@@ -1,143 +1,144 @@
-# Splitting the viewer into microservices
+# Viewer decomposition into microservices
 
-Status: **analysis / proposed direction** (not yet implemented). Captures the
-reasoning behind a possible decomposition of the monolithic viewer, the gateway
-choice, and why Dapr is deliberately *not* adopted yet.
+Status: **IMPLEMENTED (June 2026).** The monolithic `viewer` service was
+dissolved into a gateway + per-domain services over a shared `core` brick. This
+document retains the analysis of why the seams were cut where they were, updated
+to past tense where the work is done.
 
-Related: [deployment.md](deployment.md) (the Helm chart that deploys today's
-services), [viewer-backend.md](viewer-backend.md), and `CLAUDE.md` (the
-"orchestrator → NATS JetStream" roadmap note).
+Related: [deployment.md](deployment.md) (Helm chart — currently stale, pending
+update to the fleet), [viewer-backend.md](viewer-backend.md) (the dissolved
+viewer — history/rationale), and `CLAUDE.md` (the "orchestrator → NATS JetStream"
+roadmap note).
 
 ## The honest starting point
 
-The viewer looks like a monolith but is really **one stateful core wrapped in
-mostly-stateless readers**. What makes it monolithic is not the HTTP layer — it
-is that **one table (`batches`) has four writers**:
+The viewer looked like a monolith but was really **one stateful core wrapped in
+mostly-stateless readers**. What made it monolithic was not the HTTP layer — it
+was that **one table (`batches`) had four writers**:
 
 - `POST /batches/sync` — S3 reconciliation
 - `POST /chunks/{id}/submit` — tags `current_rayjob_id`
 - `POST /chunks/{id}/stop` — clears it
 - the orchestrator loop — calls submit on a timer
 
-Everything else touches no DB at all (`volumes`, `search`, `ray`, the Ray
-`serve` proxy) or only *reads* it (`catalog`, `batches GET`). So the cost of
-"many backends" is dominated entirely by how that one table and the loop that
-drives it are handled — not by the endpoint count.
+Everything else touched no DB at all (`volumes`, `search`, `ray`, the Ray
+`serve` proxy) or only *read* it (`catalog`, `batches GET`). So the cost of
+"many backends" was dominated entirely by how that one table and the loop that
+drove it were handled — not by the endpoint count.
 
-## Natural seams (cleanest → hardest)
+## Natural seams — how they were cut
 
-**Tier A — stateless readers, trivially extractable (no shared DB):**
+**Tier A — stateless readers (done: extracted with no shared DB):**
 
-- **`volumes`** — pure S3/IIIF image + ALTO proxy. Zero DB.
-- **`search`** — LanceDB `lines` table + S3 thumbnails. Zero DB.
-- **`ray` + `serve` proxy** — stateless pass-through to the Ray dashboard. Zero DB.
+- **`volumes-api`** (`components/services/volumes_api`, `:8803`) — pure S3/IIIF image + ALTO proxy. Zero DB.
+- **`search-api`** (`components/services/search_api`, `:8802`) — LanceDB `lines` table + S3 thumbnails. Zero DB.
+- **`ray-api`** (`components/services/ray_api`, `:8804`) — stateless pass-through to the Ray dashboard + `/api/serve/*` proxy. Zero DB.
 
-These could become separate services today with no data-ownership problem; they
-need only shared config (bucket names, `ray_dashboard_url`) and S3/Lance creds.
+**Tier B — the orchestrator (done: extracted as its own service):** the loop
+was moved from an in-process `asyncio.Task` to a standalone service
+(`components/services/orchestrator`, `:8810`). This removed the `replicas: 1`
+constraint from the API tier — only the orchestrator service needs to be
+singleton. The loop remains **transitional** — to become a NATS JetStream
+consumer once that lands.
 
-**Tier B — the orchestrator (already the roadmap):** the loop is an
-`asyncio.Task` on `app.state.orchestrator_task`. `CLAUDE.md` already declares it
-transitional, to become a NATS JetStream consumer. Extracting it is the
-**highest-value split** because it is what forces `viewer.replicas: 1` in the
-Helm chart — move it out and the API tier scales horizontally.
+**Tier C — the state core (`batches` + `chunks` + `catalog`), kept together:**
+these share writes/reads on one table (`batches`). The decision was to keep them
+as one `core-api` service (`components/services/core_api`, `:8801`) rather than
+splitting further. `core-api` and `orchestrator` are two thin entrypoints over
+the same `core` brick (`components/services/core`) — they share the `batches`
+table transactionally, deliberately not forced into separate services.
 
-**Tier C — the state core (`batches` + `chunks` + `catalog`), best kept
-together:** these share writes/reads on one table. Splitting them into separate
-services buys almost nothing and costs cross-service coordination. Keep them as
-one "core API" service.
-
-## Proposed topology
+## Current topology
 
 ```mermaid
 flowchart TD
     browser["browser"] --> fe["frontend (nginx :8080, SPA)"]
-    fe -->|/api/v1/*| gw["gateway"]
-    gw --> core["core-api<br/>batches · chunks · catalog"]
-    gw --> search["search-api"]
-    gw --> volumes["volumes-api"]
-    gw --> rayapi["ray-api (+ serve proxy)"]
+    fe -->|/api/*| gw["gateway :8888<br/><sub>components/services/gateway</sub>"]
+    gw --> core["core-api :8801<br/>batches · chunks · catalog"]
+    gw --> search["search-api :8802"]
+    gw --> volumes["volumes-api :8803"]
+    gw --> rayapi["ray-api :8804<br/>(+ /api/serve/* proxy)"]
+    gw --> orch["orchestrator :8810"]
 
     core -->|read/write| pg[("Postgres<br/>batches")]
     core -->|read| lance[("LanceDB<br/>lines · catalog")]
     search -->|read| lance
     search -->|read| s3[("S3<br/>images · alto")]
     volumes -->|read| s3
-    rayapi -->|read| raydash["Ray dashboard + Serve"]
-
-    orch["orchestrator-worker (1×)"] -->|write| pg
+    rayapi -->|proxy| raydash["Ray dashboard + Serve"]
+    orch -->|write| pg
     orch -->|reconcile| s3
     orch -->|submit_job| ray["Ray cluster"]
-    nats[("NATS JetStream")] <-->|events| orch
-    core -->|publish| nats
 ```
 
 ## Service catalog
 
 | Service | Responsibility | Routes (behind gateway) | State / deps | Scaling |
 |---|---|---|---|---|
-| **gateway** | Single API origin: path-route to backends; host the Ray `serve` proxy; future auth/rate-limit seam | terminates `/api/v1/*`, `/api/serve/*` | none | horizontal |
-| **core-api** | Batch inventory, chunk submit/stop, catalog browse/search — the state-mutating core | `/batches/*`, `/chunks/*`, `/catalog/*` | **owns** Postgres `batches`; reads LanceDB `archive_catalog`; Ray submit for chunk ops | horizontal (writes are row-scoped, idempotent) |
-| **search-api** | Line-level FTS + thumbnails | `/search/*` | LanceDB `lines` + S3 thumbs; **no DB** | horizontal, independent |
-| **volumes-api** | Image + ALTO serving (IIIF read-through) | `/volumes/*` | S3/IIIF; **no DB** | horizontal, independent |
-| **ray-api** | Ray cluster/job introspection + serve proxy | `/ray/*`, `/api/serve/*` | Ray dashboard HTTP; **no DB** | horizontal |
-| **orchestrator-worker** | reconcile → derive → submit, event/schedule driven | none (or tiny `/health`, `/state`) | writes Postgres `batches`; Ray submit; S3 reconcile; NATS consumer | **singleton** (single consumer / JetStream guarantees) |
+| **gateway** (`components/services/gateway`, `:8888`) | Reverse proxy; path-routes `/api/*` longest-prefix-first to backends | terminates all `/api/*` | none | horizontal |
+| **core-api** (`components/services/core_api`, `:8801`) | Batch inventory, chunk submit/stop, catalog browse/search — the state-mutating core | `/batches/*`, `/chunks/*`, `/catalog/*`, `/health` | **owns** `batches` DB; reads LanceDB `archive_catalog` | horizontal (writes row-scoped, idempotent) |
+| **orchestrator** (`components/services/orchestrator`, `:8810`) | Orchestrator loop (reconcile → derive → submit); orchestrator control endpoints | `/orchestrator/*`, `/health` | writes `batches` DB; Ray submit; S3 reconcile | **singleton** (loop must not run concurrently) |
+| **search-api** (`components/services/search_api`, `:8802`) | Line-level FTS + thumbnails | `/search/*` | LanceDB `lines` + S3 thumbs; **no DB** | horizontal, independent |
+| **volumes-api** (`components/services/volumes_api`, `:8803`) | Image + ALTO serving (IIIF read-through) | `/volumes/*` | S3/IIIF; **no DB** | horizontal, independent |
+| **ray-api** (`components/services/ray_api`, `:8804`) | Ray cluster/job introspection + `/api/serve/*` proxy | `/ray/*`, `/api/serve/*` | Ray dashboard HTTP; **no DB** | horizontal |
 
-That is 6 deployments (gateway + 4 APIs + worker), but the **minimum viable
-split is `gateway + core-api + orchestrator-worker` (3)**, peeling
-`search`/`volumes`/`ray` outward only when their load profiles diverge.
+Upstream env vars (all overridable): `RASK_CORE_API_URL` (:8801), `RASK_SEARCH_API_URL` (:8802), `RASK_VOLUMES_API_URL` (:8803), `RASK_RAY_API_URL` (:8804), `RASK_ORCH_API_URL` (:8810).
 
 ## Data ownership
 
-- **Postgres `batches`** — owned solely by **core-api** and **orchestrator-worker**
-  (the only writers). Single Alembic owner lives with core-api; the worker shares
-  the schema via a package and never runs migrations.
-- **LanceDB `lines` / `archive_catalog`** — read-only everywhere; written by the
-  existing external indexer scripts (`index_alto`, `harvest_ead`).
-- **S3 buckets** — read-only from APIs; the worker reads during reconcile.
-- No service reaches into another's store. core-api and the worker sharing
-  Postgres is deliberate: there is one table, so a shared DB beats inventing a
+- **`batches` DB** — owned solely by **core-api** and **orchestrator** (the only
+  writers). Alembic lives in the `core` brick (`components/services/core/alembic/`);
+  both entrypoints share the schema and neither runs migrations independently.
+- **LanceDB `lines` / `archive_catalog`** — read-only from all services; written
+  by external indexer scripts (`index_alto`, `harvest_ead`).
+- **S3 buckets** — read-only from APIs; the orchestrator also reads during reconcile.
+- No service reaches into another's store. `core-api` and `orchestrator` sharing
+  the DB is deliberate: there is one table, so a shared DB beats inventing a
   write-API hop.
 
 ## Communication
 
 - **North-south (sync):** browser → frontend → gateway → service, all HTTP,
-  relative `/api/v1/*`. The **frontend needs no changes** — it already assumes
-  one origin (`vite.config.ts` proxy; `api.ts` has no per-group base URL).
-- **East-west (async):** only the orchestrator becomes event-driven. Instead of a
-  60s in-process timer it is a **NATS JetStream** consumer (the project's
-  preferred bus). JetStream's durable consumer + ack gives the singleton
+  relative `/api/*`. The **frontend was not changed** — it already assumed one
+  origin (`vite.config.ts` proxy; `api.ts` has no per-group base URL).
+- **East-west (async):** the orchestrator currently uses a 60s in-process timer
+  (a lifespan-managed `asyncio.Task`). The **NATS JetStream** replacement is the
+  project's roadmap; JetStream's durable consumer + ack would give the singleton
   guarantee without a hard `replicas: 1`.
-- **No service-to-service REST mesh.** The only shared coupling is Postgres
-  (core-api ↔ worker) and the event bus, keeping the blast radius small.
+- **No service-to-service REST mesh.** The only shared coupling is the `batches`
+  DB (core-api ↔ orchestrator), keeping the blast radius small.
 
-## Repo layout changes (Polylith-friendly)
+## Repo layout (done)
 
-The dominant one-time cost is promoting in-process code into shared bricks:
+The one-time migration promoted in-process code into the `core` brick and added
+new thin entrypoints + packages:
 
 ```
 packages/
-  batchstate/        # NEW — Batch SQLModel, repositories/batch.py,
-                     #       services/sync.py, services/submission.py
-  storage/  htr/  control/   # already shared
+  service-kit/       # ADDED — make_service_app, Settings, middleware, DI lifespan
+  ray-kit/           # ADDED — Ray Job SDK + dashboard wrapper
+  storage/  htr/     # unchanged
 components/services/
-  gateway/           # NEW — thin router/proxy
-  core-api/          # batches + chunks + catalog endpoints + alembic
-  search-api/        # search endpoints
-  volumes-api/       # volumes endpoints
-  ray-api/           # ray endpoints + serve proxy
-  orchestrator-worker/  # the loop, now a NATS consumer
+  gateway/           # ADDED — thin router/proxy on :8888
+  core/              # ADDED — domain brick (dissolved viewer logic + alembic)
+  core_api/          # ADDED — thin entrypoint :8801 (health + batches + chunks + catalog)
+  orchestrator/      # ADDED — thin entrypoint :8810 (health + orchestrator loop)
+  search_api/        # ADDED — search endpoints :8802
+  volumes_api/       # ADDED — volumes endpoints :8803
+  ray_api/           # ADDED — ray endpoints + serve proxy :8804
+  # viewer/ — REMOVED (dissolved)
 projects/
-  <one per deployable>   # composition-only pyproject.toml each
+  gateway/  core-api/  orchestrator/  volumes-api/  search-api/  ray-api/  runner/
+  # projects/viewer — REMOVED
 ```
 
-Each service keeps the existing clean DI pattern; it just builds its own
-`app.state` subset in its own lifespan (e.g. search-api builds Lance + S3, no DB
-engine).
+Each service builds its own `app.state` subset in its own lifespan (e.g.
+search-api builds Lance + S3, no DB engine).
 
-## How the Helm chart evolves
+## How the Helm chart should evolve (pending follow-up)
 
-The chart from [deployment.md](deployment.md) goes from 2 app Deployments to a
-small fleet, but the shape is unchanged:
+The Helm chart (`chart/`) currently still targets the old monolith and is a
+known deployment-cycle follow-up. The target shape:
 
 - One Deployment + Service per service (templated from a shared `_helpers.tpl`).
 - The single Ingress becomes **gateway-only** (`/` → frontend, `/api` → gateway);
@@ -145,86 +146,34 @@ small fleet, but the shape is unchanged:
 - `existingSecret` stays shared (DB, S3, HF); per-service ConfigMaps carry the
   subset each needs.
 - **The `replicas: 1` + `Recreate` constraint moves off the API entirely** onto
-  only `orchestrator-worker` — and even that relaxes once it is a JetStream
-  durable consumer. That is the concrete payoff: the user-facing API tier becomes
-  freely scalable.
-- New dependency: a NATS deployment (external like Postgres, or a subchart).
+  only `orchestrator` — and even that relaxes once it is a JetStream durable
+  consumer. That is the concrete payoff: the user-facing API tier becomes freely
+  scalable.
+- New dependency (when NATS lands): a NATS deployment (external like Postgres,
+  or a subchart).
 
-## The gateway
+## The gateway (built)
 
-The "gateway" question splits in two:
+The gateway (`components/services/gateway`, `:8888`) is a **thin FastAPI
+reverse proxy** — the choice that was called "Phase 2" in the original analysis.
+It was the right fit because the Ray `/api/serve/*` proxy is application code
+anyway, and keeping routing in the same Python codebase as the services makes it
+testable.
 
-- **Routing only** — path-match `/api/v1/search` → search-api, etc. The Ingress
-  already does this.
-- **Application gateway** — auth, rate-limit, request transformation, and the Ray
-  `serve` reverse proxy (already custom FastAPI code, not just routing).
+The route table is data (longest-prefix-first):
 
-### Options
+| Prefix | Upstream |
+|---|---|
+| `/search` | search-api (`RASK_SEARCH_API_URL` :8802) |
+| `/volumes` | volumes-api (`RASK_VOLUMES_API_URL` :8803) |
+| `/ray` | ray-api (`RASK_RAY_API_URL` :8804) |
+| `/api/serve` | ray-api (`RASK_RAY_API_URL` :8804) |
+| `/orchestrator` | orchestrator (`RASK_ORCH_API_URL` :8810) |
+| `/api/v1/*`, `/api/*` (catch-all) | core-api (`RASK_CORE_API_URL` :8801) |
 
-| Option | What it is | Fits because | Cost |
-|---|---|---|---|
-| **nginx Ingress path rules** | Add `path:` entries to the chart's Ingress | Zero new components; already shipped | Routing only — no auth, no serve proxy |
-| **Traefik** | Replace nginx as ingress controller | Declarative middleware (forward-auth, rate-limit); lighter than the heavyweights | New controller to operate |
-| **Thin FastAPI gateway** | ~150 lines: httpx fan-out + serve proxy + auth | Same stack; serve proxy moves in verbatim; auth-as-code | Maintain a proxy + one hop |
-| **Kong / Istio / Envoy Gateway / APISIX** | Full gateway / mesh platforms | — | Operationally heavy; overkill for an internal tool |
-
-### Decision: two-phase, avoid the heavyweights
-
-1. **Now:** keep **nginx Ingress path-routing** for the stateless splits and keep
-   the Ray `serve` proxy as application code (in `ray-api` or core-api). The
-   Ingress *is* the gateway; do not stand up a gateway product just to route.
-
-2. **When auth/rate-limiting lands** (the viewer has none today): promote to
-   either **Traefik** (auth/middleware declaratively, no proxy code) or a **thin
-   FastAPI gateway** (auth + serve proxy in one tested Python codebase). For a
-   small FastAPI-centric team on a trusted network, lean **FastAPI gateway** —
-   custom SSO logic stays testable in-stack; pick Traefik only to avoid
-   maintaining any proxy code.
-
-The migration is clean: Phase 1 today, drop in the gateway later by flipping the
-Ingress to a two-rule form (`/` → frontend, `/api` → gateway) — no service or
-frontend rewrites.
-
-#### Phase 1 — Ingress path rules (illustrative)
-
-```yaml
-rules:
-  - host: <host>
-    http:
-      paths:
-        - {path: /api/v1/search,  pathType: Prefix, backend: {service: {name: rask-search-api,  port: {number: 8888}}}}
-        - {path: /api/v1/volumes, pathType: Prefix, backend: {service: {name: rask-volumes-api, port: {number: 8888}}}}
-        - {path: /api/v1/ray,     pathType: Prefix, backend: {service: {name: rask-ray-api,     port: {number: 8888}}}}
-        - {path: /api/serve,      pathType: Prefix, backend: {service: {name: rask-ray-api,     port: {number: 8888}}}}
-        - {path: /api/v1,         pathType: Prefix, backend: {service: {name: rask-core-api,    port: {number: 8888}}}}  # catch-all
-        - {path: /,               pathType: Prefix, backend: {service: {name: rask-frontend,    port: {number: 8080}}}}
-```
-
-Most-specific paths first; `/api/v1` as the catch-all to core-api.
-
-#### Phase 2 — thin FastAPI gateway (illustrative)
-
-```python
-# config.py — route table is data
-ROUTES = [
-    ("/api/v1/search",  "search_api_url"),
-    ("/api/v1/volumes", "volumes_api_url"),
-    ("/api/v1/ray",     "ray_api_url"),
-    ("/api/serve",      "ray_api_url"),
-    ("/api/v1",         "core_api_url"),   # catch-all
-]
-
-# main.py — one streaming proxy route, auth seam in front
-@app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"])
-async def gateway(request: Request, _: None = Depends(require_auth)):
-    target = pick_upstream(request.url.path, request.app.state.settings)
-    if target is None:
-        raise HTTPException(404)
-    return await forward(request, target)   # httpx.AsyncClient stream
-```
-
-`require_auth` is a no-op while the network is trusted and becomes real
-(Riksarkivet SSO / forward-auth) later — nothing downstream changes.
+All upstream URLs are env-overridable. **Auth:** none — assumes trusted network.
+The `require_auth` seam exists in the design; it is a no-op until Riksarkivet
+SSO lands.
 
 ## Why not Dapr
 
@@ -265,17 +214,20 @@ per-chunk pipeline grows non-idempotent steps that are *not* delegated to Ray an
 must resume exactly (a true saga). If that day comes, add the sidecar to that one
 worker and consolidate its pub/sub onto `pubsub.jetstream`.
 
-## Recommendation summary
+## What shipped — summary
 
-- Do **not** fan out to 6+ services up front; one table does not justify the
-  distributed-systems tax.
-- High-value two-step split:
-  1. **Extract the orchestrator** into its own NATS-driven worker — removes the
-     `replicas: 1` constraint, matches the roadmap, makes the API tier scalable.
-  2. **Peel off the stateless readers** (`search`, `volumes`, `ray`/serve) when
-     they need independent scaling — cheap, no shared DB.
-- Keep `batches` + `chunks` + `catalog` as one core API behind the gateway.
-- End state: **Ingress → gateway → {core-api, search, volumes, ray} + NATS
-  JetStream → orchestrator-worker → Ray.** Most effort is the one-time
-  `packages/batchstate` extraction plus standing up NATS; the gateway and Helm
-  changes are mechanical and the frontend is untouched.
+- **Did not** fan out to an over-split microservice graph; one `batches` table
+  does not justify the distributed-systems tax.
+- Two-step split delivered:
+  1. **Extracted the orchestrator** into its own service (`orchestrator`, `:8810`)
+     — removed the `replicas: 1` constraint from the API tier; the loop runs in
+     exactly one process controlled by `RASK_ORCHESTRATOR_AUTOSTART`.
+  2. **Peeled off the stateless readers** as independent services: `volumes-api`,
+     `search-api`, `ray-api` — cheap, no shared DB.
+- Kept `batches` + `chunks` + `catalog` as one core-api behind the gateway, with
+  `core-api` and `orchestrator` as two thin entrypoints over the same `core` brick.
+- Current state: **gateway → {core-api, orchestrator, search-api, volumes-api,
+  ray-api}**. `core-api` and `orchestrator` share the `batches` table. The
+  orchestrator's NATS JetStream replacement is the next roadmap item.
+- The frontend was untouched — it already assumed one origin (`/api` proxy to
+  `:8888`).

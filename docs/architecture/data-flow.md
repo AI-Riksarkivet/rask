@@ -49,8 +49,8 @@ sequenceDiagram
     participant Sync as reconcile_from_s3
     participant S3 as S3 (cache + alto)
     participant UI as Frontend
-    participant API as Viewer /api/v1
-    participant Orch as Orchestrator loop
+    participant API as Gateway → core-api
+    participant Orch as Orchestrator service (:8810)
     participant Ray as Ray head
 
     Build->>DB: INSERT batches (page_count, manifest_status)
@@ -72,14 +72,22 @@ and only then submits — so ticks are idempotent.
 
 ## Frontend ↔ Backend ↔ Storage
 
-All API routes sit under `RASK_API_PREFIX` (default `/api/v1`). The Ray
-dashboard proxy is the exception — it lives at the root under `/api/serve/*`.
+All API routes flow through the gateway on `:8888` which longest-prefix-routes
+to per-domain services. The Ray dashboard proxy is served by `ray-api` under
+`/api/serve/*` and `/api/ray/*`.
 
 ```mermaid
 flowchart LR
-    spa["SvelteKit SPA"] -->|/api/v1| api["FastAPI viewer :8888"]
-    api -->|images · ALTO| s3[("S3")]
-    api -->|batches · chunks · sync| db[("Batches DB")]
-    api -->|line search · catalog| lance[("Lance tables")]
-    api -.->|jobs · cluster · /api/serve proxy| ray["Ray dashboard :8265"]
+    spa["SvelteKit SPA"] -->|/api/*| gw["Gateway :8888"]
+    gw -->|/volumes| vols["volumes-api :8803"]
+    gw -->|/batches · /chunks · /catalog| core["core-api :8801"]
+    gw -->|/search| srch["search-api :8802"]
+    gw -->|/ray · /api/serve| rayapi["ray-api :8804"]
+    gw -->|/orchestrator| orch["orchestrator :8810"]
+    vols -->|images · ALTO| s3[("S3")]
+    core -->|batches · chunks · sync| db[("Batches DB")]
+    core -->|catalog| lance[("Lance tables")]
+    srch -->|line search| lance
+    orch -->|submit jobs| ray["Ray dashboard :8265"]
+    rayapi -.->|proxy · cluster · jobs| ray
 ```

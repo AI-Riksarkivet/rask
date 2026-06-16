@@ -28,9 +28,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 make ray-up            # local Ray head on :6379, dashboard :8265
 make serve-up          # deploy /transcribe + /htrflow on Ray Serve
-make viewer            # FastAPI on :8888 (frontend Vite proxy assumes this port)
-make viewer-frontend   # SvelteKit dev server, proxies /api → :8888
+make dev-micro         # the fleet: gateway :8888 + core-api :8801 + search :8802 +
+                       #   volumes :8803 + ray :8804 + orchestrator :8810 (via dev-micro.sh)
+make viewer            # the `core.main:app` monolith on :8888 (single-process dev convenience)
+make viewer-frontend   # SvelteKit dev server, proxies /api → :8888 (the gateway)
 ```
+
+The frontend's Vite proxy targets `:8888` either way — in the fleet that's the
+**gateway**; with `make viewer` it's the monolith. `dev-micro.sh` is the source
+of truth for the fleet's process list and ports.
 
 `make serve-down` / `make ray-down` to tear down. Indexing pipelines: `make search-index`, `make catalog-index`, `make harvest-ead`.
 
@@ -47,7 +53,7 @@ Reproducible CI equivalent via Dagger (`.dagger/`):
 
 ```bash
 dagger call migrate-up      # ephemeral pg + alembic upgrade — CI proof-of-clean-migration
-dagger call test-pg         # same as above + viewer pytest
+dagger call test-pg         # same as above + the core pytest suite
 ```
 
 ## Repository layout (Polylith-inspired)
@@ -57,13 +63,19 @@ Three brick layers — **don't blur them**:
 - `packages/` — reusable libraries, **no entrypoints**. uv + Bun workspace members.
   - `packages/htr` — Ray actors (PageLoader, Layout, Lines, Transcribe, AltoExport) + schemas
   - `packages/storage` — `FSSource/Sink`, `S3Source/Sink`, `IIIFCachedSource`, `iter_keys`, `s3_client`
+  - `packages/service-kit` — shared **platform library**: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`/`SettingsDep`, the injectable lifespan. Dependency-light (no lancedb/ray/sqlmodel).
+  - `packages/ray-kit` — Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, the dashboard service). Shared by `ray-api` and the core orchestrator.
   - `packages/component-lib` — Svelte 5 + Bits UI + Tailwind 4 component library w/ Storybook
-- `components/` — runnable code.
+- `components/` — runnable code. **The old monolithic `viewer` service is gone** — it was dissolved (2026-06) into a gateway + per-domain services + a shared `core` brick:
   - `components/apps/runner` — Typer CLI that submits Ray Data jobs
-  - `components/apps/frontend` — SvelteKit SPA (adapter-static)
-  - `components/services/viewer` — FastAPI service on `:8888` (only HTTP backend; owns `alembic/`, `models/batch.py`, and the orchestrator loop). Sync + submission live in `services/sync.py` + `services/submission.py`.
-  - `components/scripts/` — one-shot setup / debug tools (`build_batches_db`, `chunk_batches`, `harvest_ead`, `index_alto`, `index_catalog`, `download_*`, `bench_framework`, `smoke_s3`, …). **No production-state-changing CLIs** — sync / submit / orchestrate all run through the viewer (HTTP endpoints + the lifespan-managed orchestrator task).
-- `projects/<name>/pyproject.toml` — **deployable composition only, no code**. Lists workspace members for that deployable (`hcp`, `runner`, `viewer`).
+  - `components/apps/frontend` — SvelteKit SPA (adapter-static); Vite dev proxy sends `/api` → the gateway on `:8888`
+  - `components/services/gateway` — reverse proxy on `:8888` (the frontend's proxy target). Path-routes `/api/*` to the services below (longest-prefix-first); owns no state. Upstreams are env-overridable (`RASK_CORE_API_URL` :8801, `RASK_SEARCH_API_URL` :8802, `RASK_VOLUMES_API_URL` :8803, `RASK_RAY_API_URL` :8804, `RASK_ORCH_API_URL` :8810).
+  - `components/services/core` — the **core domain brick** (the dissolved `viewer`; package `core`). Owns `alembic/`, `core/db.py`, `core/lifespan.py`, `models/{batch,enums,pipelines}`, `repositories/`, the domain services (`services/{batches,submission,sync}`, `services/orchestrator/{derive,loop}`, `services/discover/catalog`), the batches/chunks/catalog/orchestrator endpoints, and `main.py` (monolith factory, still used by tests + `make viewer`). **Not a deployable** — composed by the two entrypoints below, which share the `batches` table transactionally (so they're two processes over one brick, not independent services).
+  - `components/services/core_api` — thin entrypoint (`:8801`): health + batches + chunks + catalog over `core`; orchestrator loop **off**.
+  - `components/services/orchestrator` — thin entrypoint (`:8810`): health + orchestrator endpoints over `core`; the lifespan-managed orchestrator loop **on** (`RASK_ORCHESTRATOR_AUTOSTART`).
+  - `components/services/{volumes_api,search_api,ray_api}` — independent, **viewer-free** services (`:8803`/`:8802`/`:8804`): S3/IIIF image+ALTO proxy (stateless); Lance `lines` FTS + S3 thumbnails (owns a lines-only lifespan); Ray dashboard introspection (`/api/ray/*`) + the `/api/serve/*` proxy (thin shell over `ray-kit`). Each depends only on `service-kit` + its own libs — no `core`, no DB.
+  - `components/scripts/` — one-shot setup / debug tools (`build_batches_db`, `chunk_batches`, `harvest_ead`, `index_alto`, `index_catalog`, `download_*`, `bench_framework`, `smoke_s3`, …). **No production-state-changing CLIs** — sync / submit / orchestrate all run through the HTTP services (core-api endpoints + the orchestrator service's lifespan loop).
+- `projects/<name>/pyproject.toml` — **deployable composition only, no code**. One per deployable: `gateway`, `core-api`, `orchestrator`, `volumes-api`, `search-api`, `ray-api`, `runner` (+ `hcp`). (There is no `projects/viewer` — it was deleted when viewer dissolved.)
 
 **Workspace membership is explicit, never globbed.** Adding a new brick requires editing **both**:
 - `pyproject.toml` → `[tool.uv.workspace] members`
@@ -81,15 +93,15 @@ Plus the relevant `projects/<name>/pyproject.toml` if it's deployable.
   - **Actor-per-stage** — `PageLoader → Layout → Lines → TranscribeViaServe → AltoExport → AltoWriter`. Uses GPU for YOLO regions/lines (0.001 GPU each) and TrOCR via Serve.
   - **`/htrflow`** — collapses Layout+Line+Transcribe+Alto into a single 1-replica CPU Serve deployment. Used when actor fan-out isn't worth it for a batch shape.
 - **GPU sizing is hardcoded** in `components/apps/runner/src/runner/pipeline.py` for a 3-GPU node. Changing target hardware means editing that file.
-- **Viewer has no auth, no middleware.** Assumes localhost / trusted network. SPA hits `/api/*` (fronted by the gateway); `/api/ray/*` and the `/api/serve/*` proxy are served by the standalone **ray-api** service (over `ray-kit`), not viewer.
-- **State surface:** relational DB behind a backend-agnostic ORM (SQLModel + SQLAlchemy async). **SQLite for dev** (`.cache/batches.db`, not committed); **Postgres for prod** via `DATABASE_URL=postgresql+asyncpg://…`. Schema changes go through **Alembic** (`components/services/viewer/alembic/`) — never `SQLModel.metadata.create_all` in app startup. The `Batch` SQLModel uses `SAEnum(values_callable=...)` so `htr_status`/`manifest_status` round-trip as lowercase strings against postgres-native ENUM types or sqlite VARCHAR. Plus S3 two-bucket setup (`images-batch` input, `images-batch-alto` output). **No Redis, no queue, no event bus, no docker-compose.** A Helm chart in `chart/` deploys the app services to Kubernetes (see `docs/architecture/deployment.md`); the `Makefile` is the local/dev runbook.
-- **Orchestrator runs inside the viewer.** A lifespan-managed `asyncio.Task` ticks every `RASK_ORCHESTRATOR_INTERVAL_SECONDS`: reconcile S3 → submit next prefetch / htr chunk. `RASK_ORCHESTRATOR_AUTOSTART` controls whether the loop starts on viewer boot; operators flip it at runtime via `POST /api/v1/orchestrator/start` and `/stop`. Per-chunk control via `POST /api/v1/chunks/{id}/stop`. See `viewer/services/orchestrator_loop.py`. **Transitional — to be replaced by a NATS JetStream consumer (`python-infrastructure`) once that lands.**
+- **No auth, no app middleware.** The services assume localhost / trusted network. The SPA hits `/api/*` on the **gateway** (`:8888`), which path-routes to the per-domain services; `/api/ray/*` and the `/api/serve/*` proxy are served by the standalone **ray-api** service (over `ray-kit`).
+- **State surface:** relational DB behind a backend-agnostic ORM (SQLModel + SQLAlchemy async), owned by the **`core` brick**. **SQLite for dev** (`.cache/batches.db`, not committed); **Postgres for prod** via `DATABASE_URL=postgresql+asyncpg://…`. Schema changes go through **Alembic** (`components/services/core/alembic/`, run via `make pg-migrate` = `uv run --package core alembic upgrade head`) — never `SQLModel.metadata.create_all` in app startup. The `Batch` SQLModel uses `SAEnum(values_callable=...)` so `htr_status`/`manifest_status` round-trip as lowercase strings against postgres-native ENUM types or sqlite VARCHAR. Plus S3 two-bucket setup (`images-batch` input, `images-batch-alto` output). **No Redis, no queue, no event bus, no docker-compose.** A Helm chart in `chart/` deploys the app services to Kubernetes (see `docs/architecture/deployment.md`); the `Makefile` is the local/dev runbook.
+- **Orchestrator runs in the `orchestrator` service** (a thin entrypoint over the `core` brick). A lifespan-managed `asyncio.Task` ticks every `RASK_ORCHESTRATOR_INTERVAL_SECONDS`: reconcile S3 → submit next prefetch / htr chunk. `RASK_ORCHESTRATOR_AUTOSTART` controls whether the loop starts on boot (the fleet runs `core-api` with it OFF and `orchestrator` with it ON, so the loop runs in exactly one process); operators flip it at runtime via `POST /api/v1/orchestrator/start` and `/stop`. Per-chunk control via `POST /api/v1/chunks/{id}/stop`. See `core/services/orchestrator/loop.py`. **Transitional — to be replaced by a NATS JetStream consumer once that lands.**
 - **Source images:** IIIF (Riksarkivet) with S3 read-through cache. `PageLoaderActor` hits S3 first, IIIF on miss.
 - **Remote KubeRay:** the runner accepts `--address ray://...:10001`. No K8s manifests live in this repo — the remote cluster is managed elsewhere.
 
 ## Conventions
 
-- **Frontend port is 8888.** Vite proxy in `components/apps/frontend` defaults `VIEWER_BACKEND` to `http://localhost:8888`. Don't change the viewer port without updating the proxy.
+- **Gateway port is 8888.** Vite proxy in `components/apps/frontend` defaults `VIEWER_BACKEND` to `http://localhost:8888` (the gateway, or the `make viewer` monolith). Don't change that port without updating the proxy.
 - **Pytest import mode is `importlib`** (`--import-mode=importlib` in `pyproject.toml`). Test paths are explicit (`testpaths = [...]`), not discovered.
 - **Ruff line length is 160**, not 100. Selected rule families include `ANN` (annotations); tests are exempted via `per-file-ignores`.
 - **Prettier uses tabs**, single quotes, `printWidth: 100` — defined in root `package.json`, applied across both frontend and `component-lib` workspaces.
