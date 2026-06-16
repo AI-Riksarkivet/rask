@@ -48,19 +48,18 @@ async def _open_lance_table(db: AsyncConnection, name: str) -> AsyncTable | None
 
 async def _open_lancedb(
     settings: Settings,
-) -> tuple[AsyncConnection | None, AsyncTable | None, AsyncTable | None]:
+) -> tuple[AsyncConnection | None, AsyncTable | None]:
     storage_options = settings.lance_storage_options()
     if storage_options is None:
         log.info("lancedb skipped — HCP credentials not configured")
-        return None, None, None
+        return None, None
     try:
         db = await lancedb.connect_async(settings.lance_db_uri, storage_options=storage_options)
     except (OSError, RuntimeError) as exc:
         log.warning(f"could not connect to lancedb at {settings.lance_db_uri}: {exc}")
-        return None, None, None
-    lines = await _open_lance_table(db, settings.lines_table)
+        return None, None
     catalog = await _open_lance_table(db, settings.catalog_table)
-    return db, lines, catalog
+    return db, catalog
 
 
 def create_orchestrator_task(app: FastAPI) -> asyncio.Task[None]:
@@ -110,7 +109,7 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         app.state.settings = settings
         app.state.http = httpx.AsyncClient(timeout=settings.http_timeout)
         app.state.s3 = _build_s3(settings)
-        app.state.lance_db, app.state.lines_tbl, app.state.catalog_tbl = await _open_lancedb(settings)
+        app.state.lance_db, app.state.catalog_tbl = await _open_lancedb(settings)
         app.state.ray_client = await to_thread.run_sync(build_ray_client, settings.ray_dashboard_url)
 
         app.state.db_engine = make_engine(settings)
@@ -127,8 +126,6 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         finally:
             await stop_orchestrator_task(app)
             await app.state.http.aclose()
-            if app.state.lines_tbl is not None:
-                app.state.lines_tbl.close()
             if app.state.catalog_tbl is not None:
                 app.state.catalog_tbl.close()
             if app.state.lance_db is not None:

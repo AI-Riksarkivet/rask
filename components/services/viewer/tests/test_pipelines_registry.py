@@ -9,13 +9,11 @@ sqlite with a fake Ray client so the prefetch-stop fix is exercised end-to-end.
 
 import time
 from collections.abc import AsyncIterator
-from datetime import timedelta
 from typing import cast
 
 import httpx
 import pytest
 import pytest_asyncio
-from lancedb.table import AsyncTable
 from pydantic import ValidationError
 from ray.dashboard.modules.job.common import JobStatus
 from ray.job_submission import JobSubmissionClient
@@ -29,7 +27,6 @@ from viewer.models.enums import ManifestStatus, RayStage
 from viewer.models.pipelines import DEFAULT_PIPELINE, PIPELINE_SPECS, Slot, spec_for_submission_id
 from viewer.schemas.chunk import SubmitRequest
 from viewer.services import submission as submission_service
-from viewer.services.discover import search as search_service
 from viewer.services.orchestrator import derive
 
 
@@ -173,40 +170,6 @@ async def test_prefetch_can_be_submitted_then_stopped(session: AsyncSession, tmp
     assert stop.stopped is True
     assert stop.stopped_submission_id == result.submission_id
     assert fake.stopped == [result.submission_id]
-
-
-# ── thumb_url carries the api_prefix (regression guard for the missing-/v1 bug) ──
-
-
-class _FakeLinesTbl:
-    """Async LanceDB table stand-in: the query() chain returns the seeded rows."""
-
-    def __init__(self, rows: list[dict[str, object]]) -> None:
-        self._rows = rows
-
-    def query(self) -> "_FakeLinesTbl":
-        return self
-
-    def nearest_to_text(self, query: str, columns: str) -> "_FakeLinesTbl":
-        return self
-
-    def select(self, cols: list[str]) -> "_FakeLinesTbl":
-        return self
-
-    def limit(self, n: int) -> "_FakeLinesTbl":
-        return self
-
-    async def to_list(self, timeout: timedelta) -> list[dict[str, object]]:
-        return self._rows
-
-
-@pytest.mark.asyncio
-async def test_search_thumb_url_includes_api_prefix() -> None:
-    """The bug emitted /api/search/thumb/... (no /v1) so every line thumbnail 404'd
-    through the SPA. The URL must be built from settings.api_prefix."""
-    tbl = _FakeLinesTbl([{"batch_id": "VOL_A", "text": "hej", "thumb_key": "thumbs/VOL_A/0001.jpg"}])
-    resp = await search_service.search_lines(cast(AsyncTable, tbl), "hej", 10, timedelta(seconds=5), api_prefix="/api/v1")
-    assert resp.hits[0].thumb_url == "/api/v1/search/thumb/thumbs/VOL_A/0001.jpg"
 
 
 # ── derive_state eligibility: eligible = ready - in-flight - cooldown ──────
