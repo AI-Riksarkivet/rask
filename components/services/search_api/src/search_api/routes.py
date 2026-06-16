@@ -4,10 +4,11 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 from fastapi.responses import Response
 
-from viewer.api.dependencies import LinesTblDep, S3Dep, SettingsDep
-from viewer.core.exceptions import NotFoundError
-from viewer.schemas.search import SearchResponse, SearchStats
-from viewer.services.discover import search as search_service
+from search_api import service as search_service
+from search_api.dependencies import LinesTblDep, S3Dep
+from search_api.schemas import SearchResponse, SearchStats
+from service_kit.dependencies import SettingsDep
+from service_kit.exceptions import NotFoundError
 
 
 router = APIRouter(prefix="/search", tags=["search"])

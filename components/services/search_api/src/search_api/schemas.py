@@ -1,7 +1,5 @@
 from pydantic import BaseModel, field_validator
 
-from viewer.schemas.catalog import CatalogHit
-
 
 class LineRow(BaseModel):
     """Lance columns for `lines`. Field order = projection order."""
@@ -39,7 +37,6 @@ class LineRow(BaseModel):
 
 class SearchHit(LineRow):
     thumb_url: str | None = None
-    catalog: CatalogHit | None = None
 
 
 class SearchResponse(BaseModel):

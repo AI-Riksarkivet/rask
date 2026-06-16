@@ -9,8 +9,8 @@ from datetime import timedelta
 
 from lancedb.table import AsyncTable
 
+from search_api.schemas import LineRow, SearchHit, SearchResponse, SearchStats
 from storage import S3Client
-from viewer.schemas.search import LineRow, SearchHit, SearchResponse, SearchStats
 
 
 log = logging.getLogger(__name__)

@@ -29,10 +29,6 @@ def get_s3(request: Request) -> S3Client:
     return s3
 
 
-def get_lines_tbl(request: Request) -> AsyncTable | None:
-    return request.app.state.lines_tbl
-
-
 def get_catalog_tbl(request: Request) -> AsyncTable | None:
     return request.app.state.catalog_tbl
 
@@ -54,7 +50,6 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 
 HttpDep = Annotated[httpx.AsyncClient, Depends(get_http)]
 S3Dep = Annotated[S3Client, Depends(get_s3)]
-LinesTblDep = Annotated[AsyncTable | None, Depends(get_lines_tbl)]
 CatalogTblDep = Annotated[AsyncTable | None, Depends(get_catalog_tbl)]
 RayClientDep = Annotated[JobSubmissionClient | None, Depends(get_ray_client)]
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
