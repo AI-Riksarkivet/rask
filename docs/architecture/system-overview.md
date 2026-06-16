@@ -11,14 +11,17 @@ Archives. A **Python CLI runner** submits **Ray Data** jobs that fan
 **handwritten-text-recognition** (HTR) work across a **local Ray cluster**
 with model weights kept resident in **Ray Serve** (TrOCR on `/transcribe`,
 full HTRflow pipeline on `/htrflow`). Images come from **IIIF** or
-pre-staged **S3** buckets; output ALTO XML lands back in **S3**. A
-**FastAPI viewer service** exposes versioned endpoints under `/api/v1/*`
-that a **SvelteKit SPA** consumes for inspection, batch dashboard and
-chunk submission. Batch-tracking state lives in a small relational DB
-behind a backend-agnostic ORM — **SQLite for dev** (`.cache/batches.db`),
-**Postgres for prod** — selected by `DATABASE_URL`. Full-text search over
-transcribed lines + an archival catalog index live in optional **Lance**
-tables on S3.
+pre-staged **S3** buckets; output ALTO XML lands back in **S3**. The HTTP
+backend is a fleet of FastAPI services behind a **gateway** on `:8888`: a
+**core-api** for batch/chunk/catalog state (`:8801`), an **orchestrator**
+service that runs the submission loop (`:8810`), and three stateless services —
+**volumes-api** (`:8803`), **search-api** (`:8802`), **ray-api** (`:8804`).
+A **SvelteKit SPA** consumes all of these via the gateway for inspection,
+batch dashboard and chunk submission. Batch-tracking state lives in a small
+relational DB behind a backend-agnostic ORM — **SQLite for dev**
+(`.cache/batches.db`), **Postgres for prod** — selected by `DATABASE_URL`.
+Full-text search over transcribed lines + an archival catalog index live in
+optional **Lance** tables on S3.
 
 ## Top-level component map
 
@@ -32,8 +35,13 @@ flowchart TB
         spa["components/apps/frontend<br/><sub>viewer · batch UI · search</sub>"]
     end
 
-    subgraph backend["Backend · FastAPI"]
-        viewer["components/services/viewer<br/><sub>/api/v1/* on :8888</sub>"]
+    subgraph backend["Backend · FastAPI fleet"]
+        gw["components/services/gateway<br/><sub>gateway :8888</sub>"]
+        core["components/services/core_api<br/><sub>core-api :8801</sub>"]
+        orch["components/services/orchestrator<br/><sub>orchestrator :8810</sub>"]
+        vols["components/services/volumes_api<br/><sub>volumes-api :8803</sub>"]
+        srch["components/services/search_api<br/><sub>search-api :8802</sub>"]
+        rayapi["components/services/ray_api<br/><sub>ray-api :8804</sub>"]
     end
 
     subgraph runner["Runner · Python CLI"]
@@ -58,18 +66,27 @@ flowchart TB
     subgraph libs["Library code"]
         htr["packages/htr<br/><sub>Ray actors, schemas</sub>"]
         storagepkg["packages/storage<br/><sub>FS/S3/IIIF abstractions</sub>"]
-        control["packages/control<br/><sub>sync · chunk submission</sub>"]
+        servicekit["packages/service-kit<br/><sub>make_service_app, Settings, middleware</sub>"]
+        raykit["packages/ray-kit<br/><sub>Ray Job SDK + dashboard wrapper</sub>"]
         complib["packages/component-lib<br/><sub>Svelte 5 + Tailwind + Storybook</sub>"]
     end
 
     browser --> spa
-    spa -->|"/api/v1/*"| viewer
-    viewer -->|read images| s3in
-    viewer -->|read ALTO| s3out
-    viewer -->|read/write rows| relational
-    viewer -->|search · catalog| lance
-    viewer -.->|"/api/v1/ray/* proxy"| head
-    viewer -.->|submit job| head
+    spa -->|"/api/*"| gw
+    gw --> core
+    gw --> srch
+    gw --> vols
+    gw --> rayapi
+    gw --> orch
+
+    core -->|read/write rows| relational
+    core -->|catalog| lance
+    srch -->|search| lance
+    srch -->|thumbs| s3in
+    vols -->|read images| s3in
+    vols -->|read ALTO| s3out
+    rayapi -.->|"/api/ray/* · /api/serve/* proxy"| head
+    orch -.->|submit job| head
 
     cli --> head
     scripts --> head
@@ -86,9 +103,16 @@ flowchart TB
     cli -.imports.-> htr
     cli -.imports.-> storagepkg
     workers -.imports.-> htr
-    viewer -.imports.-> storagepkg
-    viewer -.imports.-> control
-    scripts -.imports.-> control
+    core -.imports.-> storagepkg
+    core -.imports.-> servicekit
+    vols -.imports.-> storagepkg
+    vols -.imports.-> servicekit
+    srch -.imports.-> storagepkg
+    srch -.imports.-> servicekit
+    rayapi -.imports.-> raykit
+    rayapi -.imports.-> servicekit
+    orch -.imports.-> servicekit
+    orch -.imports.-> raykit
     spa -.imports.-> complib
 
     classDef user fill:#1e293b,stroke:#94a3b8,color:#e9e9ea
@@ -101,28 +125,35 @@ flowchart TB
 
     class browser user
     class spa fe
-    class viewer be
+    class gw,core,orch,vols,srch,rayapi be
     class cli,scripts run
     class head,workers,serve rayc
     class s3in,s3out,relational,lance,iiif store
-    class htr,storagepkg,control,complib lib
+    class htr,storagepkg,servicekit,raykit,complib lib
 ```
 
 ## What lives where
 
-| Path                                | Type          | Purpose                                                              |
-| ----------------------------------- | ------------- | -------------------------------------------------------------------- |
-| `components/apps/frontend/`         | SvelteKit SPA | Browser UI: page viewer, batch dashboard, search, Ray-dashboard proxy |
-| `components/apps/runner/`           | Python CLI    | Submits Ray Data jobs; ships Ray Serve deployments                   |
-| `components/services/viewer/`       | FastAPI       | Only HTTP backend; `/api/v1/*` on `:8888`; no auth                   |
-| `components/scripts/`               | Python        | One-shot tools: `build_batches_db`, `sync_from_s3`, `harvest_ead`, `search_index`, `submit_chunks` |
-| `packages/htr/`                     | Python lib    | Ray actors (PageLoader, Layout, Lines, Transcribe, AltoExport)       |
-| `packages/storage/`                 | Python lib    | `FSSource/Sink`, `S3Source/Sink`, `IIIFCachedSource`                 |
-| `packages/control/`                 | Python lib    | Shared ops logic — sync, chunk submission — used by viewer + scripts |
-| `packages/component-lib/`           | TS / Svelte   | Shared Svelte 5 + Bits UI + Tailwind 4 component library w/ Storybook |
-| `.cache/batches.db`                 | SQLite        | Default per-batch progress (dev; not committed)                      |
-| `.docker/*.dockerfile`              | Docker        | Image definitions for `viewer`, `runner` (CUDA), `frontend` (nginx)  |
-| `Makefile`                          | bash          | All deploy/dev orchestration (no docker-compose, no k8s yaml)        |
+| Path                                    | Type          | Purpose                                                              |
+| --------------------------------------- | ------------- | -------------------------------------------------------------------- |
+| `components/apps/frontend/`             | SvelteKit SPA | Browser UI: page viewer, batch dashboard, search, Ray-dashboard proxy |
+| `components/apps/runner/`               | Python CLI    | Submits Ray Data jobs; ships Ray Serve deployments                   |
+| `components/services/gateway/`          | FastAPI       | Reverse proxy on `:8888`; path-routes `/api/*` to per-domain services |
+| `components/services/core/`             | Python (brick)| Domain brick: DB, models, repositories, domain services, Alembic; shared by core-api + orchestrator |
+| `components/services/core_api/`         | FastAPI       | Thin entrypoint `:8801` — health + batches + chunks + catalog        |
+| `components/services/orchestrator/`     | FastAPI       | Thin entrypoint `:8810` — health + orchestrator loop (on)            |
+| `components/services/volumes_api/`      | FastAPI       | S3/IIIF image + ALTO proxy on `:8803`; no DB                         |
+| `components/services/search_api/`       | FastAPI       | Lance `lines` FTS + S3 thumbnails on `:8802`; no DB                  |
+| `components/services/ray_api/`          | FastAPI       | Ray dashboard introspection + `/api/serve/*` proxy on `:8804`; no DB |
+| `components/scripts/`                   | Python        | One-shot tools: `build_batches_db`, `harvest_ead`, `index_alto`, `index_catalog`, … |
+| `packages/htr/`                         | Python lib    | Ray actors (PageLoader, Layout, Lines, Transcribe, AltoExport)       |
+| `packages/storage/`                     | Python lib    | `FSSource/Sink`, `S3Source/Sink`, `IIIFCachedSource`                 |
+| `packages/service-kit/`                 | Python lib    | Platform library: `make_service_app`, `Settings`, middleware, DI lifespan |
+| `packages/ray-kit/`                     | Python lib    | Ray Job SDK + dashboard wrapper; shared by ray-api and core orchestrator |
+| `packages/component-lib/`               | TS / Svelte   | Shared Svelte 5 + Bits UI + Tailwind 4 component library w/ Storybook |
+| `.cache/batches.db`                     | SQLite        | Default per-batch progress (dev; not committed)                      |
+| `.docker/*.dockerfile`                  | Docker        | Image definitions for `runner` (CUDA), `frontend` (nginx); see deployment.md for backend images |
+| `Makefile`                              | bash          | All deploy/dev orchestration (no docker-compose, no k8s yaml)        |
 
 ## Data flow — image → ALTO XML
 
@@ -189,7 +220,7 @@ sequenceDiagram
     participant S3i as S3 · images-batch
     participant S3o as S3 · images-batch-alto
     participant UI as Frontend
-    participant API as Viewer /api/v1
+    participant API as Gateway → core-api / ray-api
     participant Sub as submit_chunks.py
     participant Ray as Ray head
 
@@ -217,52 +248,36 @@ sequenceDiagram
 
 ## Frontend ↔ Backend ↔ Storage
 
-What the SPA actually fetches. All API routes are under the
-`RASK_API_PREFIX` (default `/api/v1`).
+What the SPA actually fetches. The gateway (`/api/*`) longest-prefix-routes to
+per-domain services; `RASK_API_PREFIX` (default `/api/v1`) controls the prefix
+used by core-api.
 
 ```mermaid
 flowchart LR
-    spa["SvelteKit SPA"]
-    api["FastAPI viewer :8888<br/>/api/v1"]
+    spa["SvelteKit SPA"] -->|/api/*| gw["Gateway :8888"]
 
-    subgraph endpoints[" "]
-        e1["/health"]
-        e2["/volumes/{vol}/pages<br/>/pages/{key}/image<br/>/pages/{key}/alto"]
-        e3["/batches · /batches/{id}<br/>/batches/{id}/catalog<br/>/batches/sync · /batches/random"]
-        e4["/chunks · /chunks/{id}/submit"]
-        e5["/search · /search/stats<br/>/search/thumb/{path}"]
-        e6["/catalog/search · /catalog/browse<br/>/catalog/search/stats"]
-        e7["/orchestrator/state"]
-        e8["/ray/health · /ray/jobs · /ray/cluster<br/>+ dashboard proxy"]
-    end
+    gw -->|/volumes| vols["volumes-api :8803"]
+    gw -->|/batches · /chunks · /catalog| core["core-api :8801"]
+    gw -->|/search| srch["search-api :8802"]
+    gw -->|/ray · /api/serve| rayapi["ray-api :8804"]
+    gw -->|/orchestrator| orch["orchestrator :8810"]
 
     s3[("S3<br/>images-batch · images-batch-alto")]
     db[("Batches DB<br/>SQLite or Postgres")]
     lance[("Lance tables<br/>lines · archive_catalog")]
     rayhead["Ray head :8265"]
 
-    spa --> e1
-    spa --> e2
-    spa --> e3
-    spa --> e4
-    spa --> e5
-    spa --> e6
-    spa --> e7
-    spa --> e8
-
-    e2 --> s3
-    e3 --> db
-    e4 --> db
-    e4 -.submits.-> rayhead
-    e5 --> lance
-    e5 --> s3
-    e6 --> lance
-    e7 --> db
-    e7 -.probes.-> rayhead
-    e8 -.proxies.-> rayhead
+    vols --> s3
+    core --> db
+    core --> lance
+    srch --> lance
+    srch --> s3
+    orch --> db
+    orch -.submits.-> rayhead
+    rayapi -.proxies.-> rayhead
 
     style spa fill:#312e81,stroke:#a78bfa,color:#e9e9ea
-    style api fill:#0f766e,stroke:#5eead4,color:#e9e9ea
+    style gw fill:#0f766e,stroke:#5eead4,color:#e9e9ea
     style s3 fill:#1e3a8a,stroke:#60a5fa,color:#e9e9ea
     style db fill:#1e3a8a,stroke:#60a5fa,color:#e9e9ea
     style lance fill:#1e3a8a,stroke:#60a5fa,color:#e9e9ea
@@ -270,7 +285,7 @@ flowchart LR
 ```
 
 **Middleware:** `RequestIDMiddleware`, `TimingMiddleware`, CORS. **Auth:**
-none — `viewer` assumes localhost or trusted network.
+none — the fleet assumes localhost or trusted network.
 
 **Lance is optional.** If HCP S3 credentials are absent the search and
 catalog endpoints surface gracefully; nothing in the core image → ALTO
@@ -333,23 +348,23 @@ lives in this repo.
 
 Production-shaped image definitions live at `.docker/`. They are
 **build-ready, not orchestrated** — there is no docker-compose, no Helm
-chart, no Kustomize.
+chart, no Kustomize. `.dockerignore` and `.hadolint.yaml` sit alongside them;
+the build context is the repo root.
 
 | Image      | Dockerfile                     | Base                           | Notes                                |
 | ---------- | ------------------------------ | ------------------------------ | ------------------------------------ |
-| `viewer`   | `.docker/viewer.dockerfile`    | `python:3.13-slim`             | uv install, runs `viewer.main:app`   |
 | `runner`   | `.docker/runner.dockerfile`    | `nvidia/cuda:12.4-runtime`     | uv install, GPU client for Ray jobs  |
 | `frontend` | `.docker/frontend.dockerfile`  | Bun build → `nginx-unprivileged` | Static SPA + `frontend.nginx.conf`  |
 
-`.dockerignore` and `.hadolint.yaml` sit alongside them; the build context
-is the repo root.
+`.docker/viewer.dockerfile` references the dissolved monolith and is pending
+update to the new per-service entrypoints (see [deployment.md](deployment.md)).
 
 ## Stack at a glance
 
 | Concern             | Choice                                                                |
 | ------------------- | --------------------------------------------------------------------- |
 | Distributed compute | Ray Data + Ray Serve                                                  |
-| Backend HTTP        | FastAPI (single service, `/api/v1/*`)                                 |
+| Backend HTTP        | FastAPI fleet: gateway + core-api + orchestrator + volumes-api + search-api + ray-api |
 | ORM                 | SQLModel + SQLAlchemy async (aiosqlite or asyncpg)                    |
 | Relational DB       | SQLite (dev, `.cache/batches.db`) or Postgres (prod, `DATABASE_URL`)  |
 | Search / catalog    | Lance tables on S3 (optional, HCP-backed)                             |
@@ -365,13 +380,14 @@ is the repo root.
 
 ## What's deliberately NOT here
 
-- **No queue** between viewer and Ray. `POST /api/v1/chunks/{id}/submit`
-  shells out to `submit_chunks.py` which submits a Ray Job synchronously.
+- **No queue** between the orchestrator and Ray. The orchestrator submits Ray
+  Jobs synchronously via the Ray Job SDK. (NATS JetStream is the roadmap replacement.)
 - **No event bus.** Components communicate via S3 keys, DB rows, and
   Ray's own job/actor RPCs.
-- **No auth** on the viewer service. Localhost / trusted-network only.
-- **No docker-compose, no Helm chart, no Kubernetes manifests.** Just
-  the image definitions in `.docker/`.
+- **No auth** on any service. Localhost / trusted-network only.
+- **No docker-compose, no Helm chart, no Kubernetes manifests** in this repo.
+  Just the image definitions in `.docker/`. A Helm chart in `chart/` exists
+  but targets the old monolith — it is a known deployment-cycle follow-up.
 - **No CI manifests** for cluster deployment. Remote Ray cluster is
   managed outside this repo.
 - **No Redis, no MySQL.** The relational tier is SQLite or Postgres only.

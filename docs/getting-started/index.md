@@ -7,7 +7,7 @@ This page gets you from a fresh clone to a running stack.
 - **[uv](https://docs.astral.sh/uv/)** — Python 3.13 toolchain and workspace manager.
 - **[Bun](https://bun.sh)** — the only JavaScript runtime/package manager used
   (`npm`/`npx`/`pnpm` are intentionally not on PATH).
-- **Docker** — for the local Postgres used by the viewer and migrations.
+- **Docker** — for the local Postgres used by core-api/orchestrator and migrations.
 - An NVIDIA GPU (for real HTR) or use the CPU-only smoke pipeline.
 
 ## Install
@@ -26,9 +26,14 @@ make install        # = bun install + uv sync
 ```bash
 make ray-up            # local Ray head on :6379, dashboard :8265
 make serve-up          # deploy /transcribe + /htrflow on Ray Serve
-make viewer            # FastAPI backend on :8888
-make viewer-frontend   # SvelteKit dev server, proxies /api -> :8888
+make dev-micro         # the fleet: gateway :8888 + core-api :8801 + search :8802 +
+                       #   volumes :8803 + ray :8804 + orchestrator :8810 (via dev-micro.sh)
+make viewer-frontend   # SvelteKit dev server, proxies /api -> :8888 (the gateway)
 ```
+
+Alternatively, `make viewer` runs the `core.main:app` monolith on :8888 as a
+single-process dev convenience (no fleet needed). The frontend Vite proxy targets
+`:8888` either way.
 
 Tear down with `make serve-down` / `make ray-down`.
 
@@ -39,7 +44,7 @@ Tear down with `make serve-down` / `make ray-down`.
 
 ## Local Postgres + migrations
 
-The viewer defaults to SQLite (`.cache/batches.db`) but uses Postgres in
+The core brick defaults to SQLite (`.cache/batches.db`) but uses Postgres in
 production. To run Postgres locally:
 
 ```bash

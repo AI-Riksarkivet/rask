@@ -7,14 +7,20 @@ opposed to the libraries in `packages/`.
 |---|---|---|
 | `components/apps/runner` | Python CLI (Ray Data jobs) | [Apps](apps.md) · [Projects → Runner](../projects/runner.md) |
 | `components/apps/frontend` | SvelteKit SPA | [UI Components](ui.md) |
-| `components/services/viewer` | FastAPI backend (`:8888`) | [Services](services.md) · [Projects → Viewer](../projects/viewer.md) |
+| `components/services/gateway` | Reverse proxy (`:8888`) | [Services](services.md) |
+| `components/services/core` | Core domain brick (shared by core-api + orchestrator) | [Services](services.md) |
+| `components/services/core_api` | Batches/chunks/catalog API (`:8801`) | [Services](services.md) |
+| `components/services/orchestrator` | Orchestrator loop + endpoints (`:8810`) | [Services](services.md) |
+| `components/services/volumes_api` | S3/IIIF image+ALTO proxy (`:8803`) | [Services](services.md) |
+| `components/services/search_api` | Lance FTS + thumbnails (`:8802`) | [Services](services.md) |
+| `components/services/ray_api` | Ray dashboard + Serve proxy (`:8804`) | [Services](services.md) |
 | `components/scripts/` | One-shot Python tools | below |
 
 ## `components/scripts/`
 
 One-shot setup and debug tools — **no production-state-changing CLIs**. Anything
-that mutates live state (sync, submit, orchestrate) goes through the viewer's
-HTTP endpoints + the orchestrator loop instead. Notable scripts:
+that mutates live state (sync, submit, orchestrate) goes through the HTTP
+services (core-api endpoints + the orchestrator service's lifespan loop). Notable scripts:
 
 | Script | Purpose |
 |---|---|
@@ -29,5 +35,5 @@ HTTP endpoints + the orchestrator loop instead. Notable scripts:
 ## In this section
 
 - **[Apps](apps.md)** — the runner CLI and the frontend SPA.
-- **[Services](services.md)** — the viewer backend (endpoints, services, models).
+- **[Services](services.md)** — the gateway, core brick, and the five per-domain services.
 - **[UI Components](ui.md)** — the SvelteKit app and the `component-lib` library.

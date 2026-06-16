@@ -1,5 +1,12 @@
 # viewer — backend architecture (post-refactor, 2026-05)
 
+!!! warning "Superseded (June 2026)"
+    The monolithic `viewer` service described here was dissolved into a gateway +
+    per-domain services (`core-api`, `orchestrator`, `volumes-api`, `search-api`,
+    `ray-api`) over a shared `core` brick. See [`microservices.md`](microservices.md)
+    and [`system-overview.md`](system-overview.md) for the current architecture.
+    The text below is retained for design rationale and history.
+
 This doc captures the May 2026 refactor of `components/services/viewer/`: what
 the service looked like before, what it looks like now, and the design choice
 behind each move. The intent is that anyone reading this can answer "why is it

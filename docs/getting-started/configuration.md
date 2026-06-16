@@ -1,9 +1,9 @@
 # Configuration
 
-rask is configured through environment variables, read by the viewer's
-`Settings` (pydantic-settings) from the process environment and a local `.env`
-file. The `.env` is git-ignored — it holds storage credentials and is never
-committed.
+rask is configured through environment variables, read by each service's
+`Settings` (pydantic-settings, via `service-kit`) from the process environment
+and a local `.env` file. The `.env` is git-ignored — it holds storage
+credentials and is never committed.
 
 ## Storage (HCP / S3)
 
@@ -33,7 +33,20 @@ point at MinIO instead.
 | `RASK_LINES_TABLE` | `lines` | Full-text line index. |
 | `RASK_CATALOG_TABLE` | `archive_catalog` | Archival catalog index. |
 
-## Viewer service
+## Gateway
+
+The gateway (`:8888`) is the frontend's single proxy target. Its upstream
+service URLs are overridable via:
+
+| Variable | Default | Upstream |
+|---|---|---|
+| `RASK_CORE_API_URL` | `http://localhost:8801` | core-api |
+| `RASK_SEARCH_API_URL` | `http://localhost:8802` | search-api |
+| `RASK_VOLUMES_API_URL` | `http://localhost:8803` | volumes-api |
+| `RASK_RAY_API_URL` | `http://localhost:8804` | ray-api |
+| `RASK_ORCH_API_URL` | `http://localhost:8810` | orchestrator |
+
+## Core service (core-api + orchestrator)
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -41,7 +54,7 @@ point at MinIO instead.
 | `RASK_API_PREFIX` | `/api/v1` | Route prefix; the Vite proxy assumes it. |
 | `RASK_CORS_ORIGINS` | `[]` | Allowed CORS origins. |
 | `DATABASE_URL` | — | Postgres DSN; falls back to SQLite when unset. |
-| `RAY_DASHBOARD_URL` | `http://localhost:8265` | Ray cluster the viewer submits to and proxies. |
+| `RAY_DASHBOARD_URL` | `http://localhost:8265` | Ray cluster the orchestrator submits to; also used by ray-api. |
 
 ## Orchestrator
 
@@ -59,5 +72,5 @@ point at MinIO instead.
     `RASK_HTR_PIPELINE=htr_http` so the orchestrator submits the lightweight
     HTTP driver instead.
 
-Changes to `.env` are read once at viewer startup — restart the service to pick
-them up.
+Changes to `.env` are read once at service startup — restart the relevant
+service to pick them up.

@@ -1,5 +1,12 @@
 # rask — viewer service design (as-is)
 
+!!! warning "Superseded (June 2026)"
+    The monolithic `viewer` service described here was dissolved into a gateway +
+    per-domain services (`core-api`, `orchestrator`, `volumes-api`, `search-api`,
+    `ray-api`) over a shared `core` brick. See [`microservices.md`](microservices.md)
+    and [`system-overview.md`](system-overview.md) for the current architecture.
+    The text below is retained for design rationale and history.
+
 Authoritative design document for the **viewer** service (`components/services/viewer`). For where the viewer sits in the wider pipeline (runner, Ray, storage, frontend) see the sibling [`system-overview.md`](./system-overview.md). This document goes one layer deeper: the viewer's internal layering, its subsystems, the orchestrator decision model, the persistence and error-handling contracts, and the non-obvious facts a new engineer needs before touching it.
 
 > **Path convention.** Every code path below is relative to the viewer package root, `components/services/viewer/src/viewer/` — so `services/submission.py` means `components/services/viewer/src/viewer/services/submission.py`. The only exceptions, always written out in full, are the Alembic tree (`components/services/viewer/alembic/...`) and the shared storage package (`packages/storage/...`).

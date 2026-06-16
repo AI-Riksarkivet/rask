@@ -1,12 +1,11 @@
 # syntax=docker/dockerfile:1.11
-# rask viewer image — FastAPI on python:3.13-slim-bookworm.
-# Install to repo root as: cp .claude/skills/dockerfile/templates/viewer.dockerfile .docker/viewer.dockerfile
+# rask volumes-api image — FastAPI on python:3.13-slim-bookworm.
 # Build:
-#   docker buildx build -f .docker/viewer.dockerfile \
+#   docker buildx build -f .docker/volumes-api.dockerfile \
 #     --build-arg BUILD_DATE=$(date -u +%FT%TZ) \
 #     --build-arg VCS_REF=$(git rev-parse HEAD) \
 #     --build-arg VERSION=$(git describe --always) \
-#     -t viewer:dev .
+#     -t rask-volumes-api:dev .
 
 # ---- builder stage: install deps via uv ------------------------------------
 # hadolint ignore=DL3026  # Reason: python:slim-bookworm is the official Docker Hub image; digest-pinned for reproducibility.
@@ -23,22 +22,20 @@ COPY --from=ghcr.io/astral-sh/uv:0.5@sha256:7bff3c3776ec467fc1437960f2c469d8beb3
 
 WORKDIR /app
 
-# Step 1: install workspace deps (frozen — workspace member sources not yet COPYed).
+# Step 1: install the package's external deps (frozen — workspace sources not yet COPYed).
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    --mount=type=bind,source=projects/viewer/pyproject.toml,target=projects/viewer/pyproject.toml \
     --mount=type=bind,source=packages,target=packages \
     --mount=type=bind,source=components,target=components \
-    uv sync --frozen --no-install-workspace --package viewer --no-editable
+    uv sync --frozen --no-install-workspace --package volumes-api --no-editable
 
-# Step 2: COPY real sources and resolve workspace deps (locked).
+# Step 2: COPY real sources and resolve the workspace package (locked).
 COPY pyproject.toml uv.lock ./
 COPY packages    packages
 COPY components  components
-COPY projects/viewer projects/viewer
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --package viewer --no-editable
+    uv sync --locked --package volumes-api --no-editable
 
 # Strip residual setuid bits before the venv leaves the builder.
 RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
@@ -54,8 +51,8 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.source="https://github.com/AI-Riksarkivet/rask" \
-      org.opencontainers.image.title="rask-viewer" \
-      org.opencontainers.image.description="rask viewer service — FastAPI on :8888"
+      org.opencontainers.image.title="rask-volumes-api" \
+      org.opencontainers.image.description="rask volumes-api service — S3/IIIF image + ALTO proxy, FastAPI on :8803"
 
 # hadolint ignore=DL3008  # Reason: tini and ca-certificates have no stable version pins in apt on slim; pinning would break on next base image update.
 RUN apt-get update \
@@ -71,18 +68,15 @@ ENV PATH=/opt/venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1
 
 USER app
-EXPOSE 8888
+EXPOSE 8803
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
-  CMD python -c "import socket,sys; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',8888))" || exit 1
+  CMD python -c "import socket,sys; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',8803))" || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-# Note: --forwarded-allow-ips MUST be set to the nginx network CIDR at deploy time,
-# never '*' (header-spoofing risk). --workers is intentionally unset — orchestrator scales.
-# uvloop/httptools are NOT installed by default; the viewer's pyproject.toml uses the stock
-# uvicorn extras. If you want the perf, add `uvicorn[standard]` to
-# components/services/viewer/pyproject.toml and append `--loop uvloop --http httptools` here.
-CMD ["uvicorn", "viewer.app:app", \
-     "--host", "0.0.0.0", "--port", "8888", \
+# This service sits behind the gateway; --forwarded-allow-ips MUST be the gateway/nginx
+# CIDR at deploy time, never '*' (header-spoofing risk). --workers intentionally unset.
+CMD ["uvicorn", "volumes_api:app", \
+     "--host", "0.0.0.0", "--port", "8803", \
      "--proxy-headers", \
      "--forwarded-allow-ips", "127.0.0.1"]
