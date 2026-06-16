@@ -2871,16 +2871,18 @@ name = "ray-api"
 version = "0.1.0"
 source = { editable = "components/services/ray_api" }
 dependencies = [
+    { name = "httpx" },
+    { name = "ray-kit" },
     { name = "service-kit" },
     { name = "uvicorn" },
-    { name = "viewer" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "ray-kit", editable = "packages/ray-kit" },
     { name = "service-kit", editable = "packages/service-kit" },
     { name = "uvicorn", specifier = ">=0.30" },
-    { name = "viewer", editable = "components/services/viewer" },
 ]
 
 [[package]]

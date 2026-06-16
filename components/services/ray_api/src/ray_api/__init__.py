@@ -1,17 +1,15 @@
 """ray-api — Ray dashboard introspection (+ health) and the Ray Serve proxy.
+Thin shell over ray-kit; no viewer, no DB. The proxy_router mounts at the root
+(no /api/v1 prefix) so /api/serve/* reaches the Ray Serve status API."""
 
-The `proxy_router` is mounted at the root (no `/api/v1` prefix), exactly as in
-`viewer.main`, so `/api/serve/*` reaches the Ray Serve status API.
-"""
-
+from ray_api import health, proxy, routes
+from ray_api.lifespan import make_lifespan
 from service_kit import make_service_app
-from viewer.api.v1.endpoints import health, ray
-from viewer.core.lifespan import make_lifespan
 
 
 app = make_service_app(
     title="ray-api",
-    routers=[health.router, ray.router],
-    proxy_router=ray.proxy_router,
+    routers=[health.router, routes.router],
+    proxy_router=proxy.router,
     lifespan=make_lifespan,
 )

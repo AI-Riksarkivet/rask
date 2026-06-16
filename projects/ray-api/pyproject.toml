@@ -7,15 +7,12 @@ dependencies = ["ray-api"]
 
 [tool.uv.sources]
 ray-api = { workspace = true }
-viewer = { workspace = true }
-storage = { workspace = true }
+ray-kit = { workspace = true }
 service-kit = { workspace = true }
 
 [tool.uv.workspace]
 members = [
     "../../components/services/ray_api",
-    "../../components/services/viewer",
-    "../../packages/storage",
-    "../../packages/service-kit",
     "../../packages/ray-kit",
+    "../../packages/service-kit",
 ]
