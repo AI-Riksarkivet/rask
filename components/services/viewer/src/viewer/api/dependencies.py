@@ -13,13 +13,9 @@ from lancedb.table import AsyncTable
 from ray.job_submission import JobSubmissionClient
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from service_kit.dependencies import SettingsDep, get_settings  # noqa: F401  (re-exported for viewer endpoints)
 from storage import S3Client
-from viewer.core.config import Settings
 from viewer.core.exceptions import ServiceUnavailableError
-
-
-def get_settings(request: Request) -> Settings:
-    return request.app.state.settings
 
 
 def get_http(request: Request) -> httpx.AsyncClient:
@@ -56,7 +52,6 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
             raise
 
 
-SettingsDep = Annotated[Settings, Depends(get_settings)]
 HttpDep = Annotated[httpx.AsyncClient, Depends(get_http)]
 S3Dep = Annotated[S3Client, Depends(get_s3)]
 LinesTblDep = Annotated[AsyncTable | None, Depends(get_lines_tbl)]
