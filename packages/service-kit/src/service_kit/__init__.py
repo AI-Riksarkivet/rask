@@ -3,7 +3,7 @@
 `make_service_app` builds a FastAPI app with shared config, exception handlers,
 middleware, and logging. The lifespan is injectable: stateless services get the
 minimal `default_lifespan` (settings only); services needing resources (DB, Lance,
-Ray, S3) pass their own factory, e.g. `viewer.core.lifespan.make_lifespan`.
+Ray, S3) pass their own factory, e.g. `core.lifespan.make_lifespan`.
 """
 
 import logging
@@ -22,9 +22,9 @@ from storage import derive_hcp_creds
 
 
 def _setup_logging() -> None:
-    """Send `viewer.*` and `backends.*` loggers to stdout (mirrors viewer.main)."""
+    """Send `core.*` and `backends.*` loggers to stdout (mirrors core.main)."""
     level = os.environ.get("RASK_LOG_LEVEL", "INFO").upper()
-    for name in ("viewer", "backends"):
+    for name in ("core", "backends"):
         logger = logging.getLogger(name)
         logger.setLevel(level)
         if not any(h.get_name() == "rask-stdout" for h in logger.handlers):
@@ -68,7 +68,7 @@ def make_service_app(
     """Build a backend FastAPI app with shared config/handlers/middleware.
 
     `routers` are mounted under `settings.api_prefix`; `proxy_router` (the Ray
-    Serve proxy) is mounted at the root, matching `viewer.main`. The lifespan
+    Serve proxy) is mounted at the root, matching `core.main`. The lifespan
     defaults to the minimal `default_lifespan` unless `lifespan=` is passed.
     """
     _setup_logging()

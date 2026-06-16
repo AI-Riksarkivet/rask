@@ -74,7 +74,7 @@ VIEWER_OUTPUT ?= s3://images-batch-alto
 
 viewer:
 	RASK_VIEWER_INPUT=$(VIEWER_INPUT) RASK_VIEWER_OUTPUT=$(VIEWER_OUTPUT) \
-		uv run uvicorn viewer.main:app --host 0.0.0.0 --port 8888 --reload
+		uv run uvicorn core.main:app --host 0.0.0.0 --port 8888 --reload
 
 viewer-frontend:
 	bun --cwd components/apps/frontend run dev
@@ -203,12 +203,12 @@ pg-status:
 	docker ps --filter name=rask-pg --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 
 pg-deps:
-	uv sync --package viewer --extra postgres --extra migrations
+	uv sync --package core --extra postgres --extra migrations
 
 pg-migrate: pg-deps
-	cd components/services/viewer && \
-	  DATABASE_URL=$(PG_URL) uv run --package viewer alembic upgrade head
+	cd components/services/core && \
+	  DATABASE_URL=$(PG_URL) uv run --package core alembic upgrade head
 
 pg-revision: pg-deps
-	cd components/services/viewer && \
-	  DATABASE_URL=$(PG_URL) uv run --package viewer alembic revision --autogenerate -m "$(MSG)"
+	cd components/services/core && \
+	  DATABASE_URL=$(PG_URL) uv run --package core alembic revision --autogenerate -m "$(MSG)"

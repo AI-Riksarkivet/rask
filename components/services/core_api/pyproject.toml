@@ -1,12 +1,12 @@
 [project]
 name = "core-api"
 version = "0.1.0"
-description = "core-api backend — batches/chunks/catalog over the viewer routers."
+description = "core-api backend — batches/chunks/catalog over the core brick."
 requires-python = ">=3.13"
 license = "AGPL-3.0-only"
 dependencies = [
     "service-kit",
-    "viewer",
+    "core",
     "uvicorn>=0.30",
 ]
 
@@ -19,4 +19,4 @@ packages = ["src/core_api"]
 
 [tool.uv.sources]
 service-kit = { workspace = true }
-viewer = { workspace = true }
+core = { workspace = true }

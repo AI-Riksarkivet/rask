@@ -1,0 +1,66 @@
+"""Business logic for the batches resource.
+
+Composes repository calls and maps ORM rows to the public schema. The S3
+reconciliation lives in `services/sync.py`; RayJob submission in
+`services/submission.py`; both are orchestrated by `services/orchestrator/loop.py`.
+"""
+
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from core.models.batch import BatchPublic
+from core.models.enums import HtrStatus
+from core.repositories import batch as batch_repo
+from core.schemas.batch import (
+    BatchListResponse,
+    BatchStatusSets,
+    BatchSummary,
+)
+from service_kit.exceptions import NotFoundError
+
+
+async def list_batches(session: AsyncSession) -> BatchListResponse:
+    rows = await batch_repo.list_all(session)
+    counts = await batch_repo.status_counts(session)
+    accessible = await batch_repo.accessible_summary(session)
+    generated_at = await batch_repo.latest_sync_timestamp(session)
+    return BatchListResponse(
+        generated_at=generated_at,
+        summary=BatchSummary(
+            total_batches=len(rows),
+            accessible=accessible,
+            by_manifest_status=counts.by_manifest_status,
+            by_htr_status=counts.by_htr_status,
+        ),
+        batches=[BatchPublic.model_validate(r) for r in rows],
+    )
+
+
+async def get_batch(session: AsyncSession, batch_id: str) -> BatchPublic:
+    row = await batch_repo.get(session, batch_id)
+    if row is None:
+        raise NotFoundError(f"unknown batch_id: {batch_id}")
+    return BatchPublic.model_validate(row)
+
+
+async def random_batch(session: AsyncSession, status: HtrStatus) -> str:
+    row = await batch_repo.random_by_status(session, status)
+    if row is None:
+        raise NotFoundError(f"no batches with htr_status={status!r}")
+    return row.batch_id
+
+
+async def local_batch_status(session: AsyncSession, bild_ids: list[str]) -> BatchStatusSets:
+    """Bucket bild_ids by local-DB tier (strictly nested).
+
+    listed       = batch_id exists in batches.db
+    cached       = also has cached_pages > 0
+    transcribed  = also has transcribed_pages > 0
+    """
+    if not bild_ids:
+        return BatchStatusSets(listed=set(), cached=set(), transcribed=set())
+    rows = await batch_repo.by_ids(session, bild_ids)
+    return BatchStatusSets(
+        listed={r.batch_id for r in rows},
+        cached={r.batch_id for r in rows if r.cached_pages > 0},
+        transcribed={r.batch_id for r in rows if r.transcribed_pages > 0},
+    )

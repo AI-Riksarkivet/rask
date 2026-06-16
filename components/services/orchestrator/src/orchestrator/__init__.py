@@ -5,9 +5,9 @@ it when `RASK_ORCHESTRATOR_AUTOSTART=1` (set in `Procfile.micro`). Only `/health
 is exposed. The eventual production form is a NATS JetStream consumer.
 """
 
+from core.api.v1.endpoints import health, orchestrator
+from core.lifespan import make_lifespan
 from service_kit import make_service_app
-from viewer.api.v1.endpoints import health, orchestrator
-from viewer.core.lifespan import make_lifespan
 
 
 # Serves /api/orchestrator/{state,start,stop} so this process's own loop can be
