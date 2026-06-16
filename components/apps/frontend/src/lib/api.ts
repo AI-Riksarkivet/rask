@@ -40,7 +40,7 @@ export interface ChunkRow {
 }
 
 export async function listChunks(): Promise<{ chunks: ChunkRow[] }> {
-	const res = await fetch('/api/chunks');
+	const res = await fetch('/api/chunks/');
 	if (!res.ok) throw new Error(`listChunks: HTTP ${res.status}`);
 	return res.json();
 }
@@ -419,7 +419,7 @@ export interface BatchesPayload {
 }
 
 export async function listBatches(): Promise<BatchesPayload> {
-	const res = await fetch('/api/batches');
+	const res = await fetch('/api/batches/');
 	if (!res.ok) throw new Error(`listBatches: HTTP ${res.status}`);
 	return res.json();
 }
