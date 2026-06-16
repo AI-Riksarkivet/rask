@@ -5,10 +5,10 @@ picks the concrete `Source` impl from the configured URI scheme (s3://, fs://,
 path), so this module never touches boto3 directly.
 """
 
+from service_kit.config import Settings
+from service_kit.exceptions import NotFoundError, ValidationError
 from storage import build_source
-from viewer.core.config import Settings
-from viewer.core.exceptions import NotFoundError, ValidationError
-from viewer.schemas.page import PageEntry
+from volumes_api.schemas import PageEntry
 
 
 _IMAGE_MIME = {

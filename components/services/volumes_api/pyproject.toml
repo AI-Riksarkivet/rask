@@ -1,12 +1,12 @@
 [project]
 name = "volumes-api"
 version = "0.1.0"
-description = "volumes-api backend — image + ALTO serving over S3/IIIF, over the viewer routers."
+description = "volumes-api backend — image + ALTO serving over S3/IIIF."
 requires-python = ">=3.13"
 license = "AGPL-3.0-only"
 dependencies = [
     "service-kit",
-    "viewer",
+    "storage",
     "uvicorn>=0.30",
 ]
 
@@ -19,4 +19,4 @@ packages = ["src/volumes_api"]
 
 [tool.uv.sources]
 service-kit = { workspace = true }
-viewer = { workspace = true }
+storage = { workspace = true }

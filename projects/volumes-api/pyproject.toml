@@ -7,14 +7,10 @@ dependencies = ["volumes-api"]
 
 [tool.uv.sources]
 volumes-api = { workspace = true }
-viewer = { workspace = true }
-storage = { workspace = true }
-service-kit = { workspace = true }
 
 [tool.uv.workspace]
 members = [
     "../../components/services/volumes_api",
-    "../../components/services/viewer",
-    "../../packages/storage",
     "../../packages/service-kit",
+    "../../packages/storage",
 ]

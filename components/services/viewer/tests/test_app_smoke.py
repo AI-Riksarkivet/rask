@@ -12,10 +12,10 @@ def test_create_app_imports_and_constructs(monkeypatch, tmp_path):
     assert app.title == "viewer"
 
 
-def test_list_pages_endpoint_returns_empty(monkeypatch, tmp_path):
+def test_health_endpoint_returns_200(monkeypatch, tmp_path):
     monkeypatch.setenv("RASK_VIEWER_INPUT", str(tmp_path / "in"))
     monkeypatch.setenv("RASK_VIEWER_OUTPUT", str(tmp_path / "out"))
-    (tmp_path / "in" / "VOL").mkdir(parents=True)
+    (tmp_path / "in").mkdir()
     (tmp_path / "out").mkdir()
 
     from fastapi.testclient import TestClient
@@ -23,6 +23,5 @@ def test_list_pages_endpoint_returns_empty(monkeypatch, tmp_path):
     from viewer.main import create_app
 
     with TestClient(create_app()) as client:
-        resp = client.get("/api/v1/volumes/VOL/pages")
+        resp = client.get("/api/v1/health")
     assert resp.status_code == 200
-    assert resp.json() == []

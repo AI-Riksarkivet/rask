@@ -3233,17 +3233,19 @@ version = "0.1.0"
 source = { editable = "packages/service-kit" }
 dependencies = [
     { name = "fastapi" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "storage" },
-    { name = "viewer" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "storage", editable = "packages/storage" },
-    { name = "viewer", editable = "components/services/viewer" },
 ]
 
 [[package]]
@@ -3778,15 +3780,15 @@ version = "0.1.0"
 source = { editable = "components/services/volumes_api" }
 dependencies = [
     { name = "service-kit" },
+    { name = "storage" },
     { name = "uvicorn" },
-    { name = "viewer" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "service-kit", editable = "packages/service-kit" },
+    { name = "storage", editable = "packages/storage" },
     { name = "uvicorn", specifier = ">=0.30" },
-    { name = "viewer", editable = "components/services/viewer" },
 ]
 
 [[package]]
