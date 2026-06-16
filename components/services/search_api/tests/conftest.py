@@ -12,7 +12,9 @@ where a real `HCP_ENDPOINT` may be exported in the environment.
 (not forced) so CI may legitimately override them, but collection does not fail
 when they are absent.
 
-Same pattern as `components/services/viewer/tests/conftest.py`.
+Same intent as `components/services/viewer/tests/conftest.py` (which uses an
+autouse monkeypatch fixture; this one mutates os.environ at module level because
+search_api builds its app singleton at import time).
 """
 
 import os
