@@ -7,14 +7,14 @@ dependencies = ["orchestrator"]
 
 [tool.uv.sources]
 orchestrator = { workspace = true }
-viewer = { workspace = true }
+core = { workspace = true }
 storage = { workspace = true }
 service-kit = { workspace = true }
 
 [tool.uv.workspace]
 members = [
     "../../components/services/orchestrator",
-    "../../components/services/viewer",
+    "../../components/services/core",
     "../../packages/storage",
     "../../packages/service-kit",
     "../../packages/ray-kit",

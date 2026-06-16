@@ -162,7 +162,7 @@ paths = [
   "packages/htr/src",
   "packages/storage/src",
   "components/apps/runner/src",
-  "components/services/viewer/src",
+  "components/services/core/src",
 ]
 
 [project.plugins.mkdocstrings.handlers.python.options]

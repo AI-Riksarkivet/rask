@@ -23,8 +23,8 @@ func (m *Rask) MigrateUp(
 	return m.pythonBase(src).
 		WithServiceBinding("postgres", m.Postgres()).
 		WithEnvVariable("DATABASE_URL", PgDsn).
-		WithExec([]string{"uv", "sync", "--package", "viewer", "--extra", "postgres", "--extra", "migrations"}).
-		WithWorkdir("/src/components/services/viewer").
-		WithExec([]string{"uv", "run", "--package", "viewer", "alembic", "upgrade", "head"}).
+		WithExec([]string{"uv", "sync", "--package", "core", "--extra", "postgres", "--extra", "migrations"}).
+		WithWorkdir("/src/components/services/core").
+		WithExec([]string{"uv", "run", "--package", "core", "alembic", "upgrade", "head"}).
 		Stdout(ctx)
 }
