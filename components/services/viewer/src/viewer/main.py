@@ -17,7 +17,7 @@ from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 
 from storage import derive_hcp_creds
-from viewer.api.v1.endpoints import ray, spa
+from viewer.api.v1.endpoints import spa
 from viewer.api.v1.router import api_router
 from viewer.core.config import PIPELINE_DISABLED, Settings
 from viewer.core.exceptions import register_handlers
@@ -88,7 +88,6 @@ def create_app() -> FastAPI:
     register_middleware(app, settings)
 
     app.include_router(api_router, prefix=settings.api_prefix)
-    app.include_router(ray.proxy_router)
 
     if settings.resolved_spa_build.is_dir():
         build = settings.resolved_spa_build

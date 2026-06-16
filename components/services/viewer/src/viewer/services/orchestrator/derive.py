@@ -17,12 +17,13 @@ from ray.dashboard.modules.job.common import JobStatus
 from ray.job_submission import JobSubmissionClient
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from ray_kit import RAY_TRANSIENT_ERRORS
+from ray_kit import dashboard as ray_dashboard
+from ray_kit.schemas import RayJob
 from viewer.models.enums import RayStage, TaskState
 from viewer.models.pipelines import Slot, spec_for_submission_id
 from viewer.repositories import batch as batch_repo
 from viewer.schemas.orchestrator import Cooldown, OrchestratorState, SlimJob, SlotState, StageStat
-from viewer.schemas.ray import RayJob
-from viewer.services import ray_dashboard
 
 
 log = logging.getLogger(__name__)
@@ -153,7 +154,7 @@ async def _driver_job_id(client: JobSubmissionClient | None, submission_id: str)
         return None
     try:
         details = await to_thread.run_sync(client.get_job_info, submission_id)
-    except ray_dashboard.RAY_TRANSIENT_ERRORS as exc:
+    except RAY_TRANSIENT_ERRORS as exc:
         log.warning(f"ray get_job_info failed for {submission_id}: {exc}")
         return None
     if details is None:

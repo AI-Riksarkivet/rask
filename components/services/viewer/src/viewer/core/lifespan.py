@@ -22,11 +22,11 @@ from fastapi import FastAPI
 from lancedb.db import AsyncConnection
 from lancedb.table import AsyncTable
 
+from ray_kit import build_client as build_ray_client
 from storage import S3Client, s3_client
 from viewer.core.config import Settings
 from viewer.core.db import make_engine, make_sessionmaker
 from viewer.services.orchestrator import run_loop as run_orchestrator_loop
-from viewer.services.ray_dashboard import build_client as build_ray_client
 
 
 log = logging.getLogger(__name__)

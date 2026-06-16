@@ -17,4 +17,5 @@ members = [
     "../../components/services/viewer",
     "../../packages/storage",
     "../../packages/service-kit",
+    "../../packages/ray-kit",
 ]

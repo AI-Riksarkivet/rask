@@ -8,7 +8,7 @@ hardcoded `/api/...` literal."""
 
 from fastapi import APIRouter
 
-from viewer.api.v1.endpoints import batches, catalog, chunks, health, orchestrator, ray
+from viewer.api.v1.endpoints import batches, catalog, chunks, health, orchestrator
 
 
 api_router = APIRouter()
@@ -17,4 +17,3 @@ api_router.include_router(batches.router)
 api_router.include_router(chunks.router)
 api_router.include_router(catalog.router)
 api_router.include_router(orchestrator.router)
-api_router.include_router(ray.router)

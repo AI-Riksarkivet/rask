@@ -1,12 +1,13 @@
 [project]
 name = "ray-api"
 version = "0.1.0"
-description = "ray-api backend — Ray dashboard introspection + Ray Serve proxy, over the viewer routers."
+description = "ray-api backend — Ray dashboard introspection + Ray Serve proxy over ray-kit."
 requires-python = ">=3.13"
 license = "AGPL-3.0-only"
 dependencies = [
     "service-kit",
-    "viewer",
+    "ray-kit",
+    "httpx>=0.27",
     "uvicorn>=0.30",
 ]
 
@@ -19,4 +20,4 @@ packages = ["src/ray_api"]
 
 [tool.uv.sources]
 service-kit = { workspace = true }
-viewer = { workspace = true }
+ray-kit = { workspace = true }
