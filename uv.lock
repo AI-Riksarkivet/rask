@@ -16,6 +16,7 @@ members = [
     "orchestrator",
     "rask-workspace",
     "ray-api",
+    "ray-kit",
     "runner",
     "search-api",
     "service-kit",
@@ -2883,6 +2884,27 @@ requires-dist = [
 ]
 
 [[package]]
+name = "ray-kit"
+version = "0.1.0"
+source = { editable = "packages/ray-kit" }
+dependencies = [
+    { name = "anyio" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "ray" },
+    { name = "requests" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "anyio", specifier = ">=4.0" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "ray", specifier = ">=2.55" },
+    { name = "requests", specifier = ">=2.31" },
+]
+
+[[package]]
 name = "referencing"
 version = "0.37.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3720,6 +3742,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "ray", extra = ["default"] },
+    { name = "ray-kit" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "sqlmodel" },
     { name = "storage" },
@@ -3751,6 +3774,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "ray", extras = ["default"], specifier = "==2.55.1" },
+    { name = "ray-kit", editable = "packages/ray-kit" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
     { name = "sqlmodel", specifier = ">=0.0.22" },
     { name = "storage", editable = "packages/storage" },

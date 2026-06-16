@@ -22,11 +22,11 @@ from ray.job_submission import JobSubmissionClient
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from ray_kit import build_client
 from storage import S3Client
 from viewer.core.config import PIPELINE_DISABLED, Settings
 from viewer.models.pipelines import PIPELINE_SPECS
 from viewer.services.orchestrator.derive import derive_state
-from viewer.services.ray_dashboard import build_client
 from viewer.services.submission import submit_chunk
 from viewer.services.sync import reconcile_from_s3
 

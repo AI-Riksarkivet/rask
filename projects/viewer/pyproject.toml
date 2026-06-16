@@ -13,4 +13,5 @@ storage = { workspace = true }
 members = [
     "../../components/services/viewer",
     "../../packages/storage",
+    "../../packages/ray-kit",
 ]

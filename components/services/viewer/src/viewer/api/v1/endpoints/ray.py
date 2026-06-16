@@ -20,8 +20,8 @@ Two routers:
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
-from viewer.api.dependencies import HttpDep, RayClientDep, SettingsDep
-from viewer.schemas.ray import (
+from ray_kit import dashboard as ray_dashboard
+from ray_kit.schemas import (
     RayActorsPayload,
     RayClusterPayload,
     RayHealth,
@@ -31,7 +31,7 @@ from viewer.schemas.ray import (
     RayOverviewPayload,
     RayTasksPayload,
 )
-from viewer.services import ray_dashboard
+from viewer.api.dependencies import HttpDep, RayClientDep, SettingsDep
 
 
 router = APIRouter(prefix="/ray", tags=["ray"])

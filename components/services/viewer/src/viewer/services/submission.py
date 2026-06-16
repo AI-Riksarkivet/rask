@@ -17,13 +17,13 @@ from ray.job_submission import JobSubmissionClient
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from ray_kit import RAY_TRANSIENT_ERRORS
 from viewer.core.config import RunnerParams
 from viewer.core.exceptions import NotFoundError, ServiceUnavailableError
 from viewer.models.batch import Batch
 from viewer.models.enums import ManifestStatus
 from viewer.models.pipelines import PipelineSpec
 from viewer.schemas.chunk import ChunkBatches, StopResult, SubmitResult
-from viewer.services.ray_dashboard import RAY_TRANSIENT_ERRORS
 
 
 log = logging.getLogger(__name__)

@@ -24,7 +24,7 @@ from anyio import to_thread
 from ray.exceptions import AuthenticationError
 from ray.job_submission import JobSubmissionClient
 
-from viewer.schemas.ray import (
+from ray_kit.schemas import (
     ProxyResponse,
     RayActor,
     RayActorsPayload,
