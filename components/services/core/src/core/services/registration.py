@@ -26,7 +26,7 @@ async def register_volume(session: AsyncSession, client: S3Client, *, input_buck
     """
     prefix = volume_id.rstrip("/") + "/"
     src = S3Source(bucket=input_bucket, prefix=prefix, client=client)
-    keys = await to_thread.run_sync(lambda: list(src.keys()))
+    keys = await to_thread.run_sync(lambda: list(src.keys()))  # S3Source.keys() filters to image suffixes by default
     if not keys:
         raise ValidationError(f"no images found under {input_bucket}/{prefix}")
     page_count = len(keys)
