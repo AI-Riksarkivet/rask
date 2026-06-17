@@ -86,9 +86,12 @@ bucket under a `<volume_id>/` prefix; **no IIIF**. The only missing code is (1) 
   on insert / preserved on re-register). IIIF-only fields (`iiif_endpoint`,
   `manifest_error`) stay null. Re-register is idempotent (refreshes `page_count`).
 - **New endpoint** in `core_api` (`core/api/v1/endpoints/batches.py`):
-  `POST /api/v1/volumes/{volume_id}/register` → calls the service, returns
-  `BatchPublic`. Keeps state changes on the HTTP surface (CLAUDE.md). Add a thin
-  `components/scripts/register_volume.py` dev tool that POSTs to it.
+  `POST /api/v1/batches/{volume_id}/register` → calls the service, returns
+  `BatchPublic`. It lives under `/batches` (not `/volumes`) because the gateway
+  routes `/api/v1/volumes/*` to the read-only `volumes_api` service; `/batches`
+  routes to `core_api`, which owns the DB. Keeps state changes on the HTTP
+  surface (CLAUDE.md). Add a thin `components/scripts/register_volume.py` dev
+  tool that POSTs to it.
 - `chunk_total=1` ⇒ each volume is immediately a complete chunk;
   `chunks_with_progress` reports `expected_pages=page_count`, so after one S3 sync
   `cached==expected` → `ready_for_htr` fires. **No change to `derive.py`/`sync.py`.**
