@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from fastapi import APIRouter
+from fastapi import APIRouter, status
 
 from core.api.dependencies import CatalogTblDep, S3Dep, SessionDep, SettingsDep
 from core.models.batch import BatchPublic
@@ -9,6 +9,7 @@ from core.schemas.batch import BatchListResponse, RandomBatchResponse
 from core.schemas.catalog import CatalogHit
 from core.schemas.sync import SyncResponse
 from core.services import batches as batches_service
+from core.services import registration
 from core.services.discover import catalog as catalog_service
 from core.services.sync import reconcile_from_s3
 from service_kit.exceptions import NotFoundError
@@ -26,6 +27,13 @@ async def list_batches(session: SessionDep) -> BatchListResponse:
 async def random_batch(session: SessionDep, status: HtrStatus = HtrStatus.DONE) -> RandomBatchResponse:
     batch_id = await batches_service.random_batch(session, status)
     return RandomBatchResponse(batch_id=batch_id, status=status)
+
+
+@router.post("/{batch_id}/register", status_code=status.HTTP_201_CREATED)
+async def register_batch(batch_id: str, session: SessionDep, settings: SettingsDep, s3: S3Dep) -> BatchPublic:
+    """Index an already-uploaded input-bucket prefix `{batch_id}/` as a one-chunk volume."""
+    batch = await registration.register_volume(session, s3, input_bucket=settings.cache_bucket, volume_id=batch_id)
+    return BatchPublic.model_validate(batch)
 
 
 @router.get("/{batch_id}")
