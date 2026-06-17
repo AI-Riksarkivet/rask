@@ -118,6 +118,11 @@ serve-down:
 serve-status:
 	uv run python components/scripts/deploy_serve.py status
 
+# Single CPU/1-GPU htrflow endpoint for the low-resource / local-k3s shape.
+serve-up-htrflow:
+	RASK_SERVE_REPLICAS=1 RASK_SERVE_GPU_FRAC=$(RASK_SERVE_GPU_FRAC) \
+	  RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --no-sync python components/scripts/deploy_serve.py up --app htrflow
+
 # ---- GPU split: HTR on 2 GPUs, Qwen LLM on the 3rd -------------------------
 # transcribe + htrflow co-reside on a 2-GPU Ray pool (GPUs 0,1) via fractional
 # Serve reservations: 2 apps x RASK_SERVE_REPLICAS x RASK_SERVE_GPU_FRAC.
