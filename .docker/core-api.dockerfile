@@ -54,6 +54,12 @@ RUN apt-get update \
 RUN --network=none --mount=from=builder,source=/opt/venv,target=/tmp/venv \
     cp -a /tmp/venv /opt/venv
 
+# Copy alembic migrations so the image can be used as the migrate one-shot job.
+# working_dir in docker-compose.yml: /app/components/services/core
+RUN mkdir -p /app/components/services/core
+COPY --chown=app:app components/services/core/alembic.ini /app/components/services/core/alembic.ini
+COPY --chown=app:app components/services/core/alembic /app/components/services/core/alembic
+
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
