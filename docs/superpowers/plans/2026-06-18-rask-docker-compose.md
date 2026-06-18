@@ -37,7 +37,7 @@ Create six near-identical Dockerfiles (one per FastAPI service) from a single pa
 - Produces: six images `gateway:dev`, `core-api:dev`, `search-api:dev`, `volumes-api:dev`, `ray-api:dev`, `orchestrator:dev`, each exposing its port and answering `GET /api/v1/health` with HTTP 200.
 - Consumes: nothing (first task).
 
-**Canonical template** (substitute `__PROJECT__`, `__MODULE__`, `__PORT__`, `__TITLE__` per the table below):
+**Canonical template** (substitute `__PROJECT__`, `__MODULE__`, `__PORT__`, `__TITLE__`, `__HEALTHPATH__` per the table below):
 
 ```dockerfile
 # syntax=docker/dockerfile:1.11
@@ -104,7 +104,7 @@ USER app
 EXPOSE __PORT__
 
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s \
-  CMD curl -fsS http://127.0.0.1:__PORT__/api/v1/health || exit 1
+  CMD curl -fsS http://127.0.0.1:__PORT____HEALTHPATH__ || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["uvicorn", "__MODULE__", "--host", "0.0.0.0", "--port", "__PORT__", \
@@ -113,16 +113,16 @@ CMD ["uvicorn", "__MODULE__", "--host", "0.0.0.0", "--port", "__PORT__", \
 
 Substitution table:
 
-| File | `__PROJECT__` | `__MODULE__` | `__PORT__` | `__TITLE__` |
-|---|---|---|---|---|
-| `gateway.dockerfile` | `gateway` | `gateway:app` | `8888` | `rask gateway — reverse proxy on :8888` |
-| `core-api.dockerfile` | `core-api` | `core_api:app` | `8801` | `rask core-api — batches/chunks/catalog on :8801` |
-| `search-api.dockerfile` | `search-api` | `search_api:app` | `8802` | `rask search-api on :8802` |
-| `volumes-api.dockerfile` | `volumes-api` | `volumes_api:app` | `8803` | `rask volumes-api on :8803` |
-| `ray-api.dockerfile` | `ray-api` | `ray_api:app` | `8804` | `rask ray-api on :8804` |
-| `orchestrator.dockerfile` | `orchestrator` | `orchestrator:app` | `8810` | `rask orchestrator on :8810` |
+| File | `__PROJECT__` | `__MODULE__` | `__PORT__` | `__HEALTHPATH__` | `__TITLE__` |
+|---|---|---|---|---|---|
+| `gateway.dockerfile` | `gateway` | `gateway:app` | `8888` | `/api/v1/docs` | `rask gateway — reverse proxy on :8888` |
+| `core-api.dockerfile` | `core-api` | `core_api:app` | `8801` | `/api/v1/health` | `rask core-api — batches/chunks/catalog on :8801` |
+| `search-api.dockerfile` | `search-api` | `search_api:app` | `8802` | `/api/v1/health` | `rask search-api on :8802` |
+| `volumes-api.dockerfile` | `volumes-api` | `volumes_api:app` | `8803` | `/api/v1/health` | `rask volumes-api on :8803` |
+| `ray-api.dockerfile` | `ray-api` | `ray_api:app` | `8804` | `/api/v1/health` | `rask ray-api on :8804` |
+| `orchestrator.dockerfile` | `orchestrator` | `orchestrator:app` | `8810` | `/api/v1/health` | `rask orchestrator on :8810` |
 
-> Note: `gateway`'s health route is also `/api/v1/health` (it serves its own health, not a proxied one). `--forwarded-allow-ips "*"` is acceptable here because the only published port is the gateway on a trusted local network; tighten for any non-local deployment.
+> Note: the **gateway has no local `/api/v1/health`** — it path-routes `/api/*` to backends, so `/api/v1/health` is *proxied* to core-api and can't answer in isolation. The gateway *does* serve `/api/v1/docs` locally (swagger HTML, HTTP 200, no upstream call), so that is its liveness path. The five backends each mount `health.router` → `/api/v1/health`. `--forwarded-allow-ips "*"` is acceptable here because the only published port is the gateway on a trusted local network; tighten for any non-local deployment.
 
 - [ ] **Step 1: Write the smoke-test script (the failing test)**
 
@@ -131,9 +131,9 @@ Create `.docker/smoke-build.sh`:
 ```bash
 #!/usr/bin/env bash
 # Build one per-service image, run it, assert /api/v1/health returns 200.
-# Usage: .docker/smoke-build.sh <project> <port>
+# Usage: .docker/smoke-build.sh <project> <port> [healthpath]
 set -euo pipefail
-proj="$1"; port="$2"
+proj="$1"; port="$2"; healthpath="${3:-/api/v1/health}"
 img="${proj}:dev"
 echo ">> building ${img}"
 docker buildx build -f ".docker/${proj}.dockerfile" -t "${img}" --load .
@@ -149,7 +149,7 @@ docker run -d --name "${cname}" -p "${port}:${port}" \
 trap 'docker rm -f "${cname}" >/dev/null 2>&1 || true' EXIT
 echo ">> waiting for health"
 for i in $(seq 1 30); do
-  if curl -fsS "http://127.0.0.1:${port}/api/v1/health" >/dev/null 2>&1; then
+  if curl -fsS "http://127.0.0.1:${port}${healthpath}" >/dev/null 2>&1; then
     echo "OK ${proj} healthy"; exit 0
   fi
   sleep 2
@@ -176,7 +176,8 @@ git rm .docker/viewer.dockerfile
 
 Run (in the `docker` group, e.g. via `sg docker -c '…'`):
 ```bash
-for s in "gateway 8888" "core-api 8801" "search-api 8802" "volumes-api 8803" "ray-api 8804" "orchestrator 8810"; do
+bash .docker/smoke-build.sh gateway 8888 /api/v1/docs || exit 1
+for s in "core-api 8801" "search-api 8802" "volumes-api 8803" "ray-api 8804" "orchestrator 8810"; do
   bash .docker/smoke-build.sh $s || exit 1
 done
 ```
@@ -452,7 +453,7 @@ services:
       ray-api: {condition: service_healthy}
       orchestrator: {condition: service_healthy}
     ports: ["8888:8888"]
-    healthcheck: {test: ["CMD","curl","-fsS","http://127.0.0.1:8888/api/v1/health"], <<: *hc-api}
+    healthcheck: {test: ["CMD","curl","-fsS","http://127.0.0.1:8888/api/v1/docs"], <<: *hc-api}
 
   frontend:
     build:
