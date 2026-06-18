@@ -1,4 +1,4 @@
-.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer viewer-frontend viewer-frontend-build dev-micro ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve
+.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer viewer-frontend viewer-frontend-build dev-micro ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve compose-env compose-build compose-up compose-down compose-purge compose-logs
 
 help:
 	@echo "Targets:"
@@ -217,3 +217,30 @@ pg-migrate: pg-deps
 pg-revision: pg-deps
 	cd components/services/core && \
 	  DATABASE_URL=$(PG_URL) uv run --package core alembic revision --autogenerate -m "$(MSG)"
+
+# ---- Docker Compose (full local stack) -------------------------------------
+DC ?= docker compose
+COMPOSE_IMAGES = gateway core-api search-api volumes-api ray-api orchestrator
+
+compose-env:
+	@test -f .env || cp .env.example .env
+
+compose-build: ## Build all fleet images (+ ray) on native arm64
+	@for s in $(COMPOSE_IMAGES); do \
+	  echo ">> building $$s:dev"; \
+	  docker buildx build -f .docker/$$s.dockerfile -t $$s:dev --load . || exit 1; \
+	done
+	docker buildx build -f .docker/ray.dockerfile -t ray:dev --load .
+
+compose-up: compose-env ## Bring up the whole stack and wait for health
+	$(DC) up -d --wait
+	@echo "gateway → http://localhost:8888   minio console → http://localhost:9001"
+
+compose-down: ## Stop the stack (keep volumes)
+	$(DC) down
+
+compose-purge: ## Stop the stack and delete data volumes
+	$(DC) down --volumes
+
+compose-logs: ## Tail all service logs
+	$(DC) logs -f --tail=100
