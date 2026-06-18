@@ -25,9 +25,10 @@ Key deployment decisions (learned the hard way — keep them):
     BEFORE htrflow: uv resolves deterministically, so the GL-free cv2 wins over
     the full `opencv-python` htrflow pulls in (otherwise the replica dies on a
     missing libGL). torch is intentionally NOT pinned — the image's build is used.
-  - Model is the **private** `trocr-large-handwritten-hist-swe-3-char`. Its v3
-    1024x192 aspect ratio needs `interpolate_pos_encoding: True` or the
-    positional encodings mismatch at generate() time (see the model card).
+  - Model is the **private** `trocr-base-handwritten-hist-swe-3` (subword). Its
+    processor emits 192x1024 crops while the ViT grid is 384x384, so it needs
+    `interpolate_pos_encoding: True` or generate() raises ValueError -> htrflow's
+    unguarded worker thread dies -> the page hangs 600s. (Verified 2026-06-18.)
   - HF_TOKEN is NOT set here — it comes from the Ada worker pods' env, wired via
     the `huggingface` secret in ai-dev `kuberay-cluster/overlays/ai-dev/values.yaml`.
   - `health_check_timeout_s=1200` so the slow first model download doesn't trip
@@ -56,12 +57,22 @@ steps:
     settings:
       model: trocr
       model_settings:
-        model: Riksarkivet/trocr-large-handwritten-hist-swe-3-char
+        model: Riksarkivet/trocr-base-handwritten-hist-swe-3
       generation_settings:
         batch_size: 8
-        # v3 uses a 1024x192 aspect ratio -> generate() needs this or the
-        # positional encodings mismatch (see the model card).
+        # base-3's processor emits 192x1024 line crops but the ViT position grid
+        # is 384x384; WITHOUT interpolate_pos_encoding generate() raises ValueError,
+        # which kills htrflow's (unguarded) inference worker thread -> the page's
+        # line futures never resolve -> the request hangs until the client's 600s
+        # timeout. This was the root cause of "base-3 hangs". (Verified 2026-06-18.)
         interpolate_pos_encoding: True
+        # base-3 is subword (vocab 50265) with an internally-consistent eos=2, so
+        # it terminates cleanly (~11-21 tok/line, no junk tails); the cap is just a
+        # safety net. ~8x faster than the old char model. (Verified 2026-06-18.)
+        max_new_tokens: 128
+        # base-3 ships generation_config use_cache=false -> O(n^2) decode; re-enable.
+        use_cache: True
+        eos_token_id: 2
   - step: OrderLines
 """
 
@@ -97,16 +108,24 @@ class HTRFlow:
 
     @api.post("/transcribe")
     async def transcribe(self, request: Request):
-        import os, tempfile
+        import asyncio, os, tempfile
         from htrflow.document import Document
         data = await request.body()
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
             tf.write(data); path = tf.name
-        try:
-            doc = self.pipeline.run(Document(path))
-            out = self.serializer.serialize(doc)
-        finally:
-            os.unlink(path)
+
+        # Offload the blocking htrflow pipeline (YOLO + TrOCR) to a worker thread so
+        # the replica's asyncio event loop stays responsive to Serve's health probe.
+        # Running it inline froze the loop -> "event loop unresponsive" -> Serve
+        # killed every replica -> restart storm.
+        def _run():
+            try:
+                doc = self.pipeline.run(Document(path))
+                return self.serializer.serialize(doc)
+            finally:
+                os.unlink(path)
+
+        out = await asyncio.to_thread(_run)
         if isinstance(out, list):
             out = "\n".join(x[1] if isinstance(x, (tuple, list)) else str(x) for x in out)
         return Response(content=out or "", media_type="application/xml")

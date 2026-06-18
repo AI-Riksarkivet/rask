@@ -7,8 +7,11 @@
 #   - Segmentation runs twice: first the region YOLO, then the line YOLO
 #     constrained to those regions. This matches HTRflow's recommended
 #     handwritten-text pipeline.
-#   - TrOCR model is the Swedish historical handwritten variant — same as
-#     `transcribe_service.py` uses today.
+#   - TrOCR model is the v3 Swedish historical handwritten subword variant
+#     (trocr-base-...-3). Its processor emits 192x1024 line crops while the ViT
+#     grid is 384x384, so generate() needs `interpolate_pos_encoding: True` or it
+#     raises ValueError -> htrflow's unguarded worker thread dies -> the page
+#     hangs 600s. (Root cause of "base-3 hangs", verified 2026-06-18.)
 #   - No `device:` lines: htrflow auto-detects CUDA. Each replica is pinned
 #     to one GPU via `ray_actor_options={"num_gpus": 1}` in the deployment.
 
@@ -29,8 +32,18 @@ steps:
     settings:
       model: trocr
       model_settings:
-        model: Riksarkivet/trocr-base-handwritten-hist-swe-2
+        model: Riksarkivet/trocr-base-handwritten-hist-swe-3
       generation_settings:
         batch_size: 8
+        # base-3's processor emits 192x1024 line crops but the ViT position grid
+        # is 384x384; WITHOUT this generate() raises ValueError -> htrflow's
+        # unguarded worker thread dies -> the page hangs 600s. (Verified 2026-06-18.)
+        interpolate_pos_encoding: True
+        # base-3 is subword (vocab 50265) with an internally-consistent eos=2, so
+        # it terminates cleanly (~11-21 tok/line, no junk); the cap is a safety net.
+        max_new_tokens: 128
+        # base-3 ships generation_config use_cache=false -> O(n^2) decode; re-enable.
+        use_cache: True
+        eos_token_id: 2
 
   - step: OrderLines
