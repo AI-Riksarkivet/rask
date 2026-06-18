@@ -78,8 +78,8 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.description="rask ray head + htrflow Serve"
 
 ENV DEBIAN_FRONTEND=noninteractive
-# Reason: see builder stage. The CUDA base is the supply-chain anchor;
-# apt version-pinning these transitives would require chasing rolling updates.
+# base is an unpinned arm64 CUDA-13 tag; pin a digest once a known-good one is chosen.
+# Reason: apt version-pinning these transitives would require chasing rolling updates.
 # hadolint ignore=DL3008
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -95,6 +95,7 @@ RUN --network=none --mount=from=builder,source=/opt/venv,target=/tmp/venv \
     cp -a /tmp/venv /opt/venv
 
 COPY components/scripts/deploy_serve.py /app/deploy_serve.py
+RUN chown app:app /app/deploy_serve.py
 
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
