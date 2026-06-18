@@ -54,17 +54,22 @@ ci: check test
 
 # ---- claude code -----------------------------------------------------------
 claude-bootstrap:
-	@command -v claude >/dev/null 2>&1 || { echo "  !! claude CLI not found — install Claude Code first"; exit 1; }
-	@command -v bunx   >/dev/null 2>&1 || { echo "  !! bunx not found — install bun first (https://bun.sh)"; exit 1; }
-	@echo "==> Installing svelte MCP server (local scope, project-scoped section of ~/.claude.json)..."
+	@command -v claude  >/dev/null 2>&1 || { echo "  !! claude CLI not found — install Claude Code first"; exit 1; }
+	@command -v bunx    >/dev/null 2>&1 || { echo "  !! bunx not found — install bun first (https://bun.sh)"; exit 1; }
+	@command -v python3 >/dev/null 2>&1 || { echo "  !! python3 not found"; exit 1; }
+	@echo "==> Svelte MCP server (local scope, project section of ~/.claude.json)..."
 	@claude mcp add -t stdio -s local svelte -- bunx -y @sveltejs/mcp || echo "    (already installed — skipping)"
 	@echo
-	@echo "==> Verifying Claude config..."
-	@test -f .claude/settings.json && echo "    OK  .claude/settings.json" || echo "    !!  missing .claude/settings.json"
+	@echo "==> Adding marketplaces declared in .claude/settings.json (idempotent)..."
+	@python3 -c 'import json; print("\n".join(v["source"]["repo"] for v in json.load(open(".claude/settings.json")).get("extraKnownMarketplaces",{}).values()))' \
+		| while read -r repo; do echo "    + $$repo"; claude plugin marketplace add "$$repo" >/dev/null 2>&1 || true; done
 	@echo
-	@echo "==> Manual steps that can't be scripted (see .claude/README.md):"
-	@echo "    1. In Claude Code: /plugin marketplace add (and /plugin install) entries from README."
-	@echo "    2. Authenticate any MCP servers if prompted on first use."
+	@echo "==> Installing enabled plugins at project scope (idempotent)..."
+	@python3 -c 'import json; print("\n".join(k for k,v in json.load(open(".claude/settings.json")).get("enabledPlugins",{}).items() if v))' \
+		| while read -r plugin; do echo "    + $$plugin"; claude plugin install "$$plugin" -s project >/dev/null 2>&1 || true; done
+	@echo
+	@echo "==> Done — re-run anytime (idempotent). Skills come from the ra-skills marketplace; see .claude/README.md."
+	@echo "    Authenticate any MCP servers if prompted on first use."
 
 # ---- viewer ----------------------------------------------------------------
 # Port must be 8888 — components/apps/frontend Vite proxy defaults

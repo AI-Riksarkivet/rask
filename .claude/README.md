@@ -2,7 +2,16 @@
 
 Everything project-tracked for Claude Code lives under `.claude/`. There is **no `.mcp.json` at the repo root** by design — the svelte MCP server is registered per-developer via `make claude-bootstrap` (see below).
 
-**Toolchain note:** this project uses **`bun` / `bunx`** for all JS-runtime tooling. Do **not** substitute `npm` / `npx` / `pnpm` / `pnpx` — they are not on PATH and the MCP install commands assume `bunx`.
+**Toolchain note:** this project uses **`bun` / `bunx`** for all JS-runtime tooling. Do **not** substitute `npm` / `npx` / `pnpm` / `pnpx` — they are not on PATH and the MCP install command assumes `bunx`.
+
+## Skills come from the `ra-skills` marketplace — not this repo
+
+rask **does not vendor skills** under `.claude/skills/` anymore. All shared skills live in **[`AI-Riksarkivet/ra-skills`](https://github.com/AI-Riksarkivet/ra-skills)**, the single source of truth, and are consumed as a Claude Code marketplace. This kills the per-repo copy-drift that used to happen when every project carried its own diverging copy of `writing-python`, `dagger`, `fastapi`, …
+
+- **CORE** (language/toolchain): `writing-python`, `writing-typescript`, `fastapi`, `testing-python`, `python-infrastructure`, `otel`, `dagger`, `dockerfile`, `turborepo`, `zensical-setup`, `zensical-authoring`.
+- **PROJECT** (`rask-*`): `rask-architecture`, `rask-services-fleet`, `rask-htr-pipeline`, `rask-orchestrator`.
+
+To **change a skill, edit it in ra-skills** and re-run `make claude-bootstrap` here. The full RA Claude surface (skills + third-party marketplaces + MCP servers) is documented once, canonically, in **[ra-skills' README](https://github.com/AI-Riksarkivet/ra-skills#what-we-use--the-full-ra-claude-surface)** — this file only covers rask-specific setup.
 
 ## Bootstrap (fresh checkout)
 
@@ -10,135 +19,54 @@ Everything project-tracked for Claude Code lives under `.claude/`. There is **no
 make claude-bootstrap
 ```
 
-What it does:
+What it does (all idempotent — re-run anytime):
 
-- Registers the svelte MCP server at **local** scope using `claude mcp add -t stdio -s local svelte -- bunx -y @sveltejs/mcp`. Idempotent — re-running is safe.
-- Verifies `.claude/settings.json` is present.
-- Prints the remaining manual steps.
+1. Registers the **svelte MCP** server at **local** scope (`claude mcp add -t stdio -s local svelte -- bunx -y @sveltejs/mcp`).
+2. Adds every marketplace declared in `.claude/settings.json` → `extraKnownMarketplaces` (`claude plugin marketplace add <repo>`).
+3. Installs every plugin in `.claude/settings.json` → `enabledPlugins` at **project** scope (`claude plugin install <name>@<marketplace> -s project`).
 
-**Where `-s local` actually stores it:** Claude Code's "local" scope writes to the **project-scoped section of `~/.claude.json`** (a per-developer file in your home directory, keyed by project path), NOT to a file inside this repo. That's the closest Claude Code lets us get to "team-shared, scriptable, but not a repo-root file" without using `.mcp.json`. The install command itself is tracked in the `Makefile` — that's the source of truth for "which MCP servers does this project need".
+`.claude/settings.json` is the **single source of truth** — the bootstrap is driven from it, so a fresh checkout reproduces the exact active skill surface. Don't hand-curate plugins outside it.
 
-What it can't do (run these once in Claude Code itself):
+**Where the svelte MCP `-s local` actually stores it:** Claude Code's "local" scope writes to the **project-scoped section of `~/.claude.json`** (a per-developer file keyed by project path), NOT a file inside this repo. That's the closest we get to "team-shared, scriptable, not a repo-root file" without a root `.mcp.json`. The `claude mcp add` line in the `Makefile` is the source of truth for which MCP servers this project needs.
 
-```text
-/plugin marketplace add spences10/svelte-skills-kit
-/plugin marketplace add astral-sh/claude-code-plugins
-/plugin marketplace add spences10/claude-code-toolkit
-/plugin marketplace add denoland/skills
-/plugin marketplace add redis/agent-skills
-/plugin marketplace add sveltejs/ai-tools
+## The active surface (summary)
 
-/plugin install svelte-skills@svelte-skills-kit
-/plugin install mcp-essentials@claude-code-toolkit
-/plugin install analytics@claude-code-toolkit
-/plugin install toolkit-skills@claude-code-toolkit
-/plugin install deno-skills@denoland-skills
-/plugin install redis-development@redis
-/plugin install svelte@sveltejs-ai-tools
-/plugin install astral@astral-sh
-```
+| Kind | What | Where it's declared |
+|---|---|---|
+| **RA-owned skills** | the 15 `ra-skills` plugins above | `enabledPlugins` (`*@ra-skills`) + `extraKnownMarketplaces.ra-skills` |
+| **3rd-party plugins** | `toolkit-skills` / `mcp-essentials` / `analytics` (claude-code-toolkit), `astral`, `svelte-skills`, `redis-development` (claude-plugins-official), `hf-cli` / `huggingface-trackio` (huggingface-skills) | `enabledPlugins` + `extraKnownMarketplaces` |
+| **MCP server** | `svelte` (Svelte 5 MCP, `@sveltejs/mcp`) | `make claude-bootstrap` (local scope) |
 
-The set of enabled plugins is tracked in `.claude/settings.json` under `enabledPlugins`, so once any one developer has installed them, Claude Code can verify the state on other machines against that file.
+> Editor support: ra-skills targets the **Claude ecosystem** — Claude Code in the terminal, **VS Code**, and **Zed** (which also read the generated `AGENTS.md`). No Gemini / Codex / Cursor.
 
 ## Layout
 
 ```
 .claude/
-├── README.md              # this file — source of truth
-├── settings.json          # team-shared settings (committed): plugins, permissions, hooks
+├── README.md              # this file — rask-specific Claude setup
+├── settings.json          # committed: enabledPlugins, extraKnownMarketplaces, (permissions/hooks)
 ├── settings.local.json    # personal overrides (gitignored): includes the local-scope svelte MCP
 ├── commands/              # project-local slash commands
-├── hooks/                 # project-local lifecycle hooks
-└── skills/                # project-local skills (writing-python, python-infrastructure, fastapi, ...)
+└── hooks/                 # project-local lifecycle hooks
+# no skills/ — skills come from the ra-skills marketplace
 ```
-
-No `.mcp.json` at the repo root — by design. See "MCP servers" below.
 
 ## MCP servers
 
-The svelte MCP is registered by `make claude-bootstrap` using `claude mcp add -s local`. To add another MCP server, follow the same pattern with `bunx` as the runtime:
+The svelte MCP is registered by `make claude-bootstrap`. To add another, follow the same pattern with `bunx` as the runtime:
 
 ```bash
 claude mcp add -t stdio -s local <name> -- bunx -y <package>
 ```
 
-The three scopes Claude Code supports for MCP:
-
-| Scope     | Stored in                                  | Notes                                                                             |
-| --------- | ------------------------------------------ | --------------------------------------------------------------------------------- |
-| `local`   | Project-scoped section of `~/.claude.json` | Per-developer, this project only. **Used here.** Not a repo file.                 |
-| `project` | `.mcp.json` at repo root                   | Team-shared, committed. **Not used here** — we explicitly avoid root-level files. |
-| `user`    | Global section of `~/.claude.json`         | Per-developer, all projects. Use for personal MCPs unrelated to any single repo.  |
-
-The install command in `Makefile`'s `claude-bootstrap` target is the source of truth — that's where you can see "which MCP servers does this project need". The actual config rows land in `~/.claude.json`, which is per-developer and not in the repo at all. If a new MCP should be required for everyone, append another `claude mcp add` line to that target.
-
-## Install Library-Bundled Skills
-
-Some libraries (e.g. FastAPI, Streamlit) ship their own agent skills inside the published package, kept in sync with each release. Use [`library-skills`](https://library-skills.io) to discover what your installed dependencies expose and symlink them into this project so they always match the installed version.
-
-Run from the project root (the one with `pyproject.toml` / `package.json`):
-
-```bash
-# Python (uv)
-uvx library-skills --claude
-
-# Node.js / Bun
-bunx library-skills --claude
-```
-
-`--claude` is required: by default the CLI installs to `.agents/skills/` (the cross-agent standard), and Claude Code only reads `.claude/skills/`. Use `--copy` instead of symlinks on Windows or filesystems without symlink support.
-
-What it does:
-
-1. Reads the direct dependencies in `pyproject.toml` / `package.json`.
-2. Scans `.venv/.../site-packages/<pkg>/.agents/skills/*/SKILL.md` and `node_modules/<pkg>/.agents/skills/*/SKILL.md` for bundled skills.
-3. Prompts you to pick which to install; creates symlinks in `.claude/skills/` so updating the library updates the skill.
-
-Useful flags: `--all` (install every discovered skill non-interactively), `-s <name>` (install a specific skill, including transitive deps), `--check` (CI mode, exit 1 if installed skills drift from the library).
-
-## Marketplaces
-
-| Marketplace         | Repo                                                                              | Plugins                                                            |
-| ------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| svelte-skills-kit   | [spences10/svelte-skills-kit](https://github.com/spences10/svelte-skills-kit)     | svelte-skills (runes, SvelteKit data flow, components, deployment) |
-| claude-code-toolkit | [spences10/claude-code-toolkit](https://github.com/spences10/claude-code-toolkit) | mcp-essentials, analytics, toolkit-skills                          |
-| denoland-skills     | [denoland/skills](https://github.com/denoland/skills)                             | deno-skills                                                        |
-| redis               | [redis/agent-skills](https://github.com/redis/agent-skills)                       | redis-development                                                  |
-| sveltejs-ai-tools   | [sveltejs/ai-tools](https://github.com/sveltejs/ai-tools)                         | svelte                                                             |
-
-## Activation hook (recommended)
-
-Skills don't auto-activate reliably without a hook. The forced-eval hook gets 84% activation vs 20% without:
-
-```bash
-bunx claude-skills-cli add-hook
-```
-
-## Creating Skills
-
-Use [claude-skills-cli](https://github.com/spences10/claude-skills-cli) for scaffolding and validation:
-
-```bash
-# Create a new skill
-bunx claude-skills-cli init --name my-skill --description "Brief description"
-
-# Validate
-bunx claude-skills-cli validate .claude/skills/my-skill
-
-# Stats for all skills
-bunx claude-skills-cli stats .claude/skills
-```
-
-Skills load in 3 levels (progressive disclosure):
-
-| Level | Content                        | When Loaded         | Size Limit |
-| ----- | ------------------------------ | ------------------- | ---------- |
-| 1     | SKILL.md metadata (YAML)       | Always in context   | <200 chars |
-| 2     | SKILL.md body (Markdown)       | When skill triggers | ~50 lines  |
-| 3     | references/, scripts/, assets/ | As needed           | Unlimited  |
+| Scope     | Stored in                                  | Notes                                                                            |
+| --------- | ------------------------------------------ | -------------------------------------------------------------------------------- |
+| `local`   | Project-scoped section of `~/.claude.json` | Per-developer, this project only. **Used here.** Not a repo file.                |
+| `project` | `.mcp.json` at repo root                   | Team-shared, committed. **Not used here** — we avoid root-level files.           |
+| `user`    | Global section of `~/.claude.json`         | Per-developer, all projects. Use for personal MCPs unrelated to any single repo. |
 
 ## Troubleshooting
 
-- **Svelte MCP not loading?** Re-run `make claude-bootstrap`. The install is idempotent — it'll print "already installed" if it's there, or add it if it's missing. Verify with `claude mcp list`.
-- **Skill not activating?** See "Activation hook" above. Also check `.claude/skills/<name>/SKILL.md` has a valid `description` with a clear trigger.
-- **Settings drift?** `.claude/settings.json` is the source of truth for `enabledPlugins`; `.claude/settings.local.json` is for personal overrides only (including the local-scope MCP server).
+- **Skill not available?** Run `make claude-bootstrap` — it adds the marketplaces and installs the enabled plugins. Verify with `claude plugin list` and `claude plugin marketplace list`. To update skills after a change lands in ra-skills: `claude plugin update <name>@ra-skills` (or re-run bootstrap).
+- **Svelte MCP not loading?** Re-run `make claude-bootstrap` (idempotent). Verify with `claude mcp list`.
+- **Settings drift?** `.claude/settings.json` is the source of truth for `enabledPlugins` + `extraKnownMarketplaces`; `.claude/settings.local.json` is personal overrides only (including the local-scope MCP).

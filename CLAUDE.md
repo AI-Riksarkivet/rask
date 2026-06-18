@@ -10,18 +10,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Common commands
 
-| Goal | Command |
-|---|---|
-| First-time setup | `make install` (= `bun install` + `uv sync`) |
-| Build everything | `make build` |
-| Run all tests | `make test` |
-| Single Python test | `uv run pytest packages/htr/tests/test_geometry.py::test_name` |
-| Filter by name | `uv run pytest -k <pattern>` |
-| Skip slow tests | `uv run pytest -m "not slow"` |
-| Format + lint + typecheck | `make check` (= `make fmt` + `make lint` + `make typecheck`) |
-| Frontend type-check only | `bun --cwd components/apps/frontend run check` |
-| Storybook for `component-lib` | `make storybook` (→ `:6006`) |
-| Bootstrap Claude Code config | `make claude-bootstrap` |
+| Goal                          | Command                                                        |
+| ----------------------------- | -------------------------------------------------------------- |
+| First-time setup              | `make install` (= `bun install` + `uv sync`)                   |
+| Build everything              | `make build`                                                   |
+| Run all tests                 | `make test`                                                    |
+| Single Python test            | `uv run pytest packages/htr/tests/test_geometry.py::test_name` |
+| Filter by name                | `uv run pytest -k <pattern>`                                   |
+| Skip slow tests               | `uv run pytest -m "not slow"`                                  |
+| Format + lint + typecheck     | `make check` (= `make fmt` + `make lint` + `make typecheck`)   |
+| Frontend type-check only      | `bun --cwd components/apps/frontend run check`                 |
+| Storybook for `component-lib` | `make storybook` (→ `:6006`)                                   |
+| Bootstrap Claude Code config  | `make claude-bootstrap`                                        |
 
 ### Run the app locally
 
@@ -78,6 +78,7 @@ Three brick layers — **don't blur them**:
 - `projects/<name>/pyproject.toml` — **deployable composition only, no code**. One per deployable: `gateway`, `core-api`, `orchestrator`, `volumes-api`, `search-api`, `ray-api`, `runner` (+ `hcp`). (There is no `projects/viewer` — it was deleted when viewer dissolved.)
 
 **Workspace membership is explicit, never globbed.** Adding a new brick requires editing **both**:
+
 - `pyproject.toml` → `[tool.uv.workspace] members`
 - root `package.json` → `workspaces`
 
@@ -110,6 +111,6 @@ Plus the relevant `projects/<name>/pyproject.toml` if it's deployable.
 ## Claude Code project config
 
 - All project-local config lives under `.claude/`. **No `.mcp.json` at repo root** by design — the svelte MCP server is registered at `local` scope via `make claude-bootstrap` (idempotent). The install command in the `Makefile` is the source of truth for which MCP servers this project needs.
-- `.claude/settings.json` is committed (team-shared: `enabledPlugins`, permissions, hooks). `.claude/settings.local.json` is gitignored (personal overrides + local-scope MCP).
-- Project-local skills live in `.claude/skills/` (fastapi, otel, python-infrastructure, writing-python, writing-typescript, dagger).
-- See `.claude/README.md` for plugin/marketplace install steps.
+- `.claude/settings.json` is committed (team-shared: `enabledPlugins`, `extraKnownMarketplaces`, permissions, hooks). `.claude/settings.local.json` is gitignored (personal overrides + local-scope MCP).
+- **Skills are consumed from the [`ra-skills`](https://github.com/AI-Riksarkivet/ra-skills) marketplace, not vendored in `.claude/skills/`.** ra-skills is the single source of truth for RA's shared skills (language/toolchain CORE + the `rask-*` project skills); `make claude-bootstrap` adds the marketplace and installs the enabled set. This kills the per-repo copy-drift that used to plague `.claude/skills/`. To change a skill, edit it in ra-skills, not here.
+- See `.claude/README.md` for the full plugin/marketplace/MCP surface and bootstrap steps.
