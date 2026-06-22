@@ -1,4 +1,4 @@
-import { Server, FileText, LayoutGrid, Database } from '@lucide/svelte';
+import { House, Server, FileText, LayoutGrid, Database } from '@lucide/svelte';
 
 /** All lucide icons share one component signature, so any icon's type fits. */
 type IconComponent = typeof Server;
@@ -47,6 +47,8 @@ const under =
  * the catch-all (no base) until carved out.
  */
 export const navMain: NavItem[] = [
+	// Home / project picker — the composed root (/), served by the catch-all app.
+	{ title: 'Home', icon: House, href: '/', match: (p) => p === '/' },
 	{
 		// The Compute landing IS the overview (served at /compute) — clicking "Compute"
 		// shows it; the sub-routes are the rest of the cluster views (no separate Overview).
@@ -64,7 +66,7 @@ export const navMain: NavItem[] = [
 		],
 	},
 	{
-		title: 'Documents',
+		title: 'Discover',
 		icon: FileText,
 		href: '/search',
 		match: under('/search', '/browse', '/viewer'),
