@@ -7,6 +7,7 @@ state.
 """
 
 import logging
+import random
 import re
 import time
 from typing import cast
@@ -67,6 +68,26 @@ def _stages_for(submission_id: str) -> tuple[RayStage, ...]:
 def _chunk_id_of(submission_id: str) -> int | None:
     m = _CHUNK_RE.search(submission_id)
     return int(m.group(1)) if m else None
+
+
+def _prioritize_htr(eligible: list[int], transcribed_by_chunk: dict[int, int]) -> list[int]:
+    """Order eligible HTR chunks: never-run chunks first, then partial ones at random.
+
+    The loop fills the inflight slots from the FRONT of this list, so order is
+    the scheduling policy. Without this, eligible was ascending-by-id and a few
+    low-id chunks whose transcript count plateaus below `expected_pages` (so they
+    never go "done") stayed permanently eligible and reclaimed every freed slot —
+    starving the 92 never-run chunks completely.
+
+    Splitting on "has any transcript yet" puts chunks with NO work ahead of any
+    with partial work; shuffling the has-work tail stops a single chunk from
+    always being the one re-run once only partial chunks remain. A chunk missing
+    from the map (not yet reconciled) counts as zero -> treated as never-run.
+    """
+    no_work = [cid for cid in eligible if transcribed_by_chunk.get(cid, 0) == 0]
+    has_work = [cid for cid in eligible if transcribed_by_chunk.get(cid, 0) > 0]
+    random.shuffle(has_work)
+    return no_work + has_work
 
 
 def _slim_job(j: RayJob, *, stages: list[StageStat] | None = None) -> SlimJob:
@@ -232,6 +253,9 @@ async def derive_state(
     # submits ALL of these each tick; Ray/Kueue queue whatever doesn't fit.
     eligible_prefetch = [cid for cid in prefetch_pending if cid not in running_pf_chunks and cid not in cooldown_pf]
     eligible_htr = [cid for cid in ready_for_htr if cid not in running_htr_chunks and cid not in cooldown_htr]
+    # Fairness: prioritise never-run chunks over the perpetually-eligible partial
+    # ones (and randomise among partials) so the inflight slots can't be monopolised.
+    eligible_htr = _prioritize_htr(eligible_htr, {p.chunk_id: p.transcribed_pages for p in progress})
 
     prefetch_slot = await _build_slot(
         http=http,
