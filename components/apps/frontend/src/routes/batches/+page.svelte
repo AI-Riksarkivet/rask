@@ -13,6 +13,7 @@
 		type RayClusterPayload,
 		type RayJobsPayload,
 	} from '@rask/api';
+	import { goto } from '$app/navigation';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Badge, type BadgeVariant } from '@rask/ui/badge';
@@ -289,6 +290,7 @@
 			<RefreshCw class={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
 			{syncing ? 'Syncing…' : 'Sync from S3'}
 		</Button>
+		<Button size="sm" onclick={() => goto('/batches/new')}>New volume</Button>
 	{/snippet}
 
 	<div class="flex flex-col gap-4 p-6 text-sm">
