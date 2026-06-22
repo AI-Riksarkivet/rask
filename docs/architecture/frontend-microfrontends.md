@@ -1,59 +1,222 @@
-# Frontend microfrontend decomposition (plan)
+---
+title: Frontend Microfrontends
+description: What the rask frontend is, how the microfrontend split works, and where each piece lives.
+icon: lucide/layout-dashboard
+status: new
+---
 
-> Status: **planning + in-progress**. Source: MFE-decomposition workflow (4 read-only
-> analyses + synthesis, 2026-06-18). Loyal to rask conventions: Bun, svelte-adapter-bun,
-> valibot, `components/apps/*` explicit workspaces, `kit.paths.base` per app, shared
-> `@rask/ui` lib, gateway behind the SvelteKit server.
+# Frontend Microfrontends
 
-## MFE apps (target)
+This page explains **what we are building** for the rask frontend, **how it works**,
+and **where each piece lives** — so you can read a URL and know which app served it.
 
-| App (`components/apps/*`) | `kit.paths.base` | Routes it owns |
-| --- | --- | --- |
-| `compute-frontend`   | `/compute`   | overview, cluster, jobs (+ `[id]`), actors, serve, logviewer, api-docs |
-| `documents-frontend` | `/documents` | search, browse, viewer/[volume]/[page] |
-| `batches-frontend`   | `/batches`   | batches (hosts chunks + orchestrator submit/sync controls) |
-| `storage-frontend`   | `/storage`   | **new** S3 UI ported from ra-hcp |
+!!! abstract "One sentence"
 
-Notes from the code:
-- **`/browse` IS the catalog UI** (`browseCatalog`/`CatalogHit`) — DOCUMENTS-facing, even though
-  catalog *ingest* is a BATCHES concern. No `/catalog`, `/chunks`, `/orchestrator` routes exist.
-- **Chunks + orchestrator live inside `/batches`** (`listChunks`/`submitChunk` + chunk strip).
-- **STORAGE is greenfield** — only `frontend` + `runner` exist under `components/apps/` today.
+    The rask frontend is becoming a set of **independent SvelteKit SSR apps** (one per
+    domain), each its own deployable, all sharing **one design system + one sidebar**, and
+    **composed by a single proxy** so they feel like one site.
 
-## Unified sidebar groups (shadcn-svelte Sidebar)
+## The mental model: _vertical_ microfrontends
 
-- **Compute:** Overview, Cluster, Jobs, Actors, Logs, Serve
-- **Documents:** Search, Viewer, Browse
-- **Batches:** Batches
-- **Storage:** S3 (new)
+There are two ways to do microfrontends. We use the **vertical** (route-based) model —
+**not** the horizontal (Module Federation) one. This is the single most important thing
+to internalise, because it explains everything else.
 
-Icons reuse the exact lucide glyphs `ray-shell.svelte` already uses. Cross-MFE links must be
-plain full-navigation `<a>` (SPA `goto` across apps errors).
+=== "Vertical (what rask uses) ✅"
 
-## Double-sidebar risk (the user's explicit concern)
+    Each app is a **complete web page**. A proxy/gateway routes by **URL path**: hitting
+    `/storage` loads the *entire* storage app — its own `<html>`, its own sidebar, its own
+    content. Apps are independent and deploy separately. The shared chrome (sidebar) is a
+    **library** every app imports.
 
-`ray-shell.svelte` is NOT a SvelteKit layout — every one of the 12 routes imports and wraps
-itself in `<RayShell>`. RayShell renders **both** a top bar (logo, health badge, mode toggle,
-per-page snippets) **and** a 56px left icon-rail (its own sidebar). The new shadcn sidebar must
-**replace** that icon-rail; RayShell keeps only the top bar (moved into `Sidebar.Inset`'s header).
+    ``` mermaid
+    graph LR
+      U[Browser] -->|/batches| P{Proxy / Gateway}
+      U -->|/storage| P
+      P -->|/*| M[frontend app<br/>full page + sidebar]
+      P -->|/storage| S[storage app<br/>full page + sidebar]
+      M -.imports.-> L[(@rask/ui<br/>shared shell)]
+      S -.imports.-> L
+    ```
 
-## Component audit → @rask/ui
+=== "Horizontal (Module Federation) ❌ not us"
 
-**Move to @rask/ui (`packages/ui`, net-new):** `layout/sort-header.svelte` (5 routes),
-`ui/badge/*` (11 routes), `ui/progress/*`, `ui/separator/*`, `ui/tooltip/*` (@rask/ui-grade but dead today).
+    One **host shell app** stays loaded and pulls *fragments* of other apps into a
+    persistent layout at runtime (the sidebar never reloads). Powerful, but runtime-coupled
+    and complex. rask does **not** do this.
 
-**Dedupe (@rask/ui already exports):** `ui/button/*`, `ui/card/*` → switch frontend imports to
-`@rask/ui/button` + `/card`, delete local copies (verify @rask/ui's surface matches first).
+    ``` mermaid
+    graph LR
+      U[Browser] --> H[Shell host app]
+      H -.loads fragment.-> A[storage fragment]
+      H -.loads fragment.-> B[search fragment]
+    ```
 
-**Delete (unused):** `catalog-hit-card.svelte` (zero importers, domain-specific).
-`ui/progress`, `ui/separator`, `ui/tooltip/*` are dead in-app — promote to @rask/ui rather than discard.
+!!! question "Then why does every app _import_ `AppShell` — isn't that reverse?"
 
-## Execution order (non-breaking — keep the app working at every step)
+    No. Because each vertical app renders the **whole page itself**, it must draw its **own**
+    sidebar. So it imports `AppShell` from the shared library — exactly like importing a
+    `<Layout>` component. The shell is **shared code**, not a host process. Direction is
+    `app → uses → shell-library`. (The "shell hosts the apps" picture is the *horizontal*
+    model above.)
 
-1. ✅ Phase 1 audit cleanup · ✅ Phase 2 SSR fix
-2. Phase 3 — build the unified sidebar **in the current single app**, replacing ray-shell's rail
-3. Phase 4 — port ra-hcp S3 UI into a `/s3` route (single app), under the Storage group
-4. Phase 5 — add turborepo (`turbo.json`) over the existing Bun workspace (non-breaking)
-5. Phase 6 — extract shared packages (@rask/ui additions, `@rask/api`, configs)
-6. Phase 7 — split routes into the four `*-frontend` apps with `kit.paths.base`
-7. Phase 8 — `microfrontends.json` + `turbo dev` proxy (dev) / gateway routing (prod) + docs
+## Where everything lives
+
+rask is **Polylith**, so there is **no top-level `apps/`** (that's the turborepo
+`with-svelte` example). Runnable apps live under **`components/apps/`**; shared libraries
+under **`packages/`**.
+
+```mermaid
+graph TD
+  subgraph ca["components/apps"]
+    F[frontend<br/><sub>the monolith — all routes today</sub>]
+    SF[storage-frontend<br/><sub>MFE: /storage</sub>]
+    R[runner<br/><sub>Python CLI</sub>]
+  end
+  subgraph pk["packages"]
+    UI[ui — @rask/ui<br/><sub>sidebar/shell + styled components</sub>]
+    API[api — @rask/api<br/><sub>API client + types — planned</sub>]
+  end
+  F -->|workspace:*| UI
+  SF -->|workspace:*| UI
+  F -.planned.-> API
+  SF -.planned.-> API
+```
+
+| Path                               | What it is                                                                                                                                                                                         |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `components/apps/frontend`         | **The monolith.** Today it still owns _every_ route (search, browse, viewer, cluster, jobs, actors, serve, logviewer, batches, overview, s3). Package name `viewer-frontend`.                      |
+| `components/apps/storage-frontend` | The **first carved-out microfrontend** — owns `/storage` (the S3 browser).                                                                                                                         |
+| `packages/ui` (`@rask/ui`)         | The **shared design system**: styled components (`button`, `badge`, `card`, `dialog`, `sort-header`, `sidebar`, …) **plus the shell** (`@rask/ui/shell` → `AppShell`, `AppSidebar`, `nav-config`). |
+| `packages/api` (`@rask/api`)       | **Planned** — the shared API client + types, so apps don't each copy `api.ts`.                                                                                                                     |
+
+## How a request flows
+
+The frontend never talks to a domain service directly — it always goes through the
+**gateway** (`:8888`), which path-routes `/api/*` to the per-domain backend services.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as Browser
+  participant PX as Proxy (dev :3024 / gateway prod)
+  participant APP as SvelteKit app (Bun SSR)
+  participant GW as Gateway :8888
+  participant SVC as domain service
+  B->>PX: GET /storage
+  PX->>APP: route by path → storage-frontend
+  APP-->>B: SSR HTML (shell + page)
+  B->>PX: /api/volumes/objects
+  PX->>GW: /api/*
+  GW->>SVC: longest-prefix route
+  SVC-->>B: JSON
+```
+
+!!! info "Two fetch paths, one gateway"
+
+    - **Client-side** code uses the relative `/api/*` (dev Vite proxy / prod same-origin).
+    - **Server-side** code (SSR `load`, remote functions) uses an **absolute** `RASK_GATEWAY_URL`
+      because a server has no origin. Both end at the **one gateway**.
+
+## The shared shell (one sidebar, zero drift)
+
+`@rask/ui/shell` exports an `AppShell` that wraps every app's routes:
+
+```svelte title="every app's src/routes/+layout.svelte"
+<script lang="ts">
+	import { page } from '$app/state';
+	import { AppShell } from '@rask/ui/shell';
+	let { children } = $props();
+</script>
+
+<AppShell pathname={page.url.pathname}>
+	{@render children()}
+</AppShell>
+```
+
+`AppSidebar` is **pure**: it takes `pathname` as a prop and renders plain `<a href>` links
+(no `$app/*`), which is what makes it shareable across independently-deployed apps — and
+plain anchors are also _correct_ for cross-app navigation (a full page load the proxy routes).
+
+!!! tip "Styled components live in the library, not the apps"
+
+    The **look** (Tailwind classes, variants) lives in `@rask/ui`. Each app only supplies the
+    **theme token values** in its `app.css` (`--primary`, `--sidebar`, …) plus an
+    `@source '../../../../packages/ui/dist'` so Tailwind generates the lib's classes. Same
+    button, same sidebar, everywhere. You'd only style *in* an app for something unique to it.
+
+## Current state vs. target
+
+!!! warning "The split is **started, not finished** — 1 of 4 domain apps"
+
+    The monolith still owns most routes. Only `storage` has been carved out so far.
+
+```mermaid
+graph LR
+  subgraph NOW
+    M[frontend monolith<br/>all routes]
+    ST[storage-frontend ✅]
+  end
+  subgraph TARGET
+    C[compute-frontend]
+    D[documents-frontend]
+    BA[batches-frontend]
+    ST2[storage-frontend ✅]
+  end
+  NOW ==>|carve out, same recipe x3| TARGET
+```
+
+| Domain app                        | Routes it will own                                          | `kit.paths.base` | Status      |
+| --------------------------------- | ----------------------------------------------------------- | ---------------- | ----------- |
+| `compute-frontend` (the "ray" UI) | overview, cluster, jobs, actors, serve, logviewer, api-docs | `/compute`       | planned     |
+| `documents-frontend`              | search, browse, viewer                                      | `/documents`     | planned     |
+| `batches-frontend`                | batches (+ chunks/orchestrator controls)                    | `/batches`       | planned     |
+| `storage-frontend`                | s3                                                          | `/storage`       | **done ✅** |
+
+Carving each one is the **same recipe** as `storage-frontend` (scaffold app → move its
+routes in → wire `@rask/ui` + `@rask/api`), not a new hard problem.
+
+## Developing without the full backend
+
+You should **not** need the whole fleet (gateway + 5 services + Postgres + Ray) just to see
+a populated page. Because every frontend hits the **one gateway**, you mock **one thing**:
+
+<div class="grid cards" markdown>
+
+- :lucide-flask-conical: **Mock gateway (recommended)**
+
+  ***
+
+  One small Bun server answering `/api/*` with canned JSON. Point `RASK_GATEWAY_URL` / the
+  Vite proxy at it. **One mock feeds every microfrontend.**
+
+- :lucide-toggle-left: **`RASK_MOCK` flag**
+
+  ***
+
+  `api.ts` / `*.remote.ts` return canned data when `RASK_MOCK=1`. No extra process. The
+  `/s3` remote function is already shaped for this.
+
+- :lucide-file-json: **Prism (from OpenAPI)**
+
+  ***
+
+  Auto-generate a schema-valid mock from a service's `openapi.json`. Most "real", but needs
+  the OpenAPI-codegen workflow first.
+
+</div>
+
+## Deployment
+
+Each app is **one Bun-server Docker image** (`svelte-adapter-bun`):
+
+- **Dev** — `turbo dev` starts the built-in microfrontends **proxy on `:3024`**, composing
+  every app under one URL (`/` → monolith, `/storage` → storage MFE).
+- **Prod** — the **gateway / K8s ingress** path-routes `/compute`, `/documents`, `/batches`,
+  `/storage` to each app's Bun server (the same pattern as the per-domain _backend_ services).
+
+!!! note "Toolchain — loyal to rask, not the with-svelte example"
+
+    **Bun** workspaces (no pnpm), **svelte-adapter-bun** (SSR, not adapter-static), **valibot**
+    (not zod), **explicit** workspace membership (no globs), `kit.paths.base` per app (not raw
+    vite `base`). See `docs/components/progress.md` for the live build log.
