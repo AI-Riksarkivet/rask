@@ -57,17 +57,19 @@
 	     the per-page header: trigger, breadcrumb, page snippets, ray health, theme. -->
 	{#if !hideTopBar}
 		<header
-			class="flex h-12 shrink-0 items-center gap-3 border-b bg-[oklch(0.18_0.015_260)] px-3 text-[oklch(0.95_0.005_260)] dark:bg-[oklch(0.13_0.01_260)]"
+			class="bg-sidebar text-sidebar-foreground border-sidebar-border flex h-12 shrink-0 items-center gap-3 border-b px-3"
 		>
-			<Sidebar.Trigger class="text-[oklch(0.85_0.005_260)] hover:bg-white/10 hover:text-white" />
+			<Sidebar.Trigger
+				class="text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+			/>
 
 			<div class="flex items-center gap-2 text-sm font-semibold tracking-tight">
-				<span class="text-[oklch(0.6_0.01_260)]">/</span>
-				<span class="truncate text-[oklch(0.85_0.005_260)]">{title ?? path}</span>
+				<span class="text-sidebar-foreground/40">/</span>
+				<span class="text-sidebar-foreground truncate">{title ?? path}</span>
 			</div>
 
 			{#if center}
-				<div class="flex min-w-0 items-center gap-2 text-[oklch(0.85_0.005_260)]">
+				<div class="text-sidebar-foreground flex min-w-0 items-center gap-2">
 					{@render center()}
 				</div>
 			{/if}
@@ -86,7 +88,7 @@
 					{:else}
 						<Badge
 							variant="outline"
-							class="border-white/10 bg-white/5 font-mono text-[oklch(0.85_0.005_260)]"
+							class="border-sidebar-border bg-sidebar-accent/40 text-sidebar-foreground font-mono"
 							title={health.error ?? ''}
 						>
 							<span class="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-amber-400"></span>
@@ -98,7 +100,7 @@
 				<Button
 					variant="ghost"
 					size="icon-sm"
-					class="text-[oklch(0.85_0.005_260)] hover:bg-white/10 hover:text-white"
+					class="text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
 					onclick={toggleMode}
 					title="Toggle theme"
 				>
