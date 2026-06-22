@@ -33,6 +33,10 @@
 			"types": "./dist/components/avatar/index.d.ts",
 			"svelte": "./dist/components/avatar/index.js"
 		},
+		"./collapsible": {
+			"types": "./dist/components/collapsible/index.d.ts",
+			"svelte": "./dist/components/collapsible/index.js"
+		},
 		"./card": {
 			"types": "./dist/components/card/index.d.ts",
 			"svelte": "./dist/components/card/index.js"
