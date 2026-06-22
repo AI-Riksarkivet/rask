@@ -32,3 +32,47 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- default "default" .Values.serviceAccount.name -}}
 {{- end -}}
 {{- end -}}
+
+{{/* Component labels: pass (list . "<component>") */}}
+{{- define "rask.componentLabels" -}}
+{{- $root := index . 0 -}}
+{{- $component := index . 1 -}}
+{{ include "rask.labels" $root }}
+app.kubernetes.io/component: {{ $component }}
+{{- end -}}
+
+{{/* Postgres password: pinned across upgrades via lookup, else random. */}}
+{{- define "rask.pgPassword" -}}
+{{- if .Values.secrets.postgresPassword -}}
+{{- .Values.secrets.postgresPassword -}}
+{{- else -}}
+{{- $existing := (lookup "v1" "Secret" .Release.Namespace (printf "%s-postgres" (include "rask.fullname" .))) -}}
+{{- if and $existing $existing.data (index $existing.data "POSTGRES_PASSWORD") -}}
+{{- index $existing.data "POSTGRES_PASSWORD" | b64dec -}}
+{{- else -}}
+{{- randAlphaNum 24 -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "rask.minioAccessKey" -}}
+{{- default "rask" .Values.secrets.minioAccessKey -}}
+{{- end -}}
+
+{{- define "rask.minioSecretKey" -}}
+{{- if .Values.secrets.minioSecretKey -}}
+{{- .Values.secrets.minioSecretKey -}}
+{{- else -}}
+{{- $existing := (lookup "v1" "Secret" .Release.Namespace (printf "%s-minio" (include "rask.fullname" .))) -}}
+{{- if and $existing $existing.data (index $existing.data "MINIO_ROOT_PASSWORD") -}}
+{{- index $existing.data "MINIO_ROOT_PASSWORD" | b64dec -}}
+{{- else -}}
+{{- randAlphaNum 24 -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* asyncpg DATABASE_URL pointing at the in-cluster postgres service. */}}
+{{- define "rask.databaseUrl" -}}
+{{- printf "postgresql+asyncpg://%s:%s@%s-postgres:%v/%s" .Values.postgres.user (include "rask.pgPassword" .) (include "rask.fullname" .) .Values.postgres.port .Values.postgres.database -}}
+{{- end -}}

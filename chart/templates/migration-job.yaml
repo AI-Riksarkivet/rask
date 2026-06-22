@@ -24,21 +24,15 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "rask.serviceAccountName" . }}
-      securityContext:
-        {{- toYaml .Values.viewer.podSecurityContext | nindent 8 }}
       containers:
         - name: migrate
-          image: "{{ .Values.viewer.image.repository }}:{{ .Values.viewer.image.tag | default .Chart.AppVersion }}"
-          imagePullPolicy: {{ .Values.viewer.image.pullPolicy }}
-          securityContext:
-            {{- toYaml .Values.viewer.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository | default "core-api" }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           command:
             {{- toYaml .Values.migrations.command | nindent 12 }}
           envFrom:
             - configMapRef:
                 name: {{ include "rask.fullname" . }}-config
-            - secretRef:
-                name: {{ required "existingSecret is required for migrations (DATABASE_URL)" .Values.existingSecret }}
           resources:
             {{- toYaml .Values.migrations.resources | nindent 12 }}
 {{- end }}

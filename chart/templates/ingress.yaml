@@ -25,9 +25,9 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "rask.fullname" . }}-viewer
+                name: {{ include "rask.fullname" . }}-gateway
                 port:
-                  number: {{ .Values.viewer.service.port }}
+                  number: {{ (index .Values.services "gateway").port }}
           - path: /
             pathType: Prefix
             backend:

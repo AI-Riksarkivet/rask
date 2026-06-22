@@ -1,82 +1,160 @@
-# -- Global image pull secrets (names of existing Secrets of type kubernetes.io/dockerconfigjson)
-imagePullSecrets: []
+# Pinned so in-cluster service names are rask-<component> (release name is also rask).
+fullnameOverride: "rask"
 nameOverride: ""
-fullnameOverride: ""
+
+imagePullSecrets: []
 
 serviceAccount:
   create: true
   name: ""
   annotations: {}
 
-# Operator-created Secret holding DATABASE_URL, AWS_*, HCP_ENDPOINT, HF_TOKEN.
-# REQUIRED. Nothing sensitive is rendered by this chart.
+# Optional override: if set, this Secret is used verbatim instead of the
+# chart-generated one (prod with external deps). Empty = chart generates creds.
 existingSecret: ""
 
-# Non-sensitive env, rendered into a ConfigMap and shared by viewer + migrations.
+# Random creds are generated once on first install and pinned across upgrades
+# via `lookup`. Override here to force a value.
+secrets:
+  postgresPassword: ""   # empty => randAlphaNum 24, pinned
+  minioAccessKey: ""     # empty => "rask"
+  minioSecretKey: ""     # empty => randAlphaNum 24, pinned
+  hfToken: ""            # HuggingFace token for the gated TrOCR model
+
+# Non-secret env shared by the fleet ConfigMap.
 config:
-  RASK_ORCHESTRATOR_AUTOSTART: "false"
-  RASK_ORCHESTRATOR_INTERVAL_SECONDS: "60"
-  RASK_ORCHESTRATOR_RECONCILE_SECONDS: "600"
-  RAY_DASHBOARD_URL: "http://rask-ray-head:8265"
+  RASK_SOURCE_MODE: "s3"
+  RASK_HTR_PIPELINE: "htrflow"
+  RASK_PREFETCH_PIPELINE: "none"
+  RASK_VIEWER_INPUT: "s3://images-batch"
+  RASK_VIEWER_OUTPUT: "s3://images-batch-alto"
   RASK_CACHE_BUCKET: "images-batch"
   RASK_OUTPUT_BUCKET: "images-batch-alto"
   RASK_SEARCH_BUCKET: "images-batch-search"
   RASK_IIIF_URL: ""
+  RASK_API_PREFIX: "/api"
+  RASK_ORCHESTRATOR_INTERVAL_SECONDS: "60"
+  RASK_ORCHESTRATOR_RECONCILE_SECONDS: "600"
+  RASK_SERVE_REPLICAS: "1"
+  RASK_SERVE_GPU_FRAC: "1.0"
   AWS_REGION: "us-east-1"
-  HCP_INSECURE: "false"
-  RASK_VIEWER_INPUT: "s3://images-batch"
-  RASK_VIEWER_OUTPUT: "s3://images-batch-alto"
-  RASK_SOURCE_MODE: "s3"
-  RASK_HTR_PIPELINE: "htrflow"
-  RASK_PREFETCH_PIPELINE: "none"
+  HCP_INSECURE: "true"
+  RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
 
-viewer:
-  replicas: 1   # MUST stay 1 — the in-process orchestrator is a singleton.
-  image:
-    repository: rask-viewer
-    tag: ""        # defaults to .Chart.AppVersion when empty
-    pullPolicy: IfNotPresent
-  # CIDR of the ingress controller pods; passed to uvicorn --forwarded-allow-ips. Never "*".
-  forwardedAllowIps: "127.0.0.1"
-  service:
+# Per-service fleet definitions. Rendered by templates/fleet.yaml.
+services:
+  core-api:
+    module: "core_api:app"
+    port: 8801
+    replicas: 1
+    waitFor: ["postgres", "minio"]
+  search-api:
+    module: "search_api:app"
+    port: 8802
+    replicas: 1
+    waitFor: ["postgres"]
+  volumes-api:
+    module: "volumes_api:app"
+    port: 8803
+    replicas: 1
+    waitFor: ["minio"]
+  ray-api:
+    module: "ray_api:app"
+    port: 8804
+    replicas: 1
+    waitFor: []
+  orchestrator:
+    module: "orchestrator:app"
+    port: 8810
+    replicas: 1            # MUST stay 1 (in-process singleton)
+    singleton: true        # => strategy Recreate + RASK_ORCHESTRATOR_AUTOSTART
+    waitFor: ["postgres"]
+  gateway:
+    module: "gateway:app"
     port: 8888
-  resources:
-    requests: {cpu: "250m", memory: "512Mi"}
-    limits: {cpu: "2", memory: "2Gi"}
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
-  podSecurityContext:
-    runAsNonRoot: true
-  securityContext:
-    allowPrivilegeEscalation: false
-    readOnlyRootFilesystem: false
-    capabilities: {drop: ["ALL"]}
+    replicas: 1
+    extraArgs: ["--proxy-headers", "--forwarded-allow-ips=127.0.0.1"]
+    waitFor: []
+
+# Image registry/tag shared by every fleet + migration container.
+image:
+  repository: ""          # empty => bare "<component>" name (e.g. core-api)
+  tag: "dev"
+  pullPolicy: IfNotPresent
+
+resources:
+  fleet:
+    requests: {cpu: "50m", memory: "128Mi"}
+    limits: {cpu: "1", memory: "512Mi"}
+
+orchestrator:
+  autostart: "false"
 
 frontend:
   replicas: 2
   image:
-    repository: rask-frontend
-    tag: ""
+    repository: frontend
+    tag: "dev"
     pullPolicy: IfNotPresent
   service:
-    port: 8080
+    port: 3000
+  origin: "http://rask.local"
   resources:
     requests: {cpu: "50m", memory: "64Mi"}
     limits: {cpu: "500m", memory: "256Mi"}
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
   podSecurityContext:
     runAsNonRoot: true
-    runAsUser: 101
   securityContext:
     allowPrivilegeEscalation: false
     capabilities: {drop: ["ALL"]}
 
+postgres:
+  enabled: true
+  image: "postgres:16"
+  user: "rask"
+  database: "rask"
+  port: 5432
+  storage: "8Gi"
+  storageClass: "local-path"
+  resources:
+    requests: {cpu: "100m", memory: "256Mi"}
+    limits: {cpu: "1", memory: "1Gi"}
+
+minio:
+  enabled: true
+  image: "minio/minio:latest"
+  mcImage: "minio/mc:latest"
+  port: 9000
+  consolePort: 9001
+  storage: "50Gi"
+  storageClass: "local-path"
+  buckets: ["images-batch", "images-batch-alto", "images-batch-search"]
+  resources:
+    requests: {cpu: "100m", memory: "256Mi"}
+    limits: {cpu: "1", memory: "1Gi"}
+
+ray:
+  enabled: true
+  image:
+    repository: ray
+    tag: "dev"
+    pullPolicy: IfNotPresent
+  serveRoutePrefix: "/htrflow"
+  importPath: "runner.htrflow_service:htrflow_app"
+  dashboardPort: 8265
+  servePort: 8000
+  clientPort: 10001
+  redisPort: 6379
+  gpuCount: 1
+  runtimeClassName: "nvidia"
+  hfCacheStorage: "10Gi"
+  shmSize: "8Gi"
+  resources:
+    requests: {cpu: "2", memory: "8Gi"}
+    limits: {cpu: "4", memory: "16Gi"}
+
 migrations:
   enabled: true
-  # Command run from the alembic directory inside the viewer image.
   command: ["sh", "-c", "cd /app/components/services/core && alembic upgrade head"]
   resources:
     requests: {cpu: "100m", memory: "256Mi"}
@@ -84,7 +162,7 @@ migrations:
 
 ingress:
   enabled: true
-  className: ""   # k3s defaults to Traefik; nginx must be installed separately if desired
+  className: ""    # k3s default Traefik
   host: rask.local
   annotations: {}
-  tls: []   # e.g. [{secretName: rask-tls, hosts: [rask.example.org]}]
+  tls: []
