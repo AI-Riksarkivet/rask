@@ -99,3 +99,24 @@ def test_upload_filename_is_basenamed(client: tuple[TestClient, object]) -> None
     assert resp.status_code == 201, resp.text
     # stored as basename under the volume prefix; no traversal out of safe/
     assert _keys(s3) == ["safe/evil.jpg"]
+
+
+def test_upload_reregisters_idempotently(client: tuple[TestClient, object]) -> None:
+    tc, s3 = client
+    r1 = tc.post("/api/v1/batches/idem/upload", files=[("files", ("a.jpg", b"x", "image/jpeg"))])
+    assert r1.status_code == 201, r1.text
+    first = r1.json()
+    assert first["page_count"] == 1
+    # re-upload the same volume with an additional image
+    r2 = tc.post(
+        "/api/v1/batches/idem/upload",
+        files=[
+            ("files", ("a.jpg", b"x", "image/jpeg")),
+            ("files", ("b.jpg", b"y", "image/jpeg")),
+        ],
+    )
+    assert r2.status_code == 201, r2.text
+    second = r2.json()
+    assert second["page_count"] == 2  # count refreshed
+    assert second["chunk_id"] == first["chunk_id"]  # chunk_id preserved across re-register
+    assert _keys(s3, "idem/") == ["idem/a.jpg", "idem/b.jpg"]

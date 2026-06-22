@@ -14,6 +14,7 @@
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 	let result = $state<BatchRow | null>(null);
+	let skipped = $state(0);
 
 	const validId = $derived(ID_RE.test(volumeId));
 	const canIngest = $derived(validId && files.length > 0 && !busy);
@@ -21,7 +22,9 @@
 	function addFiles(list: FileList | null) {
 		if (!list) return;
 		const names = new Set(files.map((f) => f.name));
-		const incoming = Array.from(list).filter((f) => IMAGE_RE.test(f.name) && !names.has(f.name));
+		const all = Array.from(list);
+		const incoming = all.filter((f) => IMAGE_RE.test(f.name) && !names.has(f.name));
+		skipped = all.filter((f) => !IMAGE_RE.test(f.name)).length;
 		files = [...files, ...incoming];
 	}
 	function removeFile(name: string) {
@@ -93,7 +96,7 @@
 				<input
 					type="file"
 					multiple
-					accept="image/*"
+					accept=".jpg,.jpeg,.png,.tif,.tiff,image/*"
 					class="hidden"
 					onchange={(e: Event & { currentTarget: HTMLInputElement }) =>
 						addFiles(e.currentTarget.files)}
@@ -120,6 +123,7 @@
 				{/each}
 			</ul>
 		{/if}
+		{#if skipped > 0}<p class="text-xs opacity-60">{skipped} non-image file{skipped === 1 ? '' : 's'} skipped.</p>{/if}
 
 		<Button onclick={ingest} disabled={!canIngest}>
 			{busy ? 'Ingesting…' : files.length === 0 ? 'Ingest images' : `Ingest ${files.length} image${files.length === 1 ? '' : 's'}`}
