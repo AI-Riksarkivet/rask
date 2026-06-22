@@ -17,9 +17,9 @@
 		PanelRightOpen,
 	} from 'lucide-svelte';
 	import { CanvasController } from '$lib/canvas';
-	import { listPages, imageUrl, fetchAlto, getBatchCatalog, type CatalogHit } from '$lib/api';
+	import { listPages, imageUrl, fetchAlto, getBatchCatalog, type CatalogHit } from '@rask/api';
 	import { parseAlto } from '$lib/alto';
-	import type { AltoParse, Line, PageEntry } from '$lib/types';
+	import type { AltoParse, Line, PageEntry } from '@rask/api';
 
 	const volume = $derived(pageStore.params.volume!);
 	const pageKey = $derived(pageStore.params.page!);

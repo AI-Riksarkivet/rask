@@ -1,4 +1,4 @@
-import type { AltoParse, BBox, Line } from './types';
+import type { AltoParse, BBox, Line } from '@rask/api';
 
 const NS = 'http://www.loc.gov/standards/alto/ns-v4#';
 

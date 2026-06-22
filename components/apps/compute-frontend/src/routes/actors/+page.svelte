@@ -3,7 +3,7 @@
 	import { actorsList, rayCluster, type ActorInfo, type RayNode } from '@rask/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { SortHeader } from '@rask/ui/sort-header';
-	import { Card } from '$lib/components/ui/card';
+	import { Card } from '@rask/ui/card';
 	import { Badge } from '@rask/ui/badge';
 	import {
 		Boxes,

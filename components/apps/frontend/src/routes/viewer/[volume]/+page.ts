@@ -1,5 +1,5 @@
 import { error, redirect } from '@sveltejs/kit';
-import { listPages } from '$lib/api';
+import { listPages } from '@rask/api';
 import type { PageLoad } from './$types';
 
 /**

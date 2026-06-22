@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { rayCluster, rayLogFiles, rayLogContent, type RayNode } from '@rask/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
-	import { Card } from '$lib/components/ui/card';
+	import { Card } from '@rask/ui/card';
 	import {
 		RefreshCw,
 		FileText,

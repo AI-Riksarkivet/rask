@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { browseCatalog, type CatalogHit, type CatalogTier } from '$lib/api';
+	import { browseCatalog, type CatalogHit, type CatalogTier } from '@rask/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Badge } from '@rask/ui/badge';

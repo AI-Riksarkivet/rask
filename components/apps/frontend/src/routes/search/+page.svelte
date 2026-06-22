@@ -9,7 +9,7 @@
 		type SearchHit,
 		type SearchStats,
 		type CatalogHit,
-	} from '$lib/api';
+	} from '@rask/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Badge } from '@rask/ui/badge';

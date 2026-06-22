@@ -101,8 +101,9 @@
 				<TriangleAlert class="h-8 w-8 text-amber-500" />
 				<p class="text-sm font-medium">Object listing endpoint pending</p>
 				<p class="text-muted-foreground max-w-md text-xs">
-					Calls the <code class="font-mono">listObjects</code> remote function (valibot, server-side, via
-					the gateway). Needs <code class="font-mono">GET /api/volumes/objects</code> in volumes-api.
+					Calls the <code class="font-mono">listObjects</code> remote function (valibot,
+					server-side, via the gateway). Needs
+					<code class="font-mono">GET /api/volumes/objects</code> in volumes-api.
 				</p>
 				<!-- @rask/ui Badge — proves the shared component library works across a separate MFE app -->
 				<Badge variant="warning">{bucket} · shared via @rask/ui</Badge>

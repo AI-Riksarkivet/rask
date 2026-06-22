@@ -1,11 +1,13 @@
-.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer viewer-frontend viewer-frontend-build dev-micro ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve
+.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer dev-micro dev-frontends viewer-frontend frontend-storage frontend-compute frontend-build frontend-check ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve
 
 help:
 	@echo "Targets:"
 	@echo "  install build test lint fmt clean storybook"
-	@echo "  typecheck check ci"
-	@echo "  viewer viewer-frontend viewer-frontend-build"
-	@echo "  dev-micro                              — local microservice fleet (gateway + backends)"
+	@echo "  typecheck check ci   frontend-check frontend-build"
+	@echo "  viewer                                 — core monolith dev server (:8888)"
+	@echo "  dev-micro                              — backend fleet (gateway :8888 + per-domain services)"
+	@echo "  dev-frontends                          — all microfrontends (:5173 + :5174/storage + :5175/compute)"
+	@echo "  viewer-frontend frontend-storage frontend-compute   — run one app each"
 	@echo "  ray-up ray-down ray-status   ray-up-htr (2-GPU pool, GPUs 0,1)"
 	@echo "  serve-up serve-down serve-status   serve-up-both (transcribe+htrflow)"
 	@echo "  qwen-serve                             — vLLM Qwen3.6-27B on GPU 2 for OpenCode"
@@ -18,22 +20,19 @@ install:
 	uv sync
 
 build:
-	cargo build --workspace
 	uv sync
 	bun run build
 
+# Python tests via pytest; the frontends have no unit suite — `make frontend-check`
+# (svelte-check) is their gate.
 test:
-	cargo test --workspace
 	uv run pytest
-	bun run test
 
 lint:
-	cargo clippy --workspace -- -D warnings
 	uv run ruff check .
 	bun run lint
 
 fmt:
-	cargo fmt --all
 	uv run ruff format .
 	bun run format
 
@@ -41,8 +40,7 @@ storybook:
 	bun run storybook
 
 clean:
-	cargo clean
-	rm -rf .venv node_modules **/node_modules **/dist **/.svelte-kit **/storybook-static
+	rm -rf .venv node_modules **/node_modules **/dist **/.svelte-kit **/.turbo **/storybook-static
 
 # ---- python (uv workspace) -------------------------------------------------
 typecheck:
@@ -81,18 +79,38 @@ viewer:
 	RASK_VIEWER_INPUT=$(VIEWER_INPUT) RASK_VIEWER_OUTPUT=$(VIEWER_OUTPUT) \
 		uv run uvicorn core.main:app --host 0.0.0.0 --port 8888 --reload
 
-viewer-frontend:
-	bun --cwd components/apps/frontend run dev
-
 # Local microservice fleet (gateway + per-domain backends) via dev-micro.sh.
 # Bring up deps first: `make ray-up`, `make pg-up` (+ `make pg-migrate`); S3/HCP
-# from .env. The gateway listens on :8888 so `make viewer-frontend` works as-is.
+# from .env. The gateway listens on :8888 so the frontends' /api proxy works.
 dev-micro:
 	uv sync --all-packages
 	./dev-micro.sh
 
-viewer-frontend-build:
-	bun --cwd components/apps/frontend run build
+# ---- frontends (SvelteKit microfrontends) ----------------------------------
+# Three independent SvelteKit SSR apps (svelte-adapter-bun) + the @rask/ui
+# watcher, orchestrated by Turborepo. Each app's Vite dev server proxies
+# /api/* → VIEWER_BACKEND (the gateway / `make viewer`, :8888). There is no
+# composition proxy yet, so the apps come up on separate ports:
+#   viewer-frontend :5173 (catch-all) · storage :5174 /storage · compute :5175 /compute
+# The shared @rask/ui shell + nav render with NO backend; start one
+# (`make dev-micro` or `make viewer`) only when you need live /api data.
+dev-frontends:        # all three apps + the @rask/ui watcher (turbo run dev)
+	bun run dev
+
+viewer-frontend:      # catch-all app only, :5173
+	bun run dev:frontend
+
+frontend-storage:     # storage app only, :5174 /storage
+	bun run dev:storage
+
+frontend-compute:     # compute app only, :5175 /compute
+	bun run dev:compute
+
+frontend-build:       # production-build every app + @rask/ui (turbo, cached)
+	bun run build
+
+frontend-check:       # svelte-check every app + @rask/ui (turbo)
+	bun run check
 
 # ---- ray -------------------------------------------------------------------
 RAY_HEAD_PORT       ?= 6379

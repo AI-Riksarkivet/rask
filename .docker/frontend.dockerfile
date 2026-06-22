@@ -20,7 +20,9 @@ WORKDIR /src
 # Full source of every workspace member so `bun install` + prepare scripts resolve.
 COPY components/apps/frontend         components/apps/frontend
 COPY components/apps/storage-frontend components/apps/storage-frontend
-COPY packages/ui           packages/ui
+COPY components/apps/compute-frontend components/apps/compute-frontend
+COPY packages/api                     packages/api
+COPY packages/ui                      packages/ui
 COPY package.json bun.lock            ./
 
 RUN --mount=type=cache,target=/root/.bun/install/cache \

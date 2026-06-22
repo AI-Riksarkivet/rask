@@ -12,7 +12,7 @@
 		type ChunkRow,
 		type RayClusterPayload,
 		type RayJobsPayload,
-	} from '$lib/api';
+	} from '@rask/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Badge, type BadgeVariant } from '@rask/ui/badge';
