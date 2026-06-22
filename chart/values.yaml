@@ -26,6 +26,8 @@ config:
   RASK_SOURCE_MODE: "s3"
   RASK_HTR_PIPELINE: "htrflow"
   RASK_PREFETCH_PIPELINE: "none"
+  RASK_VIEWER_INPUT: "s3://images-batch"
+  RASK_VIEWER_OUTPUT: "s3://images-batch-alto"
   RASK_CACHE_BUCKET: "images-batch"
   RASK_OUTPUT_BUCKET: "images-batch-alto"
   RASK_SEARCH_BUCKET: "images-batch-search"
