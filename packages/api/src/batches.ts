@@ -72,6 +72,30 @@ export async function syncBatches(): Promise<BatchesPayload> {
 	return res.json();
 }
 
+// ---------- Ingest (upload + register) ----------
+
+/** Upload image files into images-batch/<id>/ and register the volume. Returns the new batch row. */
+export async function uploadVolume(id: string, files: File[]): Promise<BatchRow> {
+	const form = new FormData();
+	for (const f of files) form.append('files', f, f.name);
+	const res = await fetch(`/api/batches/${encodeURIComponent(id)}/upload`, { method: 'POST', body: form });
+	if (!res.ok) {
+		const body = await res.text();
+		throw new Error(`uploadVolume(${id}): HTTP ${res.status}: ${body.slice(0, 300)}`);
+	}
+	return res.json();
+}
+
+/** Register an already-uploaded volume prefix (images must already be in the bucket). */
+export async function registerVolume(id: string): Promise<BatchRow> {
+	const res = await fetch(`/api/batches/${encodeURIComponent(id)}/register`, { method: 'POST' });
+	if (!res.ok) {
+		const body = await res.text();
+		throw new Error(`registerVolume(${id}): HTTP ${res.status}: ${body.slice(0, 300)}`);
+	}
+	return res.json();
+}
+
 // ---------- Orchestrator state ----------
 //
 // Mirrors the decisions the viewer's orchestrator loop (services/orchestrator_loop.py)
