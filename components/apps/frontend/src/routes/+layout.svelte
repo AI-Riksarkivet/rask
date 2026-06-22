@@ -1,10 +1,10 @@
 <script lang="ts">
 	import '../app.css';
 	import { browser } from '$app/environment';
+	import { page } from '$app/state';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
-	import * as Sidebar from '$lib/components/ui/sidebar';
-	import AppSidebar from '$lib/components/layout/app-sidebar.svelte';
+	import { AppShell } from '@rask/ui/shell';
 	import type { Snippet } from 'svelte';
 	let { children }: { children: Snippet } = $props();
 </script>
@@ -15,12 +15,7 @@
 	<Toaster />
 {/if}
 
-<!-- ONE sidebar for the whole app (replaces the old per-page ray-shell icon-rail).
-     h-svh + overflow-hidden so the inner panes own their scrolling and the viewer
-     canvas can fill the viewport. -->
-<Sidebar.Provider class="h-svh overflow-hidden">
-	<AppSidebar />
-	<Sidebar.Inset class="overflow-hidden">
-		{@render children()}
-	</Sidebar.Inset>
-</Sidebar.Provider>
+<!-- ONE shared sidebar from @rask/ui — identical across every microfrontend, no drift. -->
+<AppShell pathname={page.url.pathname}>
+	{@render children()}
+</AppShell>

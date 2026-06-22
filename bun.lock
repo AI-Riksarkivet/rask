@@ -69,10 +69,11 @@
         "vite": "^8.0.16",
       },
     },
-    "packages/component-lib": {
+    "packages/ui": {
       "name": "@rask/ui",
       "version": "0.1.0",
       "dependencies": {
+        "@lucide/svelte": "^1.21.0",
         "bits-ui": "^2.18.0",
         "clsx": "^2.1.1",
         "lucide-svelte": "^1.0.1",
@@ -307,7 +308,7 @@
 
     "@publint/pack": ["@publint/pack@0.1.5", "", { "dependencies": { "tinyexec": "^1.2.4" } }, "sha512-edgyN2pP07uXiP4tJs0s8KVmU8M8i60YPbbI0/WDeok1mIJHRXz+CgD8I0nelwDkoCh3EWL/G5kGfbuHjsdbvw=="],
 
-    "@rask/ui": ["@rask/ui@workspace:packages/component-lib"],
+    "@rask/ui": ["@rask/ui@workspace:packages/ui"],
 
     "@rolldown/binding-android-arm64": ["@rolldown/binding-android-arm64@1.0.3", "", { "os": "android", "cpu": "arm64" }, "sha512-454rs7jHngixp/NMxd5srYD57OnzSlZ/eFTETjORQHLwJG1lRtmNOJcBerZlfu4GjKqeq8aCCIQrMdHyhI51Hw=="],
 

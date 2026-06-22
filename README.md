@@ -8,7 +8,7 @@ Polyglot monorepo for Riksarkivet HTR + search infrastructure. Python managed wi
 
 - `packages/` — reusable bricks (workspace members; polyglot):
   - `htr`, `storage` — Python libraries (uv workspace members)
-  - `component-lib` — Svelte 5 + Bits UI + Tailwind 4 component library with Storybook (Bun workspace)
+  - `@rask/ui` — Svelte 5 + Bits UI + Tailwind 4 component library with Storybook (Bun workspace)
 - `components/` — runnable bricks:
   - `apps/runner` — Python CLI driving Ray Data HTR pipelines
   - `apps/frontend` — Vite + Svelte viewer frontend
@@ -33,8 +33,8 @@ make build
 ## Component library workflow
 
 ```bash
-bun run --cwd packages/component-lib dev          # svelte-package -w
-bun run --cwd packages/component-lib storybook    # localhost:6006
+bun run --cwd packages/ui dev          # svelte-package -w
+bun run --cwd packages/ui storybook    # localhost:6006
 ```
 
 Or from the root:

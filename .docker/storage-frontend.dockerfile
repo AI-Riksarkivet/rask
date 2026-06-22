@@ -27,7 +27,7 @@ WORKDIR /src
 # scripts) resolve. Siblings are build-stage only — never shipped.
 COPY components/apps/frontend         components/apps/frontend
 COPY components/apps/storage-frontend components/apps/storage-frontend
-COPY packages/component-lib           packages/component-lib
+COPY packages/ui           packages/ui
 COPY package.json bun.lock            ./
 
 RUN --mount=type=cache,target=/root/.bun/install/cache \
@@ -38,8 +38,8 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 # hadolint ignore=DL3059
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     printf "import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';\nexport default { preprocess: vitePreprocess() };\n" \
-      > packages/component-lib/svelte.config.js \
-    && bun run --cwd packages/component-lib package
+      > packages/ui/svelte.config.js \
+    && bun run --cwd packages/ui package
 
 # hadolint ignore=DL3059
 RUN --mount=type=cache,target=/root/.bun/install/cache \

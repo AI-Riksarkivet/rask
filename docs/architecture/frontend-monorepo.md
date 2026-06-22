@@ -6,7 +6,7 @@ How the SvelteKit side of `rask` is intended to scale beyond a single viewer.
 
 - Every user-facing surface (viewer, pipeline studio, admin, …) is its **own
   SvelteKit app** that builds and deploys independently.
-- A single **`@rask/ui` package** (lives in `packages/component-lib/`) holds
+- A single **`@rask/ui` package** (lives in `packages/ui/`) holds
   every design token, primitive (`Button`, `Card`, `Dialog`, …), and
   domain-free layout helper (`ResizeHandle`, `CollapsibleSection`, …).
 - Apps consume the lib at **build time** via bun workspaces. There is no
@@ -24,7 +24,7 @@ flowchart LR
         admin["admin<br/><sub>audit · users</sub>"]
     end
 
-    subgraph lib["packages/component-lib — @rask/ui"]
+    subgraph lib["packages/ui — @rask/ui"]
         tokens["styles/tokens.css<br/><sub>dark theme, colors</sub>"]
         prim["components/primitives<br/><sub>Button, Card, Dialog, …</sub>"]
         layout["components/layout<br/><sub>ResizeHandle, Spinner, …</sub>"]
@@ -95,7 +95,7 @@ flowchart LR
         feB["apps/viewer<br/><sub>canvas + PII editor</sub>"]
         psB["apps/pipeline-studio<br/><sub>extracted from SettingsDrawer</sub>"]
         shB["apps/shell<br/><sub>landing + nav</sub>"]
-        libB["packages/component-lib<br/><sub>@rask/ui</sub>"]
+        libB["packages/ui<br/><sub>@rask/ui</sub>"]
     end
 
     feA -. "split + extract" .-> feB
@@ -169,7 +169,7 @@ rask/
 - **Independent dev cycles.** Working on the viewer doesn't touch the studio.
 - **Cheap to spin up app #4.** `cp -r` the shell skeleton, add the lib dep,
   start writing routes.
-- **First-class HMR within each app**; `bun --cwd packages/component-lib run
+- **First-class HMR within each app**; `bun --cwd packages/ui run
 dev` keeps the lib watch-compiling for cross-app HMR.
 
 ## What this costs
@@ -183,7 +183,7 @@ dev` keeps the lib watch-compiling for cross-app HMR.
 ## Migration order (when we actually do it)
 
 1. Promote `cn`, `tokens.css`, and the existing primitives (Button, Card,
-   Dialog) in `packages/component-lib/` to be the _single_ source. Delete the
+   Dialog) in `packages/ui/` to be the _single_ source. Delete the
    frontend duplicates. Frontend imports from `@rask/ui`.
 2. Move the remaining primitives (Badge, Separator, Progress, Tooltip) from
    `frontend/src/lib/components/ui/` into the lib. Frontend re-imports.
@@ -209,7 +209,7 @@ admin into scope. Bun workspaces support this, but the lib's `package.json`
 The lib's `exports` point at **source files** (`.ts`, `.svelte`):
 
 ```jsonc
-// packages/component-lib/package.json
+// packages/ui/package.json
 "exports": {
   ".":              "./src/lib/index.ts",
   "./button":       "./src/lib/components/primitives/button/index.ts",
@@ -219,7 +219,7 @@ The lib's `exports` point at **source files** (`.ts`, `.svelte`):
 
 - **No build step needed** — Vite reads the lib's source through the
   workspace symlink.
-- **HMR across the boundary** — edit `packages/component-lib/.../button.svelte`,
+- **HMR across the boundary** — edit `packages/ui/.../button.svelte`,
   the viewer hot-reloads instantly.
 - Boot: `bun --cwd components/apps/viewer run dev` (~1–2 s), nothing else
   required.
@@ -239,11 +239,11 @@ The lib's `exports` point at **source files** (`.ts`, `.svelte`):
 }
 ```
 
-- Lib must be **built first** (`bun --cwd packages/component-lib run build`)
+- Lib must be **built first** (`bun --cwd packages/ui run build`)
   or run in **watch mode** (`run dev` → `svelte-package -w`) for HMR.
 - This is how an external consumer of `@rask/ui` would experience it —
   useful when you want CI to verify the published artefact actually works.
-- Boot: `bun --cwd packages/component-lib run dev &` then `bun --cwd
+- Boot: `bun --cwd packages/ui run dev &` then `bun --cwd
 components/apps/viewer run dev`.
 
 ### Pick one
@@ -263,7 +263,7 @@ conditions) only when the lib starts being published outside this repo.
 | --- | --- | --- |
 | `bun --cwd components/apps/viewer run dev` | viewer routes + `@rask/ui` source the viewer imports | studio, admin, shell — entire other apps stay dormant |
 | `bun --cwd components/apps/pipeline-studio run dev` | studio routes + `@rask/ui` | viewer, admin, shell |
-| `bun --cwd packages/component-lib run storybook` | the lib + Storybook | no app at all |
+| `bun --cwd packages/ui run storybook` | the lib + Storybook | no app at all |
 
 Each app's `vite.config.ts` only crawls its own `src/` graph. The shared
 `node_modules/` is hoisted at root, so deps are fetched once and reused

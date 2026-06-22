@@ -68,7 +68,7 @@ flowchart TB
         storagepkg["packages/storage<br/><sub>FS/S3/IIIF abstractions</sub>"]
         servicekit["packages/service-kit<br/><sub>make_service_app, Settings, middleware</sub>"]
         raykit["packages/ray-kit<br/><sub>Ray Job SDK + dashboard wrapper</sub>"]
-        complib["packages/component-lib<br/><sub>Svelte 5 + Tailwind + Storybook</sub>"]
+        complib["packages/ui<br/><sub>Svelte 5 + Tailwind + Storybook</sub>"]
     end
 
     browser --> spa
@@ -150,7 +150,7 @@ flowchart TB
 | `packages/storage/`                     | Python lib    | `FSSource/Sink`, `S3Source/Sink`, `IIIFCachedSource`                 |
 | `packages/service-kit/`                 | Python lib    | Platform library: `make_service_app`, `Settings`, middleware, DI lifespan |
 | `packages/ray-kit/`                     | Python lib    | Ray Job SDK + dashboard wrapper; shared by ray-api and core orchestrator |
-| `packages/component-lib/`               | TS / Svelte   | Shared Svelte 5 + Bits UI + Tailwind 4 component library w/ Storybook |
+| `packages/ui/`               | TS / Svelte   | Shared Svelte 5 + Bits UI + Tailwind 4 component library w/ Storybook |
 | `.cache/batches.db`                     | SQLite        | Default per-batch progress (dev; not committed)                      |
 | `.docker/*.dockerfile`                  | Docker        | Image definitions for `runner` (CUDA), `frontend` (nginx); see deployment.md for backend images |
 | `Makefile`                              | bash          | All deploy/dev orchestration (no docker-compose, no k8s yaml)        |
@@ -368,7 +368,7 @@ update to the new per-service entrypoints (see [deployment.md](deployment.md)).
 | ORM                 | SQLModel + SQLAlchemy async (aiosqlite or asyncpg)                    |
 | Relational DB       | SQLite (dev, `.cache/batches.db`) or Postgres (prod, `DATABASE_URL`)  |
 | Search / catalog    | Lance tables on S3 (optional, HCP-backed)                             |
-| Frontend            | SvelteKit (SPA, adapter-static) + `packages/component-lib`            |
+| Frontend            | SvelteKit (SPA, adapter-static) + `packages/ui`            |
 | Object storage      | S3 via `packages/storage` — two buckets: `images-batch`, `*-alto`     |
 | Source              | IIIF (Riksarkivet) with S3 read-through cache                         |
 | Models              | YOLO (regions, lines), TrOCR (transcription)                          |

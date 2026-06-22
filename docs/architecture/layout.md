@@ -24,7 +24,7 @@ flowchart TD
         pst["storage"]
         psk["service-kit"]
         prk["ray-kit"]
-        pc["component-lib"]
+        pc["ui"]
     end
     pr --> ca --> ph
     pr --> ca --> pst
@@ -44,7 +44,7 @@ flowchart TD
 | [`packages/storage`](../packages/storage.md) | Python | `FSSource/Sink`, `S3Source/Sink`, `IIIFCachedSource`, `s3_client`, `iter_keys`, HCP credential derivation. |
 | `packages/service-kit` | Python | Platform library: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`, injectable lifespan. Dependency-light (no lancedb/ray/sqlmodel). |
 | `packages/ray-kit` | Python | Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, dashboard service). Shared by ray-api and core orchestrator. |
-| `packages/component-lib` | TS / Svelte | Svelte 5 + Bits UI + Tailwind 4 component library with Storybook (package `@rask/ui`). |
+| `packages/ui` | TS / Svelte | Svelte 5 + Bits UI + Tailwind 4 component library with Storybook (package `@rask/ui`). |
 
 !!! note "`packages/control` was absorbed into `core`"
     An earlier `packages/control` (S3 sync + chunk submission) no longer exists

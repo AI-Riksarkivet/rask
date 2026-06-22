@@ -2,7 +2,7 @@
 
 /* Scan the shared @rask/ui library so its Tailwind classes are generated
    (Tailwind 4 ignores node_modules by default). */
-@source '../../../../packages/component-lib/dist';
+@source '../../../../packages/ui/dist';
 
 @custom-variant dark (&:is(.dark *));
 

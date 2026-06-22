@@ -1,6 +1,6 @@
 <script lang="ts">
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
-	import { Button } from '$lib/components/ui/button';
+	import { Button } from '@rask/ui/button';
 	import { ExternalLink, FileJson } from 'lucide-svelte';
 
 	// FastAPI auto-generates an OpenAPI schema at /api/openapi.json plus two

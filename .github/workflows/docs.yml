@@ -32,10 +32,10 @@ jobs:
       - name: Install dependencies
         run: bun install
       - name: Build Storybook
-        working-directory: packages/component-lib
+        working-directory: packages/ui
         run: bun run build-storybook
       - name: Copy Storybook into docs site
-        run: cp -r packages/component-lib/storybook-static site/storybook
+        run: cp -r packages/ui/storybook-static site/storybook
 
       - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@d92aa235d04922e8f08b40ce78cc5442fcfbfa2f # v4

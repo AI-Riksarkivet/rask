@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { page as pageStore } from '$app/state';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
-	import { Button } from '$lib/components/ui/button';
+	import { Button } from '@rask/ui/button';
 	import { Badge } from '@rask/ui/badge';
 	import {
 		ChevronLeft,

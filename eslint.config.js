@@ -6,7 +6,7 @@ import { defineConfig } from 'eslint/config';
 import globals from 'globals';
 import ts from 'typescript-eslint';
 import frontendSvelteConfig from './components/apps/frontend/svelte.config.js';
-import libSvelteConfig from './packages/component-lib/svelte.config.js';
+import libSvelteConfig from './packages/ui/svelte.config.js';
 
 const gitignorePath = path.resolve(import.meta.dirname, '.gitignore');
 
@@ -60,7 +60,7 @@ export default defineConfig(
 		},
 	},
 	{
-		files: ['packages/component-lib/**/*.svelte', 'packages/component-lib/**/*.svelte.ts'],
+		files: ['packages/ui/**/*.svelte', 'packages/ui/**/*.svelte.ts'],
 		languageOptions: {
 			parserOptions: {
 				projectService: true,
@@ -76,7 +76,7 @@ export default defineConfig(
 			'**/build/',
 			'**/dist/',
 			'**/storybook-static/',
-			'packages/component-lib/.storybook/',
+			'packages/ui/.storybook/',
 		],
 	},
 );

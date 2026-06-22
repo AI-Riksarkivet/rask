@@ -10,18 +10,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Common commands
 
-| Goal                          | Command                                                        |
-| ----------------------------- | -------------------------------------------------------------- |
-| First-time setup              | `make install` (= `bun install` + `uv sync`)                   |
-| Build everything              | `make build`                                                   |
-| Run all tests                 | `make test`                                                    |
-| Single Python test            | `uv run pytest packages/htr/tests/test_geometry.py::test_name` |
-| Filter by name                | `uv run pytest -k <pattern>`                                   |
-| Skip slow tests               | `uv run pytest -m "not slow"`                                  |
-| Format + lint + typecheck     | `make check` (= `make fmt` + `make lint` + `make typecheck`)   |
-| Frontend type-check only      | `bun --cwd components/apps/frontend run check`                 |
-| Storybook for `component-lib` | `make storybook` (→ `:6006`)                                   |
-| Bootstrap Claude Code config  | `make claude-bootstrap`                                        |
+| Goal                         | Command                                                        |
+| ---------------------------- | -------------------------------------------------------------- |
+| First-time setup             | `make install` (= `bun install` + `uv sync`)                   |
+| Build everything             | `make build`                                                   |
+| Run all tests                | `make test`                                                    |
+| Single Python test           | `uv run pytest packages/htr/tests/test_geometry.py::test_name` |
+| Filter by name               | `uv run pytest -k <pattern>`                                   |
+| Skip slow tests              | `uv run pytest -m "not slow"`                                  |
+| Format + lint + typecheck    | `make check` (= `make fmt` + `make lint` + `make typecheck`)   |
+| Frontend type-check only     | `bun --cwd components/apps/frontend run check`                 |
+| Storybook for `@rask/ui`     | `make storybook` (→ `:6006`)                                   |
+| Bootstrap Claude Code config | `make claude-bootstrap`                                        |
 
 ### Run the app locally
 
@@ -65,7 +65,7 @@ Three brick layers — **don't blur them**:
   - `packages/storage` — `FSSource/Sink`, `S3Source/Sink`, `IIIFCachedSource`, `iter_keys`, `s3_client`
   - `packages/service-kit` — shared **platform library**: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`/`SettingsDep`, the injectable lifespan. Dependency-light (no lancedb/ray/sqlmodel).
   - `packages/ray-kit` — Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, the dashboard service). Shared by `ray-api` and the core orchestrator.
-  - `packages/component-lib` — Svelte 5 + Bits UI + Tailwind 4 component library (`@rask/ui`) w/ Storybook 10 (`@storybook/svelte-vite`). The shared design system; apps consume it via `workspace:*`. Exports button/card/dialog/utils today (more being promoted in — see `docs/architecture/frontend-microfrontends.md`).
+  - `packages/ui` — Svelte 5 + Bits UI + Tailwind 4 component library (`@rask/ui`; folder renamed from `@rask/ui`) w/ Storybook 10 (`@storybook/svelte-vite`). The shared design system every microfrontend imports via `workspace:*` — **styled components live here, not in the apps** (apps only supply theme tokens in their `app.css` + an `@source` pointing at `packages/ui/dist`). Subpath exports: `@rask/ui/{button,badge,card,dialog,sort-header,sidebar,utils}` + **`@rask/ui/shell`** (the shared `AppShell` + grouped `AppSidebar` + `nav-config` — so every app renders the _same_ sidebar, zero drift). See `docs/architecture/frontend-microfrontends.md`.
 - `components/` — runnable code. **The old monolithic `viewer` service is gone** — it was dissolved (2026-06) into a gateway + per-domain services + a shared `core` brick:
   - `components/apps/runner` — Typer CLI that submits Ray Data jobs
   - `components/apps/frontend` — SvelteKit 2 + Svelte 5, **SSR** via `svelte-adapter-bun` (a real Bun server: `bun ./build/index.js`), one unified shadcn-svelte grouped sidebar (Compute / Documents / Batches / Storage). Vite dev proxy sends `/api` → the gateway on `:8888`. **Being decomposed into per-domain microfrontends** (compute/documents/batches/storage) under Turborepo — see `docs/architecture/frontend-microfrontends.md`.
@@ -105,7 +105,7 @@ Plus the relevant `projects/<name>/pyproject.toml` if it's deployable.
 - **Gateway port is 8888.** Vite proxy in `components/apps/frontend` defaults `VIEWER_BACKEND` to `http://localhost:8888` (the gateway, or the `make viewer` monolith). Don't change that port without updating the proxy.
 - **Pytest import mode is `importlib`** (`--import-mode=importlib` in `pyproject.toml`). Test paths are explicit (`testpaths = [...]`), not discovered.
 - **Ruff line length is 160**, not 100. Selected rule families include `ANN` (annotations); tests are exempted via `per-file-ignores`.
-- **Prettier uses tabs**, single quotes, `printWidth: 100` — defined in root `package.json`, applied across both frontend and `component-lib` workspaces.
+- **Prettier uses tabs**, single quotes, `printWidth: 100` — defined in root `package.json`, applied across both frontend and `@rask/ui` workspaces.
 - **JS monorepo runs on Turborepo** (`turbo.json`): `bun run build`/`check`/`dev` delegate to `turbo run` (package tasks + `^build` ordering + cached `build`/`.svelte-kit`/`dist` outputs). Add a new JS package's scripts in its own `package.json` — never centralize task logic in root. `lint`/`format` stay root-level (Prettier + a single flat ESLint config) until the shared `@rask/eslint-config` package is extracted for the microfrontend split.
 - **Frontend is SSR + Svelte 5 strict.** Every `.svelte` change is validated with the Svelte 5 skills + the `svelte` MCP autofixer. Browser-only globals must stay inside `onMount`/`$effect`/handlers (never component top level or `load`) or SSR render crashes.
 - **`ty` is configured with `error-on-warning = true`** — typecheck warnings fail CI.
@@ -114,5 +114,5 @@ Plus the relevant `projects/<name>/pyproject.toml` if it's deployable.
 
 - All project-local config lives under `.claude/`. **No `.mcp.json` at repo root** by design — the svelte MCP server is registered at `local` scope via `make claude-bootstrap` (idempotent). The install command in the `Makefile` is the source of truth for which MCP servers this project needs.
 - `.claude/settings.json` is committed (team-shared: `enabledPlugins`, `extraKnownMarketplaces`, permissions, hooks). `.claude/settings.local.json` is gitignored (personal overrides + local-scope MCP).
-- **Skills are consumed from the [`ra-skills`](https://github.com/AI-Riksarkivet/ra-skills) marketplace, not vendored in `.claude/skills/`.** ra-skills is the single source of truth for RA's shared skills (language/toolchain CORE + the `rask-*` project skills); `make claude-bootstrap` adds the marketplace and installs the enabled set. This kills the per-repo copy-drift that used to plague `.claude/skills/`. To change a skill, edit it in ra-skills, not here.
+- **Shared skills come from the [`ra-skills`](https://github.com/AI-Riksarkivet/ra-skills) marketplace** (language/toolchain: writing-python, fastapi, dagger, dockerfile, otel, testing-python, turborepo, zensical-_, …) — not vendored; `make claude-bootstrap` installs them, and you change one by editing it in ra-skills. **rask's own project skills (`rask-architecture`, `rask-services-fleet`, `rask-htr-pipeline`, `rask-orchestrator`) are vendored in `.claude/skills/`** — they describe rask internals and evolve with the code, so edit them in place (the same way ra-hcp keeps its `hcp-_` skills local).
 - See `.claude/README.md` for the full plugin/marketplace/MCP surface and bootstrap steps.

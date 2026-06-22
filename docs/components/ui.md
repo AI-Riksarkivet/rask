@@ -31,7 +31,7 @@ a Ray health badge polled every 5s. The viewer's zoom/pan + ALTO parsing live in
 `$lib/canvas.ts` and `$lib/alto.ts`; there's a lightweight Svelte-5 i18n
 (`$lib/i18n.svelte.ts`, English + Swedish).
 
-## Component library — `packages/component-lib`
+## Component library — `packages/ui`
 
 A standalone Svelte 5 + Bits UI + Tailwind 4 library (package name
 `@rask/ui`), built with `@sveltejs/package` and showcased in **Storybook**
@@ -39,7 +39,7 @@ A standalone Svelte 5 + Bits UI + Tailwind 4 library (package name
 **Card**, **Dialog** (compound) — plus design tokens and a `cn()` helper.
 
 !!! note "Currently standalone"
-    The frontend app does **not** import `component-lib` today — it ships its own
+    The frontend app does **not** import `@rask/ui` today — it ships its own
     local `$lib/components/ui/*` set (a small shadcn-svelte-style collection). The
     library is built and Storybook-showcased, but not yet consumed by the app.
 

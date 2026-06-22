@@ -13,7 +13,8 @@ at each gate; not sloppy.
 - Apps under `components/apps/*`; packages under `packages/*`; **explicit** workspace membership (no globs)
 - SSR via **remote functions**; gateway sits _behind_ the SvelteKit server (`RASK_GATEWAY_URL`)
 - **`kit.paths.base`** per MFE app (NOT raw vite `base`)
-- Internal package scope: `@rask/*` (@rask/ui renamed to `@rask/ui` (was the placeholder `@your-repo/@rask/ui`))
+- Internal package scope: `@rask/*`. The shared UI lib is **`@rask/ui`** at **`packages/ui/`**
+  (renamed from the placeholder package `@your-repo/oxen` + folder `component-lib`).
 
 ## Phases
 
@@ -101,13 +102,18 @@ at each gate; not sloppy.
       bg-warning/rounded-full → the `@source` directive works across the workspace.
 - [x] **sort-header** promoted to @rask/ui (`@rask/ui/sort-header`) — 5 sites swapped, local deleted;
       added `lucide-svelte` as an @rask/ui dep.
-- [x] **Tailwind @source**: `components/apps/frontend/src/app.css` scans `packages/component-lib/dist`
+- [x] **Tailwind @source**: `components/apps/frontend/src/app.css` scans `packages/ui/dist`
       (Tailwind 4 ignores node_modules by default — without this, @rask/ui classes render unstyled).
 - [x] catalog-hit-card already deleted (dead). @rask/ui exports now: badge/button/card/dialog/sort-header/utils.
-- [ ] DEFERRED button/card dedupe: @rask/ui has simpler button (sm/md/lg/icon); frontend's (shadcn "nova")
-      has icon-xs/icon-sm used by ray-shell. Needs API reconciliation (promote the richer one) before
-      switching — risky, do deliberately, not rushed.
-- [ ] DEFERRED: promote the whole sidebar into @rask/ui during the MFE split (every app needs it).
+- [x] **button dedupe DONE**: promoted the richer shadcn "nova" button into @rask/ui (replaced the stub);
+      redirected the monolith's button imports to `@rask/ui/button`, deleted the local copy. Added
+      `@lucide/svelte` dep. Button story sizes updated (default/xs/sm/lg/icon/icon-\*).
+- [x] **SHARED SHELL DONE**: moved the whole shadcn ui-set (sidebar/sheet/tooltip/skeleton/input/separator
+      + is-mobile hook) + `nav-config` + a pure `AppSidebar` (pathname prop, plain `<a>` links — no `$app/*`)
+      + an `AppShell` wrapper into `@rask/ui` (`@rask/ui/shell`, `@rask/ui/sidebar`). BOTH apps' `+layout`
+      use `<AppShell pathname={page.url.pathname}>`; monolith locals deleted (58 files). **Verified: the same
+      grouped sidebar renders in BOTH apps under SSR (1 sidebar root, all 4 groups) — zero drift.**
+- [ ] residual minor dedupe: monolith still has local `card` + `progress` (also in @rask/ui) — follow-up.
 
 ### Phase 8 — the physical 4-app MFE split (REMAINING — large, do deliberately)
 

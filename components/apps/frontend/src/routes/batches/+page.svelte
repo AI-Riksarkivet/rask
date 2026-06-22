@@ -16,7 +16,7 @@
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Badge, type BadgeVariant } from '@rask/ui/badge';
-	import { Button } from '$lib/components/ui/button';
+	import { Button } from '@rask/ui/button';
 	import { RefreshCw, Send } from 'lucide-svelte';
 
 	let payload = $state<BatchesPayload | null>(null);

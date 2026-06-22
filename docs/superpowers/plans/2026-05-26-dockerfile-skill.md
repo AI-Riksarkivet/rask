@@ -442,7 +442,7 @@ Patterns for static-asset frontends (SvelteKit adapter-static, Vite, etc.) serve
 [expand bullet: pin by digest; --mount=type=cache,target=/root/.bun/install/cache; `bun install --frozen-lockfile`; `bun run build`. adapter-static output dir is `build/` by default.]
 
 ## Build context is repo root
-[expand bullet: bun workspaces require all workspace member package.json files. Bind-mount root package.json + root bun.lock + each workspace member's package.json (components/apps/frontend/package.json, packages/component-lib/package.json) for the install step. Then COPY components/apps/frontend/ + packages/component-lib/ sources. Build via `bun --cwd components/apps/frontend run build`.]
+[expand bullet: bun workspaces require all workspace member package.json files. Bind-mount root package.json + root bun.lock + each workspace member's package.json (components/apps/frontend/package.json, packages/ui/package.json) for the install step. Then COPY components/apps/frontend/ + packages/ui/ sources. Build via `bun --cwd components/apps/frontend run build`.]
 
 ## Runtime: nginxinc/nginx-unprivileged:1.27-alpine
 [expand bullet: listens on 8080, runs as UID 101, PID file in /tmp. No USER directive needed — image is already rootless.]
@@ -1186,12 +1186,12 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
     --mount=type=bind,source=package.json,target=package.json \
     --mount=type=bind,source=bun.lock,target=bun.lock \
     --mount=type=bind,source=components/apps/frontend/package.json,target=components/apps/frontend/package.json \
-    --mount=type=bind,source=packages/component-lib/package.json,target=packages/component-lib/package.json \
+    --mount=type=bind,source=packages/ui/package.json,target=packages/ui/package.json \
     bun install --frozen-lockfile
 
 # COPY workspace sources, then build the frontend.
 COPY components/apps/frontend components/apps/frontend
-COPY packages/component-lib   packages/component-lib
+COPY packages/ui   packages/ui
 COPY package.json bun.lock    ./
 
 RUN --mount=type=cache,target=/root/.bun/install/cache \

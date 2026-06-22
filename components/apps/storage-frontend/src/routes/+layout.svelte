@@ -1,16 +1,13 @@
 <script lang="ts">
 	import '../app.css';
+	import { page } from '$app/state';
+	import { AppShell } from '@rask/ui/shell';
 	import type { Snippet } from 'svelte';
 	let { children }: { children: Snippet } = $props();
 </script>
 
-<div class="flex h-svh flex-col overflow-hidden">
-	<header class="flex h-12 shrink-0 items-center gap-2 border-b px-4 text-sm">
-		<span class="font-semibold tracking-tight">RASK</span>
-		<span class="text-muted-foreground">/ Storage</span>
-		<span class="text-muted-foreground ml-2 text-xs">microfrontend · base /storage</span>
-	</header>
-	<main class="flex-1 overflow-auto">
-		{@render children()}
-	</main>
-</div>
+<!-- The shared AppShell (one grouped sidebar) from @rask/ui — identical to the
+     monolith's, zero drift. pathname comes from $app/state (the lib can't read it). -->
+<AppShell pathname={page.url.pathname}>
+	{@render children()}
+</AppShell>

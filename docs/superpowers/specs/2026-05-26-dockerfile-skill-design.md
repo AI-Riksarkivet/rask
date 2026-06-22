@@ -108,7 +108,7 @@ Sections, in order:
 
 - Rationale for nginx over FastAPI for static assets (sendfile, immutable headers, ~5 MB RAM).
 - Builder: `oven/bun:1-debian`, cache mount on `/root/.bun/install/cache`, `bun install --frozen-lockfile`, `bun run build`. adapter-static output dir: `build/`.
-- Build context is repo root; `bun install` runs from root (resolves bun workspace deps including `packages/component-lib`); build runs via `bun --cwd components/apps/frontend run build`.
+- Build context is repo root; `bun install` runs from root (resolves bun workspace deps including `packages/ui`); build runs via `bun --cwd components/apps/frontend run build`.
 - Runtime: `nginxinc/nginx-unprivileged:1.27-alpine` — listens on 8080, UID 101, PID file in `/tmp`, no `USER` directive needed.
 - **Read-only rootfs nginx config.** Override `pid /tmp/nginx.pid;`, `client_body_temp_path /tmp/client_body;`, `proxy_temp_path /tmp/proxy;`, `fastcgi_temp_path /tmp/fastcgi;`, `uwsgi_temp_path /tmp/uwsgi;`, `scgi_temp_path /tmp/scgi;` so the image runs under `--read-only --tmpfs /tmp`.
 - SPA nginx config essentials: `try_files $uri $uri.html $uri/index.html /index.html;` fallback; `/_app/immutable/` location with `Cache-Control: public, max-age=31536000, immutable`; root location `no-cache`; gzip on for text MIMEs.
@@ -139,7 +139,7 @@ Each template is a complete, working dockerfile (or config file). All `FROM` ref
 - `ENTRYPOINT ["/usr/bin/tini","--"]`; `CMD ["python","-m","runner"]`.
 
 ### `templates/frontend.dockerfile`
-- Builder: `oven/bun:1-debian@sha256:...`; cache mount on `/root/.bun/install/cache`. To resolve bun workspaces, bind-mount **root `package.json` + root `bun.lock` + every workspace member's `package.json`** (`components/apps/frontend/package.json`, `packages/component-lib/package.json`); run `bun install --frozen-lockfile` from repo root. Then COPY `components/apps/frontend/` + `packages/component-lib/` sources; build via `bun --cwd components/apps/frontend run build`.
+- Builder: `oven/bun:1-debian@sha256:...`; cache mount on `/root/.bun/install/cache`. To resolve bun workspaces, bind-mount **root `package.json` + root `bun.lock` + every workspace member's `package.json`** (`components/apps/frontend/package.json`, `packages/ui/package.json`); run `bun install --frozen-lockfile` from repo root. Then COPY `components/apps/frontend/` + `packages/ui/` sources; build via `bun --cwd components/apps/frontend run build`.
 - Final: `nginxinc/nginx-unprivileged:1.27-alpine@sha256:...`; OCI labels emitted from ARGs; COPY `frontend.nginx.conf` → `/etc/nginx/conf.d/default.conf`; `RUN --network=none` for `COPY --from=builder --link build/ → /usr/share/nginx/html`; `EXPOSE 8080`; `HEALTHCHECK` via wget.
 
 ### `templates/frontend.nginx.conf`

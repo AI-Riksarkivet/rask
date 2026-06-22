@@ -39,7 +39,7 @@ per-page snippets) **and** a 56px left icon-rail (its own sidebar). The new shad
 
 ## Component audit → @rask/ui
 
-**Move to @rask/ui (`packages/component-lib`, net-new):** `layout/sort-header.svelte` (5 routes),
+**Move to @rask/ui (`packages/ui`, net-new):** `layout/sort-header.svelte` (5 routes),
 `ui/badge/*` (11 routes), `ui/progress/*`, `ui/separator/*`, `ui/tooltip/*` (@rask/ui-grade but dead today).
 
 **Dedupe (@rask/ui already exports):** `ui/button/*`, `ui/card/*` → switch frontend imports to

@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { page as pageStore } from '$app/state';
-	import { Button } from '$lib/components/ui/button';
+	import { Button } from '@rask/ui/button';
 	import { Badge } from '@rask/ui/badge';
-	import * as Sidebar from '$lib/components/ui/sidebar';
+	import * as Sidebar from '@rask/ui/sidebar';
 	import { toggleMode } from 'mode-watcher';
 	import { Sun, Moon } from 'lucide-svelte';
 	import { onMount, onDestroy, type Snippet } from 'svelte';
