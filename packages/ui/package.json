@@ -25,6 +25,14 @@
 			"types": "./dist/components/dialog/index.d.ts",
 			"svelte": "./dist/components/dialog/index.js"
 		},
+		"./dropdown-menu": {
+			"types": "./dist/components/dropdown-menu/index.d.ts",
+			"svelte": "./dist/components/dropdown-menu/index.js"
+		},
+		"./avatar": {
+			"types": "./dist/components/avatar/index.d.ts",
+			"svelte": "./dist/components/avatar/index.js"
+		},
 		"./card": {
 			"types": "./dist/components/card/index.d.ts",
 			"svelte": "./dist/components/card/index.js"
