@@ -118,3 +118,13 @@ Batches; pages render through the existing volumes-api.
 - Streaming upload proxy through the gateway (current buffering is acceptable).
 - Presigned/direct-to-MinIO uploads (rejected — would expose MinIO).
 - Folder/zip upload, resumable/chunked uploads, dedup — YAGNI for now.
+
+## Verification (2026-06-22)
+
+Implemented via subagent-driven-development on branch `feat/batches-upload`. End-to-end verified on the running compose stack:
+- `POST /api/batches/uitest/upload` with 2 images → **201**, `page_count=2`, objects written to `images-batch/uitest/`, volume appears in `/api/batches/`.
+- Bad volume id (`bad.id`) → **422** `application/problem+json` (`UnprocessableEntityError`).
+- `/batches/new` renders (drop zone, volume-name field); `/batches` shows the "New volume" button.
+- Backend: 5/5 unit tests (moto) pass; ruff + ty clean. Frontend: `bun run check` 0/0.
+
+Build note: fleet images have no `build:` in docker-compose.yml — build them with `docker buildx -f .docker/<svc>.dockerfile` (the Makefile way), not `docker compose build`. uv reuses a cached workspace wheel when the package version is unchanged, so a `--no-cache` (or version bump) is needed to pick up source-only changes to `core` in the image.
