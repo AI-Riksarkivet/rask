@@ -1,4 +1,4 @@
-.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer dev-micro dev-frontends viewer-frontend frontend-storage frontend-compute frontend-build frontend-check ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve compose-env compose-build compose-up compose-down compose-purge compose-logs
+.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer dev-micro dev-frontends viewer-frontend frontend-storage frontend-compute frontend-build frontend-check ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve compose-env compose-build compose-up compose-down compose-purge compose-logs k3s-install k3s-build k3s-import k3s-up k3s-down k3s-purge
 
 help:
 	@echo "Targets:"
@@ -267,3 +267,12 @@ compose-purge: ## Stop the stack and delete data volumes
 
 compose-logs: ## Tail all service logs
 	$(DC) logs -f --tail=100
+
+# ---- local k3s ------------------------------------------------------------
+KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
+HELM ?= KUBECONFIG=$(KUBECONFIG) helm
+KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
+K3S_IMAGES = $(COMPOSE_IMAGES) frontend ray
+
+k3s-install: ## One-time host setup: k3s + helm + NVIDIA device-plugin + KubeRay operator (sudo)
+	./scripts/k3s-install.sh
