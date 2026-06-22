@@ -3,7 +3,7 @@
 	import { browseCatalog, type CatalogHit, type CatalogTier } from '$lib/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Card } from '$lib/components/ui/card';
-	import { Badge } from '$lib/components/ui/badge';
+	import { Badge } from '@your-repo/oxen/badge';
 	import { Loader2, ExternalLink, Search } from 'lucide-svelte';
 
 	// Single fetch — at the server cap, 2000 covers our current 715 cached

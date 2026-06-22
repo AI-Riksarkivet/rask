@@ -5,12 +5,11 @@
 		type ServePayload,
 		type ServeApplication,
 		type ServeDeployment,
-		type ServeReplica
 	} from '$lib/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
-	import SortHeader from '$lib/components/layout/sort-header.svelte';
+	import { SortHeader } from '@your-repo/oxen/sort-header';
 	import { Card } from '$lib/components/ui/card';
-	import { Badge } from '$lib/components/ui/badge';
+	import { Badge } from '@your-repo/oxen/badge';
 	import {
 		ServerCog,
 		ScanText,
@@ -22,7 +21,7 @@
 		Network,
 		ChevronRight,
 		ExternalLink,
-		TriangleAlert
+		TriangleAlert,
 	} from 'lucide-svelte';
 
 	let payload = $state<ServePayload | null>(null);
@@ -47,7 +46,7 @@
 	});
 
 	const apps = $derived.by<ServeApplication[]>(() =>
-		Object.values(payload?.applications ?? {}).sort((a, b) => a.name.localeCompare(b.name))
+		Object.values(payload?.applications ?? {}).sort((a, b) => a.name.localeCompare(b.name)),
 	);
 	const runningApps = $derived(apps.filter((a) => a.status === 'RUNNING').length);
 	const allDeployments = $derived(apps.flatMap((a) => Object.values(a.deployments ?? {})));
@@ -82,11 +81,42 @@
 	});
 
 	const stats = $derived([
-		{ label: 'Applications', value: runningApps, total: apps.length as number | null, dot: 'bg-emerald-500', sub: 'running / total' },
-		{ label: 'Deployments', value: healthyDeployments, total: allDeployments.length as number | null, dot: 'bg-sky-500', sub: 'healthy / total' },
-		{ label: 'Live replicas', value: liveReplicas, total: null as number | null, dot: 'bg-violet-500', sub: '' },
-		{ label: 'Proxies', value: proxies.filter((p) => p.status === 'HEALTHY').length, total: proxies.length as number | null, dot: 'bg-fuchsia-500', sub: 'healthy / total' },
-		{ label: 'Controller', value: fmtUptime(ctrl?.uptime_s), total: null as number | null, dot: 'bg-amber-500', sub: 'uptime', str: true }
+		{
+			label: 'Applications',
+			value: runningApps,
+			total: apps.length as number | null,
+			dot: 'bg-emerald-500',
+			sub: 'running / total',
+		},
+		{
+			label: 'Deployments',
+			value: healthyDeployments,
+			total: allDeployments.length as number | null,
+			dot: 'bg-sky-500',
+			sub: 'healthy / total',
+		},
+		{
+			label: 'Live replicas',
+			value: liveReplicas,
+			total: null as number | null,
+			dot: 'bg-violet-500',
+			sub: '',
+		},
+		{
+			label: 'Proxies',
+			value: proxies.filter((p) => p.status === 'HEALTHY').length,
+			total: proxies.length as number | null,
+			dot: 'bg-fuchsia-500',
+			sub: 'healthy / total',
+		},
+		{
+			label: 'Controller',
+			value: fmtUptime(ctrl?.uptime_s),
+			total: null as number | null,
+			dot: 'bg-amber-500',
+			sub: 'uptime',
+			str: true,
+		},
 	]);
 
 	// ── helpers ───────────────────────────────────────────────────────────
@@ -123,7 +153,8 @@
 	}
 	function replicaState(s: string): 'success' | 'secondary' | 'destructive' {
 		if (s === 'RUNNING') return 'success';
-		if (['STARTING', 'UPDATING', 'PENDING_ALLOCATION', 'RECOVERING'].includes(s)) return 'secondary';
+		if (['STARTING', 'UPDATING', 'PENDING_ALLOCATION', 'RECOVERING'].includes(s))
+			return 'secondary';
 		return 'destructive';
 	}
 
@@ -150,13 +181,16 @@
 			['num_replicas', c.num_replicas],
 			['max_ongoing_requests', c.max_ongoing_requests],
 			['max_queued_requests', c.max_queued_requests === -1 ? '∞' : c.max_queued_requests],
-			['rolling_update_%', c.rolling_update_percentage != null ? c.rolling_update_percentage * 100 + '%' : undefined],
+			[
+				'rolling_update_%',
+				c.rolling_update_percentage != null ? c.rolling_update_percentage * 100 + '%' : undefined,
+			],
 			['health_check_period_s', c.health_check_period_s],
 			['health_check_timeout_s', c.health_check_timeout_s],
 			['graceful_shutdown_timeout_s', c.graceful_shutdown_timeout_s],
 			['actor num_cpus', o?.num_cpus],
 			['actor num_gpus', o?.num_gpus],
-			['router', c.request_router_config?.request_router_class?.split(':').pop()]
+			['router', c.request_router_config?.request_router_class?.split(':').pop()],
 		]
 			.filter(([, v]) => v !== undefined && v !== null)
 			.map(([k, v]) => ({ k: String(k), v: String(v) }));
@@ -203,20 +237,15 @@
 			<!-- Controller & HTTP -->
 			{#if payload}
 				<Card class="p-4">
-					<div class="text-muted-foreground mb-3 flex items-center gap-1.5 text-[11px] font-medium tracking-wide uppercase">
+					<div
+						class="text-muted-foreground mb-3 flex items-center gap-1.5 text-[11px] font-medium tracking-wide uppercase"
+					>
 						<Gauge class="h-3.5 w-3.5" /> Controller & ingress
 					</div>
-					<div class="grid grid-cols-2 gap-x-6 gap-y-1.5 font-mono text-xs sm:grid-cols-3 lg:grid-cols-4">
-						{#each [
-							{ k: 'controller node', v: payload.controller_info?.node_ip },
-							{ k: 'controller pod', v: pod(payload.controller_info?.node_instance_id) },
-							{ k: 'control loops', v: ctrl?.num_control_loops?.toLocaleString() },
-							{ k: 'loops / s', v: ctrl?.loops_per_second?.toFixed(1) },
-							{ k: 'asyncio tasks', v: ctrl?.num_asyncio_tasks },
-							{ k: 'proxy location', v: payload.proxy_location },
-							{ k: 'http host', v: payload.http_options?.host },
-							{ k: 'target capacity', v: payload.target_capacity ?? 'unset' }
-						] as row (row.k)}
+					<div
+						class="grid grid-cols-2 gap-x-6 gap-y-1.5 font-mono text-xs sm:grid-cols-3 lg:grid-cols-4"
+					>
+						{#each [{ k: 'controller node', v: payload.controller_info?.node_ip }, { k: 'controller pod', v: pod(payload.controller_info?.node_instance_id) }, { k: 'control loops', v: ctrl?.num_control_loops?.toLocaleString() }, { k: 'loops / s', v: ctrl?.loops_per_second?.toFixed(1) }, { k: 'asyncio tasks', v: ctrl?.num_asyncio_tasks }, { k: 'proxy location', v: payload.proxy_location }, { k: 'http host', v: payload.http_options?.host }, { k: 'target capacity', v: payload.target_capacity ?? 'unset' }] as row (row.k)}
 							<div class="flex justify-between gap-2 border-b border-dashed py-0.5">
 								<span class="text-muted-foreground">{row.k}</span>
 								<span class="truncate">{row.v ?? '—'}</span>
@@ -229,17 +258,43 @@
 			<!-- Proxies -->
 			{#if proxies.length}
 				<Card class="overflow-hidden">
-					<div class="text-muted-foreground border-b px-4 py-2 text-[11px] font-medium tracking-wide uppercase">
+					<div
+						class="text-muted-foreground border-b px-4 py-2 text-[11px] font-medium tracking-wide uppercase"
+					>
 						Proxies ({proxies.length})
 					</div>
 					<div class="overflow-auto">
 						<table class="w-full border-collapse text-xs">
 							<thead class="bg-card text-left">
 								<tr class="border-b">
-									<SortHeader label="status" col="status" sortKey={proxySortKey} sortDir={proxySortDir} onsort={setProxySort} />
-									<SortHeader label="node ip" col="node_ip" sortKey={proxySortKey} sortDir={proxySortDir} onsort={setProxySort} />
-									<SortHeader label="pod" col="pod" sortKey={proxySortKey} sortDir={proxySortDir} onsort={setProxySort} />
-									<SortHeader label="log" col="log" sortKey={proxySortKey} sortDir={proxySortDir} onsort={setProxySort} />
+									<SortHeader
+										label="status"
+										col="status"
+										sortKey={proxySortKey}
+										sortDir={proxySortDir}
+										onsort={setProxySort}
+									/>
+									<SortHeader
+										label="node ip"
+										col="node_ip"
+										sortKey={proxySortKey}
+										sortDir={proxySortDir}
+										onsort={setProxySort}
+									/>
+									<SortHeader
+										label="pod"
+										col="pod"
+										sortKey={proxySortKey}
+										sortDir={proxySortDir}
+										onsort={setProxySort}
+									/>
+									<SortHeader
+										label="log"
+										col="log"
+										sortKey={proxySortKey}
+										sortDir={proxySortDir}
+										onsort={setProxySort}
+									/>
 								</tr>
 							</thead>
 							<tbody>
@@ -268,17 +323,28 @@
 				{@const topo = app.deployment_topology}
 				<Card class="overflow-hidden border-l-2 {accent(app.status)}">
 					<div class="flex flex-wrap items-center gap-3 px-4 py-3">
-						<div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg {tile(app.status)}">
+						<div
+							class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg {tile(
+								app.status,
+							)}"
+						>
 							<Icon class="h-5 w-5" />
 						</div>
 						<div class="min-w-0">
 							<div class="flex flex-wrap items-center gap-2">
 								<span class="truncate font-semibold tracking-tight">{app.name}</span>
 								<Badge variant={statusVariant(app.status)}>{app.status}</Badge>
-								{#if app.source}<span class="text-muted-foreground text-[10px] tracking-wide uppercase">{app.source}</span>{/if}
-								{#if app.external_scaler_enabled}<Badge variant="outline" class="text-[10px]">ext-scaler</Badge>{/if}
+								{#if app.source}<span
+										class="text-muted-foreground text-[10px] tracking-wide uppercase"
+										>{app.source}</span
+									>{/if}
+								{#if app.external_scaler_enabled}<Badge variant="outline" class="text-[10px]"
+										>ext-scaler</Badge
+									>{/if}
 							</div>
-							<div class="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-2 font-mono text-xs">
+							<div
+								class="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-2 font-mono text-xs"
+							>
 								{#if app.route_prefix}<span>{app.route_prefix}</span>{/if}
 								{#if app.docs_path}
 									<span class="text-muted-foreground/70 inline-flex items-center gap-0.5">
@@ -291,24 +357,32 @@
 							<Activity class="h-3.5 w-3.5" />
 							{deployments.length} deployment{deployments.length === 1 ? '' : 's'}
 							{#if app.last_deployed_time_s}
-								<span class="text-muted-foreground/60">· deployed {fmtAgo(app.last_deployed_time_s)}</span>
+								<span class="text-muted-foreground/60"
+									>· deployed {fmtAgo(app.last_deployed_time_s)}</span
+								>
 							{/if}
 						</div>
 					</div>
 
 					{#if app.message}
-						<div class="text-muted-foreground border-t px-4 py-1.5 font-mono text-[11px]">{app.message}</div>
+						<div class="text-muted-foreground border-t px-4 py-1.5 font-mono text-[11px]">
+							{app.message}
+						</div>
 					{/if}
 
 					{#if topo && Object.keys(topo.nodes).length > 1}
-						<div class="text-muted-foreground flex flex-wrap items-center gap-1.5 border-t px-4 py-2 text-xs">
+						<div
+							class="text-muted-foreground flex flex-wrap items-center gap-1.5 border-t px-4 py-2 text-xs"
+						>
 							<Network class="h-3.5 w-3.5" />
 							{#each Object.values(topo.nodes) as node (node.name)}
 								<span class="bg-muted rounded px-1.5 py-0.5 font-mono text-[10px]">
 									{node.name}{#if node.is_ingress}<span class="text-primary"> ◂ingress</span>{/if}
 								</span>
 								{#each node.outbound_deployments as edge (edge.name)}
-									<ChevronRight class="h-3 w-3" /><span class="text-muted-foreground/70 font-mono text-[10px]">{edge.name}</span>
+									<ChevronRight class="h-3 w-3" /><span
+										class="text-muted-foreground/70 font-mono text-[10px]">{edge.name}</span
+									>
 								{/each}
 							{/each}
 						</div>
@@ -324,33 +398,48 @@
 							{@const env = d.deployment_config?.ray_actor_options?.runtime_env}
 							{@const dead = d.recent_dead_replicas ?? []}
 							<div class="border-b last:border-b-0">
-								<div class="hover:bg-muted/30 flex flex-wrap items-center gap-x-4 gap-y-1.5 px-4 py-2.5">
+								<div
+									class="hover:bg-muted/30 flex flex-wrap items-center gap-x-4 gap-y-1.5 px-4 py-2.5"
+								>
 									<span class="font-mono text-xs font-medium">{d.name}</span>
 									<Badge variant={statusVariant(d.status)} class="scale-90">{d.status}</Badge>
-									{#if d.status_trigger}<span class="text-muted-foreground/70 text-[10px]">{d.status_trigger}</span>{/if}
+									{#if d.status_trigger}<span class="text-muted-foreground/70 text-[10px]"
+											>{d.status_trigger}</span
+										>{/if}
 
 									<div class="ml-auto flex items-center gap-2">
 										{#if target > 0 && target <= 16}
 											<div class="flex gap-0.5">
 												{#each Array.from({ length: target }) as _, i (i)}
-													<span class="h-3.5 w-1.5 rounded-full {i < live ? 'bg-emerald-500' : 'bg-muted-foreground/20'}"></span>
+													<span
+														class="h-3.5 w-1.5 rounded-full {i < live
+															? 'bg-emerald-500'
+															: 'bg-muted-foreground/20'}"
+													></span>
 												{/each}
 											</div>
 										{/if}
-										<span class="text-muted-foreground font-mono text-xs tabular-nums">{live}/{target}</span>
+										<span class="text-muted-foreground font-mono text-xs tabular-nums"
+											>{live}/{target}</span
+										>
 									</div>
 
 									{#if resources.length}
 										<div class="flex w-full flex-wrap gap-1 sm:w-auto">
 											{#each resources as [k, v] (k)}
-												<span class="rounded-md px-1.5 py-0.5 text-[10px] font-medium {resourceChip(k)}">{v}× {k}</span>
+												<span
+													class="rounded-md px-1.5 py-0.5 text-[10px] font-medium {resourceChip(k)}"
+													>{v}× {k}</span
+												>
 											{/each}
 										</div>
 									{/if}
 								</div>
 
 								{#if d.message}
-									<div class="text-muted-foreground px-4 pb-1.5 font-mono text-[11px]">{d.message}</div>
+									<div class="text-muted-foreground px-4 pb-1.5 font-mono text-[11px]">
+										{d.message}
+									</div>
 								{/if}
 
 								{#if dead.length}
@@ -364,8 +453,11 @@
 								<!-- Replicas -->
 								{#if live}
 									<details class="group">
-										<summary class="text-muted-foreground hover:bg-muted/40 flex cursor-pointer list-none items-center gap-1 px-4 py-1.5 text-[11px]">
-											<ChevronRight class="h-3 w-3 transition-transform group-open:rotate-90" /> Replicas ({live})
+										<summary
+											class="text-muted-foreground hover:bg-muted/40 flex cursor-pointer list-none items-center gap-1 px-4 py-1.5 text-[11px]"
+										>
+											<ChevronRight class="h-3 w-3 transition-transform group-open:rotate-90" /> Replicas
+											({live})
 										</summary>
 										<div class="overflow-auto px-2 pb-2">
 											<table class="w-full border-collapse text-[11px]">
@@ -380,12 +472,22 @@
 													{#each d.replicas as r (r.replica_id)}
 														<tr class="border-border/30 border-t">
 															<td class="px-2 py-1 font-mono">{r.replica_id}</td>
-															<td class="px-2 py-1"><Badge variant={replicaState(r.state)} class="scale-90">{r.state}</Badge></td>
+															<td class="px-2 py-1"
+																><Badge variant={replicaState(r.state)} class="scale-90"
+																	>{r.state}</Badge
+																></td
+															>
 															<td class="px-2 py-1 font-mono">{r.node_ip ?? '—'}</td>
 															<td class="px-2 py-1 font-mono">{pod(r.node_instance_id)}</td>
 															<td class="px-2 py-1 font-mono tabular-nums">{r.pid ?? '—'}</td>
-															<td class="px-2 py-1 font-mono tabular-nums">{fmtUptime(r.start_time_s ? Date.now() / 1000 - r.start_time_s : undefined)}</td>
-															<td class="text-muted-foreground px-2 py-1 font-mono text-[10px]">{r.log_file_path ?? '—'}</td>
+															<td class="px-2 py-1 font-mono tabular-nums"
+																>{fmtUptime(
+																	r.start_time_s ? Date.now() / 1000 - r.start_time_s : undefined,
+																)}</td
+															>
+															<td class="text-muted-foreground px-2 py-1 font-mono text-[10px]"
+																>{r.log_file_path ?? '—'}</td
+															>
 														</tr>
 													{/each}
 												</tbody>
@@ -397,11 +499,15 @@
 								<!-- Config -->
 								{#if cfg.length || env}
 									<details class="group">
-										<summary class="text-muted-foreground hover:bg-muted/40 flex cursor-pointer list-none items-center gap-1 px-4 py-1.5 text-[11px]">
+										<summary
+											class="text-muted-foreground hover:bg-muted/40 flex cursor-pointer list-none items-center gap-1 px-4 py-1.5 text-[11px]"
+										>
 											<ChevronRight class="h-3 w-3 transition-transform group-open:rotate-90" /> Config
 										</summary>
 										<div class="space-y-2 px-4 pb-3 pt-1">
-											<div class="grid grid-cols-2 gap-x-6 gap-y-1 font-mono text-[11px] sm:grid-cols-3">
+											<div
+												class="grid grid-cols-2 gap-x-6 gap-y-1 font-mono text-[11px] sm:grid-cols-3"
+											>
 												{#each cfg as row (row.k)}
 													<div class="flex justify-between gap-2 border-b border-dashed py-0.5">
 														<span class="text-muted-foreground">{row.k}</span><span>{row.v}</span>
@@ -412,20 +518,25 @@
 												<div class="flex flex-wrap items-center gap-1">
 													<span class="text-muted-foreground text-[10px] uppercase">deps</span>
 													{#each [...(env.uv ?? []), ...(env.pip ?? [])] as p (p)}
-														<span class="bg-muted rounded px-1.5 py-0.5 font-mono text-[10px]">{p}</span>
+														<span class="bg-muted rounded px-1.5 py-0.5 font-mono text-[10px]"
+															>{p}</span
+														>
 													{/each}
 												</div>
 											{/if}
 											{#if env?.working_dir}
 												<div class="font-mono text-[10px]">
-													<span class="text-muted-foreground uppercase">working_dir</span> {env.working_dir}
+													<span class="text-muted-foreground uppercase">working_dir</span>
+													{env.working_dir}
 												</div>
 											{/if}
 											{#if env?.env_vars && Object.keys(env.env_vars).length}
 												<div class="flex flex-wrap items-center gap-1 font-mono text-[10px]">
 													<span class="text-muted-foreground uppercase">env</span>
 													{#each Object.keys(env.env_vars) as k (k)}
-														<span class="bg-muted rounded px-1.5 py-0.5">{k}=<span class="text-muted-foreground">••••••</span></span>
+														<span class="bg-muted rounded px-1.5 py-0.5"
+															>{k}=<span class="text-muted-foreground">••••••</span></span
+														>
 													{/each}
 												</div>
 											{/if}

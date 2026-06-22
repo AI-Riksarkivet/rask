@@ -2,8 +2,14 @@ import type { PageEntry } from './types';
 
 /** API client for the ra-viewer backend. Same-origin in production; proxied via vite in dev. */
 
-export async function listPages(volume: string): Promise<PageEntry[]> {
-	const res = await fetch(`/api/volumes/${encodeURIComponent(volume)}/pages`);
+export async function listPages(
+	volume: string,
+	fetchFn: typeof fetch = fetch,
+): Promise<PageEntry[]> {
+	// `fetchFn` lets SSR `load` functions pass SvelteKit's provided `fetch`, which
+	// resolves the relative `/api/...` URL against the request origin (a bare global
+	// fetch has no origin on the server). Client callers use the default global fetch.
+	const res = await fetchFn(`/api/volumes/${encodeURIComponent(volume)}/pages`);
 	if (!res.ok) throw new Error(`listPages(${volume}): HTTP ${res.status}`);
 	return res.json();
 }
@@ -277,7 +283,7 @@ export async function rayLogFiles(nodeId: string): Promise<LogsPayload> {
 export async function rayLogContent(
 	nodeId: string,
 	filename: string,
-	lines = 500
+	lines = 500,
 ): Promise<LogsPayload> {
 	const qs = new URLSearchParams({ node_id: nodeId, filename, lines: String(lines) });
 	const res = await fetch(`/api/ray/logs?${qs}`);

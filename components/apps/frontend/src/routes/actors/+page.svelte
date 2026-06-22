@@ -2,9 +2,9 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { actorsList, rayCluster, type ActorInfo, type RayNode } from '$lib/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
-	import SortHeader from '$lib/components/layout/sort-header.svelte';
+	import { SortHeader } from '@your-repo/oxen/sort-header';
 	import { Card } from '$lib/components/ui/card';
-	import { Badge } from '$lib/components/ui/badge';
+	import { Badge } from '@your-repo/oxen/badge';
 	import {
 		Boxes,
 		ServerCog,
@@ -14,7 +14,7 @@
 		Cpu,
 		TriangleAlert,
 		ChevronRight,
-		FileText
+		FileText,
 	} from 'lucide-svelte';
 
 	let actors = $state<ActorInfo[]>([]);
@@ -73,11 +73,41 @@
 	const namespaces = $derived(new Set(actors.map((a) => a.ray_namespace).filter(Boolean)));
 
 	const stats = $derived([
-		{ label: 'Actors', value: aliveCount, total: actors.length as number | null, dot: 'bg-emerald-500', sub: 'alive / total' },
-		{ label: 'Dead', value: deadCount, total: null as number | null, dot: 'bg-destructive', sub: '' },
-		{ label: 'Restarts', value: totalRestarts, total: null as number | null, dot: 'bg-amber-500', sub: '' },
-		{ label: 'Classes', value: classes.size, total: null as number | null, dot: 'bg-sky-500', sub: '' },
-		{ label: 'Namespaces', value: namespaces.size, total: null as number | null, dot: 'bg-violet-500', sub: '' }
+		{
+			label: 'Actors',
+			value: aliveCount,
+			total: actors.length as number | null,
+			dot: 'bg-emerald-500',
+			sub: 'alive / total',
+		},
+		{
+			label: 'Dead',
+			value: deadCount,
+			total: null as number | null,
+			dot: 'bg-destructive',
+			sub: '',
+		},
+		{
+			label: 'Restarts',
+			value: totalRestarts,
+			total: null as number | null,
+			dot: 'bg-amber-500',
+			sub: '',
+		},
+		{
+			label: 'Classes',
+			value: classes.size,
+			total: null as number | null,
+			dot: 'bg-sky-500',
+			sub: '',
+		},
+		{
+			label: 'Namespaces',
+			value: namespaces.size,
+			total: null as number | null,
+			dot: 'bg-violet-500',
+			sub: '',
+		},
 	]);
 
 	// Filtered set, base-ordered by class so the sort below has a stable tiebreak.
@@ -86,10 +116,11 @@
 			.filter((a) => stateFilter === 'all' || a.state.toLowerCase() === stateFilter)
 			.filter((a) => {
 				if (!q) return true;
-				const hay = `${a.class_name} ${a.name ?? ''} ${a.repr_name ?? ''} ${a.ray_namespace ?? ''}`.toLowerCase();
+				const hay =
+					`${a.class_name} ${a.name ?? ''} ${a.repr_name ?? ''} ${a.ray_namespace ?? ''}`.toLowerCase();
 				return hay.includes(q.toLowerCase());
 			})
-			.sort((a, b) => a.class_name.localeCompare(b.class_name))
+			.sort((a, b) => a.class_name.localeCompare(b.class_name)),
 	);
 
 	function actorVal(a: ActorInfo, key: string): string | number | null {
@@ -204,9 +235,13 @@
 				{#each stats as s (s.label)}
 					<Card class="relative overflow-hidden p-4">
 						<div class="absolute inset-x-0 top-0 h-0.5 {s.dot}"></div>
-						<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">{s.label}</div>
+						<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
+							{s.label}
+						</div>
 						<div class="mt-1 font-mono text-2xl tabular-nums">
-							{s.value}{#if s.total !== null}<span class="text-muted-foreground text-base">/{s.total}</span>{/if}
+							{s.value}{#if s.total !== null}<span class="text-muted-foreground text-base"
+									>/{s.total}</span
+								>{/if}
 						</div>
 						{#if s.sub}<div class="text-muted-foreground text-xs">{s.sub}</div>{/if}
 					</Card>
@@ -242,11 +277,23 @@
 						<thead class="bg-card sticky top-0 z-10 text-left">
 							<tr class="border-b">
 								<SortHeader label="state" col="state" {sortKey} {sortDir} onsort={setSort} />
-								<SortHeader label="namespace" col="namespace" {sortKey} {sortDir} onsort={setSort} />
+								<SortHeader
+									label="namespace"
+									col="namespace"
+									{sortKey}
+									{sortDir}
+									onsort={setSort}
+								/>
 								<SortHeader label="node" col="node" {sortKey} {sortDir} onsort={setSort} />
 								<SortHeader label="uptime" col="uptime" {sortKey} {sortDir} onsort={setSort} />
 								<SortHeader label="cpu" col="cpu" {sortKey} {sortDir} onsort={setSort} />
-								<SortHeader label="tasks (run·pend)" col="tasks" {sortKey} {sortDir} onsort={setSort} />
+								<SortHeader
+									label="tasks (run·pend)"
+									col="tasks"
+									{sortKey}
+									{sortDir}
+									onsort={setSort}
+								/>
 								<SortHeader label="gpu" col="gpu" {sortKey} {sortDir} onsort={setSort} />
 								<SortHeader label="actor" col="actor" {sortKey} {sortDir} onsort={setSort} />
 								<th class="px-3 py-2"></th>
@@ -259,10 +306,15 @@
 								{@const run = a.num_running_tasks ?? 0}
 								{@const pend = a.num_pending_tasks ?? 0}
 								<tr
-									class="border-border/40 hover:bg-muted/40 cursor-pointer border-b {a.state === 'DEAD' ? 'opacity-70' : ''}"
+									class="border-border/40 hover:bg-muted/40 cursor-pointer border-b {a.state ===
+									'DEAD'
+										? 'opacity-70'
+										: ''}"
 									onclick={() => toggle(a.actor_id ?? '')}
 								>
-									<td class="px-3 py-1.5"><Badge variant={stateVariant(a.state)}>{a.state}</Badge></td>
+									<td class="px-3 py-1.5"
+										><Badge variant={stateVariant(a.state)}>{a.state}</Badge></td
+									>
 									<td class="px-3 py-1.5 font-mono">{a.ray_namespace ?? '—'}</td>
 									<td class="px-3 py-1.5 font-mono">{nodeLabel(a)}</td>
 									<td class="px-3 py-1.5 font-mono tabular-nums">{fmtUptime(actorAge(a))}</td>
@@ -270,7 +322,10 @@
 										{#if a.cpu_percent != null}
 											<div class="flex items-center gap-1.5">
 												<div class="bg-muted h-1.5 w-10 shrink-0 overflow-hidden rounded-full">
-													<div class="h-full bg-sky-500" style:width={`${Math.min(100, a.cpu_percent)}%`}></div>
+													<div
+														class="h-full bg-sky-500"
+														style:width={`${Math.min(100, a.cpu_percent)}%`}
+													></div>
 												</div>
 												<span>{a.cpu_percent.toFixed(0)}%</span>
 											</div>
@@ -286,28 +341,43 @@
 									<td class="px-3 py-1.5 font-mono tabular-nums">
 										{#if a.gpu_mem_mb != null || a.gpu_util != null}
 											{a.gpu_util != null ? `${a.gpu_util.toFixed(0)}%` : ''}
-											{#if a.gpu_mem_mb}<span class="text-violet-600 dark:text-violet-400">· {a.gpu_mem_mb} MB</span>{/if}
+											{#if a.gpu_mem_mb}<span class="text-violet-600 dark:text-violet-400"
+													>· {a.gpu_mem_mb} MB</span
+												>{/if}
 										{:else}<span class="text-muted-foreground">—</span>{/if}
 									</td>
 									<td class="px-3 py-1.5">
 										<div class="flex items-center gap-2">
-											<div class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md {tile(a.state)}">
+											<div
+												class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md {tile(
+													a.state,
+												)}"
+											>
 												<Icon class="h-3.5 w-3.5" />
 											</div>
 											<div>
 												<div class="font-mono" title={a.actor_id ?? ''}>{a.class_name}</div>
 												{#if a.death_reason}
-													<div class="text-destructive flex items-start gap-0.5 font-mono text-[10px]" title={a.death_reason}>
+													<div
+														class="text-destructive flex items-start gap-0.5 font-mono text-[10px]"
+														title={a.death_reason}
+													>
 														<TriangleAlert class="mt-0.5 h-3 w-3 shrink-0" />{a.death_reason}
 													</div>
 												{:else if a.repr_name}
-													<div class="text-muted-foreground font-mono text-[10px]">{a.repr_name}</div>
+													<div class="text-muted-foreground font-mono text-[10px]">
+														{a.repr_name}
+													</div>
 												{/if}
 											</div>
 										</div>
 									</td>
 									<td class="px-3 py-1.5">
-										<ChevronRight class="text-muted-foreground h-3.5 w-3.5 transition-transform {open ? 'rotate-90' : ''}" />
+										<ChevronRight
+											class="text-muted-foreground h-3.5 w-3.5 transition-transform {open
+												? 'rotate-90'
+												: ''}"
+										/>
 									</td>
 								</tr>
 								{#if open}
@@ -321,21 +391,10 @@
 													<FileText class="h-3 w-3" /> view logs
 												</a>
 											{/if}
-											<div class="grid grid-cols-2 gap-x-6 gap-y-1 font-mono text-[11px] sm:grid-cols-3 lg:grid-cols-4">
-												{#each [
-													{ k: 'actor_id', v: a.actor_id },
-													{ k: 'pid', v: a.pid },
-													{ k: 'worker_id', v: a.worker_id },
-													{ k: 'ip', v: a.ip_address },
-													{ k: 'job_id', v: a.job_id },
-													{ k: 'restarts', v: a.num_restarts },
-													{ k: 'detached', v: String(a.is_detached) },
-													{ k: 'placement_group', v: a.placement_group_id ?? '—' },
-													{ k: 'rss mem', v: fmtBytes(a.rss_bytes) },
-													{ k: 'open fds', v: a.num_fds ?? '—' },
-													{ k: 'tasks executed', v: a.num_executed_tasks ?? '—' },
-													{ k: 'task queue', v: a.task_queue_length ?? '—' }
-												] as row (row.k)}
+											<div
+												class="grid grid-cols-2 gap-x-6 gap-y-1 font-mono text-[11px] sm:grid-cols-3 lg:grid-cols-4"
+											>
+												{#each [{ k: 'actor_id', v: a.actor_id }, { k: 'pid', v: a.pid }, { k: 'worker_id', v: a.worker_id }, { k: 'ip', v: a.ip_address }, { k: 'job_id', v: a.job_id }, { k: 'restarts', v: a.num_restarts }, { k: 'detached', v: String(a.is_detached) }, { k: 'placement_group', v: a.placement_group_id ?? '—' }, { k: 'rss mem', v: fmtBytes(a.rss_bytes) }, { k: 'open fds', v: a.num_fds ?? '—' }, { k: 'tasks executed', v: a.num_executed_tasks ?? '—' }, { k: 'task queue', v: a.task_queue_length ?? '—' }] as row (row.k)}
 													<div class="flex justify-between gap-2 border-b border-dashed py-0.5">
 														<span class="text-muted-foreground">{row.k}</span>
 														<span class="truncate" title={String(row.v ?? '')}>{row.v ?? '—'}</span>
@@ -346,7 +405,11 @@
 												<div class="mt-2 flex flex-wrap items-center gap-1">
 													<span class="text-muted-foreground text-[10px] uppercase">reserves</span>
 													{#each Object.entries(a.required_resources).filter(([, v]) => v) as [k, v] (k)}
-														<span class="rounded-md px-1.5 py-0.5 text-[10px] font-medium {resourceChip(k)}">{v}× {k}</span>
+														<span
+															class="rounded-md px-1.5 py-0.5 text-[10px] font-medium {resourceChip(
+																k,
+															)}">{v}× {k}</span
+														>
 													{/each}
 												</div>
 											{/if}

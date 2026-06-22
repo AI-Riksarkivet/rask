@@ -12,7 +12,7 @@
 	} from '$lib/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Card } from '$lib/components/ui/card';
-	import { Badge } from '$lib/components/ui/badge';
+	import { Badge } from '@your-repo/oxen/badge';
 	import { Search, Loader2, Copy, Check, ExternalLink } from 'lucide-svelte';
 
 	type Scope = 'lines' | 'catalog';
@@ -383,7 +383,7 @@
 							<div class="flex items-center gap-3">
 								<div class="min-w-0 flex-1">
 									<div class="truncate font-mono text-base">
-										{#each splitForHighlight(h.text, highlightedQuery) as seg}
+										{#each splitForHighlight(h.text, highlightedQuery) as seg, i (i)}
 											{#if seg.match}
 												<mark class="text-foreground rounded bg-amber-300/70 px-0.5"
 													>{seg.text}</mark
@@ -445,7 +445,7 @@
 						<div class="flex items-start gap-3">
 							<div class="min-w-0 flex-1">
 								<div class="flex flex-wrap items-center gap-2 text-base font-medium">
-									{#each splitForHighlight(h.fonds_title || '(untitled fonds)', highlightedQuery) as seg}
+									{#each splitForHighlight(h.fonds_title || '(untitled fonds)', highlightedQuery) as seg, i (i)}
 										{#if seg.match}<mark class="text-foreground rounded bg-amber-300/70 px-0.5"
 												>{seg.text}</mark
 											>{:else}{seg.text}{/if}
@@ -453,7 +453,7 @@
 									{#if h.series_title}
 										<span class="text-muted-foreground">›</span>
 										<span>
-											{#each splitForHighlight(h.series_title, highlightedQuery) as seg}
+											{#each splitForHighlight(h.series_title, highlightedQuery) as seg, i (i)}
 												{#if seg.match}<mark class="text-foreground rounded bg-amber-300/70 px-0.5"
 														>{seg.text}</mark
 													>{:else}{seg.text}{/if}
@@ -463,7 +463,7 @@
 									{#if h.volume_title}
 										<span class="text-muted-foreground">›</span>
 										<span class="font-mono text-sm">
-											{#each splitForHighlight(h.volume_title, highlightedQuery) as seg}
+											{#each splitForHighlight(h.volume_title, highlightedQuery) as seg, i (i)}
 												{#if seg.match}<mark class="text-foreground rounded bg-amber-300/70 px-0.5"
 														>{seg.text}</mark
 													>{:else}{seg.text}{/if}
@@ -473,7 +473,7 @@
 								</div>
 								{#if h.description}
 									<div class="text-muted-foreground mt-1 line-clamp-2 text-sm">
-										{#each splitForHighlight(h.description, highlightedQuery) as seg}
+										{#each splitForHighlight(h.description, highlightedQuery) as seg, i (i)}
 											{#if seg.match}<mark class="text-foreground rounded bg-amber-300/70 px-0.5"
 													>{seg.text}</mark
 												>{:else}{seg.text}{/if}

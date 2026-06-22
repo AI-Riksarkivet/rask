@@ -1,14 +1,17 @@
 {
 	"extends": "./.svelte-kit/tsconfig.json",
 	"compilerOptions": {
-		"target": "ES2022",
-		"useDefineForClassFields": true,
-		"module": "ESNext",
-		"moduleResolution": "bundler",
+		"rewriteRelativeImportExtensions": true,
 		"allowJs": true,
 		"checkJs": true,
-		"noEmit": true,
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"resolveJsonModule": true,
+		"skipLibCheck": true,
+		"sourceMap": true,
 		"strict": true,
-		"skipLibCheck": true
+		"moduleResolution": "bundler"
 	}
+	// Path aliases are handled by SvelteKit (svelte.config.js `kit.alias`),
+	// except $lib which is `kit.files.lib`. Don't add `paths` here.
 }

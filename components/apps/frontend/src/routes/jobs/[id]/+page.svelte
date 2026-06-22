@@ -10,12 +10,12 @@
 		type RayJob,
 		type TaskInfo,
 		type RayNode,
-		type BatchRow
+		type BatchRow,
 	} from '$lib/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Card } from '$lib/components/ui/card';
-	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
-	import SortHeader from '$lib/components/layout/sort-header.svelte';
+	import { Badge, type BadgeVariant } from '@your-repo/oxen/badge';
+	import { SortHeader } from '@your-repo/oxen/sort-header';
 	import { ArrowLeft, TriangleAlert, FileText, ChevronRight, RefreshCw } from 'lucide-svelte';
 
 	const id = $derived(decodeURIComponent(page.params.id ?? ''));
@@ -154,7 +154,8 @@
 		return 'secondary';
 	}
 	const typeLabel = (t: string | null) =>
-		(t ?? '').replace('ACTOR_CREATION_TASK', 'actor-init').replace('_TASK', '').toLowerCase() || '—';
+		(t ?? '').replace('ACTOR_CREATION_TASK', 'actor-init').replace('_TASK', '').toLowerCase() ||
+		'—';
 	const short = (s: string | null | undefined) =>
 		(s ?? '').replace(/^kuberay-ai-dev-cluster-/, '') || '';
 	function nodeLabel(nid: string | null): string {
@@ -224,7 +225,10 @@
 
 <RayShell title="Job">
 	<div class="flex flex-col gap-4 p-6 text-sm">
-		<a href="/jobs" class="text-muted-foreground hover:text-foreground inline-flex w-fit items-center gap-1 text-xs">
+		<a
+			href="/jobs"
+			class="text-muted-foreground hover:text-foreground inline-flex w-fit items-center gap-1 text-xs"
+		>
 			<ArrowLeft class="h-3.5 w-3.5" /> all jobs
 		</a>
 
@@ -240,44 +244,61 @@
 
 		{#if job}
 			<!-- Header -->
-			<Card class="overflow-hidden border-l-2 {job.status === 'FAILED' ? 'border-l-destructive' : job.status === 'SUCCEEDED' ? 'border-l-emerald-500' : 'border-l-amber-500'}">
+			<Card
+				class="overflow-hidden border-l-2 {job.status === 'FAILED'
+					? 'border-l-destructive'
+					: job.status === 'SUCCEEDED'
+						? 'border-l-emerald-500'
+						: 'border-l-amber-500'}"
+			>
 				<div class="flex flex-wrap items-center gap-3 px-4 py-3">
-					<Badge variant={jobVariant(job.status)} class={running ? 'animate-pulse' : ''}>{job.status}</Badge>
+					<Badge variant={jobVariant(job.status)} class={running ? 'animate-pulse' : ''}
+						>{job.status}</Badge
+					>
 					<span class="font-mono font-semibold">{job.submission_id}</span>
 					<span class="text-muted-foreground ml-auto text-xs">
 						{#if job.start_time}started {fmtAgo(job.start_time)} ·{/if}
-						runtime {fmtDur(job.start_time ? ((job.end_time ?? Date.now()) - job.start_time) / 1000 : null)}
+						runtime {fmtDur(
+							job.start_time ? ((job.end_time ?? Date.now()) - job.start_time) / 1000 : null,
+						)}
 					</span>
 				</div>
 
 				{#if job.error_type || job.message}
-					<div class="border-destructive/30 bg-destructive/5 text-destructive mx-4 mb-3 flex items-start gap-1.5 rounded-md border p-2 font-mono text-[11px]">
+					<div
+						class="border-destructive/30 bg-destructive/5 text-destructive mx-4 mb-3 flex items-start gap-1.5 rounded-md border p-2 font-mono text-[11px]"
+					>
 						<TriangleAlert class="mt-0.5 h-3.5 w-3.5 shrink-0" />
-						<span class="break-words">{#if job.error_type}<span class="font-semibold">{job.error_type}: </span>{/if}{job.message}</span>
+						<span class="break-words"
+							>{#if job.error_type}<span class="font-semibold"
+									>{job.error_type}:
+								</span>{/if}{job.message}</span
+						>
 					</div>
 				{/if}
 
-				<div class="grid grid-cols-2 gap-x-6 gap-y-1.5 border-t px-4 py-3 font-mono text-[11px] sm:grid-cols-3 lg:grid-cols-6">
-					{#each [
-						{ k: 'job_id', v: job.job_id },
-						{ k: 'started', v: fmtTime(job.start_time) },
-						{ k: 'ended', v: fmtTime(job.end_time) },
-						{ k: 'batches', v: job.batches.length },
-						{ k: 'chunk', v: job.metadata?.chunk_id != null ? `${job.metadata.chunk_id}/${job.metadata.chunk_total ?? '?'}` : '—' },
-						{ k: 'driver_exit', v: job.driver_exit_code ?? '—' }
-					] as row (row.k)}
+				<div
+					class="grid grid-cols-2 gap-x-6 gap-y-1.5 border-t px-4 py-3 font-mono text-[11px] sm:grid-cols-3 lg:grid-cols-6"
+				>
+					{#each [{ k: 'job_id', v: job.job_id }, { k: 'started', v: fmtTime(job.start_time) }, { k: 'ended', v: fmtTime(job.end_time) }, { k: 'batches', v: job.batches.length }, { k: 'chunk', v: job.metadata?.chunk_id != null ? `${job.metadata.chunk_id}/${job.metadata.chunk_total ?? '?'}` : '—' }, { k: 'driver_exit', v: job.driver_exit_code ?? '—' }] as row (row.k)}
 						<div class="flex justify-between gap-2 border-b border-dashed py-0.5">
-							<span class="text-muted-foreground">{row.k}</span><span class="truncate" title={String(row.v ?? '')}>{row.v ?? '—'}</span>
+							<span class="text-muted-foreground">{row.k}</span><span
+								class="truncate"
+								title={String(row.v ?? '')}>{row.v ?? '—'}</span
+							>
 						</div>
 					{/each}
 				</div>
 
 				{#if job.entrypoint}
 					<details class="group border-t">
-						<summary class="text-muted-foreground hover:bg-muted/40 flex cursor-pointer list-none items-center gap-1 px-4 py-1.5 text-[11px]">
+						<summary
+							class="text-muted-foreground hover:bg-muted/40 flex cursor-pointer list-none items-center gap-1 px-4 py-1.5 text-[11px]"
+						>
 							<ChevronRight class="h-3 w-3 transition-transform group-open:rotate-90" /> entrypoint
 						</summary>
-						<pre class="bg-muted/50 mx-4 mb-3 overflow-auto rounded-md p-2 font-mono text-[10px] whitespace-pre-wrap">{job.entrypoint}</pre>
+						<pre
+							class="bg-muted/50 mx-4 mb-3 overflow-auto rounded-md p-2 font-mono text-[10px] whitespace-pre-wrap">{job.entrypoint}</pre>
 					</details>
 				{/if}
 			</Card>
@@ -286,11 +307,20 @@
 			{#if jobBatches.length}
 				<Card class="overflow-hidden">
 					<div class="flex items-center gap-3 border-b px-4 py-2">
-						<span class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">Progress</span>
+						<span class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase"
+							>Progress</span
+						>
 						<div class="bg-muted h-1.5 w-44 overflow-hidden rounded-full">
-							<div class="h-full bg-emerald-500 transition-all" style:width={`${progress.pct}%`}></div>
+							<div
+								class="h-full bg-emerald-500 transition-all"
+								style:width={`${progress.pct}%`}
+							></div>
 						</div>
-						<span class="font-mono text-xs tabular-nums">{progress.done.toLocaleString()}/{progress.total.toLocaleString()} pages ({progress.pct.toFixed(1)}%)</span>
+						<span class="font-mono text-xs tabular-nums"
+							>{progress.done.toLocaleString()}/{progress.total.toLocaleString()} pages ({progress.pct.toFixed(
+								1,
+							)}%)</span
+						>
 					</div>
 					<div class="grid gap-x-6 px-4 py-2 sm:grid-cols-2 lg:grid-cols-3">
 						{#each jobBatches as b (b.batch_id)}
@@ -301,7 +331,9 @@
 								<div class="bg-muted h-1.5 min-w-0 flex-1 overflow-hidden rounded-full">
 									<div class="h-full bg-emerald-500 transition-all" style:width={`${pct}%`}></div>
 								</div>
-								<span class="text-muted-foreground w-24 shrink-0 text-right font-mono text-[10px] tabular-nums">
+								<span
+									class="text-muted-foreground w-24 shrink-0 text-right font-mono text-[10px] tabular-nums"
+								>
 									{b.transcribed_pages ?? 0}/{b.page_count ?? 0}
 								</span>
 							</div>
@@ -313,9 +345,13 @@
 			<!-- Driver logs -->
 			<Card class="overflow-hidden">
 				<div class="flex items-center gap-2 border-b px-4 py-2">
-					<span class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">Driver logs</span>
+					<span class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase"
+						>Driver logs</span
+					>
 					{#if running}
-						<span class="flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">
+						<span
+							class="flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400"
+						>
 							<span class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500"></span>live
 						</span>
 					{/if}
@@ -327,12 +363,20 @@
 						<RefreshCw class="h-3 w-3 {logsLoading ? 'animate-spin' : ''}" /> refresh
 					</button>
 				</div>
-				<div bind:this={logPre} onscroll={onLogScroll} class="max-h-[40vh] overflow-auto py-1 font-mono text-[11px] leading-relaxed">
+				<div
+					bind:this={logPre}
+					onscroll={onLogScroll}
+					class="max-h-[40vh] overflow-auto py-1 font-mono text-[11px] leading-relaxed"
+				>
 					{#each logLines as l, i (i)}
-						<div class="hover:bg-muted/40 px-3 whitespace-pre-wrap {logLineClass(l)}">{l || ' '}</div>
+						<div class="hover:bg-muted/40 px-3 whitespace-pre-wrap {logLineClass(l)}">
+							{l || ' '}
+						</div>
 					{/each}
 					{#if !logLines.length}
-						<div class="text-muted-foreground p-3">{logsLoading ? 'loading…' : '(no driver logs)'}</div>
+						<div class="text-muted-foreground p-3">
+							{logsLoading ? 'loading…' : '(no driver logs)'}
+						</div>
 					{/if}
 				</div>
 			</Card>
@@ -340,7 +384,9 @@
 			<!-- Tasks (runner-pipeline jobs) -->
 			{#if jobTasks.length}
 				<Card class="overflow-hidden">
-					<div class="text-muted-foreground border-b px-4 py-2 text-[11px] font-medium tracking-wide uppercase">
+					<div
+						class="text-muted-foreground border-b px-4 py-2 text-[11px] font-medium tracking-wide uppercase"
+					>
 						Tasks ({jobTasks.length})
 					</div>
 					<div class="max-h-[50vh] overflow-auto">
@@ -353,25 +399,43 @@
 									<SortHeader label="node" col="node" {sortKey} {sortDir} onsort={setSort} />
 									<SortHeader label="pid" col="pid" {sortKey} {sortDir} onsort={setSort} />
 									<SortHeader label="started" col="started" {sortKey} {sortDir} onsort={setSort} />
-									<SortHeader label="duration" col="duration" {sortKey} {sortDir} onsort={setSort} />
+									<SortHeader
+										label="duration"
+										col="duration"
+										{sortKey}
+										{sortDir}
+										onsort={setSort}
+									/>
 								</tr>
 							</thead>
 							<tbody>
 								{#each sortedTasks as t (t.task_id)}
 									<tr class="border-border/40 hover:bg-muted/40 border-b">
-										<td class="px-3 py-1.5"><Badge variant={taskStateVariant(t.state)} class={t.state === 'RUNNING' ? 'animate-pulse' : ''}>{t.state}</Badge></td>
+										<td class="px-3 py-1.5"
+											><Badge
+												variant={taskStateVariant(t.state)}
+												class={t.state === 'RUNNING' ? 'animate-pulse' : ''}>{t.state}</Badge
+											></td
+										>
 										<td class="text-muted-foreground px-3 py-1.5 font-mono">{typeLabel(t.type)}</td>
 										<td class="px-3 py-1.5">
 											<div class="font-mono">{t.func_or_class_name ?? t.name ?? '—'}</div>
 											{#if t.error_message}
-												<div class="text-destructive flex items-start gap-0.5 font-mono text-[10px]" title={t.error_message}>
-													<TriangleAlert class="mt-0.5 h-3 w-3 shrink-0" />{t.error_type ? `${t.error_type}: ` : ''}{t.error_message}
+												<div
+													class="text-destructive flex items-start gap-0.5 font-mono text-[10px]"
+													title={t.error_message}
+												>
+													<TriangleAlert class="mt-0.5 h-3 w-3 shrink-0" />{t.error_type
+														? `${t.error_type}: `
+														: ''}{t.error_message}
 												</div>
 											{/if}
 										</td>
 										<td class="px-3 py-1.5 font-mono">{nodeLabel(t.node_id)}</td>
 										<td class="px-3 py-1.5 font-mono tabular-nums">{t.worker_pid ?? '—'}</td>
-										<td class="text-muted-foreground px-3 py-1.5 font-mono tabular-nums">{fmtAgo(taskStart(t))}</td>
+										<td class="text-muted-foreground px-3 py-1.5 font-mono tabular-nums"
+											>{fmtAgo(taskStart(t))}</td
+										>
 										<td class="px-3 py-1.5 font-mono tabular-nums">{fmtDur(taskDuration(t))}</td>
 									</tr>
 								{/each}
@@ -382,7 +446,8 @@
 			{:else}
 				<div class="text-muted-foreground flex items-center gap-2 text-xs">
 					<FileText class="h-4 w-4" />
-					No Ray tasks for this job — htr_http jobs run as a plain HTTP driver; the work happens in the Serve replicas (Actors page).
+					No Ray tasks for this job — htr_http jobs run as a plain HTTP driver; the work happens in the
+					Serve replicas (Actors page).
 				</div>
 			{/if}
 		{/if}

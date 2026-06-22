@@ -8,7 +8,7 @@
 		sortKey,
 		sortDir,
 		onsort,
-		class: className = ''
+		class: className = '',
 	}: {
 		label: string;
 		col: string;
@@ -23,7 +23,9 @@
 
 <th class="text-muted-foreground px-3 py-2 font-medium {className}">
 	<button
-		class="hover:text-foreground inline-flex items-center gap-1 transition-colors {active ? 'text-foreground' : ''}"
+		class="hover:text-foreground inline-flex items-center gap-1 transition-colors {active
+			? 'text-foreground'
+			: ''}"
 		onclick={() => onsort(col)}
 	>
 		{label}

@@ -15,7 +15,7 @@
 	} from '$lib/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Card } from '$lib/components/ui/card';
-	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
+	import { Badge, type BadgeVariant } from '@your-repo/oxen/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { RefreshCw, Send } from 'lucide-svelte';
 
@@ -388,7 +388,9 @@
 								>
 									{j.status}
 								</Badge>
-								<span class="text-foreground font-mono">{(j.submission_id ?? '—').slice(0, 24)}</span>
+								<span class="text-foreground font-mono"
+									>{(j.submission_id ?? '—').slice(0, 24)}</span
+								>
 								<span class="text-muted-foreground">{fmtRuntime(j.start_time, j.end_time)}</span>
 								{#if j.batches.length}
 									<span class="text-muted-foreground truncate">

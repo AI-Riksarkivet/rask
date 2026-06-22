@@ -15,7 +15,7 @@
 		TextWrap,
 		Hash,
 		ListFilter,
-		X
+		X,
 	} from 'lucide-svelte';
 
 	let nodes = $state<RayNode[]>([]);
@@ -130,7 +130,7 @@
 
 	const allLines = $derived(content ? content.split('\n') : []);
 	const matchCount = $derived(
-		query ? allLines.filter((l) => l.toLowerCase().includes(query.toLowerCase())).length : 0
+		query ? allLines.filter((l) => l.toLowerCase().includes(query.toLowerCase())).length : 0,
 	);
 	const view = $derived.by(() => {
 		let ls = allLines.map((t, i) => ({ n: i + 1, t }));
@@ -187,12 +187,20 @@
 	<div class="flex h-full flex-col gap-3 p-4 text-sm">
 		<!-- toolbar -->
 		<div class="flex flex-wrap items-center gap-2">
-			<select class="border-input bg-background h-7 rounded-md border px-2 text-xs" bind:value={nodeId} onchange={loadFiles}>
+			<select
+				class="border-input bg-background h-7 rounded-md border px-2 text-xs"
+				bind:value={nodeId}
+				onchange={loadFiles}
+			>
 				{#each nodes as n (n.node_id)}
 					<option value={n.node_id}>{nodeName(n)}{n.is_head ? ' (head)' : ''}</option>
 				{/each}
 			</select>
-			<select class="border-input bg-background h-7 rounded-md border px-2 text-xs" bind:value={lines} onchange={loadContent}>
+			<select
+				class="border-input bg-background h-7 rounded-md border px-2 text-xs"
+				bind:value={lines}
+				onchange={loadContent}
+			>
 				{#each [200, 500, 2000, 10000] as n (n)}<option value={n}>{n} lines</option>{/each}
 			</select>
 
@@ -205,28 +213,41 @@
 			>
 				{#if follow}<Pause class="h-3 w-3" />following{:else}<Play class="h-3 w-3" />follow{/if}
 			</button>
-			<button class="hover:bg-muted inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs disabled:opacity-50" onclick={loadContent} disabled={!selected || loading}>
+			<button
+				class="hover:bg-muted inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs disabled:opacity-50"
+				onclick={loadContent}
+				disabled={!selected || loading}
+			>
 				<RefreshCw class="h-3 w-3 {loading ? 'animate-spin' : ''}" />
 			</button>
 
 			<!-- search within content -->
 			<div class="relative">
-				<Search class="text-muted-foreground pointer-events-none absolute top-1/2 left-2 h-3 w-3 -translate-y-1/2" />
+				<Search
+					class="text-muted-foreground pointer-events-none absolute top-1/2 left-2 h-3 w-3 -translate-y-1/2"
+				/>
 				<input
 					class="border-input bg-background focus-visible:ring-ring h-7 w-52 rounded-md border pr-6 pl-7 text-xs focus-visible:ring-1 focus-visible:outline-none"
 					placeholder="search in log…"
 					bind:value={query}
 				/>
 				{#if query}
-					<button class="text-muted-foreground hover:text-foreground absolute top-1/2 right-1.5 -translate-y-1/2" onclick={() => (query = '')}>
+					<button
+						class="text-muted-foreground hover:text-foreground absolute top-1/2 right-1.5 -translate-y-1/2"
+						onclick={() => (query = '')}
+					>
 						<X class="h-3 w-3" />
 					</button>
 				{/if}
 			</div>
 			{#if query}
-				<span class="text-muted-foreground text-xs tabular-nums">{matchCount} match{matchCount === 1 ? '' : 'es'}</span>
+				<span class="text-muted-foreground text-xs tabular-nums"
+					>{matchCount} match{matchCount === 1 ? '' : 'es'}</span
+				>
 				<button
-					class="inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs transition-colors {onlyMatches ? 'border-primary bg-primary/10 text-primary' : 'hover:bg-muted'}"
+					class="inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs transition-colors {onlyMatches
+						? 'border-primary bg-primary/10 text-primary'
+						: 'hover:bg-muted'}"
 					title="show only matching lines"
 					onclick={() => (onlyMatches = !onlyMatches)}
 				>
@@ -235,16 +256,38 @@
 			{/if}
 
 			<div class="ml-auto flex items-center gap-1">
-				<button class="inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs transition-colors {wrap ? 'border-primary bg-primary/10 text-primary' : 'hover:bg-muted'}" title="wrap lines" onclick={() => (wrap = !wrap)}>
+				<button
+					class="inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs transition-colors {wrap
+						? 'border-primary bg-primary/10 text-primary'
+						: 'hover:bg-muted'}"
+					title="wrap lines"
+					onclick={() => (wrap = !wrap)}
+				>
 					<TextWrap class="h-3 w-3" />
 				</button>
-				<button class="inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs transition-colors {lineNumbers ? 'border-primary bg-primary/10 text-primary' : 'hover:bg-muted'}" title="line numbers" onclick={() => (lineNumbers = !lineNumbers)}>
+				<button
+					class="inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs transition-colors {lineNumbers
+						? 'border-primary bg-primary/10 text-primary'
+						: 'hover:bg-muted'}"
+					title="line numbers"
+					onclick={() => (lineNumbers = !lineNumbers)}
+				>
 					<Hash class="h-3 w-3" />
 				</button>
-				<button class="hover:bg-muted inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs disabled:opacity-50" title="copy" onclick={copy} disabled={!content}>
+				<button
+					class="hover:bg-muted inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs disabled:opacity-50"
+					title="copy"
+					onclick={copy}
+					disabled={!content}
+				>
 					<Copy class="h-3 w-3" />
 				</button>
-				<button class="hover:bg-muted inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs disabled:opacity-50" title="download" onclick={download} disabled={!content}>
+				<button
+					class="hover:bg-muted inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs disabled:opacity-50"
+					title="download"
+					onclick={download}
+					disabled={!content}
+				>
 					<Download class="h-3 w-3" />
 				</button>
 			</div>
@@ -266,12 +309,17 @@
 				</div>
 				<div class="flex-1 overflow-auto">
 					{#each filteredFiles as [cat, list] (cat)}
-						<div class="text-muted-foreground bg-muted/40 sticky top-0 flex justify-between px-3 py-1 text-[10px] font-medium tracking-wide uppercase">
+						<div
+							class="text-muted-foreground bg-muted/40 sticky top-0 flex justify-between px-3 py-1 text-[10px] font-medium tracking-wide uppercase"
+						>
 							<span>{cat}</span><span>{list.length}</span>
 						</div>
 						{#each list as f (f)}
 							<button
-								class="hover:bg-muted/60 block w-full truncate px-3 py-1 text-left font-mono text-[11px] {selected === f ? 'bg-primary/10 text-primary' : ''}"
+								class="hover:bg-muted/60 block w-full truncate px-3 py-1 text-left font-mono text-[11px] {selected ===
+								f
+									? 'bg-primary/10 text-primary'
+									: ''}"
 								title={f}
 								onclick={() => openFile(f)}
 							>
@@ -288,10 +336,17 @@
 			<!-- content -->
 			<Card class="flex min-w-0 flex-1 flex-col overflow-hidden p-0">
 				{#if selected}
-					<div class="text-muted-foreground flex shrink-0 items-center gap-2 border-b px-3 py-1.5 font-mono text-[11px]">
+					<div
+						class="text-muted-foreground flex shrink-0 items-center gap-2 border-b px-3 py-1.5 font-mono text-[11px]"
+					>
 						<span class="truncate">{selected}</span>
-						<span class="ml-auto tabular-nums">{view.length}{onlyMatches && query ? `/${allLines.length}` : ''} lines</span>
-						{#if follow}<span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400"><span class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500"></span>live</span>{/if}
+						<span class="ml-auto tabular-nums"
+							>{view.length}{onlyMatches && query ? `/${allLines.length}` : ''} lines</span
+						>
+						{#if follow}<span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400"
+								><span class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500"
+								></span>live</span
+							>{/if}
 					</div>
 				{/if}
 				{#if !selected}
@@ -299,16 +354,29 @@
 						<FileText class="h-5 w-5" /> Select a log file.
 					</div>
 				{:else}
-					<div bind:this={pre} onscroll={onScroll} class="min-h-0 flex-1 overflow-auto py-1 font-mono text-[11px] leading-relaxed {wrap ? '' : 'whitespace-nowrap'}">
+					<div
+						bind:this={pre}
+						onscroll={onScroll}
+						class="min-h-0 flex-1 overflow-auto py-1 font-mono text-[11px] leading-relaxed {wrap
+							? ''
+							: 'whitespace-nowrap'}"
+					>
 						{#each view as l (l.n)}
 							<div class="hover:bg-muted/40 flex gap-2 px-2 {levelClass(l.t)}">
-								{#if lineNumbers}<span class="text-muted-foreground/40 shrink-0 text-right select-none" style="width:4ch">{l.n}</span>{/if}
+								{#if lineNumbers}<span
+										class="text-muted-foreground/40 shrink-0 text-right select-none"
+										style="width:4ch">{l.n}</span
+									>{/if}
 								<span class="{wrap ? 'break-all whitespace-pre-wrap' : ''} min-w-0">
-									{#if query}{#each segs(l.t) as seg (seg.k)}{#if seg.hit}<mark class="text-foreground bg-amber-300/60 dark:bg-amber-500/40">{seg.s}</mark>{:else}{seg.s}{/if}{/each}{:else}{l.t || ' '}{/if}
+									{#if query}{#each segs(l.t) as seg (seg.k)}{#if seg.hit}<mark
+													class="text-foreground bg-amber-300/60 dark:bg-amber-500/40">{seg.s}</mark
+												>{:else}{seg.s}{/if}{/each}{:else}{l.t || ' '}{/if}
 								</span>
 							</div>
 						{/each}
-						{#if !view.length}<div class="text-muted-foreground p-3">{loading ? 'loading…' : '(empty)'}</div>{/if}
+						{#if !view.length}<div class="text-muted-foreground p-3">
+								{loading ? 'loading…' : '(empty)'}
+							</div>{/if}
 					</div>
 				{/if}
 			</Card>

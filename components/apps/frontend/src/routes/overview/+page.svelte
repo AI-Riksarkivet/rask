@@ -12,7 +12,7 @@
 		type RayJobsPayload,
 		type ActorInfo,
 		type TaskInfo,
-		type ServePayload
+		type ServePayload,
 	} from '$lib/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Card } from '$lib/components/ui/card';
@@ -25,7 +25,7 @@
 		ListChecks,
 		Info,
 		TriangleAlert,
-		CircleAlert
+		CircleAlert,
 	} from 'lucide-svelte';
 
 	let ov = $state<OverviewPayload | null>(null);
@@ -44,7 +44,7 @@
 			rayJobs(),
 			actorsList(),
 			tasksList(),
-			serveApplications()
+			serveApplications(),
 		]);
 		if (o.status === 'fulfilled') ov = o.value;
 		if (c.status === 'fulfilled') cluster = c.value;
@@ -73,7 +73,7 @@
 			icon: Server,
 			value: cluster?.alive_count ?? 0,
 			total: cluster?.node_count ?? null,
-			dot: 'bg-emerald-500'
+			dot: 'bg-emerald-500',
 		},
 		{
 			href: '/cluster',
@@ -81,7 +81,7 @@
 			icon: Cpu,
 			value: Math.round(cluster?.used_resources?.GPU ?? 0),
 			total: Math.round(cluster?.total_resources?.GPU ?? 0) || null,
-			dot: 'bg-violet-500'
+			dot: 'bg-violet-500',
 		},
 		{
 			href: '/jobs',
@@ -89,7 +89,7 @@
 			icon: ListTree,
 			value: jobList.filter((j) => j.status === 'RUNNING').length,
 			total: jobList.length || null,
-			dot: 'bg-sky-500'
+			dot: 'bg-sky-500',
 		},
 		{
 			href: '/jobs',
@@ -97,7 +97,7 @@
 			icon: ListChecks,
 			value: taskRows.filter((t) => t.state === 'RUNNING').length,
 			total: taskRows.length || null,
-			dot: 'bg-amber-500'
+			dot: 'bg-amber-500',
 		},
 		{
 			href: '/actors',
@@ -105,7 +105,7 @@
 			icon: Boxes,
 			value: actors.filter((a) => a.state === 'ALIVE').length,
 			total: actors.length || null,
-			dot: 'bg-fuchsia-500'
+			dot: 'bg-fuchsia-500',
 		},
 		{
 			href: '/serve',
@@ -113,8 +113,8 @@
 			icon: ServerCog,
 			value: serveApps.filter((a) => a.status === 'RUNNING').length,
 			total: serveApps.length || null,
-			dot: 'bg-teal-500'
-		}
+			dot: 'bg-teal-500',
+		},
 	]);
 
 	function sevVariant(s: string) {
@@ -140,11 +140,15 @@
 				<a href={c.href} class="block">
 					<Card class="hover:border-primary/50 relative overflow-hidden p-4 transition-colors">
 						<div class="absolute inset-x-0 top-0 h-0.5 {c.dot}"></div>
-						<div class="text-muted-foreground flex items-center gap-1.5 text-[11px] font-medium tracking-wide uppercase">
+						<div
+							class="text-muted-foreground flex items-center gap-1.5 text-[11px] font-medium tracking-wide uppercase"
+						>
 							<c.icon class="h-3.5 w-3.5" />{c.label}
 						</div>
 						<div class="mt-1 font-mono text-2xl tabular-nums">
-							{c.value}{#if c.total !== null}<span class="text-muted-foreground text-base">/{c.total}</span>{/if}
+							{c.value}{#if c.total !== null}<span class="text-muted-foreground text-base"
+									>/{c.total}</span
+								>{/if}
 						</div>
 					</Card>
 				</a>
@@ -153,7 +157,9 @@
 
 		<!-- Events -->
 		<Card class="overflow-hidden">
-			<div class="text-muted-foreground flex items-center justify-between border-b px-4 py-2 text-[11px] font-medium tracking-wide uppercase">
+			<div
+				class="text-muted-foreground flex items-center justify-between border-b px-4 py-2 text-[11px] font-medium tracking-wide uppercase"
+			>
 				<span>Cluster events</span>
 				{#if ov?.ray_version}
 					<span class="normal-case">
@@ -184,7 +190,12 @@
 
 		{#if ov?.dashboard_url}
 			<div class="text-muted-foreground text-xs">
-				dashboard: <a class="text-primary hover:underline" href={ov.dashboard_url} target="_blank" rel="noopener">{ov.dashboard_url} ↗</a>
+				dashboard: <a
+					class="text-primary hover:underline"
+					href={ov.dashboard_url}
+					target="_blank"
+					rel="noopener">{ov.dashboard_url} ↗</a
+				>
 			</div>
 		{/if}
 	</div>

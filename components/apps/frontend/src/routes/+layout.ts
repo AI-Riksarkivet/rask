@@ -1,4 +1,5 @@
-// Pure SPA: no SSR, no prerendering of dynamic routes.
-// adapter-static with `fallback: 'index.html'` lets the SPA handle all routes client-side.
-export const ssr = false;
+// SSR is ON (the default) — the app is served by svelte-adapter-bun behind the
+// gateway. Data still loads client-side in onMount; the server renders the shell.
+// Prerendering stays off because routes are dynamic (viewer/[volume]/[page], etc.).
+export const ssr = true;
 export const prerender = false;

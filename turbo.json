@@ -1,0 +1,18 @@
+{
+	"$schema": "https://turborepo.dev/schema.json",
+	"ui": "tui",
+	"tasks": {
+		"build": {
+			"dependsOn": ["^build"],
+			"inputs": ["$TURBO_DEFAULT$", ".env*"],
+			"outputs": ["build/**", ".svelte-kit/**", "dist/**"]
+		},
+		"check": {
+			"dependsOn": ["^build"]
+		},
+		"dev": {
+			"cache": false,
+			"persistent": true
+		}
+	}
+}

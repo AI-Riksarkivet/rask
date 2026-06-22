@@ -2,11 +2,15 @@
 	"name": "rask",
 	"private": true,
 	"license": "AGPL-3.0-only",
+	"packageManager": "bun@1.3.13",
 	"workspaces": [
 		"components/apps/frontend",
 		"packages/component-lib"
 	],
 	"scripts": {
+		"build": "turbo run build",
+		"check": "turbo run check",
+		"dev": "turbo run dev",
 		"dev:ui": "bun --cwd packages/component-lib run dev",
 		"dev:frontend": "bun --cwd components/apps/frontend run dev",
 		"storybook": "bun --cwd packages/component-lib run storybook",
@@ -16,18 +20,19 @@
 		"format": "prettier --write '{components/apps/frontend,packages/component-lib}/**/*.{ts,js,svelte,css,html,json,md}' '*.{json,md}' --ignore-path .gitignore"
 	},
 	"devDependencies": {
-		"@eslint/compat": "^2",
-		"@eslint/js": "^9",
-		"eslint": "^9",
-		"eslint-config-prettier": "^10",
-		"eslint-plugin-svelte": "^3",
-		"globals": "^17",
-		"prettier": "^3",
-		"prettier-plugin-svelte": "^3",
-		"prettier-plugin-tailwindcss": "^0.7",
-		"svelte-check": "^4",
-		"typescript": "~5.9",
-		"typescript-eslint": "^8"
+		"@eslint/compat": "^2.1.0",
+		"@eslint/js": "^10.0.1",
+		"eslint": "^10.5.0",
+		"eslint-config-prettier": "^10.1.8",
+		"eslint-plugin-svelte": "^3.19.0",
+		"globals": "^17.6.0",
+		"prettier": "^3.8.4",
+		"prettier-plugin-svelte": "^4.1.1",
+		"prettier-plugin-tailwindcss": "^0.8.0",
+		"svelte-check": "^4.6.0",
+		"turbo": "2.9.18",
+		"typescript": "^6.0.3",
+		"typescript-eslint": "^8.61.1"
 	},
 	"prettier": {
 		"useTabs": true,

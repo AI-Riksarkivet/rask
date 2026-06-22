@@ -4,7 +4,7 @@
 	import { page as pageStore } from '$app/state';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { Badge } from '$lib/components/ui/badge';
+	import { Badge } from '@your-repo/oxen/badge';
 	import {
 		ChevronLeft,
 		ChevronRight,
@@ -347,7 +347,7 @@
 	}
 </script>
 
-<svelte:window on:keydown={onKey} />
+<svelte:window onkeydown={onKey} />
 
 <RayShell title={volume} flush>
 	{#snippet center()}
