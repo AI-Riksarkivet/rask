@@ -43,11 +43,15 @@ helm upgrade --install kuberay-operator kuberay/kuberay-operator \
   --namespace kuberay-operator --create-namespace --wait
 
 echo ">> waiting for GPU to be advertised on the node..."
+gpu_ok=0
 for i in $(seq 1 30); do
   if sudo k3s kubectl get nodes -o jsonpath='{.items[0].status.allocatable.nvidia\.com/gpu}' | grep -q '[1-9]'; then
-    echo "GPU advertised."; break
+    echo "GPU advertised."; gpu_ok=1; break
   fi
   echo "  ...not yet ($i)"; sleep 5
 done
+if [ "$gpu_ok" -eq 0 ]; then
+  echo "WARN: nvidia.com/gpu not advertised after ~150s — check the device-plugin pod and nvidia-container-toolkit before 'make k3s-up'." >&2
+fi
 
 echo "k3s-install done. Export KUBECONFIG=$KUBECONFIG_PATH for kubectl/helm."

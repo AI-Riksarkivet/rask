@@ -135,6 +135,7 @@ minio:
 
 ray:
   enabled: true
+  rayVersion: "2.55.1"
   image:
     repository: ray
     tag: "dev"

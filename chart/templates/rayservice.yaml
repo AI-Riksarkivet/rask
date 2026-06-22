@@ -18,7 +18,7 @@ spec:
             RASK_SERVE_GPU_FRAC: "{{ .Values.config.RASK_SERVE_GPU_FRAC }}"
             HF_HUB_DISABLE_IMPLICIT_TOKEN: "0"
   rayClusterConfig:
-    rayVersion: "2.9.0"
+    rayVersion: {{ .Values.ray.rayVersion | quote }}
     headGroupSpec:
       rayStartParams:
         dashboard-host: "0.0.0.0"

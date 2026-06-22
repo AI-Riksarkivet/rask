@@ -44,7 +44,7 @@ make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
 ## Production install
 
 ```bash
-helm install rask chart/ \
+helm upgrade --install rask chart/ \
   --set existingSecret=rask-app \
   --set config.RAY_DASHBOARD_URL=http://<ray-head>:8265 \
   --set ingress.host=rask.example.org \
