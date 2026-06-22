@@ -167,3 +167,12 @@ focused move (one PR), each set verified with `@source` (see [[reference-rask-ui
 - 2026-06-22 **LOCKED IN (user choice "finish what's green")**: Phases 1–6 + docs complete & verified —
   turbo check 3/3, build 2/2, lint 0, SSR 12/12 routes, 0 errors. Phase 8 (4-app split) + OpenAPI codegen
   DEFERRED to a deliberate later effort (scoped above). Nothing left half-built; monolith fully works.
+- 2026-06-22 MFE split STARTED + pushed to main: `@rask/ui` rename (was placeholder `@your-repo/oxen`);
+  first microfrontend `components/apps/storage-frontend` (svelte-adapter-bun, kit.paths.base /storage,
+  shares @rask/ui). Repo cleanup (stray .venv removed, projects/viewer deleted, .gitignore hardened).
+- 2026-06-22 Both frontends now DEPLOYABLE as Bun-server images (verified in Docker — non-root, tini PID 1):
+  NEW `.docker/storage-frontend.dockerfile` (/storage → 200 in-container) + FIXED `.docker/frontend.dockerfile`
+  (was nginx-static — BROKEN by the SSR migration — now a Bun server; /batches → 200, sidebar renders).
+  Gotchas encoded: adapter externalizes @sveltejs/kit (ship node_modules); bun-1.3 isolated linker
+  (preserve .bun store + symlinked node_modules, run from app dir). Images ~850MB — slimming deferred.
+  REMAINING: microfrontends.json + turbo dev proxy; the other 3 domain apps; sidebar→@rask/ui; gateway routing.
