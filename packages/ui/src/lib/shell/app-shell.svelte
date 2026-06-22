@@ -12,14 +12,12 @@
 	// app's $app/state; `base` is its kit.paths.base (for breadcrumb stripping).
 	let {
 		pathname = '',
-		base = '',
-		project,
-		user,
+		project = { name: 'Default', subtitle: 'Project' },
+		user = { name: 'rask', email: 'local', initials: 'RA' },
 		status,
 		children,
 	}: {
 		pathname?: string;
-		base?: string;
 		project?: Project;
 		user?: NavUser;
 		/** App-specific status snippet rendered in the footer profile dropdown (e.g. Ray health). */
@@ -27,9 +25,10 @@
 		children: Snippet;
 	} = $props();
 
-	// Breadcrumb trail from the path (the app's base stripped, dashes → spaces).
+	// Breadcrumb trail from the FULL path (incl. the base segment, e.g. /compute) so
+	// pressing "Compute" reads "Compute › Overview", not just "Overview".
 	const crumbs = $derived(
-		(base && pathname.startsWith(base) ? pathname.slice(base.length) : pathname)
+		pathname
 			.split('/')
 			.filter(Boolean)
 			.map((s) => s.replace(/-/g, ' ')),
@@ -48,7 +47,7 @@
 				<Sidebar.Trigger class="text-muted-foreground hover:text-foreground -ml-1" />
 				<Separator orientation="vertical" class="mr-2 data-[orientation=vertical]:h-4" />
 				<nav aria-label="Breadcrumb" class="flex min-w-0 items-center gap-1.5 text-sm">
-					<span class="text-muted-foreground shrink-0">{project?.name ?? 'rask'}</span>
+					<span class="text-muted-foreground shrink-0">{project.name}</span>
 					{#each crumbs as crumb (crumb)}
 						<ChevronRight class="text-muted-foreground/40 size-3.5 shrink-0" />
 						<span class="text-foreground truncate font-medium capitalize">{crumb}</span>

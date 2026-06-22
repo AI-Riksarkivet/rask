@@ -1,7 +1,6 @@
 <script lang="ts">
 	import '../app.css';
 	import { browser } from '$app/environment';
-	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
@@ -23,6 +22,6 @@
 <!-- Shared shell from @rask/ui — identical chrome across every microfrontend.
      `base` (=/compute) strips the breadcrumb prefix; `status` renders Ray health
      in the footer profile dropdown. -->
-<AppShell pathname={page.url.pathname} {base} {status}>
+<AppShell pathname={page.url.pathname} {status}>
 	{@render children()}
 </AppShell>

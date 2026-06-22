@@ -1,7 +1,6 @@
 <script lang="ts">
 	import '../app.css';
 	import { browser } from '$app/environment';
-	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
@@ -20,6 +19,6 @@
      The transitional catch-all omits the footer Ray-status snippet: its large type
      graph trips a Bun svelte dual-copy Snippet-brand check that the dedicated compute
      app (same code) does not. Runtime is unaffected; this app is slated for retirement. -->
-<AppShell pathname={page.url.pathname} {base}>
+<AppShell pathname={page.url.pathname}>
 	{@render children()}
 </AppShell>

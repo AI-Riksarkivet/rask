@@ -20,7 +20,9 @@
 				<Collapsible.Root open={item.match(pathname)} class="group/collapsible">
 					{#snippet child({ props: rootProps })}
 						<Sidebar.MenuItem {...rootProps}>
-							<Sidebar.MenuButton tooltipContent={item.title} isActive={item.match(pathname)}>
+							<!-- Accordion parent: NOT highlighted (only the active leaf is); the open
+							     accordion + chevron convey the current domain. Links to its landing. -->
+							<Sidebar.MenuButton tooltipContent={item.title}>
 								{#snippet child({ props })}
 									<a href={item.href} {...props}>
 										<item.icon />
