@@ -18,7 +18,8 @@
     "svelte-skills@svelte-skills-kit": true,
     "redis-development@claude-plugins-official": true,
     "hf-cli@huggingface-skills": true,
-    "huggingface-trackio@huggingface-skills": true
+    "huggingface-trackio@huggingface-skills": true,
+    "shadcn-svelte@ra-skills": true
   },
   "extraKnownMarketplaces": {
     "ra-skills": {
