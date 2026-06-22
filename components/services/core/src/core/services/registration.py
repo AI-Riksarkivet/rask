@@ -33,8 +33,8 @@ async def register_volume(session: AsyncSession, client: S3Client, *, input_buck
 
     batch = await session.get(Batch, volume_id)
     if batch is None:
-        next_chunk: int = (await session.exec(select(func.coalesce(func.max(Batch.chunk_id), 0)))).one()  # type: ignore[assignment, invalid-assignment]
-        batch = Batch(batch_id=volume_id, chunk_id=int(next_chunk) + 1, chunk_total=1, htr_status=HtrStatus.CACHED)
+        max_chunk = (await session.exec(select(func.coalesce(func.max(Batch.chunk_id), 0)))).one() or 0
+        batch = Batch(batch_id=volume_id, chunk_id=max_chunk + 1, chunk_total=1, htr_status=HtrStatus.CACHED)
     batch.page_count = page_count
     batch.cached_pages = page_count
     batch.manifest_status = ManifestStatus.OK
