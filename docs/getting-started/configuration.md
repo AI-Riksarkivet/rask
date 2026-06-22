@@ -15,7 +15,7 @@ point at MinIO instead.
 | `HCP_ENDPOINT` | S3 endpoint URL (e.g. `https://dev-ai.hcp.ra-dev.int`). |
 | `HCP_USERNAME` / `HCP_PASSWORD` | Credentials; the `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` pair is **derived** from these. |
 | `HCP_INSECURE` | Skip TLS verification (HCP serves a self-signed cert). |
-| `AWS_DEFAULT_REGION` | S3 region (default `us-east-1`). |
+| `AWS_REGION` | S3 region (default `us-east-1`). |
 
 !!! warning "Self-signed certificates"
     HCP presents a self-signed certificate. boto3 honours `HCP_INSECURE` with

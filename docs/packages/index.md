@@ -5,9 +5,12 @@ blocks imported by the runnable components.
 
 | Package | Language | Imported by | Docs |
 |---|---|---|---|
-| `htr` | Python | runner, viewer (schemas) | [HTR](htr.md) · [API reference](../reference/htr.md) |
-| `storage` | Python | runner, viewer, scripts | [Storage](storage.md) · [API reference](../reference/storage.md) |
-| `component-lib` | TS / Svelte | (standalone; Storybook) | [UI Components](../components/ui.md) |
+| `htr` | Python | runner, scripts | [HTR](htr.md) · [API reference](../reference/htr.md) |
+| `storage` | Python | runner, core, search-api, scripts | [Storage](storage.md) · [API reference](../reference/storage.md) |
+| `service-kit` | Python | core, core-api, orchestrator, search-api, volumes-api, ray-api | — |
+| `ray-kit` | Python | ray-api, core | — |
+| `ui` (`@rask/ui`) | TS / Svelte | frontend, storage-frontend, compute-frontend | [UI Components](../components/ui.md) |
+| `api` (`@rask/api`) | TS | frontend, storage-frontend, compute-frontend | — |
 
 ## Conventions
 
@@ -22,4 +25,6 @@ blocks imported by the runnable components.
 
 !!! note "`packages/control` is gone"
     The former `control` package (sync + chunk submission) was absorbed into the
-    viewer's service layer. Don't reference it — only stale bytecode remains.
+    core brick (`components/services/core`) service layer
+    (`services/{sync,submission}`). Don't reference it — only stale bytecode
+    remains.

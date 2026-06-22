@@ -13,8 +13,10 @@ pre-staged **S3** buckets; ALTO XML output lands back in S3. The HTTP backend is
 a fleet of FastAPI services behind a **gateway** on port 8888: a **core-api**
 for batch/chunk/catalog state, an **orchestrator** service running the submission
 loop, plus stateless **volumes-api**, **search-api**, and **ray-api** services.
-A **SvelteKit SPA** consumes all of these via the gateway for inspection, the
-batch dashboard, search, and chunk submission. Batch-tracking state lives in a
+A **SvelteKit 2 + Svelte 5 SSR frontend** (svelte-adapter-bun, served behind the
+gateway), splitting into per-domain microfrontends
+(frontend/storage-frontend/compute-frontend), consumes all of these via the
+gateway for inspection, the batch dashboard, search, and chunk submission. Batch-tracking state lives in a
 relational DB behind a backend-agnostic ORM — SQLite for dev, Postgres for prod.
 Full-text search over transcribed lines plus an archival catalog index live in
 **Lance** tables on S3.
@@ -23,7 +25,7 @@ Full-text search over transcribed lines plus an archival catalog index live in
 
 ```mermaid
 flowchart TB
-    browser["Browser"] --> spa["Frontend · SvelteKit SPA<br/><sub>components/apps/frontend</sub>"]
+    browser["Browser"] --> spa["Frontend · SvelteKit SSR (Bun)<br/><sub>components/apps/frontend</sub>"]
     spa -->|"/api/*"| gw["Gateway · :8888<br/><sub>components/services/gateway</sub>"]
     cli["Runner · Python CLI<br/><sub>components/apps/runner</sub>"] --> head
     gw --> core["core-api · :8801<br/><sub>batches · chunks · catalog</sub>"]
@@ -56,8 +58,9 @@ flowchart TB
 - **Two pipeline shapes** — *actor-per-stage* (`htr`) and *single Serve
   deployment* (`htrflow` / `htr_http`).
 - **No auth anywhere.** Only optional CORS plus request-id/timing headers; the
-  fleet assumes a trusted/localhost network. The SPA hits `/api/*` on the
-  gateway; `/api/serve/*` is proxied by ray-api.
+  fleet assumes a trusted/localhost network. The frontend hits `/api/*` on the
+  gateway (SSR `load` uses the absolute gateway URL server-side);
+  `/api/serve/*` is proxied by ray-api.
 - **The orchestrator runs as its own service** (`components/services/orchestrator`,
   `:8810`) — a lifespan-managed `asyncio` task that reconciles S3, then submits
   the next eligible prefetch and HTR chunks. `core-api` and `orchestrator` share
@@ -70,7 +73,7 @@ flowchart TB
 ## In this section
 
 - **[Monorepo Layout](layout.md)** — the three brick layers and what lives where.
-- **[Data Flow](data-flow.md)** — image → ALTO XML, the batch lifecycle, and the SPA ↔ API ↔ storage map.
+- **[Data Flow](data-flow.md)** — image → ALTO XML, the batch lifecycle, and the frontend ↔ API ↔ storage map.
 - **[Deployment](deployment.md)** — clusters, container images, CI, and how it ships.
 - **[Microservices](microservices.md)** — the service decomposition (implemented June 2026): gateway, core-api, orchestrator, volumes-api, search-api, ray-api.
 
@@ -80,4 +83,5 @@ Longer design documents under `docs/architecture/` go beyond this summary:
 [`system-overview.md`](system-overview.md),
 [`viewer-backend.md`](viewer-backend.md) *(superseded — history/rationale for the dissolved viewer)*,
 [`viewer-design.md`](viewer-design.md) *(superseded — history/rationale for the dissolved viewer)*,
+[`frontend-microfrontends.md`](frontend-microfrontends.md),
 [`frontend-monorepo.md`](frontend-monorepo.md).

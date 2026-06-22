@@ -52,7 +52,7 @@ table transactionally, deliberately not forced into separate services.
 
 ```mermaid
 flowchart TD
-    browser["browser"] --> fe["frontend (nginx :8080, SPA)"]
+    browser["browser"] --> fe["frontends (Bun SSR :5173/:5174/:5175)"]
     fe -->|/api/*| gw["gateway :8888<br/><sub>components/services/gateway</sub>"]
     gw --> core["core-api :8801<br/>batches · chunks · catalog"]
     gw --> search["search-api :8802"]
@@ -98,9 +98,11 @@ Upstream env vars (all overridable): `RASK_CORE_API_URL` (:8801), `RASK_SEARCH_A
 
 ## Communication
 
-- **North-south (sync):** browser → frontend → gateway → service, all HTTP,
-  relative `/api/*`. The **frontend was not changed** — it already assumed one
-  origin (`vite.config.ts` proxy; `api.ts` has no per-group base URL).
+- **North-south (sync):** browser → frontend → gateway → service, all HTTP. The
+  **frontend moved to SSR** (`svelte-adapter-bun`) and its API client was
+  extracted to `packages/api`; SSR `load`/remote code reaches the gateway via an
+  absolute `RASK_GATEWAY_URL` base, while browser code uses the relative `/api`
+  proxy to `:8888` (`vite.config.ts`).
 - **East-west (async):** the orchestrator currently uses a 60s in-process timer
   (a lifespan-managed `asyncio.Task`). The **NATS JetStream** replacement is the
   project's roadmap; JetStream's durable consumer + ack would give the singleton
@@ -229,5 +231,6 @@ worker and consolidate its pub/sub onto `pubsub.jetstream`.
 - Current state: **gateway → {core-api, orchestrator, search-api, volumes-api,
   ray-api}**. `core-api` and `orchestrator` share the `batches` table. The
   orchestrator's NATS JetStream replacement is the next roadmap item.
-- The frontend was untouched — it already assumed one origin (`/api` proxy to
-  `:8888`).
+- The frontend moved to SSR (`svelte-adapter-bun`) and its API client was
+  extracted to `packages/api`; SSR uses an absolute `RASK_GATEWAY_URL` base while
+  the browser uses the relative `/api` proxy to `:8888`.

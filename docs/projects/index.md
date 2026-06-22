@@ -34,7 +34,9 @@ The container images mirror these compositions:
 - `rask-search-api` ← `projects/search-api` (slim Python, `:8802`).
 - `rask-ray-api` ← `projects/ray-api` (slim Python, `:8804`).
 - `rask-runner` ← `projects/runner` (CUDA base, GPU).
-- `rask-frontend` ← `components/apps/frontend` (nginx static).
+- `rask-frontend` ← `components/apps/frontend` (SvelteKit SSR, Bun server).
+- `rask-storage-frontend` ← `components/apps/storage-frontend` (SSR, base `/storage`).
+- `rask-compute-frontend` ← `components/apps/compute-frontend` (SSR, base `/compute`).
 
 See [Deployment](../architecture/deployment.md) for the image and cluster
 details.

@@ -46,7 +46,7 @@ credentials, by HCP's fixed convention:
 
 It is a **no-op unless both** `HCP_USERNAME` and `HCP_PASSWORD` are set, and it
 **never overwrites** pre-existing `AWS_*` vars. It is not called by `s3_client` —
-callers invoke it explicitly at startup (the runner and viewer both do).
+callers invoke it explicitly at startup (the runner does directly; the fleet services derive it via service-kit `build_settings()`).
 
 ## IIIF read-through cache
 

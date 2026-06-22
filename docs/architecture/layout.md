@@ -15,7 +15,7 @@ flowchart TD
         pra["ray-api"]
     end
     subgraph components["components/ · runnable code"]
-        ca["apps/runner · apps/frontend"]
+        ca["apps/runner · apps/frontend<br/>apps/compute-frontend · apps/storage-frontend"]
         cs["services/gateway · core · core_api · orchestrator<br/>volumes_api · search_api · ray_api"]
         cx["scripts/"]
     end
@@ -44,7 +44,8 @@ flowchart TD
 | [`packages/storage`](../packages/storage.md) | Python | `FSSource/Sink`, `S3Source/Sink`, `IIIFCachedSource`, `s3_client`, `iter_keys`, HCP credential derivation. |
 | `packages/service-kit` | Python | Platform library: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`, injectable lifespan. Dependency-light (no lancedb/ray/sqlmodel). |
 | `packages/ray-kit` | Python | Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, dashboard service). Shared by ray-api and core orchestrator. |
-| `packages/ui` | TS / Svelte | Svelte 5 + Bits UI + Tailwind 4 component library with Storybook (package `@rask/ui`). |
+| `packages/ui` | TS / Svelte | Svelte 5 + Bits UI + Tailwind 4 component library with Storybook (package `@rask/ui`); `@rask/ui/shell` exports the shared `AppShell`/`AppSidebar`/`nav-config` every app imports. |
+| `packages/api` | TS | Shared API client (package `@rask/api`), split into `ray`/`batches`/`search`/`volumes`/`types` modules. |
 
 !!! note "`packages/control` was absorbed into `core`"
     An earlier `packages/control` (S3 sync + chunk submission) no longer exists
@@ -56,7 +57,9 @@ flowchart TD
 | Path | Type | Purpose |
 |---|---|---|
 | [`components/apps/runner`](../projects/runner.md) | Python CLI | Typer CLI that submits Ray Data jobs; ships the Ray Serve deployments. |
-| `components/apps/frontend` | SvelteKit SPA | Browser UI ([UI Components](../components/ui.md)). |
+| `components/apps/frontend` | SvelteKit 2 + Svelte 5 (SSR) | Catch-all app (package `viewer-frontend`, `:5173`) on `svelte-adapter-bun` behind the gateway; being decomposed into per-domain microfrontends ([UI Components](../components/ui.md), [Frontend microfrontends](frontend-microfrontends.md)). |
+| `components/apps/compute-frontend` | SvelteKit 2 + Svelte 5 (SSR) | Compute microfrontend (`/compute`, `:5175`) on `svelte-adapter-bun`. |
+| `components/apps/storage-frontend` | SvelteKit 2 + Svelte 5 (SSR) | Storage microfrontend (`/storage`, `:5174`) on `svelte-adapter-bun`. |
 | `components/services/gateway` | FastAPI | Reverse proxy on `:8888` — path-routes `/api/*` to per-domain services (longest-prefix-first). |
 | `components/services/core` | Python (brick) | The dissolved `viewer` domain code: DB engine, models, repositories, domain services (`batches`, `submission`, `sync`, orchestrator loop, catalog discovery), Alembic, and `main.py` (monolith factory for tests / `make viewer`). **Not a standalone deployable** — composed by the two entrypoints below. |
 | `components/services/core_api` | FastAPI | Thin entrypoint `:8801`: health + batches + chunks + catalog over `core`; orchestrator loop **off**. |

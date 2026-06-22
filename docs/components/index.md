@@ -6,7 +6,9 @@ opposed to the libraries in `packages/`.
 | Path | Type | Docs |
 |---|---|---|
 | `components/apps/runner` | Python CLI (Ray Data jobs) | [Apps](apps.md) · [Projects → Runner](../projects/runner.md) |
-| `components/apps/frontend` | SvelteKit SPA | [UI Components](ui.md) |
+| `components/apps/frontend` | SvelteKit SSR app (Bun server) | [UI Components](ui.md) |
+| `components/apps/storage-frontend` | SvelteKit SSR app (Bun server) | [UI Components](ui.md) |
+| `components/apps/compute-frontend` | SvelteKit SSR app (Bun server) | [UI Components](ui.md) |
 | `components/services/gateway` | Reverse proxy (`:8888`) | [Services](services.md) |
 | `components/services/core` | Core domain brick (shared by core-api + orchestrator) | [Services](services.md) |
 | `components/services/core_api` | Batches/chunks/catalog API (`:8801`) | [Services](services.md) |
@@ -34,6 +36,6 @@ services (core-api endpoints + the orchestrator service's lifespan loop). Notabl
 
 ## In this section
 
-- **[Apps](apps.md)** — the runner CLI and the frontend SPA.
+- **[Apps](apps.md)** — the runner CLI and the SSR frontend apps (catch-all + storage/compute microfrontends).
 - **[Services](services.md)** — the gateway, core brick, and the five per-domain services.
-- **[UI Components](ui.md)** — the SvelteKit app and the `component-lib` library.
+- **[UI Components](ui.md)** — the SvelteKit app and the `@rask/ui` library (packages/ui).

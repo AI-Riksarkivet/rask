@@ -15,16 +15,39 @@ Secret — the chart does not provision them.
 
 ## Container images (`.docker/`)
 
-Production-shaped image definitions live at `.docker/`. Three are current:
+Production-shaped image definitions live at `.docker/`, built with `docker buildx`
+(repo root as context). Current:
 
 | Image | Base | Notes |
 |---|---|---|
 | `rask-runner` | `nvidia/cuda:12.4.0-runtime-ubuntu22.04` | GPU. uv-managed Python + venv; `CMD ["runner"]`. Needs `--shm-size`, `--ulimit nofile=65535`, GPU via nvidia-container-toolkit. |
-| `rask-frontend` | build on `oven/bun`, serve on `nginxinc/nginx-unprivileged:1.27-alpine` | Builds `component-lib` then the SvelteKit SPA (adapter-static), serves on `:8080` with SPA fallback + immutable asset caching. |
+| `rask-frontend` | build + serve on `oven/bun:1-debian` | The catch-all SvelteKit app, **SSR via `svelte-adapter-bun`** (no longer an nginx SPA). Pre-builds `@rask/ui`, then `bun build`; the final stage ships the Bun runtime + `node_modules` and runs `bun build/index.js` on `:3000`. tini as PID 1, non-root UID 10001. |
+| `rask-storage-frontend` | build + serve on `oven/bun:1-debian` | The Storage microfrontend (`base /storage`). Same Bun-SSR shape as `rask-frontend`; healthcheck hits `/storage`. |
+| `rask-compute-frontend` | build + serve on `oven/bun:1-debian` | The Compute/Ray microfrontend (`base /compute`). Same Bun-SSR shape; healthcheck hits `/compute/overview`. |
+
+The three frontend images share one non-obvious build contract (documented in each
+dockerfile header): `svelte-adapter-bun` externalizes `@sveltejs/kit`, so the final
+image must ship `node_modules` — `build/` is not standalone. And bun 1.3's **isolated
+linker** keeps real packages in `node_modules/.bun/` with per-member symlinks, so the
+final stage copies both the root store **and** the app dir (with its symlinks) and
+runs from the app dir. Each image `COPY`s the full JS workspace (`frontend`,
+`storage-frontend`, `compute-frontend`, `packages/{api,ui}`) so `bun install` resolves
+— siblings are build-stage only, never shipped.
+
+!!! note "Frontend images aren't built by `.dagger`"
+    The Dagger module covers Python CI only (`migrate-up`, `test-pg` — see
+    [CI](#ci) below); it does **not** build or publish the `.docker/*.dockerfile`
+    images. Those are built directly with `docker buildx`. Wiring the frontend (and
+    service) image builds into Dagger or a GitHub Actions matrix is a
+    deployment-cycle follow-up.
 
 `.docker/viewer.dockerfile` references the dissolved monolith and is pending update
 to the new per-service entrypoints (gateway, core-api, orchestrator, volumes-api,
 search-api, ray-api).
+
+The frontend topology those images serve — the Turborepo vertical-microfrontend
+proxy, the shared `@rask/ui` shell, and per-app `kit.paths.base` — is documented in
+[Frontend microfrontends](frontend-microfrontends.md).
 
 ## Ray cluster & Serve (local)
 

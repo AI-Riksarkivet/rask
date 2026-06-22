@@ -1,8 +1,8 @@
 # rask — system overview (as-is)
 
 Snapshot of the **current** architecture across runner, Ray, backend, frontend
-and storage. No proposals here — see siblings (`frontend-monorepo.md`,
-`viewer-backend.md`) for direction.
+and storage. No proposals here — see siblings (`frontend-microfrontends.md`,
+`deployment.md`) for direction.
 
 ## One-paragraph summary
 
@@ -16,7 +16,9 @@ backend is a fleet of FastAPI services behind a **gateway** on `:8888`: a
 **core-api** for batch/chunk/catalog state (`:8801`), an **orchestrator**
 service that runs the submission loop (`:8810`), and three stateless services —
 **volumes-api** (`:8803`), **search-api** (`:8802`), **ray-api** (`:8804`).
-A **SvelteKit SPA** consumes all of these via the gateway for inspection,
+A **SvelteKit 2 + Svelte 5 SSR app** (svelte-adapter-bun, Bun server), being
+split into per-domain microfrontends (frontend/storage-frontend/compute-frontend)
+under Turborepo, consumes all of these via the gateway for inspection,
 batch dashboard and chunk submission. Batch-tracking state lives in a small
 relational DB behind a backend-agnostic ORM — **SQLite for dev**
 (`.cache/batches.db`), **Postgres for prod** — selected by `DATABASE_URL`.
@@ -31,8 +33,10 @@ flowchart TB
         browser["Browser"]
     end
 
-    subgraph frontend["Frontend · SvelteKit SPA"]
+    subgraph frontend["Frontend · SvelteKit SSR (Bun) microfrontends"]
         spa["components/apps/frontend<br/><sub>viewer · batch UI · search</sub>"]
+        storagefe["components/apps/storage-frontend<br/><sub>/storage</sub>"]
+        computefe["components/apps/compute-frontend<br/><sub>/compute</sub>"]
     end
 
     subgraph backend["Backend · FastAPI fleet"]
@@ -136,7 +140,9 @@ flowchart TB
 
 | Path                                    | Type          | Purpose                                                              |
 | --------------------------------------- | ------------- | -------------------------------------------------------------------- |
-| `components/apps/frontend/`             | SvelteKit SPA | Browser UI: page viewer, batch dashboard, search, Ray-dashboard proxy |
+| `components/apps/frontend/`             | SvelteKit SSR (Bun) | Browser UI: page viewer, batch dashboard, search, Ray-dashboard proxy |
+| `components/apps/storage-frontend/`     | SvelteKit SSR (Bun) | Storage microfrontend (`/storage`)                                  |
+| `components/apps/compute-frontend/`     | SvelteKit SSR (Bun) | Compute microfrontend (`/compute`)                                  |
 | `components/apps/runner/`               | Python CLI    | Submits Ray Data jobs; ships Ray Serve deployments                   |
 | `components/services/gateway/`          | FastAPI       | Reverse proxy on `:8888`; path-routes `/api/*` to per-domain services |
 | `components/services/core/`             | Python (brick)| Domain brick: DB, models, repositories, domain services, Alembic; shared by core-api + orchestrator |
@@ -150,9 +156,10 @@ flowchart TB
 | `packages/storage/`                     | Python lib    | `FSSource/Sink`, `S3Source/Sink`, `IIIFCachedSource`                 |
 | `packages/service-kit/`                 | Python lib    | Platform library: `make_service_app`, `Settings`, middleware, DI lifespan |
 | `packages/ray-kit/`                     | Python lib    | Ray Job SDK + dashboard wrapper; shared by ray-api and core orchestrator |
-| `packages/ui/`               | TS / Svelte   | Shared Svelte 5 + Bits UI + Tailwind 4 component library w/ Storybook |
+| `packages/ui/`               | TS / Svelte   | Shared Svelte 5 + Bits UI + Tailwind 4 component library w/ Storybook; `@rask/ui/shell` exports the shared `AppShell`/`AppSidebar` |
+| `packages/api/`              | TS            | Shared API client + types (`@rask/api`), split into ray/batches/search/volumes/types modules |
 | `.cache/batches.db`                     | SQLite        | Default per-batch progress (dev; not committed)                      |
-| `.docker/*.dockerfile`                  | Docker        | Image definitions for `runner` (CUDA), `frontend` (nginx); see deployment.md for backend images |
+| `.docker/*.dockerfile`                  | Docker        | Image definitions for `runner` (CUDA) and the `frontend`/`storage-frontend`/`compute-frontend` Bun-SSR servers; see deployment.md for backend images |
 | `Makefile`                              | bash          | All deploy/dev orchestration (no docker-compose, no k8s yaml)        |
 
 ## Data flow — image → ALTO XML
@@ -233,7 +240,7 @@ sequenceDiagram
     API->>DB: SELECT
     DB-->>UI: render dashboard
     UI->>API: POST /batches/sync
-    API->>Sync: re-run (via packages/control)
+    API->>Sync: re-run (via the core brick sync service, components/services/core)
     UI->>API: GET /chunks
     UI->>API: POST /chunks/{id}/submit
     API->>Sub: submit
@@ -248,13 +255,13 @@ sequenceDiagram
 
 ## Frontend ↔ Backend ↔ Storage
 
-What the SPA actually fetches. The gateway (`/api/*`) longest-prefix-routes to
+What the frontend actually fetches. The gateway (`/api/*`) longest-prefix-routes to
 per-domain services; `RASK_API_PREFIX` (default `/api/v1`) controls the prefix
 used by core-api.
 
 ```mermaid
 flowchart LR
-    spa["SvelteKit SPA"] -->|/api/*| gw["Gateway :8888"]
+    spa["SvelteKit SSR (Bun)"] -->|/api/*| gw["Gateway :8888"]
 
     gw -->|/volumes| vols["volumes-api :8803"]
     gw -->|/batches · /chunks · /catalog| core["core-api :8801"]
@@ -294,7 +301,7 @@ pipeline depends on Lance. Indexing is driven by scripts
 
 **Orchestrator endpoint** (`/orchestrator/state`) is a pure-derivation view
 that joins Ray job state (bridging Ray's V1 `JobInfo` and V2 `JobDetails`)
-with batches-DB rows, so the SPA can poll one URL instead of fanning out.
+with batches-DB rows, so the frontend can poll one URL instead of fanning out.
 
 ## Ray cluster topology
 
@@ -354,10 +361,10 @@ the build context is the repo root.
 | Image      | Dockerfile                     | Base                           | Notes                                |
 | ---------- | ------------------------------ | ------------------------------ | ------------------------------------ |
 | `runner`   | `.docker/runner.dockerfile`    | `nvidia/cuda:12.4-runtime`     | uv install, GPU client for Ray jobs  |
-| `frontend` | `.docker/frontend.dockerfile`  | Bun build → `nginx-unprivileged` | Static SPA + `frontend.nginx.conf`  |
+| `frontend` | `.docker/frontend.dockerfile`  | Bun build → `oven/bun` runtime (SSR server) | `bun ./build/index.js`  |
+| `storage-frontend` | `.docker/storage-frontend.dockerfile` | Bun build → `oven/bun` runtime (SSR server) | `bun ./build/index.js`  |
+| `compute-frontend` | `.docker/compute-frontend.dockerfile` | Bun build → `oven/bun` runtime (SSR server) | `bun ./build/index.js`  |
 
-`.docker/viewer.dockerfile` references the dissolved monolith and is pending
-update to the new per-service entrypoints (see [deployment.md](deployment.md)).
 
 ## Stack at a glance
 
@@ -368,13 +375,12 @@ update to the new per-service entrypoints (see [deployment.md](deployment.md)).
 | ORM                 | SQLModel + SQLAlchemy async (aiosqlite or asyncpg)                    |
 | Relational DB       | SQLite (dev, `.cache/batches.db`) or Postgres (prod, `DATABASE_URL`)  |
 | Search / catalog    | Lance tables on S3 (optional, HCP-backed)                             |
-| Frontend            | SvelteKit (SPA, adapter-static) + `packages/ui`            |
+| Frontend            | SvelteKit (SSR, svelte-adapter-bun) + `packages/ui`; client API helpers in `packages/api` (`@rask/api`) |
 | Object storage      | S3 via `packages/storage` — two buckets: `images-batch`, `*-alto`     |
 | Source              | IIIF (Riksarkivet) with S3 read-through cache                         |
 | Models              | YOLO (regions, lines), TrOCR (transcription)                          |
 | Python              | uv + Ruff + ty (3.13)                                                 |
 | JS / TS             | Bun + Vite + ESLint + Prettier (Svelte 5)                             |
-| Rust                | Cargo workspace (small support crates)                                |
 | Container images    | `.docker/*.dockerfile` (no orchestration manifests in repo)           |
 | Deploy orchestration| None checked in — `Makefile` is the only runbook                      |
 

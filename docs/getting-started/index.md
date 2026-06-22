@@ -64,7 +64,7 @@ Connect with `postgresql://rask:rask@localhost:5432/rask`.
 | Format + lint + typecheck | `make check` |
 | Single Python test | `uv run pytest packages/htr/tests/test_geometry.py::test_name` |
 | Frontend type-check | `bun --cwd components/apps/frontend run check` |
-| Storybook (component-lib) | `make storybook` (→ `:6006`) |
+| Storybook (@rask/ui) | `make storybook` (→ `:6006`) |
 | Build the search index | `make search-index` |
 | Build the catalog index | `make catalog-index` |
 

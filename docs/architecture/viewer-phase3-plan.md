@@ -1,5 +1,14 @@
 # Viewer Phase 3 Implementation Plan
 
+!!! warning "Superseded (June 2026) — historical plan"
+    This plan targeted the monolithic `viewer` service (`components/services/viewer`), which
+    was **dissolved** into a gateway + per-domain services over a shared `core` brick. The
+    work landed elsewhere: the Ray job-logs + Serve-health endpoints in **`ray-api`** /
+    **`core`**, the orchestrator cooldown + OTel surface in the **`orchestrator`** entrypoint
+    over `core`. Read `viewer.` paths below as `core.` (`components/services/core/src/core/`).
+    For current architecture see [microservices.md](./microservices.md) and
+    [system-overview.md](./system-overview.md). Retained for design rationale.
+
 > Authoritative plan for the next viewer backend increment. Companion to [viewer-design.md](./viewer-design.md) — this document is the implementation contract for the four Phase 3 items.
 
 Phase 3 ships four small, additive, backend-only capabilities on the existing FastAPI viewer (`components/services/viewer`): a Ray job-logs endpoint, a Ray Serve health probe, a crash-loop-aware orchestrator cooldown, and a flag-gated OpenTelemetry surface. Every item is read-mostly, schema-free, and stays on the current in-process asyncio orchestrator loop. The bias throughout is the smallest correct change; each section names what was deliberately **not** built.

@@ -102,7 +102,6 @@ Endpoint groups:
 |---|---|
 | health | `GET /health` |
 | search | `GET /search/`, `/search/stats`, `/search/thumb/{path}` |
-| catalog | `GET /catalog/search`, `/catalog/search/stats`, `/catalog/browse` |
 
 ## ray-api — `components/services/ray_api`
 

@@ -1,5 +1,14 @@
 # Viewer structured-logging plan (stdlib, OTel-ready)
 
+!!! warning "Superseded (June 2026) — historical plan"
+    Scoped to the monolithic `viewer` service, which was **dissolved**. The shared logging /
+    request-id middleware now lives in **`packages/service-kit`**
+    (`service_kit/middleware.py` — `RequestIDMiddleware`/`TimingMiddleware`/`CORSMiddleware`),
+    consumed by every fleet service via `make_service_app`; per-service log config lives in
+    each service (e.g. `ray-api`, `search-api`) and the `core` brick. Read `viewer`/`main.py`
+    paths below against `service-kit` + `core`. Retained for design rationale; see
+    [microservices.md](./microservices.md).
+
 Status: proposed. Scope: `components/services/viewer`. Owner preference: **simple, minimal, no
 over-engineering.** This plan adds structured stdlib logging with request-id correlation and
 nothing more.

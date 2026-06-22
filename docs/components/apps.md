@@ -1,7 +1,8 @@
 # Apps
 
-`components/apps/` holds the two runnable applications: the **runner** CLI and
-the **frontend** SPA.
+`components/apps/` holds the **runner** CLI plus the SvelteKit
+microfrontends — **frontend** (catch-all), **storage-frontend**, and
+**compute-frontend** — each an SSR Bun-server app.
 
 ## Runner — `components/apps/runner`
 
@@ -34,22 +35,24 @@ handles.
 
 ## Frontend — `components/apps/frontend`
 
-A **SvelteKit** SPA (`adapter-static`, fully client-rendered) that consumes the
-backend API through the **gateway**. See [UI Components](ui.md) for routes, the
+A **SvelteKit 2 + Svelte 5** app rendered SSR via `svelte-adapter-bun` (a real
+Bun server) that consumes the backend API through the **gateway**. See [UI Components](ui.md) for routes, the
 component model, and the dev/proxy setup. In brief:
 
-- Talks to the backend through a single `$lib/api.ts` client over same-origin
+- Talks to the backend through the shared `@rask/api` package (`packages/api`,
+  split into `ray`/`batches`/`search`/`volumes`/`types`) over same-origin
   `fetch('/api/...')`; the Vite dev server proxies `/api` to `:8888` (the
   gateway, or the `make viewer` monolith for single-process dev).
 - Provides the batch dashboard, document viewer (zoom/pan + ALTO overlay),
   line/catalog search, and a full set of Ray dashboard views (jobs, cluster,
   serve, actors, logs).
-- Built with `make viewer-frontend` (dev) or `bun run build` (static).
+- Run in dev with `make viewer-frontend` (catch-all app, `:5173`); `bun run build`
+  produces the SSR Bun-server bundle (run with `bun ./build/index.js`).
 
 ```mermaid
 flowchart LR
     runner["runner CLI<br/><sub>Ray Data jobs</sub>"] -->|ALTO| s3[("S3")]
-    frontend["frontend SPA"] -->|/api| gateway["gateway :8888"]
+    frontend["frontend (SSR)"] -->|/api| gateway["gateway :8888"]
     gateway --> core_api["core-api :8801"]
     gateway --> search_api["search-api :8802"]
     gateway --> volumes_api["volumes-api :8803"]

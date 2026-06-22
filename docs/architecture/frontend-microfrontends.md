@@ -69,54 +69,65 @@ under **`packages/`**.
 ```mermaid
 graph TD
   subgraph ca["components/apps"]
-    F[frontend<br/><sub>the monolith — all routes today</sub>]
+    F[frontend<br/><sub>catch-all — most routes today</sub>]
     SF[storage-frontend<br/><sub>MFE: /storage</sub>]
+    CF[compute-frontend<br/><sub>MFE: /compute</sub>]
     R[runner<br/><sub>Python CLI</sub>]
   end
   subgraph pk["packages"]
     UI[ui — @rask/ui<br/><sub>sidebar/shell + styled components</sub>]
-    API[api — @rask/api<br/><sub>API client + types — planned</sub>]
+    API[api — @rask/api<br/><sub>API client + types</sub>]
   end
   F -->|workspace:*| UI
   SF -->|workspace:*| UI
-  F -.planned.-> API
-  SF -.planned.-> API
+  CF -->|workspace:*| UI
+  F --> API
+  SF --> API
+  CF --> API
 ```
 
 | Path                               | What it is                                                                                                                                                                                         |
 | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `components/apps/frontend`         | **The monolith.** Today it still owns _every_ route (search, browse, viewer, cluster, jobs, actors, serve, logviewer, batches, overview, s3). Package name `viewer-frontend`.                      |
+| `components/apps/frontend`         | **The catch-all app.** Still owns the not-yet-carved routes (search, browse, viewer, batches) and the compute routes it shares with `compute-frontend` until those are retired. Package name `viewer-frontend`. |
 | `components/apps/storage-frontend` | The **first carved-out microfrontend** — owns `/storage` (the S3 browser).                                                                                                                         |
+| `components/apps/compute-frontend` | The **second carved-out microfrontend** — owns `/compute` (the Ray/cluster UI: overview, cluster, jobs, actors, serve, logviewer, api-docs).                                                       |
 | `packages/ui` (`@rask/ui`)         | The **shared design system**: styled components (`button`, `badge`, `card`, `dialog`, `sort-header`, `sidebar`, …) **plus the shell** (`@rask/ui/shell` → `AppShell`, `AppSidebar`, `nav-config`). |
-| `packages/api` (`@rask/api`)       | **Planned** — the shared API client + types, so apps don't each copy `api.ts`.                                                                                                                     |
+| `packages/api` (`@rask/api`)       | The **shared API client + types** — every app imports it (`@rask/api`) instead of copying `api.ts`. JIT package (exports `./src/index.ts` source, no build), split into `ray`/`batches`/`search`/`volumes`/`types` modules. |
 
-## How a request flows
+## How a request flows (frontend → services)
 
-The frontend never talks to a domain service directly — it always goes through the
-**gateway** (`:8888`), which path-routes `/api/*` to the per-domain backend services.
+There are **two distinct layers** — keep them separate:
+
+1. **Page composition** — which *app* serves a URL path (`/storage` → storage-frontend).
+2. **Data** — how an app reaches the *backend*. The frontend **never** talks to a domain
+   service directly; it always hits the **gateway** (`:8888`), which path-routes `/api/*`
+   to the per-domain services (`core-api` :8801, `search-api` :8802, `volumes-api` :8803,
+   `ray-api` :8804, `orchestrator` :8810) longest-prefix-first.
 
 ```mermaid
 sequenceDiagram
   autonumber
   participant B as Browser
-  participant PX as Proxy (dev :3024 / gateway prod)
   participant APP as SvelteKit app (Bun SSR)
   participant GW as Gateway :8888
   participant SVC as domain service
-  B->>PX: GET /storage
-  PX->>APP: route by path → storage-frontend
-  APP-->>B: SSR HTML (shell + page)
-  B->>PX: /api/volumes/objects
-  PX->>GW: /api/*
-  GW->>SVC: longest-prefix route
+  Note over B,APP: page composition — dev: app's own port · prod: ingress by path
+  B->>APP: GET /storage
+  APP-->>B: SSR HTML (shared shell + page)
+  Note over B,SVC: data — /api/* always via the one gateway
+  B->>APP: GET /api/volumes/objects
+  APP->>GW: Vite dev proxy / same-origin forwards /api/*
+  GW->>SVC: longest-prefix route → volumes-api
   SVC-->>B: JSON
 ```
 
 !!! info "Two fetch paths, one gateway"
 
-    - **Client-side** code uses the relative `/api/*` (dev Vite proxy / prod same-origin).
+    - **Client-side** code uses the relative `/api/*` — the **Vite dev proxy** forwards it to
+      `VIEWER_BACKEND` (`:8888`) in dev; same-origin in prod.
     - **Server-side** code (SSR `load`, remote functions) uses an **absolute** `RASK_GATEWAY_URL`
-      because a server has no origin. Both end at the **one gateway**.
+      because a server has no origin. Both end at the **one gateway** — see the
+      [services fleet](system-overview.md) for how it routes onward.
 
 ## The shared shell (one sidebar, zero drift)
 
@@ -147,34 +158,63 @@ plain anchors are also _correct_ for cross-app navigation (a full page load the 
 
 ## Current state vs. target
 
-!!! warning "The split is **started, not finished** — 1 of 4 domain apps"
+!!! warning "The split is **started, not finished** — 2 of 4 domain apps"
 
-    The monolith still owns most routes. Only `storage` has been carved out so far.
+    `storage` and `compute` are carved out. The catch-all `frontend` still owns the
+    documents + batches routes (and still duplicates the compute routes until they're
+    retired).
 
 ```mermaid
 graph LR
   subgraph NOW
-    M[frontend monolith<br/>all routes]
+    M[frontend catch-all<br/>documents + batches + dup compute]
     ST[storage-frontend ✅]
+    CO[compute-frontend ✅]
   end
   subgraph TARGET
-    C[compute-frontend]
     D[documents-frontend]
     BA[batches-frontend]
     ST2[storage-frontend ✅]
+    CO2[compute-frontend ✅]
   end
-  NOW ==>|carve out, same recipe x3| TARGET
+  NOW ==>|carve out, same recipe x2| TARGET
 ```
 
-| Domain app                        | Routes it will own                                          | `kit.paths.base` | Status      |
+| Domain app                        | Routes it owns                                              | `kit.paths.base` | Status      |
 | --------------------------------- | ----------------------------------------------------------- | ---------------- | ----------- |
-| `compute-frontend` (the "ray" UI) | overview, cluster, jobs, actors, serve, logviewer, api-docs | `/compute`       | planned     |
+| `compute-frontend` (the "ray" UI) | overview, cluster, jobs, actors, serve, logviewer, api-docs | `/compute`       | **done ✅** |
+| `storage-frontend`                | s3                                                          | `/storage`       | **done ✅** |
 | `documents-frontend`              | search, browse, viewer                                      | `/documents`     | planned     |
 | `batches-frontend`                | batches (+ chunks/orchestrator controls)                    | `/batches`       | planned     |
-| `storage-frontend`                | s3                                                          | `/storage`       | **done ✅** |
 
-Carving each one is the **same recipe** as `storage-frontend` (scaffold app → move its
-routes in → wire `@rask/ui` + `@rask/api`), not a new hard problem.
+Carving each remaining one is the **same recipe** as `storage`/`compute` (scaffold app →
+move its routes in → wire `@rask/ui` + `@rask/api`), not a new hard problem.
+
+## Running the frontends locally
+
+Start them with Turborepo — no backend required to see the **chrome**:
+
+```bash
+make dev-frontends     # all apps + the @rask/ui watcher (turbo run dev)
+make viewer-frontend   # just the catch-all,  :5173
+make frontend-storage  # just storage,        :5174/storage
+make frontend-compute  # just compute,        :5175/compute
+```
+
+!!! success "Verified: the shared shell renders with **no backend running**"
+
+    Each app SSR-renders the `@rask/ui` shell + grouped sidebar on its own — e.g.
+    `GET :5175/compute` → `200`, title `Overview — RASK`, full **Compute / Documents /
+    Storage** nav — with nothing on `:8888`. You only need a backend for live `/api` **data**
+    (some routes, e.g. the catch-all's `/batches`, error without it). Start one with
+    `make dev-micro` (real fleet) or `make viewer` (monolith) — or mock it (below).
+
+!!! warning "No composition proxy yet — apps run on separate ports in dev"
+
+    `components/apps/frontend/microfrontends.json` **declares** the path routing
+    (`/storage`, `/compute`), but the Turborepo/Vercel **microfrontends proxy package is not
+    installed**, so there is no single-origin `:3024` dev URL yet. Today you visit each app on
+    its own port. Wiring the proxy is the remaining composition step.
 
 ## Developing without the full backend
 
@@ -208,10 +248,13 @@ a populated page. Because every frontend hits the **one gateway**, you mock **on
 
 ## Deployment
 
-Each app is **one Bun-server Docker image** (`svelte-adapter-bun`):
+Each app is **one Bun-server Docker image** (`svelte-adapter-bun`) — `.docker/frontend.dockerfile`,
+`.docker/storage-frontend.dockerfile`, `.docker/compute-frontend.dockerfile` (see
+[Deployment](deployment.md)):
 
-- **Dev** — `turbo dev` starts the built-in microfrontends **proxy on `:3024`**, composing
-  every app under one URL (`/` → monolith, `/storage` → storage MFE).
+- **Dev** — each app runs its own Vite dev server on its own port (`:5173`/`:5174`/`:5175`).
+  A single-origin composition proxy is **declared** in `microfrontends.json` but **not yet
+  wired** (no proxy package installed), so there is no `:3024` URL today.
 - **Prod** — the **gateway / K8s ingress** path-routes `/compute`, `/documents`, `/batches`,
   `/storage` to each app's Bun server (the same pattern as the per-domain _backend_ services).
 

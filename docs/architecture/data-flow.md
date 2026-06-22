@@ -1,6 +1,6 @@
 # Data Flow
 
-How an image becomes searchable ALTO XML, and how the SPA reads it back.
+How an image becomes searchable ALTO XML, and how the SvelteKit (SSR) frontend reads it back.
 
 ## Image → ALTO XML (the `htr` pipeline)
 
@@ -78,7 +78,7 @@ to per-domain services. The Ray dashboard proxy is served by `ray-api` under
 
 ```mermaid
 flowchart LR
-    spa["SvelteKit SPA"] -->|/api/*| gw["Gateway :8888"]
+    spa["SvelteKit SSR (Bun)"] -->|/api/*| gw["Gateway :8888"]
     gw -->|/volumes| vols["volumes-api :8803"]
     gw -->|/batches · /chunks · /catalog| core["core-api :8801"]
     gw -->|/search| srch["search-api :8802"]

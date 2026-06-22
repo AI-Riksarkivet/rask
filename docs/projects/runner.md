@@ -64,7 +64,9 @@ separately via `components/scripts/deploy_serve.py` (`make serve-up` /
 three ways to keep all GPU replicas busy.
 
 !!! note "Submitted by the viewer, not by hand"
-    In normal operation the viewer's orchestrator builds the
-    `uv run --project projects/runner runner …` entrypoint and submits it as a
-    Ray Job per chunk. The viewer's `PIPELINE_SPECS` keys are kept byte-identical
-    to the runner's `PIPELINES` keys (asserted in the viewer tests).
+    In normal operation the orchestrator service builds the
+    `uv run --project projects/runner runner` entrypoint (via
+    `core.services.submission.build_entrypoint`) and submits it as a Ray Job per
+    chunk. The core brick `PIPELINE_SPECS` keys (in `core.models.pipelines`) are
+    kept byte-identical to the runner's `PIPELINES` keys (asserted in
+    `components/services/core/tests/test_pipelines.py`).
