@@ -1,0 +1,12 @@
+{
+	"$schema": "https://turborepo.dev/microfrontends/schema.json",
+	"applications": {
+		"viewer-frontend": {
+			"development": { "local": { "port": 5173 } }
+		},
+		"storage-frontend": {
+			"development": { "local": { "port": 5174 } },
+			"routing": [{ "paths": ["/storage", "/storage/:path*"] }]
+		}
+	}
+}
