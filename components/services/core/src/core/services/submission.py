@@ -60,6 +60,19 @@ def build_entrypoint(batch_ids: list[str], *, params: RunnerParams, spec: Pipeli
             *(f"--batch {b}" for b in batch_ids),
         ]
         return " \\\n  ".join(parts)
+    if params.source_mode == "s3":
+        # Arbitrary-volume mode: read images straight from the input bucket via
+        # S3Source. One volume per chunk (chunk_total=1), so a single --prefix.
+        prefix = f"{batch_ids[0]}/"
+        parts = [
+            "uv run --project projects/runner runner",
+            f"--input {params.input_uri}",
+            f"--output {params.output}",
+            f"--prefix {prefix}",
+            f"--pipeline {spec.name}",
+            *(f"--{flag} {value}" for flag, value in spec.extra_args),
+        ]
+        return " \\\n  ".join(parts)
     parts = [
         "uv run --project projects/runner runner",
         f"--cache-bucket {params.cache_bucket}",

@@ -54,9 +54,10 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.title="rask-ray-api" \
       org.opencontainers.image.description="rask ray-api service — Ray dashboard introspection + serve proxy, FastAPI on :8804"
 
+# curl: used by the docker-compose healthcheck.
 # hadolint ignore=DL3008  # Reason: tini and ca-certificates have no stable version pins in apt on slim; pinning would break on next base image update.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends tini ca-certificates \
+ && apt-get install -y --no-install-recommends tini ca-certificates curl \
  && rm -rf /var/lib/apt/lists/* \
  && useradd -r --no-create-home --shell /usr/sbin/nologin --uid 10001 app
 

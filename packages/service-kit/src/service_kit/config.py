@@ -5,6 +5,7 @@ re-read env vars in routes or services.
 """
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -29,6 +30,8 @@ class RunnerParams(BaseModel):
     cache_bucket: str
     output: str
     iiif_url: str
+    source_mode: Literal["iiif", "s3"] = "iiif"
+    input_uri: str = ""
 
 
 class Settings(BaseSettings):
@@ -55,6 +58,7 @@ class Settings(BaseSettings):
     cache_bucket: str = Field(default="images-batch", alias="RASK_CACHE_BUCKET")
     output_bucket: str = Field(default="images-batch-alto", alias="RASK_OUTPUT_BUCKET")
     iiif_url: str = Field(default="https://iiifintern-ai.ra.se", alias="RASK_IIIF_URL")
+    source_mode: Literal["iiif", "s3"] = Field(default="iiif", alias="RASK_SOURCE_MODE")
     lines_table: str = Field(default="lines", alias="RASK_LINES_TABLE")
     catalog_table: str = Field(default="archive_catalog", alias="RASK_CATALOG_TABLE")
     ray_dashboard_url: str = Field(default="http://localhost:8265", alias="RAY_DASHBOARD_URL")
@@ -122,6 +126,8 @@ class Settings(BaseSettings):
             cache_bucket=self.cache_bucket,
             output=f"s3://{self.output_bucket}",
             iiif_url=self.iiif_url,
+            source_mode=self.source_mode,
+            input_uri=f"s3://{self.cache_bucket}",
         )
 
     @property

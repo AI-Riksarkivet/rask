@@ -21,9 +21,14 @@ config:
   RASK_CACHE_BUCKET: "images-batch"
   RASK_OUTPUT_BUCKET: "images-batch-alto"
   RASK_SEARCH_BUCKET: "images-batch-search"
-  RASK_IIIF_URL: "https://iiifintern-ai.ra.se"
+  RASK_IIIF_URL: ""
   AWS_REGION: "us-east-1"
   HCP_INSECURE: "false"
+  RASK_VIEWER_INPUT: "s3://images-batch"
+  RASK_VIEWER_OUTPUT: "s3://images-batch-alto"
+  RASK_SOURCE_MODE: "s3"
+  RASK_HTR_PIPELINE: "htrflow"
+  RASK_PREFETCH_PIPELINE: "none"
 
 viewer:
   replicas: 1   # MUST stay 1 — the in-process orchestrator is a singleton.
@@ -72,14 +77,14 @@ frontend:
 migrations:
   enabled: true
   # Command run from the alembic directory inside the viewer image.
-  command: ["sh", "-c", "cd /app/components/services/viewer && alembic upgrade head"]
+  command: ["sh", "-c", "cd /app/components/services/core && alembic upgrade head"]
   resources:
     requests: {cpu: "100m", memory: "256Mi"}
     limits: {cpu: "1", memory: "1Gi"}
 
 ingress:
   enabled: true
-  className: "nginx"
+  className: ""   # k3s defaults to Traefik; nginx must be installed separately if desired
   host: rask.local
   annotations: {}
   tls: []   # e.g. [{secretName: rask-tls, hosts: [rask.example.org]}]

@@ -462,3 +462,31 @@ def test_build_entrypoint_http_kind_runs_the_job_script() -> None:
         "  --batch VOL_A \\\n"
         "  --batch VOL_B"
     )
+
+
+def test_build_entrypoint_s3_mode_uses_input_prefix() -> None:
+    """s3 source_mode emits --input/--prefix (S3Source) and omits --batch/--cache-bucket/--iiif-url."""
+    params = RunnerParams(
+        repo_root=Path("/repo"),
+        cache_bucket="images-batch",
+        output="s3://images-batch-alto",
+        iiif_url="https://iiifintern-ai.ra.se",
+        source_mode="s3",
+        input_uri="s3://images-batch",
+    )
+    out = build_entrypoint(["VOL_A"], params=params, spec=PIPELINE_SPECS["htrflow"])
+    assert out == (
+        "uv run --project projects/runner runner \\\n"
+        "  --input s3://images-batch \\\n"
+        "  --output s3://images-batch-alto \\\n"
+        "  --prefix VOL_A/ \\\n"
+        "  --pipeline htrflow"
+    )
+
+
+def test_build_entrypoint_s3_mode_defaults_off() -> None:
+    """RunnerParams without source_mode defaults to iiif — byte-identical path unchanged."""
+    params = RunnerParams(repo_root=Path("/r"), cache_bucket="images-batch", output="s3://o", iiif_url="https://i")
+    assert params.source_mode == "iiif"
+    out = build_entrypoint(["VOL_A"], params=params, spec=PIPELINE_SPECS["htr"])
+    assert "--batch VOL_A" in out and "--input" not in out

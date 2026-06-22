@@ -571,14 +571,14 @@ name = "core-api"
 version = "0.1.0"
 source = { editable = "components/services/core_api" }
 dependencies = [
-    { name = "core" },
+    { name = "core", extra = ["migrations", "postgres"] },
     { name = "service-kit" },
     { name = "uvicorn" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "core", editable = "components/services/core" },
+    { name = "core", extras = ["migrations", "postgres"], editable = "components/services/core" },
     { name = "service-kit", editable = "packages/service-kit" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
@@ -2139,14 +2139,14 @@ name = "orchestrator"
 version = "0.1.0"
 source = { editable = "components/services/orchestrator" }
 dependencies = [
-    { name = "core" },
+    { name = "core", extra = ["postgres"] },
     { name = "service-kit" },
     { name = "uvicorn" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "core", editable = "components/services/core" },
+    { name = "core", extras = ["postgres"], editable = "components/services/core" },
     { name = "service-kit", editable = "packages/service-kit" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]

@@ -3,7 +3,7 @@ name = "core-api-project"
 version = "0.1.0"
 description = "Deployable: core-api service."
 requires-python = ">=3.13"
-dependencies = ["core-api"]
+dependencies = ["core-api", "core[migrations]"]
 
 [tool.uv.sources]
 core-api = { workspace = true }
