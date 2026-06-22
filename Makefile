@@ -276,3 +276,29 @@ K3S_IMAGES = $(COMPOSE_IMAGES) frontend ray
 
 k3s-install: ## One-time host setup: k3s + helm + NVIDIA device-plugin + KubeRay operator (sudo)
 	./scripts/k3s-install.sh
+
+k3s-build: ## Build all fleet + frontend + ray images as :dev (native arm64)
+	@for s in $(COMPOSE_IMAGES); do \
+	  echo ">> building $$s:dev"; \
+	  docker buildx build -f .docker/$$s.dockerfile -t $$s:dev --load . || exit 1; \
+	done
+	docker buildx build -f .docker/frontend.dockerfile -t frontend:dev --load .
+	docker buildx build -f .docker/ray.dockerfile -t ray:dev --load .
+
+k3s-import: ## Side-load :dev images into k3s containerd
+	@for s in $(K3S_IMAGES); do \
+	  echo ">> importing $$s:dev"; \
+	  docker save $$s:dev | sudo k3s ctr images import - || exit 1; \
+	done
+
+k3s-up: ## Install/upgrade the rask release and wait for the gateway
+	$(HELM) upgrade --install rask ./chart --wait --timeout 10m
+	$(KUBECTL) rollout status deploy/rask-gateway --timeout=300s
+	@echo "UI → http://rask.local/   (add '127.0.0.1 rask.local' to /etc/hosts)"
+	@echo "API → http://rask.local/api/health"
+
+k3s-down: ## Uninstall the rask release (keep PVCs)
+	$(HELM) uninstall rask || true
+
+k3s-purge: k3s-down ## Uninstall + delete PVCs (postgres/minio/hf-cache data)
+	$(KUBECTL) delete pvc -l app.kubernetes.io/instance=rask || true
