@@ -5,7 +5,6 @@
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
 	import { AppShell } from '@rask/ui/shell';
-	import RayStatus from '$lib/components/ray-status.svelte';
 	import type { Snippet } from 'svelte';
 	let { children }: { children: Snippet } = $props();
 </script>
@@ -15,13 +14,8 @@
 	<Toaster />
 {/if}
 
-{#snippet status()}
-	<RayStatus />
-{/snippet}
-
 <!-- Shared shell from @rask/ui — identical chrome across every microfrontend.
-     `base` (=/compute) strips the breadcrumb prefix; `status` renders Ray health
-     in the footer profile dropdown. -->
-<AppShell pathname={page.url.pathname} {status}>
+     Ray health is a live signal at the top of the compute overview, not in the shell. -->
+<AppShell pathname={page.url.pathname}>
 	{@render children()}
 </AppShell>

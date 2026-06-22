@@ -2,9 +2,8 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { rayHealth } from '@rask/api';
 
-	// Ray cluster health, rendered into the shared AppShell footer dropdown via the
-	// `status` snippet. Lives in the app (not @rask/ui) so the shared shell never
-	// imports app data like @rask/api.
+	// Ray cluster health — a live signal at the top of the compute overview. Lives in
+	// the app (not @rask/ui) so the shared shell never imports app data like @rask/api.
 	let health = $state<{ ok: boolean; version?: string; error?: string } | null>(null);
 	let timer: ReturnType<typeof setInterval> | null = null;
 

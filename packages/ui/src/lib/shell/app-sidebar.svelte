@@ -1,5 +1,4 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
 	import * as Sidebar from '../components/sidebar/index.js';
 	import ProjectSwitcher from './project-switcher.svelte';
 	import NavMain from './nav-main.svelte';
@@ -8,18 +7,15 @@
 
 	// The shadcn sidebar-07 structure: collapsible-to-icon sidebar with a project
 	// switcher (header), an accordion NavMain (content), and a profile dropdown
-	// (footer). Pure shared shell — `pathname` comes from the app's $app/state; the
-	// app-specific `status` snippet (e.g. Ray health) renders in the footer.
+	// (footer). Pure shared shell — `pathname` comes from the app's $app/state.
 	let {
 		pathname = '',
 		project,
 		user,
-		status,
 	}: {
 		pathname?: string;
 		project?: Project;
 		user?: NavUserData;
-		status?: Snippet;
 	} = $props();
 </script>
 
@@ -31,7 +27,7 @@
 		<NavMain {pathname} />
 	</Sidebar.Content>
 	<Sidebar.Footer>
-		<NavUser {user} {status} />
+		<NavUser {user} />
 	</Sidebar.Footer>
 	<Sidebar.Rail />
 </Sidebar.Root>

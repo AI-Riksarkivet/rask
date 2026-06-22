@@ -1,5 +1,4 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
 	import { Avatar, AvatarFallback } from '../components/avatar/index.js';
 	import * as DropdownMenu from '../components/dropdown-menu/index.js';
 	import * as Sidebar from '../components/sidebar/index.js';
@@ -8,13 +7,10 @@
 	import { ChevronsUpDown, Sun, Moon, Settings } from '@lucide/svelte';
 	import type { NavUser } from './nav-config.js';
 
-	// sidebar-07 NavUser, adapted: identity + an app-specific `status` slot (e.g.
-	// compute renders Ray health) + theme toggle + settings. The shared shell never
-	// imports app data like @rask/api — the app passes `status` in.
-	let {
-		user = { name: 'rask', email: 'local', initials: 'RA' },
-		status,
-	}: { user?: NavUser; status?: Snippet } = $props();
+	// sidebar-07 NavUser, adapted: identity + theme toggle + settings. App-specific
+	// live status (e.g. Ray health) lives in the app's own pages, not here — the
+	// shared shell never imports app data like @rask/api.
+	let { user = { name: 'rask', email: 'local', initials: 'RA' } }: { user?: NavUser } = $props();
 	const sidebar = useSidebar();
 </script>
 
@@ -56,10 +52,6 @@
 						</div>
 					</div>
 				</DropdownMenu.Label>
-				{#if status}
-					<DropdownMenu.Separator />
-					<div class="px-2 py-1.5">{@render status()}</div>
-				{/if}
 				<DropdownMenu.Separator />
 				<DropdownMenu.Item onclick={toggleMode}>
 					<Sun class="size-4 dark:hidden" />

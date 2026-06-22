@@ -15,10 +15,7 @@
 	<Toaster />
 {/if}
 
-<!-- ONE shared shell from @rask/ui — identical across every microfrontend, no drift.
-     The transitional catch-all omits the footer Ray-status snippet: its large type
-     graph trips a Bun svelte dual-copy Snippet-brand check that the dedicated compute
-     app (same code) does not. Runtime is unaffected; this app is slated for retirement. -->
+<!-- ONE shared shell from @rask/ui — identical across every microfrontend, no drift. -->
 <AppShell pathname={page.url.pathname}>
 	{@render children()}
 </AppShell>
