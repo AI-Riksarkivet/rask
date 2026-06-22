@@ -34,7 +34,7 @@ a Ray health badge polled every 5s. The viewer's zoom/pan + ALTO parsing live in
 ## Component library — `packages/component-lib`
 
 A standalone Svelte 5 + Bits UI + Tailwind 4 library (package name
-`@your-repo/oxen`), built with `@sveltejs/package` and showcased in **Storybook**
+`@rask/ui`), built with `@sveltejs/package` and showcased in **Storybook**
 (`make storybook` → `:6006`). It currently ships three components — **Button**,
 **Card**, **Dialog** (compound) — plus design tokens and a `cn()` helper.
 

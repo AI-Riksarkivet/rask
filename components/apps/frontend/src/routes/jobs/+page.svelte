@@ -4,9 +4,9 @@
 	import { ChevronRight } from 'lucide-svelte';
 	import { rayJobs, type RayJobsPayload, type RayJob } from '$lib/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
-	import { SortHeader } from '@your-repo/oxen/sort-header';
+	import { SortHeader } from '@rask/ui/sort-header';
 	import { Card } from '$lib/components/ui/card';
-	import { Badge, type BadgeVariant } from '@your-repo/oxen/badge';
+	import { Badge, type BadgeVariant } from '@rask/ui/badge';
 
 	let payload = $state<RayJobsPayload | null>(null);
 	let error = $state<string | null>(null);

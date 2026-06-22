@@ -3,7 +3,7 @@
 > Status: **planning + in-progress**. Source: MFE-decomposition workflow (4 read-only
 > analyses + synthesis, 2026-06-18). Loyal to rask conventions: Bun, svelte-adapter-bun,
 > valibot, `components/apps/*` explicit workspaces, `kit.paths.base` per app, shared
-> `@your-repo/oxen` lib, gateway behind the SvelteKit server.
+> `@rask/ui` lib, gateway behind the SvelteKit server.
 
 ## MFE apps (target)
 
@@ -37,16 +37,16 @@ itself in `<RayShell>`. RayShell renders **both** a top bar (logo, health badge,
 per-page snippets) **and** a 56px left icon-rail (its own sidebar). The new shadcn sidebar must
 **replace** that icon-rail; RayShell keeps only the top bar (moved into `Sidebar.Inset`'s header).
 
-## Component audit → oxen
+## Component audit → @rask/ui
 
-**Move to oxen (`packages/component-lib`, net-new):** `layout/sort-header.svelte` (5 routes),
-`ui/badge/*` (11 routes), `ui/progress/*`, `ui/separator/*`, `ui/tooltip/*` (oxen-grade but dead today).
+**Move to @rask/ui (`packages/component-lib`, net-new):** `layout/sort-header.svelte` (5 routes),
+`ui/badge/*` (11 routes), `ui/progress/*`, `ui/separator/*`, `ui/tooltip/*` (@rask/ui-grade but dead today).
 
-**Dedupe (oxen already exports):** `ui/button/*`, `ui/card/*` → switch frontend imports to
-`@your-repo/oxen/button` + `/card`, delete local copies (verify oxen's surface matches first).
+**Dedupe (@rask/ui already exports):** `ui/button/*`, `ui/card/*` → switch frontend imports to
+`@rask/ui/button` + `/card`, delete local copies (verify @rask/ui's surface matches first).
 
 **Delete (unused):** `catalog-hit-card.svelte` (zero importers, domain-specific).
-`ui/progress`, `ui/separator`, `ui/tooltip/*` are dead in-app — promote to oxen rather than discard.
+`ui/progress`, `ui/separator`, `ui/tooltip/*` are dead in-app — promote to @rask/ui rather than discard.
 
 ## Execution order (non-breaking — keep the app working at every step)
 
@@ -54,6 +54,6 @@ per-page snippets) **and** a 56px left icon-rail (its own sidebar). The new shad
 2. Phase 3 — build the unified sidebar **in the current single app**, replacing ray-shell's rail
 3. Phase 4 — port ra-hcp S3 UI into a `/s3` route (single app), under the Storage group
 4. Phase 5 — add turborepo (`turbo.json`) over the existing Bun workspace (non-breaking)
-5. Phase 6 — extract shared packages (oxen additions, `@rask/api`, configs)
+5. Phase 6 — extract shared packages (@rask/ui additions, `@rask/api`, configs)
 6. Phase 7 — split routes into the four `*-frontend` apps with `kit.paths.base`
 7. Phase 8 — `microfrontends.json` + `turbo dev` proxy (dev) / gateway routing (prod) + docs

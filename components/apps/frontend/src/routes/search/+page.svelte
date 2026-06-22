@@ -12,7 +12,7 @@
 	} from '$lib/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Card } from '$lib/components/ui/card';
-	import { Badge } from '@your-repo/oxen/badge';
+	import { Badge } from '@rask/ui/badge';
 	import { Search, Loader2, Copy, Check, ExternalLink } from 'lucide-svelte';
 
 	type Scope = 'lines' | 'catalog';

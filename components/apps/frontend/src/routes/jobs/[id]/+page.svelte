@@ -14,8 +14,8 @@
 	} from '$lib/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Card } from '$lib/components/ui/card';
-	import { Badge, type BadgeVariant } from '@your-repo/oxen/badge';
-	import { SortHeader } from '@your-repo/oxen/sort-header';
+	import { Badge, type BadgeVariant } from '@rask/ui/badge';
+	import { SortHeader } from '@rask/ui/sort-header';
 	import { ArrowLeft, TriangleAlert, FileText, ChevronRight, RefreshCw } from 'lucide-svelte';
 
 	const id = $derived(decodeURIComponent(page.params.id ?? ''));

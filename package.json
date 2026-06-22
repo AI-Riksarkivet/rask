@@ -5,6 +5,7 @@
 	"packageManager": "bun@1.3.13",
 	"workspaces": [
 		"components/apps/frontend",
+		"components/apps/storage-frontend",
 		"packages/component-lib"
 	],
 	"scripts": {

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page as pageStore } from '$app/state';
 	import { Button } from '$lib/components/ui/button';
-	import { Badge } from '@your-repo/oxen/badge';
+	import { Badge } from '@rask/ui/badge';
 	import * as Sidebar from '$lib/components/ui/sidebar';
 	import { toggleMode } from 'mode-watcher';
 	import { Sun, Moon } from 'lucide-svelte';

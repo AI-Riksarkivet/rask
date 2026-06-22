@@ -682,7 +682,7 @@ sed -i 's/"name": "ra-viewer-frontend"/"name": "viewer-frontend"/' components/ap
 
 - [ ] **Step 2: Add frontend to rask's bun workspaces**
 
-Edit `/home/morgan/rask/package.json`: in the `"workspaces"` array, add `"components/apps/frontend"` alongside the existing `"compontens/apps/webapp"` and `"packages/oxen_componets"`. Leave everything else unchanged.
+Edit `/home/morgan/rask/package.json`: in the `"workspaces"` array, add `"components/apps/frontend"` alongside the existing `"compontens/apps/webapp"` and `"packages/component-lib"`. Leave everything else unchanged.
 
 - [ ] **Step 3: Copy .claude/**
 

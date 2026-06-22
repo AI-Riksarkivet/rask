@@ -8,7 +8,7 @@
 	});
 </script>
 
-<!-- The oxen Dialog.Trigger wraps Bits UI with `WithoutChild`, so it renders its
+<!-- The @rask/ui Dialog.Trigger wraps Bits UI with `WithoutChild`, so it renders its
      own trigger button around `children` (no asChild/child snippet). -->
 <Story name="Default">
 	<Dialog.Root>

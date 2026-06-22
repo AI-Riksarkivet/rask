@@ -2,7 +2,7 @@
 
 **Goal:** Turborepo + Bun + SvelteKit 2 microfrontends on _our_ stack; shadcn-svelte
 grouped sidebar (no double sidebars); port ra-hcp's S3 UI; finish the SSR fix + audit
-cleanup; move shared components into the component library (oxen); update docs. Verify
+cleanup; move shared components into the component library (@rask/ui); update docs. Verify
 every Svelte edit with the Svelte 5 skill + `svelte` MCP. **Don't break anything** — test
 at each gate; not sloppy.
 
@@ -13,7 +13,7 @@ at each gate; not sloppy.
 - Apps under `components/apps/*`; packages under `packages/*`; **explicit** workspace membership (no globs)
 - SSR via **remote functions**; gateway sits _behind_ the SvelteKit server (`RASK_GATEWAY_URL`)
 - **`kit.paths.base`** per MFE app (NOT raw vite `base`)
-- Internal package scope: `@rask/*` (oxen stays `@your-repo/oxen` until renamed)
+- Internal package scope: `@rask/*` (@rask/ui renamed to `@rask/ui` (was the placeholder `@your-repo/@rask/ui`))
 
 ## Phases
 
@@ -80,9 +80,9 @@ at each gate; not sloppy.
       NB: full `turbo run check` is red ONLY on component-lib's pre-existing stale Storybook (→ Phase below)
 - [ ] LATER (task #10): extract @rask/typescript-config + @rask/eslint-config; split frontend →
       apps under components/apps/\* (compute/documents/batches/storage), each svelte-adapter-bun +
-      kit.paths.base, sharing oxen + api/remote; microfrontends.json + `turbo dev` proxy / gateway prod
+      kit.paths.base, sharing @rask/ui + api/remote; microfrontends.json + `turbo dev` proxy / gateway prod
 
-### Phase 3.5 — component-lib (oxen) Storybook health ✅ [unblocked green turbo + Phase 6]
+### Phase 3.5 — component-lib (@rask/ui) Storybook health ✅ [unblocked green turbo + Phase 6]
 
 - [x] bump Storybook 8→10 + `@storybook/svelte-vite` framework (lib, not SvelteKit); vite 6→8; vitest 3→4;
       @sveltejs/package 2.5.8; publint 0.3.21; svelte 5.56; ts 6; dropped 8-era addons (essentials/blocks/test)
@@ -94,20 +94,20 @@ at each gate; not sloppy.
       tokens.css export to `./dist/` (publint)
 - [x] verify: **turbo check 2/2 + turbo build 2/2 (publint All good!) + `build-storybook` succeeds** + MCP clean
 
-### Phase 6 — reusable components → oxen (clean wins done) 🟢
+### Phase 6 — reusable components → @rask/ui (clean wins done) 🟢
 
-- [x] **badge** promoted to oxen (`@your-repo/oxen/badge`) — 11 frontend sites swapped, local deleted.
-      Added `WithElementRef` helpers to oxen utils. **Verified styled**: built CSS contains bg-success/
+- [x] **badge** promoted to @rask/ui (`@rask/ui/badge`) — 11 frontend sites swapped, local deleted.
+      Added `WithElementRef` helpers to @rask/ui utils. **Verified styled**: built CSS contains bg-success/
       bg-warning/rounded-full → the `@source` directive works across the workspace.
-- [x] **sort-header** promoted to oxen (`@your-repo/oxen/sort-header`) — 5 sites swapped, local deleted;
-      added `lucide-svelte` as an oxen dep.
+- [x] **sort-header** promoted to @rask/ui (`@rask/ui/sort-header`) — 5 sites swapped, local deleted;
+      added `lucide-svelte` as an @rask/ui dep.
 - [x] **Tailwind @source**: `components/apps/frontend/src/app.css` scans `packages/component-lib/dist`
-      (Tailwind 4 ignores node_modules by default — without this, oxen classes render unstyled).
-- [x] catalog-hit-card already deleted (dead). oxen exports now: badge/button/card/dialog/sort-header/utils.
-- [ ] DEFERRED button/card dedupe: oxen has simpler button (sm/md/lg/icon); frontend's (shadcn "nova")
+      (Tailwind 4 ignores node_modules by default — without this, @rask/ui classes render unstyled).
+- [x] catalog-hit-card already deleted (dead). @rask/ui exports now: badge/button/card/dialog/sort-header/utils.
+- [ ] DEFERRED button/card dedupe: @rask/ui has simpler button (sm/md/lg/icon); frontend's (shadcn "nova")
       has icon-xs/icon-sm used by ray-shell. Needs API reconciliation (promote the richer one) before
       switching — risky, do deliberately, not rushed.
-- [ ] DEFERRED: promote the whole sidebar into oxen during the MFE split (every app needs it).
+- [ ] DEFERRED: promote the whole sidebar into @rask/ui during the MFE split (every app needs it).
 
 ### Phase 8 — the physical 4-app MFE split (REMAINING — large, do deliberately)
 
@@ -115,22 +115,22 @@ Status: **scoped & unblocked, not started.** Everything below is additive; build
 app OUTSIDE root `workspaces` first, verify it boots in isolation, THEN add to workspaces so a
 half-built app never breaks the green monolith.
 
-**Gating finding (2026-06-22):** promoting the **sidebar into oxen cascades to the whole shadcn
+**Gating finding (2026-06-22):** promoting the **sidebar into @rask/ui cascades to the whole shadcn
 ui set** — `ui/sidebar/*` (26 files) depends on `tooltip`, `sheet`, `skeleton`, `input`,
 `separator`, `button`, the `hooks/is-mobile.svelte.ts` hook, and `$lib/utils` (cn + WithElementRef,
-already in oxen). So "shared sidebar" = move the entire ui primitive layer to oxen. Do this as a
-focused move (one PR), each set verified with `@source` (see [[reference-oxen-tailwind-source]]).
+already in @rask/ui). So "shared sidebar" = move the entire ui primitive layer to @rask/ui. Do this as a
+focused move (one PR), each set verified with `@source` (see [[reference-rask-ui-tailwind-source]]).
 
 **Order:**
 
-1. Move the shadcn ui set → oxen (`tooltip`/`sheet`/`skeleton`/`input`/`separator`/`button` dedupe +
-   `sidebar` + `is-mobile`). Reconcile button (frontend "nova" icon-xs/icon-sm vs oxen sm/md/lg/icon).
-   Put `app-sidebar`/`nav-config`/`ray-shell` in a shared `@rask/app-shell` (or oxen) too.
+1. Move the shadcn ui set → @rask/ui (`tooltip`/`sheet`/`skeleton`/`input`/`separator`/`button` dedupe +
+   `sidebar` + `is-mobile`). Reconcile button (frontend "nova" icon-xs/icon-sm vs @rask/ui sm/md/lg/icon).
+   Put `app-sidebar`/`nav-config`/`ray-shell` in a shared `@rask/app-shell` (or @rask/ui) too.
 2. Extract `@rask/typescript-config` + `@rask/eslint-config` (with-svelte structure) — created WITH
    the new apps (each app's tsconfig/eslint extends them from day one; do NOT rewire the monolith).
 3. Scaffold apps under `components/apps/{compute,documents,batches,storage}-frontend`, each:
    `svelte-adapter-bun`, `kit.paths.base: '/<group>'`, `experimental.remoteFunctions`, own
-   `app.html`/`app.css` (with `@source` oxen), shares oxen + a shared `@rask/api` (the api.ts +
+   `app.html`/`app.css` (with `@source` @rask/ui), shares @rask/ui + a shared `@rask/api` (the api.ts +
    remote/ + server/env.ts, moved out of the monolith), the shared sidebar.
 4. `microfrontends.json` (root app = the catch-all) + `turbo dev` proxy (:3024) for local compose.
 5. Prod routing: gateway/K8s ingress path-routes `/compute`, `/documents`, `/batches`, `/storage`
@@ -139,7 +139,7 @@ focused move (one PR), each set verified with `@source` (see [[reference-oxen-ta
 
 ### Phase 7 — docs (ongoing)
 
-- [x] CLAUDE.md: frontend now SSR/svelte-adapter-bun + grouped sidebar + MFE-bound; oxen=@your-repo/oxen
+- [x] CLAUDE.md: frontend now SSR/svelte-adapter-bun + grouped sidebar + MFE-bound; @rask/ui=@rask/ui
       Storybook 10; added Turborepo + SSR-Svelte5 conventions; gateway-behind-SvelteKit clarified
 - [x] `docs/architecture/frontend-microfrontends.md` (decomposition + component audit + exec order)
 - [ ] update when the MFE split actually lands (per-app ports, microfrontends.json, gateway routing)
@@ -159,11 +159,11 @@ focused move (one PR), each set verified with `@source` (see [[reference-oxen-ta
 - 2026-06-18 Phase 3 sidebar done: shadcn grouped sidebar (Compute/Documents/Batches/Storage); ray-shell rail
   stripped → single sidebar; SSR-verified (4 group labels render, 0 old rails, 1 sidebar root).
 - 2026-06-18 Phase 5 turbo done: turbo 2.9.18 + turbo.json; root delegates; frontend check green via turbo.
-- 2026-06-18 Phase 3.5 oxen Storybook 8→10 done: framework svelte-vite, config scaffolded, stories fixed;
+- 2026-06-18 Phase 3.5 @rask/ui Storybook 8→10 done: framework svelte-vite, config scaffolded, stories fixed;
   turbo check 2/2 + build 2/2 + build-storybook OK. Whole workspace green.
 - 2026-06-18 docs updated (CLAUDE.md + frontend-microfrontends.md). FULL VERIFY PASS: turbo check 2/2,
   build 2/2, lint green, SSR run = 12 routes 200/302, single sidebar on every page, no server errors.
-- 2026-06-22 Phase 4 S3 scaffold + Phase 6 reusable components (badge+sort-header → oxen, verified styled).
+- 2026-06-22 Phase 4 S3 scaffold + Phase 6 reusable components (badge+sort-header → @rask/ui, verified styled).
 - 2026-06-22 **LOCKED IN (user choice "finish what's green")**: Phases 1–6 + docs complete & verified —
   turbo check 3/3, build 2/2, lint 0, SSR 12/12 routes, 0 errors. Phase 8 (4-app split) + OpenAPI codegen
   DEFERRED to a deliberate later effort (scoped above). Nothing left half-built; monolith fully works.

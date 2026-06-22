@@ -1,7 +1,7 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
-/* Scan the shared oxen component library so its Tailwind classes (badge, etc.)
+/* Scan the shared @rask/ui component library so its Tailwind classes (badge, etc.)
    are generated — Tailwind 4 ignores node_modules by default. */
 @source '../../../../packages/component-lib/dist';
 

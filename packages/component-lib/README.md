@@ -1,12 +1,12 @@
-# @your-repo/oxen
+# @rask/ui
 
 Svelte 5 component library. Bits UI primitives + Tailwind 4 + Storybook.
 
 ## Develop
 
 ```bash
-bun run --cwd packages/oxen_componets dev         # svelte-package -w
-bun run --cwd packages/oxen_componets storybook   # localhost:6006
+bun run --cwd packages/component-lib dev         # svelte-package -w
+bun run --cwd packages/component-lib storybook   # localhost:6006
 ```
 
 Or from the repo root:
@@ -21,7 +21,7 @@ bun run storybook
 ```jsonc
 {
 	"dependencies": {
-		"@your-repo/oxen": "workspace:*",
+		"@rask/ui": "workspace:*",
 		"bits-ui": "^2.18.0",
 	},
 }
@@ -29,7 +29,7 @@ bun run storybook
 
 ```svelte
 <script lang="ts">
-	import { Button, Dialog, Card } from '@your-repo/oxen';
+	import { Button, Dialog, Card } from '@rask/ui';
 </script>
 ```
 
@@ -37,9 +37,9 @@ In the app's CSS:
 
 ```css
 @import 'tailwindcss';
-@source '../../../../packages/oxen_componets/dist';
-@source '../../../../packages/oxen_componets/src';
-@import '@your-repo/oxen/styles/tokens.css';
+@source '../../../../packages/component-lib/dist';
+@source '../../../../packages/component-lib/src';
+@import '@rask/ui/styles/tokens.css';
 ```
 
 ## Adding a component

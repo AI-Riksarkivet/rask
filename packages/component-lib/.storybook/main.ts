@@ -1,6 +1,6 @@
 import type { StorybookConfig } from '@storybook/svelte-vite';
 
-// oxen is a Svelte component *library* (svelte-package), not a SvelteKit app —
+// @rask/ui is a Svelte component *library* (svelte-package), not a SvelteKit app —
 // so the framework is @storybook/svelte-vite, not @storybook/sveltekit.
 const config: StorybookConfig = {
 	stories: ['../src/**/*.stories.@(js|ts|svelte)'],

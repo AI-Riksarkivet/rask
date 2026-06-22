@@ -16,7 +16,7 @@
 # components/apps/frontend/svelte.config.js is a one-line opt-in if you
 # want gzip-precompressed assets.
 #
-# Deviation from base template: packages/component-lib (@your-repo/oxen) exports
+# Deviation from base template: packages/component-lib (@rask/ui) exports
 # from ./dist/ (svelte-package output) which does not exist as source. A pre-build
 # step `bun --cwd packages/component-lib run build` is required before the frontend
 # build so module resolution succeeds.
@@ -36,7 +36,7 @@ COPY package.json bun.lock    ./
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install --frozen-lockfile
 
-# Pre-build component-lib so @your-repo/oxen dist/ exports are resolvable.
+# Pre-build component-lib so @rask/ui dist/ exports are resolvable.
 # packages/component-lib/svelte.config.js carries `config.package` which @sveltejs/package@2
 # rejects with a hard error. Replace it with a minimal valid config before packaging.
 # `package` script = svelte-package only (skips publint which is a dev/CI concern).

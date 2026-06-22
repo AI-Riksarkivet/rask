@@ -8,4 +8,4 @@ Conventional commits — see `cliff.toml` for the changelog parsers.
 
 ## Adding a UI component
 
-See `packages/oxen_componets/README.md`.
+See `packages/component-lib/README.md`.

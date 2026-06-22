@@ -2,9 +2,9 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { actorsList, rayCluster, type ActorInfo, type RayNode } from '$lib/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
-	import { SortHeader } from '@your-repo/oxen/sort-header';
+	import { SortHeader } from '@rask/ui/sort-header';
 	import { Card } from '$lib/components/ui/card';
-	import { Badge } from '@your-repo/oxen/badge';
+	import { Badge } from '@rask/ui/badge';
 	import {
 		Boxes,
 		ServerCog,

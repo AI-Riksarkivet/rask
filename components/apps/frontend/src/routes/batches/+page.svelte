@@ -15,7 +15,7 @@
 	} from '$lib/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Card } from '$lib/components/ui/card';
-	import { Badge, type BadgeVariant } from '@your-repo/oxen/badge';
+	import { Badge, type BadgeVariant } from '@rask/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { RefreshCw, Send } from 'lucide-svelte';
 

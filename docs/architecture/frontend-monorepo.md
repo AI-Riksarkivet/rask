@@ -6,7 +6,7 @@ How the SvelteKit side of `rask` is intended to scale beyond a single viewer.
 
 - Every user-facing surface (viewer, pipeline studio, admin, …) is its **own
   SvelteKit app** that builds and deploys independently.
-- A single **`@rask/oxen` package** (lives in `packages/component-lib/`) holds
+- A single **`@rask/ui` package** (lives in `packages/component-lib/`) holds
   every design token, primitive (`Button`, `Card`, `Dialog`, …), and
   domain-free layout helper (`ResizeHandle`, `CollapsibleSection`, …).
 - Apps consume the lib at **build time** via bun workspaces. There is no
@@ -24,7 +24,7 @@ flowchart LR
         admin["admin<br/><sub>audit · users</sub>"]
     end
 
-    subgraph lib["packages/component-lib — @rask/oxen"]
+    subgraph lib["packages/component-lib — @rask/ui"]
         tokens["styles/tokens.css<br/><sub>dark theme, colors</sub>"]
         prim["components/primitives<br/><sub>Button, Card, Dialog, …</sub>"]
         layout["components/layout<br/><sub>ResizeHandle, Spinner, …</sub>"]
@@ -71,12 +71,12 @@ flowchart TB
     state["src/lib/state.svelte.ts<br/><sub>app-local store</sub>"]
     types["src/lib/types.ts<br/><sub>domain types</sub>"]
     engine["src/lib/engine/<br/><sub>app-specific logic</sub>"]
-    oxen["@rask/oxen<br/><sub>imported, not vendored</sub>"]
+    @rask/ui["@rask/ui<br/><sub>imported, not vendored</sub>"]
 
     routes --> components
     components --> state
     components --> types
-    components --> oxen
+    components --> @rask/ui
     state --> engine
 ```
 
@@ -95,7 +95,7 @@ flowchart LR
         feB["apps/viewer<br/><sub>canvas + PII editor</sub>"]
         psB["apps/pipeline-studio<br/><sub>extracted from SettingsDrawer</sub>"]
         shB["apps/shell<br/><sub>landing + nav</sub>"]
-        libB["packages/component-lib<br/><sub>@rask/oxen</sub>"]
+        libB["packages/component-lib<br/><sub>@rask/ui</sub>"]
     end
 
     feA -. "split + extract" .-> feB
@@ -142,7 +142,7 @@ Either way, each app is **independently buildable and deployable**.
 ```
 rask/
 ├── packages/
-│   └── component-lib/                    # @rask/oxen
+│   └── component-lib/                    # @rask/ui
 │       └── src/lib/
 │           ├── styles/tokens.css         # design tokens — single source
 │           ├── utils/cn.ts
@@ -184,7 +184,7 @@ dev` keeps the lib watch-compiling for cross-app HMR.
 
 1. Promote `cn`, `tokens.css`, and the existing primitives (Button, Card,
    Dialog) in `packages/component-lib/` to be the _single_ source. Delete the
-   frontend duplicates. Frontend imports from `@rask/oxen`.
+   frontend duplicates. Frontend imports from `@rask/ui`.
 2. Move the remaining primitives (Badge, Separator, Progress, Tooltip) from
    `frontend/src/lib/components/ui/` into the lib. Frontend re-imports.
 3. Move the layout helpers (`ResizeHandle`, `CollapsibleSection`, `Spinner`,
@@ -241,7 +241,7 @@ The lib's `exports` point at **source files** (`.ts`, `.svelte`):
 
 - Lib must be **built first** (`bun --cwd packages/component-lib run build`)
   or run in **watch mode** (`run dev` → `svelte-package -w`) for HMR.
-- This is how an external consumer of `@rask/oxen` would experience it —
+- This is how an external consumer of `@rask/ui` would experience it —
   useful when you want CI to verify the published artefact actually works.
 - Boot: `bun --cwd packages/component-lib run dev &` then `bun --cwd
 components/apps/viewer run dev`.
@@ -250,7 +250,7 @@ components/apps/viewer run dev`.
 
 For rask, use **Mode A**. Reasons:
 
-- Single-org monorepo — no external consumers of `@rask/oxen` yet.
+- Single-org monorepo — no external consumers of `@rask/ui` yet.
 - HMR latency for component edits drops from "rebuild + reload" to "instant".
 - One less long-running process during dev.
 
@@ -261,8 +261,8 @@ conditions) only when the lib starts being published outside this repo.
 
 | Run | Loads | Doesn't load |
 | --- | --- | --- |
-| `bun --cwd components/apps/viewer run dev` | viewer routes + `@rask/oxen` source the viewer imports | studio, admin, shell — entire other apps stay dormant |
-| `bun --cwd components/apps/pipeline-studio run dev` | studio routes + `@rask/oxen` | viewer, admin, shell |
+| `bun --cwd components/apps/viewer run dev` | viewer routes + `@rask/ui` source the viewer imports | studio, admin, shell — entire other apps stay dormant |
+| `bun --cwd components/apps/pipeline-studio run dev` | studio routes + `@rask/ui` | viewer, admin, shell |
 | `bun --cwd packages/component-lib run storybook` | the lib + Storybook | no app at all |
 
 Each app's `vite.config.ts` only crawls its own `src/` graph. The shared

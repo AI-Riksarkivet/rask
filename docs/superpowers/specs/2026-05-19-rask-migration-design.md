@@ -13,7 +13,7 @@ history is **not** preserved.
 ## Structure
 
 `rask`'s existing example scaffold (`compontens/`, `packages/lib1,lib2,shared,
-oxen_componets`) is left untouched — greenfield for new work. ra-batch lands as
+component-lib`) is left untouched — greenfield for new work. ra-batch lands as
 new bricks alongside it.
 
 ```

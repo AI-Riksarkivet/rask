@@ -4,7 +4,7 @@
 	import { page as pageStore } from '$app/state';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { Badge } from '@your-repo/oxen/badge';
+	import { Badge } from '@rask/ui/badge';
 	import {
 		ChevronLeft,
 		ChevronRight,

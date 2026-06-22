@@ -1,7 +1,7 @@
 <script lang="ts">
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Card } from '$lib/components/ui/card';
-	import { Badge } from '@your-repo/oxen/badge';
+	import { Badge } from '@rask/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { listObjects } from '$lib/remote/storage.remote';
 	import { BUCKETS, type Bucket } from '$lib/storage';
