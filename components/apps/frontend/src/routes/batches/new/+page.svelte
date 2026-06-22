@@ -76,8 +76,16 @@
 				e.preventDefault();
 				dragOver = true;
 			}}
-			ondragleave={() => (dragOver = false)}
+			ondragleave={(e: DragEvent) => {
+				if (!(e.currentTarget as Node).contains(e.relatedTarget as Node)) dragOver = false;
+			}}
 			ondrop={onDrop}
+			onkeydown={(e: KeyboardEvent) => {
+				if (e.key === 'Enter' || e.key === ' ') {
+					e.preventDefault();
+					(e.currentTarget as HTMLElement).querySelector<HTMLInputElement>('input[type=file]')?.click();
+				}
+			}}
 		>
 			<Upload class="mx-auto mb-2 h-6 w-6 opacity-60" />
 			<p class="text-sm">Drag &amp; drop images here, or</p>
@@ -114,13 +122,13 @@
 		{/if}
 
 		<Button onclick={ingest} disabled={!canIngest}>
-			{busy ? 'Ingesting…' : `Ingest ${files.length || ''} image${files.length === 1 ? '' : 's'}`}
+			{busy ? 'Ingesting…' : files.length === 0 ? 'Ingest images' : `Ingest ${files.length} image${files.length === 1 ? '' : 's'}`}
 		</Button>
 
 		{#if error}<p class="text-destructive text-sm">{error}</p>{/if}
 		{#if result}
 			<div class="space-y-1 rounded border border-green-600 p-3 text-sm">
-				<p>Ingested <strong>{result.batch_id}</strong> — {result.page_count} pages.</p>
+				<p>Ingested <strong>{result.batch_id}</strong> — {result.page_count ?? 0} pages.</p>
 				<div class="flex gap-3">
 					<a class="underline" href="/batches">Back to Batches</a>
 					<a class="underline" href={`/viewer/${result.batch_id}`}>Open viewer</a>
