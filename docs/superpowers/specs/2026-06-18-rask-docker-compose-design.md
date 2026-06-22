@@ -95,14 +95,29 @@ A compose-level `.env` (or `environment:` blocks) supplies:
 
 **Validated round-trip:** upload images to `minio/images-batch/<vol>/` → `POST /api/v1/batches/<vol>/register` (201, `page_count=N`) → `POST /api/v1/orchestrator/start` (or run the runner directly) → ALTO XML in `images-batch-alto/<vol>/`, viewable through the gateway/frontend.
 
-### 6. Testing / verification
+### 6. Testing / verification — RESULTS (2026-06-22, verified on the GB10)
 
-- `docker compose config` parses and validates.
-- `make compose-build` succeeds for all images on arm64.
-- `make compose-up` brings every long-running service to `healthy`; `migrate` and `minio-init` exit 0.
-- End-to-end demo round-trip emits valid ALTO v4 in the output bucket.
-- GPU correctness (torch sm_120 in-container) is exercised here — the accepted "assume base" risk. If it fails, document the CPU-only fallback (`RASK_SERVE_GPU_FRAC=0`, drop `gpus: all`).
-- `make check` (ruff + ty) stays green for any code touched (e.g. a tiny compose-only config addition, if any).
+The full stack was brought up and the HTR round-trip proven end-to-end:
+
+- `docker compose config` parses; `make compose-build` builds all images on arm64.
+- `make compose-up`: all long-running services reach `healthy`; `migrate` and `minio-init` exit 0; `core-api`/`search-api`/`volumes-api`/`ray-api`/`orchestrator`/`gateway`/`frontend` healthy.
+- **GPU correctness CONFIRMED** — `torch.cuda.is_available() == True` inside `ray:dev` on the GB10 (sm_120), and the htrflow Serve replica ran real GPU inference. The accepted "assume base" risk is **retired**.
+- **htrflow Serve deploys** — `deploy_serve.py up --app htrflow` → `Application 'htrflow' is ready at .../htrflow` (models served from the persisted `hf-cache` volume, ~40s).
+- **Round-trip PASSED** — upload `demo.jpg` ×2 → `s3://images-batch/testvol/{page_0001,page_0002}.jpg`; `POST /api/v1/batches/testvol/register` → `201`, `page_count=2`, `manifest_status=ok`, `cached_pages=2`; `runner --input s3://images-batch --prefix testvol/ --output s3://images-batch-alto --pipeline htrflow` → `Done — ok=2, skipped=0` in 9.8s. Output bucket holds `testvol/page_0001.xml` + `page_0002.xml` (11 KiB each), **valid ALTO v4** (`alto-4-4.xsd`, `MeasurementUnit=pixel`) with real transcribed Swedish handwriting (17 `<String>` tokens, e.g. "Mommouth den 29 1882.").
+
+#### Fixes found during verification (committed)
+
+- **`ray.dockerfile` missing OpenCV runtime libs.** The htrflow replica crashed at init with `ImportError: libxcb.so.1: cannot open shared object file` — `cv2` (pulled in by htrflow) dlopen-links `libGL.so.1`, `libglib-2.0.so.0`/`libgthread-2.0.so.0`, `libxcb.so.1`, none present in the slim CUDA runtime base. Fixed by adding `libgl1 libglib2.0-0 libxcb1` to the final-stage apt install.
+- **`ray-head` `RAY_ADDRESS=auto`.** `deploy_serve.py` must connect to the in-process head, not via the `ray://` client protocol (self-referential). Set on the `ray-head` service.
+- **`core[postgres]` extras** on `orchestrator` (and `core-api`) so the asyncpg driver is present in those images.
+
+#### Known gap / follow-up — orchestrator auto-submission
+
+The supported processing trigger in compose is the **runner invoked inside `ray-head`** (proven above); `RASK_ORCHESTRATOR_AUTOSTART=false` by design. The orchestrator's `POST /orchestrator/start` submission path is **not wired for compose**: `build_entrypoint` (s3-mode) emits `uv run --project projects/runner runner …` submitted via `JobSubmissionClient`, which assumes (a) a Ray **dashboard URL** (not in `.env`) and (b) a **repo + uv working dir** the `ray:dev` image does not carry (runner is installed as a console script only). Wiring this — e.g. submit a plain `runner …` entrypoint against `RAY_DASHBOARD_URL=http://ray-head:8265` with the image's installed CLI — is a scoped follow-up; it does not block the local round-trip.
+
+#### CPU-only fallback (documented)
+
+If a future host lacks a working GPU base: set `RASK_SERVE_GPU_FRAC=0` and remove the `deploy.resources` GPU reservation + `runtime: nvidia` from `ray-head`. Slower but functional.
 
 ## Out of scope / follow-ups
 

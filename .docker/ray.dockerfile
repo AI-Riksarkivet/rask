@@ -81,9 +81,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 # base is an unpinned arm64 CUDA-13 tag; pin a digest once a known-good one is chosen.
 # Reason: apt version-pinning these transitives would require chasing rolling updates.
 # hadolint ignore=DL3008
+# libgl1 libglib2.0-0 libxcb1: OpenCV (cv2, pulled in by htrflow) dlopen-links
+# libGL.so.1, libglib-2.0.so.0/libgthread-2.0.so.0, and libxcb.so.1 — absent from
+# the slim CUDA runtime base, so `import cv2` fails at replica init without them.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates tini libgomp1 curl \
+      libgl1 libglib2.0-0 libxcb1 \
  && rm -rf /var/lib/apt/lists/* \
  && useradd -r --no-create-home --shell /usr/sbin/nologin --uid 10001 app \
  && mkdir -p /cache/hf /app && chown -R app:app /cache /app

@@ -61,6 +61,9 @@ services:
     image: ray:dev
     pull_policy: never
     <<: *svc-env
+    # RAY_ADDRESS=auto so deploy_serve.py connects to the in-process head
+    # (not via the ray:// client protocol, which would fail self-referentially).
+    environment: {RAY_ADDRESS: "auto"}
     command: >
       bash -lc "ray start --head --dashboard-host 0.0.0.0 --num-gpus=1 &&
       python /app/deploy_serve.py up --app htrflow &&

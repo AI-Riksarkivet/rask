@@ -6,7 +6,7 @@ requires-python = ">=3.13"
 license = "AGPL-3.0-only"
 dependencies = [
     "service-kit",
-    "core",
+    "core[postgres]",
     "uvicorn>=0.30",
 ]
 
