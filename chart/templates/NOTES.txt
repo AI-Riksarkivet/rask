@@ -1,22 +1,29 @@
 rask {{ .Chart.AppVersion }} deployed as release "{{ .Release.Name }}".
 
-Components:
-  - gateway      Service: {{ include "rask.fullname" . }}-gateway:{{ (index .Values.services "gateway").port }}
-  - core-api     Service: {{ include "rask.fullname" . }}-core-api:{{ (index .Values.services "core-api").port }}
-  - frontend     (replicas={{ .Values.frontend.replicas }})  Service: {{ include "rask.fullname" . }}-frontend:{{ .Values.frontend.service.port }}
+Fleet services (ClusterIP):
+{{- range $name, $svc := .Values.services }}
+  - {{ $name }}: {{ include "rask.fullname" $ }}-{{ $name }}:{{ $svc.port }}
+{{- end }}
+  - frontend: {{ include "rask.fullname" . }}-frontend:{{ .Values.frontend.service.port }}
 {{- if .Values.postgres.enabled }}
-  - postgres     Service: {{ include "rask.fullname" . }}-postgres:{{ .Values.postgres.port }}
+  - postgres: {{ include "rask.fullname" . }}-postgres:{{ .Values.postgres.port }} (in-cluster)
 {{- end }}
 {{- if .Values.minio.enabled }}
-  - minio        Service: {{ include "rask.fullname" . }}-minio:{{ .Values.minio.port }}
+  - minio:    {{ include "rask.fullname" . }}-minio:{{ .Values.minio.port }} (in-cluster, console :{{ .Values.minio.consolePort }})
+{{- end }}
+{{- if .Values.ray.enabled }}
+  - ray:      {{ include "rask.fullname" . }}-ray-head-svc:{{ .Values.ray.dashboardPort }} (KubeRay; htrflow at {{ .Values.ray.serveRoutePrefix }})
 {{- end }}
 
 {{- if .Values.ingress.enabled }}
-Ingress host: http://{{ .Values.ingress.host }}/   (UI)   and   /api/health  (backend)
+UI:  http://{{ .Values.ingress.host }}/      API: http://{{ .Values.ingress.host }}/api/health
+Add "127.0.0.1 {{ .Values.ingress.host }}" to /etc/hosts if it is not resolvable.
 {{- else }}
-Ingress disabled — reach the gateway via: kubectl port-forward svc/{{ include "rask.fullname" . }}-gateway {{ (index .Values.services "gateway").port }}
+Ingress disabled — port-forward the gateway:
+  kubectl port-forward svc/{{ include "rask.fullname" . }}-gateway 8888
 {{- end }}
 
 Reminders:
-  * The orchestrator starts only if RASK_ORCHESTRATOR_AUTOSTART=true; otherwise POST /api/v1/orchestrator/start.
+  * The orchestrator starts only if RASK_ORCHESTRATOR_AUTOSTART=true (default false);
+    otherwise POST /api/v1/orchestrator/start.
   * DO NOT scale the orchestrator above 1 replica (in-process singleton).
