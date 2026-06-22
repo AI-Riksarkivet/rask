@@ -48,12 +48,13 @@ const under =
  */
 export const navMain: NavItem[] = [
 	{
+		// The Compute landing IS the overview (served at /compute) — clicking "Compute"
+		// shows it; the sub-routes are the rest of the cluster views (no separate Overview).
 		title: 'Compute',
 		icon: Server,
-		href: '/compute/overview',
+		href: '/compute',
 		match: under('/compute'),
 		items: [
-			{ title: 'Overview', href: '/compute/overview', match: seg('/compute/overview') },
 			{ title: 'Cluster', href: '/compute/cluster', match: seg('/compute/cluster') },
 			{ title: 'Jobs', href: '/compute/jobs', match: seg('/compute/jobs') },
 			{ title: 'Actors', href: '/compute/actors', match: seg('/compute/actors') },

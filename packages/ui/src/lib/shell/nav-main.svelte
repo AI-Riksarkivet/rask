@@ -20,9 +20,10 @@
 				<Collapsible.Root open={item.match(pathname)} class="group/collapsible">
 					{#snippet child({ props: rootProps })}
 						<Sidebar.MenuItem {...rootProps}>
-							<!-- Accordion parent: NOT highlighted (only the active leaf is); the open
-							     accordion + chevron convey the current domain. Links to its landing. -->
-							<Sidebar.MenuButton tooltipContent={item.title}>
+							<!-- Accordion parent links to its landing; highlights ONLY on that exact
+							     landing (e.g. /compute = overview), never on a sub-route — so no
+							     double-highlight with the active leaf. -->
+							<Sidebar.MenuButton tooltipContent={item.title} isActive={pathname === item.href}>
 								{#snippet child({ props })}
 									<a href={item.href} {...props}>
 										<item.icon />
