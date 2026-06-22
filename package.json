@@ -20,8 +20,8 @@
 		"dev:compute": "turbo run dev --filter=compute-frontend...",
 		"storybook": "bun --cwd=packages/ui run storybook",
 		"build-storybook": "bun --cwd=packages/ui run build-storybook",
-		"lint": "prettier --check '{components/apps/frontend,components/apps/storage-frontend,components/apps/compute-frontend,packages/api,packages/ui}/**/*.{ts,js,svelte,css,html,json,md}' '*.{json,md}' --ignore-path .gitignore && eslint components/apps/frontend packages/ui",
-		"lint:fix": "eslint components/apps/frontend packages/ui --fix",
+		"lint": "prettier --check '{components/apps/frontend,components/apps/storage-frontend,components/apps/compute-frontend,packages/api,packages/ui}/**/*.{ts,js,svelte,css,html,json,md}' '*.{json,md}' --ignore-path .gitignore && eslint components/apps/frontend components/apps/storage-frontend components/apps/compute-frontend packages/ui",
+		"lint:fix": "eslint components/apps/frontend components/apps/storage-frontend components/apps/compute-frontend packages/ui --fix",
 		"format": "prettier --write '{components/apps/frontend,components/apps/storage-frontend,components/apps/compute-frontend,packages/api,packages/ui}/**/*.{ts,js,svelte,css,html,json,md}' '*.{json,md}' --ignore-path .gitignore"
 	},
 	"devDependencies": {

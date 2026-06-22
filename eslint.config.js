@@ -5,7 +5,9 @@ import svelte from 'eslint-plugin-svelte';
 import { defineConfig } from 'eslint/config';
 import globals from 'globals';
 import ts from 'typescript-eslint';
+import computeSvelteConfig from './components/apps/compute-frontend/svelte.config.js';
 import frontendSvelteConfig from './components/apps/frontend/svelte.config.js';
+import storageSvelteConfig from './components/apps/storage-frontend/svelte.config.js';
 import libSvelteConfig from './packages/ui/svelte.config.js';
 
 const gitignorePath = path.resolve(import.meta.dirname, '.gitignore');
@@ -56,6 +58,34 @@ export default defineConfig(
 				extraFileExtensions: ['.svelte'],
 				parser: ts.parser,
 				svelteConfig: frontendSvelteConfig,
+			},
+		},
+	},
+	{
+		files: [
+			'components/apps/storage-frontend/**/*.svelte',
+			'components/apps/storage-frontend/**/*.svelte.ts',
+		],
+		languageOptions: {
+			parserOptions: {
+				projectService: true,
+				extraFileExtensions: ['.svelte'],
+				parser: ts.parser,
+				svelteConfig: storageSvelteConfig,
+			},
+		},
+	},
+	{
+		files: [
+			'components/apps/compute-frontend/**/*.svelte',
+			'components/apps/compute-frontend/**/*.svelte.ts',
+		],
+		languageOptions: {
+			parserOptions: {
+				projectService: true,
+				extraFileExtensions: ['.svelte'],
+				parser: ts.parser,
+				svelteConfig: computeSvelteConfig,
 			},
 		},
 	},
