@@ -66,6 +66,9 @@ def _connect() -> None:
 
 def cmd_up(app_name: str) -> int:
     _connect()
+    # Bind the Serve HTTP proxy to 0.0.0.0 so the endpoint is reachable from
+    # outside the container (Docker port-forward / k8s), not just loopback.
+    serve.start(http_options={"host": "0.0.0.0", "port": 8000})
     build, route = APPS[app_name]
     handle = serve.run(build(), name=app_name, route_prefix=route, blocking=False)
     print(f"Deployed app {app_name!r} at route {route}.")

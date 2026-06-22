@@ -79,6 +79,8 @@ services:
     shm_size: "8gb"
     ulimits: {nofile: 65535}
     volumes: [hf-cache:/cache/hf]
+    # 8265 Ray dashboard (cluster/jobs/serve UI), 8000 Ray Serve (htrflow endpoint).
+    ports: ["8265:8265", "8000:8000"]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/htrflow >/dev/null 2>&1 || curl -fsS http://127.0.0.1:8265/api/version >/dev/null"]
       interval: 20s
