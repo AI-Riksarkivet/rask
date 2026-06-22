@@ -1,6 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { browser } from '$app/environment';
+	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
@@ -17,8 +18,8 @@
 	<Toaster />
 {/if}
 
-<!-- The shared AppShell (one grouped sidebar) from @rask/ui — identical to the
-     monolith's, zero drift. pathname comes from $app/state (the lib can't read it). -->
-<AppShell pathname={page.url.pathname}>
+<!-- The shared AppShell (one grouped sidebar) from @rask/ui — identical to every
+     other microfrontend, zero drift. `base` (=/storage) strips the breadcrumb prefix. -->
+<AppShell pathname={page.url.pathname} {base}>
 	{@render children()}
 </AppShell>

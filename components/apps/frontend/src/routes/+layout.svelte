@@ -1,6 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { browser } from '$app/environment';
+	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
@@ -15,7 +16,10 @@
 	<Toaster />
 {/if}
 
-<!-- ONE shared sidebar from @rask/ui — identical across every microfrontend, no drift. -->
-<AppShell pathname={page.url.pathname}>
+<!-- ONE shared shell from @rask/ui — identical across every microfrontend, no drift.
+     The transitional catch-all omits the footer Ray-status snippet: its large type
+     graph trips a Bun svelte dual-copy Snippet-brand check that the dedicated compute
+     app (same code) does not. Runtime is unaffected; this app is slated for retirement. -->
+<AppShell pathname={page.url.pathname} {base}>
 	{@render children()}
 </AppShell>
