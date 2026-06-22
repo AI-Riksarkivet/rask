@@ -95,27 +95,27 @@ services:
       postgres: {condition: service_healthy}
       minio-init: {condition: service_completed_successfully}
       migrate: {condition: service_completed_successfully}
-    healthcheck: {test: ["CMD","curl","-fsS","http://127.0.0.1:8801/api/v1/health"], <<: *hc-api}
+    healthcheck: {test: ["CMD","curl","-fsS","http://127.0.0.1:8801/api/health"], <<: *hc-api}
 
   search-api:
     image: search-api:dev
     pull_policy: never
     <<: *svc-env
     depends_on: {postgres: {condition: service_healthy}}
-    healthcheck: {test: ["CMD","curl","-fsS","http://127.0.0.1:8802/api/v1/health"], <<: *hc-api}
+    healthcheck: {test: ["CMD","curl","-fsS","http://127.0.0.1:8802/api/health"], <<: *hc-api}
 
   volumes-api:
     image: volumes-api:dev
     pull_policy: never
     <<: *svc-env
     depends_on: {minio-init: {condition: service_completed_successfully}}
-    healthcheck: {test: ["CMD","curl","-fsS","http://127.0.0.1:8803/api/v1/health"], <<: *hc-api}
+    healthcheck: {test: ["CMD","curl","-fsS","http://127.0.0.1:8803/api/health"], <<: *hc-api}
 
   ray-api:
     image: ray-api:dev
     pull_policy: never
     <<: *svc-env
-    healthcheck: {test: ["CMD","curl","-fsS","http://127.0.0.1:8804/api/v1/health"], <<: *hc-api}
+    healthcheck: {test: ["CMD","curl","-fsS","http://127.0.0.1:8804/api/health"], <<: *hc-api}
 
   orchestrator:
     image: orchestrator:dev
@@ -125,7 +125,7 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
-    healthcheck: {test: ["CMD","curl","-fsS","http://127.0.0.1:8810/api/v1/health"], <<: *hc-api}
+    healthcheck: {test: ["CMD","curl","-fsS","http://127.0.0.1:8810/api/health"], <<: *hc-api}
 
   gateway:
     image: gateway:dev
@@ -137,16 +137,31 @@ services:
       volumes-api: {condition: service_healthy}
       ray-api: {condition: service_healthy}
       orchestrator: {condition: service_healthy}
-    ports: ["8888:8888"]
-    healthcheck: {test: ["CMD","curl","-fsS","http://127.0.0.1:8888/api/v1/docs"], <<: *hc-api}
+    # No host port: the ingress is the single front door. Reach the API at
+    # http://localhost:8888/api/... (ingress -> gateway).
+    healthcheck: {test: ["CMD","curl","-fsS","http://127.0.0.1:8888/api/docs"], <<: *hc-api}
 
+  # SvelteKit SSR (Bun) front door. Server-side load/remote functions hit the
+  # gateway via RASK_GATEWAY_URL; client-side /api/* is proxied by the ingress.
   frontend:
     build:
       context: .
       dockerfile: .docker/frontend.dockerfile
     image: frontend:dev
+    pull_policy: never
+    environment: {RASK_GATEWAY_URL: "http://gateway:8888", ORIGIN: "http://ingress"}
     depends_on: {gateway: {condition: service_healthy}}
-    ports: ["8080:80"]
+
+  # Local ingress: / -> frontend SSR, /api/* -> gateway. Mirrors the prod
+  # ingress so the SPA has a single same-origin host for page + API.
+  ingress:
+    image: caddy:2-alpine
+    depends_on:
+      gateway: {condition: service_healthy}
+      frontend: {condition: service_started}
+    ports: ["8888:80"]
+    volumes:
+      - ./.docker/ingress.Caddyfile:/etc/caddy/Caddyfile:ro
 
 volumes:
   minio-data:
