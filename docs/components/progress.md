@@ -182,3 +182,57 @@ focused move (one PR), each set verified with `@source` (see [[reference-rask-ui
   Gotchas encoded: adapter externalizes @sveltejs/kit (ship node_modules); bun-1.3 isolated linker
   (preserve .bun store + symlinked node_modules, run from app dir). Images ~850MB — slimming deferred.
   REMAINING: microfrontends.json + turbo dev proxy; the other 3 domain apps; sidebar→@rask/ui; gateway routing.
+
+## MFE consistency audit (2026-06-22) — the blocker/major list + live progress
+
+Six-dimension audit (6 agents, repo-verified) against the target MFE architecture.
+**3 blockers · 3 majors.** This checklist is the live tracker — tick as fixed.
+
+### 🔴 shared-chrome — **DONE** ✅ (commits `113b71d`, `9ec978d`, `0046074`)
+
+- [x] Top bar was a duplicated, Ray-specific `ray-shell` (×2, 21 routes); storage had none
+      → shared **integrated breadcrumb top bar in `@rask/ui` AppShell**; `ray-shell` slimmed to a
+      content wrapper; Ray health → footer `status` slot (compute).
+- [x] `nav-config` hrefs unprefixed → **base-aware absolute hrefs** (route cross-app correctly).
+- [x] Sidebar active-highlight broke under `kit.paths.base` → **base-aware match**.
+- [x] Theme toggle trapped in the top bar → moved to the **footer profile dropdown**.
+- [x] Sidebar redesigned to **shadcn sidebar-07**: project-switcher header (Default project),
+      footer avatar/profile dropdown (theme + Ray + settings), `collapsible="icon"`. Added
+      DropdownMenu + Avatar to `@rask/ui`.
+
+### 🔴 composition-proxy — **NOT STARTED**
+
+- [ ] `microfrontends.json` declares routing but **no proxy package installed** → apps only run
+      per-port (no single origin in dev). Install `@vercel/microfrontends` / the turbo proxy.
+- [ ] Prod chart sends everything to the catch-all → per-app Deployments + ingress.
+- [ ] *(Nav is now base-correct; needs this proxy to actually route cross-app in dev.)*
+
+### 🔴 data-layer — **PARTIAL**
+
+- [x] storage sidebar tokens were missing → app.css synced (`113b71d`).
+- [ ] Theme tokens **triplicated** across 3 app.css; `@rask/ui/styles/tokens.css` is a stale 37-line
+      vestige → consolidate to one imported source in `@rask/ui`.
+- [ ] storage opts out of `@rask/api` (own S3 client) + **no `/api` Vite proxy** → adopt `@rask/api`
+      S3 types + add the proxy.
+
+### 🟠 turborepo — **NOT STARTED**
+
+- [ ] ESLint covers only `frontend` + `@rask/ui` → **storage-frontend + compute-frontend UNLINTED**;
+      widen the glob + add a generic `components/apps/**` parser block.
+- [ ] `test` / `build-storybook` not registered as turbo tasks.
+
+### 🟠 app-parity — **PARTIAL**
+
+- [x] monolith `tsconfig` lone `rewriteRelativeImportExtensions` removed (`0046074`).
+- [x] storage deps aligned (mode-watcher/svelte-sonner/bits-ui/…).
+- [ ] storage `vite.config.ts` missing `ssr.noExternal` + `/api` proxy; `app.html` drift; unused devDeps.
+
+### 🟠 route-ownership — **NOT STARTED**
+
+- [ ] 8 compute routes **duplicated** in the catch-all (drifting) → retire them.
+- [ ] documents (search/browse/viewer) + batches **un-carved** → carve documents, then batches.
+- [ ] then retire the catch-all `viewer-frontend`.
+
+> Transitional debt: the catch-all monolith omits the footer Ray-status (a Bun `svelte` dual-copy
+> `Snippet`-brand type-check quirk in its large graph; runtime fine; app slated for retirement).
+> `ray-shell` is still imported by 21 routes as a no-op wrapper — drop it when carving documents/batches.
