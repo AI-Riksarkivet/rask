@@ -27,7 +27,7 @@ spec:
               service:
                 name: {{ include "rask.fullname" . }}-gateway
                 port:
-                  number: {{ (index .Values.services "gateway").port }}
+                  number: 8888
           - path: /
             pathType: Prefix
             backend:
