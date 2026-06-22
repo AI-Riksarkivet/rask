@@ -4,7 +4,7 @@ from datetime import timedelta
 from pathlib import PurePosixPath
 
 from anyio import to_thread
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, UploadFile, status
 
 from core.api.dependencies import CatalogTblDep, S3Dep, SessionDep, SettingsDep
 from core.models.batch import BatchPublic
@@ -16,7 +16,7 @@ from core.services import batches as batches_service
 from core.services import registration
 from core.services.discover import catalog as catalog_service
 from core.services.sync import reconcile_from_s3
-from service_kit.exceptions import NotFoundError
+from service_kit.exceptions import NotFoundError, UnprocessableEntityError
 
 
 _VOLUME_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -57,7 +57,7 @@ async def upload_batch(
     files are skipped; filenames are reduced to their basename (no path traversal).
     """
     if not _VOLUME_ID_RE.match(batch_id):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"invalid volume id {batch_id!r}: use letters, digits, '-', '_' only")
+        raise UnprocessableEntityError(f"invalid volume id {batch_id!r}: use letters, digits, '-', '_' only")
 
     written = 0
     for upload in files:
@@ -75,7 +75,7 @@ async def upload_batch(
         written += 1
 
     if written == 0:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="no image files in upload (allowed: jpg, jpeg, png, tif, tiff)")
+        raise UnprocessableEntityError("no image files in upload (allowed: jpg, jpeg, png, tif, tiff)")
 
     batch = await registration.register_volume(session, s3, input_bucket=settings.cache_bucket, volume_id=batch_id)
     return BatchPublic.model_validate(batch)

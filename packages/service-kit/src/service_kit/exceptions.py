@@ -30,6 +30,11 @@ class ValidationError(DomainError):
     title = "Bad Request"
 
 
+class UnprocessableEntityError(DomainError):
+    status_code = HTTPStatus.UNPROCESSABLE_ENTITY
+    title = "Unprocessable Entity"
+
+
 class ServiceUnavailableError(DomainError):
     status_code = HTTPStatus.SERVICE_UNAVAILABLE
     title = "Service Unavailable"
