@@ -10,7 +10,7 @@ Approach (no upstream patches):
 - The stock `Export` step writes ALTO files to disk; we drop it from the
   YAML and call `get_serializer("alto").serialize(doc)` ourselves so the
   ALTO string comes back in-process.
-- 3 replicas × 1 GPU each (htrflow auto-detects CUDA via the YAML).
+- 3 replicas x 1 GPU each (htrflow auto-detects CUDA via the YAML).
   SHARDS in the pipeline-side wrappers below matches this replica count
   so a single Ray Data task can saturate all three replicas in parallel.
 
@@ -53,6 +53,11 @@ if SERVE_GPU_RESOURCE:
 
 
 PIPELINE_YAML = Path(__file__).parent / "htrflow_pipeline.yaml"
+# Custom ALTO template dir. Same alto-4-4 template as upstream htrflow but with
+# WC (per-line/word text confidence) and PC (page confidence) emitted — the
+# stock template drops them, so the viewer showed conf 0.00. Named "alto-4-4"
+# so htrflow still resolves the matching alto-4-4.xsd from its own schema dir.
+ALTO_TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 
 def _shard(items: list, num_shards: int) -> list[list]:
@@ -89,7 +94,7 @@ class HTRFlowDeployment:
 
         logger.info("HTRFlowDeployment: loading pipeline from %s", PIPELINE_YAML)
         self._pipeline = Pipeline.from_config(str(PIPELINE_YAML))
-        self._serializer = get_serializer("alto")
+        self._serializer = get_serializer("alto", template_dir=str(ALTO_TEMPLATE_DIR), template_name="alto-4-4")
         logger.info("HTRFlowDeployment: ready (%d steps)", len(self._pipeline.steps))
 
     def transcribe(self, image_path: str) -> str:

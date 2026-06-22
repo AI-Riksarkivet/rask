@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<alto xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.loc.gov/standards/alto/ns-v4#" xsi:schemaLocation="http://www.loc.gov/standards/alto/ns-v4# http://www.loc.gov/standards/alto/v4/alto-4-4.xsd">
+    <Description>
+        <MeasurementUnit>pixel</MeasurementUnit>
+        <sourceImageInformation>
+            <fileName>{{ document.image_name }}</fileName>
+        </sourceImageInformation>
+        <Processing ID="processing">
+            <processingDateTime>{{ timestamp }}</processingDateTime>
+            {%- for step in steps %}
+            {%- if step.metadata %}
+            <processingStepDescription>{{ step.__class__.__name__ }}({% for key, value in step.metadata.settings.items() %}{{ key }}={{ value }}{% if not loop.last %}, {% endif %}{% endfor %})</processingStepDescription>
+            {%- endif %}
+            {%- endfor %}
+            <processingSoftware>
+                <softwareCreator>{{ metadata.get("Author-email") }}</softwareCreator>
+                <softwareName>{{ metadata.get("Name") }}</softwareName>
+                <softwareVersion>{{ metadata.get("Version") }}</softwareVersion>
+                <applicationDescription>{{ metadata.get("Summary") }}</applicationDescription>
+            </processingSoftware>
+        </Processing>
+    </Description>
+    {%- if document.regions %}
+    <ReadingOrder>
+        <OrderedGroup ID="ro">
+        {%- for region in document.regions %}
+            {%- set region_index = loop.index0 %}
+            {%- if region.regions %}
+            <OrderedGroup ID="ro_block{{ region_index }}">
+            {%- for line in region.regions %}
+                <ElementRef ID="ro_block{{ region_index }}_line{{ loop.index0 }}" REF="block{{ region_index }}_line{{ loop.index0 }}" />
+            {%- endfor %}
+            </OrderedGroup>
+            {%- endif %}
+        {%- endfor %}
+        </OrderedGroup>
+    </ReadingOrder>
+    {%- endif %}
+    <Layout>
+        {#- Page confidence (PC): mean of per-line text confidence. rask addition. -#}
+        {%- set page_conf = namespace(sum=0.0, n=0) %}
+        {%- for region in document.regions if region.regions %}
+        {%- for line in region.regions if line.transcription %}
+        {%- set page_conf.sum = page_conf.sum + line.transcription[0].confidence %}
+        {%- set page_conf.n = page_conf.n + 1 %}
+        {%- endfor %}
+        {%- endfor %}
+        <Page WIDTH="{{ document.image.width }}" HEIGHT="{{ document.image.height }}" PHYSICAL_IMG_NR="0" ID="_{{ document.image_name }}" PC="{{ '%.4f'|format(page_conf.sum / page_conf.n) if page_conf.n else '0.0' }}">
+            <PrintSpace>
+                {%- for region in document.regions %}
+                {%- if region.regions %}
+                {%- set region_index = loop.index0 %}
+                {%- set bbox = region.polygon.bbox %}
+                {%- set hpos = bbox.xmin %}
+                {%- set vpos = bbox.ymin %}
+                <TextBlock ID="block_{{ region_index }}" HPOS="{{ hpos }}" VPOS="{{ vpos }}" HEIGHT="{{ bbox.height }}" WIDTH="{{ bbox.width  }}" CS="false">
+                    {%- if region.polygon.points | length != 4 %}
+                    <Shape>
+                        <Polygon POINTS="{{ region.polygon.move((hpos, vpos)) }}"/>
+                    </Shape>
+                    {%- endif %}
+                    {%- for line in region.regions %}
+                    {%- set line_index = loop.index0 %}
+                    {%- set bbox = line.polygon.bbox %}
+                    {%- set hyp_part1 = loop.previtem.regions[-1].transcription[0].text if (loop.previtem and loop.previtem.regions and loop.previtem.regions.transcription) else '' %}
+                    {%- set hyp_part2 = loop.nextitem.regions[0].transcription[0].text if (loop.nextitem and loop.nextitem.regions and loop.nextitem.regions.transcription) else '' %}
+                    <TextLine ID="block{{ region_index }}_line{{ line_index }}"  HPOS="{{ hpos + bbox.xmin }}" VPOS="{{ vpos + bbox.ymin }}" HEIGHT="{{ bbox.height }}" WIDTH="{{ bbox.width }}">
+                        {%- if line.polygon.points | length != 4 %}
+                        <Shape>
+                            <Polygon POINTS="{{ line.polygon.move((hpos, vpos)) }}"/>
+                        </Shape>
+                        {%- endif %}
+                        {%- if line.regions -%}
+                        {%- for word in line.regions -%}
+                        {%- set hpos = bbox.xmin %}
+                        {%- set vpos = bbox.ymin %}
+                        {%- set bbox = word.polygon.bbox %}
+                        {%- if word.transcription %}
+                        {%- set content = word.transcription[0].text %}
+                        {%- if loop.last and content.endswith(('-', '¬')) and hyp_part2 %}
+                        <String ID="block{{ region_index }}_line{{ line_index }}_word{{ loop.index0 }}" HEIGHT="{{ bbox.height }}" WIDTH="{{ bbox.width }}" HPOS="{{ hpos + bbox.xmin }}" VPOS="{{ vpos + bbox.ymin }}" CONTENT="{{ content }}" WC="{{ '%.4f'|format(word.transcription[0].confidence) }}" SUBS_TYPE="HypPart1" SUBS_CONTENT="{{ content[:-1] }}{{ hyp_part2 }}" />
+                        {%- elif loop.first and hyp_part1.endswith(('-', '¬')) %}
+                        <String ID="block{{ region_index }}_line{{ line_index }}_word{{ loop.index0 }}" HEIGHT="{{ bbox.height }}" WIDTH="{{ bbox.width }}" HPOS="{{ hpos + bbox.xmin }}" VPOS="{{ vpos + bbox.ymin }}" CONTENT="{{ content }}" WC="{{ '%.4f'|format(word.transcription[0].confidence) }}" SUBS_TYPE="HypPart2" SUBS_CONTENT="{{ hyp_part1[:-1] }}{{ content }}" />
+                        {%- else %}
+                        <String ID="block{{ region_index }}_line{{ line_index }}_word{{ loop.index0 }}" HEIGHT="{{ bbox.height }}" WIDTH="{{ bbox.width }}" HPOS="{{ hpos + bbox.xmin }}" VPOS="{{ vpos + bbox.ymin }}" CONTENT="{{ content }}" WC="{{ '%.4f'|format(word.transcription[0].confidence) }}" />
+                        {%- endif %}
+                        {%- endif %}
+                        {%- endfor %}
+                        {%- else %}
+                        {%- if line.transcription %}
+                        <String CONTENT="{{ line.transcription[0].text | e }}" WC="{{ '%.4f'|format(line.transcription[0].confidence) }}" />
+                        {%- else %}
+                        <String CONTENT="" />
+                        {%- endif %}
+                        {%- endif %}
+                    </TextLine>
+                    {%- endfor %}
+                </TextBlock>
+                {%- endif %}
+                {%- endfor %}
+            </PrintSpace>
+        </Page>
+    </Layout>
+</alto>

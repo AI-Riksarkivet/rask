@@ -63,7 +63,12 @@ services:
     <<: *svc-env
     # RAY_ADDRESS=auto so deploy_serve.py connects to the in-process head
     # (not via the ray:// client protocol, which would fail self-referentially).
-    environment: {RAY_ADDRESS: "auto"}
+    # HF_TOKEN (+ implicit-token re-enabled) so htrflow can pull the gated
+    # Riksarkivet TrOCR model from HuggingFace. Token comes from .env (gitignored).
+    environment:
+      RAY_ADDRESS: "auto"
+      HF_TOKEN: "${HF_TOKEN:-}"
+      HF_HUB_DISABLE_IMPLICIT_TOKEN: "0"
     command: >
       bash -lc "ray start --head --dashboard-host 0.0.0.0 --num-gpus=1 &&
       python /app/deploy_serve.py up --app htrflow &&
