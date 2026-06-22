@@ -19,6 +19,7 @@ dependencies = [
     "aiosqlite>=0.20",
     "ray[default]==2.55.1",
     "anyio>=4.0",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
