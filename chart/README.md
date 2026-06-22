@@ -1,42 +1,72 @@
 # rask Helm chart
 
-Deploys the rask application services — **viewer** (FastAPI, singleton) and
-**frontend** (SPA) — plus an Alembic migration hook. Postgres, S3/MinIO and the
-KubeRay cluster are external; this chart only references them.
+Deploys the full rask fleet to Kubernetes — the **single deploy artifact** for
+both local k3s and production. In-cluster Postgres, MinIO, and KubeRay are
+optional: gate them with `*.enabled` toggles.
 
-## Prerequisites
+## Fleet
 
-1. Images `rask-viewer` and `rask-frontend` pushed to a registry your cluster can
-   pull (no CI builds these yet — build from `.docker/*.dockerfile`).
-2. A Secret with: `DATABASE_URL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
-   `HCP_ENDPOINT`, `HF_TOKEN`.
+| Component | Port | Notes |
+|---|---|---|
+| `gateway` | 8888 | Reverse proxy; path-routes `/api/*` to per-domain services |
+| `core-api` | 8801 | Batches, chunks, catalog endpoints |
+| `orchestrator` | 8810 | Reconcile loop (`replicas: 1`, `Recreate`) |
+| `volumes-api` | 8803 | S3/IIIF image + ALTO proxy (stateless) |
+| `search-api` | 8802 | Lance FTS + S3 thumbnails |
+| `ray-api` | 8804 | Ray dashboard proxy + `/api/serve/*` |
+| `frontend` | 3000 | SvelteKit SSR (svelte-adapter-bun) |
+| migration | — | pre-install/pre-upgrade Job: `alembic upgrade head` |
+| Ingress (Traefik) | 80 | `/api` → gateway:8888, `/` → frontend:3000 |
 
-   ```bash
-   kubectl create secret generic rask-secrets \
-     --from-literal=DATABASE_URL='postgresql+asyncpg://…' \
-     --from-literal=AWS_ACCESS_KEY_ID=… \
-     --from-literal=AWS_SECRET_ACCESS_KEY=… \
-     --from-literal=HCP_ENDPOINT=… \
-     --from-literal=HF_TOKEN=…
-   ```
+## In-cluster dependencies (optional)
 
-## Install
+| Toggle | What it provisions |
+|---|---|
+| `postgres.enabled=true` | Postgres 16 StatefulSet + PVC |
+| `minio.enabled=true` | MinIO StatefulSet + PVC |
+| `ray.enabled=true` | KubeRay `RayService` (head + GPU worker) |
+
+Set all three to `true` for local k3s. Leave them `false` for production and
+supply credentials via `existingSecret`.
+
+## Local k3s quickstart
+
+```bash
+make k3s-install      # one-time: k3s + helm + NVIDIA device-plugin + KubeRay (sudo)
+make k3s-build        # build fleet + frontend + ray images as :dev
+make k3s-import       # side-load images into k3s (no registry needed)
+make k3s-up           # helm upgrade --install rask ./chart --wait
+# UI: http://rask.local/   API: http://rask.local/api/health
+# (add "127.0.0.1 rask.local" to /etc/hosts)
+make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
+```
+
+## Production install
 
 ```bash
 helm install rask chart/ \
-  --set existingSecret=rask-secrets \
-  --set viewer.image.repository=<registry>/rask-viewer \
-  --set frontend.image.repository=<registry>/rask-frontend \
+  --set existingSecret=rask-app \
   --set config.RAY_DASHBOARD_URL=http://<ray-head>:8265 \
-  --set ingress.host=rask.example.org
+  --set ingress.host=rask.example.org \
+  --set postgres.enabled=false \
+  --set minio.enabled=false \
+  --set ray.enabled=false
 ```
+
+## Config and secrets
+
+Sensitive config (database URL, S3 credentials, HF token) comes from an
+operator-created Secret. The default expected name is `rask-app`; override with
+`existingSecret=<name>`.
+
+Non-sensitive config (service URLs, feature flags, orchestrator settings) flows
+from `values.yaml` into a ConfigMap mounted by each Deployment.
 
 ## Critical constraints
 
-- **Never set `viewer.replicas > 1`** — the orchestrator is an in-process
-  singleton; concurrent viewers double-submit jobs.
-- The orchestrator stays idle until `config.RASK_ORCHESTRATOR_AUTOSTART=true` or
-  an operator calls `POST /api/v1/orchestrator/start`.
+- **`orchestrator` must be a singleton** (`replicas: 1`, `strategy: Recreate`)
+  — the in-process reconcile loop must run in exactly one pod.
+- The orchestrator loop starts only when `config.RASK_ORCHESTRATOR_AUTOSTART=true`
+  or an operator calls `POST /api/v1/orchestrator/start`.
 
-See `docs/architecture/deployment.md` and the design spec
-`docs/superpowers/specs/2026-06-15-rask-helm-chart-design.md`.
+See `docs/architecture/deployment.md` for the full topology.

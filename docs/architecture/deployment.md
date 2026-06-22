@@ -1,17 +1,27 @@
 # Deployment
 
-rask uses a **Helm chart at `chart/`** for Kubernetes deployment, plus a
-`Makefile` for local/dev operation. Postgres, S3/MinIO, and the KubeRay cluster
-are **external dependencies** referenced via config and an operator-created
-Secret — the chart does not provision them.
+rask uses a **Helm chart at `chart/`** as the single deploy artifact for both
+local k3s and production Kubernetes. The chart supports in-cluster Postgres,
+MinIO, and KubeRay via `postgres.enabled` / `minio.enabled` / `ray.enabled`
+toggles — set them all to `true` for local k3s, leave them `false` (operator-
+supplied) for production.
 
-!!! warning "Helm chart and viewer dockerfile are stale (deployment-cycle follow-up)"
-    The Helm chart (`chart/`) and `.docker/viewer.dockerfile` still reference the
-    old monolithic `viewer` service, which was dissolved in June 2026. They are a
-    known follow-up task — not yet updated to the gateway + per-domain services
-    fleet. Do not rely on the chart as-is for the current service topology.
-    `make dev-micro` and `dev-micro.sh` are the authoritative source for the
-    current fleet.
+## Local deploy (k3s)
+
+```bash
+make k3s-install      # one-time: k3s + helm + NVIDIA device-plugin + KubeRay (sudo)
+make k3s-build        # build fleet + frontend + ray images as :dev
+make k3s-import       # side-load images into k3s
+make k3s-up           # helm upgrade --install rask ./chart --wait
+# UI: http://rask.local/   API: http://rask.local/api/health
+# (add "127.0.0.1 rask.local" to /etc/hosts)
+make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
+```
+
+`k3s-build` builds the full fleet (gateway, core-api, search-api, volumes-api,
+ray-api, orchestrator) plus the frontend and ray images as `:dev` tags.
+`k3s-import` side-loads them into k3s containerd via `docker save | ctr images
+import`, so no registry is needed.
 
 ## Container images (`.docker/`)
 
@@ -73,33 +83,31 @@ flowchart LR
 ## Remote KubeRay
 
 The runner accepts `--address ray://…:10001`; the orchestrator submits jobs to
-the Ray dashboard REST API at `RAY_DASHBOARD_URL`. **No KubeRay manifests live
-in this repo** — the cluster is managed elsewhere (Argo/Helm). The rask Helm
-chart (`chart/`) deploys only the app services and points at that cluster via
-`config.RAY_DASHBOARD_URL`.
+the Ray dashboard REST API at `RAY_DASHBOARD_URL`. With `ray.enabled=true` the
+chart provisions an in-cluster KubeRay RayService; with `ray.enabled=false` the
+orchestrator points at an external cluster via `config.RAY_DASHBOARD_URL`.
 
-## Helm chart (`chart/`) — stale, pending update
+## Helm chart (`chart/`)
 
-!!! warning
-    The chart currently targets the old `viewer` monolith and is a known
-    deployment-cycle follow-up. The description below reflects the chart's
-    *current* state, not the target topology.
+`make k3s-up` runs `helm upgrade --install rask ./chart --wait`. The chart deploys:
 
-`helm install rask chart/ --set existingSecret=<name>` currently deploys:
-
-- **viewer** — singleton Deployment (`replicas: 1`, `strategy: Recreate`) — this
-  is the old monolith, pending replacement by gateway + per-domain service Deployments.
-- **frontend** — scalable Deployment serving the SPA on `:8080`.
+- **gateway** — reverse proxy on `:8888` (path-routes `/api/*` to per-domain services).
+- **core-api** — batches + chunks + catalog endpoints on `:8801`.
+- **orchestrator** — the reconcile loop on `:8810` (`replicas: 1`, `Recreate`).
+- **volumes-api** — S3/IIIF image + ALTO proxy on `:8803`.
+- **search-api** — Lance FTS + S3 thumbnails on `:8802`.
+- **ray-api** — Ray dashboard proxy + `/api/serve/*` on `:8804`.
+- **frontend** — SvelteKit SSR app on `:3000`.
 - **migration** — pre-install/pre-upgrade hook Job running `alembic upgrade head`.
-- **Ingress** — `/api` → viewer:8888, `/` → frontend:8080.
+- **Ingress** (Traefik) — `/api` → gateway:8888, `/` → frontend:3000.
+- **In-cluster deps** (gated by values toggles):
+  - `postgres.enabled` — Postgres 16 StatefulSet + PVC.
+  - `minio.enabled` — MinIO StatefulSet + PVC.
+  - `ray.enabled` — KubeRay `RayService` (head + worker with GPU limits).
 
-The target topology is: gateway + core-api + orchestrator + volumes-api +
-search-api + ray-api Deployments, with the Ingress pointing only at the gateway
-(`/api` → gateway:8888) and the `replicas: 1` / `Recreate` constraint moving to
-only the `orchestrator` Deployment.
-
-Sensitive config comes from an operator-created Secret (`existingSecret`);
-non-sensitive config from `values.yaml` → ConfigMap. See `chart/README.md`.
+Sensitive config comes from an operator-created Secret (`existingSecret`, default
+`rask-app`); non-sensitive config from `values.yaml` → ConfigMap. See
+`chart/README.md`.
 
 ## CI
 
