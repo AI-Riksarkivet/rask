@@ -18,12 +18,18 @@ FROM oven/bun:1-debian@sha256:9dba1a1b43ce28c9d7931bfc4eb00feb63b0114720a0277a8f
 WORKDIR /src
 
 # Full source of every workspace member so `bun install` + prepare scripts resolve.
-COPY components/apps/frontend         components/apps/frontend
-COPY components/apps/storage-frontend components/apps/storage-frontend
-COPY components/apps/compute-frontend components/apps/compute-frontend
-COPY packages/api                     packages/api
-COPY packages/ui                      packages/ui
-COPY package.json bun.lock            ./
+# All JS workspace dirs in the root package.json must be present (even the MFE
+# apps we don't build here) or `bun install --frozen-lockfile` errors with
+# "Workspace not found". Keep in sync with package.json "workspaces".
+COPY components/apps/frontend          components/apps/frontend
+COPY components/apps/storage-frontend  components/apps/storage-frontend
+COPY components/apps/compute-frontend  components/apps/compute-frontend
+COPY components/apps/discover-frontend components/apps/discover-frontend
+COPY components/apps/studio-frontend   components/apps/studio-frontend
+COPY components/apps/train-frontend    components/apps/train-frontend
+COPY packages/api                      packages/api
+COPY packages/ui                       packages/ui
+COPY package.json bun.lock             ./
 
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install --frozen-lockfile
