@@ -274,8 +274,8 @@ k3s-up: ## Install/upgrade the rask release and wait for the gateway
 	  $${AWS_ACCESS_KEY_ID:+--set-string secrets.minioAccessKey=$$AWS_ACCESS_KEY_ID} \
 	  $${AWS_SECRET_ACCESS_KEY:+--set-string secrets.minioSecretKey=$$AWS_SECRET_ACCESS_KEY}
 	$(KUBECTL) rollout status deploy/rask-gateway --timeout=300s
-	@echo "UI → http://rask.local/   (add '127.0.0.1 rask.local' to /etc/hosts)"
-	@echo "API → http://rask.local/api/health"
+	@echo "UI → http://<node-ip>/   (catch-all ingress; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
+	@echo "API → http://<node-ip>/api/health"
 
 k3s-down: ## Uninstall the rask release (keep PVCs)
 	$(HELM) uninstall rask || true

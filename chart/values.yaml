@@ -170,6 +170,9 @@ migrations:
 ingress:
   enabled: true
   className: ""    # k3s default Traefik
-  host: rask.local
+  # Empty host => catch-all: reachable on the node IP or a VS Code / ssh -L
+  # forwarded localhost with no Host header or /etc/hosts entry. Set a hostname
+  # (e.g. rask.local) for host-based routing in shared/prod environments.
+  host: ""
   annotations: {}
   tls: []

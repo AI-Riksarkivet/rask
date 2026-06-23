@@ -16,8 +16,13 @@ Fleet services (ClusterIP):
 {{- end }}
 
 {{- if .Values.ingress.enabled }}
+{{- if .Values.ingress.host }}
 UI:  http://{{ .Values.ingress.host }}/      API: http://{{ .Values.ingress.host }}/api/health
 Add "127.0.0.1 {{ .Values.ingress.host }}" to /etc/hosts if it is not resolvable.
+{{- else }}
+UI:  http://<node-ip>/      API: http://<node-ip>/api/health   (catch-all ingress, any Host)
+Over VS Code Remote-SSH / ssh -L: forward port 80, then open the forwarded http://localhost:<port>/.
+{{- end }}
 {{- else }}
 Ingress disabled — port-forward the gateway:
   kubectl port-forward svc/{{ include "rask.fullname" . }}-gateway 8888

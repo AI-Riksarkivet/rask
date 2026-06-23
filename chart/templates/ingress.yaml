@@ -18,7 +18,10 @@ spec:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   rules:
-    - host: {{ .Values.ingress.host | quote }}
+      {{- /* Empty host => no host rule => catch-all (any Host / bare IP / VS Code-forwarded localhost). */}}
+    - {{- with .Values.ingress.host }}
+      host: {{ . | quote }}
+      {{- end }}
       http:
         paths:
           - path: /api
