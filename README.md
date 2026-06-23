@@ -30,6 +30,18 @@ uv sync
 make build
 ```
 
+## Local deploy (k3s)
+
+```bash
+make k3s-install      # one-time: k3s + helm + NVIDIA device-plugin + KubeRay (sudo)
+make k3s-build        # build fleet + frontend + ray images as :dev
+make k3s-import       # side-load images into k3s
+make k3s-up           # helm upgrade --install rask ./chart --wait
+# UI: http://rask.local/   API: http://rask.local/api/health
+# (add "127.0.0.1 rask.local" to /etc/hosts)
+make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
+```
+
 ## Component library workflow
 
 ```bash

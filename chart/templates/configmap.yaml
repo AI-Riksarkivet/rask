@@ -8,4 +8,12 @@ data:
   {{- range $k, $v := .Values.config }}
   {{ $k }}: {{ $v | quote }}
   {{- end }}
-  RASK_API_PREFIX: "/api/v1"
+  # Gateway upstreams (in-cluster DNS).
+  RASK_CORE_API_URL: {{ printf "http://%s-core-api:8801" (include "rask.fullname" .) | quote }}
+  RASK_SEARCH_API_URL: {{ printf "http://%s-search-api:8802" (include "rask.fullname" .) | quote }}
+  RASK_VOLUMES_API_URL: {{ printf "http://%s-volumes-api:8803" (include "rask.fullname" .) | quote }}
+  RASK_RAY_API_URL: {{ printf "http://%s-ray-api:8804" (include "rask.fullname" .) | quote }}
+  RASK_ORCH_API_URL: {{ printf "http://%s-orchestrator:8810" (include "rask.fullname" .) | quote }}
+  {{- if .Values.ray.enabled }}
+  RAY_DASHBOARD_URL: {{ printf "http://%s-ray-head-svc:%v" (include "rask.fullname" .) .Values.ray.dashboardPort | quote }}
+  {{- end }}

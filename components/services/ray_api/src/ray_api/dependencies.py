@@ -5,7 +5,7 @@ from typing import Annotated
 import httpx
 from fastapi import Depends, Request
 
-from ray_kit import JobSubmissionClient
+from ray_kit import JobSubmissionClient, build_client
 
 
 def get_http(request: Request) -> httpx.AsyncClient:
@@ -13,7 +13,16 @@ def get_http(request: Request) -> httpx.AsyncClient:
 
 
 def get_ray_client(request: Request) -> JobSubmissionClient | None:
-    return request.app.state.ray_client
+    # The client is built once in lifespan, but there is no startup ordering
+    # guarantee between ray-api and the Ray head (under k8s ray-api boots first
+    # and build_client returns None until the dashboard is reachable — minutes,
+    # on a fresh cluster). Rebuild lazily when still unset so /health and /jobs
+    # recover on their own once Ray comes up, with no pod restart.
+    client = request.app.state.ray_client
+    if client is None:
+        client = build_client(request.app.state.settings.ray_dashboard_url)
+        request.app.state.ray_client = client
+    return client
 
 
 HttpDep = Annotated[httpx.AsyncClient, Depends(get_http)]

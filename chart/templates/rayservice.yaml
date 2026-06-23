@@ -1,0 +1,79 @@
+{{- if .Values.ray.enabled }}
+{{- $secretName := .Values.existingSecret | default (printf "%s-app" (include "rask.fullname" .)) }}
+apiVersion: ray.io/v1
+kind: RayService
+metadata:
+  name: {{ include "rask.fullname" . }}-ray
+  labels:
+    {{- include "rask.componentLabels" (list . "ray") | nindent 4 }}
+spec:
+  serveConfigV2: |
+    applications:
+      - name: htrflow
+        import_path: {{ .Values.ray.importPath }}
+        route_prefix: {{ .Values.ray.serveRoutePrefix }}
+        runtime_env:
+          env_vars:
+            RASK_SERVE_REPLICAS: "{{ .Values.config.RASK_SERVE_REPLICAS }}"
+            RASK_SERVE_GPU_FRAC: "{{ .Values.config.RASK_SERVE_GPU_FRAC }}"
+            HF_HUB_DISABLE_IMPLICIT_TOKEN: "0"
+  rayClusterConfig:
+    rayVersion: {{ .Values.ray.rayVersion | quote }}
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+        num-gpus: "{{ .Values.ray.gpuCount }}"
+      template:
+        spec:
+          runtimeClassName: {{ .Values.ray.runtimeClassName }}
+          containers:
+            - name: ray-head
+              image: "{{ .Values.ray.image.repository }}:{{ .Values.ray.image.tag }}"
+              imagePullPolicy: {{ .Values.ray.image.pullPolicy }}
+              env:
+                - name: RAY_ENABLE_UV_RUN_RUNTIME_ENV
+                  value: "0"
+                - name: HF_HOME
+                  value: /cache/hf
+                - name: HF_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ $secretName }}
+                      key: HF_TOKEN
+              ports:
+                - {containerPort: 6379, name: gcs}
+                - {containerPort: 8265, name: dashboard}
+                - {containerPort: 10001, name: client}
+                - {containerPort: 8000, name: serve}
+              resources:
+                requests:
+                  {{- toYaml .Values.ray.resources.requests | nindent 18 }}
+                limits:
+                  nvidia.com/gpu: {{ .Values.ray.gpuCount }}
+                  {{- toYaml .Values.ray.resources.limits | nindent 18 }}
+              volumeMounts:
+                - {name: dshm, mountPath: /dev/shm}
+                - {name: hf-cache, mountPath: /cache/hf}
+          volumes:
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: {{ .Values.ray.shmSize }}
+            - name: hf-cache
+              persistentVolumeClaim:
+                claimName: {{ include "rask.fullname" . }}-hf-cache
+    workerGroupSpecs: []
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "rask.fullname" . }}-hf-cache
+  labels:
+    {{- include "rask.componentLabels" (list . "ray") | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: {{ .Values.ray.hfCacheStorage }}
+{{- end }}

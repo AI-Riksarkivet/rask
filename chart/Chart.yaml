@@ -1,9 +1,9 @@
 apiVersion: v2
 name: rask
-description: rask application services (viewer + frontend) for the Swedish National Archives HTR pipeline
+description: rask HTR pipeline — microservice fleet + optional in-cluster Postgres, MinIO, and KubeRay Serve (Swedish National Archives)
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.2.0
+appVersion: "0.2.0"
 home: https://github.com/AI-Riksarkivet/rask
 maintainers:
   - name: Riksarkivet

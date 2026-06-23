@@ -1,4 +1,4 @@
-.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer dev-micro dev-frontends viewer-frontend frontend-storage frontend-compute frontend-build frontend-check ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve compose-env compose-build compose-up compose-down compose-purge compose-logs
+.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer dev-micro dev-frontends viewer-frontend frontend-storage frontend-compute frontend-build frontend-check ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-build k3s-import k3s-up k3s-down k3s-purge
 
 help:
 	@echo "Targets:"
@@ -243,29 +243,44 @@ pg-revision: pg-deps
 	cd components/services/core && \
 	  DATABASE_URL=$(PG_URL) uv run --package core alembic revision --autogenerate -m "$(MSG)"
 
-# ---- Docker Compose (full local stack) -------------------------------------
-DC ?= docker compose
+# ---- local k3s ------------------------------------------------------------
 COMPOSE_IMAGES = gateway core-api search-api volumes-api ray-api orchestrator
+KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
+HELM ?= KUBECONFIG=$(KUBECONFIG) helm
+KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
+K3S_IMAGES = $(COMPOSE_IMAGES) frontend ray
 
-compose-env:
-	@test -f .env || cp .env.example .env
+k3s-install: ## One-time host setup: k3s + helm + NVIDIA device-plugin + KubeRay operator (sudo)
+	./scripts/k3s-install.sh
 
-compose-build: ## Build all fleet images (+ ray) on native arm64
+k3s-build: ## Build all fleet + frontend + ray images as :dev (native arm64)
 	@for s in $(COMPOSE_IMAGES); do \
 	  echo ">> building $$s:dev"; \
 	  docker buildx build -f .docker/$$s.dockerfile -t $$s:dev --load . || exit 1; \
 	done
+	docker buildx build -f .docker/frontend.dockerfile -t frontend:dev --load .
 	docker buildx build -f .docker/ray.dockerfile -t ray:dev --load .
 
-compose-up: compose-env ## Bring up the whole stack and wait for health
-	$(DC) up -d --wait
-	@echo "gateway → http://localhost:8888   minio console → http://localhost:9001"
+k3s-import: ## Side-load :dev images into k3s containerd
+	@for s in $(K3S_IMAGES); do \
+	  echo ">> importing $$s:dev"; \
+	  docker save $$s:dev | sudo k3s ctr images import - || exit 1; \
+	done
 
-compose-down: ## Stop the stack (keep volumes)
-	$(DC) down
+k3s-up: ## Install/upgrade the rask release and wait for the gateway
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	if [ -z "$$HF_TOKEN" ]; then echo "WARN: HF_TOKEN unset (env or .env) — htrflow Serve will 401 on the gated TrOCR model"; fi; \
+	$(HELM) upgrade --install rask ./chart --wait --timeout 20m \
+	  $${HF_TOKEN:+--set-string secrets.hfToken=$$HF_TOKEN} \
+	  $${POSTGRES_PASSWORD:+--set-string secrets.postgresPassword=$$POSTGRES_PASSWORD} \
+	  $${AWS_ACCESS_KEY_ID:+--set-string secrets.minioAccessKey=$$AWS_ACCESS_KEY_ID} \
+	  $${AWS_SECRET_ACCESS_KEY:+--set-string secrets.minioSecretKey=$$AWS_SECRET_ACCESS_KEY}
+	$(KUBECTL) rollout status deploy/rask-gateway --timeout=300s
+	@echo "UI → http://<node-ip>/   (catch-all ingress; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
+	@echo "API → http://<node-ip>/api/health"
 
-compose-purge: ## Stop the stack and delete data volumes
-	$(DC) down --volumes
+k3s-down: ## Uninstall the rask release (keep PVCs)
+	$(HELM) uninstall rask || true
 
-compose-logs: ## Tail all service logs
-	$(DC) logs -f --tail=100
+k3s-purge: k3s-down ## Uninstall + delete PVCs (postgres/minio/hf-cache data)
+	$(KUBECTL) delete pvc -l app.kubernetes.io/instance=rask || true

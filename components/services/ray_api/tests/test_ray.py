@@ -41,3 +41,24 @@ def test_ray_cluster_offline_is_ok_false(client: TestClient) -> None:
 def test_serve_proxy_unreachable_returns_502(client: TestClient) -> None:
     resp = client.get("/api/serve/applications/")
     assert resp.status_code == 502
+
+
+def test_get_ray_client_rebuilds_lazily_when_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A None client (Ray not yet up at boot) is rebuilt on first use and cached."""
+    from ray_api import dependencies
+
+    state = type("State", (), {})()
+    state.ray_client = None
+    state.settings = type("Settings", (), {"ray_dashboard_url": "http://ray:8265"})()
+    request = type("Request", (), {"app": type("App", (), {"state": state})()})()
+
+    sentinel = object()
+    monkeypatch.setattr(dependencies, "build_client", lambda url: sentinel)
+    assert dependencies.get_ray_client(request) is sentinel
+    assert state.ray_client is sentinel  # cached on app.state
+
+    def _boom(url: str) -> object:
+        raise AssertionError("should not rebuild once cached")
+
+    monkeypatch.setattr(dependencies, "build_client", _boom)
+    assert dependencies.get_ray_client(request) is sentinel  # served from cache

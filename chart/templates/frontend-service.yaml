@@ -3,8 +3,7 @@ kind: Service
 metadata:
   name: {{ include "rask.fullname" . }}-frontend
   labels:
-    {{- include "rask.labels" . | nindent 4 }}
-    app.kubernetes.io/component: frontend
+    {{- include "rask.componentLabels" (list . "frontend") | nindent 4 }}
 spec:
   type: ClusterIP
   ports:

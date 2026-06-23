@@ -3,8 +3,7 @@ kind: Deployment
 metadata:
   name: {{ include "rask.fullname" . }}-frontend
   labels:
-    {{- include "rask.labels" . | nindent 4 }}
-    app.kubernetes.io/component: frontend
+    {{- include "rask.componentLabels" (list . "frontend") | nindent 4 }}
 spec:
   replicas: {{ .Values.frontend.replicas }}
   selector:
@@ -26,10 +25,19 @@ spec:
         {{- toYaml .Values.frontend.podSecurityContext | nindent 8 }}
       containers:
         - name: frontend
-          image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default .Chart.AppVersion }}"
+          image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
           imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.frontend.securityContext | nindent 12 }}
+          env:
+            - name: RASK_GATEWAY_URL
+              value: {{ printf "http://%s-gateway:8888" (include "rask.fullname" .) | quote }}
+            - name: ORIGIN
+              value: {{ .Values.frontend.origin | quote }}
+            - name: PORT
+              value: {{ .Values.frontend.service.port | quote }}
+            - name: HOST
+              value: "0.0.0.0"
           ports:
             - name: http
               containerPort: {{ .Values.frontend.service.port }}
@@ -43,15 +51,3 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml .Values.frontend.resources | nindent 12 }}
-      {{- with .Values.frontend.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.frontend.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.frontend.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
