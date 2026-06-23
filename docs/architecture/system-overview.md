@@ -361,9 +361,7 @@ the build context is the repo root.
 | Image      | Dockerfile                     | Base                           | Notes                                |
 | ---------- | ------------------------------ | ------------------------------ | ------------------------------------ |
 | `runner`   | `.docker/runner.dockerfile`    | `nvidia/cuda:12.4-runtime`     | uv install, GPU client for Ray jobs  |
-| `frontend` | `.docker/frontend.dockerfile`  | Bun build → `oven/bun` runtime (SSR server) | `bun ./build/index.js`  |
-| `storage-frontend` | `.docker/storage-frontend.dockerfile` | Bun build → `oven/bun` runtime (SSR server) | `bun ./build/index.js`  |
-| `compute-frontend` | `.docker/compute-frontend.dockerfile` | Bun build → `oven/bun` runtime (SSR server) | `bun ./build/index.js`  |
+| `frontend` + 6 MFEs | `.docker/frontend.dockerfile` (`--build-arg APP=<app>`) | Bun build → `oven/bun` runtime (SSR server) | one parametrized Dockerfile builds all 7 SvelteKit apps; `bun ./build/index.js` |
 
 
 ## Stack at a glance

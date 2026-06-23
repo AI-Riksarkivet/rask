@@ -262,9 +262,11 @@ a populated page. Because every frontend hits the **one gateway**, you mock **on
 
 ## Deployment
 
-Each app is **one Bun-server Docker image** (`svelte-adapter-bun`) — `.docker/frontend.dockerfile`,
-`.docker/storage-frontend.dockerfile`, `.docker/compute-frontend.dockerfile` (see
-[Deployment](deployment.md)):
+Each app is **one Bun-server Docker image** (`svelte-adapter-bun`) built from a single
+parametrized `.docker/frontend.dockerfile` via `--build-arg APP=<app>` (see
+[Deployment](deployment.md)). In k3s each is a Deployment+Service from the chart's
+`frontend.apps` list, with the ingress routing `/default/<domain>` to its app and `/`
+to the catch-all:
 
 - **Dev** — each app runs its own Vite dev server on its own port (`:5173`/`:5174`/`:5175`),
   and Turborepo's **built-in** microfrontends proxy (auto-started from `microfrontends.json`,
