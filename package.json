@@ -5,8 +5,11 @@
 	"packageManager": "bun@1.3.14",
 	"workspaces": [
 		"components/apps/compute-frontend",
+		"components/apps/discover-frontend",
 		"components/apps/frontend",
 		"components/apps/storage-frontend",
+		"components/apps/studio-frontend",
+		"components/apps/train-frontend",
 		"packages/api",
 		"packages/ui"
 	],
@@ -19,11 +22,15 @@
 		"dev:frontend": "turbo run dev --filter=viewer-frontend...",
 		"dev:storage": "turbo run dev --filter=storage-frontend...",
 		"dev:compute": "turbo run dev --filter=compute-frontend...",
+		"dev:discover": "turbo run dev --filter=discover-frontend...",
+		"dev:train": "turbo run dev --filter=train-frontend...",
+		"dev:studio": "turbo run dev --filter=studio-frontend...",
 		"storybook": "bun --cwd=packages/ui run storybook",
-		"build-storybook": "bun --cwd=packages/ui run build-storybook",
-		"lint": "prettier --check '{components/apps/frontend,components/apps/storage-frontend,components/apps/compute-frontend,packages/api,packages/ui}/**/*.{ts,js,svelte,css,html,json,md}' '*.{json,md}' --ignore-path .gitignore && eslint components/apps/frontend components/apps/storage-frontend components/apps/compute-frontend packages/ui",
-		"lint:fix": "eslint components/apps/frontend components/apps/storage-frontend components/apps/compute-frontend packages/ui --fix",
-		"format": "prettier --write '{components/apps/frontend,components/apps/storage-frontend,components/apps/compute-frontend,packages/api,packages/ui}/**/*.{ts,js,svelte,css,html,json,md}' '*.{json,md}' --ignore-path .gitignore"
+		"build-storybook": "turbo run build-storybook",
+		"test": "turbo run test",
+		"lint": "prettier --check '{components/apps/frontend,components/apps/storage-frontend,components/apps/compute-frontend,components/apps/discover-frontend,components/apps/train-frontend,components/apps/studio-frontend,packages/api,packages/ui}/**/*.{ts,js,svelte,css,html,json,md}' '*.{json,md}' --ignore-path .gitignore && eslint components/apps/frontend components/apps/storage-frontend components/apps/compute-frontend components/apps/discover-frontend components/apps/train-frontend components/apps/studio-frontend packages/ui",
+		"lint:fix": "eslint components/apps/frontend components/apps/storage-frontend components/apps/compute-frontend components/apps/discover-frontend components/apps/train-frontend components/apps/studio-frontend packages/ui --fix",
+		"format": "prettier --write '{components/apps/frontend,components/apps/storage-frontend,components/apps/compute-frontend,components/apps/discover-frontend,components/apps/train-frontend,components/apps/studio-frontend,packages/api,packages/ui}/**/*.{ts,js,svelte,css,html,json,md}' '*.{json,md}' --ignore-path .gitignore"
 	},
 	"devDependencies": {
 		"@eslint/compat": "^2.1.0",

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-svelte';
+	import { ChevronUp, ChevronDown, ChevronsUpDown } from '@lucide/svelte';
 
 	type SortDir = 'asc' | 'desc';
 	let {

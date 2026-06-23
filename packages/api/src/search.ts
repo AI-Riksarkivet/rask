@@ -71,15 +71,19 @@ export const SearchStatsSchema = v.object({
 });
 export type SearchStats = v.InferOutput<typeof SearchStatsSchema>;
 
-export async function searchLines(query: string, limit = 50): Promise<SearchResponse> {
+export async function searchLines(
+	query: string,
+	limit = 50,
+	fetchFn: typeof fetch = fetch,
+): Promise<SearchResponse> {
 	const params = new URLSearchParams({ q: query, limit: String(limit) });
-	const res = await fetch(`/api/search?${params}`);
+	const res = await fetchFn(`/api/search?${params}`);
 	if (!res.ok) throw new Error(`searchLines: HTTP ${res.status}`);
 	return parse(SearchResponseSchema, await res.json());
 }
 
-export async function searchStats(): Promise<SearchStats> {
-	const res = await fetch('/api/search/stats');
+export async function searchStats(fetchFn: typeof fetch = fetch): Promise<SearchStats> {
+	const res = await fetchFn('/api/search/stats');
 	if (!res.ok) throw new Error(`searchStats: HTTP ${res.status}`);
 	return parse(SearchStatsSchema, await res.json());
 }
@@ -92,15 +96,19 @@ export const CatalogSearchResponseSchema = v.object({
 });
 export type CatalogSearchResponse = v.InferOutput<typeof CatalogSearchResponseSchema>;
 
-export async function searchCatalog(query: string, limit = 50): Promise<CatalogSearchResponse> {
+export async function searchCatalog(
+	query: string,
+	limit = 50,
+	fetchFn: typeof fetch = fetch,
+): Promise<CatalogSearchResponse> {
 	const params = new URLSearchParams({ q: query, limit: String(limit) });
-	const res = await fetch(`/api/catalog/search?${params}`);
+	const res = await fetchFn(`/api/catalog/search?${params}`);
 	if (!res.ok) throw new Error(`searchCatalog: HTTP ${res.status}`);
 	return parse(CatalogSearchResponseSchema, await res.json());
 }
 
-export async function catalogStats(): Promise<SearchStats> {
-	const res = await fetch('/api/catalog/search/stats');
+export async function catalogStats(fetchFn: typeof fetch = fetch): Promise<SearchStats> {
+	const res = await fetchFn('/api/catalog/search/stats');
 	if (!res.ok) throw new Error(`catalogStats: HTTP ${res.status}`);
 	return parse(SearchStatsSchema, await res.json());
 }
@@ -124,9 +132,10 @@ export async function browseCatalog(
 	tier: CatalogTier = 'cached',
 	limit = 500,
 	offset = 0,
+	fetchFn: typeof fetch = fetch,
 ): Promise<CatalogBrowseResponse> {
 	const params = new URLSearchParams({ tier, limit: String(limit), offset: String(offset) });
-	const res = await fetch(`/api/catalog/browse?${params}`);
+	const res = await fetchFn(`/api/catalog/browse?${params}`);
 	if (!res.ok) throw new Error(`browseCatalog: HTTP ${res.status}`);
 	return parse(CatalogBrowseResponseSchema, await res.json());
 }
@@ -157,8 +166,11 @@ const CatalogRowSchema = v.object({
 /** Direct catalog lookup by batch_id (== bild_id). Returns null when the
  *  batch isn't in the harvested EAD catalog (e.g. test batches), so the
  *  viewer can render conditionally without a separate error path. */
-export async function getBatchCatalog(batchId: string): Promise<CatalogHit | null> {
-	const res = await fetch(`/api/batches/${encodeURIComponent(batchId)}/catalog`);
+export async function getBatchCatalog(
+	batchId: string,
+	fetchFn: typeof fetch = fetch,
+): Promise<CatalogHit | null> {
+	const res = await fetchFn(`/api/batches/${encodeURIComponent(batchId)}/catalog`);
 	if (res.status === 404) return null;
 	if (!res.ok) throw new Error(`getBatchCatalog: HTTP ${res.status}`);
 	// The endpoint returns just the row, not the {listed, cached, transcribed}

@@ -1,5 +1,13 @@
 @custom-variant dark (&:is(.dark *));
 
+/* Opt every same-origin navigation into the View Transitions API. This animates
+   even full-document navs between the microfrontends on Chromium (a cross-document
+   view transition); it's a graceful no-op where the API is unsupported. Soft
+   client-side navs are driven per-app via the onNavigate hook in each root layout. */
+@view-transition {
+	navigation: auto;
+}
+
 :root {
 	--radius: 0.625rem;
 	/* Warm off-white background, cards float lighter */

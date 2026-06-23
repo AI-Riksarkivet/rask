@@ -38,16 +38,19 @@ export type ChunkRow = v.InferOutput<typeof ChunkRowSchema>;
 
 const ListChunksSchema = v.object({ chunks: v.array(ChunkRowSchema) });
 
-export async function listChunks(): Promise<{ chunks: ChunkRow[] }> {
-	const res = await fetch('/api/chunks/');
+export async function listChunks(fetchFn: typeof fetch = fetch): Promise<{ chunks: ChunkRow[] }> {
+	const res = await fetchFn('/api/chunks/');
 	if (!res.ok) throw new Error(`listChunks: HTTP ${res.status}`);
 	return parse(ListChunksSchema, await res.json());
 }
 
 const SubmitChunkSchema = v.object({ chunk_id: v.number(), stdout: v.string() });
 
-export async function submitChunk(chunkId: number): Promise<{ chunk_id: number; stdout: string }> {
-	const res = await fetch(`/api/chunks/${chunkId}/submit`, { method: 'POST' });
+export async function submitChunk(
+	chunkId: number,
+	fetchFn: typeof fetch = fetch,
+): Promise<{ chunk_id: number; stdout: string }> {
+	const res = await fetchFn(`/api/chunks/${chunkId}/submit`, { method: 'POST' });
 	if (!res.ok) {
 		const body = await res.text();
 		throw new Error(`submitChunk(${chunkId}): HTTP ${res.status}: ${body.slice(0, 300)}`);
@@ -72,14 +75,14 @@ export const BatchesPayloadSchema = v.object({
 });
 export type BatchesPayload = v.InferOutput<typeof BatchesPayloadSchema>;
 
-export async function listBatches(): Promise<BatchesPayload> {
-	const res = await fetch('/api/batches/');
+export async function listBatches(fetchFn: typeof fetch = fetch): Promise<BatchesPayload> {
+	const res = await fetchFn('/api/batches/');
 	if (!res.ok) throw new Error(`listBatches: HTTP ${res.status}`);
 	return parse(BatchesPayloadSchema, await res.json());
 }
 
-export async function syncBatches(): Promise<BatchesPayload> {
-	const res = await fetch('/api/batches/sync', { method: 'POST' });
+export async function syncBatches(fetchFn: typeof fetch = fetch): Promise<BatchesPayload> {
+	const res = await fetchFn('/api/batches/sync', { method: 'POST' });
 	if (!res.ok) {
 		const body = await res.text();
 		throw new Error(`syncBatches: HTTP ${res.status}: ${body.slice(0, 200)}`);
@@ -90,10 +93,17 @@ export async function syncBatches(): Promise<BatchesPayload> {
 // ---------- Ingest (upload + register) ----------
 
 /** Upload image files into images-batch/<id>/ and register the volume. Returns the new batch row. */
-export async function uploadVolume(id: string, files: File[]): Promise<BatchRow> {
+export async function uploadVolume(
+	id: string,
+	files: File[],
+	fetchFn: typeof fetch = fetch,
+): Promise<BatchRow> {
 	const form = new FormData();
 	for (const f of files) form.append('files', f, f.name);
-	const res = await fetch(`/api/batches/${encodeURIComponent(id)}/upload`, { method: 'POST', body: form });
+	const res = await fetchFn(`/api/batches/${encodeURIComponent(id)}/upload`, {
+		method: 'POST',
+		body: form,
+	});
 	if (!res.ok) {
 		const body = await res.text();
 		throw new Error(`uploadVolume(${id}): HTTP ${res.status}: ${body.slice(0, 300)}`);
@@ -102,8 +112,8 @@ export async function uploadVolume(id: string, files: File[]): Promise<BatchRow>
 }
 
 /** Register an already-uploaded volume prefix (images must already be in the bucket). */
-export async function registerVolume(id: string): Promise<BatchRow> {
-	const res = await fetch(`/api/batches/${encodeURIComponent(id)}/register`, { method: 'POST' });
+export async function registerVolume(id: string, fetchFn: typeof fetch = fetch): Promise<BatchRow> {
+	const res = await fetchFn(`/api/batches/${encodeURIComponent(id)}/register`, { method: 'POST' });
 	if (!res.ok) {
 		const body = await res.text();
 		throw new Error(`registerVolume(${id}): HTTP ${res.status}: ${body.slice(0, 300)}`);
@@ -162,8 +172,8 @@ export const OrchestratorStateSchema = v.object({
 });
 export type OrchestratorState = v.InferOutput<typeof OrchestratorStateSchema>;
 
-export async function rayOrchestrator(): Promise<OrchestratorState> {
-	const res = await fetch('/api/orchestrator/state');
+export async function rayOrchestrator(fetchFn: typeof fetch = fetch): Promise<OrchestratorState> {
+	const res = await fetchFn('/api/orchestrator/state');
 	if (!res.ok) throw new Error(`rayOrchestrator: HTTP ${res.status}`);
 	return parse(OrchestratorStateSchema, await res.json());
 }

@@ -6,7 +6,6 @@
 		type ServeApplication,
 		type ServeDeployment,
 	} from '@rask/api';
-	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { SortHeader } from '@rask/ui/sort-header';
 	import { Card } from '@rask/ui/card';
 	import { Badge } from '@rask/ui/badge';
@@ -22,7 +21,7 @@
 		ChevronRight,
 		ExternalLink,
 		TriangleAlert,
-	} from 'lucide-svelte';
+	} from '@lucide/svelte';
 
 	let payload = $state<ServePayload | null>(null);
 	let error = $state<string | null>(null);
@@ -202,7 +201,7 @@
 	<title>Serve — RASK</title>
 </svelte:head>
 
-<RayShell title="Serve">
+<main class="bg-background flex-1 overflow-auto">
 	<div class="flex flex-col gap-4 p-6 text-sm">
 		{#if error}
 			<Card class="border-destructive/40 bg-destructive/10 text-destructive p-3">{error}</Card>
@@ -550,4 +549,4 @@
 			{/each}
 		{/if}
 	</div>
-</RayShell>
+</main>

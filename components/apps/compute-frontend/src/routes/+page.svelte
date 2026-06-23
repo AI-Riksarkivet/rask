@@ -15,7 +15,6 @@
 		type TaskInfo,
 		type ServePayload,
 	} from '@rask/api';
-	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import RayStatus from '$lib/components/ray-status.svelte';
 	import { Card } from '@rask/ui/card';
 	import {
@@ -28,7 +27,7 @@
 		Info,
 		TriangleAlert,
 		CircleAlert,
-	} from 'lucide-svelte';
+	} from '@lucide/svelte';
 
 	let ov = $state<OverviewPayload | null>(null);
 	let cluster = $state<RayClusterPayload | null>(null);
@@ -130,7 +129,7 @@
 	<title>Overview — RASK</title>
 </svelte:head>
 
-<RayShell title="Overview">
+<main class="bg-background flex-1 overflow-auto">
 	<div class="flex flex-col gap-4 p-6 text-sm">
 		<!-- Live Ray cluster signal — top of the overview (the cluster's "is it up?"). -->
 		<div class="flex items-center">
@@ -208,4 +207,4 @@
 			</div>
 		{/if}
 	</div>
-</RayShell>
+</main>
