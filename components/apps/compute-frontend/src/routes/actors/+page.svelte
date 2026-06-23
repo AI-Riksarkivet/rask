@@ -2,7 +2,6 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { base } from '$app/paths';
 	import { actorsList, rayCluster, type ActorInfo, type RayNode } from '@rask/api';
-	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { SortHeader } from '@rask/ui/sort-header';
 	import { Card } from '@rask/ui/card';
 	import { Badge } from '@rask/ui/badge';
@@ -16,7 +15,7 @@
 		TriangleAlert,
 		ChevronRight,
 		FileText,
-	} from 'lucide-svelte';
+	} from '@lucide/svelte';
 
 	let actors = $state<ActorInfo[]>([]);
 	let nodes = $state<RayNode[]>([]);
@@ -217,7 +216,7 @@
 	<title>Actors — RASK</title>
 </svelte:head>
 
-<RayShell title="Actors">
+<main class="bg-background flex-1 overflow-auto">
 	<div class="flex flex-col gap-4 p-6 text-sm">
 		{#if error}
 			<Card class="border-destructive/40 bg-destructive/10 text-destructive p-3">{error}</Card>
@@ -424,4 +423,4 @@
 			</Card>
 		{/if}
 	</div>
-</RayShell>
+</main>

@@ -2,15 +2,71 @@
 	"$schema": "https://turborepo.dev/microfrontends/schema.json",
 	"applications": {
 		"viewer-frontend": {
-			"development": { "local": { "port": 5173 } }
+			"development": {
+				"local": {
+					"port": 5173
+				}
+			}
 		},
 		"storage-frontend": {
-			"development": { "local": { "port": 5174 } },
-			"routing": [{ "paths": ["/default/storage", "/default/storage/:path*"] }]
+			"development": {
+				"local": {
+					"port": 5174
+				}
+			},
+			"routing": [
+				{
+					"paths": ["/default/storage", "/default/storage/:path*"]
+				}
+			]
 		},
 		"compute-frontend": {
-			"development": { "local": { "port": 5175 } },
-			"routing": [{ "paths": ["/default/compute", "/default/compute/:path*"] }]
+			"development": {
+				"local": {
+					"port": 5175
+				}
+			},
+			"routing": [
+				{
+					"paths": ["/default/compute", "/default/compute/:path*"]
+				}
+			]
+		},
+		"discover-frontend": {
+			"development": {
+				"local": {
+					"port": 5178
+				}
+			},
+			"routing": [
+				{
+					"paths": ["/default/discover", "/default/discover/:path*"]
+				}
+			]
+		},
+		"train-frontend": {
+			"development": {
+				"local": {
+					"port": 5176
+				}
+			},
+			"routing": [
+				{
+					"paths": ["/default/train", "/default/train/:path*"]
+				}
+			]
+		},
+		"studio-frontend": {
+			"development": {
+				"local": {
+					"port": 5177
+				}
+			},
+			"routing": [
+				{
+					"paths": ["/default/studio", "/default/studio/:path*"]
+				}
+			]
 		}
 	}
 }

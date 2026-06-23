@@ -2,7 +2,7 @@
 	import { Badge } from '@rask/ui/badge';
 	import { listObjects } from '$lib/remote/storage.remote';
 	import { BUCKETS, type Bucket } from '$lib/storage';
-	import { Database, Folder, FileText, ChevronRight, House, TriangleAlert } from 'lucide-svelte';
+	import { Database, Folder, FileText, ChevronRight, House, TriangleAlert } from '@lucide/svelte';
 
 	let bucket = $state<Bucket>(BUCKETS[0]);
 	let prefix = $state('');

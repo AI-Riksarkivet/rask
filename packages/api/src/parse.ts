@@ -11,7 +11,10 @@ export function parse<S extends v.GenericSchema>(schema: S, data: unknown): v.In
 	const result = v.safeParse(schema, data);
 	if (result.success) return result.output;
 	if (typeof console !== 'undefined') {
-		console.warn('[@rask/api] response did not match its schema; passing through unvalidated', v.flatten(result.issues));
+		console.warn(
+			'[@rask/api] response did not match its schema; passing through unvalidated',
+			v.flatten(result.issues),
+		);
 	}
 	return data as v.InferOutput<S>;
 }

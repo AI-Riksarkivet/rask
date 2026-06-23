@@ -1,11 +1,10 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { rayCluster, type RayClusterPayload, type RayNode } from '@rask/api';
-	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { SortHeader } from '@rask/ui/sort-header';
 	import { Card } from '@rask/ui/card';
 	import { Badge } from '@rask/ui/badge';
-	import { Server, Cpu } from 'lucide-svelte';
+	import { Server, Cpu } from '@lucide/svelte';
 
 	let payload = $state<RayClusterPayload | null>(null);
 	let error = $state<string | null>(null);
@@ -112,7 +111,7 @@
 	<title>Cluster — RASK</title>
 </svelte:head>
 
-<RayShell title="Cluster">
+<main class="bg-background flex-1 overflow-auto">
 	<div class="flex flex-col gap-4 p-6 text-sm">
 		{#if error}
 			<Card class="border-destructive/40 bg-destructive/10 text-destructive p-3">{error}</Card>
@@ -348,4 +347,4 @@
 			</div>
 		{/if}
 	</div>
-</RayShell>
+</main>

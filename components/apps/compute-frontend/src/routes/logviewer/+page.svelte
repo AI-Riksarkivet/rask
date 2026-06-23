@@ -2,7 +2,6 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { rayCluster, rayLogFiles, rayLogContent, type RayNode } from '@rask/api';
-	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Card } from '@rask/ui/card';
 	import {
 		RefreshCw,
@@ -16,7 +15,7 @@
 		Hash,
 		ListFilter,
 		X,
-	} from 'lucide-svelte';
+	} from '@lucide/svelte';
 
 	let nodes = $state<RayNode[]>([]);
 	let nodeId = $state<string>('');
@@ -183,7 +182,7 @@
 	<title>Logs — RASK</title>
 </svelte:head>
 
-<RayShell title="Logs">
+<main class="bg-background flex-1 overflow-auto">
 	<div class="flex h-full flex-col gap-3 p-4 text-sm">
 		<!-- toolbar -->
 		<div class="flex flex-wrap items-center gap-2">
@@ -382,4 +381,4 @@
 			</Card>
 		</div>
 	</div>
-</RayShell>
+</main>

@@ -14,11 +14,10 @@
 		type RayClusterPayload,
 		type RayJobsPayload,
 	} from '@rask/api';
-	import RayShell from '$lib/components/layout/ray-shell.svelte';
-	import { Card } from '$lib/components/ui/card';
+	import { Card } from '@rask/ui/card';
 	import { Badge, type BadgeVariant } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
-	import { RefreshCw, Send } from 'lucide-svelte';
+	import { RefreshCw, Send } from '@lucide/svelte';
 
 	let payload = $state<BatchesPayload | null>(null);
 	let chunks = $state<ChunkRow[]>([]);
@@ -274,8 +273,8 @@
 	<title>Batches — RASK</title>
 </svelte:head>
 
-<RayShell title="Batches">
-	{#snippet actions()}
+<main class="bg-background flex-1 overflow-auto">
+	<div class="flex flex-wrap items-center justify-end gap-2 px-6 pt-4">
 		{#if payload}
 			<span
 				class="mr-1 hidden text-[11px] text-[oklch(0.78_0.005_260)] sm:inline"
@@ -290,7 +289,7 @@
 			<RefreshCw class={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
 			{syncing ? 'Syncing…' : 'Sync from S3'}
 		</Button>
-	{/snippet}
+	</div>
 
 	<div class="flex flex-col gap-4 p-6 text-sm">
 		{#if error}
@@ -542,7 +541,7 @@
 									<td class="px-3 py-1.5 font-mono">
 										<a
 											class="text-primary hover:underline"
-											href={`/${page.params.project}/viewer/${b.batch_id}`}>{b.batch_id}</a
+											href={`/${page.params.project}/discover/viewer/${b.batch_id}`}>{b.batch_id}</a
 										>
 									</td>
 									<td class="max-w-[18rem] truncate px-3 py-1.5" title={b.arkiv_titel ?? ''}>
@@ -599,4 +598,4 @@
 			</Card>
 		{/if}
 	</div>
-</RayShell>
+</main>

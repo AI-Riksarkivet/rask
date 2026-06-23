@@ -1,7 +1,5 @@
 <script lang="ts">
-	import RayShell from '$lib/components/layout/ray-shell.svelte';
-	import { Button } from '@rask/ui/button';
-	import { ExternalLink, FileJson } from 'lucide-svelte';
+	import { ExternalLink, FileJson } from '@lucide/svelte';
 
 	// FastAPI auto-generates an OpenAPI schema at /api/openapi.json plus two
 	// rendered viewers (/api/docs = Swagger UI, /api/redoc = ReDoc). All three
@@ -16,52 +14,48 @@
 	<title>API — RASK</title>
 </svelte:head>
 
-<RayShell title="API" flush>
-	{#snippet center()}
-		<div class="flex items-center gap-1 rounded-md bg-white/5 p-0.5 text-xs">
-			<button
-				type="button"
-				class={`rounded px-2 py-0.5 transition ${
-					view === 'swagger'
-						? 'bg-white/15 text-white'
-						: 'text-[oklch(0.78_0.005_260)] hover:bg-white/10'
-				}`}
-				onclick={() => (view = 'swagger')}>Swagger</button
-			>
-			<button
-				type="button"
-				class={`rounded px-2 py-0.5 transition ${
-					view === 'redoc'
-						? 'bg-white/15 text-white'
-						: 'text-[oklch(0.78_0.005_260)] hover:bg-white/10'
-				}`}
-				onclick={() => (view = 'redoc')}>ReDoc</button
-			>
-		</div>
-	{/snippet}
-
-	{#snippet actions()}
-		<Button
-			variant="ghost"
-			size="icon-sm"
-			class="text-[oklch(0.85_0.005_260)] hover:bg-white/10 hover:text-white"
-			onclick={() => window.open('/api/openapi.json', '_blank', 'noopener')}
-			title="Open openapi.json"
-		>
-			<FileJson class="h-4 w-4" />
-		</Button>
-		<Button
-			variant="ghost"
-			size="icon-sm"
-			class="text-[oklch(0.85_0.005_260)] hover:bg-white/10 hover:text-white"
-			onclick={() => window.open(iframeSrc, '_blank', 'noopener')}
-			title="Open in new tab"
-		>
-			<ExternalLink class="h-4 w-4" />
-		</Button>
-	{/snippet}
-
+<main class="bg-background flex flex-1 overflow-hidden">
 	<div class="flex flex-1 flex-col">
+		<div class="flex items-center gap-2 border-b px-3 py-2">
+			<div class="bg-muted/40 flex items-center gap-1 rounded-md p-0.5 text-xs">
+				<button
+					type="button"
+					class={`rounded px-2 py-0.5 transition ${
+						view === 'swagger'
+							? 'bg-background text-foreground'
+							: 'text-muted-foreground hover:bg-muted'
+					}`}
+					onclick={() => (view = 'swagger')}>Swagger</button
+				>
+				<button
+					type="button"
+					class={`rounded px-2 py-0.5 transition ${
+						view === 'redoc'
+							? 'bg-background text-foreground'
+							: 'text-muted-foreground hover:bg-muted'
+					}`}
+					onclick={() => (view = 'redoc')}>ReDoc</button
+				>
+			</div>
+			<div class="ml-auto flex items-center gap-1">
+				<button
+					type="button"
+					class="hover:bg-muted text-muted-foreground hover:text-foreground inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors"
+					onclick={() => window.open('/api/openapi.json', '_blank', 'noopener')}
+					title="Open openapi.json"
+				>
+					<FileJson class="h-4 w-4" />
+				</button>
+				<button
+					type="button"
+					class="hover:bg-muted text-muted-foreground hover:text-foreground inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors"
+					onclick={() => window.open(iframeSrc, '_blank', 'noopener')}
+					title="Open in new tab"
+				>
+					<ExternalLink class="h-4 w-4" />
+				</button>
+			</div>
+		</div>
 		<iframe
 			src={iframeSrc}
 			class="bg-background h-full w-full flex-1 border-0"
@@ -69,4 +63,4 @@
 			referrerpolicy="same-origin"
 		></iframe>
 	</div>
-</RayShell>
+</main>

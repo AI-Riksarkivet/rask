@@ -68,12 +68,12 @@ export function navMain(project: string): NavItem[] {
 		{
 			title: 'Discover',
 			icon: FileText,
-			href: `${b}/search`,
-			match: under(`${b}/search`, `${b}/browse`, `${b}/viewer`),
+			href: `${b}/discover/search`,
+			match: under(`${b}/discover`),
 			items: [
-				{ title: 'Search', href: `${b}/search`, match: seg(`${b}/search`) },
-				{ title: 'Viewer', href: `${b}/viewer`, match: seg(`${b}/viewer`) },
-				{ title: 'Browse', href: `${b}/browse`, match: seg(`${b}/browse`) },
+				{ title: 'Search', href: `${b}/discover/search`, match: seg(`${b}/discover/search`) },
+				{ title: 'Viewer', href: `${b}/discover/viewer`, match: seg(`${b}/discover/viewer`) },
+				{ title: 'Browse', href: `${b}/discover/browse`, match: seg(`${b}/discover/browse`) },
 			],
 		},
 		{ title: 'Storage', icon: Database, href: `${b}/storage`, match: seg(`${b}/storage`) },
