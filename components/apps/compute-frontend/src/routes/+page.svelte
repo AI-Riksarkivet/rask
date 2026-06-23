@@ -15,6 +15,7 @@
 		type ServePayload,
 	} from '@rask/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
+	import RayStatus from '$lib/components/ray-status.svelte';
 	import { Card } from '@rask/ui/card';
 	import {
 		Server,
@@ -130,6 +131,13 @@
 
 <RayShell title="Overview">
 	<div class="flex flex-col gap-4 p-6 text-sm">
+		<!-- Live Ray cluster signal — top of the overview (the cluster's "is it up?"). -->
+		<div class="flex items-center">
+			<div class="bg-card inline-flex items-center rounded-full border px-3 py-1.5">
+				<RayStatus />
+			</div>
+		</div>
+
 		{#if error}
 			<Card class="border-destructive/40 bg-destructive/10 text-destructive p-3">{error}</Card>
 		{/if}

@@ -89,12 +89,14 @@ dev-micro:
 # ---- frontends (SvelteKit microfrontends) ----------------------------------
 # Three independent SvelteKit SSR apps (svelte-adapter-bun) + the @rask/ui
 # watcher, orchestrated by Turborepo. Each app's Vite dev server proxies
-# /api/* → VIEWER_BACKEND (the gateway / `make viewer`, :8888). There is no
-# composition proxy yet, so the apps come up on separate ports:
+# /api/* → VIEWER_BACKEND (the gateway / `make viewer`, :8888). The apps come up on
+# their own ports AND Turborepo auto-starts its built-in microfrontends proxy (from
+# components/apps/frontend/microfrontends.json — no extra package) on :3024:
+#   single origin → http://localhost:3024   (browse THIS for cross-app nav)
 #   viewer-frontend :5173 (catch-all) · storage :5174 /storage · compute :5175 /compute
 # The shared @rask/ui shell + nav render with NO backend; start one
 # (`make dev-micro` or `make viewer`) only when you need live /api data.
-dev-frontends:        # all three apps + the @rask/ui watcher (turbo run dev)
+dev-frontends:        # all three apps + @rask/ui watcher + :3024 proxy (turbo run dev)
 	bun run dev
 
 viewer-frontend:      # catch-all app only, :5173

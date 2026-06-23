@@ -15,7 +15,7 @@
 	<Toaster />
 {/if}
 
-<!-- ONE shared sidebar from @rask/ui — identical across every microfrontend, no drift. -->
+<!-- ONE shared shell from @rask/ui — identical across every microfrontend, no drift. -->
 <AppShell pathname={page.url.pathname}>
 	{@render children()}
 </AppShell>

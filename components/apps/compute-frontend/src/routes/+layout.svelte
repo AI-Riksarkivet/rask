@@ -14,7 +14,8 @@
 	<Toaster />
 {/if}
 
-<!-- Shared sidebar from @rask/ui — identical to every other microfrontend. -->
+<!-- Shared shell from @rask/ui — identical chrome across every microfrontend.
+     Ray health is a live signal at the top of the compute overview, not in the shell. -->
 <AppShell pathname={page.url.pathname}>
 	{@render children()}
 </AppShell>
