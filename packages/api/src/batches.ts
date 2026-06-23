@@ -1,6 +1,7 @@
 // @rask/api/batches — batches, chunks, orchestrator state.
 
 import * as v from 'valibot';
+import { parse } from './parse.js';
 
 export const BatchRowSchema = v.object({
 	batch_id: v.string(),
@@ -40,7 +41,7 @@ const ListChunksSchema = v.object({ chunks: v.array(ChunkRowSchema) });
 export async function listChunks(): Promise<{ chunks: ChunkRow[] }> {
 	const res = await fetch('/api/chunks/');
 	if (!res.ok) throw new Error(`listChunks: HTTP ${res.status}`);
-	return v.parse(ListChunksSchema, await res.json());
+	return parse(ListChunksSchema, await res.json());
 }
 
 const SubmitChunkSchema = v.object({ chunk_id: v.number(), stdout: v.string() });
@@ -51,7 +52,7 @@ export async function submitChunk(chunkId: number): Promise<{ chunk_id: number; 
 		const body = await res.text();
 		throw new Error(`submitChunk(${chunkId}): HTTP ${res.status}: ${body.slice(0, 300)}`);
 	}
-	return v.parse(SubmitChunkSchema, await res.json());
+	return parse(SubmitChunkSchema, await res.json());
 }
 
 export const BatchesPayloadSchema = v.object({
@@ -74,7 +75,7 @@ export type BatchesPayload = v.InferOutput<typeof BatchesPayloadSchema>;
 export async function listBatches(): Promise<BatchesPayload> {
 	const res = await fetch('/api/batches/');
 	if (!res.ok) throw new Error(`listBatches: HTTP ${res.status}`);
-	return v.parse(BatchesPayloadSchema, await res.json());
+	return parse(BatchesPayloadSchema, await res.json());
 }
 
 export async function syncBatches(): Promise<BatchesPayload> {
@@ -83,7 +84,7 @@ export async function syncBatches(): Promise<BatchesPayload> {
 		const body = await res.text();
 		throw new Error(`syncBatches: HTTP ${res.status}: ${body.slice(0, 200)}`);
 	}
-	return v.parse(BatchesPayloadSchema, await res.json());
+	return parse(BatchesPayloadSchema, await res.json());
 }
 
 // ---------- Orchestrator state ----------
@@ -140,5 +141,5 @@ export type OrchestratorState = v.InferOutput<typeof OrchestratorStateSchema>;
 export async function rayOrchestrator(): Promise<OrchestratorState> {
 	const res = await fetch('/api/orchestrator/state');
 	if (!res.ok) throw new Error(`rayOrchestrator: HTTP ${res.status}`);
-	return v.parse(OrchestratorStateSchema, await res.json());
+	return parse(OrchestratorStateSchema, await res.json());
 }
