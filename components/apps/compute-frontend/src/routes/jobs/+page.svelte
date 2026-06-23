@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { base } from '$app/paths';
 	import { ChevronRight } from 'lucide-svelte';
 	import { rayJobs, type RayJobsPayload, type RayJob } from '@rask/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
@@ -167,7 +168,7 @@
 							{#each jobs as j (j.submission_id ?? j.job_id)}
 								<tr
 									class="border-border/40 hover:bg-muted/40 cursor-pointer border-b"
-									onclick={() => goto(`/jobs/${encodeURIComponent(j.submission_id)}`)}
+									onclick={() => goto(`${base}/jobs/${encodeURIComponent(j.submission_id)}`)}
 								>
 									<td class="px-3 py-1.5">
 										<Badge

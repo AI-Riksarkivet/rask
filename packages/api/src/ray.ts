@@ -1,6 +1,7 @@
 // @rask/api/ray — Ray dashboard + Serve introspection (compute domain).
 
 import * as v from 'valibot';
+import { parse } from './parse.js';
 
 // ---------- Ray dashboard proxy ----------
 //
@@ -88,19 +89,19 @@ export type RayClusterPayload = v.InferOutput<typeof RayClusterPayloadSchema>;
 export async function rayHealth(): Promise<RayHealth> {
 	const res = await fetch('/api/ray/health');
 	if (!res.ok) throw new Error(`rayHealth: HTTP ${res.status}`);
-	return v.parse(RayHealthSchema, await res.json());
+	return parse(RayHealthSchema, await res.json());
 }
 
 export async function rayJobs(): Promise<RayJobsPayload> {
 	const res = await fetch('/api/ray/jobs');
 	if (!res.ok) throw new Error(`rayJobs: HTTP ${res.status}`);
-	return v.parse(RayJobsPayloadSchema, await res.json());
+	return parse(RayJobsPayloadSchema, await res.json());
 }
 
 export async function rayCluster(): Promise<RayClusterPayload> {
 	const res = await fetch('/api/ray/cluster');
 	if (!res.ok) throw new Error(`rayCluster: HTTP ${res.status}`);
-	return v.parse(RayClusterPayloadSchema, await res.json());
+	return parse(RayClusterPayloadSchema, await res.json());
 }
 
 export const ActorInfoSchema = v.object({
@@ -147,7 +148,7 @@ export type ActorsPayload = v.InferOutput<typeof ActorsPayloadSchema>;
 export async function actorsList(): Promise<ActorInfo[]> {
 	const res = await fetch('/api/ray/actors');
 	if (!res.ok) throw new Error(`actorsList: HTTP ${res.status}`);
-	const payload = v.parse(ActorsPayloadSchema, await res.json());
+	const payload = parse(ActorsPayloadSchema, await res.json());
 	if (!payload.ok) throw new Error(payload.error ?? 'actors unavailable');
 	return payload.actors ?? [];
 }
@@ -183,7 +184,7 @@ export type TasksPayload = v.InferOutput<typeof TasksPayloadSchema>;
 export async function tasksList(): Promise<TaskInfo[]> {
 	const res = await fetch('/api/ray/tasks');
 	if (!res.ok) throw new Error(`tasksList: HTTP ${res.status}`);
-	const payload = v.parse(TasksPayloadSchema, await res.json());
+	const payload = parse(TasksPayloadSchema, await res.json());
 	if (!payload.ok) throw new Error(payload.error ?? 'tasks unavailable');
 	return payload.tasks ?? [];
 }
@@ -210,7 +211,7 @@ export type OverviewPayload = v.InferOutput<typeof OverviewPayloadSchema>;
 export async function rayOverview(): Promise<OverviewPayload> {
 	const res = await fetch('/api/ray/overview');
 	if (!res.ok) throw new Error(`rayOverview: HTTP ${res.status}`);
-	return v.parse(OverviewPayloadSchema, await res.json());
+	return parse(OverviewPayloadSchema, await res.json());
 }
 
 export const JobLogsPayloadSchema = v.object({
@@ -224,7 +225,7 @@ export type JobLogsPayload = v.InferOutput<typeof JobLogsPayloadSchema>;
 export async function rayJobLogs(submissionId: string, tail = 2000): Promise<JobLogsPayload> {
 	const res = await fetch(`/api/ray/jobs/${encodeURIComponent(submissionId)}/logs?tail=${tail}`);
 	if (!res.ok) throw new Error(`rayJobLogs: HTTP ${res.status}`);
-	return v.parse(JobLogsPayloadSchema, await res.json());
+	return parse(JobLogsPayloadSchema, await res.json());
 }
 
 export const LogsPayloadSchema = v.object({
@@ -240,7 +241,7 @@ export type LogsPayload = v.InferOutput<typeof LogsPayloadSchema>;
 export async function rayLogFiles(nodeId: string): Promise<LogsPayload> {
 	const res = await fetch(`/api/ray/logs?node_id=${encodeURIComponent(nodeId)}`);
 	if (!res.ok) throw new Error(`rayLogFiles: HTTP ${res.status}`);
-	return v.parse(LogsPayloadSchema, await res.json());
+	return parse(LogsPayloadSchema, await res.json());
 }
 
 export async function rayLogContent(
@@ -251,7 +252,7 @@ export async function rayLogContent(
 	const qs = new URLSearchParams({ node_id: nodeId, filename, lines: String(lines) });
 	const res = await fetch(`/api/ray/logs?${qs}`);
 	if (!res.ok) throw new Error(`rayLogContent: HTTP ${res.status}`);
-	return v.parse(LogsPayloadSchema, await res.json());
+	return parse(LogsPayloadSchema, await res.json());
 }
 
 export const ServeReplicaSchema = v.object({
@@ -395,5 +396,5 @@ export type ServePayload = v.InferOutput<typeof ServePayloadSchema>;
 export async function serveApplications(): Promise<ServePayload> {
 	const res = await fetch('/api/serve/applications/');
 	if (!res.ok) throw new Error(`serveApplications: HTTP ${res.status}`);
-	return v.parse(ServePayloadSchema, await res.json());
+	return parse(ServePayloadSchema, await res.json());
 }

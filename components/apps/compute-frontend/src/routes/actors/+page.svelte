@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import { base } from '$app/paths';
 	import { actorsList, rayCluster, type ActorInfo, type RayNode } from '@rask/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { SortHeader } from '@rask/ui/sort-header';
@@ -385,7 +386,7 @@
 										<td colspan="9" class="px-4 py-3">
 											{#if a.node_id}
 												<a
-													href={`/logviewer?node=${encodeURIComponent(a.node_id)}${a.worker_id ? `&q=${encodeURIComponent(a.worker_id)}` : ''}`}
+													href={`${base}/logviewer?node=${encodeURIComponent(a.node_id)}${a.worker_id ? `&q=${encodeURIComponent(a.worker_id)}` : ''}`}
 													class="text-primary mb-2 inline-flex items-center gap-1 text-[11px] hover:underline"
 												>
 													<FileText class="h-3 w-3" /> view logs

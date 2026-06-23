@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import { page } from '$app/state';
 	import {
 		listBatches,
 		listChunks,
@@ -377,7 +378,10 @@
 						<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
 							Recent RayJobs
 						</div>
-						<a class="text-primary text-xs hover:underline" href="/jobs">view all →</a>
+						<a
+							class="text-primary text-xs hover:underline"
+							href={`/${page.params.project}/compute/jobs`}>view all →</a
+						>
 					</div>
 					<div class="divide-border flex max-h-44 flex-col divide-y overflow-auto">
 						{#each ray.jobs.jobs.slice(0, 10) as j (j.submission_id ?? j.job_id)}
@@ -402,7 +406,7 @@
 								{#if j.submission_id}
 									<a
 										class="text-primary ml-auto hover:underline"
-										href={`/jobs/${encodeURIComponent(j.submission_id)}`}
+										href={`/${page.params.project}/compute/jobs/${encodeURIComponent(j.submission_id)}`}
 										title="Open job detail">details</a
 									>
 								{/if}
@@ -536,8 +540,9 @@
 							{#each filtered as b (b.batch_id)}
 								<tr class="border-border/40 hover:bg-muted/40 border-b">
 									<td class="px-3 py-1.5 font-mono">
-										<a class="text-primary hover:underline" href={`/viewer/${b.batch_id}`}
-											>{b.batch_id}</a
+										<a
+											class="text-primary hover:underline"
+											href={`/${page.params.project}/viewer/${b.batch_id}`}>{b.batch_id}</a
 										>
 									</td>
 									<td class="max-w-[18rem] truncate px-3 py-1.5" title={b.arkiv_titel ?? ''}>

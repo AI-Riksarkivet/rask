@@ -21,6 +21,7 @@
 	import { parseAlto } from '$lib/alto';
 	import type { AltoParse, Line, PageEntry } from '@rask/api';
 
+	const project = $derived(pageStore.params.project!);
 	const volume = $derived(pageStore.params.volume!);
 	const pageKey = $derived(pageStore.params.page!);
 	// Set when arriving from /search — viewer highlights this line + auto-enables polygons.
@@ -320,7 +321,7 @@
 		const target = e.target as HTMLElement;
 		if (target?.matches('input, textarea')) return;
 		if ((e.key === 'ArrowLeft' || e.key === 'h' || e.key === 'k') && prevPage) {
-			goto(`/viewer/${encodeURIComponent(volume)}/${encodeURIComponent(prevPage.key)}`, {
+			goto(`/${project}/viewer/${encodeURIComponent(volume)}/${encodeURIComponent(prevPage.key)}`, {
 				replaceState: false,
 				noScroll: true,
 			});
@@ -329,7 +330,7 @@
 			nextPage
 		) {
 			e.preventDefault();
-			goto(`/viewer/${encodeURIComponent(volume)}/${encodeURIComponent(nextPage.key)}`, {
+			goto(`/${project}/viewer/${encodeURIComponent(volume)}/${encodeURIComponent(nextPage.key)}`, {
 				replaceState: false,
 				noScroll: true,
 			});
@@ -454,9 +455,12 @@
 					disabled={!prevPage}
 					onclick={() =>
 						prevPage &&
-						goto(`/viewer/${encodeURIComponent(volume)}/${encodeURIComponent(prevPage.key)}`, {
-							noScroll: true,
-						})}
+						goto(
+							`/${project}/viewer/${encodeURIComponent(volume)}/${encodeURIComponent(prevPage.key)}`,
+							{
+								noScroll: true,
+							},
+						)}
 					title="Previous (←)"
 				>
 					<ChevronLeft class="h-4 w-4" />
@@ -473,9 +477,12 @@
 					disabled={!nextPage}
 					onclick={() =>
 						nextPage &&
-						goto(`/viewer/${encodeURIComponent(volume)}/${encodeURIComponent(nextPage.key)}`, {
-							noScroll: true,
-						})}
+						goto(
+							`/${project}/viewer/${encodeURIComponent(volume)}/${encodeURIComponent(nextPage.key)}`,
+							{
+								noScroll: true,
+							},
+						)}
 					title="Next (→)"
 				>
 					<ChevronRight class="h-4 w-4" />

@@ -2,13 +2,20 @@
 	import * as DropdownMenu from '../components/dropdown-menu/index.js';
 	import * as Sidebar from '../components/sidebar/index.js';
 	import { useSidebar } from '../components/sidebar/index.js';
-	import { ChevronsUpDown, Plus, Boxes } from '@lucide/svelte';
+	import { ChevronsUpDown, Boxes, House, Check } from '@lucide/svelte';
 	import type { Project } from './nav-config.js';
 
-	// sidebar-07 TeamSwitcher, adapted: a project switcher / "home" navigator. One
-	// implicit Default project until backend project support lands.
+	// sidebar-07 TeamSwitcher, adapted into a PROJECT switcher. The dropdown swaps between
+	// projects or returns to the main menu (the home picker at `/`) — that's how you leave
+	// a project, which is why there's no "Home" item in the sidebar nav. It deliberately
+	// does NOT create projects: that lives on the home landing, not here.
 	let { project = { name: 'Default', subtitle: 'Project' } }: { project?: Project } = $props();
 	const sidebar = useSidebar();
+
+	// One implicit project until backend project support lands; the slug is the URL's
+	// first segment, so swapping just navigates to /<slug>/overview.
+	const projects = [{ name: 'Default', slug: 'default' }];
+	const activeSlug = $derived(project.name.toLowerCase());
 </script>
 
 <Sidebar.Menu>
@@ -41,18 +48,27 @@
 				sideOffset={4}
 			>
 				<DropdownMenu.Label class="text-muted-foreground text-xs">Projects</DropdownMenu.Label>
-				<DropdownMenu.Item class="gap-2 p-2">
-					<div class="flex size-6 items-center justify-center rounded-md border">
-						<Boxes class="size-3.5 shrink-0" />
-					</div>
-					{project.name}
-				</DropdownMenu.Item>
+				{#each projects as p (p.slug)}
+					<DropdownMenu.Item class="p-0">
+						<a href="/{p.slug}/overview" class="flex w-full items-center gap-2 px-2 py-1.5">
+							<div class="flex size-6 items-center justify-center rounded-md border">
+								<Boxes class="size-3.5 shrink-0" />
+							</div>
+							{p.name}
+							{#if p.slug === activeSlug}
+								<Check class="ml-auto size-4" />
+							{/if}
+						</a>
+					</DropdownMenu.Item>
+				{/each}
 				<DropdownMenu.Separator />
-				<DropdownMenu.Item disabled class="gap-2 p-2">
-					<div class="flex size-6 items-center justify-center rounded-md border bg-transparent">
-						<Plus class="size-4" />
-					</div>
-					<div class="text-muted-foreground font-medium">New project (soon)</div>
+				<DropdownMenu.Item class="p-0">
+					<a href="/" class="flex w-full items-center gap-2 px-2 py-1.5">
+						<div class="flex size-6 items-center justify-center rounded-md border bg-transparent">
+							<House class="size-4" />
+						</div>
+						<span class="text-muted-foreground font-medium">Main menu</span>
+					</a>
 				</DropdownMenu.Item>
 			</DropdownMenu.Content>
 		</DropdownMenu.Root>

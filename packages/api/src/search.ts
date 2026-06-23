@@ -1,6 +1,7 @@
 // @rask/api/search — line FTS + catalog search/browse.
 
 import * as v from 'valibot';
+import { parse } from './parse.js';
 
 export const CatalogHitSchema = v.object({
 	id: v.string(),
@@ -74,13 +75,13 @@ export async function searchLines(query: string, limit = 50): Promise<SearchResp
 	const params = new URLSearchParams({ q: query, limit: String(limit) });
 	const res = await fetch(`/api/search?${params}`);
 	if (!res.ok) throw new Error(`searchLines: HTTP ${res.status}`);
-	return v.parse(SearchResponseSchema, await res.json());
+	return parse(SearchResponseSchema, await res.json());
 }
 
 export async function searchStats(): Promise<SearchStats> {
 	const res = await fetch('/api/search/stats');
 	if (!res.ok) throw new Error(`searchStats: HTTP ${res.status}`);
-	return v.parse(SearchStatsSchema, await res.json());
+	return parse(SearchStatsSchema, await res.json());
 }
 
 export const CatalogSearchResponseSchema = v.object({
@@ -95,13 +96,13 @@ export async function searchCatalog(query: string, limit = 50): Promise<CatalogS
 	const params = new URLSearchParams({ q: query, limit: String(limit) });
 	const res = await fetch(`/api/catalog/search?${params}`);
 	if (!res.ok) throw new Error(`searchCatalog: HTTP ${res.status}`);
-	return v.parse(CatalogSearchResponseSchema, await res.json());
+	return parse(CatalogSearchResponseSchema, await res.json());
 }
 
 export async function catalogStats(): Promise<SearchStats> {
 	const res = await fetch('/api/catalog/search/stats');
 	if (!res.ok) throw new Error(`catalogStats: HTTP ${res.status}`);
-	return v.parse(SearchStatsSchema, await res.json());
+	return parse(SearchStatsSchema, await res.json());
 }
 
 export type CatalogTier = 'listed' | 'cached' | 'transcribed';
@@ -127,7 +128,7 @@ export async function browseCatalog(
 	const params = new URLSearchParams({ tier, limit: String(limit), offset: String(offset) });
 	const res = await fetch(`/api/catalog/browse?${params}`);
 	if (!res.ok) throw new Error(`browseCatalog: HTTP ${res.status}`);
-	return v.parse(CatalogBrowseResponseSchema, await res.json());
+	return parse(CatalogBrowseResponseSchema, await res.json());
 }
 
 // The /batches/{id}/catalog endpoint returns just the EAD row, not the
@@ -163,6 +164,6 @@ export async function getBatchCatalog(batchId: string): Promise<CatalogHit | nul
 	// The endpoint returns just the row, not the {listed, cached, transcribed}
 	// flags — those are search-time enrichment. Fill them in as false so the
 	// type matches; consumers reading them will see "no local state known".
-	const row = v.parse(CatalogRowSchema, await res.json());
+	const row = parse(CatalogRowSchema, await res.json());
 	return { listed: false, cached: false, transcribed: false, ...row };
 }

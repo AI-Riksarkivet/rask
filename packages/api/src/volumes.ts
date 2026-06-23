@@ -1,4 +1,5 @@
 import * as v from 'valibot';
+import { parse } from './parse.js';
 import type { PageEntry } from './types';
 
 // @rask/api/volumes — S3/IIIF image + ALTO + page listing.
@@ -22,7 +23,7 @@ export async function listPages(
 	// fetch has no origin on the server). Client callers use the default global fetch.
 	const res = await fetchFn(`/api/volumes/${encodeURIComponent(volume)}/pages`);
 	if (!res.ok) throw new Error(`listPages(${volume}): HTTP ${res.status}`);
-	return v.parse(PageListSchema, await res.json());
+	return parse(PageListSchema, await res.json());
 }
 
 export function imageUrl(volume: string, key: string): string {

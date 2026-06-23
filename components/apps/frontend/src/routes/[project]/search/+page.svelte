@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import {
 		searchLines,
 		searchStats,
@@ -174,7 +175,7 @@
 		// The slash gets URL-encoded so it stays in one path segment.
 		const pageKey = `${h.batch_id}/${h.page_id}`;
 		goto(
-			`/viewer/${encodeURIComponent(h.batch_id)}/${encodeURIComponent(pageKey)}` +
+			`/${page.params.project}/viewer/${encodeURIComponent(h.batch_id)}/${encodeURIComponent(pageKey)}` +
 				`?line=${encodeURIComponent(h.line_id)}`,
 		);
 	}
@@ -427,7 +428,9 @@
 			     hides non-cached rows entirely (see visibleCatalogHits). -->
 			<div class="flex flex-col gap-2">
 				{#each visibleCatalogHits as h (h.id)}
-					{@const localHref = h.cached ? `/viewer/${encodeURIComponent(h.bild_id)}` : null}
+					{@const localHref = h.cached
+						? `/${page.params.project}/viewer/${encodeURIComponent(h.bild_id)}`
+						: null}
 					{@const externalHref = h.bildvisning_url || null}
 					{@const accentClass = h.transcribed
 						? 'border-emerald-500/40'

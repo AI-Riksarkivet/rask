@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import { base } from '$app/paths';
 	import {
 		rayOverview,
 		rayCluster,
@@ -69,7 +70,7 @@
 
 	const cards = $derived([
 		{
-			href: '/cluster',
+			href: `${base}/cluster`,
 			label: 'Nodes',
 			icon: Server,
 			value: cluster?.alive_count ?? 0,
@@ -77,7 +78,7 @@
 			dot: 'bg-emerald-500',
 		},
 		{
-			href: '/cluster',
+			href: `${base}/cluster`,
 			label: 'GPU',
 			icon: Cpu,
 			value: Math.round(cluster?.used_resources?.GPU ?? 0),
@@ -85,7 +86,7 @@
 			dot: 'bg-violet-500',
 		},
 		{
-			href: '/jobs',
+			href: `${base}/jobs`,
 			label: 'Jobs running',
 			icon: ListTree,
 			value: jobList.filter((j) => j.status === 'RUNNING').length,
@@ -93,7 +94,7 @@
 			dot: 'bg-sky-500',
 		},
 		{
-			href: '/jobs',
+			href: `${base}/jobs`,
 			label: 'Tasks running',
 			icon: ListChecks,
 			value: taskRows.filter((t) => t.state === 'RUNNING').length,
@@ -101,7 +102,7 @@
 			dot: 'bg-amber-500',
 		},
 		{
-			href: '/actors',
+			href: `${base}/actors`,
 			label: 'Actors alive',
 			icon: Boxes,
 			value: actors.filter((a) => a.state === 'ALIVE').length,
@@ -109,7 +110,7 @@
 			dot: 'bg-fuchsia-500',
 		},
 		{
-			href: '/serve',
+			href: `${base}/serve`,
 			label: 'Serve apps',
 			icon: ServerCog,
 			value: serveApps.filter((a) => a.status === 'RUNNING').length,

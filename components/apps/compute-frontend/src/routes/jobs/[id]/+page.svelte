@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { page } from '$app/state';
+	import { base } from '$app/paths';
 	import {
 		rayJobs,
 		rayJobLogs,
@@ -226,7 +227,7 @@
 <RayShell title="Job">
 	<div class="flex flex-col gap-4 p-6 text-sm">
 		<a
-			href="/jobs"
+			href="{base}/jobs"
 			class="text-muted-foreground hover:text-foreground inline-flex w-fit items-center gap-1 text-xs"
 		>
 			<ArrowLeft class="h-3.5 w-3.5" /> all jobs
