@@ -31,11 +31,29 @@ spec:
                 name: {{ include "rask.fullname" . }}-gateway
                 port:
                   number: 8888
+          {{- /* Each MFE domain app on its base path; Traefik matches longest-prefix
+                 first, so these win over the catch-all "/" below. */}}
+          {{- range .Values.frontend.apps }}
+          {{- if not .catchAll }}
+          - path: {{ .path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "rask.fullname" $ }}-{{ .name }}
+                port:
+                  number: {{ $.Values.frontend.service.port }}
+          {{- end }}
+          {{- end }}
+          {{- /* Catch-all viewer-frontend last: "/", "/<project>/overview|new". */}}
+          {{- range .Values.frontend.apps }}
+          {{- if .catchAll }}
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: {{ include "rask.fullname" . }}-frontend
+                name: {{ include "rask.fullname" $ }}-{{ .name }}
                 port:
-                  number: {{ .Values.frontend.service.port }}
+                  number: {{ $.Values.frontend.service.port }}
+          {{- end }}
+          {{- end }}
 {{- end }}

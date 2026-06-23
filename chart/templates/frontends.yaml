@@ -1,0 +1,89 @@
+{{- /*
+SvelteKit SSR microfrontends. One Deployment + Service per .Values.frontend.apps
+entry. The catch-all (catchAll: true) serves "/"; each domain app is pinned to
+its base path /default/<domain> and is probed there (GET "/" is 404 under a base
+path). Service/Deployment name = rask-<app name>; image = "<app name>:<tag>".
+*/ -}}
+{{- $root := . -}}
+{{- $fe := .Values.frontend -}}
+{{- range $fe.apps }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rask.fullname" $root }}-{{ .name }}
+  labels:
+    {{- include "rask.componentLabels" (list $root .name) | nindent 4 }}
+spec:
+  replicas: {{ $fe.replicas }}
+  selector:
+    matchLabels:
+      {{- include "rask.selectorLabels" $root | nindent 6 }}
+      app.kubernetes.io/component: {{ .name }}
+  template:
+    metadata:
+      labels:
+        {{- include "rask.selectorLabels" $root | nindent 8 }}
+        app.kubernetes.io/component: {{ .name }}
+    spec:
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "rask.serviceAccountName" $root }}
+      securityContext:
+        {{- toYaml $fe.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .name }}
+          image: "{{ .name }}:{{ $fe.image.tag }}"
+          imagePullPolicy: {{ $fe.image.pullPolicy }}
+          securityContext:
+            {{- toYaml $fe.securityContext | nindent 12 }}
+          env:
+            # SSR calls the gateway server-side via an absolute base URL.
+            - name: RASK_GATEWAY_URL
+              value: {{ printf "http://%s-gateway:8888" (include "rask.fullname" $root) | quote }}
+            # Behind Traefik: derive the request origin from forwarded headers so
+            # the adapter-bun CSRF/origin check matches however the cluster is reached
+            # (node IP, localhost, VS Code-forwarded port) — no fixed ORIGIN.
+            - name: PROTOCOL_HEADER
+              value: "x-forwarded-proto"
+            - name: HOST_HEADER
+              value: "x-forwarded-host"
+            - name: PORT
+              value: {{ $fe.service.port | quote }}
+            - name: HOST
+              value: "0.0.0.0"
+          ports:
+            - name: http
+              containerPort: {{ $fe.service.port }}
+          # TCP probe (not httpGet): some MFE apps have no index route at their
+          # base path (discover serves /browse, /search, ...), so GET "/" or the
+          # base 404s. An open port proves the adapter-bun server is alive.
+          livenessProbe:
+            tcpSocket: {port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          readinessProbe:
+            tcpSocket: {port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            {{- toYaml $fe.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rask.fullname" $root }}-{{ .name }}
+  labels:
+    {{- include "rask.componentLabels" (list $root .name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ $fe.service.port }}
+      targetPort: http
+  selector:
+    {{- include "rask.selectorLabels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ .name }}
+{{- end }}

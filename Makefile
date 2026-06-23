@@ -245,20 +245,27 @@ pg-revision: pg-deps
 
 # ---- local k3s ------------------------------------------------------------
 COMPOSE_IMAGES = gateway core-api search-api volumes-api ray-api orchestrator
+# SvelteKit SSR microfrontends — all built from the one parametrized
+# .docker/frontend.dockerfile via --build-arg APP=<name>. "frontend" is the
+# catch-all (viewer-frontend); the rest are the /default/<domain> MFE apps.
+FRONTEND_IMAGES = frontend storage-frontend compute-frontend discover-frontend train-frontend studio-frontend
 KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 HELM ?= KUBECONFIG=$(KUBECONFIG) helm
 KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
-K3S_IMAGES = $(COMPOSE_IMAGES) frontend ray
+K3S_IMAGES = $(COMPOSE_IMAGES) $(FRONTEND_IMAGES) ray
 
 k3s-install: ## One-time host setup: k3s + helm + NVIDIA device-plugin + KubeRay operator (sudo)
 	./scripts/k3s-install.sh
 
-k3s-build: ## Build all fleet + frontend + ray images as :dev (native arm64)
+k3s-build: ## Build all fleet + frontend (6 MFEs) + ray images as :dev (native arm64)
 	@for s in $(COMPOSE_IMAGES); do \
 	  echo ">> building $$s:dev"; \
 	  docker buildx build -f .docker/$$s.dockerfile -t $$s:dev --load . || exit 1; \
 	done
-	docker buildx build -f .docker/frontend.dockerfile -t frontend:dev --load .
+	@for a in $(FRONTEND_IMAGES); do \
+	  echo ">> building $$a:dev (frontend.dockerfile APP=$$a)"; \
+	  docker buildx build -f .docker/frontend.dockerfile --build-arg APP=$$a -t $$a:dev --load . || exit 1; \
+	done
 	docker buildx build -f .docker/ray.dockerfile -t ray:dev --load .
 
 k3s-import: ## Side-load :dev images into k3s containerd
