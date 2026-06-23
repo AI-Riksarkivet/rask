@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { page } from '$app/state';
+	import { base } from '$app/paths';
 	import {
 		listBatches,
 		listChunks,
@@ -19,6 +19,11 @@
 	import { Badge, type BadgeVariant } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
 	import { RefreshCw, Send } from '@lucide/svelte';
+
+	// This app's base is /default/overview; in-app links use `base`. Cross-domain
+	// links (discover/compute) stay project-prefixed — derive the project segment
+	// from the base (there's no [project] route param in this carved app).
+	const project = base.split('/')[1] ?? 'default';
 
 	let payload = $state<BatchesPayload | null>(null);
 	let chunks = $state<ChunkRow[]>([]);
@@ -271,7 +276,7 @@
 </script>
 
 <svelte:head>
-	<title>Batches — RASK</title>
+	<title>Overview — RASK</title>
 </svelte:head>
 
 <main class="bg-background flex-1 overflow-auto">
@@ -290,7 +295,7 @@
 			<RefreshCw class={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
 			{syncing ? 'Syncing…' : 'Sync from S3'}
 		</Button>
-		<Button size="sm" onclick={() => goto(`/${page.params.project}/new`)}>New volume</Button>
+		<Button size="sm" onclick={() => goto(`${base}/new`)}>New volume</Button>
 	</div>
 
 	<div class="flex flex-col gap-4 p-6 text-sm">
@@ -379,9 +384,8 @@
 						<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
 							Recent RayJobs
 						</div>
-						<a
-							class="text-primary text-xs hover:underline"
-							href={`/${page.params.project}/compute/jobs`}>view all →</a
+						<a class="text-primary text-xs hover:underline" href={`/${project}/compute/jobs`}
+							>view all →</a
 						>
 					</div>
 					<div class="divide-border flex max-h-44 flex-col divide-y overflow-auto">
@@ -407,7 +411,7 @@
 								{#if j.submission_id}
 									<a
 										class="text-primary ml-auto hover:underline"
-										href={`/${page.params.project}/compute/jobs/${encodeURIComponent(j.submission_id)}`}
+										href={`/${project}/compute/jobs/${encodeURIComponent(j.submission_id)}`}
 										title="Open job detail">details</a
 									>
 								{/if}
@@ -543,7 +547,7 @@
 									<td class="px-3 py-1.5 font-mono">
 										<a
 											class="text-primary hover:underline"
-											href={`/${page.params.project}/discover/viewer/${b.batch_id}`}>{b.batch_id}</a
+											href={`/${project}/discover/viewer/${b.batch_id}`}>{b.batch_id}</a
 										>
 									</td>
 									<td class="max-w-[18rem] truncate px-3 py-1.5" title={b.arkiv_titel ?? ''}>

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { page } from '$app/state';
+	import { base } from '$app/paths';
 	import { uploadVolume, type BatchRow } from '@rask/api';
 	import { Card } from '@rask/ui/card';
 	import { Button } from '@rask/ui/button';
@@ -8,7 +8,10 @@
 	const IMAGE_RE = /\.(jpe?g|png|tiff?)$/i;
 	const ID_RE = /^[A-Za-z0-9_-]+$/;
 
-	const project = $derived(page.params.project ?? 'default');
+	// This app's base is /default/overview; in-app links use `base`. The cross-domain
+	// viewer link stays project-prefixed — derive the project segment from the base
+	// (there's no [project] route param in this carved app).
+	const project = base.split('/')[1] ?? 'default';
 
 	let volumeId = $state('');
 	let files = $state<File[]>([]);
@@ -146,7 +149,7 @@
 			<div class="space-y-1 rounded border border-green-600 p-3 text-sm">
 				<p>Ingested <strong>{result.batch_id}</strong> — {result.page_count ?? 0} pages.</p>
 				<div class="flex gap-3">
-					<a class="underline" href={`/${project}/overview`}>Back to Overview</a>
+					<a class="underline" href={base}>Back to Overview</a>
 					<a class="underline" href={`/${project}/discover/viewer/${result.batch_id}`}
 						>Open viewer</a
 					>
