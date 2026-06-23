@@ -34,8 +34,12 @@ export function altoUrl(volume: string, key: string): string {
 	return `/api/volumes/${encodeURIComponent(volume)}/pages/${encodeURIComponent(key)}/alto`;
 }
 
-export async function fetchAlto(volume: string, key: string): Promise<string | null> {
-	const res = await fetch(altoUrl(volume, key));
+export async function fetchAlto(
+	volume: string,
+	key: string,
+	fetchFn: typeof fetch = fetch,
+): Promise<string | null> {
+	const res = await fetchFn(altoUrl(volume, key));
 	if (res.status === 404) return null;
 	if (!res.ok) throw new Error(`fetchAlto: HTTP ${res.status}`);
 	return res.text();

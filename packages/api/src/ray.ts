@@ -86,20 +86,20 @@ export const RayClusterPayloadSchema = v.object({
 });
 export type RayClusterPayload = v.InferOutput<typeof RayClusterPayloadSchema>;
 
-export async function rayHealth(): Promise<RayHealth> {
-	const res = await fetch('/api/ray/health');
+export async function rayHealth(fetchFn: typeof fetch = fetch): Promise<RayHealth> {
+	const res = await fetchFn('/api/ray/health');
 	if (!res.ok) throw new Error(`rayHealth: HTTP ${res.status}`);
 	return parse(RayHealthSchema, await res.json());
 }
 
-export async function rayJobs(): Promise<RayJobsPayload> {
-	const res = await fetch('/api/ray/jobs');
+export async function rayJobs(fetchFn: typeof fetch = fetch): Promise<RayJobsPayload> {
+	const res = await fetchFn('/api/ray/jobs');
 	if (!res.ok) throw new Error(`rayJobs: HTTP ${res.status}`);
 	return parse(RayJobsPayloadSchema, await res.json());
 }
 
-export async function rayCluster(): Promise<RayClusterPayload> {
-	const res = await fetch('/api/ray/cluster');
+export async function rayCluster(fetchFn: typeof fetch = fetch): Promise<RayClusterPayload> {
+	const res = await fetchFn('/api/ray/cluster');
 	if (!res.ok) throw new Error(`rayCluster: HTTP ${res.status}`);
 	return parse(RayClusterPayloadSchema, await res.json());
 }
@@ -145,8 +145,8 @@ export const ActorsPayloadSchema = v.object({
 export type ActorsPayload = v.InferOutput<typeof ActorsPayloadSchema>;
 
 /** Ray actors, merged from the state API + /logical/actors by the viewer backend. */
-export async function actorsList(): Promise<ActorInfo[]> {
-	const res = await fetch('/api/ray/actors');
+export async function actorsList(fetchFn: typeof fetch = fetch): Promise<ActorInfo[]> {
+	const res = await fetchFn('/api/ray/actors');
 	if (!res.ok) throw new Error(`actorsList: HTTP ${res.status}`);
 	const payload = parse(ActorsPayloadSchema, await res.json());
 	if (!payload.ok) throw new Error(payload.error ?? 'actors unavailable');
@@ -181,8 +181,8 @@ export const TasksPayloadSchema = v.object({
 });
 export type TasksPayload = v.InferOutput<typeof TasksPayloadSchema>;
 
-export async function tasksList(): Promise<TaskInfo[]> {
-	const res = await fetch('/api/ray/tasks');
+export async function tasksList(fetchFn: typeof fetch = fetch): Promise<TaskInfo[]> {
+	const res = await fetchFn('/api/ray/tasks');
 	if (!res.ok) throw new Error(`tasksList: HTTP ${res.status}`);
 	const payload = parse(TasksPayloadSchema, await res.json());
 	if (!payload.ok) throw new Error(payload.error ?? 'tasks unavailable');
@@ -208,8 +208,8 @@ export const OverviewPayloadSchema = v.object({
 });
 export type OverviewPayload = v.InferOutput<typeof OverviewPayloadSchema>;
 
-export async function rayOverview(): Promise<OverviewPayload> {
-	const res = await fetch('/api/ray/overview');
+export async function rayOverview(fetchFn: typeof fetch = fetch): Promise<OverviewPayload> {
+	const res = await fetchFn('/api/ray/overview');
 	if (!res.ok) throw new Error(`rayOverview: HTTP ${res.status}`);
 	return parse(OverviewPayloadSchema, await res.json());
 }
@@ -222,8 +222,12 @@ export const JobLogsPayloadSchema = v.object({
 });
 export type JobLogsPayload = v.InferOutput<typeof JobLogsPayloadSchema>;
 
-export async function rayJobLogs(submissionId: string, tail = 2000): Promise<JobLogsPayload> {
-	const res = await fetch(`/api/ray/jobs/${encodeURIComponent(submissionId)}/logs?tail=${tail}`);
+export async function rayJobLogs(
+	submissionId: string,
+	tail = 2000,
+	fetchFn: typeof fetch = fetch,
+): Promise<JobLogsPayload> {
+	const res = await fetchFn(`/api/ray/jobs/${encodeURIComponent(submissionId)}/logs?tail=${tail}`);
 	if (!res.ok) throw new Error(`rayJobLogs: HTTP ${res.status}`);
 	return parse(JobLogsPayloadSchema, await res.json());
 }
@@ -238,8 +242,11 @@ export const LogsPayloadSchema = v.object({
 });
 export type LogsPayload = v.InferOutput<typeof LogsPayloadSchema>;
 
-export async function rayLogFiles(nodeId: string): Promise<LogsPayload> {
-	const res = await fetch(`/api/ray/logs?node_id=${encodeURIComponent(nodeId)}`);
+export async function rayLogFiles(
+	nodeId: string,
+	fetchFn: typeof fetch = fetch,
+): Promise<LogsPayload> {
+	const res = await fetchFn(`/api/ray/logs?node_id=${encodeURIComponent(nodeId)}`);
 	if (!res.ok) throw new Error(`rayLogFiles: HTTP ${res.status}`);
 	return parse(LogsPayloadSchema, await res.json());
 }
@@ -248,9 +255,10 @@ export async function rayLogContent(
 	nodeId: string,
 	filename: string,
 	lines = 500,
+	fetchFn: typeof fetch = fetch,
 ): Promise<LogsPayload> {
 	const qs = new URLSearchParams({ node_id: nodeId, filename, lines: String(lines) });
-	const res = await fetch(`/api/ray/logs?${qs}`);
+	const res = await fetchFn(`/api/ray/logs?${qs}`);
 	if (!res.ok) throw new Error(`rayLogContent: HTTP ${res.status}`);
 	return parse(LogsPayloadSchema, await res.json());
 }
@@ -393,8 +401,8 @@ export const ServePayloadSchema = v.object({
 });
 export type ServePayload = v.InferOutput<typeof ServePayloadSchema>;
 
-export async function serveApplications(): Promise<ServePayload> {
-	const res = await fetch('/api/serve/applications/');
+export async function serveApplications(fetchFn: typeof fetch = fetch): Promise<ServePayload> {
+	const res = await fetchFn('/api/serve/applications/');
 	if (!res.ok) throw new Error(`serveApplications: HTTP ${res.status}`);
 	return parse(ServePayloadSchema, await res.json());
 }

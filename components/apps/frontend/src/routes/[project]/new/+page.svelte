@@ -76,7 +76,9 @@
 		<div
 			role="button"
 			tabindex="0"
-			class="rounded border-2 border-dashed p-8 text-center {dragOver ? 'border-primary bg-muted' : 'border-muted'}"
+			class="rounded border-2 border-dashed p-8 text-center {dragOver
+				? 'border-primary bg-muted'
+				: 'border-muted'}"
 			ondragover={(e: DragEvent) => {
 				e.preventDefault();
 				dragOver = true;
@@ -88,7 +90,9 @@
 			onkeydown={(e: KeyboardEvent) => {
 				if (e.key === 'Enter' || e.key === ' ') {
 					e.preventDefault();
-					(e.currentTarget as HTMLElement).querySelector<HTMLInputElement>('input[type=file]')?.click();
+					(e.currentTarget as HTMLElement)
+						.querySelector<HTMLInputElement>('input[type=file]')
+						?.click();
 				}
 			}}
 		>
@@ -125,10 +129,16 @@
 				{/each}
 			</ul>
 		{/if}
-		{#if skipped > 0}<p class="text-xs opacity-60">{skipped} non-image file{skipped === 1 ? '' : 's'} skipped.</p>{/if}
+		{#if skipped > 0}<p class="text-xs opacity-60">
+				{skipped} non-image file{skipped === 1 ? '' : 's'} skipped.
+			</p>{/if}
 
 		<Button onclick={ingest} disabled={!canIngest}>
-			{busy ? 'Ingesting…' : files.length === 0 ? 'Ingest images' : `Ingest ${files.length} image${files.length === 1 ? '' : 's'}`}
+			{busy
+				? 'Ingesting…'
+				: files.length === 0
+					? 'Ingest images'
+					: `Ingest ${files.length} image${files.length === 1 ? '' : 's'}`}
 		</Button>
 
 		{#if error}<p class="text-destructive text-sm">{error}</p>{/if}
@@ -137,7 +147,9 @@
 				<p>Ingested <strong>{result.batch_id}</strong> — {result.page_count ?? 0} pages.</p>
 				<div class="flex gap-3">
 					<a class="underline" href={`/${project}/overview`}>Back to Overview</a>
-					<a class="underline" href={`/${project}/discover/viewer/${result.batch_id}`}>Open viewer</a>
+					<a class="underline" href={`/${project}/discover/viewer/${result.batch_id}`}
+						>Open viewer</a
+					>
 				</div>
 			</div>
 		{/if}

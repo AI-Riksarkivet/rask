@@ -41,6 +41,22 @@
 			"types": "./dist/components/card/index.d.ts",
 			"svelte": "./dist/components/card/index.js"
 		},
+		"./table": {
+			"types": "./dist/components/table/index.d.ts",
+			"svelte": "./dist/components/table/index.js"
+		},
+		"./checkbox": {
+			"types": "./dist/components/checkbox/index.d.ts",
+			"svelte": "./dist/components/checkbox/index.js"
+		},
+		"./alert-dialog": {
+			"types": "./dist/components/alert-dialog/index.d.ts",
+			"svelte": "./dist/components/alert-dialog/index.js"
+		},
+		"./progress": {
+			"types": "./dist/components/progress/index.d.ts",
+			"svelte": "./dist/components/progress/index.js"
+		},
 		"./sort-header": {
 			"types": "./dist/components/sort-header/index.d.ts",
 			"svelte": "./dist/components/sort-header/index.js"
