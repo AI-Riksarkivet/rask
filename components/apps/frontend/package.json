@@ -27,7 +27,6 @@
 		"@rask/ui": "workspace:*",
 		"bits-ui": "^2.18.1",
 		"clsx": "^2.1.1",
-		"lucide-svelte": "^1.0.1",
 		"mode-watcher": "^1.1.0",
 		"svelte-sonner": "^1.1.1",
 		"tailwind-merge": "^3.6.0",

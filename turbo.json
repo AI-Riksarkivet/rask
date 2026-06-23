@@ -11,7 +11,16 @@
 			"dependsOn": ["^build"]
 		},
 		"check:tsgo": {},
+		"test": {
+			"dependsOn": ["^build"],
+			"outputs": []
+		},
+		"build-storybook": {
+			"dependsOn": ["^build"],
+			"outputs": ["storybook-static/**"]
+		},
 		"dev": {
+			"dependsOn": ["^build"],
 			"cache": false,
 			"persistent": true
 		}

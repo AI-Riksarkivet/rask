@@ -25,13 +25,13 @@
       "name": "compute-frontend",
       "version": "0.0.0",
       "dependencies": {
+        "@lucide/svelte": "^1.21.0",
         "@rask/api": "workspace:*",
         "@rask/ui": "workspace:*",
         "@sveltejs/kit": "^2.67.0",
         "@tailwindcss/vite": "^4.3.1",
         "bits-ui": "^2.18.1",
         "clsx": "^2.1.1",
-        "lucide-svelte": "^1.0.1",
         "mode-watcher": "^1.1.0",
         "svelte-sonner": "^1.1.1",
         "tailwind-merge": "^3.6.0",
@@ -40,7 +40,32 @@
         "tw-animate-css": "^1.4.0",
       },
       "devDependencies": {
+        "@sveltejs/vite-plugin-svelte": "^7.1.2",
+        "@types/bun": "^1.3.14",
+        "svelte": "^5.56.3",
+        "svelte-adapter-bun": "^1.0.1",
+        "vite": "^8.0.16",
+      },
+    },
+    "components/apps/discover-frontend": {
+      "name": "discover-frontend",
+      "version": "0.0.0",
+      "dependencies": {
         "@lucide/svelte": "^1.21.0",
+        "@rask/api": "workspace:*",
+        "@rask/ui": "workspace:*",
+        "@sveltejs/kit": "^2.67.0",
+        "@tailwindcss/vite": "^4.3.1",
+        "bits-ui": "^2.18.1",
+        "clsx": "^2.1.1",
+        "mode-watcher": "^1.1.0",
+        "svelte-sonner": "^1.1.1",
+        "tailwind-merge": "^3.6.0",
+        "tailwind-variants": "^3.2.2",
+        "tailwindcss": "^4.3.1",
+        "tw-animate-css": "^1.4.0",
+      },
+      "devDependencies": {
         "@sveltejs/vite-plugin-svelte": "^7.1.2",
         "@types/bun": "^1.3.14",
         "svelte": "^5.56.3",
@@ -58,7 +83,6 @@
         "@tailwindcss/vite": "^4.3.1",
         "bits-ui": "^2.18.1",
         "clsx": "^2.1.1",
-        "lucide-svelte": "^1.0.1",
         "mode-watcher": "^1.1.0",
         "svelte-sonner": "^1.1.1",
         "tailwind-merge": "^3.6.0",
@@ -81,12 +105,12 @@
       "name": "storage-frontend",
       "version": "0.0.0",
       "dependencies": {
+        "@lucide/svelte": "^1.21.0",
         "@rask/ui": "workspace:*",
         "@sveltejs/kit": "^2.67.0",
         "@tailwindcss/vite": "^4.3.1",
         "bits-ui": "^2.18.1",
         "clsx": "^2.1.1",
-        "lucide-svelte": "^1.0.1",
         "mode-watcher": "^1.1.0",
         "svelte-sonner": "^1.1.1",
         "tailwind-merge": "^3.6.0",
@@ -96,6 +120,56 @@
         "valibot": "^1.4.1",
       },
       "devDependencies": {
+        "@sveltejs/vite-plugin-svelte": "^7.1.2",
+        "@types/bun": "^1.3.14",
+        "svelte": "^5.56.3",
+        "svelte-adapter-bun": "^1.0.1",
+        "vite": "^8.0.16",
+      },
+    },
+    "components/apps/studio-frontend": {
+      "name": "studio-frontend",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lucide/svelte": "^1.21.0",
+        "@rask/ui": "workspace:*",
+        "@sveltejs/kit": "^2.67.0",
+        "@tailwindcss/vite": "^4.3.1",
+        "bits-ui": "^2.18.1",
+        "clsx": "^2.1.1",
+        "mode-watcher": "^1.1.0",
+        "svelte-sonner": "^1.1.1",
+        "tailwind-merge": "^3.6.0",
+        "tailwind-variants": "^3.2.2",
+        "tailwindcss": "^4.3.1",
+        "tw-animate-css": "^1.4.0",
+      },
+      "devDependencies": {
+        "@sveltejs/vite-plugin-svelte": "^7.1.2",
+        "@types/bun": "^1.3.14",
+        "svelte": "^5.56.3",
+        "svelte-adapter-bun": "^1.0.1",
+        "vite": "^8.0.16",
+      },
+    },
+    "components/apps/train-frontend": {
+      "name": "train-frontend",
+      "version": "0.0.0",
+      "dependencies": {
+        "@rask/ui": "workspace:*",
+        "@sveltejs/kit": "^2.67.0",
+        "@tailwindcss/vite": "^4.3.1",
+        "bits-ui": "^2.18.1",
+        "clsx": "^2.1.1",
+        "mode-watcher": "^1.1.0",
+        "svelte-sonner": "^1.1.1",
+        "tailwind-merge": "^3.6.0",
+        "tailwind-variants": "^3.2.2",
+        "tailwindcss": "^4.3.1",
+        "tw-animate-css": "^1.4.0",
+      },
+      "devDependencies": {
+        "@lucide/svelte": "^1.21.0",
         "@sveltejs/vite-plugin-svelte": "^7.1.2",
         "@types/bun": "^1.3.14",
         "svelte": "^5.56.3",
@@ -117,7 +191,6 @@
         "@lucide/svelte": "^1.21.0",
         "bits-ui": "^2.18.1",
         "clsx": "^2.1.1",
-        "lucide-svelte": "^1.0.1",
         "mode-watcher": "^1.1.0",
         "tailwind-merge": "^3.6.0",
         "tailwind-variants": "^3.2.2",
@@ -632,6 +705,8 @@
 
     "devalue": ["devalue@5.8.1", "", {}, "sha512-4CXDYRBGqN+57wVJkuXBYmpAVUSg3L6JAQa/DFqm238G73E1wuyc/JhGQJzN7vUf/CMphYau2zXbfWzDR5aTEw=="],
 
+    "discover-frontend": ["discover-frontend@workspace:components/apps/discover-frontend"],
+
     "dom-accessibility-api": ["dom-accessibility-api@0.6.3", "", {}, "sha512-7ZgogeTnjuHbo+ct10G9Ffp0mif17idi0IyWNVA/wcwcm7NPOD/WEHVP3n7n3MhXqxoIYm8d6MuZohYWIZ4T3w=="],
 
     "enhanced-resolve": ["enhanced-resolve@5.21.6", "", { "dependencies": { "graceful-fs": "^4.2.4", "tapable": "^2.3.3" } }, "sha512-aNnGCvbJ/RIyWo1IuhNdVjnNF+EjH9wpzpNHt+ci/m9He9LJvUN8wrCcXjp9cWsGNAuvSpVFTx/vraAFQ8qGjQ=="],
@@ -772,8 +847,6 @@
 
     "loupe": ["loupe@3.2.1", "", {}, "sha512-CdzqowRJCeLU72bHvWqwRBBlLcMEtIvGrlvef74kMnV2AolS9Y8xUv1I0U/MNAWMhBlKIoyuEgoJ0t/bbwHbLQ=="],
 
-    "lucide-svelte": ["lucide-svelte@1.0.1", "", { "peerDependencies": { "svelte": "^3 || ^4 || ^5.0.0-next.42" } }, "sha512-WvzZgk0pqzgda+AErLvgWxHkfg/+GgUwqKMRHvzt0IqyMdmyEDzDCk3Z+Wo/3y753oIgx8u9Q4eUbWkghFa8Jg=="],
-
     "lz-string": ["lz-string@1.5.0", "", { "bin": { "lz-string": "bin/bin.js" } }, "sha512-h5bgJWpxJNswbU7qCrV0tIKQCaS3blPDrqKWx+QxzuzL1zGUzij9XCWLrSLsJPu5t+eWA/ycetzYAO5IOMcWAQ=="],
 
     "magic-string": ["magic-string@0.30.21", "", { "dependencies": { "@jridgewell/sourcemap-codec": "^1.5.5" } }, "sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ=="],
@@ -896,6 +969,8 @@
 
     "strip-indent": ["strip-indent@3.0.0", "", { "dependencies": { "min-indent": "^1.0.0" } }, "sha512-laJTa3Jb+VQpaC6DseHhF7dXVqHTfJPCRDaEbid/drOhgitgYku/letMUqOXFoWV0zIIUbjpdH2t+tYj4bQMRQ=="],
 
+    "studio-frontend": ["studio-frontend@workspace:components/apps/studio-frontend"],
+
     "style-to-object": ["style-to-object@1.0.14", "", { "dependencies": { "inline-style-parser": "0.2.7" } }, "sha512-LIN7rULI0jBscWQYaSswptyderlarFkjQ+t79nzty8tcIAceVomEVlLzH5VP4Cmsv6MtKhs7qaAiwlcp+Mgaxw=="],
 
     "supports-color": ["supports-color@7.2.0", "", { "dependencies": { "has-flag": "^4.0.0" } }, "sha512-qpCAvRl9stuOHveKsn7HncJRvv501qIacKzQlO/+Lwxc9+0q2wLyv4Dfvt80/DPn2pqOBsJdDiogXGR9+OvwRw=="],
@@ -941,6 +1016,8 @@
     "tinyspy": ["tinyspy@4.0.4", "", {}, "sha512-azl+t0z7pw/z958Gy9svOTuzqIk6xq+NSheJzn5MMWtWTFywIacg2wUlzKFGtt3cthx0r2SxMK0yzJOR0IES7Q=="],
 
     "totalist": ["totalist@3.0.1", "", {}, "sha512-sf4i37nQ2LBx4m3wB74y+ubopq6W/dIzXg0FDGjsYnZHVa1Da8FH853wlL2gtUhg+xJXjfk3kUZS3BRoQeoQBQ=="],
+
+    "train-frontend": ["train-frontend@workspace:components/apps/train-frontend"],
 
     "ts-api-utils": ["ts-api-utils@2.5.0", "", { "peerDependencies": { "typescript": ">=4.8.4" } }, "sha512-OJ/ibxhPlqrMM0UiNHJ/0CKQkoKF243/AEmplt3qpRgkW8VG7IfOS41h7V8TjITqdByHzrjcS/2si+y4lIh8NA=="],
 

@@ -6,7 +6,7 @@ help:
 	@echo "  typecheck check ci   frontend-check frontend-build"
 	@echo "  viewer                                 — core monolith dev server (:8888)"
 	@echo "  dev-micro                              — backend fleet (gateway :8888 + per-domain services)"
-	@echo "  dev-frontends                          — all microfrontends (:5173 + :5174/storage + :5175/compute)"
+	@echo "  dev-frontends                          — all 6 microfrontends behind the :3024 proxy (browse http://localhost:3024)"
 	@echo "  viewer-frontend frontend-storage frontend-compute   — run one app each"
 	@echo "  ray-up ray-down ray-status   ray-up-htr (2-GPU pool, GPUs 0,1)"
 	@echo "  serve-up serve-down serve-status   serve-up-both (transcribe+htrflow)"
@@ -93,19 +93,19 @@ dev-micro:
 # their own ports AND Turborepo auto-starts its built-in microfrontends proxy (from
 # components/apps/frontend/microfrontends.json — no extra package) on :3024:
 #   single origin → http://localhost:3024   (browse THIS for cross-app nav)
-#   viewer-frontend :5173 (catch-all) · storage :5174 /storage · compute :5175 /compute
+#   viewer :5173 (catch-all: / + /<project>/overview) · storage :5174 /default/storage · compute :5175 /default/compute · discover :5178 · train :5176 · studio :5177
 # The shared @rask/ui shell + nav render with NO backend; start one
 # (`make dev-micro` or `make viewer`) only when you need live /api data.
 dev-frontends:        # all three apps + @rask/ui watcher + :3024 proxy (turbo run dev)
 	bun run dev
 
-viewer-frontend:      # catch-all app only, :5173
+viewer-frontend:      # catch-all app only, :5173 (serves / + /<project>/overview)
 	bun run dev:frontend
 
-frontend-storage:     # storage app only, :5174 /storage
+frontend-storage:     # storage app only, :5174 /default/storage
 	bun run dev:storage
 
-frontend-compute:     # compute app only, :5175 /compute
+frontend-compute:     # compute app only, :5175 /default/compute
 	bun run dev:compute
 
 frontend-build:       # production-build every app + @rask/ui (turbo, cached)

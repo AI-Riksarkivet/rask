@@ -13,11 +13,10 @@
 		type RayNode,
 		type BatchRow,
 	} from '@rask/api';
-	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Card } from '@rask/ui/card';
 	import { Badge, type BadgeVariant } from '@rask/ui/badge';
 	import { SortHeader } from '@rask/ui/sort-header';
-	import { ArrowLeft, TriangleAlert, FileText, ChevronRight, RefreshCw } from 'lucide-svelte';
+	import { ArrowLeft, TriangleAlert, FileText, ChevronRight, RefreshCw } from '@lucide/svelte';
 
 	const id = $derived(decodeURIComponent(page.params.id ?? ''));
 
@@ -224,7 +223,7 @@
 	<title>{id} — RASK</title>
 </svelte:head>
 
-<RayShell title="Job">
+<main class="bg-background flex-1 overflow-auto">
 	<div class="flex flex-col gap-4 p-6 text-sm">
 		<a
 			href="{base}/jobs"
@@ -453,4 +452,4 @@
 			{/if}
 		{/if}
 	</div>
-</RayShell>
+</main>

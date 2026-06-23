@@ -26,11 +26,14 @@
 	// is the project (the breadcrumb root), and the rest is the in-project trail.
 	const segs = $derived(pathname.split('/').filter(Boolean));
 	const projectName = $derived(segs[0] ?? project.name);
+	// The sidebar's project always reflects the URL's project segment (single source of
+	// truth), so it can't drift to the prop default when an app forgets to pass `project`.
+	const sidebarProject = $derived({ name: projectName, subtitle: project.subtitle ?? 'Project' });
 	const crumbs = $derived(segs.slice(1).map((s) => s.replace(/-/g, ' ')));
 </script>
 
 <Sidebar.Provider class="h-svh overflow-hidden">
-	<AppSidebar {pathname} {project} {user} />
+	<AppSidebar {pathname} project={sidebarProject} {user} />
 	<Sidebar.Inset class="flex min-w-0 flex-col overflow-hidden">
 		<!-- Integrated top bar (sidebar-07): no border, h-16 → h-12 when the sidebar is
 		     icon-collapsed. Trigger + breadcrumb; theme/profile live in the footer. -->

@@ -12,9 +12,11 @@ and **where each piece lives** — so you can read a URL and know which app serv
 
 !!! abstract "One sentence"
 
-    The rask frontend is becoming a set of **independent SvelteKit SSR apps** (one per
+    The rask frontend is a set of **independent SvelteKit SSR apps** (one per
     domain), each its own deployable, all sharing **one design system + one sidebar**, and
-    **composed by a single proxy** so they feel like one site.
+    **composed by a single proxy** so they feel like one site. The IA is **project-first**:
+    `/` is a project picker (no sidebar); inside a project you're at `/<project>/<domain>`
+    behind the shared shell.
 
 ## The mental model: _vertical_ microfrontends
 
@@ -88,9 +90,9 @@ graph TD
 
 | Path                               | What it is                                                                                                                                                                                         |
 | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `components/apps/frontend`         | **The catch-all app.** Still owns the not-yet-carved routes (search, browse, viewer, batches) and the compute routes it shares with `compute-frontend` until those are retired. Package name `viewer-frontend`. |
-| `components/apps/storage-frontend` | The **first carved-out microfrontend** — owns `/storage` (the S3 browser).                                                                                                                         |
-| `components/apps/compute-frontend` | The **second carved-out microfrontend** — owns `/compute` (the Ray/cluster UI: overview, cluster, jobs, actors, serve, logviewer, api-docs).                                                       |
+| `components/apps/frontend`         | **The catch-all app** (the proxy default). Owns `/` (the home / project picker, no sidebar) + `/<project>/overview` (the batch view). Package name `viewer-frontend`. |
+| `components/apps/storage-frontend` | A carved-out microfrontend — owns `/<project>/storage` (the S3 browser); base `/default/storage`.                                                                  |
+| `components/apps/compute-frontend` | A carved-out microfrontend — owns `/<project>/compute` (the Ray/cluster UI: overview, cluster, jobs, actors, serve, logviewer, api-docs); base `/default/compute`.  |
 | `packages/ui` (`@rask/ui`)         | The **shared design system**: styled components (`button`, `badge`, `card`, `dialog`, `sort-header`, `sidebar`, …) **plus the shell** (`@rask/ui/shell` → `AppShell`, `AppSidebar`, `nav-config`). |
 | `packages/api` (`@rask/api`)       | The **shared API client + types** — every app imports it (`@rask/api`) instead of copying `api.ts`. JIT package (exports `./src/index.ts` source, no build), split into `ray`/`batches`/`search`/`volumes`/`types` modules. |
 
@@ -156,39 +158,31 @@ plain anchors are also _correct_ for cross-app navigation (a full page load the 
     `@source '../../../../packages/ui/dist'` so Tailwind generates the lib's classes. Same
     button, same sidebar, everywhere. You'd only style *in* an app for something unique to it.
 
-## Current state vs. target
+## Project-first IA + current state
 
-!!! warning "The split is **started, not finished** — 2 of 4 domain apps"
+The information architecture is **project-first**: `/` is the **home / project picker**,
+rendered **without** the sidebar (it's the pre-project landing — pick/create a project, manage
+members/RBAC later). The moment you're inside a project you're at **`/<project>/<domain>`** with
+the shared sidebar. There is **no "Home" item** in the sidebar — you leave a project via the
+**project switcher** (header dropdown) or the breadcrumb.
 
-    `storage` and `compute` are carved out. The catch-all `frontend` still owns the
-    documents + batches routes (and still duplicates the compute routes until they're
-    retired).
+There is one implicit project (`default`) today, so each domain MFE carries it in a **static
+base** (`/default/<domain>`). That's the key trick: a static base gives each app a per-app asset
+prefix the dev proxy needs (so `/@vite`, `/_app`, built chunks route to the right app) **and**
+yields project-first URLs. Multi-project (a dynamic base) is deliberately deferred.
 
-```mermaid
-graph LR
-  subgraph NOW
-    M[frontend catch-all<br/>documents + batches + dup compute]
-    ST[storage-frontend ✅]
-    CO[compute-frontend ✅]
-  end
-  subgraph TARGET
-    D[documents-frontend]
-    BA[batches-frontend]
-    ST2[storage-frontend ✅]
-    CO2[compute-frontend ✅]
-  end
-  NOW ==>|carve out, same recipe x2| TARGET
-```
+| Domain app                         | Routes it owns                                                       | `kit.paths.base`   | Status         |
+| ---------------------------------- | ------------------------------------------------------------------- | ------------------ | -------------- |
+| `frontend` (catch-all)             | `/` home picker · `/<project>/overview` (the batch view)            | _(none — default)_ | **done ✅**    |
+| `compute-frontend` (the "ray" UI)  | compute: overview, cluster, jobs, actors, serve, logviewer, api-docs | `/default/compute` | **done ✅**    |
+| `storage-frontend`                 | storage (the S3 browser)                                            | `/default/storage` | **done ✅**    |
+| `discover-frontend`                | search, browse, viewer                                              | `/default/discover`| **carving 🔧** |
+| `train-frontend`                   | model training (dummy)                                              | `/default/train`   | **carving 🔧** |
+| `studio-frontend`                  | mini-applications (dummy)                                           | `/default/studio`  | **carving 🔧** |
 
-| Domain app                        | Routes it owns                                              | `kit.paths.base` | Status      |
-| --------------------------------- | ----------------------------------------------------------- | ---------------- | ----------- |
-| `compute-frontend` (the "ray" UI) | overview, cluster, jobs, actors, serve, logviewer, api-docs | `/compute`       | **done ✅** |
-| `storage-frontend`                | s3                                                          | `/storage`       | **done ✅** |
-| `documents-frontend`              | search, browse, viewer                                      | `/documents`     | planned     |
-| `batches-frontend`                | batches (+ chunks/orchestrator controls)                    | `/batches`       | planned     |
-
-Carving each remaining one is the **same recipe** as `storage`/`compute` (scaffold app →
-move its routes in → wire `@rask/ui` + `@rask/api`), not a new hard problem.
+Carving each one is the **same recipe** as `storage`/`compute` (scaffold app → move its routes in
+→ wire `@rask/ui` + `@rask/api` → static base `/default/<domain>` → register in the workspace +
+`microfrontends.json`), not a new hard problem.
 
 ## Running the frontends locally
 
@@ -196,10 +190,17 @@ Start them with Turborepo — no backend required to see the **chrome**:
 
 ```bash
 make dev-frontends     # all apps + @rask/ui watcher + the :3024 proxy (turbo run dev)
-make viewer-frontend   # just the catch-all,  :5173
-make frontend-storage  # just storage,        :5174/storage
-make frontend-compute  # just compute,        :5175/compute
+make viewer-frontend   # just the catch-all,  :5173  (serves / and /<project>/overview)
+make frontend-storage  # just storage,        :5174/default/storage
+make frontend-compute  # just compute,        :5175/default/compute
 ```
+
+!!! warning "Browse the **proxy** (`:3024`), not the per-app ports"
+
+    Each app only owns its own paths. Hitting an app port directly for *another* domain 404s
+    (e.g. `:5173/default/compute` → 404 — compute lives in the compute app). Always browse
+    **`http://localhost:3024`** for the composed site. (If a co-located checkout squats
+    `:5173`, the dev ports can be remapped locally — `strictPort` makes a clash fail loudly.)
 
 `make dev-frontends` (= `turbo run dev`) also brings up Turborepo's **built-in microfrontends
 proxy** on **`http://localhost:3024`** — the single origin you browse so that a `<a href="/storage">`

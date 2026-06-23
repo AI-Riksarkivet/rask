@@ -2,9 +2,8 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
-	import { ChevronRight } from 'lucide-svelte';
+	import { ChevronRight } from '@lucide/svelte';
 	import { rayJobs, type RayJobsPayload, type RayJob } from '@rask/api';
-	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { SortHeader } from '@rask/ui/sort-header';
 	import { Card } from '@rask/ui/card';
 	import { Badge, type BadgeVariant } from '@rask/ui/badge';
@@ -117,7 +116,7 @@
 	<title>Jobs — RASK</title>
 </svelte:head>
 
-<RayShell title="Jobs">
+<main class="bg-background flex-1 overflow-auto">
 	<div class="flex flex-col gap-4 p-6 text-sm">
 		{#if error}
 			<Card class="border-destructive/40 bg-destructive/10 text-destructive p-3">{error}</Card>
@@ -220,4 +219,4 @@
 			</Card>
 		{/if}
 	</div>
-</RayShell>
+</main>
