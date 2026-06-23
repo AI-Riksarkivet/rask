@@ -7,7 +7,7 @@ from fastapi.responses import Response
 
 from service_kit.dependencies import SettingsDep
 from volumes_api import service as volumes_service
-from volumes_api.schemas import PageEntry, S3Listing
+from volumes_api.schemas import PageEntry, S3Listing, S3ObjectHead
 
 
 router = APIRouter(prefix="/volumes", tags=["volumes"])
@@ -24,6 +24,32 @@ def list_objects(
 ) -> S3Listing:
     """List one delimiter-scoped level of `bucket`/`prefix` for the S3 storage browser."""
     return volumes_service.list_objects(settings, bucket, prefix)
+
+
+@router.get("/object")
+def head_object(
+    settings: SettingsDep,
+    bucket: Annotated[Bucket, Query(description="One of the two fixed rask buckets.")],
+    key: Annotated[str, Query(description="Full object key to describe.")],
+) -> S3ObjectHead:
+    """Metadata (size/content-type/last-modified/etag) for a single object (404 if missing)."""
+    return volumes_service.head_object(settings, bucket, key)
+
+
+@router.get("/object/download")
+def download_object(
+    settings: SettingsDep,
+    bucket: Annotated[Bucket, Query(description="One of the two fixed rask buckets.")],
+    key: Annotated[str, Query(description="Full object key to download.")],
+) -> Response:
+    """Return a single object's bytes with a download disposition (404 if missing)."""
+    data, content_type = volumes_service.read_object(settings, bucket, key)
+    filename = key.rsplit("/", 1)[-1] or "download"
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/{vol}/pages")

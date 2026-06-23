@@ -16,7 +16,7 @@ def get_lines_tbl(request: Request) -> AsyncTable | None:
 def get_s3(request: Request) -> S3Client:
     s3 = request.app.state.s3
     if s3 is None:
-        raise ServiceUnavailableError("S3 client not configured (HCP_ENDPOINT missing)")
+        raise ServiceUnavailableError("S3 client not configured (set RASK_S3_ENDPOINT_URL)")
     return s3
 
 

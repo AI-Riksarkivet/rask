@@ -7,7 +7,7 @@ re-read env vars in routes or services.
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -48,8 +48,19 @@ class Settings(BaseSettings):
     api_prefix: str = Field(default="/api/v1", alias="RASK_API_PREFIX")
     cors_origins: list[str] = Field(default_factory=list, alias="RASK_CORS_ORIGINS")
 
-    hcp_endpoint: str | None = Field(default=None, alias="HCP_ENDPOINT")
-    hcp_insecure: bool = Field(default=False, alias="HCP_INSECURE")
+    # S3 endpoint URL for any S3-compatible backend (MinIO / AWS / Ceph / HCP).
+    # rask is storage-agnostic: this is just an endpoint, no HCP assumptions. The
+    # canonical name is RASK_S3_ENDPOINT_URL; S3_ENDPOINT_URL (the boto3-ecosystem
+    # name) and HCP_ENDPOINT (legacy) are accepted for back-compat.
+    s3_endpoint_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("RASK_S3_ENDPOINT_URL", "S3_ENDPOINT_URL", "HCP_ENDPOINT"),
+    )
+    # Skip TLS verification (self-signed endpoints, e.g. local MinIO or HCP).
+    s3_insecure: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("RASK_S3_INSECURE", "S3_INSECURE", "HCP_INSECURE"),
+    )
     aws_access_key_id: str | None = Field(default=None, alias="AWS_ACCESS_KEY_ID")
     aws_secret_access_key: str | None = Field(default=None, alias="AWS_SECRET_ACCESS_KEY")
     aws_region: str = Field(default="us-east-1", alias="AWS_REGION")
@@ -135,20 +146,20 @@ class Settings(BaseSettings):
         return f"s3://{self.search_bucket}"
 
     def lance_storage_options(self) -> dict[str, str] | None:
-        if not self.hcp_endpoint or not self.aws_access_key_id or not self.aws_secret_access_key:
+        if not self.s3_endpoint_url or not self.aws_access_key_id or not self.aws_secret_access_key:
             return None
         opts = {
-            "aws_endpoint": self.hcp_endpoint,
+            "aws_endpoint": self.s3_endpoint_url,
             "aws_access_key_id": self.aws_access_key_id,
             "aws_secret_access_key": self.aws_secret_access_key,
             "aws_region": self.aws_region,
             "aws_virtual_hosted_style_request": "false",
-            "allow_http": "true" if self.hcp_endpoint.startswith("http://") else "false",
+            "allow_http": "true" if self.s3_endpoint_url.startswith("http://") else "false",
         }
-        # HCP serves a self-signed cert; boto3 skips verification via HCP_INSECURE,
-        # but LanceDB's Rust S3 client (object_store) verifies by default and fails
-        # the TLS handshake ("error sending request"). Mirror the insecure flag so
-        # the search tables can be opened over https.
-        if self.hcp_insecure:
+        # A self-signed endpoint (local MinIO, or HCP) is skipped by boto3 via
+        # the insecure flag, but LanceDB's Rust S3 client (object_store) verifies
+        # by default and fails the TLS handshake ("error sending request"). Mirror
+        # the insecure flag so the search tables can be opened over https.
+        if self.s3_insecure:
             opts["allow_invalid_certificates"] = "true"
         return opts

@@ -25,3 +25,16 @@ class S3Listing(BaseModel):
     prefix: str
     prefixes: list[str]
     objects: list[S3Object]
+
+
+class S3ObjectHead(BaseModel):
+    """Metadata for a single object (S3 HEAD) — the storage browser's detail panel.
+
+    Mirrors `S3ObjectHead` in storage-frontend's `storage.ts`.
+    """
+
+    key: str
+    size: int
+    content_type: str | None
+    last_modified: str | None
+    etag: str | None

@@ -33,9 +33,9 @@ log = logging.getLogger(__name__)
 
 
 def _build_s3(settings: Settings) -> S3Client | None:
-    if not settings.hcp_endpoint:
+    if not settings.s3_endpoint_url:
         return None
-    return s3_client(endpoint=settings.hcp_endpoint)
+    return s3_client(endpoint=settings.s3_endpoint_url)
 
 
 async def _open_lance_table(db: AsyncConnection, name: str) -> AsyncTable | None:
