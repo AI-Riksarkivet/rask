@@ -1,4 +1,5 @@
 import * as v from 'valibot';
+import { error } from '@sveltejs/kit';
 import { query } from '$app/server';
 import { GATEWAY_URL } from '$lib/server/env';
 import { BUCKETS, type S3Listing, type S3ObjectHead } from '$lib/storage';
@@ -19,7 +20,10 @@ export const listObjects = query(ListArgs, async ({ bucket, prefix }): Promise<S
 
 	const res = await fetch(url);
 	if (!res.ok) {
-		throw new Error(`listObjects(${bucket}/${prefix || ''}): HTTP ${res.status}`);
+		// Surface the real upstream status to the client (SvelteKit hides plain
+		// throws as a generic "Internal Error"); 404 here usually means the
+		// gateway/volumes-api is down or outdated (missing /objects).
+		error(502, `volumes-api ${bucket}/${prefix || ''} → HTTP ${res.status} ${res.statusText}`);
 	}
 	return res.json();
 });
@@ -36,7 +40,7 @@ export const headObject = query(ObjectArgs, async ({ bucket, key }): Promise<S3O
 
 	const res = await fetch(url);
 	if (!res.ok) {
-		throw new Error(`headObject(${bucket}/${key}): HTTP ${res.status}`);
+		error(502, `volumes-api object ${bucket}/${key} → HTTP ${res.status} ${res.statusText}`);
 	}
 	return res.json();
 });

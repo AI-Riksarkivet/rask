@@ -2,7 +2,6 @@
 	import { onMount } from 'svelte';
 	import { base } from '$app/paths';
 	import { gsap } from 'gsap';
-	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
 	import { Button } from '@rask/ui/button';
 	import { Card } from '@rask/ui/card';
@@ -45,6 +44,22 @@
 			ease: 'power2.out',
 		});
 		return () => tween.kill();
+	}
+
+	// A custom svelte/transition expressing the SAME motion as the GSAP stagger
+	// (opacity + slide-up + slight scale). Written as a transition function — the
+	// idiomatic svelte/transition API — rather than the built-in `fly`, because the
+	// built-ins go instant under prefers-reduced-motion (which made the Svelte side
+	// look dead next to GSAP). A custom transition isn't auto-disabled, so the A/B
+	// always shows both engines actually animating.
+	function reveal(_node: Element, { delay = 0 }: { delay?: number } = {}) {
+		return {
+			delay,
+			duration: 500,
+			easing: cubicOut,
+			css: (t: number) =>
+				`opacity:${t}; transform: translateY(${(1 - t) * 28}px) scale(${0.96 + t * 0.04})`,
+		};
 	}
 
 	const replay = () => (runId += 1);
@@ -109,7 +124,7 @@
 			{:else}
 				<div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
 					{#each items as it, i (it.label)}
-						<div in:fly={{ y: 28, duration: 500, delay: i * 80, easing: cubicOut }}>
+						<div in:reveal={{ delay: i * 80 }}>
 							<Card class="flex h-24 items-center justify-center text-sm font-medium {it.hue}">
 								{it.label}
 							</Card>

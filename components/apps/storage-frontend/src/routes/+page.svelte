@@ -49,6 +49,15 @@
 		const d = new Date(iso);
 		return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 	}
+	// SvelteKit surfaces error() throws as { status, body: { message } } and plain
+	// throws as Error — read a readable message from either shape.
+	function errText(e: unknown): string {
+		if (e && typeof e === 'object' && 'body' in e) {
+			const body = (e as { body?: { message?: string } }).body;
+			if (body?.message) return body.message;
+		}
+		return e instanceof Error ? e.message : String(e);
+	}
 </script>
 
 <div class="mx-auto flex w-full max-w-4xl flex-col gap-4 p-6">
@@ -143,7 +152,7 @@
 				<TriangleAlert class="h-8 w-8 text-amber-500" />
 				<p class="text-sm font-medium">Couldn't load objects</p>
 				<p class="text-muted-foreground max-w-md text-xs">
-					{err instanceof Error ? err.message : String(err)}
+					{errText(err)}
 				</p>
 				<Badge variant="warning">{bucket}</Badge>
 			</div>
@@ -173,7 +182,7 @@
 				</dl>
 			{:catch err}
 				<p class="text-destructive py-4 text-sm">
-					{err instanceof Error ? err.message : String(err)}
+					{errText(err)}
 				</p>
 			{/await}
 			<div class="flex justify-end">
