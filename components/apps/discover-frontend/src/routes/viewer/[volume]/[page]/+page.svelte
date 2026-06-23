@@ -231,7 +231,7 @@
 		// the box/polygon strokes layer over it). A wide rose-coloured ring
 		// with a soft shadow stays visible even at full-page zoom.
 		if (searchHighlightLine >= 0 && searchHighlightLine < lines.length) {
-			const sb = lines[searchHighlightLine].bbox;
+			const sb = lines[searchHighlightLine]!.bbox;
 			ctx.save();
 			ctx.shadowColor = 'rgba(244, 63, 94, 0.7)'; // rose-500
 			ctx.shadowBlur = 24;
@@ -242,7 +242,7 @@
 		}
 
 		for (let i = 0; i < lines.length; i++) {
-			const line = lines[i];
+			const line = lines[i]!;
 			const b = line.bbox;
 			const isHover = i === hoveredLine;
 
@@ -254,9 +254,9 @@
 
 			if (showPolygons && line.polygon && line.polygon.length > 1) {
 				ctx.beginPath();
-				ctx.moveTo(line.polygon[0].x, line.polygon[0].y);
+				ctx.moveTo(line.polygon[0]!.x, line.polygon[0]!.y);
 				for (let p = 1; p < line.polygon.length; p++) {
-					ctx.lineTo(line.polygon[p].x, line.polygon[p].y);
+					ctx.lineTo(line.polygon[p]!.x, line.polygon[p]!.y);
 				}
 				ctx.closePath();
 				ctx.fillStyle = isHover ? 'rgba(245, 158, 11, 0.4)' : lineColor(i, 0.22);
@@ -294,7 +294,7 @@
 		const { x, y } = controller.canvasToImage(e.offsetX, e.offsetY);
 		let hit = -1;
 		for (let i = 0; i < alto.lines.length; i++) {
-			const b = alto.lines[i].bbox;
+			const b = alto.lines[i]!.bbox;
 			if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
 				hit = i;
 				break;

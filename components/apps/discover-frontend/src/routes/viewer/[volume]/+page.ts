@@ -16,5 +16,5 @@ export const load: PageLoad = async ({ params, fetch }) => {
 	// fetch has no origin server-side and would throw on the relative /api URL).
 	const pages = await listPages(volume, fetch);
 	if (pages.length === 0) error(404, `no pages cached for ${volume}`);
-	redirect(302, `${base}/viewer/${volume}/${encodeURIComponent(pages[0].key)}`);
+	redirect(302, `${base}/viewer/${volume}/${encodeURIComponent(pages[0]!.key)}`);
 };

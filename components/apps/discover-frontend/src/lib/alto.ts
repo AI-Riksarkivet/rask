@@ -14,7 +14,7 @@ export function parseAlto(xml: string): AltoParse {
 	const lines: Line[] = [];
 	const textLines = doc.getElementsByTagNameNS(NS, 'TextLine');
 	for (let i = 0; i < textLines.length; i++) {
-		const tl = textLines[i];
+		const tl = textLines[i]!; // in-bounds by the loop condition
 		const bbox: BBox = {
 			x: Number(tl.getAttribute('HPOS') || 0),
 			y: Number(tl.getAttribute('VPOS') || 0),
@@ -31,7 +31,7 @@ export function parseAlto(xml: string): AltoParse {
 				.filter(Boolean)
 				.map((p) => {
 					const [x, y] = p.split(',').map(Number);
-					return { x, y };
+					return { x: x ?? 0, y: y ?? 0 };
 				});
 		}
 
@@ -39,8 +39,9 @@ export function parseAlto(xml: string): AltoParse {
 		const texts: string[] = [];
 		const wcs: number[] = [];
 		for (let j = 0; j < strings.length; j++) {
-			texts.push(strings[j].getAttribute('CONTENT') || '');
-			const wc = Number(strings[j].getAttribute('WC') || 0);
+			const s = strings[j]!; // in-bounds by the loop condition
+			texts.push(s.getAttribute('CONTENT') || '');
+			const wc = Number(s.getAttribute('WC') || 0);
 			if (wc > 0) wcs.push(wc);
 		}
 		const text = texts.join(' ');
