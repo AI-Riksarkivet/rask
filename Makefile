@@ -96,8 +96,14 @@ dev-micro:
 #   viewer :5173 (catch-all: / + /<project>/overview) · storage :5174 /default/storage · compute :5175 /default/compute · discover :5178 · train :5176 · studio :5177
 # The shared @rask/ui shell + nav render with NO backend; start one
 # (`make dev-micro` or `make viewer`) only when you need live /api data.
-dev-frontends:        # all three apps + @rask/ui watcher + :3024 proxy (turbo run dev)
-	bun run dev
+dev-frontends:        # build @rask/ui+@rask/api once, then all 7 apps + :3024 proxy
+	# Build the libs FIRST so the apps read a complete dist/. Running `turbo run dev`
+	# unfiltered also starts @rask/ui's `svelte-package -w` watcher, which rewrites
+	# dist/ concurrently and races the apps reading it (one app crashes → turbo tears
+	# the whole run down). Apps-only dev avoids that. To live-edit @rask/ui, run its
+	# watcher in a second terminal: `bun run dev:ui`.
+	bunx turbo run build --filter=@rask/ui --filter=@rask/api
+	bunx turbo run dev --filter='./components/apps/*'
 
 viewer-frontend:      # catch-all app only, :5173 (serves / + /<project>/overview)
 	bun run dev:frontend
