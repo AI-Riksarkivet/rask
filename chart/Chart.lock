@@ -1,0 +1,21 @@
+dependencies:
+- name: nvidia-device-plugin
+  repository: https://nvidia.github.io/k8s-device-plugin
+  version: 0.19.3
+- name: kuberay-operator
+  repository: https://ray-project.github.io/kuberay-helm/
+  version: 1.4.2
+- name: nats
+  repository: https://nats-io.github.io/k8s/helm/charts/
+  version: 2.14.2
+- name: dapr
+  repository: https://dapr.github.io/helm-charts/
+  version: 1.18.1
+- name: kueue
+  repository: oci://registry.k8s.io/kueue/charts
+  version: 0.18.1
+- name: openfga
+  repository: https://openfga.github.io/helm-charts
+  version: 0.3.9
+digest: sha256:656577f9a1a36a24434a79544f73433abe7e1baa8e602e02745eb5a9bf649cff
+generated: "2026-06-23T10:58:10.552448173+02:00"

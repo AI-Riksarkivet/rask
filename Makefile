@@ -1,4 +1,4 @@
-.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer dev-micro dev-frontends viewer-frontend frontend-storage frontend-compute frontend-build frontend-check ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-build k3s-import k3s-up k3s-down k3s-purge
+.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer dev-micro dev-frontends viewer-frontend frontend-storage frontend-compute frontend-build frontend-check ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge
 
 help:
 	@echo "Targets:"
@@ -254,8 +254,20 @@ HELM ?= KUBECONFIG=$(KUBECONFIG) helm
 KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
 K3S_IMAGES = $(COMPOSE_IMAGES) $(FRONTEND_IMAGES) ray
 
-k3s-install: ## One-time host setup: k3s + helm + NVIDIA device-plugin + KubeRay operator (sudo)
+# Subchart repos (Chart.yaml dependencies). OCI deps (kueue) need no repo add.
+K3S_DEP_REPOS = nvdp=https://nvidia.github.io/k8s-device-plugin \
+                kuberay=https://ray-project.github.io/kuberay-helm/ \
+                nats=https://nats-io.github.io/k8s/helm/charts/ \
+                dapr=https://dapr.github.io/helm-charts/ \
+                openfga=https://openfga.github.io/helm-charts
+
+k3s-install: ## One-time host bootstrap: k3s + helm only (everything else is the chart; sudo)
 	./scripts/k3s-install.sh
+
+k3s-deps: ## Add subchart repos + vendor chart dependencies into chart/charts/
+	@for r in $(K3S_DEP_REPOS); do n=$${r%%=*}; u=$${r#*=}; helm repo add $$n $$u >/dev/null 2>&1 || true; done
+	@helm repo update >/dev/null
+	helm dependency build ./chart
 
 k3s-build: ## Build all fleet + frontend (6 MFEs) + ray images as :dev (native arm64)
 	@for s in $(COMPOSE_IMAGES); do \
@@ -274,7 +286,7 @@ k3s-import: ## Side-load :dev images into k3s containerd
 	  docker save $$s:dev | sudo k3s ctr images import - || exit 1; \
 	done
 
-k3s-up: ## Install/upgrade the rask release and wait for the gateway
+k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait for the gateway
 	@set -a; [ -f .env ] && . ./.env; set +a; \
 	if [ -z "$$HF_TOKEN" ]; then echo "WARN: HF_TOKEN unset (env or .env) — htrflow Serve will 401 on the gated TrOCR model"; fi; \
 	$(HELM) upgrade --install rask ./chart --wait --timeout 20m \

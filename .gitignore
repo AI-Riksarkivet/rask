@@ -30,3 +30,6 @@ batches.db.20260527T105358Z
 
 # Turborepo
 .turbo
+
+# vendored helm subcharts — rebuilt via `make k3s-deps` (helm dependency build) from Chart.lock
+chart/charts/

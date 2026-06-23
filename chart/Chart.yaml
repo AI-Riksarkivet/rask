@@ -1,9 +1,41 @@
 apiVersion: v2
 name: rask
-description: rask HTR pipeline — microservice fleet + optional in-cluster Postgres, MinIO, and KubeRay Serve (Swedish National Archives)
+description: rask HTR pipeline — microservice fleet + optional in-cluster Postgres, MinIO, KubeRay Serve, and the cluster infra foundation (NVIDIA device-plugin, KubeRay/NATS/Dapr/Kueue/OpenFGA) (Swedish National Archives)
 type: application
 version: 0.2.0
 appVersion: "0.2.0"
 home: https://github.com/AI-Riksarkivet/rask
 maintainers:
   - name: Riksarkivet
+
+# Cluster infra is unified into this chart as conditional subchart dependencies
+# (one `helm install` brings up everything). Each is gated by <key>.enabled so a
+# prod install with external infra can turn them off. k3s itself + helm are the
+# only out-of-chart bootstrap (scripts/k3s-install.sh).
+dependencies:
+  - name: nvidia-device-plugin
+    alias: nvidiaDevicePlugin
+    version: "0.19.3"
+    repository: https://nvidia.github.io/k8s-device-plugin
+    condition: nvidiaDevicePlugin.enabled
+  - name: kuberay-operator
+    alias: kuberayOperator
+    version: "1.4.2"
+    repository: https://ray-project.github.io/kuberay-helm/
+    condition: kuberayOperator.enabled
+  - name: nats
+    version: "2.14.2"
+    repository: https://nats-io.github.io/k8s/helm/charts/
+    condition: nats.enabled
+  - name: dapr
+    version: "1.18.1"
+    repository: https://dapr.github.io/helm-charts/
+    condition: dapr.enabled
+  - name: kueue
+    version: "0.18.1"
+    repository: oci://registry.k8s.io/kueue/charts
+    condition: kueue.enabled
+  - name: openfga
+    version: "0.3.9"
+    repository: https://openfga.github.io/helm-charts
+    condition: openfga.enabled

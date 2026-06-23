@@ -187,3 +187,35 @@ ingress:
   host: ""
   annotations: {}
   tls: []
+
+# ---- cluster infra foundation (subchart dependencies, Chart.yaml) ----------
+# One `helm install` brings these up alongside the app. Turn off for a prod
+# install that uses externally-managed infra. Subchart value overrides live
+# under the same key as the toggle.
+nvidiaDevicePlugin:
+  enabled: true
+  # k3s registers the nvidia container runtime but doesn't make it the default,
+  # so the plugin pod must run under the nvidia RuntimeClass to see the GPU.
+  runtimeClassName: nvidia
+  # rask installs into the default namespace; the chart objects to that by default.
+  allowDefaultNamespace: true
+
+kuberayOperator:
+  enabled: true
+
+nats:
+  enabled: true
+  config:
+    jetstream:
+      enabled: true
+
+dapr:
+  enabled: true
+
+kueue:
+  enabled: true
+
+openfga:
+  enabled: true
+  datastore:
+    engine: memory   # ephemeral; point at postgres (engine+uri) when adopted
