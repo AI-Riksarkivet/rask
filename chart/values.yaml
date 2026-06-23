@@ -118,6 +118,7 @@ frontend:
   # name under components/apps/ (built from the one parametrized frontend.dockerfile).
   apps:
     - {name: frontend, catchAll: true}              # viewer-frontend, "/"
+    - {name: overview-frontend, path: /default/overview}
     - {name: storage-frontend, path: /default/storage}
     - {name: compute-frontend, path: /default/compute}
     - {name: discover-frontend, path: /default/discover}

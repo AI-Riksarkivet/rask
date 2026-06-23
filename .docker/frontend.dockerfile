@@ -25,16 +25,13 @@ ARG APP=frontend
 WORKDIR /src
 
 # Every JS workspace member must be present or `bun install --frozen-lockfile`
-# errors with "Workspace not found". Keep in sync with package.json "workspaces".
-COPY components/apps/frontend          components/apps/frontend
-COPY components/apps/storage-frontend  components/apps/storage-frontend
-COPY components/apps/compute-frontend  components/apps/compute-frontend
-COPY components/apps/discover-frontend components/apps/discover-frontend
-COPY components/apps/studio-frontend   components/apps/studio-frontend
-COPY components/apps/train-frontend    components/apps/train-frontend
-COPY packages/api                      packages/api
-COPY packages/ui                       packages/ui
-COPY package.json bun.lock             ./
+# errors with "Workspace not found". Copy all of components/apps wholesale so new
+# MFE apps don't silently break this build (.dockerignore strips node_modules/
+# .svelte-kit; the non-JS dirs like runner are harmless to bun).
+COPY components/apps components/apps
+COPY packages/api    packages/api
+COPY packages/ui     packages/ui
+COPY package.json bun.lock ./
 
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install --frozen-lockfile

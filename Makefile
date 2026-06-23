@@ -248,7 +248,7 @@ COMPOSE_IMAGES = gateway core-api search-api volumes-api ray-api orchestrator
 # SvelteKit SSR microfrontends — all built from the one parametrized
 # .docker/frontend.dockerfile via --build-arg APP=<name>. "frontend" is the
 # catch-all (viewer-frontend); the rest are the /default/<domain> MFE apps.
-FRONTEND_IMAGES = frontend storage-frontend compute-frontend discover-frontend train-frontend studio-frontend
+FRONTEND_IMAGES = frontend overview-frontend storage-frontend compute-frontend discover-frontend train-frontend studio-frontend
 KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 HELM ?= KUBECONFIG=$(KUBECONFIG) helm
 KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
