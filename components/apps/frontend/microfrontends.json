@@ -6,11 +6,11 @@
 		},
 		"storage-frontend": {
 			"development": { "local": { "port": 5174 } },
-			"routing": [{ "paths": ["/storage", "/storage/:path*"] }]
+			"routing": [{ "paths": ["/default/storage", "/default/storage/:path*"] }]
 		},
 		"compute-frontend": {
 			"development": { "local": { "port": 5175 } },
-			"routing": [{ "paths": ["/compute", "/compute/:path*"] }]
+			"routing": [{ "paths": ["/default/compute", "/default/compute/:path*"] }]
 		}
 	}
 }

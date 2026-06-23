@@ -182,3 +182,67 @@ focused move (one PR), each set verified with `@source` (see [[reference-rask-ui
   Gotchas encoded: adapter externalizes @sveltejs/kit (ship node_modules); bun-1.3 isolated linker
   (preserve .bun store + symlinked node_modules, run from app dir). Images ~850MB — slimming deferred.
   REMAINING: microfrontends.json + turbo dev proxy; the other 3 domain apps; sidebar→@rask/ui; gateway routing.
+
+## MFE consistency audit (2026-06-22) — the blocker/major list + live progress
+
+Six-dimension audit (6 agents, repo-verified) against the target MFE architecture.
+**3 blockers · 3 majors.** This checklist is the live tracker — tick as fixed.
+
+### 🔴 shared-chrome — **DONE** ✅ (commits `113b71d`, `9ec978d`, `0046074`, `2dea51a`, `dccc8ec`)
+
+- [x] **Rebuilt to the real shadcn `sidebar-07` block** (`2dea51a`): `Collapsible` accordion `nav-main`
+      (navigable parent + chevron toggle), faithful project-switcher + nav-user, breadcrumb
+      `Default › Compute › Jobs`. Screenshot-verified.
+- [x] **Grey-on-every-item bug fixed** (`dccc8ec`): mis-vendored shadcn variant — buttons render
+      `data-active="false"` but the class was `data-active:` (attr-PRESENCE `[data-active]`) not
+      `data-[active=true]:`, so all 14 inactive items got `bg-sidebar-accent`. Now only the active leaf.
+- [ ] Remaining polish (QA): project-switcher squash when icon-collapsed; the "Settings" footer item;
+      verify the project dropdown opens.
+
+- [x] Top bar was a duplicated, Ray-specific `ray-shell` (×2, 21 routes); storage had none
+      → shared **integrated breadcrumb top bar in `@rask/ui` AppShell**; `ray-shell` slimmed to a
+      content wrapper; Ray health → footer `status` slot (compute).
+- [x] `nav-config` hrefs unprefixed → **base-aware absolute hrefs** (route cross-app correctly).
+- [x] Sidebar active-highlight broke under `kit.paths.base` → **base-aware match**.
+- [x] Theme toggle trapped in the top bar → moved to the **footer profile dropdown**.
+- [x] Sidebar redesigned to **shadcn sidebar-07**: project-switcher header (Default project),
+      footer avatar/profile dropdown (theme + Ray + settings), `collapsible="icon"`. Added
+      DropdownMenu + Avatar to `@rask/ui`.
+
+### 🔴 composition-proxy — **DONE** ✅ (`32360e0`)
+
+- [x] The premise was wrong: **Turborepo 2.9 ships a built-in native microfrontends proxy** that
+      auto-starts from `microfrontends.json` on **`:3024`** — NO package needed. `:3024/compute` → 200,
+      single origin. Cross-app nav works at **http://localhost:3024**. Docs + Makefile corrected.
+- [ ] ENV blocker (not code): external `/home/morgan/rask` dev servers squat `:5173/:5174` with
+      `--strictPort`, so `:3024/storage` hits the wrong app. Stop them, then `make dev-frontends`.
+- [ ] Prod chart: per-app Deployments + ingress (deployment follow-up).
+
+### 🔴 data-layer — **MOSTLY DONE** (`113b71d`, `32360e0`)
+
+- [x] storage sidebar tokens were missing → app.css synced (`113b71d`).
+- [x] Theme tokens **consolidated** into `@rask/ui/styles/tokens.css` (was a stale 37-line vestige);
+      the 3 app.css now `@import` it instead of inlining ~122 lines each. Sidebar tokens still emit.
+- [x] storage now has the `/api` Vite proxy (`32360e0`).
+- [ ] storage still uses its own S3 remote fn rather than `@rask/api` types (optional).
+
+### 🟠 turborepo — **DONE** ✅ (`32360e0`)
+
+- [x] ESLint now lints **storage-frontend + compute-frontend** too (per-app svelte parser blocks).
+- [ ] `test` / `build-storybook` not registered as turbo tasks (minor).
+
+### 🟠 app-parity — **DONE** ✅ (`0046074`, `dccc8ec`, `32360e0`)
+
+- [x] monolith `tsconfig` lone `rewriteRelativeImportExtensions` removed.
+- [x] storage deps aligned; `vite.config.ts` now matches compute (`ssr.noExternal` + `/api` proxy);
+      `app.html` aligned.
+
+### 🟠 route-ownership — **NOT STARTED**
+
+- [ ] 8 compute routes **duplicated** in the catch-all (drifting) → retire them.
+- [ ] documents (search/browse/viewer) + batches **un-carved** → carve documents, then batches.
+- [ ] then retire the catch-all `viewer-frontend`.
+
+> Transitional debt: the catch-all monolith omits the footer Ray-status (a Bun `svelte` dual-copy
+> `Snippet`-brand type-check quirk in its large graph; runtime fine; app slated for retirement).
+> `ray-shell` is still imported by 21 routes as a no-op wrapper — drop it when carving documents/batches.

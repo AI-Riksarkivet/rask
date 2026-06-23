@@ -1,88 +1,83 @@
-import {
-	Gauge,
-	Server,
-	ServerCog,
-	Boxes,
-	ListTree,
-	FileText,
-	Search,
-	Library,
-	Image,
-	LayoutGrid,
-	BookOpen,
-	Database,
-} from 'lucide-svelte';
+import { Server, FileText, Database, LayoutGrid, GraduationCap, Shapes } from '@lucide/svelte';
 
 /** All lucide icons share one component signature, so any icon's type fits. */
-type IconComponent = typeof Gauge;
+type IconComponent = typeof Server;
 
+/** A leaf route inside a collapsible domain item. */
+export type NavLeaf = {
+	title: string;
+	/** ABSOLUTE, project-prefixed href (e.g. /default/compute/cluster). */
+	href: string;
+	/** Active predicate vs the FULL pathname. */
+	match: (p: string) => boolean;
+};
+
+/** A top-level sidebar item — a domain. With `items` it renders as a collapsible
+ *  accordion (sidebar-07 NavMain); without, as a direct link. */
 export type NavItem = {
 	title: string;
-	href: string;
 	icon: IconComponent;
-	/** Active-route predicate against the current pathname. */
+	href: string;
 	match: (p: string) => boolean;
-	/**
-	 * Optional named action run on click *instead of* navigating to `href`
-	 * (handled in app-sidebar.svelte). Used for the Viewer "open a random
-	 * completed batch" shortcut, which has no static index route.
-	 */
-	actionId?: 'viewer-random';
-	/** Cross-MFE target — render as a full-page navigation, never client-side goto. */
-	external?: boolean;
+	items?: NavLeaf[];
 };
 
-export type NavGroup = {
-	label: string;
-	items: NavItem[];
-};
+/** A selectable project — the sidebar header switcher. Backend support is pending;
+ *  there is one implicit "default" project today. */
+export type Project = { name: string; subtitle?: string };
 
-/** Single source of truth for the sidebar nav. Icons reuse the old rail's glyphs. */
-export const navGroups: NavGroup[] = [
-	{
-		label: 'Compute',
-		items: [
-			{
-				title: 'Overview',
-				href: '/overview',
-				icon: Gauge,
-				match: (p) => p.startsWith('/overview'),
-			},
-			{ title: 'Cluster', href: '/cluster', icon: Server, match: (p) => p.startsWith('/cluster') },
-			{ title: 'Jobs', href: '/jobs', icon: ListTree, match: (p) => p.startsWith('/jobs') },
-			{ title: 'Actors', href: '/actors', icon: Boxes, match: (p) => p.startsWith('/actors') },
-			{
-				title: 'Logs',
-				href: '/logviewer',
-				icon: FileText,
-				match: (p) => p.startsWith('/logviewer'),
-			},
-			{ title: 'Serve', href: '/serve', icon: ServerCog, match: (p) => p.startsWith('/serve') },
-			{ title: 'API', href: '/api-docs', icon: BookOpen, match: (p) => p.startsWith('/api-docs') },
-		],
-	},
-	{
-		label: 'Documents',
-		items: [
-			{ title: 'Search', href: '/search', icon: Search, match: (p) => p.startsWith('/search') },
-			{
-				title: 'Viewer',
-				href: '/batches',
-				icon: Image,
-				match: (p) => p.startsWith('/viewer'),
-				actionId: 'viewer-random',
-			},
-			{ title: 'Browse', href: '/browse', icon: Library, match: (p) => p.startsWith('/browse') },
-		],
-	},
-	{
-		label: 'Batches',
-		items: [
-			{ title: 'Batches', href: '/batches', icon: LayoutGrid, match: (p) => p === '/batches' },
-		],
-	},
-	{
-		label: 'Storage',
-		items: [{ title: 'S3', href: '/s3', icon: Database, match: (p) => p.startsWith('/s3') }],
-	},
-];
+/** The footer profile identity. No auth yet, so this is a local placeholder. */
+export type NavUser = { name: string; email?: string; initials?: string };
+
+/** prefix-segment match: active when the path equals the href or is nested under it. */
+const seg = (href: string) => (p: string) => p === href || p.startsWith(href + '/');
+/** domain match: active when the path is under any of the given prefixes. */
+const under =
+	(...prefixes: string[]) =>
+	(p: string) =>
+		prefixes.some((pre) => p === pre || p.startsWith(pre + '/'));
+
+/**
+ * Project-scoped sidebar nav (project-first IA). The sidebar is only shown INSIDE a
+ * project, so every href is prefixed with `/<project>` and `match` is evaluated against
+ * the full pathname. **Overview** (the project landing — the batch view) is first; there
+ * is no "Home" item here — Home is the pre-project landing at `/` (the project picker),
+ * which renders WITHOUT this sidebar.
+ *
+ * It's a factory, not a const: the active project comes from the URL's first segment, so
+ * the same nav renders correctly for any `/<project>/…`.
+ */
+export function navMain(project: string): NavItem[] {
+	const b = `/${project}`;
+	return [
+		{ title: 'Overview', icon: LayoutGrid, href: `${b}/overview`, match: seg(`${b}/overview`) },
+		{
+			title: 'Compute',
+			icon: Server,
+			href: `${b}/compute`,
+			match: under(`${b}/compute`),
+			items: [
+				{ title: 'Cluster', href: `${b}/compute/cluster`, match: seg(`${b}/compute/cluster`) },
+				{ title: 'Jobs', href: `${b}/compute/jobs`, match: seg(`${b}/compute/jobs`) },
+				{ title: 'Actors', href: `${b}/compute/actors`, match: seg(`${b}/compute/actors`) },
+				{ title: 'Logs', href: `${b}/compute/logviewer`, match: seg(`${b}/compute/logviewer`) },
+				{ title: 'Serve', href: `${b}/compute/serve`, match: seg(`${b}/compute/serve`) },
+				{ title: 'API', href: `${b}/compute/api-docs`, match: seg(`${b}/compute/api-docs`) },
+			],
+		},
+		{
+			title: 'Discover',
+			icon: FileText,
+			href: `${b}/search`,
+			match: under(`${b}/search`, `${b}/browse`, `${b}/viewer`),
+			items: [
+				{ title: 'Search', href: `${b}/search`, match: seg(`${b}/search`) },
+				{ title: 'Viewer', href: `${b}/viewer`, match: seg(`${b}/viewer`) },
+				{ title: 'Browse', href: `${b}/browse`, match: seg(`${b}/browse`) },
+			],
+		},
+		{ title: 'Storage', icon: Database, href: `${b}/storage`, match: seg(`${b}/storage`) },
+		{ title: 'Train', icon: GraduationCap, href: `${b}/train`, match: seg(`${b}/train`) },
+		{ title: 'Studio', icon: Shapes, href: `${b}/studio`, match: seg(`${b}/studio`) },
+	];
+}

@@ -9,8 +9,12 @@ const config = {
 	},
 	kit: {
 		adapter: adapter(),
-		// The compute (Ray/cluster) microfrontend, served under /compute.
-		paths: { base: '/compute' },
+		// The compute (Ray/cluster) microfrontend, served under /default/compute.
+		// Project-first IA: the base carries the project segment (one project, "default",
+		// for now) so the turbo proxy still gets a STATIC per-app asset prefix — which is
+		// what lets the dev proxy route this app's /@vite + built assets. Multi-project
+		// (dynamic base) is deliberately deferred; backward-compat is not a concern yet.
+		paths: { base: '/default/compute' },
 		experimental: { remoteFunctions: true },
 	},
 };

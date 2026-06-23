@@ -195,11 +195,16 @@ move its routes in → wire `@rask/ui` + `@rask/api`), not a new hard problem.
 Start them with Turborepo — no backend required to see the **chrome**:
 
 ```bash
-make dev-frontends     # all apps + the @rask/ui watcher (turbo run dev)
+make dev-frontends     # all apps + @rask/ui watcher + the :3024 proxy (turbo run dev)
 make viewer-frontend   # just the catch-all,  :5173
 make frontend-storage  # just storage,        :5174/storage
 make frontend-compute  # just compute,        :5175/compute
 ```
+
+`make dev-frontends` (= `turbo run dev`) also brings up Turborepo's **built-in microfrontends
+proxy** on **`http://localhost:3024`** — the single origin you browse so that a `<a href="/storage">`
+from the compute app actually loads the storage app. Individual `make frontend-*` targets only
+start that one app's port.
 
 !!! success "Verified: the shared shell renders with **no backend running**"
 
@@ -209,12 +214,20 @@ make frontend-compute  # just compute,        :5175/compute
     (some routes, e.g. the catch-all's `/batches`, error without it). Start one with
     `make dev-micro` (real fleet) or `make viewer` (monolith) — or mock it (below).
 
-!!! warning "No composition proxy yet — apps run on separate ports in dev"
+!!! success "Single-origin composition proxy — `:3024` (built into Turborepo)"
 
     `components/apps/frontend/microfrontends.json` **declares** the path routing
-    (`/storage`, `/compute`), but the Turborepo/Vercel **microfrontends proxy package is not
-    installed**, so there is no single-origin `:3024` dev URL yet. Today you visit each app on
-    its own port. Wiring the proxy is the remaining composition step.
+    (`/storage`, `/compute`), and **Turborepo 2.9 reads it and auto-starts its own native
+    microfrontends proxy** on **`http://localhost:3024`** whenever `turbo run dev` includes
+    these apps — **no `@vercel/microfrontends` package is required** (that dep is only for
+    Vercel's _hosted_ custom proxy; absent it, turbo uses its built-in Rust proxy). So
+    `:3024/compute`, `:3024/storage`, and the catch-all `:3024/*` all serve from one origin,
+    which is what makes cross-app `<a href>` navigation work. You _can_ still hit each app on
+    its own port (`:5173`/`:5174`/`:5175`) directly.
+
+    The app **without** a `routing` block (`viewer-frontend`) is the proxy's **default /
+    catch-all**. Override the proxy port with `localProxyPort` in `microfrontends.json` if
+    `:3024` is taken.
 
 ## Developing without the full backend
 
@@ -252,9 +265,10 @@ Each app is **one Bun-server Docker image** (`svelte-adapter-bun`) — `.docker/
 `.docker/storage-frontend.dockerfile`, `.docker/compute-frontend.dockerfile` (see
 [Deployment](deployment.md)):
 
-- **Dev** — each app runs its own Vite dev server on its own port (`:5173`/`:5174`/`:5175`).
-  A single-origin composition proxy is **declared** in `microfrontends.json` but **not yet
-  wired** (no proxy package installed), so there is no `:3024` URL today.
+- **Dev** — each app runs its own Vite dev server on its own port (`:5173`/`:5174`/`:5175`),
+  and Turborepo's **built-in** microfrontends proxy (auto-started from `microfrontends.json`,
+  no package needed) composes them on a **single origin at `http://localhost:3024`** — that's
+  the URL you actually browse for cross-app nav.
 - **Prod** — the **gateway / K8s ingress** path-routes `/compute`, `/documents`, `/batches`,
   `/storage` to each app's Bun server (the same pattern as the per-domain _backend_ services).
 

@@ -9,5 +9,11 @@
 			"types": "./src/index.ts",
 			"default": "./src/index.ts"
 		}
+	},
+	"scripts": {
+		"check:tsgo": "tsgo --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"valibot": "^1.4.1"
 	}
 }

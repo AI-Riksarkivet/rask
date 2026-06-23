@@ -1,10 +1,8 @@
 <script lang="ts">
 	import '../app.css';
 	import { browser } from '$app/environment';
-	import { page } from '$app/state';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
-	import { AppShell } from '@rask/ui/shell';
 	import type { Snippet } from 'svelte';
 	let { children }: { children: Snippet } = $props();
 </script>
@@ -15,7 +13,7 @@
 	<Toaster />
 {/if}
 
-<!-- ONE shared sidebar from @rask/ui — identical across every microfrontend, no drift. -->
-<AppShell pathname={page.url.pathname}>
-	{@render children()}
-</AppShell>
+<!-- Global providers only. The home picker (`/`) renders bare (no sidebar); the
+     in-project chrome (shared @rask/ui sidebar + breadcrumb) lives in
+     [project]/+layout.svelte — you only see the sidebar once you're inside a project. -->
+{@render children()}
