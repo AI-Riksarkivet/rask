@@ -9,13 +9,18 @@
 	// and whose chevron (a MenuAction) toggles the sub-routes. Collapsible.Root's
 	// `child` snippet makes the MenuItem the group element (group/collapsible +
 	// data-state), so the chevron's group-data rotation works. Single-route domains
-	// render as a plain link. `pathname` (incl. base) drives active + default-open.
+	// render as a plain link. `pathname` drives active + default-open.
 	let { pathname = '' }: { pathname?: string } = $props();
+
+	// Project-first IA: the active project is the URL's first segment, so the nav's
+	// hrefs are prefixed with it (the sidebar only ever renders inside a project).
+	const project = $derived(pathname.split('/').filter(Boolean)[0] ?? 'default');
+	const items = $derived(navMain(project));
 </script>
 
 <Sidebar.Group>
 	<Sidebar.Menu>
-		{#each navMain as item (item.title)}
+		{#each items as item (item.title)}
 			{#if item.items?.length}
 				<Collapsible.Root open={item.match(pathname)} class="group/collapsible">
 					{#snippet child({ props: rootProps })}

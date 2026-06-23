@@ -22,14 +22,11 @@
 		children: Snippet;
 	} = $props();
 
-	// Breadcrumb trail from the FULL path (incl. the base segment, e.g. /compute) so
-	// pressing "Compute" reads "Compute › Overview", not just "Overview".
-	const crumbs = $derived(
-		pathname
-			.split('/')
-			.filter(Boolean)
-			.map((s) => s.replace(/-/g, ' ')),
-	);
+	// Project-first breadcrumb: the path is /<project>/<domain>/… so the FIRST segment
+	// is the project (the breadcrumb root), and the rest is the in-project trail.
+	const segs = $derived(pathname.split('/').filter(Boolean));
+	const projectName = $derived(segs[0] ?? project.name);
+	const crumbs = $derived(segs.slice(1).map((s) => s.replace(/-/g, ' ')));
 </script>
 
 <Sidebar.Provider class="h-svh overflow-hidden">
@@ -44,7 +41,7 @@
 				<Sidebar.Trigger class="text-muted-foreground hover:text-foreground -ml-1" />
 				<Separator orientation="vertical" class="mr-2 data-[orientation=vertical]:h-4" />
 				<nav aria-label="Breadcrumb" class="flex min-w-0 items-center gap-1.5 text-sm">
-					<span class="text-muted-foreground shrink-0">{project.name}</span>
+					<span class="text-muted-foreground shrink-0 capitalize">{projectName}</span>
 					{#each crumbs as crumb (crumb)}
 						<ChevronRight class="text-muted-foreground/40 size-3.5 shrink-0" />
 						<span class="text-foreground truncate font-medium capitalize">{crumb}</span>

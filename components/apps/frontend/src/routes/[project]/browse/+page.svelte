@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { page } from '$app/state';
 	import { browseCatalog, type CatalogHit, type CatalogTier } from '@rask/api';
 	import RayShell from '$lib/components/layout/ray-shell.svelte';
 	import { Card } from '$lib/components/ui/card';
@@ -107,7 +108,11 @@
 
 	// Cached-or-better volumes open locally; listed-only ones go to Riksarkivet.
 	function hrefFor(h: CatalogHit): { href: string; external: boolean } {
-		if (h.cached) return { href: `/viewer/${encodeURIComponent(h.bild_id)}`, external: false };
+		if (h.cached)
+			return {
+				href: `/${page.params.project}/viewer/${encodeURIComponent(h.bild_id)}`,
+				external: false,
+			};
 		return { href: h.bildvisning_url || '#', external: true };
 	}
 

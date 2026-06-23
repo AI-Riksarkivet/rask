@@ -1,13 +1,15 @@
 <script lang="ts">
-	import { Boxes, Plus, ArrowRight } from '@lucide/svelte';
+	import { Boxes, Plus, ArrowRight, Users } from '@lucide/svelte';
 
-	// Home / project picker. Projects aren't in the backend yet, so this is a single
-	// implicit "Default" workspace — wire it to real projects when that API lands.
+	// Home / project picker — the pre-project landing at `/` (NO sidebar). This is where
+	// you pick/create a project and (soon) manage members + access (RBAC). Projects
+	// aren't in the backend yet, so this is a single implicit "default" workspace —
+	// opening it enters the project at /<project>/overview.
 	const projects = [
 		{
 			name: 'Default',
+			slug: 'default',
 			subtitle: 'The default rask workspace',
-			href: '/compute',
 		},
 	];
 </script>
@@ -16,14 +18,14 @@
 	<header class="mb-6">
 		<h1 class="text-2xl font-semibold tracking-tight">Projects</h1>
 		<p class="text-muted-foreground mt-1 text-sm">
-			Open a project to work with its compute, documents, batches and storage.
+			Open a project to work inside it — overview, compute, discover, storage, train and studio.
 		</p>
 	</header>
 
 	<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-		{#each projects as p (p.name)}
+		{#each projects as p (p.slug)}
 			<a
-				href={p.href}
+				href="/{p.slug}/overview"
 				class="group bg-card hover:border-primary/50 flex flex-col rounded-xl border p-5 transition-colors"
 			>
 				<div
@@ -46,6 +48,13 @@
 		>
 			<Plus class="size-5" />
 			New project (soon)
+		</div>
+
+		<div
+			class="border-border text-muted-foreground flex min-h-[164px] flex-col items-center justify-center gap-1 rounded-xl border border-dashed text-sm"
+		>
+			<Users class="size-5" />
+			Members &amp; access · RBAC (soon)
 		</div>
 	</div>
 </div>

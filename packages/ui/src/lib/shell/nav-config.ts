@@ -1,4 +1,4 @@
-import { House, Server, FileText, LayoutGrid, Database } from '@lucide/svelte';
+import { Server, FileText, Database, LayoutGrid, GraduationCap, Shapes } from '@lucide/svelte';
 
 /** All lucide icons share one component signature, so any icon's type fits. */
 type IconComponent = typeof Server;
@@ -6,9 +6,9 @@ type IconComponent = typeof Server;
 /** A leaf route inside a collapsible domain item. */
 export type NavLeaf = {
 	title: string;
-	/** ABSOLUTE href incl. the owning app's kit.paths.base (e.g. /compute/overview). */
+	/** ABSOLUTE, project-prefixed href (e.g. /default/compute/cluster). */
 	href: string;
-	/** Active predicate vs the FULL pathname (which includes the base). */
+	/** Active predicate vs the FULL pathname. */
 	match: (p: string) => boolean;
 };
 
@@ -17,15 +17,13 @@ export type NavLeaf = {
 export type NavItem = {
 	title: string;
 	icon: IconComponent;
-	/** Landing href (the item links here when it has no sub-routes / on the domain). */
 	href: string;
-	/** Active predicate vs the FULL pathname — also controls accordion default-open. */
 	match: (p: string) => boolean;
 	items?: NavLeaf[];
 };
 
 /** A selectable project — the sidebar header switcher. Backend support is pending;
- *  there is one implicit "Default" project today. */
+ *  there is one implicit "default" project today. */
 export type Project = { name: string; subtitle?: string };
 
 /** The footer profile identity. No auth yet, so this is a local placeholder. */
@@ -40,52 +38,46 @@ const under =
 		prefixes.some((pre) => p === pre || p.startsWith(pre + '/'));
 
 /**
- * Single source of truth for the sidebar nav, in the sidebar-07 NavMain shape:
- * domain items that expand (accordion) to their routes. Hrefs are absolute +
- * base-prefixed so the same nav renders identically in every app and routes
- * cross-app. Compute + Storage own their bases; Documents + Batches still live in
- * the catch-all (no base) until carved out.
+ * Project-scoped sidebar nav (project-first IA). The sidebar is only shown INSIDE a
+ * project, so every href is prefixed with `/<project>` and `match` is evaluated against
+ * the full pathname. **Overview** (the project landing — the batch view) is first; there
+ * is no "Home" item here — Home is the pre-project landing at `/` (the project picker),
+ * which renders WITHOUT this sidebar.
+ *
+ * It's a factory, not a const: the active project comes from the URL's first segment, so
+ * the same nav renders correctly for any `/<project>/…`.
  */
-export const navMain: NavItem[] = [
-	// Home / project picker — the composed root (/), served by the catch-all app.
-	{ title: 'Home', icon: House, href: '/', match: (p) => p === '/' },
-	{
-		// The Compute landing IS the overview (served at /compute) — clicking "Compute"
-		// shows it; the sub-routes are the rest of the cluster views (no separate Overview).
-		title: 'Compute',
-		icon: Server,
-		href: '/compute',
-		match: under('/compute'),
-		items: [
-			{ title: 'Cluster', href: '/compute/cluster', match: seg('/compute/cluster') },
-			{ title: 'Jobs', href: '/compute/jobs', match: seg('/compute/jobs') },
-			{ title: 'Actors', href: '/compute/actors', match: seg('/compute/actors') },
-			{ title: 'Logs', href: '/compute/logviewer', match: seg('/compute/logviewer') },
-			{ title: 'Serve', href: '/compute/serve', match: seg('/compute/serve') },
-			{ title: 'API', href: '/compute/api-docs', match: seg('/compute/api-docs') },
-		],
-	},
-	{
-		title: 'Discover',
-		icon: FileText,
-		href: '/search',
-		match: under('/search', '/browse', '/viewer'),
-		items: [
-			{ title: 'Search', href: '/search', match: seg('/search') },
-			{ title: 'Viewer', href: '/viewer', match: seg('/viewer') },
-			{ title: 'Browse', href: '/browse', match: seg('/browse') },
-		],
-	},
-	{
-		title: 'Batches',
-		icon: LayoutGrid,
-		href: '/batches',
-		match: seg('/batches'),
-	},
-	{
-		title: 'Storage',
-		icon: Database,
-		href: '/storage',
-		match: seg('/storage'),
-	},
-];
+export function navMain(project: string): NavItem[] {
+	const b = `/${project}`;
+	return [
+		{ title: 'Overview', icon: LayoutGrid, href: `${b}/overview`, match: seg(`${b}/overview`) },
+		{
+			title: 'Compute',
+			icon: Server,
+			href: `${b}/compute`,
+			match: under(`${b}/compute`),
+			items: [
+				{ title: 'Cluster', href: `${b}/compute/cluster`, match: seg(`${b}/compute/cluster`) },
+				{ title: 'Jobs', href: `${b}/compute/jobs`, match: seg(`${b}/compute/jobs`) },
+				{ title: 'Actors', href: `${b}/compute/actors`, match: seg(`${b}/compute/actors`) },
+				{ title: 'Logs', href: `${b}/compute/logviewer`, match: seg(`${b}/compute/logviewer`) },
+				{ title: 'Serve', href: `${b}/compute/serve`, match: seg(`${b}/compute/serve`) },
+				{ title: 'API', href: `${b}/compute/api-docs`, match: seg(`${b}/compute/api-docs`) },
+			],
+		},
+		{
+			title: 'Discover',
+			icon: FileText,
+			href: `${b}/search`,
+			match: under(`${b}/search`, `${b}/browse`, `${b}/viewer`),
+			items: [
+				{ title: 'Search', href: `${b}/search`, match: seg(`${b}/search`) },
+				{ title: 'Viewer', href: `${b}/viewer`, match: seg(`${b}/viewer`) },
+				{ title: 'Browse', href: `${b}/browse`, match: seg(`${b}/browse`) },
+			],
+		},
+		{ title: 'Storage', icon: Database, href: `${b}/storage`, match: seg(`${b}/storage`) },
+		{ title: 'Train', icon: GraduationCap, href: `${b}/train`, match: seg(`${b}/train`) },
+		{ title: 'Studio', icon: Shapes, href: `${b}/studio`, match: seg(`${b}/studio`) },
+	];
+}

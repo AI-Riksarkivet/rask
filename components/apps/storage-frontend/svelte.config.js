@@ -9,10 +9,11 @@ const config = {
 	},
 	kit: {
 		adapter: adapter(),
-		// This microfrontend is served under /storage. Turborepo's MFE proxy routes
-		// /storage/* here in dev; the gateway/K8s ingress does it in prod.
-		// kit.paths.base is the SvelteKit-correct base path (NOT raw vite `base`).
-		paths: { base: '/storage' },
+		// The storage microfrontend, served under /default/storage. Project-first IA:
+		// the base carries the project segment (one project, "default", for now) so the
+		// turbo proxy gets a STATIC per-app asset prefix (routes this app's /@vite +
+		// built assets in dev). Multi-project (dynamic base) is deferred on purpose.
+		paths: { base: '/default/storage' },
 		experimental: { remoteFunctions: true },
 	},
 };
