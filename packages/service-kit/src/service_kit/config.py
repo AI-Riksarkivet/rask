@@ -95,6 +95,12 @@ class Settings(BaseSettings):
     # the tick into a JetStream consumer. See viewer/services/orchestrator/loop.py.
     orchestrator_autostart: bool = Field(default=False, alias="RASK_ORCHESTRATOR_AUTOSTART")
     orchestrator_interval_seconds: int = Field(default=60, ge=10, alias="RASK_ORCHESTRATOR_INTERVAL_SECONDS")
+
+    # Dapr service invocation. When false, build_dapr_client returns None and the
+    # gateway falls back to direct httpx upstreams. DAPR_HTTP_PORT is set by the
+    # Dapr sidecar injector in-cluster.
+    dapr_enabled: bool = Field(default=False, alias="RASK_DAPR_ENABLED")
+    dapr_http_port: str = Field(default="3500", alias="DAPR_HTTP_PORT")
     # S3 reconcile walks the whole cache bucket (~600k keys) — far too slow to run
     # every tick, so it's throttled: reconcile at most this often, and derive/submit
     # from the DB on the other ticks. 0 = reconcile every tick (legacy). The first
