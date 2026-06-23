@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # One-time host setup for the local rask k3s stack. Idempotent; needs sudo.
 # Installs: k3s (bundled containerd + Traefik + kubectl) -> helm ->
-# NVIDIA k8s device-plugin -> KubeRay operator.
+# NVIDIA k8s device-plugin -> KubeRay operator -> cluster infra foundation
+# (NATS JetStream, Dapr control plane, Kueue, OpenFGA). The infra foundation is
+# installed but NOT yet wired into rask — it's a base for upcoming work.
 set -euo pipefail
 
 KUBERAY_VERSION="${KUBERAY_VERSION:-1.4.2}"
 DEVICE_PLUGIN_VERSION="${DEVICE_PLUGIN_VERSION:-v0.17.4}"
+NATS_VERSION="${NATS_VERSION:-2.14.2}"
+DAPR_VERSION="${DAPR_VERSION:-1.18.1}"
+KUEUE_VERSION="${KUEUE_VERSION:-v0.18.1}"
+OPENFGA_VERSION="${OPENFGA_VERSION:-0.3.9}"
 KUBECONFIG_PATH="/etc/rancher/k3s/k3s.yaml"
 
 echo ">> [1/4] k3s"
@@ -40,7 +46,7 @@ sudo k3s kubectl apply -f "https://raw.githubusercontent.com/NVIDIA/k8s-device-p
 sudo k3s kubectl -n kube-system patch daemonset nvidia-device-plugin-daemonset --type merge \
   -p '{"spec":{"template":{"spec":{"runtimeClassName":"nvidia"}}}}'
 
-echo ">> [4/4] KubeRay operator"
+echo ">> [4/8] KubeRay operator"
 helm repo add kuberay https://ray-project.github.io/kuberay-helm/ 2>/dev/null || true
 helm repo update kuberay
 helm upgrade --install kuberay-operator kuberay/kuberay-operator \
@@ -58,5 +64,36 @@ done
 if [ "$gpu_ok" -eq 0 ]; then
   echo "WARN: nvidia.com/gpu not advertised after ~150s — check the device-plugin pod and nvidia-container-toolkit before 'make k3s-up'." >&2
 fi
+
+# ---- cluster infra foundation (not yet wired into rask) --------------------
+echo ">> [5/8] NATS (JetStream)"
+helm repo add nats https://nats-io.github.io/k8s/helm/charts/ 2>/dev/null || true
+helm repo update nats
+helm upgrade --install nats nats/nats \
+  --version "${NATS_VERSION}" \
+  --namespace nats --create-namespace \
+  --set config.jetstream.enabled=true --wait
+
+echo ">> [6/8] Dapr control plane"
+helm repo add dapr https://dapr.github.io/helm-charts/ 2>/dev/null || true
+helm repo update dapr
+helm upgrade --install dapr dapr/dapr \
+  --version "${DAPR_VERSION}" \
+  --namespace dapr-system --create-namespace --wait
+
+echo ">> [7/8] Kueue"
+sudo k3s kubectl apply --server-side -f \
+  "https://github.com/kubernetes-sigs/kueue/releases/download/${KUEUE_VERSION}/manifests.yaml"
+sudo k3s kubectl -n kueue-system rollout status deploy/kueue-controller-manager --timeout=300s
+
+echo ">> [8/8] OpenFGA"
+# datastore.engine=memory: ephemeral, fine for a local foundation. Point it at
+# postgres (datastore.engine=postgres + uri) when OpenFGA is actually adopted.
+helm repo add openfga https://openfga.github.io/helm-charts 2>/dev/null || true
+helm repo update openfga
+helm upgrade --install openfga openfga/openfga \
+  --version "${OPENFGA_VERSION}" \
+  --namespace openfga --create-namespace \
+  --set datastore.engine=memory --wait
 
 echo "k3s-install done. Export KUBECONFIG=$KUBECONFIG_PATH for kubectl/helm."
