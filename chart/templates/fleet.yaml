@@ -21,6 +21,12 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $root.Template.BasePath "/configmap.yaml") $root | sha256sum }}
+        {{- if $root.Values.dapr.sidecars }}
+        dapr.io/enabled: "true"
+        dapr.io/app-id: {{ $name | quote }}
+        dapr.io/app-port: {{ $svc.port | quote }}
+        dapr.io/log-level: {{ $root.Values.dapr.logLevel | quote }}
+        {{- end }}
       labels:
         {{- include "rask.selectorLabels" $root | nindent 8 }}
         app.kubernetes.io/component: {{ $name }}

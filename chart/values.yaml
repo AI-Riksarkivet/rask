@@ -46,6 +46,7 @@ config:
   AWS_REGION: "us-east-1"
   HCP_INSECURE: "true"
   RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
+  RASK_DAPR_ENABLED: "true"
 
 # Per-service fleet definitions. Rendered by templates/fleet.yaml.
 services:
@@ -218,6 +219,10 @@ nats:
 
 dapr:
   enabled: true
+  # Inject Dapr sidecar into every fleet pod. Off => plain pods; the gateway
+  # falls back to httpx env-URLs. (The control-plane subchart is dapr.enabled above.)
+  sidecars: true
+  logLevel: "info"
 
 kueue:
   enabled: true
