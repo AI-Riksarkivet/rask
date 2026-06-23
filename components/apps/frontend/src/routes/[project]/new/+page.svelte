@@ -1,10 +1,9 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { uploadVolume, type BatchRow } from '@rask/api';
-	import RayShell from '$lib/components/layout/ray-shell.svelte';
-	import { Card } from '$lib/components/ui/card';
+	import { Card } from '@rask/ui/card';
 	import { Button } from '@rask/ui/button';
-	import { Upload, X, FileImage } from 'lucide-svelte';
+	import { Upload, X, FileImage } from '@lucide/svelte';
 
 	const IMAGE_RE = /\.(jpe?g|png|tiff?)$/i;
 	const ID_RE = /^[A-Za-z0-9_-]+$/;
@@ -57,7 +56,7 @@
 	}
 </script>
 
-<RayShell title="New volume">
+<main class="bg-background flex-1 overflow-auto">
 	<Card class="m-4 max-w-2xl space-y-4 p-6">
 		<h1 class="text-lg font-semibold">Upload images</h1>
 
@@ -138,9 +137,9 @@
 				<p>Ingested <strong>{result.batch_id}</strong> — {result.page_count ?? 0} pages.</p>
 				<div class="flex gap-3">
 					<a class="underline" href={`/${project}/overview`}>Back to Overview</a>
-					<a class="underline" href={`/${project}/viewer/${result.batch_id}`}>Open viewer</a>
+					<a class="underline" href={`/${project}/discover/viewer/${result.batch_id}`}>Open viewer</a>
 				</div>
 			</div>
 		{/if}
 	</Card>
-</RayShell>
+</main>
