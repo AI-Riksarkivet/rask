@@ -34,6 +34,11 @@ metadata:
 handler: nvidia
 EOF
 sudo k3s kubectl apply -f "https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/${DEVICE_PLUGIN_VERSION}/deployments/static/nvidia-device-plugin.yml"
+# k3s registers the nvidia container runtime but does NOT make it the default, so
+# the upstream device-plugin pod runs under runc and sees "No devices found".
+# Pin it to the nvidia RuntimeClass so it can enumerate the GPU.
+sudo k3s kubectl -n kube-system patch daemonset nvidia-device-plugin-daemonset --type merge \
+  -p '{"spec":{"template":{"spec":{"runtimeClassName":"nvidia"}}}}'
 
 echo ">> [4/4] KubeRay operator"
 helm repo add kuberay https://ray-project.github.io/kuberay-helm/ 2>/dev/null || true

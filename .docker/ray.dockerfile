@@ -84,9 +84,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 # libgl1 libglib2.0-0 libxcb1: OpenCV (cv2, pulled in by htrflow) dlopen-links
 # libGL.so.1, libglib-2.0.so.0/libgthread-2.0.so.0, and libxcb.so.1 — absent from
 # the slim CUDA runtime base, so `import cv2` fails at replica init without them.
+# wget: KubeRay's generated head readiness/liveness probes shell out to `wget`
+# (raylet + gcs healthz); without it the head never goes Ready and the operator
+# never submits the Serve config.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates tini libgomp1 curl \
+      ca-certificates tini libgomp1 curl wget \
       libgl1 libglib2.0-0 libxcb1 \
  && rm -rf /var/lib/apt/lists/* \
  && useradd -r --no-create-home --shell /usr/sbin/nologin --uid 10001 app \

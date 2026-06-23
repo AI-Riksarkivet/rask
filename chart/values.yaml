@@ -15,11 +15,17 @@ existingSecret: ""
 
 # Random creds are generated once on first install and pinned across upgrades
 # via `lookup`. Override here to force a value.
+# For in-cluster postgres/minio, SET these (the local `make k3s-up` injects them
+# from .env: POSTGRES_PASSWORD, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, HF_TOKEN).
+# Leaving postgresPassword/minioSecretKey empty falls back to a fresh randAlphaNum
+# on every render — which the `rask-postgres` secret and the `rask-app` DATABASE_URL
+# generate INDEPENDENTLY, so they won't match. Only rely on the empty default when
+# postgres.enabled/minio.enabled are false (external deps via existingSecret).
 secrets:
-  postgresPassword: ""   # empty => randAlphaNum 24, pinned
+  postgresPassword: ""   # in-cluster pg: set this (else fresh-render mismatch); from .env POSTGRES_PASSWORD
   minioAccessKey: ""     # empty => "rask"
-  minioSecretKey: ""     # empty => randAlphaNum 24, pinned
-  hfToken: ""            # HuggingFace token for the gated TrOCR model
+  minioSecretKey: ""     # in-cluster minio: set this; from .env AWS_SECRET_ACCESS_KEY
+  hfToken: ""            # HuggingFace token for the gated TrOCR model; from .env HF_TOKEN
 
 # Non-secret env shared by the fleet ConfigMap.
 config:
