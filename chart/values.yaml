@@ -46,7 +46,6 @@ config:
   AWS_REGION: "us-east-1"
   HCP_INSECURE: "true"
   RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
-  RASK_DAPR_ENABLED: "true"
 
 # Per-service fleet definitions. Rendered by templates/fleet.yaml.
 services:

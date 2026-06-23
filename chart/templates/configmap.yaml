@@ -8,6 +8,7 @@ data:
   {{- range $k, $v := .Values.config }}
   {{ $k }}: {{ $v | quote }}
   {{- end }}
+  RASK_DAPR_ENABLED: {{ .Values.dapr.sidecars | quote }}
   # Gateway upstreams (in-cluster DNS).
   RASK_CORE_API_URL: {{ printf "http://%s-core-api:8801" (include "rask.fullname" .) | quote }}
   RASK_SEARCH_API_URL: {{ printf "http://%s-search-api:8802" (include "rask.fullname" .) | quote }}
