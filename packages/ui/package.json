@@ -72,13 +72,13 @@
 		"svelte": "^5.0.0"
 	},
 	"dependencies": {
-		"bits-ui": "^2.18.0",
+		"bits-ui": "^2.18.1",
 		"clsx": "^2.1.1",
 		"@lucide/svelte": "^1.21.0",
 		"lucide-svelte": "^1.0.1",
 		"mode-watcher": "^1.1.0",
-		"tailwind-merge": "^2.5.0",
-		"tailwind-variants": "^0.3.0"
+		"tailwind-merge": "^3.6.0",
+		"tailwind-variants": "^3.2.2"
 	},
 	"devDependencies": {
 		"@storybook/addon-a11y": "^10.4.6",
