@@ -13,7 +13,12 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, FastAPI
+from typing import TYPE_CHECKING, Annotated
+
+from fastapi import APIRouter, Depends, FastAPI, Request
+
+if TYPE_CHECKING:
+    from dapr.clients import DaprClient
 
 from service_kit.config import Settings
 from service_kit.exceptions import register_handlers
@@ -39,6 +44,28 @@ def build_settings() -> Settings:
     load_dotenv()
     derive_hcp_creds()
     return Settings.model_validate({})
+
+
+def _import_dapr_client() -> "type[DaprClient]":
+    # Lazy import: the dapr SDK is only required when RASK_DAPR_ENABLED is true.
+    from dapr.clients import DaprClient
+
+    return DaprClient
+
+
+def build_dapr_client(settings: Settings) -> "DaprClient | None":
+    """Dapr SDK client at the local sidecar, or None when Dapr is disabled."""
+    if not settings.dapr_enabled:
+        return None
+    dapr_client_cls = _import_dapr_client()
+    return dapr_client_cls(f"http://127.0.0.1:{settings.dapr_http_port}")
+
+
+def get_dapr(request: Request) -> "DaprClient | None":
+    return request.app.state.dapr
+
+
+DaprClientDep = Annotated["DaprClient | None", Depends(get_dapr)]
 
 
 def default_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
@@ -73,7 +100,22 @@ def make_service_app(
     """
     _setup_logging()
     settings = build_settings()
-    lifespan_factory: LifespanFactory = lifespan if lifespan is not None else default_lifespan
+    base_factory: LifespanFactory = lifespan if lifespan is not None else default_lifespan
+
+    def lifespan_factory(s: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
+        base = base_factory(s)
+
+        @asynccontextmanager
+        async def wrapped(app: FastAPI) -> AsyncIterator[None]:
+            app.state.dapr = build_dapr_client(s)
+            try:
+                async with base(app):
+                    yield
+            finally:
+                if app.state.dapr is not None:
+                    app.state.dapr.close()
+
+        return wrapped
 
     app = FastAPI(
         title=title,
