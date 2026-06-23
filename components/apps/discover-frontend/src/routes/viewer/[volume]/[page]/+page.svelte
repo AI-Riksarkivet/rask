@@ -39,6 +39,10 @@
 	let img: HTMLImageElement | null = null;
 	let hasFitOnce = false;
 
+	// Slice-namespaced localStorage keys: all MFEs share one origin, so prefix with
+	// the owning slice (discover) to avoid cross-app key collisions.
+	const STORE_PREFIX = 'discover:';
+
 	// Display toggles (persisted in localStorage so they survive nav).
 	let showBoxes = $state(persisted('viewer.showBoxes', true));
 	let showPolygons = $state(persisted('viewer.showPolygons', false));
@@ -81,10 +85,13 @@
 
 	function persisted<T>(key: string, fallback: T): T {
 		if (typeof localStorage === 'undefined') return fallback;
-		const raw = localStorage.getItem(key);
+		const raw = localStorage.getItem(STORE_PREFIX + key);
 		if (raw === null) return fallback;
 		try {
-			return JSON.parse(raw) as T;
+			const parsed: unknown = JSON.parse(raw);
+			// Narrow against the fallback's runtime type rather than asserting blindly
+			// — localStorage is untrusted input.
+			return typeof parsed === typeof fallback ? (parsed as T) : fallback;
 		} catch {
 			return fallback;
 		}
@@ -92,7 +99,7 @@
 
 	function savePersisted(key: string, value: unknown): void {
 		if (typeof localStorage === 'undefined') return;
-		localStorage.setItem(key, JSON.stringify(value));
+		localStorage.setItem(STORE_PREFIX + key, JSON.stringify(value));
 	}
 
 	$effect(() => {
@@ -509,7 +516,7 @@
 				{#if view === 'lines'}
 					{#if alto}
 						<div class="flex-1 overflow-y-auto">
-							{#each alto.lines as line, i (i)}
+							{#each alto.lines as line, i (line.id)}
 								<button
 									type="button"
 									onmouseenter={() => (hoveredLine = i)}

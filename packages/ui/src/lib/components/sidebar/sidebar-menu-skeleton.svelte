@@ -30,7 +30,7 @@
 	<Skeleton
 		class="h-4 max-w-(--skeleton-width) flex-1"
 		data-sidebar="menu-skeleton-text"
-		style="--skeleton-width: {width};"
+		--skeleton-width={width}
 	/>
 	{@render children?.()}
 </div>

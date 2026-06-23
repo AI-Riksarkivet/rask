@@ -3,6 +3,9 @@
 	"version": "0.1.0",
 	"type": "module",
 	"license": "MIT",
+	"keywords": [
+		"svelte"
+	],
 	"files": [
 		"dist",
 		"!dist/**/*.test.*",

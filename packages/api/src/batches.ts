@@ -108,7 +108,7 @@ export async function uploadVolume(
 		const body = await res.text();
 		throw new Error(`uploadVolume(${id}): HTTP ${res.status}: ${body.slice(0, 300)}`);
 	}
-	return res.json();
+	return parse(BatchRowSchema, await res.json());
 }
 
 /** Register an already-uploaded volume prefix (images must already be in the bucket). */
@@ -118,7 +118,7 @@ export async function registerVolume(id: string, fetchFn: typeof fetch = fetch):
 		const body = await res.text();
 		throw new Error(`registerVolume(${id}): HTTP ${res.status}: ${body.slice(0, 300)}`);
 	}
-	return res.json();
+	return parse(BatchRowSchema, await res.json());
 }
 
 // ---------- Orchestrator state ----------
