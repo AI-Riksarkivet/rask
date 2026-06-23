@@ -1,112 +1,120 @@
 // @rask/api/search — line FTS + catalog search/browse.
 
-export interface SearchHit {
-	batch_id: string;
-	page_id: string;
-	page_idx: number;
-	line_id: string;
-	line_idx: number;
-	text: string;
-	confidence: number;
-	hpos: number;
-	vpos: number;
-	width: number;
-	height: number;
-	polygon: string;
-	thumb_key: string;
-	thumb_url: string | null;
-	/** Parent volume's EAD row, or null when the batch isn't in the harvested
-	 *  catalog. Backend joins by batch_id == bild_id at search time. The
-	 *  embedded row doesn't carry the listed/cached/transcribed flags — we
-	 *  already know it's transcribed (otherwise it wouldn't be in the line
-	 *  index in the first place). */
-	catalog: CatalogHit | null;
-}
+import * as v from 'valibot';
 
-export interface SearchResponse {
-	ok: boolean;
-	query: string;
-	count: number;
-	hits: SearchHit[];
-}
-
-export interface SearchStats {
-	available: boolean;
-	rows: number;
-}
-
-export async function searchLines(query: string, limit = 50): Promise<SearchResponse> {
-	const params = new URLSearchParams({ q: query, limit: String(limit) });
-	const res = await fetch(`/api/search?${params}`);
-	if (!res.ok) throw new Error(`searchLines: HTTP ${res.status}`);
-	return res.json();
-}
-
-export async function searchStats(): Promise<SearchStats> {
-	const res = await fetch('/api/search/stats');
-	if (!res.ok) throw new Error(`searchStats: HTTP ${res.status}`);
-	return res.json();
-}
-
-export interface CatalogHit {
-	id: string;
-	reference_code: string;
-	archive_code: string;
-	fonds_id: string;
-	fonds_title: string;
-	series_id: string;
-	series_title: string;
-	volume_id: string;
-	volume_title: string;
-	date_text: string;
-	date_start: number | null;
-	date_end: number | null;
-	description: string;
-	bild_id: string;
-	bildvisning_url: string;
-	iiif_manifest: string;
-	thumbnail_url: string;
+export const CatalogHitSchema = v.object({
+	id: v.string(),
+	reference_code: v.string(),
+	archive_code: v.string(),
+	fonds_id: v.string(),
+	fonds_title: v.string(),
+	series_id: v.string(),
+	series_title: v.string(),
+	volume_id: v.string(),
+	volume_title: v.string(),
+	date_text: v.string(),
+	date_start: v.nullable(v.number()),
+	date_end: v.nullable(v.number()),
+	description: v.string(),
+	bild_id: v.string(),
+	bildvisning_url: v.string(),
+	iiif_manifest: v.string(),
+	thumbnail_url: v.string(),
 	/** Three nested local-state flags (transcribed ⊂ cached ⊂ listed):
 	 *  - listed:      bild_id is in batches.db (we know the manifest).
 	 *  - cached:      cached_pages > 0 (at least one image downloaded).
 	 *  - transcribed: transcribed_pages > 0 (at least one ALTO produced).
 	 *  Used to pick the click target (our viewer when cached, Riksarkivet
 	 *  otherwise) and to render escalating progress badges. */
-	listed: boolean;
-	cached: boolean;
-	transcribed: boolean;
+	listed: v.boolean(),
+	cached: v.boolean(),
+	transcribed: v.boolean(),
+});
+export type CatalogHit = v.InferOutput<typeof CatalogHitSchema>;
+
+export const SearchHitSchema = v.object({
+	batch_id: v.string(),
+	page_id: v.string(),
+	page_idx: v.number(),
+	line_id: v.string(),
+	line_idx: v.number(),
+	text: v.string(),
+	confidence: v.number(),
+	hpos: v.number(),
+	vpos: v.number(),
+	width: v.number(),
+	height: v.number(),
+	polygon: v.string(),
+	thumb_key: v.string(),
+	thumb_url: v.nullable(v.string()),
+	/** Parent volume's EAD row, or null when the batch isn't in the harvested
+	 *  catalog. Backend joins by batch_id == bild_id at search time. The
+	 *  embedded row doesn't carry the listed/cached/transcribed flags — we
+	 *  already know it's transcribed (otherwise it wouldn't be in the line
+	 *  index in the first place). */
+	catalog: v.nullable(CatalogHitSchema),
+});
+export type SearchHit = v.InferOutput<typeof SearchHitSchema>;
+
+export const SearchResponseSchema = v.object({
+	ok: v.boolean(),
+	query: v.string(),
+	count: v.number(),
+	hits: v.array(SearchHitSchema),
+});
+export type SearchResponse = v.InferOutput<typeof SearchResponseSchema>;
+
+export const SearchStatsSchema = v.object({
+	available: v.boolean(),
+	rows: v.number(),
+});
+export type SearchStats = v.InferOutput<typeof SearchStatsSchema>;
+
+export async function searchLines(query: string, limit = 50): Promise<SearchResponse> {
+	const params = new URLSearchParams({ q: query, limit: String(limit) });
+	const res = await fetch(`/api/search?${params}`);
+	if (!res.ok) throw new Error(`searchLines: HTTP ${res.status}`);
+	return v.parse(SearchResponseSchema, await res.json());
 }
 
-export interface CatalogSearchResponse {
-	ok: boolean;
-	query: string;
-	count: number;
-	hits: CatalogHit[];
+export async function searchStats(): Promise<SearchStats> {
+	const res = await fetch('/api/search/stats');
+	if (!res.ok) throw new Error(`searchStats: HTTP ${res.status}`);
+	return v.parse(SearchStatsSchema, await res.json());
 }
+
+export const CatalogSearchResponseSchema = v.object({
+	ok: v.boolean(),
+	query: v.string(),
+	count: v.number(),
+	hits: v.array(CatalogHitSchema),
+});
+export type CatalogSearchResponse = v.InferOutput<typeof CatalogSearchResponseSchema>;
 
 export async function searchCatalog(query: string, limit = 50): Promise<CatalogSearchResponse> {
 	const params = new URLSearchParams({ q: query, limit: String(limit) });
 	const res = await fetch(`/api/catalog/search?${params}`);
 	if (!res.ok) throw new Error(`searchCatalog: HTTP ${res.status}`);
-	return res.json();
+	return v.parse(CatalogSearchResponseSchema, await res.json());
 }
 
 export async function catalogStats(): Promise<SearchStats> {
 	const res = await fetch('/api/catalog/search/stats');
 	if (!res.ok) throw new Error(`catalogStats: HTTP ${res.status}`);
-	return res.json();
+	return v.parse(SearchStatsSchema, await res.json());
 }
 
 export type CatalogTier = 'listed' | 'cached' | 'transcribed';
 
-export interface CatalogBrowseResponse {
-	ok: boolean;
-	tier: CatalogTier;
-	count: number;
-	total: number;
-	offset: number;
-	hits: CatalogHit[];
-}
+export const CatalogBrowseResponseSchema = v.object({
+	ok: v.boolean(),
+	tier: v.picklist(['listed', 'cached', 'transcribed']),
+	count: v.number(),
+	total: v.number(),
+	offset: v.number(),
+	hits: v.array(CatalogHitSchema),
+});
+export type CatalogBrowseResponse = v.InferOutput<typeof CatalogBrowseResponseSchema>;
 
 /** Browse mode — list batches at >= `tier` from batches.db, enriched with
  *  EAD catalog metadata. Returns at most `limit` rows (server-capped at 2000)
@@ -119,8 +127,31 @@ export async function browseCatalog(
 	const params = new URLSearchParams({ tier, limit: String(limit), offset: String(offset) });
 	const res = await fetch(`/api/catalog/browse?${params}`);
 	if (!res.ok) throw new Error(`browseCatalog: HTTP ${res.status}`);
-	return res.json();
+	return v.parse(CatalogBrowseResponseSchema, await res.json());
 }
+
+// The /batches/{id}/catalog endpoint returns just the EAD row, not the
+// {listed, cached, transcribed} enrichment flags (those are search-time only).
+// Parse the partial row leniently, then fill the flags as false below.
+const CatalogRowSchema = v.object({
+	id: v.string(),
+	reference_code: v.string(),
+	archive_code: v.string(),
+	fonds_id: v.string(),
+	fonds_title: v.string(),
+	series_id: v.string(),
+	series_title: v.string(),
+	volume_id: v.string(),
+	volume_title: v.string(),
+	date_text: v.string(),
+	date_start: v.nullable(v.number()),
+	date_end: v.nullable(v.number()),
+	description: v.string(),
+	bild_id: v.string(),
+	bildvisning_url: v.string(),
+	iiif_manifest: v.string(),
+	thumbnail_url: v.string(),
+});
 
 /** Direct catalog lookup by batch_id (== bild_id). Returns null when the
  *  batch isn't in the harvested EAD catalog (e.g. test batches), so the
@@ -132,6 +163,6 @@ export async function getBatchCatalog(batchId: string): Promise<CatalogHit | nul
 	// The endpoint returns just the row, not the {listed, cached, transcribed}
 	// flags — those are search-time enrichment. Fill them in as false so the
 	// type matches; consumers reading them will see "no local state known".
-	const row = await res.json();
+	const row = v.parse(CatalogRowSchema, await res.json());
 	return { listed: false, cached: false, transcribed: false, ...row };
 }

@@ -9,5 +9,8 @@
 			"types": "./src/index.ts",
 			"default": "./src/index.ts"
 		}
+	},
+	"dependencies": {
+		"valibot": "^1.4.1"
 	}
 }

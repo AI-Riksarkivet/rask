@@ -108,6 +108,9 @@
     "packages/api": {
       "name": "@rask/api",
       "version": "0.1.0",
+      "dependencies": {
+        "valibot": "^1.4.1",
+      },
     },
     "packages/ui": {
       "name": "@rask/ui",
