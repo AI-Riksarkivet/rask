@@ -12,6 +12,8 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClie
     monkeypatch.setenv("RASK_API_PREFIX", "/api/v1")
     monkeypatch.setenv("RASK_VIEWER_INPUT", str(tmp_path / "in"))
     monkeypatch.setenv("RASK_VIEWER_OUTPUT", str(tmp_path / "out"))
+    monkeypatch.delenv("RASK_S3_ENDPOINT_URL", raising=False)
+    monkeypatch.delenv("S3_ENDPOINT_URL", raising=False)
     monkeypatch.delenv("HCP_ENDPOINT", raising=False)
     (tmp_path / "in").mkdir()
     (tmp_path / "out").mkdir()
@@ -51,8 +53,12 @@ def test_list_objects_returns_prefixes_and_objects(monkeypatch: pytest.MonkeyPat
     from service_kit.config import Settings
     from volumes_api import service as volumes_service
 
-    # No HCP endpoint → boto3 (and thus moto) uses its default AWS endpoint.
-    monkeypatch.delenv("HCP_ENDPOINT", raising=False)
+    # Force every S3-endpoint alias empty in the env (which overrides the repo
+    # `.env`) so `s3_client` falls back to no endpoint and boto3 — and thus moto —
+    # uses its default AWS endpoint instead of a real one.
+    monkeypatch.setenv("RASK_S3_ENDPOINT_URL", "")
+    monkeypatch.setenv("S3_ENDPOINT_URL", "")
+    monkeypatch.setenv("HCP_ENDPOINT", "")
 
     with mock_aws():
         client = boto3.client("s3", region_name="us-east-1")
@@ -61,13 +67,9 @@ def test_list_objects_returns_prefixes_and_objects(monkeypatch: pytest.MonkeyPat
         client.put_object(Bucket="images-batch", Key="VOL/sub/b.jpg", Body=b"y")
         client.put_object(Bucket="images-batch", Key="top.jpg", Body=b"z")
 
-        # Pass HCP_ENDPOINT="" so the repo `.env`'s real endpoint can't leak in;
-        # `s3_client` treats the empty string as falsy and falls back to no
-        # endpoint, so boto3 (and thus moto) uses its default AWS endpoint.
         settings = Settings(
             RASK_VIEWER_INPUT="s3://images-batch",
             RASK_VIEWER_OUTPUT="s3://images-batch-alto",
-            HCP_ENDPOINT="",
         )
 
         # Root level: one common-prefix folder ("VOL/") and one leaf object ("top.jpg").
@@ -83,3 +85,42 @@ def test_list_objects_returns_prefixes_and_objects(monkeypatch: pytest.MonkeyPat
         vol = volumes_service.list_objects(settings, "images-batch", "VOL/")
         assert vol.prefixes == ["VOL/sub/"]
         assert [o.key for o in vol.objects] == ["VOL/a.jpg"]
+
+
+def test_head_and_read_object(monkeypatch: pytest.MonkeyPatch) -> None:
+    import boto3
+    from moto import mock_aws
+
+    from service_kit.config import Settings
+    from service_kit.exceptions import NotFoundError
+    from volumes_api import service as volumes_service
+
+    monkeypatch.setenv("RASK_S3_ENDPOINT_URL", "")
+    monkeypatch.setenv("S3_ENDPOINT_URL", "")
+    monkeypatch.setenv("HCP_ENDPOINT", "")
+
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="images-batch")
+        client.put_object(Bucket="images-batch", Key="VOL/a.jpg", Body=b"hello", ContentType="image/jpeg")
+
+        settings = Settings(
+            RASK_VIEWER_INPUT="s3://images-batch",
+            RASK_VIEWER_OUTPUT="s3://images-batch-alto",
+        )
+
+        head = volumes_service.head_object(settings, "images-batch", "VOL/a.jpg")
+        assert head.key == "VOL/a.jpg"
+        assert head.size == 5
+        assert head.content_type == "image/jpeg"
+        assert head.last_modified is not None
+        assert head.etag  # moto returns a (quoted) etag; service strips the quotes
+
+        data, content_type = volumes_service.read_object(settings, "images-batch", "VOL/a.jpg")
+        assert data == b"hello"
+        assert content_type == "image/jpeg"
+
+        with pytest.raises(NotFoundError):
+            volumes_service.head_object(settings, "images-batch", "VOL/missing.jpg")
+        with pytest.raises(NotFoundError):
+            volumes_service.read_object(settings, "images-batch", "VOL/missing.jpg")

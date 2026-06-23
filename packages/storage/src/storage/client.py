@@ -1,4 +1,9 @@
-"""HCP credential derivation + boto3 S3 client tuned for HCP."""
+"""A generic boto3 S3 client (MinIO / AWS / Ceph / HCP) + optional HCP creds.
+
+rask is storage-agnostic: the client below speaks only standard S3, so the
+backend is a runtime choice (endpoint + credentials), never a code one.
+`derive_hcp_creds` is an opt-in no-op kept for the one HCP deployment.
+"""
 
 import base64
 import hashlib
@@ -11,11 +16,27 @@ from typing import Any
 # reaching past storage's boundary into `mypy_boto3_s3`.
 type S3Client = Any
 
+# Env names for the S3 endpoint/insecure/CA, canonical-first. HCP_* are the
+# legacy names, honored for back-compat (mirrors the AliasChoices on Settings).
+_ENDPOINT_ENVS = ("RASK_S3_ENDPOINT_URL", "S3_ENDPOINT_URL", "HCP_ENDPOINT")
+_INSECURE_ENVS = ("RASK_S3_INSECURE", "S3_INSECURE", "HCP_INSECURE")
+_CA_BUNDLE_ENVS = ("RASK_S3_CA_BUNDLE", "S3_CA_BUNDLE", "HCP_CA_BUNDLE")
+
+
+def _env_first(names: tuple[str, ...]) -> str | None:
+    """First non-empty value among `names` (canonical-first env resolution)."""
+    for name in names:
+        if value := os.getenv(name):
+            return value
+    return None
+
 
 def derive_hcp_creds() -> None:
-    """If HCP_USERNAME/HCP_PASSWORD are set and AWS_* are not, derive S3 creds.
+    """Opt-in HCP credential derivation; a no-op unless HCP_USERNAME/PASSWORD are set.
 
-    HCP S3 convention: access_key = base64(username), secret_key = md5(password) hex.
+    For the one HCP deployment whose S3 keys follow the convention
+    access_key = base64(username), secret_key = md5(password) hex. Never
+    overrides already-set AWS_* keys, so MinIO/AWS (keys set directly) is untouched.
     """
     user = os.getenv("HCP_USERNAME")
     pwd = os.getenv("HCP_PASSWORD")
@@ -28,7 +49,12 @@ def derive_hcp_creds() -> None:
 
 
 def s3_client(endpoint: str | None = None) -> Any:  # noqa: ANN401 — boto3 client has no public stub
-    """Build a boto3 S3 client tuned for HCP. Reads endpoint/CA/insecure flags from env."""
+    """Build a boto3 S3 client for any S3-compatible backend (MinIO / AWS / Ceph / HCP).
+
+    Endpoint/CA/insecure flags resolve from env (RASK_S3_*/S3_*, HCP_* honored for
+    back-compat). Path-style + s3v4 are the MinIO-safe, AWS-accepted defaults; region
+    comes from AWS_REGION so it isn't left solely to the boto3 env chain.
+    """
     import boto3
     from botocore.config import Config
 
@@ -41,10 +67,14 @@ def s3_client(endpoint: str | None = None) -> Any:  # noqa: ANN401 — boto3 cli
         connect_timeout=10,
         read_timeout=60,
     )
-    kwargs: dict = {"endpoint_url": endpoint or os.getenv("HCP_ENDPOINT"), "config": cfg}
-    if ca := os.getenv("HCP_CA_BUNDLE"):
+    kwargs: dict = {
+        "endpoint_url": endpoint or _env_first(_ENDPOINT_ENVS),
+        "region_name": os.getenv("AWS_REGION", "us-east-1"),
+        "config": cfg,
+    }
+    if ca := _env_first(_CA_BUNDLE_ENVS):
         kwargs["verify"] = ca
-    elif os.getenv("HCP_INSECURE", "").lower() in ("1", "true", "yes"):
+    elif (_env_first(_INSECURE_ENVS) or "").lower() in ("1", "true", "yes"):
         import urllib3
 
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
