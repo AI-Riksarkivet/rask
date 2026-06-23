@@ -1,11 +1,27 @@
 <script lang="ts">
 	import { Badge } from '@rask/ui/badge';
-	import { listObjects } from '$lib/remote/storage.remote';
+	import { Button } from '@rask/ui/button';
+	import { Dialog } from '@rask/ui/dialog';
+	import { listObjects, headObject } from '$lib/remote/storage.remote';
 	import { BUCKETS, type Bucket } from '$lib/storage';
-	import { Database, Folder, FileText, ChevronRight, House, TriangleAlert } from '@lucide/svelte';
+	import {
+		Database,
+		Folder,
+		FileText,
+		ChevronRight,
+		House,
+		TriangleAlert,
+		Download,
+	} from '@lucide/svelte';
 
 	let bucket = $state<Bucket>(BUCKETS[0]);
 	let prefix = $state('');
+
+	// The object whose detail dialog is open (null = closed). Read-only browse:
+	// the gateway's volumes-api is backend-agnostic, so this works against
+	// MinIO/AWS/HCP unchanged.
+	let detailKey = $state<string | null>(null);
+	const detailOpen = $derived(detailKey !== null);
 
 	const segments = $derived(prefix.split('/').filter(Boolean));
 
@@ -22,6 +38,16 @@
 	}
 	function leaf(p: string): string {
 		return p.replace(/\/$/, '').split('/').pop() ?? p;
+	}
+	/** Client-side download via the gateway proxy (Content-Disposition: attachment). */
+	function downloadHref(key: string): string {
+		const params = new URLSearchParams({ bucket, key });
+		return `/api/volumes/object/download?${params}`;
+	}
+	function fmtDate(iso: string | null): string {
+		if (!iso) return '—';
+		const d = new Date(iso);
+		return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 	}
 </script>
 
@@ -66,6 +92,7 @@
 						<tr>
 							<th class="px-4 py-2 text-left font-medium">Name</th>
 							<th class="px-4 py-2 text-right font-medium">Size</th>
+							<th class="w-10 px-4 py-2"></th>
 						</tr>
 					</thead>
 					<tbody>
@@ -78,36 +105,83 @@
 									</button>
 								</td>
 								<td class="text-muted-foreground px-4 py-2 text-right">—</td>
+								<td></td>
 							</tr>
 						{/each}
 						{#each listing.objects as obj (obj.key)}
 							<tr class="hover:bg-accent/40 border-b last:border-0">
 								<td class="px-4 py-2">
-									<span class="flex items-center gap-2">
+									<button
+										class="hover:text-primary flex items-center gap-2 text-left"
+										title="View details"
+										onclick={() => (detailKey = obj.key)}
+									>
 										<FileText class="text-muted-foreground h-4 w-4" />
 										{leaf(obj.key)}
-									</span>
+									</button>
 								</td>
 								<td class="text-muted-foreground px-4 py-2 text-right font-mono text-xs">
 									{fmtSize(obj.size)}
+								</td>
+								<td class="px-2 py-2 text-right">
+									<a
+										class="text-muted-foreground hover:text-foreground inline-flex"
+										href={downloadHref(obj.key)}
+										title="Download"
+										download={leaf(obj.key)}
+									>
+										<Download class="h-4 w-4" />
+									</a>
 								</td>
 							</tr>
 						{/each}
 					</tbody>
 				</table>
 			{/if}
-		{:catch}
+		{:catch err}
 			<div class="flex flex-col items-center gap-2 p-8 text-center">
 				<TriangleAlert class="h-8 w-8 text-amber-500" />
-				<p class="text-sm font-medium">Object listing endpoint pending</p>
+				<p class="text-sm font-medium">Couldn't load objects</p>
 				<p class="text-muted-foreground max-w-md text-xs">
-					Calls the <code class="font-mono">listObjects</code> remote function (valibot,
-					server-side, via the gateway). Needs
-					<code class="font-mono">GET /api/volumes/objects</code> in volumes-api.
+					{err instanceof Error ? err.message : String(err)}
 				</p>
-				<!-- @rask/ui Badge — proves the shared component library works across a separate MFE app -->
-				<Badge variant="warning">{bucket} · shared via @rask/ui</Badge>
+				<Badge variant="warning">{bucket}</Badge>
 			</div>
 		{/await}
 	</div>
 </div>
+
+<!-- Object-detail dialog: HEAD metadata + a download, lazily fetched when opened. -->
+<Dialog.Root open={detailOpen} onOpenChange={(o) => (detailKey = o ? detailKey : null)}>
+	<Dialog.Content>
+		{#if detailKey}
+			{@const key = detailKey}
+			<Dialog.Title>{leaf(key)}</Dialog.Title>
+			<Dialog.Description class="font-mono text-xs break-all">{key}</Dialog.Description>
+			{#await headObject({ bucket, key })}
+				<div class="text-muted-foreground py-4 text-sm">Loading details…</div>
+			{:then head}
+				<dl class="grid grid-cols-[6rem_1fr] gap-y-2 text-sm">
+					<dt class="text-muted-foreground">Size</dt>
+					<dd class="font-mono">{fmtSize(head.size)}</dd>
+					<dt class="text-muted-foreground">Type</dt>
+					<dd class="font-mono">{head.content_type ?? '—'}</dd>
+					<dt class="text-muted-foreground">Modified</dt>
+					<dd>{fmtDate(head.last_modified)}</dd>
+					<dt class="text-muted-foreground">ETag</dt>
+					<dd class="font-mono text-xs break-all">{head.etag ?? '—'}</dd>
+				</dl>
+			{:catch err}
+				<p class="text-destructive py-4 text-sm">
+					{err instanceof Error ? err.message : String(err)}
+				</p>
+			{/await}
+			<div class="flex justify-end">
+				<Button href={downloadHref(key)} download={leaf(key)}>
+					<Download class="h-4 w-4" />
+					Download
+				</Button>
+			</div>
+		{/if}
+	</Dialog.Content>
+</Dialog.Root>
