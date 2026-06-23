@@ -182,6 +182,18 @@ focused move (one PR), each set verified with `@source` (see [[reference-rask-ui
   Gotchas encoded: adapter externalizes @sveltejs/kit (ship node_modules); bun-1.3 isolated linker
   (preserve .bun store + symlinked node_modules, run from app dir). Images ~850MB — slimming deferred.
   REMAINING: microfrontends.json + turbo dev proxy; the other 3 domain apps; sidebar→@rask/ui; gateway routing.
+- 2026-06-23 **valibot @rask/api parse** (parse-don't-validate boundary) + **volumes-api GET /objects** (S3
+  browser unblocked, moto-tested). **strictPort** port-pin fix. Ray-status → top of overview; Home `/`; Documents→Discover.
+- 2026-06-23 **PROJECT-FIRST IA landed + on main (`30b2495`)**, MFE split KEPT (deliberate; the skill's
+  "start with a monolith" is knowingly overridden — see memory): `/` = home picker (no shell);
+  `/<project>/<domain>` behind the shared @rask/ui shell. MFEs re-based to `/default/<domain>` (static base
+  carries the single project so the proxy keeps a per-app asset prefix). Sidebar: Overview (was Batches) on top,
+  no Home (leave via project switcher/breadcrumb), + Train + Studio dummies. Internal links made idiomatic
+  (base from $app/paths in MFEs, page.params.project in catch-all) → within-domain nav is soft.
+  **Ray regression fixed**: strict valibot rejected the live `error:null`/`metadata:null` shapes and blanked the
+  compute UI → added a best-effort `parse()` (safeParse + warn + passthrough). check 5/5; screenshots verified.
+  Dev runs on `:3024` proxy; local `527x` port override (uncommitted) because a co-located checkout squats `:5173`.
+  NOTE: pushed to main bypassing PR/CI (user's choice) — verified locally, not CI-tested.
 
 ## MFE consistency audit (2026-06-22) — the blocker/major list + live progress
 
@@ -237,11 +249,13 @@ Six-dimension audit (6 agents, repo-verified) against the target MFE architectur
 - [x] storage deps aligned; `vite.config.ts` now matches compute (`ssr.noExternal` + `/api` proxy);
       `app.html` aligned.
 
-### 🟠 route-ownership — **NOT STARTED**
+### 🟢 route-ownership — **DONE via the project-first restructure** (`d670311`, on main `30b2495`)
 
-- [ ] 8 compute routes **duplicated** in the catch-all (drifting) → retire them.
-- [ ] documents (search/browse/viewer) + batches **un-carved** → carve documents, then batches.
-- [ ] then retire the catch-all `viewer-frontend`.
+- [x] **8 duplicated compute routes retired from the catch-all** — the compute MFE owns them.
+- [x] **Project-first IA** — `/` = home (no shell); `/<project>/<domain>` behind the shared shell.
+      MFEs carry the project in a static base (`/default/compute`, `/default/storage`); catch-all
+      owns `/<project>/{overview,search,browse,viewer,train,studio}`.
+- [ ] LATER: carve documents/train/studio into their own MFE apps (currently catch-all routes).
 
 > Transitional debt: the catch-all monolith omits the footer Ray-status (a Bun `svelte` dual-copy
 > `Snippet`-brand type-check quirk in its large graph; runtime fine; app slated for retirement).
