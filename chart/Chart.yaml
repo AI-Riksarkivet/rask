@@ -13,16 +13,18 @@ maintainers:
 # prod install with external infra can turn them off. k3s itself + helm are the
 # only out-of-chart bootstrap (scripts/k3s-install.sh).
 dependencies:
+  # Aliases must be lowercase RFC1123 (subcharts derive container/resource names
+  # from .Chart.Name = the alias); camelCase breaks them.
   - name: nvidia-device-plugin
-    alias: nvidiaDevicePlugin
+    alias: nvdp
     version: "0.19.3"
     repository: https://nvidia.github.io/k8s-device-plugin
-    condition: nvidiaDevicePlugin.enabled
+    condition: nvdp.enabled
   - name: kuberay-operator
-    alias: kuberayOperator
+    alias: kuberay
     version: "1.4.2"
     repository: https://ray-project.github.io/kuberay-helm/
-    condition: kuberayOperator.enabled
+    condition: kuberay.enabled
   - name: nats
     version: "2.14.2"
     repository: https://nats-io.github.io/k8s/helm/charts/

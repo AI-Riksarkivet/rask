@@ -290,6 +290,7 @@ k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait 
 	@set -a; [ -f .env ] && . ./.env; set +a; \
 	if [ -z "$$HF_TOKEN" ]; then echo "WARN: HF_TOKEN unset (env or .env) — htrflow Serve will 401 on the gated TrOCR model"; fi; \
 	$(HELM) upgrade --install rask ./chart --wait --timeout 20m \
+	  --force-conflicts --take-ownership \
 	  $${HF_TOKEN:+--set-string secrets.hfToken=$$HF_TOKEN} \
 	  $${POSTGRES_PASSWORD:+--set-string secrets.postgresPassword=$$POSTGRES_PASSWORD} \
 	  $${AWS_ACCESS_KEY_ID:+--set-string secrets.minioAccessKey=$$AWS_ACCESS_KEY_ID} \

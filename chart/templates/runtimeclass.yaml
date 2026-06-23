@@ -3,11 +3,11 @@ The nvidia-device-plugin subchart runs its pod under this RuntimeClass (k3s
 registers the nvidia containerd runtime but doesn't default it), but the chart
 references the class without creating it — so create it here.
 */ -}}
-{{- if .Values.nvidiaDevicePlugin.enabled }}
+{{- if .Values.nvdp.enabled }}
 apiVersion: node.k8s.io/v1
 kind: RuntimeClass
 metadata:
-  name: {{ .Values.nvidiaDevicePlugin.runtimeClassName }}
+  name: {{ .Values.nvdp.runtimeClassName }}
   labels:
     {{- include "rask.labels" . | nindent 4 }}
 handler: nvidia
