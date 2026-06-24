@@ -14,15 +14,10 @@ from dotenv import load_dotenv
 
 def main() -> None:
     load_dotenv()
+    from storage import derive_hcp_creds
 
-    import base64
-    import hashlib
-
-    if (u := os.getenv("HCP_USERNAME")) and (p := os.getenv("HCP_PASSWORD")):
-        os.environ.setdefault("AWS_ACCESS_KEY_ID", base64.b64encode(u.encode()).decode())
-        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", hashlib.md5(p.encode()).hexdigest())  # noqa: S324
-
-    endpoint = os.getenv("HCP_ENDPOINT")
+    derive_hcp_creds()  # HCP cred bridge; no-op for MinIO/rustfs/AWS
+    endpoint = os.getenv("RASK_S3_ENDPOINT_URL") or os.getenv("S3_ENDPOINT_URL") or os.getenv("HCP_ENDPOINT")
     print(f"endpoint: {endpoint}", flush=True)
     print(f"akid set: {bool(os.getenv('AWS_ACCESS_KEY_ID'))}", flush=True)
 

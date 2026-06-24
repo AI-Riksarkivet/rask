@@ -1,7 +1,7 @@
 """search-api lifespan — open the Lance lines table + S3 client, expose on app.state.
 
 Stateful in exactly one dimension (the lines table); no DB/Ray/orchestrator.
-Tolerant of missing HCP creds / table so tests run offline (lines_tbl = None).
+Tolerant of missing S3 creds / table so tests run offline (lines_tbl = None).
 """
 
 import logging
@@ -29,7 +29,7 @@ def _build_s3(settings: Settings) -> S3Client | None:
 async def _open_lines_table(settings: Settings) -> tuple[AsyncConnection | None, AsyncTable | None]:
     storage_options = settings.lance_storage_options()
     if storage_options is None:
-        log.info("lancedb skipped — HCP credentials not configured")
+        log.info("lancedb skipped — S3 credentials not configured")
         return None, None
     try:
         db = await lancedb.connect_async(settings.lance_db_uri, storage_options=storage_options)

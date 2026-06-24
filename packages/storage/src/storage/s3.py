@@ -1,4 +1,4 @@
-"""S3/HCP source and sink — picklable for Ray actors via lazy client factory."""
+"""S3 source and sink — picklable for Ray actors via lazy client factory."""
 
 from collections.abc import Callable, Iterable, Iterator
 from typing import Any
@@ -19,7 +19,7 @@ def iter_keys(client: Any, bucket: str, prefix: str = "", suffix: str = "") -> I
 
 
 class S3Source:
-    """S3/HCP source. Pass `client` for tests (with moto) or `client_factory` for runs
+    """S3 source. Pass `client` for tests (with moto) or `client_factory` for runs
     that need to ship the source through pickle (e.g. Ray Data driver scripts).
     """
 
@@ -68,7 +68,7 @@ class S3Source:
 
 
 class S3Sink:
-    """S3/HCP sink with same lazy-client semantics as S3Source. `prefix` scopes
+    """S3 sink with same lazy-client semantics as S3Source. `prefix` scopes
     `existing_keys()` listings (important for resumability against large buckets)."""
 
     def __init__(

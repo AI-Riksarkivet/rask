@@ -19,7 +19,7 @@
 
 	// The object whose detail dialog is open (null = closed). Read-only browse:
 	// the gateway's volumes-api is backend-agnostic, so this works against
-	// MinIO/AWS/HCP unchanged.
+	// any S3 backend (MinIO/rustfs/AWS) unchanged.
 	let detailKey = $state<string | null>(null);
 	const detailOpen = $derived(detailKey !== null);
 

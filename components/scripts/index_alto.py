@@ -643,9 +643,8 @@ def cmd_info(args: argparse.Namespace) -> int:
 
 def main() -> int:
     load_dotenv()
-    # HCP S3 creds (AWS_ACCESS_KEY_ID/SECRET) are derived from HCP_USERNAME/
-    # HCP_PASSWORD; without this boto3 reports "Unable to locate credentials".
-    # Runs on the driver, then ray.init forwards the derived vars to workers.
+    # Bridge HCP_USERNAME/PASSWORD → AWS_* for the current HCP backend (no-op for
+    # MinIO/rustfs/AWS, which set AWS_* directly); ray.init forwards them to workers.
     from storage import derive_hcp_creds
 
     derive_hcp_creds()

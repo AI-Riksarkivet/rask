@@ -1,8 +1,9 @@
-"""A generic boto3 S3 client (MinIO / AWS / Ceph / HCP) + optional HCP creds.
+"""A generic boto3 S3 client for any S3-compatible backend (MinIO / rustfs / AWS).
 
 rask is storage-agnostic: the client below speaks only standard S3, so the
 backend is a runtime choice (endpoint + credentials), never a code one.
-`derive_hcp_creds` is an opt-in no-op kept for the one HCP deployment.
+`derive_hcp_creds` is an isolated, opt-in bridge for the current HCP dev backend
+(a no-op for MinIO/rustfs/AWS); remove it once fully migrated off HCP.
 """
 
 import base64
@@ -16,11 +17,12 @@ from typing import Any
 # reaching past storage's boundary into `mypy_boto3_s3`.
 type S3Client = Any
 
-# Env names for the S3 endpoint/insecure/CA, canonical-first. HCP_* are the
-# legacy names, honored for back-compat (mirrors the AliasChoices on Settings).
+# Env names for the S3 endpoint/insecure/CA, canonical-first. `HCP_*` are legacy
+# aliases kept while HCP is the current backend (the chart + dev `.env` still set
+# HCP_ENDPOINT/HCP_INSECURE); drop them once everything uses RASK_S3_*.
 _ENDPOINT_ENVS = ("RASK_S3_ENDPOINT_URL", "S3_ENDPOINT_URL", "HCP_ENDPOINT")
 _INSECURE_ENVS = ("RASK_S3_INSECURE", "S3_INSECURE", "HCP_INSECURE")
-_CA_BUNDLE_ENVS = ("RASK_S3_CA_BUNDLE", "S3_CA_BUNDLE", "HCP_CA_BUNDLE")
+_CA_BUNDLE_ENVS = ("RASK_S3_CA_BUNDLE", "S3_CA_BUNDLE")
 
 
 def _env_first(names: tuple[str, ...]) -> str | None:
@@ -32,11 +34,11 @@ def _env_first(names: tuple[str, ...]) -> str | None:
 
 
 def derive_hcp_creds() -> None:
-    """Opt-in HCP credential derivation; a no-op unless HCP_USERNAME/PASSWORD are set.
+    """Opt-in HCP credential bridge; a no-op unless HCP_USERNAME/PASSWORD are set.
 
-    For the one HCP deployment whose S3 keys follow the convention
-    access_key = base64(username), secret_key = md5(password) hex. Never
-    overrides already-set AWS_* keys, so MinIO/AWS (keys set directly) is untouched.
+    The current HCP dev backend issues S3 keys as access_key = base64(username),
+    secret_key = md5(password) hex. Never overrides already-set AWS_* keys, so
+    MinIO/rustfs/AWS (keys set directly) are untouched. Legacy — drop once off HCP.
     """
     user = os.getenv("HCP_USERNAME")
     pwd = os.getenv("HCP_PASSWORD")
@@ -49,11 +51,11 @@ def derive_hcp_creds() -> None:
 
 
 def s3_client(endpoint: str | None = None) -> Any:  # noqa: ANN401 — boto3 client has no public stub
-    """Build a boto3 S3 client for any S3-compatible backend (MinIO / AWS / Ceph / HCP).
+    """Build a boto3 S3 client for any S3-compatible backend (MinIO / rustfs / AWS).
 
-    Endpoint/CA/insecure flags resolve from env (RASK_S3_*/S3_*, HCP_* honored for
-    back-compat). Path-style + s3v4 are the MinIO-safe, AWS-accepted defaults; region
-    comes from AWS_REGION so it isn't left solely to the boto3 env chain.
+    Endpoint/CA/insecure flags resolve from env (RASK_S3_*/S3_*, with HCP_* as the
+    legacy bridge). Path-style + s3v4 are the MinIO-safe, AWS-accepted defaults;
+    region comes from AWS_REGION so it isn't left solely to the boto3 env chain.
     """
     import boto3
     from botocore.config import Config
