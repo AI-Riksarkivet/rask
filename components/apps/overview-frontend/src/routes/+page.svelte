@@ -368,8 +368,10 @@
 						<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
 							Recent RayJobs
 						</div>
-						<a class="text-primary text-xs hover:underline" href={`/${project}/compute/jobs`}
-							>view all →</a
+						<a
+							class="text-primary text-xs hover:underline"
+							href={`/${project}/compute/jobs`}
+							data-sveltekit-reload>view all →</a
 						>
 					</div>
 					<div class="divide-border flex max-h-44 flex-col divide-y overflow-auto">
@@ -396,7 +398,8 @@
 									<a
 										class="text-primary ml-auto hover:underline"
 										href={`/${project}/compute/jobs/${encodeURIComponent(j.submission_id)}`}
-										title="Open job detail">details</a
+										title="Open job detail"
+										data-sveltekit-reload>details</a
 									>
 								{/if}
 							</div>
@@ -531,7 +534,8 @@
 									<td class="px-3 py-1.5 font-mono">
 										<a
 											class="text-primary hover:underline"
-											href={`/${project}/discover/viewer/${b.batch_id}`}>{b.batch_id}</a
+											href={`/${project}/discover/viewer/${b.batch_id}`}
+											data-sveltekit-reload>{b.batch_id}</a
 										>
 									</td>
 									<td class="max-w-[18rem] truncate px-3 py-1.5" title={b.arkiv_titel ?? ''}>
