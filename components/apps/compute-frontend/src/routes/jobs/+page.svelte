@@ -143,7 +143,7 @@
 					{#if counts[s]}
 						<button
 							class={`rounded-md border px-2.5 py-1 text-xs transition ${filter === s ? 'border-primary bg-primary/10 text-primary' : 'hover:bg-accent'}`}
-							onclick={() => (filter = s as RayJob['status'])}
+							onclick={() => (filter = s)}
 						>
 							{s.toLowerCase()}
 							<span class="text-muted-foreground">({counts[s]})</span>

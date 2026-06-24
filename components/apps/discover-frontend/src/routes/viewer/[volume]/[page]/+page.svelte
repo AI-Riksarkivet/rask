@@ -26,18 +26,20 @@
 	// Raw ALTO XML, retained alongside the parsed `alto` so the right pane can
 	// render it as text. fetchAlto returns the string before parseAlto runs.
 	let xmlText = $state<string | null>(null);
-	let altoError = $state<string | null>(null);
 	let view = $state<'lines' | 'xml'>('lines');
 	let copied = $state(false);
 	let hoveredLine = $state(-1);
 	// Index of the line the user navigated to from /search. Drawn in
 	// drawOverlay with a heavier outline + glow than the hover treatment so
 	// it's spottable at full-page zoom.
-	let searchHighlightLine = $state(-1);
 	let canvasEl: HTMLCanvasElement | undefined = $state();
 	let controller: CanvasController | undefined;
 	let img: HTMLImageElement | null = null;
 	let hasFitOnce = false;
+
+	// Slice-namespaced localStorage keys: all MFEs share one origin, so prefix with
+	// the owning slice (discover) to avoid cross-app key collisions.
+	const STORE_PREFIX = 'discover:';
 
 	// Display toggles (persisted in localStorage so they survive nav).
 	let showBoxes = $state(persisted('viewer.showBoxes', true));
@@ -81,10 +83,13 @@
 
 	function persisted<T>(key: string, fallback: T): T {
 		if (typeof localStorage === 'undefined') return fallback;
-		const raw = localStorage.getItem(key);
+		const raw = localStorage.getItem(STORE_PREFIX + key);
 		if (raw === null) return fallback;
 		try {
-			return JSON.parse(raw) as T;
+			const parsed: unknown = JSON.parse(raw);
+			// Narrow against the fallback's runtime type rather than asserting blindly
+			// — localStorage is untrusted input.
+			return typeof parsed === typeof fallback ? (parsed as T) : fallback;
 		} catch {
 			return fallback;
 		}
@@ -92,7 +97,7 @@
 
 	function savePersisted(key: string, value: unknown): void {
 		if (typeof localStorage === 'undefined') return;
-		localStorage.setItem(key, JSON.stringify(value));
+		localStorage.setItem(STORE_PREFIX + key, JSON.stringify(value));
 	}
 
 	$effect(() => {
@@ -119,18 +124,21 @@
 	// TextLine after ALTO loads, force polygons on, and apply a prominent
 	// "you came from search" highlight (separate state from `hoveredLine` so
 	// hovering elsewhere doesn't erase it).
-	$effect(() => {
+	// Derived: the line index matching `?line=<id>`, recomputed from the URL id +
+	// loaded ALTO (was a $state mutated inside an $effect — derived-state-as-effect).
+	const searchHighlightLine = $derived.by(() => {
 		const lid = highlightLineId;
 		const a = alto;
-		if (!lid || !a) {
-			searchHighlightLine = -1;
-			return;
-		}
+		if (!lid || !a) return -1;
 		const idx = a.lines.findIndex((l) => l.altoId === lid);
-		searchHighlightLine = idx >= 0 ? idx : -1;
-		if (idx >= 0) {
-			// Hide the per-line boxes/polygons so only the search hit's
-			// highlight stands out — the other lines would just clutter.
+		return idx >= 0 ? idx : -1;
+	});
+
+	// One-shot side effect on search arrival: hide the per-line boxes/polygons so
+	// only the search hit's highlight stands out (the rest would just clutter). Fires
+	// only when the resolved index changes, so toggling the boxes back on afterwards sticks.
+	$effect(() => {
+		if (searchHighlightLine >= 0) {
 			showBoxes = false;
 			showPolygons = false;
 		}
@@ -159,7 +167,6 @@
 	}
 
 	async function loadPage(v: string, k: string) {
-		altoError = null;
 		xmlText = null;
 		hoveredLine = -1;
 
@@ -185,7 +192,7 @@
 			xmlText = xml ?? null;
 			alto = xml ? parseAlto(xml) : null;
 		} catch (e) {
-			altoError = e instanceof Error ? e.message : String(e);
+			console.error('fetchAlto', e);
 			xmlText = null;
 			alto = null;
 		}
@@ -224,7 +231,7 @@
 		// the box/polygon strokes layer over it). A wide rose-coloured ring
 		// with a soft shadow stays visible even at full-page zoom.
 		if (searchHighlightLine >= 0 && searchHighlightLine < lines.length) {
-			const sb = lines[searchHighlightLine].bbox;
+			const sb = lines[searchHighlightLine]!.bbox;
 			ctx.save();
 			ctx.shadowColor = 'rgba(244, 63, 94, 0.7)'; // rose-500
 			ctx.shadowBlur = 24;
@@ -235,7 +242,7 @@
 		}
 
 		for (let i = 0; i < lines.length; i++) {
-			const line = lines[i];
+			const line = lines[i]!;
 			const b = line.bbox;
 			const isHover = i === hoveredLine;
 
@@ -247,9 +254,9 @@
 
 			if (showPolygons && line.polygon && line.polygon.length > 1) {
 				ctx.beginPath();
-				ctx.moveTo(line.polygon[0].x, line.polygon[0].y);
+				ctx.moveTo(line.polygon[0]!.x, line.polygon[0]!.y);
 				for (let p = 1; p < line.polygon.length; p++) {
-					ctx.lineTo(line.polygon[p].x, line.polygon[p].y);
+					ctx.lineTo(line.polygon[p]!.x, line.polygon[p]!.y);
 				}
 				ctx.closePath();
 				ctx.fillStyle = isHover ? 'rgba(245, 158, 11, 0.4)' : lineColor(i, 0.22);
@@ -287,7 +294,7 @@
 		const { x, y } = controller.canvasToImage(e.offsetX, e.offsetY);
 		let hit = -1;
 		for (let i = 0; i < alto.lines.length; i++) {
-			const b = alto.lines[i].bbox;
+			const b = alto.lines[i]!.bbox;
 			if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
 				hit = i;
 				break;
@@ -509,7 +516,7 @@
 				{#if view === 'lines'}
 					{#if alto}
 						<div class="flex-1 overflow-y-auto">
-							{#each alto.lines as line, i (i)}
+							{#each alto.lines as line, i (line.id)}
 								<button
 									type="button"
 									onmouseenter={() => (hoveredLine = i)}

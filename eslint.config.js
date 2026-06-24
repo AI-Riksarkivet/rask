@@ -6,8 +6,12 @@ import { defineConfig } from 'eslint/config';
 import globals from 'globals';
 import ts from 'typescript-eslint';
 import computeSvelteConfig from './components/apps/compute-frontend/svelte.config.js';
+import discoverSvelteConfig from './components/apps/discover-frontend/svelte.config.js';
 import frontendSvelteConfig from './components/apps/frontend/svelte.config.js';
+import overviewSvelteConfig from './components/apps/overview-frontend/svelte.config.js';
 import storageSvelteConfig from './components/apps/storage-frontend/svelte.config.js';
+import studioSvelteConfig from './components/apps/studio-frontend/svelte.config.js';
+import trainSvelteConfig from './components/apps/train-frontend/svelte.config.js';
 import libSvelteConfig from './packages/ui/svelte.config.js';
 
 const gitignorePath = path.resolve(import.meta.dirname, '.gitignore');
@@ -37,8 +41,12 @@ export default defineConfig(
 			],
 			// Map/Set/URL in non-reactive contexts (workers, callbacks) are fine.
 			'svelte/prefer-svelte-reactivity': 'off',
-			// Good practice but not required.
-			'svelte/require-each-key': 'warn',
+			// GATE: keyless {#each} silently re-renders/reorders DOM on mutation — a
+			// class of bug recent audits caught by hand. Error, not warn, so CI fails.
+			'svelte/require-each-key': 'error',
+			// GATE: bind reactive state, never reassign it imperatively — catches the
+			// "assigned but not reactive" footgun. Zero violations on current code.
+			'svelte/no-reactive-reassign': 'error',
 			// Not using shallow routing.
 			'svelte/no-navigation-without-resolve': 'off',
 		},
@@ -86,6 +94,62 @@ export default defineConfig(
 				extraFileExtensions: ['.svelte'],
 				parser: ts.parser,
 				svelteConfig: computeSvelteConfig,
+			},
+		},
+	},
+	{
+		files: [
+			'components/apps/discover-frontend/**/*.svelte',
+			'components/apps/discover-frontend/**/*.svelte.ts',
+		],
+		languageOptions: {
+			parserOptions: {
+				projectService: true,
+				extraFileExtensions: ['.svelte'],
+				parser: ts.parser,
+				svelteConfig: discoverSvelteConfig,
+			},
+		},
+	},
+	{
+		files: [
+			'components/apps/overview-frontend/**/*.svelte',
+			'components/apps/overview-frontend/**/*.svelte.ts',
+		],
+		languageOptions: {
+			parserOptions: {
+				projectService: true,
+				extraFileExtensions: ['.svelte'],
+				parser: ts.parser,
+				svelteConfig: overviewSvelteConfig,
+			},
+		},
+	},
+	{
+		files: [
+			'components/apps/studio-frontend/**/*.svelte',
+			'components/apps/studio-frontend/**/*.svelte.ts',
+		],
+		languageOptions: {
+			parserOptions: {
+				projectService: true,
+				extraFileExtensions: ['.svelte'],
+				parser: ts.parser,
+				svelteConfig: studioSvelteConfig,
+			},
+		},
+	},
+	{
+		files: [
+			'components/apps/train-frontend/**/*.svelte',
+			'components/apps/train-frontend/**/*.svelte.ts',
+		],
+		languageOptions: {
+			parserOptions: {
+				projectService: true,
+				extraFileExtensions: ['.svelte'],
+				parser: ts.parser,
+				svelteConfig: trainSvelteConfig,
 			},
 		},
 	},

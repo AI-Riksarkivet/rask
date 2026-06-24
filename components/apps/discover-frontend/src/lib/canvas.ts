@@ -43,6 +43,7 @@ export class CanvasController {
 		canvas.addEventListener('wheel', this.onWheel, { passive: false });
 
 		this.observer = new IntersectionObserver(([entry]) => {
+			if (!entry) return;
 			this.visible = entry.isIntersecting;
 			if (this.visible) this.scheduleRender();
 		});

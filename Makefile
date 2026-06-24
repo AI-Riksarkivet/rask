@@ -1,9 +1,9 @@
-.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer dev-micro dev-frontends viewer-frontend frontend-storage frontend-compute frontend-build frontend-check ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge
+.PHONY: help install build test lint fmt clean storybook typecheck knip check ci viewer dev-micro dev-frontends viewer-frontend frontend-storage frontend-compute frontend-build frontend-check ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge
 
 help:
 	@echo "Targets:"
 	@echo "  install build test lint fmt clean storybook"
-	@echo "  typecheck check ci   frontend-check frontend-build"
+	@echo "  typecheck knip check ci   frontend-check frontend-build"
 	@echo "  viewer                                 — core monolith dev server (:8888)"
 	@echo "  dev-micro                              — backend fleet (gateway :8888 + per-domain services)"
 	@echo "  dev-frontends                          — all 6 microfrontends behind the :3024 proxy (browse http://localhost:3024)"
@@ -46,7 +46,13 @@ clean:
 typecheck:
 	uvx ty check
 
-check: fmt lint typecheck
+# ---- frontend dead-code + dep gate (knip, repo-wide; see knip.json) ---------
+# Cross-workspace tool — analyses the whole JS graph at once, so it stays a
+# root-level gate (like lint/format), not a per-package turbo task.
+knip:
+	bun run knip
+
+check: fmt lint typecheck knip
 
 ci: check test
 
@@ -96,8 +102,14 @@ dev-micro:
 #   viewer :5173 (catch-all: / + /<project>/overview) · storage :5174 /default/storage · compute :5175 /default/compute · discover :5178 · train :5176 · studio :5177
 # The shared @rask/ui shell + nav render with NO backend; start one
 # (`make dev-micro` or `make viewer`) only when you need live /api data.
-dev-frontends:        # all three apps + @rask/ui watcher + :3024 proxy (turbo run dev)
-	bun run dev
+dev-frontends:        # build @rask/ui+@rask/api once, then all 7 apps + :3024 proxy
+	# Build the libs FIRST so the apps read a complete dist/. Running `turbo run dev`
+	# unfiltered also starts @rask/ui's `svelte-package -w` watcher, which rewrites
+	# dist/ concurrently and races the apps reading it (one app crashes → turbo tears
+	# the whole run down). Apps-only dev avoids that. To live-edit @rask/ui, run its
+	# watcher in a second terminal: `bun run dev:ui`.
+	bunx turbo run build --filter=@rask/ui --filter=@rask/api
+	bunx turbo run dev --filter='./components/apps/*'
 
 viewer-frontend:      # catch-all app only, :5173 (serves / + /<project>/overview)
 	bun run dev:frontend

@@ -426,7 +426,7 @@
 				<Card class="p-4">
 					<div class="mb-2 flex items-center justify-between gap-3">
 						<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
-							{chunks.length} chunks · ~{Math.round(chunks[0].expected_pages).toLocaleString()} pages
+							{chunks.length} chunks · ~{Math.round(chunks[0]!.expected_pages).toLocaleString()} pages
 							each
 						</div>
 						{#if chunkFilter !== 'all'}

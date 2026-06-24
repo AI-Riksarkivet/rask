@@ -3,6 +3,9 @@
 	"version": "0.1.0",
 	"type": "module",
 	"license": "MIT",
+	"keywords": [
+		"svelte"
+	],
 	"files": [
 		"dist",
 		"!dist/**/*.test.*",
@@ -99,7 +102,6 @@
 		"@storybook/addon-a11y": "^10.4.6",
 		"@storybook/addon-docs": "^10.4.6",
 		"@storybook/addon-svelte-csf": "^5.1.2",
-		"@storybook/addon-themes": "^10.4.6",
 		"@storybook/svelte": "^10.4.6",
 		"@storybook/svelte-vite": "^10.4.6",
 		"@sveltejs/package": "^2.5.8",
@@ -110,7 +112,6 @@
 		"svelte": "^5.56.3",
 		"svelte-check": "^4.6.0",
 		"tailwindcss": "^4.3.1",
-		"tslib": "^2.8.1",
 		"typescript": "^6.0.3",
 		"vite": "^8.0.16",
 		"vitest": "^4.1.9"
