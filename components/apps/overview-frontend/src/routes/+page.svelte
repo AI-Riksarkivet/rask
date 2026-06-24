@@ -1,19 +1,8 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount } from 'svelte';
 	import { base } from '$app/paths';
-	import {
-		listBatches,
-		listChunks,
-		rayCluster,
-		rayJobs,
-		submitChunk,
-		syncBatches,
-		type BatchRow,
-		type BatchesPayload,
-		type ChunkRow,
-		type RayClusterPayload,
-		type RayJobsPayload,
-	} from '@rask/api';
+	import { submitChunk, syncBatches, type BatchRow, type ChunkRow } from '@rask/api';
+	import { getBatches, getChunks, getRayJobs, getRayCluster } from '$lib/remote/overview.remote';
 	import { goto } from '$app/navigation';
 	import { Card } from '@rask/ui/card';
 	import { Badge, type BadgeVariant } from '@rask/ui/badge';
@@ -25,17 +14,29 @@
 	// from the base (there's no [project] route param in this carved app).
 	const project = base.split('/')[1] ?? 'default';
 
-	let payload = $state<BatchesPayload | null>(null);
-	let chunks = $state<ChunkRow[]>([]);
-	let ray = $state<{
-		jobs: RayJobsPayload | null;
-		cluster: RayClusterPayload | null;
-	}>({
-		jobs: null,
-		cluster: null,
-	});
-	let error = $state<string | null>(null);
-	let loading = $state(true);
+	// THE ONE PATTERN (see lib/remote/overview.remote.ts):
+	//  - Initial reads (batches, chunks) are SSR-rendered remote queries —
+	//    `await`ed in markup (experimental.async), no onMount waterfall.
+	//  - Live reads (ray jobs/cluster) are the SAME query objects, polled below
+	//    via `.refresh().catch()` and read imperatively (`.current`) so refresh
+	//    is flicker-free and a single 500 can't kill the poll loop.
+	// Cached query handles (get_x() === get_x() while on the page).
+	const batchesQuery = getBatches();
+	const chunksQuery = getChunks();
+	const rayJobsQuery = getRayJobs();
+	const rayClusterQuery = getRayCluster();
+
+	// SSR-rendered data — resolved on the server, hydrated, then kept fresh by
+	// `runSync`/`handleSubmitChunk` refreshes. `await` is legal at the top level
+	// of an async-mode component; first paint already has the data.
+	const payload = $derived(await batchesQuery);
+	const chunks = $derived(await chunksQuery);
+
+	// Polled Ray reads — imperative `.current` (undefined until first resolve).
+	// The dashboard proxy never 5xxs, so these resolve even when Ray is offline.
+	const rayJobsPayload = $derived(rayJobsQuery.current ?? null);
+	const rayClusterPayload = $derived(rayClusterQuery.current ?? null);
+
 	let syncing = $state(false);
 
 	let statusFilter = $state<'all' | string>('all');
@@ -45,49 +46,22 @@
 	let sortKey = $state<keyof BatchRow>('batch_id');
 	let sortDir = $state<'asc' | 'desc'>('asc');
 
-	async function refresh() {
-		loading = true;
-		error = null;
-		try {
-			const [b, c, rj, rc] = await Promise.all([
-				listBatches(),
-				listChunks(),
-				rayJobs().catch(() => null),
-				rayCluster().catch(() => null),
-			]);
-			payload = b;
-			chunks = c.chunks;
-			ray = { jobs: rj, cluster: rc };
-		} catch (e: unknown) {
-			error = e instanceof Error ? e.message : String(e);
-		} finally {
-			loading = false;
-		}
-	}
-
-	async function refreshRay() {
-		const [rj, rc] = await Promise.all([
-			rayJobs().catch(() => null),
-			rayCluster().catch(() => null),
-		]);
-		ray = { jobs: rj, cluster: rc };
-	}
+	let syncError = $state<string | null>(null);
 
 	async function runSync() {
 		syncing = true;
-		error = null;
+		syncError = null;
 		try {
-			const [b, c] = await Promise.all([syncBatches(), listChunks()]);
-			payload = b;
-			chunks = c.chunks;
+			// Mutation, then refetch the affected queries in place (flicker-free).
+			await syncBatches();
+			await Promise.all([batchesQuery.refresh(), chunksQuery.refresh()]);
 		} catch (e: unknown) {
-			error = e instanceof Error ? e.message : String(e);
+			syncError = e instanceof Error ? e.message : String(e);
 		} finally {
 			syncing = false;
 		}
 	}
 
-	let pollTimer: ReturnType<typeof setInterval> | null = null;
 	let submitting = $state<number | null>(null);
 	let submitMsg = $state<string | null>(null);
 
@@ -97,7 +71,7 @@
 		try {
 			const res = await submitChunk(id);
 			submitMsg = `chunk ${id} submitted: ${res.stdout.split('\n').slice(-1)[0] ?? 'ok'}`;
-			await refreshRay();
+			await Promise.all([rayJobsQuery.refresh(), rayClusterQuery.refresh()]);
 		} catch (e: unknown) {
 			submitMsg = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -105,27 +79,28 @@
 		}
 	}
 
+	// Poll Ray every 5s. `.catch(() => {})` is mandatory: an uncaught refresh
+	// rejection (one 500) evicts the query from cache and kills the loop.
 	onMount(() => {
-		refresh();
-		pollTimer = setInterval(refreshRay, 5000);
+		const timer = setInterval(() => {
+			rayJobsQuery.refresh().catch(() => {});
+			rayClusterQuery.refresh().catch(() => {});
+		}, 5000);
+		return () => clearInterval(timer);
 	});
 
-	onDestroy(() => {
-		if (pollTimer) clearInterval(pollTimer);
-	});
-
-	const totalExpected = $derived(payload?.summary.accessible.expected ?? 0);
-	const totalCached = $derived(payload?.summary.accessible.cached ?? 0);
-	const totalTranscribed = $derived(payload?.summary.accessible.transcribed ?? 0);
+	const totalExpected = $derived(payload.summary.accessible.expected);
+	const totalCached = $derived(payload.summary.accessible.cached);
+	const totalTranscribed = $derived(payload.summary.accessible.transcribed);
 	const cachedPct = $derived(totalExpected ? (totalCached / totalExpected) * 100 : 0);
 	const transcribedPct = $derived(totalExpected ? (totalTranscribed / totalExpected) * 100 : 0);
-	const htrStatuses = $derived(Object.keys(payload?.summary.by_htr_status ?? {}).sort());
-	const manifestStatuses = $derived(Object.keys(payload?.summary.by_manifest_status ?? {}).sort());
+	const htrStatuses = $derived(Object.keys(payload.summary.by_htr_status).sort());
+	const manifestStatuses = $derived(Object.keys(payload.summary.by_manifest_status).sort());
 
 	const liveJobStatus = $derived.by(() => {
 		const map = new Map<string, string>();
 		const live = new Set(['PENDING', 'RUNNING']);
-		for (const j of ray.jobs?.jobs ?? []) {
+		for (const j of rayJobsPayload?.jobs ?? []) {
 			if (live.has(j.status)) map.set(j.submission_id, j.status);
 		}
 		return map;
@@ -136,7 +111,7 @@
 	const livePrefetchByBatch = $derived.by(() => {
 		const map = new Map<string, string>();
 		const live = new Set(['PENDING', 'RUNNING']);
-		for (const j of ray.jobs?.jobs ?? []) {
+		for (const j of rayJobsPayload?.jobs ?? []) {
 			if (!j.submission_id?.startsWith('prefetch-')) continue;
 			if (!live.has(j.status)) continue;
 			for (const b of j.batches) map.set(b, j.status);
@@ -146,7 +121,7 @@
 
 	const runningChunks = $derived.by(() => {
 		const out = new Set<number>();
-		for (const b of payload?.batches ?? []) {
+		for (const b of payload.batches) {
 			if (b.chunk_id !== null && b.current_rayjob_id && liveJobStatus.has(b.current_rayjob_id)) {
 				out.add(b.chunk_id);
 			}
@@ -156,7 +131,7 @@
 
 	const prefetchingChunks = $derived.by(() => {
 		const out = new Set<number>();
-		for (const b of payload?.batches ?? []) {
+		for (const b of payload.batches) {
 			if (b.chunk_id !== null && livePrefetchByBatch.has(b.batch_id)) {
 				out.add(b.chunk_id);
 			}
@@ -165,7 +140,6 @@
 	});
 
 	const filtered = $derived.by(() => {
-		if (!payload) return [];
 		const term = search.trim().toLowerCase();
 		const out = payload.batches.filter((b) => {
 			if (statusFilter !== 'all' && b.htr_status !== statusFilter) return false;
@@ -299,15 +273,28 @@
 	</div>
 
 	<div class="flex flex-col gap-4 p-6 text-sm">
-		{#if error}
+		{#if syncError}
 			<Card class="border-destructive/40 bg-destructive/10 text-destructive p-3">
-				{error}
+				{syncError}
 			</Card>
 		{/if}
 
-		{#if loading && !payload}
-			<div class="text-muted-foreground">Loading…</div>
-		{:else if payload}
+		<svelte:boundary>
+			{#snippet pending()}
+				<div class="text-muted-foreground">Loading…</div>
+			{/snippet}
+
+			{#snippet failed(boundaryError, reset)}
+				<Card
+					class="border-destructive/40 bg-destructive/10 text-destructive flex flex-col gap-2 p-3"
+				>
+					<span
+						>{boundaryError instanceof Error ? boundaryError.message : String(boundaryError)}</span
+					>
+					<Button size="sm" variant="outline" onclick={reset}>Retry</Button>
+				</Card>
+			{/snippet}
+
 			<!-- Summary tiles -->
 			<section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
 				<Card class="p-4">
@@ -349,36 +336,36 @@
 						<span class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
 							Ray cluster
 						</span>
-						{#if ray.cluster?.ok}
+						{#if rayClusterPayload?.ok}
 							<Badge variant="success" class="text-[10px]">online</Badge>
 						{:else}
 							<Badge variant="secondary" class="text-[10px]">offline</Badge>
 						{/if}
 					</div>
-					{#if ray.cluster?.ok && ray.cluster.total_resources}
-						{@const tr = ray.cluster.total_resources}
-						{@const ur = ray.cluster.used_resources!}
+					{#if rayClusterPayload?.ok && rayClusterPayload.total_resources}
+						{@const tr = rayClusterPayload.total_resources}
+						{@const ur = rayClusterPayload.used_resources!}
 						<div class="mt-1 font-mono text-2xl tabular-nums">
 							{ur.GPU.toFixed(0)}/{tr.GPU.toFixed(0)} GPU
 						</div>
 						<div class="text-muted-foreground text-xs">
-							{ur.CPU.toFixed(0)}/{tr.CPU.toFixed(0)} CPU · {ray.cluster.alive_count}/{ray.cluster
-								.node_count} nodes
+							{ur.CPU.toFixed(0)}/{tr.CPU.toFixed(0)} CPU · {rayClusterPayload.alive_count}/{rayClusterPayload.node_count}
+							nodes
 						</div>
 					{:else}
 						<div class="text-muted-foreground mt-1 font-mono text-sm">no dashboard</div>
 						<div
 							class="text-muted-foreground truncate text-[10px]"
-							title={ray.cluster?.error ?? ray.jobs?.error ?? ''}
+							title={rayClusterPayload?.error ?? rayJobsPayload?.error ?? ''}
 						>
-							{ray.cluster?.dashboard_url ?? ''}
+							{rayClusterPayload?.dashboard_url ?? ''}
 						</div>
 					{/if}
 				</Card>
 			</section>
 
 			<!-- Recent RayJobs -->
-			{#if ray.jobs?.ok && ray.jobs.jobs && ray.jobs.jobs.length}
+			{#if rayJobsPayload?.ok && rayJobsPayload.jobs && rayJobsPayload.jobs.length}
 				<Card class="overflow-hidden">
 					<div class="flex items-center justify-between border-b px-4 py-2">
 						<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
@@ -389,7 +376,7 @@
 						>
 					</div>
 					<div class="divide-border flex max-h-44 flex-col divide-y overflow-auto">
-						{#each ray.jobs.jobs.slice(0, 10) as j (j.submission_id ?? j.job_id)}
+						{#each rayJobsPayload.jobs.slice(0, 10) as j (j.submission_id ?? j.job_id)}
 							<div class="flex items-center gap-3 px-4 py-1.5 text-xs">
 								<Badge
 									variant={jobBadgeVariant(j.status)}
@@ -602,6 +589,6 @@
 					</table>
 				</div>
 			</Card>
-		{/if}
+		</svelte:boundary>
 	</div>
 </main>

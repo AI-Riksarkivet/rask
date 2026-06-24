@@ -7,21 +7,30 @@
 	import { Badge } from '@rask/ui/badge';
 	import { ChevronLeft, ChevronRight, Maximize, SunMedium } from '@lucide/svelte';
 	import { CanvasController } from '$lib/canvas';
-	import { listPages, imageUrl, fetchAlto, getBatchCatalog, type CatalogHit } from '@rask/api';
+	import { imageUrl, fetchAlto } from '@rask/api';
+	import { listVolumePages, getVolumeCatalog } from '$lib/remote/discover.remote';
 	import { parseAlto } from '$lib/alto';
-	import type { AltoParse, Line, PageEntry } from '@rask/api';
+	import type { AltoParse, Line } from '@rask/api';
 
 	const volume = $derived(pageStore.params.volume!);
 	const pageKey = $derived(pageStore.params.page!);
 	// Set when arriving from /search — viewer highlights this line + auto-enables polygons.
 	const highlightLineId = $derived(pageStore.url.searchParams.get('line'));
 
-	let pages = $state<PageEntry[]>([]);
+	// THE ONE PATTERN (see lib/remote/discover.remote.ts): page listing + EAD
+	// catalog are param `query()`s keyed on `volume` (extracted to a `$derived`
+	// above, so navigation re-keys + re-runs them). Read imperatively via
+	// `.current` so a page change doesn't blank the strip mid-flight. No
+	// onMount/$effect fetch for these. The ALTO/image load below legitimately
+	// stays an effect — `fetchAlto` returns raw XML text for the canvas, not JSON.
+	const pagesQuery = $derived(listVolumePages({ volume }));
+	const pages = $derived(pagesQuery.current ?? []);
 	// EAD catalog metadata for this batch (fonds/series/volume/dates/etc.).
-	// null = not loaded yet OR no matching row in the catalog (e.g. test
-	// batches not in the OAI-PMH harvest). Re-fetched whenever `volume`
-	// changes via the $effect below.
-	let catalog = $state<CatalogHit | null>(null);
+	// null = no matching row in the catalog (e.g. test batches not in the
+	// OAI-PMH harvest) — getBatchCatalog returns null for a 404, so the panel
+	// hides itself without a separate error path.
+	const catalogQuery = $derived(getVolumeCatalog({ volume }));
+	const catalog = $derived(catalogQuery.current ?? null);
 	let alto = $state<AltoParse | null>(null);
 	// Raw ALTO XML, retained alongside the parsed `alto` so the right pane can
 	// render it as text. fetchAlto returns the string before parseAlto runs.
@@ -54,21 +63,6 @@
 	$effect(() => savePersisted('viewer.imgFilter', imgFilter));
 	$effect(() => savePersisted('viewer.showPanel', showPanel));
 
-	// Refetch catalog metadata whenever the user navigates to a different
-	// batch. The fetch is fire-and-forget; failures (404 or otherwise) just
-	// leave `catalog` null and the panel hides itself.
-	$effect(() => {
-		const v = volume;
-		catalog = null;
-		getBatchCatalog(v)
-			.then((row) => {
-				if (volume === v) catalog = row;
-			})
-			.catch(() => {
-				if (volume === v) catalog = null;
-			});
-	});
-
 	const idx = $derived(pages.findIndex((p) => p.key === pageKey));
 	const prevPage = $derived(idx > 0 ? pages[idx - 1] : null);
 	const nextPage = $derived(idx >= 0 && idx < pages.length - 1 ? pages[idx + 1] : null);
@@ -100,11 +94,8 @@
 		localStorage.setItem(STORE_PREFIX + key, JSON.stringify(value));
 	}
 
-	$effect(() => {
-		const v = volume;
-		untrack(() => loadPages(v));
-	});
-
+	// ALTO + image load stays an effect — it sets the canvas image and parses raw
+	// ALTO XML (text, not query-shaped JSON). Keyed on volume+page.
 	$effect(() => {
 		const v = volume,
 			k = pageKey;
@@ -155,15 +146,6 @@
 	function lineColor(i: number, alpha: number): string {
 		const hue = (i * 137.508) % 360;
 		return `hsla(${hue}, 70%, 55%, ${alpha})`;
-	}
-
-	async function loadPages(v: string) {
-		try {
-			pages = await listPages(v);
-		} catch (e) {
-			console.error('listPages', e);
-			pages = [];
-		}
 	}
 
 	async function loadPage(v: string, k: string) {

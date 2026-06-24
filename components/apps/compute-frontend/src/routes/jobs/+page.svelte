@@ -1,16 +1,21 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { ChevronRight } from '@lucide/svelte';
-	import { rayJobs, type RayJobsPayload, type RayJob } from '@rask/api';
+	import { type RayJob } from '@rask/api';
+	import { getRayJobs } from '$lib/remote/compute.remote';
 	import { SortHeader } from '@rask/ui/sort-header';
 	import { Card } from '@rask/ui/card';
 	import { Badge, type BadgeVariant } from '@rask/ui/badge';
 
-	let payload = $state<RayJobsPayload | null>(null);
-	let error = $state<string | null>(null);
-	let timer: ReturnType<typeof setInterval> | null = null;
+	// THE ONE PATTERN (see lib/remote/compute.remote.ts): a cached remote query,
+	// polled below via `.refresh().catch()`, read imperatively (`.current`) for
+	// flicker-free refresh. The dashboard proxy never 5xxs (offline-safe payload).
+	const jobsQuery = getRayJobs();
+	const payload = $derived(jobsQuery.current ?? null);
+	const error = $derived(jobsQuery.error ? String(jobsQuery.error) : null);
+
 	let filter = $state<'all' | RayJob['status']>('all');
 	let sortKey = $state('started');
 	let sortDir = $state<'asc' | 'desc'>('desc');
@@ -23,21 +28,13 @@
 		}
 	}
 
-	async function refresh() {
-		try {
-			payload = await rayJobs();
-			error = null;
-		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
-		}
-	}
-
+	// Poll Ray every 5s. `.catch(() => {})` is mandatory: an uncaught refresh
+	// rejection (one 500) evicts the query from cache and kills the loop.
 	onMount(() => {
-		refresh();
-		timer = setInterval(refresh, 5000);
-	});
-	onDestroy(() => {
-		if (timer) clearInterval(timer);
+		const timer = setInterval(() => {
+			jobsQuery.refresh().catch(() => {});
+		}, 5000);
+		return () => clearInterval(timer);
 	});
 
 	function jobVal(j: RayJob, key: string): string | number | null {

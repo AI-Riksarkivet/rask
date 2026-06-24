@@ -1,35 +1,46 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { base } from '$app/paths';
+	import { type TaskInfo, type BatchRow } from '@rask/api';
 	import {
-		rayJobs,
-		rayJobLogs,
-		tasksList,
-		rayCluster,
-		listBatches,
-		type RayJob,
-		type TaskInfo,
-		type RayNode,
-		type BatchRow,
-	} from '@rask/api';
+		getRayJobs,
+		getTasks,
+		getRayCluster,
+		getBatches,
+		getRayJobLogs,
+	} from '$lib/remote/compute.remote';
 	import { Card } from '@rask/ui/card';
 	import { Badge, type BadgeVariant } from '@rask/ui/badge';
 	import { SortHeader } from '@rask/ui/sort-header';
 	import { ArrowLeft, TriangleAlert, FileText, ChevronRight, RefreshCw } from '@lucide/svelte';
 
+	// THE ONE PATTERN (see lib/remote/compute.remote.ts): the four dashboards
+	// (jobs/tasks/cluster/batches) are cached remote queries read imperatively
+	// (`.current`) and polled below. The driver logs are a PARAM query keyed by
+	// `{ id }` so navigating the submission id re-keys it; extract `id` to a
+	// `$derived` first so the logs query re-runs on navigation.
 	const id = $derived(decodeURIComponent(page.params.id ?? ''));
 
-	let jobs = $state<RayJob[]>([]);
-	let tasks = $state<TaskInfo[]>([]);
-	let nodes = $state<RayNode[]>([]);
-	let batches = $state<BatchRow[]>([]);
-	let logText = $state('');
-	let logsLoading = $state(false);
-	let loaded = $state(false);
-	let error = $state<string | null>(null);
-	let timer: ReturnType<typeof setInterval> | null = null;
-	let tickCount = 0;
+	const jobsQuery = getRayJobs();
+	const tasksQuery = getTasks();
+	const clusterQuery = getRayCluster();
+	const batchesQuery = getBatches();
+	// Param query — re-keys when `id` changes (navigation between job details).
+	const logsQuery = $derived(getRayJobLogs({ id }));
+
+	const jobs = $derived(jobsQuery.current?.jobs ?? []);
+	const tasks = $derived(tasksQuery.current ?? []);
+	const nodes = $derived(clusterQuery.current?.nodes ?? []);
+	const batches = $derived(batchesQuery.current?.batches ?? []);
+	const logsPayload = $derived(logsQuery.current ?? null);
+	const logText = $derived(logsPayload?.ok ? logsPayload.logs : '');
+	const logsLoading = $derived(logsQuery.loading);
+	// `loaded` once the jobs list has resolved at least once (drives the
+	// "no such job" empty state, which must not flash before the first load).
+	const loaded = $derived(jobsQuery.ready);
+	const error = $derived(jobsQuery.error ? String(jobsQuery.error) : null);
+
 	let logPre: HTMLElement | null = $state(null);
 	let logStick = $state(true);
 
@@ -46,54 +57,24 @@
 	const job = $derived(jobs.find((j) => j.submission_id === id) ?? null);
 	const running = $derived(job?.status === 'RUNNING' || job?.status === 'PENDING');
 
-	async function refreshLogs() {
-		if (!id) return;
-		logsLoading = true;
-		try {
-			const p = await rayJobLogs(id);
-			if (p.ok) logText = p.logs;
-		} catch {
-			/* job may have aged out */
-		} finally {
-			logsLoading = false;
-		}
+	// Manual log refresh (toolbar button) — event handler, so `.refresh()` (one
+	// of the always-callable methods) not `.current`.
+	function refreshLogs() {
+		logsQuery.refresh().catch(() => {});
 	}
 
-	async function refresh() {
-		try {
-			const [j, t] = await Promise.all([rayJobs(), tasksList()]);
-			jobs = j.jobs ?? [];
-			tasks = t;
-			error = null;
-		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
-		} finally {
-			loaded = true;
-		}
-		// Heavier fetches on a slower cadence: batches (1MB+) every 3rd tick,
-		// logs every tick while the job is live (else only on demand).
-		if (tickCount % 3 === 0) {
-			try {
-				batches = (await listBatches()).batches;
-			} catch {
-				/* progress card is a nicety */
-			}
-		}
-		if (running || tickCount === 0) await refreshLogs();
-		try {
-			nodes = (await rayCluster()).nodes ?? [];
-		} catch {
-			/* node names optional */
-		}
-		tickCount += 1;
-	}
-
+	// Poll every 5s. `.catch(() => {})` is mandatory: an uncaught refresh
+	// rejection (one 500) evicts the query from cache and kills the loop. Logs
+	// only poll while the job is live; the rest always refresh independently.
 	onMount(() => {
-		refresh();
-		timer = setInterval(refresh, 5000);
-	});
-	onDestroy(() => {
-		if (timer) clearInterval(timer);
+		const timer = setInterval(() => {
+			jobsQuery.refresh().catch(() => {});
+			tasksQuery.refresh().catch(() => {});
+			clusterQuery.refresh().catch(() => {});
+			batchesQuery.refresh().catch(() => {});
+			if (running) logsQuery.refresh().catch(() => {});
+		}, 5000);
+		return () => clearInterval(timer);
 	});
 
 	// Tail behaviour for the log pane.

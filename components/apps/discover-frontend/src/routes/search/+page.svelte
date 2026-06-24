@@ -1,16 +1,13 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
+	import type { SearchHit, CatalogHit } from '@rask/api';
 	import {
-		searchLines,
-		searchStats,
-		searchCatalog,
-		catalogStats,
-		type SearchHit,
-		type SearchStats,
-		type CatalogHit,
-	} from '@rask/api';
+		getSearchStats,
+		getCatalogStats,
+		searchLinesQ,
+		searchCatalogQ,
+	} from '$lib/remote/discover.remote';
 	import { Card } from '@rask/ui/card';
 	import { Badge } from '@rask/ui/badge';
 	import { Search, Loader2, Copy, Check, ExternalLink } from '@lucide/svelte';
@@ -23,11 +20,18 @@
 	// Lines side
 	let hits = $state<SearchHit[]>([]);
 	let count = $state(0);
-	let stats = $state<SearchStats | null>(null);
 	// Catalog side
 	let catalogHits = $state<CatalogHit[]>([]);
 	let catalogCount = $state(0);
-	let catalogStatsState = $state<SearchStats | null>(null);
+
+	// THE ONE PATTERN (see lib/remote/discover.remote.ts): index stats are
+	// SSR-rendered remote queries (read imperatively via `.current` so an
+	// unavailable index degrades gracefully). The searches themselves are
+	// USER-triggered — awaited in `runSearch` (an event handler, where `.current`
+	// isn't usable), NOT made reactive on `q` (that would fire a fetch on every
+	// keystroke). No onMount/$effect data fetch anywhere on this page.
+	const stats = $derived(getSearchStats().current ?? null);
+	const catalogStatsState = $derived(getCatalogStats().current ?? null);
 	// Filter the catalog tab to a minimum local-state tier. 'all' shows
 	// everything, 'listed' / 'cached' / 'transcribed' progressively narrow
 	// to volumes we know about, have downloaded, or have HTR'd. Pure client-
@@ -58,21 +62,6 @@
 	// on the corresponding copy button. Cleared after a short timeout.
 	let copiedKey = $state<string | null>(null);
 
-	onMount(async () => {
-		// Fetch both stats so the active-tab badge always shows the right number
-		// when the user toggles scope, without paying a fetch on every switch.
-		try {
-			stats = await searchStats();
-		} catch {
-			stats = { available: false, rows: 0 };
-		}
-		try {
-			catalogStatsState = await catalogStats();
-		} catch {
-			catalogStatsState = { available: false, rows: 0 };
-		}
-	});
-
 	function setScope(s: Scope) {
 		if (scope === s) return;
 		scope = s;
@@ -99,12 +88,15 @@
 		error = null;
 		const t0 = performance.now();
 		try {
+			// Searches are user-triggered, so resolve the query by awaiting the call
+			// directly in this event handler (rather than reading `.current`, a
+			// reactive-only API). Each distinct `{ q, limit }` is its own cache key.
 			if (scope === 'lines') {
-				const r = await searchLines(query, limit);
+				const r = await searchLinesQ({ q: query, limit });
 				hits = r.hits;
 				count = r.count;
 			} else {
-				const r = await searchCatalog(query, limit);
+				const r = await searchCatalogQ({ q: query, limit });
 				catalogHits = r.hits;
 				catalogCount = r.count;
 			}

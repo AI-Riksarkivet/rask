@@ -1,11 +1,7 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
-	import {
-		serveApplications,
-		type ServePayload,
-		type ServeApplication,
-		type ServeDeployment,
-	} from '@rask/api';
+	import { onMount } from 'svelte';
+	import { type ServeApplication, type ServeDeployment } from '@rask/api';
+	import { getServe } from '$lib/remote/compute.remote';
 	import { SortHeader } from '@rask/ui/sort-header';
 	import { Card } from '@rask/ui/card';
 	import { Badge } from '@rask/ui/badge';
@@ -23,25 +19,20 @@
 		TriangleAlert,
 	} from '@lucide/svelte';
 
-	let payload = $state<ServePayload | null>(null);
-	let error = $state<string | null>(null);
-	let timer: ReturnType<typeof setInterval> | null = null;
+	// THE ONE PATTERN (see lib/remote/compute.remote.ts): a cached remote query,
+	// polled below via `.refresh().catch()`, read imperatively (`.current`) for
+	// flicker-free refresh. The serve proxy never 5xxs (offline-safe payload).
+	const serveQuery = getServe();
+	const payload = $derived(serveQuery.current ?? null);
+	const error = $derived(serveQuery.error ? String(serveQuery.error) : null);
 
-	async function refresh() {
-		try {
-			payload = await serveApplications();
-			error = null;
-		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
-		}
-	}
-
+	// Poll Ray every 5s. `.catch(() => {})` is mandatory: an uncaught refresh
+	// rejection (one 500) evicts the query from cache and kills the loop.
 	onMount(() => {
-		refresh();
-		timer = setInterval(refresh, 5000);
-	});
-	onDestroy(() => {
-		if (timer) clearInterval(timer);
+		const timer = setInterval(() => {
+			serveQuery.refresh().catch(() => {});
+		}, 5000);
+		return () => clearInterval(timer);
 	});
 
 	const apps = $derived.by<ServeApplication[]>(() =>
