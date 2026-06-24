@@ -11,6 +11,7 @@
 		"components/apps/storage-frontend",
 		"components/apps/studio-frontend",
 		"components/apps/train-frontend",
+		"e2e",
 		"packages/api",
 		"packages/ui"
 	],
