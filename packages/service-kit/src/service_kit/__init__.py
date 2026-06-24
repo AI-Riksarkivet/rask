@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 from service_kit.config import Settings
 from service_kit.exceptions import register_handlers
 from service_kit.middleware import register_middleware
+from service_kit.slash import SlashToleranceMiddleware
 from storage import derive_hcp_creds
 
 
@@ -132,5 +133,10 @@ def make_service_app(
         app.include_router(router, prefix=settings.api_prefix)
     if proxy_router is not None:
         app.include_router(proxy_router)
+
+    # Dapr drops trailing slashes; resolve the variant in-process instead of a
+    # 307 redirect that would leak the service's in-pod address (see slash.py).
+    app.router.redirect_slashes = False
+    app.add_middleware(SlashToleranceMiddleware, routes_provider=lambda: app.router.routes)
 
     return app
