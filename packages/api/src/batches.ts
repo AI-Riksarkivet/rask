@@ -123,7 +123,7 @@ export async function registerVolume(id: string, fetchFn: typeof fetch = fetch):
 
 // ---------- Orchestrator state ----------
 //
-// Mirrors the decisions the viewer's orchestrator loop (services/orchestrator_loop.py)
+// Mirrors the decisions the orchestrator loop (core/services/orchestrator/loop.py)
 // would make on its next tick: which chunk is in each pipeline slot, what's queued,
 // what's in failure-cooldown. Pure derivation from /api/ray/jobs + the batches table.
 

@@ -1,30 +1,28 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
-	import { rayCluster, type RayClusterPayload, type RayNode } from '@rask/api';
+	import { onMount } from 'svelte';
+	import { type RayNode } from '@rask/api';
+	import { getRayCluster } from '$lib/remote/compute.remote';
 	import { SortHeader } from '@rask/ui/sort-header';
 	import { Card } from '@rask/ui/card';
 	import { Badge } from '@rask/ui/badge';
 	import { Server, Cpu } from '@lucide/svelte';
 
-	let payload = $state<RayClusterPayload | null>(null);
-	let error = $state<string | null>(null);
-	let timer: ReturnType<typeof setInterval> | null = null;
+	// THE ONE PATTERN (see lib/remote/compute.remote.ts): the cluster read is a
+	// cached remote query, polled below via `.refresh().catch()` and read
+	// imperatively (`.current`) so refresh is flicker-free and a single 500 can't
+	// kill the poll loop. The dashboard proxy never 5xxs (returns `{ ok:false }`),
+	// so `.error` is reserved for transport failures.
+	const clusterQuery = getRayCluster();
+	const payload = $derived(clusterQuery.current ?? null);
+	const error = $derived(clusterQuery.error ? String(clusterQuery.error) : null);
 
-	async function refresh() {
-		try {
-			payload = await rayCluster();
-			error = null;
-		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
-		}
-	}
-
+	// Poll Ray every 5s. `.catch(() => {})` is mandatory: an uncaught refresh
+	// rejection (one 500) evicts the query from cache and kills the loop.
 	onMount(() => {
-		refresh();
-		timer = setInterval(refresh, 5000);
-	});
-	onDestroy(() => {
-		if (timer) clearInterval(timer);
+		const timer = setInterval(() => {
+			clusterQuery.refresh().catch(() => {});
+		}, 5000);
+		return () => clearInterval(timer);
 	});
 
 	function bytesGb(b: number): number {
@@ -53,7 +51,7 @@
 	}
 
 	// Real host memory aggregated across nodes (Ray's logical memory is ~0 used).
-	let realMem = $derived.by(() => {
+	const realMem = $derived.by(() => {
 		const ns = payload?.nodes ?? [];
 		return {
 			used: ns.reduce((a, n) => a + (n.host_mem_used ?? 0), 0),
@@ -126,9 +124,9 @@
 			</Card>
 		{/if}
 
-		{#if payload?.ok && payload.total_resources}
+		{#if payload?.ok && payload.total_resources && payload.used_resources}
 			{@const tr = payload.total_resources}
-			{@const ur = payload.used_resources!}
+			{@const ur = payload.used_resources}
 
 			<!-- Summary strip -->
 			<section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

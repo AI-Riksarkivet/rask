@@ -1,20 +1,14 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount } from 'svelte';
 	import { base } from '$app/paths';
 	import {
-		rayOverview,
-		rayCluster,
-		rayJobs,
-		actorsList,
-		tasksList,
-		serveApplications,
-		type OverviewPayload,
-		type RayClusterPayload,
-		type RayJobsPayload,
-		type ActorInfo,
-		type TaskInfo,
-		type ServePayload,
-	} from '@rask/api';
+		getOverview,
+		getRayCluster,
+		getRayJobs,
+		getActors,
+		getTasks,
+		getServe,
+	} from '$lib/remote/compute.remote';
 	import RayStatus from '$lib/components/ray-status.svelte';
 	import { Card } from '@rask/ui/card';
 	import {
@@ -29,39 +23,39 @@
 		CircleAlert,
 	} from '@lucide/svelte';
 
-	let ov = $state<OverviewPayload | null>(null);
-	let cluster = $state<RayClusterPayload | null>(null);
-	let jobs = $state<RayJobsPayload | null>(null);
-	let actors = $state<ActorInfo[]>([]);
-	let taskRows = $state<TaskInfo[]>([]);
-	let serve = $state<ServePayload | null>(null);
-	let error = $state<string | null>(null);
-	let timer: ReturnType<typeof setInterval> | null = null;
+	// THE ONE PATTERN (see lib/remote/compute.remote.ts): every read is a cached
+	// remote query, polled below via `.refresh().catch()`, read imperatively
+	// (`.current`) for flicker-free refresh. All six dashboard proxies are
+	// offline-safe (never 5xx), so each resolves even when Ray is down.
+	const overviewQuery = getOverview();
+	const clusterQuery = getRayCluster();
+	const jobsQuery = getRayJobs();
+	const actorsQuery = getActors();
+	const tasksQuery = getTasks();
+	const serveQuery = getServe();
 
-	async function refresh() {
-		const [o, c, j, a, t, s] = await Promise.allSettled([
-			rayOverview(),
-			rayCluster(),
-			rayJobs(),
-			actorsList(),
-			tasksList(),
-			serveApplications(),
-		]);
-		if (o.status === 'fulfilled') ov = o.value;
-		if (c.status === 'fulfilled') cluster = c.value;
-		if (j.status === 'fulfilled') jobs = j.value;
-		if (a.status === 'fulfilled') actors = a.value;
-		if (t.status === 'fulfilled') taskRows = t.value;
-		if (s.status === 'fulfilled') serve = s.value;
-		error = o.status === 'rejected' ? (o.reason?.message ?? 'overview unavailable') : null;
-	}
+	const ov = $derived(overviewQuery.current ?? null);
+	const cluster = $derived(clusterQuery.current ?? null);
+	const jobs = $derived(jobsQuery.current ?? null);
+	const actors = $derived(actorsQuery.current ?? []);
+	const taskRows = $derived(tasksQuery.current ?? []);
+	const serve = $derived(serveQuery.current ?? null);
+	// Mirror the original: surface only the overview transport failure.
+	const error = $derived(overviewQuery.error ? String(overviewQuery.error) : null);
 
+	// Poll Ray every 5s. `.catch(() => {})` is mandatory: an uncaught refresh
+	// rejection (one 500) evicts the query from cache and kills the loop. Each
+	// query refreshes independently so one failure can't stop the others.
 	onMount(() => {
-		refresh();
-		timer = setInterval(refresh, 5000);
-	});
-	onDestroy(() => {
-		if (timer) clearInterval(timer);
+		const timer = setInterval(() => {
+			overviewQuery.refresh().catch(() => {});
+			clusterQuery.refresh().catch(() => {});
+			jobsQuery.refresh().catch(() => {});
+			actorsQuery.refresh().catch(() => {});
+			tasksQuery.refresh().catch(() => {});
+			serveQuery.refresh().catch(() => {});
+		}, 5000);
+		return () => clearInterval(timer);
 	});
 
 	const jobList = $derived(jobs?.jobs ?? []);

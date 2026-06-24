@@ -7,14 +7,15 @@
 		ref = $bindable(null),
 		class: className,
 		showIcon = false,
+		width = '70%',
 		children,
 		...restProps
 	}: WithElementRef<HTMLAttributes<HTMLElement>> & {
 		showIcon?: boolean;
+		/** Text-row width. Fixed by default so SSR HTML matches the hydration frame
+		 * (a random per-render width would mismatch). Callers can vary it deterministically. */
+		width?: string;
 	} = $props();
-
-	// Random width between 50% and 90%
-	const width = `${Math.floor(Math.random() * 40) + 50}%`;
 </script>
 
 <div

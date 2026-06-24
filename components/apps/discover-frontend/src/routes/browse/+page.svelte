@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { base } from '$app/paths';
-	import { browseCatalog, type CatalogHit, type CatalogTier } from '@rask/api';
+	import type { CatalogHit, CatalogTier } from '@rask/api';
+	import { browseCatalogTier } from '$lib/remote/discover.remote';
 	import { Card } from '@rask/ui/card';
 	import { Badge } from '@rask/ui/badge';
 	import { Loader2, ExternalLink, Search } from '@lucide/svelte';
@@ -11,31 +11,23 @@
 	// to either lift the cap or page on archive_code.
 	const FETCH_LIMIT = 2000;
 
+	// THE ONE PATTERN (see lib/remote/discover.remote.ts): the catalog read is a
+	// param `query()` keyed on `tier`. `tier` is extracted to its own `$state`
+	// first, then fed into the query so toggling it re-keys (and re-runs) the
+	// query — no onMount/$effect fetch, no manual loading/error wiring. The
+	// initial frame is SSR-rendered.
 	let tier = $state<CatalogTier>('cached');
-	let hits = $state<CatalogHit[]>([]);
-	let total = $state(0);
-	let loading = $state(false);
-	let error = $state<string | null>(null);
-
-	async function load() {
-		loading = true;
-		error = null;
-		try {
-			const r = await browseCatalog(tier, FETCH_LIMIT, 0);
-			hits = r.hits;
-			total = r.total;
-		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
-			hits = [];
-		} finally {
-			loading = false;
-		}
-	}
-
-	onMount(load);
-	// Refetch on tier change via the select's onchange (below), NOT an $effect —
-	// an $effect would also fire on mount, double-loading. (svelte-runes: prefer an
-	// event handler over $effect when a user action is the trigger.)
+	const browseQuery = $derived(browseCatalogTier({ tier, limit: FETCH_LIMIT, offset: 0 }));
+	const hits = $derived(browseQuery.current?.hits ?? []);
+	const total = $derived(browseQuery.current?.total ?? 0);
+	const loading = $derived(browseQuery.loading);
+	const error = $derived(
+		browseQuery.error
+			? browseQuery.error instanceof Error
+				? browseQuery.error.message
+				: String(browseQuery.error)
+			: null,
+	);
 
 	// Group hits into a 3-level tree:
 	//   archive_code  ->  fonds_id  ->  series_id  ->  [volumes]
@@ -138,7 +130,6 @@
 				<span class="text-muted-foreground">Show:</span>
 				<select
 					bind:value={tier}
-					onchange={load}
 					class="border-input bg-background cursor-pointer rounded-md border px-2 py-1 text-sm"
 				>
 					<option value="listed">listed</option>

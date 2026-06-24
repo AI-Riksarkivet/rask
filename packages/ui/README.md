@@ -27,9 +27,14 @@ bun run storybook
 }
 ```
 
+Import from the per-component subpath exports (never the root barrel or a deep
+`@rask/ui/dist/...` path):
+
 ```svelte
 <script lang="ts">
-	import { Button, Dialog, Card } from '@rask/ui';
+	import { Button } from '@rask/ui/button';
+	import { Card } from '@rask/ui/card';
+	import { Dialog } from '@rask/ui/dialog';
 </script>
 ```
 
@@ -37,9 +42,11 @@ In the app's CSS:
 
 ```css
 @import 'tailwindcss';
-@source '../../../../packages/ui/dist';
-@source '../../../../packages/ui/src';
+@import 'tw-animate-css';
 @import '@rask/ui/styles/tokens.css';
+
+/* Tailwind 4 skips node_modules — scan @rask/ui/dist or its classes vanish. */
+@source '../../../../packages/ui/dist';
 ```
 
 ## Adding a component
@@ -47,5 +54,8 @@ In the app's CSS:
 1. `src/lib/components/<name>/<name>.svelte`
 2. `<name>.stories.ts` (simple) or `<name>.stories.svelte` (composite, uses snippets)
 3. `index.ts` barrel
-4. Re-export from `src/lib/index.ts`
-5. Add to `package.json` `exports` if you want a deep import path
+4. Add the `./<name>` subpath to `package.json` `exports` — this is the
+   canonical import path (`@rask/ui/<name>`); consumers import from the subpath.
+5. Optionally re-export from `src/lib/index.ts` (the root `.` barrel is a
+   curated convenience surface, not the full component set — subpaths are
+   authoritative).

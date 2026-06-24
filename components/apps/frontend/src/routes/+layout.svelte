@@ -28,7 +28,9 @@
 	<Toaster />
 {/if}
 
-<!-- Global providers only. The home picker (`/`) renders bare (no sidebar); the
-     in-project chrome (shared @rask/ui sidebar + breadcrumb) lives in
-     [project]/+layout.svelte — you only see the sidebar once you're inside a project. -->
+<!-- Global providers only. This catch-all host renders just the bare `/` picker
+     (no sidebar) and 307-redirects /<project> into the overview zone. The grouped
+     @rask/ui AppShell sidebar is NOT rendered here — each domain MFE renders it
+     identically in its own root layout (§5/§6), so you only see the sidebar once a
+     cross-zone nav lands you inside a domain app (/<project>/<domain>). -->
 {@render children()}

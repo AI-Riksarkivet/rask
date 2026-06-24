@@ -144,7 +144,7 @@ export const ActorsPayloadSchema = v.object({
 });
 export type ActorsPayload = v.InferOutput<typeof ActorsPayloadSchema>;
 
-/** Ray actors, merged from the state API + /logical/actors by the viewer backend. */
+/** Ray actors, merged from the state API + /logical/actors by the ray-api service. */
 export async function actorsList(fetchFn: typeof fetch = fetch): Promise<ActorInfo[]> {
 	const res = await fetchFn('/api/ray/actors');
 	if (!res.ok) throw new Error(`actorsList: HTTP ${res.status}`);

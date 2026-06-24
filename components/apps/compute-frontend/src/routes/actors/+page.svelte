@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount } from 'svelte';
 	import { base } from '$app/paths';
-	import { actorsList, rayCluster, type ActorInfo, type RayNode } from '@rask/api';
+	import { type ActorInfo } from '@rask/api';
+	import { getActors, getRayCluster } from '$lib/remote/compute.remote';
 	import { SortHeader } from '@rask/ui/sort-header';
 	import { Card } from '@rask/ui/card';
 	import { Badge } from '@rask/ui/badge';
@@ -17,10 +18,15 @@
 		FileText,
 	} from '@lucide/svelte';
 
-	let actors = $state<ActorInfo[]>([]);
-	let nodes = $state<RayNode[]>([]);
-	let error = $state<string | null>(null);
-	let timer: ReturnType<typeof setInterval> | null = null;
+	// THE ONE PATTERN (see lib/remote/compute.remote.ts): cached remote queries,
+	// polled below via `.refresh().catch()`, read imperatively (`.current`) for
+	// flicker-free refresh. Cluster (node names) is a nicety — its failure is
+	// tolerated independently of the actors list.
+	const actorsQuery = getActors();
+	const clusterQuery = getRayCluster();
+	const actors = $derived(actorsQuery.current ?? []);
+	const nodes = $derived(clusterQuery.current?.nodes ?? []);
+	const error = $derived(actorsQuery.error ? String(actorsQuery.error) : null);
 
 	let stateFilter = $state<'all' | 'alive' | 'dead'>('all');
 	let q = $state('');
@@ -36,26 +42,15 @@
 		}
 	}
 
-	async function refresh() {
-		try {
-			actors = await actorsList();
-			error = null;
-		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
-		}
-		try {
-			nodes = (await rayCluster()).nodes ?? [];
-		} catch {
-			/* node names are a nicety; tolerate failure */
-		}
-	}
-
+	// Poll Ray every 5s. `.catch(() => {})` is mandatory: an uncaught refresh
+	// rejection (one 500) evicts the query from cache and kills the loop. Each
+	// query is refreshed independently so a cluster failure can't stop actors.
 	onMount(() => {
-		refresh();
-		timer = setInterval(refresh, 5000);
-	});
-	onDestroy(() => {
-		if (timer) clearInterval(timer);
+		const timer = setInterval(() => {
+			actorsQuery.refresh().catch(() => {});
+			clusterQuery.refresh().catch(() => {});
+		}, 5000);
+		return () => clearInterval(timer);
 	});
 
 	function toggle(id: string) {

@@ -7,21 +7,30 @@
 	import { Badge } from '@rask/ui/badge';
 	import { ChevronLeft, ChevronRight, Maximize, SunMedium } from '@lucide/svelte';
 	import { CanvasController } from '$lib/canvas';
-	import { listPages, imageUrl, fetchAlto, getBatchCatalog, type CatalogHit } from '@rask/api';
+	import { imageUrl, fetchAlto } from '@rask/api';
+	import { listVolumePages, getVolumeCatalog } from '$lib/remote/discover.remote';
 	import { parseAlto } from '$lib/alto';
-	import type { AltoParse, Line, PageEntry } from '@rask/api';
+	import type { AltoParse, Line } from '@rask/api';
 
 	const volume = $derived(pageStore.params.volume!);
 	const pageKey = $derived(pageStore.params.page!);
 	// Set when arriving from /search — viewer highlights this line + auto-enables polygons.
 	const highlightLineId = $derived(pageStore.url.searchParams.get('line'));
 
-	let pages = $state<PageEntry[]>([]);
+	// THE ONE PATTERN (see lib/remote/discover.remote.ts): page listing + EAD
+	// catalog are param `query()`s keyed on `volume` (extracted to a `$derived`
+	// above, so navigation re-keys + re-runs them). Read imperatively via
+	// `.current` so a page change doesn't blank the strip mid-flight. No
+	// onMount/$effect fetch for these. The ALTO/image load below legitimately
+	// stays an effect — `fetchAlto` returns raw XML text for the canvas, not JSON.
+	const pagesQuery = $derived(listVolumePages({ volume }));
+	const pages = $derived(pagesQuery.current ?? []);
 	// EAD catalog metadata for this batch (fonds/series/volume/dates/etc.).
-	// null = not loaded yet OR no matching row in the catalog (e.g. test
-	// batches not in the OAI-PMH harvest). Re-fetched whenever `volume`
-	// changes via the $effect below.
-	let catalog = $state<CatalogHit | null>(null);
+	// null = no matching row in the catalog (e.g. test batches not in the
+	// OAI-PMH harvest) — getBatchCatalog returns null for a 404, so the panel
+	// hides itself without a separate error path.
+	const catalogQuery = $derived(getVolumeCatalog({ volume }));
+	const catalog = $derived(catalogQuery.current ?? null);
 	let alto = $state<AltoParse | null>(null);
 	// Raw ALTO XML, retained alongside the parsed `alto` so the right pane can
 	// render it as text. fetchAlto returns the string before parseAlto runs.
@@ -54,21 +63,6 @@
 	$effect(() => savePersisted('viewer.imgFilter', imgFilter));
 	$effect(() => savePersisted('viewer.showPanel', showPanel));
 
-	// Refetch catalog metadata whenever the user navigates to a different
-	// batch. The fetch is fire-and-forget; failures (404 or otherwise) just
-	// leave `catalog` null and the panel hides itself.
-	$effect(() => {
-		const v = volume;
-		catalog = null;
-		getBatchCatalog(v)
-			.then((row) => {
-				if (volume === v) catalog = row;
-			})
-			.catch(() => {
-				if (volume === v) catalog = null;
-			});
-	});
-
 	const idx = $derived(pages.findIndex((p) => p.key === pageKey));
 	const prevPage = $derived(idx > 0 ? pages[idx - 1] : null);
 	const nextPage = $derived(idx >= 0 && idx < pages.length - 1 ? pages[idx + 1] : null);
@@ -100,30 +94,18 @@
 		localStorage.setItem(STORE_PREFIX + key, JSON.stringify(value));
 	}
 
-	$effect(() => {
-		const v = volume;
-		untrack(() => loadPages(v));
-	});
-
+	// ALTO + image load stays an effect — it sets the canvas image and parses raw
+	// ALTO XML (text, not query-shaped JSON). Keyed on volume+page.
 	$effect(() => {
 		const v = volume,
 			k = pageKey;
 		untrack(() => loadPage(v, k));
 	});
 
-	// Re-render when toggles change
-	$effect(() => {
-		void showBoxes;
-		void showPolygons;
-		void showText;
-		void hoveredLine;
-		controller?.render();
-	});
-
 	// Search → viewer: when the URL carries `?line=<line_id>`, find the matching
-	// TextLine after ALTO loads, force polygons on, and apply a prominent
-	// "you came from search" highlight (separate state from `hoveredLine` so
-	// hovering elsewhere doesn't erase it).
+	// TextLine after ALTO loads and apply a prominent "you came from search"
+	// highlight (separate state from `hoveredLine` so hovering elsewhere doesn't
+	// erase it). drawOverlay draws the rose ring for this index.
 	// Derived: the line index matching `?line=<id>`, recomputed from the URL id +
 	// loaded ALTO (was a $state mutated inside an $effect — derived-state-as-effect).
 	const searchHighlightLine = $derived.by(() => {
@@ -134,18 +116,24 @@
 		return idx >= 0 ? idx : -1;
 	});
 
-	// One-shot side effect on search arrival: hide the per-line boxes/polygons so
-	// only the search hit's highlight stands out (the rest would just clutter). Fires
-	// only when the resolved index changes, so toggling the boxes back on afterwards sticks.
-	$effect(() => {
-		if (searchHighlightLine >= 0) {
-			showBoxes = false;
-			showPolygons = false;
-		}
-	});
+	// Canon §2 "derive, don't effect-into-state": on search arrival we want only
+	// the search hit's highlight to stand out (the per-line boxes/polygons would
+	// just clutter), but we must NOT mutate the persisted `showBoxes`/`showPolygons`
+	// toggles — that write-through to localStorage permanently clobbered the user's
+	// saved preferences. Instead derive render-only flags that suppress the
+	// per-line overlays while on a search-highlighted page; the stored toggles are
+	// untouched, so leaving search restores the user's real preferences.
+	const effectiveShowBoxes = $derived(searchHighlightLine >= 0 ? false : showBoxes);
+	const effectiveShowPolygons = $derived(searchHighlightLine >= 0 ? false : showPolygons);
 
-	// Re-render whenever the search highlight changes too.
+	// Re-render when the (render-only) overlay flags, hover, or search highlight
+	// change. Tracking the effective flags covers search arrival/departure too,
+	// so no separate searchHighlightLine effect is needed.
 	$effect(() => {
+		void effectiveShowBoxes;
+		void effectiveShowPolygons;
+		void showText;
+		void hoveredLine;
 		void searchHighlightLine;
 		controller?.render();
 	});
@@ -155,15 +143,6 @@
 	function lineColor(i: number, alpha: number): string {
 		const hue = (i * 137.508) % 360;
 		return `hsla(${hue}, 70%, 55%, ${alpha})`;
-	}
-
-	async function loadPages(v: string) {
-		try {
-			pages = await listPages(v);
-		} catch (e) {
-			console.error('listPages', e);
-			pages = [];
-		}
 	}
 
 	async function loadPage(v: string, k: string) {
@@ -246,13 +225,13 @@
 			const b = line.bbox;
 			const isHover = i === hoveredLine;
 
-			if (showBoxes) {
+			if (effectiveShowBoxes) {
 				ctx.lineWidth = isHover ? 2 : 1.2;
 				ctx.strokeStyle = isHover ? '#f59e0b' : lineColor(i, 0.7);
 				ctx.strokeRect(b.x, b.y, b.w, b.h);
 			}
 
-			if (showPolygons && line.polygon && line.polygon.length > 1) {
+			if (effectiveShowPolygons && line.polygon && line.polygon.length > 1) {
 				ctx.beginPath();
 				ctx.moveTo(line.polygon[0]!.x, line.polygon[0]!.y);
 				for (let p = 1; p < line.polygon.length; p++) {
@@ -314,8 +293,7 @@
 	}
 
 	function onKey(e: KeyboardEvent) {
-		const target = e.target as HTMLElement;
-		if (target?.matches('input, textarea')) return;
+		if (e.target instanceof HTMLElement && e.target.matches('input, textarea')) return;
 		if ((e.key === 'ArrowLeft' || e.key === 'h' || e.key === 'k') && prevPage) {
 			goto(`${base}/viewer/${encodeURIComponent(volume)}/${encodeURIComponent(prevPage.key)}`, {
 				replaceState: false,
