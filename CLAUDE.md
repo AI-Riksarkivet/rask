@@ -2,6 +2,24 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Engineering principles (read first)
+
+**This is state-of-the-art work. Do things properly — no shortcuts, no band-aids.**
+
+- **Fix root causes, not symptoms.** Never paper over an app/library bug at an outer
+  layer (proxy, ingress, env hack, wrapper) when the defect belongs in the app or its
+  build. Workarounds that "make it pass" are not acceptable as final fixes — at most a
+  clearly-labelled temporary step that is then replaced by the real fix.
+- **A fix must travel with the code.** Prefer fixes that keep a component correct on its
+  own (behind any proxy, in any environment), over fixes that depend on surrounding infra.
+- **Verify like it ships.** SSR returning 200 is not "working" — exercise the real user
+  path (a browser for UI, the actual client for APIs). Assume nothing is fixed until it's
+  been observed working end-to-end.
+- **Use the proper workflow.** Non-trivial changes go through the superpowers flow
+  (brainstorm → spec → plan → subagent-driven-dev with reviews + TDD), not ad-hoc edits.
+- **No silent scope-cuts.** If you bound coverage, sample, or defer something, say so
+  explicitly. Don't let "partially done" read as "done".
+
 ## Toolchain rules
 
 - **JS/TS uses Bun exclusively.** Use `bun` / `bunx`. `npm`, `npx`, `pnpm`, `pnpx` are not on PATH and MCP install commands assume `bunx`.
