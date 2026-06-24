@@ -28,6 +28,9 @@ from service_kit.exceptions import NotFoundError, ServiceUnavailableError
 
 log = logging.getLogger(__name__)
 
+# HCP_ is the Helm chart's S3-endpoint bridge (it injects HCP_ENDPOINT) — keep it
+# in the passthrough so Ray-job subprocesses get the endpoint until the chart sets
+# RASK_S3_ENDPOINT_URL. AWS_ carries credentials; IIIF_/RASK_ the app config.
 _ENV_PASSTHROUGH_PREFIXES = ("AWS_", "HCP_", "IIIF_", "RASK_")
 
 

@@ -20,9 +20,10 @@ Every Python brick must be registered in **both** root files:
 
 - `pyproject.toml` → `[tool.uv.workspace] members` — append the path
   (e.g. `"components/services/foo"`). uv resolves first-party deps from here.
-- root `package.json` → `workspaces` — **only if it carries JS/TS** (the
-  frontend + `component-lib` are the only current JS members). A pure-Python
-  brick is **not** added here; a Svelte/TS brick is.
+- root `package.json` → `workspaces` — **only if it carries JS/TS** (the JS
+  members are the 7 frontend apps under `components/apps/*` plus `packages/api`
+  = @rask/api and `packages/ui` = @rask/ui). A pure-Python brick is **not**
+  added here; a Svelte/TS brick is.
 
 > The brief says "two-place edit (members AND workspaces)". In practice
 > `package.json workspaces` only lists JS-bearing bricks. A Python-only brick

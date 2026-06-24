@@ -6,4 +6,4 @@ export * from './batches';
 export * from './search';
 export * from './volumes';
 export * from './types';
-export * from './server-fetch';
+export * from './gateway';

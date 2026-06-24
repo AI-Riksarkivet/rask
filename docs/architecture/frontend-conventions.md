@@ -33,10 +33,11 @@ default project port `:3024`). Data is **server-only remote-function `query()`**
 that reuses **`@rask/api`** via `getRequestEvent().fetch`. Components come from
 **`@rask/ui`** (Bits UI headless, styled there — never restyled in apps).
 Styling is **Tailwind 4 + OKLCH `@theme` tokens** from `@rask/ui/styles/tokens.css`
-+ the `style:` directive. TypeScript is **strict + `noUncheckedIndexedAccess`**
-everywhere; **`exactOptionalPropertyTypes` is OFF on Svelte packages, ON for
-`@rask/api`**. Gates: `knip` + `eslint-plugin-svelte` + `svelte-check` +
-`tsc --strict`, run by `make check`.
+
+- the `style:` directive. TypeScript is **strict + `noUncheckedIndexedAccess`**
+  everywhere; **`exactOptionalPropertyTypes` is OFF on Svelte packages, ON for
+  `@rask/api`**. Gates: `knip` + `eslint-plugin-svelte` + `svelte-check` +
+  `tsc --strict`, run by `make check`.
 
 ---
 
@@ -44,11 +45,17 @@ everywhere; **`exactOptionalPropertyTypes` is OFF on Svelte packages, ON for
 
 **THE canonical pattern.** Every read is a **server-only remote `query()`** in
 `src/lib/remote/<domain>.remote.ts` whose body calls a **`@rask/api`** function,
-passing **`getRequestEvent().fetch`**. That request-scoped fetch resolves the
-relative `/api/*` URLs against the request origin during SSR, inherits cookies,
-and inlines the response into the SSR payload (no hydration refetch, no
-`onMount` waterfall). Reuse `@rask/api`'s schemas + parse — **zero duplicated
-fetch/validation per app.**
+passing **`getRequestEvent().fetch`**. The `@rask/api` functions fetch **relative
+`/api/*`**; a per-app server hook (`src/hooks.server.ts` →
+`makeGatewayHandleFetch(env.RASK_GATEWAY_URL)`) rewrites those to the **in-cluster
+gateway** during SSR, so a server read goes straight to the gateway instead of
+hairpinning out through the external ingress (a relative URL on the server would
+otherwise resolve against the incoming request origin). The request-scoped fetch
+inherits cookies and inlines the response into the SSR payload (no hydration
+refetch, no `onMount` waterfall). Reuse `@rask/api`'s schemas + parse — **zero
+duplicated fetch/validation per app**, and the rewrite is single-sourced in
+`@rask/api` so a new app only adds the one-line hook. Client-side fetches stay
+relative (same-origin, correct).
 
 ```ts
 // src/lib/remote/overview.remote.ts
@@ -69,7 +76,9 @@ export const getRayJobs = query(async (): Promise<RayJobsPayload> => {
 When the endpoint isn't in `@rask/api` yet (e.g. storage's volumes-api), the
 query fetches the **gateway by absolute URL** (`GATEWAY_URL` from
 `$lib/server/env`, defaulting `http://localhost:8888`, overridable via
-`RASK_GATEWAY_URL`) and **parses the untrusted response at the boundary**, and
+`RASK_GATEWAY_URL`) — equivalent to the relative-`/api` + `hooks.server.ts`
+rewrite above, just inlined — and **parses the untrusted response at the
+boundary**, and
 surfaces the real upstream status with `error(502, …)` (a plain throw becomes a
 generic "Internal Error"):
 
@@ -449,19 +458,27 @@ drift. An app owns only its content area + its own internal routing.
 
 **Cross-zone links.** Links **within** an app use `base` (soft client-side nav).
 Links to **another domain** are project-prefixed absolute paths built from the
-derived project segment (they cross a zone boundary = full document nav,
-animated by the cross-document View Transition in `tokens.css`):
+derived project segment, and carry **`data-sveltekit-reload`**: they cross a zone
+boundary into a route this app's manifest doesn't contain, so they must be a full
+document nav — without the attribute, the global `data-sveltekit-preload-data="hover"`
+makes the client router attempt a no-op nav first. The hard nav is animated by the
+cross-document View Transition in `tokens.css`:
 
 ```svelte
 const project = base.split('/')[1] ?? 'default';
 
-<!-- in-app: base -->
+<!-- in-app: base (soft) -->
 <Button onclick={() => goto(`${base}/new`)}>New volume</Button>
 
-<!-- cross-zone: /<project>/<domain>/... -->
-<a href={`/${project}/compute/jobs/${encodeURIComponent(j.submission_id)}`}>details</a>
-<a href={`/${project}/discover/viewer/${b.batch_id}`}>{b.batch_id}</a>
+<!-- cross-zone: project-prefixed + data-sveltekit-reload (hard nav) -->
+<a href={`/${project}/compute/jobs/${encodeURIComponent(j.submission_id)}`} data-sveltekit-reload
+	>details</a
+>
+<a href={`/${project}/discover/viewer/${b.batch_id}`} data-sveltekit-reload>{b.batch_id}</a>
 ```
+
+The shared `AppSidebar` applies this **conditionally** — only when a link's domain
+differs from the current one; a domain's own sub-routes stay soft.
 
 **Namespacing.** Each app's static base **is** its namespace (asset prefix,
 route prefix, port). Don't let two apps claim overlapping path prefixes; the
@@ -473,6 +490,9 @@ proxy routes longest-prefix by zone.
   `microfrontends.json` (silently breaks proxy routing).
 - Cross-zone navigation via `goto()` of another app's internal route (it isn't
   loaded in this zone); use a project-prefixed `<a href>`.
+- A cross-zone `<a href>` **without** `data-sveltekit-reload` — the client router
+  attempts a route this zone doesn't have; it falls back to a hard nav, but only
+  after a wasted attempt, and the SSR fetch can resolve against the wrong origin.
 - Duplicating shell chrome in an app instead of using `@rask/ui/shell`.
 - Hardcoded `/default/...` cross-zone links — derive `project` from `base`.
 - Proposing to merge the apps back into a monolith (the MFE split is a
@@ -549,15 +569,15 @@ backed by the type errors they prevent.
 `svelte-kit sync && svelte-check --tsconfig ./tsconfig.json`). What each gate
 owns:
 
-| Gate                                            | Runs via                            | Enforces (in this doc)                                                                                                                                  |
-| ----------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **`eslint` + `eslint-plugin-svelte`**           | `bun run lint` (in `make lint`)     | **`svelte/require-each-key: error`** (§2 keyed each); **`svelte/no-reactive-reassign: error`** (§2 no imperative reassign); `no-explicit-any: warn`; `no-unused-vars: error` |
-| **`svelte-check`**                              | `turbo run check`                   | strict types in `.svelte`/`.ts`, SSR/snippet/`{@render}` correctness, `noUncheckedIndexedAccess` (§2, §3, §5, §7)                                       |
-| **`tsc --strict` (per-package tsconfig)**       | `svelte-check` / `check:tsgo` / `ty` | the strictness baseline + the `exactOptionalPropertyTypes` split (§7)                                                                                   |
-| **`knip`**                                      | `bun run knip` (root, `make knip`)  | dead remote functions (`*.remote.ts` entries), unused `@rask/ui` exports, dead deps/files (§1, §3)                                                      |
-| **`prettier` (+ tailwind plugin)**              | `bun run format` (in `make fmt`)    | tabs, single quotes, `printWidth: 100`, Tailwind class order (§4)                                                                                       |
-| **`strictPort` (dev)**                          | `vite dev`                          | per-app port matches `microfrontends.json` — clash fails loudly (§6)                                                                                    |
-| **`svelte` MCP autofixer**                      | local, every `.svelte` edit         | Svelte 5 correctness before commit (mandatory, §2, §3)                                                                                                  |
+| Gate                                      | Runs via                             | Enforces (in this doc)                                                                                                                                                       |
+| ----------------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`eslint` + `eslint-plugin-svelte`**     | `bun run lint` (in `make lint`)      | **`svelte/require-each-key: error`** (§2 keyed each); **`svelte/no-reactive-reassign: error`** (§2 no imperative reassign); `no-explicit-any: warn`; `no-unused-vars: error` |
+| **`svelte-check`**                        | `turbo run check`                    | strict types in `.svelte`/`.ts`, SSR/snippet/`{@render}` correctness, `noUncheckedIndexedAccess` (§2, §3, §5, §7)                                                            |
+| **`tsc --strict` (per-package tsconfig)** | `svelte-check` / `check:tsgo` / `ty` | the strictness baseline + the `exactOptionalPropertyTypes` split (§7)                                                                                                        |
+| **`knip`**                                | `bun run knip` (root, `make knip`)   | dead remote functions (`*.remote.ts` entries), unused `@rask/ui` exports, dead deps/files (§1, §3)                                                                           |
+| **`prettier` (+ tailwind plugin)**        | `bun run format` (in `make fmt`)     | tabs, single quotes, `printWidth: 100`, Tailwind class order (§4)                                                                                                            |
+| **`strictPort` (dev)**                    | `vite dev`                           | per-app port matches `microfrontends.json` — clash fails loudly (§6)                                                                                                         |
+| **`svelte` MCP autofixer**                | local, every `.svelte` edit          | Svelte 5 correctness before commit (mandatory, §2, §3)                                                                                                                       |
 
 **Everything else is convention** (reviewer-enforced, no machine gate): the
 `getRequestEvent().fetch` data pattern and `.catch()` poll loops (§1),

@@ -13,7 +13,7 @@ export default defineConfig({
 		// Bind the port declared in microfrontends.json — the :3024 composition proxy
 		// routes by it. strictPort makes a clash fail loudly instead of silently
 		// drifting to the next free port (which breaks the proxy's routing).
-		port: 5173,
+		port: 5273,
 		strictPort: true,
 		proxy: {
 			// Everything /api goes to the viewer backend — including /api/serve/*,

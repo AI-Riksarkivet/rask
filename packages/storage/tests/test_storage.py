@@ -69,6 +69,8 @@ def test_split_s3_uri_and_merge_prefix():
 
 
 def test_derive_hcp_creds(monkeypatch):
+    import base64
+    import hashlib
     import os
 
     from storage import derive_hcp_creds
@@ -78,5 +80,7 @@ def test_derive_hcp_creds(monkeypatch):
     monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
     derive_hcp_creds()
-    assert os.environ["AWS_ACCESS_KEY_ID"] == "YWxpY2U="
-    assert os.environ["AWS_SECRET_ACCESS_KEY"] == "5ebe2294ecd0e0f08eab7690d2a6ee69"  # noqa: S105
+    # Expected values are derived from the fake inputs above (base64 of the
+    # username, md5 of the password) — not real credentials.
+    assert os.environ["AWS_ACCESS_KEY_ID"] == base64.b64encode(b"alice").decode()
+    assert os.environ["AWS_SECRET_ACCESS_KEY"] == hashlib.md5(b"secret").hexdigest()  # noqa: S324

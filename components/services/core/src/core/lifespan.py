@@ -1,7 +1,7 @@
 """Application lifespan — build once, dispose once.
 
 Resources are stashed on `app.state` so dependencies pull them without
-recreating per request. Tolerant of missing optional deps (HCP, LanceDB
+recreating per request. Tolerant of missing optional deps (S3, LanceDB
 tables, batches.db) so tests run offline.
 
 `app.state.orchestrator_task` holds the orchestrator loop's `asyncio.Task`
@@ -51,7 +51,7 @@ async def _open_lancedb(
 ) -> tuple[AsyncConnection | None, AsyncTable | None]:
     storage_options = settings.lance_storage_options()
     if storage_options is None:
-        log.info("lancedb skipped — HCP credentials not configured")
+        log.info("lancedb skipped — S3 credentials not configured")
         return None, None
     try:
         db = await lancedb.connect_async(settings.lance_db_uri, storage_options=storage_options)

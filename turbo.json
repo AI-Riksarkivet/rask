@@ -8,9 +8,13 @@
 			"outputs": ["build/**", ".svelte-kit/**", "dist/**"]
 		},
 		"check": {
-			"dependsOn": ["^build"]
+			"dependsOn": ["^build"],
+			"outputs": []
 		},
-		"check:tsgo": {},
+		"check:tsgo": {
+			"dependsOn": ["^build"],
+			"outputs": []
+		},
 		"test": {
 			"dependsOn": ["^build"],
 			"outputs": []

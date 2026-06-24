@@ -1,7 +1,7 @@
 # core
 
 FastAPI backend for the rask core. Serves images and ALTO XML from any
-`Source` (filesystem, MinIO, HCP), exposes Lance-backed line/catalog search,
+`Source` (filesystem, MinIO/rustfs/AWS), exposes Lance-backed line/catalog search,
 proxies the Ray dashboard, and optionally hosts the SvelteKit SPA.
 
 > For the **design rationale + before/after layout**, see
@@ -57,7 +57,7 @@ All settings load from `.env` (or env vars) via `pydantic-settings`. See
 |---|---|---|
 | `RASK_VIEWER_INPUT` | Source URI (s3:// or filesystem path) | required |
 | `RASK_VIEWER_OUTPUT` | ALTO output URI | required |
-| `HCP_ENDPOINT` / `HCP_USERNAME` / `HCP_PASSWORD` | S3-compatible store creds | unset → S3 features disabled |
+| `RASK_S3_ENDPOINT_URL` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | S3 backend (MinIO/rustfs/AWS) creds | unset → S3 features disabled |
 | `RASK_SEARCH_BUCKET` | Lance dataset bucket | `images-batch-search` |
 | `RAY_DASHBOARD_URL` | Ray dashboard HTTP base | `http://localhost:8265` |
 | `DATABASE_URL` | Async SQLAlchemy URL — sqlite **or** postgres (set `postgresql+asyncpg://…`) | falls back to `sqlite+aiosqlite:///.cache/batches.db` |

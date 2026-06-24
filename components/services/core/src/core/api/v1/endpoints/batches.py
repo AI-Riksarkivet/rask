@@ -97,8 +97,8 @@ async def get_batch_catalog(batch_id: str, tbl: CatalogTblDep, settings: Setting
 
 @router.post("/sync")
 async def sync_batches(session: SessionDep, settings: SettingsDep, s3: S3Dep) -> SyncResponse:
-    # S3Dep yields a 503 when S3 is unconfigured (HCP_ENDPOINT unset), so this
-    # needs no explicit hcp_endpoint guard.
+    # S3Dep yields a 503 when S3 is unconfigured (no S3 endpoint set), so this
+    # needs no explicit endpoint guard.
     await reconcile_from_s3(session, s3, cache_bucket=settings.cache_bucket, output_bucket=settings.output_bucket)
     payload = await batches_service.list_batches(session)
     return SyncResponse(**payload.model_dump())

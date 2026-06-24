@@ -88,20 +88,20 @@ graph TD
   CF --> API
 ```
 
-| Path                               | What it is                                                                                                                                                                                         |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `components/apps/frontend`         | **The catch-all app** (the proxy default). Owns `/` (the home / project picker, no sidebar) + `/<project>/overview` (the batch view). Package name `viewer-frontend`. |
-| `components/apps/storage-frontend` | A carved-out microfrontend — owns `/<project>/storage` (the S3 browser); base `/default/storage`.                                                                  |
-| `components/apps/compute-frontend` | A carved-out microfrontend — owns `/<project>/compute` (the Ray/cluster UI: overview, cluster, jobs, actors, serve, logviewer, api-docs); base `/default/compute`.  |
-| `packages/ui` (`@rask/ui`)         | The **shared design system**: styled components (`button`, `badge`, `card`, `dialog`, `sort-header`, `sidebar`, …) **plus the shell** (`@rask/ui/shell` → `AppShell`, `AppSidebar`, `nav-config`). |
+| Path                               | What it is                                                                                                                                                                                                                  |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `components/apps/frontend`         | **The catch-all app** (the proxy default). Owns `/` (the home / project picker, no sidebar) + `/<project>/overview` (the batch view). Package name `viewer-frontend`.                                                       |
+| `components/apps/storage-frontend` | A carved-out microfrontend — owns `/<project>/storage` (the S3 browser); base `/default/storage`.                                                                                                                           |
+| `components/apps/compute-frontend` | A carved-out microfrontend — owns `/<project>/compute` (the Ray/cluster UI: overview, cluster, jobs, actors, serve, logviewer, api-docs); base `/default/compute`.                                                          |
+| `packages/ui` (`@rask/ui`)         | The **shared design system**: styled components (`button`, `badge`, `card`, `dialog`, `sort-header`, `sidebar`, …) **plus the shell** (`@rask/ui/shell` → `AppShell`, `AppSidebar`, `nav-config`).                          |
 | `packages/api` (`@rask/api`)       | The **shared API client + types** — every app imports it (`@rask/api`) instead of copying `api.ts`. JIT package (exports `./src/index.ts` source, no build), split into `ray`/`batches`/`search`/`volumes`/`types` modules. |
 
 ## How a request flows (frontend → services)
 
 There are **two distinct layers** — keep them separate:
 
-1. **Page composition** — which *app* serves a URL path (`/storage` → storage-frontend).
-2. **Data** — how an app reaches the *backend*. The frontend **never** talks to a domain
+1. **Page composition** — which _app_ serves a URL path (`/storage` → storage-frontend).
+2. **Data** — how an app reaches the _backend_. The frontend **never** talks to a domain
    service directly; it always hits the **gateway** (`:8888`), which path-routes `/api/*`
    to the per-domain services (`core-api` :8801, `search-api` :8802, `volumes-api` :8803,
    `ray-api` :8804, `orchestrator` :8810) longest-prefix-first.
@@ -127,9 +127,11 @@ sequenceDiagram
 
     - **Client-side** code uses the relative `/api/*` — the **Vite dev proxy** forwards it to
       `VIEWER_BACKEND` (`:8888`) in dev; same-origin in prod.
-    - **Server-side** code (SSR `load`, remote functions) uses an **absolute** `RASK_GATEWAY_URL`
-      because a server has no origin. Both end at the **one gateway** — see the
-      [services fleet](system-overview.md) for how it routes onward.
+    - **Server-side** code (SSR `load`, remote functions) fetches the **same relative `/api/*`**,
+      but a per-app `src/hooks.server.ts` (`makeGatewayHandleFetch` from `@rask/api`) rewrites it
+      to the **in-cluster gateway** (`RASK_GATEWAY_URL`) during SSR — a server has no origin, so a
+      relative URL would otherwise hairpin out through the external ingress. Both end at the **one
+      gateway** — see the [services fleet](system-overview.md) for how it routes onward.
 
 ## The shared shell (one sidebar, zero drift)
 
@@ -148,8 +150,11 @@ sequenceDiagram
 ```
 
 `AppSidebar` is **pure**: it takes `pathname` as a prop and renders plain `<a href>` links
-(no `$app/*`), which is what makes it shareable across independently-deployed apps — and
-plain anchors are also _correct_ for cross-app navigation (a full page load the proxy routes).
+(no `$app/*`), which is what makes it shareable across independently-deployed apps. Its
+**cross-zone** links (a link whose domain differs from the current one) carry
+`data-sveltekit-reload`, so they hard-navigate into the target zone (the full page load the
+proxy routes) instead of a no-op client-router attempt; same-domain sub-route links stay
+soft. See the cross-zone rule in [frontend-conventions.md](frontend-conventions.md) §6.
 
 !!! tip "Styled components live in the library, not the apps"
 
@@ -171,14 +176,14 @@ base** (`/default/<domain>`). That's the key trick: a static base gives each app
 prefix the dev proxy needs (so `/@vite`, `/_app`, built chunks route to the right app) **and**
 yields project-first URLs. Multi-project (a dynamic base) is deliberately deferred.
 
-| Domain app                         | Routes it owns                                                       | `kit.paths.base`   | Status         |
-| ---------------------------------- | ------------------------------------------------------------------- | ------------------ | -------------- |
-| `frontend` (catch-all)             | `/` home picker · `/<project>/overview` (the batch view)            | _(none — default)_ | **done ✅**    |
-| `compute-frontend` (the "ray" UI)  | compute: overview, cluster, jobs, actors, serve, logviewer, api-docs | `/default/compute` | **done ✅**    |
-| `storage-frontend`                 | storage (the S3 browser)                                            | `/default/storage` | **done ✅**    |
-| `discover-frontend`                | search, browse, viewer                                              | `/default/discover`| **carving 🔧** |
-| `train-frontend`                   | model training (dummy)                                              | `/default/train`   | **carving 🔧** |
-| `studio-frontend`                  | mini-applications (dummy)                                           | `/default/studio`  | **carving 🔧** |
+| Domain app                        | Routes it owns                                                       | `kit.paths.base`    | Status         |
+| --------------------------------- | -------------------------------------------------------------------- | ------------------- | -------------- |
+| `frontend` (catch-all)            | `/` home picker · `/<project>/overview` (the batch view)             | _(none — default)_  | **done ✅**    |
+| `compute-frontend` (the "ray" UI) | compute: overview, cluster, jobs, actors, serve, logviewer, api-docs | `/default/compute`  | **done ✅**    |
+| `storage-frontend`                | storage (the S3 browser)                                             | `/default/storage`  | **done ✅**    |
+| `discover-frontend`               | search, browse, viewer                                               | `/default/discover` | **carving 🔧** |
+| `train-frontend`                  | model training (dummy)                                               | `/default/train`    | **carving 🔧** |
+| `studio-frontend`                 | mini-applications (dummy)                                            | `/default/studio`   | **carving 🔧** |
 
 Carving each one is the **same recipe** as `storage`/`compute` (scaffold app → move its routes in
 → wire `@rask/ui` + `@rask/api` → static base `/default/<domain>` → register in the workspace +

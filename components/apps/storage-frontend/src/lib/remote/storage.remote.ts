@@ -11,8 +11,8 @@ import {
 } from '$lib/storage';
 
 // Remote functions (server-only) — the storage microfrontend's data layer over
-// the gateway's agnostic volumes-api (works against MinIO/AWS/HCP, see
-// docs/architecture/ra-hcp-migration.md). All read-only.
+// the gateway's agnostic volumes-api (works against any S3 backend: MinIO/rustfs/AWS).
+// All read-only.
 
 const ListArgs = v.object({
 	bucket: v.picklist(BUCKETS),

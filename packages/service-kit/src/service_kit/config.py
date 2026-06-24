@@ -48,15 +48,16 @@ class Settings(BaseSettings):
     api_prefix: str = Field(default="/api/v1", alias="RASK_API_PREFIX")
     cors_origins: list[str] = Field(default_factory=list, alias="RASK_CORS_ORIGINS")
 
-    # S3 endpoint URL for any S3-compatible backend (MinIO / AWS / Ceph / HCP).
-    # rask is storage-agnostic: this is just an endpoint, no HCP assumptions. The
-    # canonical name is RASK_S3_ENDPOINT_URL; S3_ENDPOINT_URL (the boto3-ecosystem
-    # name) and HCP_ENDPOINT (legacy) are accepted for back-compat.
+    # S3 endpoint URL for any S3-compatible backend (MinIO / rustfs / AWS).
+    # rask is storage-agnostic: this is just an endpoint. The canonical name is
+    # RASK_S3_ENDPOINT_URL; S3_ENDPOINT_URL (the boto3-ecosystem name) is also
+    # accepted, plus HCP_ENDPOINT as the Helm chart's legacy bridge (drop once the
+    # chart sets RASK_S3_ENDPOINT_URL).
     s3_endpoint_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices("RASK_S3_ENDPOINT_URL", "S3_ENDPOINT_URL", "HCP_ENDPOINT"),
     )
-    # Skip TLS verification (self-signed endpoints, e.g. local MinIO or HCP).
+    # Skip TLS verification (self-signed endpoints, e.g. local MinIO/rustfs).
     s3_insecure: bool = Field(
         default=False,
         validation_alias=AliasChoices("RASK_S3_INSECURE", "S3_INSECURE", "HCP_INSECURE"),
@@ -162,7 +163,7 @@ class Settings(BaseSettings):
             "aws_virtual_hosted_style_request": "false",
             "allow_http": "true" if self.s3_endpoint_url.startswith("http://") else "false",
         }
-        # A self-signed endpoint (local MinIO, or HCP) is skipped by boto3 via
+        # A self-signed endpoint (local MinIO/rustfs) is skipped by boto3 via
         # the insecure flag, but LanceDB's Rust S3 client (object_store) verifies
         # by default and fails the TLS handshake ("error sending request"). Mirror
         # the insecure flag so the search tables can be opened over https.

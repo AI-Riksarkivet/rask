@@ -16,6 +16,14 @@
 	// hrefs are prefixed with it (the sidebar only ever renders inside a project).
 	const project = $derived(pathname.split('/').filter(Boolean)[0] ?? 'default');
 	const items = $derived(navMain(project));
+
+	// MFE zones split by DOMAIN (the segment after the project): /<project>/compute is a
+	// different SvelteKit app/zone than /<project>/discover. A sidebar link whose domain
+	// differs from the current one leaves THIS app's route manifest, so it must hard-nav
+	// (data-sveltekit-reload) — a soft client nav would target a route this app doesn't know.
+	// Same-domain links (a domain's own sub-routes) stay soft for SPA speed.
+	const currentDomain = $derived(pathname.split('/').filter(Boolean)[1] ?? '');
+	const crossZone = (href: string) => (href.split('/').filter(Boolean)[1] ?? '') !== currentDomain;
 </script>
 
 <Sidebar.Group>
@@ -30,7 +38,11 @@
 							     double-highlight with the active leaf. -->
 							<Sidebar.MenuButton tooltipContent={item.title} isActive={pathname === item.href}>
 								{#snippet child({ props })}
-									<a href={item.href} {...props}>
+									<a
+										href={item.href}
+										data-sveltekit-reload={crossZone(item.href) ? '' : undefined}
+										{...props}
+									>
 										<item.icon />
 										<span>{item.title}</span>
 									</a>
@@ -53,7 +65,11 @@
 										<Sidebar.MenuSubItem>
 											<Sidebar.MenuSubButton isActive={sub.match(pathname)}>
 												{#snippet child({ props })}
-													<a href={sub.href} {...props}>
+													<a
+														href={sub.href}
+														data-sveltekit-reload={crossZone(sub.href) ? '' : undefined}
+														{...props}
+													>
 														<span>{sub.title}</span>
 													</a>
 												{/snippet}
@@ -69,7 +85,11 @@
 				<Sidebar.MenuItem>
 					<Sidebar.MenuButton tooltipContent={item.title} isActive={item.match(pathname)}>
 						{#snippet child({ props })}
-							<a href={item.href} {...props}>
+							<a
+								href={item.href}
+								data-sveltekit-reload={crossZone(item.href) ? '' : undefined}
+								{...props}
+							>
 								<item.icon />
 								<span>{item.title}</span>
 							</a>

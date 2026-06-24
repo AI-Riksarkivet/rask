@@ -1,7 +1,7 @@
 [project]
 name = "storage"
 version = "0.1.0"
-description = "Filesystem and S3/HCP source/sink helpers used by runner and viewer."
+description = "Filesystem and S3 (MinIO/rustfs/AWS) source/sink helpers used by runner and core."
 requires-python = ">=3.10"
 license = "AGPL-3.0-only"
 dependencies = [

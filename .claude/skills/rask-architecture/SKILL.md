@@ -17,13 +17,13 @@ The single most rask-specific thing to get right: **which layer a brick lives in
 
 ## The three brick layers — don't blur them
 
-| Layer | Path | Rule | Has entrypoints? |
-|---|---|---|---|
-| **packages** | `packages/<name>` | reusable libraries | **No** — never an `app`/`main`/CLI |
-| **components** | `components/{apps,services,scripts}/<name>` | runnable code (services, CLIs, one-shot scripts) | Yes |
-| **projects** | `projects/<name>` | deployable composition: pins a member set, **no code** | composes, owns none |
+| Layer          | Path                                        | Rule                                                   | Has entrypoints?                   |
+| -------------- | ------------------------------------------- | ------------------------------------------------------ | ---------------------------------- |
+| **packages**   | `packages/<name>`                           | reusable libraries                                     | **No** — never an `app`/`main`/CLI |
+| **components** | `components/{apps,services,scripts}/<name>` | runnable code (services, CLIs, one-shot scripts)       | Yes                                |
+| **projects**   | `projects/<name>`                           | deployable composition: pins a member set, **no code** | composes, owns none                |
 
-Current packages: `htr`, `storage`, `service-kit`, `ray-kit`, `component-lib`.
+Current packages: `api` (@rask/api, Bun), `htr`, `ray-kit`, `service-kit`, `storage`, `tracker`, `ui` (@rask/ui, Bun), `validate`. The Python libs are uv members; `api`/`ui` are the JS/Bun members (the frontend design system + valibot client).
 Current deployables (`projects/*` with a `pyproject.toml`): `core-api`, `gateway`, `orchestrator`, `ray-api`, `runner`, `search-api`, `volumes-api`. (`projects/viewer/` is an orphan `.venv` with **no pyproject** — not a deployable; don't treat it as one.)
 
 ## The composition seam: `make_service_app` + injectable lifespan
@@ -59,7 +59,7 @@ app = make_service_app(
 
 ## When to load each reference
 
-| Need | Read |
-|---|---|
+| Need                                                                    | Read                           |
+| ----------------------------------------------------------------------- | ------------------------------ |
 | Step-by-step: add a new brick or deployable without breaking resolution | `references/adding-a-brick.md` |
-| The full service fleet, ports, and which brick each entrypoint composes | `references/service-fleet.md` |
+| The full service fleet, ports, and which brick each entrypoint composes | `references/service-fleet.md`  |

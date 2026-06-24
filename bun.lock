@@ -71,7 +71,6 @@
       "name": "viewer-frontend",
       "version": "0.0.0",
       "dependencies": {
-        "@rask/api": "workspace:*",
         "@rask/ui": "workspace:*",
         "@sveltejs/kit": "^2.67.0",
         "@tailwindcss/vite": "^4.3.1",
