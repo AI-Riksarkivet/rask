@@ -32,6 +32,9 @@ COPY components/apps components/apps
 COPY packages/api    packages/api
 COPY packages/ui     packages/ui
 COPY package.json bun.lock ./
+# patchedDependencies (e.g. svelte-adapter-bun) — bun install --frozen-lockfile
+# resolves these patch files relative to the project root, so they must be present.
+COPY patches patches
 
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install --frozen-lockfile
