@@ -29,6 +29,20 @@ _HOP_BY_HOP = frozenset(
 )
 
 
+def _rewrite_location(location: str) -> str:
+    """Scrub an upstream redirect Location: an absolute URL (which carries the
+    upstream's internal host, e.g. 127.0.0.1:8801) becomes path(+query) so the
+    caller resolves it against the gateway origin instead of an unreachable
+    in-cluster address."""
+    u = httpx.URL(location)
+    if u.host:
+        rel = u.path
+        if u.query:
+            rel += "?" + u.query.decode()
+        return rel
+    return location
+
+
 def _routes() -> list[tuple[str, str, str]]:
     # (path-prefix, dapr app-id, httpx fallback URL). Mirror RASK_API_PREFIX so
     # routing lines up with where endpoints mount. load_dotenv() so the gateway
@@ -148,9 +162,15 @@ async def proxy(path: str, request: Request) -> Response:
         # clean 502 rather than a 500 traceback.
         raise HTTPException(status_code=502, detail=f"upstream {base} unreachable: {exc}") from exc
 
+    out_headers = {}
+    for k, v in upstream_resp.headers.items():
+        if k.lower().encode() in _HOP_BY_HOP:
+            continue
+        out_headers[k] = _rewrite_location(v) if k.lower() == "location" else v
+
     return StreamingResponse(
         upstream_resp.aiter_raw(),
         status_code=upstream_resp.status_code,
-        headers={k: v for k, v in upstream_resp.headers.items() if k.lower().encode() not in _HOP_BY_HOP},
+        headers=out_headers,
         background=BackgroundTask(upstream_resp.aclose),
     )
