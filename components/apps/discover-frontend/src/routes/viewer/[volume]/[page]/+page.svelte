@@ -33,7 +33,6 @@
 	// Index of the line the user navigated to from /search. Drawn in
 	// drawOverlay with a heavier outline + glow than the hover treatment so
 	// it's spottable at full-page zoom.
-	let searchHighlightLine = $state(-1);
 	let canvasEl: HTMLCanvasElement | undefined = $state();
 	let controller: CanvasController | undefined;
 	let img: HTMLImageElement | null = null;
@@ -126,18 +125,21 @@
 	// TextLine after ALTO loads, force polygons on, and apply a prominent
 	// "you came from search" highlight (separate state from `hoveredLine` so
 	// hovering elsewhere doesn't erase it).
-	$effect(() => {
+	// Derived: the line index matching `?line=<id>`, recomputed from the URL id +
+	// loaded ALTO (was a $state mutated inside an $effect — derived-state-as-effect).
+	const searchHighlightLine = $derived.by(() => {
 		const lid = highlightLineId;
 		const a = alto;
-		if (!lid || !a) {
-			searchHighlightLine = -1;
-			return;
-		}
+		if (!lid || !a) return -1;
 		const idx = a.lines.findIndex((l) => l.altoId === lid);
-		searchHighlightLine = idx >= 0 ? idx : -1;
-		if (idx >= 0) {
-			// Hide the per-line boxes/polygons so only the search hit's
-			// highlight stands out — the other lines would just clutter.
+		return idx >= 0 ? idx : -1;
+	});
+
+	// One-shot side effect on search arrival: hide the per-line boxes/polygons so
+	// only the search hit's highlight stands out (the rest would just clutter). Fires
+	// only when the resolved index changes, so toggling the boxes back on afterwards sticks.
+	$effect(() => {
+		if (searchHighlightLine >= 0) {
 			showBoxes = false;
 			showPolygons = false;
 		}

@@ -33,10 +33,9 @@
 	}
 
 	onMount(load);
-	$effect(() => {
-		tier;
-		load();
-	});
+	// Refetch on tier change via the select's onchange (below), NOT an $effect —
+	// an $effect would also fire on mount, double-loading. (svelte-runes: prefer an
+	// event handler over $effect when a user action is the trigger.)
 
 	// Group hits into a 3-level tree:
 	//   archive_code  ->  fonds_id  ->  series_id  ->  [volumes]
@@ -139,6 +138,7 @@
 				<span class="text-muted-foreground">Show:</span>
 				<select
 					bind:value={tier}
+					onchange={load}
 					class="border-input bg-background cursor-pointer rounded-md border px-2 py-1 text-sm"
 				>
 					<option value="listed">listed</option>

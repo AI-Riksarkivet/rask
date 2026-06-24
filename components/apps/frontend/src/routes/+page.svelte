@@ -24,8 +24,11 @@
 
 	<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 		{#each projects as p (p.slug)}
+			<!-- data-sveltekit-reload: this links into another MFE zone (overview-frontend),
+			     so do the hard navigation immediately instead of a no-op client-router attempt. -->
 			<a
 				href="/{p.slug}/overview"
+				data-sveltekit-reload
 				class="group bg-card hover:border-primary/50 flex flex-col rounded-xl border p-5 transition-colors"
 			>
 				<div

@@ -2,7 +2,7 @@ import * as v from 'valibot';
 import { error } from '@sveltejs/kit';
 import { query } from '$app/server';
 import { GATEWAY_URL } from '$lib/server/env';
-import { BUCKETS, type S3Listing, type S3ObjectHead } from '$lib/storage';
+import { BUCKETS, S3ListingSchema, S3ObjectHeadSchema, type S3Listing, type S3ObjectHead } from '$lib/storage';
 
 // Remote functions (server-only) — the storage microfrontend's data layer over
 // the gateway's agnostic volumes-api (works against MinIO/AWS/HCP, see
@@ -25,7 +25,8 @@ export const listObjects = query(ListArgs, async ({ bucket, prefix }): Promise<S
 		// gateway/volumes-api is down or outdated (missing /objects).
 		error(502, `volumes-api ${bucket}/${prefix || ''} → HTTP ${res.status} ${res.statusText}`);
 	}
-	return res.json();
+	// Parse the untrusted response at the boundary (parse-don't-validate).
+	return v.parse(S3ListingSchema, await res.json());
 });
 
 const ObjectArgs = v.object({
@@ -42,5 +43,5 @@ export const headObject = query(ObjectArgs, async ({ bucket, key }): Promise<S3O
 	if (!res.ok) {
 		error(502, `volumes-api object ${bucket}/${key} → HTTP ${res.status} ${res.statusText}`);
 	}
-	return res.json();
+	return v.parse(S3ObjectHeadSchema, await res.json());
 });
