@@ -59,6 +59,10 @@
 	}
 </script>
 
+<svelte:head>
+	<title>Upload images — RASK</title>
+</svelte:head>
+
 <main class="bg-background flex-1 overflow-auto">
 	<Card class="m-4 max-w-2xl space-y-4 p-6">
 		<h1 class="text-lg font-semibold">Upload images</h1>
@@ -146,7 +150,7 @@
 
 		{#if error}<p class="text-destructive text-sm">{error}</p>{/if}
 		{#if result}
-			<div class="space-y-1 rounded border border-green-600 p-3 text-sm">
+			<div class="space-y-1 rounded border border-emerald-600 p-3 text-sm">
 				<p>Ingested <strong>{result.batch_id}</strong> — {result.page_count ?? 0} pages.</p>
 				<div class="flex gap-3">
 					<a class="underline" href={base}>Back to Overview</a>

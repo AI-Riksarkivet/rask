@@ -51,7 +51,7 @@
 	}
 
 	// Real host memory aggregated across nodes (Ray's logical memory is ~0 used).
-	let realMem = $derived.by(() => {
+	const realMem = $derived.by(() => {
 		const ns = payload?.nodes ?? [];
 		return {
 			used: ns.reduce((a, n) => a + (n.host_mem_used ?? 0), 0),
@@ -124,9 +124,9 @@
 			</Card>
 		{/if}
 
-		{#if payload?.ok && payload.total_resources}
+		{#if payload?.ok && payload.total_resources && payload.used_resources}
 			{@const tr = payload.total_resources}
-			{@const ur = payload.used_resources!}
+			{@const ur = payload.used_resources}
 
 			<!-- Summary strip -->
 			<section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

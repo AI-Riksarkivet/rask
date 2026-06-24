@@ -11,6 +11,7 @@
 		}
 	},
 	"scripts": {
+		"check": "tsgo --noEmit -p tsconfig.json",
 		"check:tsgo": "tsgo --noEmit -p tsconfig.json"
 	},
 	"dependencies": {

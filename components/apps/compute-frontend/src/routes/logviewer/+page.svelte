@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { rayCluster, rayLogFiles, rayLogContent, type RayNode } from '@rask/api';
+	import { type RayNode } from '@rask/api';
+	import { getRayCluster, getLogFiles, getLogContent } from '$lib/remote/compute.remote';
 	import { Card } from '@rask/ui/card';
 	import {
 		RefreshCw,
@@ -17,14 +18,26 @@
 		X,
 	} from '@lucide/svelte';
 
-	let nodes = $state<RayNode[]>([]);
-	let nodeId = $state<string>('');
-	let files = $state<Record<string, string[]>>({});
+	// THE ONE PATTERN (see lib/remote/compute.remote.ts): every read is a cached
+	// remote query threading `getRequestEvent().fetch`. Nodes come from the cluster
+	// query; files + content are PARAM queries re-keyed by the current node /
+	// filename / line count, so changing any of them re-runs the read. Selection is
+	// the only mutable local state; everything displayed derives from `.current`.
+	const clusterQuery = getRayCluster();
+	const nodes = $derived(clusterQuery.current?.nodes ?? []);
+
+	// Deep-link defaults from the URL, resolved once nodes have loaded.
+	const qNode = $derived(page.url.searchParams.get('node'));
+	const nodeId = $derived(
+		(qNode && nodes.find((n) => n.node_id === qNode)?.node_id) ||
+			(nodes.find((n) => n.is_head) ?? nodes[0])?.node_id ||
+			'',
+	);
+
+	let selectedNode = $state<string | null>(null);
 	let selected = $state<string>('');
-	let content = $state<string>('');
 	let lines = $state(500);
-	let error = $state<string | null>(null);
-	let loading = $state(false);
+	const activeNode = $derived(selectedNode ?? nodeId);
 
 	// view options
 	let follow = $state(false);
@@ -32,7 +45,7 @@
 	let lineNumbers = $state(true);
 	let onlyMatches = $state(false);
 	let query = $state('');
-	let fileQuery = $state('');
+	let fileQuery = $state(page.url.searchParams.get('q') ?? '');
 
 	let pre: HTMLElement | null = $state(null);
 	let stick = $state(true); // auto-scroll only while parked at the bottom
@@ -41,54 +54,47 @@
 		(s ?? '').replace(/^kuberay-ai-dev-cluster-/, '') || '';
 	const nodeName = (n: RayNode) => short(n.hostname) || n.node_ip || n.node_id?.slice(0, 12) || '?';
 
-	async function loadNodes() {
-		try {
-			nodes = (await rayCluster()).nodes ?? [];
-			const qNode = page.url.searchParams.get('node');
-			nodeId =
-				(qNode && nodes.find((n) => n.node_id === qNode)?.node_id) ||
-				(nodes.find((n) => n.is_head) ?? nodes[0])?.node_id ||
-				'';
-			fileQuery = page.url.searchParams.get('q') ?? '';
-			await loadFiles();
-			const qFile = page.url.searchParams.get('file');
-			if (qFile) await openFile(qFile);
-		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
-		}
-	}
+	// File inventory for the active node — param query, re-keys on node change.
+	const filesQuery = $derived(activeNode ? getLogFiles({ nodeId: activeNode }) : null);
+	const filesPayload = $derived(filesQuery?.current ?? null);
+	const files = $derived(filesPayload?.ok ? filesPayload.files : {});
 
-	async function loadFiles() {
-		if (!nodeId) return;
+	// Tail content for the selected file — param query, re-keys on node/file/lines.
+	const contentQuery = $derived(
+		activeNode && selected
+			? getLogContent({ nodeId: activeNode, filename: selected, lines })
+			: null,
+	);
+	const contentPayload = $derived(contentQuery?.current ?? null);
+	const content = $derived(contentPayload?.ok ? (contentPayload.text ?? '') : '');
+	const loading = $derived(contentQuery?.loading ?? false);
+	const error = $derived.by(() => {
+		if (filesQuery?.error) return String(filesQuery.error);
+		if (contentQuery?.error) return String(contentQuery.error);
+		if (filesPayload && !filesPayload.ok) return filesPayload.error ?? 'failed to list logs';
+		if (contentPayload && !contentPayload.ok) return contentPayload.error ?? 'failed to read log';
+		return null;
+	});
+
+	// Refresh the cluster node list every 5s (the file/content reads re-key
+	// themselves; the manual refresh button re-fetches the active content query).
+	onMount(() => {
+		const timer = setInterval(() => clusterQuery.refresh().catch(() => {}), 5000);
+		return () => clearInterval(timer);
+	});
+
+	function selectNode(id: string) {
+		selectedNode = id;
 		selected = '';
-		content = '';
-		try {
-			const p = await rayLogFiles(nodeId);
-			files = p.ok ? p.files : {};
-			error = p.ok ? null : (p.error ?? 'failed to list logs');
-		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
-		}
 	}
 
-	async function openFile(name: string) {
+	function openFile(name: string) {
 		selected = name;
 		stick = true;
-		await loadContent();
 	}
 
-	async function loadContent() {
-		if (!nodeId || !selected) return;
-		loading = true;
-		try {
-			const p = await rayLogContent(nodeId, selected, lines);
-			content = p.ok ? (p.text ?? '') : '';
-			error = p.ok ? null : (p.error ?? 'failed to read log');
-		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
-		} finally {
-			loading = false;
-		}
+	function refreshContent() {
+		contentQuery?.refresh().catch(() => {});
 	}
 
 	function onScroll() {
@@ -112,12 +118,22 @@
 		URL.revokeObjectURL(url);
 	}
 
-	onMount(loadNodes);
+	// Open a deep-linked file once its node's inventory has loaded.
+	let deepLinkOpened = false;
+	$effect(() => {
+		if (deepLinkOpened || !filesPayload?.ok) return;
+		const qFile = page.url.searchParams.get('file');
+		if (qFile) openFile(qFile);
+		deepLinkOpened = true;
+	});
 
-	// Live tail.
+	// Live tail — poll the content query while following. `.refresh().catch()` is
+	// mandatory: an uncaught refresh rejection evicts the query and kills the loop.
 	$effect(() => {
 		if (!follow || !selected) return;
-		const t = setInterval(loadContent, 2500);
+		const cq = contentQuery;
+		if (!cq) return;
+		const t = setInterval(() => cq.refresh().catch(() => {}), 2500);
 		return () => clearInterval(t);
 	});
 
@@ -188,8 +204,8 @@
 		<div class="flex flex-wrap items-center gap-2">
 			<select
 				class="border-input bg-background h-7 rounded-md border px-2 text-xs"
-				bind:value={nodeId}
-				onchange={loadFiles}
+				value={activeNode}
+				onchange={(e) => selectNode(e.currentTarget.value)}
 			>
 				{#each nodes as n (n.node_id)}
 					<option value={n.node_id}>{nodeName(n)}{n.is_head ? ' (head)' : ''}</option>
@@ -198,7 +214,6 @@
 			<select
 				class="border-input bg-background h-7 rounded-md border px-2 text-xs"
 				bind:value={lines}
-				onchange={loadContent}
 			>
 				{#each [200, 500, 2000, 10000] as n (n)}<option value={n}>{n} lines</option>{/each}
 			</select>
@@ -214,7 +229,7 @@
 			</button>
 			<button
 				class="hover:bg-muted inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs disabled:opacity-50"
-				onclick={loadContent}
+				onclick={refreshContent}
 				disabled={!selected || loading}
 			>
 				<RefreshCw class="h-3 w-3 {loading ? 'animate-spin' : ''}" />

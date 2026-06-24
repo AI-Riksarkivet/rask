@@ -45,12 +45,13 @@
 	const proxies = $derived(Object.values(payload?.proxies ?? {}));
 	const ctrl = $derived(payload?.controller_health_metrics);
 
-	let proxySortKey = $state('node_ip');
+	type ProxySortKey = 'status' | 'node_ip' | 'pod' | 'log';
+	let proxySortKey = $state<ProxySortKey>('node_ip');
 	let proxySortDir = $state<'asc' | 'desc'>('asc');
 	function setProxySort(col: string) {
 		if (proxySortKey === col) proxySortDir = proxySortDir === 'asc' ? 'desc' : 'asc';
 		else {
-			proxySortKey = col;
+			proxySortKey = col as ProxySortKey;
 			proxySortDir = 'asc';
 		}
 	}

@@ -102,19 +102,10 @@
 		untrack(() => loadPage(v, k));
 	});
 
-	// Re-render when toggles change
-	$effect(() => {
-		void showBoxes;
-		void showPolygons;
-		void showText;
-		void hoveredLine;
-		controller?.render();
-	});
-
 	// Search → viewer: when the URL carries `?line=<line_id>`, find the matching
-	// TextLine after ALTO loads, force polygons on, and apply a prominent
-	// "you came from search" highlight (separate state from `hoveredLine` so
-	// hovering elsewhere doesn't erase it).
+	// TextLine after ALTO loads and apply a prominent "you came from search"
+	// highlight (separate state from `hoveredLine` so hovering elsewhere doesn't
+	// erase it). drawOverlay draws the rose ring for this index.
 	// Derived: the line index matching `?line=<id>`, recomputed from the URL id +
 	// loaded ALTO (was a $state mutated inside an $effect — derived-state-as-effect).
 	const searchHighlightLine = $derived.by(() => {
@@ -125,18 +116,24 @@
 		return idx >= 0 ? idx : -1;
 	});
 
-	// One-shot side effect on search arrival: hide the per-line boxes/polygons so
-	// only the search hit's highlight stands out (the rest would just clutter). Fires
-	// only when the resolved index changes, so toggling the boxes back on afterwards sticks.
-	$effect(() => {
-		if (searchHighlightLine >= 0) {
-			showBoxes = false;
-			showPolygons = false;
-		}
-	});
+	// Canon §2 "derive, don't effect-into-state": on search arrival we want only
+	// the search hit's highlight to stand out (the per-line boxes/polygons would
+	// just clutter), but we must NOT mutate the persisted `showBoxes`/`showPolygons`
+	// toggles — that write-through to localStorage permanently clobbered the user's
+	// saved preferences. Instead derive render-only flags that suppress the
+	// per-line overlays while on a search-highlighted page; the stored toggles are
+	// untouched, so leaving search restores the user's real preferences.
+	const effectiveShowBoxes = $derived(searchHighlightLine >= 0 ? false : showBoxes);
+	const effectiveShowPolygons = $derived(searchHighlightLine >= 0 ? false : showPolygons);
 
-	// Re-render whenever the search highlight changes too.
+	// Re-render when the (render-only) overlay flags, hover, or search highlight
+	// change. Tracking the effective flags covers search arrival/departure too,
+	// so no separate searchHighlightLine effect is needed.
 	$effect(() => {
+		void effectiveShowBoxes;
+		void effectiveShowPolygons;
+		void showText;
+		void hoveredLine;
 		void searchHighlightLine;
 		controller?.render();
 	});
@@ -228,13 +225,13 @@
 			const b = line.bbox;
 			const isHover = i === hoveredLine;
 
-			if (showBoxes) {
+			if (effectiveShowBoxes) {
 				ctx.lineWidth = isHover ? 2 : 1.2;
 				ctx.strokeStyle = isHover ? '#f59e0b' : lineColor(i, 0.7);
 				ctx.strokeRect(b.x, b.y, b.w, b.h);
 			}
 
-			if (showPolygons && line.polygon && line.polygon.length > 1) {
+			if (effectiveShowPolygons && line.polygon && line.polygon.length > 1) {
 				ctx.beginPath();
 				ctx.moveTo(line.polygon[0]!.x, line.polygon[0]!.y);
 				for (let p = 1; p < line.polygon.length; p++) {
@@ -296,8 +293,7 @@
 	}
 
 	function onKey(e: KeyboardEvent) {
-		const target = e.target as HTMLElement;
-		if (target?.matches('input, textarea')) return;
+		if (e.target instanceof HTMLElement && e.target.matches('input, textarea')) return;
 		if ((e.key === 'ArrowLeft' || e.key === 'h' || e.key === 'k') && prevPage) {
 			goto(`${base}/viewer/${encodeURIComponent(volume)}/${encodeURIComponent(prevPage.key)}`, {
 				replaceState: false,

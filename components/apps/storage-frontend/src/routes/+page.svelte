@@ -23,6 +23,14 @@
 	let detailKey = $state<string | null>(null);
 	const detailOpen = $derived(detailKey !== null);
 
+	// THE ONE PATTERN (see lib/remote/storage.remote.ts): cache the query handle,
+	// keyed on reactive params via `$derived`, so navigation re-keys + re-runs it
+	// (re-calling listObjects() in markup would defeat the cache). `await`-ed in a
+	// `<svelte:boundary>` below — first paint already has the data (experimental.async).
+	const listingQuery = $derived(listObjects({ bucket, prefix }));
+	// Object HEAD metadata, lazily keyed on the open key (null = dialog closed).
+	const headQuery = $derived(detailKey ? headObject({ bucket, key: detailKey }) : null);
+
 	const segments = $derived(prefix.split('/').filter(Boolean));
 
 	function openPrefix(p: string) {
@@ -49,15 +57,6 @@
 		const d = new Date(iso);
 		return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 	}
-	// SvelteKit surfaces error() throws as { status, body: { message } } and plain
-	// throws as Error — read a readable message from either shape.
-	function errText(e: unknown): string {
-		if (e && typeof e === 'object' && 'body' in e) {
-			const body = (e as { body?: { message?: string } }).body;
-			if (body?.message) return body.message;
-		}
-		return e instanceof Error ? e.message : String(e);
-	}
 </script>
 
 <div class="mx-auto flex w-full max-w-4xl flex-col gap-4 p-6">
@@ -83,16 +82,31 @@
 			<House class="h-3.5 w-3.5" />
 			{bucket}
 		</button>
-		{#each segments as seg, i (i)}
+		{#each segments as seg, i (segments.slice(0, i + 1).join('/'))}
 			<ChevronRight class="h-3.5 w-3.5" />
 			<button class="hover:text-foreground" onclick={() => crumbTo(i)}>{seg}</button>
 		{/each}
 	</div>
 
 	<div class="bg-card overflow-hidden rounded-lg border">
-		{#await listObjects({ bucket, prefix })}
-			<div class="text-muted-foreground p-8 text-center text-sm">Loading {bucket}…</div>
-		{:then listing}
+		<svelte:boundary>
+			{#snippet pending()}
+				<div class="text-muted-foreground p-8 text-center text-sm">Loading {bucket}…</div>
+			{/snippet}
+
+			{#snippet failed(boundaryError, reset)}
+				<div class="flex flex-col items-center gap-2 p-8 text-center">
+					<TriangleAlert class="h-8 w-8 text-amber-500" />
+					<p class="text-sm font-medium">Couldn't load objects</p>
+					<p class="text-muted-foreground max-w-md text-xs">
+						{boundaryError instanceof Error ? boundaryError.message : String(boundaryError)}
+					</p>
+					<Badge variant="warning">{bucket}</Badge>
+					<Button size="sm" variant="outline" onclick={reset}>Retry</Button>
+				</div>
+			{/snippet}
+
+			{@const listing = await listingQuery}
 			{#if listing.prefixes.length === 0 && listing.objects.length === 0}
 				<div class="text-muted-foreground p-8 text-center text-sm">Empty prefix.</div>
 			{:else}
@@ -147,16 +161,7 @@
 					</tbody>
 				</table>
 			{/if}
-		{:catch err}
-			<div class="flex flex-col items-center gap-2 p-8 text-center">
-				<TriangleAlert class="h-8 w-8 text-amber-500" />
-				<p class="text-sm font-medium">Couldn't load objects</p>
-				<p class="text-muted-foreground max-w-md text-xs">
-					{errText(err)}
-				</p>
-				<Badge variant="warning">{bucket}</Badge>
-			</div>
-		{/await}
+		</svelte:boundary>
 	</div>
 </div>
 
@@ -167,24 +172,34 @@
 			{@const key = detailKey}
 			<Dialog.Title>{leaf(key)}</Dialog.Title>
 			<Dialog.Description class="font-mono text-xs break-all">{key}</Dialog.Description>
-			{#await headObject({ bucket, key })}
-				<div class="text-muted-foreground py-4 text-sm">Loading details…</div>
-			{:then head}
-				<dl class="grid grid-cols-[6rem_1fr] gap-y-2 text-sm">
-					<dt class="text-muted-foreground">Size</dt>
-					<dd class="font-mono">{fmtSize(head.size)}</dd>
-					<dt class="text-muted-foreground">Type</dt>
-					<dd class="font-mono">{head.content_type ?? '—'}</dd>
-					<dt class="text-muted-foreground">Modified</dt>
-					<dd>{fmtDate(head.last_modified)}</dd>
-					<dt class="text-muted-foreground">ETag</dt>
-					<dd class="font-mono text-xs break-all">{head.etag ?? '—'}</dd>
-				</dl>
-			{:catch err}
-				<p class="text-destructive py-4 text-sm">
-					{errText(err)}
-				</p>
-			{/await}
+			<svelte:boundary>
+				{#snippet pending()}
+					<div class="text-muted-foreground py-4 text-sm">Loading details…</div>
+				{/snippet}
+
+				{#snippet failed(boundaryError, reset)}
+					<div class="flex flex-col items-start gap-2 py-4">
+						<p class="text-destructive text-sm">
+							{boundaryError instanceof Error ? boundaryError.message : String(boundaryError)}
+						</p>
+						<Button size="sm" variant="outline" onclick={reset}>Retry</Button>
+					</div>
+				{/snippet}
+
+				{#if headQuery}
+					{@const head = await headQuery}
+					<dl class="grid grid-cols-[6rem_1fr] gap-y-2 text-sm">
+						<dt class="text-muted-foreground">Size</dt>
+						<dd class="font-mono">{fmtSize(head.size)}</dd>
+						<dt class="text-muted-foreground">Type</dt>
+						<dd class="font-mono">{head.content_type ?? '—'}</dd>
+						<dt class="text-muted-foreground">Modified</dt>
+						<dd>{fmtDate(head.last_modified)}</dd>
+						<dt class="text-muted-foreground">ETag</dt>
+						<dd class="font-mono text-xs break-all">{head.etag ?? '—'}</dd>
+					</dl>
+				{/if}
+			</svelte:boundary>
 			<div class="flex justify-end">
 				<Button href={downloadHref(key)} download={leaf(key)}>
 					<Download class="h-4 w-4" />

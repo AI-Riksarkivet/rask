@@ -203,7 +203,8 @@
 		const out: { text: string; match: boolean }[] = [];
 		let last = 0;
 		for (const m of text.matchAll(re)) {
-			const i = m.index!;
+			const i = m.index;
+			if (i === undefined) continue;
 			if (i > last) out.push({ text: text.slice(last, i), match: false });
 			out.push({ text: m[0], match: true });
 			last = i + m[0].length;

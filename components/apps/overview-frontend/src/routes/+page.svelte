@@ -254,46 +254,43 @@
 </svelte:head>
 
 <main class="bg-background flex-1 overflow-auto">
-	<div class="flex flex-wrap items-center justify-end gap-2 px-6 pt-4">
-		{#if payload}
+	<svelte:boundary>
+		{#snippet pending()}
+			<div class="text-muted-foreground p-6">Loading…</div>
+		{/snippet}
+
+		{#snippet failed(boundaryError, reset)}
+			<Card
+				class="border-destructive/40 bg-destructive/10 text-destructive m-6 flex flex-col gap-2 p-3"
+			>
+				<span>{boundaryError instanceof Error ? boundaryError.message : String(boundaryError)}</span
+				>
+				<Button size="sm" variant="outline" onclick={reset}>Retry</Button>
+			</Card>
+		{/snippet}
+
+		<div class="flex flex-wrap items-center justify-end gap-2 px-6 pt-4">
 			<span
-				class="mr-1 hidden text-[11px] text-[oklch(0.78_0.005_260)] sm:inline"
+				class="text-muted-foreground mr-1 hidden text-[11px] sm:inline"
 				title={`last synced ${payload.generated_at ?? 'never'}`}
 			>
 				{payload.summary.total_batches.toLocaleString()} batches · synced {fmtSync(
 					payload.generated_at,
 				)}
 			</span>
-		{/if}
-		<Button size="sm" variant="outline" onclick={runSync} disabled={syncing}>
-			<RefreshCw class={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
-			{syncing ? 'Syncing…' : 'Sync from S3'}
-		</Button>
-		<Button size="sm" onclick={() => goto(`${base}/new`)}>New volume</Button>
-	</div>
+			<Button size="sm" variant="outline" onclick={runSync} disabled={syncing}>
+				<RefreshCw class={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
+				{syncing ? 'Syncing…' : 'Sync from S3'}
+			</Button>
+			<Button size="sm" onclick={() => goto(`${base}/new`)}>New volume</Button>
+		</div>
 
-	<div class="flex flex-col gap-4 p-6 text-sm">
-		{#if syncError}
-			<Card class="border-destructive/40 bg-destructive/10 text-destructive p-3">
-				{syncError}
-			</Card>
-		{/if}
-
-		<svelte:boundary>
-			{#snippet pending()}
-				<div class="text-muted-foreground">Loading…</div>
-			{/snippet}
-
-			{#snippet failed(boundaryError, reset)}
-				<Card
-					class="border-destructive/40 bg-destructive/10 text-destructive flex flex-col gap-2 p-3"
-				>
-					<span
-						>{boundaryError instanceof Error ? boundaryError.message : String(boundaryError)}</span
-					>
-					<Button size="sm" variant="outline" onclick={reset}>Retry</Button>
+		<div class="flex flex-col gap-4 p-6 text-sm">
+			{#if syncError}
+				<Card class="border-destructive/40 bg-destructive/10 text-destructive p-3">
+					{syncError}
 				</Card>
-			{/snippet}
+			{/if}
 
 			<!-- Summary tiles -->
 			<section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -342,9 +339,9 @@
 							<Badge variant="secondary" class="text-[10px]">offline</Badge>
 						{/if}
 					</div>
-					{#if rayClusterPayload?.ok && rayClusterPayload.total_resources}
+					{#if rayClusterPayload?.ok && rayClusterPayload.total_resources && rayClusterPayload.used_resources}
 						{@const tr = rayClusterPayload.total_resources}
-						{@const ur = rayClusterPayload.used_resources!}
+						{@const ur = rayClusterPayload.used_resources}
 						<div class="mt-1 font-mono text-2xl tabular-nums">
 							{ur.GPU.toFixed(0)}/{tr.GPU.toFixed(0)} GPU
 						</div>
@@ -589,6 +586,6 @@
 					</table>
 				</div>
 			</Card>
-		</svelte:boundary>
-	</div>
+		</div>
+	</svelte:boundary>
 </main>

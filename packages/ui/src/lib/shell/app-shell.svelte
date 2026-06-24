@@ -29,7 +29,14 @@
 	// The sidebar's project always reflects the URL's project segment (single source of
 	// truth), so it can't drift to the prop default when an app forgets to pass `project`.
 	const sidebarProject = $derived({ name: projectName, subtitle: project.subtitle ?? 'Project' });
-	const crumbs = $derived(segs.slice(1).map((s) => s.replace(/-/g, ' ')));
+	// Key by the accumulated path prefix so repeated segments (e.g. /studio/studio) stay unique;
+	// the human label drops the dashes.
+	const crumbs = $derived(
+		segs.slice(1).map((seg, i) => ({
+			id: segs.slice(0, i + 2).join('/'),
+			label: seg.replace(/-/g, ' '),
+		})),
+	);
 </script>
 
 <Sidebar.Provider class="h-svh overflow-hidden">
@@ -45,9 +52,9 @@
 				<Separator orientation="vertical" class="mr-2 data-[orientation=vertical]:h-4" />
 				<nav aria-label="Breadcrumb" class="flex min-w-0 items-center gap-1.5 text-sm">
 					<span class="text-muted-foreground shrink-0 capitalize">{projectName}</span>
-					{#each crumbs as crumb (crumb)}
+					{#each crumbs as crumb (crumb.id)}
 						<ChevronRight class="text-muted-foreground/40 size-3.5 shrink-0" />
-						<span class="text-foreground truncate font-medium capitalize">{crumb}</span>
+						<span class="text-foreground truncate font-medium capitalize">{crumb.label}</span>
 					{/each}
 				</nav>
 			</div>

@@ -142,7 +142,7 @@ export async function browseCatalog(
 
 // The /batches/{id}/catalog endpoint returns just the EAD row, not the
 // {listed, cached, transcribed} enrichment flags (those are search-time only).
-// Parse the partial row leniently, then fill the flags as false below.
+// Parse against this flag-less row schema, then fill the flags as false below.
 const CatalogRowSchema = v.object({
 	id: v.string(),
 	reference_code: v.string(),

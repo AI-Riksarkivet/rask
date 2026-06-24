@@ -4,6 +4,9 @@ import {
 	rayOverview,
 	rayJobs,
 	rayCluster,
+	rayHealth,
+	rayLogFiles,
+	rayLogContent,
 	actorsList,
 	tasksList,
 	serveApplications,
@@ -12,6 +15,8 @@ import {
 	type OverviewPayload,
 	type RayJobsPayload,
 	type RayClusterPayload,
+	type RayHealth,
+	type LogsPayload,
 	type ActorInfo,
 	type TaskInfo,
 	type ServePayload,
@@ -78,5 +83,30 @@ export const getRayJobLogs = query(
 	v.object({ id: v.string(), tail: v.optional(v.number()) }),
 	async ({ id, tail }): Promise<JobLogsPayload> => {
 		return rayJobLogs(id, tail ?? 2000, getRequestEvent().fetch);
+	},
+);
+
+/** Ray cluster health — the live "is it up?" signal at the top of the overview.
+ *  Polled every 5s (offline-safe payload). */
+export const getRayHealth = query(async (): Promise<RayHealth> => {
+	return rayHealth(getRequestEvent().fetch);
+});
+
+/** Log-file inventory for one node (grouped by category). Param query keyed by
+ *  `{ nodeId }` so switching node re-keys it. Offline-safe (`{ ok:false }`). */
+export const getLogFiles = query(
+	v.object({ nodeId: v.string() }),
+	async ({ nodeId }): Promise<LogsPayload> => {
+		return rayLogFiles(nodeId, getRequestEvent().fetch);
+	},
+);
+
+/** Tail content of one log file on one node. Param query keyed by
+ *  `{ nodeId, filename, lines }` so any of them changing re-keys it; polled
+ *  while following. Offline-safe (`{ ok:false }`). */
+export const getLogContent = query(
+	v.object({ nodeId: v.string(), filename: v.string(), lines: v.optional(v.number()) }),
+	async ({ nodeId, filename, lines }): Promise<LogsPayload> => {
+		return rayLogContent(nodeId, filename, lines ?? 500, getRequestEvent().fetch);
 	},
 );
