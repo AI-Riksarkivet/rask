@@ -127,9 +127,11 @@ sequenceDiagram
 
     - **Client-side** code uses the relative `/api/*` — the **Vite dev proxy** forwards it to
       `VIEWER_BACKEND` (`:8888`) in dev; same-origin in prod.
-    - **Server-side** code (SSR `load`, remote functions) uses an **absolute** `RASK_GATEWAY_URL`
-      because a server has no origin. Both end at the **one gateway** — see the
-      [services fleet](system-overview.md) for how it routes onward.
+    - **Server-side** code (SSR `load`, remote functions) fetches the **same relative `/api/*`**,
+      but a per-app `src/hooks.server.ts` (`makeGatewayHandleFetch` from `@rask/api`) rewrites it
+      to the **in-cluster gateway** (`RASK_GATEWAY_URL`) during SSR — a server has no origin, so a
+      relative URL would otherwise hairpin out through the external ingress. Both end at the **one
+      gateway** — see the [services fleet](system-overview.md) for how it routes onward.
 
 ## The shared shell (one sidebar, zero drift)
 

@@ -45,11 +45,17 @@ Styling is **Tailwind 4 + OKLCH `@theme` tokens** from `@rask/ui/styles/tokens.c
 
 **THE canonical pattern.** Every read is a **server-only remote `query()`** in
 `src/lib/remote/<domain>.remote.ts` whose body calls a **`@rask/api`** function,
-passing **`getRequestEvent().fetch`**. That request-scoped fetch resolves the
-relative `/api/*` URLs against the request origin during SSR, inherits cookies,
-and inlines the response into the SSR payload (no hydration refetch, no
-`onMount` waterfall). Reuse `@rask/api`'s schemas + parse — **zero duplicated
-fetch/validation per app.**
+passing **`getRequestEvent().fetch`**. The `@rask/api` functions fetch **relative
+`/api/*`**; a per-app server hook (`src/hooks.server.ts` →
+`makeGatewayHandleFetch(env.RASK_GATEWAY_URL)`) rewrites those to the **in-cluster
+gateway** during SSR, so a server read goes straight to the gateway instead of
+hairpinning out through the external ingress (a relative URL on the server would
+otherwise resolve against the incoming request origin). The request-scoped fetch
+inherits cookies and inlines the response into the SSR payload (no hydration
+refetch, no `onMount` waterfall). Reuse `@rask/api`'s schemas + parse — **zero
+duplicated fetch/validation per app**, and the rewrite is single-sourced in
+`@rask/api` so a new app only adds the one-line hook. Client-side fetches stay
+relative (same-origin, correct).
 
 ```ts
 // src/lib/remote/overview.remote.ts
@@ -70,7 +76,9 @@ export const getRayJobs = query(async (): Promise<RayJobsPayload> => {
 When the endpoint isn't in `@rask/api` yet (e.g. storage's volumes-api), the
 query fetches the **gateway by absolute URL** (`GATEWAY_URL` from
 `$lib/server/env`, defaulting `http://localhost:8888`, overridable via
-`RASK_GATEWAY_URL`) and **parses the untrusted response at the boundary**, and
+`RASK_GATEWAY_URL`) — equivalent to the relative-`/api` + `hooks.server.ts`
+rewrite above, just inlined — and **parses the untrusted response at the
+boundary**, and
 surfaces the real upstream status with `error(502, …)` (a plain throw becomes a
 generic "Internal Error"):
 
