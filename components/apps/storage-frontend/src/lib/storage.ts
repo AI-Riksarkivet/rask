@@ -6,7 +6,6 @@ const S3ObjectSchema = v.object({
 	size: v.number(),
 	last_modified: v.nullable(v.string()),
 });
-export type S3Object = v.InferOutput<typeof S3ObjectSchema>;
 
 /** A delimiter-listed page of a bucket (mirrors `S3Listing` in volumes-api). */
 export const S3ListingSchema = v.object({

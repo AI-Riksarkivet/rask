@@ -2,7 +2,13 @@ import * as v from 'valibot';
 import { error } from '@sveltejs/kit';
 import { query } from '$app/server';
 import { GATEWAY_URL } from '$lib/server/env';
-import { BUCKETS, S3ListingSchema, S3ObjectHeadSchema, type S3Listing, type S3ObjectHead } from '$lib/storage';
+import {
+	BUCKETS,
+	S3ListingSchema,
+	S3ObjectHeadSchema,
+	type S3Listing,
+	type S3ObjectHead,
+} from '$lib/storage';
 
 // Remote functions (server-only) — the storage microfrontend's data layer over
 // the gateway's agnostic volumes-api (works against MinIO/AWS/HCP, see

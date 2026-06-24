@@ -26,7 +26,6 @@
 	// Raw ALTO XML, retained alongside the parsed `alto` so the right pane can
 	// render it as text. fetchAlto returns the string before parseAlto runs.
 	let xmlText = $state<string | null>(null);
-	let altoError = $state<string | null>(null);
 	let view = $state<'lines' | 'xml'>('lines');
 	let copied = $state(false);
 	let hoveredLine = $state(-1);
@@ -168,7 +167,6 @@
 	}
 
 	async function loadPage(v: string, k: string) {
-		altoError = null;
 		xmlText = null;
 		hoveredLine = -1;
 
@@ -194,7 +192,7 @@
 			xmlText = xml ?? null;
 			alto = xml ? parseAlto(xml) : null;
 		} catch (e) {
-			altoError = e instanceof Error ? e.message : String(e);
+			console.error('fetchAlto', e);
 			xmlText = null;
 			alto = null;
 		}

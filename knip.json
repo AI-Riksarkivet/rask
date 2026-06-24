@@ -1,0 +1,15 @@
+{
+	"$schema": "https://unpkg.com/knip@6/schema.json",
+	"workspaces": {
+		"components/apps/*-frontend": {
+			"entry": ["src/**/*.remote.ts", "src/**/*.server.ts"]
+		},
+		"components/apps/frontend": {
+			"entry": ["src/**/*.remote.ts", "src/**/*.server.ts"]
+		},
+		"packages/ui": {
+			"entry": ["src/lib/**/index.{ts,js}"],
+			"project": ["src/**/*.{ts,js,svelte}"]
+		}
+	}
+}

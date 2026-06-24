@@ -1,9 +1,9 @@
-.PHONY: help install build test lint fmt clean storybook typecheck check ci viewer dev-micro dev-frontends viewer-frontend frontend-storage frontend-compute frontend-build frontend-check ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge
+.PHONY: help install build test lint fmt clean storybook typecheck knip check ci viewer dev-micro dev-frontends viewer-frontend frontend-storage frontend-compute frontend-build frontend-check ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge
 
 help:
 	@echo "Targets:"
 	@echo "  install build test lint fmt clean storybook"
-	@echo "  typecheck check ci   frontend-check frontend-build"
+	@echo "  typecheck knip check ci   frontend-check frontend-build"
 	@echo "  viewer                                 — core monolith dev server (:8888)"
 	@echo "  dev-micro                              — backend fleet (gateway :8888 + per-domain services)"
 	@echo "  dev-frontends                          — all 6 microfrontends behind the :3024 proxy (browse http://localhost:3024)"
@@ -46,7 +46,13 @@ clean:
 typecheck:
 	uvx ty check
 
-check: fmt lint typecheck
+# ---- frontend dead-code + dep gate (knip, repo-wide; see knip.json) ---------
+# Cross-workspace tool — analyses the whole JS graph at once, so it stays a
+# root-level gate (like lint/format), not a per-package turbo task.
+knip:
+	bun run knip
+
+check: fmt lint typecheck knip
 
 ci: check test
 
