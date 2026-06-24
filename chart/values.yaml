@@ -222,6 +222,10 @@ dapr:
   # falls back to httpx env-URLs. (The control-plane subchart is dapr.enabled above.)
   sidecars: true
   logLevel: "info"
+  # Max request body size for Dapr service invocation. Dapr defaults to 4Mi,
+  # which rejects multi-image batch uploads (POST /api/batches/<id>/upload routes
+  # gateway -> core-api over Dapr). Raise it to fit real batches.
+  maxBodySize: "32Mi"
 
 kueue:
   enabled: true
