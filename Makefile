@@ -319,4 +319,4 @@ k3s-purge: k3s-down ## Uninstall + delete PVCs (postgres/minio/hf-cache data)
 
 # ---- e2e (Playwright) -------------------------------------------------------
 e2e: ## Browser e2e against a running deploy (RASK_E2E_BASE_URL, default http://localhost)
-	cd e2e && bunx playwright test
+	cd e2e && bun install && bunx playwright test
