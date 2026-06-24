@@ -1,6 +1,5 @@
 """service-kit Dapr wiring — config gating + client factory (no sidecar needed)."""
 
-import os
 
 import pytest
 

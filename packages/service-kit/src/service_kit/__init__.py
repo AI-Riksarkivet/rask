@@ -11,11 +11,11 @@ import os
 import sys
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-
-from dotenv import load_dotenv
 from typing import TYPE_CHECKING, Annotated
 
+from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, FastAPI, Request
+
 
 if TYPE_CHECKING:
     from dapr.clients import DaprClient
