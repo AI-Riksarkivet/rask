@@ -244,6 +244,24 @@ pg-down:
 pg-status:
 	docker ps --filter name=rask-pg --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 
+# ---- rustfs (S3-compatible object storage) smoke ---------------------------
+# Prove packages/storage + LanceDB work against a REAL rustfs backend (not moto).
+# rustfs serves the S3 API on :9000; rask is storage-agnostic, so this is env-only.
+rustfs-up: ## Start a local rustfs S3 server in docker (:9000, rustfsadmin/rustfsadmin)
+	docker run -d --name rask-rustfs -p 9000:9000 \
+	  -e RUSTFS_ACCESS_KEY=rustfsadmin -e RUSTFS_SECRET_KEY=rustfsadmin \
+	  rustfs/rustfs:latest
+	@echo "rustfs up on http://localhost:9000 (access/secret: rustfsadmin). Smoke: make smoke-rustfs"
+
+rustfs-down:
+	docker rm -f rask-rustfs
+
+smoke-rustfs: ## Storage smoke vs rustfs (S3 round-trip + LanceDB) — needs rustfs-up
+	RASK_S3_ENDPOINT_URL=http://localhost:9000 \
+	  AWS_ACCESS_KEY_ID=rustfsadmin AWS_SECRET_ACCESS_KEY=rustfsadmin \
+	  RASK_S3_INSECURE=1 RASK_SMOKE_BUCKET=rask-rustfs-smoke \
+	  uv run python components/scripts/smoke_rustfs.py
+
 pg-deps:
 	uv sync --package core --extra postgres --extra migrations
 
