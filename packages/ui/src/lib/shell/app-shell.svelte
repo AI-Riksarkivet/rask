@@ -4,7 +4,30 @@
 	import { Separator } from '../components/separator/index.js';
 	import AppSidebar from './app-sidebar.svelte';
 	import { ChevronRight } from '@lucide/svelte';
+	import { gsap } from 'gsap';
 	import type { Project, NavUser } from './nav-config.js';
+
+	// Subtle content settle-in. Runs once when the shell MOUNTS — i.e. on a fresh
+	// document load, which is every cross-zone microfrontend landing — so the page gently
+	// rises + fades in instead of snapping after the hard nav. Only the content area
+	// animates; the sidebar/shell stay put. In-app soft navs don't remount the shell, so
+	// this does NOT replay on every click (kept subtle, not annoying); those keep each
+	// app's onNavigate view transition. SSR-safe: the wrapper starts at opacity:0 (CSS
+	// below) so the first paint never shows content pre-animation (no flash); GSAP fades
+	// it in and clears the transform so nothing lingers (no containing block for fixed/
+	// portaled children). Reduced-motion: no animation, just reveal.
+	function contentEnter(el: HTMLElement) {
+		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+			el.style.opacity = '1';
+			return;
+		}
+		const tween = gsap.fromTo(
+			el,
+			{ y: 8 },
+			{ opacity: 1, y: 0, duration: 0.32, ease: 'power2.out', clearProps: 'transform' },
+		);
+		return () => tween.kill();
+	}
 
 	// The shared application shell: ONE grouped sidebar + a content inset with an
 	// integrated breadcrumb top bar. Every microfrontend wraps its routes in this so
@@ -59,8 +82,23 @@
 				</nav>
 			</div>
 		</header>
-		<div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+		<div class="content-enter flex min-h-0 flex-1 flex-col overflow-hidden" {@attach contentEnter}>
 			{@render children()}
 		</div>
 	</Sidebar.Inset>
 </Sidebar.Provider>
+
+<style>
+	/* Start hidden so a fresh-document first paint never shows content before the GSAP
+	   contentEnter fades it in (no flash). The app is a hydrated SSR app (requires JS),
+	   so an initial opacity:0 is safe; GSAP sets inline opacity:1 once it runs, which
+	   overrides this. Reduced-motion users get it visible immediately. */
+	.content-enter {
+		opacity: 0;
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.content-enter {
+			opacity: 1;
+		}
+	}
+</style>
