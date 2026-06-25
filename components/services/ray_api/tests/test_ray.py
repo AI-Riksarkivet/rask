@@ -43,6 +43,28 @@ def test_serve_proxy_unreachable_returns_502(client: TestClient) -> None:
     assert resp.status_code == 502
 
 
+def test_serve_proxy_restores_trailing_slash(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ray's Serve REST API is trailing-slash-strict (`/api/serve/applications/`).
+    Intermediaries (the dapr sidecar's service-invoke) normalize the trailing slash
+    away, so the proxy must restore it before forwarding to the dashboard — otherwise
+    Ray returns 404 and the SPA's /serve view breaks."""
+    from ray_kit import dashboard
+    from ray_kit.schemas import ProxyResponse
+
+    captured: dict[str, str] = {}
+
+    async def fake_proxy(http, dashboard_url, path, method, query, headers, body):
+        captured["path"] = path
+        return ProxyResponse(content=b"{}", status_code=200, headers={"content-type": "application/json"})
+
+    monkeypatch.setattr(dashboard, "proxy", fake_proxy)
+
+    # Slash-less path, as it arrives after dapr strips the trailing slash.
+    resp = client.get("/api/serve/applications")
+    assert resp.status_code == 200
+    assert captured["path"] == "api/serve/applications/"
+
+
 def test_get_ray_client_rebuilds_lazily_when_none(monkeypatch: pytest.MonkeyPatch) -> None:
     """A None client (Ray not yet up at boot) is rebuilt on first use and cached."""
     from ray_api import dependencies
