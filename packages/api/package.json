@@ -12,9 +12,13 @@
 	},
 	"scripts": {
 		"check": "tsgo --noEmit -p tsconfig.json",
-		"check:tsgo": "tsgo --noEmit -p tsconfig.json"
+		"check:tsgo": "tsgo --noEmit -p tsconfig.json",
+		"test": "vitest run"
 	},
 	"dependencies": {
 		"valibot": "^1.4.1"
+	},
+	"devDependencies": {
+		"vitest": "^4.1.9"
 	}
 }

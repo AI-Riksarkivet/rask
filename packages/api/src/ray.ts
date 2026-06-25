@@ -12,7 +12,7 @@ export const RayHealthSchema = v.object({
 	ok: v.boolean(),
 	dashboard_url: v.string(),
 	ray_version: v.optional(v.string()),
-	error: v.optional(v.string()),
+	error: v.optional(v.nullable(v.string())),
 });
 export type RayHealth = v.InferOutput<typeof RayHealthSchema>;
 
@@ -37,7 +37,7 @@ export const RayJobsPayloadSchema = v.object({
 	ok: v.boolean(),
 	dashboard_url: v.string(),
 	jobs: v.optional(v.array(RayJobSchema)),
-	error: v.optional(v.string()),
+	error: v.optional(v.nullable(v.string())),
 });
 export type RayJobsPayload = v.InferOutput<typeof RayJobsPayloadSchema>;
 
@@ -82,7 +82,7 @@ export const RayClusterPayloadSchema = v.object({
 	total_resources: v.optional(ResourceTripletSchema),
 	used_resources: v.optional(ResourceTripletSchema),
 	nodes: v.optional(v.array(RayNodeSchema)),
-	error: v.optional(v.string()),
+	error: v.optional(v.nullable(v.string())),
 });
 export type RayClusterPayload = v.InferOutput<typeof RayClusterPayloadSchema>;
 

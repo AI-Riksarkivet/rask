@@ -1,0 +1,288 @@
+# Default values for rustfs-operator.
+
+# Operator deployment configuration
+operator:
+  # Number of operator replicas
+  replicas: 1
+  # Force leader election setting.
+  # If unset/null, Helm enables it automatically when replicas > 1.
+  leaderElect:
+
+  image:
+    repository: rustfs/operator
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  # Image pull secrets for private registries
+  imagePullSecrets: []
+
+  # Resource limits and requests
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  metrics:
+    # Enable the operator observability HTTP endpoint.
+    enabled: true
+    port: 8080
+    service:
+      type: ClusterIP
+      port: 8080
+      clusterIP: ""
+      annotations: {}
+
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+    annotations: {}
+
+  prometheusRule:
+    enabled: false
+    labels: {}
+    annotations: {}
+
+  tenantMonitor:
+    enabled: true
+    intervalSeconds: 300
+
+  # Basic process probes. Override these for stricter platform-specific checks.
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: metrics
+    initialDelaySeconds: 10
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    httpGet:
+      path: /readyz
+      port: metrics
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  # Environment variables
+  env:
+    - name: RUST_LOG
+      value: info
+
+  # Security context for the operator pod
+  podSecurityContext:
+    fsGroup: 65534
+
+  # Security context for the operator container
+  securityContext:
+    allowPrivilegeEscalation: false
+    runAsNonRoot: true
+    runAsUser: 65534
+    capabilities:
+      drop:
+        - ALL
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Node selector for operator pod placement
+  nodeSelector: {}
+
+  # Tolerations for operator pod scheduling
+  tolerations: []
+
+  # Affinity rules for operator pod scheduling
+  affinity: {}
+
+# Kubernetes ServiceAccount for operator STS endpoint
+sts:
+  # Enable/disable operator STS exposure
+  enabled: true
+  # Kubernetes TokenReview audience used by RustFS STS clients.
+  # Workloads should request projected service account tokens for this audience.
+  audience: sts.rustfs.com
+  # STS service/port in operator pods
+  port: 4223
+  tls:
+    # Operator STS listens with TLS by default and uses this Secret for server certs.
+    enabled: true
+    # When true, the operator creates the Secret if it is missing.
+    auto: true
+  service:
+    type: ClusterIP
+    port: 4223
+    clusterIP: ""
+    annotations: {}
+
+# ServiceAccount configuration
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+# RBAC configuration
+rbac:
+  # Specifies whether RBAC resources should be created
+  create: true
+
+# Namespace where the operator will be deployed
+# If not specified, uses the release namespace
+namespace: ""
+
+# Additional labels to add to all resources
+commonLabels: {}
+
+# Additional annotations to add to all resources
+commonAnnotations: {}
+
+# Console web UI configuration
+console:
+  # Enable console deployment
+  enabled: true
+
+  # Number of console replicas
+  replicas: 1
+
+  # Console server port
+  port: 9090
+
+  # Log level for console (trace, debug, info, warn, error)
+  logLevel: info
+
+  # Secret used to encrypt Console session cookies.
+  # All Console replicas must use the same secret.
+  # If not set, an existing chart Secret is reused.
+  # On first install, a random secret is generated.
+  # Generate with: openssl rand -base64 32
+  jwtSecret: ""
+
+  image:
+    # Console uses the same image as operator
+    repository: rustfs/operator
+    tag: ""  # Defaults to operator.image.tag
+    pullPolicy: IfNotPresent
+
+  # Image pull secrets for private registries
+  imagePullSecrets: []
+
+  # Resource limits and requests
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  # Extra environment variables for the Console API.
+  # For cross-site frontend/API deployments, set:
+  # - CORS_ALLOWED_ORIGINS=https://ui.example.com
+  # - CONSOLE_COOKIE_SAME_SITE=None
+  # Keep CONSOLE_COOKIE_SECURE enabled for production.
+  env: []
+
+  # Security context for the console pod
+  podSecurityContext:
+    fsGroup: 65534
+
+  # Security context for the console container
+  securityContext:
+    allowPrivilegeEscalation: false
+    runAsNonRoot: true
+    runAsUser: 65534
+    capabilities:
+      drop:
+        - ALL
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Node selector for console pod placement
+  nodeSelector: {}
+
+  # Tolerations for console pod scheduling
+  tolerations: []
+
+  # Affinity rules for console pod scheduling
+  affinity: {}
+
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 9090
+    nodePort: ""
+    clusterIP: ""
+    loadBalancerIP: ""
+    loadBalancerSourceRanges: []
+    annotations: {}
+
+  # ServiceAccount configuration
+  serviceAccount:
+    # Specifies whether a service account should be created
+    create: true
+    # Annotations to add to the service account
+    annotations: {}
+    # The name of the service account to use.
+    name: ""
+
+  # RBAC configuration
+  rbac:
+    # Specifies whether RBAC resources should be created
+    create: true
+
+  # Legacy split frontend deployment. The default operator image already embeds
+  # console-web static files, so the Console service serves both / and /api/v1.
+  # Enable this only when you intentionally deploy a separate frontend image.
+  frontend:
+    enabled: false
+    replicas: 1
+    image:
+      repository: rustfs/console-web
+      tag: latest
+      pullPolicy: IfNotPresent
+    imagePullSecrets: []
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+    securityContext:
+      allowPrivilegeEscalation: false
+      runAsNonRoot: true
+      runAsUser: 101
+      capabilities:
+        drop:
+          - ALL
+      seccompProfile:
+        type: RuntimeDefault
+    service:
+      port: 80
+
+  # Ingress configuration. By default, / and /api/v1 are served by the Console
+  # service from the unified operator image. When frontend.enabled=true, / is
+  # routed to the legacy split frontend service and /api to the Console backend.
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+      # kubernetes.io/ingress.class: nginx
+      # cert-manager.io/cluster-issuer: letsencrypt-prod
+    hosts:
+      - host: console.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+      # - secretName: console-tls
+      #   hosts:
+      #     - console.example.com

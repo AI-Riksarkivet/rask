@@ -1,0 +1,128 @@
+{{- $livenessProbe := default dict .Values.operator.livenessProbe -}}
+{{- $readinessProbe := default dict .Values.operator.readinessProbe -}}
+{{- if and (not .Values.operator.metrics.enabled) (or (hasKey $livenessProbe "httpGet") (hasKey $readinessProbe "httpGet")) -}}
+{{- fail "operator.metrics.enabled=false requires overriding operator.livenessProbe and operator.readinessProbe because the chart defaults use the metrics port" -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rustfs-operator.fullname" . }}
+  namespace: {{ include "rustfs-operator.namespace" . }}
+  labels:
+    {{- include "rustfs-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.operator.replicas }}
+  selector:
+    matchLabels:
+      {{- include "rustfs-operator.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: operator
+  template:
+    metadata:
+      labels:
+        {{- include "rustfs-operator.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: operator
+    spec:
+      serviceAccountName: {{ include "rustfs-operator.serviceAccountName" . }}
+      {{- with .Values.operator.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.operator.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: operator
+          image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
+          imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
+          command: ["./operator", "server"]
+          {{- $leaderElect := gt (int .Values.operator.replicas) 1 }}
+          {{- if hasKey .Values.operator "leaderElect" }}
+          {{- if ne .Values.operator.leaderElect nil }}
+          {{- $leaderElect = .Values.operator.leaderElect }}
+          {{- end }}
+          {{- end }}
+          {{- if $leaderElect }}
+          args:
+            - --leader-elect
+          {{- end }}
+          {{- if or .Values.sts.enabled .Values.operator.metrics.enabled }}
+          ports:
+          {{- if .Values.operator.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.operator.metrics.port }}
+              protocol: TCP
+          {{- end }}
+          {{- if .Values.sts.enabled }}
+            - name: sts
+              containerPort: {{ .Values.sts.port }}
+              protocol: TCP
+          {{- end }}
+          {{- end }}
+          {{- with .Values.operator.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.operator.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: OPERATOR_METRICS_ENABLED
+              value: {{ .Values.operator.metrics.enabled | quote }}
+            - name: OPERATOR_METRICS_PORT
+              value: {{ .Values.operator.metrics.port | quote }}
+            - name: OPERATOR_TENANT_MONITOR_ENABLED
+              value: {{ .Values.operator.tenantMonitor.enabled | quote }}
+            - name: OPERATOR_TENANT_MONITOR_INTERVAL_SECONDS
+              value: {{ .Values.operator.tenantMonitor.intervalSeconds | quote }}
+            - name: OPERATOR_STS_ENABLED
+              value: {{ .Values.sts.enabled | quote }}
+            - name: OPERATOR_STS_AUDIENCE
+              value: {{ .Values.sts.audience | quote }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          {{- if .Values.sts.enabled }}
+            - name: OPERATOR_STS_PORT
+              value: {{ .Values.sts.port | quote }}
+            - name: OPERATOR_STS_SERVICE_NAME
+              value: {{ printf "%s-sts" (include "rustfs-operator.fullname" .) | quote }}
+            - name: OPERATOR_STS_TLS_ENABLED
+              value: {{ .Values.sts.tls.enabled | quote }}
+            - name: OPERATOR_STS_TLS_AUTO
+              value: {{ .Values.sts.tls.auto | quote }}
+          {{- end }}
+          {{- with .Values.operator.env }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.operator.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.operator.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.operator.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.operator.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.operator.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
