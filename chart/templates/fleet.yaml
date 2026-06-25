@@ -86,9 +86,9 @@ spec:
             - name: RASK_OTEL_ENABLED
               value: "true"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "http://rask-greptimedb-standalone:4001"
+              value: "http://rask-greptimedb-standalone:4000/v1/otlp"
             - name: OTEL_EXPORTER_OTLP_PROTOCOL
-              value: "grpc"
+              value: "http/protobuf"
             - name: OTEL_EXPORTER_OTLP_HEADERS
               value: "x-greptime-db-name=public"
             - name: OTEL_SERVICE_NAME

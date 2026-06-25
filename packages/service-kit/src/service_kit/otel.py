@@ -1,4 +1,4 @@
-"""OpenTelemetry wiring — opt-in OTLP/gRPC export for the fleet services.
+"""OpenTelemetry wiring — opt-in OTLP/HTTP export for the fleet services.
 
 No-op unless instrumentation is enabled (settings.otel_enabled) or an OTLP
 endpoint is configured (OTEL_EXPORTER_OTLP_ENDPOINT). The OTLP exporter reads
@@ -25,7 +25,7 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings) -> bool:
         return False
 
     from opentelemetry import trace
-    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
     from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
     from opentelemetry.instrumentation.logging import LoggingInstrumentor
