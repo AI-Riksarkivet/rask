@@ -136,19 +136,17 @@ async function runSync() {
 - `redirect()`/`error()` thrown from a `command()`-style mutation expecting it
   to navigate; mutations return values, the page reacts.
 
-**Two fetch paths — reconciled.** The `getRequestEvent().fetch` pattern above
-works on the client (relative `/api/*` resolves against the browser's origin) but
-not raw during SSR inside a k3s pod (relative URL has no origin → "Unable to
-connect"). The fix is a shared `handleFetch` hook in each app's
-`src/hooks.server.ts` that transparently rewrites server-side `/api/*` requests
-to the absolute in-cluster gateway (`${GATEWAY_URL}` from
-`$lib/server/env.ts`, defaulting `http://localhost:8888`, overridable via
-`RASK_GATEWAY_URL`). `handleFetch` is only called by SvelteKit for server-side
-`event.fetch` calls, so it does not affect client-side requests. The four apps
-that use `@rask/api` + `getRequestEvent().fetch` (`overview-frontend`,
-`discover-frontend`, `compute-frontend`, `frontend`) each carry this hook;
-`storage-frontend` fetches the gateway at an absolute URL directly in its remote
-functions and does not need it.
+**Why the hook (the SSR-origin problem).** `getRequestEvent().fetch` of a relative
+`/api/*` resolves against the browser origin on the client, but a server has no
+origin — raw during SSR inside a k3s pod the relative URL fails ("Unable to
+connect") or hairpins out through the external ingress. That is what the
+`makeGatewayHandleFetch` hook above solves: SvelteKit calls `handleFetch` only for
+server-side `event.fetch`, so it rewrites SSR `/api/*` to the in-cluster gateway
+and leaves client requests untouched. The **three data apps** (`overview-frontend`,
+`discover-frontend`, `compute-frontend`) each carry the hook in
+`src/hooks.server.ts`; the catch-all `frontend` has **no** `@rask/api` data layer
+(so no hook), and `storage-frontend` fetches the gateway at an absolute URL
+directly in its remote functions.
 
 **Gate:** `*.remote.ts` is a knip entry point (dead remote functions are caught
 by `knip`). Server-only safety (no client import of `$app/server`) is enforced
