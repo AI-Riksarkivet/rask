@@ -20,7 +20,7 @@ make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
 ```
 
 `k3s-build` builds the full fleet (gateway, core-api, search-api, volumes-api,
-ray-api, orchestrator) plus the frontend and ray images as `:dev` tags.
+ray-api, orchestrator) plus all 7 frontend images and the ray image as `:dev` tags.
 `k3s-import` side-loads them into k3s containerd via `docker save | ctr images
 import`, so no registry is needed.
 
@@ -32,18 +32,17 @@ Production-shaped image definitions live at `.docker/`, built with `docker build
 | Image | Base | Notes |
 |---|---|---|
 | `rask-runner` | `nvidia/cuda:12.4.0-runtime-ubuntu22.04` | GPU. uv-managed Python + venv; `CMD ["runner"]`. Needs `--shm-size`, `--ulimit nofile=65535`, GPU via nvidia-container-toolkit. |
-| `rask-frontend` | build + serve on `oven/bun:1-debian` | The catch-all SvelteKit app, **SSR via `svelte-adapter-bun`** (no longer an nginx SPA). Pre-builds `@rask/ui`, then `bun build`; the final stage ships the Bun runtime + `node_modules` and runs `bun build/index.js` on `:3000`. tini as PID 1, non-root UID 10001. |
-| `rask-storage-frontend` | build + serve on `oven/bun:1-debian` | The Storage microfrontend (`base /storage`). Same Bun-SSR shape as `rask-frontend`; healthcheck hits `/storage`. |
-| `rask-compute-frontend` | build + serve on `oven/bun:1-debian` | The Compute/Ray microfrontend (`base /compute`). Same Bun-SSR shape; healthcheck hits `/compute/overview`. |
+| `frontend` / `<domain>-frontend` (7 images) | build + serve on `oven/bun:1-debian` | All built from **one parametrized** `.docker/frontend.dockerfile` via `--build-arg APP=<dir>`. **SSR via `svelte-adapter-bun`** (no longer an nginx SPA). `APP=frontend` is the catch-all (viewer-frontend, owns `/`); the six `<domain>-frontend` apps (overview/compute/discover/storage/train/studio) each pin base `/default/<domain>` and are probed there. Pre-builds `@rask/ui`, then `bun build`; the final stage ships the Bun runtime + `node_modules` and runs `bun build/index.js` on `:3000`. tini as PID 1, non-root UID 10001. |
+| backend services (per-workload) | uv-managed Python | One dockerfile each: `gateway`, `core-api`, `orchestrator`, `volumes-api`, `search-api`, `ray-api` (plus `ray.dockerfile` for the Serve image). |
 
-The three frontend images share one non-obvious build contract (documented in each
-dockerfile header): `svelte-adapter-bun` externalizes `@sveltejs/kit`, so the final
+The one frontend dockerfile encodes a non-obvious build contract (documented in its
+header): `svelte-adapter-bun` externalizes `@sveltejs/kit`, so the final
 image must ship `node_modules` — `build/` is not standalone. And bun 1.3's **isolated
 linker** keeps real packages in `node_modules/.bun/` with per-member symlinks, so the
 final stage copies both the root store **and** the app dir (with its symlinks) and
-runs from the app dir. Each image `COPY`s the full JS workspace (`frontend`,
-`storage-frontend`, `compute-frontend`, `packages/{api,ui}`) so `bun install` resolves
-— siblings are build-stage only, never shipped.
+runs from the app dir. The build `COPY`s the full JS workspace (all of
+`components/apps` wholesale + `packages/{api,ui}`) so `bun install` resolves — siblings
+are build-stage only, never shipped.
 
 !!! note "Frontend images aren't built by `.dagger`"
     The Dagger module covers Python CI only (`migrate-up`, `test-pg` — see
@@ -52,9 +51,9 @@ runs from the app dir. Each image `COPY`s the full JS workspace (`frontend`,
     service) image builds into Dagger or a GitHub Actions matrix is a
     deployment-cycle follow-up.
 
-`.docker/viewer.dockerfile` references the dissolved monolith and is pending update
-to the new per-service entrypoints (gateway, core-api, orchestrator, volumes-api,
-search-api, ray-api).
+The dissolved `viewer` monolith no longer has a dockerfile; its per-service
+entrypoints each ship their own (`gateway`, `core-api`, `orchestrator`,
+`volumes-api`, `search-api`, `ray-api`).
 
 The frontend topology those images serve — the Turborepo vertical-microfrontend
 proxy, the shared `@rask/ui` shell, and per-app `kit.paths.base` — is documented in
@@ -124,5 +123,6 @@ Sensitive config comes from an operator-created Secret (`existingSecret`, defaul
 - **Postgres** (prod) via `DATABASE_URL=postgresql+asyncpg://…`; **SQLite** (dev)
   at `.cache/batches.db`. Schema changes go through **Alembic** — never
   `create_all` at startup. Local Postgres: `make pg-up` / `pg-migrate`.
-- **S3 / HCP** two-bucket setup (`images-batch` input, `images-batch-alto`
-  output) plus the `images-batch-search` Lance tables.
+- **S3** (backend-agnostic: MinIO / rustfs / AWS; HCP only as a legacy env-alias
+  bridge) two-bucket setup (`images-batch` input, `images-batch-alto` output) plus
+  the `images-batch-search` Lance tables.

@@ -17,8 +17,9 @@ status: new
 ## The verdict that drove the slim-down
 
 A storage-agnosticism audit (multi-agent, read-only) confirmed `packages/storage`
-speaks **plain S3** — MinIO / AWS / Ceph / HCP all work with **env vars only, zero
-code changes**. The coupling was *lexical* (env-var names were `HCP_*`), not
+speaks **plain S3** — MinIO / rustfs / AWS / Ceph / HCP all work with **env vars only,
+zero code changes** (MinIO and rustfs are the targeted backends, both verified). The
+coupling was *lexical* (env-var names were `HCP_*`), not
 functional, and is now fixed. So ra-hcp's backend buys rask nothing, and every part
 of it is an active coupling risk:
 
@@ -35,12 +36,12 @@ of it is an active coupling risk:
 model is imported. If per-project storage isolation is ever wanted, it's per-project
 S3 *prefixes* governed by rask RBAC — never an HCP tenant.
 
-## Swap to MinIO today — no code change
+## Swap to MinIO / rustfs today — no code change
 
 - `RASK_S3_ENDPOINT_URL=http://minio:9000` (or `S3_ENDPOINT_URL`, or legacy `HCP_ENDPOINT` — all accepted via `AliasChoices`)
-- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` = your MinIO keys (set directly → `derive_hcp_creds` no-ops)
+- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` = your backend keys (set directly → `derive_hcp_creds` no-ops)
 - `RASK_S3_INSECURE=1` for a self-signed endpoint; do **not** set `HCP_USERNAME/HCP_PASSWORD`
-- The Helm chart already ships an **in-cluster MinIO** (`minio.enabled`), so the agnostic backend is deployed, not hypothetical.
+- The Helm chart already ships an **in-cluster MinIO** (`minio.enabled`), so the agnostic backend is deployed, not hypothetical. rustfs is the other verified target.
 
 ## Done
 
@@ -55,15 +56,16 @@ S3 *prefixes* governed by rask RBAC — never an HCP tenant.
 - **`packages/tracker` + `packages/validate`** — the only ra-hcp Python worth keeping
   (a transfer ledger + an image validator — the medallion governance pieces). Landed as
   leaf libs.
+- **`storage-frontend` bucket-browser** — the MFE has a read-only browser wired to
+  `/objects` (list + prefix nav), an **object-detail dialog** over `/object` (HEAD
+  metadata) and **download** via `/object/download`, all styled with `@rask/ui` and
+  routed through the gateway proxy. It imports **zero** ra-hcp backend code; the data
+  comes from `volumes-api`. Upload/delete remain a later, backend-gated step.
 
 ## Left
 
-- **`storage-frontend` bucket-browser** — the MFE already has a read-only browser wired
-  to `/objects` (list + prefix nav). Enhance it with an **object-detail panel** (`/object`)
-  and **download** (`/object/download`), styled with `@rask/ui`, base-aware links. Take
-  UX cues from ra-hcp's `frontend/src/routes/(app)/buckets/[bucket]/sections/bucket-object-browser.svelte`
-  — but import **zero** ra-hcp backend code; the data comes from `volumes-api`. Read-only first;
-  upload/delete are a later, backend-gated step.
+- **Upload / delete** — the read-only browser is complete; write operations are the
+  remaining, backend-gated step.
 
 ## Optional, later
 

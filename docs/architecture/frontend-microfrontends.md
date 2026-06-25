@@ -33,7 +33,7 @@ to internalise, because it explains everything else.
 
     ``` mermaid
     graph LR
-      U[Browser] -->|/batches| P{Proxy / Gateway}
+      U[Browser] -->|/compute| P{Proxy / Gateway}
       U -->|/storage| P
       P -->|/*| M[frontend app<br/>full page + sidebar]
       P -->|/storage| S[storage app<br/>full page + sidebar]
@@ -71,9 +71,12 @@ under **`packages/`**.
 ```mermaid
 graph TD
   subgraph ca["components/apps"]
-    F[frontend<br/><sub>catch-all — most routes today</sub>]
-    SF[storage-frontend<br/><sub>MFE: /storage</sub>]
-    CF[compute-frontend<br/><sub>MFE: /compute</sub>]
+    F[frontend<br/><sub>catch-all — / home picker</sub>]
+    OF[overview-frontend<br/><sub>MFE: /default/overview</sub>]
+    SF[storage-frontend<br/><sub>MFE: /default/storage</sub>]
+    CF[compute-frontend<br/><sub>MFE: /default/compute</sub>]
+    DF[discover-frontend<br/><sub>MFE: /default/discover</sub>]
+    TF[train · studio<br/><sub>MFE: /default/{train,studio}</sub>]
     R[runner<br/><sub>Python CLI</sub>]
   end
   subgraph pk["packages"]
@@ -81,20 +84,28 @@ graph TD
     API[api — @rask/api<br/><sub>API client + types</sub>]
   end
   F -->|workspace:*| UI
+  OF -->|workspace:*| UI
   SF -->|workspace:*| UI
   CF -->|workspace:*| UI
-  F --> API
-  SF --> API
+  DF -->|workspace:*| UI
+  TF -->|workspace:*| UI
+  OF --> API
   CF --> API
+  DF --> API
 ```
 
-| Path                               | What it is                                                                                                                                                                                                                  |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `components/apps/frontend`         | **The catch-all app** (the proxy default). Owns `/` (the home / project picker, no sidebar) + `/<project>/overview` (the batch view). Package name `viewer-frontend`.                                                       |
-| `components/apps/storage-frontend` | A carved-out microfrontend — owns `/<project>/storage` (the S3 browser); base `/default/storage`.                                                                                                                           |
-| `components/apps/compute-frontend` | A carved-out microfrontend — owns `/<project>/compute` (the Ray/cluster UI: overview, cluster, jobs, actors, serve, logviewer, api-docs); base `/default/compute`.                                                          |
-| `packages/ui` (`@rask/ui`)         | The **shared design system**: styled components (`button`, `badge`, `card`, `dialog`, `sort-header`, `sidebar`, …) **plus the shell** (`@rask/ui/shell` → `AppShell`, `AppSidebar`, `nav-config`).                          |
-| `packages/api` (`@rask/api`)       | The **shared API client + types** — every app imports it (`@rask/api`) instead of copying `api.ts`. JIT package (exports `./src/index.ts` source, no build), split into `ray`/`batches`/`search`/`volumes`/`types` modules. |
+There are **7** SvelteKit apps: the catch-all plus **six** domain MFEs.
+
+| Path                                | What it is                                                                                                                                                                                                                  |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `components/apps/frontend`          | **The catch-all app** (the proxy default). Owns `/` (the home / project picker, no sidebar) + the `/<project>` entry redirect. Package name `viewer-frontend`; no data layer.                                               |
+| `components/apps/overview-frontend` | A carved-out microfrontend — owns `/<project>/overview` (the batch view); base `/default/overview`.                                                                                                                         |
+| `components/apps/storage-frontend`  | A carved-out microfrontend — owns `/<project>/storage` (the S3 browser); base `/default/storage`.                                                                                                                           |
+| `components/apps/compute-frontend`  | A carved-out microfrontend — owns `/<project>/compute` (the Ray/cluster UI: overview, cluster, jobs, actors, serve, logviewer, api-docs); base `/default/compute`.                                                          |
+| `components/apps/discover-frontend` | A carved-out microfrontend — owns `/<project>/discover` (search, browse, viewer); base `/default/discover`.                                                                                                                 |
+| `components/apps/{train,studio}-frontend` | Carved-out microfrontends — `/<project>/train` (model training, dummy) and `/<project>/studio` (mini-applications, dummy); bases `/default/train` · `/default/studio`.                                                  |
+| `packages/ui` (`@rask/ui`)          | The **shared design system**: styled components (`button`, `badge`, `card`, `dialog`, `sort-header`, `sidebar`, …) **plus the shell** (`@rask/ui/shell` → `AppShell`, `AppSidebar`, `nav-config`).                          |
+| `packages/api` (`@rask/api`)        | The **shared API client + types** — every app imports it (`@rask/api`) instead of copying `api.ts`. JIT package (exports `./src/index.ts` source, no build), split into `ray`/`batches`/`search`/`volumes`/`types` modules. |
 
 ## How a request flows (frontend → services)
 
@@ -128,10 +139,12 @@ sequenceDiagram
     - **Client-side** code uses the relative `/api/*` — the **Vite dev proxy** forwards it to
       `VIEWER_BACKEND` (`:8888`) in dev; same-origin in prod.
     - **Server-side** code (SSR `load`, remote functions) fetches the **same relative `/api/*`**,
-      but a per-app `src/hooks.server.ts` (`makeGatewayHandleFetch` from `@rask/api`) rewrites it
-      to the **in-cluster gateway** (`RASK_GATEWAY_URL`) during SSR — a server has no origin, so a
-      relative URL would otherwise hairpin out through the external ingress. Both end at the **one
-      gateway** — see the [services fleet](system-overview.md) for how it routes onward.
+      but the three data apps (`overview`/`compute`/`discover`) ship a `src/hooks.server.ts`
+      (`makeGatewayHandleFetch` from `@rask/api`) that rewrites it to the **in-cluster gateway**
+      (`RASK_GATEWAY_URL`) during SSR — a server has no origin, so a relative URL would otherwise
+      hairpin out through the external ingress. (`storage` instead builds an **absolute**
+      `GATEWAY_URL` directly in its remote functions; the catch-all has no data layer.) Both end at
+      the **one gateway** — see the [services fleet](system-overview.md) for how it routes onward.
 
 ## The shared shell (one sidebar, zero drift)
 
@@ -178,24 +191,25 @@ yields project-first URLs. Multi-project (a dynamic base) is deliberately deferr
 
 | Domain app                        | Routes it owns                                                       | `kit.paths.base`    | Status         |
 | --------------------------------- | -------------------------------------------------------------------- | ------------------- | -------------- |
-| `frontend` (catch-all)            | `/` home picker · `/<project>/overview` (the batch view)             | _(none — default)_  | **done ✅**    |
+| `frontend` (catch-all)            | `/` home picker · `/<project>` entry redirect                        | _(none — default)_  | **done ✅**    |
+| `overview-frontend`               | overview (the batch view)                                            | `/default/overview` | **done ✅**    |
 | `compute-frontend` (the "ray" UI) | compute: overview, cluster, jobs, actors, serve, logviewer, api-docs | `/default/compute`  | **done ✅**    |
 | `storage-frontend`                | storage (the S3 browser)                                             | `/default/storage`  | **done ✅**    |
-| `discover-frontend`               | search, browse, viewer                                               | `/default/discover` | **carving 🔧** |
-| `train-frontend`                  | model training (dummy)                                               | `/default/train`    | **carving 🔧** |
-| `studio-frontend`                 | mini-applications (dummy)                                            | `/default/studio`   | **carving 🔧** |
+| `discover-frontend`               | search, browse, viewer                                               | `/default/discover` | **done ✅**    |
+| `train-frontend`                  | model training (dummy)                                               | `/default/train`    | **done ✅**    |
+| `studio-frontend`                 | mini-applications (dummy)                                            | `/default/studio`   | **done ✅**    |
 
-Carving each one is the **same recipe** as `storage`/`compute` (scaffold app → move its routes in
-→ wire `@rask/ui` + `@rask/api` → static base `/default/<domain>` → register in the workspace +
-`microfrontends.json`), not a new hard problem.
+Each was carved with the **same recipe** (scaffold app → move its routes in → wire `@rask/ui` +
+`@rask/api` → static base `/default/<domain>` → register in the workspace + `microfrontends.json`),
+so adding the next domain is not a new hard problem.
 
 ## Running the frontends locally
 
 Start them with Turborepo — no backend required to see the **chrome**:
 
 ```bash
-make dev-frontends     # all apps + @rask/ui watcher + the :3024 proxy (turbo run dev)
-make viewer-frontend   # just the catch-all,  :5173  (serves / and /<project>/overview)
+make dev-frontends     # all 7 apps + @rask/ui watcher + the :3024 proxy (turbo run dev)
+make viewer-frontend   # just the catch-all,  :5273  (serves / and the /<project> redirect)
 make frontend-storage  # just storage,        :5174/default/storage
 make frontend-compute  # just compute,        :5175/default/compute
 ```
@@ -203,9 +217,9 @@ make frontend-compute  # just compute,        :5175/default/compute
 !!! warning "Browse the **proxy** (`:3024`), not the per-app ports"
 
     Each app only owns its own paths. Hitting an app port directly for *another* domain 404s
-    (e.g. `:5173/default/compute` → 404 — compute lives in the compute app). Always browse
-    **`http://localhost:3024`** for the composed site. (If a co-located checkout squats
-    `:5173`, the dev ports can be remapped locally — `strictPort` makes a clash fail loudly.)
+    (e.g. `:5273/default/compute` → 404 — compute lives in the compute app). Always browse
+    **`http://localhost:3024`** for the composed site. (`strictPort` makes a port clash fail
+    loudly instead of drifting to the next free port and breaking the proxy's routing.)
 
 `make dev-frontends` (= `turbo run dev`) also brings up Turborepo's **built-in microfrontends
 proxy** on **`http://localhost:3024`** — the single origin you browse so that a `<a href="/storage">`
@@ -215,10 +229,10 @@ start that one app's port.
 !!! success "Verified: the shared shell renders with **no backend running**"
 
     Each app SSR-renders the `@rask/ui` shell + grouped sidebar on its own — e.g.
-    `GET :5175/compute` → `200`, title `Overview — RASK`, full **Compute / Documents /
-    Storage** nav — with nothing on `:8888`. You only need a backend for live `/api` **data**
-    (some routes, e.g. the catch-all's `/batches`, error without it). Start one with
-    `make dev-micro` (real fleet) or `make viewer` (monolith) — or mock it (below).
+    `GET :5175/default/compute` → `200`, title `Overview — RASK`, full **Overview / Compute /
+    Discover / Storage / Train / Studio** nav — with nothing on `:8888`. You only need a backend
+    for live `/api` **data** (some routes, e.g. the overview app's batch view, error without it).
+    Start one with `make dev-micro` (real fleet) or `make viewer` (monolith) — or mock it (below).
 
 !!! success "Single-origin composition proxy — `:3024` (built into Turborepo)"
 
@@ -229,7 +243,7 @@ start that one app's port.
     Vercel's _hosted_ custom proxy; absent it, turbo uses its built-in Rust proxy). So
     `:3024/compute`, `:3024/storage`, and the catch-all `:3024/*` all serve from one origin,
     which is what makes cross-app `<a href>` navigation work. You _can_ still hit each app on
-    its own port (`:5173`/`:5174`/`:5175`) directly.
+    its own port (catch-all `:5273`, then `:5174`/`:5175`/… per `microfrontends.json`) directly.
 
     The app **without** a `routing` block (`viewer-frontend`) is the proxy's **default /
     catch-all**. Override the proxy port with `localProxyPort` in `microfrontends.json` if
@@ -277,8 +291,10 @@ to the catch-all:
   and Turborepo's **built-in** microfrontends proxy (auto-started from `microfrontends.json`,
   no package needed) composes them on a **single origin at `http://localhost:3024`** — that's
   the URL you actually browse for cross-app nav.
-- **Prod** — the **gateway / K8s ingress** path-routes `/compute`, `/documents`, `/batches`,
-  `/storage` to each app's Bun server (the same pattern as the per-domain _backend_ services).
+- **Prod** — the **gateway / K8s ingress** path-routes `/default/<domain>` (`/default/overview`,
+  `/default/compute`, `/default/discover`, `/default/storage`, `/default/train`, `/default/studio`)
+  to each app's Bun server, with `/` to the catch-all (the same pattern as the per-domain
+  _backend_ services).
 
 !!! note "Toolchain — loyal to rask, not the with-svelte example"
 

@@ -1,8 +1,9 @@
 # Apps
 
-`components/apps/` holds the **runner** CLI plus the SvelteKit
-microfrontends — **frontend** (catch-all), **storage-frontend**, and
-**compute-frontend** — each an SSR Bun-server app.
+`components/apps/` holds the **runner** CLI plus the seven SvelteKit
+microfrontends — **frontend** (the `viewer-frontend` catch-all owning `/`)
+plus six domain apps (**overview**, **compute**, **discover**, **storage**,
+**train**, **studio**) — each an SSR Bun-server app.
 
 ## Runner — `components/apps/runner`
 
@@ -37,17 +38,25 @@ handles.
 
 A **SvelteKit 2 + Svelte 5** app rendered SSR via `svelte-adapter-bun` (a real
 Bun server) that consumes the backend API through the **gateway**. See [UI Components](ui.md) for routes, the
-component model, and the dev/proxy setup. In brief:
+component model, and the dev setup. In brief:
 
 - Talks to the backend through the shared `@rask/api` package (`packages/api`,
-  split into `ray`/`batches`/`search`/`volumes`/`types`) over same-origin
-  `fetch('/api/...')`; the Vite dev server proxies `/api` to `:8888` (the
-  gateway, or the `make viewer` monolith for single-process dev).
-- Provides the batch dashboard, document viewer (zoom/pan + ALTO overlay),
-  line/catalog search, and a full set of Ray dashboard views (jobs, cluster,
-  serve, actors, logs).
-- Run in dev with `make viewer-frontend` (catch-all app, `:5173`); `bun run build`
-  produces the SSR Bun-server bundle (run with `bun ./build/index.js`).
+  with `batches`/`ray`/`search`/`volumes`/`gateway`/`types` modules behind a
+  single barrel export). Reads run **server-only** via remote `query()`
+  functions that call `@rask/api` with `getRequestEvent().fetch`; a per-app
+  `src/hooks.server.ts` (`makeGatewayHandleFetch`) routes those SSR `/api/*`
+  fetches to the gateway on `:8888` (storage-frontend instead uses an absolute
+  `RASK_GATEWAY_URL`).
+- The `frontend` catch-all owns `/` (the platform home — a floating GSAP glass
+  navbar + project picker). The product surfaces are split across the domain
+  apps: the batch dashboard (**overview**), document viewer (zoom/pan + ALTO
+  overlay) and line/catalog search (**discover**), and the Ray dashboard views —
+  jobs, cluster, serve, actors, logs — (**compute**). Every domain app renders
+  the shared `@rask/ui/shell` sidebar.
+- Run the catch-all in dev with `make viewer-frontend` (`:5173`); run all seven
+  apps behind the Turborepo microfrontends proxy on `:3024` with
+  `make dev-frontends`. `bun run build` produces each SSR Bun-server bundle (run
+  with `bun ./build/index.js`).
 
 ```mermaid
 flowchart LR

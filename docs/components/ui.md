@@ -1,51 +1,54 @@
 # UI Components
 
-The browser UI is an **SSR SvelteKit** app (`svelte-adapter-bun` Bun server,
-served behind the gateway `:8888`), being split into per-domain microfrontends
-(`frontend` / `storage-frontend` / `compute-frontend`) under Turborepo, with a
-separate Svelte component library developed in Storybook.
+The browser UI is a set of **SSR SvelteKit** apps (`svelte-adapter-bun` Bun
+servers, behind the gateway `:8888`) composed as routing-based microfrontends
+under Turborepo — the dev composition proxy on `:3024`, the k3s Ingress in prod —
+with a separate Svelte component library developed in Storybook. There are seven
+apps: a catch-all that owns `/` plus six domain apps (overview / compute /
+discover / storage / train / studio), each pinned to base `/default/<domain>`.
 
-## Frontend app — `components/apps/frontend`
+## Catch-all app — `components/apps/frontend`
 
 - **Stack:** Svelte 5, SvelteKit 2, Vite 8, `svelte-adapter-bun` (SSR Bun
   server), Tailwind 4, Bits UI. SSR on (`ssr = true`, `prerender = false`).
-- **Backend calls:** go through the `@rask/api` package (`packages/api`), split
-  into `ray` / `batches` / `search` / `volumes` / `types` modules, over
-  same-origin `fetch('/api/...')`. The Vite dev proxy forwards `^/api(/.*)?$` to
+- **Role:** the platform home — it owns `/` only (a floating GSAP glass navbar +
+  project picker; no sidebar, no data layer). The domain routes below live in the
+  per-domain apps, not here. Its Vite dev proxy still forwards `^/api(/.*)?$` to
   `VIEWER_BACKEND` (default `http://localhost:8888`) — a **regex**, not a plain
   prefix, so `/api-docs` isn't wrongly proxied.
 
-### Routes
+### Domain apps and their routes
 
-| Route | Purpose |
+The six domain apps render the same shared `@rask/ui/shell` `AppShell` sidebar
+(grouped Overview / Compute / Discover / Storage / Train / Studio, project-prefixed
+under `/default/<domain>`). Their backend reads go through the `@rask/api` package
+(`packages/api`) via server-only remote `query()` functions; each data app carries
+a `src/hooks.server.ts` (`makeGatewayHandleFetch`) that routes SSR `/api/*` to the
+in-cluster gateway. Notable routes:
+
+| App | Routes |
 |---|---|
-| `/` → `/batches` | Canonical entry (redirect). |
-| `/batches` | Batch dashboard — filterable/sortable table, chunk list, Ray job + cluster summary; sync and submit chunks. |
-| `/viewer/[volume]/[page]` | Document viewer — zoom/pan canvas, ALTO text overlay with line boxes/polygons, page nav, catalog metadata; honors `?line=` from search. |
-| `/search` | Two-tab search: transcribed lines + catalog, with a tier filter. |
-| `/browse` | Browse cached catalog volumes by tier. |
-| `/jobs`, `/jobs/[id]` | Ray jobs list + job detail/logs. |
-| `/overview`, `/cluster`, `/serve`, `/actors`, `/logviewer` | Ray dashboard views (events, nodes/GPU, Serve apps, actors, log tail). |
-| `/api-docs` | Embeds the FastAPI Swagger UI via the proxy. |
+| **overview** (`overview-frontend`) | Project landing / batch dashboard — filterable/sortable table, chunk list, Ray job + cluster summary; sync and submit chunks. |
+| **compute** (`compute-frontend`) | `cluster`, `jobs` / `jobs/[id]`, `actors`, `serve`, `logviewer` (Ray dashboard views), `api-docs` (embeds FastAPI Swagger UI via the proxy). |
+| **discover** (`discover-frontend`) | `viewer/[volume]/[page]` (zoom/pan canvas, ALTO overlay, page nav, catalog metadata; honors `?line=`), `search` (transcribed lines + catalog, tier filter), `browse` (cached catalog volumes by tier). |
+| **storage** (`storage-frontend`) | S3/volumes browser. |
+| **train**, **studio** | Scaffolds for the training + design workspaces. |
 
-The app shell is the grouped `@rask/ui/shell` `AppShell` / `AppSidebar`
-(Compute / Documents / Batches / Storage) shared by every microfrontend;
-`$lib/components/layout/ray-shell.svelte` composes it with the Ray health badge
-polled every 5s. The viewer's zoom/pan + ALTO parsing live in
-`$lib/canvas.ts` and `$lib/alto.ts`; there's a lightweight Svelte-5 i18n
-(`$lib/i18n.svelte.ts`, English + Swedish).
+The discover viewer's zoom/pan + ALTO parsing live in its `$lib/canvas.ts` and
+`$lib/alto.ts`.
 
 ## Component library — `packages/ui`
 
 A standalone Svelte 5 + Bits UI + Tailwind 4 library (package name
 `@rask/ui`), built with `@sveltejs/package` and showcased in **Storybook**
 (`make storybook` → `:6006`). It ships **Button**, **Badge**, **Card**,
-**Dialog**, **Sidebar**, **SortHeader** (plus `input`, `separator`, `sheet`,
-`skeleton`, `tooltip`) as subpath exports (`@rask/ui/button`, `@rask/ui/badge`,
-…), plus design tokens (`@rask/ui/styles/tokens.css`) and a `cn()` helper
-(`@rask/ui/utils`). The **`@rask/ui/shell`** export is the shared `AppShell` /
-`AppSidebar` / `nav-config` that every microfrontend imports so they all render
-the same grouped sidebar with zero drift.
+**Dialog**, **Sidebar**, **SortHeader**, **Table** (plus `alert-dialog`,
+`avatar`, `checkbox`, `collapsible`, `dropdown-menu`, `progress`) as subpath
+exports (`@rask/ui/button`, `@rask/ui/badge`, …), plus design tokens
+(`@rask/ui/styles/tokens.css`) and a `cn()` helper (`@rask/ui/utils`). The
+**`@rask/ui/shell`** export is the shared `AppShell` / `AppSidebar` /
+`nav-config` that every domain app imports so they all render the same grouped
+sidebar with zero drift.
 
 !!! note "Consumed via `workspace:*`"
     Every app consumes `@rask/ui` via `workspace:*` — the styled components live

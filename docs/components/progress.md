@@ -1,3 +1,5 @@
+> **Historical** — superseded (2026-06); kept for context. See [docs/architecture/frontend-microfrontends.md](../architecture/frontend-microfrontends.md).
+
 # rask frontend → microfrontends: progress
 
 **Goal:** Turborepo + Bun + SvelteKit 2 microfrontends on _our_ stack; shadcn-svelte

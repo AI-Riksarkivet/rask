@@ -7,15 +7,16 @@ This section describes the system as it runs today.
 
 A Python CLI **runner** submits one **Ray Data** job per invocation and blocks on
 materialization; it fans HTR work across a Ray cluster with model weights kept
-resident in **Ray Serve** (TrOCR on `/transcribe`, the full HTRflow pipeline on
-`/htrflow`, and an HTTP variant on `/htr`). Images come from **IIIF** or
+resident in **Ray Serve** (TrOCR on `/transcribe` and the full HTRflow pipeline
+on `/htrflow`). Images come from **IIIF** or
 pre-staged **S3** buckets; ALTO XML output lands back in S3. The HTTP backend is
 a fleet of FastAPI services behind a **gateway** on port 8888: a **core-api**
 for batch/chunk/catalog state, an **orchestrator** service running the submission
 loop, plus stateless **volumes-api**, **search-api**, and **ray-api** services.
-A **SvelteKit 2 + Svelte 5 SSR frontend** (svelte-adapter-bun, served behind the
-gateway), splitting into per-domain microfrontends
-(frontend/storage-frontend/compute-frontend), consumes all of these via the
+A set of **SvelteKit 2 + Svelte 5 SSR** apps (svelte-adapter-bun, served behind the
+gateway) composed as routing-based microfrontend zones — a catch-all `frontend`
+owning `/` plus per-domain apps (overview/compute/discover/storage/train/studio) —
+consumes all of these via the
 gateway for inspection, the batch dashboard, search, and chunk submission. Batch-tracking state lives in a
 relational DB behind a backend-agnostic ORM — SQLite for dev, Postgres for prod.
 Full-text search over transcribed lines plus an archival catalog index live in
@@ -40,7 +41,7 @@ flowchart TB
     volumes --> s3
     rayapi -.->|proxy| head["Ray head :6379 · dashboard :8265"]
     orch -.->|submit job| head
-    head --> serve["Ray Serve<br/><sub>/transcribe · /htrflow · /htr</sub>"]
+    head --> serve["Ray Serve<br/><sub>/transcribe · /htrflow</sub>"]
     head --> workers["Worker actors<br/><sub>PageLoader · Layout · Lines · TranscribeViaServe</sub>"]
     workers -->|read · IIIF on miss| s3
     workers -->|write ALTO| s3
@@ -56,7 +57,7 @@ flowchart TB
   The pipeline's transcribe step is a CPU-only actor that calls Serve over a
   handle — and shards each task three ways so all GPU replicas run concurrently.
 - **Two pipeline shapes** — *actor-per-stage* (`htr`) and *single Serve
-  deployment* (`htrflow` / `htr_http`).
+  deployment* (`htrflow`).
 - **No auth anywhere.** Only optional CORS plus request-id/timing headers; the
   fleet assumes a trusted/localhost network. The frontend hits `/api/*` on the
   gateway (SSR `load` uses the absolute gateway URL server-side);

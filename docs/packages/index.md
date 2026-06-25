@@ -6,11 +6,13 @@ blocks imported by the runnable components.
 | Package | Language | Imported by | Docs |
 |---|---|---|---|
 | `htr` | Python | runner, scripts | [HTR](htr.md) · [API reference](../reference/htr.md) |
-| `storage` | Python | runner, core, search-api, scripts | [Storage](storage.md) · [API reference](../reference/storage.md) |
+| `storage` | Python | runner, core, search-api, volumes-api, scripts | [Storage](storage.md) · [API reference](../reference/storage.md) |
 | `service-kit` | Python | core, core-api, orchestrator, search-api, volumes-api, ray-api | — |
 | `ray-kit` | Python | ray-api, core | — |
-| `ui` (`@rask/ui`) | TS / Svelte | frontend, storage-frontend, compute-frontend | [UI Components](../components/ui.md) |
-| `api` (`@rask/api`) | TS | frontend, storage-frontend, compute-frontend | — |
+| `tracker` | Python | (standalone; not yet wired into a component) | — |
+| `validate` | Python | (standalone; not yet wired into a component) | — |
+| `ui` (`@rask/ui`) | TS / Svelte | all 7 frontend apps | [UI Components](../components/ui.md) |
+| `api` (`@rask/api`) | TS | overview-frontend, compute-frontend, discover-frontend | — |
 
 ## Conventions
 
