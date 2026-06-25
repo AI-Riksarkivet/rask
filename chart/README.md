@@ -1,8 +1,8 @@
 # rask Helm chart
 
 Deploys the full rask fleet to Kubernetes — the **single deploy artifact** for
-both local k3s and production. In-cluster Postgres, MinIO, and KubeRay are
-optional: gate them with `*.enabled` toggles.
+both local k3s and production. In-cluster CloudNativePG (Postgres), RustFS
+(object store), and KubeRay are optional: gate them with `*.enabled` toggles.
 
 ## Fleet
 
@@ -20,11 +20,13 @@ optional: gate them with `*.enabled` toggles.
 
 ## In-cluster dependencies (optional)
 
-| Toggle | What it provisions |
-|---|---|
-| `postgres.enabled=true` | Postgres 16 StatefulSet + PVC |
-| `minio.enabled=true` | MinIO StatefulSet + PVC |
-| `ray.enabled=true` | KubeRay `RayService` (head + GPU worker) |
+Each toggle gates **both** the operator subchart and the custom resource it manages.
+
+| Toggle | Operator | What it provisions | Service |
+|---|---|---|---|
+| `cnpg.enabled=true` | CloudNativePG (`cloudnative-pg` 0.28.3) | `Cluster` named `rask-postgres` (instances, storage, image all under `cnpg.*`) | `rask-postgres-rw:5432` |
+| `rustfs.enabled=true` | RustFS operator (vendored at `third_party/rustfs-operator/`, refreshed via `scripts/vendor-rustfs-operator.sh`) | `Tenant` named `rask-rustfs` — 1 pod / 4 PVCs (erasure-coding minimum); buckets provisioned natively via `spec.buckets` | `rask-rustfs-io:9000` (S3), `rask-rustfs-console:9001` (console) |
+| `ray.enabled=true` | — | KubeRay `RayService` (head + GPU worker) | — |
 
 Set all three to `true` for local k3s. Leave them `false` for production and
 supply credentials via `existingSecret`.
@@ -48,8 +50,8 @@ helm upgrade --install rask chart/ \
   --set existingSecret=rask-app \
   --set config.RAY_DASHBOARD_URL=http://<ray-head>:8265 \
   --set ingress.host=rask.example.org \
-  --set postgres.enabled=false \
-  --set minio.enabled=false \
+  --set cnpg.enabled=false \
+  --set rustfs.enabled=false \
   --set ray.enabled=false
 ```
 
