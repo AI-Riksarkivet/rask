@@ -139,4 +139,8 @@ def make_service_app(
     app.router.redirect_slashes = False
     app.add_middleware(SlashToleranceMiddleware, routes_provider=lambda: app.router.routes)
 
+    from service_kit.otel import setup_otel
+
+    setup_otel(app, service_name=title, settings=settings)
+
     return app

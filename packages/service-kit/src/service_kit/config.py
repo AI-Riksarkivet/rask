@@ -44,6 +44,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        populate_by_name=True,
     )
 
     viewer_input: str = Field(alias="RASK_VIEWER_INPUT")
@@ -100,6 +101,11 @@ class Settings(BaseSettings):
     # the tick into a JetStream consumer. See viewer/services/orchestrator/loop.py.
     orchestrator_autostart: bool = Field(default=False, alias="RASK_ORCHESTRATOR_AUTOSTART")
     orchestrator_interval_seconds: int = Field(default=60, ge=10, alias="RASK_ORCHESTRATOR_INTERVAL_SECONDS")
+
+    # OpenTelemetry opt-in. When true, OTLP/gRPC traces are exported to the
+    # endpoint configured by OTEL_EXPORTER_OTLP_ENDPOINT. Also auto-enabled when
+    # that env var is present, even if this flag is false.
+    otel_enabled: bool = Field(default=False, alias="RASK_OTEL_ENABLED")
 
     # Dapr service invocation. When false, build_dapr_client returns None and the
     # gateway falls back to direct httpx upstreams. DAPR_HTTP_PORT is set by the
