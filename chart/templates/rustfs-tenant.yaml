@@ -1,0 +1,35 @@
+{{- if .Values.rustfs.enabled }}
+apiVersion: rustfs.com/v1alpha1
+kind: Tenant
+metadata:
+  name: {{ include "rask.fullname" . }}-rustfs
+  labels:
+    {{- include "rask.componentLabels" (list . "rustfs") | nindent 4 }}
+spec:
+  image: {{ .Values.rustfs.image | quote }}
+  credsSecret:
+    name: {{ include "rask.fullname" . }}-rustfs
+  {{- if .Values.rustfs.bypassDiskCheck }}
+  # RustFS erasure coding requires its volumes on distinct physical disks. On a
+  # single-node k3s box every local-path PVC lands on the same disk, which trips
+  # a fatal safety check; this flag bypasses it (intended for local/CI per RustFS).
+  env:
+    - name: RUSTFS_UNSAFE_BYPASS_DISK_CHECK
+      value: "true"
+  {{- end }}
+  pools:
+    - name: pool-0
+      servers: {{ .Values.rustfs.servers }}
+      persistence:
+        volumesPerServer: {{ .Values.rustfs.volumesPerServer }}
+        volumeClaimTemplate:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: {{ .Values.rustfs.storage | quote }}
+          storageClassName: {{ .Values.rustfs.storageClass | quote }}
+  buckets:
+    {{- range .Values.rustfs.buckets }}
+    - name: {{ . | quote }}
+    {{- end }}
+{{- end }}

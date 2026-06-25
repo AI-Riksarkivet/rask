@@ -1,10 +1,12 @@
 # Deployment
 
 rask uses a **Helm chart at `chart/`** as the single deploy artifact for both
-local k3s and production Kubernetes. The chart supports in-cluster Postgres,
-MinIO, and KubeRay via `postgres.enabled` / `minio.enabled` / `ray.enabled`
-toggles — set them all to `true` for local k3s, leave them `false` (operator-
-supplied) for production.
+local k3s and production Kubernetes. The chart supports in-cluster
+CloudNativePG (Postgres), RustFS (object store), and KubeRay via
+`cnpg.enabled` / `rustfs.enabled` / `ray.enabled` toggles — each toggle gates
+both the operator subchart and the custom resource it manages. Set all three to
+`true` for local k3s; leave them `false` for production (external deps supplied
+via `existingSecret`).
 
 ## Local deploy (k3s)
 
@@ -100,10 +102,12 @@ orchestrator points at an external cluster via `config.RAY_DASHBOARD_URL`.
 - **frontend** — SvelteKit SSR app on `:3000`.
 - **migration** — pre-install/pre-upgrade hook Job running `alembic upgrade head`.
 - **Ingress** (Traefik) — `/api` → gateway:8888, `/` → frontend:3000.
-- **In-cluster deps** (gated by values toggles):
-  - `postgres.enabled` — Postgres 16 StatefulSet + PVC.
-  - `minio.enabled` — MinIO StatefulSet + PVC.
+- **In-cluster deps** (gated by values toggles — each gate covers both the operator subchart and its CR):
+  - `cnpg.enabled` — CloudNativePG operator + `Cluster` named `rask-postgres`; app connects to `rask-postgres-rw:5432`. Values under `cnpg.*` (instances, storage, imageName, user, database).
+  - `rustfs.enabled` — RustFS operator (vendored at `third_party/rustfs-operator/`, refreshed via `scripts/vendor-rustfs-operator.sh`) + `Tenant` named `rask-rustfs`; S3 at `rask-rustfs-io:9000`, console at `rask-rustfs-console:9001`. Standalone mode: 1 pod / 4 PVCs (erasure-coding minimum). Buckets provisioned natively via `spec.buckets` — no init Job. Values under `rustfs.*`.
   - `ray.enabled` — KubeRay `RayService` (head + worker with GPU limits).
+
+Greenfield local cutover (drops old PVCs): `make k3s-purge && make k3s-up`.
 
 Sensitive config comes from an operator-created Secret (`existingSecret`, default
 `rask-app`); non-sensitive config from `values.yaml` → ConfigMap. See
