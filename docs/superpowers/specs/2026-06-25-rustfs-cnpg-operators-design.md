@@ -46,12 +46,20 @@ Two operator-specific differences drive this design:
 - **RustFS** — controller-only reconciliation, **no admission webhook** (operator
   ns `rustfs-system`, `Tenant` in `rustfs.com/v1alpha1`). Behaves exactly like
   KubeRay → plain gated CR template, no hook needed.
-- **CNPG** — installs a validating/mutating **webhook** with `failurePolicy: Fail`.
-  On a fresh install, a `Cluster` applied before the operator webhook pod is
-  serving is **rejected** and `helm install` errors. CRD-first ordering is not
-  enough; the webhook pod must be Ready. → the `Cluster` CR is rendered as a
-  **`post-install,post-upgrade` hook** so Helm (`--wait`, used by `make k3s-up`)
-  brings the operator to Ready before the hook applies the `Cluster`.
+- **CNPG** — installs a validating/mutating **webhook** defaulting to
+  `failurePolicy: Fail`. On a fresh install, a `Cluster` applied before the
+  operator webhook pod is serving would be **rejected** and `helm install`
+  errors. The webhook `failurePolicy` is configurable via the operator chart
+  values, so we set **`failurePolicy: Ignore`** for the validating *and*
+  mutating webhooks. A `Cluster` created before the operator is Ready is then
+  simply admitted and reconciled once the controller comes up — exactly the
+  KubeRay/`RayService` behavior — so the `Cluster` is a plain gated template,
+  **no Helm hook**. (A post-install hook on a *stateful* `Cluster` was rejected:
+  Helm hook delete-policies would either drop the database on every upgrade
+  (`before-hook-creation`) or error on re-create (no policy). The webhook only
+  performs synchronous defaulting/validation; the operator re-validates at
+  reconcile time and the `Cluster` spec is chart-templated, so the brief
+  Ignore window during install/upgrade is low-risk.)
 
 A second asymmetry is **packaging**:
 
@@ -68,10 +76,11 @@ A second asymmetry is **packaging**:
 | Decision | Choice |
 |---|---|
 | Install model | Gated subchart operators + CR templates, matching the KubeRay style |
-| CNPG `Cluster` ordering | Rendered as a `post-install,post-upgrade` hook (beats the webhook race) |
+| CNPG `Cluster` ordering | Webhook `failurePolicy: Ignore` + plain gated template (no hook) |
 | CNPG topology | **1 instance**, operator-managed (no replica) |
-| RustFS mode | **Standalone** (1 pod / 1 PVC) |
-| RustFS operator packaging | **Vendored locally** under `chart/charts/rustfs-operator/` |
+| RustFS mode | **Standalone** = `servers:1, volumesPerServer:4` → 1 pod / 4 PVCs (erasure-coding minimum) |
+| RustFS buckets | Declared natively on the Tenant (`spec.buckets`) — no `mc` Job |
+| RustFS operator packaging | **Vendored** at `third_party/rustfs-operator/`, `file://` subchart dep |
 | CNPG operator packaging | Remote subchart dependency |
 | Data | **Greenfield** — purge old PVCs, redeploy, no migration |
 | Working copy | `/home/morgan/rask`, branch `feat/rustfs-cnpg-operators` |
@@ -82,23 +91,32 @@ A second asymmetry is **packaging**:
 
 - Add **CNPG** as a remote subchart dependency:
   - repository `https://cloudnative-pg.github.io/charts`, chart `cloudnative-pg`,
-    pinned version (~`0.28.x`, confirm latest at implementation), `condition: cnpg.enabled`.
-- Add **RustFS operator** as a **local** subchart: `chart/charts/rustfs-operator/`
-  (vendored, unpacked), `condition: rustfs.enabled`. Because it is unpacked under
-  `charts/`, Helm treats it as a normal subchart; its packaged CRDs install first.
-  - It is **not** added under `dependencies:` with a repository (there is no repo
-    to fetch from). A vendored local chart in `charts/` is picked up directly.
-- `chart/Chart.lock` regenerated for the CNPG addition.
+    version **`0.28.3`** (appVersion 1.29.1), `condition: cnpg.enabled`.
+  - Operator subchart value overrides (under key `cloudnative-pg:`) set both
+    webhook failure policies to `Ignore`:
+    `webhook.validating.failurePolicy` / `webhook.mutating.failurePolicy`.
+- Add **RustFS operator** as a **vendored local** subchart. `chart/charts/` is
+  gitignored (rebuilt by `helm dependency build`), so the committed source lives
+  at repo-root **`third_party/rustfs-operator/`** and is referenced as a
+  dependency `repository: "file://../third_party/rustfs-operator"`, name
+  `rustfs-operator`, version `0.1.0`, `condition: rustfs.enabled`.
+  `helm dependency build` packages it into `chart/charts/`; its packaged CRDs
+  install first. Operator image `rustfs/operator:latest` is published upstream
+  (no source build).
+- `chart/Chart.lock` regenerated (`helm dependency update`) for both additions.
 
 ### 2. CloudNativePG resources
 
-- **`chart/templates/cnpg-cluster.yaml`** — a `Cluster` named **`rask-postgres`**:
-  - `instances: 1`; `storage.size` + `storage.storageClass: local-path` from values.
-  - `bootstrap.initdb`: database `rask`, owner `rask`, password sourced from a
+- **`chart/templates/cnpg-cluster.yaml`** — a `Cluster` named **`rask-postgres`**
+  (`apiVersion: postgresql.cnpg.io/v1`):
+  - `instances: 1`; `storage.size` + `storage.storageClass: local-path` from values;
+    `imageName: ghcr.io/cloudnative-pg/postgresql:16`.
+  - `bootstrap.initdb`: database `rask`, owner `rask`, `secret.name` referencing a
     basic-auth Secret we control (so the password is the pinned
     `secrets.postgresPassword` from `.env`, never an operator-random value).
-  - Rendered as a **`post-install,post-upgrade` hook**, `helm.sh/hook-weight`
-    **lower than** the migrate Job (so the cluster is admitted before migrations run).
+  - **Plain `cnpg.enabled`-gated template, no Helm hook** (webhook `failurePolicy:
+    Ignore` makes cold-install admission safe). `make k3s-up --wait` waits for the
+    cluster + the migrate Job's `nc` init handles "DB not ready yet".
   - Primary read/write service: **`rask-postgres-rw:5432`**.
 - **`chart/templates/secrets.yaml`** — replace the `rask-postgres` `POSTGRES_*`
   Secret with a `kubernetes.io/basic-auth` Secret (`username: rask`,
@@ -106,19 +124,20 @@ A second asymmetry is **packaging**:
 
 ### 3. RustFS resources
 
-- **`chart/templates/rustfs-tenant.yaml`** — a `Tenant` named **`rask-rustfs`**:
-  - Standalone (1 pod / 1 PVC); `storage` + `storageClass` from values.
-  - Credentials from a Secret (`rask-rustfs`, replacing `rask-minio`) holding the
-    root access/secret key = `secrets.minioAccessKey` / `secrets.minioSecretKey`.
-    (Exact Secret key names + `Tenant` spec fields pinned against the vendored
-    chart's `values.yaml`/examples at implementation.)
+- **`chart/templates/rustfs-tenant.yaml`** — a `Tenant` named **`rask-rustfs`**
+  (`apiVersion: rustfs.com/v1alpha1`):
+  - One pool, `servers: 1`, `persistence.volumesPerServer: 4` → **1 pod / 4 PVCs**
+    (RustFS erasure-coding minimum is `servers * volumesPerServer >= 4`; there is
+    no true single-PVC mode). PVC template `storage` + `storageClassName` from values.
+  - `credsSecret.name` → a Secret (`rask-rustfs`, replacing `rask-minio`) with keys
+    **`accesskey`/`secretkey`** (operator requires these names, min 8 chars) =
+    `secrets.minioAccessKey` / `secrets.minioSecretKey`.
+  - **`spec.buckets`** declares the three buckets natively
+    (`images-batch`, `images-batch-alto`, `images-batch-search`) — the operator
+    provisions them, so **no `mc`/`aws` Job**.
   - Plain `rustfs.enabled`-gated template (no hook — no blocking webhook).
-  - S3 service: **`rask-rustfs-io:9000`**, console `rask-rustfs-console:9001`.
-- **Bucket provisioning** — keep the existing post-install Job pattern (today's
-  `mc` job), repointed at `rask-rustfs-io:9000`. RustFS is S3-compatible, so
-  `mc` / `aws s3api` create the three buckets (`images-batch`,
-  `images-batch-alto`, `images-batch-search`). Weighted after the Tenant is up.
-  (May live in `rustfs-tenant.yaml` or a separate `rustfs-buckets.yaml`.)
+  - S3 service: **`rask-rustfs-io:9000`** (confirmed from operator source
+    `io_service_name = {tenant}-io`), console `rask-rustfs-console:9001`.
 
 ### 4. `chart/values.yaml` restructure
 
@@ -150,10 +169,11 @@ A second asymmetry is **packaging**:
 
 ### 6. Files
 
-- **Removed**: `chart/templates/minio.yaml`, `chart/templates/postgres.yaml`.
+- **Removed**: `chart/templates/minio.yaml` (incl. the `mc` bucket Job),
+  `chart/templates/postgres.yaml`.
 - **Added**: `chart/templates/cnpg-cluster.yaml`,
-  `chart/templates/rustfs-tenant.yaml` (+ optional `rustfs-buckets.yaml`),
-  `chart/charts/rustfs-operator/` (vendored), `scripts/vendor-rustfs-operator.sh`.
+  `chart/templates/rustfs-tenant.yaml`, `third_party/rustfs-operator/` (vendored
+  operator chart), `scripts/vendor-rustfs-operator.sh`.
 - **Changed**: `chart/Chart.yaml`, `chart/Chart.lock`, `chart/values.yaml`,
   `chart/templates/secrets.yaml`, `chart/templates/_helpers.tpl`,
   `chart/templates/fleet.yaml`, `chart/templates/migration-job.yaml`,
@@ -183,15 +203,19 @@ A second asymmetry is **packaging**:
 
 ## Risks / to verify at implementation
 
-- **RustFS operator image**: confirm a prebuilt operator image is published; if
-  not, add a build-and-`k3s-import` step (consistent with the other `:dev` images).
-- **RustFS `Tenant` spec**: pin exact Secret key names and Tenant fields
-  (pools/persistence/credentials/ports) against the vendored chart's
-  `values.yaml`/examples.
-- **CNPG chart version** pin; confirm the operator installs cleanly into the
-  `default` release namespace (KubeRay already does as a subchart).
-- **CNPG webhook `failurePolicy`** confirmed `Fail` → the post-install-hook
-  ordering is what makes the first install reliable.
-- **Vendored chart upkeep**: the local `rustfs-operator` chart must be refreshed
-  against upstream tags via `scripts/vendor-rustfs-operator.sh`; CRD upgrades are
-  not auto-managed by Helm (`charts/*/crds/` are install-only).
+- **RustFS bucket provisioning** (operator v0.x feature): confirm `spec.buckets`
+  actually creates the buckets at reconcile against the running tenant. Fallback
+  if flaky: a post-install `aws s3api`/`mc` Job against `rask-rustfs-io:9000`
+  (documented, not implemented by default).
+- **RustFS operator maturity**: latest git tag is `0.0.2`, chart `0.1.0`. Pin a
+  specific ref when vendoring; verify the `Tenant` CRD schema in the vendored
+  chart matches the templated fields.
+- **CNPG webhook `failurePolicy: Ignore`** is the mechanism that makes single
+  `helm install` cold-start reliable; confirm the operator installs cleanly into
+  the `default` release namespace (KubeRay already does as a subchart).
+- **`file://` subchart dep**: confirm `helm dependency update/build` resolves
+  `file://../third_party/rustfs-operator` and packages it into `chart/charts/`
+  without circular-path issues.
+- **Vendored chart upkeep**: refresh `third_party/rustfs-operator/` against
+  upstream tags via `scripts/vendor-rustfs-operator.sh`; CRD upgrades are not
+  auto-managed by Helm (`charts/*/crds/` are install-only).
