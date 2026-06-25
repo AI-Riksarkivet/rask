@@ -195,11 +195,45 @@ A second asymmetry is **packaging**:
   **on** and **off** (the prod external-infra path).
 - Fresh `make k3s-purge && make k3s-up` on the node:
   - CNPG + RustFS operators reconcile; `Cluster` and `Tenant` reach Ready.
-  - Buckets created by the post-install Job.
+  - Buckets auto-provisioned via the Tenant's `spec.buckets`.
   - Migrate Job succeeds (Alembic `upgrade head` against `rask-postgres-rw`).
   - `rask-gateway` rolls out; `/api/health` green.
   - S3 round-trip via `scripts/smoke_s3.py` against `rask-rustfs-io:9000`; a DB
     read confirms connectivity.
+
+## Live verification results (2026-06-25, greenfield k3s)
+
+Verified end-to-end on the single-GPU k3s node (install with `ray.enabled=false`,
+`dapr.sidecars=false`, and `--set-string secrets.postgresPassword=… secrets.minioSecretKey=…`):
+CNPG `Cluster` healthy + Alembic migrations applied (`alembic_version` head +
+`batches`), RustFS `Tenant` Running with **all three buckets auto-provisioned via
+`spec.buckets`**, S3 put→get round-trip OK, gateway `/api/health` → 200.
+
+Two chart fixes were required and are committed (verified live):
+
+- **CNPG CRD cold-install race** — CNPG ships its CRDs as *templated* resources
+  (`templates/crds/crds.yaml`), not a bare `crds/` dir, so Helm cannot map the
+  `Cluster` CR on a cold install (`no matches for kind "Cluster"`). The webhook
+  `failurePolicy: Ignore` does **not** help this (it's a CRD-establishment, not
+  webhook, race). Fix: vendor the CNPG CRDs into the umbrella chart's
+  **`chart/crds/cnpg-crds.yaml`** (installed in Helm's CRD phase) and set
+  `cloudnative-pg.crds.create: false` so the subchart doesn't double-apply them.
+  (RustFS's own CRDs ship in a bare `crds/` dir, so it never hit this.)
+- **RustFS single-node disk check** — RustFS erasure coding refuses 4 `local-path`
+  volumes on one physical disk. Fix: values-gated `rustfs.bypassDiskCheck: true`
+  → `RUSTFS_UNSAFE_BYPASS_DISK_CHECK` env on the Tenant (local/CI only).
+
+Two **pre-existing** issues surfaced (not caused by this migration, not fixed here):
+
+- **dapr injector race on fresh install** — fleet pods created before the dapr
+  injector webhook is serving come up sidecar-less (`failurePolicy: Ignore`) →
+  gateway `/api/health` 502. Workaround: rollout-restart the fleet once the
+  injector is Ready, or install with `dapr.sidecars=false`.
+- **Random-password requirement** — with `secrets.postgresPassword` /
+  `secrets.minioSecretKey` unset and no prior secret to `lookup`, the
+  `randAlphaNum` fallback differs between the credential Secret and the
+  `DATABASE_URL` / app AWS creds → auth fails. Same contract as the old chart
+  (provide them via `.env` or `--set`). The verified install set them explicitly.
 
 ## Risks / to verify at implementation
 
