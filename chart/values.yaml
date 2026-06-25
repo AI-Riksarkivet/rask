@@ -289,6 +289,13 @@ greptimedb-standalone:
 # Vector subchart — Agent DaemonSet shipping pod logs to GreptimeDB (Task 2 fills customConfig).
 vector:
   role: "Agent"
+  # The Agent only pulls pod logs and pushes to GreptimeDB — it exposes no
+  # listening ports, so the chart's auto-generated Services would be invalid
+  # (empty spec.ports). Disable both; the DaemonSet needs no inbound Service.
+  service:
+    enabled: false
+  serviceHeadless:
+    enabled: false
   # customConfig fully REPLACES Vector's default config (chart contract), so it
   # must be complete: a kubernetes_logs source piped to the greptimedb_logs sink.
   customConfig:
