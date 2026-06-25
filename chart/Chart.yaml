@@ -41,3 +41,11 @@ dependencies:
     version: "0.3.9"
     repository: https://openfga.github.io/helm-charts
     condition: openfga.enabled
+  - name: cloudnative-pg
+    version: "0.28.3"
+    repository: https://cloudnative-pg.github.io/charts
+    condition: cnpg.enabled
+  - name: rustfs-operator
+    version: "0.1.0"
+    repository: "file://../third_party/rustfs-operator"
+    condition: rustfs.enabled

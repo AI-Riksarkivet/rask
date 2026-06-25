@@ -234,3 +234,23 @@ openfga:
   enabled: true
   datastore:
     engine: memory   # ephemeral; point at postgres (engine+uri) when adopted
+
+cnpg:
+  enabled: true
+
+# cloudnative-pg operator subchart (Chart.yaml dep, gated by cnpg.enabled).
+# Webhook failurePolicy=Ignore so a Cluster created before the operator pod is
+# Ready is admitted and reconciled later (the KubeRay/RayService behaviour) —
+# this is what lets the Cluster be a plain template instead of a hook.
+cloudnative-pg:
+  webhook:
+    validating:
+      failurePolicy: Ignore
+    mutating:
+      failurePolicy: Ignore
+
+rustfs:
+  enabled: true
+
+# rustfs operator subchart (vendored at third_party/, gated by rustfs.enabled).
+rustfs-operator: {}
