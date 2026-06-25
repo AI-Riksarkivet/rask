@@ -82,6 +82,20 @@ spec:
           env:
             - name: RASK_ORCHESTRATOR_AUTOSTART
               value: {{ if $svc.singleton }}{{ $root.Values.orchestrator.autostart | quote }}{{ else }}"false"{{ end }}
+            {{- if $root.Values.observability.enabled }}
+            - name: RASK_OTEL_ENABLED
+              value: "true"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://rask-greptimedb-standalone:4001"
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "grpc"
+            - name: OTEL_EXPORTER_OTLP_HEADERS
+              value: "x-greptime-db-name=public"
+            - name: OTEL_SERVICE_NAME
+              value: {{ $name | quote }}
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: {{ printf "service.namespace=rask,deployment.environment=%s" $root.Release.Namespace | quote }}
+            {{- end }}
           readinessProbe:
             httpGet: {path: /api/health, port: http}
             initialDelaySeconds: 5
