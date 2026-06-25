@@ -322,3 +322,12 @@ perses:
           kind: PrometheusDatasource
           spec:
             directUrl: "http://rask-greptimedb-standalone:4000/v1/prometheus"
+  # Add /etc/perses/datasources to provisioning.folders so Perses scans the
+  # datasource ConfigMap mounted there (the chart mounts datasources: at that
+  # path but the default server config only lists /etc/perses/provisioning).
+  config:
+    provisioning:
+      folders:
+        - /etc/perses/provisioning
+        - /etc/perses/datasources
+      interval: 10m
