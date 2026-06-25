@@ -47,13 +47,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make ray-up            # local Ray head on :6379, dashboard :8265
 make serve-up          # deploy /transcribe + /htrflow on Ray Serve
 make dev-micro         # the fleet: gateway :8888 + core-api :8801 + search :8802 +
-                       #   volumes :8803 + ray :8804 + orchestrator :8810 (via dev-micro.sh)
+                       #   volumes :8803 + ray :8804 + orchestrator :8810 (via scripts/dev-micro.sh)
 make viewer            # the `core.main:app` monolith on :8888 (single-process dev convenience)
 make home   # SvelteKit dev server, proxies /api → :8888 (the gateway)
 ```
 
 The frontend's Vite proxy targets `:8888` either way — in the fleet that's the
-**gateway**; with `make viewer` it's the monolith. `dev-micro.sh` is the source
+**gateway**; with `make viewer` it's the monolith. `scripts/dev-micro.sh` is the source
 of truth for the fleet's process list and ports.
 
 `make serve-down` / `make ray-down` to tear down. Indexing pipelines: `make search-index`, `make catalog-index`, `make harvest-ead`.

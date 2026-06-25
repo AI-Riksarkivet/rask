@@ -85,12 +85,12 @@ viewer:
 	RASK_VIEWER_INPUT=$(VIEWER_INPUT) RASK_VIEWER_OUTPUT=$(VIEWER_OUTPUT) \
 		uv run uvicorn core.main:app --host 0.0.0.0 --port 8888 --reload
 
-# Local microservice fleet (gateway + per-domain backends) via dev-micro.sh.
+# Local microservice fleet (gateway + per-domain backends) via scripts/dev-micro.sh.
 # Bring up deps first: `make ray-up`, `make pg-up` (+ `make pg-migrate`); S3/HCP
 # from .env. The gateway listens on :8888 so the frontends' /api proxy works.
 dev-micro:
 	uv sync --all-packages
-	./dev-micro.sh
+	./scripts/dev-micro.sh
 
 # ---- frontends (SvelteKit microfrontends) ----------------------------------
 # Seven independent SvelteKit SSR apps (svelte-adapter-bun) + the @rask/ui
@@ -344,4 +344,4 @@ k3s-purge: k3s-down ## Uninstall + delete PVCs (postgres/minio/hf-cache data)
 
 # ---- e2e (Playwright) -------------------------------------------------------
 e2e: ## Browser e2e against a running deploy (RASK_E2E_BASE_URL, default http://localhost)
-	cd e2e && bun install && bunx playwright test
+	cd tests/e2e && bun install && bunx playwright test

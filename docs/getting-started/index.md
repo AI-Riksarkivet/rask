@@ -27,7 +27,7 @@ make install        # = bun install + uv sync
 make ray-up            # local Ray head on :6379, dashboard :8265
 make serve-up          # deploy /transcribe + /htrflow on Ray Serve
 make dev-micro         # the fleet: gateway :8888 + core-api :8801 + search :8802 +
-                       #   volumes :8803 + ray :8804 + orchestrator :8810 (via dev-micro.sh)
+                       #   volumes :8803 + ray :8804 + orchestrator :8810 (via scripts/dev-micro.sh)
 make dev-frontends     # all 7 SvelteKit SSR apps + the Turborepo microfrontends
                        #   proxy on :3024 (single origin); each app proxies /api -> :8888
 ```
