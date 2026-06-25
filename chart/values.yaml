@@ -316,6 +316,17 @@ vector:
 
 # Perses subchart — dashboards-as-code (Task 3 fills the datasource).
 perses:
+  # Perses bundles its datasource/panel plugins and extracts them into
+  # /etc/perses/plugins at startup, but the container runs readOnlyRootFilesystem
+  # so that path isn't writable → "datasource schemas are not loaded" and the
+  # GreptimeDB datasource fails to provision. Give it a writable emptyDir there
+  # (keeps readOnlyRootFilesystem: true).
+  volumes:
+    - name: perses-plugins
+      emptyDir: {}
+  volumeMounts:
+    - name: perses-plugins
+      mountPath: /etc/perses/plugins
   # Provision a GreptimeDB datasource via the chart's datasources values key
   # (renders a ConfigMap mounted at /etc/perses/datasources). GreptimeDB exposes
   # a Prometheus-compatible query API at :4000/v1/prometheus.
