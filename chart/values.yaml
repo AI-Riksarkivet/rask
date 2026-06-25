@@ -308,4 +308,17 @@ vector:
         compression: "gzip"
 
 # Perses subchart — dashboards-as-code (Task 3 fills the datasource).
-perses: {}
+perses:
+  # Provision a GreptimeDB datasource via the chart's datasources values key
+  # (renders a ConfigMap mounted at /etc/perses/datasources). GreptimeDB exposes
+  # a Prometheus-compatible query API at :4000/v1/prometheus.
+  datasources:
+    - kind: GlobalDatasource
+      metadata:
+        name: greptimedb
+      spec:
+        default: true
+        plugin:
+          kind: PrometheusDatasource
+          spec:
+            directUrl: "http://rask-greptimedb-standalone:4000/v1/prometheus"
