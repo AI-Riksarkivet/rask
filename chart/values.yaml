@@ -289,6 +289,23 @@ greptimedb-standalone:
 # Vector subchart — Agent DaemonSet shipping pod logs to GreptimeDB (Task 2 fills customConfig).
 vector:
   role: "Agent"
+  # customConfig fully REPLACES Vector's default config (chart contract), so it
+  # must be complete: a kubernetes_logs source piped to the greptimedb_logs sink.
+  customConfig:
+    data_dir: /vector-data-dir
+    api:
+      enabled: false
+    sources:
+      pod_logs:
+        type: kubernetes_logs
+    sinks:
+      greptimedb_logs:
+        type: greptimedb_logs
+        inputs: ["pod_logs"]
+        endpoint: "http://rask-greptimedb-standalone:4000"
+        dbname: "public"
+        table: "rask_logs"
+        compression: "gzip"
 
 # Perses subchart — dashboards-as-code (Task 3 fills the datasource).
 perses: {}
