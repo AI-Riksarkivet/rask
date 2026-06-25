@@ -35,5 +35,7 @@
      identically in its own root layout (§5/§6), so you only see the sidebar once a
      cross-zone nav lands you inside a domain app (/<project>/<domain>). The platform
      top navbar IS rendered here (only the catch-all has it) above the page content. -->
+<!-- TopNav is a FLOATING fixed pill (out of flow), so <main> spans the full height
+     and each page adds its own top padding to clear it. -->
 <TopNav />
-<main class="min-h-[calc(100svh-3.5rem)]">{@render children()}</main>
+<main class="min-h-svh">{@render children()}</main>
