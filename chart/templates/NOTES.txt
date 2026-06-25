@@ -5,8 +5,8 @@ Fleet services (ClusterIP):
   - {{ $name }}: {{ include "rask.fullname" $ }}-{{ $name }}:{{ $svc.port }}
 {{- end }}
   - frontend: {{ include "rask.fullname" . }}-frontend:{{ .Values.frontend.service.port }}
-{{- if .Values.postgres.enabled }}
-  - postgres: {{ include "rask.fullname" . }}-postgres:{{ .Values.postgres.port }} (in-cluster)
+{{- if .Values.cnpg.enabled }}
+  - postgres: {{ include "rask.fullname" . }}-postgres-rw:{{ .Values.cnpg.port }} (CNPG in-cluster)
 {{- end }}
 {{- if .Values.minio.enabled }}
   - minio:    {{ include "rask.fullname" . }}-minio:{{ .Values.minio.port }} (in-cluster, console :{{ .Values.minio.consolePort }})

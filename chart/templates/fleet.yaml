@@ -45,7 +45,7 @@ spec:
         {{- if eq $dep "postgres" }}
         - name: wait-postgres
           image: busybox:1.36
-          command: ["sh","-c","until nc -z {{ include "rask.fullname" $root }}-postgres {{ $root.Values.postgres.port }}; do echo waiting postgres; sleep 2; done"]
+          command: ["sh","-c","until nc -z {{ include "rask.fullname" $root }}-postgres-rw {{ $root.Values.cnpg.port }}; do echo waiting postgres; sleep 2; done"]
         {{- end }}
         {{- if eq $dep "minio" }}
         - name: wait-minio

@@ -47,8 +47,8 @@ app.kubernetes.io/component: {{ $component }}
 {{- .Values.secrets.postgresPassword -}}
 {{- else -}}
 {{- $existing := (lookup "v1" "Secret" .Release.Namespace (printf "%s-postgres" (include "rask.fullname" .))) -}}
-{{- if and $existing $existing.data (index $existing.data "POSTGRES_PASSWORD") -}}
-{{- index $existing.data "POSTGRES_PASSWORD" | b64dec -}}
+{{- if and $existing $existing.data (index $existing.data "password") -}}
+{{- index $existing.data "password" | b64dec -}}
 {{- else -}}
 {{- randAlphaNum 24 -}}
 {{- end -}}
@@ -74,5 +74,5 @@ app.kubernetes.io/component: {{ $component }}
 
 {{/* asyncpg DATABASE_URL pointing at the in-cluster postgres service. */}}
 {{- define "rask.databaseUrl" -}}
-{{- printf "postgresql+asyncpg://%s:%s@%s-postgres:%v/%s" .Values.postgres.user (include "rask.pgPassword" .) (include "rask.fullname" .) .Values.postgres.port .Values.postgres.database -}}
+{{- printf "postgresql+asyncpg://%s:%s@%s-postgres-rw:%v/%s" .Values.cnpg.user (include "rask.pgPassword" .) (include "rask.fullname" .) .Values.cnpg.port .Values.cnpg.database -}}
 {{- end -}}

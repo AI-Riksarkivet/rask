@@ -24,11 +24,11 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "rask.serviceAccountName" . }}
-      {{- if .Values.postgres.enabled }}
+      {{- if .Values.cnpg.enabled }}
       initContainers:
         - name: wait-postgres
           image: busybox:1.36
-          command: ["sh","-c","until nc -z {{ include "rask.fullname" . }}-postgres {{ .Values.postgres.port }}; do echo waiting postgres; sleep 2; done"]
+          command: ["sh","-c","until nc -z {{ include "rask.fullname" . }}-postgres-rw {{ .Values.cnpg.port }}; do echo waiting postgres; sleep 2; done"]
       {{- end }}
       containers:
         - name: migrate

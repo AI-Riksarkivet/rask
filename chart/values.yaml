@@ -125,18 +125,6 @@ frontend:
     - {name: train-frontend, path: /default/train}
     - {name: studio-frontend, path: /default/studio}
 
-postgres:
-  enabled: true
-  image: "postgres:16"
-  user: "rask"
-  database: "rask"
-  port: 5432
-  storage: "8Gi"
-  storageClass: "local-path"
-  resources:
-    requests: {cpu: "100m", memory: "256Mi"}
-    limits: {cpu: "1", memory: "1Gi"}
-
 minio:
   enabled: true
   image: "minio/minio:latest"
@@ -235,8 +223,22 @@ openfga:
   datastore:
     engine: memory   # ephemeral; point at postgres (engine+uri) when adopted
 
+# In-cluster Postgres via the CloudNativePG operator (Cluster CR + operator
+# subchart). `enabled` gates BOTH the operator subchart (Chart.yaml condition
+# cnpg.enabled) and the Cluster template. Turn off for an external/managed DB
+# (provide DATABASE_URL via existingSecret).
 cnpg:
   enabled: true
+  instances: 1
+  imageName: "ghcr.io/cloudnative-pg/postgresql:16"
+  user: "rask"
+  database: "rask"
+  port: 5432
+  storage: "8Gi"
+  storageClass: "local-path"
+  resources:
+    requests: {cpu: "100m", memory: "256Mi"}
+    limits: {cpu: "1", memory: "1Gi"}
 
 # cloudnative-pg operator subchart (Chart.yaml dep, gated by cnpg.enabled).
 # Webhook failurePolicy=Ignore so a Cluster created before the operator pod is
