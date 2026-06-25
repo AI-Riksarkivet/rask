@@ -136,6 +136,20 @@ async function runSync() {
 - `redirect()`/`error()` thrown from a `command()`-style mutation expecting it
   to navigate; mutations return values, the page reacts.
 
+**Two fetch paths — reconciled.** The `getRequestEvent().fetch` pattern above
+works on the client (relative `/api/*` resolves against the browser's origin) but
+not raw during SSR inside a k3s pod (relative URL has no origin → "Unable to
+connect"). The fix is a shared `handleFetch` hook in each app's
+`src/hooks.server.ts` that transparently rewrites server-side `/api/*` requests
+to the absolute in-cluster gateway (`${GATEWAY_URL}` from
+`$lib/server/env.ts`, defaulting `http://localhost:8888`, overridable via
+`RASK_GATEWAY_URL`). `handleFetch` is only called by SvelteKit for server-side
+`event.fetch` calls, so it does not affect client-side requests. The four apps
+that use `@rask/api` + `getRequestEvent().fetch` (`overview-frontend`,
+`discover-frontend`, `compute-frontend`, `frontend`) each carry this hook;
+`storage-frontend` fetches the gateway at an absolute URL directly in its remote
+functions and does not need it.
+
 **Gate:** `*.remote.ts` is a knip entry point (dead remote functions are caught
 by `knip`). Server-only safety (no client import of `$app/server`) is enforced
 by SvelteKit's build + `svelte-check`. The `getRequestEvent().fetch` discipline

@@ -1,4 +1,4 @@
-.PHONY: help install build test lint fmt clean storybook typecheck knip check ci viewer dev-micro dev-frontends viewer-frontend frontend-storage frontend-compute frontend-build frontend-check ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge
+.PHONY: help install build test lint fmt clean storybook typecheck knip check ci viewer dev-micro dev-frontends viewer-frontend frontend-storage frontend-compute frontend-build frontend-check ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge e2e
 
 help:
 	@echo "Targets:"
@@ -316,3 +316,7 @@ k3s-down: ## Uninstall the rask release (keep PVCs)
 
 k3s-purge: k3s-down ## Uninstall + delete PVCs (postgres/minio/hf-cache data)
 	$(KUBECTL) delete pvc -l app.kubernetes.io/instance=rask || true
+
+# ---- e2e (Playwright) -------------------------------------------------------
+e2e: ## Browser e2e against a running deploy (RASK_E2E_BASE_URL, default http://localhost)
+	cd e2e && bun install && bunx playwright test

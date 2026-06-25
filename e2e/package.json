@@ -1,0 +1,10 @@
+{
+	"name": "@rask/e2e",
+	"private": true,
+	"devDependencies": {
+		"@playwright/test": "^1.61.1"
+	},
+	"scripts": {
+		"test": "playwright test"
+	}
+}

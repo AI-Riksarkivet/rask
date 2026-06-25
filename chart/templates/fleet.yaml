@@ -26,6 +26,9 @@ spec:
         dapr.io/app-id: {{ $name | quote }}
         dapr.io/app-port: {{ $svc.port | quote }}
         dapr.io/log-level: {{ $root.Values.dapr.logLevel | quote }}
+        {{- with $root.Values.dapr.maxBodySize }}
+        dapr.io/max-body-size: {{ . | quote }}
+        {{- end }}
         {{- end }}
       labels:
         {{- include "rask.selectorLabels" $root | nindent 8 }}

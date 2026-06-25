@@ -1,0 +1,23 @@
+diff --git a/dist/files/handler.js b/dist/files/handler.js
+index 601766aaac9d28439ce054fd6aa1197e859a48e3..89f9e5cd37892eee8e547ca5795eb157a7472f46 100644
+--- a/dist/files/handler.js
++++ b/dist/files/handler.js
+@@ -644,7 +644,8 @@ var address_header = env("ADDRESS_HEADER", "").toLowerCase();
+ var protocol_header = env("PROTOCOL_HEADER", "").toLowerCase();
+ var host_header = env("HOST_HEADER", "").toLowerCase();
+ var port_header = env("PORT_HEADER", "").toLowerCase();
+-var asset_dir = `${import.meta.dir}/client${base}`;
++// PATCH(rask): sirv root at client (not client${base}) so base-path assets serve correctly
++var asset_dir = `${import.meta.dir}/client`;
+ await server.init({
+   env: Bun.env,
+   read: (file) => Bun.file(`${asset_dir}/${file}`).stream()
+@@ -715,7 +716,7 @@ var ssr = async (request, bunServer) => {
+ var getHandler = () => {
+   const websocket = server.websocket();
+   const staticHandlers = [
+-    serveAssets && serve(`${import.meta.dir}/client${base}`, true),
++    serveAssets && serve(`${import.meta.dir}/client`, true),
+     serveAssets && serve_prerendered()
+   ].filter(Boolean);
+   const handler = (request, server2) => {
