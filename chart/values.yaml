@@ -135,6 +135,10 @@ rustfs:
   image: "rustfs/rustfs:latest"
   servers: 1
   volumesPerServer: 4
+  # Single-node k3s: all 4 local-path volumes share one physical disk, which
+  # trips RustFS's distinct-disk erasure safety check. Bypass it for local/CI.
+  # Set false for a real multi-node / multi-disk object store.
+  bypassDiskCheck: true
   port: 9000
   consolePort: 9001
   storage: "15Gi"          # per-volume; 4 volumes => ~60Gi total (local-path is unmetered hostPath)
@@ -248,6 +252,12 @@ cnpg:
 # Ready is admitted and reconciled later (the KubeRay/RayService behaviour) —
 # this is what lets the Cluster be a plain template instead of a hook.
 cloudnative-pg:
+  # CNPG ships its CRDs as templated resources (not a bare crds/ dir), so Helm
+  # cannot map our Cluster CR in the same release on a cold install. We instead
+  # vendor the CNPG CRDs into the umbrella chart's crds/ dir (installed in Helm's
+  # CRD phase, before templates), so the subchart must NOT also create them.
+  crds:
+    create: false
   webhook:
     validating:
       failurePolicy: Ignore
