@@ -68,7 +68,7 @@ def build_entrypoint(batch_ids: list[str], *, params: RunnerParams, spec: Pipeli
         # S3Source. One volume per chunk (chunk_total=1), so a single --prefix.
         prefix = f"{batch_ids[0]}/"
         parts = [
-            "uv run --project projects/runner runner",
+            params.runner_cmd,
             f"--input {params.input_uri}",
             f"--output {params.output}",
             f"--prefix {prefix}",
@@ -77,7 +77,7 @@ def build_entrypoint(batch_ids: list[str], *, params: RunnerParams, spec: Pipeli
         ]
         return " \\\n  ".join(parts)
     parts = [
-        "uv run --project projects/runner runner",
+        params.runner_cmd,
         f"--cache-bucket {params.cache_bucket}",
         f"--output {params.output}",
         f"--iiif-url {params.iiif_url}",

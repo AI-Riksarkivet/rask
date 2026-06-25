@@ -16,10 +16,12 @@ backend is a fleet of FastAPI services behind a **gateway** on `:8888`: a
 **core-api** for batch/chunk/catalog state (`:8801`), an **orchestrator**
 service that runs the submission loop (`:8810`), and three stateless services —
 **volumes-api** (`:8803`), **search-api** (`:8802`), **ray-api** (`:8804`).
-A **SvelteKit 2 + Svelte 5 SSR app** (svelte-adapter-bun, Bun server), being
-split into per-domain microfrontends (frontend/storage-frontend/compute-frontend)
-under Turborepo, consumes all of these via the gateway for inspection,
-batch dashboard and chunk submission. Batch-tracking state lives in a small
+The frontend is **7 SvelteKit 2 + Svelte 5 SSR apps** (svelte-adapter-bun, Bun
+servers) — a catch-all (`frontend`, owning `/`) plus six per-domain
+microfrontends (overview/compute/discover/storage/train/studio) composed by the
+Turborepo microfrontends proxy on `:3024` in dev (the k3s Ingress in prod) —
+consuming all of these via the gateway for inspection, batch dashboard and chunk
+submission. Batch-tracking state lives in a small
 relational DB behind a backend-agnostic ORM — **SQLite for dev**
 (`.cache/batches.db`), **Postgres for prod** — selected by `DATABASE_URL`.
 Full-text search over transcribed lines + an archival catalog index live in
@@ -33,10 +35,9 @@ flowchart TB
         browser["Browser"]
     end
 
-    subgraph frontend["Frontend · SvelteKit SSR (Bun) microfrontends"]
-        spa["components/apps/frontend<br/><sub>viewer · batch UI · search</sub>"]
-        storagefe["components/apps/storage-frontend<br/><sub>/storage</sub>"]
-        computefe["components/apps/compute-frontend<br/><sub>/compute</sub>"]
+    subgraph frontend["Frontend · 7 SvelteKit SSR (Bun) microfrontends · :3024 proxy"]
+        spa["components/apps/frontend<br/><sub>catch-all · platform home /</sub>"]
+        domainfe["6 domain apps<br/><sub>overview · compute · discover<br/>storage · train · studio</sub>"]
     end
 
     subgraph backend["Backend · FastAPI fleet"]
@@ -140,9 +141,8 @@ flowchart TB
 
 | Path                                    | Type          | Purpose                                                              |
 | --------------------------------------- | ------------- | -------------------------------------------------------------------- |
-| `components/apps/frontend/`             | SvelteKit SSR (Bun) | Browser UI: page viewer, batch dashboard, search, Ray-dashboard proxy |
-| `components/apps/storage-frontend/`     | SvelteKit SSR (Bun) | Storage microfrontend (`/storage`)                                  |
-| `components/apps/compute-frontend/`     | SvelteKit SSR (Bun) | Compute microfrontend (`/compute`)                                  |
+| `components/apps/frontend/`             | SvelteKit SSR (Bun) | Catch-all app: platform home `/`, project picker; package `viewer-frontend` |
+| `components/apps/{overview,compute,discover,storage,train,studio}-frontend/` | SvelteKit SSR (Bun) | Six per-domain microfrontends, each pinned to `/default/<domain>`, all rendering the shared `@rask/ui/shell` sidebar |
 | `components/apps/runner/`               | Python CLI    | Submits Ray Data jobs; ships Ray Serve deployments                   |
 | `components/services/gateway/`          | FastAPI       | Reverse proxy on `:8888`; path-routes `/api/*` to per-domain services |
 | `components/services/core/`             | Python (brick)| Domain brick: DB, models, repositories, domain services, Alembic; shared by core-api + orchestrator |
@@ -159,8 +159,9 @@ flowchart TB
 | `packages/ui/`               | TS / Svelte   | Shared Svelte 5 + Bits UI + Tailwind 4 component library w/ Storybook; `@rask/ui/shell` exports the shared `AppShell`/`AppSidebar` |
 | `packages/api/`              | TS            | Shared API client + types (`@rask/api`), split into ray/batches/search/volumes/types modules |
 | `.cache/batches.db`                     | SQLite        | Default per-batch progress (dev; not committed)                      |
-| `.docker/*.dockerfile`                  | Docker        | Image definitions for `runner` (CUDA) and the `frontend`/`storage-frontend`/`compute-frontend` Bun-SSR servers; see deployment.md for backend images |
-| `Makefile`                              | bash          | All deploy/dev orchestration (no docker-compose, no k8s yaml)        |
+| `.docker/*.dockerfile`                  | Docker        | Image definitions for `runner` (CUDA) and all 7 SvelteKit apps (one parametrized `frontend.dockerfile`, `--build-arg APP=`); see deployment.md for backend images |
+| `chart/`                                | Helm          | The single deploy artifact for local k3s **and** prod (in-cluster Postgres/MinIO/KubeRay gated by values toggles) |
+| `Makefile`                              | bash          | All deploy/dev orchestration (k3s + Helm; no docker-compose)         |
 
 ## Data flow — image → ALTO XML
 
@@ -348,20 +349,21 @@ GPU node. Earlier attempts at 6 transcribe replicas OOM'd host RAM
 (6 × ~4 GB TrOCR weights).
 
 **Remote KubeRay?** The CLI accepts `--address ray://dev-kuberay.ra.se:10001`,
-suggesting an out-of-repo cluster exists. No Helm chart or K8s manifest
-lives in this repo.
+suggesting an out-of-repo cluster exists. The repo's own Helm chart (`chart/`)
+can stand up an in-cluster KubeRay (`ray.enabled`), but no manifest for that
+external production cluster lives here.
 
 ## Container images
 
-Production-shaped image definitions live at `.docker/`. They are
-**build-ready, not orchestrated** — there is no docker-compose, no Helm
-chart, no Kustomize. `.dockerignore` and `.hadolint.yaml` sit alongside them;
-the build context is the repo root.
+Production-shaped image definitions live at `.docker/`; orchestration is the
+Helm chart in `chart/` (the single deploy artifact for local k3s and prod) —
+there is no docker-compose. `.dockerignore` and `.hadolint.yaml` sit alongside
+the dockerfiles; the build context is the repo root.
 
 | Image      | Dockerfile                     | Base                           | Notes                                |
 | ---------- | ------------------------------ | ------------------------------ | ------------------------------------ |
 | `runner`   | `.docker/runner.dockerfile`    | `nvidia/cuda:12.4-runtime`     | uv install, GPU client for Ray jobs  |
-| `frontend` + 6 MFEs | `.docker/frontend.dockerfile` (`--build-arg APP=<app>`) | Bun build → `oven/bun` runtime (SSR server) | one parametrized Dockerfile builds all 7 SvelteKit apps; `bun ./build/index.js` |
+| `frontend` + 6 domain MFEs | `.docker/frontend.dockerfile` (`--build-arg APP=<app>`) | Bun build → `oven/bun` runtime (SSR server) | one parametrized Dockerfile builds all 7 SvelteKit apps; `bun ./build/index.js` |
 
 
 ## Stack at a glance
@@ -372,15 +374,15 @@ the build context is the repo root.
 | Backend HTTP        | FastAPI fleet: gateway + core-api + orchestrator + volumes-api + search-api + ray-api |
 | ORM                 | SQLModel + SQLAlchemy async (aiosqlite or asyncpg)                    |
 | Relational DB       | SQLite (dev, `.cache/batches.db`) or Postgres (prod, `DATABASE_URL`)  |
-| Search / catalog    | Lance tables on S3 (optional, HCP-backed)                             |
+| Search / catalog    | Lance tables on S3 (optional; any S3-agnostic backend)                |
 | Frontend            | SvelteKit (SSR, svelte-adapter-bun) + `packages/ui`; client API helpers in `packages/api` (`@rask/api`) |
-| Object storage      | S3 via `packages/storage` — two buckets: `images-batch`, `*-alto`     |
+| Object storage      | S3 via `packages/storage` (S3-agnostic: MinIO/rustfs, env-swap only) — two buckets: `images-batch`, `*-alto` |
 | Source              | IIIF (Riksarkivet) with S3 read-through cache                         |
 | Models              | YOLO (regions, lines), TrOCR (transcription)                          |
 | Python              | uv + Ruff + ty (3.13)                                                 |
 | JS / TS             | Bun + Vite + ESLint + Prettier (Svelte 5)                             |
-| Container images    | `.docker/*.dockerfile` (no orchestration manifests in repo)           |
-| Deploy orchestration| None checked in — `Makefile` is the only runbook                      |
+| Container images    | `.docker/*.dockerfile` (one parametrized `frontend.dockerfile` for all 7 apps) |
+| Deploy orchestration| Helm chart in `chart/` (single artifact for local k3s + prod); `Makefile` drives k3s/Helm |
 
 ## What's deliberately NOT here
 
@@ -389,9 +391,8 @@ the build context is the repo root.
 - **No event bus.** Components communicate via S3 keys, DB rows, and
   Ray's own job/actor RPCs.
 - **No auth** on any service. Localhost / trusted-network only.
-- **No docker-compose, no Helm chart, no Kubernetes manifests** in this repo.
-  Just the image definitions in `.docker/`. A Helm chart in `chart/` exists
-  but targets the old monolith — it is a known deployment-cycle follow-up.
+- **No docker-compose.** The Helm chart in `chart/` is the single deploy
+  artifact for both local k3s and prod (image definitions in `.docker/` feed it).
 - **No CI manifests** for cluster deployment. Remote Ray cluster is
   managed outside this repo.
 - **No Redis, no MySQL.** The relational tier is SQLite or Postgres only.

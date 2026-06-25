@@ -4,9 +4,10 @@ This is the **single source of truth** for how rask's frontend is written. The
 codebase is checked against it, and every future change is reconciled to it —
 so the same inconsistencies stop being rediscovered.
 
-Scope: the 7 SvelteKit microfrontends under `components/apps/*-frontend` (+ the
-legacy `frontend` monolith being decomposed), the shared `@rask/ui` design
-system, and the `@rask/api` data client. It assumes the architecture in
+Scope: the 7 SvelteKit microfrontends — the 6 domain apps under
+`components/apps/*-frontend` plus the catch-all `components/apps/frontend`
+(package `viewer-frontend`) that owns `/` (the platform home) — the shared
+`@rask/ui` design system, and the `@rask/api` data client. It assumes the architecture in
 `frontend-microfrontends.md` and `frontend-monorepo.md` — read those for the
 _why_; this doc is the _rules_.
 
@@ -74,16 +75,15 @@ export const getRayJobs = query(async (): Promise<RayJobsPayload> => {
 ```
 
 When the endpoint isn't in `@rask/api` yet (e.g. storage's volumes-api), the
-query fetches the **gateway by absolute URL** (`GATEWAY_URL` from
-`$lib/server/env`, defaulting `http://localhost:8888`, overridable via
-`RASK_GATEWAY_URL`) — equivalent to the relative-`/api` + `hooks.server.ts`
-rewrite above, just inlined — and **parses the untrusted response at the
-boundary**, and
-surfaces the real upstream status with `error(502, …)` (a plain throw becomes a
-generic "Internal Error"):
+query still fetches **relative `/api/*` via `getRequestEvent().fetch`** — the
+same `hooks.server.ts` rewrite carries it to the gateway, so there is **no
+absolute-URL special case**. The only difference is that the response is parsed
+against a **local valibot schema** instead of an imported `@rask/api` one
+(parse-don't-validate at the boundary), and the real upstream status is surfaced
+with `error(502, …)` (a plain throw becomes a generic "Internal Error"):
 
 ```ts
-const res = await fetch(new URL('/api/volumes/objects', GATEWAY_URL));
+const res = await getRequestEvent().fetch(`/api/volumes/objects?${params}`);
 if (!res.ok) error(502, `volumes-api → HTTP ${res.status} ${res.statusText}`);
 return v.parse(S3ListingSchema, await res.json());
 ```
@@ -142,11 +142,10 @@ origin — raw during SSR inside a k3s pod the relative URL fails ("Unable to
 connect") or hairpins out through the external ingress. That is what the
 `makeGatewayHandleFetch` hook above solves: SvelteKit calls `handleFetch` only for
 server-side `event.fetch`, so it rewrites SSR `/api/*` to the in-cluster gateway
-and leaves client requests untouched. The **three data apps** (`overview-frontend`,
-`discover-frontend`, `compute-frontend`) each carry the hook in
-`src/hooks.server.ts`; the catch-all `frontend` has **no** `@rask/api` data layer
-(so no hook), and `storage-frontend` fetches the gateway at an absolute URL
-directly in its remote functions.
+and leaves client requests untouched. **All four data apps** (`overview-frontend`,
+`discover-frontend`, `compute-frontend`, `storage-frontend`) carry the **identical**
+hook in `src/hooks.server.ts` — no per-app variation. The catch-all `frontend` has
+**no** `@rask/api` data layer (so no hook).
 
 **Gate:** `*.remote.ts` is a knip entry point (dead remote functions are caught
 by `knip`). Server-only safety (no client import of `$app/server`) is enforced

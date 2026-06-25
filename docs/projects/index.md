@@ -19,7 +19,9 @@ viewer was dissolved (June 2026) into the gateway + per-domain services above.
 
 !!! warning "HCP is not a project"
     The nav lists an [HCP](hcp.md) page, but there is **no `projects/hcp`**. "HCP"
-    is the Hitachi Content Platform — the S3 storage backend — documented there
+    is the Hitachi Content Platform — the legacy S3 backend rask is migrating
+    off. Storage is S3-agnostic (the real targets are MinIO / rustfs, swapped by
+    env only); HCP survives only as an env-alias bridge. It's documented there
     for completeness because the codebase and older docs reference it as if it
     were a deployable.
 
@@ -34,9 +36,11 @@ The container images mirror these compositions:
 - `rask-search-api` ← `projects/search-api` (slim Python, `:8802`).
 - `rask-ray-api` ← `projects/ray-api` (slim Python, `:8804`).
 - `rask-runner` ← `projects/runner` (CUDA base, GPU).
-- `rask-frontend` ← `components/apps/frontend` (SvelteKit SSR, Bun server).
-- `rask-storage-frontend` ← `components/apps/storage-frontend` (SSR, base `/storage`).
-- `rask-compute-frontend` ← `components/apps/compute-frontend` (SSR, base `/compute`).
+
+The seven SvelteKit SSR apps under `components/apps/` (`frontend` — the catch-all
+`viewer-frontend` — plus `overview`/`compute`/`discover`/`storage`/`train`/`studio`)
+all build from one parametrized `.docker/frontend.dockerfile`
+(`--build-arg APP=<dir>`, Bun server).
 
 See [Deployment](../architecture/deployment.md) for the image and cluster
 details.

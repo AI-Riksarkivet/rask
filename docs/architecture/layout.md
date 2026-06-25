@@ -15,7 +15,7 @@ flowchart TD
         pra["ray-api"]
     end
     subgraph components["components/ · runnable code"]
-        ca["apps/runner · apps/frontend<br/>apps/compute-frontend · apps/storage-frontend"]
+        ca["apps/runner · apps/frontend<br/>apps/{overview,compute,discover,storage,train,studio}-frontend"]
         cs["services/gateway · core · core_api · orchestrator<br/>volumes_api · search_api · ray_api"]
         cx["scripts/"]
     end
@@ -45,7 +45,9 @@ flowchart TD
 | `packages/service-kit` | Python | Platform library: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`, injectable lifespan. Dependency-light (no lancedb/ray/sqlmodel). |
 | `packages/ray-kit` | Python | Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, dashboard service). Shared by ray-api and core orchestrator. |
 | `packages/ui` | TS / Svelte | Svelte 5 + Bits UI + Tailwind 4 component library with Storybook (package `@rask/ui`); `@rask/ui/shell` exports the shared `AppShell`/`AppSidebar`/`nav-config` every app imports. |
-| `packages/api` | TS | Shared API client (package `@rask/api`), split into `ray`/`batches`/`search`/`volumes`/`types` modules. |
+| `packages/api` | TS | Shared API client (package `@rask/api`, valibot fetch client), split into `ray`/`batches`/`search`/`volumes`/`types` modules. |
+| `packages/tracker` | Python | Run/metric tracking helpers (`tracker`; optional `tracker[postgres]` extra). |
+| `packages/validate` | Python | Validation helpers (`validate`). |
 
 !!! note "`packages/control` was absorbed into `core`"
     An earlier `packages/control` (S3 sync + chunk submission) no longer exists
@@ -57,9 +59,8 @@ flowchart TD
 | Path | Type | Purpose |
 |---|---|---|
 | [`components/apps/runner`](../projects/runner.md) | Python CLI | Typer CLI that submits Ray Data jobs; ships the Ray Serve deployments. |
-| `components/apps/frontend` | SvelteKit 2 + Svelte 5 (SSR) | Catch-all app (package `viewer-frontend`, `:5173`) on `svelte-adapter-bun` behind the gateway; being decomposed into per-domain microfrontends ([UI Components](../components/ui.md), [Frontend microfrontends](frontend-microfrontends.md)). |
-| `components/apps/compute-frontend` | SvelteKit 2 + Svelte 5 (SSR) | Compute microfrontend (`/compute`, `:5175`) on `svelte-adapter-bun`. |
-| `components/apps/storage-frontend` | SvelteKit 2 + Svelte 5 (SSR) | Storage microfrontend (`/storage`, `:5174`) on `svelte-adapter-bun`. |
+| `components/apps/frontend` | SvelteKit 2 + Svelte 5 (SSR) | Catch-all app (package `viewer-frontend`, `:5273`) on `svelte-adapter-bun` — owns `/` (the platform home) behind the gateway ([UI Components](../components/ui.md), [Frontend microfrontends](frontend-microfrontends.md)). |
+| `components/apps/{overview,compute,discover,storage,train,studio}-frontend` | SvelteKit 2 + Svelte 5 (SSR) | The six domain microfrontend zones (`svelte-adapter-bun`), each pinned to base `/default/<domain>` on its own dev port (`:5174`–`:5179`) and rendering the shared `@rask/ui/shell` sidebar. Composed by the Turborepo microfrontends proxy in dev / the k3s Ingress in prod. |
 | `components/services/gateway` | FastAPI | Reverse proxy on `:8888` — path-routes `/api/*` to per-domain services (longest-prefix-first). |
 | `components/services/core` | Python (brick) | The dissolved `viewer` domain code: DB engine, models, repositories, domain services (`batches`, `submission`, `sync`, orchestrator loop, catalog discovery), Alembic, and `main.py` (monolith factory for tests / `make viewer`). **Not a standalone deployable** — composed by the two entrypoints below. |
 | `components/services/core_api` | FastAPI | Thin entrypoint `:8801`: health + batches + chunks + catalog over `core`; orchestrator loop **off**. |
@@ -72,7 +73,8 @@ flowchart TD
 ## `projects/` — deployable compositions, no code
 
 A `projects/<name>/pyproject.toml` lists the workspace members for one
-deployable. Six deployables exist (plus `runner` and `hcp`):
+deployable. Seven deployables exist — `runner` plus six services (there is no
+`projects/hcp`, see the warning below):
 
 - **`projects/runner`** — composes `runner`, `htr`, `storage` (+ `htrflow` from git).
 - **`projects/gateway`**, **`projects/core-api`**, **`projects/orchestrator`**, **`projects/volumes-api`**, **`projects/search-api`**, **`projects/ray-api`** — each composes its thin entrypoint + `core` (if needed) + shared packages.
@@ -80,9 +82,11 @@ deployable. Six deployables exist (plus `runner` and `hcp`):
 There is **no `projects/viewer`** — it was deleted when the monolithic viewer was dissolved (June 2026).
 
 !!! warning "There is no `projects/hcp`"
-    "HCP" is the **Hitachi Content Platform** S3 backend, configured via `HCP_*`
-    environment variables and implemented in `packages/storage` — not a
-    deployable project. See [Projects → HCP](../projects/hcp.md).
+    "HCP" (Hitachi Content Platform) is one S3-compatible backend — a **legacy
+    env-alias bridge** (`HCP_*` aliases + `derive_hcp_creds`) kept while it's the
+    current dev backend, implemented in `packages/storage`. Storage is otherwise
+    S3-agnostic (MinIO/rustfs/AWS via `RASK_S3_*`). It is not a deployable
+    project. See [Projects → HCP](../projects/hcp.md).
 
 ## Workspace membership is explicit
 

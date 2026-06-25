@@ -101,6 +101,24 @@ def test_build_entrypoint_renders_extra_args_before_batches() -> None:
     assert "--pipeline htr \\\n  --limit 5 \\\n  --batch VOL_A" in out
 
 
+def test_build_entrypoint_honours_configurable_runner_cmd() -> None:
+    """The in-cluster ray image has no `uv`/source tree, only the installed
+    `runner` console script — so RASK_RUNNER_CMD overrides the invocation. The
+    command must start with the configured runner_cmd, not the uv-run default."""
+    params = RunnerParams(
+        repo_root=Path("/r"),
+        cache_bucket="images-batch",
+        output="s3://images-batch-alto",
+        iiif_url="https://i",
+        source_mode="s3",
+        input_uri="s3://images-batch",
+        runner_cmd="runner",
+    )
+    out = build_entrypoint(["VOL_A"], params=params, spec=PIPELINE_SPECS["htrflow"])
+    assert out.startswith("runner \\\n  --input s3://images-batch")
+    assert "uv run" not in out
+
+
 # ── 2. REGISTRY INVARIANTS ─────────────────────────────────────────────────
 
 

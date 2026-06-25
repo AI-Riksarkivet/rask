@@ -16,6 +16,94 @@ import libSvelteConfig from './packages/ui/svelte.config.js';
 
 const gitignorePath = path.resolve(import.meta.dirname, '.gitignore');
 
+// --- Local rule: cross-zone <a> links must hard-navigate ---------------------
+// In the microfrontend split each zone (`/default/<domain>`) is a SEPARATE
+// SvelteKit app. A soft client-router nav to another zone's path targets a route
+// THIS app doesn't own → 404. Cross-zone <a>s must therefore set
+// `data-sveltekit-reload` to force a full document navigation. The shared shell
+// (`@rask/ui/shell` nav-main) does this dynamically via `crossZone(href)`; this
+// rule guards the hand-written links in app pages so the convention can't silently
+// drift back. Same-zone links use `{base}/…` (a `{base}` expression, never a literal
+// `/default/<domain>`), so they read as an opaque placeholder here and are ignored.
+const ZONE_PATH = /^\/[^/]*\/(overview|compute|discover|storage|train|studio)(?:\/|$)/;
+const EXPR = '￿'; // opaque-expression placeholder (can't contain a '/')
+
+// Reconstruct a comparable path string from an href attribute's value nodes.
+// Static text is kept verbatim; every `${…}`/`{…}` becomes EXPR. Returns null for
+// shorthand/spread hrefs we can't read statically (never flagged).
+function hrefToPath(valueNodes) {
+	if (!valueNodes || valueNodes.length === 0) return null;
+	let out = '';
+	for (const n of valueNodes) {
+		if (n.type === 'SvelteLiteral') {
+			out += n.value;
+		} else if (n.type === 'SvelteMustacheTag') {
+			const e = n.expression;
+			if (e && e.type === 'TemplateLiteral') {
+				out += e.quasis.map((q) => q.value.cooked ?? q.value.raw).join(EXPR);
+			} else {
+				out += EXPR;
+			}
+		} else {
+			return null;
+		}
+	}
+	return out;
+}
+
+// `data-sveltekit-reload` present and not explicitly "off".
+function hasReloadEnabled(attrs) {
+	for (const a of attrs) {
+		if (a.type === 'SvelteAttribute' && a.key?.name === 'data-sveltekit-reload') {
+			const v = a.value;
+			if (v?.length === 1 && v[0].type === 'SvelteLiteral' && v[0].value === 'off') return false;
+			return true; // boolean shorthand, "", or a dynamic value → enabled
+		}
+	}
+	return false;
+}
+
+const raLocal = {
+	rules: {
+		'cross-zone-reload': {
+			meta: {
+				type: 'problem',
+				docs: {
+					description:
+						'Cross-zone <a> links (into another microfrontend /default/<domain>) must set data-sveltekit-reload.',
+				},
+				messages: {
+					missingReload:
+						'Cross-zone link to "{{href}}" must set data-sveltekit-reload — a soft client nav targets a route this microfrontend zone does not own (→ 404). Add data-sveltekit-reload, or use {base}/… for a same-zone link.',
+				},
+				schema: [],
+			},
+			create(context) {
+				return {
+					SvelteElement(node) {
+						const nm = node.name;
+						const tag = typeof nm === 'string' ? nm : nm?.name;
+						if (tag !== 'a') return;
+						const attrs = node.startTag?.attributes ?? [];
+						const hrefAttr = attrs.find(
+							(a) => a.type === 'SvelteAttribute' && a.key?.name === 'href',
+						);
+						if (!hrefAttr) return;
+						const path = hrefToPath(hrefAttr.value);
+						if (!path || !ZONE_PATH.test(path)) return;
+						if (hasReloadEnabled(attrs)) return;
+						context.report({
+							node,
+							messageId: 'missingReload',
+							data: { href: path.replaceAll(EXPR, '${…}') },
+						});
+					},
+				};
+			},
+		},
+	},
+};
+
 export default defineConfig(
 	includeIgnoreFile(gitignorePath),
 	ts.configs.recommended,
@@ -163,6 +251,12 @@ export default defineConfig(
 				svelteConfig: libSvelteConfig,
 			},
 		},
+	},
+	{
+		// GATE: cross-zone <a> links must hard-navigate (see ZONE_PATH rule above).
+		files: ['components/apps/**/*.svelte'],
+		plugins: { 'ra-local': raLocal },
+		rules: { 'ra-local/cross-zone-reload': 'error' },
 	},
 	{
 		ignores: [

@@ -6,9 +6,13 @@ opposed to the libraries in `packages/`.
 | Path | Type | Docs |
 |---|---|---|
 | `components/apps/runner` | Python CLI (Ray Data jobs) | [Apps](apps.md) · [Projects → Runner](../projects/runner.md) |
-| `components/apps/frontend` | SvelteKit SSR app (Bun server) | [UI Components](ui.md) |
-| `components/apps/storage-frontend` | SvelteKit SSR app (Bun server) | [UI Components](ui.md) |
-| `components/apps/compute-frontend` | SvelteKit SSR app (Bun server) | [UI Components](ui.md) |
+| `components/apps/frontend` | SvelteKit SSR app — catch-all, owns `/` (Bun server) | [UI Components](ui.md) |
+| `components/apps/overview-frontend` | SvelteKit SSR app — `overview` domain (Bun server) | [UI Components](ui.md) |
+| `components/apps/compute-frontend` | SvelteKit SSR app — `compute` domain (Bun server) | [UI Components](ui.md) |
+| `components/apps/discover-frontend` | SvelteKit SSR app — `discover` domain (Bun server) | [UI Components](ui.md) |
+| `components/apps/storage-frontend` | SvelteKit SSR app — `storage` domain (Bun server) | [UI Components](ui.md) |
+| `components/apps/train-frontend` | SvelteKit SSR app — `train` domain (Bun server) | [UI Components](ui.md) |
+| `components/apps/studio-frontend` | SvelteKit SSR app — `studio` domain (Bun server) | [UI Components](ui.md) |
 | `components/services/gateway` | Reverse proxy (`:8888`) | [Services](services.md) |
 | `components/services/core` | Core domain brick (shared by core-api + orchestrator) | [Services](services.md) |
 | `components/services/core_api` | Batches/chunks/catalog API (`:8801`) | [Services](services.md) |
@@ -36,6 +40,6 @@ services (core-api endpoints + the orchestrator service's lifespan loop). Notabl
 
 ## In this section
 
-- **[Apps](apps.md)** — the runner CLI and the SSR frontend apps (catch-all + storage/compute microfrontends).
+- **[Apps](apps.md)** — the runner CLI and the SSR frontend apps (catch-all + the six domain microfrontends: overview, compute, discover, storage, train, studio).
 - **[Services](services.md)** — the gateway, core brick, and the five per-domain services.
 - **[UI Components](ui.md)** — the SvelteKit app and the `@rask/ui` library (packages/ui).

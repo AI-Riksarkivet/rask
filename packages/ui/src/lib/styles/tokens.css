@@ -1,12 +1,14 @@
 @custom-variant dark (&:is(.dark *));
 
-/* Opt every same-origin navigation into the View Transitions API. This animates
-   even full-document navs between the microfrontends on Chromium (a cross-document
-   view transition); it's a graceful no-op where the API is unsupported. Soft
-   client-side navs are driven per-app via the onNavigate hook in each root layout. */
-@view-transition {
-	navigation: auto;
-}
+/* Cross-document View Transitions (the view-transition at-rule, navigation auto) are
+   deliberately NOT enabled. Each microfrontend is a SEPARATE document with its OWN
+   sidebar/shell instance, so a cross-zone nav is a full document reload — opting that
+   into a view transition crossfades the whole viewport (identical sidebar included) on
+   every nav, which reads as a flicker. We let the browser do an instant, paint-held
+   document swap instead: the new doc paints (dark, via the app.html no-flash script)
+   before the old is removed, so the identical sidebar looks static. Soft IN-APP navs
+   still animate via the onNavigate → startViewTransition hook in each root layout
+   (the same-document VT API, independent of this at-rule). Don't re-add this. */
 
 :root {
 	--radius: 0.625rem;

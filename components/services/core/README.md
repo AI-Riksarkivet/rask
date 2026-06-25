@@ -1,8 +1,13 @@
 # core
 
-FastAPI backend for the rask core. Serves images and ALTO XML from any
-`Source` (filesystem, MinIO/rustfs/AWS), exposes Lance-backed line/catalog search,
-proxies the Ray dashboard, and optionally hosts the SvelteKit SPA.
+The rask **core domain brick** (the dissolved `viewer`; package `core`). Owns the
+batches/chunks/catalog/orchestrator endpoints, the DB + Alembic, and the domain
+services. Exposes Lance-backed **catalog** search and the SvelteKit SPA fallback.
+Not a deployable on its own — composed by two thin entrypoints (`core-api` :8801
+with the orchestrator loop OFF, `orchestrator` :8810 with it ON); `main.py` is the
+monolith factory, still used by tests + `make viewer`. Image/ALTO serving, **line**
+search, and the Ray dashboard proxy now live in the separate `volumes-api`,
+`search-api`, and `ray-api` services.
 
 > For the **design rationale + before/after layout**, see
 > [`docs/architecture/viewer-backend.md`](../../../docs/architecture/viewer-backend.md).
@@ -12,7 +17,7 @@ proxies the Ray dashboard, and optionally hosts the SvelteKit SPA.
 ```
 src/core/
 ├── main.py            # create_app() + uvicorn entry
-├── api/v1/endpoints/  # one router per concern (health, volumes, batches, chunks, search, catalog, orchestrator, ray, spa)
+├── api/v1/endpoints/  # one router per concern (health, batches, chunks, catalog, orchestrator, spa)
 ├── api/dependencies.py
 ├── core/              # config, db, exceptions, lifespan
 ├── models/            # SQLModel — Batch + StrEnums
@@ -25,28 +30,24 @@ src/core/
 
 ```
 GET   /api/health
-GET   /api/volumes/{vol}/pages              -> [PageEntry]
-GET   /api/volumes/{vol}/pages/{key}/image
-GET   /api/volumes/{vol}/pages/{key}/alto
 
 GET   /api/batches | /api/batches/{id} | /api/batches/random | /api/batches/{id}/catalog
-POST  /api/batches/sync
+POST  /api/batches/{id}/register | /api/batches/{id}/upload | /api/batches/sync
 
 GET   /api/chunks
-POST  /api/chunks/{id}/submit
+POST  /api/chunks/{id}/submit | /api/chunks/{id}/stop
 
-GET   /api/search | /api/search/stats | /api/search/thumb/{key}
 GET   /api/catalog/search | /api/catalog/search/stats | /api/catalog/browse
 
 GET   /api/orchestrator/state
-GET   /api/ray/health | /api/ray/jobs | /api/ray/cluster
-ALL   /ray-dashboard/{path}  + /api/v0/*, /api/jobs/*, /logs/*  (Ray iframe proxy)
+POST  /api/orchestrator/start | /api/orchestrator/stop
 
 GET   /api/docs   /api/redoc   /api/openapi.json
 ```
 
-Volume IDs are key prefixes in the input bucket (e.g. `A0060198/`). The viewer
-navigates by **known** volume ID — there is no global inventory listing.
+Image/ALTO serving (`/api/volumes/*`), line search (`/api/search/*`), and the Ray
+dashboard proxy (`/api/ray/*`, `/ray-dashboard/*`) are **not** here — they live in
+the standalone `volumes-api`, `search-api`, and `ray-api` services.
 
 ## Config
 
@@ -96,19 +97,19 @@ Same code path. The repository layer is dialect-agnostic; see the
 
 ## Frontend
 
-The SvelteKit app lives at `components/apps/frontend/`. Dev flow:
+The SvelteKit catch-all app lives at `components/apps/frontend/`; the rest are the
+per-domain microfrontends under `components/apps/`. Dev flow:
 
 ```bash
-make viewer            # backend on :8888
-make viewer-frontend   # vite dev server on :5173, proxies /api → :8888
+make viewer            # core monolith on :8888 (dev convenience)
+make viewer-frontend   # catch-all vite dev server on :5173, proxies /api → :8888
+make dev-frontends     # all 7 apps behind the :3024 microfrontends proxy
 ```
 
-For production, build once and the FastAPI process serves both at `:8888`:
-
-```bash
-make viewer-frontend-build
-make viewer
-```
+The `spa.py` fallback (mounted only when a static build dir exists) is a dev/legacy
+convenience. In production the frontend is built into per-domain SSR images and
+composed by the k3s Ingress — FastAPI does **not** serve the SPA. Build all apps
+with `make frontend-build`.
 
 ## Tests
 
