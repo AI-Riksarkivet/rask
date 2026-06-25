@@ -4,7 +4,7 @@ Fleet services (ClusterIP):
 {{- range $name, $svc := .Values.services }}
   - {{ $name }}: {{ include "rask.fullname" $ }}-{{ $name }}:{{ $svc.port }}
 {{- end }}
-  - frontend: {{ include "rask.fullname" . }}-frontend:{{ .Values.frontend.service.port }}
+  - frontend: {{ include "rask.fullname" . }}-home:{{ .Values.frontend.service.port }}
 {{- if .Values.cnpg.enabled }}
   - postgres: {{ include "rask.fullname" . }}-postgres-rw:{{ .Values.cnpg.port }} (CNPG in-cluster)
 {{- end }}

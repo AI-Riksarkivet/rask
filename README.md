@@ -10,12 +10,12 @@ Polyglot monorepo for Riksarkivet HTR + search infrastructure. Python managed wi
   - `htr`, `storage` — Python libraries (uv workspace members)
   - `@rask/ui` — Svelte 5 + Bits UI + Tailwind 4 component library with Storybook (Bun workspace)
 - `components/` — runnable bricks:
-  - `apps/runner` — Python CLI driving Ray Data HTR pipelines
-  - `apps/frontend` — Vite + Svelte viewer frontend
-  - `services/viewer` — FastAPI viewer backend (serves images + ALTO from object storage)
+  - `cli/runner` — Python CLI driving Ray Data HTR pipelines
+  - `frontends/` — seven SvelteKit 2 + Svelte 5 **SSR** apps (`svelte-adapter-bun`): `home` (catch-all, owns `/`) + six domain zones (`overview`/`compute`/`discover`/`storage`/`train`/`studio`), composed by the Turborepo `:3024` proxy in dev / k3s Ingress in prod
+  - `services/` — FastAPI services: `gateway` (reverse proxy `:8888`) + the `core` brick (composed by `core-api` + `orchestrator`) + `volumes-api` + `search-api` + `ray-api`
   - `scripts/` — standalone Python utilities (indexing, EAD harvesting, IIIF downloads, Ray job submission, …)
 - `projects/` — code-less composition pyprojects (one per deployable):
-  - `hcp`, `runner`, `viewer`
+  - `core-api`, `gateway`, `orchestrator`, `ray-api`, `runner`, `search-api`, `volumes-api`
 - `docs/` — Zensical documentation source; deployed by `.github/workflows/docs.yml`
 - `contributions/` — contribution guidelines
 - `.claude/` — project-local Claude Code config (skills, commands, hooks)
@@ -64,7 +64,7 @@ make storybook
 | `make test`                                                     | Run pytest + bun test (plus cargo test if present)     |
 | `make check`                                                    | `fmt` + `lint` + `typecheck`                           |
 | `make viewer`                                                   | Run the viewer FastAPI on `:8888`                      |
-| `make viewer-frontend`                                          | Run the viewer SvelteKit frontend (proxies to `:8888`) |
+| `make home`                                                     | Run the `home` catch-all frontend (vite proxies /api → `:8888`) |
 | `make ray-up` / `make ray-down`                                 | Start / stop a local Ray head node                     |
 | `make serve-up` / `make serve-down`                             | Deploy / tear down Ray Serve apps                      |
 | `make search-index` / `make catalog-index` / `make harvest-ead` | Indexing & EAD pipelines                               |

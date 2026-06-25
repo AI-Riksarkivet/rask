@@ -34,7 +34,7 @@ Production-shaped image definitions live at `.docker/`, built with `docker build
 | Image | Base | Notes |
 |---|---|---|
 | `rask-runner` | `nvidia/cuda:12.4.0-runtime-ubuntu22.04` | GPU. uv-managed Python + venv; `CMD ["runner"]`. Needs `--shm-size`, `--ulimit nofile=65535`, GPU via nvidia-container-toolkit. |
-| `frontend` / `<domain>-frontend` (7 images) | build + serve on `oven/bun:1-debian` | All built from **one parametrized** `.docker/frontend.dockerfile` via `--build-arg APP=<dir>`. **SSR via `svelte-adapter-bun`** (no longer an nginx SPA). `APP=frontend` is the catch-all (viewer-frontend, owns `/`); the six `<domain>-frontend` apps (overview/compute/discover/storage/train/studio) each pin base `/default/<domain>` and are probed there. Pre-builds `@rask/ui`, then `bun build`; the final stage ships the Bun runtime + `node_modules` and runs `bun build/index.js` on `:3000`. tini as PID 1, non-root UID 10001. |
+| `home` / `<domain>` (7 images) | build + serve on `oven/bun:1-debian` | All built from **one parametrized** `.docker/frontend.dockerfile` via `--build-arg APP=<dir>`. **SSR via `svelte-adapter-bun`** (no longer an nginx SPA). `APP=home` is the catch-all (home, owns `/`); the six domain apps (overview/compute/discover/storage/train/studio) each pin base `/default/<domain>` and are probed there. Pre-builds `@rask/ui`, then `bun build`; the final stage ships the Bun runtime + `node_modules` and runs `bun build/index.js` on `:3000`. tini as PID 1, non-root UID 10001. |
 | backend services (per-workload) | uv-managed Python | One dockerfile each: `gateway`, `core-api`, `orchestrator`, `volumes-api`, `search-api`, `ray-api` (plus `ray.dockerfile` for the Serve image). |
 
 The one frontend dockerfile encodes a non-obvious build contract (documented in its
@@ -43,7 +43,7 @@ image must ship `node_modules` — `build/` is not standalone. And bun 1.3's **i
 linker** keeps real packages in `node_modules/.bun/` with per-member symlinks, so the
 final stage copies both the root store **and** the app dir (with its symlinks) and
 runs from the app dir. The build `COPY`s the full JS workspace (all of
-`components/apps` wholesale + `packages/{api,ui}`) so `bun install` resolves — siblings
+`components/frontends` wholesale + `packages/{api,ui}`) so `bun install` resolves — siblings
 are build-stage only, never shipped.
 
 !!! note "Frontend images aren't built by `.dagger`"

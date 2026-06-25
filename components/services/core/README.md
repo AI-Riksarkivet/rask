@@ -97,12 +97,12 @@ Same code path. The repository layer is dialect-agnostic; see the
 
 ## Frontend
 
-The SvelteKit catch-all app lives at `components/apps/frontend/`; the rest are the
-per-domain microfrontends under `components/apps/`. Dev flow:
+The SvelteKit catch-all app lives at `components/frontends/home/`; the rest are the
+per-domain microfrontends under `components/frontends/`. Dev flow:
 
 ```bash
 make viewer            # core monolith on :8888 (dev convenience)
-make viewer-frontend   # catch-all vite dev server on :5173, proxies /api → :8888
+make home   # catch-all vite dev server on :5173, proxies /api → :8888
 make dev-frontends     # all 7 apps behind the :3024 microfrontends proxy
 ```
 

@@ -1,6 +1,6 @@
 ---
 name: rask-htr-pipeline
-description: The rask HTR image→ALTO pipeline — Ray Data actor fan-out + Ray Serve TrOCR/HTRflow GPU packing, the hard-won OOM and concurrency lessons. Use when editing components/apps/runner/pipeline.py, transcribe_service.py, or htrflow_service.py; tuning GPU fractions / replica counts / actor pool sizes / transcribe batch; retargeting to different GPU hardware; or debugging a raylet-killing OOM, idle GPUs, or ALTO that lands late in S3.
+description: The rask HTR image→ALTO pipeline — Ray Data actor fan-out + Ray Serve TrOCR/HTRflow GPU packing, the hard-won OOM and concurrency lessons. Use when editing components/cli/runner/pipeline.py, transcribe_service.py, or htrflow_service.py; tuning GPU fractions / replica counts / actor pool sizes / transcribe batch; retargeting to different GPU hardware; or debugging a raylet-killing OOM, idle GPUs, or ALTO that lands late in S3.
 ---
 
 # rask HTR pipeline (Ray Data + Ray Serve)
@@ -9,7 +9,7 @@ Distributed image→ALTO HTR for the Swedish National Archives. A `runner` CLI i
 
 ## When to use
 
-- Editing `components/apps/runner/src/runner/{pipeline.py,transcribe_service.py,htrflow_service.py}`.
+- Editing `components/cli/runner/src/runner/{pipeline.py,transcribe_service.py,htrflow_service.py}`.
 - Tuning GPU fractions, Serve replica counts, actor-pool sizes, or `transcribe_batch`.
 - Retargeting to different GPU hardware (a 3-GPU node assumption is baked in).
 - Debugging: OOM-killed raylet, idle GPUs (work stuck on one actor/replica), or ALTO landing late in S3.

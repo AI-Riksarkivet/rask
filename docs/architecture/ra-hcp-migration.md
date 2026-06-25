@@ -12,7 +12,7 @@ status: new
     The original "absorb all of ra-hcp" plan is **retired**. Decision (2026-06-23,
     audit-backed): rask's storage is **already backend-agnostic**, so we do **not**
     merge ra-hcp's backend. We harvest **only** ra-hcp's frontend S3 bucket-browser
-    into the `storage-frontend` MFE, backed by rask's own agnostic `volumes-api`.
+    into the `storage` MFE, backed by rask's own agnostic `volumes-api`.
 
 ## The verdict that drove the slim-down
 
@@ -56,7 +56,7 @@ S3 *prefixes* governed by rask RBAC — never an HCP tenant.
 - **`packages/tracker` + `packages/validate`** — the only ra-hcp Python worth keeping
   (a transfer ledger + an image validator — the medallion governance pieces). Landed as
   leaf libs.
-- **`storage-frontend` bucket-browser** — the MFE has a read-only browser wired to
+- **`storage` bucket-browser** — the MFE has a read-only browser wired to
   `/objects` (list + prefix nav), an **object-detail dialog** over `/object` (HEAD
   metadata) and **download** via `/object/download`, all styled with `@rask/ui` and
   routed through the gateway proxy. It imports **zero** ra-hcp backend code; the data

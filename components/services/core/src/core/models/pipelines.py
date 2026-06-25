@@ -7,7 +7,7 @@ the per-stage Ray actor names (`stages`), whether the pipeline tags a row's
 (`extra_args`).
 
 The registry keys are byte-identical to the runner's `PIPELINES` dict
-(`components/apps/runner/src/runner/pipeline.py`) — `name` is simultaneously the
+(`components/cli/runner/src/runner/pipeline.py`) — `name` is simultaneously the
 registry key, the `--pipeline` value passed to the runner, and the submission_id
 prefix. Keeping the two in sync ends the silent divergence where the core's
 `Pipeline` StrEnum only knew about a subset of the runner's pipelines.

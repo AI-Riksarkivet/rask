@@ -5,14 +5,14 @@ opposed to the libraries in `packages/`.
 
 | Path | Type | Docs |
 |---|---|---|
-| `components/apps/runner` | Python CLI (Ray Data jobs) | [Apps](apps.md) · [Projects → Runner](../projects/runner.md) |
-| `components/apps/frontend` | SvelteKit SSR app — catch-all, owns `/` (Bun server) | [UI Components](ui.md) |
-| `components/apps/overview-frontend` | SvelteKit SSR app — `overview` domain (Bun server) | [UI Components](ui.md) |
-| `components/apps/compute-frontend` | SvelteKit SSR app — `compute` domain (Bun server) | [UI Components](ui.md) |
-| `components/apps/discover-frontend` | SvelteKit SSR app — `discover` domain (Bun server) | [UI Components](ui.md) |
-| `components/apps/storage-frontend` | SvelteKit SSR app — `storage` domain (Bun server) | [UI Components](ui.md) |
-| `components/apps/train-frontend` | SvelteKit SSR app — `train` domain (Bun server) | [UI Components](ui.md) |
-| `components/apps/studio-frontend` | SvelteKit SSR app — `studio` domain (Bun server) | [UI Components](ui.md) |
+| `components/cli/runner` | Python CLI (Ray Data jobs) | [Frontends](frontends.md) · [Projects → Runner](../projects/runner.md) |
+| `components/frontends/home` | SvelteKit SSR app — catch-all, owns `/` (Bun server) | [UI Components](ui.md) |
+| `components/frontends/overview` | SvelteKit SSR app — `overview` domain (Bun server) | [UI Components](ui.md) |
+| `components/frontends/compute` | SvelteKit SSR app — `compute` domain (Bun server) | [UI Components](ui.md) |
+| `components/frontends/discover` | SvelteKit SSR app — `discover` domain (Bun server) | [UI Components](ui.md) |
+| `components/frontends/storage` | SvelteKit SSR app — `storage` domain (Bun server) | [UI Components](ui.md) |
+| `components/frontends/train` | SvelteKit SSR app — `train` domain (Bun server) | [UI Components](ui.md) |
+| `components/frontends/studio` | SvelteKit SSR app — `studio` domain (Bun server) | [UI Components](ui.md) |
 | `components/services/gateway` | Reverse proxy (`:8888`) | [Services](services.md) |
 | `components/services/core` | Core domain brick (shared by core-api + orchestrator) | [Services](services.md) |
 | `components/services/core_api` | Batches/chunks/catalog API (`:8801`) | [Services](services.md) |
@@ -40,6 +40,6 @@ services (core-api endpoints + the orchestrator service's lifespan loop). Notabl
 
 ## In this section
 
-- **[Apps](apps.md)** — the runner CLI and the SSR frontend apps (catch-all + the six domain microfrontends: overview, compute, discover, storage, train, studio).
+- **[Frontends](frontends.md)** — the runner CLI and the SSR frontend apps (catch-all + the six domain microfrontends: overview, compute, discover, storage, train, studio).
 - **[Services](services.md)** — the gateway, core brick, and the five per-domain services.
 - **[UI Components](ui.md)** — the SvelteKit app and the `@rask/ui` library (packages/ui).

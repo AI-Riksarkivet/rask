@@ -16,7 +16,7 @@ both local k3s and production. In-cluster CloudNativePG (Postgres), RustFS
 | `ray-api` | 8804 | Ray dashboard proxy + `/api/serve/*` |
 | `frontend` | 3000 | SvelteKit SSR (svelte-adapter-bun) |
 | migration | — | pre-install/pre-upgrade Job: `alembic upgrade head` |
-| Ingress (Traefik) | 80 | `/api` → gateway:8888, `/` → frontend:3000 |
+| Ingress (Traefik) | 80 | `/api` → gateway:8888, `/` → rask-home:3000 |
 
 ## In-cluster dependencies (optional)
 

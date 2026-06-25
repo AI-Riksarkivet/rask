@@ -15,7 +15,7 @@ flowchart TD
         pra["ray-api"]
     end
     subgraph components["components/ · runnable code"]
-        ca["apps/runner · apps/frontend<br/>apps/{overview,compute,discover,storage,train,studio}-frontend"]
+        ca["cli/runner · frontends/home<br/>apps/{overview,compute,discover,storage,train,studio}"]
         cs["services/gateway · core · core_api · orchestrator<br/>volumes_api · search_api · ray_api"]
         cx["scripts/"]
     end
@@ -58,9 +58,9 @@ flowchart TD
 
 | Path | Type | Purpose |
 |---|---|---|
-| [`components/apps/runner`](../projects/runner.md) | Python CLI | Typer CLI that submits Ray Data jobs; ships the Ray Serve deployments. |
-| `components/apps/frontend` | SvelteKit 2 + Svelte 5 (SSR) | Catch-all app (package `viewer-frontend`, `:5273`) on `svelte-adapter-bun` — owns `/` (the platform home) behind the gateway ([UI Components](../components/ui.md), [Frontend microfrontends](frontend-microfrontends.md)). |
-| `components/apps/{overview,compute,discover,storage,train,studio}-frontend` | SvelteKit 2 + Svelte 5 (SSR) | The six domain microfrontend zones (`svelte-adapter-bun`), each pinned to base `/default/<domain>` on its own dev port (`:5174`–`:5179`) and rendering the shared `@rask/ui/shell` sidebar. Composed by the Turborepo microfrontends proxy in dev / the k3s Ingress in prod. |
+| [`components/cli/runner`](../projects/runner.md) | Python CLI | Typer CLI that submits Ray Data jobs; ships the Ray Serve deployments. |
+| `components/frontends/home` | SvelteKit 2 + Svelte 5 (SSR) | Catch-all app (package `home`, `:5273`) on `svelte-adapter-bun` — owns `/` (the platform home) behind the gateway ([UI Components](../components/ui.md), [Frontend microfrontends](frontend-microfrontends.md)). |
+| `components/frontends/{overview,compute,discover,storage,train,studio}` | SvelteKit 2 + Svelte 5 (SSR) | The six domain microfrontend zones (`svelte-adapter-bun`), each pinned to base `/default/<domain>` on its own dev port (`:5174`–`:5179`) and rendering the shared `@rask/ui/shell` sidebar. Composed by the Turborepo microfrontends proxy in dev / the k3s Ingress in prod. |
 | `components/services/gateway` | FastAPI | Reverse proxy on `:8888` — path-routes `/api/*` to per-domain services (longest-prefix-first). |
 | `components/services/core` | Python (brick) | The dissolved `viewer` domain code: DB engine, models, repositories, domain services (`batches`, `submission`, `sync`, orchestrator loop, catalog discovery), Alembic, and `main.py` (monolith factory for tests / `make viewer`). **Not a standalone deployable** — composed by the two entrypoints below. |
 | `components/services/core_api` | FastAPI | Thin entrypoint `:8801`: health + batches + chunks + catalog over `core`; orchestrator loop **off**. |

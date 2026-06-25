@@ -38,7 +38,7 @@ nav = [
   ]},
   { "Components" = [
     { "Overview" = "components/index.md" },
-    { "Apps" = "components/apps.md" },
+    { "Frontends" = "components/frontends.md" },
     { "Services" = "components/services.md" },
     { "UI Components" = "components/ui.md" },
   ]},
@@ -162,7 +162,7 @@ default_handler = "python"
 paths = [
   "packages/htr/src",
   "packages/storage/src",
-  "components/apps/runner/src",
+  "components/cli/runner/src",
   "components/services/core/src",
 ]
 

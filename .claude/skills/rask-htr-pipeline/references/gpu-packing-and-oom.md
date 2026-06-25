@@ -1,7 +1,7 @@
 # GPU packing, the OOM cascade, and the fan-out workaround
 
 Deep reference for the load-bearing rules in SKILL.md. Every number here is from
-`components/apps/runner/src/runner/{pipeline.py,transcribe_service.py,htrflow_service.py}`.
+`components/cli/runner/src/runner/{pipeline.py,transcribe_service.py,htrflow_service.py}`.
 
 ## The GPU-fraction budget
 

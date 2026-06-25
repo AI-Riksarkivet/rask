@@ -3317,7 +3317,7 @@ wheels = [
 [[package]]
 name = "runner"
 version = "0.1.0"
-source = { editable = "components/apps/runner" }
+source = { editable = "components/cli/runner" }
 dependencies = [
     { name = "htr" },
     { name = "htrflow" },

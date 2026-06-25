@@ -273,7 +273,7 @@ The aggregator (`api/v1/router.py`) adds **no prefix** — each endpoint module 
 
 **In one line: build the `runner` Ray Data entrypoint for one chunk, submit it off-thread via the Ray Job SDK, and tag/clear `current_rayjob_id` on the chunk's Batch rows.**
 
-Pipeline identity is owned by `PIPELINE_SPECS`, whose four registered names are **`prefetch`**, **`htr`** (the default), **`htrflow`**, and **`fake`**. A spec's `name` doubles as the runner `--pipeline` value **and** the `submission_id` prefix — there is no DB linkage, so the string is parsed back to recover the pipeline. The built entrypoint must stay byte-identical to the runner CLI in `components/apps/runner/src/runner/main.py`.
+Pipeline identity is owned by `PIPELINE_SPECS`, whose four registered names are **`prefetch`**, **`htr`** (the default), **`htrflow`**, and **`fake`**. A spec's `name` doubles as the runner `--pipeline` value **and** the `submission_id` prefix — there is no DB linkage, so the string is parsed back to recover the pipeline. The built entrypoint must stay byte-identical to the runner CLI in `components/cli/runner/src/runner/main.py`.
 
 | At a glance | |
 |---|---|
@@ -587,7 +587,7 @@ flowchart TD
 | `RASK_LINES_TABLE` / `RASK_CATALOG_TABLE` | Lance tables | `lines` / `archive_catalog` |
 | `RAY_DASHBOARD_URL` | `ray_dashboard_url` | `http://localhost:8265` |
 | `DATABASE_URL` / `RASK_BATCHES_DB` | DB | sqlite at `.cache/batches.db` |
-| `RASK_SPA_BUILD` | `spa_build_dir` | `<repo_root>/components/apps/frontend/build` (via `resolved_spa_build`) |
+| `RASK_SPA_BUILD` | `spa_build_dir` | `<repo_root>/components/frontends/home/build` (via `resolved_spa_build`) |
 | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` / `DB_POOL_RECYCLE_SECONDS` / `DB_POOL_TIMEOUT_SECONDS` / `DB_QUERY_TIMEOUT_SECONDS` | pool | 10 / 20 / 1800 / 30 / 60 |
 | `RASK_LANCE_QUERY_TIMEOUT_SECONDS` | Lance timeout | 30 |
 | `RASK_ORCHESTRATOR_AUTOSTART` | `orchestrator_autostart` | `False` |

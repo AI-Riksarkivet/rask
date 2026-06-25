@@ -4,7 +4,7 @@
 
     This was an early design sketch written before the split was built. Its concrete
     details are now stale (it imagined `shell`/`pipeline-studio`/`admin` apps and
-    source-mode `exports`; the real split is `frontend`/`storage-frontend`/`compute-frontend`
+    source-mode `exports`; the real split is `frontend`/`storage`/`compute`
     on **svelte-adapter-bun SSR** consuming the **built** `@rask/ui` + `@rask/api`). The
     authoritative, current doc is **[frontend-microfrontends.md](frontend-microfrontends.md)**.
 

@@ -7,7 +7,7 @@ with a separate Svelte component library developed in Storybook. There are seven
 apps: a catch-all that owns `/` plus six domain apps (overview / compute /
 discover / storage / train / studio), each pinned to base `/default/<domain>`.
 
-## Catch-all app — `components/apps/frontend`
+## Catch-all app — `components/frontends/home`
 
 - **Stack:** Svelte 5, SvelteKit 2, Vite 8, `svelte-adapter-bun` (SSR Bun
   server), Tailwind 4, Bits UI. SSR on (`ssr = true`, `prerender = false`).
@@ -28,10 +28,10 @@ in-cluster gateway. Notable routes:
 
 | App | Routes |
 |---|---|
-| **overview** (`overview-frontend`) | Project landing / batch dashboard — filterable/sortable table, chunk list, Ray job + cluster summary; sync and submit chunks. |
-| **compute** (`compute-frontend`) | `cluster`, `jobs` / `jobs/[id]`, `actors`, `serve`, `logviewer` (Ray dashboard views), `api-docs` (embeds FastAPI Swagger UI via the proxy). |
-| **discover** (`discover-frontend`) | `viewer/[volume]/[page]` (zoom/pan canvas, ALTO overlay, page nav, catalog metadata; honors `?line=`), `search` (transcribed lines + catalog, tier filter), `browse` (cached catalog volumes by tier). |
-| **storage** (`storage-frontend`) | S3/volumes browser. |
+| **overview** (`overview`) | Project landing / batch dashboard — filterable/sortable table, chunk list, Ray job + cluster summary; sync and submit chunks. |
+| **compute** (`compute`) | `cluster`, `jobs` / `jobs/[id]`, `actors`, `serve`, `logviewer` (Ray dashboard views), `api-docs` (embeds FastAPI Swagger UI via the proxy). |
+| **discover** (`discover`) | `viewer/[volume]/[page]` (zoom/pan canvas, ALTO overlay, page nav, catalog metadata; honors `?line=`), `search` (transcribed lines + catalog, tier filter), `browse` (cached catalog volumes by tier). |
+| **storage** (`storage`) | S3/volumes browser. |
 | **train**, **studio** | Scaffolds for the training + design workspaces. |
 
 The discover viewer's zoom/pan + ALTO parsing live in its `$lib/canvas.ts` and
@@ -63,6 +63,6 @@ sidebar with zero drift.
   `svelte-check`.
 
 !!! tip "Dev server binds loopback-only"
-    `make viewer-frontend` starts Vite without `--host`, so it binds `127.0.0.1`
+    `make home` starts Vite without `--host`, so it binds `127.0.0.1`
     only. Pass `--host` to reach it over IPv4 localhost or the LAN. Only the
     backend (`make viewer`) binds `0.0.0.0:8888`.

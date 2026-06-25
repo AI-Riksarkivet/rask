@@ -5,8 +5,8 @@ codebase is checked against it, and every future change is reconciled to it —
 so the same inconsistencies stop being rediscovered.
 
 Scope: the 7 SvelteKit microfrontends — the 6 domain apps under
-`components/apps/*-frontend` plus the catch-all `components/apps/frontend`
-(package `viewer-frontend`) that owns `/` (the platform home) — the shared
+`components/frontends/*` plus the catch-all `components/frontends/home`
+(package `home`) that owns `/` (the platform home) — the shared
 `@rask/ui` design system, and the `@rask/api` data client. It assumes the architecture in
 `frontend-microfrontends.md` and `frontend-monorepo.md` — read those for the
 _why_; this doc is the _rules_.
@@ -142,9 +142,9 @@ origin — raw during SSR inside a k3s pod the relative URL fails ("Unable to
 connect") or hairpins out through the external ingress. That is what the
 `makeGatewayHandleFetch` hook above solves: SvelteKit calls `handleFetch` only for
 server-side `event.fetch`, so it rewrites SSR `/api/*` to the in-cluster gateway
-and leaves client requests untouched. **All four data apps** (`overview-frontend`,
-`discover-frontend`, `compute-frontend`, `storage-frontend`) carry the **identical**
-hook in `src/hooks.server.ts` — no per-app variation. The catch-all `frontend` has
+and leaves client requests untouched. **All four data apps** (`overview`,
+`discover`, `compute`, `storage`) carry the **identical**
+hook in `src/hooks.server.ts` — no per-app variation. The catch-all `home` has
 **no** `@rask/api` data layer (so no hook).
 
 **Gate:** `*.remote.ts` is a knip entry point (dead remote functions are caught
@@ -434,7 +434,7 @@ exact port with `strictPort: true` so a clash fails loudly instead of silently
 drifting and breaking routing.
 
 ```jsonc
-"overview-frontend": {
+"overview": {
 	"development": { "local": { "port": 5179 } },
 	"routing": [{ "paths": ["/default/overview", "/default/overview/:path*"] }]
 }

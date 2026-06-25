@@ -27,7 +27,7 @@ Frontend work in rask is built ON these. Read them in full (references included)
 
 ## The stack, one breath
 
-Bun + Turborepo; **7 SvelteKit 2 + Svelte 5 SSR apps** (`svelte-adapter-bun`) as routing-based **MFE zones** at `/default/<domain>` behind the turbo `:3024` proxy (the catch-all `frontend` app owns `/`); **`@rask/ui`** = the shared design system (Bits UI headless + Tailwind 4 + OKLCH `@theme` tokens); **`@rask/api`** = the valibot fetch client. Deliberately MFE, **not** a monolith.
+Bun + Turborepo; **7 SvelteKit 2 + Svelte 5 SSR apps** (`svelte-adapter-bun`) as routing-based **MFE zones** at `/default/<domain>` behind the turbo `:3024` proxy (the catch-all `home` app owns `/`); **`@rask/ui`** = the shared design system (Bits UI headless + Tailwind 4 + OKLCH `@theme` tokens); **`@rask/api`** = the valibot fetch client. Deliberately MFE, **not** a monolith.
 
 ## The canon at a glance (full detail → the doc)
 
@@ -45,7 +45,7 @@ Bun + Turborepo; **7 SvelteKit 2 + Svelte 5 SSR apps** (`svelte-adapter-bun`) as
 Two DIFFERENT composition layers stitch the zones; they are NOT meant to mirror each other — they share ONLY the base paths. Confusing them is the usual "ports don't map in k3s" bug.
 
 - **DEV** = turbo's `microfrontends.json` proxy on `:3024` (`turbo dev`). Per-app dev ports (5174…); the application **key** doubles as routing id. `packageName` is OPTIONAL — only needed when a key ≠ its `package.json` `name`; rask's keys ARE the package names, so it's correctly omitted. `options.localProxyPort` just moves the `:3024` proxy (rask uses the default). **All of this is dev-only — turbo says so explicitly; `microfrontends.json` does NOT exist/apply in prod.**
-- **PROD** = each app is its own `:3000` container (`svelte-adapter-bun`, `frontend.service.port`) composed by the **k3s Ingress** (the prod reverse-proxy): `/default/<domain>` → that app's Service (pathType `Prefix`, **no strip** — the app keeps its base path), `/` → the catch-all `frontend`, `/api` → gateway:8888. Source: `chart/templates/{frontends,ingress}.yaml` + `values.frontend`.
+- **PROD** = each app is its own `:3000` container (`svelte-adapter-bun`, `frontend.service.port`) composed by the **k3s Ingress** (the prod reverse-proxy): `/default/<domain>` → that app's Service (pathType `Prefix`, **no strip** — the app keeps its base path), `/` → the catch-all `home`, `/api` → gateway:8888. Source: `chart/templates/{frontends,ingress}.yaml` + `values.frontend`.
 - **One parametrized `.docker/frontend.dockerfile`** (`--build-arg APP=…`), built per app in the Makefile loop. **No per-app and no per-package dockerfile** — `@rask/ui`/`@rask/api` are libraries baked into each app image at build time, never their own deployable.
 - **The shared dev↔prod contract is the base path** `/default/<domain>` (set in each `svelte.config.js`). Both proxy layers route to it unchanged; nothing else has to match.
 - **Deploy gotcha (SSR hairpin):** a `query()` whose `getRequestEvent().fetch` hits a relative `/api/*` works in dev (vite proxy) but in prod resolves against the EXTERNAL ingress host → the pod hairpins out and back. Server-side reads must use the in-cluster `RASK_GATEWAY_URL` when set. Full detail → `docs/architecture/{deployment,frontend-microfrontends}.md`.

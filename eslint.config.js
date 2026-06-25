@@ -5,13 +5,13 @@ import svelte from 'eslint-plugin-svelte';
 import { defineConfig } from 'eslint/config';
 import globals from 'globals';
 import ts from 'typescript-eslint';
-import computeSvelteConfig from './components/apps/compute-frontend/svelte.config.js';
-import discoverSvelteConfig from './components/apps/discover-frontend/svelte.config.js';
-import frontendSvelteConfig from './components/apps/frontend/svelte.config.js';
-import overviewSvelteConfig from './components/apps/overview-frontend/svelte.config.js';
-import storageSvelteConfig from './components/apps/storage-frontend/svelte.config.js';
-import studioSvelteConfig from './components/apps/studio-frontend/svelte.config.js';
-import trainSvelteConfig from './components/apps/train-frontend/svelte.config.js';
+import computeSvelteConfig from './components/frontends/compute/svelte.config.js';
+import discoverSvelteConfig from './components/frontends/discover/svelte.config.js';
+import frontendSvelteConfig from './components/frontends/home/svelte.config.js';
+import overviewSvelteConfig from './components/frontends/overview/svelte.config.js';
+import storageSvelteConfig from './components/frontends/storage/svelte.config.js';
+import studioSvelteConfig from './components/frontends/studio/svelte.config.js';
+import trainSvelteConfig from './components/frontends/train/svelte.config.js';
 import libSvelteConfig from './packages/ui/svelte.config.js';
 
 const gitignorePath = path.resolve(import.meta.dirname, '.gitignore');
@@ -147,7 +147,7 @@ export default defineConfig(
 		},
 	},
 	{
-		files: ['components/apps/frontend/**/*.svelte', 'components/apps/frontend/**/*.svelte.ts'],
+		files: ['components/frontends/home/**/*.svelte', 'components/frontends/home/**/*.svelte.ts'],
 		languageOptions: {
 			parserOptions: {
 				projectService: true,
@@ -159,8 +159,8 @@ export default defineConfig(
 	},
 	{
 		files: [
-			'components/apps/storage-frontend/**/*.svelte',
-			'components/apps/storage-frontend/**/*.svelte.ts',
+			'components/frontends/storage/**/*.svelte',
+			'components/frontends/storage/**/*.svelte.ts',
 		],
 		languageOptions: {
 			parserOptions: {
@@ -173,8 +173,8 @@ export default defineConfig(
 	},
 	{
 		files: [
-			'components/apps/compute-frontend/**/*.svelte',
-			'components/apps/compute-frontend/**/*.svelte.ts',
+			'components/frontends/compute/**/*.svelte',
+			'components/frontends/compute/**/*.svelte.ts',
 		],
 		languageOptions: {
 			parserOptions: {
@@ -187,8 +187,8 @@ export default defineConfig(
 	},
 	{
 		files: [
-			'components/apps/discover-frontend/**/*.svelte',
-			'components/apps/discover-frontend/**/*.svelte.ts',
+			'components/frontends/discover/**/*.svelte',
+			'components/frontends/discover/**/*.svelte.ts',
 		],
 		languageOptions: {
 			parserOptions: {
@@ -201,8 +201,8 @@ export default defineConfig(
 	},
 	{
 		files: [
-			'components/apps/overview-frontend/**/*.svelte',
-			'components/apps/overview-frontend/**/*.svelte.ts',
+			'components/frontends/overview/**/*.svelte',
+			'components/frontends/overview/**/*.svelte.ts',
 		],
 		languageOptions: {
 			parserOptions: {
@@ -215,8 +215,8 @@ export default defineConfig(
 	},
 	{
 		files: [
-			'components/apps/studio-frontend/**/*.svelte',
-			'components/apps/studio-frontend/**/*.svelte.ts',
+			'components/frontends/studio/**/*.svelte',
+			'components/frontends/studio/**/*.svelte.ts',
 		],
 		languageOptions: {
 			parserOptions: {
@@ -229,8 +229,8 @@ export default defineConfig(
 	},
 	{
 		files: [
-			'components/apps/train-frontend/**/*.svelte',
-			'components/apps/train-frontend/**/*.svelte.ts',
+			'components/frontends/train/**/*.svelte',
+			'components/frontends/train/**/*.svelte.ts',
 		],
 		languageOptions: {
 			parserOptions: {
@@ -254,7 +254,7 @@ export default defineConfig(
 	},
 	{
 		// GATE: cross-zone <a> links must hard-navigate (see ZONE_PATH rule above).
-		files: ['components/apps/**/*.svelte'],
+		files: ['components/frontends/**/*.svelte'],
 		plugins: { 'ra-local': raLocal },
 		rules: { 'ra-local/cross-zone-reload': 'error' },
 	},
