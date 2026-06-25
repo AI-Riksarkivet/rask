@@ -1,0 +1,42 @@
+{
+	// --- inotify hygiene -----------------------------------------------------
+	// On Linux every watched DIRECTORY costs one inotify watch, and the default
+	// fs.inotify.max_user_watches is only 65536. VS Code recursively watches the
+	// whole workspace, so without these excludes it watches ~5,200 dirs of .venv
+	// (the uv Python env: ray/torch/lance/…) + ~8,700 of node_modules + the 7
+	// apps' generated .svelte-kit — exhausting the limit and starving Vite's own
+	// watcher (which then crashes with EINVAL and falls back to slow polling).
+	// None of these are hand-edited, so VS Code never needs to watch them; Vite
+	// keeps its own watcher on .svelte-kit independently.
+	"files.watcherExclude": {
+		"**/.git/objects/**": true,
+		"**/.git/subtree-cache/**": true,
+		"**/node_modules/**": true,
+		"**/.venv/**": true,
+		"**/.svelte-kit/**": true,
+		"**/build/**": true,
+		"**/dist/**": true,
+		"**/.turbo/**": true,
+		"**/__pycache__/**": true,
+		"**/.pytest_cache/**": true,
+		"**/.ruff_cache/**": true,
+		"**/.mypy_cache/**": true,
+		"**/.cache/**": true,
+		"**/storybook-static/**": true
+	},
+	// Keep search + the file tree out of the same dirs (speed + less noise).
+	"search.exclude": {
+		"**/.venv": true,
+		"**/node_modules": true,
+		"**/.svelte-kit": true,
+		"**/build": true,
+		"**/dist": true,
+		"**/.turbo": true,
+		"**/storybook-static": true
+	},
+	"files.exclude": {
+		"**/__pycache__": true,
+		"**/.pytest_cache": true,
+		"**/.ruff_cache": true
+	}
+}
