@@ -28,6 +28,16 @@ Ingress disabled — port-forward the gateway:
   kubectl port-forward svc/{{ include "rask.fullname" . }}-gateway 8888
 {{- end }}
 
+{{- if .Values.observability.enabled }}
+Observability (Vector + GreptimeDB + Perses):
+  - greptimedb:  {{ include "rask.fullname" . }}-greptimedb-standalone:4000 (HTTP: OTLP, Prometheus query/write, SQL)
+                 {{ include "rask.fullname" . }}-greptimedb-standalone:4001 (gRPC: OTLP)
+  - perses:      {{ include "rask.fullname" . }}-perses:8080 (dashboards; GreptimeDB Prometheus datasource pre-configured)
+  - vector:      DaemonSet {{ include "rask.fullname" . }}-vector — ships pod logs to GreptimeDB :4000, table rask_logs
+  - storage:     RustFS bucket rask-observability (rask-rustfs-io:9000; auto-provisioned by RustFS Tenant)
+  Fleet and Ray Serve apps export OTLP/gRPC directly to GreptimeDB :4001 (gated by RASK_OTEL_ENABLED).
+{{- end }}
+
 Reminders:
   * The orchestrator starts only if RASK_ORCHESTRATOR_AUTOSTART=true (default false);
     otherwise POST /api/v1/orchestrator/start.

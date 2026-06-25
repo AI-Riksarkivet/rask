@@ -106,6 +106,31 @@ orchestrator points at an external cluster via `config.RAY_DASHBOARD_URL`.
   - `cnpg.enabled` — CloudNativePG operator + `Cluster` named `rask-postgres`; app connects to `rask-postgres-rw:5432`. Values under `cnpg.*` (instances, storage, imageName, user, database).
   - `rustfs.enabled` — RustFS operator (vendored at `third_party/rustfs-operator/`, refreshed via `scripts/vendor-rustfs-operator.sh`) + `Tenant` named `rask-rustfs`; S3 at `rask-rustfs-io:9000`, console at `rask-rustfs-console:9001`. Standalone mode: 1 pod / 4 PVCs (erasure-coding minimum). Buckets provisioned natively via `spec.buckets` — no init Job. Values under `rustfs.*`.
   - `ray.enabled` — KubeRay `RayService` (head + worker with GPU limits).
+  - `observability.enabled` — three optional subcharts (see below).
+
+### Observability stack (`observability.enabled`)
+
+The `observability.enabled` toggle gates three subcharts and all OTLP wiring in the
+fleet and Ray deployments.
+
+| Component | Version | Service | Role |
+|---|---|---|---|
+| **Vector** | 0.56.0 | `rask-vector` (Agent DaemonSet) | Collects k8s pod logs; ships to GreptimeDB `:4000` via `greptimedb_logs` sink (table `rask_logs`) |
+| **GreptimeDB** | `greptimedb-standalone` 0.4.5 (app 1.1.1) | `rask-greptimedb-standalone` | Unified metrics/logs/traces store; `:4000` HTTP (OTLP, Prometheus query/write, SQL), `:4001` gRPC (OTLP) |
+| **Perses** | 0.22.0 | `rask-perses:8080` | Dashboard UI; a GreptimeDB Prometheus `GlobalDatasource` (`http://rask-greptimedb-standalone:4000/v1/prometheus`) is pre-configured |
+
+**Storage:** GreptimeDB writes to the in-cluster RustFS S3 at `rask-rustfs-io:9000`,
+bucket `rask-observability`. The bucket is auto-provisioned by the RustFS Tenant's
+`spec.buckets` — no init Job or manual bucket creation is required (greenfield installs
+get it automatically).
+
+**App instrumentation:** `service_kit.setup_otel` (called from `make_service_app`)
+instruments the FastAPI fleet; the Ray Serve htrflow app is similarly instrumented.
+Both export OTLP/gRPC **directly to GreptimeDB `:4001`** — the chart injects
+`OTEL_EXPORTER_OTLP_ENDPOINT` and `RASK_OTEL_ENABLED` when `observability.enabled=true`.
+When the toggle is off the env vars are absent and instrumentation is a no-op.
+Standard OTLP/gRPC is used throughout; OTel-Arrow is not used (the Python SDK and
+Vector both lack OTAP support).
 
 Greenfield local cutover (drops old PVCs): `make k3s-purge && make k3s-up`.
 

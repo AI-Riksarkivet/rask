@@ -31,6 +31,28 @@ Each toggle gates **both** the operator subchart and the custom resource it mana
 Set all three to `true` for local k3s. Leave them `false` for production and
 supply credentials via `existingSecret`.
 
+## Observability (optional)
+
+Toggle: `observability.enabled` (default `false`). When enabled, three subcharts are
+installed and all fleet + Ray OTLP wiring is activated.
+
+| Subchart | Version | Service | Notes |
+|---|---|---|---|
+| Vector (`vector` 0.56.0) | Agent DaemonSet | `rask-vector` | Collects k8s pod logs; ships to GreptimeDB `:4000` via `greptimedb_logs` sink (table `rask_logs`) |
+| GreptimeDB (`greptimedb-standalone` 0.4.5, app 1.1.1) | `rask-greptimedb-standalone` | Unified metrics/logs/traces store; `:4000` HTTP (OTLP, Prometheus query/write, SQL), `:4001` gRPC (OTLP) |
+| Perses (`perses` 0.22.0) | `rask-perses:8080` | Dashboard UI; a GreptimeDB Prometheus `GlobalDatasource` pointing at `http://rask-greptimedb-standalone:4000/v1/prometheus` is pre-configured |
+
+**Storage:** GreptimeDB persists to the in-cluster RustFS S3 (`rask-rustfs-io:9000`,
+bucket `rask-observability`). The bucket is auto-provisioned by the RustFS Tenant's
+`spec.buckets` — no manual setup required.
+
+**App instrumentation:** the FastAPI fleet (via `service_kit.setup_otel` in
+`make_service_app`) and the Ray Serve htrflow app export OTLP/gRPC **directly to
+GreptimeDB `:4001`** (`OTEL_*` env vars injected by the chart when
+`observability.enabled=true`). Instrumentation is opt-in — no-op unless the env vars
+are present. Standard OTLP/gRPC is used throughout (OTel-Arrow is not used — the
+Python SDK and Vector both lack OTAP support).
+
 ## Local k3s quickstart
 
 ```bash
