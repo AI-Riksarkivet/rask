@@ -22,8 +22,14 @@ from core.schemas.sync import SyncResult
 from storage import S3Client, iter_keys
 
 
-_CACHE_IMAGE_SUFFIX = ".jpg"  # cache_bucket holds JPEGs (one per page)
-_ALTO_OUTPUT_SUFFIX = ".xml"  # output_bucket holds ALTO XMLs (one per page)
+# Input bucket holds page images uploaded as-is — count every supported image
+# type, matching registration / storage's S3Source default. `.jpg`-only was an
+# IIIF-era assumption (the read-through cache held one JPEG per page); in S3
+# source-mode users upload jpg/png/tif directly and the runner transcribes them
+# all, so undercounting png/tif here would keep a volume below the HTR-ready
+# threshold forever.
+_CACHE_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".tif", ".tiff")
+_ALTO_OUTPUT_SUFFIXES = (".xml",)  # output_bucket holds ALTO XMLs (one per page)
 
 
 def _classify(expected: int | None, cached: int, transcribed: int) -> HtrStatus:
@@ -47,10 +53,13 @@ def _classify(expected: int | None, cached: int, transcribed: int) -> HtrStatus:
     return HtrStatus.PENDING
 
 
-def _count_per_batch(client: S3Client, bucket: str, suffix: str) -> dict[str, int]:
-    """`batch_id → count` for every key under `bucket` whose name ends in `suffix`."""
+def _count_per_batch(client: S3Client, bucket: str, suffixes: tuple[str, ...]) -> dict[str, int]:
+    """`batch_id → count` for every key under `bucket` whose name ends in any of `suffixes`."""
+    suffixes_lc = tuple(s.lower() for s in suffixes)
     counts: dict[str, int] = defaultdict(int)
-    for key in iter_keys(client, bucket, suffix=suffix):
+    for key in iter_keys(client, bucket):
+        if not key.lower().endswith(suffixes_lc):
+            continue
         batch_id, _, _ = key.partition("/")
         if not batch_id:
             continue
@@ -70,8 +79,8 @@ async def reconcile_from_s3(
     `client` is the lifespan-owned S3 client (`app.state.s3`), threaded in so the
     reconcile reuses it instead of building a fresh client per call/tick.
     """
-    cached = await to_thread.run_sync(_count_per_batch, client, cache_bucket, _CACHE_IMAGE_SUFFIX)
-    transcribed = await to_thread.run_sync(_count_per_batch, client, output_bucket, _ALTO_OUTPUT_SUFFIX)
+    cached = await to_thread.run_sync(_count_per_batch, client, cache_bucket, _CACHE_IMAGE_SUFFIXES)
+    transcribed = await to_thread.run_sync(_count_per_batch, client, output_bucket, _ALTO_OUTPUT_SUFFIXES)
 
     now = datetime.now(UTC).isoformat(timespec="seconds")
     rows = list((await session.exec(select(Batch))).all())
