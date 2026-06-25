@@ -16,12 +16,21 @@ router = APIRouter(include_in_schema=False)
 _PROXY_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"]
 
 
+def _canonical(path: str) -> str:
+    """Ray's Serve REST API is trailing-slash-strict — `/api/serve/applications/`
+    is the resource; the slash-less form 404s. Intermediaries on the request path
+    (notably the dapr sidecar's service-invoke) normalize the trailing slash away,
+    so this proxy — which exists solely to forward Ray's Serve status API — restores
+    it. Keeps ray-api correct on its own behind any proxy, not just direct calls."""
+    return path if path.endswith("/") else path + "/"
+
+
 async def _proxy(request: Request, http: HttpDep, settings: SettingsDep, path: str) -> Response:
     body = await request.body()
     resp = await dashboard.proxy(
         http,
         settings.ray_dashboard_url,
-        path,
+        _canonical(path),
         request.method,
         request.url.query,
         dict(request.headers),
