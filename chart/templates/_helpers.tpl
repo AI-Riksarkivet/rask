@@ -56,16 +56,16 @@ app.kubernetes.io/component: {{ $component }}
 {{- end -}}
 
 {{- define "rask.minioAccessKey" -}}
-{{- default "rask" .Values.secrets.minioAccessKey -}}
+{{- default "raskadmin" .Values.secrets.minioAccessKey -}}
 {{- end -}}
 
 {{- define "rask.minioSecretKey" -}}
 {{- if .Values.secrets.minioSecretKey -}}
 {{- .Values.secrets.minioSecretKey -}}
 {{- else -}}
-{{- $existing := (lookup "v1" "Secret" .Release.Namespace (printf "%s-minio" (include "rask.fullname" .))) -}}
-{{- if and $existing $existing.data (index $existing.data "MINIO_ROOT_PASSWORD") -}}
-{{- index $existing.data "MINIO_ROOT_PASSWORD" | b64dec -}}
+{{- $existing := (lookup "v1" "Secret" .Release.Namespace (printf "%s-rustfs" (include "rask.fullname" .))) -}}
+{{- if and $existing $existing.data (index $existing.data "secretkey") -}}
+{{- index $existing.data "secretkey" | b64dec -}}
 {{- else -}}
 {{- randAlphaNum 24 -}}
 {{- end -}}

@@ -8,8 +8,8 @@ Fleet services (ClusterIP):
 {{- if .Values.cnpg.enabled }}
   - postgres: {{ include "rask.fullname" . }}-postgres-rw:{{ .Values.cnpg.port }} (CNPG in-cluster)
 {{- end }}
-{{- if .Values.minio.enabled }}
-  - minio:    {{ include "rask.fullname" . }}-minio:{{ .Values.minio.port }} (in-cluster, console :{{ .Values.minio.consolePort }})
+{{- if .Values.rustfs.enabled }}
+  - rustfs:   {{ include "rask.fullname" . }}-rustfs-io:{{ .Values.rustfs.port }} (in-cluster, console :{{ .Values.rustfs.consolePort }} via -rustfs-console)
 {{- end }}
 {{- if .Values.ray.enabled }}
   - ray:      {{ include "rask.fullname" . }}-ray-head-svc:{{ .Values.ray.dashboardPort }} (KubeRay; htrflow at {{ .Values.ray.serveRoutePrefix }})

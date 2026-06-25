@@ -50,7 +50,7 @@ spec:
         {{- if eq $dep "minio" }}
         - name: wait-minio
           image: busybox:1.36
-          command: ["sh","-c","until nc -z {{ include "rask.fullname" $root }}-minio {{ $root.Values.minio.port }}; do echo waiting minio; sleep 2; done"]
+          command: ["sh","-c","until nc -z {{ include "rask.fullname" $root }}-rustfs-io {{ $root.Values.rustfs.port }}; do echo waiting s3; sleep 2; done"]
         {{- end }}
         {{- end }}
       {{- end }}

@@ -1,0 +1,27 @@
+{{- if .Values.rustfs.enabled }}
+apiVersion: rustfs.com/v1alpha1
+kind: Tenant
+metadata:
+  name: {{ include "rask.fullname" . }}-rustfs
+  labels:
+    {{- include "rask.componentLabels" (list . "rustfs") | nindent 4 }}
+spec:
+  image: {{ .Values.rustfs.image | quote }}
+  credsSecret:
+    name: {{ include "rask.fullname" . }}-rustfs
+  pools:
+    - name: pool-0
+      servers: {{ .Values.rustfs.servers }}
+      persistence:
+        volumesPerServer: {{ .Values.rustfs.volumesPerServer }}
+        volumeClaimTemplate:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: {{ .Values.rustfs.storage | quote }}
+          storageClassName: {{ .Values.rustfs.storageClass | quote }}
+  buckets:
+    {{- range .Values.rustfs.buckets }}
+    - name: {{ . | quote }}
+    {{- end }}
+{{- end }}

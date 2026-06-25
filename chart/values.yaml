@@ -125,18 +125,21 @@ frontend:
     - {name: train-frontend, path: /default/train}
     - {name: studio-frontend, path: /default/studio}
 
-minio:
+# In-cluster S3 object store via the RustFS operator (Tenant CR + operator
+# subchart). `enabled` gates BOTH the operator subchart (Chart.yaml condition
+# rustfs.enabled) and the Tenant template. Turn off for external S3.
+# RustFS erasure coding requires servers*volumesPerServer >= 4; standalone is
+# servers=1, volumesPerServer=4 (1 pod, 4 PVCs). S3 service is <tenant>-io:9000.
+rustfs:
   enabled: true
-  image: "minio/minio:latest"
-  mcImage: "minio/mc:latest"
+  image: "rustfs/rustfs:latest"
+  servers: 1
+  volumesPerServer: 4
   port: 9000
   consolePort: 9001
-  storage: "50Gi"
+  storage: "15Gi"          # per-volume; 4 volumes => ~60Gi total (local-path is unmetered hostPath)
   storageClass: "local-path"
   buckets: ["images-batch", "images-batch-alto", "images-batch-search"]
-  resources:
-    requests: {cpu: "100m", memory: "256Mi"}
-    limits: {cpu: "1", memory: "1Gi"}
 
 ray:
   enabled: true
@@ -250,9 +253,6 @@ cloudnative-pg:
       failurePolicy: Ignore
     mutating:
       failurePolicy: Ignore
-
-rustfs:
-  enabled: true
 
 # rustfs operator subchart (vendored at third_party/, gated by rustfs.enabled).
 rustfs-operator: {}
