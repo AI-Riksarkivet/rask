@@ -4,6 +4,7 @@
 	import { onNavigate } from '$app/navigation';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
+	import TopNav from '$lib/components/top-nav.svelte';
 	import type { Snippet } from 'svelte';
 	let { children }: { children: Snippet } = $props();
 
@@ -32,5 +33,7 @@
      (no sidebar) and 307-redirects /<project> into the overview zone. The grouped
      @rask/ui AppShell sidebar is NOT rendered here — each domain MFE renders it
      identically in its own root layout (§5/§6), so you only see the sidebar once a
-     cross-zone nav lands you inside a domain app (/<project>/<domain>). -->
-{@render children()}
+     cross-zone nav lands you inside a domain app (/<project>/<domain>). The platform
+     top navbar IS rendered here (only the catch-all has it) above the page content. -->
+<TopNav />
+<main class="min-h-[calc(100svh-3.5rem)]">{@render children()}</main>
