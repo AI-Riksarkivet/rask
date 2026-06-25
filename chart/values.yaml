@@ -143,7 +143,7 @@ rustfs:
   consolePort: 9001
   storage: "15Gi"          # per-volume; 4 volumes => ~60Gi total (local-path is unmetered hostPath)
   storageClass: "local-path"
-  buckets: ["images-batch", "images-batch-alto", "images-batch-search"]
+  buckets: ["images-batch", "images-batch-alto", "images-batch-search", "rask-observability"]
 
 ray:
   enabled: true
@@ -266,3 +266,29 @@ cloudnative-pg:
 
 # rustfs operator subchart (vendored at third_party/, gated by rustfs.enabled).
 rustfs-operator: {}
+
+# ---- observability stack (Vector + GreptimeDB + Perses) --------------------
+# Gated by observability.enabled (the three subcharts' Chart.yaml condition AND
+# the OTLP wiring below). App services + Ray export OTLP-direct to GreptimeDB;
+# Vector ships pod logs. GreptimeDB stores to the in-cluster RustFS S3.
+observability:
+  enabled: true
+  bucket: "rask-observability"          # RustFS bucket for GreptimeDB object storage
+
+# GreptimeDB standalone subchart — unified metrics/logs/traces store on RustFS S3.
+greptimedb-standalone:
+  objectStorage:
+    s3:
+      bucket: "rask-observability"
+      region: "us-east-1"
+      root: "/greptimedb"
+      endpoint: "http://rask-rustfs-io:9000"
+    credentials:
+      existingSecretName: "rask-observability-s3"
+
+# Vector subchart — Agent DaemonSet shipping pod logs to GreptimeDB (Task 2 fills customConfig).
+vector:
+  role: "Agent"
+
+# Perses subchart — dashboards-as-code (Task 3 fills the datasource).
+perses: {}

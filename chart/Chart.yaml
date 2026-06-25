@@ -49,3 +49,15 @@ dependencies:
     version: "0.1.0"
     repository: "file://../third_party/rustfs-operator"
     condition: rustfs.enabled
+  - name: greptimedb-standalone
+    version: "0.4.5"
+    repository: https://greptimeteam.github.io/helm-charts/
+    condition: observability.enabled
+  - name: vector
+    version: "0.56.0"
+    repository: https://helm.vector.dev
+    condition: observability.enabled
+  - name: perses
+    version: "0.22.0"
+    repository: https://perses.github.io/helm-charts
+    condition: observability.enabled

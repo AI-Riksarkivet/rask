@@ -23,5 +23,14 @@ dependencies:
 - name: rustfs-operator
   repository: file://../third_party/rustfs-operator
   version: 0.1.0
-digest: sha256:23737cce3eeb3741e503142f0427f5ccd2f6311dd94a8a3a2a343ffbbfe38d57
-generated: "2026-06-25T10:55:25.984711069+02:00"
+- name: greptimedb-standalone
+  repository: https://greptimeteam.github.io/helm-charts/
+  version: 0.4.5
+- name: vector
+  repository: https://helm.vector.dev
+  version: 0.56.0
+- name: perses
+  repository: https://perses.github.io/helm-charts
+  version: 0.22.0
+digest: sha256:e6b7e533db6d906968dda8c9cd3258c60c675fa324a685cd0daed8567672ea70
+generated: "2026-06-25T14:22:06.150783917+02:00"

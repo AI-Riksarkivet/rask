@@ -290,7 +290,10 @@ K3S_DEP_REPOS = nvdp=https://nvidia.github.io/k8s-device-plugin \
                 nats=https://nats-io.github.io/k8s/helm/charts/ \
                 dapr=https://dapr.github.io/helm-charts/ \
                 openfga=https://openfga.github.io/helm-charts \
-                cnpg=https://cloudnative-pg.github.io/charts
+                cnpg=https://cloudnative-pg.github.io/charts \
+                greptime=https://greptimeteam.github.io/helm-charts/ \
+                vector=https://helm.vector.dev \
+                perses=https://perses.github.io/helm-charts
 
 k3s-install: ## One-time host bootstrap: k3s + helm only (everything else is the chart; sudo)
 	./scripts/k3s-install.sh
