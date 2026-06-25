@@ -3446,6 +3446,8 @@ source = { editable = "components/apps/runner" }
 dependencies = [
     { name = "htr" },
     { name = "htrflow" },
+    { name = "opentelemetry-exporter-otlp-proto-grpc" },
+    { name = "opentelemetry-sdk" },
     { name = "python-dotenv" },
     { name = "ray", extra = ["data", "default", "serve"] },
     { name = "rich" },
@@ -3457,6 +3459,8 @@ dependencies = [
 requires-dist = [
     { name = "htr", editable = "packages/htr" },
     { name = "htrflow", git = "https://github.com/AI-Riksarkivet/htrflow.git" },
+    { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.27" },
+    { name = "opentelemetry-sdk", specifier = ">=1.27" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "ray", extras = ["data", "default", "serve"], specifier = ">=2.52,<2.56" },
     { name = "rich", specifier = ">=13.7" },

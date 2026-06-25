@@ -17,6 +17,12 @@ spec:
             RASK_SERVE_REPLICAS: "{{ .Values.config.RASK_SERVE_REPLICAS }}"
             RASK_SERVE_GPU_FRAC: "{{ .Values.config.RASK_SERVE_GPU_FRAC }}"
             HF_HUB_DISABLE_IMPLICIT_TOKEN: "0"
+            {{- if .Values.observability.enabled }}
+            OTEL_EXPORTER_OTLP_ENDPOINT: "http://rask-greptimedb-standalone:4001"
+            OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+            OTEL_EXPORTER_OTLP_HEADERS: "x-greptime-db-name=public"
+            OTEL_SERVICE_NAME: "ray-htrflow"
+            {{- end }}
   rayClusterConfig:
     rayVersion: {{ .Values.ray.rayVersion | quote }}
     headGroupSpec:

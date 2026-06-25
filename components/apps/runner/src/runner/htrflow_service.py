@@ -153,6 +153,24 @@ def _build_in_memory_document(image_bytes: bytes, name: str = "page") -> object:
     return InMemoryDocument(image_bytes, image_name=name)
 
 
+def _init_otel() -> None:
+    if not os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        return
+    from opentelemetry import trace
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+    if isinstance(trace.get_tracer_provider(), TracerProvider):
+        return  # already initialised
+    provider = TracerProvider(resource=Resource.create({"service.name": os.getenv("OTEL_SERVICE_NAME", "ray-htrflow")}))
+    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+    trace.set_tracer_provider(provider)
+
+
+_init_otel()
+
 htrflow_app = HTRFlowDeployment.bind()
 
 

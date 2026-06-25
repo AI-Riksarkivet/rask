@@ -12,6 +12,8 @@ dependencies = [
     "typer>=0.12",
     "python-dotenv>=1.0",
     "htrflow",
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.27",
 ]
 
 [project.scripts]
