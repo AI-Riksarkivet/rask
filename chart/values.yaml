@@ -346,6 +346,12 @@ perses:
   # Provision a GreptimeDB datasource via the chart's datasources values key
   # (renders a ConfigMap mounted at /etc/perses/datasources). GreptimeDB exposes
   # a Prometheus-compatible query API at :4000/v1/prometheus.
+  #
+  # Use PROXY mode, not directUrl: with directUrl the *browser* queries the URL,
+  # but rask-greptimedb-standalone is an in-cluster DNS name unreachable from a
+  # laptop hitting Perses over `kubectl port-forward` → "failed to fetch". Proxy
+  # mode routes queries through the Perses server (which can resolve it), so the
+  # browser only ever talks to Perses.
   datasources:
     - kind: GlobalDatasource
       metadata:
@@ -355,7 +361,10 @@ perses:
         plugin:
           kind: PrometheusDatasource
           spec:
-            directUrl: "http://rask-greptimedb-standalone:4000/v1/prometheus"
+            proxy:
+              kind: HTTPProxy
+              spec:
+                url: "http://rask-greptimedb-standalone:4000/v1/prometheus"
   # Add /etc/perses/datasources to provisioning.folders so Perses scans the
   # datasource ConfigMap mounted there (the chart mounts datasources: at that
   # path but the default server config only lists /etc/perses/provisioning).
