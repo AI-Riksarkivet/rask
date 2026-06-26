@@ -1,4 +1,4 @@
-.PHONY: help install build test lint fmt clean storybook typecheck knip check ci viewer dev-micro dev-frontends home frontend-storage frontend-compute frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge e2e
+.PHONY: help install build test lint fmt clean storybook typecheck knip check ci viewer dev-micro dev-frontends home frontend-storage frontend-compute frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge tilt-registry tilt-up tilt-down e2e
 
 help:
 	@echo "Targets:"
@@ -349,6 +349,21 @@ k3s-purge: k3s-down ## Uninstall + delete PVCs (clean slate)
 	# storage without removing the namespaces themselves. Idempotent.
 	-$(KUBECTL) delete pvc -n dapr-system --all --ignore-not-found
 	-$(KUBECTL) delete pvc -n nats --all --ignore-not-found
+
+# ---- Tilt dev loop (in-cluster hot-reload for the Python fleet) -------------
+# One-time: `make tilt-registry` (local registry + point k3s at it). Then, with the
+# cluster up (`make k3s-up`), `make tilt-up` builds editable dev images and hot-reloads
+# the fleet on .py changes. Frontends iterate faster via `make dev-frontends` (local
+# Vite HMR). See the Tiltfile header.
+tilt-registry: ## One-time: local image registry + point k3s at it (sudo; restarts k3s)
+	bash scripts/k3s-registry.sh
+
+tilt-up: ## Dev loop: editable fleet images + uvicorn --reload via Tilt (needs k3s-up + tilt-registry)
+	@command -v tilt >/dev/null 2>&1 || { echo "!! tilt not installed — https://docs.tilt.dev/install.html"; exit 1; }
+	tilt up
+
+tilt-down: ## Stop the Tilt session and revert the dev deploy (keeps the cluster/data)
+	tilt down
 
 # ---- e2e (Playwright) -------------------------------------------------------
 e2e: ## Browser e2e against a running deploy (RASK_E2E_BASE_URL, default http://localhost)

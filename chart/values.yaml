@@ -88,6 +88,13 @@ image:
   tag: "dev"
   pullPolicy: IfNotPresent
 
+# Dev-only knobs, driven by the Tilt loop (Tiltfile). Never enable in production.
+dev:
+  # Append `uvicorn --reload` (+ reload-dirs) to the fleet args so Tilt's
+  # live_update sync of /app/{packages,components} hot-reloads the Python services
+  # in-cluster. Requires the editable dev image (.docker/fleet.dev.dockerfile).
+  reload: false
+
 resources:
   fleet:
     requests: {cpu: "50m", memory: "128Mi"}
