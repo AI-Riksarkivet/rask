@@ -195,11 +195,20 @@ nvdp:
   runtimeClassName: nvidia
   # rask installs into the default namespace; the chart objects to that by default.
   allowDefaultNamespace: true
-  # The chart defaults to a nodeAffinity gating on GPU-feature-discovery labels
-  # (feature.node.kubernetes.io/..., nvidia.com/gpu.present) that we don't run NFD
-  # to provide, so the DaemonSet matches 0 nodes. Clear it: on this single GPU node
-  # the nvidia RuntimeClass + container-toolkit are enough to enumerate the GPU.
-  affinity: {}
+  # The device-plugin DaemonSet gates (nodeAffinity) on GPU-feature-discovery labels
+  # — feature.node.kubernetes.io/pci-10de.present (PCI vendor 0x10de = NVIDIA),
+  # nvidia.com/gpu.present, etc. — so it only runs on actual GPU nodes. Those labels
+  # come from Node Feature Discovery + GPU Feature Discovery, NOT from the bare plugin.
+  # Without them the DaemonSet matches 0 nodes (desired=0) and nvidia.com/gpu is never
+  # advertised, so KubeRay's GPU pods stay Pending.
+  #
+  # Enable the bundled NFD+GFD (the node-feature-discovery dep ships inside the
+  # subchart tgz, so this works offline on k3s). It labels every GPU node correctly
+  # and leaves CPU-only nodes alone — keeping the default affinity portable across
+  # single-node dev and multi-node clusters. Set nvdp.enabled=false instead if the
+  # cluster already runs NFD or the NVIDIA GPU Operator.
+  gfd:
+    enabled: true
 
 # kuberay-operator subchart (aliased 'kuberay' in Chart.yaml)
 kuberay:
