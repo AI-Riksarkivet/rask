@@ -31,11 +31,11 @@ Ingress disabled — port-forward the gateway:
 {{- if .Values.observability.enabled }}
 Observability (Vector + GreptimeDB + Perses):
   - greptimedb:  {{ include "rask.fullname" . }}-greptimedb-standalone:4000 (HTTP: OTLP, Prometheus query/write, SQL)
-                 {{ include "rask.fullname" . }}-greptimedb-standalone:4001 (gRPC: OTLP)
   - perses:      {{ include "rask.fullname" . }}-perses:8080 (dashboards; GreptimeDB Prometheus datasource pre-configured)
   - vector:      DaemonSet {{ include "rask.fullname" . }}-vector — ships pod logs to GreptimeDB :4000, table rask_logs
   - storage:     RustFS bucket rask-observability (rask-rustfs-io:9000; auto-provisioned by RustFS Tenant)
-  Fleet and Ray Serve apps export OTLP/gRPC directly to GreptimeDB :4001 (gated by RASK_OTEL_ENABLED).
+  Fleet (incl. gateway) and Ray Serve apps export OTLP/HTTP traces to GreptimeDB
+  :4000/v1/otlp (table opentelemetry_traces, pipeline greptime_trace_v1; gated by RASK_OTEL_ENABLED).
 {{- end }}
 
 Reminders:

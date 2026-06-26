@@ -102,7 +102,7 @@ class Settings(BaseSettings):
     orchestrator_autostart: bool = Field(default=False, alias="RASK_ORCHESTRATOR_AUTOSTART")
     orchestrator_interval_seconds: int = Field(default=60, ge=10, alias="RASK_ORCHESTRATOR_INTERVAL_SECONDS")
 
-    # OpenTelemetry opt-in. When true, OTLP/gRPC traces are exported to the
+    # OpenTelemetry opt-in. When true, OTLP/HTTP traces are exported to the
     # endpoint configured by OTEL_EXPORTER_OTLP_ENDPOINT. Also auto-enabled when
     # that env var is present, even if this flag is false.
     otel_enabled: bool = Field(default=False, alias="RASK_OTEL_ENABLED")

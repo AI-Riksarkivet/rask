@@ -39,19 +39,23 @@ installed and all fleet + Ray OTLP wiring is activated.
 | Subchart | Version | Service | Notes |
 |---|---|---|---|
 | Vector | 0.56.0 | `rask-vector` (Agent DaemonSet) | Collects k8s pod logs; ships to GreptimeDB `:4000` via `greptimedb_logs` sink (table `rask_logs`) |
-| GreptimeDB (`greptimedb-standalone` 0.4.5, app 1.1.1) | `rask-greptimedb-standalone` | Unified metrics/logs/traces store; `:4000` HTTP (OTLP, Prometheus query/write, SQL), `:4001` gRPC (OTLP) |
+| GreptimeDB (`greptimedb-standalone` 0.4.5, app 1.1.1) | `rask-greptimedb-standalone` | Unified metrics/logs/traces store; `:4000` HTTP (OTLP at `/v1/otlp`, Prometheus query/write, SQL), `:4001` gRPC |
 | Perses (`perses` 0.22.0) | `rask-perses:8080` | Dashboard UI; a GreptimeDB Prometheus `GlobalDatasource` pointing at `http://rask-greptimedb-standalone:4000/v1/prometheus` is pre-configured |
 
 **Storage:** GreptimeDB persists to the in-cluster RustFS S3 (`rask-rustfs-io:9000`,
 bucket `rask-observability`). The bucket is auto-provisioned by the RustFS Tenant's
 `spec.buckets` — no manual setup required.
 
-**App instrumentation:** the FastAPI fleet (via `service_kit.setup_otel` in
-`make_service_app`) and the Ray Serve htrflow app export OTLP/gRPC **directly to
-GreptimeDB `:4001`** (`OTEL_*` env vars injected by the chart when
-`observability.enabled=true`). Instrumentation is opt-in — no-op unless the env vars
-are present. Standard OTLP/gRPC is used throughout (OTel-Arrow is not used — the
-Python SDK and Vector both lack OTAP support).
+**App instrumentation:** the FastAPI fleet (via `service_kit.setup_otel` — called
+automatically from `make_service_app`, and directly by the gateway proxy app) and the
+Ray Serve htrflow app export OTLP/HTTP traces **directly to GreptimeDB
+`:4000/v1/otlp`** (`OTEL_*` env vars injected by the chart when
+`observability.enabled=true`, including the `x-greptime-pipeline-name=greptime_trace_v1`
+header GreptimeDB requires for trace ingestion). Traces land in the
+`opentelemetry_traces` table; gateway spans root each distributed trace.
+Instrumentation is opt-in — no-op unless the env vars are present. Standard OTLP is
+used throughout (OTel-Arrow is not used — the Python SDK and Vector both lack OTAP
+support).
 
 ## Local k3s quickstart
 
