@@ -1,4 +1,4 @@
-.PHONY: help install build test lint fmt clean storybook typecheck knip check ci viewer dev-micro dev-frontends home frontend-storage frontend-compute frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge tilt-registry tilt-up tilt-down e2e
+.PHONY: help install build test lint fmt clean storybook typecheck knip check ci viewer dev-micro dev-frontends dev-frontends-k3s home frontend-storage frontend-compute frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge tilt-registry tilt-up tilt-down e2e
 
 help:
 	@echo "Targets:"
@@ -7,6 +7,7 @@ help:
 	@echo "  viewer                                 — core monolith dev server (:8888)"
 	@echo "  dev-micro                              — backend fleet (gateway :8888 + per-domain services)"
 	@echo "  dev-frontends                          — all 7 apps behind the :3024 proxy (browse http://localhost:3024)"
+	@echo "  dev-frontends-k3s                      — same, but /api → the IN-CLUSTER gateway (port-forwarded)"
 	@echo "  home frontend-storage frontend-compute   — run one app each"
 	@echo "  ray-up ray-down ray-status   ray-up-htr (2-GPU pool, GPUs 0,1)"
 	@echo "  serve-up serve-down serve-status   serve-up-both (transcribe+htrflow)"
@@ -110,6 +111,21 @@ dev-frontends:        # build @rask/ui+@rask/api once, then all 7 apps + :3024 p
 	# watcher in a second terminal: `bun run dev:ui`.
 	bunx turbo run build --filter=@rask/ui --filter=@rask/api
 	bunx turbo run dev --filter='./components/frontends/*'
+
+dev-frontends-k3s:    # frontend HMR (Path A) against the IN-CLUSTER backend
+	# Port-forwards the in-cluster gateway to :8888, then runs all 7 apps with Vite
+	# HMR pointed at it (VIEWER_BACKEND client proxy + RASK_GATEWAY_URL SSR both
+	# default to :8888). One Ctrl-C tears down both (trap kills the port-forward).
+	# Needs the cluster up (`make k3s-up`). Browse http://localhost:3024.
+	@echo "==> port-forward rask-gateway → http://localhost:8888 (Ctrl-C stops both)"
+	@$(KUBECTL) port-forward svc/rask-gateway 8888:8888 >/dev/null 2>&1 & \
+	  PF=$$!; trap 'kill $$PF 2>/dev/null' EXIT INT TERM; \
+	  until curl -sf http://localhost:8888/api/health >/dev/null 2>&1; do sleep 1; done; \
+	  echo "==> gateway reachable; starting frontends (Vite HMR)"; \
+	  VIEWER_BACKEND=http://localhost:8888 RASK_GATEWAY_URL=http://localhost:8888 \
+	    bunx turbo run build --filter=@rask/ui --filter=@rask/api && \
+	  VIEWER_BACKEND=http://localhost:8888 RASK_GATEWAY_URL=http://localhost:8888 \
+	    bunx turbo run dev --filter='./components/frontends/*'
 
 home:      # catch-all app only, :5273 (serves / + /<project>/overview)
 	bun run dev:home
