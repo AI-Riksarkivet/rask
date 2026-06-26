@@ -1,0 +1,59 @@
+{{- if and .Values.observability.enabled .Values.observability.retention }}
+{{- /*
+Durable retention: a post-install/post-upgrade Helm hook that sets a database-level
+TTL on GreptimeDB's `public` database. Every table (rask_logs, opentelemetry_traces,
+the metrics physical table) inherits the DB TTL unless it sets its own, so logs,
+traces, and metrics all age out at observability.retention instead of growing
+forever on the single local disk. Idempotent — ALTER DATABASE just re-sets the value
+on every upgrade. Runs as a hook (not a plain Job) so it re-applies after the chart
+has (re)created GreptimeDB; the retry loop tolerates GreptimeDB still starting up.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "rask.fullname" . }}-greptimedb-ttl
+  labels:
+    {{- include "rask.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 20
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        {{- include "rask.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: greptimedb-ttl
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: set-ttl
+          image: curlimages/curl:8.10.1
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: "10m", memory: "16Mi"}
+            limits: {cpu: "100m", memory: "64Mi"}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              GT="http://{{ include "rask.fullname" . }}-greptimedb-standalone:4000"
+              TTL='{{ .Values.observability.retention }}'
+              echo "waiting for GreptimeDB at $GT ..."
+              until curl -sf "$GT/health" >/dev/null 2>&1; do sleep 3; done
+              echo "setting public database ttl=$TTL"
+              curl -sf "$GT/v1/sql?db=public" \
+                --data-urlencode "sql=ALTER DATABASE public SET 'ttl'='$TTL'" \
+                | grep -q affectedrows
+              echo "retention applied: $TTL"
+{{- end }}

@@ -283,6 +283,12 @@ rustfs-operator: {}
 observability:
   enabled: true
   bucket: "rask-observability"          # RustFS bucket for GreptimeDB object storage
+  # Retention for logs/traces/metrics. Applied as a database-level TTL on the
+  # GreptimeDB `public` database via a post-install/post-upgrade hook Job
+  # (templates/greptimedb-ttl-job.yaml), so every table (rask_logs,
+  # opentelemetry_traces, the metrics physical table) inherits it. Empty string
+  # = no TTL (unbounded growth). GreptimeDB accepts e.g. "14d", "30d", "90d".
+  retention: "14d"
 
 # GreptimeDB standalone subchart — unified metrics/logs/traces store on RustFS S3.
 greptimedb-standalone:
@@ -314,6 +320,19 @@ vector:
     sources:
       pod_logs:
         type: kubernetes_logs
+        # Don't enrich logs with node labels, namespace labels, or pod
+        # annotations: GreptimeDB's logs sink is schema-on-write, so every
+        # distinct key becomes a PERMANENT column. Node labels alone added ~107
+        # useless columns (NFD cpu-cpuid.*, nvidia.com/cuda.*), and pod
+        # annotations add checksum/* churn — one new column per new workload.
+        # Empty string disables each enrichment; pod_labels (app/component) and
+        # the core pod/container/namespace fields are kept.
+        node_annotation_fields:
+          node_labels: ""
+        namespace_annotation_fields:
+          namespace_labels: ""
+        pod_annotation_fields:
+          pod_annotations: ""
     sinks:
       greptimedb_logs:
         type: greptimedb_logs
