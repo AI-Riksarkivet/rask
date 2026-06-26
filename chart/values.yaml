@@ -39,6 +39,11 @@ config:
   RASK_SEARCH_BUCKET: "images-batch-search"
   RASK_IIIF_URL: ""
   RASK_API_PREFIX: "/api"
+  # How the orchestrator invokes the runner CLI in the Ray job entrypoint. The
+  # in-cluster ray image ships the installed `runner` console script on PATH (no
+  # uv, no source tree), so override the dev default (`uv run --project
+  # projects/runner runner`) — otherwise the job fails with `uv: not found` (127).
+  RASK_RUNNER_CMD: "runner"
   RASK_ORCHESTRATOR_INTERVAL_SECONDS: "60"
   RASK_ORCHESTRATOR_RECONCILE_SECONDS: "600"
   RASK_SERVE_REPLICAS: "1"
