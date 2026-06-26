@@ -342,8 +342,13 @@ k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait 
 k3s-down: ## Uninstall the rask release (keep PVCs)
 	$(HELM) uninstall rask || true
 
-k3s-purge: k3s-down ## Uninstall + delete PVCs (postgres/minio/hf-cache data)
-	$(KUBECTL) delete pvc -l app.kubernetes.io/instance=rask || true
+k3s-purge: k3s-down ## Uninstall + delete PVCs (clean slate)
+	$(KUBECTL) delete pvc -A -l app.kubernetes.io/instance=rask --ignore-not-found || true
+	# Stale PVCs left in old per-component namespaces (dapr/nats now run in the
+	# release namespace) that the label-scoped delete above misses — reclaim the
+	# storage without removing the namespaces themselves. Idempotent.
+	-$(KUBECTL) delete pvc -n dapr-system --all --ignore-not-found
+	-$(KUBECTL) delete pvc -n nats --all --ignore-not-found
 
 # ---- e2e (Playwright) -------------------------------------------------------
 e2e: ## Browser e2e against a running deploy (RASK_E2E_BASE_URL, default http://localhost)
