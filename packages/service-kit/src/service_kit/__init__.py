@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 from service_kit.config import Settings
 from service_kit.exceptions import register_handlers
 from service_kit.middleware import register_middleware
+from service_kit.otel import setup_otel
 from service_kit.slash import SlashToleranceMiddleware
 from storage import derive_hcp_creds
 
@@ -138,8 +139,6 @@ def make_service_app(
     # 307 redirect that would leak the service's in-pod address (see slash.py).
     app.router.redirect_slashes = False
     app.add_middleware(SlashToleranceMiddleware, routes_provider=lambda: app.router.routes)
-
-    from service_kit.otel import setup_otel
 
     setup_otel(app, service_name=title, settings=settings)
 

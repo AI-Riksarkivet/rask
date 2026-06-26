@@ -15,12 +15,17 @@ from fastapi import FastAPI
 from service_kit.config import Settings
 
 
-def setup_otel(app: FastAPI, service_name: str, settings: Settings) -> bool:
+def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None) -> bool:
     """Wire traces/metrics/logs OTLP export + FastAPI instrumentation.
+
+    `settings` is optional: services built on `make_service_app` pass their
+    `Settings`, but a bespoke entrypoint (e.g. the gateway, which uses plain
+    env + no `Settings`) can omit it and rely on `OTEL_EXPORTER_OTLP_ENDPOINT`
+    alone to opt in.
 
     Returns True if instrumentation was applied, False if skipped.
     """
-    enabled = settings.otel_enabled or bool(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+    enabled = (settings is not None and settings.otel_enabled) or bool(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
     if not enabled:
         return False
 

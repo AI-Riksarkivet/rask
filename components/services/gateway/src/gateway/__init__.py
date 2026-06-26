@@ -20,6 +20,8 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
+from service_kit import setup_otel
+
 
 log = logging.getLogger("gateway")
 
@@ -132,6 +134,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="gateway", version="0.1.0", lifespan=lifespan)
+
+# Opt-in OTLP tracing (no-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set). The
+# gateway is the front door, so its spans are the root of every request trace;
+# HTTPXClientInstrumentor propagates context to the upstream services.
+setup_otel(app, service_name="gateway")
 
 
 @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
