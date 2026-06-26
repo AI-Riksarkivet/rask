@@ -90,7 +90,7 @@ spec:
             - name: OTEL_EXPORTER_OTLP_PROTOCOL
               value: "http/protobuf"
             - name: OTEL_EXPORTER_OTLP_HEADERS
-              value: "x-greptime-db-name=public"
+              value: "x-greptime-db-name=public,x-greptime-pipeline-name=greptime_trace_v1"
             - name: OTEL_SERVICE_NAME
               value: {{ $name | quote }}
             - name: OTEL_RESOURCE_ATTRIBUTES

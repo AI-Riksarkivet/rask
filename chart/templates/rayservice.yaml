@@ -20,7 +20,7 @@ spec:
             {{- if .Values.observability.enabled }}
             OTEL_EXPORTER_OTLP_ENDPOINT: "http://rask-greptimedb-standalone:4000/v1/otlp"
             OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
-            OTEL_EXPORTER_OTLP_HEADERS: "x-greptime-db-name=public"
+            OTEL_EXPORTER_OTLP_HEADERS: "x-greptime-db-name=public,x-greptime-pipeline-name=greptime_trace_v1"
             OTEL_SERVICE_NAME: "ray-htrflow"
             {{- end }}
   rayClusterConfig:
