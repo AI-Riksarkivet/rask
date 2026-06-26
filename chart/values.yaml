@@ -233,6 +233,24 @@ dapr:
 
 kueue:
   enabled: true
+  # Default queue topology (ResourceFlavor + ClusterQueue + a LocalQueue in the
+  # release namespace). Kueue's admission webhooks are failurePolicy=Fail, so the
+  # queues can't be created until the controller's webhook endpoints exist — a
+  # post-install/post-upgrade hook Job therefore retries `kubectl apply` until it
+  # succeeds (templates/kueue-queues.yaml). Reference the queue from a workload
+  # with the label `kueue.x-k8s.io/queue-name: <localQueueName>`.
+  queues:
+    enabled: true
+    kubectlImage: "registry.k8s.io/kubectl:v1.31.3"
+    flavorName: "rask"
+    clusterQueueName: "rask"
+    localQueueName: "rask"
+    # Nominal quota for the single ClusterQueue. Size to the cluster; over-quota
+    # just leaves workloads Pending (not catastrophic), under-quota throttles.
+    nominalQuota:
+      cpu: "18"
+      memory: "120Gi"
+      "nvidia.com/gpu": "1"
 
 openfga:
   enabled: true
