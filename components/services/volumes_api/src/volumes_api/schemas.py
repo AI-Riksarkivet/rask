@@ -7,7 +7,7 @@ class PageEntry(BaseModel):
 
 
 class S3Object(BaseModel):
-    """A single object under a prefix (mirrors `S3Object` in storage-frontend's `storage.ts`)."""
+    """A single object under a prefix (mirrors `S3Object` in storage's `storage.ts`)."""
 
     key: str
     size: int
@@ -15,7 +15,7 @@ class S3Object(BaseModel):
 
 
 class S3Listing(BaseModel):
-    """A delimiter-listed page of a bucket (mirrors `S3Listing` in storage-frontend's `storage.ts`).
+    """A delimiter-listed page of a bucket (mirrors `S3Listing` in storage's `storage.ts`).
 
     `prefixes` are the "folder" common-prefixes directly under `prefix`; `objects` are the
     leaf keys at this level.
@@ -30,7 +30,7 @@ class S3Listing(BaseModel):
 class S3ObjectHead(BaseModel):
     """Metadata for a single object (S3 HEAD) — the storage browser's detail panel.
 
-    Mirrors `S3ObjectHead` in storage-frontend's `storage.ts`.
+    Mirrors `S3ObjectHead` in storage's `storage.ts`.
     """
 
     key: str

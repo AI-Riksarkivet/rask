@@ -12,7 +12,7 @@ blocks imported by the runnable components.
 | `tracker` | Python | (standalone; not yet wired into a component) | — |
 | `validate` | Python | (standalone; not yet wired into a component) | — |
 | `ui` (`@rask/ui`) | TS / Svelte | all 7 frontend apps | [UI Components](../components/ui.md) |
-| `api` (`@rask/api`) | TS | overview-frontend, compute-frontend, discover-frontend | — |
+| `api` (`@rask/api`) | TS | overview, compute, discover | — |
 
 ## Conventions
 

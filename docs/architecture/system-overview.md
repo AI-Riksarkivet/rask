@@ -36,7 +36,7 @@ flowchart TB
     end
 
     subgraph frontend["Frontend · 7 SvelteKit SSR (Bun) microfrontends · :3024 proxy"]
-        spa["components/apps/frontend<br/><sub>catch-all · platform home /</sub>"]
+        spa["components/frontends/home<br/><sub>catch-all · platform home /</sub>"]
         domainfe["6 domain apps<br/><sub>overview · compute · discover<br/>storage · train · studio</sub>"]
     end
 
@@ -50,7 +50,7 @@ flowchart TB
     end
 
     subgraph runner["Runner · Python CLI"]
-        cli["components/apps/runner<br/><sub>Typer CLI, Ray Data jobs</sub>"]
+        cli["components/cli/runner<br/><sub>Typer CLI, Ray Data jobs</sub>"]
         scripts["components/scripts/<br/><sub>build/sync/chunk/submit/index</sub>"]
     end
 
@@ -141,9 +141,9 @@ flowchart TB
 
 | Path                                    | Type          | Purpose                                                              |
 | --------------------------------------- | ------------- | -------------------------------------------------------------------- |
-| `components/apps/frontend/`             | SvelteKit SSR (Bun) | Catch-all app: platform home `/`, project picker; package `viewer-frontend` |
-| `components/apps/{overview,compute,discover,storage,train,studio}-frontend/` | SvelteKit SSR (Bun) | Six per-domain microfrontends, each pinned to `/default/<domain>`, all rendering the shared `@rask/ui/shell` sidebar |
-| `components/apps/runner/`               | Python CLI    | Submits Ray Data jobs; ships Ray Serve deployments                   |
+| `components/frontends/home/`             | SvelteKit SSR (Bun) | Catch-all app: platform home `/`, project picker; package `home` |
+| `components/frontends/{overview,compute,discover,storage,train,studio}/` | SvelteKit SSR (Bun) | Six per-domain microfrontends, each pinned to `/default/<domain>`, all rendering the shared `@rask/ui/shell` sidebar |
+| `components/cli/runner/`               | Python CLI    | Submits Ray Data jobs; ships Ray Serve deployments                   |
 | `components/services/gateway/`          | FastAPI       | Reverse proxy on `:8888`; path-routes `/api/*` to per-domain services |
 | `components/services/core/`             | Python (brick)| Domain brick: DB, models, repositories, domain services, Alembic; shared by core-api + orchestrator |
 | `components/services/core_api/`         | FastAPI       | Thin entrypoint `:8801` — health + batches + chunks + catalog        |
@@ -341,7 +341,7 @@ flowchart TB
 ```
 
 **GPU sizing** is hardcoded in
-`components/apps/runner/src/runner/pipeline.py` and the two Serve modules
+`components/cli/runner/src/runner/pipeline.py` and the two Serve modules
 (`runner/transcribe_service.py`, `runner/htrflow_service.py`). The numbers
 target a **3-GPU node**: 3 TrOCR replicas at 0.99 GPU each fill the GPUs,
 while Layout/Lines actors hold 0.001 GPU slots just to land them on the

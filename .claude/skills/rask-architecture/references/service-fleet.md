@@ -1,6 +1,6 @@
 # The service fleet: ports, entrypoints, and which brick each composes
 
-The fleet (`make dev-micro`, driven by `dev-micro.sh` / `Procfile.micro`):
+The fleet (`make dev-micro`, driven by `scripts/dev-micro.sh` / `Procfile.micro`):
 gateway `:8888` + core-api `:8801` + search `:8802` + volumes `:8803` +
 ray `:8804` + orchestrator `:8810`. The frontend's Vite proxy targets `:8888`
 (the gateway). With `make viewer` instead, `:8888` is the `core.main:app`

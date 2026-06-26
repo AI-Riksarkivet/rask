@@ -13,7 +13,7 @@ htrflow = { git = "https://github.com/AI-Riksarkivet/htrflow.git" }
 
 [tool.uv.workspace]
 members = [
-    "../../components/apps/runner",
+    "../../components/cli/runner",
     "../../packages/htr",
     "../../packages/storage",
 ]

@@ -37,7 +37,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Filter by name               | `uv run pytest -k <pattern>`                                   |
 | Skip slow tests              | `uv run pytest -m "not slow"`                                  |
 | Format + lint + typecheck    | `make check` (= `make fmt` + `make lint` + `make typecheck`)   |
-| Frontend type-check only     | `bun --cwd components/apps/frontend run check`                 |
+| Frontend type-check only     | `bun --cwd components/frontends/home run check`                |
 | Storybook for `@rask/ui`     | `make storybook` (→ `:6006`)                                   |
 | Bootstrap Claude Code config | `make claude-bootstrap`                                        |
 
@@ -47,13 +47,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make ray-up            # local Ray head on :6379, dashboard :8265
 make serve-up          # deploy /transcribe + /htrflow on Ray Serve
 make dev-micro         # the fleet: gateway :8888 + core-api :8801 + search :8802 +
-                       #   volumes :8803 + ray :8804 + orchestrator :8810 (via dev-micro.sh)
+                       #   volumes :8803 + ray :8804 + orchestrator :8810 (via scripts/dev-micro.sh)
 make viewer            # the `core.main:app` monolith on :8888 (single-process dev convenience)
-make viewer-frontend   # SvelteKit dev server, proxies /api → :8888 (the gateway)
+make home   # SvelteKit dev server, proxies /api → :8888 (the gateway)
 ```
 
 The frontend's Vite proxy targets `:8888` either way — in the fleet that's the
-**gateway**; with `make viewer` it's the monolith. `dev-micro.sh` is the source
+**gateway**; with `make viewer` it's the monolith. `scripts/dev-micro.sh` is the source
 of truth for the fleet's process list and ports.
 
 `make serve-down` / `make ray-down` to tear down. Indexing pipelines: `make search-index`, `make catalog-index`, `make harvest-ead`.
@@ -85,8 +85,8 @@ Three brick layers — **don't blur them**:
   - `packages/ray-kit` — Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, the dashboard service). Shared by `ray-api` and the core orchestrator.
   - `packages/ui` — Svelte 5 + Bits UI + Tailwind 4 component library (`@rask/ui`; the former `component-lib`) w/ Storybook 10 (`@storybook/svelte-vite`). The shared design system every microfrontend imports via `workspace:*` — **styled components live here, not in the apps** (apps only supply theme tokens in their `app.css` + an `@source` pointing at `packages/ui/dist`). Subpath exports: `@rask/ui/{button,badge,card,dialog,sort-header,sidebar,utils}` + **`@rask/ui/shell`** (the shared `AppShell` + grouped `AppSidebar` + `nav-config` — so every app renders the _same_ sidebar, zero drift). See `docs/architecture/frontend-microfrontends.md`.
 - `components/` — runnable code. **The old monolithic `viewer` service is gone** — it was dissolved (2026-06) into a gateway + per-domain services + a shared `core` brick:
-  - `components/apps/runner` — Typer CLI that submits Ray Data jobs
-  - `components/apps/frontend` — the **catch-all** microfrontend (package `viewer-frontend`) owning `/` (the platform home), SvelteKit 2 + Svelte 5, **SSR** via `svelte-adapter-bun` (a real Bun server: `bun ./build/index.js`). Vite dev proxy sends `/api` → the gateway on `:8888`. The frontend is **already decomposed into 7 SvelteKit microfrontend zones** under Turborepo — this catch-all plus 6 domain apps (`{overview,compute,discover,storage,train,studio}-frontend`), each pinned to base `/default/<domain>` and composed by the `:3024` microfrontends proxy in dev (k3s Ingress in prod). Every domain app renders the **shared `@rask/ui/shell` AppShell sidebar** (grouped, per-domain) — see `docs/architecture/frontend-microfrontends.md`.
+  - `components/cli/runner` — Typer CLI that submits Ray Data jobs
+  - `components/frontends/home` — the **catch-all** microfrontend (package `home`) owning `/` (the platform home), SvelteKit 2 + Svelte 5, **SSR** via `svelte-adapter-bun` (a real Bun server: `bun ./build/index.js`). Vite dev proxy sends `/api` → the gateway on `:8888`. The frontend is **already decomposed into 7 SvelteKit microfrontend zones** under Turborepo — this catch-all plus 6 domain apps (`{overview,compute,discover,storage,train,studio}`), each pinned to base `/default/<domain>` and composed by the `:3024` microfrontends proxy in dev (k3s Ingress in prod). Every domain app renders the **shared `@rask/ui/shell` AppShell sidebar** (grouped, per-domain) — see `docs/architecture/frontend-microfrontends.md`.
   - `components/services/gateway` — reverse proxy on `:8888` (the frontend's proxy target). Path-routes `/api/*` to the services below (longest-prefix-first); owns no state. Upstreams are env-overridable (`RASK_CORE_API_URL` :8801, `RASK_SEARCH_API_URL` :8802, `RASK_VOLUMES_API_URL` :8803, `RASK_RAY_API_URL` :8804, `RASK_ORCH_API_URL` :8810).
   - `components/services/core` — the **core domain brick** (the dissolved `viewer`; package `core`). Owns `alembic/`, `core/db.py`, `core/lifespan.py`, `models/{batch,enums,pipelines}`, `repositories/`, the domain services (`services/{batches,submission,sync}`, `services/orchestrator/{derive,loop}`, `services/discover/catalog`), the batches/chunks/catalog/orchestrator endpoints, and `main.py` (monolith factory, still used by tests + `make viewer`). **Not a deployable** — composed by the two entrypoints below, which share the `batches` table transactionally (so they're two processes over one brick, not independent services).
   - `components/services/core_api` — thin entrypoint (`:8801`): health + batches + chunks + catalog over `core`; orchestrator loop **off**.
@@ -106,12 +106,12 @@ Plus the relevant `projects/<name>/pyproject.toml` if it's deployable.
 
 `rask` is a distributed HTR pipeline for the Swedish National Archives. See `docs/architecture/system-overview.md` for the full diagrams. Key facts that aren't obvious from any single file:
 
-- **Runner is the engine.** `components/apps/runner` submits one Ray Data pipeline per CLI invocation and blocks on `.materialize()`. It does not run a long-lived service.
+- **Runner is the engine.** `components/cli/runner` submits one Ray Data pipeline per CLI invocation and blocks on `.materialize()`. It does not run a long-lived service.
 - **Ray Serve persists across job submissions.** TrOCR weights stay warm in `/transcribe` (3 replicas × 0.99 GPU). The pipeline's `TranscribeViaServe` actor is CPU-only and calls Serve synchronously over a handle. `make serve-up` deploys this independently of any job.
 - **Two pipeline shapes:**
   - **Actor-per-stage** — `PageLoader → Layout → Lines → TranscribeViaServe → AltoExport → AltoWriter`. Uses GPU for YOLO regions/lines (0.001 GPU each) and TrOCR via Serve.
   - **`/htrflow`** — collapses Layout+Line+Transcribe+Alto into a single 1-replica CPU Serve deployment. Used when actor fan-out isn't worth it for a batch shape.
-- **GPU sizing is hardcoded** in `components/apps/runner/src/runner/pipeline.py` for a 3-GPU node. Changing target hardware means editing that file.
+- **GPU sizing is hardcoded** in `components/cli/runner/src/runner/pipeline.py` for a 3-GPU node. Changing target hardware means editing that file.
 - **No auth, no app middleware.** The services assume localhost / trusted network. The frontend hits `/api/*` on the **gateway** (`:8888`), which path-routes to the per-domain services; `/api/ray/*` and the `/api/serve/*` proxy are served by the standalone **ray-api** service (over `ray-kit`). SSR `load`/remote functions reach the gateway server-side via an absolute base URL (`RASK_GATEWAY_URL`); client code uses the relative `/api/*` proxy. The gateway sits **behind** the SvelteKit Bun server (it does not serve the SPA shell).
 - **State surface:** relational DB behind a backend-agnostic ORM (SQLModel + SQLAlchemy async), owned by the **`core` brick**. **SQLite for dev** (`.cache/batches.db`, not committed); **Postgres for prod** via `DATABASE_URL=postgresql+asyncpg://…`. Schema changes go through **Alembic** (`components/services/core/alembic/`, run via `make pg-migrate` = `uv run --package core alembic upgrade head`) — never `SQLModel.metadata.create_all` in app startup. The `Batch` SQLModel uses `SAEnum(values_callable=...)` so `htr_status`/`manifest_status` round-trip as lowercase strings against postgres-native ENUM types or sqlite VARCHAR. Plus S3 two-bucket setup (`images-batch` input, `images-batch-alto` output). **No Redis, no queue, no event bus, no compose stack.** The Helm chart in `chart/` is the single deploy artifact for both local k3s and production — in-cluster CloudNativePG (`Cluster` → `rask-postgres-rw:5432`), RustFS operator (`Tenant` → `rask-rustfs-io:9000`), and KubeRay are gated by `cnpg.enabled`/`rustfs.enabled`/`ray.enabled` values toggles; each toggle gates both the operator subchart and its custom resource. Local deploy: `make k3s-install` (one-time) → `make k3s-build` → `make k3s-import` → `make k3s-up`; tear down with `make k3s-down` / `make k3s-purge`. See `docs/architecture/deployment.md` and `chart/README.md`.
 - **Observability (optional, `observability.enabled`):** Vector → GreptimeDB (on RustFS S3 bucket `rask-observability`) → Perses; fleet (incl. the gateway) + Ray export OTLP/HTTP traces to `rask-greptimedb-standalone:4000/v1/otlp` via `service_kit.setup_otel`. GreptimeDB requires the `x-greptime-pipeline-name=greptime_trace_v1` header for trace ingestion (traces land in the `opentelemetry_traces` table). Standard OTLP throughout (not OTel-Arrow).
@@ -121,7 +121,7 @@ Plus the relevant `projects/<name>/pyproject.toml` if it's deployable.
 
 ## Conventions
 
-- **Gateway port is 8888.** Vite proxy in `components/apps/frontend` defaults `VIEWER_BACKEND` to `http://localhost:8888` (the gateway, or the `make viewer` monolith). Don't change that port without updating the proxy.
+- **Gateway port is 8888.** Vite proxy in `components/frontends/home` defaults `VIEWER_BACKEND` to `http://localhost:8888` (the gateway, or the `make viewer` monolith). Don't change that port without updating the proxy.
 - **Pytest import mode is `importlib`** (`--import-mode=importlib` in `pyproject.toml`). Test paths are explicit (`testpaths = [...]`), not discovered.
 - **Ruff line length is 160**, not 100. Selected rule families include `ANN` (annotations); tests are exempted via `per-file-ignores`.
 - **Prettier uses tabs**, single quotes, `printWidth: 100` — defined in root `package.json`, applied across both frontend and `@rask/ui` workspaces.

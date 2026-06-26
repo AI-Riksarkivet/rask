@@ -42,7 +42,7 @@ class BrowseTier(StrEnum):
 
 class RayStage(StrEnum):
     """Ray actor names matching the pipeline stages in
-    `components/apps/runner/src/runner/pipeline.py`. Used to read per-stage
+    `components/cli/runner/src/runner/pipeline.py`. Used to read per-stage
     task counts from `/api/v0/tasks/summarize` — string-equality with Ray's
     task naming is the contract."""
 

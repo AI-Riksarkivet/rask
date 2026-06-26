@@ -37,8 +37,7 @@ The container images mirror these compositions:
 - `rask-ray-api` ← `projects/ray-api` (slim Python, `:8804`).
 - `rask-runner` ← `projects/runner` (CUDA base, GPU).
 
-The seven SvelteKit SSR apps under `components/apps/` (`frontend` — the catch-all
-`viewer-frontend` — plus `overview`/`compute`/`discover`/`storage`/`train`/`studio`)
+The seven SvelteKit SSR apps under `components/frontends/` (`home` — the catch-all — plus `overview`/`compute`/`discover`/`storage`/`train`/`studio`)
 all build from one parametrized `.docker/frontend.dockerfile`
 (`--build-arg APP=<dir>`, Bun server).
 

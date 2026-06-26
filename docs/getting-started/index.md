@@ -27,12 +27,12 @@ make install        # = bun install + uv sync
 make ray-up            # local Ray head on :6379, dashboard :8265
 make serve-up          # deploy /transcribe + /htrflow on Ray Serve
 make dev-micro         # the fleet: gateway :8888 + core-api :8801 + search :8802 +
-                       #   volumes :8803 + ray :8804 + orchestrator :8810 (via dev-micro.sh)
+                       #   volumes :8803 + ray :8804 + orchestrator :8810 (via scripts/dev-micro.sh)
 make dev-frontends     # all 7 SvelteKit SSR apps + the Turborepo microfrontends
                        #   proxy on :3024 (single origin); each app proxies /api -> :8888
 ```
 
-`make viewer-frontend` runs just the catch-all app on :5173 (serves `/` +
+`make home` runs just the catch-all app on :5173 (serves `/` +
 `/<project>/overview`); `make dev-frontends` brings up the full microfrontend zone
 set behind the :3024 proxy.
 
@@ -44,7 +44,7 @@ Tear down with `make serve-down` / `make ray-down`.
 
 !!! tip "Frontend host binding"
     The Vite dev server binds loopback-only by default. Start it with `--host`
-    (e.g. `bun --cwd components/apps/frontend run dev -- --host`) to reach it
+    (e.g. `bun --cwd components/frontends/home run dev -- --host`) to reach it
     over IPv4 `localhost` or the LAN.
 
 ## Local Postgres + migrations
@@ -68,7 +68,7 @@ Connect with `postgresql://rask:rask@localhost:5432/rask`.
 | Run all tests | `make test` |
 | Format + lint + typecheck | `make check` |
 | Single Python test | `uv run pytest packages/htr/tests/test_geometry.py::test_name` |
-| Frontend type-check | `bun --cwd components/apps/frontend run check` |
+| Frontend type-check | `bun --cwd components/frontends/home run check` |
 | Storybook (@rask/ui) | `make storybook` (→ `:6006`) |
 | Build the search index | `make search-index` |
 | Build the catalog index | `make catalog-index` |

@@ -26,9 +26,9 @@ Full-text search over transcribed lines plus an archival catalog index live in
 
 ```mermaid
 flowchart TB
-    browser["Browser"] --> spa["Frontend · SvelteKit SSR (Bun)<br/><sub>components/apps/frontend</sub>"]
+    browser["Browser"] --> spa["Frontend · SvelteKit SSR (Bun)<br/><sub>components/frontends/home</sub>"]
     spa -->|"/api/*"| gw["Gateway · :8888<br/><sub>components/services/gateway</sub>"]
-    cli["Runner · Python CLI<br/><sub>components/apps/runner</sub>"] --> head
+    cli["Runner · Python CLI<br/><sub>components/cli/runner</sub>"] --> head
     gw --> core["core-api · :8801<br/><sub>batches · chunks · catalog</sub>"]
     gw --> search["search-api · :8802"]
     gw --> volumes["volumes-api · :8803"]

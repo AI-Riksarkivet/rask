@@ -1,4 +1,4 @@
-.PHONY: help install build test lint fmt clean storybook typecheck knip check ci viewer dev-micro dev-frontends viewer-frontend frontend-storage frontend-compute frontend-build frontend-check ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge e2e
+.PHONY: help install build test lint fmt clean storybook typecheck knip check ci viewer dev-micro dev-frontends home frontend-storage frontend-compute frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge e2e
 
 help:
 	@echo "Targets:"
@@ -6,8 +6,8 @@ help:
 	@echo "  typecheck knip check ci   frontend-check frontend-build"
 	@echo "  viewer                                 — core monolith dev server (:8888)"
 	@echo "  dev-micro                              — backend fleet (gateway :8888 + per-domain services)"
-	@echo "  dev-frontends                          — all 6 microfrontends behind the :3024 proxy (browse http://localhost:3024)"
-	@echo "  viewer-frontend frontend-storage frontend-compute   — run one app each"
+	@echo "  dev-frontends                          — all 7 apps behind the :3024 proxy (browse http://localhost:3024)"
+	@echo "  home frontend-storage frontend-compute   — run one app each"
 	@echo "  ray-up ray-down ray-status   ray-up-htr (2-GPU pool, GPUs 0,1)"
 	@echo "  serve-up serve-down serve-status   serve-up-both (transcribe+htrflow)"
 	@echo "  qwen-serve                             — vLLM Qwen3.6-27B on GPU 2 for OpenCode"
@@ -76,7 +76,7 @@ claude-bootstrap:
 	@echo "    Authenticate any MCP servers if prompted on first use."
 
 # ---- viewer ----------------------------------------------------------------
-# Port must be 8888 — components/apps/frontend Vite proxy defaults
+# Port must be 8888 — components/frontends/home Vite proxy defaults
 # VIEWER_BACKEND to http://localhost:8888.
 VIEWER_INPUT  ?= s3://images-batch
 VIEWER_OUTPUT ?= s3://images-batch-alto
@@ -85,21 +85,21 @@ viewer:
 	RASK_VIEWER_INPUT=$(VIEWER_INPUT) RASK_VIEWER_OUTPUT=$(VIEWER_OUTPUT) \
 		uv run uvicorn core.main:app --host 0.0.0.0 --port 8888 --reload
 
-# Local microservice fleet (gateway + per-domain backends) via dev-micro.sh.
+# Local microservice fleet (gateway + per-domain backends) via scripts/dev-micro.sh.
 # Bring up deps first: `make ray-up`, `make pg-up` (+ `make pg-migrate`); S3/HCP
 # from .env. The gateway listens on :8888 so the frontends' /api proxy works.
 dev-micro:
 	uv sync --all-packages
-	./dev-micro.sh
+	./scripts/dev-micro.sh
 
 # ---- frontends (SvelteKit microfrontends) ----------------------------------
-# Three independent SvelteKit SSR apps (svelte-adapter-bun) + the @rask/ui
+# Seven independent SvelteKit SSR apps (svelte-adapter-bun) + the @rask/ui
 # watcher, orchestrated by Turborepo. Each app's Vite dev server proxies
 # /api/* → VIEWER_BACKEND (the gateway / `make viewer`, :8888). The apps come up on
 # their own ports AND Turborepo auto-starts its built-in microfrontends proxy (from
-# components/apps/frontend/microfrontends.json — no extra package) on :3024:
+# components/frontends/home/microfrontends.json — no extra package) on :3024:
 #   single origin → http://localhost:3024   (browse THIS for cross-app nav)
-#   viewer :5173 (catch-all: / + /<project>/overview) · storage :5174 /default/storage · compute :5175 /default/compute · discover :5178 · train :5176 · studio :5177
+#   home :5273 (catch-all: / + /<project>/overview) · storage :5174 /default/storage · compute :5175 /default/compute · discover :5178 · train :5176 · studio :5177
 # The shared @rask/ui shell + nav render with NO backend; start one
 # (`make dev-micro` or `make viewer`) only when you need live /api data.
 dev-frontends:        # build @rask/ui+@rask/api once, then all 7 apps + :3024 proxy
@@ -109,10 +109,10 @@ dev-frontends:        # build @rask/ui+@rask/api once, then all 7 apps + :3024 p
 	# the whole run down). Apps-only dev avoids that. To live-edit @rask/ui, run its
 	# watcher in a second terminal: `bun run dev:ui`.
 	bunx turbo run build --filter=@rask/ui --filter=@rask/api
-	bunx turbo run dev --filter='./components/apps/*'
+	bunx turbo run dev --filter='./components/frontends/*'
 
-viewer-frontend:      # catch-all app only, :5173 (serves / + /<project>/overview)
-	bun run dev:frontend
+home:      # catch-all app only, :5273 (serves / + /<project>/overview)
+	bun run dev:home
 
 frontend-storage:     # storage app only, :5174 /default/storage
 	bun run dev:storage
@@ -125,6 +125,12 @@ frontend-build:       # production-build every app + @rask/ui (turbo, cached)
 
 frontend-check:       # svelte-check every app + @rask/ui (turbo)
 	bun run check
+
+sync-favicons:        # copy the shared favicon source → every app's static/ (one source of truth)
+	@for a in home overview compute discover storage train studio; do \
+	  cp components/frontends/assets/favicon.ico components/frontends/assets/favicon.svg \
+	     components/frontends/$$a/static/ ; \
+	done; echo "synced favicon.{ico,svg} → 7 apps' static/"
 
 # ---- ray -------------------------------------------------------------------
 RAY_HEAD_PORT       ?= 6379
@@ -277,8 +283,8 @@ pg-revision: pg-deps
 COMPOSE_IMAGES = gateway core-api search-api volumes-api ray-api orchestrator
 # SvelteKit SSR microfrontends — all built from the one parametrized
 # .docker/frontend.dockerfile via --build-arg APP=<name>. "frontend" is the
-# catch-all (viewer-frontend); the rest are the /default/<domain> MFE apps.
-FRONTEND_IMAGES = frontend overview-frontend storage-frontend compute-frontend discover-frontend train-frontend studio-frontend
+# catch-all (home); the rest are the /default/<domain> MFE apps.
+FRONTEND_IMAGES = home overview storage compute discover train studio
 KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 HELM ?= KUBECONFIG=$(KUBECONFIG) helm
 KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
@@ -341,4 +347,4 @@ k3s-purge: k3s-down ## Uninstall + delete PVCs (postgres/minio/hf-cache data)
 
 # ---- e2e (Playwright) -------------------------------------------------------
 e2e: ## Browser e2e against a running deploy (RASK_E2E_BASE_URL, default http://localhost)
-	cd e2e && bun install && bunx playwright test
+	cd tests/e2e && bun install && bunx playwright test

@@ -65,17 +65,17 @@ to internalise, because it explains everything else.
 ## Where everything lives
 
 rask is **Polylith**, so there is **no top-level `apps/`** (that's the turborepo
-`with-svelte` example). Runnable apps live under **`components/apps/`**; shared libraries
+`with-svelte` example). Runnable apps live under **`components/frontends/`**; shared libraries
 under **`packages/`**.
 
 ```mermaid
 graph TD
-  subgraph ca["components/apps"]
+  subgraph ca["components/frontends"]
     F[frontend<br/><sub>catch-all — / home picker</sub>]
-    OF[overview-frontend<br/><sub>MFE: /default/overview</sub>]
-    SF[storage-frontend<br/><sub>MFE: /default/storage</sub>]
-    CF[compute-frontend<br/><sub>MFE: /default/compute</sub>]
-    DF[discover-frontend<br/><sub>MFE: /default/discover</sub>]
+    OF[overview<br/><sub>MFE: /default/overview</sub>]
+    SF[storage<br/><sub>MFE: /default/storage</sub>]
+    CF[compute<br/><sub>MFE: /default/compute</sub>]
+    DF[discover<br/><sub>MFE: /default/discover</sub>]
     TF[train · studio<br/><sub>MFE: /default/{train,studio}</sub>]
     R[runner<br/><sub>Python CLI</sub>]
   end
@@ -98,12 +98,12 @@ There are **7** SvelteKit apps: the catch-all plus **six** domain MFEs.
 
 | Path                                | What it is                                                                                                                                                                                                                  |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `components/apps/frontend`          | **The catch-all app** (the proxy default). Owns `/` (the home / project picker, no sidebar) + the `/<project>` entry redirect. Package name `viewer-frontend`; no data layer.                                               |
-| `components/apps/overview-frontend` | A carved-out microfrontend — owns `/<project>/overview` (the batch view); base `/default/overview`.                                                                                                                         |
-| `components/apps/storage-frontend`  | A carved-out microfrontend — owns `/<project>/storage` (the S3 browser); base `/default/storage`.                                                                                                                           |
-| `components/apps/compute-frontend`  | A carved-out microfrontend — owns `/<project>/compute` (the Ray/cluster UI: overview, cluster, jobs, actors, serve, logviewer, api-docs); base `/default/compute`.                                                          |
-| `components/apps/discover-frontend` | A carved-out microfrontend — owns `/<project>/discover` (search, browse, viewer); base `/default/discover`.                                                                                                                 |
-| `components/apps/{train,studio}-frontend` | Carved-out microfrontends — `/<project>/train` (model training, dummy) and `/<project>/studio` (mini-applications, dummy); bases `/default/train` · `/default/studio`.                                                  |
+| `components/frontends/home`          | **The catch-all app** (the proxy default). Owns `/` (the home / project picker, no sidebar) + the `/<project>` entry redirect. Package name `home`; no data layer.                                               |
+| `components/frontends/overview` | A carved-out microfrontend — owns `/<project>/overview` (the batch view); base `/default/overview`.                                                                                                                         |
+| `components/frontends/storage`  | A carved-out microfrontend — owns `/<project>/storage` (the S3 browser); base `/default/storage`.                                                                                                                           |
+| `components/frontends/compute`  | A carved-out microfrontend — owns `/<project>/compute` (the Ray/cluster UI: overview, cluster, jobs, actors, serve, logviewer, api-docs); base `/default/compute`.                                                          |
+| `components/frontends/discover` | A carved-out microfrontend — owns `/<project>/discover` (search, browse, viewer); base `/default/discover`.                                                                                                                 |
+| `components/frontends/{train,studio}` | Carved-out microfrontends — `/<project>/train` (model training, dummy) and `/<project>/studio` (mini-applications, dummy); bases `/default/train` · `/default/studio`.                                                  |
 | `packages/ui` (`@rask/ui`)          | The **shared design system**: styled components (`button`, `badge`, `card`, `dialog`, `sort-header`, `sidebar`, …) **plus the shell** (`@rask/ui/shell` → `AppShell`, `AppSidebar`, `nav-config`).                          |
 | `packages/api` (`@rask/api`)        | The **shared API client + types** — every app imports it (`@rask/api`) instead of copying `api.ts`. JIT package (exports `./src/index.ts` source, no build), split into `ray`/`batches`/`search`/`volumes`/`types` modules. |
 
@@ -111,7 +111,7 @@ There are **7** SvelteKit apps: the catch-all plus **six** domain MFEs.
 
 There are **two distinct layers** — keep them separate:
 
-1. **Page composition** — which _app_ serves a URL path (`/storage` → storage-frontend).
+1. **Page composition** — which _app_ serves a URL path (`/storage` → storage).
 2. **Data** — how an app reaches the _backend_. The frontend **never** talks to a domain
    service directly; it always hits the **gateway** (`:8888`), which path-routes `/api/*`
    to the per-domain services (`core-api` :8801, `search-api` :8802, `volumes-api` :8803,
@@ -192,12 +192,12 @@ yields project-first URLs. Multi-project (a dynamic base) is deliberately deferr
 | Domain app                        | Routes it owns                                                       | `kit.paths.base`    | Status         |
 | --------------------------------- | -------------------------------------------------------------------- | ------------------- | -------------- |
 | `frontend` (catch-all)            | `/` home picker · `/<project>` entry redirect                        | _(none — default)_  | **done ✅**    |
-| `overview-frontend`               | overview (the batch view)                                            | `/default/overview` | **done ✅**    |
-| `compute-frontend` (the "ray" UI) | compute: overview, cluster, jobs, actors, serve, logviewer, api-docs | `/default/compute`  | **done ✅**    |
-| `storage-frontend`                | storage (the S3 browser)                                             | `/default/storage`  | **done ✅**    |
-| `discover-frontend`               | search, browse, viewer                                               | `/default/discover` | **done ✅**    |
-| `train-frontend`                  | model training (dummy)                                               | `/default/train`    | **done ✅**    |
-| `studio-frontend`                 | mini-applications (dummy)                                            | `/default/studio`   | **done ✅**    |
+| `overview`               | overview (the batch view)                                            | `/default/overview` | **done ✅**    |
+| `compute` (the "ray" UI) | compute: overview, cluster, jobs, actors, serve, logviewer, api-docs | `/default/compute`  | **done ✅**    |
+| `storage`                | storage (the S3 browser)                                             | `/default/storage`  | **done ✅**    |
+| `discover`               | search, browse, viewer                                               | `/default/discover` | **done ✅**    |
+| `train`                  | model training (dummy)                                               | `/default/train`    | **done ✅**    |
+| `studio`                 | mini-applications (dummy)                                            | `/default/studio`   | **done ✅**    |
 
 Each was carved with the **same recipe** (scaffold app → move its routes in → wire `@rask/ui` +
 `@rask/api` → static base `/default/<domain>` → register in the workspace + `microfrontends.json`),
@@ -209,7 +209,7 @@ Start them with Turborepo — no backend required to see the **chrome**:
 
 ```bash
 make dev-frontends     # all 7 apps + @rask/ui watcher + the :3024 proxy (turbo run dev)
-make viewer-frontend   # just the catch-all,  :5273  (serves / and the /<project> redirect)
+make home   # just the catch-all,  :5273  (serves / and the /<project> redirect)
 make frontend-storage  # just storage,        :5174/default/storage
 make frontend-compute  # just compute,        :5175/default/compute
 ```
@@ -236,7 +236,7 @@ start that one app's port.
 
 !!! success "Single-origin composition proxy — `:3024` (built into Turborepo)"
 
-    `components/apps/frontend/microfrontends.json` **declares** the path routing
+    `components/frontends/home/microfrontends.json` **declares** the path routing
     (`/storage`, `/compute`), and **Turborepo 2.9 reads it and auto-starts its own native
     microfrontends proxy** on **`http://localhost:3024`** whenever `turbo run dev` includes
     these apps — **no `@vercel/microfrontends` package is required** (that dep is only for
@@ -245,7 +245,7 @@ start that one app's port.
     which is what makes cross-app `<a href>` navigation work. You _can_ still hit each app on
     its own port (catch-all `:5273`, then `:5174`/`:5175`/… per `microfrontends.json`) directly.
 
-    The app **without** a `routing` block (`viewer-frontend`) is the proxy's **default /
+    The app **without** a `routing` block (`home`) is the proxy's **default /
     catch-all**. Override the proxy port with `localProxyPort` in `microfrontends.json` if
     `:3024` is taken.
 

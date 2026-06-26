@@ -2,11 +2,11 @@
 # rask frontend image — SvelteKit SSR built with Bun and RUN by the Bun runtime
 # (svelte-adapter-bun: ships a Bun *server*, not static files). Build context = repo root.
 #
-# Parametrized over the workspace app via --build-arg APP=<dir under components/apps>:
-#   docker buildx build -f .docker/frontend.dockerfile --build-arg APP=storage-frontend \
+# Parametrized over the workspace app via --build-arg APP=<dir under components/frontends, e.g. home>:
+#   docker buildx build -f .docker/frontend.dockerfile --build-arg APP=storage \
 #     --build-arg BUILD_DATE=$(date -u +%FT%TZ) --build-arg VCS_REF=$(git rev-parse HEAD) \
-#     --build-arg VERSION=$(git describe --always) -t storage-frontend:dev .
-# APP=frontend builds the catch-all (viewer-frontend); the others build the MFE
+#     --build-arg VERSION=$(git describe --always) -t storage:dev .
+# APP=home builds the catch-all (home); the others build the MFE
 # domain apps (each pinned to its base path /default/<domain> in svelte.config.js).
 #
 # Two bun-1.3 + svelte-adapter-bun gotchas this encodes:
@@ -21,14 +21,14 @@
 # ---- builder: bun install (workspace) + prebuild @rask/ui + bun build --------
 FROM oven/bun:1-debian@sha256:9dba1a1b43ce28c9d7931bfc4eb00feb63b0114720a0277a8f939ae4dfc9db6f AS builder
 
-ARG APP=frontend
+ARG APP=home
 WORKDIR /src
 
 # Every JS workspace member must be present or `bun install --frozen-lockfile`
-# errors with "Workspace not found". Copy all of components/apps wholesale so new
+# errors with "Workspace not found". Copy all of components/frontends wholesale so new
 # MFE apps don't silently break this build (.dockerignore strips node_modules/
 # .svelte-kit; the non-JS dirs like runner are harmless to bun).
-COPY components/apps components/apps
+COPY components/frontends components/frontends
 COPY packages/api    packages/api
 COPY packages/ui     packages/ui
 COPY package.json bun.lock ./
@@ -49,12 +49,12 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 
 # hadolint ignore=DL3059
 RUN --mount=type=cache,target=/root/.bun/install/cache \
-    bun run --cwd components/apps/${APP} build
+    bun run --cwd components/frontends/${APP} build
 
 # ---- final: minimal Bun runtime serving the adapter-bun server ---------------
 FROM oven/bun:1-debian@sha256:9dba1a1b43ce28c9d7931bfc4eb00feb63b0114720a0277a8f939ae4dfc9db6f
 
-ARG APP=frontend
+ARG APP=home
 ARG BUILD_DATE
 ARG VCS_REF
 ARG VERSION
@@ -74,10 +74,10 @@ WORKDIR /app
 
 # Preserve the isolated-linker layout (store + app's symlinked node_modules).
 COPY --from=builder --chown=10001:10001 /src/node_modules ./node_modules
-COPY --from=builder --chown=10001:10001 /src/components/apps/${APP} ./components/apps/${APP}
+COPY --from=builder --chown=10001:10001 /src/components/frontends/${APP} ./components/frontends/${APP}
 
 # Re-anchor the workdir at the app via a stable symlink so CMD is APP-agnostic.
-RUN ln -s "components/apps/${APP}" /app/app
+RUN ln -s "components/frontends/${APP}" /app/app
 WORKDIR /app/app
 
 USER 10001

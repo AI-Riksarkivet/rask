@@ -1,7 +1,7 @@
 # Topology, env knobs, and deploy
 
 The concrete shape of the pipeline + the two Serve apps, with exact symbols,
-ports, and commands. Source: `components/apps/runner/src/runner/` and
+ports, and commands. Source: `components/cli/runner/src/runner/` and
 `components/scripts/deploy_serve.py`.
 
 ## The two pipeline shapes
@@ -103,6 +103,6 @@ uv run python components/scripts/deploy_serve.py down --app htrflow
 uv run python components/scripts/deploy_serve.py status
 ```
 
-Submit work through the `runner` CLI (`components/apps/runner`), which builds one
+Submit work through the `runner` CLI (`components/cli/runner`), which builds one
 of the `PIPELINES` and blocks on `.materialize()`. For remote KubeRay pass
 `--address ray://...:10001`.

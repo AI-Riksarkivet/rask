@@ -9,8 +9,9 @@ Do every step that applies.
 
 - **Reusable library, no entrypoint** → `packages/<name>`. If it grows an `app`
   or a CLI, it's in the wrong layer.
-- **Runnable** → `components/apps/<name>` (CLI/SPA), `components/services/<name>`
-  (HTTP service), or `components/scripts/<name>` (one-shot setup/debug).
+- **Runnable** → a SvelteKit frontend → `components/frontends/<name>`; a CLI →
+  `components/cli/<name>`; an HTTP service → `components/services/<name>`; a
+  one-shot setup/debug script → `components/scripts/<name>`.
 - **Deployable composition, no code** → `projects/<name>` (pins a member set
   only; it never contains importable modules).
 
@@ -21,7 +22,7 @@ Every Python brick must be registered in **both** root files:
 - `pyproject.toml` → `[tool.uv.workspace] members` — append the path
   (e.g. `"components/services/foo"`). uv resolves first-party deps from here.
 - root `package.json` → `workspaces` — **only if it carries JS/TS** (the JS
-  members are the 7 frontend apps under `components/apps/*` plus `packages/api`
+  members are the 7 frontend apps under `components/frontends/*` plus `packages/api`
   = @rask/api and `packages/ui` = @rask/ui). A pure-Python brick is **not**
   added here; a Svelte/TS brick is.
 

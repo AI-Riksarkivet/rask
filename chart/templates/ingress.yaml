@@ -44,7 +44,7 @@ spec:
                   number: {{ $.Values.frontend.service.port }}
           {{- end }}
           {{- end }}
-          {{- /* Catch-all viewer-frontend last: "/", "/<project>/overview|new". */}}
+          {{- /* Catch-all home app last: "/", "/<project>/overview|new". */}}
           {{- range .Values.frontend.apps }}
           {{- if .catchAll }}
           - path: /

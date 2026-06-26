@@ -1,10 +1,10 @@
 {
 	"$schema": "https://unpkg.com/knip@6/schema.json",
 	"workspaces": {
-		"components/apps/*-frontend": {
+		"components/frontends/*": {
 			"entry": ["src/**/*.remote.ts", "src/**/*.server.ts"]
 		},
-		"components/apps/frontend": {
+		"components/frontends/home": {
 			"entry": ["src/**/*.remote.ts", "src/**/*.server.ts"]
 		},
 		"packages/ui": {
