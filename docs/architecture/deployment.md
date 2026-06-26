@@ -128,15 +128,26 @@ get it automatically).
 the services built on `make_service_app` call it automatically, and the gateway
 (a bespoke proxy app, no `Settings`) calls it directly with `service_name="gateway"`
 so the front-door spans root every distributed trace. The Ray Serve htrflow app is
-similarly instrumented. All export OTLP/HTTP traces **directly to GreptimeDB
-`:4000/v1/otlp`** — the chart injects `OTEL_EXPORTER_OTLP_ENDPOINT`,
-`OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`, the
-`x-greptime-pipeline-name=greptime_trace_v1` header (GreptimeDB **requires** a
-pipeline for trace ingestion — without it `/v1/otlp/v1/traces` returns 400), and
-`RASK_OTEL_ENABLED` when `observability.enabled=true`. Traces land in the
-`opentelemetry_traces` table. When the toggle is off the env vars are absent and
-instrumentation is a no-op. Standard OTLP is used throughout; OTel-Arrow is not used
-(the Python SDK and Vector both lack OTAP support).
+similarly instrumented. It wires both **traces** (`BatchSpanProcessor`) and **RED
+metrics** (`MeterProvider` + periodic exporter): the FastAPI/HTTPX instrumentation
+emits `http.server.*`/`http.client.*` request count, duration, and active-request
+metrics automatically — no per-endpoint code. All export OTLP/HTTP **directly to
+GreptimeDB `:4000/v1/otlp`** — the chart injects `OTEL_EXPORTER_OTLP_ENDPOINT`,
+`OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`, and `RASK_OTEL_ENABLED` when
+`observability.enabled=true`. Headers are split by signal: traces carry
+`OTEL_EXPORTER_OTLP_TRACES_HEADERS` with `x-greptime-pipeline-name=greptime_trace_v1`
+(GreptimeDB **requires** a pipeline for trace ingestion — without it
+`/v1/otlp/v1/traces` returns 400), while metrics use the generic
+`OTEL_EXPORTER_OTLP_HEADERS` (db-name only — metrics need no pipeline). Traces land in
+`opentelemetry_traces`; metrics become PromQL-queryable series
+(`http_server_duration_milliseconds_*`, etc.) that Perses charts. When the toggle is
+off the env vars are absent and instrumentation is a no-op. Standard OTLP is used
+throughout; OTel-Arrow is not used (the Python SDK and Vector both lack OTAP support).
+
+**Dashboards:** the chart provisions a Perses Project `rask` + a **"Fleet — RED"**
+dashboard (`chart/templates/perses-dashboards.yaml`, mounted into a
+`perses.config.provisioning.folders` path) — per-service request rate, 5xx error
+rate, p95 latency, and in-flight requests off the metrics above.
 
 Greenfield local cutover (drops old PVCs): `make k3s-purge && make k3s-up`.
 

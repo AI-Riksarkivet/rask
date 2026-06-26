@@ -89,7 +89,13 @@ spec:
               value: "http://rask-greptimedb-standalone:4000/v1/otlp"
             - name: OTEL_EXPORTER_OTLP_PROTOCOL
               value: "http/protobuf"
+            # Generic headers apply to metrics (and anything without a signal-specific
+            # override): db-name only — GreptimeDB ingests OTLP metrics with no pipeline.
             - name: OTEL_EXPORTER_OTLP_HEADERS
+              value: "x-greptime-db-name=public"
+            # Traces additionally need GreptimeDB's trace pipeline; signal-specific
+            # headers override the generic ones for traces only.
+            - name: OTEL_EXPORTER_OTLP_TRACES_HEADERS
               value: "x-greptime-db-name=public,x-greptime-pipeline-name=greptime_trace_v1"
             - name: OTEL_SERVICE_NAME
               value: {{ $name | quote }}

@@ -1,0 +1,94 @@
+{{- if .Values.observability.enabled }}
+{{- if index .Values "perses" "enabled" | default true }}
+{{- /*
+Perses dashboards-as-code. Provisioned by mounting this ConfigMap into a folder
+listed in perses.config.provisioning.folders (see values.yaml). Perses loads the
+Project + Dashboard on startup and reconciles them every provisioning interval.
+Queries target the default `greptimedb` Prometheus datasource; metric names are
+OTel/semconv classic (http_server_duration_milliseconds_*), emitted by the
+FastAPI/HTTPX instrumentation wired in service_kit.setup_otel.
+
+NB: Perses `seriesNameFormat` uses {{`{{label}}`}} syntax — escaped here so Helm
+emits the literal braces instead of evaluating them as template actions.
+*/}}
+{{- $svc := "{{service_name}}" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rask.fullname" . }}-perses-dashboards
+  labels:
+    {{- include "rask.labels" . | nindent 4 }}
+data:
+  project.json: |
+    {
+      "kind": "Project",
+      "metadata": { "name": "rask" },
+      "spec": { "display": { "name": "rask" } }
+    }
+  fleet-red.json: |
+    {
+      "kind": "Dashboard",
+      "metadata": { "name": "fleet-red", "project": "rask" },
+      "spec": {
+        "display": { "name": "rask Fleet — RED", "description": "Request rate, error rate, and duration per fleet service (OTLP http.server metrics)." },
+        "duration": "1h",
+        "panels": {
+          "requestRate": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Request rate (req/s)" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (service_name) (rate(http_server_duration_milliseconds_count[5m]))",
+                "seriesNameFormat": {{ $svc | quote }} } } } } ]
+            }
+          },
+          "errorRate": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Error rate (5xx %)" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" }, "yAxis": { "format": { "unit": "percent" } } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "100 * sum by (service_name) (rate(http_server_duration_milliseconds_count{http_status_code=~\"5..\"}[5m])) / clamp_min(sum by (service_name) (rate(http_server_duration_milliseconds_count[5m])), 0.001)",
+                "seriesNameFormat": {{ $svc | quote }} } } } } ]
+            }
+          },
+          "latencyP95": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "p95 latency (ms)" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" }, "yAxis": { "format": { "unit": "milliseconds" } } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_duration_milliseconds_bucket[5m])))",
+                "seriesNameFormat": {{ $svc | quote }} } } } } ]
+            }
+          },
+          "activeRequests": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "In-flight requests" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (service_name) (http_server_active_requests)",
+                "seriesNameFormat": {{ $svc | quote }} } } } } ]
+            }
+          }
+        },
+        "layouts": [
+          {
+            "kind": "Grid",
+            "spec": {
+              "display": { "title": "Fleet RED" },
+              "items": [
+                { "x": 0, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/requestRate" } },
+                { "x": 12, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/errorRate" } },
+                { "x": 0, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/latencyP95" } },
+                { "x": 12, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/activeRequests" } }
+              ]
+            }
+          }
+        ]
+      }
+    }
+{{- end }}
+{{- end }}

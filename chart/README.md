@@ -48,14 +48,17 @@ bucket `rask-observability`). The bucket is auto-provisioned by the RustFS Tenan
 
 **App instrumentation:** the FastAPI fleet (via `service_kit.setup_otel` — called
 automatically from `make_service_app`, and directly by the gateway proxy app) and the
-Ray Serve htrflow app export OTLP/HTTP traces **directly to GreptimeDB
-`:4000/v1/otlp`** (`OTEL_*` env vars injected by the chart when
-`observability.enabled=true`, including the `x-greptime-pipeline-name=greptime_trace_v1`
-header GreptimeDB requires for trace ingestion). Traces land in the
-`opentelemetry_traces` table; gateway spans root each distributed trace.
-Instrumentation is opt-in — no-op unless the env vars are present. Standard OTLP is
-used throughout (OTel-Arrow is not used — the Python SDK and Vector both lack OTAP
-support).
+Ray Serve htrflow app export OTLP/HTTP **traces and RED metrics** (the FastAPI/HTTPX
+instrumentation emits `http.server.*`/`http.client.*` count/duration/active-request
+metrics with no per-endpoint code) **directly to GreptimeDB `:4000/v1/otlp`** (`OTEL_*`
+env vars injected by the chart when `observability.enabled=true`). Headers split by
+signal: traces carry `x-greptime-pipeline-name=greptime_trace_v1` (required for trace
+ingestion), metrics use db-name only. Traces land in `opentelemetry_traces`; metrics
+become PromQL series. Gateway spans root each distributed trace. The chart also
+provisions a Perses **"Fleet — RED"** dashboard (rate / 5xx errors / p95 latency /
+in-flight, per service). Instrumentation is opt-in — no-op unless the env vars are
+present. Standard OTLP is used throughout (OTel-Arrow is not used — the Python SDK and
+Vector both lack OTAP support).
 
 ## Local k3s quickstart
 

@@ -333,9 +333,16 @@ perses:
   volumes:
     - name: perses-plugins
       emptyDir: {}
+    # Dashboards-as-code: the rask-perses-dashboards ConfigMap (templates/
+    # perses-dashboards.yaml) holds the rask Project + "Fleet — RED" Dashboard.
+    - name: perses-dashboards
+      configMap:
+        name: rask-perses-dashboards
   volumeMounts:
     - name: perses-plugins
       mountPath: /etc/perses/plugins
+    - name: perses-dashboards
+      mountPath: /etc/perses/dashboards
   # Provision a GreptimeDB datasource via the chart's datasources values key
   # (renders a ConfigMap mounted at /etc/perses/datasources). GreptimeDB exposes
   # a Prometheus-compatible query API at :4000/v1/prometheus.
@@ -357,4 +364,5 @@ perses:
       folders:
         - /etc/perses/provisioning
         - /etc/perses/datasources
-      interval: 10m
+        - /etc/perses/dashboards
+      interval: 1m

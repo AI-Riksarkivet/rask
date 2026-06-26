@@ -29,21 +29,38 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None
     if not enabled:
         return False
 
-    from opentelemetry import trace
+    from opentelemetry import metrics, trace
+    from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
     from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
     from opentelemetry.instrumentation.logging import LoggingInstrumentor
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
     resource = Resource.create({"service.name": service_name})
-    provider = TracerProvider(resource=resource)
-    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
-    trace.set_tracer_provider(provider)
 
-    FastAPIInstrumentor.instrument_app(app)
-    HTTPXClientInstrumentor().instrument()
+    # Traces: BatchSpanProcessor -> OTLP/HTTP. The span exporter reads
+    # OTEL_EXPORTER_OTLP_TRACES_HEADERS (carrying GreptimeDB's required
+    # x-greptime-pipeline-name=greptime_trace_v1) from the environment.
+    tracer_provider = TracerProvider(resource=resource)
+    tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+    trace.set_tracer_provider(tracer_provider)
+
+    # Metrics: periodic OTLP/HTTP push. The FastAPI/HTTPX instrumentors emit RED
+    # metrics (http.server.* request count/duration, http.client.*) automatically
+    # once a MeterProvider is registered — no per-endpoint code. The metric
+    # exporter must NOT carry the trace pipeline header, so it relies on the
+    # generic OTEL_EXPORTER_OTLP_HEADERS (db-name only); GreptimeDB ingests OTLP
+    # metrics at /v1/otlp/v1/metrics with no pipeline.
+    metric_reader = PeriodicExportingMetricReader(OTLPMetricExporter())
+    meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
+    metrics.set_meter_provider(meter_provider)
+
+    FastAPIInstrumentor.instrument_app(app, tracer_provider=tracer_provider, meter_provider=meter_provider)
+    HTTPXClientInstrumentor().instrument(tracer_provider=tracer_provider, meter_provider=meter_provider)
     LoggingInstrumentor().instrument(set_logging_format=True)
     return True
