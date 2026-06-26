@@ -32,17 +32,17 @@ steps:
     settings:
       model: trocr
       model_settings:
-        model: Riksarkivet/trocr-base-handwritten-hist-swe-3
+        # swe-2 (public) while swe-3 is gated (private repo -> 401 without an HF token).
+        # swe-3 is the better subword model; switch back via secrets.hfToken when a
+        # token with access is available. NB: swe-2 is character-level, not subword,
+        # so the base-3-specific generation tuning below does NOT apply here.
+        model: Riksarkivet/trocr-base-handwritten-hist-swe-2
       generation_settings:
         batch_size: 8
-        # base-3's processor emits 192x1024 line crops but the ViT position grid
-        # is 384x384; WITHOUT this generate() raises ValueError -> htrflow's
-        # unguarded worker thread dies -> the page hangs 600s. (Verified 2026-06-18.)
-        interpolate_pos_encoding: True
-        # base-3 is subword (vocab 50265) with an internally-consistent eos=2, so
-        # it terminates cleanly (~11-21 tok/line, no junk); the cap is a safety net.
+        # swe-2's processor emits native 384x384 crops matching the ViT position grid,
+        # so no position-encoding interpolation is needed (unlike base-3's 192x1024).
+        # Safety cap on decode length; swe-2 terminates on eos=2.
         max_new_tokens: 128
-        # base-3 ships generation_config use_cache=false -> O(n^2) decode; re-enable.
         use_cache: True
         eos_token_id: 2
 
