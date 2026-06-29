@@ -1,6 +1,7 @@
 """controlplane tests — health skeleton + (later) project listing."""
 
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -65,6 +66,20 @@ def test_to_dto_missing_status_defaults_pending(monkeypatch: pytest.MonkeyPatch)
     assert dto.namespace == ""
 
 
+def test_to_dto_empty_phase_defaults_pending(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RASK_API_PREFIX", "/api")
+    monkeypatch.setenv("RASK_VIEWER_INPUT", "s3://unused")
+    monkeypatch.setenv("RASK_VIEWER_OUTPUT", "s3://unused")
+
+    from controlplane.service import to_dto
+
+    cr = _cr("empty", phase="Ready")
+    cr["status"]["phase"] = ""  # status present, phase empty string
+    dto = to_dto(cr)
+    assert dto.phase == "Pending"
+    assert dto.namespace == "project-empty"  # namespace still preserved
+
+
 def test_list_project_dtos_sorted_by_created_at(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RASK_API_PREFIX", "/api")
     monkeypatch.setenv("RASK_VIEWER_INPUT", "s3://unused")
@@ -73,7 +88,7 @@ def test_list_project_dtos_sorted_by_created_at(monkeypatch: pytest.MonkeyPatch)
     from controlplane.service import list_project_dtos
 
     class FakeReader:
-        def list_projects(self) -> list[dict]:
+        def list_projects(self) -> list[dict[str, Any]]:
             return [
                 _cr("b", created="2026-02-01T00:00:00Z"),
                 _cr("a", created="2026-01-01T00:00:00Z"),
