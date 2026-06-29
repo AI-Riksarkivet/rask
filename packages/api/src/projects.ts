@@ -10,6 +10,7 @@ export const ProjectSchema = v.object({
 	workload: v.string(),
 	phase: v.string(),
 	namespace: v.string(),
+	url: v.string(),
 	created_at: v.string(),
 });
 export type Project = v.InferOutput<typeof ProjectSchema>;
