@@ -143,6 +143,16 @@ app = FastAPI(title="gateway", version="0.1.0", lifespan=lifespan)
 setup_otel(app, service_name="gateway")
 
 
+@app.get("/healthz")
+async def healthz() -> dict[str, str]:
+    """Gateway process liveness/readiness — served by the gateway itself, never
+    proxied (it is not under /api), so it stays green even when no domain
+    backends are deployed (e.g. a front-door-only install). Probing a proxied
+    path like /api/health instead would 502 once its upstream is removed and
+    take the gateway NotReady."""
+    return {"status": "ok"}
+
+
 @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
 async def proxy(path: str, request: Request) -> Response:
     prefix: str = request.app.state.api_prefix

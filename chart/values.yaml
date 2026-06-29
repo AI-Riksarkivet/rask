@@ -94,6 +94,10 @@ services:
     port: 8888
     replicas: 1
     extraArgs: ["--proxy-headers", "--forwarded-allow-ips=127.0.0.1"]
+    # The gateway proxies /api/* to backends, so /api/health depends on core-api.
+    # Probe its own unproxied /healthz instead, so it stays Ready in a front-door-only
+    # install (no domain backends).
+    healthPath: /healthz
     waitFor: []
 
 # Image registry/tag shared by every fleet + migration container.
