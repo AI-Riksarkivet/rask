@@ -296,7 +296,7 @@ pg-revision: pg-deps
 	  DATABASE_URL=$(PG_URL) uv run --package core alembic revision --autogenerate -m "$(MSG)"
 
 # ---- local k3s ------------------------------------------------------------
-COMPOSE_IMAGES = gateway core-api search-api volumes-api ray-api orchestrator
+COMPOSE_IMAGES = gateway core-api search-api volumes-api ray-api orchestrator controlplane
 # SvelteKit SSR microfrontends — all built from the one parametrized
 # .docker/frontend.dockerfile via --build-arg APP=<name>. "frontend" is the
 # catch-all (home); the rest are the /default/<domain> MFE apps.

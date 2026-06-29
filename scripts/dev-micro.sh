@@ -35,6 +35,7 @@ SEARCH_PORT="${SEARCH_PORT:-$((8802 + OFFSET))}"
 VOLUMES_PORT="${VOLUMES_PORT:-$((8803 + OFFSET))}"
 RAY_PORT="${RAY_PORT:-$((8804 + OFFSET))}"
 ORCH_PORT="${ORCH_PORT:-$((8810 + OFFSET))}"
+CONTROLPLANE_PORT="${CONTROLPLANE_PORT:-8820}"
 
 # Wire the gateway's upstreams to THIS fleet's per-service ports (else, when
 # offset, it would route to whatever holds the default ports). No-op at OFFSET=0.
@@ -64,6 +65,7 @@ run search-api  "$SEARCH_PORT"  search_api:app  env RASK_ORCHESTRATOR_AUTOSTART=
 run volumes-api "$VOLUMES_PORT" volumes_api:app env RASK_ORCHESTRATOR_AUTOSTART=false
 run ray-api     "$RAY_PORT"     ray_api:app     env RASK_ORCHESTRATOR_AUTOSTART=false
 run orchestrator "$ORCH_PORT"   orchestrator:app env RASK_ORCHESTRATOR_AUTOSTART="$ORCH_AUTOSTART"
+run controlplane "$CONTROLPLANE_PORT" controlplane:app env RASK_ORCHESTRATOR_AUTOSTART=false
 
 echo "fleet up — gateway on http://127.0.0.1:${GATEWAY_PORT} (RASK_API_PREFIX=${RASK_API_PREFIX}; Ctrl-C to stop)"
 if [ "$OFFSET" != "0" ]; then
