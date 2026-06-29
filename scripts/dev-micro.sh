@@ -35,7 +35,7 @@ SEARCH_PORT="${SEARCH_PORT:-$((8802 + OFFSET))}"
 VOLUMES_PORT="${VOLUMES_PORT:-$((8803 + OFFSET))}"
 RAY_PORT="${RAY_PORT:-$((8804 + OFFSET))}"
 ORCH_PORT="${ORCH_PORT:-$((8810 + OFFSET))}"
-CONTROLPLANE_PORT="${CONTROLPLANE_PORT:-8820}"
+CONTROLPLANE_PORT="${CONTROLPLANE_PORT:-$((8820 + OFFSET))}"
 
 # Wire the gateway's upstreams to THIS fleet's per-service ports (else, when
 # offset, it would route to whatever holds the default ports). No-op at OFFSET=0.
