@@ -73,7 +73,7 @@ indent-style = "space"
 
 [tool.ruff.lint.isort]
 lines-after-imports = 2
-known-first-party = ["htr", "storage", "runner", "core", "gateway", "service_kit", "core_api", "search_api", "volumes_api", "ray_api", "orchestrator", "ray_kit", "tracker", "validate"]
+known-first-party = ["htr", "storage", "runner", "core", "gateway", "service_kit", "core_api", "search_api", "volumes_api", "ray_api", "orchestrator", "controlplane", "ray_kit", "tracker", "validate"]
 
 [tool.ty.terminal]
 error-on-warning = true
