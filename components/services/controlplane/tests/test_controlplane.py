@@ -44,7 +44,7 @@ def test_to_dto_maps_all_fields(monkeypatch: pytest.MonkeyPatch) -> None:
 
     from controlplane.service import to_dto
 
-    dto = to_dto(_cr("demo", team="team-archives", phase="Ready"))
+    dto = to_dto(_cr("demo", team="team-archives", phase="Ready"), "")
     assert dto.slug == "demo"
     assert dto.name == "demo"
     assert dto.team == "team-archives"
@@ -61,7 +61,7 @@ def test_to_dto_missing_status_defaults_pending(monkeypatch: pytest.MonkeyPatch)
 
     from controlplane.service import to_dto
 
-    dto = to_dto(_cr("fresh", phase=None))
+    dto = to_dto(_cr("fresh", phase=None), "")
     assert dto.phase == "Pending"
     assert dto.namespace == ""
 
@@ -75,7 +75,7 @@ def test_to_dto_empty_phase_defaults_pending(monkeypatch: pytest.MonkeyPatch) ->
 
     cr = _cr("empty", phase="Ready")
     cr["status"]["phase"] = ""  # status present, phase empty string
-    dto = to_dto(cr)
+    dto = to_dto(cr, "")
     assert dto.phase == "Pending"
     assert dto.namespace == "project-empty"  # namespace still preserved
 
@@ -94,7 +94,10 @@ def test_list_project_dtos_sorted_by_created_at(monkeypatch: pytest.MonkeyPatch)
                 _cr("a", created="2026-01-01T00:00:00Z"),
             ]
 
-    dtos = list_project_dtos(FakeReader())
+        def ingress_host(self, namespace: str) -> str | None:
+            return None
+
+    dtos = list_project_dtos(FakeReader(), "http")
     assert [d.slug for d in dtos] == ["a", "b"]
 
 
@@ -105,6 +108,9 @@ def test_list_projects_endpoint_returns_dtos(client: TestClient) -> None:
     class FakeReader:
         def list_projects(self) -> list[dict]:
             return [_cr("demo", team="team-archives", phase="Ready")]
+
+        def ingress_host(self, namespace: str) -> str | None:
+            return None
 
     app.dependency_overrides[get_reader] = lambda: FakeReader()
     try:
@@ -117,6 +123,7 @@ def test_list_projects_endpoint_returns_dtos(client: TestClient) -> None:
     assert body["projects"][0]["slug"] == "demo"
     assert body["projects"][0]["phase"] == "Ready"
     assert body["projects"][0]["created_at"] == "2026-01-01T00:00:00Z"
+    assert body["projects"][0]["url"] == ""
 
 
 def test_list_projects_endpoint_503_on_reader_error(client: TestClient) -> None:
@@ -127,6 +134,9 @@ def test_list_projects_endpoint_503_on_reader_error(client: TestClient) -> None:
         def list_projects(self) -> list[dict]:
             raise RuntimeError("k8s unreachable")
 
+        def ingress_host(self, namespace: str) -> str | None:
+            return None
+
     app.dependency_overrides[get_reader] = lambda: BoomReader()
     try:
         resp = client.get("/api/projects/")
@@ -134,3 +144,32 @@ def test_list_projects_endpoint_503_on_reader_error(client: TestClient) -> None:
         app.dependency_overrides.clear()
 
     assert resp.status_code == 503
+
+
+def test_to_dto_builds_url_from_ingress_host() -> None:
+    from controlplane.service import list_project_dtos
+
+    class FakeReader:
+        def list_projects(self) -> list[dict[str, Any]]:
+            return [_cr("demo", phase="Ready")]
+
+        def ingress_host(self, namespace: str) -> str | None:
+            assert namespace == "project-demo"
+            return "demo.rask.local"
+
+    dtos = list_project_dtos(FakeReader(), "http")
+    assert dtos[0].url == "http://demo.rask.local/default/overview"
+
+
+def test_url_empty_when_no_ingress() -> None:
+    from controlplane.service import list_project_dtos
+
+    class FakeReader:
+        def list_projects(self) -> list[dict[str, Any]]:
+            return [_cr("demo", phase="Provisioning")]
+
+        def ingress_host(self, namespace: str) -> str | None:
+            return None
+
+    dtos = list_project_dtos(FakeReader(), "http")
+    assert dtos[0].url == ""

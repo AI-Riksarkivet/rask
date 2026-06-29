@@ -8,6 +8,7 @@ class ProjectDTO(BaseModel):
     workload: str
     phase: str
     namespace: str
+    url: str
     created_at: str
 
 

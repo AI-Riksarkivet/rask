@@ -1,3 +1,4 @@
+import os
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,8 +21,9 @@ ReaderDep = Annotated[ProjectReader, Depends(get_reader)]
 
 @router.get("/")
 def list_projects(reader: ReaderDep) -> ProjectsResponse:
+    scheme = os.environ.get("RASK_PROJECT_URL_SCHEME", "http")
     try:
-        dtos = service.list_project_dtos(reader)
+        dtos = service.list_project_dtos(reader, scheme)
     except Exception as exc:  # broad catch: any k8s failure surfaces as a clean 503
         raise HTTPException(status_code=503, detail="cannot reach kubernetes api") from exc
     return ProjectsResponse(projects=dtos)

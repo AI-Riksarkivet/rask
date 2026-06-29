@@ -15,6 +15,7 @@ PROJECT_PLURAL = "projects"
 
 class ProjectReader(Protocol):
     def list_projects(self) -> list[dict[str, Any]]: ...
+    def ingress_host(self, namespace: str) -> str | None: ...
 
 
 class K8sProjectReader:
@@ -28,10 +29,19 @@ class K8sProjectReader:
         except config.ConfigException:
             config.load_kube_config()
         self._api = client.CustomObjectsApi()
+        self._net = client.NetworkingV1Api()
 
     def list_projects(self) -> list[dict[str, Any]]:
-        resp = self._api.list_cluster_custom_object(
-            group=PROJECT_GROUP, version=PROJECT_VERSION, plural=PROJECT_PLURAL
-        )
+        resp = self._api.list_cluster_custom_object(group=PROJECT_GROUP, version=PROJECT_VERSION, plural=PROJECT_PLURAL)
         items: list[dict[str, Any]] = resp.get("items", [])
         return items
+
+    def ingress_host(self, namespace: str) -> str | None:
+        resp = self._net.list_namespaced_ingress(
+            namespace, label_selector="platform.rask.io/project"
+        )
+        for ing in resp.items:
+            for rule in ing.spec.rules or []:
+                if rule.host:
+                    return rule.host
+        return None
