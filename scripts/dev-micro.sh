@@ -44,6 +44,7 @@ export RASK_SEARCH_API_URL="${RASK_SEARCH_API_URL:-http://127.0.0.1:${SEARCH_POR
 export RASK_VOLUMES_API_URL="${RASK_VOLUMES_API_URL:-http://127.0.0.1:${VOLUMES_PORT}}"
 export RASK_RAY_API_URL="${RASK_RAY_API_URL:-http://127.0.0.1:${RAY_PORT}}"
 export RASK_ORCH_API_URL="${RASK_ORCH_API_URL:-http://127.0.0.1:${ORCH_PORT}}"
+export RASK_CONTROLPLANE_URL="${RASK_CONTROLPLANE_URL:-http://127.0.0.1:${CONTROLPLANE_PORT}}"
 
 # Only the orchestrator process runs the loop. We force it OFF for every other
 # service (regardless of what .env says) so there is exactly one orchestrator.

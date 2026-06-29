@@ -56,12 +56,14 @@ def _routes() -> list[tuple[str, str, str]]:
     volumes = ("volumes-api", os.environ.get("RASK_VOLUMES_API_URL", "http://127.0.0.1:8803"))
     ray = ("ray-api", os.environ.get("RASK_RAY_API_URL", "http://127.0.0.1:8804"))
     orch = ("orchestrator", os.environ.get("RASK_ORCH_API_URL", "http://127.0.0.1:8810"))
+    controlplane = ("controlplane", os.environ.get("RASK_CONTROLPLANE_URL", "http://127.0.0.1:8820"))
     # longest / most-specific prefixes first; the prefix itself is the catch-all
     return [
         (f"{prefix}/search", *search),
         (f"{prefix}/volumes", *volumes),
         (f"{prefix}/ray", *ray),
         (f"{prefix}/orchestrator", *orch),
+        (f"{prefix}/projects", *controlplane),
         ("/api/serve", *ray),
         (prefix, *core),
         ("/api", *core),
