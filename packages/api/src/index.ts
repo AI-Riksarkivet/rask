@@ -3,6 +3,7 @@
 // Server-only bits (remote functions, $env) stay per-app.
 export * from './ray';
 export * from './batches';
+export * from './projects';
 export * from './search';
 export * from './volumes';
 export * from './types';
