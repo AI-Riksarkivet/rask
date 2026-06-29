@@ -1,6 +1,7 @@
 {{- $root := . }}
 {{- $secretName := .Values.existingSecret | default (printf "%s-app" (include "rask.fullname" .)) }}
 {{- range $name, $svc := .Values.services }}
+{{- if or (eq $name "gateway") $root.Values.singleTenant.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -138,4 +139,5 @@ spec:
     {{- include "rask.selectorLabels" $root | nindent 4 }}
     app.kubernetes.io/component: {{ $name }}
 ---
+{{- end }}
 {{- end }}

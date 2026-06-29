@@ -7,6 +7,7 @@ path). Service/Deployment name = rask-<app name>; image = "<app name>:<tag>".
 {{- $root := . -}}
 {{- $fe := .Values.frontend -}}
 {{- range $fe.apps }}
+{{- if or .catchAll $root.Values.singleTenant.enabled }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -86,4 +87,5 @@ spec:
   selector:
     {{- include "rask.selectorLabels" $root | nindent 4 }}
     app.kubernetes.io/component: {{ .name }}
+{{- end }}
 {{- end }}

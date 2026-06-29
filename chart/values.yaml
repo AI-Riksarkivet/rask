@@ -9,6 +9,15 @@ serviceAccount:
   name: ""
   annotations: {}
 
+# singleTenant gates the LEGACY single-tenant default workloads (the default
+# domain services + /default frontends + default Postgres/object-store/Ray/NATS/
+# migration). Default false => front-door-only install (picker + controlplane +
+# gateway + operators). Set true to restore the old single-tenant stack.
+# NOTE: this is separate from the operator subchart toggles (cnpg/rustfs/...),
+# which stay enabled so per-project stacks keep working.
+singleTenant:
+  enabled: false
+
 # Optional override: if set, this Secret is used verbatim instead of the
 # chart-generated one (prod with external deps). Empty = chart generates creds.
 existingSecret: ""
@@ -234,7 +243,7 @@ kuberay:
   enabled: true
 
 nats:
-  enabled: true
+  enabled: false   # platform NATS was single-tenant; per-project renders its own
   config:
     jetstream:
       enabled: true

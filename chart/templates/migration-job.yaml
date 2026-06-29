@@ -1,4 +1,4 @@
-{{- if .Values.migrations.enabled }}
+{{- if and .Values.migrations.enabled .Values.singleTenant.enabled }}
 {{- $secretName := .Values.existingSecret | default (printf "%s-app" (include "rask.fullname" .)) }}
 apiVersion: batch/v1
 kind: Job

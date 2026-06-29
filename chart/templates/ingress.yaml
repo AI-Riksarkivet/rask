@@ -34,7 +34,7 @@ spec:
           {{- /* Each MFE domain app on its base path; Traefik matches longest-prefix
                  first, so these win over the catch-all "/" below. */}}
           {{- range .Values.frontend.apps }}
-          {{- if not .catchAll }}
+          {{- if and (not .catchAll) $.Values.singleTenant.enabled }}
           - path: {{ .path }}
             pathType: Prefix
             backend:

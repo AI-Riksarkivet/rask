@@ -1,4 +1,4 @@
-{{- if .Values.ray.enabled }}
+{{- if and .Values.ray.enabled .Values.singleTenant.enabled }}
 {{- $secretName := .Values.existingSecret | default (printf "%s-app" (include "rask.fullname" .)) }}
 apiVersion: ray.io/v1
 kind: RayService
