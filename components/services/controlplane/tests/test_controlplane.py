@@ -96,3 +96,41 @@ def test_list_project_dtos_sorted_by_created_at(monkeypatch: pytest.MonkeyPatch)
 
     dtos = list_project_dtos(FakeReader())
     assert [d.slug for d in dtos] == ["a", "b"]
+
+
+def test_list_projects_endpoint_returns_dtos(client: TestClient) -> None:
+    from controlplane import app
+    from controlplane.routes import get_reader
+
+    class FakeReader:
+        def list_projects(self) -> list[dict]:
+            return [_cr("demo", team="team-archives", phase="Ready")]
+
+    app.dependency_overrides[get_reader] = lambda: FakeReader()
+    try:
+        resp = client.get("/api/projects/")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["projects"][0]["slug"] == "demo"
+    assert body["projects"][0]["phase"] == "Ready"
+    assert body["projects"][0]["created_at"] == "2026-01-01T00:00:00Z"
+
+
+def test_list_projects_endpoint_503_on_reader_error(client: TestClient) -> None:
+    from controlplane import app
+    from controlplane.routes import get_reader
+
+    class BoomReader:
+        def list_projects(self) -> list[dict]:
+            raise RuntimeError("k8s unreachable")
+
+    app.dependency_overrides[get_reader] = lambda: BoomReader()
+    try:
+        resp = client.get("/api/projects/")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 503
