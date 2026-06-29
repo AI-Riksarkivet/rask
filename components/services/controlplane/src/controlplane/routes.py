@@ -22,6 +22,6 @@ ReaderDep = Annotated[ProjectReader, Depends(get_reader)]
 def list_projects(reader: ReaderDep) -> ProjectsResponse:
     try:
         dtos = service.list_project_dtos(reader)
-    except Exception as exc:  # noqa: BLE001, RUF100 - any k8s failure surfaces as a clean 503
+    except Exception as exc:  # broad catch: any k8s failure surfaces as a clean 503
         raise HTTPException(status_code=503, detail="cannot reach kubernetes api") from exc
     return ProjectsResponse(projects=dtos)

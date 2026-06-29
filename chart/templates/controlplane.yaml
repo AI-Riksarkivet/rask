@@ -16,6 +16,15 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.dapr.sidecars }}
+        dapr.io/enabled: "true"
+        dapr.io/app-id: controlplane
+        dapr.io/app-port: {{ .Values.controlplane.port | quote }}
+        dapr.io/log-level: {{ .Values.dapr.logLevel | quote }}
+        {{- with .Values.dapr.maxBodySize }}
+        dapr.io/max-body-size: {{ . | quote }}
+        {{- end }}
+        {{- end }}
       labels:
         {{- include "rask.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: controlplane
@@ -37,9 +46,32 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.controlplane.port }}
+          # configMapRef-only: the stateless controlplane needs no S3/DB secret;
+          # all required Settings come from the shared config map.
           envFrom:
             - configMapRef:
                 name: {{ include "rask.fullname" . }}-config
+          env:
+            {{- if .Values.observability.enabled }}
+            - name: RASK_OTEL_ENABLED
+              value: "true"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://rask-greptimedb-standalone:4000/v1/otlp"
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "http/protobuf"
+            # Generic headers apply to metrics (and anything without a signal-specific
+            # override): db-name only — GreptimeDB ingests OTLP metrics with no pipeline.
+            - name: OTEL_EXPORTER_OTLP_HEADERS
+              value: "x-greptime-db-name=public"
+            # Traces additionally need GreptimeDB's trace pipeline; signal-specific
+            # headers override the generic ones for traces only.
+            - name: OTEL_EXPORTER_OTLP_TRACES_HEADERS
+              value: "x-greptime-db-name=public,x-greptime-pipeline-name=greptime_trace_v1"
+            - name: OTEL_SERVICE_NAME
+              value: "controlplane"
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: {{ printf "service.namespace=rask,deployment.environment=%s" .Release.Namespace | quote }}
+            {{- end }}
           readinessProbe:
             httpGet: {path: /api/health, port: http}
             initialDelaySeconds: 5
