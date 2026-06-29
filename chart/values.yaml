@@ -105,6 +105,12 @@ resources:
     requests: {cpu: "50m", memory: "128Mi"}
     limits: {cpu: "1", memory: "512Mi"}
 
+# Platform control-plane: read-only listing of operator Project CRs for the
+# home picker. Its own ServiceAccount + ClusterRole (read projects only).
+controlplane:
+  enabled: true
+  port: 8820
+
 orchestrator:
   autostart: "false"
 

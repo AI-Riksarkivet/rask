@@ -15,6 +15,7 @@ data:
   RASK_VOLUMES_API_URL: {{ printf "http://%s-volumes-api:8803" (include "rask.fullname" .) | quote }}
   RASK_RAY_API_URL: {{ printf "http://%s-ray-api:8804" (include "rask.fullname" .) | quote }}
   RASK_ORCH_API_URL: {{ printf "http://%s-orchestrator:8810" (include "rask.fullname" .) | quote }}
+  RASK_CONTROLPLANE_URL: {{ printf "http://%s-controlplane:8820" (include "rask.fullname" .) | quote }}
   {{- if .Values.ray.enabled }}
   RAY_DASHBOARD_URL: {{ printf "http://%s-ray-head-svc:%v" (include "rask.fullname" .) .Values.ray.dashboardPort | quote }}
   {{- end }}
