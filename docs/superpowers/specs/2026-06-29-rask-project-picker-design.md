@@ -33,16 +33,17 @@ We want the home page to **list the live operator projects** instead of the hard
 2. **List source:** a new **control-plane read API** (platform service) that reads `Project` CRs via the Kubernetes API. The operator stays UI-free; the frontend stays out of the k8s API.
 3. **Legacy `default`:** removed from the picker. The picker shows **only** live operator projects.
 4. **Read-only:** the control-plane API is GET-only; its cluster grant is read-only.
+5. **Frontend → API path:** through the **gateway** (`/api/v1/projects`), not a direct fetch. This is the rask canon (all frontend data flows `@rask/api` → gateway → service) and avoids the SSR "hairpin" (a relative `/api/*` server-side fetch resolving against the external ingress host). The home remote `query()` uses `@rask/api` and reads `RASK_GATEWAY_URL` server-side. *(Supersedes the earlier "direct fetch to `RASK_CONTROLPLANE_URL`" idea.)*
 
 ## Architecture
 
 ```
   Browser ── GET / ──► home frontend (SvelteKit, platform install)
-                          │  server-side remote query()
+                          │  server-side remote query() via @rask/api
                           ▼
-                 control-plane API (FastAPI, platform install)
-                          │  list_cluster_custom_object(...)
-                          ▼
+                 gateway :8888  ── /api/v1/projects ──►  control-plane API (FastAPI)
+                                                              │  list_cluster_custom_object(...)
+                                                              ▼
                  Kubernetes API ── Project CRs (platform.rask.io/v1alpha1)
                           ▲
                           │ kubectl apply (admin)
@@ -90,7 +91,7 @@ Field mapping from each `Project` CR: `slug`/`name` ← `metadata.name`; `team` 
 
 **Error handling.** A k8s API failure returns HTTP 503 with a small error body; the home frontend renders an empty state with a "couldn't reach the platform" message rather than a hardcoded fallback list. A `Project` with missing `status` is still listed (phase shown as `Pending`).
 
-### Unit 2 — Deployment + RBAC (platform `rask` chart)
+### Unit 2 — Deployment + RBAC + gateway route (platform `rask` chart)
 
 The service is **platform-level** and must outlive ephemeral projects, so it lives in the platform install (`chart/`, namespace `default` today), **not** in the operator's per-project chart.
 
@@ -98,22 +99,24 @@ The service is **platform-level** and must outlive ephemeral projects, so it liv
 - A dedicated **ServiceAccount** for the control-plane pod.
 - A read-only **ClusterRole** (`apiGroups: ["platform.rask.io"]`, `resources: ["projects"]`, `verbs: ["get","list","watch"]`) + **ClusterRoleBinding** to that ServiceAccount. This is the only new cluster-level grant; it is read-only and scoped to the `Project` resource.
 - Chart values for image/tag/resources, consistent with the other services.
+- **Gateway route.** Add a `/api/v1/projects` prefix to the gateway's route table (`gateway/__init__.py::_routes()`), pointing at `RASK_CONTROLPLANE_URL` (e.g. `http://controlplane-api:8820`). It must be registered **before** the core catch-all (longest-prefix-first invariant) or core will swallow it. Wire `RASK_CONTROLPLANE_URL` into the gateway env (configmap) and `scripts/dev-micro.sh` for local dev.
 
 ### Unit 3 — Home frontend picker
 
 Follows `rask-frontend` conventions (server-side data via a remote `query()` + `refresh`).
 
-- Add a remote query that fetches the control-plane API **server-side** and returns the project list. Reachability: **direct server-side fetch** to `RASK_CONTROLPLANE_URL` (e.g. `http://controlplane-api:8820`), configured like the other `RASK_*_URL` service envs. Not routed through the per-project gateway (platform concern; avoids coupling to a stack we may later decommission).
+- Add a server-only remote `query()` (via `@rask/api`, using `getRequestEvent().fetch`) that fetches `GET /api/v1/projects` **through the gateway** and returns the project list. Server-side it must resolve against the in-cluster `RASK_GATEWAY_URL` (the established SSR-hairpin guard), falling back to the relative `/api/*` path in dev (vite proxy). Use `.refresh()` to keep it live.
 - Replace the hardcoded `projects` array in `+page.svelte` with the query result. Each card shows the project name + team/workload subtitle + a **phase status chip** (Ready / Provisioning / Pending). Empty state when there are no projects ("No projects yet — create one with `kubectl apply`").
 - Cards are **not click-through** in this slice (opening is deferred). The existing GSAP reveal and styling are preserved.
 - The hardcoded `'Default'` entry and the "open the default workspace" path are removed from the landing page.
 
 ## Data flow
 
-1. User loads `/`. The home SvelteKit server runs the remote `query()`.
-2. The query fetches `GET ${RASK_CONTROLPLANE_URL}/api/v1/projects`.
-3. The control-plane service lists `Project` CRs from the k8s API, maps them to DTOs, returns the list.
-4. The page renders one card per project with its live phase. `refresh` keeps it current.
+1. User loads `/`. The home SvelteKit server runs the remote `query()` via `@rask/api`.
+2. The query fetches `GET /api/v1/projects` through the gateway (server-side: `RASK_GATEWAY_URL`).
+3. The gateway path-routes `/api/v1/projects` to the control-plane service.
+4. The control-plane service lists `Project` CRs from the k8s API, maps them to DTOs, returns the list.
+5. The page renders one card per project with its live phase. `refresh` keeps it current.
 
 ## Testing
 
