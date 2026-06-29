@@ -110,6 +110,7 @@ resources:
 controlplane:
   enabled: true
   port: 8820
+  urlScheme: http
 
 orchestrator:
   autostart: "false"

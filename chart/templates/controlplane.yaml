@@ -52,6 +52,8 @@ spec:
             - configMapRef:
                 name: {{ include "rask.fullname" . }}-config
           env:
+            - name: RASK_PROJECT_URL_SCHEME
+              value: {{ .Values.controlplane.urlScheme | default "http" | quote }}
             {{- if .Values.observability.enabled }}
             - name: RASK_OTEL_ENABLED
               value: "true"
@@ -115,6 +117,9 @@ metadata:
 rules:
   - apiGroups: ["platform.rask.io"]
     resources: ["projects"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
     verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
