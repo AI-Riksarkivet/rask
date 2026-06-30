@@ -12,18 +12,17 @@
 	// render as a plain link. `pathname` drives active + default-open.
 	let { pathname = '' }: { pathname?: string } = $props();
 
-	// Project-first IA: the active project is the URL's first segment, so the nav's
-	// hrefs are prefixed with it (the sidebar only ever renders inside a project).
-	const project = $derived(pathname.split('/').filter(Boolean)[0] ?? 'default');
-	const items = $derived(navMain(project));
+	// Project-first IA via HOST: the project is the request host (e.g. demo.localhost),
+	// so the path carries only the domain. The sidebar's hrefs are domain-relative
+	// (/<domain>) and render inside any project.
+	const items = $derived(navMain());
 
-	// MFE zones split by DOMAIN (the segment after the project): /<project>/compute is a
-	// different SvelteKit app/zone than /<project>/discover. A sidebar link whose domain
-	// differs from the current one leaves THIS app's route manifest, so it must hard-nav
-	// (data-sveltekit-reload) — a soft client nav would target a route this app doesn't know.
-	// Same-domain links (a domain's own sub-routes) stay soft for SPA speed.
-	const currentDomain = $derived(pathname.split('/').filter(Boolean)[1] ?? '');
-	const crossZone = (href: string) => (href.split('/').filter(Boolean)[1] ?? '') !== currentDomain;
+	// MFE zones split by DOMAIN (the FIRST path segment now): /compute is a different
+	// SvelteKit app/zone than /discover. A sidebar link whose domain differs from the
+	// current one leaves THIS app's route manifest, so it must hard-nav
+	// (data-sveltekit-reload); same-domain links stay soft for SPA speed.
+	const currentDomain = $derived(pathname.split('/').filter(Boolean)[0] ?? '');
+	const crossZone = (href: string) => (href.split('/').filter(Boolean)[0] ?? '') !== currentDomain;
 </script>
 
 <Sidebar.Group>

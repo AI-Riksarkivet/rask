@@ -6,7 +6,7 @@ type IconComponent = typeof Server;
 /** A leaf route inside a collapsible domain item. */
 export type NavLeaf = {
 	title: string;
-	/** ABSOLUTE, project-prefixed href (e.g. /default/compute/cluster). */
+	/** ABSOLUTE, domain-relative href (e.g. /compute/cluster). */
 	href: string;
 	/** Active predicate vs the FULL pathname. */
 	match: (p: string) => boolean;
@@ -38,17 +38,17 @@ const under =
 		prefixes.some((pre) => p === pre || p.startsWith(pre + '/'));
 
 /**
- * Project-scoped sidebar nav (project-first IA). The sidebar is only shown INSIDE a
- * project, so every href is prefixed with `/<project>` and `match` is evaluated against
- * the full pathname. **Overview** (the project landing — the batch view) is first; there
- * is no "Home" item here — Home is the pre-project landing at `/` (the project picker),
- * which renders WITHOUT this sidebar.
+ * Project-scoped sidebar nav (project-first IA via HOST). The project is the request
+ * host (e.g. demo.localhost), so the path carries only the domain and every href is
+ * domain-relative (`/<domain>`); `match` is evaluated against the full pathname.
+ * **Overview** (the project landing — the batch view) is first; there is no "Home" item
+ * here — Home is the platform landing at `/` (the project picker), which renders WITHOUT
+ * this sidebar.
  *
- * It's a factory, not a const: the active project comes from the URL's first segment, so
- * the same nav renders correctly for any `/<project>/…`.
+ * The sidebar renders identically inside any project; the host disambiguates projects.
  */
-export function navMain(project: string): NavItem[] {
-	const b = `/${project}`;
+export function navMain(): NavItem[] {
+	const b = '';
 	return [
 		{ title: 'Overview', icon: LayoutGrid, href: `${b}/overview`, match: seg(`${b}/overview`) },
 		{
