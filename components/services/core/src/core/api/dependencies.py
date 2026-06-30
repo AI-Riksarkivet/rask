@@ -8,11 +8,13 @@ from collections.abc import AsyncIterator
 from typing import Annotated
 
 import httpx
+from anyio import to_thread
 from fastapi import Depends, Request
 from lancedb.table import AsyncTable
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from ray_kit import JobSubmissionClient
+from ray_kit import build_client as build_ray_client
 from service_kit.dependencies import SettingsDep, get_settings  # noqa: F401  (re-exported for core endpoints)
 from service_kit.exceptions import ServiceUnavailableError
 from storage import S3Client
@@ -33,8 +35,17 @@ def get_catalog_tbl(request: Request) -> AsyncTable | None:
     return request.app.state.catalog_tbl
 
 
-def get_ray_client(request: Request) -> JobSubmissionClient | None:
-    return request.app.state.ray_client
+async def get_ray_client(request: Request) -> JobSubmissionClient | None:
+    # The client is built once in the lifespan. If the Ray dashboard wasn't up
+    # then (a freshly-provisioned project's core-api boots before its RayService
+    # head), build_client returned None and every submit would 503 until restart.
+    # Lazily rebuild when None and cache a successful client, so the first submit
+    # after Ray comes up succeeds on its own.
+    client = request.app.state.ray_client
+    if client is None:
+        client = await to_thread.run_sync(build_ray_client, request.app.state.settings.ray_dashboard_url)
+        request.app.state.ray_client = client
+    return client
 
 
 async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
