@@ -277,8 +277,13 @@ kueue:
     flavorName: "rask"
     clusterQueueName: "rask"
     localQueueName: "rask"
-    # Nominal quota for the single ClusterQueue. Size to the cluster; over-quota
-    # just leaves workloads Pending (not catastrophic), under-quota throttles.
+    # Nominal quota for the single ClusterQueue cohort. cpu/memory: size to the
+    # cluster. nvidia.com/gpu MUST equal the total schedulable nvidia.com/gpu
+    # across all nodes — it is the single lever for how many projects transcribe
+    # at once: Kueue admits this many project RayServices (each claims a whole
+    # GPU) and suspends the rest. Dev = 1 GPU => 1 at a time; add GPU nodes and
+    # raise this to run more concurrently. Never set it above the real GPU count
+    # (Kueue would admit a pod that can't schedule).
     nominalQuota:
       cpu: "18"
       memory: "120Gi"
