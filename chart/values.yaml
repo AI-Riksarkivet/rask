@@ -144,18 +144,18 @@ frontend:
     allowPrivilegeEscalation: false
     capabilities: {drop: ["ALL"]}
   # The frontend is a set of SvelteKit SSR microfrontends. The catch-all
-  # (home) owns "/", "/<project>/overview|new";
-  # each domain app is pinned to its base path /default/<domain> in its
-  # svelte.config.js and gets an ingress rule for that path. image == app dir
-  # name under components/frontends/ (built from the one parametrized frontend.dockerfile).
+  # (home) owns "/"; each domain app is pinned to its base path /<domain> in its
+  # svelte.config.js (host carries the project; path carries the domain) and gets
+  # an ingress rule for that path. image == app dir name under components/frontends/
+  # (built from the one parametrized frontend.dockerfile).
   apps:
     - {name: home, catchAll: true}              # home, "/"
-    - {name: overview, path: /default/overview}
-    - {name: storage, path: /default/storage}
-    - {name: compute, path: /default/compute}
-    - {name: discover, path: /default/discover}
-    - {name: train, path: /default/train}
-    - {name: studio, path: /default/studio}
+    - {name: overview, path: /overview}
+    - {name: storage, path: /storage}
+    - {name: compute, path: /compute}
+    - {name: discover, path: /discover}
+    - {name: train, path: /train}
+    - {name: studio, path: /studio}
 
 # In-cluster S3 object store via the RustFS operator (Tenant CR + operator
 # subchart). `enabled` gates BOTH the operator subchart (Chart.yaml condition
