@@ -76,3 +76,50 @@ app.kubernetes.io/component: {{ $component }}
 {{- define "rask.databaseUrl" -}}
 {{- printf "postgresql+asyncpg://%s:%s@%s-postgres-rw:%v/%s" .Values.cnpg.user (include "rask.pgPassword" .) (include "rask.fullname" .) .Values.cnpg.port .Values.cnpg.database -}}
 {{- end -}}
+
+{{/* Dapr sidecar pod annotations (no-op unless dapr.sidecars). Shared by fleet +
+     controlplane so the annotation set never drifts.
+     Usage: {{- include "rask.daprAnnotations" (list $root $appId $appPort) | nindent 8 }} */}}
+{{- define "rask.daprAnnotations" -}}
+{{- $root := index . 0 -}}
+{{- $appId := index . 1 -}}
+{{- $appPort := index . 2 -}}
+{{- if $root.Values.dapr.sidecars -}}
+dapr.io/enabled: "true"
+dapr.io/app-id: {{ $appId | quote }}
+dapr.io/app-port: {{ $appPort | quote }}
+dapr.io/log-level: {{ $root.Values.dapr.logLevel | quote }}
+{{- with $root.Values.dapr.maxBodySize }}
+dapr.io/max-body-size: {{ . | quote }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/* OTLP/OpenTelemetry container env (no-op unless observability.enabled). Shared by
+     fleet + controlplane so the OTLP wiring never drifts. The GreptimeDB host + the
+     metrics/traces header split live here, in one place.
+     Usage: {{- include "rask.otelEnv" (list $root "service-name") | nindent 12 }} */}}
+{{- define "rask.otelEnv" -}}
+{{- $root := index . 0 -}}
+{{- $svc := index . 1 -}}
+{{- if $root.Values.observability.enabled -}}
+- name: RASK_OTEL_ENABLED
+  value: "true"
+- name: OTEL_EXPORTER_OTLP_ENDPOINT
+  value: "http://rask-greptimedb-standalone:4000/v1/otlp"
+- name: OTEL_EXPORTER_OTLP_PROTOCOL
+  value: "http/protobuf"
+# Generic headers apply to metrics (and anything without a signal-specific
+# override): db-name only — GreptimeDB ingests OTLP metrics with no pipeline.
+- name: OTEL_EXPORTER_OTLP_HEADERS
+  value: "x-greptime-db-name=public"
+# Traces additionally need GreptimeDB's trace pipeline; signal-specific
+# headers override the generic ones for traces only.
+- name: OTEL_EXPORTER_OTLP_TRACES_HEADERS
+  value: "x-greptime-db-name=public,x-greptime-pipeline-name=greptime_trace_v1"
+- name: OTEL_SERVICE_NAME
+  value: {{ $svc | quote }}
+- name: OTEL_RESOURCE_ATTRIBUTES
+  value: {{ printf "service.namespace=rask,deployment.environment=%s" $root.Release.Namespace | quote }}
+{{- end }}
+{{- end -}}

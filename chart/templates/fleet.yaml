@@ -22,15 +22,7 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $root.Template.BasePath "/configmap.yaml") $root | sha256sum }}
-        {{- if $root.Values.dapr.sidecars }}
-        dapr.io/enabled: "true"
-        dapr.io/app-id: {{ $name | quote }}
-        dapr.io/app-port: {{ $svc.port | quote }}
-        dapr.io/log-level: {{ $root.Values.dapr.logLevel | quote }}
-        {{- with $root.Values.dapr.maxBodySize }}
-        dapr.io/max-body-size: {{ . | quote }}
-        {{- end }}
-        {{- end }}
+        {{- include "rask.daprAnnotations" (list $root $name $svc.port) | nindent 8 }}
       labels:
         {{- include "rask.selectorLabels" $root | nindent 8 }}
         app.kubernetes.io/component: {{ $name }}
@@ -92,26 +84,7 @@ spec:
           env:
             - name: RASK_ORCHESTRATOR_AUTOSTART
               value: {{ if $svc.singleton }}{{ $root.Values.orchestrator.autostart | quote }}{{ else }}"false"{{ end }}
-            {{- if $root.Values.observability.enabled }}
-            - name: RASK_OTEL_ENABLED
-              value: "true"
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "http://rask-greptimedb-standalone:4000/v1/otlp"
-            - name: OTEL_EXPORTER_OTLP_PROTOCOL
-              value: "http/protobuf"
-            # Generic headers apply to metrics (and anything without a signal-specific
-            # override): db-name only — GreptimeDB ingests OTLP metrics with no pipeline.
-            - name: OTEL_EXPORTER_OTLP_HEADERS
-              value: "x-greptime-db-name=public"
-            # Traces additionally need GreptimeDB's trace pipeline; signal-specific
-            # headers override the generic ones for traces only.
-            - name: OTEL_EXPORTER_OTLP_TRACES_HEADERS
-              value: "x-greptime-db-name=public,x-greptime-pipeline-name=greptime_trace_v1"
-            - name: OTEL_SERVICE_NAME
-              value: {{ $name | quote }}
-            - name: OTEL_RESOURCE_ATTRIBUTES
-              value: {{ printf "service.namespace=rask,deployment.environment=%s" $root.Release.Namespace | quote }}
-            {{- end }}
+            {{- include "rask.otelEnv" (list $root $name) | nindent 12 }}
           readinessProbe:
             httpGet: {path: {{ $svc.healthPath | default "/api/health" }}, port: http}
             initialDelaySeconds: 5

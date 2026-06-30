@@ -54,41 +54,30 @@
 	<svelte:boundary>
 		<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 			{#each projects as p (p.slug)}
-				{#if p.phase === 'Ready' && p.url}
-					<a
-						href={p.url}
-						data-sveltekit-reload
-						class="bg-card hover:border-primary/50 flex flex-col rounded-xl border p-5 transition-colors hover:shadow-lg hover:shadow-black/5"
+				{@const ready = p.phase === 'Ready' && !!p.url}
+				<!-- One card body; only the wrapper differs — a Ready project is a clickable
+				     <a> (hard-nav to its host), otherwise a plain <div>. -->
+				<svelte:element
+					this={ready ? 'a' : 'div'}
+					href={ready ? p.url : undefined}
+					data-sveltekit-reload={ready ? '' : undefined}
+					class="bg-card flex flex-col rounded-xl border p-5 {ready
+						? 'hover:border-primary/50 transition-colors hover:shadow-lg hover:shadow-black/5'
+						: ''}"
+				>
+					<div
+						class="bg-primary/10 text-primary mb-3 flex size-10 items-center justify-center rounded-lg"
 					>
-						<div
-							class="bg-primary/10 text-primary mb-3 flex size-10 items-center justify-center rounded-lg"
-						>
-							<Boxes class="size-5" />
-						</div>
-						<div class="flex items-center justify-between gap-2">
-							<div class="font-medium">{p.name}</div>
-							<span class="rounded-full px-2 py-0.5 text-xs font-medium {phaseClass(p.phase)}">
-								{p.phase}
-							</span>
-						</div>
-						<div class="text-muted-foreground text-sm">{p.team} · {p.workload}</div>
-					</a>
-				{:else}
-					<div class="bg-card flex flex-col rounded-xl border p-5">
-						<div
-							class="bg-primary/10 text-primary mb-3 flex size-10 items-center justify-center rounded-lg"
-						>
-							<Boxes class="size-5" />
-						</div>
-						<div class="flex items-center justify-between gap-2">
-							<div class="font-medium">{p.name}</div>
-							<span class="rounded-full px-2 py-0.5 text-xs font-medium {phaseClass(p.phase)}">
-								{p.phase}
-							</span>
-						</div>
-						<div class="text-muted-foreground text-sm">{p.team} · {p.workload}</div>
+						<Boxes class="size-5" />
 					</div>
-				{/if}
+					<div class="flex items-center justify-between gap-2">
+						<div class="font-medium">{p.name}</div>
+						<span class="rounded-full px-2 py-0.5 text-xs font-medium {phaseClass(p.phase)}">
+							{p.phase}
+						</span>
+					</div>
+					<div class="text-muted-foreground text-sm">{p.team} · {p.workload}</div>
+				</svelte:element>
 			{:else}
 				<div
 					class="border-border/70 text-muted-foreground col-span-full flex min-h-[164px] flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed text-sm"
