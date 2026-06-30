@@ -158,7 +158,7 @@ def test_to_dto_builds_url_from_ingress_host() -> None:
             return "demo.rask.local"
 
     dtos = list_project_dtos(FakeReader(), "http")
-    assert dtos[0].url == "http://demo.rask.local/default/overview"
+    assert dtos[0].url == "http://demo.rask.local/overview"
 
 
 def test_url_empty_when_no_ingress() -> None:

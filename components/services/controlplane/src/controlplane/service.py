@@ -6,9 +6,10 @@ from controlplane.k8s import ProjectReader
 from controlplane.schemas import ProjectDTO
 
 
-# The project entry surface. Reused MFE images serve at /default/<domain> today;
-# Spec II (drop /default) flips this to "/overview".
-PROJECT_ENTRY_PATH = "/default/overview"
+# The project entry surface. Host carries the project; the path carries the domain
+# (project-first URLs), so each project's MFEs serve at /<domain> — overview is the
+# landing. (Bare host also redirects to /overview via the per-project ingress.)
+PROJECT_ENTRY_PATH = "/overview"
 
 
 def _namespace(cr: dict[str, Any]) -> str:
