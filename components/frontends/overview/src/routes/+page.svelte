@@ -9,7 +9,7 @@
 	import { Button } from '@rask/ui/button';
 	import { RefreshCw, Send } from '@lucide/svelte';
 
-	// This app's base is /default/overview; in-app links use `base`. Cross-domain
+	// This app's base is /overview; in-app links use `base`. Cross-domain
 	// links (discover/compute) stay project-prefixed — derive the project segment
 	// from the base (there's no [project] route param in this carved app).
 	const project = base.split('/')[1] ?? 'default';

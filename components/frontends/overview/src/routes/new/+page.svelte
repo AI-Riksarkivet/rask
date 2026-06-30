@@ -8,7 +8,7 @@
 	const IMAGE_RE = /\.(jpe?g|png|tiff?)$/i;
 	const ID_RE = /^[A-Za-z0-9_-]+$/;
 
-	// This app's base is /default/overview; in-app links use `base`. The cross-domain
+	// This app's base is /overview; in-app links use `base`. The cross-domain
 	// viewer link stays project-prefixed — derive the project segment from the base
 	// (there's no [project] route param in this carved app).
 	const project = base.split('/')[1] ?? 'default';

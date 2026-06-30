@@ -58,7 +58,7 @@
 			<!-- CTA: enter the workspace — cross-zone into overview → data-sveltekit-reload. -->
 			<Button
 				data-nav-item
-				href="/default/overview"
+				href="/overview"
 				data-sveltekit-reload
 				size="sm"
 				class="rounded-full pr-3"

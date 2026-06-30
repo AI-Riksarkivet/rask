@@ -33,7 +33,7 @@
 {/if}
 
 <!-- The shared AppShell (one grouped sidebar) from @rask/ui — identical to every
-     other microfrontend, zero drift. `base` (=/default/studio) frames the breadcrumb. -->
+     other microfrontend, zero drift. `base` (=/studio) frames the breadcrumb. -->
 <AppShell pathname={page.url.pathname}>
 	{@render children()}
 </AppShell>

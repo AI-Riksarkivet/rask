@@ -16,7 +16,7 @@
 			},
 			"routing": [
 				{
-					"paths": ["/default/overview", "/default/overview/:path*"]
+					"paths": ["/overview", "/overview/:path*"]
 				}
 			]
 		},
@@ -28,7 +28,7 @@
 			},
 			"routing": [
 				{
-					"paths": ["/default/storage", "/default/storage/:path*"]
+					"paths": ["/storage", "/storage/:path*"]
 				}
 			]
 		},
@@ -40,7 +40,7 @@
 			},
 			"routing": [
 				{
-					"paths": ["/default/compute", "/default/compute/:path*"]
+					"paths": ["/compute", "/compute/:path*"]
 				}
 			]
 		},
@@ -52,7 +52,7 @@
 			},
 			"routing": [
 				{
-					"paths": ["/default/discover", "/default/discover/:path*"]
+					"paths": ["/discover", "/discover/:path*"]
 				}
 			]
 		},
@@ -64,7 +64,7 @@
 			},
 			"routing": [
 				{
-					"paths": ["/default/train", "/default/train/:path*"]
+					"paths": ["/train", "/train/:path*"]
 				}
 			]
 		},
@@ -76,7 +76,7 @@
 			},
 			"routing": [
 				{
-					"paths": ["/default/studio", "/default/studio/:path*"]
+					"paths": ["/studio", "/studio/:path*"]
 				}
 			]
 		}

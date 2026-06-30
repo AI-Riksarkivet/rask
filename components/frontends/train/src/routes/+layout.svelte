@@ -33,7 +33,7 @@
 {/if}
 
 <!-- The shared AppShell (one grouped sidebar) from @rask/ui — identical to every
-     other microfrontend, zero drift. `base` (=/default/train) strips the breadcrumb prefix. -->
+     other microfrontend, zero drift. `base` (=/train) strips the breadcrumb prefix. -->
 <AppShell pathname={page.url.pathname}>
 	{@render children()}
 </AppShell>

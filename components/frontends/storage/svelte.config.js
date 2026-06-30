@@ -9,11 +9,11 @@ const config = {
 	},
 	kit: {
 		adapter: adapter(),
-		// The storage microfrontend, served under /default/storage. Project-first IA:
+		// The storage microfrontend, served under /storage. Project-first IA:
 		// the base carries the project segment (one project, "default", for now) so the
 		// turbo proxy gets a STATIC per-app asset prefix (routes this app's /@vite +
 		// built assets in dev). Multi-project (dynamic base) is deferred on purpose.
-		paths: { base: '/default/storage' },
+		paths: { base: '/storage' },
 		experimental: { remoteFunctions: true },
 	},
 };

@@ -9,11 +9,11 @@ const config = {
 	},
 	kit: {
 		adapter: adapter(),
-		// The train microfrontend, served under /default/train. Project-first IA:
+		// The train microfrontend, served under /train. Project-first IA:
 		// the base carries the project segment (one project, "default", for now) so the
 		// turbo proxy gets a STATIC per-app asset prefix (routes this app's /@vite +
 		// built assets in dev). Multi-project (dynamic base) is deferred on purpose.
-		paths: { base: '/default/train' },
+		paths: { base: '/train' },
 		experimental: { remoteFunctions: true },
 	},
 };

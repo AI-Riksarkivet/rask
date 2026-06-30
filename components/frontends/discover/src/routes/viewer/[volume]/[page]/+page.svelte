@@ -324,7 +324,7 @@
 
 <svelte:window onkeydown={onKey} />
 
-<main class="bg-background flex-1 overflow-auto">
+<main class="bg-background flex flex-1 overflow-hidden">
 	<!-- Canvas pane -->
 	<div class="bg-muted/40 relative flex-1">
 		<canvas bind:this={canvasEl} class="h-full w-full" style:filter={filterCss}></canvas>
