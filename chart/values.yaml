@@ -248,7 +248,7 @@ kuberay:
 
 nats:
   enabled: false   # platform NATS was single-tenant; per-project renders its own
-  config:
+  config:           # inert while enabled=false; kept so a re-enable needs no re-discovery
     jetstream:
       enabled: true
 

@@ -8,7 +8,6 @@ from collections.abc import AsyncIterator
 from typing import Annotated
 
 import httpx
-from anyio import to_thread
 from fastapi import Depends, Request
 from lancedb.table import AsyncTable
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -35,15 +34,17 @@ def get_catalog_tbl(request: Request) -> AsyncTable | None:
     return request.app.state.catalog_tbl
 
 
-async def get_ray_client(request: Request) -> JobSubmissionClient | None:
-    # The client is built once in the lifespan. If the Ray dashboard wasn't up
-    # then (a freshly-provisioned project's core-api boots before its RayService
-    # head), build_client returned None and every submit would 503 until restart.
-    # Lazily rebuild when None and cache a successful client, so the first submit
-    # after Ray comes up succeeds on its own.
+def get_ray_client(request: Request) -> JobSubmissionClient | None:
+    # The client is built once in the lifespan, but there's no startup ordering
+    # guarantee vs the Ray head: a freshly-provisioned project's core-api boots
+    # before its RayService exists, so build_client returns None until the
+    # dashboard is reachable. Rebuild lazily when still None and cache a live
+    # client, so /chunks/{id}/submit recovers on its own with no pod restart.
+    # (Mirrors ray_api's get_ray_client; FastAPI runs sync deps in a threadpool,
+    # so the blocking build doesn't stall the event loop.)
     client = request.app.state.ray_client
     if client is None:
-        client = await to_thread.run_sync(build_ray_client, request.app.state.settings.ray_dashboard_url)
+        client = build_ray_client(request.app.state.settings.ray_dashboard_url)
         request.app.state.ray_client = client
     return client
 

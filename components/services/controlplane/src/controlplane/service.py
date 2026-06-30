@@ -29,7 +29,7 @@ def to_dto(cr: dict[str, Any], url: str) -> ProjectDTO:
         slug=meta.get("name", ""),
         name=meta.get("name", ""),
         team=spec.get("team", ""),
-        workload=spec.get("workload", {}).get("type", ""),
+        workload=(spec.get("workload") or {}).get("type", ""),
         phase=status.get("phase") or "Pending",
         namespace=status.get("namespace", ""),
         url=url,

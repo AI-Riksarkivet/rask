@@ -37,9 +37,7 @@ class K8sProjectReader:
         return items
 
     def ingress_host(self, namespace: str) -> str | None:
-        resp = self._net.list_namespaced_ingress(
-            namespace, label_selector="platform.rask.io/project"
-        )
+        resp = self._net.list_namespaced_ingress(namespace, label_selector="platform.rask.io/project")
         for ing in resp.items:
             for rule in ing.spec.rules or []:
                 if rule.host:

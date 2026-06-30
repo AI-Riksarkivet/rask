@@ -9,10 +9,9 @@
 	import { Button } from '@rask/ui/button';
 	import { RefreshCw, Send } from '@lucide/svelte';
 
-	// This app's base is /overview; in-app links use `base`. Cross-domain
-	// links (discover/compute) stay project-prefixed — derive the project segment
-	// from the base (there's no [project] route param in this carved app).
-	const project = base.split('/')[1] ?? 'default';
+	// This app's base is /overview; in-app links use `base`. Cross-domain links
+	// (compute/discover) are domain-relative — the host carries the project, so a
+	// hard-nav (data-sveltekit-reload) to /<domain> lands on the sibling MFE.
 
 	// THE ONE PATTERN (see lib/remote/overview.remote.ts):
 	//  - Initial reads (batches, chunks) are SSR-rendered remote queries —
@@ -370,7 +369,7 @@
 						</div>
 						<a
 							class="text-primary text-xs hover:underline"
-							href={`/${project}/compute/jobs`}
+							href={`/compute/jobs`}
 							data-sveltekit-reload>view all →</a
 						>
 					</div>
@@ -397,7 +396,7 @@
 								{#if j.submission_id}
 									<a
 										class="text-primary ml-auto hover:underline"
-										href={`/${project}/compute/jobs/${encodeURIComponent(j.submission_id)}`}
+										href={`/compute/jobs/${encodeURIComponent(j.submission_id)}`}
 										title="Open job detail"
 										data-sveltekit-reload>details</a
 									>
@@ -534,7 +533,7 @@
 									<td class="px-3 py-1.5 font-mono">
 										<a
 											class="text-primary hover:underline"
-											href={`/${project}/discover/viewer/${b.batch_id}`}
+											href={`/discover/viewer/${b.batch_id}`}
 											data-sveltekit-reload>{b.batch_id}</a
 										>
 									</td>

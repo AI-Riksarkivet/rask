@@ -9,9 +9,8 @@
 	const ID_RE = /^[A-Za-z0-9_-]+$/;
 
 	// This app's base is /overview; in-app links use `base`. The cross-domain
-	// viewer link stays project-prefixed — derive the project segment from the base
-	// (there's no [project] route param in this carved app).
-	const project = base.split('/')[1] ?? 'default';
+	// viewer link is domain-relative — the host carries the project, so a hard-nav
+	// (data-sveltekit-reload) to /discover/... lands on the discover MFE.
 
 	let volumeId = $state('');
 	let files = $state<File[]>([]);
@@ -156,7 +155,7 @@
 					<a class="underline" href={base}>Back to Overview</a>
 					<a
 						class="underline"
-						href={`/${project}/discover/viewer/${result.batch_id}`}
+						href={`/discover/viewer/${result.batch_id}`}
 						data-sveltekit-reload>Open viewer</a
 					>
 				</div>

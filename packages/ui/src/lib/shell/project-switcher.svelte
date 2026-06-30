@@ -22,7 +22,9 @@
 	onMount(() => {
 		const { protocol, host } = window.location;
 		const labels = host.split('.');
-		if (labels.length > 1) {
+		// Only a real subdomain is a project label. Skip bare hosts (localhost) and
+		// IPv4 hosts (127.0.0.1) — a numeric first label is an octet, not a project.
+		if (labels.length > 1 && !/^\d+$/.test(labels[0] ?? '')) {
 			currentSlug = labels[0] ?? '';
 			homeUrl = `${protocol}//${labels.slice(1).join('.')}/`;
 		}

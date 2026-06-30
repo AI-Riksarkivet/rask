@@ -1,4 +1,4 @@
-"""controlplane tests — health skeleton + (later) project listing."""
+"""controlplane tests — health endpoint + project listing (CR→DTO + reader seam)."""
 
 from collections.abc import Iterator
 from typing import Any
@@ -126,24 +126,47 @@ def test_list_projects_endpoint_returns_dtos(client: TestClient) -> None:
     assert body["projects"][0]["url"] == ""
 
 
-def test_list_projects_endpoint_503_on_reader_error(client: TestClient) -> None:
+def test_list_projects_endpoint_503_on_k8s_unreachable(client: TestClient) -> None:
+    """A real transport failure (connection refused → OSError subclass) → 503."""
     from controlplane import app
     from controlplane.routes import get_reader
 
-    class BoomReader:
+    class UnreachableReader:
         def list_projects(self) -> list[dict]:
-            raise RuntimeError("k8s unreachable")
+            raise ConnectionError("k8s unreachable")
 
         def ingress_host(self, namespace: str) -> str | None:
             return None
 
-    app.dependency_overrides[get_reader] = lambda: BoomReader()
+    app.dependency_overrides[get_reader] = lambda: UnreachableReader()
     try:
         resp = client.get("/api/projects/")
     finally:
         app.dependency_overrides.clear()
 
     assert resp.status_code == 503
+
+
+def test_list_projects_endpoint_does_not_mask_mapping_bug(client: TestClient) -> None:
+    """A non-k8s error (e.g. a CR-mapping bug) must NOT be swallowed into a 503.
+    It propagates as a server error (TestClient re-raises) so the defect is
+    visible, instead of the old broad-except masking it as 'k8s unreachable'."""
+    from controlplane import app
+    from controlplane.routes import get_reader
+
+    class BuggyReader:
+        def list_projects(self) -> list[dict]:
+            raise KeyError("unexpected CR shape")  # a programming bug, not k8s
+
+        def ingress_host(self, namespace: str) -> str | None:
+            return None
+
+    app.dependency_overrides[get_reader] = lambda: BuggyReader()
+    try:
+        with pytest.raises(KeyError):
+            client.get("/api/projects/")
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_to_dto_builds_url_from_ingress_host() -> None:

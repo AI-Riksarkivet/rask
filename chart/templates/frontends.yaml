@@ -1,7 +1,7 @@
 {{- /*
 SvelteKit SSR microfrontends. One Deployment + Service per .Values.frontend.apps
 entry. The catch-all (catchAll: true) serves "/"; each domain app is pinned to
-its base path /default/<domain> and is probed there (GET "/" is 404 under a base
+its base path /<domain> and is probed there (GET "/" is 404 under a base
 path). Service/Deployment name = rask-<app name>; image = "<app name>:<tag>".
 */ -}}
 {{- $root := . -}}
