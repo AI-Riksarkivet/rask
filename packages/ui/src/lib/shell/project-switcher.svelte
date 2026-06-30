@@ -1,21 +1,33 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import * as DropdownMenu from '../components/dropdown-menu/index.js';
 	import * as Sidebar from '../components/sidebar/index.js';
 	import { useSidebar } from '../components/sidebar/index.js';
 	import { ChevronsUpDown, Boxes, House, Check } from '@lucide/svelte';
 	import type { Project } from './nav-config.js';
 
-	// sidebar-07 TeamSwitcher, adapted into a PROJECT switcher. The dropdown swaps between
-	// projects or returns to the main menu (the home picker at `/`) — that's how you leave
-	// a project, which is why there's no "Home" item in the sidebar nav. It deliberately
-	// does NOT create projects: that lives on the home landing, not here.
+	// sidebar-07 TeamSwitcher, adapted into a PROJECT switcher. Project-first IA via HOST:
+	// the project IS the request host (e.g. demo.localhost), so "Main menu" returns to the
+	// platform picker on the FRONT-DOOR host — derived by stripping the project's subdomain
+	// label (demo.localhost -> localhost). That's how you leave a project; the picker (not
+	// this switcher) lists/creates projects.
 	let { project = { name: 'Default', subtitle: 'Project' } }: { project?: Project } = $props();
 	const sidebar = useSidebar();
 
-	// One implicit project until backend project support lands; the slug is the URL's
-	// first segment, so swapping just navigates to /<slug>/overview.
-	const projects = [{ name: 'Default', slug: 'default' }];
-	const activeSlug = $derived(project.name.toLowerCase());
+	// Computed client-side from the current host (SSR has no window; these links are only
+	// followed in the browser). homeUrl = platform front-door (host minus the project
+	// label); currentSlug = the active project (first host label).
+	let homeUrl = $state('/');
+	let currentSlug = $state('');
+	onMount(() => {
+		const { protocol, host } = window.location;
+		const labels = host.split('.');
+		if (labels.length > 1) {
+			currentSlug = labels[0] ?? '';
+			homeUrl = `${protocol}//${labels.slice(1).join('.')}/`;
+		}
+	});
+	const displayName = $derived(currentSlug || project.name);
 </script>
 
 <Sidebar.Menu>
@@ -34,7 +46,7 @@
 							<Boxes class="size-4" />
 						</div>
 						<div class="grid flex-1 text-left text-sm leading-tight">
-							<span class="truncate font-medium">{project.name}</span>
+							<span class="truncate font-medium">{displayName}</span>
 							<span class="truncate text-xs">{project.subtitle ?? 'Project'}</span>
 						</div>
 						<ChevronsUpDown class="ml-auto" />
@@ -48,22 +60,18 @@
 				sideOffset={4}
 			>
 				<DropdownMenu.Label class="text-muted-foreground text-xs">Projects</DropdownMenu.Label>
-				{#each projects as p (p.slug)}
-					<DropdownMenu.Item class="p-0">
-						<a href="/{p.slug}/overview" class="flex w-full items-center gap-2 px-2 py-1.5">
-							<div class="flex size-6 items-center justify-center rounded-md border">
-								<Boxes class="size-3.5 shrink-0" />
-							</div>
-							{p.name}
-							{#if p.slug === activeSlug}
-								<Check class="ml-auto size-4" />
-							{/if}
-						</a>
-					</DropdownMenu.Item>
-				{/each}
+				<DropdownMenu.Item class="p-0">
+					<a href="/overview" class="flex w-full items-center gap-2 px-2 py-1.5">
+						<div class="flex size-6 items-center justify-center rounded-md border">
+							<Boxes class="size-3.5 shrink-0" />
+						</div>
+						{displayName}
+						<Check class="ml-auto size-4" />
+					</a>
+				</DropdownMenu.Item>
 				<DropdownMenu.Separator />
 				<DropdownMenu.Item class="p-0">
-					<a href="/" class="flex w-full items-center gap-2 px-2 py-1.5">
+					<a href={homeUrl} class="flex w-full items-center gap-2 px-2 py-1.5">
 						<div class="flex size-6 items-center justify-center rounded-md border bg-transparent">
 							<House class="size-4" />
 						</div>
