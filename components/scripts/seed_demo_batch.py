@@ -50,9 +50,7 @@ def list_example_images(client: httpx.Client) -> list[str]:
     paths = [
         entry["path"]
         for entry in resp.json()
-        if entry.get("type") == "file"
-        and entry["path"].startswith(EXAMPLES_PREFIX)
-        and entry["path"].lower().endswith(IMAGE_SUFFIXES)
+        if entry.get("type") == "file" and entry["path"].startswith(EXAMPLES_PREFIX) and entry["path"].lower().endswith(IMAGE_SUFFIXES)
     ]
     return sorted(paths)
 
@@ -75,9 +73,7 @@ def main() -> int:
         default="htr-demo",
         help="volume id to create (letters, digits, '-', '_'; default: htr-demo)",
     )
-    parser.add_argument(
-        "--timeout", type=float, default=180.0, help="per-request timeout in seconds"
-    )
+    parser.add_argument("--timeout", type=float, default=180.0, help="per-request timeout in seconds")
     args = parser.parse_args()
 
     with httpx.Client(timeout=args.timeout, follow_redirects=True) as client:
@@ -105,9 +101,7 @@ def main() -> int:
 
         batch = resp.json()
         print(
-            "Done. Batch "
-            f"{batch.get('batch_id')!r}: page_count={batch.get('page_count')} "
-            f"htr_status={batch.get('htr_status')} chunk_id={batch.get('chunk_id')}"
+            f"Done. Batch {batch.get('batch_id')!r}: page_count={batch.get('page_count')} htr_status={batch.get('htr_status')} chunk_id={batch.get('chunk_id')}"
         )
         return 0
 

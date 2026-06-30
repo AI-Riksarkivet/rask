@@ -5,9 +5,7 @@ from service_kit.otel import setup_otel
 
 
 def _settings(**env: bool | str) -> Settings:
-    return Settings.model_validate(
-        {"RASK_VIEWER_INPUT": "/dev/null", "RASK_VIEWER_OUTPUT": "/dev/null", **env}
-    )
+    return Settings.model_validate({"RASK_VIEWER_INPUT": "/dev/null", "RASK_VIEWER_OUTPUT": "/dev/null", **env})
 
 
 def test_setup_otel_noop_when_disabled() -> None:

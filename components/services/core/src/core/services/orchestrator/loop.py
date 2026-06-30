@@ -84,7 +84,9 @@ async def tick(
         if settings.htr_max_inflight > 0:
             free = max(0, settings.htr_max_inflight - len(state.htr.running))
             if free < len(htr_eligible):
-                log.info(f"orchestrator: htr cap {settings.htr_max_inflight} ({len(state.htr.running)} running) — submitting {free} of {len(htr_eligible)} eligible")
+                log.info(
+                    f"orchestrator: htr cap {settings.htr_max_inflight} ({len(state.htr.running)} running) — submitting {free} of {len(htr_eligible)} eligible"
+                )
             htr_eligible = htr_eligible[:free]
         for cid in htr_eligible:
             log.info(f"orchestrator: submitting {settings.htr_pipeline} for chunk {cid}")

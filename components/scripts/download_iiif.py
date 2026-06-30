@@ -54,10 +54,7 @@ def main() -> None:
         print(f"{len(image_ids)} image(s) to fetch into {out_dir}")
 
         ext = file_extension(args.size)
-        jobs = [
-            (build_image_url(img, base_url=args.base_url, query_params=args.size), out_dir / f"{img}{ext}")
-            for img in image_ids
-        ]
+        jobs = [(build_image_url(img, base_url=args.base_url, query_params=args.size), out_dir / f"{img}{ext}") for img in image_ids]
         with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
             results = list(pool.map(lambda j: fetch(client, *j), jobs))
 

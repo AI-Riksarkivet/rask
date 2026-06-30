@@ -1,15 +1,12 @@
 """service-kit Dapr wiring — config gating + client factory (no sidecar needed)."""
 
-
 import pytest
 
 from service_kit.config import Settings
 
 
 def _settings(**env: str) -> Settings:
-    return Settings.model_validate(
-        {"RASK_VIEWER_INPUT": "/dev/null", "RASK_VIEWER_OUTPUT": "/dev/null", **env}
-    )
+    return Settings.model_validate({"RASK_VIEWER_INPUT": "/dev/null", "RASK_VIEWER_OUTPUT": "/dev/null", **env})
 
 
 def test_dapr_disabled_by_default() -> None:

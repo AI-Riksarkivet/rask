@@ -87,10 +87,12 @@ api = FastAPI()
         "resources": {"gpu_ada": 0.001},
         # uv (like rask) resolves deterministically so opencv-python-headless's
         # GL-free cv2 wins over the full opencv-python htrflow pulls in -> no libGL.
-        "runtime_env": {"uv": [
-            "opencv-python-headless",
-            "git+https://github.com/AI-Riksarkivet/htrflow.git",
-        ]},
+        "runtime_env": {
+            "uv": [
+                "opencv-python-headless",
+                "git+https://github.com/AI-Riksarkivet/htrflow.git",
+            ]
+        },
     },
     health_check_period_s=30,
     health_check_timeout_s=1200,
@@ -101,6 +103,7 @@ class HTRFlow:
     def __init__(self):
         from htrflow.pipeline.pipeline import Pipeline
         from htrflow.serialization.serialization import get_serializer
+
         with open("/tmp/htrflow_pipeline.yaml", "w") as f:
             f.write(PIPELINE_YAML)
         self.pipeline = Pipeline.from_config("/tmp/htrflow_pipeline.yaml")
@@ -110,9 +113,11 @@ class HTRFlow:
     async def transcribe(self, request: Request):
         import asyncio, os, tempfile
         from htrflow.document import Document
+
         data = await request.body()
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
-            tf.write(data); path = tf.name
+            tf.write(data)
+            path = tf.name
 
         # Offload the blocking htrflow pipeline (YOLO + TrOCR) to a worker thread so
         # the replica's asyncio event loop stays responsive to Serve's health probe.

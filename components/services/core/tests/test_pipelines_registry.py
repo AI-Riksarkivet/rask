@@ -217,14 +217,26 @@ async def derive_session() -> AsyncIterator[AsyncSession]:
     async with AsyncSession(engine) as s:
         s.add(
             Batch(
-                batch_id="B2", manifest_status=ManifestStatus.OK, page_count=40, cached_pages=20,
-                transcribed_pages=0, chunk_id=2, chunk_total=1, last_synced_at="2026-01-01T00:00:00+00:00",
+                batch_id="B2",
+                manifest_status=ManifestStatus.OK,
+                page_count=40,
+                cached_pages=20,
+                transcribed_pages=0,
+                chunk_id=2,
+                chunk_total=1,
+                last_synced_at="2026-01-01T00:00:00+00:00",
             )
         )
         s.add(
             Batch(
-                batch_id="B3", manifest_status=ManifestStatus.OK, page_count=10, cached_pages=10,
-                transcribed_pages=0, chunk_id=3, chunk_total=1, last_synced_at="2026-01-01T00:00:00+00:00",
+                batch_id="B3",
+                manifest_status=ManifestStatus.OK,
+                page_count=10,
+                cached_pages=10,
+                transcribed_pages=0,
+                chunk_id=3,
+                chunk_total=1,
+                last_synced_at="2026-01-01T00:00:00+00:00",
             )
         )
         await s.commit()

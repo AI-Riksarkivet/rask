@@ -63,7 +63,9 @@ def _validate_pipeline_settings(settings: Settings) -> None:
     orchestrator HTR-only; the HTR lane must always be a real pipeline.
     """
     if settings.prefetch_pipeline.lower() not in PIPELINE_DISABLED and settings.prefetch_pipeline not in PIPELINE_SPECS:
-        raise ValueError(f"settings.prefetch_pipeline={settings.prefetch_pipeline!r} is not a registered pipeline; choose from {sorted(PIPELINE_SPECS)} or a disable sentinel {sorted(PIPELINE_DISABLED)}")
+        raise ValueError(
+            f"settings.prefetch_pipeline={settings.prefetch_pipeline!r} is not a registered pipeline; choose from {sorted(PIPELINE_SPECS)} or a disable sentinel {sorted(PIPELINE_DISABLED)}"
+        )
     if settings.htr_pipeline not in PIPELINE_SPECS:
         raise ValueError(f"settings.htr_pipeline={settings.htr_pipeline!r} is not a registered pipeline; choose from {sorted(PIPELINE_SPECS)}")
 
