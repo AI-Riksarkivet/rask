@@ -30,7 +30,7 @@
 		"dev:studio": "turbo run dev --filter=studio...",
 		"storybook": "bun --cwd=packages/ui run storybook",
 		"build-storybook": "turbo run build-storybook",
-		"test": "turbo run test",
+		"test": "turbo run test && vitest run eslint-rules",
 		"lint": "prettier --check '{components/frontends/home,components/frontends/overview,components/frontends/storage,components/frontends/compute,components/frontends/discover,components/frontends/train,components/frontends/studio,packages/api,packages/ui}/**/*.{ts,js,svelte,css,html,json,md}' '*.{json,md}' --ignore-path .gitignore && eslint components/frontends/home components/frontends/overview components/frontends/storage components/frontends/compute components/frontends/discover components/frontends/train components/frontends/studio packages/api packages/ui",
 		"lint:fix": "eslint components/frontends/home components/frontends/overview components/frontends/storage components/frontends/compute components/frontends/discover components/frontends/train components/frontends/studio packages/api packages/ui --fix",
 		"format": "prettier --write '{components/frontends/home,components/frontends/overview,components/frontends/storage,components/frontends/compute,components/frontends/discover,components/frontends/train,components/frontends/studio,packages/api,packages/ui}/**/*.{ts,js,svelte,css,html,json,md}' '*.{json,md}' --ignore-path .gitignore"
@@ -49,7 +49,8 @@
 		"svelte-check": "^4.6.0",
 		"turbo": "2.9.18",
 		"typescript": "^6.0.3",
-		"typescript-eslint": "^8.62.0"
+		"typescript-eslint": "^8.62.0",
+		"vitest": "^4.1.9"
 	},
 	"prettier": {
 		"useTabs": true,

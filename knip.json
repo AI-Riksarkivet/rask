@@ -10,6 +10,9 @@
 		"packages/ui": {
 			"entry": ["src/lib/**/index.{ts,js}"],
 			"project": ["src/**/*.{ts,js,svelte}"]
+		},
+		"tests/e2e": {
+			"entry": ["playwright.config.ts", "tests/**/*.spec.ts"]
 		}
 	}
 }
