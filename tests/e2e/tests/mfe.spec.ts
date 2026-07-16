@@ -1,15 +1,21 @@
 import { test, expect } from '@playwright/test';
 
-// Catch-all + each domain app's real entry route (discover has no index).
+// Project-first URLs are HOST-based: the project is the request host and every MFE
+// base path is `/<domain>` (the old `/default/<domain>` project segment is gone). So
+// RASK_E2E_BASE_URL must point at a host that serves the domain apps — a provisioned
+// project's URL, or a `singleTenant.enabled` install — NOT the front-door host (which
+// serves only `/`, the picker). See docs/superpowers/specs/2026-06-29-openable-projects-design.md.
+//
+// Catch-all `/` (picker/landing) + each domain app's real entry route (discover has no index).
 const ROUTES = [
 	'/',
-	'/default/overview',
-	'/default/storage',
-	'/default/compute',
-	'/default/discover/browse',
-	'/default/discover/search',
-	'/default/train',
-	'/default/studio',
+	'/overview',
+	'/storage',
+	'/compute',
+	'/discover/browse',
+	'/discover/search',
+	'/train',
+	'/studio',
 ];
 
 for (const route of ROUTES) {
@@ -31,6 +37,8 @@ for (const route of ROUTES) {
 	});
 }
 
+// Requires the batch backend (core-api) — i.e. a full/`singleTenant` deploy, not the
+// front-door-only install where `/api/batches` has no upstream (gateway 502).
 test('api round-trip via gateway returns 2xx (no internal-URL redirect)', async ({ request }) => {
 	const res = await request.get('/api/batches/', { maxRedirects: 0 });
 	// 200 with data, OR a redirect whose Location is relative (never an absolute
