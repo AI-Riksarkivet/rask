@@ -1,11 +1,12 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
+	import { onMount, type Snippet } from 'svelte';
 	import * as Sidebar from '../components/sidebar/index.js';
 	import { Separator } from '../components/separator/index.js';
 	import AppSidebar from './app-sidebar.svelte';
 	import { ChevronRight } from '@lucide/svelte';
 	import { gsap } from 'gsap';
 	import type { Project, NavUser } from './nav-config.js';
+	import { pathCrumbs, projectFromHost } from './breadcrumb.js';
 
 	// Subtle content settle-in. Runs once when the shell MOUNTS — i.e. on a fresh
 	// document load, which is every cross-zone microfrontend landing — so the page gently
@@ -45,21 +46,18 @@
 		children: Snippet;
 	} = $props();
 
-	// Project-first breadcrumb: the path is /<project>/<domain>/… so the FIRST segment
-	// is the project (the breadcrumb root), and the rest is the in-project trail.
-	const segs = $derived(pathname.split('/').filter(Boolean));
-	const projectName = $derived(segs[0] ?? project.name);
-	// The sidebar's project always reflects the URL's project segment (single source of
-	// truth), so it can't drift to the prop default when an app forgets to pass `project`.
+	// Project-first breadcrumb via HOST: the project IS the request host, so the path
+	// carries only the domain + in-project trail. The project is the breadcrumb ROOT
+	// (from the host, client-side); every path segment — the domain first — is a crumb.
+	// SSR has no host, so `projectName` falls back to the `project` prop until mount,
+	// exactly like `project-switcher` (shared `projectFromHost` keeps them in lockstep).
+	let projectSlug = $state('');
+	onMount(() => {
+		projectSlug = projectFromHost(window.location.host) ?? '';
+	});
+	const projectName = $derived(projectSlug || project.name);
 	const sidebarProject = $derived({ name: projectName, subtitle: project.subtitle ?? 'Project' });
-	// Key by the accumulated path prefix so repeated segments (e.g. /studio/studio) stay unique;
-	// the human label drops the dashes.
-	const crumbs = $derived(
-		segs.slice(1).map((seg, i) => ({
-			id: segs.slice(0, i + 2).join('/'),
-			label: seg.replace(/-/g, ' '),
-		})),
-	);
+	const crumbs = $derived(pathCrumbs(pathname));
 </script>
 
 <Sidebar.Provider class="h-svh overflow-hidden">

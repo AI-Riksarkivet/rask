@@ -5,6 +5,7 @@
 	import { useSidebar } from '../components/sidebar/index.js';
 	import { ChevronsUpDown, Boxes, House, Check } from '@lucide/svelte';
 	import type { Project } from './nav-config.js';
+	import { projectFromHost } from './breadcrumb.js';
 
 	// sidebar-07 TeamSwitcher, adapted into a PROJECT switcher. Project-first IA via HOST:
 	// the project IS the request host (e.g. demo.localhost), so "Main menu" returns to the
@@ -21,12 +22,13 @@
 	let currentSlug = $state('');
 	onMount(() => {
 		const { protocol, host } = window.location;
-		const labels = host.split('.');
-		// Only a real subdomain is a project label. Skip bare hosts (localhost) and
-		// IPv4 hosts (127.0.0.1) — a numeric first label is an octet, not a project.
-		if (labels.length > 1 && !/^\d+$/.test(labels[0] ?? '')) {
-			currentSlug = labels[0] ?? '';
-			homeUrl = `${protocol}//${labels.slice(1).join('.')}/`;
+		// Shared `projectFromHost` (single source of truth) decides whether the host
+		// carries a project label — bare/IPv4 hosts don't; keeps this in lockstep with
+		// the app-shell breadcrumb root.
+		const slug = projectFromHost(host);
+		if (slug) {
+			currentSlug = slug;
+			homeUrl = `${protocol}//${host.split('.').slice(1).join('.')}/`;
 		}
 	});
 	const displayName = $derived(currentSlug || project.name);
