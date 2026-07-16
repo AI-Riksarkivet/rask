@@ -13,7 +13,13 @@ from service_kit.dependencies import SettingsDep
 
 router = APIRouter(include_in_schema=False)
 
-_PROXY_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"]
+# READ-ONLY on purpose. The SPA's /serve page only *reads* Serve status, and this
+# proxy is unauthenticated (see docs/architecture: no app auth). Ray's dashboard
+# exposes write verbs on the same surface — PUT /api/serve/applications/ deploys an
+# app with a caller-chosen import_path/runtime_env, i.e. arbitrary code execution on
+# the cluster — so forwarding anything but GET/HEAD would hand that to any caller who
+# can reach the ingress. Never widen this without an auth layer in front of /api.
+_PROXY_METHODS = ["GET", "HEAD"]
 
 
 def _canonical(path: str) -> str:
