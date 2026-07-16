@@ -5,6 +5,7 @@ Geometry utilities
 import logging
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import astuple, dataclass
+from typing import cast
 
 import cv2
 import numpy as np
@@ -277,7 +278,8 @@ def mask2polygon(mask: Mask, epsilon: float = 0.005) -> Polygon:
     if mask.dtype != np.uint8:
         mask = mask.astype(np.uint8)
     if len(mask.shape) == 3 and mask.shape[2] != 1:
-        mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+        # cv2 returns an untyped MatLike; BGR2GRAY on a uint8 input yields uint8.
+        mask = cast(Mask, cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY))
 
     contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -340,5 +342,6 @@ def polygon2mask(polygon: Polygon, shape: tuple[int, int] | None = None) -> Mask
 
     mask = np.zeros(shape, dtype=np.uint8)
     if len(polygon) > 0:
-        mask = cv2.fillPoly(mask, [polygon.as_nparray()], color=255)
+        # cv2.fillPoly returns an untyped MatLike; it fills the uint8 `mask` in place.
+        mask = cast(Mask, cv2.fillPoly(mask, [polygon.as_nparray()], color=255))
     return mask

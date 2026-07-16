@@ -30,6 +30,7 @@ from pathlib import PurePosixPath
 
 import httpx
 
+
 # Pinned source: the example images live under this prefix in the Space repo.
 SPACE_ID = "Riksarkivet/htr_demo"
 SPACE_REVISION = "main"

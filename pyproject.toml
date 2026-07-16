@@ -38,6 +38,7 @@ dev = [
     "pytest-asyncio>=0.25",
     "pytest-cov>=7.0",
     "moto[s3]>=5.0",
+    "boto3-stubs[s3]>=1.35",
     "ruff",
     "ty",
     "datasets>=4.8.4",
@@ -82,7 +83,7 @@ error-on-warning = true
 python-version = "3.13"
 
 [tool.pytest.ini_options]
-testpaths = ["packages/htr/tests", "packages/storage/tests", "packages/tracker/tests", "packages/validate/tests", "components/services/core/tests", "components/cli/runner/tests", "components/services/volumes_api/tests", "components/services/search_api/tests", "components/services/ray_api/tests", "components/services/controlplane/tests", "components/services/gateway/tests"]
+testpaths = ["packages/htr/tests", "packages/storage/tests", "packages/tracker/tests", "packages/validate/tests", "packages/service-kit/tests", "components/services/core/tests", "components/cli/runner/tests", "components/services/volumes_api/tests", "components/services/search_api/tests", "components/services/ray_api/tests", "components/services/controlplane/tests", "components/services/gateway/tests"]
 addopts = "--cov --cov-report=term-missing:skip-covered --import-mode=importlib"
 markers = ["slow: marks tests requiring real models or long runtimes (deselect with '-m \"not slow\"')"]
 

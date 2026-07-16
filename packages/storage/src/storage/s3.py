@@ -43,6 +43,9 @@ class S3Source:
     @property
     def client(self) -> Any:  # noqa: ANN401 — boto3 client has no public stub
         if self._client is None:
+            # __init__ guarantees at least one of client/factory is set, so a
+            # None client here means the factory is non-None.
+            assert self._client_factory is not None
             self._client = self._client_factory()
         return self._client
 
@@ -91,6 +94,9 @@ class S3Sink:
     @property
     def client(self) -> Any:  # noqa: ANN401 — boto3 client has no public stub
         if self._client is None:
+            # __init__ guarantees at least one of client/factory is set, so a
+            # None client here means the factory is non-None.
+            assert self._client_factory is not None
             self._client = self._client_factory()
         return self._client
 

@@ -137,7 +137,7 @@ def test_pipeline_specs_are_frozen() -> None:
     """frozen=True → assignment raises, so the registry can't be mutated at runtime."""
     spec = PIPELINE_SPECS["htr"]
     with pytest.raises(ValidationError):
-        spec.name = "mutated"  # type: ignore[misc]
+        spec.name = "mutated"  # ty: ignore[invalid-assignment]  # deliberately assign a read-only frozen field to prove it raises
 
 
 def test_slot_submission_id_prefix_matches_value() -> None:

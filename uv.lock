@@ -3141,6 +3141,7 @@ source = { editable = "." }
 
 [package.dev-dependencies]
 dev = [
+    { name = "boto3-stubs", extra = ["s3"] },
     { name = "datasets" },
     { name = "lancedb" },
     { name = "moto", extra = ["s3"] },
@@ -3159,6 +3160,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "boto3-stubs", extras = ["s3"], specifier = ">=1.35" },
     { name = "datasets", specifier = ">=4.8.4" },
     { name = "lancedb", specifier = ">=0.20" },
     { name = "moto", extras = ["s3"], specifier = ">=5.0" },

@@ -47,6 +47,7 @@ class LineActor:
 
     def __call__(self, batch: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         self._ensure_model()
+        assert self._model is not None  # _ensure_model() guarantees this
         # Drop rows where line detection fails so a single bad page doesn't
         # kill the chunk. Keep all parallel arrays aligned.
         keys = batch.get("key")

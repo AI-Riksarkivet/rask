@@ -36,8 +36,9 @@ Key deployment decisions (learned the hard way — keep them):
 """
 
 import ray
-from ray import serve
 from fastapi import FastAPI, Request, Response
+from ray import serve
+
 
 ray.init(address="auto", ignore_reinit_error=True, log_to_driver=False)
 
@@ -101,17 +102,23 @@ api = FastAPI()
 @serve.ingress(api)
 class HTRFlow:
     def __init__(self):
+        import tempfile
+
         from htrflow.pipeline.pipeline import Pipeline
         from htrflow.serialization.serialization import get_serializer
 
-        with open("/tmp/htrflow_pipeline.yaml", "w") as f:
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
             f.write(PIPELINE_YAML)
-        self.pipeline = Pipeline.from_config("/tmp/htrflow_pipeline.yaml")
+            config_path = f.name
+        self.pipeline = Pipeline.from_config(config_path)
         self.serializer = get_serializer("alto")
 
     @api.post("/transcribe")
-    async def transcribe(self, request: Request):
-        import asyncio, os, tempfile
+    async def transcribe(self, request: Request) -> Response:
+        import asyncio
+        import os
+        import tempfile
+
         from htrflow.document import Document
 
         data = await request.body()
@@ -123,7 +130,7 @@ class HTRFlow:
         # the replica's asyncio event loop stays responsive to Serve's health probe.
         # Running it inline froze the loop -> "event loop unresponsive" -> Serve
         # killed every replica -> restart storm.
-        def _run():
+        def _run() -> str | list | None:
             try:
                 doc = self.pipeline.run(Document(path))
                 return self.serializer.serialize(doc)

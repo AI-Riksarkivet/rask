@@ -1,4 +1,4 @@
-.PHONY: help install build test lint fmt clean storybook typecheck knip check ci viewer dev-micro dev-frontends dev-frontends-k3s home frontend-storage frontend-compute frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge tilt-registry tilt-up tilt-down e2e
+.PHONY: help install build test test-slow lint fmt clean storybook typecheck knip check ci viewer dev-micro dev-frontends dev-frontends-k3s home frontend-storage frontend-compute frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge tilt-registry tilt-up tilt-down e2e
 
 help:
 	@echo "Targets:"
@@ -27,6 +27,11 @@ build:
 # Python tests via pytest; the frontends have no unit suite — `make frontend-check`
 # (svelte-check) is their gate.
 test:
+	uv run pytest -m "not slow"
+
+# Slow tests need real models / a GPU (e.g. the YOLO layout smoke test) and hang on
+# hosts without them — opt in explicitly. Runs the full suite including slow marks.
+test-slow:
 	uv run pytest
 
 lint:

@@ -44,7 +44,7 @@ def out_key(jpg_key: str) -> str:
     return f"{batch}/{stem}.xml"
 
 
-def s3_client() -> Any:
+def s3_client() -> Any:  # noqa: ANN401 — boto3 S3 client methods are generated at runtime; no static type exposes them without boto3-stubs
     kwargs: dict = {
         "endpoint_url": os.environ.get("HCP_ENDPOINT"),
         "config": Config(
@@ -60,7 +60,7 @@ def s3_client() -> Any:
     return boto3.client("s3", **kwargs)
 
 
-def list_keys(s3: Any, bucket: str, prefix: str, suffix_ok) -> list[str]:
+def list_keys(s3: Any, bucket: str, prefix: str, suffix_ok) -> list[str]:  # noqa: ANN401 — see s3_client
     out: list[str] = []
     for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
         out.extend(o["Key"] for o in page.get("Contents", []) if suffix_ok(o["Key"]))
@@ -68,8 +68,14 @@ def list_keys(s3: Any, bucket: str, prefix: str, suffix_ok) -> list[str]:
 
 
 def transcribe(endpoint: str, img: bytes) -> str:
-    req = urllib.request.Request(endpoint, data=img, headers={"Content-Type": "application/octet-stream"}, method="POST")
-    with urllib.request.urlopen(req, timeout=600) as resp:
+    # Endpoint is operator-supplied (default the head node's localhost Serve). Reject
+    # non-HTTP(S) schemes so a stray file:/custom URL can't turn urlopen into a local
+    # file read. This job is deliberately stdlib+boto3 only (no httpx in its Ray Job
+    # runtime_env), so urllib stays — the scheme guard is what makes it safe.
+    if urlparse(endpoint).scheme not in ("http", "https"):
+        raise ValueError(f"endpoint must be http(s), got {endpoint!r}")
+    req = urllib.request.Request(endpoint, data=img, headers={"Content-Type": "application/octet-stream"}, method="POST")  # noqa: S310 — scheme validated above
+    with urllib.request.urlopen(req, timeout=600) as resp:  # noqa: S310 — scheme validated above
         return resp.read().decode("utf-8", "replace")
 
 
@@ -90,7 +96,7 @@ def main() -> int:
     # whose ALTO already exists (resumable). One output listing per batch.
     todo: list[str] = []
     for batch in a.batch:
-        done = {k for k in list_keys(s3, out_bucket, f"{batch}/", lambda k: k.lower().endswith(".xml"))}
+        done = set(list_keys(s3, out_bucket, f"{batch}/", lambda k: k.lower().endswith(".xml")))
         pages = list_keys(s3, a.cache_bucket, f"{batch}/", is_jpg)
         todo.extend(k for k in pages if out_key(k) not in done)
         log.info("batch %s: %d pages, %d already done", batch, len(pages), len(pages) - sum(out_key(k) not in done for k in pages))

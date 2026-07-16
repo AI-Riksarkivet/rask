@@ -4,8 +4,11 @@ Mirrors test_register_endpoint.py: schema via a sync engine, lifespan S3 builder
 patched to a moto client. The endpoint itself does the writes (nothing pre-seeded).
 """
 
+from __future__ import annotations
+
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import boto3
 import pytest
@@ -17,8 +20,12 @@ from sqlmodel import SQLModel
 from core.models.batch import Batch  # noqa: F401 - registers table with SQLModel.metadata
 
 
+if TYPE_CHECKING:
+    from mypy_boto3_s3 import S3Client
+
+
 @pytest.fixture
-def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[tuple[TestClient, object]]:
+def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[tuple[TestClient, S3Client]]:
     db = tmp_path / "b.db"
     engine = create_engine(f"sqlite:///{db}")
     SQLModel.metadata.create_all(engine)
@@ -47,12 +54,12 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[tuple[Te
             yield tc, c
 
 
-def _keys(s3: object, prefix: str = "") -> list[str]:
-    resp = s3.list_objects_v2(Bucket="images-batch", Prefix=prefix)  # type: ignore[attr-defined]
+def _keys(s3: S3Client, prefix: str = "") -> list[str]:
+    resp = s3.list_objects_v2(Bucket="images-batch", Prefix=prefix)
     return sorted(o["Key"] for o in resp.get("Contents", []))
 
 
-def test_upload_creates_and_registers(client: tuple[TestClient, object]) -> None:
+def test_upload_creates_and_registers(client: tuple[TestClient, S3Client]) -> None:
     tc, s3 = client
     files = [
         ("files", ("page_0001.jpg", b"img1", "image/jpeg")),
@@ -68,7 +75,7 @@ def test_upload_creates_and_registers(client: tuple[TestClient, object]) -> None
     assert _keys(s3, "myvol/") == ["myvol/page_0001.jpg", "myvol/page_0002.jpg", "myvol/page_0003.png"]
 
 
-def test_upload_skips_non_images(client: tuple[TestClient, object]) -> None:
+def test_upload_skips_non_images(client: tuple[TestClient, S3Client]) -> None:
     tc, s3 = client
     files = [
         ("files", ("a.jpg", b"img", "image/jpeg")),
@@ -80,20 +87,20 @@ def test_upload_skips_non_images(client: tuple[TestClient, object]) -> None:
     assert _keys(s3, "mixed/") == ["mixed/a.jpg"]  # txt not written
 
 
-def test_upload_all_non_images_422(client: tuple[TestClient, object]) -> None:
+def test_upload_all_non_images_422(client: tuple[TestClient, S3Client]) -> None:
     tc, _ = client
     resp = tc.post("/api/v1/batches/novol/upload", files=[("files", ("notes.txt", b"hi", "text/plain"))])
     assert resp.status_code == 422
 
 
-def test_upload_bad_volume_id_422(client: tuple[TestClient, object]) -> None:
+def test_upload_bad_volume_id_422(client: tuple[TestClient, S3Client]) -> None:
     tc, _ = client
     # dot is disallowed by the volume-id charset
     resp = tc.post("/api/v1/batches/bad.id/upload", files=[("files", ("a.jpg", b"x", "image/jpeg"))])
     assert resp.status_code == 422
 
 
-def test_upload_filename_is_basenamed(client: tuple[TestClient, object]) -> None:
+def test_upload_filename_is_basenamed(client: tuple[TestClient, S3Client]) -> None:
     tc, s3 = client
     resp = tc.post("/api/v1/batches/safe/upload", files=[("files", ("../evil.jpg", b"x", "image/jpeg"))])
     assert resp.status_code == 201, resp.text
@@ -101,7 +108,7 @@ def test_upload_filename_is_basenamed(client: tuple[TestClient, object]) -> None
     assert _keys(s3) == ["safe/evil.jpg"]
 
 
-def test_upload_reregisters_idempotently(client: tuple[TestClient, object]) -> None:
+def test_upload_reregisters_idempotently(client: tuple[TestClient, S3Client]) -> None:
     tc, s3 = client
     r1 = tc.post("/api/v1/batches/idem/upload", files=[("files", ("a.jpg", b"x", "image/jpeg"))])
     assert r1.status_code == 201, r1.text

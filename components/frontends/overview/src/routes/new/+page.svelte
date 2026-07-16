@@ -153,10 +153,8 @@
 				<p>Ingested <strong>{result.batch_id}</strong> — {result.page_count ?? 0} pages.</p>
 				<div class="flex gap-3">
 					<a class="underline" href={base}>Back to Overview</a>
-					<a
-						class="underline"
-						href={`/discover/viewer/${result.batch_id}`}
-						data-sveltekit-reload>Open viewer</a
+					<a class="underline" href={`/discover/viewer/${result.batch_id}`} data-sveltekit-reload
+						>Open viewer</a
 					>
 				</div>
 			</div>

@@ -252,6 +252,7 @@ class TranscribeActor:
         return self._call_inner(batch)
 
     def _call_profiled(self, batch: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        assert self.profile_dir is not None  # only reached when profile_dir is set (see __call__)
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         idx = self._profile_call_idx
         self._profile_call_idx += 1

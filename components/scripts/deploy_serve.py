@@ -29,13 +29,13 @@ from ray import serve
 
 # Each entry: (build callable, default route prefix). The `build` callable
 # returns a Serve `Application` (the value of `Deployment.bind()`).
-def _build_transcribe() -> object:
+def _build_transcribe() -> serve.Application:
     from runner.transcribe_service import build_app
 
     return build_app()
 
 
-def _build_htrflow() -> object:
+def _build_htrflow() -> serve.Application:
     from runner.htrflow_service import htrflow_app
 
     return htrflow_app

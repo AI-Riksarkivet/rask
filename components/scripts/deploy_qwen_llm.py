@@ -54,7 +54,7 @@ def _connect() -> None:
     ray.init(address=os.environ.get("RAY_ADDRESS", "auto"), ignore_reinit_error=True, log_to_driver=False)
 
 
-def build_app() -> object:
+def build_app() -> serve.Application:
     from ray.serve.llm import LLMConfig, build_openai_app
 
     # py_executable pins replica/engine processes to this vLLM venv; the env var
@@ -121,7 +121,10 @@ def cmd_up() -> int:
     deadline = time.time() + 900
     while time.time() < deadline:
         app = serve.status().applications.get(APP_NAME)
-        status = str(app.status) if app else "MISSING"
+        if app is None:
+            time.sleep(5)
+            continue
+        status = str(app.status)
         if "RUNNING" in status:
             print(f"LLM app {APP_NAME!r} RUNNING at {ROUTE} — OpenAI API on the Serve proxy (:{port}/v1).")
             print(f"model_id={MODEL_ID}  max_model_len={CTX}  max_num_seqs={MAX_SEQS}")

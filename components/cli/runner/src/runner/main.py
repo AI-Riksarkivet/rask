@@ -28,6 +28,18 @@ app = typer.Typer(name="runner", help="Ray Data batch driver for HTR.")
 console = Console()
 
 
+def _validate_invocation(pipeline: str, input_uri: str | None, batch: list[str] | None, cache_bucket: str | None) -> None:
+    """Guard the mutually-exclusive / required-together CLI options (raises BadParameter)."""
+    if pipeline not in PIPELINES:
+        raise typer.BadParameter(f"unknown pipeline {pipeline!r}; choose from {list(PIPELINES)}")
+    if (input_uri is None) == (not batch):
+        raise typer.BadParameter("provide exactly one of --input or --batch")
+    if batch and not cache_bucket:
+        raise typer.BadParameter("--batch requires --cache-bucket (the S3 cache to read/write through)")
+    if pipeline == "prefetch" and not batch:
+        raise typer.BadParameter("--pipeline prefetch requires --batch (it warms the IIIF→S3 cache)")
+
+
 @app.command()
 def main(
     output_uri: Annotated[str, typer.Option("--output", "-o", help="Filesystem path or s3://bucket")],
@@ -77,17 +89,11 @@ def main(
 ) -> None:
     logging.basicConfig(level=log_level, handlers=[RichHandler(console=console)])
 
-    if pipeline not in PIPELINES:
-        raise typer.BadParameter(f"unknown pipeline {pipeline!r}; choose from {list(PIPELINES)}")
-
-    if (input_uri is None) == (not batch):
-        raise typer.BadParameter("provide exactly one of --input or --batch")
-    if batch and not cache_bucket:
-        raise typer.BadParameter("--batch requires --cache-bucket (the S3 cache to read/write through)")
-    if pipeline == "prefetch" and not batch:
-        raise typer.BadParameter("--pipeline prefetch requires --batch (it warms the IIIF→S3 cache)")
+    _validate_invocation(pipeline, input_uri, batch, cache_bucket)
 
     if batch:
+        # _validate_invocation guarantees --cache-bucket is set whenever --batch is.
+        assert cache_bucket is not None
         source = IIIFCachedSource(
             batch_ids=batch,
             cache_bucket=cache_bucket,
@@ -96,6 +102,8 @@ def main(
         )
         source_label = f"iiif:{','.join(batch)} (cache={cache_bucket}, server={iiif_url})"
     else:
+        # _validate_invocation guarantees exactly one of --input/--batch, so here --input is set.
+        assert input_uri is not None
         source = build_source(input_uri, s3_endpoint=s3_endpoint, prefix=prefix)
         source_label = f"input={input_uri} prefix={prefix!r}"
     sink = build_sink(output_uri, s3_endpoint=s3_endpoint, prefix=prefix)

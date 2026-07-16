@@ -80,6 +80,9 @@ def _get(client: httpx.Client, url: str, retries: int = 3) -> httpx.Response:
                 time.sleep(wait)
             else:
                 raise
+    # Unreachable when retries >= 1 (the loop either returns or raises), but the
+    # loop body is skipped entirely if retries == 0 — make that contract explicit.
+    raise RuntimeError(f"GET {url} exhausted {retries} retries without a response")
 
 
 def list_identifiers(client: httpx.Client, archive_code: str) -> list[str]:

@@ -369,7 +369,7 @@
 						</div>
 						<a
 							class="text-primary text-xs hover:underline"
-							href={`/compute/jobs`}
+							href="/compute/jobs"
 							data-sveltekit-reload>view all →</a
 						>
 					</div>

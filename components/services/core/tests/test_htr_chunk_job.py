@@ -4,8 +4,9 @@ from pathlib import Path
 
 _PATH = Path(__file__).resolve().parents[4] / "components/scripts/htr_chunk_job.py"
 _spec = importlib.util.spec_from_file_location("htr_chunk_job", _PATH)
+assert _spec is not None and _spec.loader is not None
 m = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(m)  # type: ignore[union-attr]
+_spec.loader.exec_module(m)
 
 
 def test_bucket_strips_s3_scheme():

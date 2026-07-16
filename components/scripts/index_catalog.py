@@ -301,7 +301,9 @@ def walk_archive_dir(directory: str, limit: int | None = None):
 
 
 def create_embedder():
-    from sentence_transformers import SentenceTransformer
+    # sentence-transformers is an optional heavy extra (not in the base env);
+    # imported lazily here so the module loads without it installed.
+    from sentence_transformers import SentenceTransformer  # ty: ignore[unresolved-import]
 
     return SentenceTransformer(EMBED_MODEL, truncate_dim=EMBED_DIM)
 

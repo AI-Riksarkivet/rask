@@ -32,7 +32,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | ---------------------------- | -------------------------------------------------------------- |
 | First-time setup             | `make install` (= `bun install` + `uv sync`)                   |
 | Build everything             | `make build`                                                   |
-| Run all tests                | `make test`                                                    |
+| Run tests (excludes slow)    | `make test` (= `uv run pytest -m "not slow"`)                  |
+| Run all tests incl. slow     | `make test-slow` (needs real models / a GPU)                   |
 | Single Python test           | `uv run pytest packages/htr/tests/test_geometry.py::test_name` |
 | Filter by name               | `uv run pytest -k <pattern>`                                   |
 | Skip slow tests              | `uv run pytest -m "not slow"`                                  |

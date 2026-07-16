@@ -29,6 +29,7 @@ import sys
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 from xml.etree import ElementTree as ET
 
 import boto3
@@ -94,7 +95,7 @@ def lance_storage_options() -> dict:
     return opts
 
 
-def ensure_bucket(client: object, bucket: str) -> None:
+def ensure_bucket(client: Any, bucket: str) -> None:  # noqa: ANN401 — boto3 S3 client methods are generated at runtime; no static type exposes them without boto3-stubs
     """Idempotent bucket create."""
     try:
         client.head_bucket(Bucket=bucket)
@@ -216,7 +217,7 @@ def make_thumb(img: Image.Image, hpos: int, vpos: int, w: int, h: int, max_heigh
     crop = img.crop((x0, y0, x1, y1))
     if crop.height > max_height:
         ratio = max_height / crop.height
-        crop = crop.resize((max(1, int(crop.width * ratio)), max_height), Image.LANCZOS)
+        crop = crop.resize((max(1, int(crop.width * ratio)), max_height), Image.Resampling.LANCZOS)
     buf = BytesIO()
     crop.convert("RGB").save(buf, format="JPEG", quality=80)
     return buf.getvalue()
@@ -502,7 +503,7 @@ def cmd_index(args: argparse.Namespace) -> int:
 
     # If the dataset already has rows for this batch, drop them so re-runs are
     # idempotent. Lance supports DELETE with a SQL-ish filter.
-    write_kwargs = {"schema": SCHEMA}
+    write_kwargs: dict[str, Any] = {"schema": SCHEMA}
     if storage_options is not None:
         write_kwargs["storage_options"] = storage_options
     if _dataset_exists(lance_uri, storage_options):

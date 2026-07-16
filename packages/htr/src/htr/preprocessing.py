@@ -12,7 +12,7 @@ def preprocess_rtmdet(image: Image.Image, input_size: int = 640) -> tuple[np.nda
     scale = min(input_size / orig_w, input_size / orig_h)
     new_w, new_h = round(orig_w * scale), round(orig_h * scale)
 
-    resized = image.resize((new_w, new_h), Image.BILINEAR)
+    resized = image.resize((new_w, new_h), Image.Resampling.BILINEAR)
     padded = Image.new("RGB", (input_size, input_size), (114, 114, 114))
     padded.paste(resized, (0, 0))
 
@@ -32,7 +32,7 @@ def preprocess_yolo(image: Image.Image, input_size: int = 640) -> tuple[np.ndarr
     pad_y = (input_size - new_h) // 2
 
     padded = Image.new("RGB", (input_size, input_size), (114, 114, 114))  # Ultralytics letterbox default
-    resized = image.resize((new_w, new_h), Image.BILINEAR)
+    resized = image.resize((new_w, new_h), Image.Resampling.BILINEAR)
     padded.paste(resized, (pad_x, pad_y))
 
     arr = np.array(padded, dtype=np.float32) / 255.0
@@ -44,7 +44,7 @@ def preprocess_trocr(image: Image.Image, size: int = 384) -> np.ndarray:
     """Resize and normalize for TrOCR encoder.
     Returns tensor [1, 3, 384, 384].
     """
-    resized = image.resize((size, size), Image.BILINEAR)
+    resized = image.resize((size, size), Image.Resampling.BILINEAR)
     arr = np.array(resized, dtype=np.float32) / 127.5 - 1.0
     return arr.transpose(2, 0, 1)[np.newaxis]
 

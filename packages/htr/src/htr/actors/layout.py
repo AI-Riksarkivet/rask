@@ -44,6 +44,7 @@ class LayoutActor:
 
     def __call__(self, batch: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         self._ensure_model()
+        assert self._model is not None  # _ensure_model() guarantees this
         # Drop rows where YOLO refuses (corrupt JPEG, OOM, etc.) so a single
         # bad page doesn't kill the chunk. Keep `key` and `image_bytes`
         # aligned with the new `regions` so downstream stages see consistent
