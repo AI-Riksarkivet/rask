@@ -5,7 +5,7 @@ description = "Pre-upload image file validation — TIFF/JPEG/PNG corruption det
 requires-python = ">=3.10"
 license = "AGPL-3.0-only"
 dependencies = [
-    "pillow>=11.0",
+    "pillow>=12.3.0",
 ]
 
 [build-system]
