@@ -44,7 +44,6 @@ nav = [
   ]},
   { "Projects" = [
     { "Overview" = "projects/index.md" },
-    { "HCP" = "projects/hcp.md" },
     { "Runner" = "projects/runner.md" },
     { "Viewer" = "projects/viewer.md" },
   ]},

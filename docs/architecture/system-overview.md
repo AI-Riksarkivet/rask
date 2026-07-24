@@ -145,7 +145,7 @@ flowchart TB
 | `components/frontends/{overview,compute,discover,storage,train,studio}/` | SvelteKit SSR (Bun) | Six per-domain microfrontends, each pinned to `/default/<domain>`, all rendering the shared `@rask/ui/shell` sidebar |
 | `components/cli/runner/`               | Python CLI    | Submits Ray Data jobs; ships Ray Serve deployments                   |
 | `components/services/gateway/`          | FastAPI       | Reverse proxy on `:8888`; path-routes `/api/*` to per-domain services |
-| `components/services/core/`             | Python (brick)| Domain brick: DB, models, repositories, domain services, Alembic; shared by core-api + orchestrator |
+| `components/services/core/`             | Python (domain package)| Domain package: DB, models, repositories, domain services, Alembic; shared by core-api + orchestrator |
 | `components/services/core_api/`         | FastAPI       | Thin entrypoint `:8801` — health + batches + chunks + catalog        |
 | `components/services/orchestrator/`     | FastAPI       | Thin entrypoint `:8810` — health + orchestrator loop (on)            |
 | `components/services/volumes_api/`      | FastAPI       | S3/IIIF image + ALTO proxy on `:8803`; no DB                         |
@@ -241,7 +241,7 @@ sequenceDiagram
     API->>DB: SELECT
     DB-->>UI: render dashboard
     UI->>API: POST /batches/sync
-    API->>Sync: re-run (via the core brick sync service, components/services/core)
+    API->>Sync: re-run (via the core package sync service, components/services/core)
     UI->>API: GET /chunks
     UI->>API: POST /chunks/{id}/submit
     API->>Sub: submit

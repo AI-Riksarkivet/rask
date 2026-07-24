@@ -49,7 +49,7 @@ Tear down with `make serve-down` / `make ray-down`.
 
 ## Local Postgres + migrations
 
-The core brick defaults to SQLite (`.cache/batches.db`) but uses Postgres in
+The core package defaults to SQLite (`.cache/batches.db`) but uses Postgres in
 production. To run Postgres locally:
 
 ```bash

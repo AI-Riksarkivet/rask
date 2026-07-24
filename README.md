@@ -6,21 +6,19 @@ Polyglot monorepo for Riksarkivet HTR + search infrastructure. Python managed wi
 
 ## Layout
 
-- `packages/` — reusable bricks (workspace members; polyglot):
+- `packages/` — reusable libraries (workspace members; polyglot):
   - `htr`, `storage` — Python libraries (uv workspace members)
   - `@rask/ui` — Svelte 5 + Bits UI + Tailwind 4 component library with Storybook (Bun workspace)
-- `components/` — runnable bricks:
+- `components/` — runnable code:
   - `cli/runner` — Python CLI driving Ray Data HTR pipelines
   - `frontends/` — seven SvelteKit 2 + Svelte 5 **SSR** apps (`svelte-adapter-bun`): `home` (catch-all, owns `/`) + six domain zones (`overview`/`compute`/`discover`/`storage`/`train`/`studio`), composed by the Turborepo `:3024` proxy in dev / k3s Ingress in prod
-  - `services/` — FastAPI services: `gateway` (reverse proxy `:8888`) + the `core` brick (composed by `core-api` + `orchestrator`) + `volumes-api` + `search-api` + `ray-api`
+  - `services/` — FastAPI services: `gateway` (reverse proxy `:8888`) + the `core` package (composed by `core-api` + `orchestrator`) + `volumes-api` + `search-api` + `ray-api`
   - `scripts/` — standalone Python utilities (indexing, EAD harvesting, IIIF downloads, Ray job submission, …)
-- `projects/` — code-less composition pyprojects (one per deployable):
-  - `core-api`, `gateway`, `orchestrator`, `ray-api`, `runner`, `search-api`, `volumes-api`
 - `docs/` — Zensical documentation source; deployed by `.github/workflows/docs.yml`
 - `contributions/` — contribution guidelines
 - `.claude/` — project-local Claude Code config (skills, commands, hooks)
 
-Workspace membership is **explicit** — see `pyproject.toml` `[tool.uv.workspace] members` (uv) and root `package.json` `workspaces` (Bun). Adding a new brick under `packages/` or `components/` requires adding the path to the relevant list; globs are deliberately not used.
+Workspace membership is **explicit** — see `pyproject.toml` `[tool.uv.workspace] members` (uv) and root `package.json` `workspaces` (Bun). Adding a new package under `packages/` or `components/` requires adding the path to the relevant list; globs are deliberately not used. Deployables build from the root workspace via `uv sync --package <name>` (one dockerfile per deployable in `.docker/`).
 
 ## Quick start
 

@@ -55,7 +55,7 @@ The Ray State API can't filter task summary by `job_id` server-side reliably for
 `submit_chunk` reads chunk membership (`manifest_status='ok'` rows, ordered by `batch_id`), builds the entrypoint, and `ray_client.submit_job(...)` via `anyio.to_thread` (sync SDK). Key details:
 
 - `chunk_name(chunk_id, chunk_total, spec)` → `<spec.name>-chunk-NNN-of-MMM-<ts>`. The `%Y%m%dT%H%M%S` suffix makes every submission unique because **Ray's REST API rejects duplicate `submission_id`s even for completed/deleted jobs** — without it, stop-and-resubmit would fail.
-- `build_entrypoint`: `runner` specs run `uv run --project projects/runner runner --pipeline <name> ...`; `http` specs (e.g. `htr_http`) run `components/scripts/htr_chunk_job.py` POSTing to the deployed `/htr` endpoint and need `boto3` in `runtime_env` pip.
+- `build_entrypoint`: `runner` specs run `uv run --package runner runner --pipeline <name> ...`; `http` specs (e.g. `htr_http`) run `components/scripts/htr_chunk_job.py` POSTing to the deployed `/htr` endpoint and need `boto3` in `runtime_env` pip.
 - `runtime_env` passes `working_dir`, env vars filtered to prefixes `AWS_`/`HCP_`/`IIIF_`/`RASK_`, and spec `pip`.
 - When `spec.tracks_rayjob_id` (true for all current specs), tags `current_rayjob_id` + `current_rayjob_submitted_at` on every row in the chunk — that's what `stop_chunk` later reads to find the job.
 - `RAY_TRANSIENT_ERRORS` → `ServiceUnavailableError`; empty membership → `NotFoundError`.
@@ -83,7 +83,7 @@ The Ray State API can't filter task summary by `job_id` server-side reliably for
 
 ## Singleton invariant & runtime control
 
-The loop is an `asyncio.Task` on `app.state.orchestrator_task`, created by `create_orchestrator_task(app)` (the single factory used by both autostart and the `/start` endpoint) and torn down by `stop_orchestrator_task(app)` (used by `/stop` and lifespan shutdown). Because two concurrent loops would both write `batches` and double-submit, the `orchestrator` service is the only one pinned to `replicas: 1` with `strategy: Recreate` (never overlap two pods during a rollout). Extracting the loop into its own thin entrypoint is what let the API tier drop the `replicas: 1` constraint — `core-api` and `orchestrator` are two processes over one `core` brick, sharing the `batches` table transactionally.
+The loop is an `asyncio.Task` on `app.state.orchestrator_task`, created by `create_orchestrator_task(app)` (the single factory used by both autostart and the `/start` endpoint) and torn down by `stop_orchestrator_task(app)` (used by `/stop` and lifespan shutdown). Because two concurrent loops would both write `batches` and double-submit, the `orchestrator` service is the only one pinned to `replicas: 1` with `strategy: Recreate` (never overlap two pods during a rollout). Extracting the loop into its own thin entrypoint is what let the API tier drop the `replicas: 1` constraint — `core-api` and `orchestrator` are two processes over one `core` package, sharing the `batches` table transactionally.
 
 ## The NATS roadmap (why NATS, not Dapr)
 

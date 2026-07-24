@@ -95,6 +95,9 @@ resources:
 
 orchestrator:
   autostart: "false"
+  # In-cluster the ray image ships the installed `runner` console script on PATH
+  # (no uv, no source tree), so override the dev default `uv run --package runner runner`.
+  runnerCmd: "runner"
 
 frontend:
   replicas: 1

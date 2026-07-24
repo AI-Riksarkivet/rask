@@ -64,9 +64,9 @@ to internalise, because it explains everything else.
 
 ## Where everything lives
 
-rask is **Polylith**, so there is **no top-level `apps/`** (that's the turborepo
-`with-svelte` example). Runnable apps live under **`components/frontends/`**; shared libraries
-under **`packages/`**.
+rask keeps runnable code under `components/`, so there is **no top-level `apps/`**
+(that's the turborepo `with-svelte` example). Runnable apps live under
+**`components/frontends/`**; shared libraries under **`packages/`**.
 
 ```mermaid
 graph TD

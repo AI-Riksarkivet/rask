@@ -36,7 +36,7 @@ Bun + Turborepo; **7 SvelteKit 2 + Svelte 5 SSR apps** (`svelte-adapter-bun`) as
 3. **Components** — only `@rask/ui` (Bits UI); snippets + `{@render}`, not slots; zero app-local styled duplicates.
 4. **Styling** — OKLCH `@theme` token utilities (no off-palette literals); `style:` / the component custom-property form for dynamic values; Tailwind 4 + the `@source` + `ModeWatcher` boilerplate.
 5. **Routing/SSR** — browser globals only in `onMount`/`$effect`/handlers; `+error` per app; cross-zone redirects in `+page.server.ts`; base-relative in-app links.
-6. **MFE** — keep the zones; shared `AppShell`/`AppError` (zero drift); cross-zone links project-prefixed + `data-sveltekit-reload`; a new app = two-place workspace membership + `microfrontends.json` + a static base path (bricks → `rask-architecture`).
+6. **MFE** — keep the zones; shared `AppShell`/`AppError` (zero drift); cross-zone links project-prefixed + `data-sveltekit-reload`; a new app = two-place workspace membership + `microfrontends.json` + a static base path (workspace layers → `rask-architecture`).
 7. **TypeScript** — strict + `noUncheckedIndexedAccess` everywhere (`exactOptionalPropertyTypes` OFF on Svelte pkgs — Bits UI incompat); parse-don't-validate with **valibot** (not zod); `satisfies` over a needless `as`.
 8. **Gates** — `make check` = knip + eslint (`require-each-key`, `no-reactive-reassign`) + svelte-check + prettier. A repeated convention violation becomes a NEW gate, not a relaxed rule.
 
@@ -66,4 +66,4 @@ Animation → **GSAP** (via `{@attach}`) + **Lenis** (smooth scroll); charts →
 ## Cross-skill
 
 - The **generic foundation** is the "Core skills" section up top (`svelte-skills:*`, the `svelte` MCP, `micro-frontends`, `turborepo`, `writing-typescript`) — read those deeply; this skill is only the **rask-specific** layer + the canon pointer.
-- `rask-architecture` (bricks / two-place workspace membership), `rask-services-fleet` (the `/api/*` gateway + the per-domain services the frontend queries hit).
+- `rask-architecture` (workspace layers / two-place workspace membership), `rask-services-fleet` (the `/api/*` gateway + the per-domain services the frontend queries hit).

@@ -35,7 +35,7 @@ class RunnerParams(BaseModel):
     # How to invoke the runner CLI in the Ray job entrypoint. Local dev resolves
     # the workspace via uv; the in-cluster ray image ships the installed `runner`
     # console script on PATH (no uv, no source tree), so the chart overrides this.
-    runner_cmd: str = "uv run --project projects/runner runner"
+    runner_cmd: str = "uv run --package runner runner"
 
 
 class Settings(BaseSettings):
@@ -115,7 +115,7 @@ class Settings(BaseSettings):
     # the caller's pipeline registry (e.g. viewer.models.pipelines.PIPELINE_SPECS)
     # and are validated at app startup.
     htr_pipeline: str = Field(default="htr", alias="RASK_HTR_PIPELINE")
-    runner_cmd: str = Field(default="uv run --project projects/runner runner", alias="RASK_RUNNER_CMD")
+    runner_cmd: str = Field(default="uv run --package runner runner", alias="RASK_RUNNER_CMD")
     prefetch_pipeline: str = Field(default="prefetch", alias="RASK_PREFETCH_PIPELINE")
     # Max HTR jobs the orchestrator keeps in flight at once (0 = unlimited). Caps
     # concurrent job drivers so a batch run can't OOM/flood the Ray head. The
