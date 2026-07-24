@@ -65,7 +65,7 @@ flowchart TB
 - **The orchestrator runs as its own service** (`components/services/orchestrator`,
   `:8810`) — a lifespan-managed `asyncio` task that reconciles S3, then submits
   the next eligible prefetch and HTR chunks. `core-api` and `orchestrator` share
-  the same `core` brick and the same `batches` table transactionally.
+  the same `core` package and the same `batches` table transactionally.
 - **State** is a relational DB (SQLModel + SQLAlchemy async) plus two S3 buckets
   and optional Lance tables. No Redis, no queue, no event bus; a Helm chart in
   `chart/` deploys app services to Kubernetes, while the `Makefile` is the
@@ -73,7 +73,7 @@ flowchart TB
 
 ## In this section
 
-- **[Monorepo Layout](layout.md)** — the three brick layers and what lives where.
+- **[Monorepo Layout](layout.md)** — the two workspace layers and what lives where.
 - **[Data Flow](data-flow.md)** — image → ALTO XML, the batch lifecycle, and the frontend ↔ API ↔ storage map.
 - **[Deployment](deployment.md)** — clusters, container images, CI, and how it ships.
 - **[Microservices](microservices.md)** — the service decomposition (implemented June 2026): gateway, core-api, orchestrator, volumes-api, search-api, ray-api.

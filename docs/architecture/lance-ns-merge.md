@@ -19,7 +19,7 @@ Source of truth for the copy is `/home/blackwell/Desktop/lance-ns` at `c2ae04f`;
 
 | lance-ns source | rask destination | Rule |
 |---|---|---|
-| `services/{catalog,lineage,medallion,compaction}` | `components/services/{catalog,lineage,medallion,compaction}` (converted to src-layout: `src/<name>/…`, entrypoints preserved: `catalog.main:app`) + new `projects/{catalog,lineage,medallion,compaction}/pyproject.toml` | rask Polylith shape: brick + deployable composition |
+| `services/{catalog,lineage,medallion,compaction}` | `components/services/{catalog,lineage,medallion,compaction}` (converted to src-layout: `src/<name>/…`, entrypoints preserved: `catalog.main:app`) | rask shape: workspace member + `.docker/<name>.dockerfile` per deployable (no `projects/` layer — removed 2026-07) |
 | `services/common` | `packages/common` (distribution name `lance-common`, import root stays `common` so zero import rewrites) | Transitional; long-term converge on `service-kit`'s `make_service_app`, keeping common's auth/FGA/audit middleware as the governed variant — NOT on this branch |
 | `frontend/components/frontends/{data,lineage,models,admin}` | `components/frontends/{data,lineage,models,admin}` | Zone names stay (decision 3) |
 | `frontend/components/frontends/home` | **dissolves into rask's `components/frontends/home`** (`/auth/{login,callback,logout}` routes + zone-picker landing content move in; lance home package deleted) | One catch-all only |
@@ -46,8 +46,8 @@ Source of truth for the copy is `/home/blackwell/Desktop/lance-ns` at `c2ae04f`;
 ## P1 — Python plane (hermetic; no cluster)
 
 **Moves/adaptations:**
-- Copy the four services + common per the P0 table; convert to src-layout; add workspace members to root `pyproject.toml` (`packages/common` + 4 bricks + 4 projects) and regenerate `uv.lock`.
-- Drop lance-ns's `pythonpath=["services"]` hack — src-layout bricks resolve via workspace installation under rask's `importlib` import-mode.
+- Copy the four services + common per the P0 table; convert to src-layout; add workspace members to root `pyproject.toml` (`packages/common` + the 4 services) and regenerate `uv.lock`.
+- Drop lance-ns's `pythonpath=["services"]` hack — src-layout members resolve via workspace installation under rask's `importlib` import-mode.
 - Reformat all incoming Python under rask's ruff config (line 160) in a **separate pure-format commit**; fix whole-repo `ty` (error-on-warning) fallout.
 - Append `tests/unit`, `tests/integration`, `tests/e2e-py` to rask's explicit `testpaths`.
 - **Gateway fold (code half)**: add rows to `components/services/gateway` `_routes()` — `/api/catalog→catalog`, `/api/lineage→lineage`, `/api/produce`+`/api/train→medallion` — and port the `lance.lineageSidecarOnlyRoutes` nginx 403-blocklist as gateway middleware (it was helm-template logic; it becomes Python). Respect the `dev-micro.sh` warning: lance services serve `/v1/...` internally, gateway strips `/api/<svc>` — a wrong prefix silently 404s.

@@ -2,7 +2,7 @@
 
 !!! warning "Superseded (June 2026)"
     The `viewer` deployable described here no longer exists. The viewer monolith
-    was dissolved into a gateway + per-domain services over a shared `core` brick;
+    was dissolved into a gateway + per-domain services over a shared `core` package;
     the API endpoints now live in `core-api` (batches/chunks/catalog) and
     `orchestrator`, fronted by the gateway on :8888. See
     `docs/architecture/microservices.md`. The text below is retained for

@@ -1,7 +1,7 @@
 # Runner
 
-`projects/runner` composes the runner CLI (`runner` + `htr` + `storage`, plus
-`htrflow` from git) into a single deployable. The runner is **the engine**: each
+The runner (`components/cli/runner` — the `runner` workspace member, depending
+on `htr` + `storage`, plus `htrflow` from git) is **the engine**: each
 invocation builds one Ray Data pipeline, runs it to completion, and exits.
 
 → Symbol docs: **[API reference](../reference/runner.md)**.
@@ -9,7 +9,7 @@ invocation builds one Ray Data pipeline, runs it to completion, and exits.
 ## CLI
 
 ```bash
-uv run --project projects/runner runner --output s3://images-batch-alto \
+uv run --package runner runner --output s3://images-batch-alto \
   --pipeline htr --batch A0060198 --cache-bucket images-batch
 ```
 
@@ -65,8 +65,8 @@ three ways to keep all GPU replicas busy.
 
 !!! note "Submitted by the viewer, not by hand"
     In normal operation the orchestrator service builds the
-    `uv run --project projects/runner runner` entrypoint (via
+    `uv run --package runner runner` entrypoint (via
     `core.services.submission.build_entrypoint`) and submits it as a Ray Job per
-    chunk. The core brick `PIPELINE_SPECS` keys (in `core.models.pipelines`) are
+    chunk. The core package `PIPELINE_SPECS` keys (in `core.models.pipelines`) are
     kept byte-identical to the runner's `PIPELINES` keys (asserted in
     `components/services/core/tests/test_pipelines.py`).

@@ -1,21 +1,16 @@
 # Monorepo Layout
 
-rask is a Polylith-inspired monorepo with three **brick layers**. The boundary
-between them is deliberate — don't blur it.
+rask is a monorepo with two **workspace layers**. The boundary between them is
+deliberate — don't blur it. (An earlier Polylith-inspired `projects/` layer of
+per-deployable composition pyprojects was removed in July 2026 — deployables now
+build straight from the root uv workspace, one `.docker/<name>.dockerfile` per
+deployable running `uv sync --frozen --package <name>` against the root
+`uv.lock`.)
 
 ```mermaid
 flowchart TD
-    subgraph projects["projects/ · deployable compositions (no code)"]
-        pr["runner"]
-        pgw["gateway"]
-        pca["core-api"]
-        po["orchestrator"]
-        pv["volumes-api"]
-        ps["search-api"]
-        pra["ray-api"]
-    end
     subgraph components["components/ · runnable code"]
-        ca["cli/runner · frontends/home<br/>apps/{overview,compute,discover,storage,train,studio}"]
+        ca["cli/runner · frontends/home<br/>frontends/{overview,compute,discover,storage,train,studio}"]
         cs["services/gateway · core · core_api · orchestrator<br/>volumes_api · search_api · ray_api"]
         cx["scripts/"]
     end
@@ -26,14 +21,11 @@ flowchart TD
         prk["ray-kit"]
         pc["ui"]
     end
-    pr --> ca --> ph
-    pr --> ca --> pst
-    pgw --> cs --> psk
-    pca --> cs
-    po --> cs --> prk
-    pv --> cs --> pst
-    ps --> cs
-    pra --> cs
+    ca --> ph
+    ca --> pst
+    cs --> psk
+    cs --> prk
+    cs --> pst
 ```
 
 ## `packages/` — reusable libraries, no entrypoints
@@ -51,7 +43,7 @@ flowchart TD
 
 !!! note "`packages/control` was absorbed into `core`"
     An earlier `packages/control` (S3 sync + chunk submission) no longer exists
-    as a standalone package — its logic lives in the `core` brick's service layer
+    as a standalone package — its logic lives in the `core` package's service layer
     (`core/services/sync.py`, `core/services/submission.py`).
 
 ## `components/` — runnable code
@@ -62,7 +54,7 @@ flowchart TD
 | `components/frontends/home` | SvelteKit 2 + Svelte 5 (SSR) | Catch-all app (package `home`, `:5273`) on `svelte-adapter-bun` — owns `/` (the platform home) behind the gateway ([UI Components](../components/ui.md), [Frontend microfrontends](frontend-microfrontends.md)). |
 | `components/frontends/{overview,compute,discover,storage,train,studio}` | SvelteKit 2 + Svelte 5 (SSR) | The six domain microfrontend zones (`svelte-adapter-bun`), each pinned to base `/default/<domain>` on its own dev port (`:5174`–`:5179`) and rendering the shared `@rask/ui/shell` sidebar. Composed by the Turborepo microfrontends proxy in dev / the k3s Ingress in prod. |
 | `components/services/gateway` | FastAPI | Reverse proxy on `:8888` — path-routes `/api/*` to per-domain services (longest-prefix-first). |
-| `components/services/core` | Python (brick) | The dissolved `viewer` domain code: DB engine, models, repositories, domain services (`batches`, `submission`, `sync`, orchestrator loop, catalog discovery), Alembic, and `main.py` (monolith factory for tests / `make viewer`). **Not a standalone deployable** — composed by the two entrypoints below. |
+| `components/services/core` | Python (domain package) | The dissolved `viewer` domain code: DB engine, models, repositories, domain services (`batches`, `submission`, `sync`, orchestrator loop, catalog discovery), Alembic, and `main.py` (monolith factory for tests / `make viewer`). **Not a standalone deployable** — composed by the two entrypoints below. |
 | `components/services/core_api` | FastAPI | Thin entrypoint `:8801`: health + batches + chunks + catalog over `core`; orchestrator loop **off**. |
 | `components/services/orchestrator` | FastAPI | Thin entrypoint `:8810`: health + orchestrator endpoints over `core`; the lifespan orchestrator loop **on** (`RASK_ORCHESTRATOR_AUTOSTART`). |
 | `components/services/volumes_api` | FastAPI | S3/IIIF image + ALTO proxy on `:8803`; stateless, no DB. Deps: `service-kit` + `storage`. |
@@ -70,30 +62,19 @@ flowchart TD
 | `components/services/ray_api` | FastAPI | Ray dashboard introspection + `/api/serve/*` proxy on `:8804`; no DB. Deps: `service-kit` + `ray-kit` + httpx. |
 | `components/scripts/` | Python | One-shot tools: `build_batches_db`, `harvest_ead`, `index_alto`, `index_catalog`, `deploy_serve`, … No production-state-changing CLIs — sync/submit/orchestrate run through the HTTP services. |
 
-## `projects/` — deployable compositions, no code
+## Deployables — workspace members with a dockerfile
 
-A `projects/<name>/pyproject.toml` lists the workspace members for one
-deployable. Seven deployables exist — `runner` plus six services (there is no
-`projects/hcp`, see the warning below):
-
-- **`projects/runner`** — composes `runner`, `htr`, `storage` (+ `htrflow` from git).
-- **`projects/gateway`**, **`projects/core-api`**, **`projects/orchestrator`**, **`projects/volumes-api`**, **`projects/search-api`**, **`projects/ray-api`** — each composes its thin entrypoint + `core` (if needed) + shared packages.
-
-There is **no `projects/viewer`** — it was deleted when the monolithic viewer was dissolved (June 2026).
-
-!!! warning "There is no `projects/hcp`"
-    "HCP" (Hitachi Content Platform) is one S3-compatible backend — a **legacy
-    env-alias bridge** (`HCP_*` aliases + `derive_hcp_creds`) kept while it's the
-    current dev backend, implemented in `packages/storage`. Storage is otherwise
-    S3-agnostic (MinIO/rustfs/AWS via `RASK_S3_*`). It is not a deployable
-    project. See [Projects → HCP](../projects/hcp.md).
+There is **no `projects/` layer**. Seven deployables exist — `runner` plus six
+services (`gateway`, `core-api`, `orchestrator`, `volumes-api`, `search-api`,
+`ray-api`); each is an ordinary workspace member built by its
+`.docker/<name>.dockerfile` via `uv sync --frozen --package <name>` against the
+**root** `uv.lock` (one lock for dev, tests, and every image).
 
 ## Workspace membership is explicit
 
-Membership is never globbed. Adding a brick requires editing **both** the root
+Membership is never globbed. Adding a member requires editing **both** the root
 `pyproject.toml` (`[tool.uv.workspace] members`) and the root `package.json`
-(`workspaces`), plus the relevant `projects/<name>/pyproject.toml` if it's
-deployable.
+(`workspaces`) — the latter only if it carries JS/TS.
 
 ## Toolchain
 

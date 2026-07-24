@@ -5,7 +5,7 @@ description: The rask backend topology — gateway (:8888) reverse-proxy + per-d
 
 # rask services fleet (gateway + per-domain backends)
 
-The day-to-day backend map. The SPA's Vite proxy targets `:8888`; in the fleet that's the **gateway**, a stateless reverse proxy that path-routes `/api/*` to per-domain services. The old `viewer` monolith is gone — its domain logic lives in the shared `core` brick, composed by two thin entrypoints (`core_api`, `orchestrator`). `scripts/dev-micro.sh` is the source of truth for the process list + ports.
+The day-to-day backend map. The SPA's Vite proxy targets `:8888`; in the fleet that's the **gateway**, a stateless reverse proxy that path-routes `/api/*` to per-domain services. The old `viewer` monolith is gone — its domain logic lives in the shared `core` package, composed by two thin entrypoints (`core_api`, `orchestrator`). `scripts/dev-micro.sh` is the source of truth for the process list + ports.
 
 For FastAPI app/router/lifespan idioms see `fastapi`; for the orchestrator loop's async-task lifecycle see `python-infrastructure`. This skill is *only* the topology + invariants.
 
@@ -34,7 +34,7 @@ For FastAPI app/router/lifespan idioms see `fastapi`; for the orchestrator loop'
 
 ## Load-bearing invariants
 
-1. **Data ownership.** Only `core-api` and `orchestrator` open a DB engine (both via `core/lifespan.py::make_lifespan` → `make_engine`/`make_sessionmaker`). They are two processes over *one* `core` brick sharing the `batches` table transactionally — not independent services. `search`/`volumes`/`ray` are **stateless readers with no DB**: never give them a session or have them write batch state.
+1. **Data ownership.** Only `core-api` and `orchestrator` open a DB engine (both via `core/lifespan.py::make_lifespan` → `make_engine`/`make_sessionmaker`). They are two processes over *one* `core` package sharing the `batches` table transactionally — not independent services. `search`/`volumes`/`ray` are **stateless readers with no DB**: never give them a session or have them write batch state.
 2. **Each service builds only its own `app.state` subset in its own lifespan.** volumes-api passes no `lifespan` at all (stateless). search-api opens only `lines_tbl`+`s3`. ray-api opens only the dashboard/job clients. Don't widen a lifespan to grab resources the service doesn't use.
 3. **Longest-prefix-first routing.** `gateway/__init__.py::_routes()` returns prefixes most-specific-first; `_pick_upstream` returns the first whose `path == prefix or path.startswith(prefix + "/")`. Order: `{prefix}/search`, `/volumes`, `/ray`, `/orchestrator` → their services; **`/api/serve` → ray-api**; then `{prefix}` and `/api` → **core (the catch-all)**. New domain prefixes must go *before* the core catch-all or core will swallow them.
 4. **`/api/serve` and `/api/ray` both go to ray-api**, but for different reasons: domain routers mount under `RASK_API_PREFIX` (`/api/v1`), while ray-api's `proxy_router` mounts at the **root** (no prefix) so `/api/serve/*` reaches the Ray Serve status API. Routers vs proxy_router is the `make_service_app` distinction.

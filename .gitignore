@@ -6,7 +6,7 @@ __pycache__/
 dist/
 build/
 *.egg-info/
-# uv / virtualenvs — `.venv/` matches at ANY depth (root + any stray projects/*/.venv)
+# uv / virtualenvs — `.venv/` matches at ANY depth (root + any stray nested .venv)
 .venv/
 **/.venv/
 .uv/

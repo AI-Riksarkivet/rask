@@ -27,6 +27,6 @@ blocks imported by the runnable components.
 
 !!! note "`packages/control` is gone"
     The former `control` package (sync + chunk submission) was absorbed into the
-    core brick (`components/services/core`) service layer
+    core package (`components/services/core`) service layer
     (`services/{sync,submission}`). Don't reference it — only stale bytecode
     remains.

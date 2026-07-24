@@ -7,8 +7,9 @@ the resulting transcriptions searchable.
 
 It is a polyglot monorepo — **Python + Svelte/TypeScript**, managed with
 [uv](https://docs.astral.sh/uv/) (Python 3.13) and [Bun](https://bun.sh) — laid
-out in three brick layers: reusable **packages**, runnable **components**, and
-deployable **projects**.
+out in two layers: reusable **packages** and runnable **components**.
+Deployables build from the root workspace (`uv sync --package <name>`), one
+dockerfile each under `.docker/`.
 
 ## What it does
 
@@ -33,7 +34,7 @@ flowchart LR
 - **[Getting Started](getting-started/index.md)** — install, run the stack locally, and submit your first batch.
 - **[Concepts](getting-started/concepts.md)** — the vocabulary: batches, chunks, pipelines, the orchestrator.
 - **[Architecture](architecture/index.md)** — how runner, Ray, the services, the frontend, and storage fit together.
-- **[Packages](packages/index.md)** / **[Components](components/index.md)** / **[Projects](projects/index.md)** — the monorepo, layer by layer.
+- **[Packages](packages/index.md)** / **[Components](components/index.md)** — the monorepo, layer by layer (plus [sub-project notes](projects/index.md): runner, HCP).
 - **[API Reference](reference/htr.md)** — auto-generated from source docstrings.
 
 !!! note "Audience"

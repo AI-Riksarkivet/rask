@@ -1,7 +1,7 @@
 # Services
 
 `components/services/` holds the HTTP backend fleet — a **gateway** reverse
-proxy plus five per-domain services, all built over a shared **core** brick.
+proxy plus five per-domain services, all built over a shared **core** package.
 The old monolithic `viewer` service was dissolved (June 2026) into this layout.
 
 ## Gateway — `components/services/gateway`
@@ -18,10 +18,10 @@ the services below; owns no state and no DB. Upstream URLs are env-overridable:
 | `RASK_RAY_API_URL` | `http://localhost:8804` | ray-api |
 | `RASK_ORCH_API_URL` | `http://localhost:8810` | orchestrator |
 
-## Core brick — `components/services/core`
+## Core package — `components/services/core`
 
 Package `core`. **Not a deployable on its own** — composed by `core-api` and
-`orchestrator`, which run as two processes over the same brick so they share the
+`orchestrator`, which run as two processes over the same package so they share the
 `batches` table transactionally.
 
 Owns:
@@ -72,7 +72,7 @@ orchestrator endpoints. Orchestrator lifespan loop **on**
 `POST /api/v1/orchestrator/start` and `/stop`; inspect with
 `GET /api/v1/orchestrator/state`.
 
-!!! note "Two processes, one brick"
+!!! note "Two processes, one package"
     `core-api` (loop OFF) and `orchestrator` (loop ON) are deliberately split
     so the submission loop runs in exactly one process. They share the same
     `batches` table and the same `core` source tree. The loop is explicitly

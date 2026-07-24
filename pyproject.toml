@@ -1,7 +1,7 @@
 [project]
 name = "rask-workspace"
 version = "0.1.0"
-description = "rask monorepo — uv workspace root (no entry points; see projects/*)."
+description = "rask monorepo — uv workspace root (no entry points; deployables build via `uv sync --package <name>`)."
 requires-python = ">=3.13"
 license = "AGPL-3.0-only"
 dependencies = []

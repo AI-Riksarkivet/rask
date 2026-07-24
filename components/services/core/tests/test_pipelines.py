@@ -54,7 +54,7 @@ from service_kit.config import RunnerParams
 # by " \<newline>  ". Reconstructed by hand so this pins the format rather than
 # echoing build_entrypoint's own join.
 _GOLDEN_PREFIX = (
-    "uv run --project projects/runner runner \\\n"
+    "uv run --package runner runner \\\n"
     "  --cache-bucket images-batch \\\n"
     "  --output s3://images-batch-alto \\\n"
     "  --iiif-url https://iiifintern-ai.ra.se \\\n"
@@ -122,8 +122,8 @@ def test_build_entrypoint_honours_configurable_runner_cmd() -> None:
 # ── 2. REGISTRY INVARIANTS ─────────────────────────────────────────────────
 
 
-# The runner's PIPELINES keys, mirrored here. The viewer package can't import
-# `runner` (separate uv workspace project), so when it IS importable we assert
+# The runner's PIPELINES keys, mirrored here. The core package can't import
+# `runner` (not one of its dependencies), so when it IS importable we assert
 # equality against the live dict; otherwise we pin against this literal. Either
 # way a divergence between the two sources is what this test exists to catch.
 _EXPECTED_RUNNER_PIPELINES = {"htr", "htrflow", "fake", "prefetch"}
@@ -494,11 +494,7 @@ def test_build_entrypoint_s3_mode_uses_input_prefix() -> None:
     )
     out = build_entrypoint(["VOL_A"], params=params, spec=PIPELINE_SPECS["htrflow"])
     assert out == (
-        "uv run --project projects/runner runner \\\n"
-        "  --input s3://images-batch \\\n"
-        "  --output s3://images-batch-alto \\\n"
-        "  --prefix VOL_A/ \\\n"
-        "  --pipeline htrflow"
+        "uv run --package runner runner \\\n  --input s3://images-batch \\\n  --output s3://images-batch-alto \\\n  --prefix VOL_A/ \\\n  --pipeline htrflow"
     )
 
 

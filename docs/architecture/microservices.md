@@ -1,7 +1,7 @@
 # Viewer decomposition into microservices
 
 Status: **IMPLEMENTED (June 2026).** The monolithic `viewer` service was
-dissolved into a gateway + per-domain services over a shared `core` brick. This
+dissolved into a gateway + per-domain services over a shared `core` package. This
 document retains the analysis of why the seams were cut where they were, updated
 to past tense where the work is done.
 
@@ -45,7 +45,7 @@ consumer once that lands.
 these share writes/reads on one table (`batches`). The decision was to keep them
 as one `core-api` service (`components/services/core_api`, `:8801`) rather than
 splitting further. `core-api` and `orchestrator` are two thin entrypoints over
-the same `core` brick (`components/services/core`) — they share the `batches`
+the same `core` package (`components/services/core`) — they share the `batches`
 table transactionally, deliberately not forced into separate services.
 
 ## Current topology
@@ -87,7 +87,7 @@ Upstream env vars (all overridable): `RASK_CORE_API_URL` (:8801), `RASK_SEARCH_A
 ## Data ownership
 
 - **`batches` DB** — owned solely by **core-api** and **orchestrator** (the only
-  writers). Alembic lives in the `core` brick (`components/services/core/alembic/`);
+  writers). Alembic lives in the `core` package (`components/services/core/alembic/`);
   both entrypoints share the schema and neither runs migrations independently.
 - **LanceDB `lines` / `archive_catalog`** — read-only from all services; written
   by external indexer scripts (`index_alto`, `harvest_ead`).
@@ -112,7 +112,7 @@ Upstream env vars (all overridable): `RASK_CORE_API_URL` (:8801), `RASK_SEARCH_A
 
 ## Repo layout (done)
 
-The one-time migration promoted in-process code into the `core` brick and added
+The one-time migration promoted in-process code into the `core` package and added
 new thin entrypoints + packages:
 
 ```
@@ -122,16 +122,15 @@ packages/
   storage/  htr/     # unchanged
 components/services/
   gateway/           # ADDED — thin router/proxy on :8888
-  core/              # ADDED — domain brick (dissolved viewer logic + alembic)
+  core/              # ADDED — domain package (dissolved viewer logic + alembic)
   core_api/          # ADDED — thin entrypoint :8801 (health + batches + chunks + catalog)
   orchestrator/      # ADDED — thin entrypoint :8810 (health + orchestrator loop)
   search_api/        # ADDED — search endpoints :8802
   volumes_api/       # ADDED — volumes endpoints :8803
   ray_api/           # ADDED — ray endpoints + serve proxy :8804
   # viewer/ — REMOVED (dissolved)
-projects/
-  gateway/  core-api/  orchestrator/  volumes-api/  search-api/  ray-api/  runner/
-  # projects/viewer — REMOVED
+# projects/ — REMOVED (2026-07; deployables build from the root workspace via
+#              `uv sync --package <name>`, one .docker/<name>.dockerfile each)
 ```
 
 Each service builds its own `app.state` subset in its own lifespan (e.g.
@@ -227,7 +226,7 @@ worker and consolidate its pub/sub onto `pubsub.jetstream`.
   2. **Peeled off the stateless readers** as independent services: `volumes-api`,
      `search-api`, `ray-api` — cheap, no shared DB.
 - Kept `batches` + `chunks` + `catalog` as one core-api behind the gateway, with
-  `core-api` and `orchestrator` as two thin entrypoints over the same `core` brick.
+  `core-api` and `orchestrator` as two thin entrypoints over the same `core` package.
 - Current state: **gateway → {core-api, orchestrator, search-api, volumes-api,
   ray-api}**. `core-api` and `orchestrator` share the `batches` table. The
   orchestrator's NATS JetStream replacement is the next roadmap item.

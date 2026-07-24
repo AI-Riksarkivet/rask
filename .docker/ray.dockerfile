@@ -44,7 +44,6 @@ WORKDIR /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    --mount=type=bind,source=projects/runner/pyproject.toml,target=projects/runner/pyproject.toml \
     --mount=type=bind,source=packages,target=packages \
     --mount=type=bind,source=components,target=components \
     uv sync --frozen --no-install-workspace --package runner --no-editable
@@ -53,7 +52,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY pyproject.toml uv.lock ./
 COPY packages packages
 COPY components components
-COPY projects/runner projects/runner
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --package runner --no-editable
 

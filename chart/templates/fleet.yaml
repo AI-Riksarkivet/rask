@@ -85,6 +85,12 @@ spec:
             - name: RASK_ORCHESTRATOR_AUTOSTART
               value: {{ if $svc.singleton }}{{ $root.Values.orchestrator.autostart | quote }}{{ else }}"false"{{ end }}
             {{- include "rask.otelEnv" (list $root $name) | nindent 12 }}
+            {{- if $svc.singleton }}
+            # The Ray job entrypoint runs inside the ray image, which has no uv and
+            # no source tree — only the installed `runner` console script on PATH.
+            - name: RASK_RUNNER_CMD
+              value: {{ $root.Values.orchestrator.runnerCmd | quote }}
+            {{- end }}
           readinessProbe:
             httpGet: {path: {{ $svc.healthPath | default "/api/health" }}, port: http}
             initialDelaySeconds: 5

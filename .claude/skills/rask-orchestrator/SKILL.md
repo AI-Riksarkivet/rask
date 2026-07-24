@@ -5,7 +5,7 @@ description: The rask orchestrator — the reconcile→derive→submit loop that
 
 # rask Orchestrator
 
-The transitional control loop that turns S3 + DB state into Ray job submissions. A lifespan-managed `asyncio.Task` that ticks every `RASK_ORCHESTRATOR_INTERVAL_SECONDS` (default 60, `ge=10`). Lives in the `core` brick (`components/services/core/src/core/services/orchestrator/`), composed by the thin `orchestrator` entrypoint (`:8810`).
+The transitional control loop that turns S3 + DB state into Ray job submissions. A lifespan-managed `asyncio.Task` that ticks every `RASK_ORCHESTRATOR_INTERVAL_SECONDS` (default 60, `ge=10`). Lives in the `core` package (`components/services/core/src/core/services/orchestrator/`), composed by the thin `orchestrator` entrypoint (`:8810`).
 
 This is domain-specific glue. For the *generic* patterns it leans on — NATS JetStream, retries, OTel — defer to `python-infrastructure`; for FastAPI/SQLModel/Alembic mechanics, `fastapi`. This skill encodes only what's non-obvious about *this* loop.
 
