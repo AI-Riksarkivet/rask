@@ -3,7 +3,7 @@
 # Nothing else in CI renders the prod overlay — the e2e jobs deploy the DEFAULT (kind) values — so without
 # this a regression that silently ships the dev posture in prod (NetworkPolicy off, OpenFGA/Dapr single-
 # replica) sails through green. Dummy values satisfy the render-FAILS-CLOSED prod-secret guards (appToken /
-# edgeAuth htpasswd / age pw / rustfs key); supplying them ALSO proves the guards don't block a legitimate
+# age pw / rustfs key); supplying them ALSO proves the guards don't block a legitimate
 # prod render. Run: `make prod-render-check` (or in CI). Requires helm + the vendored chart/charts/*.tgz.
 set -euo pipefail
 
@@ -14,7 +14,6 @@ trap 'rm -f "$OUT"' EXIT
 helm template lance-ns "$CHART" -f "$CHART/values-prod.yaml" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 \
   --set dapr.appToken=ci-dummy-token-0000000000 \
-  --set 'observability.edgeAuth.htpasswd=observer:$apr1$ci000000$0000000000000000000000' \
   --set age.password=ci-dummy-pw --set rustfs.secretKey=ci-dummy-key \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass \
   --set ingress.host=lance.example.com > "$OUT"
@@ -48,8 +47,12 @@ grep -A20 "name: lance-ns-nats-monitor" "$OUT" | grep -q "port: 8222" \
 grep -A15 "name: lance-ns-openfga$" "$OUT" | grep -q "replicas: 3" \
   || fail "prod OpenFGA must run 3 replicas (authz SPOF)"
 
-# 3. Dapr control-plane HA — Sentry is the mTLS CA in the sidecar cert-renewal path.
-awk '/name: dapr-sentry$/{n=1} n&&/replicas:/{print; exit}' "$OUT" | grep -q "replicas: 3" \
+# 3. Dapr control-plane HA — Sentry is the mTLS CA in the sidecar cert-renewal path. (Anchor on the
+# Deployment doc via its # Source + kind — helm sorts output by kind, so the first `name: dapr-sentry`
+# is the RBAC ServiceAccount, and a bare /replicas:/ substring-matches cnpg's `streaming_replicas`
+# monitoring query that the merged chart renders in between.)
+awk '/^# Source:/{src=$0; d=0} /^kind: Deployment$/{if (src ~ /dapr_sentry_deployment/) d=1} d&&/^ *replicas:/{print; exit}' "$OUT" \
+  | grep -q "replicas: 3" \
   || fail "prod Dapr control-plane must be HA (dapr-sentry replicas: 3)"
 
 # 4. PodDisruptionBudgets: the request-serving backends (catalog/lineage/gateway) + OpenFGA (the authz
@@ -88,29 +91,19 @@ grep -q "LineageOutboxNotDraining" "$OUT" || fail "the proven alert rules must b
 grep -q "DaprConsumerWedge" "$OUT" || fail "the consumer-wedge rule must be mounted (SLO-as-code)"
 grep -q "name: lance-ns-vmagent$" "$OUT" && fail "vmagent must NOT be shipped (the OTel Collector owns the Dapr scrape)"
 
-# 8b. THE GATEWAY'S TWO UNAUTHENTICATED DOORS ARE SHUT IN PROD.
+# 8b. THE EDGE'S FORMERLY-UNAUTHENTICATED DOORS STAY SHUT IN PROD.
 #
-# The gateway is an nginx reverse proxy: no OIDC, no FGA. It forwards to the services, which enforce on the
-# bearer — so /catalog/ and /lineage/ answer 401 to an anonymous caller, verified live. Two locations are
-# NOT protected that way, and both were correct in values-prod.yaml while NOTHING here asserted them:
-#
-#   - POST /produce fires the medallion cascade and carries no auth of its own. Measured anonymously
-#     through the gateway on the dev render: 202. That is deliberate for the demo
-#     (`medallion.producer.expose: true`) and values-prod sets it false — a caller who could reach it
-#     could trigger cascades and forge medallion provenance.
-#   - /perses/ and /greptime/ are a dashboard suite and a raw telemetry store. Measured anonymously on the
-#     dev render: 200 and 200. values-prod turns on `observability.edgeAuth` to put basic-auth on both.
-#
-# Asserting the rendered OUTPUT rather than trusting the values file: a values edit, a template refactor, or
-# a `--set` in a deploy script can reopen either door, and neither failure is visible — an exposed /produce
-# looks like a working demo, and an open /greptime looks like a working dashboard.
-grep -q "location /produce" "$OUT" \
-  && fail "prod must NOT expose the unauthenticated /produce door (medallion.producer.expose)"
-grep -q "auth_basic_user_file /etc/nginx/edge-auth/htpasswd" "$OUT" \
-  || fail "prod must put basic-auth on the gateway's /perses/ + /greptime/ (observability.edgeAuth.enabled)"
-# One auth_basic per protected location, so a half-applied guard (one of the two) fails rather than passing.
-[ "$(grep -c 'auth_basic_user_file /etc/nginx/edge-auth/htpasswd' "$OUT")" = "2" ] \
-  || fail "both /perses/ AND /greptime/ must carry basic-auth in prod (found $(grep -c 'auth_basic_user_file' "$OUT"))"
+# Pre-fold, the nginx gateway exposed two unauthenticated locations: POST /produce (medallion cascade,
+# gated only by `medallion.producer.expose`) and /perses/ + /greptime/ (basic-auth'd via
+# observability.edgeAuth). The gateway fold (lance-ns-merge.md decision 4 / P1 / P4) retired nginx:
+# the FastAPI gateway proxies /api/* only, /produce + /train enforce fail-closed dual-auth in the
+# service itself (#64, tests/unit/test_produce_auth.py), and the telemetry suite is cluster-internal
+# (port-forward only — no Ingress path routes it). Assert the doors stay CLOSED under the new topology,
+# on the rendered OUTPUT: an Ingress path or a resurfaced nginx block reopens a door invisibly.
+grep -qE "location /(produce|perses|greptime)" "$OUT" \
+  && fail "an nginx location block resurfaced — the nginx gateway is retired (lance-ns-merge decision 4)"
+grep -qE "path: /(perses|greptime)" "$OUT" \
+  && fail "prod must NOT route /perses//greptime at the public edge (cluster-internal since the gateway fold)"
 
 # 9. Catalog memory coherence (P1): the load-shed write cap must be sized to the catalog memory tier —
 # cap × maxBodyBytes of buffered Arrow-IPC bodies + 512Mi baseline headroom (process + pyarrow decode)
@@ -147,22 +140,20 @@ peak=$((cap * body + headroom))
 EXT_S3=https://s3.ext.example.com
 atomic=$(helm template lance-ns "$CHART" -f "$CHART/values-prod.yaml" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 --set dapr.appToken=ci-dummy-token-0000000000 \
-  --set 'observability.edgeAuth.htpasswd=observer:$apr1$ci000000$0000000000000000000000' \
   --set age.password=ci-dummy-pw --set rustfs.secretKey=ci-dummy-key \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
   --set rustfs.enabled=false --set rustfs.externalEndpoint="$EXT_S3" \
   --set greptimedb-standalone.objectStorage.s3.endpoint="$EXT_S3" 2>/dev/null)
-grep -q "lance-ns-rustfs:9000" <<<"$atomic" \
+grep -q "rask-rustfs-io" <<<"$atomic" \
   && fail "externalizing RustFS + the greptime endpoint companion still leaks in-cluster rustfs DNS"
 # Negative: rustfs externalized but the greptime companion OMITTED must still show the leak (proves the pairing
 # is load-bearing, i.e. the guard above isn't vacuous).
 leak=$(helm template lance-ns "$CHART" -f "$CHART/values-prod.yaml" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 --set dapr.appToken=ci-dummy-token-0000000000 \
-  --set 'observability.edgeAuth.htpasswd=observer:$apr1$ci000000$0000000000000000000000' \
   --set age.password=ci-dummy-pw --set rustfs.secretKey=ci-dummy-key \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
   --set rustfs.enabled=false --set rustfs.externalEndpoint="$EXT_S3" 2>/dev/null)
-grep -q "lance-ns-rustfs:9000" <<<"$leak" \
+grep -q "rask-rustfs-io" <<<"$leak" \
   || fail "the rustfs-externalize coherence guard is vacuous (expected the greptime leak without the companion override)"
 
 # 11. External Secrets Operator path renders (operator-handoff audit): externalSecrets.enabled=true must
@@ -170,7 +161,6 @@ grep -q "lance-ns-rustfs:9000" <<<"$leak" \
 # and SATISFY the fail-closed prod-secret guard WITHOUT age.password/rustfs.secretKey (ESO supplies them).
 eso=$(helm template lance-ns "$CHART" -f "$CHART/values-prod.yaml" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 --set dapr.appToken=ci-dummy-token-0000000000 \
-  --set 'observability.edgeAuth.htpasswd=observer:$apr1$ci000000$0000000000000000000000' \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
   --set externalSecrets.enabled=true 2>/dev/null) \
   || fail "prod render with externalSecrets.enabled=true FAILED (age.password/rustfs.secretKey should not be required)"
@@ -184,12 +174,17 @@ grep -A2 "name: lance-ns-infra-credentials" <<<"$eso" | grep -q "stringData:" \
 # bucket existed). Pod-template label indents only — 8 spaces (Job) / 12 (CronJob) — so the heredoc'd
 # VolumeSnapshot labels inside a command string can't satisfy the check. Then pin the load-bearing pair:
 # the mkbucket pod label AND its admission in the rustfs ingress client list.
+# post-delete hooks are exempt: the landmine class is INSTALL-time wedging (an unlabeled hook pod
+# that no netpol ingress rule admits), and a post-delete hook cannot wedge an install. Today's only
+# such job is the vendored nfd 0.17.3 prune (node-API-only, needs no ingress admission), whose
+# labels are hardcoded upstream — revisit if nfd ever grows a prune podLabels hook.
 jobs_missing=$(awk '
-  /^---/     { if (k && !c && n != "") print n; k=0; c=0; n="" }
+  /^---/     { if (k && !c && !pd && n != "") print n; k=0; c=0; pd=0; n="" }
   /^kind: Job$/ || /^kind: CronJob$/ { k=1 }
   k && n == "" && /^  name: /        { n=$2 }
+  k && /"helm\.sh\/hook": post-delete/ { pd=1 }
   k && (/^        app\.kubernetes\.io\/component:/ || /^            app\.kubernetes\.io\/component:/) { c=1 }
-  END        { if (k && !c && n != "") print n }
+  END        { if (k && !c && !pd && n != "") print n }
 ' "$OUT")
 [ -z "$jobs_missing" ] \
   || fail "Job/CronJob pod templates missing the component label (invisible to component-scoped NetworkPolicies): $(tr '\n' ' ' <<<"$jobs_missing")"

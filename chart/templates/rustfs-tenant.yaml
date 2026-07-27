@@ -1,4 +1,11 @@
-{{- if and .Values.rustfs.enabled .Values.singleTenant.enabled }}
+{{- if .Values.rustfs.enabled }}
+# The ONE in-cluster object store (docs/architecture/lance-ns-merge.md P4: "RustFS: rask's operator
+# Tenant wins; ... keep-PVC posture via Tenant spec"). Gated by rustfs.enabled ALONE — the toggle gates
+# the operator subchart (Chart.yaml condition), this Tenant CR, and the bucket-init hook
+# (templates/rustfs.yaml) as one unit. Deliberately NOT gated by singleTenant: the lakehouse apps,
+# medallion movers, compaction, backups and GreptimeDB all resolve the Tenant's S3 Service
+# (`<tenant>-io:9000` = `lance.rustfsHost`) regardless of singleTenant, so the endpoint must exist
+# whenever any of them renders.
 apiVersion: rustfs.com/v1alpha1
 kind: Tenant
 metadata:
@@ -9,25 +16,74 @@ spec:
   image: {{ .Values.rustfs.image | quote }}
   credsSecret:
     name: {{ include "rask.fullname" . }}-rustfs
-  {{- if .Values.rustfs.bypassDiskCheck }}
-  # RustFS erasure coding requires its volumes on distinct physical disks. On a
-  # single-node k3s box every local-path PVC lands on the same disk, which trips
-  # a fatal safety check; this flag bypasses it (intended for local/CI per RustFS).
+  {{- if .Values.security.infraContexts.enabled }}
+  # Per-image uid/fsGroup from values (see security.infraContexts.rustfs): uid 10001 is the rustfs
+  # image's built-in user that owns the on-disk data. A mismatched uid does NOT CrashLoop — the server
+  # READS fine but EVERY WRITE fails (S3 500/AccessDenied), which killed the whole data plane live
+  # 2026-07-13. Flag default OFF; flip after the kind boot check (§7a).
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: {{ .Values.security.infraContexts.rustfs.runAsUser }}
+    {{- with .Values.security.infraContexts.rustfs.fsGroup }}
+    fsGroup: {{ . }}
+    {{- end }}
+    seccompProfile: { type: RuntimeDefault }
+  {{- end }}
+  {{- if or .Values.rustfs.bypassDiskCheck .Values.rustfs.oidc.enabled }}
   env:
+    {{- if .Values.rustfs.bypassDiskCheck }}
+    # RustFS erasure coding requires its volumes on distinct physical disks. On a
+    # single-node k3s box every local-path PVC lands on the same disk, which trips
+    # a fatal safety check; this flag bypasses it (intended for local/CI per RustFS).
     - name: RUSTFS_UNSAFE_BYPASS_DISK_CHECK
       value: "true"
+    {{- end }}
+    {{- if .Values.rustfs.oidc.enabled }}
+    # OIDC identity provider (Dex) for STS AssumeRoleWithWebIdentity — a client presents its Dex
+    # id_token and RustFS mints short-TTL creds bound to ROLE_POLICY, which the catalog's inline
+    # session policy then scopes per-table (Track B / credential vending). MinIO-compatible config.
+    # Lived on the first-party Deployment before the P4 store unification; the Tenant is the ONE
+    # store now, so the toggle lands here.
+    - name: RUSTFS_IDENTITY_OPENID_ENABLE
+      value: "on"
+    - name: RUSTFS_IDENTITY_OPENID_CONFIG_URL
+      value: "{{ .Values.dex.issuer }}/.well-known/openid-configuration"
+    - name: RUSTFS_IDENTITY_OPENID_CLIENT_ID
+      value: {{ .Values.dex.clientId | quote }}
+    - name: RUSTFS_IDENTITY_OPENID_CLIENT_SECRET
+      value: {{ .Values.dex.clientSecret | quote }}
+    - name: RUSTFS_IDENTITY_OPENID_SCOPES
+      value: "openid,email"
+    # The base policy every Dex-authenticated token assumes; the per-request session policy can only
+    # narrow it. `readwrite` is a built-in policy (full S3); narrowing happens in the session policy.
+    - name: RUSTFS_IDENTITY_OPENID_ROLE_POLICY
+      value: {{ .Values.rustfs.oidc.rolePolicy | quote }}
+    {{- end }}
   {{- end }}
   pools:
     - name: pool-0
       servers: {{ .Values.rustfs.servers }}
+      # The lakehouse + observability object store under real load — values-prod tiers it to 1Gi
+      # (resources.rustfs); the default render takes the shared tier.
+      resources: {{- include "lance.resources" (dict "root" . "comp" "rustfs") | nindent 8 }}
       persistence:
         volumesPerServer: {{ .Values.rustfs.volumesPerServer }}
+        # Keep-PVC posture via the Tenant spec (the P4 ruling): the operator's StatefulSet-owned PVCs
+        # survive both pod rolls and `helm uninstall` (helm never owned them). The labels are
+        # LOAD-BEARING — templates/backup-snapshot.yaml selects the lakehouse PVCs by this pair.
+        labels:
+          app.kubernetes.io/instance: {{ .Release.Name }}
+          app.kubernetes.io/component: rustfs
         volumeClaimTemplate:
           accessModes: ["ReadWriteOnce"]
           resources:
             requests:
               storage: {{ .Values.rustfs.storage | quote }}
-          storageClassName: {{ .Values.rustfs.storageClass | quote }}
+          {{- with .Values.rustfs.storageClass }}
+          # `with`, not a bare quote: `storageClassName: ""` DISABLES dynamic provisioning in k8s —
+          # empty values must render NO field so the cluster-default StorageClass applies.
+          storageClassName: {{ . | quote }}
+          {{- end }}
   buckets:
     {{- range .Values.rustfs.buckets }}
     - name: {{ . | quote }}

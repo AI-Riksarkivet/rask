@@ -1,0 +1,60 @@
+{{- if .Values.runners.enabled }}
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# Model runners (runners/ — the lance-audio fold's model homes). Only the CPU-viable subset deploys
+# here; the CUDA-pinned runners (asr/diarize/voiceprint) and the LLM-dependent batch runners
+# (topics/kg) stay undeployed on this GPU-less estate — see docs/DECISIONS.md "Runner deployment".
+#
+# assist: the annotator's interactive AI-assist server (GroundingDINO-tiny detection + SAM-ViT-base
+# segmentation, CPU, weights baked into the image). The annotator's MEDIA_ASSIST_URL (media.yaml)
+# points at this Service when runners.enabled — flipping the in-repo mock to real predictions with
+# zero annotator changes (the same drop-in seam as the catalog transport).
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lance.fullname" . }}-assist
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  replicas: 1 # one warm model pair; interactive bursts serialize behind the server's inference lock
+  selector:
+    matchLabels: { app.kubernetes.io/component: assist, app.kubernetes.io/instance: {{ .Release.Name }} }
+  template:
+    metadata:
+      labels:
+        {{- include "lance.labels" . | nindent 8 }}
+        # Explicit component label — prod default-deny NetworkPolicies select on it (kindnet hides
+        # a miss); no lance.dev/logs=otlp: the runner carries no OTel SDK, the Collector's filelog
+        # tail ships its logs.
+        app.kubernetes.io/component: assist
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
+      {{- if .Values.security.serviceAccounts.enabled }}
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-assist
+      {{- end }}
+      containers:
+        - name: assist
+          image: "{{ .Values.runners.assist.image.repository }}:{{ required "runners.assist.image.tag must be set (a release tag in prod; `dev` locally)" .Values.runners.assist.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "lance.securityContext" . | nindent 10 }}
+          {{- include "lance.preStop" . | nindent 10 }}
+          ports: [{ name: http, containerPort: {{ .Values.runners.assist.port }} }]
+          env:
+            # Frames are fetched from the viewer (the corpus reader) — the payload's image_url is
+            # relative; this base is the runner's only allowed origin (no SSRF surface).
+            - { name: ASSIST_FRAME_BASE, value: "http://{{ include "lance.fullname" . }}-viewer:{{ .Values.media.services.viewer.port }}" }
+          {{- include "lance.appProbes" . | nindent 10 }}
+          resources: {{- include "lance.resources" (dict "root" . "comp" "assist") | nindent 12 }}
+          volumeMounts:
+            {{- include "lance.tmpMount" . | nindent 12 }}
+      volumes:
+        {{- include "lance.tmpVolume" . | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lance.fullname" . }}-assist
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  ports: [{ name: http, port: {{ .Values.runners.assist.port }}, targetPort: http }]
+  selector: { app.kubernetes.io/component: assist, app.kubernetes.io/instance: {{ .Release.Name }} }
+{{- end }}

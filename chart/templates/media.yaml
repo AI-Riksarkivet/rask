@@ -1,0 +1,138 @@
+{{- if .Values.media.enabled }}
+{{- $root := . }}
+{{- if .Values.media.catalogToken }}
+# The media services' catalog identity (auth-on catalogs): a bearer the annotator presents on every
+# catalog read/write — FGA decides what that identity may do (the merge's writer-rung rehearsal).
+# A Secret, never a plain env value; renders only when set (prod leaves it to the real secret flow).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "lance.fullname" . }}-media-catalog-token
+  labels: {{- include "lance.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  token: {{ .Values.media.catalogToken | quote }}
+---
+{{- end }}
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# lance-media plane (merged from the lance-audio checkout per docs/LANCE_NS_HANDOFF.md): the viewer,
+# search, and annotator services. All three share the catalog image (services/ tree is COPY'd whole),
+# read the CORPUS from a node-local hostPath (NO data move — the corpus never migrates; on this kind
+# cluster it is staged at /var/media-corpus on the node, the kind adaptation of the runbook's
+# hostPath/extraMount), and run CATALOG-mode reads/writes: only the annotations table lives in the
+# catalog (MEDIA_READ/WRITE_BACKEND=catalog, MEDIA_CATALOG_URI → the in-release catalog Service).
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+{{- range $name, $svc := .Values.media.services }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lance.fullname" $root }}-{{ $name }}
+  labels: {{- include "lance.labels" $root | nindent 4 }}
+spec:
+  replicas: {{ (hasKey $svc "replicas") | ternary $svc.replicas 1 }}
+  selector:
+    matchLabels: { app.kubernetes.io/component: {{ $name }}, app.kubernetes.io/instance: {{ $root.Release.Name }} }
+  template:
+    metadata:
+      labels:
+        {{- include "lance.labels" $root | nindent 8 }}
+        app.kubernetes.io/component: {{ $name }}
+        lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
+      {{- if $root.Values.dapr.sidecars }}
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: {{ $svc.daprAppId | quote }}
+        dapr.io/app-port: {{ $svc.port | quote }}
+        dapr.io/log-level: {{ $root.Values.dapr.logLevel | quote }}
+        {{- include "lance.daprSidecarResources" $root | nindent 8 }}
+        {{- if include "lance.otelEnabled" $root }}
+        dapr.io/config: "lance-tracing"
+        {{- end }}
+      {{- end }}
+    spec:
+      terminationGracePeriodSeconds: {{ $root.Values.lifecycle.terminationGracePeriodSeconds }}
+      {{- if $root.Values.security.serviceAccounts.enabled }}
+      serviceAccountName: {{ include "lance.fullname" $root }}-sa-{{ $name }}
+      {{- end }}
+      containers:
+        - name: {{ $name }}
+          image: "{{ include "lance.catalogImage" $root }}"
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          {{- include "lance.securityContext" $root | nindent 10 }}
+          {{- include "lance.preStop" $root | nindent 10 }}
+          {{- if include "lance.otelEnabled" $root }}
+          command: ["opentelemetry-instrument", "uvicorn", "{{ $name }}.main:app", "--host=0.0.0.0", "--port={{ $svc.port }}"]
+          {{- else }}
+          command: ["uvicorn", "{{ $name }}.main:app", "--host=0.0.0.0", "--port={{ $svc.port }}"]
+          {{- end }}
+          ports: [{ name: http, containerPort: {{ $svc.port }} }]
+          env:
+            {{- if include "lance.otelEnabled" $root }}
+            {{- include "lance.otelEnv" (list $root $svc.daprAppId) | nindent 12 }}
+            {{- end }}
+            # In-pod bind: the settings default is 127.0.0.1 (dev); a pod must listen on all interfaces.
+            - { name: MEDIA_HOST, value: "0.0.0.0" }
+            # The corpus, mounted read-only from the node (see the volume below). db_root anchors the
+            # multi-dataset registry; db_path is the default dataset; descriptors ride alongside.
+            - { name: MEDIA_DB_ROOT, value: {{ $root.Values.media.corpusMountPath | quote }} }
+            - { name: MEDIA_DB, value: "{{ $root.Values.media.corpusMountPath }}/transcripts_v2.lance" }
+            - { name: MEDIA_DESCRIPTOR_DIR, value: "{{ $root.Values.media.corpusMountPath }}/descriptors" }
+            # Catalog mode (the merge's env flip): annotations live in the catalog, nowhere else.
+            - { name: MEDIA_READ_BACKEND, value: {{ $root.Values.media.readBackend | quote }} }
+            - { name: MEDIA_WRITE_BACKEND, value: {{ $root.Values.media.writeBackend | quote }} }
+            - { name: MEDIA_CATALOG_URI, value: {{ $root.Values.media.catalogUri | default (printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port) | quote }} }
+            {{- if $root.Values.media.catalogToken }}
+            - name: MEDIA_CATALOG_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ include "lance.fullname" $root }}-media-catalog-token, key: token }
+            {{- end }}
+            {{- if or (eq $name "search") (eq $name "viewer") }}
+            # Query encoders (values.encoders). search CALLS them (vector/hybrid/rerank legs); viewer
+            # only PROBES them for /api/health, which is what drives the media zone's mode gating — so
+            # both must see the same URLs or the UI disables a mode search can actually serve. Rendered
+            # only when set: unset leaves the settings default (127.0.0.1, unreachable in a pod) and the
+            # health probe reports ok=false, which is the honest "no encoder deployed" state.
+            {{- /* `default dict`, not a bare field access: `encoders` is a NEW top-level key, so under
+            `helm upgrade --reuse-values` the stored values carry no `encoders` at all and
+            `.Values.encoders.embedUrl` aborts the entire render with "nil pointer evaluating
+            interface {}.embedUrl". Gated by scripts/verify_encoder_wiring.sh step 2b. */}}
+            {{- $enc := $root.Values.encoders | default dict }}
+            {{- with $enc.embedUrl }}
+            - { name: MEDIA_EMBED_URL, value: {{ . | quote }} }
+            {{- end }}
+            {{- with $enc.rerankUrl }}
+            - { name: MEDIA_RERANK_URL, value: {{ . | quote }} }
+            {{- end }}
+            {{- end }}
+            {{- if and (eq $name "annotator") $root.Values.runners.enabled }}
+            # The assist runner (runners.yaml): flips the annotator's in-repo assist mock to REAL
+            # GroundingDINO+SAM predictions — same request/response wire shape, zero code change.
+            - { name: MEDIA_ASSIST_URL, value: "http://{{ include "lance.fullname" $root }}-assist:{{ $root.Values.runners.assist.port }}/v1/assist" }
+            {{- if $root.Values.runners.jobsUrl }}
+            # Batch-labeling submit seam — only rendered when an actual RayJob endpoint exists;
+            # unset keeps the annotator's honest submit/poll mock (no fake deriver).
+            - { name: MEDIA_JOBS_URL, value: {{ $root.Values.runners.jobsUrl | quote }} }
+            {{- end }}
+            {{- end }}
+          {{- include "lance.appProbes" $root | nindent 10 }}
+          resources: {{- include "lance.resources" (dict "root" $root "comp" $name) | nindent 12 }}
+          volumeMounts:
+            {{- include "lance.tmpMount" $root | nindent 12 }}
+            - { name: corpus, mountPath: {{ $root.Values.media.corpusMountPath | quote }}, readOnly: true }
+      volumes:
+        {{- include "lance.tmpVolume" $root | nindent 8 }}
+        # NO data move: the corpus stays node-local (staged from the lance-audio box), never in RustFS.
+        - name: corpus
+          hostPath: { path: {{ $root.Values.media.corpusHostPath | quote }}, type: Directory }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lance.fullname" $root }}-{{ $name }}
+  labels: {{- include "lance.labels" $root | nindent 4 }}
+spec:
+  ports: [{ name: http, port: {{ $svc.port }}, targetPort: http }]
+  selector: { app.kubernetes.io/component: {{ $name }}, app.kubernetes.io/instance: {{ $root.Release.Name }} }
+---
+{{- end }}
+{{- end }}

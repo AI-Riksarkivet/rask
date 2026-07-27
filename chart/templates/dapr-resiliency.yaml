@@ -1,0 +1,39 @@
+{{- if and .Values.dapr.enabled .Values.dapr.resiliency.enabled }}
+# Dapr Resiliency (opt-in, ships TOGETHER with the deadLetterTopic subscriptions + the crash-recovery
+# broker backOff — see values.yaml dapr.resiliency): the SIDECAR owns pub/sub delivery retries, so a
+# delivery that exhausts this schedule is published to the subscription's dead-letter topic (visible,
+# ERROR-logged parking) instead of silently ceasing to redeliver after the broker's maxDeliver.
+# Schedule mirrors the previous broker one: exponential 30s→300s, 5 total attempts (~7.5 min) — under
+# the component's 720s crash-recovery ack window so broker redelivery never races these retries.
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: {{ .Release.Name }}-pubsub-resiliency
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  policies:
+    retries:
+      pubsubDeliveryRetry:
+        policy: exponential
+        duration: 30s
+        maxInterval: 300s
+        maxRetries: 4
+  targets:
+    components:
+{{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId) }}
+{{- if .Values.medallion.enabled }}
+{{- $subscribers = append $subscribers (dict "appId" .Values.medallion.producer.daprAppId) }}
+{{- range .Values.medallion.movers }}
+{{- $subscribers = append $subscribers (dict "appId" .daprAppId) }}
+{{- end }}
+{{- end }}
+{{- range $subscribers }}
+      {{ include "lance.subPubsub" (list $ .appId) }}:
+        inbound:
+          retry: pubsubDeliveryRetry
+{{- end }}
+scopes:
+{{- range $subscribers }}
+  - {{ .appId }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,60 @@
+{{- if .Values.rustfs.enabled }}
+# RustFS bucket-init — the provisioning hook for the ONE object store, the rustfs-operator Tenant
+# (templates/rustfs-tenant.yaml, S3 Service `<tenant>-io:9000` = `lance.rustfsHost`). RESOLVED per
+# docs/architecture/lance-ns-merge.md P4 ("RustFS: rask's operator Tenant wins; ... bucket-init
+# re-pointed at operator Tenant endpoint `<tenant>-io:9000`"): the first-party RustFS Deployment and
+# its Service that used to live in this file are DELETED. The Tenant provisions the
+# static platform bucket set natively (spec.buckets = rustfs.buckets); this Job covers what a static
+# CR list cannot express — the values-driven medallion zone buckets (a map whose unset entries fall
+# back to rustfs.bucket) and the observability toggle — and it also runs against
+# rustfs.externalEndpoint (managed S3, where no Tenant exists). Idempotent: `mc mb --ignore-existing`.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "rask.fullname" . }}-rustfs-mkbucket
+  labels: {{- include "lance.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 20
+  template:
+    metadata:
+      # The explicit component label is the P4 landmine (see bootstrap-admin.yaml): hook pods without one
+      # are invisible to any component-scoped NetworkPolicy `from` list. Here it is LOAD-BEARING, not just
+      # hygiene — rustfs:9000's ingress admits an enumerated client list ONLY (network-policy.yaml 3d,
+      # which names rustfs-mkbucket), so an unlabeled pod's `mc alias set` loop waits forever under a
+      # policy-enforcing CNI and every prod install/upgrade wedges before a bucket exists.
+      labels:
+        {{- include "lance.labels" . | nindent 8 }}
+        app.kubernetes.io/component: rustfs-mkbucket
+    spec:
+      restartPolicy: OnFailure
+      {{- if .Values.security.serviceAccounts.enabled }}
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
+      {{- end }}
+      containers:
+        - name: mc
+          image: {{ .Values.rustfs.mcImage }}
+          # The S3 root secret from a k8s Secret (not interpolated plaintext into the shell command) —
+          # `mc alias set` reads it from "$RUSTFS_SECRET_KEY", so it never appears in the rendered Job
+          # command/args. Same credential pair the Tenant boots with (credsSecret, templates/secrets.yaml).
+          env:
+            - name: RUSTFS_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: rustfs-secret-key }
+          command:
+            - sh
+            - -c
+            - |
+              until mc alias set rfs {{ include "lance.s3Endpoint" . }} {{ .Values.rustfs.accessKey }} "$RUSTFS_SECRET_KEY"; do echo wait-rustfs; sleep 3; done
+              mc mb --ignore-existing rfs/{{ .Values.rustfs.bucket }}
+              {{- if .Values.observability.enabled }}
+              mc mb --ignore-existing rfs/{{ .Values.observability.bucket }}  # GreptimeDB object store
+              {{- end }}
+              {{- range $ns, $bkt := .Values.medallion.buckets }}
+              {{- if and $bkt (ne $bkt $.Values.rustfs.bucket) }}
+              mc mb --ignore-existing rfs/{{ $bkt }}  # medallion storage zone ({{ $ns }}: ingest-source / gold-sink)
+              {{- end }}
+              {{- end }}
+{{- end }}

@@ -1,0 +1,110 @@
+{{- if .Values.dex.enabled }}
+# Dex — OIDC issuer for the governed demo. In-memory storage + one static client + one static user
+# (demo only). The catalog/lineage verify tokens against this issuer when auth.enabled.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "lance.dexHost" . }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    issuer: {{ .Values.dex.issuer }}
+    storage:
+      type: memory
+    web:
+      http: 0.0.0.0:{{ .Values.dex.port }}
+    oauth2:
+      skipApprovalScreen: true
+      passwordConnector: local
+    enablePasswordDB: true
+    staticPasswords:
+      # Two demo identities (same password) so the governed demo can show authz allow vs. deny:
+      # alice creates a table (→ she's granted), bob is denied reading it. bcrypt hash of "password".
+      - email: {{ .Values.dex.staticUser | quote }}
+        hash: "$2b$10$TsVVN0.5g.XntmJAGNuXF.gyhwQZgmgjmkevKxTa48M7k06J./53G"
+        username: alice
+        userID: "08a8684b-db88-4b73-90a9-3cd1661f5466"
+      - email: "bob@example.com"
+        hash: "$2b$10$TsVVN0.5g.XntmJAGNuXF.gyhwQZgmgjmkevKxTa48M7k06J./53G"
+        username: bob
+        userID: "1b6e2f5a-7c4d-4e9b-9f1a-2d3c4b5a6e7f"
+    staticClients:
+      - id: {{ .Values.dex.clientId }}
+        name: Lance Catalog
+        secret: {{ .Values.dex.clientSecret }}
+        public: true
+        redirectURIs:
+          - http://localhost:8080/callback
+          {{- if and .Values.frontend.enabled .Values.frontend.oidc.enabled .Values.frontend.oidc.publicOrigin }}
+          # The micro-frontend zones' OIDC callback (the home zone owns /auth/callback; every zone shares this
+          # one origin-wide redirect), so a per-user login through THIS (in-chart) Dex is accepted. In prod the
+          # IdP is external (frontend.oidc.publicIssuer) and registers its own redirect there — this is for a
+          # demo/ingress that still uses the bundled Dex.
+          - {{ .Values.frontend.oidc.publicOrigin | trimSuffix "/" }}/auth/callback
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lance.dexHost" . }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  ports:
+    - { name: http, port: {{ .Values.dex.port }}, targetPort: {{ .Values.dex.port }} }
+  selector:
+    app.kubernetes.io/component: dex
+    app.kubernetes.io/instance: {{ .Release.Name }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lance.dexHost" . }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: dex
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "lance.labels" . | nindent 8 }}
+        app.kubernetes.io/component: dex
+      annotations:
+        # Restart on config change: Dex reads its ConfigMap at boot only, so without this hash an
+        # issuer change upgrades the ConfigMap but leaves the old pod serving the old issuer
+        # (found live 2026-07-24 — the login fix silently didn't take until a manual pod delete).
+        checksum/config: {{ .Values.dex | toYaml | sha256sum }}
+    spec:
+      {{- if .Values.security.serviceAccounts.enabled }}
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-dex
+      {{- end }}
+      {{- if .Values.security.infraContexts.enabled }}
+      # Per-image uid/fsGroup from values (the audit: data/secret holders need runAsUser+fsGroup for
+      # their PVCs — no blind helper reuse). Flag default OFF: flip after the kind boot check (§7a).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: {{ .Values.security.infraContexts.dex.runAsUser }}
+        {{- with .Values.security.infraContexts.dex.fsGroup }}
+        fsGroup: {{ . }}
+        {{- end }}
+        seccompProfile: { type: RuntimeDefault }
+      {{- end }}
+      containers:
+        - name: dex
+          image: {{ .Values.dex.image }}
+          args: ["dex", "serve", "/etc/dex/config.yaml"]
+          ports:
+            - { name: http, containerPort: {{ .Values.dex.port }} }
+          volumeMounts:
+            - { name: config, mountPath: /etc/dex }
+          readinessProbe:
+            httpGet: { path: /dex/.well-known/openid-configuration, port: {{ .Values.dex.port }} }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources: {{- include "lance.resources" (dict "root" . "comp" "dex") | nindent 12 }}
+      volumes:
+        - name: config
+          configMap: { name: {{ include "lance.dexHost" . }} }
+{{- end }}

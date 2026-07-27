@@ -27,11 +27,14 @@ serviceAccount:
   annotations: {}
 
 # singleTenant gates the LEGACY single-tenant default workloads (the default
-# domain services + /default frontends + default Postgres/object-store/Ray/NATS/
-# migration). Default false => front-door-only install (picker + controlplane +
-# gateway + operators). Set true to restore the old single-tenant stack.
+# domain services + /default frontends + default Postgres/Ray/NATS/migration).
+# Default false => front-door-only install (picker + controlplane + gateway +
+# operators). Set true to restore the old single-tenant stack.
 # NOTE: this is separate from the operator subchart toggles (cnpg/rustfs/...),
-# which stay enabled so per-project stacks keep working.
+# which stay enabled so per-project stacks keep working. The OBJECT STORE is
+# deliberately NOT in this list: rustfs.enabled alone gates the operator Tenant
+# (lance-ns-merge P4) because the lakehouse plane resolves `rask-rustfs-io:9000`
+# regardless of singleTenant.
 singleTenant:
   enabled: false
 
@@ -41,16 +44,14 @@ existingSecret: ""
 
 # Random creds are generated once on first install and pinned across upgrades
 # via `lookup`. Override here to force a value.
-# For in-cluster postgres/minio, SET these (the local `make k3s-up` injects them
-# from .env: POSTGRES_PASSWORD, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, HF_TOKEN).
-# Leaving postgresPassword/minioSecretKey empty falls back to a fresh randAlphaNum
-# on every render — which the `rask-postgres` secret and the `rask-app` DATABASE_URL
-# generate INDEPENDENTLY, so they won't match. Only rely on the empty default when
-# postgres.enabled/minio.enabled are false (external deps via existingSecret).
+# For in-cluster postgres, SET postgresPassword (the local `make k3s-up` injects it from .env
+# POSTGRES_PASSWORD; leaving it empty falls back to a fresh randAlphaNum on every render — which the
+# `rask-postgres` secret and the `rask-app` DATABASE_URL generate INDEPENDENTLY, so they won't match).
+# The OBJECT-STORE credential pair is NOT here (lance-ns-merge P4 RustFS unification): it is
+# rustfs.accessKey/secretKey — one pair for the Tenant credsSecret, the fleet AWS_*, and the lakehouse
+# apps; `make k3s-up` injects it from .env AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY.
 secrets:
   postgresPassword: ""   # in-cluster pg: set this (else fresh-render mismatch); from .env POSTGRES_PASSWORD
-  minioAccessKey: ""     # empty => "rask"
-  minioSecretKey: ""     # in-cluster minio: set this; from .env AWS_SECRET_ACCESS_KEY
   hfToken: ""            # HuggingFace token for the gated TrOCR model; from .env HF_TOKEN
 
 # Non-secret env shared by the fleet ConfigMap.
@@ -83,9 +84,10 @@ config:
 #     map but only emits the `gateway` entry unless singleTenant.enabled;
 #   * the lance-ns LAKEHOUSE apps (catalog, lineage) — rendered by templates/services.yaml, which
 #     reads .Values.services.catalog / .Values.services.lineage by NAME.
-# ⚠ CONFLICT (reported, not silently patched): with singleTenant.enabled=true, fleet.yaml's `range`
-# also picks up catalog+lineage and would emit a SECOND Deployment for each (image `<name>:tag` from
-# the fleet registry). fleet.yaml must learn to skip the lakehouse entries — a templates-side fix.
+# RESOLVED (P4 collision guard): fleet.yaml excludes the lakehouse entries by name (its $lakehouse
+# list — catalog, lineage), unconditionally, so each service renders from exactly ONE template under
+# every singleTenant combination: the fleet entries from fleet.yaml, catalog+lineage from
+# services.yaml. A new lakehouse entry added to this map must also be added to that list.
 services:
   # ---- rask fleet (uvicorn modules, one Deployment each via templates/fleet.yaml) ----
   core-api:
@@ -259,7 +261,6 @@ security:
     age: { runAsUser: 999, fsGroup: 999 } # postgres official image uid/gid
     openbao: { runAsUser: 100, fsGroup: 1000 } # hashicorp vault-family image uid
     dex: { runAsUser: 1001, fsGroup: 1001 }
-    gateway: { runAsUser: 101 } # nginx worker uid; its conf already pins pid/temp to /tmp
 
 # --- Network isolation (opt-in; requires a policy-enforcing CNI e.g. Calico/Cilium) ---------------
 # k3s's default kindnet/flannel does NOT enforce NetworkPolicy, so this is a no-op there — it is prod
@@ -373,19 +374,11 @@ frontend:
     publicOrigin: "" # browser-reachable origin, e.g. https://app.example.com (forms the redirect URI)
     sessionSecret: "" # >=32 random chars; seals the session cookie (AES-256-GCM). REQUIRED when enabled.
 
-# --- lance-ns API gateway — the lakehouse's own nginx reverse proxy ---------------------------------
-# One nginx that path-routes to the in-cluster lakehouse services, so a single `kubectl port-forward`
-# fronts the whole platform. Non-root nginx-unprivileged (listens on 8080).
-# ⚠ CONFLICT (reported): this is a SECOND front door beside the rask fleet gateway at services.gateway
-# (uvicorn `gateway:app` on :8888, the SvelteKit proxy target). They are different Deployments with
-# different names, so nothing collides at render — but the estate now has two edges and the Ingress
-# must be told which one owns which path. Not resolvable inside values.yaml.
-gateway:
-  enabled: true
-  image: nginxinc/nginx-unprivileged:1.27-alpine
-  port: 8080
-  daprAppId: gateway # app traffic is routed via this sidecar's Dapr service-invocation API (:3500)
-  replicas: 1 # stateless nginx reverse proxy — scale freely
+# --- lance-ns nginx gateway: RETIRED (lance-ns-merge.md decision 4 + P4) ----------------------------
+# The rask fleet gateway at services.gateway (uvicorn `gateway:app` on :8888) is the ONE front door; it
+# carries the lance routes (/api/catalog, /api/lineage, /api/produce, /api/train, /api/media/*) and the
+# lineage sidecar-only 403 guard as Python middleware. templates/gateway.yaml (nginx ConfigMap +
+# Deployment + Service) is deleted; the former top-level `gateway:` values block went with it.
 
 # --- Governance (Dex OIDC + OpenFGA). Off → open dev mode; on → the full governed demo. ------------
 auth:
@@ -740,16 +733,15 @@ autoscaling:
   targetCPUUtilizationPercentage: 70
 
 # --- In-cluster S3 (RustFS) ------------------------------------------------------------------------
-# `enabled` gates BOTH object-store paths that now live in this chart:
-#   * the FIRST-PARTY Deployment + mkbucket Job (templates/rustfs.yaml, service `rask-rustfs:9000`) —
-#     the lance-ns lakehouse store, which renders on every install;
-#   * the rustfs-operator Tenant CR (templates/rustfs-tenant.yaml, service `rask-rustfs-io:9000`) —
-#     rask's store, additionally gated by singleTenant.enabled.
-# ⚠ CONFLICT (reported): with singleTenant.enabled=true BOTH render — two object stores, two endpoints,
-# and rask's fleet/secrets templates hardcode `-rustfs-io` while the lakehouse services resolve
-# `lance.rustfsHost` (`rask-rustfs`). Unifying them is a templates-side decision, not a values one.
-# RustFS erasure coding requires servers*volumesPerServer >= 4; standalone is servers=1,
-# volumesPerServer=4 (1 pod, 4 PVCs).
+# RESOLVED (docs/architecture/lance-ns-merge.md P4: "RustFS: rask's operator Tenant wins; lance-ns's
+# per-warehouse bucket provisioning re-pointed at `<tenant>-io:9000`; keep-PVC posture via Tenant
+# spec"): ONE object store renders. `enabled` gates the rustfs-operator subchart + the Tenant CR
+# (templates/rustfs-tenant.yaml) + the bucket-init hook (templates/rustfs.yaml) as one unit — on
+# rustfs.enabled ALONE, not singleTenant, because the lakehouse/medallion/observability consumers
+# render without singleTenant and must resolve the store. The ONE endpoint is the Tenant's S3 Service
+# `rask-rustfs-io:9000` (`lance.rustfsHost`/`lance.s3Endpoint`); the first-party Deployment + Service
+# (`rask-rustfs:9000`) are deleted. RustFS erasure coding requires servers*volumesPerServer >= 4;
+# standalone is servers=1, volumesPerServer=4 (1 pod, 4 PVCs).
 rustfs:
   enabled: true
   # lance-ns's PINNED tag wins over rask's `rustfs/rustfs:latest`: it is multi-arch (amd64+arm64) and
@@ -763,9 +755,8 @@ rustfs:
   bypassDiskCheck: true
   port: 9000
   consolePort: 9001
-  # Tenant path: per-volume, 4 volumes => ~60Gi total. First-party path: the single lakehouse PVC.
-  # rask's 15Gi is kept (it is the larger of the two dev defaults and local-path is unmetered);
-  # values-prod raises it to 200Gi for the real lakehouse + 14d of observability.
+  # Per Tenant volume: 4 volumes × 15Gi => ~60Gi total (local-path is unmetered on dev k3s);
+  # values-prod raises it to 200Gi/volume for the real lakehouse + 14d of observability.
   storage: "15Gi"
   storageClass: "local-path"          # Tenant PVCs
   accessKey: rustfsadmin
@@ -773,22 +764,22 @@ rustfs:
   # The Lance lakehouse ROOT bucket (catalog LANCE_REST_ROOT + the warehouse registry). Referenced by
   # name in scripts/demo_reset.sh + the vending/lineage tests — do not rename casually.
   bucket: lance-catalog
-  # Buckets the rustfs-operator Tenant provisions. The lakehouse + observability buckets are listed so
-  # the Tenant path provisions exactly what the first-party mkbucket Job does.
+  # The STATIC platform bucket set, provisioned natively by the Tenant (spec.buckets). The
+  # values-driven extras — medallion.buckets zones + the observability toggle — are provisioned by
+  # the bucket-init hook (templates/rustfs.yaml), which a static CR list cannot express.
   buckets: ["images-batch", "images-batch-alto", "images-batch-search", "rask-observability", "lance-catalog"]
   # Externalize: when set, the apps (catalog/lineage/compaction + vending STS) connect HERE instead of the
   # in-cluster RustFS — pair with rustfs.enabled=false to use a managed S3. NOTE: the greptimedb-standalone
   # subchart's S3 endpoint (under `greptimedb-standalone.objectStorage.s3.endpoint`) must be overridden too.
   externalEndpoint: "" # e.g. https://s3.us-east-1.amazonaws.com
-  # Durable lakehouse storage for the FIRST-PARTY Deployment. Default true → a PVC (the lakehouse +
-  # GreptimeDB data survive a pod roll + are snapshot-able in prod). false → emptyDir, throwaway CI only.
-  persistence:
-    enabled: true
-    storageClassName: "" # "" = the cluster default SC (local-path on k3s); prod: a snapshot-capable CSI class
+  # (rustfs.persistence is GONE with the first-party Deployment — durability is the Tenant's
+  # volumeClaimTemplate above: StatefulSet-owned PVCs survive pod rolls AND `helm uninstall`, the
+  # keep-PVC posture the P4 ruling pins to the Tenant spec. `storageClass` sizes/classes them.)
   mcImage: minio/mc:RELEASE.2025-08-13T08-35-41Z # pinned (multi-arch); `mc` speaks plain S3 → bootstraps buckets on RustFS too
   # OIDC identity provider for STS AssumeRoleWithWebIdentity (Track B). When on, RustFS trusts Dex id_tokens
   # → a client can mint short-TTL creds it scopes per-table via the catalog's vending endpoint (vending.mode=
-  # web_identity). Off by default (plain dev needs no STS). Enabling it rolls RustFS.
+  # web_identity). Off by default (plain dev needs no STS). Enabling it rolls RustFS (the env lands in the
+  # Tenant spec, templates/rustfs-tenant.yaml).
   oidc:
     enabled: false
     rolePolicy: readwrite # built-in full-S3 base policy; the per-request session policy narrows it per-table
@@ -1182,37 +1173,26 @@ observability:
     alertmanagerImage: prom/alertmanager:v0.28.0
     evaluationInterval: "1m"
     webhookUrl: "" # empty → Alertmanager still receives + groups alerts, but pages nowhere (black-hole)
-  # Edge auth (§5e hardening) — nginx `auth_basic` on the gateway's /perses/ + /greptime/ locations.
-  # BOTH are otherwise UNAUTHENTICATED: Perses is the dashboard, and GreptimeDB exposes its RAW SQL/ingest
-  # API on :4000 — and in prod the Ingress→gateway proxies both publicly. This closes that hole AT THE EDGE
-  # without touching GreptimeDB's own `auth.enabled` (which would force EVERY client — the app OTLP
-  # exporters, Dapr tracing, the OTel Collector's exporter, the Perses datasource proxy — to carry
-  # credentials; that plus Perses OIDC is the documented follow-on). Default OFF so local dev stays
-  # frictionless; values-prod flips it TRUE.
-  edgeAuth:
-    enabled: false
-    # The realm shown on the browser basic-auth prompt (not a secret).
-    realm: "rask observability"
-    # The htpasswd LINE(S) (`user:hash`) for the basic-auth file. INFRA-TIER credential (the two-tier
-    # secret model): NOT stored here as plaintext — it lands ONLY in the `<release>-observability-edge-auth`
-    # k8s Secret (templates/observability.yaml) and is mounted read-only into the gateway as the
-    # `auth_basic_user_file` (never a pod env/arg value). Empty by default; the render FAILS CLOSED when
-    # edgeAuth.enabled with no htpasswd supplied, so provide it out-of-band in prod:
-    # `--set observability.edgeAuth.htpasswd=…` sourced from OpenBao / external-secrets (an apr1/bcrypt
-    # hash — e.g. `htpasswd -nbB observer <pw>`).
-    htpasswd: ""
+  # RETIRED (gateway fold): edgeAuth (§5e) backed the nginx gateway's public /perses/ + /greptime/
+  # basic-auth. The nginx gateway is deleted and no Ingress path routes the telemetry UIs, so they
+  # are cluster-internal (port-forward) and the edge credential guarded nothing. GreptimeDB
+  # `auth.enabled` + Perses OIDC via Dex remain the documented follow-on if they are re-exposed.
 
 # GreptimeDB standalone subchart — unified metrics/logs/traces store on the in-cluster RustFS S3.
-# The endpoint names the FIRST-PARTY RustFS Service (`rask-rustfs`), which renders on every install;
-# the operator Tenant's `rask-rustfs-io` only exists under singleTenant.enabled. Externalizing RustFS
-# means overriding this endpoint too (the subchart value cannot follow the rustfs.externalEndpoint helper).
+# RESOLVED (lance-ns-merge P4 "operator Tenant wins"): the endpoint names the ONE object store — the
+# rustfs-operator Tenant's S3 Service `rask-rustfs-io:9000`, which renders whenever rustfs.enabled
+# (regardless of singleTenant). Both values below are STATIC subchart values that cannot follow chart
+# helpers: externalizing RustFS means overriding `endpoint` too (values-prod's EXTERNALIZE block
+# documents the pairing; prod_render_check proves it atomic), and `existingSecretName` must equal the
+# rendered `<release>-observability-s3` Secret (templates/observability.yaml — rustfs.accessKey/secretKey,
+# the ONE store credential pair).
 greptimedb-standalone:
   objectStorage:
     s3:
       bucket: "rask-observability"
       region: "us-east-1"
       root: "/greptimedb"
-      endpoint: "http://rask-rustfs:9000"
+      endpoint: "http://rask-rustfs-io:9000"
     credentials:
       existingSecretName: "rask-observability-s3"
 

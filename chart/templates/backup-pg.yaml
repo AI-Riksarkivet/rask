@@ -1,0 +1,69 @@
+{{- if .Values.backups.pgDump.enabled }}
+# pg_dump the lineage + OpenFGA databases (gzip) → the lakehouse S3 under _backups/pg/<date>/.
+# SELF-CONTAINED FALLBACK ONLY: when AGE is a CloudNativePG cluster (the rask path), disable this and use
+# CNPG's scheduled backups / PITR instead — they do this better. Reads creds from the infra-tier Secret.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "lance.fullname" . }}-pg-backup
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backups.pgDump.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      template:
+        metadata:
+          # The component label is load-bearing under the prod NetworkPolicy: the age-postgres and rustfs
+          # ingress rules allow `from` component=backup-pg — without this label the CronJob pod matches
+          # neither, default-deny drops its pg_dump SYN + mc upload, and the backup silently never runs.
+          labels:
+            {{- include "lance.labels" . | nindent 12 }}
+            app.kubernetes.io/component: backup-pg
+        spec:
+          restartPolicy: OnFailure
+          volumes:
+            - { name: dump, emptyDir: {} }
+          initContainers:
+            - name: pg-dump
+              image: {{ .Values.age.image }}
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: postgres-password }
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  for db in {{ .Values.age.lineageDb }} {{ .Values.age.openfgaDb }}; do
+                    pg_dump -h {{ include "lance.ageConnectHost" . }} -p {{ .Values.age.port }} -U {{ .Values.age.user }} -d "$db" | gzip > /dump/"$db".sql.gz
+                  done
+              volumeMounts: [{ name: dump, mountPath: /dump }]
+          {{- if .Values.security.serviceAccounts.enabled }}
+          serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
+          {{- end }}
+          containers:
+            - name: upload
+              image: {{ .Values.rustfs.mcImage }}
+              env:
+                - name: RUSTFS_SECRET_KEY
+                  valueFrom:
+                    secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: rustfs-secret-key }
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  mc alias set rfs {{ include "lance.s3Endpoint" . }} {{ .Values.rustfs.accessKey }} "$RUSTFS_SECRET_KEY"
+                  mc cp --recursive /dump/ rfs/{{ .Values.rustfs.bucket }}/_backups/pg/$(date +%Y-%m-%dT%H-%M-%SZ)/
+                  {{- if gt (int .Values.backups.pgDump.keep) 0 }}
+                  # Retention (P4): keep the newest {{ .Values.backups.pgDump.keep }} dumps, prune older ones
+                  # so the backup prefix doesn't grow unbounded. Dir names are ISO timestamps → sort lexically.
+                  mc ls rfs/{{ .Values.rustfs.bucket }}/_backups/pg/ | awk '{print $NF}' | sort -r \
+                    | tail -n +{{ add (int .Values.backups.pgDump.keep) 1 }} \
+                    | while read -r d; do mc rm --recursive --force "rfs/{{ .Values.rustfs.bucket }}/_backups/pg/$d"; done
+                  {{- end }}
+              volumeMounts: [{ name: dump, mountPath: /dump }]
+{{- end }}

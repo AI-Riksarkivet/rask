@@ -24,4 +24,4 @@ def test_projects_route_targets_controlplane() -> None:
     from gateway import _routes
 
     proj = next(r for r in _routes() if r[0] == "/api/projects")
-    assert proj[1] == "controlplane"
+    assert proj[2] == "controlplane"

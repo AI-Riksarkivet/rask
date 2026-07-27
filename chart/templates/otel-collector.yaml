@@ -1,0 +1,214 @@
+{{- /*
+OTel-first telemetry hub. A single OpenTelemetry Collector (contrib) that:
+  - RECEIVES app OTLP (the apps point OTEL_EXPORTER_OTLP_ENDPOINT here — see lance.otlpEndpoint),
+  - TAILS infra-pod stdout via the filelog receiver (retires the Vector subchart), dropping the app pods
+    (lance.dev/logs=otlp) that already ship OTLP logs so nothing double-ingests,
+  - SCRAPES the Dapr sidecars' :9090 via the prometheus receiver + k8s SD (the DaprConsumerWedge source),
+and exports all three signals OTLP → GreptimeDB (:4000/v1/otlp), adding GreptimeDB's db-name header on every
+signal and the trace-pipeline header on traces only (a separate exporter, since metrics/logs must NOT carry it).
+
+Deploys only when observability.enabled AND otelCollector.enabled AND no externalEndpoint is set: in prod you
+run the OTel operator + an external Collector and set observability.otelCollector.externalEndpoint, so this
+whole file renders nothing and the apps just aim their OTLP at that existing Collector. Single Deployment (not
+a DaemonSet): filelog reads the node it lands on — correct on single-node kind/dev; prod uses the external
+operator-managed Collector (agent DaemonSet + gateway) instead. NetworkPolicy is a prod switch and prod is
+external, so the in-cluster dev Collector isn't gated by it.
+*/ -}}
+{{- $o := .Values.observability }}
+{{- $c := $o.otelCollector | default dict }}
+{{- if and $o.enabled $c.enabled (not $c.externalEndpoint) }}
+{{- $fullname := include "lance.fullname" . }}
+{{- $sa := printf "%s-otel-collector" $fullname }}
+{{- $greptime := printf "http://%s:%v/v1/otlp" (include "lance.greptimeHost" .) $o.greptimePort }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $sa }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+---
+# k8sattributes needs pod/namespace/replicaset/node reads for enrichment; the prometheus receiver's k8s SD
+# needs pod discovery. Cluster-scoped (SD + attributes are cluster-wide), read-only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $sa }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, namespaces, nodes, nodes/proxy, services, endpoints]
+    verbs: [get, list, watch]
+  - apiGroups: ["apps"]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $sa }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ $sa }} }
+subjects:
+  - { kind: ServiceAccount, name: {{ $sa }}, namespace: {{ .Release.Namespace }} }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $sa }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+      # Persist filelog read offsets so a collector RESTART resumes where it left off instead of jumping to the
+      # tail (filelog's default start_at: end = logs written during the gap are lost) — the durability Vector's
+      # data_dir gave. The emptyDir survives container crash/OOM restarts (the common case, same pod); a full
+      # pod reschedule starts fresh, but in prod the OTel operator owns the Collector (this file renders nothing)
+      # and manages its own offset persistence. fsGroup 65534 makes the dir writable by the non-root runtime.
+      file_storage:
+        directory: /var/lib/otelcol/file_storage
+    receivers:
+      otlp:
+        protocols:
+          grpc: { endpoint: 0.0.0.0:4317 }
+          http: { endpoint: 0.0.0.0:4318 }
+      # Infra-pod logs (retires Vector). The container operator parses the CRI/containerd log format and
+      # stamps k8s.pod.uid/name/namespace/container from the file path; k8sattributes then resolves the pod
+      # labels, and a filter drops the app pods that already ship OTLP logs (no double-ingest).
+      filelog:
+        include: [/var/log/pods/*/*/*.log]
+        exclude: [/var/log/pods/{{ .Release.Namespace }}_{{ $fullname }}-otel-collector-*/*/*.log]
+        include_file_path: true
+        start_at: end
+        storage: file_storage
+        retry_on_failure: { enabled: true }
+        operators:
+          - type: container
+      # Dapr sidecar metrics (:9090) — the DaprConsumerWedge source. Discover dapr.io/enabled pods, scrape
+      # the dapr-metrics port only (the container port NAME), so app ports don't produce duplicate targets.
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: dapr-sidecars
+              scrape_interval: 30s
+              kubernetes_sd_configs:
+                - role: pod
+                  namespaces: { names: [{{ .Release.Namespace }}] }
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_pod_annotation_dapr_io_enabled]
+                  action: keep
+                  regex: "true"
+                - source_labels: [__meta_kubernetes_pod_container_port_name]
+                  action: keep
+                  regex: dapr-metrics
+                - source_labels: [__meta_kubernetes_namespace]
+                  target_label: namespace
+                - source_labels: [__meta_kubernetes_pod_name]
+                  target_label: pod
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 400
+        spike_limit_mib: 100
+      k8sattributes:
+        auth_type: serviceAccount
+        passthrough: false
+        extract:
+          metadata: [k8s.namespace.name, k8s.pod.name, k8s.pod.uid, k8s.node.name, k8s.container.name]
+          labels:
+            - { tag_name: lance.dev/logs, key: lance.dev/logs, from: pod }
+        pod_association:
+          - sources: [{ from: resource_attribute, name: k8s.pod.uid }]
+          - sources: [{ from: connection }]
+      # The app pods already export OTLP logs (trace-correlated) — drop the file-tailed duplicate. Mirrors
+      # what Vector's `lance.dev/logs!=otlp` selector did. error_mode ignore: a pod without the label is kept.
+      filter/drop_app_file_logs:
+        error_mode: ignore
+        logs:
+          log_record:
+            - 'resource.attributes["lance.dev/logs"] == "otlp"'
+      batch: {}
+    exporters:
+      # Traces carry GreptimeDB's trace-pipeline header (→ opentelemetry_traces); metrics/logs must NOT, so
+      # they get a separate exporter with only the db-name header. Both hit the same /v1/otlp base; the
+      # otlphttp exporter appends /v1/{traces,metrics,logs} per signal (same as the app SDK did).
+      otlphttp/greptime_traces:
+        endpoint: {{ $greptime | quote }}
+        headers:
+          x-greptime-db-name: {{ $o.dbName | quote }}
+          x-greptime-pipeline-name: {{ $o.tracePipeline | quote }}
+      otlphttp/greptime:
+        endpoint: {{ $greptime | quote }}
+        headers:
+          x-greptime-db-name: {{ $o.dbName | quote }}
+    service:
+      extensions: [health_check, file_storage]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, batch]
+          exporters: [otlphttp/greptime_traces]
+        metrics:
+          receivers: [otlp, prometheus]
+          processors: [memory_limiter, k8sattributes, batch]
+          exporters: [otlphttp/greptime]
+        logs:
+          receivers: [otlp, filelog]
+          processors: [memory_limiter, k8sattributes, filter/drop_app_file_logs, batch]
+          exporters: [otlphttp/greptime]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $sa }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/component: otel-collector, app.kubernetes.io/instance: {{ .Release.Name }} }
+  template:
+    metadata:
+      labels:
+        {{- include "lance.labels" . | nindent 8 }}
+        app.kubernetes.io/component: otel-collector
+      annotations:
+        checksum/config: {{ .Values | toYaml | sha256sum }}
+    spec:
+      serviceAccountName: {{ $sa }}
+      securityContext: { runAsNonRoot: true, runAsUser: 65534, fsGroup: 65534 }
+      containers:
+        - name: otel-collector
+          image: {{ $c.image }}
+          args: ["--config=/etc/otelcol/config.yaml"]
+          ports:
+            - { name: otlp-grpc, containerPort: 4317 }
+            - { name: otlp-http, containerPort: 4318 }
+          readinessProbe: { httpGet: { path: /, port: 13133 }, initialDelaySeconds: 5, periodSeconds: 10 }
+          resources: {{- include "lance.resources" (dict "root" . "comp" "otel-collector") | nindent 12 }}
+          volumeMounts:
+            - { name: config, mountPath: /etc/otelcol, readOnly: true }
+            # filelog reads the node's container logs (RO). /var/log/pods symlinks into /var/lib/docker or
+            # containerd, so mount both roots (the second is where the real files live on most nodes).
+            - { name: varlogpods, mountPath: /var/log/pods, readOnly: true }
+            - { name: varlibdockercontainers, mountPath: /var/lib/docker/containers, readOnly: true }
+            # filelog offset checkpoints (file_storage extension) — writable via fsGroup 65534.
+            - { name: offsets, mountPath: /var/lib/otelcol/file_storage }
+      volumes:
+        - name: config
+          configMap: { name: {{ $sa }} }
+        - { name: varlogpods, hostPath: { path: /var/log/pods } }
+        - { name: varlibdockercontainers, hostPath: { path: /var/lib/docker/containers } }
+        - { name: offsets, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $sa }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  selector: { app.kubernetes.io/component: otel-collector, app.kubernetes.io/instance: {{ .Release.Name }} }
+  ports:
+    - { name: otlp-grpc, port: 4317, targetPort: otlp-grpc }
+    - { name: otlp-http, port: 4318, targetPort: otlp-http }
+{{- end }}

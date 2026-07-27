@@ -1,0 +1,129 @@
+# promtool test rules — PROVES the alert logic fires on synthetic series, hermetically (no live GreptimeDB).
+# `make alert-rules-check` runs `promtool check rules rules.yml` + `promtool test rules rules_test.yml`.
+# This is the "prove it fires" that render-checking alone can't give: the render can be valid while the
+# PromQL never trips. The remaining unproven piece is only the live vmalert->GreptimeDB query round-trip
+# (a drill, docs/DECISIONS.md "P3b").
+rule_files:
+  - rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # 1. Outbox stuck at depth 5 for 12 min → LineageOutboxNotDraining fires (past its 10m `for`).
+  - interval: 1m
+    input_series:
+      - series: "outbox_depth"
+        values: "5+0x14" # 5, held for 15 samples (0..14 min)
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: LineageOutboxNotDraining
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: lineage
+            exp_annotations:
+              summary: "Lineage outbox not draining (depth > 0 for 10m)"
+              description: "Durable lineage events are staged but not published — provenance is not reaching the AGE graph. The relay, lineage, or the NATS bus is unhealthy. Runbook: docs/RUNBOOK-oncall.md#outbox-not-draining"
+
+  # 2. Outbox healthy (depth 0) → NO alert. A gauge that falls back must not page forever.
+  - interval: 1m
+    input_series:
+      - series: "outbox_depth"
+        values: "0+0x14"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: LineageOutboxNotDraining
+        exp_alerts: []
+
+  # 3. Cascade DLQ counter rising → rate() > 0 → MedallionCascadeDeadLettering fires.
+  - interval: 1m
+    input_series:
+      - series: 'medallion_dlq_parked_total{lance_medallion_app="raw-to-bronze"}'
+        values: "0+1x11" # 0,1,2,...,11 — a monotonically rising counter
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: MedallionCascadeDeadLettering
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: medallion
+            exp_annotations:
+              summary: "Medallion cascade dead-lettering — a stage delivery gave up"
+              description: "A cascade delivery exhausted its retries and was parked; a dataset has silently stopped updating. Runbook: docs/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+
+  # 4. No dead-letters (flat counter) → the cascade alert stays silent.
+  - interval: 1m
+    input_series:
+      - series: 'medallion_dlq_parked_total{lance_medallion_app="raw-to-bronze"}'
+        values: "0+0x11"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: MedallionCascadeDeadLettering
+        exp_alerts: []
+
+  # 5. Catalog shedding writes continuously for >15m → the capacity alert fires.
+  - interval: 1m
+    input_series:
+      - series: "catalog_writes_shed_total"
+        values: "0+3x20" # a steadily-rising shed counter (writes being 429'd every scrape)
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: CatalogWritesShedSustained
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: catalog
+            exp_annotations:
+              summary: "Catalog shedding writes for 15m — persistently over write-concurrency capacity"
+              description: "The catalog has been returning 429 on bulk Arrow-IPC writes (the concurrent-write cap, P5 load-shedding) for 15m — it is persistently over capacity, not just riding out a burst. Scale catalog replicas or raise LANCE_MAX_CONCURRENT_WRITES (watch the pod memory: each write buffers up to 256MiB). Runbook: docs/RUNBOOK-oncall.md"
+
+  # 6. A brief shed burst that stops well under 15m → NO alert (backpressure riding out a spike is normal).
+  - interval: 1m
+    input_series:
+      - series: "catalog_writes_shed_total"
+        values: "0 1 2 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3" # shedding only in the first ~3 min, then flat
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: CatalogWritesShedSustained
+        exp_alerts: []
+
+  # 7. A Dapr consumer booking process_status=retry continuously for >15m → DaprConsumerWedge fires. sum by
+  #    (app_id) keeps app_id on the resulting alert, so it names the wedged subscriber.
+  - interval: 1m
+    input_series:
+      - series: 'dapr_component_pubsub_ingress_count_total{process_status="retry",app_id="bronze-to-silver"}'
+        values: "0+1x20" # a retried delivery every scrape — the handler never succeeds
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: DaprConsumerWedge
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: dapr
+              app_id: bronze-to-silver
+            exp_annotations:
+              summary: "Dapr consumer wedged — a subscriber is retrying inbound messages for 15m"
+              description: "A subscriber's handler has failed continuously: Dapr has booked process_status=retry on inbound deliveries for 15m without clearing, so this consumer is not draining its subscription and the cascade / lineage ingest has silently stopped. A healthy transient error clears in seconds. Check the wedged app's logs and its downstream (AGE / OpenFGA / RustFS). Runbook: docs/RUNBOOK-oncall.md#cascade-stalled"
+
+  # 8. A busy-but-HEALTHY consumer books only process_status=success (no retry series at all) → NO alert.
+  #    This is the case the old dapr_resiliency_count rule got wrong: that counter rises on healthy traffic
+  #    too, so it would have false-paged here; process_status=retry stays absent on the happy path.
+  - interval: 1m
+    input_series:
+      - series: 'dapr_component_pubsub_ingress_count_total{process_status="success",app_id="bronze-to-silver"}'
+        values: "0+5x20" # heavy healthy throughput — five successful deliveries per scrape, no retries
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: DaprConsumerWedge
+        exp_alerts: []
+
+  # 9. A transient inbound error that clears in a few minutes → NO alert (retries are normal; a WEDGE is
+  #    retries that never stop). The retry counter stops rising after ~4 min, so rate() falls back to 0.
+  - interval: 1m
+    input_series:
+      - series: 'dapr_component_pubsub_ingress_count_total{process_status="retry",app_id="bronze-to-silver"}'
+        values: "0 1 2 3 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4" # retried only in the first ~4 min, then recovered
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: DaprConsumerWedge
+        exp_alerts: []

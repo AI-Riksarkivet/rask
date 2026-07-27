@@ -1,0 +1,88 @@
+{{- /*
+HA for the stateless request-serving services (catalog, lineage, gateway). Off by default (single-node
+kind); the prod overlay enables the PDB after bumping replicas. The stateful stores (AGE/RustFS) get HA from
+their operators in rask (CNPG / rustfs-operator), NOT from here. The event-driven movers/producer are
+intentionally excluded — eviction is safe (Dapr redelivers; ingest is idempotent). The P5 micro-frontend
+zones get NO PDB at their 1-replica default (a single-replica minAvailable=1 PDB would block every
+voluntary drain); once frontend.replicas > 1 (the prod overlay) a PDB per zone renders below — the zones
+are the Ingress-routed north-south edge, so an unbounded drain there defeats the replica bump.
+*/ -}}
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- range $c := list "catalog" "lineage" "gateway" }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "lance.fullname" $ }}-{{ $c }}
+  labels: {{- include "lance.labels" $ | nindent 4 }}
+spec:
+  minAvailable: {{ $.Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: {{ $c }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+{{- end }}
+{{- if and .Values.frontend.enabled (gt (int (ternary .Values.frontend.replicas 1 (hasKey .Values.frontend "replicas"))) 1) }}
+{{- range .Values.frontend.apps }}
+---
+# Zone PDBs (audit 2026-07-24): the P5 zones are the north-south edge (the Ingress path-routes
+# /<zone> → web-<zone>), so once replicas are bumped past 1 they need the same voluntary-disruption
+# bound as the backends — without one, a node drain may evict both replicas at once and the HA replica
+# count buys nothing. Gated on replicas > 1 (see the header: a 1-replica minAvailable=1 PDB blocks drains).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "lance.fullname" $ }}-web-{{ .name }}
+  labels: {{- include "lance.labels" $ | nindent 4 }}
+spec:
+  minAvailable: {{ $.Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: web-{{ .name }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+{{- end }}
+{{- end }}
+{{- if .Values.openfga.enabled }}
+---
+# OpenFGA is the authz chokepoint — every governed catalog write, lineage read, and mover WRITE fails
+# CLOSED through it, so a drain that evicts the quorum 503s the whole estate. Separate block: the subchart's
+# pods carry name/instance labels, not our component label. (prod-readiness P2)
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "lance.fullname" . }}-openfga
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openfga
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+{{- end }}
+{{- if .Values.autoscaling.enabled }}
+{{- range $c := list "catalog" "lineage" }}
+---
+# HPA on CPU for the request-serving services. Needs metrics-server. The PDB minAvailable bounds disruption
+# during scale-down; the Deployment's replicas: becomes the HPA floor, so keep replicas <= minReplicas.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "lance.fullname" $ }}-{{ $c }}
+  labels: {{- include "lance.labels" $ | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "lance.fullname" $ }}-{{ $c }}
+  minReplicas: {{ $.Values.autoscaling.minReplicas }}
+  maxReplicas: {{ $.Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $.Values.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- end }}

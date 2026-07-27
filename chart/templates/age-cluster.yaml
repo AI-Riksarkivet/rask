@@ -1,0 +1,61 @@
+# CloudNativePG Cluster for the lance-ns state of record (the AGE lineage graph + the OpenFGA datastore),
+# with Apache AGE mounted as an ImageVolume extension. Requires: PostgreSQL 18, CloudNativePG >= 1.27,
+# Kubernetes 1.33+ with the ImageVolume feature gate (1.35 default-on), containerd >= 2.1 / CRI-O >= 1.31.
+# Build + push the extension image first: docker build -f .docker/cnpg-age-ext.dockerfile -t <registry>/age-cnpg-ext:1.7.0-18 .
+# For older clusters that lack ImageVolume, use the custom-full-image bridge instead (docs/CNPG-AGE.md).
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: lance-pg
+spec:
+  instances: 3                                   # HA — 1 primary + 2 replicas, automated failover
+  imageName: ghcr.io/cloudnative-pg/postgresql:18-standard-trixie   # STOCK image, unchanged
+  postgresql:
+    # AGE recommends preloading; the lance code also does LOAD 'age' per-session, which works via the
+    # dynamic_library_path CNPG auto-configures — preloading is belt-and-suspenders.
+    shared_preload_libraries:
+      - age
+    extensions:
+      - name: age
+        image:
+          reference: ghcr.io/REPLACE-ME/age-cnpg-ext:1.7.0-18   # the extension image you built + pushed
+        # CNPG auto-appends /extensions/age/share → extension_control_path and /extensions/age/lib →
+        # dynamic_library_path; no manual path config needed for the standard layout.
+  storage:
+    size: 50Gi
+  # Physical backups + PITR to object storage — REPLACES the chart's pg_dump CronJob, and is strictly safer
+  # for AGE (physical replication captures the whole datadir, sidestepping the "does pg_dump round-trip the
+  # AGE graph" hazard the in-chart restore drill had to prove). Configure a barman-cloud object store:
+  # backup:
+  #   barmanObjectStore:
+  #     destinationPath: s3://lance-backups/cnpg
+  #     s3Credentials: { … }
+  #   retentionPolicy: "30d"
+  bootstrap:
+    initdb:
+      database: lineage        # the AGE graph DB (OpenFGA gets its own DB via a Database CR below)
+      owner: lineage
+---
+# CNPG runs `CREATE EXTENSION age` in the `lineage` DB (declarative extension management).
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: lance-lineage-db
+spec:
+  cluster:
+    name: lance-pg
+  name: lineage
+  owner: lineage
+  extensions:
+    - name: age
+---
+# OpenFGA shares the same server — plain SQL, no extension. It migrates in the same maintenance window.
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: lance-openfga-db
+spec:
+  cluster:
+    name: lance-pg
+  name: openfga
+  owner: lineage

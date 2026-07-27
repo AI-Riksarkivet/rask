@@ -1,0 +1,173 @@
+{{- if .Values.dapr.enabled }}
+# Dapr pub/sub components — the catalog→lineage topic + the medallion triggers on NATS JetStream. The
+# sidecar owns retry/backoff here (config, not app code); subscriptions are programmatic (each app
+# serves GET /dapr/subscribe via dapr-ext-fastapi), so no declarative Subscription CRDs.
+#
+# PUBLISH-only component: the catalog (+ compaction when lineageEmit) publish through it. Consumer
+# metadata (queue group / deliver policy) lives on the per-SUBSCRIBER components below, never here.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.pubsub.name }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  type: pubsub.jetstream
+  version: v1
+  metadata:
+    - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
+    - { name: name, value: "lance-dapr" }
+scopes:
+  - {{ .Values.services.catalog.daprAppId }}
+{{- if .Values.compaction.lineageEmit }}
+  - {{ .Values.compaction.daprAppId }} {{/* compaction publishes maintenance lineage only when lineageEmit is on */}}
+{{- end }}
+{{- if .Values.catalog.controlEmit }}
+---
+# BROADCAST component for the catalog's OWN control-plane change-events (grants/warehouses/policies/tables).
+# DEDICATED (not the shared lineage-pubsub) and with NO queueGroupName → jetstream sets no DeliverGroup, so
+# EVERY catalog replica receives EVERY event and appends it to its per-replica ring buffer (GET /v1/events).
+# The catalog is BOTH publisher (core/control_emit.py) and subscriber (api/dapr.py) on this one component.
+# Ephemeral (no durableName) + deliverPolicy=new: a booting/redeployed replica must NOT replay 168h of past
+# governance events into a fresh in-memory buffer — the buffer is a live-refresh hint window, not a log.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.pubsub.controlName | default "catalog-control-pubsub" }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  type: pubsub.jetstream
+  version: v1
+  metadata:
+    - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
+    - { name: name, value: "lance-dapr-catalog-control" }
+    - { name: deliverPolicy, value: "new" }
+scopes:
+  - {{ .Values.services.catalog.daprAppId }}
+{{- end }}
+{{- /* One component PER SUBSCRIBER app-id (see the lance.subPubsub helper): queueGroupName makes that
+     app's replicas a competing-consumer group (single delivery per app — without it every replica gets
+     EVERY message: jetstream only sets a DeliverGroup when queueGroupName is non-empty), and it CANNOT
+     live on one shared component because lineage and lance-ray both consume lineage.events.v1 — one
+     shared queue group would split those messages across the two apps. deliverPolicy differs on
+     purpose: `all` for lineage (a restart replays the retained stream into the idempotent MERGE ingest —
+     that replay IS the outage-durability story), `new` for the cascade head + movers (a replayed
+     168h of triggers would re-fire cascades / re-run compute). The `new` subscribers ALSO get a
+     durableName: an ephemeral queue-group consumer is deleted with its last member, so a trigger
+     published (or unacked) while the mover is down was LOST — deliverPolicy=new skipped it on
+     reconnect (the chaos-confirmed cascade stall, docs/RESILIENCE.md). A durable+queue-group consumer
+     keeps its cursor across pod death AND redeploys — chaos-verified live 2026-07-06: publish-while-down
+     delivered on recovery, and a rollout restart re-attached with zero "consumer name already in use"
+     errors (that orphan failure applies to durables WITHOUT a queue group, not this combination).
+     lineage stays ephemeral ON PURPOSE — a durable cursor would defeat its replay-rebuilds-the-graph
+     recovery story. */}}
+{{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId "deliverPolicy" "all") }}
+{{- if .Values.medallion.enabled }}
+{{- $subscribers = append $subscribers (dict "appId" .Values.medallion.producer.daprAppId "deliverPolicy" "new") }}
+{{- range .Values.medallion.movers }}
+{{- $subscribers = append $subscribers (dict "appId" .daprAppId "deliverPolicy" "new") }}
+{{- end }}
+{{- end }}
+{{- range $subscribers }}
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ include "lance.subPubsub" (list $ .appId) }}
+  labels: {{- include "lance.labels" $ | nindent 4 }}
+spec:
+  type: pubsub.jetstream
+  version: v1
+  metadata:
+    - { name: natsURL, value: "{{ include "lance.natsUrl" $ }}" }
+    - { name: name, value: "lance-dapr-{{ .appId }}" }
+    - { name: queueGroupName, value: {{ .appId | quote }} }
+    - { name: deliverPolicy, value: {{ .deliverPolicy | quote }} }
+    {{- if eq .deliverPolicy "new" }}
+    # Durable cursor for the trigger consumers (movers + cascade head): survives pod death and redeploys,
+    # so a trigger published while the app is down is DELIVERED on recovery instead of skipped (see the
+    # comment block above; chaos-verified). Name matches the app-id — one durable per subscriber app.
+    - { name: durableName, value: "{{ .appId }}-durable" }
+    {{- end }}
+    # backOff supersedes ackWait for redelivery timing (NATS consumer semantics): its FIRST value is the
+    # effective ack window, so it must not undercut the slowest handler (a compute-on mover does real
+    # S3 reads+writes) — a 1s first step would concurrently redeliver mid-handling even at 1 replica.
+    {{- if $.Values.dapr.resiliency.enabled }}
+    # Resiliency ON: the SIDECAR owns delivery retries (Resiliency CRD, ~10.5 min total) and parks
+    # exhausted messages on the DLQ — so broker redelivery becomes the CRASH-RECOVERY layer only. Its
+    # first step must exceed the sidecar's total retry span, else the broker would redeliver while the
+    # sidecar still holds the message mid-retry (concurrent duplicate handling).
+    - { name: ackWait, value: "720s" }
+    - { name: maxDeliver, value: "3" }
+    - { name: backOff, value: "720s,720s" }
+    {{- else }}
+    - { name: ackWait, value: "30s" }
+    - { name: maxDeliver, value: "5" }
+    - { name: backOff, value: "30s,60s,120s,300s" }
+    {{- end }}
+scopes:
+  - {{ .appId }}
+{{- end }}
+{{- if include "lance.secretsViaDapr" . }}
+---
+# Dapr secret store fronting OpenBao / an external Vault (Vault-API compatible). Apps read secrets via
+# their sidecar (GET /v1.0/secrets/lance-secrets/<name>) instead of plaintext env — the secret-handling
+# fix. Renders for the in-cluster OpenBao OR an external Vault (openbao.externalAddr), so externalizing
+# the store does not force the apps back to plaintext.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: lance-secrets
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  type: secretstores.hashicorp.vault
+  version: v1
+  metadata:
+    - { name: vaultAddr, value: "{{ include "lance.vaultAddr" . }}" }
+    {{- if and .Values.openbao.enabled .Values.openbao.devMode }}
+    - { name: vaultToken, value: {{ .Values.openbao.devToken | quote }} }
+    {{- else }}
+    # Prod path: NOT the dev root token (it can't authenticate against an operator-initialized OpenBao).
+    # The operator supplies a real, scoped token via this Kubernetes secret; Dapr resolves it through its
+    # default k8s secret store. Create it out-of-band: kubectl create secret generic <release>-openbao-token
+    # --from-literal=token=<bao-token>.
+    - name: vaultToken
+      secretKeyRef:
+        name: {{ .Release.Name }}-openbao-token
+        key: token
+    {{- end }}
+    - { name: enginePath, value: "secret" }
+    # Dapr defaults vaultKVPrefix to "dapr", so it reads secret/data/dapr/<key>; our seed writes
+    # secret/data/<key>. Drop the prefix so the path is the natural secret/data/<key> (the kv-v2 nuance).
+    - { name: vaultKVUsePrefix, value: "false" }
+    # TLS verification tracks the Vault address scheme: an https Vault (the openbao.externalAddr prod
+    # path) is verified; skipVerify only for the plain-http in-cluster dev OpenBao (no TLS to verify).
+    # An unconditional "true" would leave the component fronting EVERY app secret unverified in prod.
+    - { name: skipVerify, value: {{ ternary "false" "true" (hasPrefix "https://" (include "lance.vaultAddr" .)) | quote }} }
+{{- $secretScopes := list .Values.services.catalog.daprAppId .Values.services.lineage.daprAppId }}
+{{- if .Values.compaction.enabled }}
+{{- $secretScopes = append $secretScopes .Values.compaction.daprAppId }}
+{{- end }}
+{{- if .Values.medallion.enabled }}
+{{- /* The medallion plane consumes the store too (MEDALLION_SECRETS_FROM_DAPR fetches the S3 secret at
+       boot when a store is configured) — unscoped, every compute-on + openbao-on medallion pod
+       fail-closed with ERR_SECRET_STORES_NOT_CONFIGURED (found live 2026-07-24). */}}
+{{- $secretScopes = append $secretScopes .Values.medallion.producer.daprAppId }}
+{{- range .Values.medallion.movers }}
+{{- $secretScopes = append $secretScopes .daprAppId }}
+{{- end }}
+{{- end }}
+{{- if .Values.stateStore.enabled }}
+{{- /* Anything scoped to the STATE store must also be scoped here, because that component resolves its
+       connection string through this one (`auth.secretStore`). Miss it and the sidecar logs
+       "references a secret store that isn't loaded: lance-secrets", the state store silently does not
+       load, and — the part that is easy to miss — "Actor state store not configured - actor hosting
+       disabled". Derived from stateStore.scopes rather than restated, so the two lists cannot drift;
+       found live 2026-07-26 when the annotator was scoped to the state store but not to this. */}}
+{{- $secretScopes = concat $secretScopes .Values.stateStore.scopes }}
+{{- end }}
+scopes:
+{{- range ($secretScopes | uniq) }}
+  - {{ . }}
+{{- end }}
+{{- end }}
+{{- end }}

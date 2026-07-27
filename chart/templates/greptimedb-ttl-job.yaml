@@ -1,19 +1,24 @@
 {{- if and .Values.observability.enabled .Values.observability.retention }}
 {{- /*
-Durable retention: a post-install/post-upgrade Helm hook that sets a database-level
-TTL on GreptimeDB's `public` database. Every table (rask_logs, opentelemetry_traces,
-the metrics physical table) inherits the DB TTL unless it sets its own, so logs,
-traces, and metrics all age out at observability.retention instead of growing
-forever on the single local disk. Idempotent — ALTER DATABASE just re-sets the value
-on every upgrade. Runs as a hook (not a plain Job) so it re-applies after the chart
-has (re)created GreptimeDB; the retry loop tolerates GreptimeDB still starting up.
+Durable retention: a post-install/post-upgrade Helm hook that sets a database-level TTL on
+GreptimeDB's `public` database (observability.dbName). Every table inherits the DB TTL
+unless it sets its own — rask's Vector agent `rask_logs`, lance-ns's OTel filelog
+`opentelemetry_logs`, `opentelemetry_traces`, and the metrics physical table — so all
+three signals age out at observability.retention instead of growing forever on the single
+local disk. Idempotent: ALTER DATABASE just re-sets the value on every upgrade. It runs as
+a HOOK (not a plain Job) so it re-applies after the chart has (re)created GreptimeDB, and
+the retry loop tolerates GreptimeDB still starting up.
+
+The pod template carries an explicit component label: under the prod default-deny
+NetworkPolicy an unlabelled hook pod is invisible to every allow rule, and the failure is
+silent (kindnet does not enforce, so it only appears on a policy-enforcing CNI).
 */}}
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ include "rask.fullname" . }}-greptimedb-ttl
   labels:
-    {{- include "rask.labels" . | nindent 4 }}
+    {{- include "rask.componentLabels" (list . "greptimedb-ttl") | nindent 4 }}
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "5"
@@ -28,6 +33,9 @@ spec:
         app.kubernetes.io/component: greptimedb-ttl
     spec:
       restartPolicy: OnFailure
+      {{- if .Values.security.serviceAccounts.enabled }}
+      serviceAccountName: {{ include "rask.fullname" . }}-sa-jobs
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -47,13 +55,14 @@ spec:
           args:
             - |
               set -eu
-              GT="http://{{ include "rask.fullname" . }}-greptimedb-standalone:4000"
+              GT="http://{{ include "lance.greptimeHost" . }}:{{ .Values.observability.greptimePort }}"
+              DB='{{ .Values.observability.dbName }}'
               TTL='{{ .Values.observability.retention }}'
               echo "waiting for GreptimeDB at $GT ..."
               until curl -sf "$GT/health" >/dev/null 2>&1; do sleep 3; done
-              echo "setting public database ttl=$TTL"
-              curl -sf "$GT/v1/sql?db=public" \
-                --data-urlencode "sql=ALTER DATABASE public SET 'ttl'='$TTL'" \
+              echo "setting $DB database ttl=$TTL"
+              curl -sf "$GT/v1/sql?db=$DB" \
+                --data-urlencode "sql=ALTER DATABASE $DB SET 'ttl'='$TTL'" \
                 | grep -q affectedrows
               echo "retention applied: $TTL"
 {{- end }}

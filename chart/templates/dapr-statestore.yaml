@@ -1,0 +1,72 @@
+{{- if .Values.stateStore.enabled }}
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# The Dapr state store — the estate's home for OPERATIONAL state.
+#
+# Why this exists at all (docs/DESIGN-interactive-state.md): Lance is a columnar, immutable, versioned
+# ANALYTICAL format, and every commit is a new version with a manifest and a transaction file. That is
+# exactly why the git-like history in #113 works, and exactly why it is the wrong shape for a task's
+# state. A per-task flip (assigned → in progress → submitted → reviewed) is a small, frequent,
+# single-entity write; in Lance each one would be a dataset version — hundreds of manifests a minute, a
+# history that is noise rather than provenance, and read-modify-write contention on a format with no
+# row-level locking. It is not a limitation of Lance; asking an OLAP format for OLTP semantics is a
+# category error. So the annotation task model (#122) and the notification inbox (#125) live here.
+#
+# WHY POSTGRES AND NOT REDIS. Both are Stable Dapr state stores with actor support, so either would
+# work, and the owner has approved adding Redis for CACHE. The split is by property, not preference:
+#
+#   * A cache must FORGET. TTL eviction and memory-bound behaviour are what Redis is best at.
+#   * Durable workflow that loses its state on a pod restart is not durable. Postgres is durable by
+#     default; a Redis without AOF configured loses everything on restart.
+#   * `maxmemory-policy` is SERVER-wide, not per-key or per-database. One Redis holding both an
+#     evicting cache and actor state can silently evict workflow state under memory pressure — so a
+#     single instance cannot safely play both roles, and two instances would be two new pods.
+#
+# And this one needs NO new infrastructure: `lance-ns-age` is already deployed, already backed up
+# (backup-pg.yaml), already monitored, and already holds the lineage graph and the OpenFGA datastore.
+# One component, one extra database, zero extra pods.
+#
+# `actorStateStore: "true"` is not optional decoration: it is the prerequisite for Dapr ACTORS *and*
+# for Dapr WORKFLOW, because workflow uses the actor framework internally. Without it, #122's per-task
+# actor and #125's per-user inbox cannot exist, and a workflow instance cannot persist. Postgres v1
+# and v2 both carry Stable actor support (Dapr's supported-state-stores reference).
+#
+# Scoped to the services that own operational state. A component with no `scopes` is loadable by every
+# app-id in the namespace, which would let any service write another's state — the same fail-closed
+# reflex the pub/sub components already follow.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.stateStore.name }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  type: state.postgresql
+  version: {{ .Values.stateStore.componentVersion | quote }}
+  metadata:
+    # Resolved through the Dapr SECRET STORE (`lance-secrets` -> OpenBao), not a k8s Secret. That is the
+    # estate's rule, and `services/common/secrets.py` records why it exists: an audit found the secret
+    # store "wired but never read", with services taking secrets from plaintext pod env, which made the
+    # integration decorative. Putting a password-bearing DSN into a k8s Secret would reintroduce exactly
+    # that. The DSN is stored assembled because a Dapr metadata `secretKeyRef` substitutes the WHOLE
+    # value — there is no way to splice in just the password — so the seed writes it whole to
+    # secret/lance (openbao.yaml), beside postgres-password.
+    - name: connectionString
+      secretKeyRef:
+        name: lance # the secret at secret/data/lance; vaultKVUsePrefix=false drops Dapr's "dapr/" prefix
+        key: dapr-state-connection-string
+    # The gate for actors and workflow both. See the header.
+    - { name: actorStateStore, value: "true" }
+    # Dapr creates and migrates this table itself; naming it explicitly keeps a future second store
+    # (a cache, say) from colliding in the same database if one is ever pointed here.
+    - { name: tableName, value: {{ .Values.stateStore.tableName | quote }} }
+    - { name: metadataTableName, value: {{ .Values.stateStore.metadataTableName | quote }} }
+auth:
+  # Which component resolves the secretKeyRef above. Without this Dapr looks in Kubernetes Secrets.
+  secretStore: {{ .Values.stateStore.secretStore }}
+{{- if .Values.stateStore.scopes }}
+scopes:
+{{- range .Values.stateStore.scopes }}
+  - {{ . }}
+{{- end }}
+{{- end }}
+{{- end }}

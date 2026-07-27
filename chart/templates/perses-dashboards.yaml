@@ -1,17 +1,27 @@
 {{- if .Values.observability.enabled }}
-{{- if index .Values "perses" "enabled" | default true }}
 {{- /*
-Perses dashboards-as-code. Provisioned by mounting this ConfigMap into a folder
-listed in perses.config.provisioning.folders (see values.yaml). Perses loads the
-Project + Dashboard on startup and reconciles them every provisioning interval.
-Queries target the default `greptimedb` Prometheus datasource; metric names are
-OTel/semconv classic (http_server_duration_milliseconds_*), emitted by the
-FastAPI/HTTPX instrumentation wired in service_kit.setup_otel.
+Perses dashboards-as-code. Provisioned by mounting this ConfigMap into a folder listed in
+perses.config.provisioning.folders (see values.yaml); Perses loads the Project + Dashboards
+on startup and reconciles them every provisioning interval. Queries target the default
+`greptimedb` Prometheus datasource.
 
-NB: Perses `seriesNameFormat` uses {{`{{label}}`}} syntax — escaped here so Helm
-emits the literal braces instead of evaluating them as template actions.
+ONE project ("rask"), four dashboards — the merged estate is one platform under one
+release, so lance-ns's dashboards moved from the `lance-ns` project onto this one rather
+than provisioning a second, near-empty project beside it:
+  fleet-red    — rask's fleet RED view (OTLP http.server metrics from service_kit.setup_otel)
+  lineage      — lance-ns ingest domain signal + HTTP RED
+  service-flow — the event-driven medallion cascade edges + per-service activity
+  training     — per-model training run metrics (Ray train job → OTLP)
+
+Gated on observability.enabled ALONE, matching Chart.yaml's `condition: observability.enabled`
+on the perses dependency — so the dashboards exist exactly when Perses does. (Both charts
+previously wrapped this in `index .Values "perses" "enabled" | default true`, which is the
+boolean form of the swallow-an-explicit-value trap: `false | default true` is true, so the
+knob never worked, and no `perses.enabled` key exists to drive it.)
+
+NB: Perses `seriesNameFormat` uses {{`{{label}}`}} syntax — escaped here so Helm emits the
+literal braces instead of evaluating them as template actions.
 */}}
-{{- $svc := "{{service_name}}" }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -40,7 +50,7 @@ data:
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
                 "query": "sum by (service_name) (rate(http_server_duration_milliseconds_count[5m]))",
-                "seriesNameFormat": {{ $svc | quote }} } } } } ]
+                "seriesNameFormat": {{ "{{service_name}}" | quote }} } } } } ]
             }
           },
           "errorRate": {
@@ -50,7 +60,7 @@ data:
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" }, "yAxis": { "format": { "unit": "percent" } } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
                 "query": "100 * sum by (service_name) (rate(http_server_duration_milliseconds_count{http_status_code=~\"5..\"}[5m])) / clamp_min(sum by (service_name) (rate(http_server_duration_milliseconds_count[5m])), 0.001)",
-                "seriesNameFormat": {{ $svc | quote }} } } } } ]
+                "seriesNameFormat": {{ "{{service_name}}" | quote }} } } } } ]
             }
           },
           "latencyP95": {
@@ -60,7 +70,7 @@ data:
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" }, "yAxis": { "format": { "unit": "milliseconds" } } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
                 "query": "histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_duration_milliseconds_bucket[5m])))",
-                "seriesNameFormat": {{ $svc | quote }} } } } } ]
+                "seriesNameFormat": {{ "{{service_name}}" | quote }} } } } } ]
             }
           },
           "activeRequests": {
@@ -70,7 +80,7 @@ data:
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
                 "query": "sum by (service_name) (http_server_active_requests)",
-                "seriesNameFormat": {{ $svc | quote }} } } } } ]
+                "seriesNameFormat": {{ "{{service_name}}" | quote }} } } } } ]
             }
           }
         },
@@ -90,5 +100,233 @@ data:
         ]
       }
     }
-{{- end }}
+  lineage.json: |
+    {
+      "kind": "Dashboard",
+      "metadata": { "name": "lineage", "project": "rask" },
+      "spec": {
+        "display": { "name": "Lance Lineage — ingest + RED", "description": "Domain signal (events ingested/dropped/retried, ingest latency) + OTLP HTTP RED, all from GreptimeDB." },
+        "duration": "1h",
+        "panels": {
+          "eventsByOutcome": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Lineage events /s by outcome" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (lance_lineage_outcome) (rate(lineage_events_processed_total[5m]))",
+                "seriesNameFormat": {{ "{{lance_lineage_outcome}}" | quote }} } } } } ]
+            }
+          },
+          "ingestP95": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Ingest p95 (s)" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" }, "yAxis": { "format": { "unit": "seconds" } } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "histogram_quantile(0.95, sum by (le) (rate(lineage_ingest_duration_seconds_bucket[5m])))",
+                "seriesNameFormat": "p95" } } } } ]
+            }
+          },
+          "httpRate": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "HTTP request rate (req/s)" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (service_name) (rate(http_server_duration_milliseconds_count[5m]))",
+                "seriesNameFormat": {{ "{{service_name}}" | quote }} } } } } ]
+            }
+          },
+          "httpP95": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "HTTP p95 latency (ms)" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" }, "yAxis": { "format": { "unit": "milliseconds" } } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_duration_milliseconds_bucket[5m])))",
+                "seriesNameFormat": {{ "{{service_name}}" | quote }} } } } } ]
+            }
+          }
+        },
+        "layouts": [
+          {
+            "kind": "Grid",
+            "spec": {
+              "display": { "title": "Lineage ingest + RED" },
+              "items": [
+                { "x": 0, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/eventsByOutcome" } },
+                { "x": 12, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/ingestP95" } },
+                { "x": 0, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/httpRate" } },
+                { "x": 12, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/httpP95" } }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  service-flow.json: |
+    {
+      "kind": "Dashboard",
+      "metadata": { "name": "service-flow", "project": "rask" },
+      "spec": {
+        "display": { "name": "Service Flow", "description": "How the event-driven services connect + move data — the medallion cascade edges + per-service activity, from GreptimeDB. (A node-topology graph would need the OTel Collector's servicegraph connector; this is the metrics view over the OTLP signals the Collector exports.)" },
+        "duration": "30m",
+        "panels": {
+          "medallionFlow": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Medallion cascade /s (raw→bronze→silver→gold edges)" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (lance_medallion_transition) (rate(medallion_stage_transitions_total[5m]))",
+                "seriesNameFormat": {{ "{{lance_medallion_transition}}" | quote }} } } } } ]
+            }
+          },
+          "activeServices": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Active services — request rate (req/s)" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (service_name) (rate(http_server_duration_milliseconds_count[5m]))",
+                "seriesNameFormat": {{ "{{service_name}}" | quote }} } } } } ]
+            }
+          },
+          "lineageOutcomes": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Lineage ingest /s by outcome" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (lance_lineage_outcome) (rate(lineage_events_processed_total[5m]))",
+                "seriesNameFormat": {{ "{{lance_lineage_outcome}}" | quote }} } } } } ]
+            }
+          },
+          "compactionSweeps": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Compaction sweeps (cron) — total" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum(compaction_runs_total)",
+                "seriesNameFormat": "compaction sweeps" } } } } ]
+            }
+          },
+          "errorRate": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Error rate — 5xx share of requests, by service (the missing E in RED)" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (service_name) (rate(http_server_duration_milliseconds_count{http_status_code=~\"5..\"}[5m])) / sum by (service_name) (rate(http_server_duration_milliseconds_count[5m]))",
+                "seriesNameFormat": {{ "{{service_name}}" | quote }} } } } } ]
+            }
+          },
+          "outboxDurability": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Outbox durability — depth + oldest age (alertable pair; sustained > 0 = relay not draining)" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "max(outbox_depth)", "seriesNameFormat": "depth (events)" } } } },
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "max(outbox_oldest_age)", "seriesNameFormat": "oldest age (s)" } } } },
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum(rate(outbox_publish_failed_total[5m]))", "seriesNameFormat": "publish failed /s" } } } }
+              ]
+            }
+          },
+          "governanceGates": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Blocked at the gates — FGA denials + quality blocks + dead-letters + catalog emit failures" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum(rate(medallion_stage_denied_total[5m]))", "seriesNameFormat": "stage denied /s" } } } },
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum(rate(medallion_stage_quality_blocked_total[5m]))", "seriesNameFormat": "quality blocked /s" } } } },
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum(rate(lineage_events_processed_total{lance_lineage_outcome=\"dead_lettered\"}[5m]))", "seriesNameFormat": "dead-lettered /s" } } } },
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum(rate(catalog_lineage_emit_failed_total[5m]))", "seriesNameFormat": "catalog emit failed /s" } } } }
+              ]
+            }
+          }
+        },
+        "layouts": [
+          {
+            "kind": "Grid",
+            "spec": {
+              "display": { "title": "Service flow" },
+              "items": [
+                { "x": 0, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/medallionFlow" } },
+                { "x": 12, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/activeServices" } },
+                { "x": 0, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/lineageOutcomes" } },
+                { "x": 12, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/compactionSweeps" } },
+                { "x": 0, "y": 16, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/errorRate" } },
+                { "x": 8, "y": 16, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/outboxDurability" } },
+                { "x": 16, "y": 16, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/governanceGates" } }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  training.json: |
+    {
+      "kind": "Dashboard",
+      "metadata": { "name": "training", "project": "rask" },
+      "spec": {
+        "display": { "name": "Model Training — experiment metrics", "description": "Per-model training run metrics emitted by the Ray train job over OTLP → GreptimeDB (#18, not MLflow): completed runs and the latest run metrics (rows seen, feature count), by model." },
+        "duration": "6h",
+        "panels": {
+          "runsByModel": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Training runs /s by model" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "sum by (lance_model) (rate(lance_training_runs_total[5m]))",
+                "seriesNameFormat": {{ "{{lance_model}}" | quote }} } } } } ]
+            }
+          },
+          "rowsSeen": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Rows seen (latest run) by model" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "max by (lance_model) (lance_training_rows_seen)",
+                "seriesNameFormat": {{ "{{lance_model}}" | quote }} } } } } ]
+            }
+          },
+          "featuresUsed": {
+            "kind": "Panel",
+            "spec": {
+              "display": { "name": "Feature datasets used (latest run) by model" },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                "query": "max by (lance_model) (lance_training_features)",
+                "seriesNameFormat": {{ "{{lance_model}}" | quote }} } } } } ]
+            }
+          }
+        },
+        "layouts": [
+          {
+            "kind": "Grid",
+            "spec": {
+              "display": { "title": "Model training" },
+              "items": [
+                { "x": 0, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/runsByModel" } },
+                { "x": 12, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/rowsSeen" } },
+                { "x": 0, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/featuresUsed" } }
+              ]
+            }
+          }
+        ]
+      }
+    }
 {{- end }}

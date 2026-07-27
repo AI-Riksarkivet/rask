@@ -28,6 +28,11 @@ build:
 # (svelte-check) is their gate.
 test:
 	uv run pytest -m "not slow"
+	# The HTR runner is sealed OUT of the root workspace (own lock, own venv): the root
+	# pytest can neither import nor collect its tests, so without this second line the
+	# runner suite silently never runs. cd first — from the repo root, pytest would read
+	# the ROOT testpaths and try to import fleet modules absent from the runner's venv.
+	cd runners/htr && uv run --frozen pytest -m "not slow"
 
 # Slow tests need real models / a GPU (e.g. the YOLO layout smoke test) and hang on
 # hosts without them — opt in explicitly. Runs the full suite including slow marks.
@@ -362,8 +367,8 @@ k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait 
 	  --force-conflicts --take-ownership \
 	  $${HF_TOKEN:+--set-string secrets.hfToken=$$HF_TOKEN} \
 	  $${POSTGRES_PASSWORD:+--set-string secrets.postgresPassword=$$POSTGRES_PASSWORD} \
-	  $${AWS_ACCESS_KEY_ID:+--set-string secrets.minioAccessKey=$$AWS_ACCESS_KEY_ID} \
-	  $${AWS_SECRET_ACCESS_KEY:+--set-string secrets.minioSecretKey=$$AWS_SECRET_ACCESS_KEY}
+	  $${AWS_ACCESS_KEY_ID:+--set-string rustfs.accessKey=$$AWS_ACCESS_KEY_ID} \
+	  $${AWS_SECRET_ACCESS_KEY:+--set-string rustfs.secretKey=$$AWS_SECRET_ACCESS_KEY}
 	$(KUBECTL) rollout status deploy/rask-gateway --timeout=300s
 	@echo "UI → http://<node-ip>/   (catch-all ingress; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
 	@echo "API → http://<node-ip>/api/health"

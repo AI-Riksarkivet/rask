@@ -1,4 +1,32 @@
 {{- if .Values.ingress.enabled }}
+{{- $root := . -}}
+{{- /*
+The north-south edge. ONE Ingress for the whole release: it path-routes the SvelteKit
+micro-frontend ZONES (each domain zone owns its base path /<zone>; the catch-all `home`
+owns "/"), plus /api → the fleet gateway and — auth on — /dex → the IdP, so the whole
+estate rides ONE public origin. Controllers match longest-prefix, so the specific rules
+win over the catch-all "/" regardless of the order below; they are still emitted
+specific-first because that is the order a reader checks them in.
+
+Frontend object names are `<fullname>-web-<zone>` (see frontends.yaml: the `annotator`
+ZONE and the `annotator` BACKEND service share one release, so the frontend tier carries
+a `web-` prefix). A zone's path comes from its `path` in .Values.frontend.apps and MUST
+equal the `paths.base` pinned in that zone's svelte.config.js, or SvelteKit serves assets
+from a prefix the edge never routes.
+
+The zones' own /<zone>/api/* BFF routes (bearer-forwarding proxies to the media
+viewer/search/annotator Services) are covered by the zone prefix rules — there are
+deliberately NO root-absolute /api/media|/api/search rules: that side door let
+unauthenticated edge traffic reach the media services directly, bypassing the BFF gate.
+
+k3s ships Traefik and the annotations are ingress-nginx's; both are keyed defaults in
+values.yaml, and an unknown annotation is inert to a controller that does not own it.
+The proxy-read-timeout one is load-bearing, not decoration: ingress-nginx's 60s default
+counts IDLE time on the upstream, so a `query.live` generator that yields only on change
+is severed after a minute of quiet and SvelteKit's SSE transport sends no keepalive to
+refresh that clock. It pairs with the zones' IDLE_TIMEOUT (frontends.yaml) — both hops
+must hold, and the SMALLER one always wins.
+*/ -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -11,7 +39,7 @@ metadata:
   {{- end }}
 spec:
   {{- with .Values.ingress.className }}
-  ingressClassName: {{ . }}
+  ingressClassName: {{ . | quote }}
   {{- end }}
   {{- with .Values.ingress.tls }}
   tls:
@@ -24,36 +52,77 @@ spec:
       {{- end }}
       http:
         paths:
+          {{- /* /api is the FLEET gateway (services.gateway, uvicorn `gateway:app` on
+                 :8888): it path-routes to core-api, search-api, volumes-api, ray-api and
+                 the orchestrator, and it is what the zones' relative /api/* client fetches
+                 resolve to (SSR uses the in-cluster URL instead). It renders in every
+                 install (fleet.yaml is not gated), so this rule never dangles.
+
+                 ⚠ UNRECONCILED, outside these files: lance-ns's nginx gateway
+                 (top-level `gateway:`, :8080, templates/gateway.yaml) renders a Deployment
+                 AND Service ALSO named `<fullname>-gateway`, which one release cannot
+                 install. The base chart wins here per the merge rule, so every gateway
+                 route below names the fleet gateway's port; the nginx edge must be renamed
+                 (or dropped) before it can be addressed at all. It was never on the public
+                 path in lance-ns either — it is reached by port-forward. */}}
           - path: /api
             pathType: Prefix
             backend:
               service:
-                name: {{ include "rask.fullname" . }}-gateway
+                name: {{ include "rask.fullname" $ }}-gateway
                 port:
-                  number: 8888
-          {{- /* Each MFE domain app on its base path; Traefik matches longest-prefix
-                 first, so these win over the catch-all "/" below. */}}
+                  number: {{ .Values.services.gateway.port }}
+          {{- if .Values.frontend.enabled }}
           {{- range .Values.frontend.apps }}
-          {{- if and (not .catchAll) $.Values.singleTenant.enabled }}
-          - path: {{ .path }}
+          {{- if not .catchAll }}
+          - path: {{ required (printf "frontend.apps entry %q needs a `path` (its svelte.config.js paths.base) unless it is the catchAll zone" .name) .path }}
             pathType: Prefix
             backend:
               service:
-                name: {{ include "rask.fullname" $ }}-{{ .name }}
+                name: {{ include "rask.fullname" $root }}-web-{{ .name }}
                 port:
-                  number: {{ $.Values.frontend.service.port }}
+                  number: {{ $root.Values.frontend.service.port }}
           {{- end }}
           {{- end }}
-          {{- /* Catch-all home app last: "/" (host carries the project; path carries the domain). */}}
+          {{- end }}
+          {{- if .Values.auth.enabled }}
+          {{- /* Dex under the SAME origin as the zones: /dex → the dex Service, so the whole
+                 OIDC round-trip (authorize, login form, token, JWKS) rides the one public
+                 origin — no second hostname, no extra tunnel, no DNS tricks. Dex already
+                 serves under the /dex path (its issuer path). Split-horizon: pods fetch via
+                 the internal Service URL (OIDC_INTERNAL_ISSUER), browsers via this route. */}}
+          - path: /dex
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "lance.dexHost" $root }}
+                port:
+                  number: 5556
+          {{- end }}
+          {{- if .Values.frontend.enabled }}
+          {{- /* The catch-all home zone LAST: "/" and anything that is not a domain zone
+                 (host carries the project; path carries the domain). */}}
           {{- range .Values.frontend.apps }}
           {{- if .catchAll }}
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: {{ include "rask.fullname" $ }}-{{ .name }}
+                name: {{ include "rask.fullname" $root }}-web-{{ .name }}
                 port:
-                  number: {{ $.Values.frontend.service.port }}
+                  number: {{ $root.Values.frontend.service.port }}
           {{- end }}
+          {{- end }}
+          {{- else }}
+          {{- /* Frontend off (the headless `--set frontend.enabled=false` stacks in
+                 scripts/e2e_stack.sh): fall back to the fleet gateway at "/" so the edge
+                 still resolves to something that exists. */}}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "rask.fullname" $root }}-gateway
+                port:
+                  number: {{ .Values.services.gateway.port }}
           {{- end }}
 {{- end }}

@@ -1,0 +1,151 @@
+{{- if .Values.age.enabled }}
+# Apache AGE Postgres — the OpenLineage graph store (graph 'lineage') AND OpenFGA's datastore (db
+# 'openfga'). CNPG's image lacks the AGE extension, so this is a plain StatefulSet on the apache/age
+# image (postgres 16 + AGE). initdb scripts (alphabetical) load AGE + create the graph, then the
+# openfga database.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "lance.ageHost" . }}-init
+  labels: {{- include "lance.labels" . | nindent 4 }}
+data:
+  10-age.sql: |
+    CREATE EXTENSION IF NOT EXISTS age;
+    LOAD 'age';
+    SET search_path = ag_catalog, "$user", public;
+    SELECT create_graph('{{ .Values.age.lineageDb }}');
+    -- Pre-create the vertex labels + a UNIQUE index on each MERGE key (item 6): AGE's MERGE is
+    -- MATCH-then-CREATE, so two concurrent writers (the cron reconcile racing live ingest) could each miss
+    -- and both CREATE a duplicate vertex. The unique index makes the loser's insert fail instead. Fresh-DB
+    -- declarative guarantee; the lineage service ALSO applies these idempotently at boot (existing DBs,
+    -- retained PVC) via ensure_graph_constraints. ag_catalog.agtype_access_operator(...) is AGE's immutable
+    -- property-access expression for a functional index.
+    SELECT create_vlabel('{{ .Values.age.lineageDb }}', 'Run');
+    SELECT create_vlabel('{{ .Values.age.lineageDb }}', 'Job');
+    SELECT create_vlabel('{{ .Values.age.lineageDb }}', 'Dataset');
+    -- Index NAMES are double-quoted (like the schema/table already are, and matching the boot-time Python
+    -- sibling's psycopg.sql.Identifier) so a hyphenated lineageDb (e.g. "lineage-prod") can't produce an
+    -- unquoted identifier that breaks initdb SQL and CrashLoops the AGE StatefulSet.
+    CREATE UNIQUE INDEX IF NOT EXISTS "{{ .Values.age.lineageDb }}_run_uniq" ON "{{ .Values.age.lineageDb }}"."Run"
+      (ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"run_id"'::agtype]));
+    CREATE UNIQUE INDEX IF NOT EXISTS "{{ .Values.age.lineageDb }}_dataset_uniq" ON "{{ .Values.age.lineageDb }}"."Dataset"
+      (ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"name"'::agtype]));
+    CREATE UNIQUE INDEX IF NOT EXISTS "{{ .Values.age.lineageDb }}_job_uniq" ON "{{ .Values.age.lineageDb }}"."Job"
+      (ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"namespace"'::agtype]),
+       ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"name"'::agtype]));
+    -- Column gets a PLAIN (non-unique) lookup index on its MERGE key: uniqueness is deliberately NOT
+    -- enforced (duplicate column vertices from a rare concurrent first-create are benign, collapsed by
+    -- DISTINCT reads; a unique index would add abort/retry churn to the hot column path) — but without
+    -- any index every column MERGE seq-scans a label table that grows with the estate (§4).
+    SELECT create_vlabel('{{ .Values.age.lineageDb }}', 'Column');
+    CREATE INDEX IF NOT EXISTS "{{ .Values.age.lineageDb }}_column_lookup" ON "{{ .Values.age.lineageDb }}"."Column"
+      (ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"dataset"'::agtype]),
+       ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"field"'::agtype]));
+  20-openfga.sql: |
+    -- Quoted identifier (same reason as the index names above) so a hyphenated openfgaDb can't break initdb.
+    CREATE DATABASE "{{ .Values.age.openfgaDb }}";
+    -- Keep the openfga db off AGE's ag_catalog search path (it has no AGE) so openfga migrations resolve
+    -- objects in public, not a non-existent ag_catalog schema.
+    ALTER DATABASE "{{ .Values.age.openfgaDb }}" SET search_path = public;
+  30-daprstate.sql: |
+    -- The Dapr state store's own database: operational state (annotation tasks, notification inboxes,
+    -- actor and workflow state) that Lance must not hold — a per-task state flip would be a dataset
+    -- version, so hundreds of manifests a minute and a history that is noise rather than provenance.
+    --
+    -- Its own database rather than a table in `lineage`: Dapr owns this schema completely (it creates and
+    -- migrates its own tables), and mixing that with AGE's graph would make a Dapr migration a risk to the
+    -- lineage store. Same isolation argument as openfga's.
+    CREATE DATABASE "{{ .Values.age.stateDb }}";
+    ALTER DATABASE "{{ .Values.age.stateDb }}" SET search_path = public;
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lance.ageHost" . }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  ports:
+    - { name: postgres, port: {{ .Values.age.port }}, targetPort: 5432 }
+  selector:
+    app.kubernetes.io/component: age
+    app.kubernetes.io/instance: {{ .Release.Name }}
+---
+{{- /* Guard: StatefulSet volumeClaimTemplates are immutable, so bumping age.storage on an upgrade
+either hard-fails deep in the apply or (worse) looks accepted without resizing anything. Catch it
+up-front with a clear path forward. `lookup` returns empty on `helm template`/client dry-run, so
+render/CI paths are unaffected; the comparison is textual (write the same unit as the live object,
+normally the one this chart installed). */}}
+{{- $existingSts := lookup "apps/v1" "StatefulSet" .Release.Namespace (include "lance.ageHost" .) }}
+{{- if $existingSts }}
+{{- range $existingSts.spec.volumeClaimTemplates }}
+{{- if eq .metadata.name "data" }}
+{{- $current := .spec.resources.requests.storage }}
+{{- if ne (toString $current) (toString $.Values.age.storage) }}
+{{- fail (printf "age.storage=%s but the deployed AGE StatefulSet's volumeClaimTemplate requests %s — volumeClaimTemplates are immutable, so this upgrade cannot resize the volume. To resize: patch the PVC (kubectl patch pvc data-%s-0 -p '{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"%s\"}}}}'), delete the StatefulSet with --cascade=orphan (pods and PVC stay), then re-run the upgrade. See docs/RUNBOOK-restore.md. To keep the current size, revert age.storage to %s." (toString $.Values.age.storage) (toString $current) (include "lance.ageHost" $) (toString $.Values.age.storage) (toString $current)) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "lance.ageHost" . }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "lance.ageHost" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: age
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "lance.labels" . | nindent 8 }}
+        app.kubernetes.io/component: age
+    spec:
+      {{- if .Values.security.serviceAccounts.enabled }}
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-age
+      {{- end }}
+      {{- if .Values.security.infraContexts.enabled }}
+      # Per-image uid/fsGroup from values (the audit: data/secret holders need runAsUser+fsGroup for
+      # their PVCs — no blind helper reuse). Flag default OFF: flip after the kind boot check (§7a).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: {{ .Values.security.infraContexts.age.runAsUser }}
+        {{- with .Values.security.infraContexts.age.fsGroup }}
+        fsGroup: {{ . }}
+        {{- end }}
+        seccompProfile: { type: RuntimeDefault }
+      {{- end }}
+      containers:
+        - name: postgres
+          image: {{ .Values.age.image }}
+          env:
+            - { name: POSTGRES_USER, value: {{ .Values.age.user | quote }} }
+            # From a k8s Secret (not a plaintext pod-spec value) — the audit's 'POSTGRES_PASSWORD plaintext
+            # on the DB server pod' fix. Prod populates the Secret from OpenBao via the operator.
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: postgres-password }
+            - { name: POSTGRES_DB, value: {{ .Values.age.lineageDb | quote }} }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports:
+            - { name: postgres, containerPort: 5432 }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: init, mountPath: /docker-entrypoint-initdb.d }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", {{ .Values.age.user | quote }}, "-d", {{ .Values.age.lineageDb | quote }}] }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources: {{- include "lance.resources" (dict "root" . "comp" "age") | nindent 12 }}
+      volumes:
+        - name: init
+          configMap: { name: {{ include "lance.ageHost" . }}-init }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: {{ .Values.age.storage }} } }
+{{- end }}

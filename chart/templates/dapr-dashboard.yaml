@@ -1,0 +1,81 @@
+{{- if and .Values.dapr.enabled .Values.dapr.dashboard.enabled }}
+# Dapr dashboard — the web UI for the Dapr stuff: components (lineage-pubsub, lance-secrets,
+# lance-tracing), subscriptions, configurations, and the control plane. Port-forward 8080 to view.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "lance.fullname" . }}-dapr-dashboard
+  labels: {{- include "lance.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "lance.fullname" . }}-dapr-dashboard
+  labels: {{- include "lance.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["dapr.io"]
+    resources: ["components", "configurations", "subscriptions", "resiliencies", "httpendpoints"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "lance.fullname" . }}-dapr-dashboard
+  labels: {{- include "lance.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "lance.fullname" . }}-dapr-dashboard
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lance.fullname" . }}-dapr-dashboard
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lance.fullname" . }}-dapr-dashboard
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: dapr-dashboard
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "lance.labels" . | nindent 8 }}
+        app.kubernetes.io/component: dapr-dashboard
+    spec:
+      # ALWAYS the dedicated RBAC-bound SA — never the zero-grant unbound SA that security-sa.yaml renders
+      # under security.serviceAccounts.enabled. The dashboard legitimately reads the k8s API (its
+      # ClusterRole above: Dapr CRDs, pods, deployments); the zero-grant SA would leave it Ready but
+      # broken. The old conditional second key here was a duplicate-map-key render: lenient last-wins
+      # parsing swapped the RBAC SA out (audit 2026-07-24).
+      serviceAccountName: {{ include "lance.fullname" . }}-dapr-dashboard
+      containers:
+        - name: dashboard
+          image: {{ .Values.dapr.dashboard.image }}
+          ports:
+            - { name: http, containerPort: 8080 }
+          resources: {{- include "lance.resources" (dict "root" . "comp" "dapr-dashboard") | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lance.fullname" . }}-dapr-dashboard
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+  selector:
+    app.kubernetes.io/component: dapr-dashboard
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

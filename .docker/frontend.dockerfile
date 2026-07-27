@@ -41,17 +41,15 @@ COPY frontend/patches patches
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install --frozen-lockfile
 
-# Pre-build packages/ui so its dist/ exports resolve during the app build.
-# @sveltejs/package@2 rejects the `config.package` key — swap a minimal config in.
+# Pre-build packages/ui (svelte-package → dist/) so its dist exports resolve during
+# the app build. The ui svelte.config.js is already @sveltejs/package@2-compatible.
 # hadolint ignore=DL3059
 RUN --mount=type=cache,target=/root/.bun/install/cache \
-    printf "import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';\nexport default { preprocess: vitePreprocess() };\n" \
-      > packages/ui/svelte.config.js \
-    && bun run --cwd packages/ui package
+    bun run --cwd=packages/ui build
 
 # hadolint ignore=DL3059
 RUN --mount=type=cache,target=/root/.bun/install/cache \
-    bun run --cwd microfrontends/${APP} build
+    bun run --cwd=microfrontends/${APP} build
 
 # ---- final: minimal Bun runtime serving the adapter-bun server ---------------
 FROM oven/bun:1-debian@sha256:9dba1a1b43ce28c9d7931bfc4eb00feb63b0114720a0277a8f939ae4dfc9db6f
