@@ -61,9 +61,9 @@ case); catalog 501s **confirmed at 7** (`docs/COVERAGE.md`, 47/54 backed).
 | `services/{catalog,lineage,medallion,compaction,viewer,search,annotator}` | `services/{catalog,lineage,medallion,compaction,viewer,search,annotator}` (converted to src-layout: `src/<name>/…`, entrypoints preserved: `catalog.main:app`) | rask shape: workspace member + `.docker/<name>.dockerfile` per deployable (no `projects/` layer — removed 2026-07; no `components/` layer — dissolved 2026-07-27 by D7). Membership is now the **`services/*` glob**, so a copied service registers itself — nothing to add to `pyproject.toml`. The media trio (viewer/search/annotator, folded from lance-audio) is IN scope (total merge, owner-ruled); lance `search` coexists with rask's `search_api` until P7 retires the latter (gated on the P5 pin test) |
 | ~~`src/ratch`~~ **`packages/ratch`** (already moved in lance-ns, `45912c8`) | `packages/ratch` (uv workspace member, src-layout) | **RE-PIN — no plan row existed.** Owner-ruled 2026-07-27: ratch is a **package**, not a deployable — it belongs in the Python `packages/` plane, not `services/`. (The `components/cli` layer this row originally contrasted against no longer exists.) It is the folded lance-media pipeline tree, currently UNWIRED (lance-ns `pyproject.toml:113` excludes it, with the note *"no service imports them … ratch's ray[data]/lance-ray/typer stack lands with the pipeline step"*). Making it a workspace member is what **resolves** that exclusion: its heavy deps live in its own `pyproject.toml` instead of the root's, which is precisely why it was excluded |
 | `services/common` | `packages/common` (distribution name `lance-common`, import root stays `common` so zero import rewrites) | Transitional; long-term converge on `service-kit`'s `make_service_app`, keeping common's auth/FGA/audit middleware as the governed variant — NOT on this branch |
-| ~~`frontend/components/frontends/{data,lineage,models,admin}`~~ **`frontend/components/frontends/lakehouse`** | `frontend/microfrontends/lakehouse` | **RE-PIN**: the four are one zone since `bb099df` — `data`/`lineage`/`models`/`admin` are its *routes*. One app, one port slot, one ingress rule, one `.docker` build, one spec dir. Per **R8** it also absorbs rask's `storage` (the S3 object browser) and `train`. **The zone dir is `microfrontends/`, not lance-ns's `components/frontends/`** — see D7's landed note; the incoming zone-contract's hardcoded paths need translating |
-| `frontend/components/frontends/{media,annotator}` | `frontend/microfrontends/{media,annotator}` | The media zones are **`ssr=false` SPAs with NO BFF** — root-absolute `/api/*` fetches, a different deploy/env shape than the SSR zones; their fetch bases are rewritten to the `/api/media/*` namespace (owner-ruled, see P1) |
-| `frontend/components/frontends/home` | **dissolves into rask's `frontend/microfrontends/home`** (`/auth/{login,callback,logout}` routes + zone-picker landing content move in; lance home package deleted) | One catch-all only |
+| ~~`frontend/microfrontends/{data,lineage,models,admin}`~~ **`frontend/microfrontends/lakehouse`** | `frontend/microfrontends/lakehouse` | **RE-PIN**: the four are one zone since `bb099df` — `data`/`lineage`/`models`/`admin` are its *routes*. One app, one port slot, one ingress rule, one `.docker` build, one spec dir. Per **R8** it also absorbs rask's `storage` (the S3 object browser) and `train`. **The zone dir is `microfrontends/`, not lance-ns's `components/frontends/`** — see D7's landed note; the incoming zone-contract's hardcoded paths need translating |
+| `frontend/microfrontends/{media,annotator}` | `frontend/microfrontends/{media,annotator}` | The media zones are **`ssr=false` SPAs with NO BFF** — root-absolute `/api/*` fetches, a different deploy/env shape than the SSR zones; their fetch bases are rewritten to the `/api/media/*` namespace (owner-ruled, see P1) |
+| `frontend/microfrontends/home` | **dissolves into rask's `frontend/microfrontends/home`** (`/auth/{login,callback,logout}` routes + zone-picker landing content move in; lance home package deleted) | One catch-all only |
 | `frontend/packages/api` (**`@repo/api`**) | merged into `frontend/packages/api` (add `oidc.ts`, `bff.ts`, `gateway.test.ts`, **`runs-feed.ts`**, export conditions `./oidc`,`./bff`,`./runs-feed`) | rask original wins (it is `@rask/api` and already sits at `frontend/packages/api` since D7 landed). **RE-PIN**: the scope on the lance side is `@repo/*`, not `@rask/*`. `runs-feed.ts` is the shared run-notification generator every zone's bell stands on |
 | **`frontend/packages/{config,engine,labeling,media-api,zone-contract}`** (net-new) | `frontend/packages/*` (the `packages/*` glob picks them up) | **RE-PIN — no plan row existed.** `zone-contract` is the gate package (bff-routes, budget, cross-zone-reload, link-targets, live-stream, manifest, notification-surface, no-networkidle, poll-reason, proxy) and is what makes the frontend claims falsifiable; `media-api` is the media seam incl. the shared server cache. **Landed 2026-07-27:** rask now has a *stub* `frontend/packages/zone-contract` (`@rask/zone-contract`) holding only the cross-zone-reload guard — the incoming package folds into it rather than arriving on empty ground |
 | `frontend/packages/ui` (**`@repo/ui`**) | merged into `frontend/packages/ui` (add the components + `gsap.ts`/`motion.ts` + shell fold; keep rask's storybook) | rask original wins; see P2. **RE-PIN**: the shell now also carries `notification-center`/`notification-list` and the `runs/run-status` ordering — the bell is shell furniture, not a zone feature |
@@ -115,7 +115,7 @@ in either repo, the tree is:
 ```
 /
 ├── frontend/                        ← the JS plane, wholesale = lance-ns's proven tree
-│   ├── components/frontends/{home,lakehouse,media,annotator,compute,studio}
+│   ├── microfrontends/{home,lakehouse,media,annotator,compute,studio}
 │   ├── packages/{api,ui,config,engine,labeling,media-api,zone-contract}    ← TS-only → globs
 │   └── package.json · bun.lock · turbo.json · .oxlintrc.json · .oxfmtrc.json
 ├── services/                        ← Python deployables, src-layout, uv members via GLOB
@@ -148,7 +148,9 @@ torch builds (`torch==2.11.0+cu128`) whose index and cadence must never enter th
 - **Runners are sealed and self-contained** (owner-ruled): each carries its own README + `pyproject.toml`
   (+ `uv.lock` where it builds an image), and the tree has **no `__init__.py` package glue** — done in
   lance-ns at `a4cf8f6`. `rask/components/cli/runner` (the HTR runner, `ray>=2.52,<2.56` — today a
-  workspace member) **moves OUT of the workspace to `runners/htr` at copy time**, gaining its own
+  workspace member) **already moved OUT of the workspace to `runners/htr`** (rask `bb4b4a4`, 2026-07-27) —
+together with `packages/htr`, since `htr` is what actually pulls torch and nothing but the runner depends
+on it. Root lock 200 → 145 packages; fleet suite ~32 min → ~6 s. It has its own
   `pyproject.toml`-as-sealed-project and its own lock. No hedge: the earlier "may stay a member if it still
   resolves" was mine, not the owner's, and it is struck. P7 re-cuts it as movers anyway, from `runners/`.
 - **The ratch↔runner seam**: ratch knows runner NAMES and hands each runner's `pyproject.toml` to Ray as
@@ -162,13 +164,14 @@ translation.
 
 **What this changes in the phases:**
 - **The P0 frontend direction FLIPS.** lance-ns's `frontend/` tree comes wholesale — bun.lock, turbo.json,
-  oxlint/oxfmt configs, and all 13 zone-contract gate files **unchanged**, because `FRONTEND_ROOT`'s
-  internal shape is preserved and its repo-relative reads of `chart/` and `scripts/` still resolve. rask's
-  `compute` + `studio` zones (2) move INTO it, instead of 3 lance zones moving out into
-  `components/frontends` — fewer moves, and the proven gates travel as-is.
-- **`components/` dissolves**: `components/services/*` → `services/*`; `components/cli/runner` →
-  `services/` (it is a deployable); `components/scripts` → `scripts/`; `components/frontends/*` →
-  `frontend/components/frontends/*`.
+  oxlint/oxfmt configs, and every zone-contract gate file **unchanged** — lance-ns renamed its own zone
+directory to `microfrontends/` (`6fbaa0e`), so the two trees MATCH and no path translation happens at
+copy — `FRONTEND_ROOT`'s internal shape is preserved and its repo-relative reads of `chart/` and
+  `scripts/` still resolve. rask's `compute` + `studio` zones (2) move INTO it, rather than lance's
+  zones moving out — fewer moves, and the proven gates travel byte-identical.
+- **`components/` dissolved** (rask `bb4b4a4`, done): `components/services/*` → `services/*`;
+  `components/cli/runner` + `packages/htr` → the sealed `runners/htr`; `components/scripts` →
+  `scripts/`; `components/frontends/*` → `frontend/microfrontends/*`.
 - **P2's 3-way `packages/ui` merge inverts**: rask's storybook + `navMain(project)` fold INTO
   `frontend/packages/ui` (`@repo/ui`), not the other way. Keep-from-rask list unchanged.
 - **The manifest-completeness gate becomes unnecessary** — globs enforce membership structurally. (If D7
@@ -424,6 +427,7 @@ changelog preview. Update `CLAUDE.md`, `docs/architecture/*`, and the vendored `
 | R5 | **Whole-plane media namespace** — `/api/media/{,search,annotations}` → viewer/search/annotator; all three SPAs' fetch bases rewritten. |
 | R6 | **rask's discovery/viewing estate is eaten by the media plane** — discover zone, EAD `/api/v1/catalog`, search_api, volumes page/ALTO viewing all retire at P7 (no renames spent on them); EAD data re-lands as a catalog-governed Lance table. |
 | R7 | **Platform renames to `Lagom`** — after the merge stabilizes; a named follow-up, nothing renamed on this branch. |
+| R11 | **The zone directory is `microfrontends/` on BOTH sides** (2026-07-27). rask ruled it; lance-ns then renamed to match (`6fbaa0e`). The trees are identical, so the copy is a directory move with **no sed and no path translation**, and zone-contract's gate files arrive byte-identical to upstream — which is what makes them "proven". |
 | R8 | **The surviving zone set is `home + lakehouse + media + annotator + compute` (+ `studio`, per R9)** (2026-07-27). Three parts: (a) rask's **browse / viewing / search** surfaces are eaten by the media plane — this is R6, reconfirmed; (b) what survives of rask's own frontend is **compute** — the Ray dashboard, jobs, actors, cluster views — because that is the plane rask owns; (c) rask's **`storage` zone folds INTO the lakehouse**: an S3 object browser is a lakehouse view of the warehouse's own buckets, not a separate destination. `train` folds in with it (lance `models` absorbed it, and `models` is a lakehouse route). `overview` folds into home as already proposed. `studio` is ruled separately in **R9**. |
 
 | R10 | **All lance-ns configs come to rask** (2026-07-27): the chart, and the frontend toolchain — **oxlint + oxfmt + rsvelte-fmt WIN over rask's eslint + prettier**. This RESOLVES the P2 toolchain precondition: the pure-format commit reformats rask's surviving zones (`compute`, `studio`, home content) and `packages/{api,ui}` under the lance-ns toolchain, and eslint/prettier retire. `@repo/zone-contract`'s script-parity gate then applies to every package unchanged. P2 step 1's `prettier-plugin-tailwindcss` premise is dead. |
