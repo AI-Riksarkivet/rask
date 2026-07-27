@@ -514,7 +514,7 @@ signals.md § Exclude noisy endpoints). Launcher-driven instrumentation → the 
 the Dapr sidecar, so in-flight requests drain instead of hitting connection-refused — this is what makes
 the apps' /readyz shutting_down branch actually reachable during a rollout. Pairs with pod-level
 terminationGracePeriodSeconds (grace > preStop + app drain). sh exists in every app image
-(python-slim, nginx-unprivileged). */}}
+(python-slim for the fleet, oven/bun's debian base for the zones). */}}
 {{- define "lance.preStop" -}}
 lifecycle:
   preStop:

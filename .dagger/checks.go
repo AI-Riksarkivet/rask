@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 
-	"dagger/lance-ns/internal/dagger"
+	"dagger/rask/internal/dagger"
 )
 
 // Lint runs ruff check + format --check over services + tests (the CI lint gate).
-func (m *LanceNs) Lint(
+func (m *Rask) Lint(
 	ctx context.Context,
 	// +defaultPath="/"
 	// +optional
@@ -20,7 +20,7 @@ func (m *LanceNs) Lint(
 }
 
 // Typecheck runs the ty type-checker (the CI type gate).
-func (m *LanceNs) Typecheck(
+func (m *Rask) Typecheck(
 	ctx context.Context,
 	// +defaultPath="/"
 	// +optional

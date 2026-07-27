@@ -33,12 +33,14 @@ supply credentials via `existingSecret`.
 
 ## Observability (optional)
 
-Toggle: `observability.enabled` (default `false`). When enabled, three subcharts are
-installed and all fleet + Ray OTLP wiring is activated.
+Toggle: `observability.enabled` (default `false`). When enabled, two subcharts are
+installed, the first-party OTel Collector renders, and all fleet + Ray OTLP wiring is
+activated. The Collector is the **single log shipper** (Vector retired, owner ruling
+2026-07-27): its filelog receiver tails infra-pod logs into `opentelemetry_logs`.
 
-| Subchart | Version | Service | Notes |
+| Component | Version | Service | Notes |
 |---|---|---|---|
-| Vector | 0.56.0 | `rask-vector` (Agent DaemonSet) | Collects k8s pod logs; ships to GreptimeDB `:4000` via `greptimedb_logs` sink (table `rask_logs`) |
+| OTel Collector (first-party template, `templates/otel-collector.yaml`) | contrib image | `rask-otel-collector` | Telemetry hub: receives app OTLP, tails infra-pod logs (filelog → table `opentelemetry_logs`), scrapes Dapr sidecars; exports OTLP → GreptimeDB `:4000/v1/otlp` |
 | GreptimeDB (`greptimedb-standalone` 0.4.5, app 1.1.1) | `rask-greptimedb-standalone` | Unified metrics/logs/traces store; `:4000` HTTP (OTLP at `/v1/otlp`, Prometheus query/write, SQL), `:4001` gRPC |
 | Perses (`perses` 0.22.0) | `rask-perses:8080` | Dashboard UI; a GreptimeDB Prometheus `GlobalDatasource` pointing at `http://rask-greptimedb-standalone:4000/v1/prometheus` is pre-configured |
 
@@ -57,8 +59,8 @@ ingestion), metrics use db-name only. Traces land in `opentelemetry_traces`; met
 become PromQL series. Gateway spans root each distributed trace. The chart also
 provisions a Perses **"Fleet — RED"** dashboard (rate / 5xx errors / p95 latency /
 in-flight, per service). Instrumentation is opt-in — no-op unless the env vars are
-present. Standard OTLP is used throughout (OTel-Arrow is not used — the Python SDK and
-Vector both lack OTAP support).
+present. Standard OTLP is used throughout (OTel-Arrow is not used — the Python SDK
+lacks OTAP support).
 
 ## Local k3s quickstart
 

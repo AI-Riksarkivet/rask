@@ -81,8 +81,9 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
   CMD python -c "import socket,sys; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',8801))" || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-# This service sits behind the gateway; --forwarded-allow-ips MUST be the gateway/nginx
-# CIDR at deploy time, never '*' (header-spoofing risk). --workers intentionally unset.
+# This service sits behind the FastAPI gateway (services/gateway); --forwarded-allow-ips
+# MUST be the gateway's CIDR at deploy time, never '*' (header-spoofing risk).
+# --workers intentionally unset.
 CMD ["uvicorn", "core_api:app", \
      "--host", "0.0.0.0", "--port", "8801", \
      "--proxy-headers", \

@@ -106,16 +106,18 @@ orchestrator points at an external cluster via `config.RAY_DASHBOARD_URL`.
   - `cnpg.enabled` — CloudNativePG operator + `Cluster` named `rask-postgres`; app connects to `rask-postgres-rw:5432`. Values under `cnpg.*` (instances, storage, imageName, user, database).
   - `rustfs.enabled` — RustFS operator (vendored at `third_party/rustfs-operator/`, refreshed via `scripts/vendor-rustfs-operator.sh`) + `Tenant` named `rask-rustfs`; S3 at `rask-rustfs-io:9000`, console at `rask-rustfs-console:9001`. Standalone mode: 1 pod / 4 PVCs (erasure-coding minimum). Buckets provisioned natively via `spec.buckets` — no init Job. Values under `rustfs.*`.
   - `ray.enabled` — KubeRay `RayService` (head + worker with GPU limits).
-  - `observability.enabled` — three optional subcharts (see below).
+  - `observability.enabled` — two optional subcharts + the first-party OTel Collector (see below).
 
 ### Observability stack (`observability.enabled`)
 
-The `observability.enabled` toggle gates three subcharts and all OTLP wiring in the
-fleet and Ray deployments.
+The `observability.enabled` toggle gates two subcharts (GreptimeDB, Perses), the
+first-party OTel Collector template, and all OTLP wiring in the fleet and Ray
+deployments. The Collector is the **single log shipper** (Vector retired, owner ruling
+2026-07-27).
 
 | Component | Version | Service | Role |
 |---|---|---|---|
-| **Vector** | 0.56.0 | `rask-vector` (Agent DaemonSet) | Collects k8s pod logs; ships to GreptimeDB `:4000` via `greptimedb_logs` sink (table `rask_logs`) |
+| **OTel Collector** | first-party template (`chart/templates/otel-collector.yaml`) | `rask-otel-collector` | Telemetry hub: receives app OTLP, tails infra-pod logs via the filelog receiver (→ table `opentelemetry_logs`), scrapes Dapr sidecar metrics; exports everything OTLP → GreptimeDB `:4000/v1/otlp` |
 | **GreptimeDB** | `greptimedb-standalone` 0.4.5 (app 1.1.1) | `rask-greptimedb-standalone` | Unified metrics/logs/traces store; `:4000` HTTP (OTLP at `/v1/otlp`, Prometheus query/write, SQL), `:4001` gRPC |
 | **Perses** | 0.22.0 | `rask-perses:8080` | Dashboard UI; a GreptimeDB Prometheus `GlobalDatasource` (`http://rask-greptimedb-standalone:4000/v1/prometheus`) is pre-configured |
 
@@ -142,7 +144,7 @@ GreptimeDB `:4000/v1/otlp`** — the chart injects `OTEL_EXPORTER_OTLP_ENDPOINT`
 `opentelemetry_traces`; metrics become PromQL-queryable series
 (`http_server_duration_milliseconds_*`, etc.) that Perses charts. When the toggle is
 off the env vars are absent and instrumentation is a no-op. Standard OTLP is used
-throughout; OTel-Arrow is not used (the Python SDK and Vector both lack OTAP support).
+throughout; OTel-Arrow is not used (the Python SDK lacks OTAP support).
 
 **Dashboards:** the chart provisions a Perses Project `rask` + a **"Fleet — RED"**
 dashboard (`chart/templates/perses-dashboards.yaml`, mounted into a

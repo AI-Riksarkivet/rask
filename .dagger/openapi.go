@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 
-	"dagger/lance-ns/internal/dagger"
+	"dagger/rask/internal/dagger"
 )
 
 // Openapi runs the CI `test` job's OpenAPI drift gate (`make openapi-check`): the committed specs
@@ -12,7 +12,7 @@ import (
 // here, not surprise a client. base() excludes .git, so instead of `make openapi-check`'s `git diff` this
 // snapshots the two committed specs, regenerates them from the apps, then diffs the regenerated files back
 // against the snapshots — same fail-on-drift contract, no repo needed. A non-zero diff fails the function.
-func (m *LanceNs) Openapi(
+func (m *Rask) Openapi(
 	ctx context.Context,
 	// +defaultPath="/"
 	// +optional

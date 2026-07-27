@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 
-	"dagger/lance-ns/internal/dagger"
+	"dagger/rask/internal/dagger"
 )
 
 // ageImage pins PostgreSQL 16 + Apache AGE — the 'latest' tag tracks PG18, on which AGE crashes the
@@ -16,7 +16,7 @@ const ageImage = "apache/age:release_PG16_1.5.0"
 // — the int-vs-string $ver at-version match, the RETURN-less DETACH DELETE prune, the functional-index
 // DDL — so this gate runs them against the real engine. Port-readiness is safe: the postgres entrypoint's
 // temporary initdb server listens on the unix socket only, so the first TCP accept IS the final server.
-func (m *LanceNs) TestLineage(
+func (m *Rask) TestLineage(
 	ctx context.Context,
 	// +defaultPath="/"
 	// +optional

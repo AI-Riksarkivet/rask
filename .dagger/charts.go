@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 
-	"dagger/lance-ns/internal/dagger"
+	"dagger/rask/internal/dagger"
 )
 
 // chartsBaseImage is a small Debian userland matching the uv image's `trixie` release. The prod-render
@@ -26,7 +26,7 @@ const promVersion = "2.55.1"
 // prepend can't shadow our pinned promtool with a host-downloaded one — the curled /usr/local/bin binaries
 // are the sole source of truth. The gate make targets call bare `helm`/`promtool`/`bash`, so /usr/local/bin
 // on PATH is all they need; no .localbin replication required.
-func (m *LanceNs) chartsBase(src *dagger.Directory) *dagger.Container {
+func (m *Rask) chartsBase(src *dagger.Directory) *dagger.Container {
 	return dag.Container().
 		From(chartsBaseImage).
 		WithExec([]string{"apt-get", "update"}).
@@ -54,7 +54,7 @@ func (m *LanceNs) chartsBase(src *dagger.Directory) *dagger.Container {
 // the prod-overlay HA/security render check, and the promtool alert-rules validate-and-fire gate. Each
 // WithExec fails the whole function on the first non-zero exit (Dagger surfaces the container error), so a
 // green `dagger call charts` == that whole subset of CI green. Byte-for-byte equal to the ci.yml shell.
-func (m *LanceNs) Charts(
+func (m *Rask) Charts(
 	ctx context.Context,
 	// +defaultPath="/"
 	// +optional

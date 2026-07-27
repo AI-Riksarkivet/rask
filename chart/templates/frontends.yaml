@@ -30,11 +30,10 @@ zones additionally get the media plane's upstreams, scoped per zone.
 {{- /* The zones' gateway is the RASK FLEET gateway (services.gateway, uvicorn `gateway:app`
        on :8888) — the process that path-routes /api/* to core-api/search/volumes/ray/
        orchestrator, and the target the zones' relative /api/* fetches resolve to through
-       the Ingress. lance-ns's own nginx gateway (top-level `gateway:`, :8080) is a
-       BACKEND/observability edge reached by port-forward and is deliberately NOT what the
-       zones talk to. ⚠ UNRESOLVED (outside these files): both render an object named
-       `<fullname>-gateway` (fleet.yaml and gateway.yaml), which one release cannot install
-       — one of the two must be renamed before this chart deploys. */ -}}
+       the Ingress. lance-ns's own nginx gateway (top-level `gateway:`, :8080,
+       templates/gateway.yaml) is RETIRED and deleted (lance-ns-merge.md decision 4/P4),
+       so `<fullname>-gateway` names exactly one object — the fleet gateway. kgateway is
+       the intended future edge (not implemented on this branch). */ -}}
 {{- $gwPort := $root.Values.services.gateway.port -}}
 {{- /* Dead-subscription detector (the lakehouse zone's admin /streams view): the comma
        list of "STREAM:service" consumer groups the estate EXPECTS on JetStream, rendered

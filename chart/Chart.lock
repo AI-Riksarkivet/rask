@@ -26,11 +26,8 @@ dependencies:
 - name: greptimedb-standalone
   repository: https://greptimeteam.github.io/helm-charts/
   version: 0.4.5
-- name: vector
-  repository: https://helm.vector.dev
-  version: 0.56.0
 - name: perses
   repository: https://perses.github.io/helm-charts
   version: 0.22.0
-digest: sha256:e6b7e533db6d906968dda8c9cd3258c60c675fa324a685cd0daed8567672ea70
-generated: "2026-06-25T14:22:06.150783917+02:00"
+digest: sha256:503c037eb7f48fcc3896cd902fc62e0a011d2c7522e183b9c7a9b75ff89bb07b
+generated: "2026-07-27T19:22:49.851489118+02:00"

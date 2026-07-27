@@ -145,7 +145,7 @@ compaction:
 # set your className / host / TLS. ------------------------------------------------------------------
 ingress:
   enabled: true
-  className: nginx # match your cluster's Ingress controller (nginx / traefik / …)
+  className: nginx # match your cluster's Ingress controller (nginx / traefik / …) — this names the CLUSTER's controller class, not rask's gateway; kgateway is the intended future edge
   host: "" # e.g. lance.example.com
 
 # RETIRED (gateway fold): observability.edgeAuth backed the nginx gateway's public /perses/ +

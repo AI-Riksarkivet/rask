@@ -1133,11 +1133,10 @@ rustfs-operator: {}
 # dashboards. GreptimeDB is ONE unified store for metrics+logs+traces, backed by RustFS S3. The
 # Collector RECEIVES app OTLP, TAILS infra-pod logs (filelog), and SCRAPES the Dapr sidecars
 # (prometheus + k8s SD), exporting everything OTLP → GreptimeDB (:4000/v1/otlp).
-# `observability.enabled` gates the three subcharts' Chart.yaml condition AND the OTLP wiring.
-# ⚠ CONFLICT (reported): rask ships the Vector Agent DaemonSet (kubernetes_logs → `rask_logs`) and
-# lance-ns ships the OTel Collector's filelog receiver (→ `opentelemetry_logs`). Both are gated by
-# observability.enabled, so BOTH ship logs today. Retiring Vector means dropping its Chart.yaml dep,
-# the `vector:` block below, and regenerating Chart.lock — one coordinated change, not a silent drop.
+# `observability.enabled` gates the two subcharts' (greptimedb-standalone, perses) Chart.yaml condition AND the OTLP wiring.
+# RESOLVED (owner ruling 2026-07-27): the OTel Collector's filelog receiver owns log shipping
+# (infra-pod logs → `opentelemetry_logs`). The Vector subchart is retired — its Chart.yaml dep,
+# the `vector:` values block, and its Chart.lock entry are gone; exactly ONE log-shipping path remains.
 observability:
   enabled: true
   environment: rask # deployment.environment.name resource attr — override per deploy (dev / staging / prod)
@@ -1147,7 +1146,7 @@ observability:
   # scrape config are that platform's concern; the chart just aims its OTLP export there.
   otelCollector:
     enabled: true
-    image: otel/opentelemetry-collector-contrib:0.119.0
+    image: otel/opentelemetry-collector-contrib:0.157.0
     externalEndpoint: "" # e.g. http://otel-collector.observability.svc:4318 — set in prod, deploys nothing
   # Legacy escape hatch: ship OTLP to an off-cluster endpoint AND run no in-cluster store. Prefer
   # otelCollector.externalEndpoint (the OTel-first prod path); this stays for a raw non-Collector target.
@@ -1155,7 +1154,7 @@ observability:
   bucket: "rask-observability"          # RustFS bucket for GreptimeDB object storage
   # Retention for logs/traces/metrics. Applied as a database-level TTL on the
   # GreptimeDB `public` database via a post-install/post-upgrade hook Job
-  # (templates/greptimedb-ttl-job.yaml), so every table (rask_logs,
+  # (templates/greptimedb-ttl-job.yaml), so every table (opentelemetry_logs,
   # opentelemetry_traces, the metrics physical table) inherits it. Empty string
   # = no TTL (unbounded growth). GreptimeDB accepts e.g. "14d", "30d", "90d".
   retention: "14d"
@@ -1195,48 +1194,6 @@ greptimedb-standalone:
       endpoint: "http://rask-rustfs-io:9000"
     credentials:
       existingSecretName: "rask-observability-s3"
-
-# Vector subchart — Agent DaemonSet shipping pod logs to GreptimeDB.
-# See the observability CONFLICT note above: the OTel Collector's filelog receiver now does this too.
-vector:
-  role: "Agent"
-  # The Agent only pulls pod logs and pushes to GreptimeDB — it exposes no
-  # listening ports, so the chart's auto-generated Services would be invalid
-  # (empty spec.ports). Disable both; the DaemonSet needs no inbound Service.
-  service:
-    enabled: false
-  serviceHeadless:
-    enabled: false
-  # customConfig fully REPLACES Vector's default config (chart contract), so it
-  # must be complete: a kubernetes_logs source piped to the greptimedb_logs sink.
-  customConfig:
-    data_dir: /vector-data-dir
-    api:
-      enabled: false
-    sources:
-      pod_logs:
-        type: kubernetes_logs
-        # Don't enrich logs with node labels, namespace labels, or pod
-        # annotations: GreptimeDB's logs sink is schema-on-write, so every
-        # distinct key becomes a PERMANENT column. Node labels alone added ~107
-        # useless columns (NFD cpu-cpuid.*, nvidia.com/cuda.*), and pod
-        # annotations add checksum/* churn — one new column per new workload.
-        # Empty string disables each enrichment; pod_labels (app/component) and
-        # the core pod/container/namespace fields are kept.
-        node_annotation_fields:
-          node_labels: ""
-        namespace_annotation_fields:
-          namespace_labels: ""
-        pod_annotation_fields:
-          pod_annotations: ""
-    sinks:
-      greptimedb_logs:
-        type: greptimedb_logs
-        inputs: ["pod_logs"]
-        endpoint: "http://rask-greptimedb-standalone:4000"
-        dbname: "public"
-        table: "rask_logs"
-        compression: "gzip"
 
 # Perses subchart — dashboards-as-code over GreptimeDB's Prometheus-compatible API.
 perses:

@@ -16,11 +16,11 @@ dependencies = [
     "lance-namespace>=0.9.0",
     "dapr>=1.18.1",
     "dapr-ext-fastapi>=1.18.1",
-    "opentelemetry-distro>=0.64b0",
-    "opentelemetry-exporter-otlp>=1.43.0",
-    "opentelemetry-instrumentation-fastapi>=0.64b0",
-    "opentelemetry-instrumentation-psycopg>=0.64b0",
-    "opentelemetry-instrumentation-logging>=0.64b0",
+    "opentelemetry-distro>=0.65b0",
+    "opentelemetry-exporter-otlp>=1.44.0",
+    "opentelemetry-instrumentation-fastapi>=0.65b0",
+    "opentelemetry-instrumentation-psycopg>=0.65b0",
+    "opentelemetry-instrumentation-logging>=0.65b0",
 ]
 
 # `lineage.seed` is the producer-side OpenLineage emitter for the mock medallion flow — compute-layer

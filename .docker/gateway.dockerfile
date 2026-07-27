@@ -75,8 +75,9 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
   CMD python -c "import socket,sys; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',8888))" || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-# The gateway is the external-facing service; --forwarded-allow-ips MUST be the ingress/nginx
-# CIDR at deploy time, never '*' (header-spoofing risk). --workers intentionally unset.
+# The gateway is the external-facing service; --forwarded-allow-ips MUST be the cluster
+# edge's CIDR at deploy time (the Ingress controller today; kgateway is the intended
+# future edge), never '*' (header-spoofing risk). --workers intentionally unset.
 CMD ["uvicorn", "gateway:app", \
      "--host", "0.0.0.0", "--port", "8888", \
      "--proxy-headers", \

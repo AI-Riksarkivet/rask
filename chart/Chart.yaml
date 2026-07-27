@@ -88,17 +88,7 @@ dependencies:
     version: "0.4.5"
     repository: https://greptimeteam.github.io/helm-charts/
     condition: observability.enabled
-  # OPEN DECISION (P4, deliberately NOT resolved in this file): rask ships Vector as a log-shipping
-  # Agent DaemonSet (kubernetes_logs → greptimedb_logs `rask_logs`); lance-ns RETIRED Vector and
-  # replaced it with a single in-chart OTel Collector (templates/otel-collector.yaml) whose filelog
-  # receiver tails infra-pod logs into `opentelemetry_logs`. Both are gated by observability.enabled,
-  # so with lance-ns's collector template grafted in, BOTH ship logs unless someone rules. This dep is
-  # kept (rask's, per "preserve every rask key"); retiring it means deleting THIS entry, the `vector:`
-  # block in values.yaml, and regenerating Chart.lock — one coordinated change, not a silent drop.
-  - name: vector
-    version: "0.56.0"
-    repository: https://helm.vector.dev
-    condition: observability.enabled
+  # Vector RETIRED (owner ruling 2026-07-27): the OTel Collector (templates/otel-collector.yaml) is the single log shipper — its filelog receiver tails infra-pod logs into `opentelemetry_logs`.
   - name: perses
     version: "0.22.0"
     repository: https://perses.github.io/helm-charts

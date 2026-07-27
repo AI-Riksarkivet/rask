@@ -58,13 +58,11 @@ spec:
                  resolve to (SSR uses the in-cluster URL instead). It renders in every
                  install (fleet.yaml is not gated), so this rule never dangles.
 
-                 ⚠ UNRECONCILED, outside these files: lance-ns's nginx gateway
-                 (top-level `gateway:`, :8080, templates/gateway.yaml) renders a Deployment
-                 AND Service ALSO named `<fullname>-gateway`, which one release cannot
-                 install. The base chart wins here per the merge rule, so every gateway
-                 route below names the fleet gateway's port; the nginx edge must be renamed
-                 (or dropped) before it can be addressed at all. It was never on the public
-                 path in lance-ns either — it is reached by port-forward. */}}
+                 RESOLVED (lance-ns-merge.md decision 4/P4): lance-ns's nginx gateway
+                 (top-level `gateway:`, :8080, templates/gateway.yaml) is deleted, so
+                 `<fullname>-gateway` names exactly one object — the fleet gateway — and
+                 every gateway route below names the fleet gateway's port. kgateway is
+                 the intended future edge (not implemented on this branch). */}}
           - path: /api
             pathType: Prefix
             backend:

@@ -1,7 +1,8 @@
 {{- /*
 OTel-first telemetry hub. A single OpenTelemetry Collector (contrib) that:
   - RECEIVES app OTLP (the apps point OTEL_EXPORTER_OTLP_ENDPOINT here — see lance.otlpEndpoint),
-  - TAILS infra-pod stdout via the filelog receiver (retires the Vector subchart), dropping the app pods
+  - TAILS infra-pod stdout via the filelog receiver (the SINGLE log shipper — the Vector subchart is
+    retired, owner ruling 2026-07-27), dropping the app pods
     (lance.dev/logs=otlp) that already ship OTLP logs so nothing double-ingests,
   - SCRAPES the Dapr sidecars' :9090 via the prometheus receiver + k8s SD (the DaprConsumerWedge source),
 and exports all three signals OTLP → GreptimeDB (:4000/v1/otlp), adding GreptimeDB's db-name header on every
@@ -62,8 +63,8 @@ data:
       health_check:
         endpoint: 0.0.0.0:13133
       # Persist filelog read offsets so a collector RESTART resumes where it left off instead of jumping to the
-      # tail (filelog's default start_at: end = logs written during the gap are lost) — the durability Vector's
-      # data_dir gave. The emptyDir survives container crash/OOM restarts (the common case, same pod); a full
+      # tail (filelog's default start_at: end = logs written during the gap are lost) — the durability the
+      # retired Vector agent's data_dir used to give. The emptyDir survives container crash/OOM restarts (the common case, same pod); a full
       # pod reschedule starts fresh, but in prod the OTel operator owns the Collector (this file renders nothing)
       # and manages its own offset persistence. fsGroup 65534 makes the dir writable by the non-root runtime.
       file_storage:
@@ -73,7 +74,7 @@ data:
         protocols:
           grpc: { endpoint: 0.0.0.0:4317 }
           http: { endpoint: 0.0.0.0:4318 }
-      # Infra-pod logs (retires Vector). The container operator parses the CRI/containerd log format and
+      # Infra-pod logs — the sole log-shipping path (Vector retired). The container operator parses the CRI/containerd log format and
       # stamps k8s.pod.uid/name/namespace/container from the file path; k8sattributes then resolves the pod
       # labels, and a filter drops the app pods that already ship OTLP logs (no double-ingest).
       filelog:
@@ -122,7 +123,7 @@ data:
           - sources: [{ from: resource_attribute, name: k8s.pod.uid }]
           - sources: [{ from: connection }]
       # The app pods already export OTLP logs (trace-correlated) — drop the file-tailed duplicate. Mirrors
-      # what Vector's `lance.dev/logs!=otlp` selector did. error_mode ignore: a pod without the label is kept.
+      # what the retired Vector agent's `lance.dev/logs!=otlp` selector did. error_mode ignore: a pod without the label is kept.
       filter/drop_app_file_logs:
         error_mode: ignore
         logs:

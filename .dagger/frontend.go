@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 
-	"dagger/lance-ns/internal/dagger"
+	"dagger/rask/internal/dagger"
 )
 
 // bunImage is the frontend toolchain's base image — the exact digest-pinned tag from
@@ -17,7 +17,7 @@ const bunImage = "oven/bun:1.3.14-slim@sha256:d56a2534ffd262e92c12fd3249d3924d29
 // `bun install --frozen-lockfile` (the packages/* + microfrontends/* workspace from frontend/bun.lock).
 // Unexported → a shared private helper, not a Dagger Function. The bun install cache mirrors the
 // dockerfile's `--mount=type=cache,target=/root/.bun/install/cache`.
-func (m *LanceNs) frontendBase(src *dagger.Directory) *dagger.Container {
+func (m *Rask) frontendBase(src *dagger.Directory) *dagger.Container {
 	return dag.Container().
 		From(bunImage).
 		WithMountedCache("/root/.bun/install/cache", dag.CacheVolume("lance-ns-bun")).
@@ -43,7 +43,7 @@ func (m *LanceNs) frontendBase(src *dagger.Directory) *dagger.Container {
 // are package tasks now, so they parallelise and cache instead of running once repo-wide. Turbo fails on
 // the first non-zero task, which Dagger surfaces as the container error. The Playwright e2e leg
 // (`test:e2e`) is browser-bound and lives in its own function; it is not part of this hermetic subset.
-func (m *LanceNs) Frontend(
+func (m *Rask) Frontend(
 	ctx context.Context,
 	// +defaultPath="/"
 	// +optional

@@ -10,7 +10,7 @@
 # flags the suites need, seeds the exact grants/buckets they assume, then runs the five e2e suites the
 # goal names: CAS, client-direct (#2), warehouses (#3-A), multibase (#3-B), outbox (#4).
 #
-# Heavy optional components (observability/Vector/Perses/Greptime, web, compaction) are DISABLED — they
+# Heavy optional components (observability: OTel Collector/Perses/Greptime, web, compaction) are DISABLED — they
 # are not under test here and a GitHub runner is 2 cores / 7 GB. `make e2e-obs` covers observability.
 #
 # Idempotent: safe to re-run against an existing cluster. Env overrides: CLUSTER, RELEASE, KEEP_STACK=1.
@@ -66,12 +66,11 @@ step "1/8 cluster + chart deps"
 kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --config deploy/kind/kind-config.yaml --wait 180s
 for r in dapr https://dapr.github.io/helm-charts/ nats https://nats-io.github.io/k8s/helm/charts/ \
          openfga https://openfga.github.io/helm-charts greptime https://greptimeteam.github.io/helm-charts/ \
-         vector https://helm.vector.dev perses https://perses.github.io/helm-charts; do :; done
+         perses https://perses.github.io/helm-charts; do :; done
 helm repo add dapr    https://dapr.github.io/helm-charts/            >/dev/null 2>&1 || true
 helm repo add nats    https://nats-io.github.io/k8s/helm/charts/     >/dev/null 2>&1 || true
 helm repo add openfga https://openfga.github.io/helm-charts          >/dev/null 2>&1 || true
 helm repo add greptime https://greptimeteam.github.io/helm-charts/   >/dev/null 2>&1 || true
-helm repo add vector  https://helm.vector.dev                        >/dev/null 2>&1 || true
 helm repo add perses  https://perses.github.io/helm-charts           >/dev/null 2>&1 || true
 helm repo update >/dev/null && helm dependency build ./chart >/dev/null
 
