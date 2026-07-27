@@ -1,0 +1,16 @@
+{
+	"$schema": "./node_modules/oxfmt/configuration_schema.json",
+	"printWidth": 100,
+	"useTabs": true,
+	"singleQuote": true,
+	"trailingComma": "all",
+	"ignorePatterns": [
+		"**/.svelte-kit/**",
+		"**/.svelte-check/**",
+		"**/build/**",
+		"**/dist/**",
+		"**/storybook-static/**",
+		"**/*.generated.ts",
+		"**/src/generated/**"
+	]
+}

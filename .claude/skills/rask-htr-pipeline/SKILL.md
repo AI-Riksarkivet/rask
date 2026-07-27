@@ -1,6 +1,6 @@
 ---
 name: rask-htr-pipeline
-description: The rask HTR image→ALTO pipeline — Ray Data actor fan-out + Ray Serve TrOCR/HTRflow GPU packing, the hard-won OOM and concurrency lessons. Use when editing components/cli/runner/pipeline.py, transcribe_service.py, or htrflow_service.py; tuning GPU fractions / replica counts / actor pool sizes / transcribe batch; retargeting to different GPU hardware; or debugging a raylet-killing OOM, idle GPUs, or ALTO that lands late in S3.
+description: The rask HTR image→ALTO pipeline — Ray Data actor fan-out + Ray Serve TrOCR/HTRflow GPU packing, the hard-won OOM and concurrency lessons. Use when editing runners/htr/src/runner/pipeline.py, transcribe_service.py, or htrflow_service.py; tuning GPU fractions / replica counts / actor pool sizes / transcribe batch; retargeting to different GPU hardware; or debugging a raylet-killing OOM, idle GPUs, or ALTO that lands late in S3.
 ---
 
 # rask HTR pipeline (Ray Data + Ray Serve)
@@ -9,7 +9,7 @@ Distributed image→ALTO HTR for the Swedish National Archives. A `runner` CLI i
 
 ## When to use
 
-- Editing `components/cli/runner/src/runner/{pipeline.py,transcribe_service.py,htrflow_service.py}`.
+- Editing `runners/htr/src/runner/{pipeline.py,transcribe_service.py,htrflow_service.py}`.
 - Tuning GPU fractions, Serve replica counts, actor-pool sizes, or `transcribe_batch`.
 - Retargeting to different GPU hardware (a 3-GPU node assumption is baked in).
 - Debugging: OOM-killed raylet, idle GPUs (work stuck on one actor/replica), or ALTO landing late in S3.
@@ -20,7 +20,7 @@ Two pipeline shapes, both starting at `PageLoaderActor` (S3 read-through cache, 
 - **Actor-per-stage** (`htr_pipeline`): `PageLoader → Layout → Lines → TranscribeViaServe → AltoExport → AltoWriter`. GPU for YOLO regions/lines (`num_gpus=0.001` token slots) + TrOCR via Serve.
 - **`/htrflow` collapse** (`htrflow_pipeline`): `PageLoader → HTRFlowViaServeBytes → AltoWriter`. One Serve replica owns region-YOLO + line-YOLO + TrOCR + ALTO serialize.
 
-**The GPU work is NOT a Ray Data actor.** It lives in Ray Serve (`TranscribeService` / `HTRFlowDeployment`), deployed independently by `make serve-up` (= `components/scripts/deploy_serve.py up`, app names `transcribe`→`/transcribe`, `htrflow`→`/htrflow`). `TranscribeViaServe` and `HTRFlowViaServe*` are **CPU-only** `map_batches` steps that block on a `serve.get_app_handle(...)`. Serve replicas keep TrOCR weights warm, so each `runner` invocation skips the ~30 s cold-start.
+**The GPU work is NOT a Ray Data actor.** It lives in Ray Serve (`TranscribeService` / `HTRFlowDeployment`), deployed independently by `make serve-up` (= `scripts/deploy_serve.py up`, app names `transcribe`→`/transcribe`, `htrflow`→`/htrflow`). `TranscribeViaServe` and `HTRFlowViaServe*` are **CPU-only** `map_batches` steps that block on a `serve.get_app_handle(...)`. Serve replicas keep TrOCR weights warm, so each `runner` invocation skips the ~30 s cold-start.
 
 ## Load-bearing rules (do not break)
 

@@ -44,7 +44,7 @@ Tear down with `make serve-down` / `make ray-down`.
 
 !!! tip "Frontend host binding"
     The Vite dev server binds loopback-only by default. Start it with `--host`
-    (e.g. `bun --cwd components/frontends/home run dev -- --host`) to reach it
+    (e.g. `bun --cwd frontend/microfrontends/home run dev -- --host`) to reach it
     over IPv4 `localhost` or the LAN.
 
 ## Local Postgres + migrations
@@ -67,8 +67,8 @@ Connect with `postgresql://rask:rask@localhost:5432/rask`.
 | Build everything | `make build` |
 | Run all tests | `make test` |
 | Format + lint + typecheck | `make check` |
-| Single Python test | `uv run pytest packages/htr/tests/test_geometry.py::test_name` |
-| Frontend type-check | `bun --cwd components/frontends/home run check` |
+| Single Python test | `uv run pytest runners/htr/tests/test_geometry.py::test_name` |
+| Frontend type-check | `bun --cwd frontend/microfrontends/home run check` |
 | Storybook (@rask/ui) | `make storybook` (→ `:6006`) |
 | Build the search index | `make search-index` |
 | Build the catalog index | `make catalog-index` |

@@ -128,7 +128,7 @@ controlplane:
 orchestrator:
   autostart: "false"
   # In-cluster the ray image ships the installed `runner` console script on PATH
-  # (no uv, no source tree), so override the dev default `uv run --package runner runner`.
+  # (no uv, no source tree), so override the dev default `uv run --project runners/htr runner`.
   runnerCmd: "runner"
 
 frontend:
@@ -149,7 +149,7 @@ frontend:
   # The frontend is a set of SvelteKit SSR microfrontends. The catch-all
   # (home) owns "/"; each domain app is pinned to its base path /<domain> in its
   # svelte.config.js (host carries the project; path carries the domain) and gets
-  # an ingress rule for that path. image == app dir name under components/frontends/
+  # an ingress rule for that path. image == app dir name under frontend/microfrontends/
   # (built from the one parametrized frontend.dockerfile).
   apps:
     - {name: home, catchAll: true}              # home, "/"
@@ -203,7 +203,7 @@ ray:
 
 migrations:
   enabled: true
-  command: ["sh", "-c", "cd /app/components/services/core && alembic upgrade head"]
+  command: ["sh", "-c", "cd /app/services/core && alembic upgrade head"]
   resources:
     requests: {cpu: "100m", memory: "256Mi"}
     limits: {cpu: "1", memory: "1Gi"}

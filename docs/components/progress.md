@@ -12,7 +12,7 @@ at each gate; not sloppy.
 
 - **Bun** (package.json `workspaces`, no pnpm-workspace.yaml); **svelte-adapter-bun** (not adapter-auto)
 - **valibot** (not zod); `trailingComma: "all"`; `prettier-plugin-tailwindcss`
-- Apps under `components/frontends/*`; packages under `packages/*`; **explicit** workspace membership (no globs)
+- Apps under `frontend/microfrontends/*`; packages under `packages/*`; **explicit** workspace membership (no globs)
 - SSR via **remote functions**; gateway sits _behind_ the SvelteKit server (`RASK_GATEWAY_URL`)
 - **`kit.paths.base`** per MFE app (NOT raw vite `base`)
 - Internal package scope: `@rask/*`. The shared UI lib is **`@rask/ui`** at **`packages/ui/`**
@@ -82,7 +82,7 @@ at each gate; not sloppy.
 - [x] verify: `turbo run check --filter=home` → 1 successful (turbo+frontend GREEN).
       NB: full `turbo run check` is red ONLY on component-lib's pre-existing stale Storybook (→ Phase below)
 - [ ] LATER (task #10): extract @rask/typescript-config + @rask/eslint-config; split frontend →
-      apps under components/frontends/\* (compute/documents/batches/storage), each svelte-adapter-bun +
+      apps under frontend/microfrontends/\* (compute/documents/batches/storage), each svelte-adapter-bun +
       kit.paths.base, sharing @rask/ui + api/remote; microfrontends.json + `turbo dev` proxy / gateway prod
 
 ### Phase 3.5 — component-lib (@rask/ui) Storybook health ✅ [unblocked green turbo + Phase 6]
@@ -104,7 +104,7 @@ at each gate; not sloppy.
       bg-warning/rounded-full → the `@source` directive works across the workspace.
 - [x] **sort-header** promoted to @rask/ui (`@rask/ui/sort-header`) — 5 sites swapped, local deleted;
       added `lucide-svelte` as an @rask/ui dep.
-- [x] **Tailwind @source**: `components/frontends/home/src/app.css` scans `packages/ui/dist`
+- [x] **Tailwind @source**: `frontend/microfrontends/home/src/app.css` scans `packages/ui/dist`
       (Tailwind 4 ignores node_modules by default — without this, @rask/ui classes render unstyled).
 - [x] catalog-hit-card already deleted (dead). @rask/ui exports now: badge/button/card/dialog/sort-header/utils.
 - [x] **button dedupe DONE**: promoted the richer shadcn "nova" button into @rask/ui (replaced the stub);
@@ -136,7 +136,7 @@ focused move (one PR), each set verified with `@source` (see [[reference-rask-ui
    Put `app-sidebar`/`nav-config`/`ray-shell` in a shared `@rask/app-shell` (or @rask/ui) too.
 2. Extract `@rask/typescript-config` + `@rask/eslint-config` (with-svelte structure) — created WITH
    the new apps (each app's tsconfig/eslint extends them from day one; do NOT rewire the monolith).
-3. Scaffold apps under `components/frontends/{compute,documents,batches,storage}-frontend`, each:
+3. Scaffold apps under `frontend/microfrontends/{compute,documents,batches,storage}-frontend`, each:
    `svelte-adapter-bun`, `kit.paths.base: '/<group>'`, `experimental.remoteFunctions`, own
    `app.html`/`app.css` (with `@source` @rask/ui), shares @rask/ui + a shared `@rask/api` (the api.ts +
    remote/ + server/env.ts, moved out of the monolith), the shared sidebar.
@@ -176,7 +176,7 @@ focused move (one PR), each set verified with `@source` (see [[reference-rask-ui
   turbo check 3/3, build 2/2, lint 0, SSR 12/12 routes, 0 errors. Phase 8 (4-app split) + OpenAPI codegen
   DEFERRED to a deliberate later effort (scoped above). Nothing left half-built; monolith fully works.
 - 2026-06-22 MFE split STARTED + pushed to main: `@rask/ui` rename (was placeholder `@your-repo/oxen`);
-  first microfrontend `components/frontends/storage` (svelte-adapter-bun, kit.paths.base /storage,
+  first microfrontend `frontend/microfrontends/storage` (svelte-adapter-bun, kit.paths.base /storage,
   shares @rask/ui). Repo cleanup (stray .venv removed, projects/viewer deleted, .gitignore hardened).
 - 2026-06-22 Both frontends now DEPLOYABLE as Bun-server images (verified in Docker — non-root, tini PID 1):
   NEW `.docker/storage.dockerfile` (/storage → 200 in-container) + FIXED `.docker/frontend.dockerfile`

@@ -14,7 +14,7 @@ a fleet of FastAPI services behind a **gateway** on port 8888: a **core-api**
 for batch/chunk/catalog state, an **orchestrator** service running the submission
 loop, plus stateless **volumes-api**, **search-api**, and **ray-api** services.
 A set of **SvelteKit 2 + Svelte 5 SSR** apps (svelte-adapter-bun, served behind the
-gateway) composed as routing-based microfrontend zones — a catch-all `frontend`
+gateway) composed as routing-based microfrontend zones — a catch-all `home`
 owning `/` plus per-domain apps (overview/compute/discover/storage/train/studio) —
 consumes all of these via the
 gateway for inspection, the batch dashboard, search, and chunk submission. Batch-tracking state lives in a
@@ -26,9 +26,9 @@ Full-text search over transcribed lines plus an archival catalog index live in
 
 ```mermaid
 flowchart TB
-    browser["Browser"] --> spa["Frontend · SvelteKit SSR (Bun)<br/><sub>components/frontends/home</sub>"]
-    spa -->|"/api/*"| gw["Gateway · :8888<br/><sub>components/services/gateway</sub>"]
-    cli["Runner · Python CLI<br/><sub>components/cli/runner</sub>"] --> head
+    browser["Browser"] --> spa["Frontend · SvelteKit SSR (Bun)<br/><sub>frontend/microfrontends/home</sub>"]
+    spa -->|"/api/*"| gw["Gateway · :8888<br/><sub>services/gateway</sub>"]
+    cli["Runner · Python CLI<br/><sub>runners/htr</sub>"] --> head
     gw --> core["core-api · :8801<br/><sub>batches · chunks · catalog</sub>"]
     gw --> search["search-api · :8802"]
     gw --> volumes["volumes-api · :8803"]
@@ -62,7 +62,7 @@ flowchart TB
   fleet assumes a trusted/localhost network. The frontend hits `/api/*` on the
   gateway (SSR `load` uses the absolute gateway URL server-side);
   `/api/serve/*` is proxied by ray-api.
-- **The orchestrator runs as its own service** (`components/services/orchestrator`,
+- **The orchestrator runs as its own service** (`services/orchestrator`,
   `:8810`) — a lifespan-managed `asyncio` task that reconciles S3, then submits
   the next eligible prefetch and HTR chunks. `core-api` and `orchestrator` share
   the same `core` package and the same `batches` table transactionally.
@@ -73,7 +73,7 @@ flowchart TB
 
 ## In this section
 
-- **[Monorepo Layout](layout.md)** — the two workspace layers and what lives where.
+- **[Monorepo Layout](layout.md)** — the two language-pure workspace planes and what lives where.
 - **[Data Flow](data-flow.md)** — image → ALTO XML, the batch lifecycle, and the frontend ↔ API ↔ storage map.
 - **[Deployment](deployment.md)** — clusters, container images, CI, and how it ships.
 - **[Microservices](microservices.md)** — the service decomposition (implemented June 2026): gateway, core-api, orchestrator, volumes-api, search-api, ray-api.

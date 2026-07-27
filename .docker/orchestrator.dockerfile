@@ -27,13 +27,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=packages,target=packages \
-    --mount=type=bind,source=components,target=components \
+    --mount=type=bind,source=services,target=services \
     uv sync --frozen --no-install-workspace --package orchestrator --no-editable
 
 # Step 2: COPY real sources and resolve the workspace package (locked).
 COPY pyproject.toml uv.lock ./
 COPY packages    packages
-COPY components  components
+COPY services  services
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --package orchestrator --no-editable
 

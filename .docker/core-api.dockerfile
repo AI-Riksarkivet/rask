@@ -27,13 +27,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=packages,target=packages \
-    --mount=type=bind,source=components,target=components \
+    --mount=type=bind,source=services,target=services \
     uv sync --frozen --no-install-workspace --package core-api --no-editable
 
 # Step 2: COPY real sources and resolve the workspace package (locked).
 COPY pyproject.toml uv.lock ./
 COPY packages    packages
-COPY components  components
+COPY services  services
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --package core-api --no-editable
 
@@ -65,10 +65,10 @@ RUN --network=none --mount=from=builder,source=/opt/venv,target=/tmp/venv \
     cp -a /tmp/venv /opt/venv
 
 # Copy alembic migrations so this image can double as the `migrate` one-shot job.
-# working_dir in docker-compose.yml: /app/components/services/core
-RUN mkdir -p /app/components/services/core
-COPY --chown=app:app components/services/core/alembic.ini /app/components/services/core/alembic.ini
-COPY --chown=app:app components/services/core/alembic /app/components/services/core/alembic
+# working_dir in docker-compose.yml: /app/services/core
+RUN mkdir -p /app/services/core
+COPY --chown=app:app services/core/alembic.ini /app/services/core/alembic.ini
+COPY --chown=app:app services/core/alembic /app/services/core/alembic
 
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \

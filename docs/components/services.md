@@ -1,10 +1,10 @@
 # Services
 
-`components/services/` holds the HTTP backend fleet — a **gateway** reverse
-proxy plus five per-domain services, all built over a shared **core** package.
-The old monolithic `viewer` service was dissolved (June 2026) into this layout.
+`services/` holds the HTTP backend fleet — a **gateway** reverse proxy plus five
+per-domain services, all built over a shared **core** package. The old
+monolithic `viewer` service was dissolved (June 2026) into this layout.
 
-## Gateway — `components/services/gateway`
+## Gateway — `services/gateway`
 
 App `gateway:app`, port **:8888**. The frontend's single proxy target and the
 only external-facing service. Receives `/api/*` and routes by longest-prefix to
@@ -18,7 +18,7 @@ the services below; owns no state and no DB. Upstream URLs are env-overridable:
 | `RASK_RAY_API_URL` | `http://localhost:8804` | ray-api |
 | `RASK_ORCH_API_URL` | `http://localhost:8810` | orchestrator |
 
-## Core package — `components/services/core`
+## Core package — `services/core`
 
 Package `core`. **Not a deployable on its own** — composed by `core-api` and
 `orchestrator`, which run as two processes over the same package so they share the
@@ -27,7 +27,7 @@ Package `core`. **Not a deployable on its own** — composed by `core-api` and
 Owns:
 
 - **DB** — `core/db.py`, `core/lifespan.py`, Alembic migrations in
-  `components/services/core/alembic/`.
+  `services/core/alembic/`.
 - **Models** — `models/{batch,enums,pipelines}`. `Batch` SQLModel; enums
   (`HtrStatus`, `ManifestStatus`) stored as lowercase strings via
   `SAEnum(values_callable=…)`. `PipelineSpec` + `PIPELINE_SPECS` (`htr`,
@@ -58,13 +58,13 @@ Postgres in prod via `DATABASE_URL`. Schema changes go through **Alembic**
 make pg-migrate   # uv run --package core alembic upgrade head
 ```
 
-## core-api — `components/services/core_api`
+## core-api — `services/core_api`
 
 App `core_api:app`, port **:8801**. Thin entrypoint over core: health +
 batches + chunks + catalog endpoints. Orchestrator loop **off**. Exposes no
 state of its own.
 
-## orchestrator — `components/services/orchestrator`
+## orchestrator — `services/orchestrator`
 
 App `orchestrator:app`, port **:8810**. Thin entrypoint over core: health +
 orchestrator endpoints. Orchestrator lifespan loop **on**
@@ -78,7 +78,7 @@ orchestrator endpoints. Orchestrator lifespan loop **on**
     `batches` table and the same `core` source tree. The loop is explicitly
     transitional — the intended successor is a NATS JetStream consumer.
 
-## volumes-api — `components/services/volumes_api`
+## volumes-api — `services/volumes_api`
 
 Port **:8803**. Independent, stateless S3/IIIF image + ALTO proxy. No DB, no
 `core` dependency. Deps: `service-kit` + `storage`.
@@ -90,7 +90,7 @@ Endpoint groups:
 | health | `GET /health` |
 | volumes | `GET /volumes/{vol}/pages`, `…/pages/{key}/image`, `…/pages/{key}/alto` |
 
-## search-api — `components/services/search_api`
+## search-api — `services/search_api`
 
 Port **:8802**. Lance `lines` FTS + S3 thumbnails. Owns a `lines`-only
 lifespan (opens Lance tables on startup). No DB, no `core` dependency. Deps:
@@ -103,7 +103,7 @@ Endpoint groups:
 | health | `GET /health` |
 | search | `GET /search/`, `/search/stats`, `/search/thumb/{path}` |
 
-## ray-api — `components/services/ray_api`
+## ray-api — `services/ray_api`
 
 Port **:8804**. Ray dashboard introspection (`/api/ray/*`) + the
 `/api/serve/*` proxy. Thin shell over `ray-kit`. No DB, no `core` dependency.

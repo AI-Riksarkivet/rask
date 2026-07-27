@@ -2,7 +2,7 @@
 # rask frontend image — SvelteKit SSR built with Bun and RUN by the Bun runtime
 # (svelte-adapter-bun: ships a Bun *server*, not static files). Build context = repo root.
 #
-# Parametrized over the workspace app via --build-arg APP=<dir under components/frontends, e.g. home>:
+# Parametrized over the workspace app via --build-arg APP=<dir under frontend/microfrontends, e.g. home>:
 #   docker buildx build -f .docker/frontend.dockerfile --build-arg APP=storage \
 #     --build-arg BUILD_DATE=$(date -u +%FT%TZ) --build-arg VCS_REF=$(git rev-parse HEAD) \
 #     --build-arg VERSION=$(git describe --always) -t storage:dev .
@@ -25,16 +25,17 @@ ARG APP=home
 WORKDIR /src
 
 # Every JS workspace member must be present or `bun install --frozen-lockfile`
-# errors with "Workspace not found". Copy all of components/frontends wholesale so new
+# errors with "Workspace not found". Copy all of frontend/microfrontends wholesale so new
 # MFE apps don't silently break this build (.dockerignore strips node_modules/
-# .svelte-kit; the non-JS dirs like runner are harmless to bun).
-COPY components/frontends components/frontends
-COPY packages/api    packages/api
-COPY packages/ui     packages/ui
-COPY package.json bun.lock ./
+# .svelte-kit). /src IS the frontend workspace root: frontend/* is copied to the root
+# of the build stage so bun's workspace globs (apps/*, packages/*) resolve unchanged.
+COPY frontend/microfrontends microfrontends
+COPY frontend/packages packages
+COPY frontend/package.json frontend/bun.lock frontend/turbo.json ./
+COPY frontend/.oxlintrc.json frontend/.oxfmtrc.json ./
 # patchedDependencies (e.g. svelte-adapter-bun) — bun install --frozen-lockfile
 # resolves these patch files relative to the project root, so they must be present.
-COPY patches patches
+COPY frontend/patches patches
 
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install --frozen-lockfile
@@ -49,7 +50,7 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 
 # hadolint ignore=DL3059
 RUN --mount=type=cache,target=/root/.bun/install/cache \
-    bun run --cwd components/frontends/${APP} build
+    bun run --cwd microfrontends/${APP} build
 
 # ---- final: minimal Bun runtime serving the adapter-bun server ---------------
 FROM oven/bun:1-debian@sha256:9dba1a1b43ce28c9d7931bfc4eb00feb63b0114720a0277a8f939ae4dfc9db6f
@@ -74,10 +75,10 @@ WORKDIR /app
 
 # Preserve the isolated-linker layout (store + app's symlinked node_modules).
 COPY --from=builder --chown=10001:10001 /src/node_modules ./node_modules
-COPY --from=builder --chown=10001:10001 /src/components/frontends/${APP} ./components/frontends/${APP}
+COPY --from=builder --chown=10001:10001 /src/microfrontends/${APP} ./microfrontends/${APP}
 
 # Re-anchor the workdir at the app via a stable symlink so CMD is APP-agnostic.
-RUN ln -s "components/frontends/${APP}" /app/app
+RUN ln -s "microfrontends/${APP}" /app/app
 WORKDIR /app/app
 
 USER 10001

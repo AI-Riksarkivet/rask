@@ -24,7 +24,7 @@ func (m *Rask) MigrateUp(
 		WithServiceBinding("postgres", m.Postgres()).
 		WithEnvVariable("DATABASE_URL", PgDsn).
 		WithExec([]string{"uv", "sync", "--package", "core", "--extra", "postgres", "--extra", "migrations"}).
-		WithWorkdir("/src/components/services/core").
+		WithWorkdir("/src/services/core").
 		WithExec([]string{"uv", "run", "--package", "core", "alembic", "upgrade", "head"}).
 		Stdout(ctx)
 }
