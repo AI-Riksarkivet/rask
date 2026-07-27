@@ -14,8 +14,8 @@
 # without LANCE_E2E_GREPTIME_URL while the pins + lineage + validator gates still run.
 set -euo pipefail
 
-CLUSTER="${CLUSTER:-lance-ray-e2e}"
-RELEASE="${RELEASE:-lance-ns}"
+CLUSTER="${CLUSTER:-rask-ray-e2e}"
+RELEASE="${RELEASE:-rask}"
 CATALOG_IMG="${CATALOG_IMG:-lance-rest-catalog:dev}"
 RAY_IMG="${RAY_IMG:-ray-lance:dev}"
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.localbin"
@@ -76,7 +76,7 @@ print(' '.join(shas))
 }
 
 step "1/6 cluster + chart deps + images"
-# No --config: deploy/kind/kind-config.yaml pins `name: lance`, which conflicts with our own $CLUSTER
+# No --config: deploy/kind/kind-config.yaml pins `name: rask`, which conflicts with our own $CLUSTER
 # name (and it only declares a single control-plane node — kind's default anyway).
 kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER" --wait 180s
 # ALL declared chart dependencies' repos — `helm dependency build` needs every one even when the

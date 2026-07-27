@@ -25,15 +25,41 @@ jobs:
         run: |
           curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
 
-      # Python gates — ruff lint + ty type-check + OpenAPI-spec drift + unit/integration pytest — run
-      # hermetically in the pinned uv image via the Dagger module (.dagger/main.go Ci). The pytest leg runs
-      # the whole non-e2e suite (`-m "not e2e"`), which INCLUDES the claim-lint invariants
-      # (tests/unit/test_invariants.py) — so that gate is not lost, just folded into the suite. `dagger call
-      # ci` == `make ci`, so "green in CI" and "green on my machine" cannot diverge.
-      - name: Python CI gate — lint + type-check + openapi + tests (Dagger)
+      # Python gates — ruff lint + ty type-check + OpenAPI-spec drift + the offline pytest suite — run
+      # hermetically in the pinned uv image via the Dagger module. The merged module has NO `ci` wrapper;
+      # the old lance-ns Ci composition (lint → typecheck → openapi → test) runs as explicit steps over
+      # the functions that exist (.dagger/checks.go, openapi.go, test.go), in the same order, so a failing
+      # gate is named in the step list instead of buried in one combined log. The pytest leg runs the whole
+      # offline suite (`-m "not e2e and not slow"`), which INCLUDES the claim-lint invariants
+      # (tests/unit/test_invariants.py) and the tests/e2e-py collection gate
+      # (tests/unit/test_e2e_collection_gate.py) — so those gates are not lost, just folded into the suite.
+      - name: Lint — ruff check + format (Dagger)
         env:
           DAGGER_NO_NAG: "1"
-        run: dagger call ci
+        run: dagger call lint
+
+      - name: Typecheck — ty (Dagger)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: dagger call typecheck
+
+      - name: OpenAPI drift — committed specs vs the live apps (Dagger)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: dagger call openapi
+
+      - name: Tests — offline pytest suite, -m "not e2e and not slow" (Dagger)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: dagger call test
+
+      # The postgres proof the pure-sqlite pytest leg cannot give: alembic upgrade head from zero
+      # against a real postgres:16 service, then the core suite with DATABASE_URL pointing at it
+      # (.dagger/test.go TestPg — supersedes migrate-up, which it runs as its first step).
+      - name: Postgres migrations + core suite against pg (Dagger)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: dagger call test-pg
 
       # Chart gates — helm lint + a full template render, the networkPolicy / security-hardening / Dapr-
       # resiliency `--set` render-and-grep invariants, the prod-overlay HA/security render check, and the
@@ -45,7 +71,7 @@ jobs:
           DAGGER_NO_NAG: "1"
         run: dagger call charts
 
-      # NOT yet daggerized — the one `test`-job gate that isn't in `dagger call ci`/`charts`: it needs the
+      # NOT yet daggerized — the one `test`-job gate that isn't in the Dagger steps above: it needs the
       # `fga` CLI + jq, not the uv/helm/promtool toolchain the Dagger functions carry, so it stays a native
       # step. The OpenFGA authorization model is source-of-truth for who-can — gate its tests (7 types,
       # concentric rungs, the validator promote gate, create-on-parent) so a model edit can't regress access.
@@ -174,7 +200,7 @@ jobs:
           echo "zones: ${zones% }"
 
       # `make frontend-images` == this step, byte-for-byte — the same contract every other gate here
-      # holds (`dagger call ci` == `make ci`). It loops the four zones through the one parametrized
+      # holds (`dagger call charts` == `make charts`). It loops the zones through the one parametrized
       # dockerfile with the OCI provenance build-args, and exits on the first zone that fails.
       #
       # Deliberately NO cross-run layer cache (no `cache-from/to: type=gha`). The claim this gate makes

@@ -218,11 +218,28 @@ spec:
                   - rustfs-backup
                   - backup-pg # the pg-backup CronJob uploads its dumps to the lakehouse (_backups/pg/)
                   - rustfs-mkbucket # the bucket-provisioning hook Job — blocked, no install ever gets buckets
+                  # rask's own S3 clients (audit 2026-07-27 defect 5: absent, so prod default-deny cut
+                  # the fleet off object storage). Labels are fleet.yaml's `app.kubernetes.io/component:
+                  # <name>`. core-api + orchestrator run the `core` package's sync/discover S3 reconcile
+                  # (both waitFor minio/postgres over the same batches table); search-api serves S3
+                  # thumbnails; volumes-api is the S3/IIIF image+ALTO proxy.
+                  - core-api
+                  - orchestrator
+                  - search-api
+                  - volumes-api
                   {{- range .Values.medallion.movers }}
                   - {{ .name }}
                   {{- end }}
         - podSelector:
             matchLabels: { app.kubernetes.io/name: greptimedb-standalone }
+        {{- if .Values.ray.enabled }}
+        # The HTR runner executes inside the KubeRay-managed RayService pods (PageLoader reads the
+        # image cache, AltoWriter writes ALTO — s3://images-batch*). The chart's head template stamps
+        # no labels of its own; KubeRay stamps its `ray.io/is-ray-node: "yes"` marker on every Ray
+        # pod, so select that (component-label style can't reach operator-created pods).
+        - podSelector:
+            matchLabels: { ray.io/is-ray-node: "yes" }
+        {{- end }}
         {{- with .Values.networkPolicy.rustfsExtraFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

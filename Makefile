@@ -26,8 +26,11 @@ build:
 
 # Python tests via pytest; the frontends have no unit suite — `make frontend-check`
 # (svelte-check) is their gate.
+# `not e2e`: tests/e2e-py is collectable (so the collection gate in
+# tests/unit/test_e2e_collection_gate.py can see it) but its suites need a LIVE deployed
+# stack — run them via `make e2e-ci` / `make e2e-ray-ci` / the per-suite targets.
 test:
-	uv run pytest -m "not slow"
+	uv run pytest -m "not slow and not e2e"
 	# The HTR runner is sealed OUT of the root workspace (own lock, own venv): the root
 	# pytest can neither import nor collect its tests, so without this second line the
 	# runner suite silently never runs. cd first — from the repo root, pytest would read
@@ -37,7 +40,7 @@ test:
 # Slow tests need real models / a GPU (e.g. the YOLO layout smoke test) and hang on
 # hosts without them — opt in explicitly. Runs the full suite including slow marks.
 test-slow:
-	uv run pytest
+	uv run pytest -m "not e2e"
 	# The HTR runner is sealed OUT of the root workspace (its model stack must not enter the
 	# fleet's resolution), so the root pytest cannot see it. Run its suite in its own env —
 	# without this line 28 tests would silently never run.
@@ -122,9 +125,9 @@ dev-micro:
 # `make k3s-build`/`k3s-import` (one image per zone via --build-arg APP=$z) and
 # sync-favicons; the zone-contract deploy-path gate pins this list to the zone
 # directories that actually exist, so add/retire a zone HERE too.
-ZONES = home lakehouse media annotator compute studio
+ZONES = home lakehouse media annotator compute studio train
 
-dev-frontends:        # build the ui + api libs once, then all 6 zones + :3024 proxy
+dev-frontends:        # build the ui + api libs once, then all zones + :3024 proxy
 	# Build the libs FIRST so the zones read a complete dist/. Running `turbo run dev`
 	# unfiltered also starts the ui library's `svelte-package -w` watcher, which rewrites
 	# dist/ concurrently and races the zones reading it (one zone crashes → turbo tears
@@ -322,7 +325,10 @@ COMPOSE_IMAGES = gateway core-api search-api volumes-api ray-api orchestrator co
 KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 HELM ?= KUBECONFIG=$(KUBECONFIG) helm
 KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
-K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES) ray
+# lance-rest-catalog is the ONE lakehouse image (catalog + lineage + medallion + compaction +
+# media trio — chart `image.catalog`); the default render runs 8 containers from it, so the
+# build/import set must carry it or kind/k3s deploys ImagePullBackOff on every lakehouse pod.
+K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES) ray lance-rest-catalog
 
 # Subchart repos (Chart.yaml dependencies). OCI deps (kueue) need no repo add.
 K3S_DEP_REPOS = nvdp=https://nvidia.github.io/k8s-device-plugin \
@@ -352,6 +358,9 @@ k3s-build: ## Build all fleet + frontend (6 MFEs) + ray images as :dev (native a
 	  docker buildx build -f .docker/frontend.dockerfile --build-arg APP=$$a -t $$a:dev --load . || exit 1; \
 	done
 	docker buildx build -f .docker/ray.dockerfile -t ray:dev --load .
+	# The lakehouse fleet image — dockerfile name (rest-catalog) != image name, so it can't
+	# ride the COMPOSE_IMAGES loop. Same build scripts/e2e_stack.sh does.
+	docker buildx build -f .docker/rest-catalog.dockerfile -t lance-rest-catalog:dev --load .
 
 k3s-import: ## Side-load :dev images into k3s containerd
 	@for s in $(K3S_IMAGES); do \
@@ -382,6 +391,60 @@ k3s-purge: k3s-down ## Uninstall + delete PVCs (clean slate)
 	# storage without removing the namespaces themselves. Idempotent.
 	-$(KUBECTL) delete pvc -n dapr-system --all --ignore-not-found
 	-$(KUBECTL) delete pvc -n nats --all --ignore-not-found
+
+# ---- kind (throwaway CI-shaped cluster; k3s above is the long-lived local deploy) ----
+# Same chart, same :dev image set, same release name (rask) as k3s — but on a disposable
+# kind cluster, which is what the CI live-proof jobs (e2e-stack / ray-e2e) boot. Toolchain
+# is pinned into .localbin by `make bootstrap` (kind/kubectl/fga; helm + docker from PATH).
+.PHONY: bootstrap kind-up kind-images kind-load kind-deploy kind-down e2e-ci e2e-ray-ci
+
+LOCALBIN     := $(CURDIR)/.localbin
+KIND         := $(LOCALBIN)/kind
+KIND_CLUSTER := rask
+KIND_IMAGES  := $(K3S_IMAGES)
+# OS/arch detection so bootstrap works on Linux/macOS, x86_64/arm64. sed/tr, NOT a shell
+# `case`: a `)` inside $(shell …) prematurely closes make's paren-match.
+HOST_OS   := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+HOST_ARCH := $(shell uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
+KIND_V    := v0.25.0
+KUBECTL_V := v1.31.3
+FGA_V     := 0.6.4
+
+bootstrap: ## Download kind/kubectl/fga into .localbin (idempotent) — helm + docker must be on PATH
+	@mkdir -p $(LOCALBIN)
+	@test -n "$(HOST_ARCH)" || { echo "!! unsupported CPU '$$(uname -m)' — need x86_64 or arm64"; exit 1; }
+	@test -x $(KIND)              || { echo "kind ->"; curl -fsSL -o $(KIND) "https://kind.sigs.k8s.io/dl/$(KIND_V)/kind-$(HOST_OS)-$(HOST_ARCH)" && chmod +x $(KIND); }
+	@test -x $(LOCALBIN)/kubectl  || { echo "kubectl ->"; curl -fsSL -o $(LOCALBIN)/kubectl "https://dl.k8s.io/release/$(KUBECTL_V)/bin/$(HOST_OS)/$(HOST_ARCH)/kubectl" && chmod +x $(LOCALBIN)/kubectl; }
+	@test -x $(LOCALBIN)/fga      || { echo "fga ->"; curl -fsSL "https://github.com/openfga/cli/releases/download/v$(FGA_V)/fga_$(FGA_V)_$(HOST_OS)_$(HOST_ARCH).tar.gz" | tar xz -C $(LOCALBIN) fga; }
+	@command -v docker >/dev/null || { echo "!! docker not on PATH — install https://docs.docker.com/get-docker/"; exit 1; }
+	@command -v helm   >/dev/null || { echo "!! helm not on PATH — install https://helm.sh/docs/intro/install/"; exit 1; }
+	@echo "toolchain ready in .localbin ($(HOST_OS)/$(HOST_ARCH))"
+
+kind-up: bootstrap ## Create the rask kind cluster (idempotent; deploy/kind/kind-config.yaml)
+	@$(KIND) get clusters 2>/dev/null | grep -qx $(KIND_CLUSTER) || \
+	  $(KIND) create cluster --name $(KIND_CLUSTER) --config deploy/kind/kind-config.yaml --wait 150s
+
+kind-images: k3s-build ## Build the full :dev image set (same builds k3s uses — fleet + zones + ray)
+
+kind-load: ## Side-load the :dev image set into the kind cluster
+	$(KIND) load docker-image $(foreach i,$(KIND_IMAGES),$(i):dev) --name $(KIND_CLUSTER)
+
+kind-deploy: k3s-deps ## helm upgrade --install release `rask` into the kind cluster
+	helm upgrade --install rask ./chart --kube-context kind-$(KIND_CLUSTER) --timeout 600s
+	$(LOCALBIN)/kubectl --context kind-$(KIND_CLUSTER) rollout status deploy/rask-gateway --timeout=300s
+
+kind-down: ## Delete the rask kind cluster
+	$(KIND) delete cluster --name $(KIND_CLUSTER)
+
+# THE guarded live proofs — identical to the CI `e2e-stack` / `ray-e2e` jobs (both shell out
+# to the same scripts, so "green in CI" and "green on my machine" cannot diverge). The
+# scripts bring up their own governed kind stack, seed grants/buckets, run the suites, and
+# (in CI) tear the cluster down.
+e2e-ci: bootstrap ## Governed kind stack + the 5 live e2e suites (CAS/#2/#3-A/#3-B/#4) == CI e2e-stack
+	CLUSTER=$(KIND_CLUSTER) RELEASE=rask bash scripts/e2e_stack.sh
+
+e2e-ray-ci: bootstrap ## Governed ray-ON kind stack + real KubeRay + both Ray suites == CI ray-e2e
+	CLUSTER=$(KIND_CLUSTER)-ray-e2e RELEASE=rask bash scripts/ray_e2e_stack.sh
 
 # ---- Tilt dev loop (in-cluster hot-reload for the Python fleet) -------------
 # One-time: `make tilt-registry` (local registry + point k3s at it). Then, with the

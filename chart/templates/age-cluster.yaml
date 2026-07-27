@@ -1,3 +1,15 @@
+{{- if .Values.age.cnpgCluster.enabled }}
+{{- if .Values.age.enabled }}
+{{- fail "age.enabled and age.cnpgCluster.enabled are mutually exclusive — exactly ONE graph store may render (audit 2026-07-27 defect 3: this template rendered ungated, a second 3-instance CNPG Cluster with a placeholder extension image ALONGSIDE the AGE StatefulSet). Set age.enabled=false to cut over to AGE-on-CNPG, or age.cnpgCluster.enabled=false to keep the StatefulSet stack." }}
+{{- end }}
+# GATED (audit 2026-07-27 defect 3): this file rendered UNCONDITIONALLY — two graph stores in one
+# render, with the un-buildable ghcr.io/REPLACE-ME extension image shipping by default. Decision:
+# the OLD apache/age StatefulSet stack (age-postgres.yaml, age.enabled=true) stays the default until
+# the CNPG-AGE extension image is real; this AGE-on-CNPG cutover (lance-ns-merge.md decision 1 / P4:
+# stock image + ImageVolume, docs/CNPG-AGE.md) is opt-in via age.cnpgCluster.enabled, mutually
+# exclusive with age.enabled (the guard above fails the render on both), and the extension image is
+# required() from values so no placeholder can ever render.
+#
 # CloudNativePG Cluster for the lance-ns state of record (the AGE lineage graph + the OpenFGA datastore),
 # with Apache AGE mounted as an ImageVolume extension. Requires: PostgreSQL 18, CloudNativePG >= 1.27,
 # Kubernetes 1.33+ with the ImageVolume feature gate (1.35 default-on), containerd >= 2.1 / CRI-O >= 1.31.
@@ -18,7 +30,8 @@ spec:
     extensions:
       - name: age
         image:
-          reference: ghcr.io/REPLACE-ME/age-cnpg-ext:1.7.0-18   # the extension image you built + pushed
+          # From values (required — no placeholder default can render): the extension image you built + pushed.
+          reference: {{ required "age.cnpgCluster.extensionImage is required when age.cnpgCluster.enabled=true — build + push .docker/cnpg-age-ext.dockerfile first" .Values.age.cnpgCluster.extensionImage }}
         # CNPG auto-appends /extensions/age/share → extension_control_path and /extensions/age/lib →
         # dynamic_library_path; no manual path config needed for the standard layout.
   storage:
@@ -59,3 +72,4 @@ spec:
     name: lance-pg
   name: openfga
   owner: lineage
+{{- end }}

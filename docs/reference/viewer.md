@@ -8,33 +8,10 @@
     `docs/architecture/microservices.md`. The text below is retained for
     historical reference.
 
-Auto-generated from source docstrings in `components/services/viewer/src`. For
-the endpoint and service breakdown see [Components → Services](../components/services.md).
-
-## Configuration
-
-::: viewer.core.config
-
-## Models
-
-::: viewer.models.batch
-
-::: viewer.models.pipelines
-
-## Services
-
-::: viewer.services.sync
-
-::: viewer.services.submission
-
-::: viewer.services.orchestrator.loop
-
-::: viewer.services.orchestrator.derive
-
-::: viewer.services.ray_dashboard
-
-## Search & catalog
-
-::: viewer.services.discover.search
-
-::: viewer.services.discover.catalog
+This page was auto-generated from source docstrings in the old
+`components/services/viewer/src` tree. That `viewer` Python package has been
+**deleted from the repo**, so the auto-generated API sections below it are gone
+too (mkdocstrings can no longer collect them). For the endpoint and service
+breakdown of the successor fleet see
+[Components → Services](../components/services.md); the code now lives in the
+`core` package (`services/core`).

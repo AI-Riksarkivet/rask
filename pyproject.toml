@@ -146,9 +146,29 @@ exclude = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["packages/storage/tests", "packages/tracker/tests", "packages/validate/tests", "services/core/tests", "services/gateway/tests", "services/volumes_api/tests", "services/search_api/tests", "services/ray_api/tests", "tests/unit", "tests/integration"]
+# tests/e2e-py holds the LIVE suites (they need a deployed stack): collectable here so they can
+# never silently vanish from the gate (tests/unit/test_e2e_collection_gate.py asserts it), but
+# excluded from offline runs via `-m "not e2e"` (make test / test-slow), the same way `slow` is.
+# tests/e2e-py/conftest.py force-applies the e2e marker to every item collected under it.
+testpaths = ["packages/storage/tests", "packages/tracker/tests", "packages/validate/tests", "services/core/tests", "services/gateway/tests", "services/volumes_api/tests", "services/search_api/tests", "services/ray_api/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
 addopts = "--cov --cov-report=term-missing:skip-covered --import-mode=importlib"
-markers = ["slow: marks tests requiring real models or long runtimes (deselect with '-m \"not slow\"')"]
+markers = [
+    "slow: marks tests requiring real models or long runtimes (deselect with '-m \"not slow\"')",
+    "e2e: live end-to-end suites needing a running/deployed stack (deselect with '-m \"not e2e\"'; run via make e2e-ci / the per-suite targets)",
+    # per-suite selectors used by the e2e make targets (e.g. `pytest -m media`); all of them ALSO carry e2e
+    "cas: object-store conditional-write (CAS) e2e",
+    "compaction: compaction/GC sweep e2e",
+    "duckdb: duckdb-over-Lance e2e",
+    "gateway: Dapr service-invocation gateway e2e",
+    "governed_union: full governed-union e2e",
+    "medallion: medallion-cascade e2e",
+    "media: media-lane e2e",
+    "media_catalog: annotator/catalog live-mode e2e",
+    "observability: observability (OTLP/Greptime) e2e",
+    "ray_batch: Ray batch-path e2e",
+    "ray_train: Ray train-path e2e",
+    "user_state: user-state live e2e",
+]
 
 [tool.coverage.run]
 branch = true

@@ -11,7 +11,7 @@ CHART="${CHART:-chart}"
 OUT="$(mktemp)"
 trap 'rm -f "$OUT"' EXIT
 
-helm template lance-ns "$CHART" -f "$CHART/values-prod.yaml" \
+helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 \
   --set dapr.appToken=ci-dummy-token-0000000000 \
   --set age.password=ci-dummy-pw --set rustfs.secretKey=ci-dummy-key \
@@ -32,19 +32,19 @@ grep -q -- "-openbao" "$OUT" || fail "prod NetworkPolicy set missing the openbao
 # greps pin the from-selector + port to THEIR rule, not a stray match elsewhere.
 grep -qF "values: [openbao, age, rustfs, nats]" "$OUT" \
   || fail "the general intra-namespace ingress allow must exclude the nats pods (with openbao/age/rustfs)"
-grep -q "name: lance-ns-nats-clients" "$OUT" || fail "prod NetworkPolicy set missing the nats-clients (4222) rule"
-grep -A20 "name: lance-ns-nats-clients" "$OUT" | grep -q "port: 4222" \
+grep -q "name: rask-nats-clients" "$OUT" || fail "prod NetworkPolicy set missing the nats-clients (4222) rule"
+grep -A20 "name: rask-nats-clients" "$OUT" | grep -q "port: 4222" \
   || fail "the nats-clients rule must target the 4222 client port"
-grep -q "name: lance-ns-nats-monitor" "$OUT" || fail "prod NetworkPolicy set missing the nats-monitor (8222) rule"
-grep -A20 "name: lance-ns-nats-monitor" "$OUT" | grep -q "app.kubernetes.io/component: web-lakehouse" \
+grep -q "name: rask-nats-monitor" "$OUT" || fail "prod NetworkPolicy set missing the nats-monitor (8222) rule"
+grep -A20 "name: rask-nats-monitor" "$OUT" | grep -q "app.kubernetes.io/component: web-lakehouse" \
   || fail "the nats-monitor rule must admit only the web-lakehouse component pods"
-grep -A20 "name: lance-ns-nats-monitor" "$OUT" | grep -q "port: 8222" \
+grep -A20 "name: rask-nats-monitor" "$OUT" | grep -q "port: 8222" \
   || fail "the nats-monitor rule must target the 8222 monitor port"
 
 # 2. OpenFGA HA — the authz chokepoint every governed call fails-closed through: 3 replicas. (The subchart
 # Deployment's spec.replicas renders ~10 lines below its metadata.name; only the Deployment carries a
 # replicas: field, so the windowed grep can't false-match the Service/SA/migrate-Job of the same name.)
-grep -A15 "name: lance-ns-openfga$" "$OUT" | grep -q "replicas: 3" \
+grep -A15 "name: rask-openfga$" "$OUT" | grep -q "replicas: 3" \
   || fail "prod OpenFGA must run 3 replicas (authz SPOF)"
 
 # 3. Dapr control-plane HA — Sentry is the mTLS CA in the sidecar cert-renewal path. (Anchor on the
@@ -62,8 +62,8 @@ awk '/^# Source:/{src=$0; d=0} /^kind: Deployment$/{if (src ~ /dapr_sentry_deplo
 pdb=$(grep -c "kind: PodDisruptionBudget" "$OUT" || true)
 pdb_names=$(awk '/^kind: PodDisruptionBudget$/{f=1} f&&/^  name: /{print $2; f=0}' "$OUT")
 for p in catalog lineage gateway openfga web-home web-lakehouse web-media web-annotator; do
-  grep -qx "lance-ns-$p" <<<"$pdb_names" \
-    || fail "prod is missing the lance-ns-$p PodDisruptionBudget (got: $(tr '\n' ' ' <<<"$pdb_names"))"
+  grep -qx "rask-$p" <<<"$pdb_names" \
+    || fail "prod is missing the rask-$p PodDisruptionBudget (got: $(tr '\n' ' ' <<<"$pdb_names"))"
 done
 
 # 5. Anti-affinity: the replicas:2 services spread across nodes (else one node loss defeats their PDB).
@@ -79,9 +79,9 @@ tiers=$(grep -c "memory: 1Gi" "$OUT" || true)
 # 7. Alerting engine (P3b): vmalert + Alertmanager deployed, vmalert wired to GreptimeDB's PromQL endpoint,
 # and the PROVEN rules actually mounted (a known alertname must appear — proves .Files.Get loaded rules.yml,
 # not an empty ConfigMap). Off on the default render.
-grep -q "name: lance-ns-vmalert$" "$OUT" || fail "prod must deploy vmalert (the alert evaluator)"
-grep -q "name: lance-ns-alertmanager$" "$OUT" || fail "prod must deploy Alertmanager"
-grep -q "datasource.url=http://lance-ns-greptimedb-standalone:.*prometheus" "$OUT" \
+grep -q "name: rask-vmalert$" "$OUT" || fail "prod must deploy vmalert (the alert evaluator)"
+grep -q "name: rask-alertmanager$" "$OUT" || fail "prod must deploy Alertmanager"
+grep -q "datasource.url=http://rask-greptimedb-standalone:.*prometheus" "$OUT" \
   || fail "vmalert must query GreptimeDB's PromQL endpoint"
 grep -q "LineageOutboxNotDraining" "$OUT" || fail "the proven alert rules must be mounted into vmalert"
 
@@ -89,7 +89,7 @@ grep -q "LineageOutboxNotDraining" "$OUT" || fail "the proven alert rules must b
 # sidecars), and NO bespoke scraper is shipped — the redundant vmagent was removed; the OTel Collector's
 # prometheus receiver owns that scrape at operator-adoption time.
 grep -q "DaprConsumerWedge" "$OUT" || fail "the consumer-wedge rule must be mounted (SLO-as-code)"
-grep -q "name: lance-ns-vmagent$" "$OUT" && fail "vmagent must NOT be shipped (the OTel Collector owns the Dapr scrape)"
+grep -q "name: rask-vmagent$" "$OUT" && fail "vmagent must NOT be shipped (the OTel Collector owns the Dapr scrape)"
 
 # 8b. THE EDGE'S FORMERLY-UNAUTHENTICATED DOORS STAY SHUT IN PROD.
 #
@@ -138,7 +138,7 @@ peak=$((cap * body + headroom))
 # values-prod EXTERNALIZE block documents both as a pair; prove that when BOTH are set no in-cluster rustfs
 # DNS survives anywhere (app env OR the greptime config), and that setting ONLY the rustfs half leaks.
 EXT_S3=https://s3.ext.example.com
-atomic=$(helm template lance-ns "$CHART" -f "$CHART/values-prod.yaml" \
+atomic=$(helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 --set dapr.appToken=ci-dummy-token-0000000000 \
   --set age.password=ci-dummy-pw --set rustfs.secretKey=ci-dummy-key \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
@@ -148,7 +148,7 @@ grep -q "rask-rustfs-io" <<<"$atomic" \
   && fail "externalizing RustFS + the greptime endpoint companion still leaks in-cluster rustfs DNS"
 # Negative: rustfs externalized but the greptime companion OMITTED must still show the leak (proves the pairing
 # is load-bearing, i.e. the guard above isn't vacuous).
-leak=$(helm template lance-ns "$CHART" -f "$CHART/values-prod.yaml" \
+leak=$(helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 --set dapr.appToken=ci-dummy-token-0000000000 \
   --set age.password=ci-dummy-pw --set rustfs.secretKey=ci-dummy-key \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
@@ -159,14 +159,14 @@ grep -q "rask-rustfs-io" <<<"$leak" \
 # 11. External Secrets Operator path renders (operator-handoff audit): externalSecrets.enabled=true must
 # render the SecretStore + ExternalSecret CRs, SKIP the static infra-credentials + observability-s3 Secrets,
 # and SATISFY the fail-closed prod-secret guard WITHOUT age.password/rustfs.secretKey (ESO supplies them).
-eso=$(helm template lance-ns "$CHART" -f "$CHART/values-prod.yaml" \
+eso=$(helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 --set dapr.appToken=ci-dummy-token-0000000000 \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
   --set externalSecrets.enabled=true 2>/dev/null) \
   || fail "prod render with externalSecrets.enabled=true FAILED (age.password/rustfs.secretKey should not be required)"
 grep -q "kind: SecretStore" <<<"$eso" || fail "ESO path must render a SecretStore"
 grep -q "kind: ExternalSecret" <<<"$eso" || fail "ESO path must render the ExternalSecret CRs"
-grep -A2 "name: lance-ns-infra-credentials" <<<"$eso" | grep -q "stringData:" \
+grep -A2 "name: rask-infra-credentials" <<<"$eso" | grep -q "stringData:" \
   && fail "ESO path must SKIP the static infra-credentials Secret (external-secrets owns it)"
 
 # 12. Every Job/CronJob POD TEMPLATE carries a component label (the P4 landmine, audit 2026-07-24: the

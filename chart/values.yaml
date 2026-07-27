@@ -347,13 +347,17 @@ frontend:
   # READER on the warehouse (seed_medallion_fga.sh) + allowlisted in LINEAGE_SERVICE_SUBJECTS.
   serviceIdentity: service-web
   # The zones. home = the catch-all "/"; every other zone is pinned to /<name>.
-  # The union of both estates: rask's 6 domain zones + lance-ns's 3 lakehouse/media zones.
+  # The union of both estates — one entry per zone directory (the zone-contract deploy-path gate
+  # pins this list to frontend/microfrontends/*).
   apps:
     - {name: home, catchAll: true}              # the platform home, "/"
     # rask domain zones surviving R8+R9: compute (the Ray plane rask owns) and studio.
-    # storage + train folded into lakehouse, overview into home; discover retires at P7.
+    # storage folded into lakehouse, overview into compute (R16); discover retires at P7.
     - {name: compute, path: /compute}
     - {name: studio, path: /studio}
+    # R17: train RETURNS as its own zone (supersedes R8's train→lakehouse fold) —
+    # submit/runs/monitoring/analysis/models; lakehouse's models area migrates there.
+    - {name: train, path: /train}
     # lance-ns zones. `lakehouse` is the MERGED estate zone: catalog + lineage + models + admin were
     # four separate zones on four Deployments, all reading the same catalog/lineage planes and all
     # shipped from one shared image tag — four SSR servers and a full document reload between them,
@@ -1047,6 +1051,18 @@ age:
   # silently not resizing. To resize: patch the PVC, recreate the StatefulSet with --cascade=orphan,
   # then upgrade — see docs/RUNBOOK-restore.md.
   storage: 1Gi
+  # --- AGE-on-CNPG cutover gate (audit 2026-07-27 defect 3; lance-ns-merge.md decision 1 / P4) ---
+  # templates/age-cluster.yaml (CNPG Cluster + ImageVolume AGE extension, docs/CNPG-AGE.md) used to
+  # render UNGATED — a second 3-instance graph store with a placeholder extension image, alongside
+  # this StatefulSet stack, on every render. It is now gated here and MUTUALLY EXCLUSIVE with
+  # age.enabled (the template fails the render if both are on). Default OFF: the estate runs the
+  # apache/age StatefulSet today, and the cutover needs a real extension image built + pushed first
+  # (.docker/cnpg-age-ext.dockerfile) plus K8s 1.33+ (ImageVolume) and CNPG >= 1.27.
+  cnpgCluster:
+    enabled: false
+    # The built AGE extension image (e.g. ghcr.io/<org>/age-cnpg-ext:1.7.0-18). Deliberately NO
+    # default — required() when enabled, so a REPLACE-ME placeholder can never render.
+    extensionImage: ""
 
 # --- Dex (first-party template) — OIDC issuer for the governed demo --------------------------------
 dex:

@@ -16,8 +16,8 @@
 # Idempotent: safe to re-run against an existing cluster. Env overrides: CLUSTER, RELEASE, KEEP_STACK=1.
 set -euo pipefail
 
-CLUSTER="${CLUSTER:-lance}"
-RELEASE="${RELEASE:-lance-ns}"
+CLUSTER="${CLUSTER:-rask}"
+RELEASE="${RELEASE:-rask}"
 CATALOG_IMG="${CATALOG_IMG:-lance-rest-catalog:dev}"
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.localbin"
 export PATH="$BIN:$PATH"
