@@ -83,6 +83,28 @@ enforces it. Three things in lance-ns that only exist because there is no worksp
 library living in the services directory (no `main.py`, no `app.py`), `src/ratch` sits at the root excluded
 from the root's own tooling, and `runners/` has nowhere to be. All three get a home here.
 
+**One root `packages/`, mixed-language — the cost, and the guard it requires (owner question, 2026-07-27).**
+rask keeps TS and Python side by side in `packages/` (`api`/`ui` TS; `htr`/`ray-kit`/`service-kit`/`storage`/
+`tracker`/`validate` Python). That is the target and it is not being changed — but it has a measurable price
+worth naming, because the merge triples the number of packages:
+
+```
+lance-ns   workspaces: ['packages/*', 'components/frontends/*']            ← globs (tree is language-pure)
+rask       workspaces: ['components/frontends/compute', … , 'packages/ui'] ← 9 paths enumerated by hand
+           uv members:  packages/htr, … , components/services/orchestrator ← 14 paths enumerated by hand
+```
+
+**Neither toolchain can glob a mixed directory** — `packages/*` in bun's `workspaces` would sweep in Python
+dirs with no `package.json`. So every package is registered by hand, twice, and **a forgotten registration
+fails silently**: the package simply is not built, linted or tested, and nothing says so. This is risk 5
+(silent gate loss) in a second guise, and after the merge there are ~11 more packages to forget.
+
+**Required P1 gate:** a manifest-completeness test — walk `packages/*` and `components/*/*`, and assert
+every directory containing a `package.json` appears in the root `workspaces` array, and every directory
+containing a `pyproject.toml` appears in `[tool.uv.workspace] members`. Fail on either direction (a listed
+path that does not exist is equally a bug). lance-ns's `@repo/zone-contract` is the precedent — it exists to
+make exactly this class of claim falsifiable, and it ships with the merge.
+
 **Naming rules (the load-bearing ones):**
 1. **k8s objects**: backends `rask-<service>` (existing pattern); ALL frontend zones — rask's included — become `rask-web-<zone>`. Rationale — **RE-PIN, and the example got sharper**: there is no `lineage` zone any more, but the collision class is still live and now unavoidable — lance's **`annotator` zone vs the `annotator` backend Service** (`services/annotator`) under one release is exactly it, and lance-ns already hit this class (memory landmine + `frontends.yaml` NAMING comment). Renaming rask's 7 zone objects is branch-only churn and buys a uniform rule.
 2. **Dapr app-ids**: backends keep bare names (`catalog`, `lineage`, `medallion`, `compaction`, `core-api`, `gateway`); frontends get no sidecars. No collisions in that set today; the rule prevents future ones.
