@@ -1,4 +1,4 @@
-import { Database } from '@lucide/svelte';
+import { Brain, Cpu, Database, FlaskConical, House, PenLine, Search } from '@lucide/svelte';
 import type { RunStatusLike } from '../runs/run-status.js';
 
 /** All lucide icons share one component signature, so any icon's type fits. */
@@ -95,6 +95,8 @@ export type TopNavEntry = {
 	title: string;
 	href: string;
 	match: (p: string) => boolean;
+	/** The zone's mark in the bar (lucide) — same signature seam as `ZoneNavLeaf.icon`. */
+	icon?: IconComponent;
 	/** The zone's sub-areas. Present → the navbar renders a NavigationMenu trigger opening a panel
 	 *  of these; absent → a plain link, because the zone has a single surface and a dropdown with
 	 *  one row in it would be noise. Deliberately a SUBSET of the zone's own sidebar (`ZoneNav`):
@@ -194,6 +196,23 @@ const GOVERNANCE_ITEMS: TopNavItem[] = [
 	},
 ];
 
+/** COMPUTE's panel rows — the Ray/job plane. The old overview zone folded in here (R16), so the
+ *  zone root IS the overview and rides the panel as its first row (matching exactly, like Media's
+ *  Search at /media). */
+const COMPUTE_ITEMS: TopNavItem[] = [
+	{ title: 'Overview', href: '/compute', description: 'The Ray plane at a glance.' },
+	{ title: 'Jobs', href: '/compute/jobs', description: 'Submitted Ray jobs and their lifecycle.' },
+	{ title: 'Cluster', href: '/compute/cluster', description: 'Nodes and their resource load.' },
+	{ title: 'Actors', href: '/compute/actors', description: 'Live actors across the cluster.' },
+	{ title: 'Serve', href: '/compute/serve', description: 'Ray Serve apps and deployments.' },
+	{ title: 'Logs', href: '/compute/logviewer', description: 'The cluster log viewer.' },
+	{
+		title: 'API docs',
+		href: '/compute/api-docs',
+		description: 'The compute API, self-documented.',
+	},
+];
+
 const OPERATIONS_ITEMS: TopNavItem[] = [
 	{ title: 'Events', href: '/lakehouse/admin/events', description: 'The live control-event feed.' },
 	{
@@ -209,29 +228,31 @@ const OPERATIONS_ITEMS: TopNavItem[] = [
 ];
 
 /**
- * The top-navbar IA. There are four zones now — home, lakehouse, media, annotator — and the bar shows
- * three entries over them, because Lakehouse and Lineage are two views of the ONE merged estate zone
- * rather than two apps. That is the point of the merge: a hop from the catalog to the lineage graph, or
- * to governance, is a soft navigation inside one router; only Media and Annotate still cross a zone
- * boundary and hard-navigate. The sidebar renders the current AREA's routes (`ZoneNav`).
+ * The top-navbar IA. Seven zones — home, lakehouse, media, annotator, compute, train, studio — and
+ * the bar carries an entry for EVERY one of them (R15: a zone missing from the shared navbar is a
+ * defect, regardless of scaffold status). Lakehouse and Lineage stay two views of the ONE merged
+ * estate zone rather than two apps — a hop from the catalog to the lineage graph, or to governance,
+ * is a soft navigation inside one router; every OTHER entry crosses a zone boundary and
+ * hard-navigates. The sidebar renders the current zone's routes (`ZoneNav`).
  *
  * A zone with sub-areas carries `items`, and the navbar renders it as a NavigationMenu trigger with
  * a panel — so the estate's shape is reachable from any zone in one hop instead of landing on a
  * zone root and hunting through its sidebar. Zones with a single surface stay plain links.
  *
- * Admin appends ONLY for an estate admin (`me.estate_admin` from the frozen `/v1/me` contract) —
- * fail-closed: an unresolved/absent `me` renders the base entries. Access is NOT a top-level
- * entry: it lives inside the admin zone (/admin/access), so Admin covers the whole /admin subtree
- * here and Access appears only as one row of Admin's panel.
+ * The Governance/Operations columns append ONLY for an estate admin (`me.estate_admin` from the
+ * frozen `/v1/me` contract) — fail-closed: an unresolved/absent `me` renders the base entries.
+ * Access is NOT a top-level entry: it lives inside the lakehouse admin area
+ * (/lakehouse/admin/access), so it appears only as one row of the Governance column.
  */
 export function topNav(estateAdmin: boolean): TopNavEntry[] {
 	// LAKEHOUSE gathers everything that describes or governs the one governed estate: the catalog
 	// (projects → warehouses → namespaces → tables), the model registry (models are catalog objects
-	// too — models$<model> carries the same rungs), and, for an estate admin, the governance and
-	// operations surfaces over it. Grouping by DOMAIN rather than by zone is what keeps the bar at
-	// three words while the product grows: a new route becomes a row in a panel column, never a new
-	// top-level entry. Home is the product mark, not a nav item; the project switcher sits at the
-	// head of the bar on every zone (global context belongs in global chrome).
+	// too — models$<model> carries the same rungs; R17 migrates this surface to the train zone,
+	// which owns the column once the routes physically move), and, for an estate admin, the
+	// governance and operations surfaces over it. Grouping by DOMAIN rather than by zone is what
+	// keeps a growing product from growing the bar: a new ROUTE becomes a row in a panel column —
+	// only a new ZONE earns a new entry (R15). The project switcher sits at the head of the bar on
+	// every zone (global context belongs in global chrome).
 	const lakehouse: TopNavGroup[] = [
 		{ label: 'Catalog', items: DATA_ITEMS },
 		{ label: 'Models', items: MODEL_ITEMS },
@@ -251,8 +272,18 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 	}
 	return [
 		{
+			// HOME is the catch-all zone at the origin root — the platform landing surface. It used to
+			// ride only as the product mark; R15 put every zone in the bar, so it is an entry like the
+			// rest. A single surface, so a plain link.
+			title: 'Home',
+			href: '/',
+			icon: House,
+			match: (p) => zoneOf(p) === '',
+		},
+		{
 			title: 'Lakehouse',
 			href: '/lakehouse/data',
+			icon: Database,
 			// The whole merged zone — catalog, models, lineage, and (for an admin) governance and
 			// operations. No carve-out: every area is a column of this one trigger.
 			match: under('/lakehouse'),
@@ -264,6 +295,7 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			// "Media" described our folder layout rather than their task.
 			title: 'Search',
 			href: '/media',
+			icon: Search,
 			match: under('/media'),
 			items: [...MEDIA_ITEMS],
 		},
@@ -274,10 +306,35 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			// workflow one hover deep. A single surface, so a plain link rather than a panel.
 			title: 'Annotate',
 			href: '/annotator',
+			icon: PenLine,
 			match: under('/annotator'),
 		},
-		// COMPUTE (rask) lands here as the fourth trigger when that merge happens — the Ray/job plane.
-		// Deliberately NOT rendered yet: a trigger with nowhere to go is worse than a missing one.
+		{
+			// COMPUTE is the Ray/job plane — the merged rask zone. The old overview zone folded in
+			// here (R16), so the zone root is the overview and the panel lists the Ray surfaces.
+			title: 'Compute',
+			href: '/compute',
+			icon: Cpu,
+			match: under('/compute'),
+			items: [...COMPUTE_ITEMS],
+		},
+		{
+			// TRAIN is its own zone again (R17): submit, watch, monitor and analyse training, plus the
+			// model registry that migrates over from Lakehouse. The zone is being scaffolded — the
+			// entry rides the bar NOW (R15: a zone missing from the navbar is a defect regardless of
+			// scaffold status); a plain link until its areas are real enough to panel.
+			title: 'Train',
+			href: '/train',
+			icon: Brain,
+			match: under('/train'),
+		},
+		{
+			// STUDIO stays the sandbox/PoC zone (R17) — one experimental surface, so a plain link.
+			title: 'Studio',
+			href: '/studio',
+			icon: FlaskConical,
+			match: under('/studio'),
+		},
 	];
 }
 

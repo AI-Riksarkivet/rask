@@ -21,13 +21,14 @@
 	} from './nav-config.js';
 
 	// The shared top navbar — the cross-zone IA on the shadcn-svelte NavigationMenu shape. One entry
-	// per microfrontend zone; a zone that carries `items` renders as a trigger opening a panel of its
-	// sub-areas (so the estate is one hop away from anywhere), and a zone with a single surface stays
-	// a plain link. Admin appears only for an estate admin (`me.estate_admin`, the frozen /v1/me
-	// contract — fail-closed: no `me`, no admin entry); Access is never a top-level entry, it is one
-	// row of Admin's panel. The identity/theme control (the old sidebar footer nav-user) lives on the
-	// right side. Bare flex chrome on purpose: the mount decides the framing (AppShell sits it on the
-	// header's navbar row).
+	// per microfrontend zone, and EVERY zone of the seven-zone estate is in the bar (R15); a zone
+	// that carries `items`/`groups` renders as a trigger opening a panel of its sub-areas (so the
+	// estate is one hop away from anywhere), and a zone with a single surface stays a plain link.
+	// The Governance/Operations columns appear only for an estate admin (`me.estate_admin`, the
+	// frozen /v1/me contract — fail-closed: no `me`, no admin columns); Access is never a top-level
+	// entry, it is one row of the Governance column. The identity/theme control (the old sidebar
+	// footer nav-user) lives on the right side. Bare flex chrome on purpose: the mount decides the
+	// framing (AppShell sits it on the header's navbar row).
 	//
 	// `me` is the RESOLVED identity (null = signed out / lookup failed); `meLoading` renders the BASE
 	// entry titles as invisible text under skeleton pills instead — the same chrome classes and the
@@ -59,7 +60,7 @@
 
 	const entries = $derived(topNav(me?.estate_admin ?? false));
 	// The identity-free base set: what the skeleton reserves space for while /v1/me is in flight
-	// (an admin's extra entry appends on resolve — earned content, not reserved chrome).
+	// (an admin's extra panel columns append on resolve — earned content, not reserved chrome).
 	const placeholders = topNav(false);
 	// Cross-zone links leave THIS app's route manifest → hard nav (data-sveltekit-reload); the home
 	// zone owns the origin root, so its zone key is ''. A plain function over the `pathname` prop, not
@@ -103,7 +104,10 @@
 		if (items.some((item) => item.href === entry.href)) return items;
 		return [
 			{
-				title: `${entry.title} home`,
+				// A paneled zone's prepended root row says "<Zone> home" to set it off from the rows
+				// under it; a plain-link zone's ONLY row IS the zone, so it just carries the zone's
+				// name (the Home zone would otherwise read "Home home").
+				title: items.length ? `${entry.title} home` : entry.title,
 				href: entry.href,
 				description: `Open the ${entry.title.toLowerCase()} zone.`,
 			},
@@ -123,10 +127,17 @@
 				{#each collapsed ? placeholders.slice(0, 1) : placeholders as entry (entry.title)}
 					<li aria-hidden="true">
 						<span class={cn(chrome, 'relative')}>
+							{#if collapsed}
+								<Menu class="invisible size-4" />
+							{:else if entry.icon}
+								<entry.icon class="invisible size-4" />
+							{/if}
 							<span class="invisible">{collapsed ? 'Menu' : entry.title}</span>
-							{#if entry.items || entry.groups}
+							{#if collapsed || entry.items || entry.groups}
 								<!-- Reserve the trigger's chevron too, or an entry with a panel would grow by
-								     its width the moment the identity lands. -->
+								     its width the moment the identity lands. Collapsed, the one real entry is
+								     ALWAYS the Menu trigger, so the chevron is reserved regardless of what the
+								     first placeholder entry happens to be. -->
 								<ChevronDown class="invisible size-3" />
 							{/if}
 							<Skeleton class="absolute inset-0 rounded-lg" />
@@ -146,8 +157,11 @@
 							{#each entries as entry (entry.title)}
 								<p
 									data-slot="navbar-overflow-group"
-									class="text-muted-foreground px-2 pt-1 pb-1.5 text-[0.6875rem] font-semibold tracking-wide uppercase"
+									class="text-muted-foreground flex items-center gap-1.5 px-2 pt-1 pb-1.5 text-[0.6875rem] font-semibold tracking-wide uppercase"
 								>
+									{#if entry.icon}
+										<entry.icon class="size-3.5" aria-hidden="true" />
+									{/if}
 									{entry.title}
 								</p>
 								<ul class="grid gap-0.5 pb-1">
@@ -178,6 +192,9 @@
 							     of listing a dozen undifferentiated rows. Column count follows the groups
 							     the viewer actually gets, so a non-admin sees a tighter two-column panel. -->
 							<NavigationMenu.Trigger data-active={entry.match(pathname) ? '' : undefined}>
+								{#if entry.icon}
+									<entry.icon class="size-4" aria-hidden="true" />
+								{/if}
 								{entry.title}
 							</NavigationMenu.Trigger>
 							<NavigationMenu.Content>
@@ -244,6 +261,9 @@
 							</NavigationMenu.Content>
 						{:else if entry.items}
 							<NavigationMenu.Trigger data-active={entry.match(pathname) ? '' : undefined}>
+								{#if entry.icon}
+									<entry.icon class="size-4" aria-hidden="true" />
+								{/if}
 								{entry.title}
 							</NavigationMenu.Trigger>
 							<NavigationMenu.Content>
@@ -292,6 +312,9 @@
 								{@attach warm(entry.href)}
 								class={chrome}
 							>
+								{#if entry.icon}
+									<entry.icon class="size-4" aria-hidden="true" />
+								{/if}
 								{entry.title}
 							</NavigationMenu.Link>
 						{/if}
@@ -304,7 +327,7 @@
 		{#if meLoading}
 			<!-- size-8 = the resolved NavbarUser trigger (Button size="icon") — same box, no shift. The
 			     bell reserves nothing: a zone with no feed has no bell, so reserving its width would
-			     shift the account control on every load in three of the four zones. -->
+			     shift the account control on every load in every zone that has not wired a feed. -->
 			<Skeleton class="size-8 rounded-full" />
 		{:else}
 			{#if notifications}

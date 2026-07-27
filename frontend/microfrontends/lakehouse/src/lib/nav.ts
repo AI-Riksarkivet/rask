@@ -4,6 +4,7 @@ import { DATA_ZONE_NAV } from '$lib/data/nav';
 import { LINEAGE_ZONE_NAV } from '$lib/lineage/nav';
 import { MODELS_ZONE_NAV } from '$lib/models/nav';
 import { ADMIN_ZONE_NAV } from '$lib/admin/nav';
+import { STORAGE_ZONE_NAV } from '$lib/storage/nav';
 
 /**
  * The lakehouse zone hosts four areas — catalog (`data`), `lineage`, `models` and `admin` — that used
@@ -23,6 +24,9 @@ const AREAS: Record<string, ZoneNav> = {
 	lineage: LINEAGE_ZONE_NAV,
 	models: MODELS_ZONE_NAV,
 	admin: ADMIN_ZONE_NAV,
+	// R18: the S3 object browser over the warehouse buckets — the absorbed storage zone, rebuilt as
+	// an area of this zone rather than merely deleted.
+	storage: STORAGE_ZONE_NAV,
 };
 
 /** The area segment right after this zone's base — `''` on the zone root. */

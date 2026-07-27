@@ -30,6 +30,11 @@
 			"staticGzipKB": 220,
 			"deferredGzipKB": 40,
 			"note": "The studio zone; gsap rides in the entry graph for the animation surface and is the only dependency beyond the shared shell, so this should stay light. Measured 163 / 1."
+		},
+		"train": {
+			"staticGzipKB": 220,
+			"deferredGzipKB": 40,
+			"note": "The train zone (R17): five dummy areas — submit form, run board, monitoring, analysis, model registry — over the shared shell, no dependency beyond it, so it should stay near studio's weight until real training surfaces land. Measured 184 / 1."
 		}
 	}
 }

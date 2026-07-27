@@ -1,4 +1,23 @@
 import { test, expect } from '@playwright/test';
+// The zone-directory ground truth (a dir under microfrontends/ with a package.json), read straight
+// off the filesystem by the shared zone-contract helper. Relative import on purpose: Playwright
+// transpiles local files but not node_modules, and importing the ui package's nav-config here would
+// make the test self-referential — it would pass whatever the config said, missing zone and all.
+import { zoneDirs } from '../../../packages/zone-contract/src/manifest';
+
+// One navbar entry per zone (R15) — keyed by ZONE DIRECTORY, so the map's keys are asserted equal to
+// `zoneDirs()`: scaffolding a new zone without adding its navbar entry (and its row here) FAILS this
+// suite instead of silently shipping an unreachable zone. `trigger` = a NavigationMenu button opening
+// a panel of sub-areas; `link` = a plain link (single-surface zone).
+const ZONE_ENTRIES: Record<string, { title: string; kind: 'trigger' | 'link' }> = {
+	home: { title: 'Home', kind: 'link' },
+	lakehouse: { title: 'Lakehouse', kind: 'trigger' },
+	media: { title: 'Search', kind: 'trigger' }, // the media read plane, named for the task
+	annotator: { title: 'Annotate', kind: 'link' },
+	compute: { title: 'Compute', kind: 'trigger' }, // the merged rask zone (R16)
+	train: { title: 'Train', kind: 'link' }, // resurrected zone (R17), plain link while scaffolded
+	studio: { title: 'Studio', kind: 'link' }, // the sandbox/PoC zone (R17)
+};
 
 // The home zone owns the relocated OIDC BFF routes (/auth/{login,callback,logout}) AND the
 // signed-in landing (navbar + project gallery). Running auth-OFF (no OIDC env, no catalog), the
@@ -25,24 +44,37 @@ test('GET /auth/logout clears the session and redirects home', async ({ page, ba
 	expect(page.url()).toBe(`${baseURL}/`);
 });
 
-test('the navbar carries one trigger per zone and no governance column for an anonymous visitor', async ({
+test('the navbar carries one entry per zone and no governance column for an anonymous visitor', async ({
 	page,
 }) => {
+	// Ground truth first: every zone directory has exactly one row in ZONE_ENTRIES. A future zone
+	// scaffolded without a navbar entry fails HERE, before any DOM assertion.
+	expect(Object.keys(ZONE_ENTRIES).sort()).toEqual(zoneDirs());
 	await page.goto('/');
 	const nav = page.getByRole('navigation', { name: 'Zones' });
 	await expect(nav).toBeVisible();
-	// One trigger per ZONE: Lakehouse (catalog + models + lineage + governance) and Search (the media
-	// read plane) carry sub-areas, so they are NavigationMenu triggers opening a panel; Annotate is a
-	// single-surface zone and stays a plain link. Home is the product mark, not an entry at all.
-	for (const domain of ['Lakehouse', 'Search']) {
-		await expect(nav.getByRole('button', { name: domain, exact: true })).toBeVisible();
+	// One entry per ZONE (R15): a zone with sub-areas (Lakehouse, Search, Compute) is a
+	// NavigationMenu trigger opening a panel; a single-surface zone (Home, Annotate, Train, Studio)
+	// stays a plain link — a one-row dropdown would be noise.
+	for (const { title, kind } of Object.values(ZONE_ENTRIES)) {
+		await expect(
+			nav.getByRole(kind === 'trigger' ? 'button' : 'link', { name: title, exact: true }),
+		).toBeVisible();
 	}
-	await expect(nav.getByRole('link', { name: 'Annotate', exact: true })).toBeVisible();
-	// Two TRIGGERS (Lakehouse, Search) — Annotate is a plain link, not a button, because that
-	// zone has a single surface and a one-row dropdown would be noise. Compute joins as a third
-	// trigger when the rask zone lands.
-	await expect(nav.getByRole('button')).toHaveCount(2);
-	await expect(nav.getByRole('link', { name: 'Home', exact: true })).toHaveCount(0);
+	// …and nothing beyond those entries: the bar carries the zones, the whole zones, and nothing but
+	// the zones (panel rows live in portalled content, closed here, so they never count).
+	const triggerCount = Object.values(ZONE_ENTRIES).filter((e) => e.kind === 'trigger').length;
+	await expect(nav.getByRole('button')).toHaveCount(triggerCount);
+	await expect(nav.getByRole('link')).toHaveCount(zoneDirs().length - triggerCount);
+	// From home, every OTHER zone's plain link leaves this app's route manifest → hard nav; the Home
+	// link is same-zone and must stay soft.
+	await expect(nav.getByRole('link', { name: 'Train', exact: true })).toHaveAttribute(
+		'data-sveltekit-reload',
+		'',
+	);
+	await expect(nav.getByRole('link', { name: 'Home', exact: true })).not.toHaveAttribute(
+		'data-sveltekit-reload',
+	);
 	// fetchMe resolves null (no session, no catalog) → estate_admin is unknowable → fail-closed.
 	// Access has no home outside the estate-admin Governance column, so it is nowhere in this bar…
 	await expect(nav.getByText('Access')).toHaveCount(0);

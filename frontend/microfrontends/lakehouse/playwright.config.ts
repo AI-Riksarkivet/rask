@@ -97,7 +97,7 @@ export default defineConfig({
 		// starve behind the initial compile and time out at 30s in a bundle — flaky counts per run.
 		{
 			name: 'warmup',
-			testMatch: /e2e\/(data|lineage|models)\/warmup\.setup\.ts/,
+			testMatch: /e2e\/(data|lineage|models|storage)\/warmup\.setup\.ts/,
 			use: { baseURL: AUTH_OFF },
 		},
 		{

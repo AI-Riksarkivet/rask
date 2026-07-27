@@ -2,20 +2,37 @@ import { describe, expect, it } from 'vitest';
 import { exact, norm, seg, topNav, under, zoneOf } from '../src/lib/shell/nav-config';
 
 // The top-navbar IA + the shared matchers every zone builds its ZoneNav sidebar config with.
-// ONE TRIGGER PER ZONE, one column per area. Lakehouse covers the whole merged /lakehouse zone — the
-// catalog, the model registry, lineage, and (estate-admin only) governance and operations — and Media
-// covers /media plus the annotator zone it hands off to. Lineage used to be its own trigger, which
-// made the bar mix a zone with an area inside that zone and forced Lakehouse to subtract the lineage
-// subtree from its own match; it is a column now. A new route becomes a row in a column, never a new
-// top-level entry.
+// ONE ENTRY PER ZONE, and EVERY zone of the seven-zone estate is in the bar (R15) — home, lakehouse,
+// media (Search), annotator (Annotate), compute, train, studio. One column per area: Lakehouse
+// covers the whole merged /lakehouse zone — the catalog, the model registry, lineage, and
+// (estate-admin only) governance and operations. Lineage used to be its own trigger, which made the
+// bar mix a zone with an area inside that zone and forced Lakehouse to subtract the lineage subtree
+// from its own match; it is a column now. A new route becomes a row in a column — only a new ZONE
+// earns a new top-level entry.
 describe('topNav', () => {
-	it('exposes three domain triggers, in order, for a non-admin (fail-closed)', () => {
-		expect(topNav(false).map((e) => e.title)).toEqual(['Lakehouse', 'Search', 'Annotate']);
-		expect(topNav(false).map((e) => e.href)).toEqual(['/lakehouse/data', '/media', '/annotator']);
+	it('carries every zone of the estate, in order, for a non-admin (fail-closed)', () => {
+		expect(topNav(false).map((e) => e.title)).toEqual([
+			'Home',
+			'Lakehouse',
+			'Search',
+			'Annotate',
+			'Compute',
+			'Train',
+			'Studio',
+		]);
+		expect(topNav(false).map((e) => e.href)).toEqual([
+			'/',
+			'/lakehouse/data',
+			'/media',
+			'/annotator',
+			'/compute',
+			'/train',
+			'/studio',
+		]);
 	});
 
-	it('keeps the same three triggers for an estate admin — admin earns COLUMNS, not an entry', () => {
-		expect(topNav(true).map((e) => e.title)).toEqual(['Lakehouse', 'Search', 'Annotate']);
+	it('keeps the same entries for an estate admin — admin earns COLUMNS, not an entry', () => {
+		expect(topNav(true).map((e) => e.title)).toEqual(topNav(false).map((e) => e.title));
 	});
 
 	it('gates governance + operations behind estate-admin, inside the Lakehouse panel', () => {
@@ -63,6 +80,7 @@ describe('topNav', () => {
 		expect(lakehouse.match('/')).toBe(false);
 		expect(lakehouse.match('/media')).toBe(false);
 		expect(lakehouse.match('/annotator')).toBe(false);
+		expect(lakehouse.match('/compute')).toBe(false);
 	});
 
 	it('lineage is a COLUMN of the lakehouse panel, never a trigger of its own', () => {
@@ -88,6 +106,55 @@ describe('topNav', () => {
 		expect(annotate.groups).toBeUndefined();
 		// …and Annotate is no longer buried inside Search's panel.
 		expect(search.items?.some((i) => i.href === '/annotator')).toBe(false);
+	});
+
+	it('Home is the catch-all zone — active only at the origin root, never in another zone', () => {
+		const home = topNav(false).find((e) => e.title === 'Home')!;
+		expect(home.match('/')).toBe(true);
+		expect(home.match('')).toBe(true);
+		for (const p of ['/lakehouse/data', '/media', '/annotator', '/compute', '/train', '/studio']) {
+			expect(home.match(p), p).toBe(false);
+		}
+		// A single surface — a plain link, not a one-row dropdown.
+		expect(home.items).toBeUndefined();
+		expect(home.groups).toBeUndefined();
+	});
+
+	it('Compute owns the Ray plane — the folded overview at its root plus the Ray surfaces (R16)', () => {
+		const compute = topNav(false).find((e) => e.title === 'Compute')!;
+		expect(compute.match('/compute')).toBe(true);
+		expect(compute.match('/compute/jobs/raysubmit_123')).toBe(true);
+		expect(compute.match('/media')).toBe(false);
+		expect(compute.match('/')).toBe(false);
+		// The overview IS the zone root (like Media's Search), so the first row carries entry.href
+		// and the panel never prepends a second zone-root row.
+		expect(compute.items!.map((i) => i.title)).toEqual([
+			'Overview',
+			'Jobs',
+			'Cluster',
+			'Actors',
+			'Serve',
+			'Logs',
+			'API docs',
+		]);
+		expect(compute.items![0]!.href).toBe('/compute');
+	});
+
+	it('Train and Studio are single-surface zones — plain links with disjoint matches (R17)', () => {
+		const train = topNav(false).find((e) => e.title === 'Train')!;
+		const studio = topNav(false).find((e) => e.title === 'Studio')!;
+		// Train's areas (submit/watch/monitor/analyse/models) are still scaffolding; studio is the
+		// sandbox. Neither has panel rows yet — a one-row dropdown would be noise.
+		for (const entry of [train, studio]) {
+			expect(entry.items).toBeUndefined();
+			expect(entry.groups).toBeUndefined();
+		}
+		expect(train.match('/train')).toBe(true);
+		expect(train.match('/train/submit')).toBe(true);
+		expect(train.match('/studio')).toBe(false);
+		expect(studio.match('/studio')).toBe(true);
+		expect(studio.match('/studio/animation')).toBe(true);
+		expect(studio.match('/train')).toBe(false);
 	});
 
 	it('carries the expected rows per column', () => {

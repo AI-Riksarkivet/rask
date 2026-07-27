@@ -8,7 +8,7 @@
 	import { AppShell } from '@rask/ui/shell';
 	import { onMount, type Snippet } from 'svelte';
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
-	import { COMPUTE_ZONE_NAV } from '$lib/nav';
+	import { TRAIN_ZONE_NAV } from '$lib/nav';
 	let { children }: { children: Snippet } = $props();
 
 	// The navbar's notification bell (@rask/ui's NotificationCenter, mounted by AppShell). The shell owns
@@ -42,13 +42,19 @@
 	});
 </script>
 
+<!-- ModeWatcher sets `class="dark"` on <html> so the .dark theme tokens apply —
+     without it the shared sidebar renders unstyled. Identical wiring to every
+     other microfrontend (compute/studio/monolith). -->
 <ModeWatcher defaultMode="dark" />
 {#if browser}
 	<Toaster />
 {/if}
 
-<!-- Shared shell from @rask/ui — identical chrome across every microfrontend.
-     Ray health is a live signal at the top of the compute overview, not in the shell. -->
-<AppShell pathname={page.url.pathname} zoneNav={COMPUTE_ZONE_NAV} {notifications}>
-	{@render children()}
+<!-- The shared AppShell (one grouped sidebar) from @rask/ui — identical to every
+     other microfrontend, zero drift. `base` (=/train) frames the breadcrumb;
+     `zoneNav` renders THIS zone's five areas as the sidebar leaves. -->
+<AppShell pathname={page.url.pathname} zoneNav={TRAIN_ZONE_NAV} {notifications}>
+	<div class="min-h-0 flex-1 overflow-y-auto">
+		{@render children()}
+	</div>
 </AppShell>

@@ -14,6 +14,7 @@ const ROUTES = [
 	'/annotator',
 	'/compute',
 	'/studio',
+	'/train',
 ];
 
 for (const route of ROUTES) {
