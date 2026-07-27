@@ -5,9 +5,11 @@ codebase is checked against it, and every future change is reconciled to it —
 so the same inconsistencies stop being rediscovered.
 
 Scope: the 7 SvelteKit microfrontends — the 6 domain apps under
-`components/frontends/*` plus the catch-all `components/frontends/home`
+`frontend/microfrontends/*` plus the catch-all `frontend/microfrontends/home`
 (package `home`) that owns `/` (the platform home) — the shared
-`@rask/ui` design system, and the `@rask/api` data client. It assumes the architecture in
+`@rask/ui` design system, and the `@rask/api` data client. All of it lives in the
+`frontend/` JS/TS plane, its own bun + Turborepo workspace root, so every task is
+scoped from the repo root (`bun --cwd=frontend run <task>`). It assumes the architecture in
 `frontend-microfrontends.md` and `frontend-monorepo.md` — read those for the
 _why_; this doc is the _rules_.
 
@@ -15,9 +17,9 @@ _why_; this doc is the _rules_.
 
 - **THE canonical pattern** — one copy-pasteable shape. There is exactly one.
 - **Reject** — anti-patterns. If you see them, fix them.
-- **Gate** — `knip` / `eslint` / `svelte-check` / `tsc(strict)` enforce it in
-  `make check` + `turbo run check`, **or** `convention` (reviewer-enforced, no
-  machine gate yet).
+- **Gate** — `knip` / `oxlint` / `oxfmt` / `svelte-check` / `tsc(strict)` /
+  `@rask/zone-contract` enforce it in `make check` + `turbo run check`, **or**
+  `convention` (reviewer-enforced, no machine gate yet).
 
 rask makes **deliberate** choices that override the generic Svelte/MFE skill
 advice (e.g. "start with a monolith", "exactOptionalPropertyTypes everywhere").
@@ -37,8 +39,8 @@ Styling is **Tailwind 4 + OKLCH `@theme` tokens** from `@rask/ui/styles/tokens.c
 
 - the `style:` directive. TypeScript is **strict + `noUncheckedIndexedAccess`**
   everywhere; **`exactOptionalPropertyTypes` is OFF on Svelte packages, ON for
-  `@rask/api`**. Gates: `knip` + `eslint-plugin-svelte` + `svelte-check` +
-  `tsc --strict`, run by `make check`.
+  `@rask/api`**. Gates: `knip` + `oxlint` (with `@rsvelte/oxlint-plugin` for the
+  Svelte rules) + `oxfmt` + `svelte-check` + `tsc --strict`, run by `make check`.
 
 ---
 
@@ -213,9 +215,13 @@ is surgically patched, never reordered in place:
 - Reading browser globals (`window`, `document`, `localStorage`) at component
   top level or in `load`; confine them to `onMount`/`$effect`/handlers (see §5).
 
-**Gate:** `eslint-plugin-svelte` — **`svelte/require-each-key` is `error`**
-(keyless each fails CI) and **`svelte/no-reactive-reassign` is `error`** (catches
-imperative reassignment of reactive state). The `$derived`-not-`$effect` choice
+**Gate:** `oxlint` + `@rsvelte/oxlint-plugin` — **`svelte/require-each-key` is
+`error`** (keyless each fails CI) and **`svelte/no-reactive-reassign` is `error`**
+(catches imperative reassignment of reactive state); both rule names carried over
+verbatim from the retired ESLint config, see `frontend/.oxlintrc.json`. Note
+oxlint reads a component's `<script>` block and **not** its markup, so
+markup-level rules cannot live there (that is why the cross-zone link guard in §6
+is a test). The `$derived`-not-`$effect` choice
 and runes-vs-`let` are **convention** + `svelte-check` (some misuse surfaces as
 type/compile errors). Always validate `.svelte` edits with the **`svelte` MCP
 autofixer**.

@@ -30,22 +30,22 @@ drove it were handled — not by the endpoint count.
 
 **Tier A — stateless readers (done: extracted with no shared DB):**
 
-- **`volumes-api`** (`components/services/volumes_api`, `:8803`) — pure S3/IIIF image + ALTO proxy. Zero DB.
-- **`search-api`** (`components/services/search_api`, `:8802`) — LanceDB `lines` table + S3 thumbnails. Zero DB.
-- **`ray-api`** (`components/services/ray_api`, `:8804`) — stateless pass-through to the Ray dashboard + `/api/serve/*` proxy. Zero DB.
+- **`volumes-api`** (`services/volumes_api`, `:8803`) — pure S3/IIIF image + ALTO proxy. Zero DB.
+- **`search-api`** (`services/search_api`, `:8802`) — LanceDB `lines` table + S3 thumbnails. Zero DB.
+- **`ray-api`** (`services/ray_api`, `:8804`) — stateless pass-through to the Ray dashboard + `/api/serve/*` proxy. Zero DB.
 
 **Tier B — the orchestrator (done: extracted as its own service):** the loop
 was moved from an in-process `asyncio.Task` to a standalone service
-(`components/services/orchestrator`, `:8810`). This removed the `replicas: 1`
+(`services/orchestrator`, `:8810`). This removed the `replicas: 1`
 constraint from the API tier — only the orchestrator service needs to be
 singleton. The loop remains **transitional** — to become a NATS JetStream
 consumer once that lands.
 
 **Tier C — the state core (`batches` + `chunks` + `catalog`), kept together:**
 these share writes/reads on one table (`batches`). The decision was to keep them
-as one `core-api` service (`components/services/core_api`, `:8801`) rather than
+as one `core-api` service (`services/core_api`, `:8801`) rather than
 splitting further. `core-api` and `orchestrator` are two thin entrypoints over
-the same `core` package (`components/services/core`) — they share the `batches`
+the same `core` package (`services/core`) — they share the `batches`
 table transactionally, deliberately not forced into separate services.
 
 ## Current topology
@@ -53,7 +53,7 @@ table transactionally, deliberately not forced into separate services.
 ```mermaid
 flowchart TD
     browser["browser"] --> fe["frontends (Bun SSR :5173/:5174/:5175)"]
-    fe -->|/api/*| gw["gateway :8888<br/><sub>components/services/gateway</sub>"]
+    fe -->|/api/*| gw["gateway :8888<br/><sub>services/gateway</sub>"]
     gw --> core["core-api :8801<br/>batches · chunks · catalog"]
     gw --> search["search-api :8802"]
     gw --> volumes["volumes-api :8803"]
@@ -75,19 +75,19 @@ flowchart TD
 
 | Service | Responsibility | Routes (behind gateway) | State / deps | Scaling |
 |---|---|---|---|---|
-| **gateway** (`components/services/gateway`, `:8888`) | Reverse proxy; path-routes `/api/*` longest-prefix-first to backends | terminates all `/api/*` | none | horizontal |
-| **core-api** (`components/services/core_api`, `:8801`) | Batch inventory, chunk submit/stop, catalog browse/search — the state-mutating core | `/batches/*`, `/chunks/*`, `/catalog/*`, `/health` | **owns** `batches` DB; reads LanceDB `archive_catalog` | horizontal (writes row-scoped, idempotent) |
-| **orchestrator** (`components/services/orchestrator`, `:8810`) | Orchestrator loop (reconcile → derive → submit); orchestrator control endpoints | `/orchestrator/*`, `/health` | writes `batches` DB; Ray submit; S3 reconcile | **singleton** (loop must not run concurrently) |
-| **search-api** (`components/services/search_api`, `:8802`) | Line-level FTS + thumbnails | `/search/*` | LanceDB `lines` + S3 thumbs; **no DB** | horizontal, independent |
-| **volumes-api** (`components/services/volumes_api`, `:8803`) | Image + ALTO serving (IIIF read-through) | `/volumes/*` | S3/IIIF; **no DB** | horizontal, independent |
-| **ray-api** (`components/services/ray_api`, `:8804`) | Ray cluster/job introspection + `/api/serve/*` proxy | `/ray/*`, `/api/serve/*` | Ray dashboard HTTP; **no DB** | horizontal |
+| **gateway** (`services/gateway`, `:8888`) | Reverse proxy; path-routes `/api/*` longest-prefix-first to backends | terminates all `/api/*` | none | horizontal |
+| **core-api** (`services/core_api`, `:8801`) | Batch inventory, chunk submit/stop, catalog browse/search — the state-mutating core | `/batches/*`, `/chunks/*`, `/catalog/*`, `/health` | **owns** `batches` DB; reads LanceDB `archive_catalog` | horizontal (writes row-scoped, idempotent) |
+| **orchestrator** (`services/orchestrator`, `:8810`) | Orchestrator loop (reconcile → derive → submit); orchestrator control endpoints | `/orchestrator/*`, `/health` | writes `batches` DB; Ray submit; S3 reconcile | **singleton** (loop must not run concurrently) |
+| **search-api** (`services/search_api`, `:8802`) | Line-level FTS + thumbnails | `/search/*` | LanceDB `lines` + S3 thumbs; **no DB** | horizontal, independent |
+| **volumes-api** (`services/volumes_api`, `:8803`) | Image + ALTO serving (IIIF read-through) | `/volumes/*` | S3/IIIF; **no DB** | horizontal, independent |
+| **ray-api** (`services/ray_api`, `:8804`) | Ray cluster/job introspection + `/api/serve/*` proxy | `/ray/*`, `/api/serve/*` | Ray dashboard HTTP; **no DB** | horizontal |
 
 Upstream env vars (all overridable): `RASK_CORE_API_URL` (:8801), `RASK_SEARCH_API_URL` (:8802), `RASK_VOLUMES_API_URL` (:8803), `RASK_RAY_API_URL` (:8804), `RASK_ORCH_API_URL` (:8810).
 
 ## Data ownership
 
 - **`batches` DB** — owned solely by **core-api** and **orchestrator** (the only
-  writers). Alembic lives in the `core` package (`components/services/core/alembic/`);
+  writers). Alembic lives in the `core` package (`services/core/alembic/`);
   both entrypoints share the schema and neither runs migrations independently.
 - **LanceDB `lines` / `archive_catalog`** — read-only from all services; written
   by external indexer scripts (`index_alto`, `harvest_ead`).
@@ -120,7 +120,7 @@ packages/
   service-kit/       # ADDED — make_service_app, Settings, middleware, DI lifespan
   ray-kit/           # ADDED — Ray Job SDK + dashboard wrapper
   storage/  htr/     # unchanged
-components/services/
+services/
   gateway/           # ADDED — thin router/proxy on :8888
   core/              # ADDED — domain package (dissolved viewer logic + alembic)
   core_api/          # ADDED — thin entrypoint :8801 (health + batches + chunks + catalog)
@@ -155,7 +155,7 @@ known deployment-cycle follow-up. The target shape:
 
 ## The gateway (built)
 
-The gateway (`components/services/gateway`, `:8888`) is a **thin FastAPI
+The gateway (`services/gateway`, `:8888`) is a **thin FastAPI
 reverse proxy** — the choice that was called "Phase 2" in the original analysis.
 It was the right fit because the Ray `/api/serve/*` proxy is application code
 anyway, and keeping routing in the same Python codebase as the services makes it

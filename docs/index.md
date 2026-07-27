@@ -6,10 +6,12 @@ handwritten-text recognition (HTR) over archival page images at scale and makes
 the resulting transcriptions searchable.
 
 It is a polyglot monorepo — **Python + Svelte/TypeScript**, managed with
-[uv](https://docs.astral.sh/uv/) (Python 3.13) and [Bun](https://bun.sh) — laid
-out in two layers: reusable **packages** and runnable **components**.
-Deployables build from the root workspace (`uv sync --package <name>`), one
-dockerfile each under `.docker/`.
+[uv](https://docs.astral.sh/uv/) (Python 3.13) and [Bun](https://bun.sh) — split
+into two language-pure planes: the Python plane (reusable **`packages/`**
+libraries plus runnable **`services/`**) and the JS/TS plane under
+**`frontend/`**, its own Bun + Turborepo workspace root. Deployables build from
+the root workspace (`uv sync --package <name>`), one dockerfile each under
+`.docker/`.
 
 ## What it does
 

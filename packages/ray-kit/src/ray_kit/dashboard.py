@@ -486,11 +486,7 @@ async def logs(
         resp.raise_for_status()
         raw = (resp.json().get("data") or {}).get("result") or {}
         # Drop directory entries (e.g. "old/") — only real files are readable.
-        files = {
-            k: [f for f in v if isinstance(f, str) and not f.endswith("/")]
-            for k, v in raw.items()
-            if isinstance(v, list)
-        }
+        files = {k: [f for f in v if isinstance(f, str) and not f.endswith("/")] for k, v in raw.items() if isinstance(v, list)}
         files = {k: v for k, v in files.items() if v}
         return RayLogsPayload(ok=True, node_id=node_id, files=files)
     except httpx.HTTPError as exc:

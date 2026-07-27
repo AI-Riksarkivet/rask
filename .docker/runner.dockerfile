@@ -41,20 +41,22 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Step 1: install workspace deps (frozen — workspace member sources not yet COPYed).
+# The HTR runner is a SEALED project (runners/htr), deliberately outside the root uv
+# workspace: its model stack (torch/htrflow/ultralytics) must never enter the fleet's
+# resolution. So it builds from its OWN lock, not the root one. `storage` comes along
+# as a path dependency.
+# Step 1: install deps (frozen — first-party sources not yet COPYed).
 RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    --mount=type=bind,source=packages,target=packages \
-    --mount=type=bind,source=components,target=components \
-    uv sync --frozen --no-install-workspace --package runner --no-editable
+    --mount=type=bind,source=runners/htr/uv.lock,target=runners/htr/uv.lock \
+    --mount=type=bind,source=runners/htr/pyproject.toml,target=runners/htr/pyproject.toml \
+    --mount=type=bind,source=packages/storage,target=packages/storage \
+    uv sync --project runners/htr --frozen --no-install-project --no-editable
 
-# Step 2: COPY sources + lock metadata (bind-mounts from Step 1 are gone), then resolve (locked).
-COPY pyproject.toml uv.lock ./
-COPY packages packages
-COPY components components
+# Step 2: COPY sources (bind-mounts from Step 1 are gone), then resolve (locked).
+COPY packages/storage packages/storage
+COPY runners/htr    runners/htr
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --package runner --no-editable
+    uv sync --project runners/htr --locked --no-editable
 
 # Optional gated-model fetch step. Uncomment if rask pulls licensed weights at build time.
 # RUN --mount=type=secret,id=hf_token \

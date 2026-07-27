@@ -16,28 +16,32 @@ help:
 	@echo "  claude-bootstrap                       — install Claude Code skills & verify config"
 
 install:
-	bun install
+	bun --cwd=frontend install
 	uv sync
 
 build:
 	uv sync
-	bun run build
+	bun --cwd=frontend run build
 
 # Python tests via pytest; the frontends have no unit suite — `make frontend-check`
 # (svelte-check) is their gate.
 test:
 	uv run pytest
+	# The HTR runner is sealed OUT of the root workspace (its model stack must not enter the
+	# fleet's resolution), so the root pytest cannot see it. Run its suite in its own env —
+	# without this line 28 tests would silently never run.
+	uv run --project runners/htr --frozen pytest
 
 lint:
 	uv run ruff check .
-	bun run lint
+	bun --cwd=frontend run lint
 
 fmt:
 	uv run ruff format .
-	bun run format
+	bun --cwd=frontend run fmt
 
 storybook:
-	bun run storybook
+	bun --cwd=frontend run storybook
 
 clean:
 	rm -rf .venv node_modules **/node_modules **/dist **/.svelte-kit **/.turbo **/storybook-static
@@ -48,9 +52,9 @@ typecheck:
 
 # ---- frontend dead-code + dep gate (knip, repo-wide; see knip.json) ---------
 # Cross-workspace tool — analyses the whole JS graph at once, so it stays a
-# root-level gate (like lint/format), not a per-package turbo task.
+# root-level gate, not a per-package turbo task (lint/fmt ARE per-package turbo tasks).
 knip:
-	bun run knip
+	bun --cwd=frontend run knip
 
 check: fmt lint typecheck knip
 
@@ -76,7 +80,7 @@ claude-bootstrap:
 	@echo "    Authenticate any MCP servers if prompted on first use."
 
 # ---- viewer ----------------------------------------------------------------
-# Port must be 8888 — components/frontends/home Vite proxy defaults
+# Port must be 8888 — frontend/microfrontends/home Vite proxy defaults
 # VIEWER_BACKEND to http://localhost:8888.
 VIEWER_INPUT  ?= s3://images-batch
 VIEWER_OUTPUT ?= s3://images-batch-alto
@@ -97,7 +101,7 @@ dev-micro:
 # watcher, orchestrated by Turborepo. Each app's Vite dev server proxies
 # /api/* → VIEWER_BACKEND (the gateway / `make viewer`, :8888). The apps come up on
 # their own ports AND Turborepo auto-starts its built-in microfrontends proxy (from
-# components/frontends/home/microfrontends.json — no extra package) on :3024:
+# frontend/microfrontends/home/microfrontends.json — no extra package) on :3024:
 #   single origin → http://localhost:3024   (browse THIS for cross-app nav)
 #   home :5273 (catch-all: / + /<project>/overview) · storage :5174 /default/storage · compute :5175 /default/compute · discover :5178 · train :5176 · studio :5177
 # The shared @rask/ui shell + nav render with NO backend; start one
@@ -108,28 +112,28 @@ dev-frontends:        # build @rask/ui+@rask/api once, then all 7 apps + :3024 p
 	# dist/ concurrently and races the apps reading it (one app crashes → turbo tears
 	# the whole run down). Apps-only dev avoids that. To live-edit @rask/ui, run its
 	# watcher in a second terminal: `bun run dev:ui`.
-	bunx turbo run build --filter=@rask/ui --filter=@rask/api
-	bunx turbo run dev --filter='./components/frontends/*'
+	bunx turbo --cwd=frontend run build --filter=@rask/ui --filter=@rask/api
+	bunx turbo --cwd=frontend run dev --filter='./microfrontends/*'
 
 home:      # catch-all app only, :5273 (serves / + /<project>/overview)
-	bun run dev:home
+	bun --cwd=frontend run dev:home
 
 frontend-storage:     # storage app only, :5174 /default/storage
-	bun run dev:storage
+	bun --cwd=frontend run dev:storage
 
 frontend-compute:     # compute app only, :5175 /default/compute
-	bun run dev:compute
+	bun --cwd=frontend run dev:compute
 
 frontend-build:       # production-build every app + @rask/ui (turbo, cached)
-	bun run build
+	bun --cwd=frontend run build
 
 frontend-check:       # svelte-check every app + @rask/ui (turbo)
-	bun run check
+	bun --cwd=frontend run check
 
 sync-favicons:        # copy the shared favicon source → every app's static/ (one source of truth)
 	@for a in home overview compute discover storage train studio; do \
-	  cp components/frontends/assets/favicon.ico components/frontends/assets/favicon.svg \
-	     components/frontends/$$a/static/ ; \
+	  cp frontend/assets/favicon.ico frontend/assets/favicon.svg \
+	     frontend/microfrontends/$$a/static/ ; \
 	done; echo "synced favicon.{ico,svg} → 7 apps' static/"
 
 # ---- ray -------------------------------------------------------------------
@@ -153,18 +157,18 @@ ray-status:
 
 # ---- serve -----------------------------------------------------------------
 serve-up:
-	uv run python components/scripts/deploy_serve.py up
+	uv run --project runners/htr python runners/htr/scripts/deploy_serve.py up
 
 serve-down:
-	uv run python components/scripts/deploy_serve.py down
+	uv run --project runners/htr python runners/htr/scripts/deploy_serve.py down
 
 serve-status:
-	uv run python components/scripts/deploy_serve.py status
+	uv run --project runners/htr python runners/htr/scripts/deploy_serve.py status
 
 # Single CPU/1-GPU htrflow endpoint for the low-resource / local-k3s shape.
 serve-up-htrflow:
 	RASK_SERVE_REPLICAS=1 RASK_SERVE_GPU_FRAC=$(RASK_SERVE_GPU_FRAC) \
-	  RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --no-sync python components/scripts/deploy_serve.py up --app htrflow
+	  RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --project runners/htr --no-sync python runners/htr/scripts/deploy_serve.py up --app htrflow
 
 # ---- GPU split: HTR on 2 GPUs, Qwen LLM on the 3rd -------------------------
 # transcribe + htrflow co-reside on a 2-GPU Ray pool (GPUs 0,1) via fractional
@@ -187,9 +191,9 @@ ray-up-htr:
 
 serve-up-both:
 	RASK_SERVE_REPLICAS=$(RASK_SERVE_REPLICAS) RASK_SERVE_GPU_FRAC=$(RASK_SERVE_GPU_FRAC) \
-	  RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --no-sync python components/scripts/deploy_serve.py up --app transcribe
+	  RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --project runners/htr --no-sync python runners/htr/scripts/deploy_serve.py up --app transcribe
 	RASK_SERVE_REPLICAS=$(RASK_SERVE_REPLICAS) RASK_SERVE_GPU_FRAC=$(RASK_SERVE_GPU_FRAC) \
-	  RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --no-sync python components/scripts/deploy_serve.py up --app htrflow
+	  RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --project runners/htr --no-sync python runners/htr/scripts/deploy_serve.py up --app htrflow
 
 # ---- Qwen3.6-27B LLM backend for OpenCode (external, isolated venv) --------
 # Lives outside the rask uv workspace: vLLM pins torch/transformers that clash
@@ -218,16 +222,16 @@ qwen-serve:
 
 # ---- search / catalog index ------------------------------------------------
 search-index:
-	uv run python components/scripts/submit_index.py
+	uv run python scripts/submit_index.py
 
 search-index-fresh:
-	uv run python components/scripts/submit_index.py --skip-existing
+	uv run python scripts/submit_index.py --skip-existing
 
 harvest-ead:
-	uv run python components/scripts/harvest_ead.py
+	uv run python scripts/harvest_ead.py
 
 catalog-index:
-	uv run python components/scripts/index_catalog.py --no-embed --digitized-only
+	uv run python scripts/index_catalog.py --no-embed --digitized-only
 
 # ---- local postgres (for alembic + viewer testing) -------------------------
 # Local dev postgres in a docker container. Connect from the VS Code
@@ -266,17 +270,17 @@ smoke-rustfs: ## Storage smoke vs rustfs (S3 round-trip + LanceDB) — needs rus
 	RASK_S3_ENDPOINT_URL=http://localhost:9000 \
 	  AWS_ACCESS_KEY_ID=rustfsadmin AWS_SECRET_ACCESS_KEY=rustfsadmin \
 	  RASK_S3_INSECURE=1 RASK_SMOKE_BUCKET=rask-rustfs-smoke \
-	  uv run python components/scripts/smoke_rustfs.py
+	  uv run python scripts/smoke_rustfs.py
 
 pg-deps:
 	uv sync --package core --extra postgres --extra migrations
 
 pg-migrate: pg-deps
-	cd components/services/core && \
+	cd services/core && \
 	  DATABASE_URL=$(PG_URL) uv run --package core alembic upgrade head
 
 pg-revision: pg-deps
-	cd components/services/core && \
+	cd services/core && \
 	  DATABASE_URL=$(PG_URL) uv run --package core alembic revision --autogenerate -m "$(MSG)"
 
 # ---- local k3s ------------------------------------------------------------

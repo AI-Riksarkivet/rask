@@ -7,7 +7,7 @@ with a separate Svelte component library developed in Storybook. There are seven
 apps: a catch-all that owns `/` plus six domain apps (overview / compute /
 discover / storage / train / studio), each pinned to base `/default/<domain>`.
 
-## Catch-all app — `components/frontends/home`
+## Catch-all app — `frontend/microfrontends/home`
 
 - **Stack:** Svelte 5, SvelteKit 2, Vite 8, `svelte-adapter-bun` (SSR Bun
   server), Tailwind 4, Bits UI. SSR on (`ssr = true`, `prerender = false`).
@@ -22,7 +22,7 @@ discover / storage / train / studio), each pinned to base `/default/<domain>`.
 The six domain apps render the same shared `@rask/ui/shell` `AppShell` sidebar
 (grouped Overview / Compute / Discover / Storage / Train / Studio, project-prefixed
 under `/default/<domain>`). Their backend reads go through the `@rask/api` package
-(`packages/api`) via server-only remote `query()` functions; each data app carries
+(`frontend/packages/api`) via server-only remote `query()` functions; each data app carries
 a `src/hooks.server.ts` (`makeGatewayHandleFetch`) that routes SSR `/api/*` to the
 in-cluster gateway. Notable routes:
 
@@ -37,7 +37,7 @@ in-cluster gateway. Notable routes:
 The discover viewer's zoom/pan + ALTO parsing live in its `$lib/canvas.ts` and
 `$lib/alto.ts`.
 
-## Component library — `packages/ui`
+## Component library — `frontend/packages/ui`
 
 A standalone Svelte 5 + Bits UI + Tailwind 4 library (package name
 `@rask/ui`), built with `@sveltejs/package` and showcased in **Storybook**
@@ -53,14 +53,17 @@ sidebar with zero drift.
 !!! note "Consumed via `workspace:*`"
     Every app consumes `@rask/ui` via `workspace:*` — the styled components live
     in the library, not in the apps. A consuming app must add a Tailwind
-    `@source` pointing at `packages/ui/dist` in its `app.css`, or the library's
-    classes render unstyled (Tailwind 4 doesn't scan `node_modules`).
+    `@source` pointing at `frontend/packages/ui/dist` in its `app.css`, or the
+    library's classes render unstyled (Tailwind 4 doesn't scan `node_modules`).
 
 ## Toolchain
 
-- **Bun only** — `bun` / `bunx`; `npm`/`npx`/`pnpm` are not on PATH.
-- Prettier (tabs, single quotes, `printWidth: 100`), ESLint (flat config),
-  `svelte-check`.
+- **Bun only** — `bun` / `bunx`; `npm`/`npx`/`pnpm` are not on PATH. The whole
+  JS/TS plane is one Bun + Turborepo workspace rooted at `frontend/`, so every
+  invocation is scoped: `bun --cwd=frontend run …` / `bunx turbo --cwd=frontend run …`.
+- **oxfmt** (tabs, single quotes, `printWidth: 100`) and **oxlint** (with the
+  `@rsvelte/oxlint-plugin` Svelte rules), plus `svelte-check`. `lint`, `fmt` and
+  `fmt:check` are **per-package turbo tasks** — each package owns the scripts.
 
 !!! tip "Dev server binds loopback-only"
     `make home` starts Vite without `--host`, so it binds `127.0.0.1`

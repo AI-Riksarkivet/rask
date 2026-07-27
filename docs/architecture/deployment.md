@@ -43,7 +43,7 @@ image must ship `node_modules` — `build/` is not standalone. And bun 1.3's **i
 linker** keeps real packages in `node_modules/.bun/` with per-member symlinks, so the
 final stage copies both the root store **and** the app dir (with its symlinks) and
 runs from the app dir. The build `COPY`s the full JS workspace (all of
-`components/frontends` wholesale + `packages/{api,ui}`) so `bun install` resolves — siblings
+`frontend/microfrontends` wholesale + `packages/{api,ui}`) so `bun install` resolves — siblings
 are build-stage only, never shipped.
 
 !!! note "Frontend images aren't built by `.dagger`"
@@ -75,7 +75,7 @@ flowchart LR
   --num-gpus=2`); exports `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` and uses
   `uv run --no-sync` (the documented Ray/uv gotcha).
 - `make serve-up` / `serve-down` / `serve-status` — deploy the Serve apps via
-  `components/scripts/deploy_serve.py`.
+  `scripts/deploy_serve.py`.
 - `make serve-up-both` — deploy `transcribe` + `htrflow` with fractional GPU
   reservations (`RASK_SERVE_REPLICAS=2`, `RASK_SERVE_GPU_FRAC=0.49` → ≈1.96 GPU
   on the 2-GPU pool).

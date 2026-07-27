@@ -1,18 +1,18 @@
 # Frontends
 
-`components/frontends/` holds the seven SvelteKit microfrontends — **home** (the
+`frontend/microfrontends/` holds the seven SvelteKit microfrontends — **home** (the
 catch-all owning `/`) plus six domain apps (**overview**, **compute**, **discover**,
 **storage**, **train**, **studio**) — each an SSR Bun-server app
 (`svelte-adapter-bun`) that consumes the backend API through the **gateway**.
 
-> The **runner** is not a frontend — it's a CLI under `components/cli/runner`
+> The **runner** is not a frontend — it's a CLI under `runners/htr`
 > (the Ray Data pipeline engine). See [reference/runner](../reference/runner.md)
 > and [Projects → Runner](../projects/runner.md).
 
 ## The apps
 
 - **Data layer.** Reads run **server-only** via remote `query()` functions that
-  call `@rask/api` (`packages/api`) with `getRequestEvent().fetch`; a per-app
+  call `@rask/api` (`frontend/packages/api`) with `getRequestEvent().fetch`; a per-app
   `src/hooks.server.ts` (`makeGatewayHandleFetch`) routes those SSR `/api/*`
   fetches to the in-cluster gateway. All four data apps (**overview**, **compute**,
   **discover**, **storage**) carry the **identical** hook — `storage` just parses
@@ -25,7 +25,8 @@ catch-all owning `/`) plus six domain apps (**overview**, **compute**, **discove
   shared `@rask/ui/shell` sidebar.
 - **Dev.** `make home` (`:5273`) runs the catch-all alone; `make dev-frontends`
   runs all seven behind the Turborepo microfrontends proxy on `:3024`.
-  `bun run build` produces each SSR Bun-server bundle (run with `bun ./build/index.js`).
+  `bun --cwd=frontend run build` produces each SSR Bun-server bundle (run with
+  `bun ./build/index.js`).
 
 See [UI Components](ui.md) for routes + the component model, and
 [Frontend microfrontends](../architecture/frontend-microfrontends.md) for the

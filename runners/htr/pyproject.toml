@@ -1,0 +1,78 @@
+[project]
+name = "htr-runner"
+version = "0.1.0"
+description = "Sealed HTR model runner — Ray Data pipeline + the HTR actors (image → ALTO)."
+requires-python = ">=3.13"
+license = "AGPL-3.0-only"
+dependencies = [
+    # `storage` is the only first-party dep, taken as a PATH dep (see [tool.uv.sources]) —
+    # deliberately NOT `workspace = true`, because this project is sealed OUT of the root uv
+    # workspace so the model stack below never enters the fleet's resolution.
+    "storage",
+    # --- the model stack. THIS is why the runner is sealed. ---
+    "torch==2.12.0",
+    "transformers>=5.6.1",
+    "ultralytics>=8.4.41",
+    "accelerate>=1.13.0",
+    "opencv-python>=4.10",
+    "huggingface-hub>=0.28",
+    "htrflow",
+    # --- pipeline + CLI ---
+    "ray[data,default,serve]>=2.52,<2.56",
+    "pillow>=11.0",
+    "numpy>=2.0",
+    "jinja2>=3.1",
+    "rich>=13.7",
+    "typer>=0.12",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+runner = "runner.main:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/htr", "src/runner"]
+
+[tool.uv.sources]
+storage = { path = "../../packages/storage", editable = true }
+htrflow = { git = "https://github.com/AI-Riksarkivet/htrflow.git" }
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.25", "moto[s3]>=5.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"
+markers = ["slow: marks tests requiring real models or long runtimes (deselect with '-m \"not slow\"')"]
+
+# Mirrors the root ruff config verbatim. Ruff resolves the NEAREST pyproject, so without
+# this the sealed runner would silently fall back to ruff's small default rule set — held
+# to a weaker standard than the rest of the repo, and nothing would say so.
+[tool.ruff]
+line-length = 160
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "S", "C4", "SIM", "RUF", "C901", "RET", "PERF", "FURB", "A", "ANN"]
+ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101", "ANN201", "ANN202"]
+# The Typer entrypoint is one `main` with ~15 CLI options plus their mutual-exclusion
+# checks; its cyclomatic complexity (16) is the option surface, not tangled logic.
+# Splitting it would move the same branches behind a helper and read worse.
+"src/runner/main.py" = ["C901"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ruff.lint.isort]
+lines-after-imports = 2
+known-first-party = ["htr", "runner", "storage"]

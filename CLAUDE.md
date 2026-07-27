@@ -23,23 +23,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Toolchain rules
 
 - **JS/TS uses Bun exclusively.** Use `bun` / `bunx`. `npm`, `npx`, `pnpm`, `pnpx` are not on PATH and MCP install commands assume `bunx`.
+- **The JS/TS plane lives in `frontend/`** — its own bun + Turborepo workspace root (its own `package.json`, `bun.lock`, `turbo.json`). Every bun/turbo call is **scoped to it**: `bun --cwd=frontend run <task>`, `bunx turbo --cwd=frontend run <task>`. Use the `--cwd=` form — `bun --cwd <path>` with a space silently no-ops.
+- **JS/TS lint + format is oxlint + oxfmt**, not ESLint/Prettier (both deleted). Svelte support comes from `@rsvelte/oxlint-plugin` (lint) and `@rsvelte/fmt` (format); configs live at `frontend/.oxlintrc.json` and `frontend/.oxfmtrc.json`. `lint` / `fmt` / `fmt:check` are **per-package turbo tasks**, run from `frontend/`.
 - **Python uses uv** (3.13) with Ruff + `ty` for type-checking. Run Python via `uv run <cmd>`; type-check via `uvx ty check`.
 - Identifiers and env vars carry **no `ra-`/`ra_` prefix** (legacy from the ra-batch migration). Env vars are `RASK_*`.
 
 ## Common commands
 
-| Goal                         | Command                                                        |
-| ---------------------------- | -------------------------------------------------------------- |
-| First-time setup             | `make install` (= `bun install` + `uv sync`)                   |
-| Build everything             | `make build`                                                   |
-| Run all tests                | `make test`                                                    |
-| Single Python test           | `uv run pytest packages/htr/tests/test_geometry.py::test_name` |
-| Filter by name               | `uv run pytest -k <pattern>`                                   |
-| Skip slow tests              | `uv run pytest -m "not slow"`                                  |
-| Format + lint + typecheck    | `make check` (= `make fmt` + `make lint` + `make typecheck`)   |
-| Frontend type-check only     | `bun --cwd components/frontends/home run check`                |
-| Storybook for `@rask/ui`     | `make storybook` (→ `:6006`)                                   |
-| Bootstrap Claude Code config | `make claude-bootstrap`                                        |
+| Goal                         | Command                                                                  |
+| ---------------------------- | ------------------------------------------------------------------------ |
+| First-time setup             | `make install` (= `bun --cwd=frontend install` + `uv sync`)              |
+| Build everything             | `make build`                                                             |
+| Run all tests                | `make test`                                                              |
+| Single Python test           | `uv run pytest services/core/tests/test_pipelines.py::test_name`        |
+| Filter by name               | `uv run pytest -k <pattern>`                                             |
+| Skip slow tests              | `uv run pytest -m "not slow"`                                            |
+| Format + lint + typecheck    | `make check` (= `make fmt` + `make lint` + `make typecheck` + `make knip`) |
+| Frontend type-check only     | `bun --cwd=frontend run check` (one zone: `bunx turbo --cwd=frontend run check --filter=home`) |
+| Storybook for `@rask/ui`     | `make storybook` (→ `:6006`)                                             |
+| Bootstrap Claude Code config | `make claude-bootstrap`                                                  |
 
 ### Run the app locally
 
@@ -76,27 +78,35 @@ dagger call test-pg         # same as above + the core pytest suite
 
 ## Repository layout
 
-Two layers — **don't blur them**. (There is deliberately **no Polylith-style `projects/` layer** — it was removed 2026-07; deployables build straight from the root uv workspace via `uv sync --package <name>`, one dockerfile per deployable in `.docker/`.)
+Two **language-pure planes** — **don't blur them**. Python lives at the repo root (`packages/` + `services/`); the entire JS/TS estate lives under `frontend/`, its own bun + Turborepo workspace root. (There is deliberately **no Polylith-style `projects/` layer** — it was removed 2026-07; deployables build straight from the root uv workspace via `uv sync --package <name>`, one dockerfile per deployable in `.docker/`.)
 
-- `packages/` — reusable libraries, **no entrypoints**. uv + Bun workspace members.
-  - `packages/htr` — Ray actors (PageLoader, Layout, Lines, Transcribe, AltoExport) + schemas
+- `packages/` — reusable **Python** libraries, **no entrypoints**. uv workspace members.
   - `packages/storage` — `FSSource/Sink`, `S3Source/Sink`, `IIIFCachedSource`, `iter_keys`, `s3_client`
   - `packages/service-kit` — shared **platform library**: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`/`SettingsDep`, the injectable lifespan. Dependency-light (no lancedb/ray/sqlmodel).
   - `packages/ray-kit` — Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, the dashboard service). Shared by `ray-api` and the core orchestrator.
-  - `packages/ui` — Svelte 5 + Bits UI + Tailwind 4 component library (`@rask/ui`; the former `component-lib`) w/ Storybook 10 (`@storybook/svelte-vite`). The shared design system every microfrontend imports via `workspace:*` — **styled components live here, not in the apps** (apps only supply theme tokens in their `app.css` + an `@source` pointing at `packages/ui/dist`). Subpath exports: `@rask/ui/{button,badge,card,dialog,sort-header,sidebar,utils}` + **`@rask/ui/shell`** (the shared `AppShell` + grouped `AppSidebar` + `nav-config` — so every app renders the _same_ sidebar, zero drift). See `docs/architecture/frontend-microfrontends.md`.
-- `components/` — runnable code. **The old monolithic `viewer` service is gone** — it was dissolved (2026-06) into a gateway + per-domain services + a shared `core` package:
-  - `components/cli/runner` — Typer CLI that submits Ray Data jobs
-  - `components/frontends/home` — the **catch-all** microfrontend (package `home`) owning `/` (the platform home), SvelteKit 2 + Svelte 5, **SSR** via `svelte-adapter-bun` (a real Bun server: `bun ./build/index.js`). Vite dev proxy sends `/api` → the gateway on `:8888`. The frontend is **already decomposed into 7 SvelteKit microfrontend zones** under Turborepo — this catch-all plus 6 domain apps (`{overview,compute,discover,storage,train,studio}`), each pinned to base `/default/<domain>` and composed by the `:3024` microfrontends proxy in dev (k3s Ingress in prod). Every domain app renders the **shared `@rask/ui/shell` AppShell sidebar** (grouped, per-domain) — see `docs/architecture/frontend-microfrontends.md`.
-  - `components/services/gateway` — reverse proxy on `:8888` (the frontend's proxy target). Path-routes `/api/*` to the services below (longest-prefix-first); owns no state. Upstreams are env-overridable (`RASK_CORE_API_URL` :8801, `RASK_SEARCH_API_URL` :8802, `RASK_VOLUMES_API_URL` :8803, `RASK_RAY_API_URL` :8804, `RASK_ORCH_API_URL` :8810).
-  - `components/services/core` — the **core domain package** (the dissolved `viewer`; package `core`). Owns `alembic/`, `core/db.py`, `core/lifespan.py`, `models/{batch,enums,pipelines}`, `repositories/`, the domain services (`services/{batches,submission,sync}`, `services/orchestrator/{derive,loop}`, `services/discover/catalog`), the batches/chunks/catalog/orchestrator endpoints, and `main.py` (monolith factory, still used by tests + `make viewer`). **Not a deployable** — composed by the two entrypoints below, which share the `batches` table transactionally (so they're two processes over one package, not independent services).
-  - `components/services/core_api` — thin entrypoint (`:8801`): health + batches + chunks + catalog over `core`; orchestrator loop **off**.
-  - `components/services/orchestrator` — thin entrypoint (`:8810`): health + orchestrator endpoints over `core`; the lifespan-managed orchestrator loop **on** (`RASK_ORCHESTRATOR_AUTOSTART`).
-  - `components/services/{volumes_api,search_api,ray_api}` — independent, **viewer-free** services (`:8803`/`:8802`/`:8804`): S3/IIIF image+ALTO proxy (stateless); Lance `lines` FTS + S3 thumbnails (owns a lines-only lifespan); Ray dashboard introspection (`/api/ray/*`) + the `/api/serve/*` proxy (thin shell over `ray-kit`). Each depends only on `service-kit` + its own libs — no `core`, no DB.
-  - `components/scripts/` — one-shot setup / debug tools (`build_batches_db`, `chunk_batches`, `harvest_ead`, `index_alto`, `index_catalog`, `download_*`, `bench_framework`, `smoke_s3`, …). **No production-state-changing CLIs** — sync / submit / orchestrate all run through the HTTP services (core-api endpoints + the orchestrator service's lifespan loop).
-**Workspace membership is explicit, never globbed.** Adding a new package/component requires editing **both**:
+  - `packages/tracker` — pluggable transfer-state tracking (SQLite / Postgres backends)
+  - `packages/validate` — pre-upload image validation (TIFF/JPEG/PNG corruption detection + pluggable rules)
+- `services/` — runnable **Python** code. **The old monolithic `viewer` service is gone** — it was dissolved (2026-06) into a gateway + per-domain services + a shared `core` package:
+  - `services/gateway` — reverse proxy on `:8888` (the frontend's proxy target). Path-routes `/api/*` to the services below (longest-prefix-first); owns no state. Upstreams are env-overridable (`RASK_CORE_API_URL` :8801, `RASK_SEARCH_API_URL` :8802, `RASK_VOLUMES_API_URL` :8803, `RASK_RAY_API_URL` :8804, `RASK_ORCH_API_URL` :8810).
+  - `services/core` — the **core domain package** (the dissolved `viewer`; package `core`). Owns `alembic/`, `core/db.py`, `core/lifespan.py`, `models/{batch,enums,pipelines}`, `repositories/`, the domain services (`services/{batches,submission,sync}`, `services/orchestrator/{derive,loop}`, `services/discover/catalog`), the batches/chunks/catalog/orchestrator endpoints, and `main.py` (monolith factory, still used by tests + `make viewer`). **Not a deployable** — composed by the two entrypoints below, which share the `batches` table transactionally (so they're two processes over one package, not independent services).
+  - `services/core_api` — thin entrypoint (`:8801`): health + batches + chunks + catalog over `core`; orchestrator loop **off**.
+  - `services/orchestrator` — thin entrypoint (`:8810`): health + orchestrator endpoints over `core`; the lifespan-managed orchestrator loop **on** (`RASK_ORCHESTRATOR_AUTOSTART`).
+  - `services/{volumes_api,search_api,ray_api}` — independent, **viewer-free** services (`:8803`/`:8802`/`:8804`): S3/IIIF image+ALTO proxy (stateless); Lance `lines` FTS + S3 thumbnails (owns a lines-only lifespan); Ray dashboard introspection (`/api/ray/*`) + the `/api/serve/*` proxy (thin shell over `ray-kit`). Each depends only on `service-kit` + its own libs — no `core`, no DB.
+- `frontend/` — the **JS/TS plane** and its own workspace root: `package.json`, `bun.lock`, `turbo.json`, `knip.json`, `.oxlintrc.json`, `.oxfmtrc.json`, `patches/`, `assets/` (the shared favicon source). The only JS outside it is `tests/e2e`, a standalone Playwright project with its own lockfile (`make e2e`).
+  - `frontend/microfrontends/home` — the **catch-all** microfrontend (package `home`) owning `/` (the platform home), SvelteKit 2 + Svelte 5, **SSR** via `svelte-adapter-bun` (a real Bun server: `bun ./build/index.js`). Vite dev proxy sends `/api` → the gateway on `:8888`. The frontend is **already decomposed into 7 SvelteKit microfrontend zones** under Turborepo — this catch-all plus 6 domain apps (`{overview,compute,discover,storage,train,studio}`), each pinned to base `/default/<domain>` and composed by the `:3024` microfrontends proxy in dev (k3s Ingress in prod). Every domain app renders the **shared `@rask/ui/shell` AppShell sidebar** (grouped, per-domain) — see `docs/architecture/frontend-microfrontends.md`.
+  - `frontend/packages/ui` — Svelte 5 + Bits UI + Tailwind 4 component library (`@rask/ui`; the former `component-lib`) w/ Storybook 10 (`@storybook/svelte-vite`). The shared design system every microfrontend imports via `workspace:*` — **styled components live here, not in the apps** (apps only supply theme tokens in their `app.css` + an `@source` pointing at `frontend/packages/ui/dist`). Subpath exports: `@rask/ui/{button,badge,card,dialog,dropdown-menu,avatar,collapsible,table,checkbox,alert-dialog,progress,sort-header,sidebar,utils}` + **`@rask/ui/shell`** (the shared `AppShell` + grouped `AppSidebar` + `nav-config` — so every app renders the _same_ sidebar, zero drift). See `docs/architecture/frontend-microfrontends.md`.
+  - `frontend/packages/api` — `@rask/api`, the shared frontend data layer (typed gateway client + types, split by domain). JIT TS: apps import the source directly, no build step.
+  - `frontend/packages/zone-contract` — `@rask/zone-contract`, the cross-zone link guard (a cross-zone `<a>` must carry `data-sveltekit-reload`). It is a **vitest test**, not a lint rule — the retired ESLint rule was ported here when the frontend moved to oxlint.
+- `scripts/` — **all** dev/ops scripts, shell + Python: one-shot setup / debug tools (`build_batches_db`, `chunk_batches`, `harvest_ead`, `index_alto`, `index_catalog`, `download_*`, `bench_framework`, `smoke_s3`, …) plus `dev-micro.sh` and `k3s-install.sh`. **No production-state-changing CLIs** — sync / submit / orchestrate all run through the HTTP services (core-api endpoints + the orchestrator service's lifespan loop).
 
-- `pyproject.toml` → `[tool.uv.workspace] members`
-- root `package.json` → `workspaces`
+- `runners/` — **sealed model environments, NOT workspace members.** `runners/htr` holds the Ray Data HTR pipeline (`src/runner`) *and* the model actors (`src/htr`) in one project with its **own `pyproject.toml` and own `uv.lock`**. Matched by no glob, so torch/htrflow/ultralytics/transformers never enter the fleet's resolution (root lock 200 → 145 packages; fleet tests ~32 min → ~6 s). `storage` is a **path** dep. Its tests are invisible to the root pytest — `make test` runs them separately; its images build from **its** lock; it carries its own ruff config (ruff resolves the nearest pyproject). Ray entrypoint: `uv run --project runners/htr runner`, overridden in-cluster by `RASK_RUNNER_CMD=runner`.
+
+**Workspace membership is globbed, per plane** — the directories are language-pure, so every child carries the right manifest:
+
+- `pyproject.toml` → `[tool.uv.workspace] members = ["packages/*", "services/*"]`
+- `frontend/package.json` → `workspaces = ["microfrontends/*", "packages/*"]` (relative to `frontend/`)
+
+A new Python library/service or a new zone is picked up by the glob — but it **must** ship a `pyproject.toml` (Python) or a `package.json` (JS), or its plane silently drops it.
 
 Deployables are just workspace members with a dockerfile: `.docker/<name>.dockerfile` runs `uv sync --frozen --package <name>` against the **root** `uv.lock` (the deployable set is `gateway`, `core-api`, `orchestrator`, `volumes-api`, `search-api`, `ray-api`, `runner`).
 
@@ -104,25 +114,26 @@ Deployables are just workspace members with a dockerfile: `.docker/<name>.docker
 
 `rask` is a distributed HTR pipeline for the Swedish National Archives. See `docs/architecture/system-overview.md` for the full diagrams. Key facts that aren't obvious from any single file:
 
-- **Runner is the engine.** `components/cli/runner` submits one Ray Data pipeline per CLI invocation and blocks on `.materialize()`. It does not run a long-lived service.
+- **Runner is the engine.** `runners/htr` submits one Ray Data pipeline per CLI invocation and blocks on `.materialize()`. It does not run a long-lived service.
 - **Ray Serve persists across job submissions.** TrOCR weights stay warm in `/transcribe` (3 replicas × 0.99 GPU). The pipeline's `TranscribeViaServe` actor is CPU-only and calls Serve synchronously over a handle. `make serve-up` deploys this independently of any job.
 - **Two pipeline shapes:**
   - **Actor-per-stage** — `PageLoader → Layout → Lines → TranscribeViaServe → AltoExport → AltoWriter`. Uses GPU for YOLO regions/lines (0.001 GPU each) and TrOCR via Serve.
   - **`/htrflow`** — collapses Layout+Line+Transcribe+Alto into a single 1-replica CPU Serve deployment. Used when actor fan-out isn't worth it for a batch shape.
-- **GPU sizing is hardcoded** in `components/cli/runner/src/runner/pipeline.py` for a 3-GPU node. Changing target hardware means editing that file.
+- **GPU sizing is hardcoded** in `runners/htr/src/runner/pipeline.py` for a 3-GPU node. Changing target hardware means editing that file.
 - **No auth, no app middleware.** The services assume localhost / trusted network. The frontend hits `/api/*` on the **gateway** (`:8888`), which path-routes to the per-domain services; `/api/ray/*` and the `/api/serve/*` proxy are served by the standalone **ray-api** service (over `ray-kit`). SSR `load`/remote functions reach the gateway server-side via an absolute base URL (`RASK_GATEWAY_URL`); client code uses the relative `/api/*` proxy. The gateway sits **behind** the SvelteKit Bun server (it does not serve the SPA shell).
-- **State surface:** relational DB behind a backend-agnostic ORM (SQLModel + SQLAlchemy async), owned by the **`core` package**. **SQLite for dev** (`.cache/batches.db`, not committed); **Postgres for prod** via `DATABASE_URL=postgresql+asyncpg://…`. Schema changes go through **Alembic** (`components/services/core/alembic/`, run via `make pg-migrate` = `uv run --package core alembic upgrade head`) — never `SQLModel.metadata.create_all` in app startup. The `Batch` SQLModel uses `SAEnum(values_callable=...)` so `htr_status`/`manifest_status` round-trip as lowercase strings against postgres-native ENUM types or sqlite VARCHAR. Plus S3 two-bucket setup (`images-batch` input, `images-batch-alto` output). **No Redis, no queue, no event bus, no compose stack.** The Helm chart in `chart/` is the single deploy artifact for both local k3s and production — in-cluster CloudNativePG (`Cluster` → `rask-postgres-rw:5432`), RustFS operator (`Tenant` → `rask-rustfs-io:9000`), and KubeRay are gated by `cnpg.enabled`/`rustfs.enabled`/`ray.enabled` values toggles; each toggle gates both the operator subchart and its custom resource. Local deploy: `make k3s-install` (one-time) → `make k3s-build` → `make k3s-import` → `make k3s-up`; tear down with `make k3s-down` / `make k3s-purge`. See `docs/architecture/deployment.md` and `chart/README.md`.
+- **State surface:** relational DB behind a backend-agnostic ORM (SQLModel + SQLAlchemy async), owned by the **`core` package**. **SQLite for dev** (`.cache/batches.db`, not committed); **Postgres for prod** via `DATABASE_URL=postgresql+asyncpg://…`. Schema changes go through **Alembic** (`services/core/alembic/`, run via `make pg-migrate` = `uv run --package core alembic upgrade head`) — never `SQLModel.metadata.create_all` in app startup. The `Batch` SQLModel uses `SAEnum(values_callable=...)` so `htr_status`/`manifest_status` round-trip as lowercase strings against postgres-native ENUM types or sqlite VARCHAR. Plus S3 two-bucket setup (`images-batch` input, `images-batch-alto` output). **No Redis, no queue, no event bus, no compose stack.** The Helm chart in `chart/` is the single deploy artifact for both local k3s and production — in-cluster CloudNativePG (`Cluster` → `rask-postgres-rw:5432`), RustFS operator (`Tenant` → `rask-rustfs-io:9000`), and KubeRay are gated by `cnpg.enabled`/`rustfs.enabled`/`ray.enabled` values toggles; each toggle gates both the operator subchart and its custom resource. Local deploy: `make k3s-install` (one-time) → `make k3s-build` → `make k3s-import` → `make k3s-up`; tear down with `make k3s-down` / `make k3s-purge`. See `docs/architecture/deployment.md` and `chart/README.md`.
 - **Orchestrator runs in the `orchestrator` service** (a thin entrypoint over the `core` package). A lifespan-managed `asyncio.Task` ticks every `RASK_ORCHESTRATOR_INTERVAL_SECONDS`: reconcile S3 → submit next prefetch / htr chunk. `RASK_ORCHESTRATOR_AUTOSTART` controls whether the loop starts on boot (the fleet runs `core-api` with it OFF and `orchestrator` with it ON, so the loop runs in exactly one process); operators flip it at runtime via `POST /api/v1/orchestrator/start` and `/stop`. Per-chunk control via `POST /api/v1/chunks/{id}/stop`. See `core/services/orchestrator/loop.py`. **Transitional — to be replaced by a NATS JetStream consumer once that lands.**
 - **Source images:** IIIF (Riksarkivet) with S3 read-through cache. `PageLoaderActor` hits S3 first, IIIF on miss.
 - **Remote KubeRay:** the runner accepts `--address ray://...:10001`. No K8s manifests live in this repo — the remote cluster is managed elsewhere.
 
 ## Conventions
 
-- **Gateway port is 8888.** Vite proxy in `components/frontends/home` defaults `VIEWER_BACKEND` to `http://localhost:8888` (the gateway, or the `make viewer` monolith). Don't change that port without updating the proxy.
+- **Gateway port is 8888.** Vite proxy in `frontend/microfrontends/home` defaults `VIEWER_BACKEND` to `http://localhost:8888` (the gateway, or the `make viewer` monolith). Don't change that port without updating the proxy.
 - **Pytest import mode is `importlib`** (`--import-mode=importlib` in `pyproject.toml`). Test paths are explicit (`testpaths = [...]`), not discovered.
 - **Ruff line length is 160**, not 100. Selected rule families include `ANN` (annotations); tests are exempted via `per-file-ignores`.
-- **Prettier uses tabs**, single quotes, `printWidth: 100` — defined in root `package.json`, applied across both frontend and `@rask/ui` workspaces.
-- **JS monorepo runs on Turborepo** (`turbo.json`): `bun run build`/`check`/`dev` delegate to `turbo run` (package tasks + `^build` ordering + cached `build`/`.svelte-kit`/`dist` outputs). Add a new JS package's scripts in its own `package.json` — never centralize task logic in root. `lint`/`format` stay root-level (Prettier + a single flat ESLint config) until the shared `@rask/eslint-config` package is extracted for the microfrontend split.
+- **oxfmt uses tabs**, single quotes, `printWidth: 100` — defined in `frontend/.oxfmtrc.json`, applied across every JS/TS workspace (zones, `@rask/ui`, `@rask/api`, `@rask/zone-contract`). Prettier is gone.
+- **JS monorepo runs on Turborepo** (`frontend/turbo.json`): `bun --cwd=frontend run build`/`check`/`dev` delegate to `turbo run` (package tasks + `^build` ordering + cached `build`/`.svelte-kit`/`dist` outputs). Add a new JS package's scripts in its own `package.json` — never centralize task logic in root. `lint`/`fmt`/`fmt:check` are **per-package turbo tasks** too (each package runs `oxlint` / `oxfmt`); only `knip` stays root-level, because it analyses the whole JS graph at once.
+- **The cross-zone link gate is a test, not a lint rule.** A cross-zone `<a>` must carry `data-sveltekit-reload` or SvelteKit soft-navigates into a route the zone doesn't own (→ 404). Enforced by `@rask/zone-contract`'s vitest suite (`frontend/packages/zone-contract/src/cross-zone-reload.test.ts`) — oxlint's `.svelte` support reads the `<script>` block, not the markup, so an anchor-attribute rule cannot live there.
 - **Frontend is SSR + Svelte 5 strict.** Every `.svelte` change is validated with the Svelte 5 skills + the `svelte` MCP autofixer. Browser-only globals must stay inside `onMount`/`$effect`/handlers (never component top level or `load`) or SSR render crashes.
 - **`ty` is configured with `error-on-warning = true`** — typecheck warnings fail CI.
 

@@ -1,0 +1,16 @@
+{
+	"$schema": "https://unpkg.com/knip@6/schema.json",
+	"workspaces": {
+		"microfrontends/*": {
+			"entry": ["src/**/*.remote.ts", "src/**/*.server.ts"]
+		},
+		"packages/ui": {
+			"entry": ["src/lib/**/index.{ts,js}"],
+			"project": ["src/**/*.{ts,js,svelte}"]
+		},
+		"packages/zone-contract": {
+			"entry": ["src/**/*.test.ts"],
+			"project": ["src/**/*.ts"]
+		}
+	}
+}

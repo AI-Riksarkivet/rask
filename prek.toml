@@ -7,7 +7,9 @@ hooks = [
   # chart/templates are Helm templates ({{ … }}), not parseable as plain YAML
   { id = "check-yaml", exclude = "^chart/templates/" },
   { id = "check-toml" },
-  { id = "check-added-large-files" },
+  # Lockfiles are legitimately large and MUST be committed — the root uv.lock is already
+  # 501 KB and only slips past because this hook checks newly-added files by default.
+  { id = "check-added-large-files", exclude = "(^|/)(uv\\.lock|bun\\.lock)$" },
   { id = "check-merge-conflict" },
 ]
 

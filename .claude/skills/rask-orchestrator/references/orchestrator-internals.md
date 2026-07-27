@@ -1,6 +1,6 @@
 # Orchestrator internals
 
-Deep reference for the rask reconcile→derive→submit loop. The lean rules are in `SKILL.md`; this file is the data path, the invariants in detail, and the NATS roadmap. File paths are relative to `components/services/core/src/core/`.
+Deep reference for the rask reconcile→derive→submit loop. The lean rules are in `SKILL.md`; this file is the data path, the invariants in detail, and the NATS roadmap. File paths are relative to `services/core/src/core/`.
 
 ## The tick control flow (`services/orchestrator/loop.py`)
 
@@ -55,7 +55,7 @@ The Ray State API can't filter task summary by `job_id` server-side reliably for
 `submit_chunk` reads chunk membership (`manifest_status='ok'` rows, ordered by `batch_id`), builds the entrypoint, and `ray_client.submit_job(...)` via `anyio.to_thread` (sync SDK). Key details:
 
 - `chunk_name(chunk_id, chunk_total, spec)` → `<spec.name>-chunk-NNN-of-MMM-<ts>`. The `%Y%m%dT%H%M%S` suffix makes every submission unique because **Ray's REST API rejects duplicate `submission_id`s even for completed/deleted jobs** — without it, stop-and-resubmit would fail.
-- `build_entrypoint`: `runner` specs run `uv run --package runner runner --pipeline <name> ...`; `http` specs (e.g. `htr_http`) run `components/scripts/htr_chunk_job.py` POSTing to the deployed `/htr` endpoint and need `boto3` in `runtime_env` pip.
+- `build_entrypoint`: `runner` specs run `uv run --project runners/htr runner --pipeline <name> ...`; `http` specs (e.g. `htr_http`) run `scripts/htr_chunk_job.py` POSTing to the deployed `/htr` endpoint and need `boto3` in `runtime_env` pip.
 - `runtime_env` passes `working_dir`, env vars filtered to prefixes `AWS_`/`HCP_`/`IIIF_`/`RASK_`, and spec `pip`.
 - When `spec.tracks_rayjob_id` (true for all current specs), tags `current_rayjob_id` + `current_rayjob_submitted_at` on every row in the chunk — that's what `stop_chunk` later reads to find the job.
 - `RAY_TRANSIENT_ERRORS` → `ServiceUnavailableError`; empty membership → `NotFoundError`.

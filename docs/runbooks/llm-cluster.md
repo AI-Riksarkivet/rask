@@ -16,7 +16,7 @@ needs a different venv than HTR:
 
 Models: `google/gemma-4-31B-it` on route `/` (→ `:8002/v1`) and
 `Qwen/Qwen3.6-27B` on route `/qwen` (→ `:8002/qwen/v1`). Both tool-calling
-verified. Deploy logic: `components/scripts/deploy_qwen_llm.py`.
+verified. Deploy logic: `scripts/deploy_qwen_llm.py`.
 
 > Neither cluster auto-starts on reboot (no systemd). Bring it up by hand.
 
@@ -38,7 +38,7 @@ CUDA_VISIBLE_DEVICES=1,2 ~/qwen-serve/.venv-ray2/bin/ray start --head \
 QWEN_MODEL=google/gemma-4-31B-it QWEN_CTX=131072 SERVE_HTTP_PORT=8002 \
   TOOL_CALL_PARSER=gemma4 \
   RAY_ADDRESS=10.16.51.53:6380 \
-  ~/qwen-serve/.venv-ray2/bin/python components/scripts/deploy_qwen_llm.py up
+  ~/qwen-serve/.venv-ray2/bin/python scripts/deploy_qwen_llm.py up
 ```
 
 **3. Deploy Qwen3.6 (route `/qwen`; omit `SERVE_HTTP_PORT` — the proxy is
@@ -48,7 +48,7 @@ already on :8002 from step 2):**
 QWEN_MODEL=Qwen/Qwen3.6-27B QWEN_ROUTE=/qwen QWEN_CTX=131072 QWEN_MAX_SEQS=256 \
   TOOL_CALL_PARSER=qwen3_coder REASONING_PARSER=qwen3 \
   RAY_ADDRESS=10.16.51.53:6380 \
-  ~/qwen-serve/.venv-ray2/bin/python components/scripts/deploy_qwen_llm.py up
+  ~/qwen-serve/.venv-ray2/bin/python scripts/deploy_qwen_llm.py up
 ```
 
 `TOOL_CALL_PARSER` is **required** for agentic clients (they send
@@ -72,9 +72,9 @@ nvidia-smi --query-gpu=index,memory.used --format=csv,noheader   # GPU 1 & 2 ~90
 
 ```bash
 QWEN_MODEL=google/gemma-4-31B-it RAY_ADDRESS=10.16.51.53:6380 \
-  ~/qwen-serve/.venv-ray2/bin/python components/scripts/deploy_qwen_llm.py down
+  ~/qwen-serve/.venv-ray2/bin/python scripts/deploy_qwen_llm.py down
 QWEN_MODEL=Qwen/Qwen3.6-27B RAY_ADDRESS=10.16.51.53:6380 \
-  ~/qwen-serve/.venv-ray2/bin/python components/scripts/deploy_qwen_llm.py down
+  ~/qwen-serve/.venv-ray2/bin/python scripts/deploy_qwen_llm.py down
 ```
 
 To take the **whole cluster** down (free GPUs 1 & 2):

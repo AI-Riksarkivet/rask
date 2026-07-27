@@ -11,13 +11,13 @@ This section holds **narrative notes on rask's deployables and sub-projects**.
 
 | Deployable | Workspace member | Docs |
 |---|---|---|
-| `gateway` | `components/services/gateway` | [Services](../components/services.md) |
-| `core-api` | `components/services/core_api` (over `core`) | [Services](../components/services.md) |
-| `orchestrator` | `components/services/orchestrator` (over `core`) | [Services](../components/services.md) |
-| `volumes-api` | `components/services/volumes_api` | [Services](../components/services.md) |
-| `search-api` | `components/services/search_api` | [Services](../components/services.md) |
-| `ray-api` | `components/services/ray_api` | [Services](../components/services.md) |
-| `runner` | `components/cli/runner` (+ `htr`, `storage`, `htrflow` from git) | [Runner](runner.md) |
+| `gateway` | `services/gateway` | [Services](../components/services.md) |
+| `core-api` | `services/core_api` (over `core`) | [Services](../components/services.md) |
+| `orchestrator` | `services/orchestrator` (over `core`) | [Services](../components/services.md) |
+| `volumes-api` | `services/volumes_api` | [Services](../components/services.md) |
+| `search-api` | `services/search_api` | [Services](../components/services.md) |
+| `ray-api` | `services/ray_api` | [Services](../components/services.md) |
+| `runner` | `runners/htr` (+ `htr`, `storage`, `htrflow` from git) | [Runner](runner.md) |
 
 There is no `viewer` deployable — the viewer was dissolved (June 2026) into the
 gateway + per-domain services above.
@@ -34,7 +34,7 @@ One dockerfile per deployable under `.docker/`:
 - `rask-ray-api` ← `.docker/ray-api.dockerfile` (slim Python, `:8804`).
 - `rask-runner` ← `.docker/runner.dockerfile` (CUDA base, GPU).
 
-The seven SvelteKit SSR apps under `components/frontends/` (`home` — the catch-all — plus `overview`/`compute`/`discover`/`storage`/`train`/`studio`)
+The seven SvelteKit SSR apps under `frontend/microfrontends/` (`home` — the catch-all — plus `overview`/`compute`/`discover`/`storage`/`train`/`studio`)
 all build from one parametrized `.docker/frontend.dockerfile`
 (`--build-arg APP=<dir>`, Bun server).
 

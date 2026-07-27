@@ -1,11 +1,13 @@
 ---
 name: rask-frontend
-description: The rask frontend canon — its Svelte 5 + SvelteKit 2 + Bun/Turborepo microfrontend conventions (data via remote query()+refresh, runes, @rask/ui/Bits UI, OKLCH tokens, MFE zones, TS strictness) and the make-check gates. Use when touching any .svelte / a frontend app / @rask/ui / @rask/api / microfrontends.json, doing data-fetching/reactivity/styling/routing, adding a frontend dep or app, or deciding the idiomatic rask way to do a frontend thing.
+description: The rask frontend canon — the `frontend/` JS plane's Svelte 5 + SvelteKit 2 + Bun/Turborepo microfrontend conventions (data via remote query()+refresh, runes, @rask/ui/Bits UI, OKLCH tokens, MFE zones, TS strictness) and the oxlint/oxfmt + make-check gates. Use when touching any .svelte / a frontend zone / @rask/ui / @rask/api / @rask/zone-contract / microfrontends.json, doing data-fetching/reactivity/styling/routing, adding a frontend dep or zone, or deciding the idiomatic rask way to do a frontend thing.
 ---
 
 # rask frontend (the MFE canon)
 
 The rask-specific frontend rules — the layer **over** the generic skills below. The exhaustive, gate-mapped canon is **`docs/architecture/frontend-conventions.md`** (8 concerns, each with the pattern + anti-patterns); this skill is the at-a-glance bias + checklist. **Read the canon doc before any non-trivial frontend work.**
+
+**Everything JS/TS lives under `frontend/`**, which is its own bun + turbo **workspace root** — `frontend/package.json`, `bun.lock`, `turbo.json`, `knip.json`, `.oxlintrc.json`, `.oxfmtrc.json`, `patches/`, `assets/`. The zones are `frontend/microfrontends/<zone>`; the shared libs are `frontend/packages/{api,ui,zone-contract}`. Every bun/turbo invocation is scoped from the repo root: `bun --cwd=frontend run <task>`, `bunx turbo --cwd=frontend run <task>`. (There is no JS at the repo root; root `packages/`+`services/` are the Python plane — see `rask-architecture`.)
 
 ## Core skills — read these deeply, every time (not optional)
 

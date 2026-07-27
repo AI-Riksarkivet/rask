@@ -6,24 +6,25 @@ Polyglot monorepo for Riksarkivet HTR + search infrastructure. Python managed wi
 
 ## Layout
 
-- `packages/` — reusable libraries (workspace members; polyglot):
-  - `htr`, `storage` — Python libraries (uv workspace members)
-  - `@rask/ui` — Svelte 5 + Bits UI + Tailwind 4 component library with Storybook (Bun workspace)
-- `components/` — runnable code:
-  - `cli/runner` — Python CLI driving Ray Data HTR pipelines
-  - `frontends/` — seven SvelteKit 2 + Svelte 5 **SSR** apps (`svelte-adapter-bun`): `home` (catch-all, owns `/`) + six domain zones (`overview`/`compute`/`discover`/`storage`/`train`/`studio`), composed by the Turborepo `:3024` proxy in dev / k3s Ingress in prod
-  - `services/` — FastAPI services: `gateway` (reverse proxy `:8888`) + the `core` package (composed by `core-api` + `orchestrator`) + `volumes-api` + `search-api` + `ray-api`
-  - `scripts/` — standalone Python utilities (indexing, EAD harvesting, IIIF downloads, Ray job submission, …)
+Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
+
+- `packages/` — reusable Python libraries (uv workspace members): `htr`, `storage`, `service-kit`, `ray-kit`, `tracker`, `validate`
+- `services/` — runnable Python code:
+  - `runner` — Python CLI driving Ray Data HTR pipelines
+  - FastAPI services: `gateway` (reverse proxy `:8888`) + the `core` package (composed by `core-api` + `orchestrator`) + `volumes-api` + `search-api` + `ray-api`
+- `frontend/` — the JS/TS plane; its own Bun + Turborepo workspace root (lint/format via oxlint + oxfmt):
+  - `microfrontends/` — seven SvelteKit 2 + Svelte 5 **SSR** apps (`svelte-adapter-bun`): `home` (catch-all, owns `/`) + six domain zones (`overview`/`compute`/`discover`/`storage`/`train`/`studio`), composed by the Turborepo `:3024` proxy in dev / k3s Ingress in prod
+  - `packages/` — `@rask/ui` (Svelte 5 + Bits UI + Tailwind 4 component library with Storybook), `@rask/api` (shared typed gateway client), `@rask/zone-contract` (the cross-zone link guard)
+- `scripts/` — dev/ops scripts, shell + Python (indexing, EAD harvesting, IIIF downloads, Ray job submission, the local fleet and k3s installers)
 - `docs/` — Zensical documentation source; deployed by `.github/workflows/docs.yml`
-- `contributions/` — contribution guidelines
 - `.claude/` — project-local Claude Code config (skills, commands, hooks)
 
-Workspace membership is **explicit** — see `pyproject.toml` `[tool.uv.workspace] members` (uv) and root `package.json` `workspaces` (Bun). Adding a new package under `packages/` or `components/` requires adding the path to the relevant list; globs are deliberately not used. Deployables build from the root workspace via `uv sync --package <name>` (one dockerfile per deployable in `.docker/`).
+Workspace membership is **globbed per plane** — `pyproject.toml` `[tool.uv.workspace] members = ["packages/*", "services/*"]` (uv) and `frontend/package.json` `workspaces = ["microfrontends/*", "packages/*"]` (Bun). A new directory joins its plane automatically, provided it ships a `pyproject.toml` / `package.json`. Deployables build from the root workspace via `uv sync --package <name>` (one dockerfile per deployable in `.docker/`).
 
 ## Quick start
 
 ```bash
-bun install
+bun --cwd=frontend install
 uv sync
 make build
 ```
@@ -43,8 +44,8 @@ make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
 ## Component library workflow
 
 ```bash
-bun run --cwd packages/ui dev          # svelte-package -w
-bun run --cwd packages/ui storybook    # localhost:6006
+bun --cwd=frontend run dev:ui          # svelte-package -w
+bun --cwd=frontend run storybook       # localhost:6006
 ```
 
 Or from the root:
@@ -57,10 +58,10 @@ make storybook
 
 | Target                                                          | What it does                                           |
 | --------------------------------------------------------------- | ------------------------------------------------------ |
-| `make install`                                                  | `bun install` + `uv sync`                              |
-| `make build`                                                    | Build everything (uv + bun, plus cargo if present)     |
-| `make test`                                                     | Run pytest + bun test (plus cargo test if present)     |
-| `make check`                                                    | `fmt` + `lint` + `typecheck`                           |
+| `make install`                                                  | `bun --cwd=frontend install` + `uv sync`               |
+| `make build`                                                    | Build everything (`uv sync` + the `frontend` turbo build) |
+| `make test`                                                     | Run pytest                                             |
+| `make check`                                                    | `fmt` + `lint` + `typecheck` + `knip`                  |
 | `make viewer`                                                   | Run the viewer FastAPI on `:8888`                      |
 | `make home`                                                     | Run the `home` catch-all frontend (vite proxies /api → `:8888`) |
 | `make ray-up` / `make ray-down`                                 | Start / stop a local Ray head node                     |
