@@ -76,8 +76,10 @@
 		return null;
 	});
 
-	// Refresh the cluster node list every 5s (the file/content reads re-key
-	// themselves; the manual refresh button re-fetches the active content query).
+	// POLL REASON: the Ray dashboard REST API is snapshot-only introspection — Ray publishes no
+	// change events a cursor could ride, so the node list re-reads on a clock (the file/content
+	// reads re-key themselves; the manual refresh button re-fetches the active content query),
+	// and the live tail below polls because a growing log file emits no "it grew" event.
 	onMount(() => {
 		const timer = setInterval(() => clusterQuery.refresh().catch(() => {}), 5000);
 		return () => clearInterval(timer);
@@ -330,8 +332,7 @@
 						</div>
 						{#each list as f (f)}
 							<button
-								class="hover:bg-muted/60 block w-full truncate px-3 py-1 text-left font-mono text-[11px] {selected ===
-								f
+								class="hover:bg-muted/60 block w-full truncate px-3 py-1 text-left font-mono text-[11px] {selected === f
 									? 'bg-primary/10 text-primary'
 									: ''}"
 								title={f}
@@ -357,10 +358,9 @@
 						<span class="ml-auto tabular-nums"
 							>{view.length}{onlyMatches && query ? `/${allLines.length}` : ''} lines</span
 						>
-						{#if follow}<span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400"
-								><span class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500"
-								></span>live</span
-							>{/if}
+						{#if follow}<span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400"><span
+							class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500"
+						></span>live</span>{/if}
 					</div>
 				{/if}
 				{#if !selected}

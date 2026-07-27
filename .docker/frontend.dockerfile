@@ -3,11 +3,11 @@
 # (svelte-adapter-bun: ships a Bun *server*, not static files). Build context = repo root.
 #
 # Parametrized over the workspace app via --build-arg APP=<dir under frontend/microfrontends, e.g. home>:
-#   docker buildx build -f .docker/frontend.dockerfile --build-arg APP=storage \
+#   docker buildx build -f .docker/frontend.dockerfile --build-arg APP=media \
 #     --build-arg BUILD_DATE=$(date -u +%FT%TZ) --build-arg VCS_REF=$(git rev-parse HEAD) \
-#     --build-arg VERSION=$(git describe --always) -t storage:dev .
+#     --build-arg VERSION=$(git describe --always) -t media:dev .
 # APP=home builds the catch-all (home); the others build the MFE
-# domain apps (each pinned to its base path /default/<domain> in svelte.config.js).
+# domain zones (each pinned to its base path /<zone> in svelte.config.js).
 #
 # Two bun-1.3 + svelte-adapter-bun gotchas this encodes:
 #  1. the adapter externalizes @sveltejs/kit (+ svelte runtime) → ship node_modules
@@ -18,7 +18,7 @@
 #     node_modules) at the path the relative symlinks expect, and runs from the app dir.
 # Size note: ships the full node_modules; slimming deferred (correctness first).
 
-# ---- builder: bun install (workspace) + prebuild @rask/ui + bun build --------
+# ---- builder: bun install (workspace) + prebuild packages/ui + bun build -----
 FROM oven/bun:1-debian@sha256:9dba1a1b43ce28c9d7931bfc4eb00feb63b0114720a0277a8f939ae4dfc9db6f AS builder
 
 ARG APP=home
@@ -28,7 +28,8 @@ WORKDIR /src
 # errors with "Workspace not found". Copy all of frontend/microfrontends wholesale so new
 # MFE apps don't silently break this build (.dockerignore strips node_modules/
 # .svelte-kit). /src IS the frontend workspace root: frontend/* is copied to the root
-# of the build stage so bun's workspace globs (apps/*, packages/*) resolve unchanged.
+# of the build stage so bun's workspace globs (microfrontends/*, packages/*) resolve
+# unchanged.
 COPY frontend/microfrontends microfrontends
 COPY frontend/packages packages
 COPY frontend/package.json frontend/bun.lock frontend/turbo.json ./
@@ -40,7 +41,7 @@ COPY frontend/patches patches
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install --frozen-lockfile
 
-# Pre-build @rask/ui so its dist/ exports resolve during the app build.
+# Pre-build packages/ui so its dist/ exports resolve during the app build.
 # @sveltejs/package@2 rejects the `config.package` key — swap a minimal config in.
 # hadolint ignore=DL3059
 RUN --mount=type=cache,target=/root/.bun/install/cache \

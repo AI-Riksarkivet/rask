@@ -44,6 +44,28 @@
 	--sidebar-accent-foreground: oklch(0.205 0.006 270);
 	--sidebar-border: oklch(0.915 0.006 260);
 	--sidebar-ring: oklch(0.45 0.18 250);
+
+	/* --- Legacy palette bridge -------------------------------------------------------------
+	   45 components across data/lineage/admin/models (and a few @rask/ui ones) still style with
+	   the pre-shadcn palette (--ink/--mut/--line/--panel/…, ~800 references). Those names were
+	   never defined here, so every one resolved to an INVALID value: a card's
+	   `background: var(--panel)` fell back to transparent and — worst — `border-color:
+	   var(--line)` fell back to `currentColor`, painting every hairline in the full text colour.
+	   That is the "why does this look weird" the estate has been carrying. Mapping the legacy
+	   names onto the shadcn tokens fixes all of them in BOTH themes at once (the targets are
+	   themselves re-declared under .dark, so these follow automatically). Components migrate to
+	   the token names as they are touched; this block retires when the last reference is gone
+	   (`grep -r "var(--ink" frontend/`). */
+	--ink: var(--foreground);
+	--mut: var(--muted-foreground);
+	--faint: var(--muted-foreground);
+	--line: var(--border);
+	--panel: var(--card);
+	--panel-2: var(--muted);
+	--ok: var(--success);
+	--fail: var(--destructive);
+	--warn: var(--warning);
+	--amber: var(--warning);
 }
 
 .dark {

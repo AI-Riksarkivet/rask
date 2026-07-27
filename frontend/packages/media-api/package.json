@@ -1,0 +1,41 @@
+{
+	"name": "@rask/media-api",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./src/api.ts",
+			"default": "./src/api.ts"
+		},
+		"./descriptor": {
+			"types": "./src/descriptor.ts",
+			"default": "./src/descriptor.ts"
+		},
+		"./base": {
+			"types": "./src/base.ts",
+			"default": "./src/base.ts"
+		},
+		"./server-cache": {
+			"types": "./src/server-cache.ts",
+			"default": "./src/server-cache.ts"
+		}
+	},
+	"scripts": {
+		"check": "bunx tsc --noEmit",
+		"check:tsgo": "tsgo --noEmit -p tsconfig.json",
+		"test": "vitest run",
+		"lint": "oxlint .",
+		"fmt": "rsvelte-fmt .",
+		"fmt:check": "rsvelte-fmt --check ."
+	},
+	"dependencies": {
+		"apache-arrow": "^21.2.0",
+		"valibot": "^1.4.2"
+	},
+	"devDependencies": {
+		"@rask/config": "workspace:*",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.10"
+	}
+}

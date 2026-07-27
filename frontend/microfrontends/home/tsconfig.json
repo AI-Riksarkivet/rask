@@ -12,6 +12,4 @@
 		"noUncheckedIndexedAccess": true,
 		"moduleResolution": "bundler"
 	}
-	// Path aliases are handled by SvelteKit (svelte.config.js `kit.alias`),
-	// except $lib which is `kit.files.lib`. Don't add `paths` here.
 }

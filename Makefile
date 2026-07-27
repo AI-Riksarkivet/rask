@@ -1,4 +1,4 @@
-.PHONY: help install build test test-slow lint fmt clean storybook typecheck knip check ci viewer dev-micro dev-frontends dev-frontends-k3s home frontend-storage frontend-compute frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge tilt-registry tilt-up tilt-down e2e
+.PHONY: help install build test test-slow lint fmt clean storybook typecheck knip check ci viewer dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge tilt-registry tilt-up tilt-down e2e
 
 help:
 	@echo "Targets:"
@@ -6,9 +6,9 @@ help:
 	@echo "  typecheck knip check ci   frontend-check frontend-build"
 	@echo "  viewer                                 — core monolith dev server (:8888)"
 	@echo "  dev-micro                              — backend fleet (gateway :8888 + per-domain services)"
-	@echo "  dev-frontends                          — all 7 apps behind the :3024 proxy (browse http://localhost:3024)"
+	@echo "  dev-frontends                          — all 6 zones behind the :3024 proxy (browse http://localhost:3024)"
 	@echo "  dev-frontends-k3s                      — same, but /api → the IN-CLUSTER gateway (port-forwarded)"
-	@echo "  home frontend-storage frontend-compute   — run one app each"
+	@echo "  home frontend-<zone>                   — run one zone each (e.g. frontend-media)"
 	@echo "  ray-up ray-down ray-status   ray-up-htr (2-GPU pool, GPUs 0,1)"
 	@echo "  serve-up serve-down serve-status   serve-up-both (transcribe+htrflow)"
 	@echo "  qwen-serve                             — vLLM Qwen3.6-27B on GPU 2 for OpenCode"
@@ -103,26 +103,33 @@ dev-micro:
 	./scripts/dev-micro.sh
 
 # ---- frontends (SvelteKit microfrontends) ----------------------------------
-# Seven independent SvelteKit SSR apps (svelte-adapter-bun) + the @rask/ui
-# watcher, orchestrated by Turborepo. Each app's Vite dev server proxies
-# /api/* → VIEWER_BACKEND (the gateway / `make viewer`, :8888). The apps come up on
+# Six independent SvelteKit SSR zones (svelte-adapter-bun) + the shared ui
+# library's watcher, orchestrated by Turborepo. Each zone's Vite dev server proxies
+# /api/* → VIEWER_BACKEND (the gateway / `make viewer`, :8888). The zones come up on
 # their own ports AND Turborepo auto-starts its built-in microfrontends proxy (from
 # frontend/microfrontends/home/microfrontends.json — no extra package) on :3024:
-#   single origin → http://localhost:3024   (browse THIS for cross-app nav)
-#   home :5273 (catch-all: / + /<project>/overview) · storage :5174 /default/storage · compute :5175 /default/compute · discover :5178 · train :5176 · studio :5177
-# The shared @rask/ui shell + nav render with NO backend; start one
+#   single origin → http://localhost:3024   (browse THIS for cross-zone nav)
+#   home :5273 (catch-all: /) · media :5173 /media · lakehouse :5174 /lakehouse · compute :5175 /compute · studio :5176 /studio · annotator :5177 /annotator
+# The shared ui-package shell + nav render with NO backend; start one
 # (`make dev-micro` or `make viewer`) only when you need live /api data.
-dev-frontends:        # build @rask/ui+@rask/api once, then all 7 apps + :3024 proxy
-	# Build the libs FIRST so the apps read a complete dist/. Running `turbo run dev`
-	# unfiltered also starts @rask/ui's `svelte-package -w` watcher, which rewrites
-	# dist/ concurrently and races the apps reading it (one app crashes → turbo tears
-	# the whole run down). Apps-only dev avoids that. To live-edit @rask/ui, run its
-	# watcher in a second terminal: `bun run dev:ui`.
-	bunx turbo --cwd=frontend run build --filter=@rask/ui --filter=@rask/api
+
+# The zone estate — one entry per directory under frontend/microfrontends/. Drives
+# `make k3s-build`/`k3s-import` (one image per zone via --build-arg APP=$z) and
+# sync-favicons; the zone-contract deploy-path gate pins this list to the zone
+# directories that actually exist, so add/retire a zone HERE too.
+ZONES = home lakehouse media annotator compute studio
+
+dev-frontends:        # build the ui + api libs once, then all 6 zones + :3024 proxy
+	# Build the libs FIRST so the zones read a complete dist/. Running `turbo run dev`
+	# unfiltered also starts the ui library's `svelte-package -w` watcher, which rewrites
+	# dist/ concurrently and races the zones reading it (one zone crashes → turbo tears
+	# the whole run down). Zones-only dev avoids that. To live-edit the ui library, run
+	# its watcher in a second terminal: `bun run dev:ui`.
+	bunx turbo --cwd=frontend run build --filter='./packages/ui' --filter='./packages/api'
 	bunx turbo --cwd=frontend run dev --filter='./microfrontends/*'
 
 dev-frontends-k3s:    # frontend HMR (Path A) against the IN-CLUSTER backend
-	# Port-forwards the in-cluster gateway to :8888, then runs all 7 apps with Vite
+	# Port-forwards the in-cluster gateway to :8888, then runs all 6 zones with Vite
 	# HMR pointed at it (VIEWER_BACKEND client proxy + RASK_GATEWAY_URL SSR both
 	# default to :8888). One Ctrl-C tears down both (trap kills the port-forward).
 	# Needs the cluster up (`make k3s-up`). Browse http://localhost:3024.
@@ -132,30 +139,28 @@ dev-frontends-k3s:    # frontend HMR (Path A) against the IN-CLUSTER backend
 	  until curl -sf http://localhost:8888/api/health >/dev/null 2>&1; do sleep 1; done; \
 	  echo "==> gateway reachable; starting frontends (Vite HMR)"; \
 	  VIEWER_BACKEND=http://localhost:8888 RASK_GATEWAY_URL=http://localhost:8888 \
-	    bunx turbo run build --filter=@rask/ui --filter=@rask/api && \
+	    bunx turbo --cwd=frontend run build --filter='./packages/ui' --filter='./packages/api' && \
 	  VIEWER_BACKEND=http://localhost:8888 RASK_GATEWAY_URL=http://localhost:8888 \
-	    bunx turbo run dev --filter='./components/frontends/*'
+	    bunx turbo --cwd=frontend run dev --filter='./microfrontends/*'
 
-home:      # catch-all app only, :5273 (serves / + /<project>/overview)
+home:      # catch-all zone only, :5273 (serves /)
 	bun --cwd=frontend run dev:home
 
-frontend-storage:     # storage app only, :5174 /default/storage
-	bun --cwd=frontend run dev:storage
+frontend-%:           # run one domain zone on its own port, e.g. `make frontend-media`
+	bun --cwd=frontend run dev:$*
 
-frontend-compute:     # compute app only, :5175 /default/compute
-	bun --cwd=frontend run dev:compute
-
-frontend-build:       # production-build every app + @rask/ui (turbo, cached)
+frontend-build:       # production-build every zone + the ui library (turbo, cached)
 	bun --cwd=frontend run build
 
-frontend-check:       # svelte-check every app + @rask/ui (turbo)
+frontend-check:       # svelte-check every zone + the ui library (turbo)
 	bun --cwd=frontend run check
 
-sync-favicons:        # copy the shared favicon source → every app's static/ (one source of truth)
-	@for a in home overview compute discover storage train studio; do \
+sync-favicons:        # copy the shared favicon source → every zone's static/ (one source of truth)
+	@for a in $(ZONES); do \
+	  mkdir -p frontend/microfrontends/$$a/static && \
 	  cp frontend/assets/favicon.ico frontend/assets/favicon.svg \
 	     frontend/microfrontends/$$a/static/ ; \
-	done; echo "synced favicon.{ico,svg} → 7 apps' static/"
+	done; echo "synced favicon.{ico,svg} → 6 zones' static/"
 
 # ---- ray -------------------------------------------------------------------
 RAY_HEAD_PORT       ?= 6379
@@ -306,14 +311,13 @@ pg-revision: pg-deps
 
 # ---- local k3s ------------------------------------------------------------
 COMPOSE_IMAGES = gateway core-api search-api volumes-api ray-api orchestrator controlplane
-# SvelteKit SSR microfrontends — all built from the one parametrized
-# .docker/frontend.dockerfile via --build-arg APP=<name>. "frontend" is the
-# catch-all (home); the rest are the /default/<domain> MFE apps.
-FRONTEND_IMAGES = home overview storage compute discover train studio
+# SvelteKit SSR microfrontend zone images — one per $(ZONES) entry, all built from
+# the one parametrized .docker/frontend.dockerfile via --build-arg APP=<name>.
+# "home" is the catch-all; the rest are pinned to their /<zone> base path.
 KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 HELM ?= KUBECONFIG=$(KUBECONFIG) helm
 KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
-K3S_IMAGES = $(COMPOSE_IMAGES) $(FRONTEND_IMAGES) ray
+K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES) ray
 
 # Subchart repos (Chart.yaml dependencies). OCI deps (kueue) need no repo add.
 K3S_DEP_REPOS = nvdp=https://nvidia.github.io/k8s-device-plugin \
@@ -339,7 +343,7 @@ k3s-build: ## Build all fleet + frontend (6 MFEs) + ray images as :dev (native a
 	  echo ">> building $$s:dev"; \
 	  docker buildx build -f .docker/$$s.dockerfile -t $$s:dev --load . || exit 1; \
 	done
-	@for a in $(FRONTEND_IMAGES); do \
+	@for a in $(ZONES); do \
 	  echo ">> building $$a:dev (frontend.dockerfile APP=$$a)"; \
 	  docker buildx build -f .docker/frontend.dockerfile --build-arg APP=$$a -t $$a:dev --load . || exit 1; \
 	done

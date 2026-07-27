@@ -1,0 +1,26 @@
+{
+	"name": "@rask/labeling",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		"./*": "./src/*.ts"
+	},
+	"scripts": {
+		"check": "bunx tsc --noEmit",
+		"check:tsgo": "tsgo --noEmit -p tsconfig.json",
+		"test": "vitest run",
+		"lint": "oxlint .",
+		"fmt": "rsvelte-fmt .",
+		"fmt:check": "rsvelte-fmt --check ."
+	},
+	"dependencies": {
+		"@rask/media-api": "workspace:*",
+		"apache-arrow": "^21.2.0"
+	},
+	"devDependencies": {
+		"@rask/config": "workspace:*",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.10"
+	}
+}

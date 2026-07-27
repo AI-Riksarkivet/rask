@@ -43,9 +43,11 @@
 	// Mirror the original: surface only the overview transport failure.
 	const error = $derived(overviewQuery.error ? String(overviewQuery.error) : null);
 
-	// Poll Ray every 5s. `.catch(() => {})` is mandatory: an uncaught refresh
-	// rejection (one 500) evicts the query from cache and kills the loop. Each
-	// query refreshes independently so one failure can't stop the others.
+	// POLL REASON: the Ray dashboard REST API is snapshot-only introspection — Ray publishes no
+	// change events a cursor could ride, so re-reading on a clock is the only transport for
+	// cluster/job/actor/task/serve state. `.catch(() => {})` is mandatory: an uncaught refresh
+	// rejection (one 500) evicts the query from cache and kills the loop. Each query refreshes
+	// independently so one failure can't stop the others.
 	onMount(() => {
 		const timer = setInterval(() => {
 			overviewQuery.refresh().catch(() => {});
@@ -148,9 +150,7 @@
 							<c.icon class="h-3.5 w-3.5" />{c.label}
 						</div>
 						<div class="mt-1 font-mono text-2xl tabular-nums">
-							{c.value}{#if c.total !== null}<span class="text-muted-foreground text-base"
-									>/{c.total}</span
-								>{/if}
+							{c.value}{#if c.total !== null}<span class="text-muted-foreground text-base">/{c.total}</span>{/if}
 						</div>
 					</Card>
 				</a>

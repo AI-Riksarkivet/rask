@@ -2,6 +2,6 @@
 @import 'tw-animate-css';
 @import '@rask/ui/styles/tokens.css';
 
-/* Scan the shared @rask/ui component library so its Tailwind classes (badge, etc.)
-   are generated — Tailwind 4 ignores node_modules by default. */
+/* Scan the shared @rask/ui component library so its Tailwind classes are generated —
+   Tailwind 4 ignores node_modules by default. */
 @source '../../../packages/ui/dist';

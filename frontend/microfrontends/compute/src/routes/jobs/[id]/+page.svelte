@@ -63,9 +63,11 @@
 		logsQuery.refresh().catch(() => {});
 	}
 
-	// Poll every 5s. `.catch(() => {})` is mandatory: an uncaught refresh
-	// rejection (one 500) evicts the query from cache and kills the loop. Logs
-	// only poll while the job is live; the rest always refresh independently.
+	// POLL REASON: the Ray dashboard REST API is snapshot-only introspection — Ray publishes no
+	// change events a cursor could ride, and a live job's log file grows without any event that
+	// says it grew, so re-reading on a clock is the only transport. `.catch(() => {})` is
+	// mandatory: an uncaught refresh rejection (one 500) evicts the query from cache and kills
+	// the loop. Logs only poll while the job is live; the rest always refresh independently.
 	onMount(() => {
 		const timer = setInterval(() => {
 			jobsQuery.refresh().catch(() => {});
@@ -240,8 +242,8 @@
 					<span class="text-muted-foreground ml-auto text-xs">
 						{#if job.start_time}started {fmtAgo(job.start_time)} ·{/if}
 						runtime {fmtDur(
-							job.start_time ? ((job.end_time ?? Date.now()) - job.start_time) / 1000 : null,
-						)}
+				job.start_time ? ((job.end_time ?? Date.now()) - job.start_time) / 1000 : null,
+			)}
 					</span>
 				</div>
 
@@ -299,8 +301,8 @@
 						</div>
 						<span class="font-mono text-xs tabular-nums"
 							>{progress.done.toLocaleString()}/{progress.total.toLocaleString()} pages ({progress.pct.toFixed(
-								1,
-							)}%)</span
+				1,
+			)}%)</span
 						>
 					</div>
 					<div class="grid gap-x-6 px-4 py-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -330,9 +332,7 @@
 						>Driver logs</span
 					>
 					{#if running}
-						<span
-							class="flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400"
-						>
+						<span class="flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">
 							<span class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500"></span>live
 						</span>
 					{/if}
@@ -406,9 +406,7 @@
 													class="text-destructive flex items-start gap-0.5 font-mono text-[10px]"
 													title={t.error_message}
 												>
-													<TriangleAlert class="mt-0.5 h-3 w-3 shrink-0" />{t.error_type
-														? `${t.error_type}: `
-														: ''}{t.error_message}
+													<TriangleAlert class="mt-0.5 h-3 w-3 shrink-0" />{t.error_type ? `${t.error_type}: ` : ''}{t.error_message}
 												</div>
 											{/if}
 										</td>
@@ -427,8 +425,8 @@
 			{:else}
 				<div class="text-muted-foreground flex items-center gap-2 text-xs">
 					<FileText class="h-4 w-4" />
-					No Ray tasks for this job — htr_http jobs run as a plain HTTP driver; the work happens in the
-					Serve replicas (Actors page).
+					No Ray tasks for this job — htr_http jobs run as a plain HTTP driver; the work happens in the Serve
+					replicas (Actors page).
 				</div>
 			{/if}
 		{/if}

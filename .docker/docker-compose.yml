@@ -1,0 +1,124 @@
+# Run from repo root:  docker compose -f .docker/docker-compose.yml up -d --build
+# Build context is the repo root (..), so .dockerignore and pyproject/uv.lock apply.
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: lance-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # web console
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  createbuckets:
+    image: minio/mc:latest
+    container_name: lance-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing local/lance-catalog &&
+      echo 'bucket lance-catalog ready';
+      "
+
+  server:
+    build:
+      context: ..
+      dockerfile: .docker/rest-catalog.dockerfile
+    image: lance-rest-catalog:dev
+    container_name: lance-rest-catalog
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      minio:
+        condition: service_healthy
+      createbuckets:
+        condition: service_completed_successfully
+    environment:
+      LANCE_REST_IMPL: dir
+      LANCE_REST_ROOT: s3://lance-catalog
+      LANCE_NS_DELIMITER: "$$"            # $$ -> literal $ in compose
+      LANCE_S3_ENDPOINT: http://minio:9000
+      LANCE_S3_ACCESS_KEY_ID: minioadmin
+      LANCE_S3_SECRET_ACCESS_KEY: minioadmin
+      LANCE_S3_REGION: us-east-1
+      LANCE_S3_ALLOW_HTTP: "true"
+      LANCE_S3_VIRTUAL_HOSTED: "false"
+      # --- Auth is OFF by default. Uncomment to enforce OIDC (Dex) + OpenFGA authz.
+      #   The openfga/postgres/dex services below provide the infra.
+      # LANCE_OIDC_ENABLED: "true"
+      # LANCE_OIDC_ISSUER: http://dex:5556/dex
+      # LANCE_OIDC_AUDIENCE: lance-catalog
+      # LANCE_FGA_ENABLED: "true"
+      # LANCE_FGA_API_URL: http://openfga:8080
+    ports:
+      - "2333:2333"
+
+  # --- OpenFGA authorization (Postgres-backed) ---
+  fga-postgres:
+    image: postgres:16
+    container_name: lance-fga-postgres
+    environment:
+      POSTGRES_USER: openfga
+      POSTGRES_PASSWORD: openfga
+      POSTGRES_DB: openfga
+    volumes:
+      - fga-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openfga"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  openfga-migrate:
+    image: openfga/openfga:latest
+    container_name: lance-openfga-migrate
+    command: migrate
+    depends_on:
+      fga-postgres:
+        condition: service_healthy
+    environment:
+      OPENFGA_DATASTORE_ENGINE: postgres
+      OPENFGA_DATASTORE_URI: postgres://openfga:openfga@fga-postgres:5432/openfga?sslmode=disable
+
+  openfga:
+    image: openfga/openfga:latest
+    container_name: lance-openfga
+    command: run
+    depends_on:
+      openfga-migrate:
+        condition: service_completed_successfully
+    environment:
+      OPENFGA_DATASTORE_ENGINE: postgres
+      OPENFGA_DATASTORE_URI: postgres://openfga:openfga@fga-postgres:5432/openfga?sslmode=disable
+      OPENFGA_LOG_FORMAT: json
+    ports:
+      - "8080:8080"   # HTTP API
+      - "3000:3000"   # Playground (dev only)
+
+  # --- Dex OIDC provider (static config; dev IdP) ---
+  dex:
+    image: dexidp/dex:latest
+    container_name: lance-dex
+    command: dex serve /etc/dex/config.yaml
+    volumes:
+      - ./dex.config.yaml:/etc/dex/config.yaml:ro
+    ports:
+      - "5556:5556"
+
+volumes:
+  minio-data:
+  fga-postgres-data:

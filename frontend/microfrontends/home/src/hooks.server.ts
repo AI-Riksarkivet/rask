@@ -1,11 +1,12 @@
-import type { HandleFetch } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
-import { makeGatewayHandleFetch } from '@rask/api';
+import { makeZoneHooks } from '@rask/api/bff';
+import { makeZoneServerErrorHandler } from '@rask/api/observability';
 
-// SSR reads (remote query() via getRequestEvent().fetch) issue relative /api/*,
-// which in prod resolves against the external ingress origin and hairpins back
-// through the ingress. Route them straight to the in-cluster gateway instead.
-// Dev defaults to the local gateway; the chart sets RASK_GATEWAY_URL in-cluster.
-export const handleFetch: HandleFetch = makeGatewayHandleFetch(
-	env.RASK_GATEWAY_URL ?? 'http://localhost:8888',
-);
+// Per-request session hydration from the sealed OIDC cookie + the SSR `/api/*` → in-cluster gateway
+// rewrite, both single-sourced in @rask/api/bff. No-op when OIDC is unconfigured (the zone runs
+// auth-off). The chart sets LANCE_GATEWAY_URL in-cluster; dev defaults to the local gateway.
+export const { handle, handleFetch } = makeZoneHooks(env, { gateway: true });
+
+// Every unhandled SSR/endpoint error is stamped with THIS zone, so an alert names the zone that can fix
+// it instead of "the page" — four zones share one origin, and nothing else can tell them apart.
+export const handleError = makeZoneServerErrorHandler('home');

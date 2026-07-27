@@ -1,0 +1,15 @@
+# Local-only override: avoid host-port clashes with other running containers.
+# `ra-minio` already owns host 9000/9001, so remap THIS stack's MinIO host ports.
+# The catalog server reaches MinIO over the compose network (minio:9000), so only
+# the host-side mapping changes — nothing inside the stack is affected.
+#
+#   docker compose -f .docker/docker-compose.yml \
+#                  -f .docker/docker-compose.auth.sqlite.yml \
+#                  -f .docker/docker-compose.local.yml up -d --build server
+services:
+  minio:
+    # !override REPLACES the base ports list (Compose otherwise *concatenates*
+    # them, which would re-introduce the conflicting 9000/9001 host bindings).
+    ports: !override
+      - "9900:9000"   # S3 API  (host 9900 -> container 9000)
+      - "9901:9001"   # console (host 9901 -> container 9001)

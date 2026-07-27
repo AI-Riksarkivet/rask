@@ -28,8 +28,10 @@
 		}
 	}
 
-	// Poll Ray every 5s. `.catch(() => {})` is mandatory: an uncaught refresh
-	// rejection (one 500) evicts the query from cache and kills the loop.
+	// POLL REASON: the Ray dashboard REST API is snapshot-only introspection — Ray publishes no
+	// change events a cursor could ride, so re-reading the job list on a clock is the only
+	// transport. `.catch(() => {})` is mandatory: an uncaught refresh rejection (one 500) evicts
+	// the query from cache and kills the loop.
 	onMount(() => {
 		const timer = setInterval(() => {
 			jobsQuery.refresh().catch(() => {});
@@ -184,8 +186,8 @@
 										{#if j.batches.length}
 											<span class="ml-1 text-[10px]">
 												{j.batches.slice(0, 2).join(', ')}{j.batches.length > 2
-													? ` +${j.batches.length - 2}`
-													: ''}
+							? ` +${j.batches.length - 2}`
+							: ''}
 											</span>
 										{/if}
 									</td>

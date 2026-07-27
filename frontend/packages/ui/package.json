@@ -1,10 +1,8 @@
 {
 	"name": "@rask/ui",
 	"version": "0.1.0",
-	"keywords": [
-		"svelte"
-	],
-	"license": "MIT",
+	"private": true,
+	"license": "Apache-2.0",
 	"files": [
 		"dist",
 		"!dist/**/*.test.*",
@@ -18,13 +16,46 @@
 			"types": "./dist/index.d.ts",
 			"svelte": "./dist/index.js"
 		},
-		"./button": {
-			"types": "./dist/components/button/index.d.ts",
-			"svelte": "./dist/components/button/index.js"
+		"./alert-dialog": {
+			"types": "./dist/components/alert-dialog/index.d.ts",
+			"svelte": "./dist/components/alert-dialog/index.js"
+		},
+		"./avatar": {
+			"types": "./dist/components/avatar/index.d.ts",
+			"svelte": "./dist/components/avatar/index.js"
 		},
 		"./badge": {
 			"types": "./dist/components/badge/index.d.ts",
 			"svelte": "./dist/components/badge/index.js"
+		},
+		"./button": {
+			"types": "./dist/components/button/index.d.ts",
+			"svelte": "./dist/components/button/index.js"
+		},
+		"./card": {
+			"types": "./dist/components/card/index.d.ts",
+			"svelte": "./dist/components/card/index.js"
+		},
+		"./checkbox": {
+			"types": "./dist/components/checkbox/index.d.ts",
+			"svelte": "./dist/components/checkbox/index.js"
+		},
+		"./chip": {
+			"types": "./dist/components/chip/index.d.ts",
+			"svelte": "./dist/components/chip/index.js"
+		},
+		"./collapsible": {
+			"types": "./dist/components/collapsible/index.d.ts",
+			"svelte": "./dist/components/collapsible/index.js"
+		},
+		"./color-mode": {
+			"types": "./dist/hooks/color-mode.svelte.d.ts",
+			"svelte": "./dist/hooks/color-mode.svelte.js",
+			"default": "./dist/hooks/color-mode.svelte.js"
+		},
+		"./data-table": {
+			"types": "./dist/components/data-table/index.d.ts",
+			"svelte": "./dist/components/data-table/index.js"
 		},
 		"./dialog": {
 			"types": "./dist/components/dialog/index.d.ts",
@@ -34,69 +65,121 @@
 			"types": "./dist/components/dropdown-menu/index.d.ts",
 			"svelte": "./dist/components/dropdown-menu/index.js"
 		},
-		"./avatar": {
-			"types": "./dist/components/avatar/index.d.ts",
-			"svelte": "./dist/components/avatar/index.js"
+		"./field": {
+			"types": "./dist/components/field/index.d.ts",
+			"svelte": "./dist/components/field/index.js"
 		},
-		"./collapsible": {
-			"types": "./dist/components/collapsible/index.d.ts",
-			"svelte": "./dist/components/collapsible/index.js"
+		"./grants-panel": {
+			"types": "./dist/components/grants-panel/index.d.ts",
+			"svelte": "./dist/components/grants-panel/index.js"
 		},
-		"./card": {
-			"types": "./dist/components/card/index.d.ts",
-			"svelte": "./dist/components/card/index.js"
+		"./input": {
+			"types": "./dist/components/input/index.d.ts",
+			"svelte": "./dist/components/input/index.js"
 		},
-		"./table": {
-			"types": "./dist/components/table/index.d.ts",
-			"svelte": "./dist/components/table/index.js"
+		"./motion": {
+			"types": "./dist/motion.d.ts",
+			"default": "./dist/motion.js"
 		},
-		"./checkbox": {
-			"types": "./dist/components/checkbox/index.d.ts",
-			"svelte": "./dist/components/checkbox/index.js"
+		"./navigation-menu": {
+			"types": "./dist/components/navigation-menu/index.d.ts",
+			"svelte": "./dist/components/navigation-menu/index.js"
 		},
-		"./alert-dialog": {
-			"types": "./dist/components/alert-dialog/index.d.ts",
-			"svelte": "./dist/components/alert-dialog/index.js"
+		"./popover": {
+			"types": "./dist/components/popover/index.d.ts",
+			"svelte": "./dist/components/popover/index.js"
 		},
 		"./progress": {
 			"types": "./dist/components/progress/index.d.ts",
 			"svelte": "./dist/components/progress/index.js"
 		},
-		"./sort-header": {
-			"types": "./dist/components/sort-header/index.d.ts",
-			"svelte": "./dist/components/sort-header/index.js"
+		"./radio-group": {
+			"types": "./dist/components/radio-group/index.d.ts",
+			"svelte": "./dist/components/radio-group/index.js"
 		},
-		"./sidebar": {
-			"types": "./dist/components/sidebar/index.d.ts",
-			"svelte": "./dist/components/sidebar/index.js"
+		"./resizable-split": {
+			"types": "./dist/components/resizable-split/index.d.ts",
+			"svelte": "./dist/components/resizable-split/index.js"
+		},
+		"./runs": {
+			"types": "./dist/runs/index.d.ts",
+			"default": "./dist/runs/index.js"
+		},
+		"./search-bar": {
+			"types": "./dist/components/search-bar/index.d.ts",
+			"svelte": "./dist/components/search-bar/index.js"
+		},
+		"./select": {
+			"types": "./dist/components/select/index.d.ts",
+			"svelte": "./dist/components/select/index.js"
+		},
+		"./separator": {
+			"types": "./dist/components/separator/index.d.ts",
+			"svelte": "./dist/components/separator/index.js"
+		},
+		"./sheet": {
+			"types": "./dist/components/sheet/index.d.ts",
+			"svelte": "./dist/components/sheet/index.js"
 		},
 		"./shell": {
 			"types": "./dist/shell/index.d.ts",
 			"svelte": "./dist/shell/index.js"
 		},
+		"./sidebar": {
+			"types": "./dist/components/sidebar/index.d.ts",
+			"svelte": "./dist/components/sidebar/index.js"
+		},
+		"./skeleton": {
+			"types": "./dist/components/skeleton/index.d.ts",
+			"svelte": "./dist/components/skeleton/index.js"
+		},
+		"./slider": {
+			"types": "./dist/components/slider/index.d.ts",
+			"svelte": "./dist/components/slider/index.js"
+		},
+		"./sort-header": {
+			"types": "./dist/components/sort-header/index.d.ts",
+			"svelte": "./dist/components/sort-header/index.js"
+		},
+		"./status-board": {
+			"types": "./dist/components/status-board/index.d.ts",
+			"svelte": "./dist/components/status-board/index.js"
+		},
+		"./styles/tokens.css": "./dist/styles/tokens.css",
+		"./switch": {
+			"types": "./dist/components/switch/index.d.ts",
+			"svelte": "./dist/components/switch/index.js"
+		},
+		"./table": {
+			"types": "./dist/components/table/index.d.ts",
+			"svelte": "./dist/components/table/index.js"
+		},
+		"./tooltip": {
+			"types": "./dist/components/tooltip/index.d.ts",
+			"svelte": "./dist/components/tooltip/index.js"
+		},
 		"./utils": {
 			"types": "./dist/utils/index.d.ts",
 			"default": "./dist/utils/index.js"
-		},
-		"./styles/tokens.css": "./dist/styles/tokens.css"
+		}
 	},
 	"scripts": {
 		"dev": "svelte-package -w",
-		"build": "svelte-package && publint",
-		"package": "svelte-package",
+		"build": "svelte-package",
 		"check": "svelte-check --tsconfig ./tsconfig.json",
-		"test": "vitest run",
+		"test": "vitest run --passWithNoTests",
+		"lint": "oxlint .",
+		"fmt": "rsvelte-fmt .",
+		"fmt:check": "rsvelte-fmt --check .",
 		"storybook": "storybook dev -p 6006",
-		"build-storybook": "storybook build",
-		"lint": "oxlint",
-		"fmt": "oxfmt .",
-		"fmt:check": "oxfmt --check ."
+		"build-storybook": "storybook build"
 	},
 	"dependencies": {
-		"@lucide/svelte": "^1.21.0",
+		"@lucide/svelte": "^1.26.0",
+		"@tanstack/table-core": "^8.21.3",
 		"bits-ui": "^2.18.1",
 		"clsx": "^2.1.1",
-		"gsap": "^3.13.0",
+		"gsap": "^3.15.0",
 		"mode-watcher": "^1.1.0",
 		"tailwind-merge": "^3.6.0",
 		"tailwind-variants": "^3.2.2"
@@ -108,16 +191,14 @@
 		"@storybook/svelte": "^10.4.6",
 		"@storybook/svelte-vite": "^10.4.6",
 		"@sveltejs/package": "^2.5.8",
-		"@sveltejs/vite-plugin-svelte": "^7.1.2",
-		"@tailwindcss/vite": "^4.3.1",
-		"publint": "^0.3.21",
+		"@sveltejs/vite-plugin-svelte": "^7.2.0",
+		"@tailwindcss/vite": "^4.3.3",
 		"storybook": "^10.4.6",
-		"svelte": "^5.56.3",
-		"svelte-check": "^4.6.0",
-		"tailwindcss": "^4.3.1",
-		"typescript": "^6.0.3",
-		"vite": "^8.0.16",
-		"vitest": "^4.1.9"
+		"svelte": "^5.56.8",
+		"svelte-check": "^4.7.3",
+		"tailwindcss": "^4.3.3",
+		"vite": "^8.1.5",
+		"vitest": "^4.1.10"
 	},
 	"peerDependencies": {
 		"svelte": "^5.0.0"

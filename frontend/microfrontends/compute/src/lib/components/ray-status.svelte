@@ -8,8 +8,10 @@
 	const healthQuery = getRayHealth();
 	const health = $derived(healthQuery.current ?? null);
 
-	// Poll every 5s. `.catch(() => {})` is mandatory: an uncaught refresh rejection
-	// (one 500) evicts the query from cache and kills the loop.
+	// POLL REASON: service liveness — the transition worth catching is a recovery, and nothing
+	// publishes "the Ray head you could not reach is up again", so a timer is the only transport.
+	// `.catch(() => {})` is mandatory: an uncaught refresh rejection (one 500) evicts the query
+	// from cache and kills the loop.
 	onMount(() => {
 		const timer = setInterval(() => healthQuery.refresh().catch(() => {}), 5000);
 		return () => clearInterval(timer);

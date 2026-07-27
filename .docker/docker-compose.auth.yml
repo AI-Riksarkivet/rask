@@ -1,0 +1,17 @@
+# Overlay that turns ON OIDC (Dex) + OpenFGA authz for the server.
+#   docker compose -f .docker/docker-compose.yml -f .docker/docker-compose.auth.yml up -d
+services:
+  server:
+    environment:
+      LANCE_OIDC_ENABLED: "true"
+      LANCE_OIDC_ISSUER: http://dex:5556/dex
+      LANCE_OIDC_AUDIENCE: lance-catalog
+      # Dex dev IdP serves discovery/JWKS over http; allow it (dev only — never in prod).
+      LANCE_OIDC_ALLOW_INSECURE: "true"
+      LANCE_FGA_ENABLED: "true"
+      LANCE_FGA_API_URL: http://openfga:8080
+    depends_on:
+      openfga:
+        condition: service_started
+      dex:
+        condition: service_started

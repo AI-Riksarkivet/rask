@@ -1,0 +1,55 @@
+/* ────────────────────────────────────────────────────────────────────
+ * The annotator zone's stylesheet — the ESTATE design system, nothing zone-private.
+ *
+ * Palette, radius scale and type scale all come from @rask/ui/styles/tokens.css: the
+ * exact import data/admin/models/lineage use. So `bg-card`, `text-muted-foreground`,
+ * `border-border` and `rounded-lg` resolve to the same values here as everywhere else,
+ * in light and dark alike, and the annotator stops reading as a different product.
+ *
+ * What this replaces: a lance-audio-era block that carried its own hex ramp (#0d0d0f /
+ * #fafaf8 …), a 0.375rem radius, a 13.5px body size, a Lora serif and a karaoke-cursor
+ * rule. That palette was close enough to look intentional and different enough to look
+ * wrong beside the estate. The serif, the --highlight token, the cursor rules and the
+ * bits-ui popover patch were all inherited from the media zone's transcript player and
+ * referenced by nothing this zone renders.
+ * ──────────────────────────────────────────────────────────────────── */
+
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import '@rask/ui/styles/tokens.css';
+
+/* Tailwind 4 + Vite auto-discovery isn't reliable for .svelte under Bun; point it at the
+ * source roots explicitly (paths relative to this file). @rask/ui ships built, and Tailwind 4
+ * skips node_modules unless told otherwise. */
+@source './lib';
+@source './routes';
+@source './app.html';
+@source '../../../packages/ui/dist';
+
+@layer base {
+	html,
+	body {
+		height: 100%;
+	}
+	/* The review panes are dense and scroll constantly (annotation list, table, layer and
+	 * history sections). A thin token-coloured scrollbar keeps that chrome quiet instead
+	 * of dropping a platform-width bar into every panel. */
+	*::-webkit-scrollbar {
+		width: 10px;
+		height: 10px;
+	}
+	*::-webkit-scrollbar-thumb {
+		background: var(--color-border);
+		border-radius: 999px;
+	}
+	*::-webkit-scrollbar-thumb:hover {
+		background: var(--color-muted-foreground);
+	}
+}
+
+/* Icons sit inside tight flex rows all over the tool rail and the floating clusters;
+ * without this they pick up inline layout's baseline gap and can be squeezed. */
+svg {
+	display: block;
+	flex-shrink: 0;
+}

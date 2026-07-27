@@ -7,6 +7,9 @@ describe('cn', () => {
 	});
 
 	it('handles conditional values', () => {
+		// The constant `false &&` is the POINT: this pins the call-site idiom every component uses
+		// (`cn(base, isActive && 'active')`) rather than just cn's handling of a bare falsy argument.
+		// oxlint-disable-next-line no-constant-binary-expression
 		expect(cn('text-sm', false && 'hidden', 'font-bold')).toBe('text-sm font-bold');
 	});
 });

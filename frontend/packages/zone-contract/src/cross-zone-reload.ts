@@ -1,60 +1,136 @@
 /**
- * Cross-zone link guard.
+ * A cross-zone `<a>` MUST hard-navigate.
  *
- * Ported from the retired `ra-local/cross-zone-reload` ESLint rule when the frontend moved to
- * oxlint + oxfmt (oxlint's .svelte support reads the <script> block, not the markup, so an
- * anchor-attribute rule cannot live there). It is a TEST now, which is also where lance-ns keeps
- * its equivalent — so the merge adds cases to this package rather than reintroducing a linter.
+ * Each zone is a SEPARATE SvelteKit app. A soft client-router navigation to another zone's path
+ * targets a route THIS app's manifest does not contain → 404. Cross-zone links must therefore carry
+ * `data-sveltekit-reload` to force a full document navigation. Nothing else catches this: it type-checks,
+ * it unit-tests, it renders — it only fails in a browser, on the one hop nobody clicked.
  *
- * The hazard: an <a> pointing into ANOTHER microfrontend zone that soft-navigates. SvelteKit's
- * router would try to resolve a route this zone does not own → 404. Such a link must carry
- * `data-sveltekit-reload` so the browser performs a document navigation instead.
+ * This used to be a local ESLint rule (the last thing keeping ESLint installed). It is a gate, not a
+ * style preference, so it moved to where the estate's other gates live and now runs on **Svelte's own
+ * compiler** — the same parser that builds the component, rather than a second AST from a lint plugin.
  *
- * Same-zone links are written `{base}/…` (a `{base}` expression, never a literal
- * `/default/<domain>`), so they normalise to an opaque placeholder here and are never flagged.
+ * `lakehouse` is ONE zone spanning the data/lineage/models/admin AREAS: a link between those is
+ * same-zone and must NOT hard-navigate, or every area hop pays a document load again. Same-zone links
+ * are written `{base}/…`, so their href starts with an opaque expression and is never a zone path.
  */
+import { parse } from 'svelte/compiler';
 
-/** Zones that own a base path. `home` is the catch-all at `/` and owns no `/…/<zone>` prefix. */
-export const ZONES = ['overview', 'compute', 'discover', 'storage', 'train', 'studio'] as const;
+/** The zones with a base path. `home` is the catch-all at '/' and owns no prefix. */
+export const ZONES = ['lakehouse', 'media', 'annotator', 'compute', 'studio'];
 
-/** Opaque-expression placeholder. Cannot contain a '/', so it never forms a zone path. */
-const EXPR = '￿';
+/** A cross-zone path is domain-relative and single-segment-rooted: `/<zone>` or `/<zone>/…`. */
+const ZONE_PATH = new RegExp(`^\\/(${ZONES.join('|')})(?:\\/|$)`);
 
-const ZONE_PATH = new RegExp(`^/[^/]*/(${ZONES.join('|')})(?:/|$)`);
+/** Opaque-expression placeholder. Cannot contain '/', so it never completes a zone prefix. */
+export const EXPR = '￿';
 
-const ANCHOR = /<a\b([^>]*)>/gis;
-const HREF = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
-const RELOAD = /\bdata-sveltekit-reload\b/i;
-
-/** Every `{…}` mustache becomes one opaque char, mirroring the original rule's hrefToPath(). */
-function normalise(raw: string): string {
-	return raw.replace(/\{[^}]*\}/g, EXPR);
+/** True when an href targets another zone and so must hard-navigate. */
+export function isCrossZonePath(path: string | null): boolean {
+	return typeof path === 'string' && ZONE_PATH.test(path);
 }
 
-export function isCrossZonePath(path: string): boolean {
-	return ZONE_PATH.test(path);
+/**
+ * Flatten an href attribute value to a comparable string: static text verbatim, every `{…}` as EXPR.
+ * Returns null for a shorthand/spread href that cannot be read statically (never flagged).
+ */
+export function hrefToPath(value: unknown): string | null {
+	if (value === true || value == null) return null;
+	const nodes = Array.isArray(value) ? value : [value];
+	let out = '';
+	for (const n of nodes as { type?: string; data?: string; expression?: unknown }[]) {
+		if (n.type === 'Text') {
+			out += n.data ?? '';
+		} else if (n.type === 'ExpressionTag') {
+			const e = n.expression as {
+				type?: string;
+				quasis?: { value: { cooked?: string; raw: string } }[];
+			};
+			out +=
+				e?.type === 'TemplateLiteral'
+					? (e.quasis ?? []).map((q) => q.value.cooked ?? q.value.raw).join(EXPR)
+					: EXPR;
+		} else {
+			return null;
+		}
+	}
+	return out;
+}
+
+/** `data-sveltekit-reload` present and not explicitly "off". */
+function hasReloadEnabled(
+	attributes: { type?: string; name?: string; value?: unknown }[],
+): boolean {
+	for (const a of attributes) {
+		if (a.type !== 'Attribute' || a.name !== 'data-sveltekit-reload') continue;
+		const v = a.value;
+		if (Array.isArray(v) && v.length === 1) {
+			const only = v[0] as { type?: string; data?: string };
+			if (only.type === 'Text' && only.data === 'off') return false;
+		}
+		return true; // boolean shorthand, "", or a dynamic value → enabled
+	}
+	return false;
 }
 
 export interface Violation {
+	/** The href as written, with expressions rendered as `${…}`. */
 	href: string;
 	line: number;
 }
 
-/** Scan Svelte markup for cross-zone anchors missing `data-sveltekit-reload`. */
+/** One `<a>` element found in a component: its attributes and 1-based source line. */
+export interface Anchor {
+	attributes: { type?: string; name?: string; value?: unknown }[];
+	line: number;
+}
+
+/** Every `<a>` in a component, in source order. Shared by this gate and `link-targets`, which asks a
+ *  different question of the same elements (does the target exist) and must not re-derive the walk —
+ *  a second traversal would drift, and the blocks ({#if}/{#each}/{#snippet}) are the fiddly part. */
+export function walkAnchors(source: string): Anchor[] {
+	const ast = parse(source, { modern: true });
+	const out: Anchor[] = [];
+
+	const walk = (node: unknown): void => {
+		if (!node || typeof node !== 'object') return;
+		const n = node as {
+			type?: string;
+			name?: string;
+			attributes?: { type?: string; name?: string; value?: unknown }[];
+			fragment?: { nodes?: unknown[] };
+			nodes?: unknown[];
+			start?: number;
+		};
+		if (n.type === 'RegularElement' && n.name === 'a') {
+			out.push({
+				attributes: n.attributes ?? [],
+				line: source.slice(0, n.start ?? 0).split('\n').length,
+			});
+		}
+		for (const child of n.fragment?.nodes ?? n.nodes ?? []) walk(child);
+		// Blocks ({#if}, {#each}, {#snippet}, …) hold their children in named fragments.
+		for (const [key, v] of Object.entries(n)) {
+			if (key === 'fragment' || key === 'nodes' || key === 'attributes') continue;
+			if (Array.isArray(v)) for (const c of v) walk(c);
+			else if (v && typeof v === 'object' && 'type' in (v as object)) walk(v);
+		}
+	};
+
+	walk(ast.fragment);
+	return out;
+}
+
+/** Every cross-zone `<a>` in one component that does not hard-navigate. */
 export function findViolations(source: string): Violation[] {
 	const out: Violation[] = [];
-	for (const match of source.matchAll(ANCHOR)) {
-		const attrs = match[1] ?? '';
-		const href = HREF.exec(attrs);
-		// No href, or a fully dynamic `href={…}` we cannot read statically → never flagged.
+	for (const { attributes, line } of walkAnchors(source)) {
+		const href = attributes.find((a) => a.type === 'Attribute' && a.name === 'href');
 		if (!href) continue;
-		const path = normalise(href[1] ?? href[2] ?? '');
-		if (!isCrossZonePath(path)) continue;
-		if (RELOAD.test(attrs)) continue;
-		out.push({
-			href: path,
-			line: source.slice(0, match.index).split('\n').length,
-		});
+		const path = hrefToPath(href.value);
+		if (isCrossZonePath(path) && !hasReloadEnabled(attributes)) {
+			out.push({ href: path!.replaceAll(EXPR, '${…}'), line });
+		}
 	}
 	return out;
 }

@@ -1,0 +1,32 @@
+{
+	"name": "@rask/engine",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"default": "./src/index.ts"
+		},
+		"./*": "./src/*"
+	},
+	"scripts": {
+		"check": "bunx tsc --noEmit",
+		"check:tsgo": "tsgo --noEmit -p tsconfig.json",
+		"test": "vitest run",
+		"lint": "oxlint .",
+		"fmt": "rsvelte-fmt .",
+		"fmt:check": "rsvelte-fmt --check ."
+	},
+	"dependencies": {
+		"apache-arrow": "^21.2.0",
+		"flatbush": "^4.6.2",
+		"pixi.js": "^8.19.0",
+		"wavesurfer.js": "^7.12.11"
+	},
+	"devDependencies": {
+		"@rask/config": "workspace:*",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.10"
+	}
+}

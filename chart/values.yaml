@@ -1,3 +1,20 @@
+# rask umbrella chart values — the MERGED estate (rask 0.2.0 + lance-ns 0.1.0, one release named `rask`).
+#
+# Two systems now install from this one file:
+#   * the rask HTR fleet (gateway/core-api/orchestrator/ray-api/search-api/volumes-api/controlplane),
+#     KubeRay Serve, CloudNativePG, the RustFS Tenant, the SvelteKit microfrontend zones;
+#   * the lance-ns lakehouse (catalog + lineage + medallion + compaction + media), governance
+#     (Dex OIDC + OpenFGA), the Dapr/NATS event fabric, OpenBao, and the OTel-first observability tier.
+#
+# Merge rule applied throughout (plan P4): rask's chart is the BASE and every rask key is preserved;
+# subchart DEPENDENCIES are rask's (one control plane each — see Chart.yaml); subchart VALUES are
+# lance-ns's where richer (credentialed NATS, openfga datastore.engine=postgres + the migrate hook).
+# Every lance-ns hostname literal was re-pointed from `lance-ns-*` to `rask-*`, because both charts'
+# fullname helpers resolve to the release name and the release is `rask`.
+#
+# Helm hard rules for this chart: numeric knobs use `(hasKey $parent "key") | ternary` — NEVER
+# `| default <n>`, which swallows an explicit 0 (tests/unit/test_invariants.py enforces it).
+
 # Pinned so in-cluster service names are rask-<component> (release name is also rask).
 fullnameOverride: "rask"
 nameOverride: ""
@@ -61,8 +78,16 @@ config:
   HCP_INSECURE: "true"
   RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
 
-# Per-service fleet definitions. Rendered by templates/fleet.yaml.
+# Per-service definitions. TWO planes share this map, by design of the merge:
+#   * the rask FLEET (core-api … gateway) — rendered by templates/fleet.yaml, which ranges over this
+#     map but only emits the `gateway` entry unless singleTenant.enabled;
+#   * the lance-ns LAKEHOUSE apps (catalog, lineage) — rendered by templates/services.yaml, which
+#     reads .Values.services.catalog / .Values.services.lineage by NAME.
+# ⚠ CONFLICT (reported, not silently patched): with singleTenant.enabled=true, fleet.yaml's `range`
+# also picks up catalog+lineage and would emit a SECOND Deployment for each (image `<name>:tag` from
+# the fleet registry). fleet.yaml must learn to skip the lakehouse entries — a templates-side fix.
 services:
+  # ---- rask fleet (uvicorn modules, one Deployment each via templates/fleet.yaml) ----
   core-api:
     module: "core_api:app"
     port: 8801
@@ -100,11 +125,63 @@ services:
     healthPath: /healthz
     waitFor: []
 
-# Image registry/tag shared by every fleet + migration container.
+  # ---- lance-ns lakehouse apps (templates/services.yaml; share the catalog image, different entrypoint) ----
+  catalog:
+    module: catalog.main:app
+    port: 2333
+    daprAppId: catalog
+    replicas: 1 # stateless — scale freely in prod (the prod overlay bumps these); HA via podDisruptionBudget
+  lineage:
+    module: lineage.main:app
+    port: 8000
+    daprAppId: lineage
+    # Freshness budget in HOURS (data-contract gap #2): >0 makes the reconcile sweep + per-dataset
+    # GET flag `stale: true` for any dataset whose newest version commit is older — arrival cadence
+    # becomes an ASSERTED contract clause (WARN `lineage_reconcile_stale` on the tick). 0 = off.
+    freshnessBudgetHours: 0
+    # Safe to scale: the app's own pubsub component carries queueGroupName=lineage, so replicas form a
+    # competing-consumer group (single delivery per event); ingest is idempotent anyway (MERGE on run_id).
+    replicas: 1
+    # Demo data-peek router (/demo/*: live Lance schema/versions/rows for the UI) — DEMO ONLY: the
+    # endpoints carry no OIDC/FGA guard, so they'd disclose dataset metadata past the governance layer
+    # (reachable unauthenticated through the web BFF — bug hunt 2026-07-13). SECURE-BY-DEFAULT off; a demo
+    # opts in with `--set services.lineage.demoData=true`. The router is only mounted when true.
+    demoData: false
+    # Read-side audit trail: every allowed FGA-gated data read is recorded (the lineage_reads table),
+    # feeding GET /datasets/{name}/readers + the ReadersPanel in the data/lineage zones. Rendered into
+    # LINEAGE_READ_AUDIT_ENABLED only when auth.enabled (that is where a real subject exists to record) —
+    # the read-side mirror of auth.audit; set false to keep the panel dark even with auth on.
+    readAudit: true
+    # Periodic storage->graph reconciliation (B4) — a Dapr cron binding POSTs to /<bindingName> on `schedule`
+    # to back-fill Lance writes whose lineage event was lost (the outbox gap). Off by default (the demo ships
+    # without it); the /datasets/{name}/reconcile read endpoint is available regardless.
+    reconcile:
+      enabled: false
+      bindingName: lineage-reconcile-cron
+      schedule: "@every 300s" # demo cadence (prod: e.g. "0 */15 * * * *")
+    # #4 transactional outbox: producers stage each lineage event to s3://<rustfs.bucket>/_lineage_outbox
+    # BEFORE the fire-and-forget publish; the reconcile sweep DRAINS any survivor (a crash between the Lance
+    # commit and the publish), re-ingesting the FULL event (inputs/author/columnLineage) — closing the loss
+    # window the DLQ + version-only back-fill cannot. Requires reconcile.enabled (the drain runs in the sweep).
+    outbox:
+      enabled: false
+    # Run-node retention (§4): the reconcile cron prunes graph :Run nodes older than this many days
+    # (batched DETACH DELETE under the sweep's single-flight lock). 0 = off — keep full provenance
+    # (the dev/demo default). Only meaningful with reconcile.enabled (the cron is the pruner).
+    runRetentionDays: 0
+    # Server-side per-statement timeout (seconds) on the AGE pool — bounds a runaway Cypher traversal.
+    ageStatementTimeoutSeconds: 30
+
+# Image registry/tag shared by every fleet + migration container, PLUS the per-image lance-ns block so
+# Tilt can inject each built image independently (image_keys → image.catalog.repository/tag).
 image:
   repository: ""          # empty => bare "<component>" name (e.g. core-api)
   tag: "dev"
   pullPolicy: IfNotPresent
+  # The lakehouse image: catalog (catalog.main:app) + lineage (lineage.main:app) + the medallion
+  # movers + compaction + the media services all run from this one image, different entrypoint.
+  # `lance.catalogImage` uses required() on the tag, so an empty tag FAILS the render loudly.
+  catalog: { repository: lance-rest-catalog, tag: dev }
 
 # Dev-only knobs, driven by the Tilt loop (Tiltfile). Never enable in production.
 dev:
@@ -114,9 +191,104 @@ dev:
   reload: false
 
 resources:
+  # rask fleet tier (templates/fleet.yaml).
   fleet:
     requests: {cpu: "50m", memory: "128Mi"}
     limits: {cpu: "1", memory: "512Mi"}
+  # lance-ns default tier — every app container that doesn't name its own key (lance.resources helper).
+  default:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: "1", memory: 512Mi }
+  # The assist model runner holds two warm torch models (~1.1 GB weights) and burns real CPU per
+  # inference (multi-threaded GEMMs) — the request-pod default would OOM-kill it at load.
+  assist:
+    requests: { cpu: "1", memory: 2Gi }
+    limits: { cpu: "8", memory: 6Gi }
+  # The viewer is not a request pod: it holds an in-process lance-graph CypherEngine over the KG and a
+  # cache of Arrow-IPC atlas point clouds, both sized by the corpus. On the default 512Mi tier a SINGLE
+  # `GET /api/graph/status` (what the media zone's /graph page calls on mount) OOM-killed it — measured
+  # 2026-07-26, kernel `Memory cgroup out of memory: Killed process (uvicorn)` anon-rss:510000kB, exit
+  # 137, and the annotator's next thumbnail fetch surfaced the bare 502.
+  #
+  # Sizing, from cgroup memory.current on the live pod (11 GB corpus: 145,175 chunks, 139,407 KG
+  # entities, 290,408 relations, 507,344 mentions):
+  #   idle 124Mi → all 1154 thumbnails 139Mi → three atlas point clouds 265Mi → KG engine built 736Mi
+  #   → full concurrent mixed drive 609Mi steady, high-water 955Mi (the KG build's transient).
+  # 1536Mi = 1.6x the measured 955Mi peak; requests 768Mi covers the 609-736Mi steady working set.
+  # CPU 2 is for the thumbnail grid, measured at conc 8: 172 req/s p95 80ms at 1 core vs 310 req/s
+  # p95 46ms at 2 — the annotator opens a whole page of tiles at once.
+  viewer:
+    requests: { cpu: 200m, memory: 768Mi }
+    limits: { cpu: "2", memory: 1536Mi }
+
+# --- Graceful rollouts -----------------------------------------------------------------------------
+# preStop sleep: endpoint removal must propagate to kube-proxy/the Dapr sidecar BEFORE the app receives
+# SIGTERM, else every rollout connection-refuses in-flight requests (and the apps' /readyz shutting_down
+# branch is dead code). terminationGracePeriodSeconds bounds preStop + the app's own drain; compaction
+# gets a longer budget so an in-flight sweep/Lance write is never SIGKILLed mid-transaction.
+lifecycle:
+  preStopSeconds: 5
+  terminationGracePeriodSeconds: 30
+  compactionTerminationGracePeriodSeconds: 120
+
+# --- Pod hardening (applied to every app container via the lance.securityContext helper) ----------
+# runAsNonRoot + drop-ALL-caps + RuntimeDefault seccomp are unconditional (the restricted PodSecurity
+# baseline). readOnlyRootFilesystem is the one tunable: on by default (each app has a writable /tmp
+# emptyDir for pyarrow/Lance spill + OTel), flip off only if a workload genuinely needs a writable rootfs.
+security:
+  readOnlyRootFilesystem: true
+  # Batch 10 (2026-07-11) — both default OFF (behavior-identical); flip after the §7a live checks.
+  # Dedicated unbound SA per first-party workload, automountServiceAccountToken:false ON THE SA
+  # object (never the pod — the Dapr injector's projected token stays untouched). Pre-flip check:
+  # `dapr mtls -k` must still verify after enabling (the audit's guidance).
+  serviceAccounts:
+    enabled: false
+  # securityContexts for the INFRA pods (app tier is already hardened via lance.securityContext)
+  # + PSA-restricted compliance for the root busybox wait-age init containers (the audit's
+  # sequencing footgun: label the namespace `pod-security.kubernetes.io/enforce=restricted` ONLY
+  # after these boot green — the label itself is a kubectl step, the namespace isn't chart-owned).
+  # Per-image uid/fsGroup (data/secret holders need the RIGHT ids for their PVCs, not helper reuse):
+  infraContexts:
+    enabled: false
+    rustfs: { runAsUser: 10001, fsGroup: 10001 } # MUST match the rustfs image's built-in `rustfs` user
+    # (uid 10001) — it is what owns the on-disk data. A mismatched uid (this was 1000) does NOT CrashLoop:
+    # RustFS starts and READS fine (world-readable dirs), but EVERY WRITE fails `Io error: Permission
+    # denied (os error 13)` → S3 500/AccessDenied to every client. Live 2026-07-13: the whole data plane
+    # was write-dead under infraContexts until this was corrected. fsGroup alone can't rescue it (the
+    # dirs are mode 755 owned by group 10001, so a different group has no write bit).
+    age: { runAsUser: 999, fsGroup: 999 } # postgres official image uid/gid
+    openbao: { runAsUser: 100, fsGroup: 1000 } # hashicorp vault-family image uid
+    dex: { runAsUser: 1001, fsGroup: 1001 }
+    gateway: { runAsUser: 101 } # nginx worker uid; its conf already pins pid/temp to /tmp
+
+# --- Network isolation (opt-in; requires a policy-enforcing CNI e.g. Calico/Cilium) ---------------
+# k3s's default kindnet/flannel does NOT enforce NetworkPolicy, so this is a no-op there — it is prod
+# hardening. When enabled: namespace default-deny Ingress+Egress, kube-dns egress allow (same change —
+# the audit's footgun), intra-namespace allows, api-server egress, and EXCLUSIVE client lists for the
+# guarded stores (openbao ← secret-consuming app pods ONLY; age-postgres ← its real clients;
+# rustfs ← the data plane + GreptimeDB). Default OFF; flip in values-prod on a policy-enforcing CNI.
+# ⚠ Under default-deny, EVERY Job/CronJob pod template needs explicit component labels or the policy
+# blocks it silently (kindnet hides the failure) — see the templates' job specs.
+networkPolicy:
+  # NOTE (goal cond 8): the NATS pods are EXCLUDED from the general intra-namespace ingress allow; their
+  # only ingress is two explicit, port-scoped rules — 4222 (clients) from any in-namespace pod (the daprd
+  # sidecars live in nearly every app pod, so a label enumeration would be dishonest) and 8222 (monitor,
+  # varz/jsz for the admin ops view) from the web-admin zone pods ONLY. 6222/7422 stay closed — see
+  # network-policy.yaml (3e)/(3f).
+  enabled: false
+  # Extra `from` peers for the openbao policy — e.g. the external-secrets operator's namespace when
+  # externalSecrets.enabled: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: external-secrets}}}]
+  openbaoExtraFrom: []
+  # Extra `from` peers for the rustfs policy — the ray-lance demo pods live outside the release's
+  # component labels (deploy/ray-lance-demo.yaml), so grant them here when running `make ray-demo`:
+  rustfsExtraFrom:
+    - podSelector:
+        matchLabels: { app: ray-lance-head }
+    - podSelector:
+        matchLabels: { app: ray-lance-worker }
+  # Extra egress rules (verbatim NetworkPolicy egress entries) for externalized backends —
+  # off-cluster S3, a managed NATS (nats.externalUrl), an external OTLP endpoint.
+  extraEgress: []
 
 # Platform control-plane: read-only listing of operator Project CRs for the
 # home picker. Its own ServiceAccount + ClusterRole (read projects only).
@@ -131,10 +303,18 @@ orchestrator:
   # (no uv, no source tree), so override the dev default `uv run --project runners/htr runner`.
   runnerCmd: "runner"
 
+# --- Micro-frontend zones: the SvelteKit SSR zones deployed from the ONE parametrized
+# frontend.dockerfile (image <name>:tag). The catch-all `home` owns "/"; each domain zone is pinned to
+# its base path /<name> in svelte.config.js (host carries the project; path carries the domain) and gets
+# an Ingress rule (templates/ingress.yaml). image == app dir name under frontend/microfrontends/.
 frontend:
+  enabled: true
   replicas: 1
   image:
-    tag: "dev"            # shared tag; repository per app is the app name below
+    # The DEFAULT tag; shared across zones. A zone may override it with `tag:` on its apps entry below —
+    # that is what makes the zone split mean anything: independent deploy is the only thing a zone
+    # boundary buys, and one shared tag across every zone cancels it.
+    tag: "dev"
     pullPolicy: IfNotPresent
   service:
     port: 3000
@@ -146,28 +326,435 @@ frontend:
   securityContext:
     allowPrivilegeEscalation: false
     capabilities: {drop: ["ALL"]}
-  # The frontend is a set of SvelteKit SSR microfrontends. The catch-all
-  # (home) owns "/"; each domain app is pinned to its base path /<domain> in its
-  # svelte.config.js (host carries the project; path carries the domain) and gets
-  # an ingress rule for that path. image == app dir name under frontend/microfrontends/
-  # (built from the one parametrized frontend.dockerfile).
+  # How long a zone's Bun server tolerates an idle connection, in seconds — the FIRST cut on a live query,
+  # not the edge. svelte-adapter-bun defaults it to 10, which turned `query.live` into a ~12s reconnect
+  # loop (nginx logged "upstream prematurely closed connection", upstream_response_time 12.001).
+  # 0 = disabled, and the measurement is why. 255 is Bun's maximum; the estate HAS a keepalive
+  # (`KEEPALIVE_MS` = 20s in feeds.remote.ts, which re-yields an unmoved cursor so bytes keep flowing)
+  # and a stream still died at **256.8s**, measured over a 290s hold with the edge at 3600s. So Bun's
+  # `idleTimeout` is not refreshed by outbound SSE writes: for a streaming response it behaves as a
+  # maximum connection LIFETIME, and no keepalive can beat it.
+  #
+  # The objection to disabling it — a wedged client holding a socket for ever — is answered by that same
+  # keepalive: every 20s the server WRITES to the socket, so a vanished peer fails the write and ends the
+  # generator. The liveness check moved into the application, where it can tell a silent estate from a
+  # silent client; the transport could not.
+  # ⚠ Templates must read this with `(hasKey $fe "idleTimeoutSeconds") | ternary …` — `| default 255`
+  # swallows this explicit 0 (the bug tests/unit/test_invariants.py now forbids chart-wide).
+  idleTimeoutSeconds: 0
+  # The bare FGA subject the zones' BFF names when reading lineage as a SERVICE (no user session) — must be
+  # READER on the warehouse (seed_medallion_fga.sh) + allowlisted in LINEAGE_SERVICE_SUBJECTS.
+  serviceIdentity: service-web
+  # The zones. home = the catch-all "/"; every other zone is pinned to /<name>.
+  # The union of both estates: rask's 6 domain zones + lance-ns's 3 lakehouse/media zones.
   apps:
-    - {name: home, catchAll: true}              # home, "/"
-    - {name: overview, path: /overview}
-    - {name: storage, path: /storage}
+    - {name: home, catchAll: true}              # the platform home, "/"
+    # rask domain zones surviving R8+R9: compute (the Ray plane rask owns) and studio.
+    # storage + train folded into lakehouse, overview into home; discover retires at P7.
     - {name: compute, path: /compute}
-    - {name: discover, path: /discover}
-    - {name: train, path: /train}
     - {name: studio, path: /studio}
+    # lance-ns zones. `lakehouse` is the MERGED estate zone: catalog + lineage + models + admin were
+    # four separate zones on four Deployments, all reading the same catalog/lineage planes and all
+    # shipped from one shared image tag — four SSR servers and a full document reload between them,
+    # with none of the independent-deploy payoff. One zone, four areas under /lakehouse/<area>.
+    - {name: lakehouse, path: /lakehouse}
+    # The lance-media zones: full BFF zones like the rest — SSR on, the shared session handle, and
+    # same-origin /<zone>/api/* proxy routes to the media Services (VIEWER_API/SEARCH_API/
+    # ANNOTATOR_API env, rendered when media.enabled). Deploy together with media.enabled=true.
+    - {name: media, path: /media}
+    - {name: annotator, path: /annotator}
+  # Per-user OIDC login (opt-in), shared across ALL zones — one origin, one sealed cookie, so a login on
+  # any zone is a login on every zone. REQUIRED when enabled: sessionSecret (seals the cookie),
+  # publicIssuer, publicOrigin (forms the home zone's /auth/callback redirect URI). The confidential Dex
+  # client secret rides dex.clientSecret.
+  oidc:
+    enabled: false
+    publicIssuer: "" # browser-reachable IdP issuer, e.g. https://auth.example.com/dex
+    publicOrigin: "" # browser-reachable origin, e.g. https://app.example.com (forms the redirect URI)
+    sessionSecret: "" # >=32 random chars; seals the session cookie (AES-256-GCM). REQUIRED when enabled.
 
-# In-cluster S3 object store via the RustFS operator (Tenant CR + operator
-# subchart). `enabled` gates BOTH the operator subchart (Chart.yaml condition
-# rustfs.enabled) and the Tenant template. Turn off for external S3.
-# RustFS erasure coding requires servers*volumesPerServer >= 4; standalone is
-# servers=1, volumesPerServer=4 (1 pod, 4 PVCs). S3 service is <tenant>-io:9000.
+# --- lance-ns API gateway — the lakehouse's own nginx reverse proxy ---------------------------------
+# One nginx that path-routes to the in-cluster lakehouse services, so a single `kubectl port-forward`
+# fronts the whole platform. Non-root nginx-unprivileged (listens on 8080).
+# ⚠ CONFLICT (reported): this is a SECOND front door beside the rask fleet gateway at services.gateway
+# (uvicorn `gateway:app` on :8888, the SvelteKit proxy target). They are different Deployments with
+# different names, so nothing collides at render — but the estate now has two edges and the Ingress
+# must be told which one owns which path. Not resolvable inside values.yaml.
+gateway:
+  enabled: true
+  image: nginxinc/nginx-unprivileged:1.27-alpine
+  port: 8080
+  daprAppId: gateway # app traffic is routed via this sidecar's Dapr service-invocation API (:3500)
+  replicas: 1 # stateless nginx reverse proxy — scale freely
+
+# --- Governance (Dex OIDC + OpenFGA). Off → open dev mode; on → the full governed demo. ------------
+auth:
+  enabled: false
+  # Lock root (top-level) namespace/table creation to warehouse-create-grant holders. Off in dev
+  # (open self-serve); values-prod sets it true so a token alone can't squat root namespaces.
+  lockRootCreate: false
+  # #41 compliance audit trail: structured who/what/outcome events for authn (success+failure), authz
+  # (allow+deny), and credential vending on the dedicated `lance.audit` logger → OTLP → GreptimeDB. Rendered
+  # into LANCE_AUDIT_ENABLED only when auth is on (that is where a real subject exists); set false to silence
+  # the stream even with auth on.
+  audit: true
+  # Pin the OpenFGA store (and optionally model) id — the production posture packages/common's fga.py
+  # documents. When set, EVERY FGA consumer (catalog, lineage, medallion) receives its
+  # *_FGA_STORE_ID/*_FGA_MODEL_ID env from these SAME values, and the bootstrap-admin Job grants into the
+  # pinned store — one value, every consumer, so the store the Job grants into can never diverge from the
+  # store the services check against. Empty (default) = provision-by-name at boot (the `lance-catalog`
+  # store — dev/e2e, where the store id changes per cluster).
+  fgaStoreId: ""
+  fgaModelId: ""
+  # First estate admin, seeded BY THE CHART (goal cond 4): a Dex subject (the id_token's `sub`) granted
+  # `owner` on the FGA root object (warehouse:lance_catalog) by the bootstrap-admin post-install/upgrade
+  # hook Job — the grant every estate-wide surface (GET /v1/events, the admin console) gates on. Empty
+  # (default) = no Job renders and grants stay out-of-band (seed scripts / the UI). Requires auth.enabled.
+  bootstrapAdmin: ""
+
+# --- Data-plane credential vending (Track B). How a client gets storage_options for DIRECT object I/O. ----
+# POST /v1/table/<id>/credentials?tier=read|write returns scoped creds (or mode=server_mediated). Modes:
+#   mode_b        (default) — nothing vended; clients use the server-mediated Arrow-IPC data endpoints.
+#   web_identity  — the RUSTFS-NATIVE path: the caller's Dex id_token is exchanged via
+#                   AssumeRoleWithWebIdentity for creds bound to ROLE_POLICY, narrowed per-table by an inline
+#                   session policy. Requires rustfs.oidc.enabled + auth.enabled (the caller presents a token).
+#   sts           — plain AssumeRole + session policy. Works on a compliant STS (AWS / MinIO / Ceph / moto);
+#                   NOT on RustFS (its STS rejects plain AssumeRole — that's why web_identity exists).
+#   static        — pre-provisioned per-bucket keys.
+vending:
+  mode: mode_b # mode_b | web_identity | sts | static
+  ttlSeconds: 900
+  assumeRoleArn: "arn:aws:iam::000000000000:role/lance-vend" # RustFS ignores it; boto3 requires the param
+  # Allow blob-v2 columns to reference EXTERNAL objects outside the dataset root (Blob.from_uri) on create.
+  # Off by default: (1) external bytes live outside the lakehouse (Lance's GC can't protect them, a source
+  # delete dangles the pointer); (2) SSRF — a client-controlled pointer URI is fetched server-side by the
+  # cascade's read_blobs, so an arbitrary URI (cloud metadata / internal host) becomes a read primitive.
+  # Enable only for a trusted producer. Managed/inline blobs (bytes copied in) always work regardless.
+  allowExternalBlobs: false
+  # The SAFER alternative to the blanket flag: a comma-separated allowlist of approved external base URIs
+  # (e.g. "s3://media-bucket/approved,s3://other/base"). External Blob.from_uri pointers are accepted ONLY
+  # under a registered base, with the blanket bypass left off — a curated media source without the SSRF door.
+  # Empty = the chart defaults it to the release's own model-artifact base (s3://<rustfs.bucket>/models/,
+  # the #92 allowlist for #115 registry pointers — plain-path artifacts in the lake's own bucket, no SSRF
+  # surface). Overriding REPLACES that default — include the models base yourself or the train registry's
+  # external pointers get rejected.
+  externalBlobBases: ""
+
+# --- Catalog request limits -----------------------------------------------------------------------
+catalog:
+  # Max request-body bytes accepted on any catalog route. The Arrow-IPC write endpoints buffer the whole
+  # body in memory, so an unbounded POST (e.g. a multi-GB media blob pushed through the catalog instead of
+  # the direct storage/vending path) OOMs the worker. The body-limit middleware rejects oversized bodies
+  # with 413 before buffering. 256 MiB — generous for tabular batches + small inline blobs, bounded well
+  # under a worker's memory. Big media must use the direct-write/vending path (claim-check), not this API.
+  maxBodyBytes: 268435456 # 256 * 1024 * 1024
+  # Cap on concurrent in-flight Arrow-IPC writes (create/insert/merge_insert) — each buffers up to
+  # maxBodyBytes, so peak buffer memory = maxConcurrentWrites × maxBodyBytes. Over the cap → 429 +
+  # Retry-After, shed before a body byte is buffered. 16 matches the code default; prod lowers it to fit
+  # the catalog memory tier — values-prod.yaml states the sizing formula. 0 disables shedding.
+  maxConcurrentWrites: 16
+  # #3-A per-warehouse physical multi-tenancy (admin control plane). On → POST /v1/warehouses provisions a
+  # physically separate bucket per warehouse (Lakekeeper parity) and binds top-level namespaces to it, so a
+  # table under a bound namespace lands in that warehouse's bucket. Additive + backward-compatible: an
+  # unbound namespace always routes to the shared rustfs.bucket, so single-tenant flows are untouched.
+  warehouses:
+    enabled: true
+  # #3-B Lance multi-base DATA distribution: the ALLOWLIST of bucket URIs a single table's fragments may be
+  # spread across (?data_base=s3://... per create, round-robin write, fan-out read — the Uber pattern). A
+  # per-request base MUST be on this list (a caller can never target an arbitrary bucket). Empty = feature
+  # off (single-location creates, byte-identical to before). Populate with pre-provisioned data buckets.
+  multibase:
+    dataBases: []
+  # Control-plane change-events: every governance/metadata mutation (grants/warehouses/policies/tables)
+  # publishes a CatalogControlEvent onto a DEDICATED broadcast Dapr topic (catalog.control.v1, no
+  # queueGroupName) that EVERY catalog replica buffers, so the admin console live-refreshes via
+  # GET /v1/events. ON renders the catalog-control-pubsub Dapr component + the CATALOG_CONTROL NATS
+  # stream + the broadcast subscription, and turns emission on. On by default (parity with lineage emit)
+  # — best-effort + fail-open, so a bus outage degrades to "no live refresh + the audit trail still
+  # records it", never a failed mutation.
+  # BOUNDARY: the ring buffer + its cursor are PER-REPLICA (each broadcast subscriber buffers independently).
+  # Correct at services.catalog.replicas=1 (the default). Scaling the catalog past one replica needs session
+  # affinity (so a client's polls stick to one replica) or a shared buffer — else a load-balanced poll gets
+  # inconsistent cursors and degrades to noisy `reset`s (safe, since events are hints, but wasteful).
+  controlEmit: true
+
+# Dapr pub/sub: the publish-side component name + the lineage topic. Each SUBSCRIBER app additionally
+# gets its own derived component `<name>-<app-id>` carrying its queue group + deliver policy
+# (dapr-component.yaml); the subscription routes live in app code (/lineage-events, /raw-arrival,
+# /medallion-event).
+pubsub:
+  name: lineage-pubsub
+  topic: lineage.events.v1
+  # The DEDICATED broadcast component for the catalog's own control-plane change-events (topic
+  # catalog.control.v1). Separate from `name` (the shared lineage publish component) because it carries NO
+  # queueGroupName — every catalog replica receives every event. Must equal the app's LANCE_CONTROL_PUBSUB
+  # default (services/catalog/core/config.py). Rendered only when catalog.controlEmit is on.
+  controlName: catalog-control-pubsub
+
+# --- Event-driven medallion pipeline (raw → bronze → silver → gold) --------------------------------
+# lance-ray (dummy producer) is the HEAD: POST /produce emits the raw_events lineage + the first trigger
+# (medallion.raw). Each mover subscribes to its upstream stage's trigger, emits the transform's lineage
+# (the DERIVED_FROM edge), and publishes the next trigger — one source event cascades the whole DAG, and
+# Dapr propagates the trace context across every hop. All 5 share the catalog image (different entrypoint).
+medallion:
+  enabled: true
+  port: 8000
+  # Storage ZONES (ingest SOURCE → medallion → gold SINK). Maps a stage NAMESPACE to its S3 bucket;
+  # anything unset falls back to the shared `rustfs.bucket`, so the DEFAULT here is the single-bucket
+  # layout (unchanged, e2e-safe). Override to separate the boundaries — raw (ingest source) and gold
+  # (sink/output) into their OWN buckets/tenants, while bronze/silver (the project's medallion internals)
+  # stay in the project bucket. Any non-default bucket listed here is auto-provisioned by rustfs-mkbucket.
+  # Same RustFS endpoint/creds serve all buckets; a truly external S3 per zone (own endpoint) is future.
+  buckets: {} # e.g. { raw: lance-source, gold: lance-sink }
+  # #84 per-tenant medallion routing (OPT-IN). When true, the producer + movers get
+  # MEDALLION_CONTROL_ROOT (the catalog's warehouse-registry root — the same s3://<rustfs.bucket> the
+  # catalog's LANCE_REST_ROOT names), so a `project`-carrying POST /produce (or stage trigger) resolves
+  # that project's ACTIVE warehouse (`_warehouses/*.json`, provisioned via POST /v1/warehouses) and the
+  # cascade reads/writes s3://<project-bucket>/medallion/<stage> with project-qualified lineage
+  # (acme-bronze / acme-bronze$events). Project-less traffic is BYTE-IDENTICAL either way; with this
+  # false (default — zero render diff), a project-carrying trigger is DROPPED fail-closed (never a
+  # fallback into the shared zone URIs). Per-project FGA namespace tuples must be seeded separately.
+  projectsEnabled: false
+  # Gold SERVING warehouse (OPT-IN; composes with projectsEnabled). When true, the terminal silver→gold
+  # mover gets MEDALLION_GOLD_WAREHOUSE_ENABLED: a `project`-carrying trigger's TARGET root becomes the
+  # project's gold serving warehouse — the registry record created with `"serving": "gold"` on POST
+  # /v1/warehouses — when one exists. The upstream read + raw/bronze/silver stay in the tenant's WORK
+  # warehouse. Absent gold warehouse, or this false (default), → byte-identical work-warehouse routing.
+  goldWarehouse: false
+  # ReBAC enforcement: when true, each mover CHECKS it's authorized (OpenFGA) to produce its target stage
+  # before emitting — the silver→gold mover needs `can_promote` (validator), the others `can_create_table`
+  # (writer). Off by default (the open-mode demo runs without it); seed the mover-identity grants first
+  # (scripts/seed_medallion_fga.sh) before flipping it on.
+  fgaEnabled: false
+  fgaApiUrl: http://rask-openfga:8080
+  # #64 human trigger door: the project a signed-in user must hold `can_administer` on to fire /produce or
+  # /train from the UI (the web BFF forwards ONLY the user's bearer — no service token leaves the web pod).
+  # The service-to-service app-token path is unchanged; this is a SECOND, admin-only door, gated on
+  # auth.enabled + fga. Matches the project the seed grants admin on (scripts/e2e_stack.sh → project:acme).
+  produceAdminProject: acme
+  # Replica counts — each mover's own pubsub component carries queueGroupName=<app-id>, so its replicas
+  # form a competing-consumer group (single delivery per trigger; without the queue group every replica
+  # would process EVERY trigger — up to 8× at gold with 2 replicas per stage). Movers are idempotent on
+  # top (MERGE on run_id). lance-ray is a subscriber too (/raw-arrival). All stateless.
+  producerReplicas: 1
+  moverReplicas: 1
+  # When true, every stage does a REAL in-process Lance read->transform->write (the fake-Ray compute) so the
+  # event-driven cascade produces actual versioned data on RustFS, not just provenance — the lineage graph
+  # then reflects what storage holds and outputStatistics carry real rows/bytes. Off by default (the demo
+  # ships as a pure lineage-emit). Each stage's FROM_URI/TO_URI derive from rustfs.bucket + its namespace, so
+  # the chain lines up (producer raw -> raw->bronze -> bronze->silver -> silver->gold). REQUIRES OpenBao off
+  # (`--set openbao.enabled=false`): the medallion is a dummy producer with no OpenBao secret-fetch (unlike
+  # the catalog), so with OpenBao on the plaintext S3 secret is withheld and it fails fast at boot. Real
+  # compute is a Ray job at rask.
+  compute: false
+  # Media head demo seeding: /ingest-media writes two sample PNGs into the source prefix before
+  # ingesting (the stand-in for an external media drop). Prod points the source at real media and
+  # sets this false. Prefix/topic/dataset names use the code defaults.
+  mediaSeedSamples: true
+  # Event-driven REAL-Ray compute (requires compute + a running Ray cluster — deploy/ray-lance-demo.yaml).
+  # When true, each mover submits its stage transform as a `ray job submit` to the ray-lance cluster IN
+  # RESPONSE TO its Dapr trigger (Ray Jobs REST API, httpx-only — no ray package in the mover image), instead
+  # of the in-process fake-Ray write. Default off. Production is KubeRay (the RayService this chart already
+  # renders under ray.enabled); the raw Ray head here is the on-kind proof.
+  ray: false
+  rayAddress: "http://ray-lance-head:8265"
+  # When true, after the compute writes a stage's Lance dataset the mover runs data-quality assertions on it
+  # (row_count > 0, key column non-null) and BLOCKS promotion on failure — the failed run + its
+  # dataQualityAssertions facet are still emitted (auditable in lineage), but the next stage is NOT
+  # triggered, so a bad batch can't cascade. The automated *validator* half of governance (FGA decides who
+  # MAY promote; quality decides if the DATA is good enough). Requires medallion.compute. Off by default.
+  quality: false
+  qualityKeyColumn: id
+  # Ray TRAIN head (#115): values-wired passthrough for the /train head + the submit-and-ack trainer
+  # consumer (both live in the lance-ray app). Defaults mirror services/medallion/core/config.py so a
+  # deployment can retarget topic/entrypoint/identity/registry namespace without an image rebuild.
+  # lineageUrl empty = release-derived (http://<release>-lineage:<port>) — set it only to point the
+  # training job's self-emitted RunEvents elsewhere ("" in the CODE default disables emission; the chart
+  # always renders a URL).
+  train:
+    topic: training.jobs
+    entrypoint: "python /home/ray/jobs/ray_train_job.py"
+    trainerIdentity: service-trainer
+    modelsNamespace: models
+    lineageUrl: ""
+  producer:
+    daprAppId: lance-ray
+    # Expose POST /produce through the gateway (the DEMO entry point for the cascade). It carries no
+    # auth — a caller could trigger cascades / forge medallion provenance — so values-prod sets it false;
+    # the EDGE head then fires only from real raw writes via /raw-arrival. NB this gates only the gateway
+    # route — the in-cluster ClusterIP route stays reachable + unauthenticated.
+    expose: true
+    rawDataset: raw_events
+    rawNamespace: raw
+    operation: lance_ray_ingest
+    author: ray
+    rawTopic: medallion.raw
+  # The 4 stage movers run medallion.mover:app, differing only by env. order = the DAG.
+  # requiredAction/serviceIdentity gate each hop when fgaEnabled: silver→gold needs `can_promote`
+  # (validator-only); the others `can_create_table` (writer). Each mover checks as its own identity.
+  # ⚠ Every requiredAction below MUST be a real relation on the `namespace` type in
+  # packages/common/src/common/auth/model.json — the mover checks it on namespace:<toNamespace>, and a
+  # typo 503s the whole cascade at the FGA gate instead of denying it. Pinned by
+  # tests/unit/test_fga_model_contract.py::test_chart_medallion_required_actions_exist_on_namespace.
+  movers:
+    # serviceIdentity is a BARE subject — common.fga.check prefixes `user:` itself (a `user:` here would
+    # double-prefix and always deny). The seeded FGA tuples grant these `user:service-*` identities.
+    # Optional per-mover `requiredColumns: "id,embedding"` — declared consumer dependencies
+    # (data-contract gap #1): the quality gate adds a `column_declared` assertion per name, so a
+    # promotion that dropped/renamed a declared column is BLOCKED (the breaking-change detector).
+    - { name: raw-to-bronze, daprAppId: raw-to-bronze, fromNamespace: raw, fromDataset: raw_events, toNamespace: bronze, toDataset: bronze$events, operation: ingest_events, author: alice, subTopic: medallion.raw, pubTopic: medallion.bronze, requiredAction: can_create_table, serviceIdentity: "service-raw-to-bronze" }
+    - { name: bronze-to-silver, daprAppId: bronze-to-silver, fromNamespace: bronze, fromDataset: bronze$events, toNamespace: silver, toDataset: silver$features, operation: embed_features, author: data_eng, subTopic: medallion.bronze, pubTopic: medallion.silver, requiredAction: can_create_table, serviceIdentity: "service-bronze-to-silver", requiredColumns: "id" }
+    - { name: silver-to-gold, daprAppId: silver-to-gold, fromNamespace: silver, fromDataset: silver$features, toNamespace: gold, toDataset: gold$catalog, operation: aggregate_gold, author: analyst, subTopic: medallion.silver, pubTopic: "", requiredAction: can_promote, serviceIdentity: "service-silver-to-gold", requiredColumns: "id" }
+    # The MEDIA lane (multimodal §9): POST /ingest-media on lance-ray lands bronze-media blobs and
+    # publishes medallion.media; this mover's generic compute then derives what the blob CONTENT
+    # supports (image → inline thumbnail + embedding; unrecognised media carries through untouched —
+    # no media config anywhere, the same binary as every mover). Terminal (pubTopic ""). Own
+    # namespaces: mover URIs derive from the namespace, so reusing bronze/silver would collide with
+    # the events chain's datasets on the same paths.
+    - { name: media-to-silver, daprAppId: media-to-silver, fromNamespace: bronze-media, fromDataset: bronze-media$objects, toNamespace: silver-media, toDataset: silver-media$features, operation: derive_media, author: data_eng, subTopic: medallion.media, pubTopic: "", requiredAction: can_create_table, serviceIdentity: "service-media-to-silver", requiredColumns: "id,thumbnail,embedding" }
+
+# --- Compaction/GC microservice (Dapr cron binding) -----------------------------------------------
+# A bindings.cron component POSTs /<bindingName> on `schedule`; the service compacts small Lance
+# fragments + GCs old versions across the lakehouse bucket. Schedule/retention are component config.
+compaction:
+  enabled: true
+  daprAppId: compaction
+  port: 8000
+  bindingName: compaction-cron
+  schedule: "@every 120s" # demo cadence (prod: e.g. "0 */30 * * * *")
+  olderThanDays: 7 # version GC keeps this much history
+  # Emit a maintenance lineage event per materially-compacted dataset (shows GC in producers() next to
+  # writes) AND a FAIL event per maintain:-errored dataset (deterministic per-dataset run id — the flood
+  # guard). Off by default (opt-in, like the medallion toggles); on → compaction joins the pubsub scope +
+  # publishes. NOTE: the compaction FAILURE surface (§4 visibility) exists only when this is ON — left
+  # off, a persistently failing dataset is visible only in OTel spans + the cron response body. When ON,
+  # also consider services.lineage.runRetentionDays > 0: a recovered dataset's FAIL Run node otherwise
+  # persists in /runs indefinitely (the deterministic id means exactly one node per dataset).
+  lineageEmit: false
+
+# --- lance-media plane ----------------------------------------------------------------------------
+# The viewer/search/annotator services from the lance-audio checkout. All three share the catalog image
+# and read the corpus from a node-local hostPath (NO data move — only the annotations table lives in the
+# catalog; MEDIA_READ/WRITE_BACKEND=catalog is the merge's env flip, "direct" restores standalone dev).
+media:
+  enabled: false
+  # Where the corpus is staged ON THE NODE (k3s: into the node at /var/media-corpus — the adaptation of
+  # the runbook's hostPath/extraMount; prod uses a real PV) and where the pods mount it (read-only).
+  corpusHostPath: /var/media-corpus
+  corpusMountPath: /media-corpus
+  readBackend: catalog
+  writeBackend: catalog
+  # Default: the in-release catalog Service (rendered in media.yaml); set to override.
+  catalogUri: ""
+  # The media services' catalog bearer (auth-on catalogs): rendered into a Secret + secretKeyRef env,
+  # only when set. FGA decides what the identity may do — grant it the writer rung on the annotations
+  # table. Unset = anonymous (fail-closed 401/403 on governed catalogs; fine for auth-off dev).
+  catalogToken: ""
+  services:
+    viewer: { port: 8101, daprAppId: viewer }
+    search: { port: 8102, daprAppId: search }
+    annotator: { port: 8103, daprAppId: annotator }
+
+# --- Query encoders — the vector/rerank half of media search -------------------------------------
+# The search + viewer services are CLIENTS of two OpenAI-shaped HTTP endpoints
+# (services/search/services/encoders/{embedding,reranker}.py): Qwen3-VL-Embedding-2B on
+# `POST {embedUrl}/v1/embeddings` and Qwen3-VL-Reranker-2B on `POST {rerankUrl}/v1/rerank`. Neither
+# server is our code — lance-audio serves both from the stock `vllm/vllm-openai` image, so this is a
+# URL, not a Deployment.
+#
+# The settings default is `http://127.0.0.1:8001` / `:8002` — a sidecar-era address that inside a pod
+# is the POD's own loopback, so every vector mode 503s until these are set. Measured 2026-07-26:
+# fts + scene_fts 200, and `semantic`/`visual`/`scene`/`hybrid`/`all` + `rerank=true` all 503.
+# Leaving them empty is the HONEST off state, not an oversight: /api/health reports embed.ok=false /
+# rerank.ok=false and the media zone disables the modes with that reason.
+#
+# Point these at whatever serves the two models — an out-of-cluster fleet, or a host-run vLLM reached
+# through the node gateway. Under `networkPolicy.enabled` an off-cluster endpoint also needs a
+# `networkPolicy.extraEgress` entry, the same as the externalized S3/NATS/OTLP endpoints.
+encoders:
+  embedUrl: "" # e.g. http://encoders.internal:8001 — enables semantic / visual / scene / hybrid / all
+  rerankUrl: "" # e.g. http://encoders.internal:8002 — enables the rerank leg on any mode
+
+# --- Model runners (runners/ — the lance-audio fold) ----------------------------------------------
+# Only the CPU-viable subset ships: `assist` (GroundingDINO-tiny + SAM-ViT-base, CPU wheels, weights
+# baked into the image). The CUDA-pinned runners (asr/diarize/voiceprint) and the LLM-dependent batch
+# runners (topics/kg) have no honest deployment on a GPU-less estate. When enabled (and media.enabled),
+# the annotator's MEDIA_ASSIST_URL points at the assist Service, flipping its in-repo mock to real
+# predictions. NOTE: runners/htr is the rask HTR runner — a sealed project, not deployed from here.
+runners:
+  enabled: false
+  assist:
+    image: { repository: assist-runner, tag: dev }
+    port: 8110
+  # A RayJob submit endpoint for the annotator's batch-labeling seam (MEDIA_JOBS_URL).
+  # No such deriver exists yet — leave empty and the annotator keeps its honest submit/poll mock.
+  jobsUrl: ""
+
+# --- Dapr state store — operational state (NOT analytical data) -----------------------------------
+# Backed by the already-deployed AGE Postgres, in its own database. This is what annotation task state
+# (#122), the notification inbox (#125) and Dapr workflow instances persist to; Lance keeps the
+# published, versioned, analytical data and nothing operational. See chart/templates/dapr-statestore.yaml
+# for why Postgres rather than Redis.
+stateStore:
+  enabled: true
+  name: lance-statestore
+  componentVersion: v1
+  # The Dapr secret store that resolves the connection string — OpenBao, not a k8s Secret. See
+  # packages/common's secrets module for why the store must be the sole source.
+  secretStore: lance-secrets
+  tableName: state
+  metadataTableName: dapr_metadata
+  # Only the services that own operational state may load it. An unscoped component is loadable by
+  # every app-id in the namespace, which would let any service write another's state.
+  scopes:
+    - annotator # #122 task/project state, and the actor per task
+    - catalog # workflow instances for the publish saga
+
+# --- Backups — a FALLBACK for the SELF-CONTAINED in-cluster path only. OFF by default. When you run the
+# managed/operator path (CloudNativePG for AGE, rustfs-operator for S3 — the rask deployment), DISABLE these
+# and let the operators do backups (PITR + scheduled, better than this). These exist so a self-contained
+# in-cluster-prod deploy (in-cluster RustFS PVC + AGE) isn't backup-less. ---------------------------------
+backups:
+  # pg_dump the lineage + OpenFGA DBs (gzip) → the lakehouse S3 under _backups/pg/<date>/.
+  pgDump:
+    enabled: false
+    schedule: "0 2 * * *" # daily 02:00
+    keep: 7 # retention: prune all but the newest N daily dumps each run, so the backups don't grow unbounded
+  # CSI VolumeSnapshot of the RustFS lakehouse PVC. Needs a CSI snapshotter + a VolumeSnapshotClass.
+  volumeSnapshot:
+    enabled: false
+    schedule: "0 3 * * *" # daily 03:00
+    snapshotClassName: "" # the cluster's VolumeSnapshotClass; "" = the cluster default
+    kubectlImage: bitnami/kubectl:1.31 # creates the VolumeSnapshot CR (override to your cluster's kubectl image)
+
+# --- HA: PodDisruptionBudget + (optional) HPA for the stateless request-serving services. Off by default
+# (single-node dev); the prod overlay turns the PDB on. Stateful stores (AGE/RustFS) get HA from their
+# operators (CNPG / rustfs-operator), NOT from here. ------------------------------------------------
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+autoscaling:
+  enabled: false # opt-in; needs metrics-server. Targets catalog + lineage.
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+# --- In-cluster S3 (RustFS) ------------------------------------------------------------------------
+# `enabled` gates BOTH object-store paths that now live in this chart:
+#   * the FIRST-PARTY Deployment + mkbucket Job (templates/rustfs.yaml, service `rask-rustfs:9000`) —
+#     the lance-ns lakehouse store, which renders on every install;
+#   * the rustfs-operator Tenant CR (templates/rustfs-tenant.yaml, service `rask-rustfs-io:9000`) —
+#     rask's store, additionally gated by singleTenant.enabled.
+# ⚠ CONFLICT (reported): with singleTenant.enabled=true BOTH render — two object stores, two endpoints,
+# and rask's fleet/secrets templates hardcode `-rustfs-io` while the lakehouse services resolve
+# `lance.rustfsHost` (`rask-rustfs`). Unifying them is a templates-side decision, not a values one.
+# RustFS erasure coding requires servers*volumesPerServer >= 4; standalone is servers=1,
+# volumesPerServer=4 (1 pod, 4 PVCs).
 rustfs:
   enabled: true
-  image: "rustfs/rustfs:latest"
+  # lance-ns's PINNED tag wins over rask's `rustfs/rustfs:latest`: it is multi-arch (amd64+arm64) and
+  # rustfs is pre-1.0, so `latest` silently moves under a running data store.
+  image: rustfs/rustfs:1.0.0-beta.8
   servers: 1
   volumesPerServer: 4
   # Single-node k3s: all 4 local-path volumes share one physical disk, which
@@ -176,9 +763,35 @@ rustfs:
   bypassDiskCheck: true
   port: 9000
   consolePort: 9001
-  storage: "15Gi"          # per-volume; 4 volumes => ~60Gi total (local-path is unmetered hostPath)
-  storageClass: "local-path"
-  buckets: ["images-batch", "images-batch-alto", "images-batch-search", "rask-observability"]
+  # Tenant path: per-volume, 4 volumes => ~60Gi total. First-party path: the single lakehouse PVC.
+  # rask's 15Gi is kept (it is the larger of the two dev defaults and local-path is unmetered);
+  # values-prod raises it to 200Gi for the real lakehouse + 14d of observability.
+  storage: "15Gi"
+  storageClass: "local-path"          # Tenant PVCs
+  accessKey: rustfsadmin
+  secretKey: rustfsadmin
+  # The Lance lakehouse ROOT bucket (catalog LANCE_REST_ROOT + the warehouse registry). Referenced by
+  # name in scripts/demo_reset.sh + the vending/lineage tests — do not rename casually.
+  bucket: lance-catalog
+  # Buckets the rustfs-operator Tenant provisions. The lakehouse + observability buckets are listed so
+  # the Tenant path provisions exactly what the first-party mkbucket Job does.
+  buckets: ["images-batch", "images-batch-alto", "images-batch-search", "rask-observability", "lance-catalog"]
+  # Externalize: when set, the apps (catalog/lineage/compaction + vending STS) connect HERE instead of the
+  # in-cluster RustFS — pair with rustfs.enabled=false to use a managed S3. NOTE: the greptimedb-standalone
+  # subchart's S3 endpoint (under `greptimedb-standalone.objectStorage.s3.endpoint`) must be overridden too.
+  externalEndpoint: "" # e.g. https://s3.us-east-1.amazonaws.com
+  # Durable lakehouse storage for the FIRST-PARTY Deployment. Default true → a PVC (the lakehouse +
+  # GreptimeDB data survive a pod roll + are snapshot-able in prod). false → emptyDir, throwaway CI only.
+  persistence:
+    enabled: true
+    storageClassName: "" # "" = the cluster default SC (local-path on k3s); prod: a snapshot-capable CSI class
+  mcImage: minio/mc:RELEASE.2025-08-13T08-35-41Z # pinned (multi-arch); `mc` speaks plain S3 → bootstraps buckets on RustFS too
+  # OIDC identity provider for STS AssumeRoleWithWebIdentity (Track B). When on, RustFS trusts Dex id_tokens
+  # → a client can mint short-TTL creds it scopes per-table via the catalog's vending endpoint (vending.mode=
+  # web_identity). Off by default (plain dev needs no STS). Enabling it rolls RustFS.
+  oidc:
+    enabled: false
+    rolePolicy: readwrite # built-in full-S3 base policy; the per-request session policy narrows it per-table
 
 ray:
   enabled: true
@@ -215,8 +828,31 @@ ingress:
   # forwarded localhost with no Host header or /etc/hosts entry. Set a hostname
   # (e.g. rask.local) for host-based routing in shared/prod environments.
   host: ""
-  annotations: {}
-  tls: []
+  # Keyed defaults, so an operator's own annotations still merge (and can override these).
+  #
+  # SvelteKit emits one `Link: <…>; rel=modulepreload` entry per module of the entry graph, so a
+  # chart-heavy zone (models pulls layerchart) sends a ~4 KB response header. nginx's DEFAULT
+  # proxy buffer is 4 KB and it answers "upstream sent too big header" with a 502 — the models
+  # zone was unreachable through the edge while its pod served 200s (found live 2026-07-24).
+  # 16 KB fits the largest zone with headroom; harmless for the others.
+  #
+  # proxy-read-timeout is what keeps a live query alive. ingress-nginx defaults to 60s, and it counts
+  # from the last byte READ FROM the upstream, not from the last request — so a `query.live` generator
+  # that yields only when its data changes (the correct discipline) is severed by the edge after 60
+  # idle seconds. SvelteKit's SSE transport sends no keepalive of its own (kit 2.70.1
+  # runtime/server/remote.js has exactly one enqueue, the payload), so nothing refreshes that clock
+  # from the app side. The client then reconnects and re-runs the generator from scratch, which is
+  # strictly worse than polling. 3600s lets a stream idle for an hour; a genuinely dead upstream is
+  # still reaped, just on a timescale that matches a human session. proxy-send-timeout moves with it —
+  # the two are one setting in practice, and leaving the send side at 60s reaps the same connection
+  # from the other end. Pinned by
+  # tests/unit/test_invariants.py::test_ingress_holds_a_live_stream_open_longer_than_nginx_default.
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffer-size: 16k
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  tls: []          # e.g. [{ secretName: rask-tls, hosts: ["rask.example.com"] }]
 
 # ---- cluster infra foundation (subchart dependencies, Chart.yaml) ----------
 # One `helm install` brings these up alongside the app. Turn off for a prod
@@ -249,15 +885,34 @@ nvdp:
 kuberay:
   enabled: true
 
+# --- NATS (subchart) — JetStream backs the Dapr pubsub.jetstream component -------------------------
+# rask shipped this OFF ("platform NATS was single-tenant; per-project renders its own"). The merge
+# turns it ON: the lance-ns event fabric (lineage publish, the medallion cascade, the catalog control
+# broadcast, the DLQ streams) is the chart's default-on data plane and every one of those hops is a
+# Dapr pubsub.jetstream publish. templates/nats-stream-job.yaml provisions the streams (Dapr does not
+# auto-create them) and renders on `nats.enabled OR nats.externalUrl`.
 nats:
-  enabled: false   # platform NATS was single-tenant; per-project renders its own
-  config:           # inert while enabled=false; kept so a re-enable needs no re-discovery
+  enabled: true
+  config:
     jetstream:
       enabled: true
+      fileStore:
+        pvc:
+          size: 1Gi
+  # the headless service is <release>-nats:4222
+  # First-party keys (the nats subchart ignores them):
+  # Externalize: when set, the pubsub components + the stream-provision Job connect HERE instead of the
+  # in-cluster NATS — pair with nats.enabled=false to use a managed/clustered NATS (the in-cluster
+  # single node is a prod SPOF: the bus down = no lineage ingest, no cascade).
+  externalUrl: "" # e.g. nats://nats.internal:4222
+  # Raft replication for the LINEAGE/MEDALLION streams — REQUIRES a clustered NATS (3+ nodes); the
+  # in-cluster single-node subchart only supports 1. Set 3 together with externalUrl in prod.
+  streamReplicas: 1
 
+# --- Dapr control plane (subchart) — injects the daprd sidecar into annotated pods ----------------
 dapr:
   enabled: true
-  # Inject Dapr sidecar into every fleet pod. Off => plain pods; the gateway
+  # Inject Dapr sidecar into every fleet + lakehouse pod. Off => plain pods; the gateway
   # falls back to httpx env-URLs. (The control-plane subchart is dapr.enabled above.)
   sidecars: true
   logLevel: "info"
@@ -265,6 +920,65 @@ dapr:
   # which rejects multi-image batch uploads (POST /api/batches/<id>/upload routes
   # gateway -> core-api over Dapr). Raise it to fit real batches.
   maxBodySize: "32Mi"
+  # PodSecurity `restricted` compliance for the injected daprd sidecar. OFF by default (prod posture, like
+  # networkPolicy.enabled). Our app containers are already `restricted`-clean (lance.securityContext:
+  # runAsNonRoot + drop:[ALL] + RuntimeDefault); the sidecar is the remaining gap. Turning this on adds the
+  # RuntimeDefault seccomp annotation; you MUST ALSO set the injector-wide drop-caps value it can't reach:
+  #   --set dapr.sidecarRestricted=true --set dapr.dapr_sidecar_injector.sidecarDropALLCapabilities=true
+  # NOTE full-namespace `restricted` ENFORCE is still blocked by the OTel Collector (a single Deployment
+  # whose filelog receiver needs hostPath /var/log/pods — `restricted` forbids it, no value fixes it):
+  # give the Collector its own namespace at `baseline`, or a ServiceAccount PSA exemption.
+  sidecarRestricted: false
+  # Bound every DaprClient gRPC call (publish_event has no per-call timeout arg, and the SDK's default
+  # deadline is unset) so a wedged sidecar can't hang a publisher indefinitely — a timeout surfaces as a
+  # publish failure the caller handles (the producer → 503, the movers → RETRY) instead of a stuck request.
+  apiTimeoutSeconds: 30
+  # Dapr app-API-token — Dapr injects it (APP_API_TOKEN) into subscriber apps AND stamps a
+  # `dapr-api-token` header on every event it DELIVERS, so the sidecar-delivered routes (/lineage-events,
+  # /medallion-event, the cron route) reject any forged request that didn't come through the sidecar.
+  # OVERRIDE in prod (it's the auth secret for those routes). Closes the provenance-forgery prod-blocker.
+  appToken: "lance-dev-dapr-app-token-override-me"
+  # Dapr-native retry + dead-letter layer — DEFAULT ON (Dapr-first rule). Wires THREE things TOGETHER
+  # (they are only correct as a set — a deadLetterTopic without a retry policy dead-letters on the FIRST
+  # failure per Dapr's documented default):
+  #   1. a Resiliency CRD: the SIDECAR owns delivery retries (exponential 30s→300s, 5 attempts), scoped
+  #      to the subscriber apps;
+  #   2. deadLetterTopic on every subscription (via the *_DLQ_TOPIC envs): retry exhaustion PARKS the
+  #      message on a per-app dlq.* topic (the DLQ stream, nats-stream-job) — ERROR-logged by the
+  #      app's /dlq-event route — instead of silently ceasing to redeliver;
+  #   3. the broker backOff moves to a long crash-recovery window (first step > the sidecar's total
+  #      retry span) so broker redelivery no longer races the sidecar's in-flight retries — it now
+  #      covers ONLY sidecar/pod death mid-delivery.
+  # The durable-consumer question is ANSWERED FROM SOURCE (components-contrib jetstream.go: durableName
+  # is applied as-is per subscription, and NATS scopes consumer names PER STREAM — the dlq.* topics live
+  # on their own DLQ stream). Set false to restore broker-only behavior (30-300s backOff, no DLQ).
+  resiliency:
+    enabled: true
+  # The Dapr dashboard — a web UI for the Dapr stuff (components, subscriptions, configurations,
+  # control plane). These are first-party keys (the dapr subchart ignores them).
+  dashboard:
+    enabled: true
+    image: daprio/dashboard:0.15.0
+  # daprd sidecar resources (first-party keys → the lance.daprSidecarResources annotations). The app
+  # containers are bounded (resources.default); an unbounded daprd on every sidecar'd pod is not.
+  sidecarResources:
+    cpuRequest: 50m
+    cpuLimit: 300m
+    memoryRequest: 64Mi
+    memoryLimit: 256Mi
+  global:
+    ha:
+      enabled: false # single-node dev
+    mtls:
+      # Pin Dapr Sentry service-to-service mTLS ON explicitly. It IS the subchart default, but pinning it
+      # makes the relied-upon guarantee self-documenting and guards against an accidental `--set …=false`
+      # or a subchart-default flip silently dropping inter-service encryption. Confirm live with
+      # `dapr mtls -k` (sidecars 2/2 with SPIFFE identities).
+      enabled: true
+    # NOTE: we use pub/sub + bindings + secret stores + service invocation only (no actors/workflows/jobs),
+    # so placement + scheduler are logically unused — BUT do NOT disable them: daprd 1.18 connects to BOTH
+    # at startup unconditionally and never becomes Ready without them (verified live — sidecars stuck 1/2
+    # with "no such host: dapr-placement-server / dapr-scheduler-server-a"). The control plane stays.
 
 kueue:
   enabled: true
@@ -292,10 +1006,99 @@ kueue:
       memory: "120Gi"
       "nvidia.com/gpu": "1"
 
+# --- OpenFGA (subchart) — Zanzibar authz. lance-ns's values REPLACE rask's `engine: memory`: the
+# datastore is the AGE Postgres (it's just postgres), so grants survive a restart. -----------------
 openfga:
   enabled: true
+  replicaCount: 1
+  # Pin to v1.8.0: v1.18.0's migration 006 (DROP INDEX CONCURRENTLY) breaks against the AGE-shared
+  # Postgres; v1.8.0 migrates cleanly. Server + our migrate Job both use this tag (schema match).
+  image:
+    tag: v1.8.0
   datastore:
-    engine: memory   # ephemeral; point at postgres (engine+uri) when adopted
+    engine: postgres
+    # DSN comes from the infra-credentials Secret (key openfga-datastore-uri) — the SAME secret the AGE
+    # servers + our migrate Job consume, rendered from age.* in dev and OWNED by the external-secrets
+    # operator when externalSecrets.enabled. No plaintext password in values/env: the subchart's
+    # existingSecret+secretKeys branch turns this into a secretKeyRef. (Subchart values can't template,
+    # so the release-prefixed secret name is hardcoded — it is `<release>-infra-credentials`, and the
+    # release is `rask`.)
+    existingSecret: rask-infra-credentials
+    secretKeys:
+      uriKey: openfga-datastore-uri
+    # The chart's bundled migrate (both job + initContainer types) fails to pass the datastore flags in
+    # 0.3.9, so we disable it and run our own proven migrate Job (templates/openfga-migrate.yaml) that
+    # waits for the AGE Postgres first. The server then connects to the already-migrated db.
+    applyMigrations: false
+    waitForMigrations: false
+
+# --- Apache AGE Postgres (first-party template) — the lineage graph store AND openfga's datastore --
+# Separate from the `cnpg` Cluster below (rask's batches/chunks state of record): CNPG's stock image
+# has no AGE extension, so this is a plain StatefulSet on apache/age. See docs/CNPG-AGE.md for the
+# ImageVolume path that eventually folds it into CloudNativePG.
+age:
+  enabled: true
+  image: apache/age:release_PG16_1.5.0
+  user: lance
+  password: lance
+  lineageDb: lineage
+  openfgaDb: openfga
+  # The Dapr state store's database (see stateStore above). Dapr owns this schema outright — it creates
+  # and migrates its own tables — so it gets its own database rather than a table beside AGE's graph.
+  stateDb: daprstate
+  port: 5432
+  # Externalize: when set, lineage + the OpenFGA datastore connect to THIS host instead of the in-cluster
+  # AGE — pair with age.enabled=false + a managed Postgres (set user/password/dbs to match). NOTE: the
+  # openfga subchart's `openfga.datastore.uri` must also be overridden to the external DSN.
+  externalHost: "" # e.g. rask-postgres-rw (the CNPG Cluster's -rw service)
+  # Effectively immutable after first install: StatefulSet volumeClaimTemplates can't be updated in
+  # place, so the chart fails the upgrade if this differs from the deployed StatefulSet instead of
+  # silently not resizing. To resize: patch the PVC, recreate the StatefulSet with --cascade=orphan,
+  # then upgrade — see docs/RUNBOOK-restore.md.
+  storage: 1Gi
+
+# --- Dex (first-party template) — OIDC issuer for the governed demo --------------------------------
+dex:
+  enabled: true
+  image: ghcr.io/dexidp/dex:v2.42.0
+  port: 5556
+  issuer: http://rask-dex:5556/dex # in-cluster issuer (matches the OIDC config)
+  # A static client + a static password (demo only).
+  clientId: lance-catalog
+  clientSecret: lance-catalog-secret
+  staticUser: alice@example.com
+  # NOTE: the demo password is NOT set here — Dex needs a bcrypt HASH, which Helm can't compute at render.
+  # It's hardcoded in templates/dex.yaml (staticPasswords[].hash = bcrypt of "password"). To change it,
+  # regenerate the hash (e.g. `htpasswd -bnBC 10 "" <pw> | tr -d ':\n'`) and edit that template.
+
+# --- OpenBao (first-party template) — secret store, fronted by Dapr secretstores.* ------------------
+openbao:
+  enabled: true
+  image: openbao/openbao:2.2.0
+  port: 8200
+  # devMode=true → in-memory, auto-unsealed, fixed root token (demo ONLY — anyone in-cluster can read
+  # everything with `root`). Set devMode=false for the prod path: a sealed, file-backed server on a PVC
+  # that an operator must `bao operator init` + unseal, with real auth — no fixed root token, no auto-seed.
+  devMode: true
+  devToken: root # dev-mode root token (devMode=true only)
+  storage: 1Gi # PVC size for the prod (devMode=false) file backend
+  # Externalize: when set, the Dapr secret store points at THIS Vault/OpenBao address instead of the
+  # in-cluster server — pair with openbao.enabled=false to use an external Vault. The apps still consume
+  # via Dapr (no plaintext fallback) because secretsViaDapr keys off this too.
+  externalAddr: "" # e.g. https://vault.internal:8200
+
+# --- external-secrets.io — sync the infra-tier Secret FROM Vault so NO plaintext secret ships in the chart.
+# Requires the external-secrets operator in-cluster. When on, templates/external-secrets.yaml creates a
+# SecretStore (→ vaultAddr) + an ExternalSecret that OWNS <release>-infra-credentials, and the static
+# Secret in infra-credentials.yaml is skipped. Complements openbao.externalAddr (the app tier's Dapr path).
+externalSecrets:
+  enabled: false
+  refreshInterval: "1h"
+  kvMount: secret # the Vault KV mount path
+  kvVersion: "v2"
+  secretPath: lance # the KV key holding postgres-password + rustfs-secret-key (e.g. secret/data/lance)
+  kubernetesAuthPath: kubernetes # the Vault Kubernetes auth backend mount
+  role: lance-infra # the Vault role the operator's ServiceAccount assumes
 
 # In-cluster Postgres via the CloudNativePG operator (Cluster CR + operator
 # subchart). `enabled` gates BOTH the operator subchart (Chart.yaml condition
@@ -334,12 +1137,30 @@ cloudnative-pg:
 # rustfs operator subchart (vendored at third_party/, gated by rustfs.enabled).
 rustfs-operator: {}
 
-# ---- observability stack (Vector + GreptimeDB + Perses) --------------------
-# Gated by observability.enabled (the three subcharts' Chart.yaml condition AND
-# the OTLP wiring below). App services + Ray export OTLP-direct to GreptimeDB;
-# Vector ships pod logs. GreptimeDB stores to the in-cluster RustFS S3.
+# ---- observability stack ---------------------------------------------------
+# OTel-first: a single OpenTelemetry Collector is the telemetry hub, GreptimeDB the store, Perses the
+# dashboards. GreptimeDB is ONE unified store for metrics+logs+traces, backed by RustFS S3. The
+# Collector RECEIVES app OTLP, TAILS infra-pod logs (filelog), and SCRAPES the Dapr sidecars
+# (prometheus + k8s SD), exporting everything OTLP → GreptimeDB (:4000/v1/otlp).
+# `observability.enabled` gates the three subcharts' Chart.yaml condition AND the OTLP wiring.
+# ⚠ CONFLICT (reported): rask ships the Vector Agent DaemonSet (kubernetes_logs → `rask_logs`) and
+# lance-ns ships the OTel Collector's filelog receiver (→ `opentelemetry_logs`). Both are gated by
+# observability.enabled, so BOTH ship logs today. Retiring Vector means dropping its Chart.yaml dep,
+# the `vector:` block below, and regenerating Chart.lock — one coordinated change, not a silent drop.
 observability:
   enabled: true
+  environment: rask # deployment.environment.name resource attr — override per deploy (dev / staging / prod)
+  # OTel Collector — the single telemetry hub (receives app OTLP + tails infra logs + scrapes Dapr metrics).
+  # enabled: deploy the in-cluster Collector (dev). externalEndpoint: point at an operator-managed
+  # external Collector instead (prod) — when set, NO in-cluster Collector is deployed and the apps + the
+  # scrape config are that platform's concern; the chart just aims its OTLP export there.
+  otelCollector:
+    enabled: true
+    image: otel/opentelemetry-collector-contrib:0.119.0
+    externalEndpoint: "" # e.g. http://otel-collector.observability.svc:4318 — set in prod, deploys nothing
+  # Legacy escape hatch: ship OTLP to an off-cluster endpoint AND run no in-cluster store. Prefer
+  # otelCollector.externalEndpoint (the OTel-first prod path); this stays for a raw non-Collector target.
+  externalOtlpEndpoint: "" # e.g. http://otel-collector.observability:4318/v1/otlp
   bucket: "rask-observability"          # RustFS bucket for GreptimeDB object storage
   # Retention for logs/traces/metrics. Applied as a database-level TTL on the
   # GreptimeDB `public` database via a post-install/post-upgrade hook Job
@@ -347,19 +1168,56 @@ observability:
   # opentelemetry_traces, the metrics physical table) inherits it. Empty string
   # = no TTL (unbounded growth). GreptimeDB accepts e.g. "14d", "30d", "90d".
   retention: "14d"
+  greptimePort: 4000 # GreptimeDB HTTP: /v1/otlp (ingest), /v1/prometheus (query), /v1/sql, /health
+  dbName: public # the GreptimeDB database all signals land in (x-greptime-db-name header)
+  tracePipeline: greptime_trace_v1 # required pipeline header for OTLP trace ingestion → opentelemetry_traces
+  samplingRate: "1" # Dapr trace sampling — full, so the catalog→lineage context always propagates
+  # Alerting engine (P3b): vmalert evaluates chart/alerting/rules.yml against GreptimeDB's PromQL endpoint
+  # (:4000/v1/prometheus) and routes firing alerts through Alertmanager. Default OFF (dev has no on-call);
+  # values-prod flips it on. The rules are PROVEN to fire by `make alert-rules-check` (promtool); the live
+  # query round-trip + a real receiver route are a prod drill. Set webhookUrl to your Slack/PagerDuty webhook.
+  alerting:
+    enabled: false
+    vmalertImage: victoriametrics/vmalert:v1.106.1
+    alertmanagerImage: prom/alertmanager:v0.28.0
+    evaluationInterval: "1m"
+    webhookUrl: "" # empty → Alertmanager still receives + groups alerts, but pages nowhere (black-hole)
+  # Edge auth (§5e hardening) — nginx `auth_basic` on the gateway's /perses/ + /greptime/ locations.
+  # BOTH are otherwise UNAUTHENTICATED: Perses is the dashboard, and GreptimeDB exposes its RAW SQL/ingest
+  # API on :4000 — and in prod the Ingress→gateway proxies both publicly. This closes that hole AT THE EDGE
+  # without touching GreptimeDB's own `auth.enabled` (which would force EVERY client — the app OTLP
+  # exporters, Dapr tracing, the OTel Collector's exporter, the Perses datasource proxy — to carry
+  # credentials; that plus Perses OIDC is the documented follow-on). Default OFF so local dev stays
+  # frictionless; values-prod flips it TRUE.
+  edgeAuth:
+    enabled: false
+    # The realm shown on the browser basic-auth prompt (not a secret).
+    realm: "rask observability"
+    # The htpasswd LINE(S) (`user:hash`) for the basic-auth file. INFRA-TIER credential (the two-tier
+    # secret model): NOT stored here as plaintext — it lands ONLY in the `<release>-observability-edge-auth`
+    # k8s Secret (templates/observability.yaml) and is mounted read-only into the gateway as the
+    # `auth_basic_user_file` (never a pod env/arg value). Empty by default; the render FAILS CLOSED when
+    # edgeAuth.enabled with no htpasswd supplied, so provide it out-of-band in prod:
+    # `--set observability.edgeAuth.htpasswd=…` sourced from OpenBao / external-secrets (an apr1/bcrypt
+    # hash — e.g. `htpasswd -nbB observer <pw>`).
+    htpasswd: ""
 
-# GreptimeDB standalone subchart — unified metrics/logs/traces store on RustFS S3.
+# GreptimeDB standalone subchart — unified metrics/logs/traces store on the in-cluster RustFS S3.
+# The endpoint names the FIRST-PARTY RustFS Service (`rask-rustfs`), which renders on every install;
+# the operator Tenant's `rask-rustfs-io` only exists under singleTenant.enabled. Externalizing RustFS
+# means overriding this endpoint too (the subchart value cannot follow the rustfs.externalEndpoint helper).
 greptimedb-standalone:
   objectStorage:
     s3:
       bucket: "rask-observability"
       region: "us-east-1"
       root: "/greptimedb"
-      endpoint: "http://rask-rustfs-io:9000"
+      endpoint: "http://rask-rustfs:9000"
     credentials:
       existingSecretName: "rask-observability-s3"
 
-# Vector subchart — Agent DaemonSet shipping pod logs to GreptimeDB (Task 2 fills customConfig).
+# Vector subchart — Agent DaemonSet shipping pod logs to GreptimeDB.
+# See the observability CONFLICT note above: the OTel Collector's filelog receiver now does this too.
 vector:
   role: "Agent"
   # The Agent only pulls pod logs and pushes to GreptimeDB — it exposes no
@@ -400,7 +1258,7 @@ vector:
         table: "rask_logs"
         compression: "gzip"
 
-# Perses subchart — dashboards-as-code (Task 3 fills the datasource).
+# Perses subchart — dashboards-as-code over GreptimeDB's Prometheus-compatible API.
 perses:
   # Perses bundles its datasource/panel plugins and extracts them into
   # /etc/perses/plugins at startup, but the container runs readOnlyRootFilesystem
@@ -411,7 +1269,7 @@ perses:
     - name: perses-plugins
       emptyDir: {}
     # Dashboards-as-code: the rask-perses-dashboards ConfigMap (templates/
-    # perses-dashboards.yaml) holds the rask Project + "Fleet — RED" Dashboard.
+    # perses-dashboards.yaml) holds the rask Project + its Dashboards.
     - name: perses-dashboards
       configMap:
         name: rask-perses-dashboards

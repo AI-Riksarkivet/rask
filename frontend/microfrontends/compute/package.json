@@ -10,9 +10,9 @@
 		"preview": "vite preview",
 		"start": "bun ./build/index.js",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-		"lint": "oxlint",
-		"fmt": "oxfmt .",
-		"fmt:check": "oxfmt --check ."
+		"lint": "oxlint .",
+		"fmt": "rsvelte-fmt .",
+		"fmt:check": "rsvelte-fmt --check ."
 	},
 	"dependencies": {
 		"@lucide/svelte": "^1.21.0",

@@ -11,7 +11,12 @@
 		"resolveJsonModule": true,
 		"esModuleInterop": true,
 		"verbatimModuleSyntax": true,
-		"types": ["svelte"]
+		"types": ["svelte"],
+		"baseUrl": ".",
+		"paths": {
+			"$lib": ["./src/lib"],
+			"$lib/*": ["./src/lib/*"]
+		}
 	},
-	"include": ["src/**/*.ts", "src/**/*.svelte", ".storybook/**/*.ts"]
+	"include": ["src/**/*.ts", "src/**/*.svelte"]
 }

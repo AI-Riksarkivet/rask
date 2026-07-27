@@ -26,8 +26,10 @@
 	const payload = $derived(serveQuery.current ?? null);
 	const error = $derived(serveQuery.error ? String(serveQuery.error) : null);
 
-	// Poll Ray every 5s. `.catch(() => {})` is mandatory: an uncaught refresh
-	// rejection (one 500) evicts the query from cache and kills the loop.
+	// POLL REASON: the Ray dashboard REST API is snapshot-only introspection — Ray publishes no
+	// change events a cursor could ride, so re-reading Serve's app/deployment state on a clock is
+	// the only transport. `.catch(() => {})` is mandatory: an uncaught refresh rejection (one 500)
+	// evicts the query from cache and kills the loop.
 	onMount(() => {
 		const timer = setInterval(() => {
 			serveQuery.refresh().catch(() => {});
@@ -216,9 +218,7 @@
 							{s.label}
 						</div>
 						<div class="mt-1 font-mono text-2xl tabular-nums">
-							{s.value}{#if s.total !== null}<span class="text-muted-foreground text-base"
-									>/{s.total}</span
-								>{/if}
+							{s.value}{#if s.total !== null}<span class="text-muted-foreground text-base">/{s.total}</span>{/if}
 						</div>
 						{#if s.sub}<div class="text-muted-foreground text-xs">{s.sub}</div>{/if}
 					</Card>
@@ -325,13 +325,10 @@
 							<div class="flex flex-wrap items-center gap-2">
 								<span class="truncate font-semibold tracking-tight">{app.name}</span>
 								<Badge variant={statusVariant(app.status)}>{app.status}</Badge>
-								{#if app.source}<span
-										class="text-muted-foreground text-[10px] tracking-wide uppercase"
-										>{app.source}</span
-									>{/if}
+								{#if app.source}<span class="text-muted-foreground text-[10px] tracking-wide uppercase">{app.source}</span>{/if}
 								{#if app.external_scaler_enabled}<Badge variant="outline" class="text-[10px]"
-										>ext-scaler</Badge
-									>{/if}
+								  >ext-scaler</Badge
+								>{/if}
 							</div>
 							<div
 								class="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-2 font-mono text-xs"
@@ -348,9 +345,7 @@
 							<Activity class="h-3.5 w-3.5" />
 							{deployments.length} deployment{deployments.length === 1 ? '' : 's'}
 							{#if app.last_deployed_time_s}
-								<span class="text-muted-foreground/60"
-									>· deployed {fmtAgo(app.last_deployed_time_s)}</span
-								>
+								<span class="text-muted-foreground/60">· deployed {fmtAgo(app.last_deployed_time_s)}</span>
 							{/if}
 						</div>
 					</div>
@@ -394,9 +389,7 @@
 								>
 									<span class="font-mono text-xs font-medium">{d.name}</span>
 									<Badge variant={statusVariant(d.status)} class="scale-90">{d.status}</Badge>
-									{#if d.status_trigger}<span class="text-muted-foreground/70 text-[10px]"
-											>{d.status_trigger}</span
-										>{/if}
+									{#if d.status_trigger}<span class="text-muted-foreground/70 text-[10px]">{d.status_trigger}</span>{/if}
 
 									<div class="ml-auto flex items-center gap-2">
 										{#if target > 0 && target <= 16}
@@ -410,16 +403,13 @@
 												{/each}
 											</div>
 										{/if}
-										<span class="text-muted-foreground font-mono text-xs tabular-nums"
-											>{live}/{target}</span
-										>
+										<span class="text-muted-foreground font-mono text-xs tabular-nums">{live}/{target}</span>
 									</div>
 
 									{#if resources.length}
 										<div class="flex w-full flex-wrap gap-1 sm:w-auto">
 											{#each resources as [k, v] (k)}
-												<span
-													class="rounded-md px-1.5 py-0.5 text-[10px] font-medium {resourceChip(k)}"
+												<span class="rounded-md px-1.5 py-0.5 text-[10px] font-medium {resourceChip(k)}"
 													>{v}× {k}</span
 												>
 											{/each}
@@ -447,8 +437,7 @@
 										<summary
 											class="text-muted-foreground hover:bg-muted/40 flex cursor-pointer list-none items-center gap-1 px-4 py-1.5 text-[11px]"
 										>
-											<ChevronRight class="h-3 w-3 transition-transform group-open:rotate-90" /> Replicas
-											({live})
+											<ChevronRight class="h-3 w-3 transition-transform group-open:rotate-90" /> Replicas ({live})
 										</summary>
 										<div class="overflow-auto px-2 pb-2">
 											<table class="w-full border-collapse text-[11px]">
@@ -464,9 +453,7 @@
 														<tr class="border-border/30 border-t">
 															<td class="px-2 py-1 font-mono">{r.replica_id}</td>
 															<td class="px-2 py-1"
-																><Badge variant={replicaState(r.state)} class="scale-90"
-																	>{r.state}</Badge
-																></td
+																><Badge variant={replicaState(r.state)} class="scale-90">{r.state}</Badge></td
 															>
 															<td class="px-2 py-1 font-mono">{r.node_ip ?? '—'}</td>
 															<td class="px-2 py-1 font-mono">{pod(r.node_instance_id)}</td>
@@ -509,9 +496,7 @@
 												<div class="flex flex-wrap items-center gap-1">
 													<span class="text-muted-foreground text-[10px] uppercase">deps</span>
 													{#each [...(env.uv ?? []), ...(env.pip ?? [])] as p (p)}
-														<span class="bg-muted rounded px-1.5 py-0.5 font-mono text-[10px]"
-															>{p}</span
-														>
+														<span class="bg-muted rounded px-1.5 py-0.5 font-mono text-[10px]">{p}</span>
 													{/each}
 												</div>
 											{/if}

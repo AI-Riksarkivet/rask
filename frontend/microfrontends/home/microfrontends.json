@@ -8,19 +8,7 @@
 				}
 			}
 		},
-		"overview": {
-			"development": {
-				"local": {
-					"port": 5179
-				}
-			},
-			"routing": [
-				{
-					"paths": ["/overview", "/overview/:path*"]
-				}
-			]
-		},
-		"storage": {
+		"lakehouse": {
 			"development": {
 				"local": {
 					"port": 5174
@@ -28,7 +16,31 @@
 			},
 			"routing": [
 				{
-					"paths": ["/storage", "/storage/:path*"]
+					"paths": ["/lakehouse", "/lakehouse/:path*"]
+				}
+			]
+		},
+		"media": {
+			"development": {
+				"local": {
+					"port": 5173
+				}
+			},
+			"routing": [
+				{
+					"paths": ["/media", "/media/:path*"]
+				}
+			]
+		},
+		"annotator": {
+			"development": {
+				"local": {
+					"port": 5177
+				}
+			},
+			"routing": [
+				{
+					"paths": ["/annotator", "/annotator/:path*"]
 				}
 			]
 		},
@@ -44,34 +56,10 @@
 				}
 			]
 		},
-		"discover": {
-			"development": {
-				"local": {
-					"port": 5178
-				}
-			},
-			"routing": [
-				{
-					"paths": ["/discover", "/discover/:path*"]
-				}
-			]
-		},
-		"train": {
-			"development": {
-				"local": {
-					"port": 5176
-				}
-			},
-			"routing": [
-				{
-					"paths": ["/train", "/train/:path*"]
-				}
-			]
-		},
 		"studio": {
 			"development": {
 				"local": {
-					"port": 5177
+					"port": 5176
 				}
 			},
 			"routing": [

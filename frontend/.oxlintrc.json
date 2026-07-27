@@ -50,7 +50,13 @@
 		// Carried over from the ESLint config these rules replaced — same rules, same reasons.
 		"svelte/prefer-svelte-reactivity": "off",
 		// Not using shallow routing.
-		"svelte/no-navigation-without-resolve": "off"
+		"svelte/no-navigation-without-resolve": "off",
+
+		// A readability rule about `new Array(x)` being ambiguous between length and sole element.
+		// Every use here is a PRE-SIZED buffer in a Pixi render path (`new Array(numRows)`), where the
+		// suggested `Array.from({length: n})` both allocates and fills. The ambiguity the rule is about
+		// does not arise when the argument is plainly a count.
+		"unicorn/no-new-array": "off"
 	},
 	"overrides": [
 		{

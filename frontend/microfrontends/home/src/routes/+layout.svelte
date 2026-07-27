@@ -1,41 +1,53 @@
 <script lang="ts">
 	import '../app.css';
 	import { browser } from '$app/environment';
-	import { onNavigate } from '$app/navigation';
+	import { page } from '$app/state';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
-	import TopNav from '$lib/components/top-nav.svelte';
+	import { AppShell } from '@rask/ui/shell';
+	import { onMount } from 'svelte';
+	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
 	import type { Snippet } from 'svelte';
-	let { children }: { children: Snippet } = $props();
+	import { HOME_ZONE_NAV } from '$lib/nav';
+	import type { LayoutData } from './$types';
 
-	// Animate soft client-side navs (e.g. / <-> /<project>) via the View Transitions
-	// API. onNavigate registers a callback and is SSR-safe; the document check guards
-	// browsers without support. Cross-document MFE navs are handled by the
-	// `@view-transition` rule in the shared @rask/ui tokens stylesheet.
-	onNavigate((navigation) => {
-		if (!document.startViewTransition) return;
-		return new Promise((resolve) => {
-			document.startViewTransition(async () => {
-				resolve();
-				await navigation.complete;
-			});
-		});
+	let { children, data }: { children: Snippet; data: LayoutData } = $props();
+
+	// The navbar's notification bell (@rask/ui's NotificationCenter, mounted by AppShell). The shell owns
+	// the surface and never fetches — the zone owns the transport — and the transport is now shared
+	// (`@rask/api/runs-feed`), so a run that started, finished or FAILED reaches whoever is in this zone
+	// rather than only whoever happens to be on the run board. Opened ON MOUNT, never at init: a live
+	// query touched during render makes the SERVER hold the page until the feed's first value.
+	let feed = $state<{ current: LineagePulse | undefined } | null>(null);
+	onMount(() => {
+		feed = lineageFeed();
+	});
+	// `.current` is undefined until the first value lands; an empty feed and a not-yet-connected one both
+	// render as "no notifications", which is the honest reading of both.
+	const notifications = $derived({
+		runs: feed?.current?.runs ?? [],
+		allHref: '/lakehouse/lineage/runs',
 	});
 </script>
 
 <ModeWatcher defaultMode="dark" />
-<!-- Toaster touches browser-only APIs; render it client-side only to keep SSR clean. -->
 {#if browser}
 	<Toaster />
 {/if}
 
-<!-- Global providers only. This catch-all host renders just the bare `/` picker
-     (no sidebar) and 307-redirects /<project> into the overview zone. The grouped
-     @rask/ui AppShell sidebar is NOT rendered here — each domain MFE renders it
-     identically in its own root layout (§5/§6), so you only see the sidebar once a
-     cross-zone nav lands you inside a domain app (/<project>/<domain>). The platform
-     top navbar IS rendered here (only the catch-all has it) above the page content. -->
-<!-- TopNav is a FLOATING fixed pill (out of flow), so <main> spans the full height
-     and each page adds its own top padding to clear it. -->
-<TopNav />
-<main class="min-h-svh">{@render children()}</main>
+<!-- The same estate shell as every other zone (identical server-rendered chrome, so a cross-zone
+     hop into "/" paints stable navbar + sidebar immediately). `me` resolved in the layout load —
+     the navbar SSRs its final entry set, no skeleton pass on the landing. -->
+<AppShell
+	pathname={page.url.pathname}
+	user={data.user}
+	authEnabled={data.authEnabled}
+	zoneNav={HOME_ZONE_NAV}
+	me={data.me}
+	meLoading={false}
+	{notifications}
+>
+	<div class="min-h-0 flex-1 overflow-y-auto">
+		{@render children()}
+	</div>
+</AppShell>

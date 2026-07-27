@@ -1,0 +1,35 @@
+{
+	"//": "Per-zone client-bundle ceilings in gzipped KB, measured in two halves from Vite's manifest. `staticGzipKB` is the closure of STATIC imports from every emitted entry (entry/start, entry/app and every route node) plus their CSS — what crossing into the zone actually costs. `deferredGzipKB` is everything reachable only through a dynamic import — real bytes, but ones the user opts into. The split exists because one number could not tell those apart: the annotator once measured 4179 KB of which 3809 was OpenCV wasm behind a lazy import, so a doubling of its entry graph would have passed unnoticed. That blob is gone (#117 — two ops reimplemented in @rask/engine/tools/corners.ts), which is why the annotator's deferred ceiling is now in line with every other zone's. Raise a number ONLY with the reason in the commit message; that edit is the review.",
+	"zones": {
+		"home": {
+			"staticGzipKB": 200,
+			"deferredGzipKB": 40,
+			"note": "The landing + the OIDC round-trip. Should stay the smallest thing in the estate; if it grows, something that belongs in a domain zone has leaked into the shell. Measured 157 / 1."
+		},
+		"lakehouse": {
+			"staticGzipKB": 600,
+			"deferredGzipKB": 120,
+			"note": "Four areas (catalog, lineage, models, admin) in one router. Carries @xyflow/svelte for the lineage graph and layerchart for the model experiments. Measured 490 / 46."
+		},
+		"media": {
+			"staticGzipKB": 1050,
+			"deferredGzipKB": 120,
+			"note": "embedding-atlas + d3 + elkjs for the atlas/tree/graph surfaces. The HEAVIEST zone to enter — nearly three times the annotator — which is the opposite of what the single-number budget implied. Measured 927 / 46."
+		},
+		"annotator": {
+			"staticGzipKB": 420,
+			"deferredGzipKB": 120,
+			"note": "Pixi ships in the entry graph (a canvas is the whole point of the zone) and is most of the 365 KB. The deferred ceiling was 4200 while the magnetic tool pulled a vendored OpenCV build; #117 replaced its two calls (cvtColor RGBA→GRAY, cornerMinEigenVal) with ~120 lines in @rask/engine/tools/corners.ts, pinned to OpenCV's recorded output, and the deferred half fell 3854 → 46 KB with the entry graph unchanged. On entry cost this is the second-lightest zone, against media's 929. Measured 365 / 46."
+		},
+		"compute": {
+			"staticGzipKB": 260,
+			"deferredGzipKB": 40,
+			"note": "The Ray surfaces (cluster, jobs, actors, serve, logviewer) over the shared shell — tables and status views, no heavy vendored runtime, so it should stay near the home zone's weight. Measured 192 / 1."
+		},
+		"studio": {
+			"staticGzipKB": 220,
+			"deferredGzipKB": 40,
+			"note": "The studio zone; gsap rides in the entry graph for the animation surface and is the only dependency beyond the shared shell, so this should stay light. Measured 163 / 1."
+		}
+	}
+}

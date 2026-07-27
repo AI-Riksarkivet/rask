@@ -1,4 +1,4 @@
-import { IsMobile } from '../../hooks/is-mobile.svelte.js';
+import { IsMobile, SHELL_COLLAPSE_BREAKPOINT } from '../../hooks/is-mobile.svelte.js';
 import { getContext, setContext } from 'svelte';
 import { SIDEBAR_KEYBOARD_SHORTCUT } from './constants.js';
 
@@ -30,7 +30,10 @@ class SidebarState {
 
 	constructor(props: SidebarStateProps) {
 		this.setOpen = props.setOpen;
-		this.#isMobile = new IsMobile();
+		// The SHELL breakpoint, not the generic mobile one: the sidebar has to go off-canvas at the
+		// same width the navbar folds into its overflow menu, or the two disagree and the estate row
+		// overlaps itself (see SHELL_COLLAPSE_BREAKPOINT).
+		this.#isMobile = new IsMobile(SHELL_COLLAPSE_BREAKPOINT);
 		this.props = props;
 	}
 

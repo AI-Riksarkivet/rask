@@ -1,33 +1,31 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import * as Sidebar from '../components/sidebar/index.js';
-	import ProjectSwitcher from './project-switcher.svelte';
-	import NavMain from './nav-main.svelte';
-	import NavUser from './nav-user.svelte';
-	import type { Project, NavUser as NavUserData } from './nav-config.js';
+	import ZoneNav from './zone-nav.svelte';
+	import type { ZoneNav as ZoneNavConfig } from './nav-config.js';
 
-	// The shadcn sidebar-07 structure: collapsible-to-icon sidebar with a project
-	// switcher (header), an accordion NavMain (content), and a profile dropdown
-	// (footer). Pure shared shell — `pathname` comes from the app's $app/state.
+	// The zone-scoped sidebar: collapsible-to-icon, carrying ONLY the CURRENT zone's own routes
+	// (from the `zoneNav` prop each zone passes). Everything estate-wide moved up into the shell
+	// header — the cross-zone list and identity/theme to the navbar row, the project switcher to
+	// the head of that same row — so the sidebar is in-zone navigation only, plus an OPTIONAL
+	// zone-owned `footer` snippet (e.g. media's live service-status popover).
 	let {
 		pathname = '',
-		project,
-		user,
+		zoneNav = null,
+		footer,
 	}: {
 		pathname?: string;
-		project?: Project;
-		user?: NavUserData;
+		zoneNav?: ZoneNavConfig | null;
+		footer?: Snippet;
 	} = $props();
 </script>
 
 <Sidebar.Root collapsible="icon">
-	<Sidebar.Header>
-		<ProjectSwitcher {project} />
-	</Sidebar.Header>
-	<Sidebar.Content>
-		<NavMain {pathname} />
+	<Sidebar.Content class="pt-2">
+		<ZoneNav {pathname} nav={zoneNav} />
 	</Sidebar.Content>
-	<Sidebar.Footer>
-		<NavUser {user} />
-	</Sidebar.Footer>
+	{#if footer}
+		<Sidebar.Footer>{@render footer()}</Sidebar.Footer>
+	{/if}
 	<Sidebar.Rail />
 </Sidebar.Root>

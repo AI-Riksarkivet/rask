@@ -6,15 +6,13 @@ import { test, expect } from '@playwright/test';
 // project's URL, or a `singleTenant.enabled` install — NOT the front-door host (which
 // serves only `/`, the picker). See docs/superpowers/specs/2026-06-29-openable-projects-design.md.
 //
-// Catch-all `/` (picker/landing) + each domain app's real entry route (discover has no index).
+// Catch-all `/` (picker/landing) + each domain zone's real entry route (lakehouse has no index).
 const ROUTES = [
 	'/',
-	'/overview',
-	'/storage',
+	'/lakehouse/data',
+	'/media',
+	'/annotator',
 	'/compute',
-	'/discover/browse',
-	'/discover/search',
-	'/train',
 	'/studio',
 ];
 

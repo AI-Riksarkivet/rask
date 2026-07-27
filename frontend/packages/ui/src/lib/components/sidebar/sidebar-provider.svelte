@@ -42,9 +42,9 @@
 		style:--sidebar-width={SIDEBAR_WIDTH}
 		style:--sidebar-width-icon={SIDEBAR_WIDTH_ICON}
 		class={cn(
-			'group/sidebar-wrapper has-data-[variant=inset]:bg-sidebar flex min-h-svh w-full',
-			className,
-		)}
+	'group/sidebar-wrapper has-data-[variant=inset]:bg-sidebar flex min-h-svh w-full',
+	className,
+)}
 		bind:this={ref}
 		{...restProps}
 	>

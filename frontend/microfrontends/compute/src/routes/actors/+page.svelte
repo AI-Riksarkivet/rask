@@ -42,9 +42,11 @@
 		}
 	}
 
-	// Poll Ray every 5s. `.catch(() => {})` is mandatory: an uncaught refresh
-	// rejection (one 500) evicts the query from cache and kills the loop. Each
-	// query is refreshed independently so a cluster failure can't stop actors.
+	// POLL REASON: the Ray dashboard REST API is snapshot-only introspection — Ray publishes no
+	// change events a cursor could ride, so re-reading actor/cluster state on a clock is the only
+	// transport. `.catch(() => {})` is mandatory: an uncaught refresh rejection (one 500) evicts
+	// the query from cache and kills the loop. Each query is refreshed independently so a cluster
+	// failure can't stop actors.
 	onMount(() => {
 		const timer = setInterval(() => {
 			actorsQuery.refresh().catch(() => {});
@@ -234,9 +236,7 @@
 							{s.label}
 						</div>
 						<div class="mt-1 font-mono text-2xl tabular-nums">
-							{s.value}{#if s.total !== null}<span class="text-muted-foreground text-base"
-									>/{s.total}</span
-								>{/if}
+							{s.value}{#if s.total !== null}<span class="text-muted-foreground text-base">/{s.total}</span>{/if}
 						</div>
 						{#if s.sub}<div class="text-muted-foreground text-xs">{s.sub}</div>{/if}
 					</Card>
@@ -307,9 +307,7 @@
 										: ''}"
 									onclick={() => toggle(a.actor_id ?? '')}
 								>
-									<td class="px-3 py-1.5"
-										><Badge variant={stateVariant(a.state)}>{a.state}</Badge></td
-									>
+									<td class="px-3 py-1.5"><Badge variant={stateVariant(a.state)}>{a.state}</Badge></td>
 									<td class="px-3 py-1.5 font-mono">{a.ray_namespace ?? '—'}</td>
 									<td class="px-3 py-1.5 font-mono">{nodeLabel(a)}</td>
 									<td class="px-3 py-1.5 font-mono tabular-nums">{fmtUptime(actorAge(a))}</td>
@@ -317,10 +315,7 @@
 										{#if a.cpu_percent != null}
 											<div class="flex items-center gap-1.5">
 												<div class="bg-muted h-1.5 w-10 shrink-0 overflow-hidden rounded-full">
-													<div
-														class="h-full bg-sky-500"
-														style:width={`${Math.min(100, a.cpu_percent)}%`}
-													></div>
+													<div class="h-full bg-sky-500" style:width={`${Math.min(100, a.cpu_percent)}%`}></div>
 												</div>
 												<span>{a.cpu_percent.toFixed(0)}%</span>
 											</div>

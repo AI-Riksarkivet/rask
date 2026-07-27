@@ -1,16 +1,42 @@
 {
 	"$schema": "https://unpkg.com/knip@6/schema.json",
+	"ignoreExportsUsedInFile": {
+		"type": true,
+		"interface": true
+	},
+	"ignoreBinaries": [
+		"make"
+	],
 	"workspaces": {
 		"microfrontends/*": {
-			"entry": ["src/**/*.remote.ts", "src/**/*.server.ts"]
+			"entry": [
+				"src/**/*.remote.ts",
+				"src/**/*.server.ts",
+				"server.ts",
+				"e2e/**/warmup.setup.ts",
+				"e2e/**/mock-*.ts"
+			]
 		},
 		"packages/ui": {
-			"entry": ["src/lib/**/index.{ts,js}"],
-			"project": ["src/**/*.{ts,js,svelte}"]
+			"entry": [
+				"src/lib/**/index.{ts,js}"
+			],
+			"project": [
+				"src/**/*.{ts,js,svelte}"
+			]
 		},
 		"packages/zone-contract": {
-			"entry": ["src/**/*.test.ts"],
-			"project": ["src/**/*.ts"]
+			"entry": [
+				"src/**/*.test.ts"
+			],
+			"project": [
+				"src/**/*.ts"
+			]
+		},
+		"packages/engine": {
+			"ignore": [
+				"scripts/gen-corner-fixture.ts"
+			]
 		}
 	}
 }

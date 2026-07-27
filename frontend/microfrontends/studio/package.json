@@ -10,12 +10,13 @@
 		"preview": "vite preview",
 		"start": "bun ./build/index.js",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-		"lint": "oxlint",
-		"fmt": "oxfmt .",
-		"fmt:check": "oxfmt --check ."
+		"lint": "oxlint .",
+		"fmt": "rsvelte-fmt .",
+		"fmt:check": "rsvelte-fmt --check ."
 	},
 	"dependencies": {
 		"@lucide/svelte": "^1.21.0",
+		"@rask/api": "workspace:*",
 		"@rask/ui": "workspace:*",
 		"@sveltejs/kit": "^2.67.0",
 		"@tailwindcss/vite": "^4.3.1",

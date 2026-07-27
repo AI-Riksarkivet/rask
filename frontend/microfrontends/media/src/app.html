@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" href="data:," />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>lance — Media</title>
+		<!-- No webfont link on purpose: every other zone resolves the token stack
+		     ('Inter', ui-sans-serif, system-ui) locally, so pulling Inter + Lora from
+		     Google here made this zone render in a different typeface than the rest of
+		     the estate (and added a third-party request the cluster can't reach). -->
+		<!-- Dark-first via the estate-shared mode-watcher (defaultMode="dark" in +layout.svelte):
+		     its SSR-injected head script sets the `dark` class before first paint — same no-flash
+		     posture as every other zone, one origin-wide theme choice. -->
+		%sveltekit.head%
+	</head>
+	<body data-sveltekit-preload-data="hover" class="bg-background text-foreground">
+		<div style="display: contents">%sveltekit.body%</div>
+	</body>
+</html>

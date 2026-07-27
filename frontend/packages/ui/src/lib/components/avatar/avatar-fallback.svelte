@@ -13,9 +13,9 @@
 <BitsAvatar.Fallback
 	bind:ref
 	class={cn(
-		'bg-sidebar-primary text-sidebar-primary-foreground flex size-full items-center justify-center rounded-md text-xs font-medium',
-		className,
-	)}
+	'bg-sidebar-primary text-sidebar-primary-foreground flex size-full items-center justify-center rounded-md text-xs font-medium',
+	className,
+)}
 	{...rest}
 >
 	{@render children?.()}
