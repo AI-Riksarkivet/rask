@@ -50,6 +50,7 @@ case); catalog 501s **confirmed at 7** (`docs/COVERAGE.md`, 47/54 backed).
 | lance-ns source | rask destination | Rule |
 |---|---|---|
 | `services/{catalog,lineage,medallion,compaction,viewer,search,annotator}` | `components/services/{catalog,lineage,medallion,compaction,viewer,search,annotator}` (converted to src-layout: `src/<name>/…`, entrypoints preserved: `catalog.main:app`) | rask shape: workspace member + `.docker/<name>.dockerfile` per deployable (no `projects/` layer — removed 2026-07). The media trio (viewer/search/annotator, folded from lance-audio) is IN scope (total merge, owner-ruled); lance `search` coexists with rask's `search_api` until P7 retires the latter (gated on the P5 pin test) |
+| `src/ratch` | **`packages/ratch`** (uv workspace member, src-layout) | **RE-PIN — no plan row existed.** Owner-ruled 2026-07-27: ratch is a **package**, not a deployable — it does not belong in `components/cli`. It is the folded lance-media pipeline tree, currently UNWIRED (lance-ns `pyproject.toml:113` excludes it, with the note *"no service imports them … ratch's ray[data]/lance-ray/typer stack lands with the pipeline step"*). Making it a workspace member is what **resolves** that exclusion: its heavy deps live in its own `pyproject.toml` instead of the root's, which is precisely why it was excluded |
 | `services/common` | `packages/common` (distribution name `lance-common`, import root stays `common` so zero import rewrites) | Transitional; long-term converge on `service-kit`'s `make_service_app`, keeping common's auth/FGA/audit middleware as the governed variant — NOT on this branch |
 | ~~`frontend/components/frontends/{data,lineage,models,admin}`~~ **`frontend/components/frontends/lakehouse`** | `components/frontends/lakehouse` | **RE-PIN**: the four are one zone since `bb099df` — `data`/`lineage`/`models`/`admin` are its *routes*. One app, one port slot, one ingress rule, one `.docker` build, one spec dir. Per **R8** it also absorbs rask's `storage` (the S3 object browser) and `train` |
 | `frontend/components/frontends/{media,annotator}` | `components/frontends/{media,annotator}` | The media zones are **`ssr=false` SPAs with NO BFF** — root-absolute `/api/*` fetches, a different deploy/env shape than the SSR zones; their fetch bases are rewritten to the `/api/media/*` namespace (owner-ruled, see P1) |
@@ -69,6 +70,17 @@ case); catalog 501s **confirmed at 7** (`docs/COVERAGE.md`, 47/54 backed).
 | **`chart/templates/dapr-statestore.yaml`** (net-new) | `chart/templates/` | **RE-PIN — no plan row existed.** `state.postgresql` with `actorStateStore: "true"`, DSN resolved from OpenBao through `lance-secrets` (never a k8s Secret). Externalizes to CNPG like the rest. Its `scopes` must list every app that owns operational state — an app outside `scopes` gets "component not found" from its sidecar and every user's saved work 503s, which the sidecar logs and nothing else notices |
 | **`chart/templates/runners.yaml`** + `runners/assist` (net-new) | `chart/templates/` + `components/runners/assist` | **RE-PIN — no plan row existed.** A deployable absent from the P3 image list |
 
+**Why rask's layout wins, and it is not about tidiness (owner question, 2026-07-27).** lance-ns has **no uv
+workspace at all** — it is a single package named `lance-ns` with `pythonpath = ["services", "."]`, a pytest
+path hack that makes `catalog`, `lineage`, `medallion`… import as top-level modules. Nothing declares a
+dependency on anything, so nothing can violate one: `catalog` importing `medallion`'s internals is not an
+error, it is just an import. rask is a real workspace — **14 members**, each with its own `pyproject.toml`,
+`src/`, `tests/`, and *declared* deps (`service-kit` depends on `storage`). Adopting rask's shape is not a
+rename; it is the difference between implicit and enforced module boundaries, and the resolver is what
+enforces it. Three things in lance-ns that only exist because there is no workspace: `services/common` is a
+library living in the services directory (no `main.py`, no `app.py`), `src/ratch` sits at the root excluded
+from the root's own tooling, and `runners/` has nowhere to be. All three get a home here.
+
 **Naming rules (the load-bearing ones):**
 1. **k8s objects**: backends `rask-<service>` (existing pattern); ALL frontend zones — rask's included — become `rask-web-<zone>`. Rationale — **RE-PIN, and the example got sharper**: there is no `lineage` zone any more, but the collision class is still live and now unavoidable — lance's **`annotator` zone vs the `annotator` backend Service** (`services/annotator`) under one release is exactly it, and lance-ns already hit this class (memory landmine + `frontends.yaml` NAMING comment). Renaming rask's 7 zone objects is branch-only churn and buys a uniform rule.
 2. **Dapr app-ids**: backends keep bare names (`catalog`, `lineage`, `medallion`, `compaction`, `core-api`, `gateway`); frontends get no sidecars. No collisions in that set today; the rule prevents future ones.
@@ -87,7 +99,7 @@ case); catalog 501s **confirmed at 7** (`docs/COVERAGE.md`, 47/54 backed).
 **Pre-step (before or parallel to P1) — Ray version unification (owner-ruled: ONE cluster, latest version).** Provable against rask alone, no lance-ns code involved: bump rask's Ray estate to the latest release (runner `pyproject` lifts `ray<2.56`; `ray-kit` re-tested; `.docker/{ray,runner}.dockerfile` bases rebuilt; `chart/templates/rayservice.yaml` image), align the Python minor with what lance-ray/pylance-8 support, and **revalidate the GPU Serve packing invariants** (fractions × replicas ≤ physical GPUs, host-RAM headroom, `smoke-gpu.sh`, `/transcribe` + `/htrflow` answer). Gate: rask's existing HTR smoke path green on the new version. Everything after lands on the unified cluster.
 
 **Moves/adaptations:**
-- Copy the seven services + common per the P0 table; convert to src-layout; add workspace members to root `pyproject.toml` (`packages/common` + the 7 services) and regenerate `uv.lock`.
+- Copy the seven services + common per the P0 table; convert to src-layout; add workspace members to root `pyproject.toml` (`packages/common`, **`packages/ratch`**, the 7 services, and the `runners/assist` deployable) and regenerate `uv.lock`. **RE-PIN**: lance-ns is not a workspace today (single package + a `pythonpath` hack), so this is a conversion, not an append — every incoming module gets a declared home and declared deps for the first time.
 - Drop lance-ns's `pythonpath=["services"]` hack — src-layout members resolve via workspace installation under rask's `importlib` import-mode.
 - Reformat all incoming Python under rask's ruff config (line 160) in a **separate pure-format commit**; fix whole-repo `ty` (error-on-warning) fallout.
 - Append `tests/unit`, `tests/integration`, `tests/e2e-py` to rask's explicit `testpaths`.
