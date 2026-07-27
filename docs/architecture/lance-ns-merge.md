@@ -31,6 +31,8 @@ longer exist. Full working detail in the source repo at `docs/MERGE-REPIN-DELTA.
 | — | **Run-notification transport** — every zone's shell holds a `query.live` SSE stream open | P4 (ingress) · P6 |
 | — | `runners/assist` + `chart/templates/runners.yaml` + `.docker/assist-runner.dockerfile`; catalog `user_state`/`me`/`access_admin` endpoints | P0 table · P1 gateway rows · P3 |
 
+**The merged zone set (R8 + R9): `home + lakehouse + media + annotator + compute + studio`.**
+
 **Easier than the plan assumed:** four zones instead of seven; AGE-on-CNPG **decided and proven** (stock
 image + ImageVolume, `docs/CNPG-AGE.md`) so PROPOSED decision 1 is settled; tenancy is **no longer a
 decision** (per-warehouse physical multi-tenancy shipped, rask's single implicit `default` is the degenerate
@@ -200,10 +202,10 @@ The coexistence merge (P1–P6) keeps rask's orchestrator running untouched. P7 
 **d. Decommission (only after a+b+c are live-proven end-to-end).** Flip `RASK_ORCHESTRATOR_AUTOSTART` off fleet-wide, then delete: `core/services/orchestrator/{loop,derive}.py`, `core/services/sync.py`, the `orchestrator` entrypoint + `:8810` (dev-micro.sh row, gateway row, chart), the batches/chunks/orchestrator endpoints + the `batches` table + its Alembic lineage (formally abandoning the parked batch_state migration), the prefetch `PipelineSpec` + `PrefetchActor`, the runner's S3-diff resumability, and `components/scripts/{build_batches_db,chunk_batches,index_alto}`.
 
 **The media plane eats rask's discovery/viewing estate wholesale** (owner-ruled — rask's surfaces there are placeholder-quality, not worth preserving): retire `search_api` (`:8802`; lance `search` over a catalog-governed lines table replaces it — gated on the P5 pin test), retire the **discover zone** + the EAD `/api/v1/catalog` endpoints + `core/services/discover/` (the EAD harvest re-lands as an ingest job writing a **catalog-governed Lance table** that the media estate serves — `harvest_ead` refitted, `index_catalog` retired), and retire `volumes_api`'s page/ALTO viewing endpoints (lance `viewer` + the exporter cover them; IIIF *reading* becomes a library inside the P7a bronze producer). What survives of volumes_api is only the `/objects` S3 browser backing the **storage** zone. Reorganize the `@rask/ui` shell nav around the merged set — **RE-PIN, now owner-ruled as R8**:
-**home + lakehouse + media + annotator + compute**. `discover` retires with its backends; `storage` folds
-INTO lakehouse (an S3 object browser is a lakehouse view of the warehouse's own buckets); `train` folds in
-with it via lance `models`, which is a lakehouse route; `overview` folds into home. **`studio` is the one
-zone no ruling covers — decide it before P2.4.**
+**home + lakehouse + media + annotator + compute + studio** — six zones. `discover` retires with its
+backends; `storage` folds INTO lakehouse (an S3 object browser is a lakehouse view of the warehouse's own
+buckets); `train` folds in with it via lance `models`, which is a lakehouse route; `overview` folds into
+home. **`studio` keeps its own top-navbar entry (R9)** — it is not folded into anything.
 
 **Gate**: the HTR-cascade e2e — IIIF → bronze → silver → gold on the unified cluster with lineage populated, then an exporter round-trip producing byte-valid ALTO 4.4 from gold — green **before** anything in (d) is deleted.
 
@@ -244,7 +246,9 @@ Retire `components/services/viewer` (pycache husk — distinct from lance's inco
 | R5 | **Whole-plane media namespace** — `/api/media/{,search,annotations}` → viewer/search/annotator; all three SPAs' fetch bases rewritten. |
 | R6 | **rask's discovery/viewing estate is eaten by the media plane** — discover zone, EAD `/api/v1/catalog`, search_api, volumes page/ALTO viewing all retire at P7 (no renames spent on them); EAD data re-lands as a catalog-governed Lance table. |
 | R7 | **Platform renames to `Lagom`** — after the merge stabilizes; a named follow-up, nothing renamed on this branch. |
-| R8 | **The surviving zone set is `home + lakehouse + media + annotator + compute`** (2026-07-27). Three parts: (a) rask's **browse / viewing / search** surfaces are eaten by the media plane — this is R6, reconfirmed; (b) what survives of rask's own frontend is **compute** — the Ray dashboard, jobs, actors, cluster views — because that is the plane rask owns; (c) rask's **`storage` zone folds INTO the lakehouse**: an S3 object browser is a lakehouse view of the warehouse's own buckets, not a separate destination. `train` folds in with it (lance `models` absorbed it, and `models` is a lakehouse route). `overview` folds into home as already proposed. **`studio` is undecided** and is the one zone no ruling covers — it must be decided before P2.4, not defaulted. |
+| R8 | **The surviving zone set is `home + lakehouse + media + annotator + compute` (+ `studio`, per R9)** (2026-07-27). Three parts: (a) rask's **browse / viewing / search** surfaces are eaten by the media plane — this is R6, reconfirmed; (b) what survives of rask's own frontend is **compute** — the Ray dashboard, jobs, actors, cluster views — because that is the plane rask owns; (c) rask's **`storage` zone folds INTO the lakehouse**: an S3 object browser is a lakehouse view of the warehouse's own buckets, not a separate destination. `train` folds in with it (lance `models` absorbed it, and `models` is a lakehouse route). `overview` folds into home as already proposed. `studio` is ruled separately in **R9**. |
+
+| R9 | **`studio` survives as its own top-navbar zone** (2026-07-27). It is not folded into anything. This closes the one gap R8 left open. It matches what `studio` already is on the rask side: a top-level nav entry in `packages/ui/src/lib/shell/nav-config.ts:81` (`Studio`, `Shapes` icon, `${b}/studio`) with its own `/animation` route — so the ruling preserves the surface rather than inventing one. **Final merged zone set: `home + lakehouse + media + annotator + compute + studio` — six zones.** |
 
 **Defaults written in as PROPOSED (veto in review):** lance `models` absorbs rask `train`; `overview` folds into home; rask zones stay auth-free this branch (`authEnabled:false` unless `frontend.oidc.enabled`); relational remainder after P7 = the `openfga` + `lineage` databases only; the media corpus hostPath is replaced by a PVC or rustfs-backed bucket in P4 (no hostPath ships).
 
