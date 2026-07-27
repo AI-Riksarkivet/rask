@@ -463,3 +463,10 @@ changelog preview. Update `CLAUDE.md`, `docs/architecture/*`, and the vendored `
 - No hybrid+rerank search build-out (still the acknowledged lancedb-SDK gap on both sides); no `/search` Tier-2 work beyond the pin-verification test.
 - ~~No license relabeling~~ — **moot**: both repos are Apache-2.0 as of the rebase. Only the stale per-package `license` fields remain to align.
 - No git-history grafting; no pre-emptive cleanup of rask strays outside the P7 sweep commit.
+
+> **Known finding (2026-07-27, post-merge):** `runners/htr` `test_fake_pipeline_via_ray_data`
+> fails with a RuntimeError after ~31.5 min when run solo (fake model, local Ray Data pipeline).
+> It is `slow`-marked, so `make test` is unaffected; `make test-slow` will hit it. Investigate in
+> the next goal alongside the ONE-Ray-cluster-latest work (R3) — the runner's Ray stack is
+> touched there anyway. Full traceback not captured (launcher tailed the log); reproduce with
+> `cd runners/htr && uv run --frozen pytest tests/test_pipeline_smoke.py -q`.
