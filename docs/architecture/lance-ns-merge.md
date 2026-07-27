@@ -83,8 +83,59 @@ enforces it. Three things in lance-ns that only exist because there is no worksp
 library living in the services directory (no `main.py`, no `app.py`), `src/ratch` sits at the root excluded
 from the root's own tooling, and `runners/` has nowhere to be. All three get a home here.
 
-**PROPOSED D6 — colocate packages by language instead of one mixed root `packages/` (owner question,
-2026-07-27; needs ratification, it changes rask's own layout).**
+**D7 — the merged tree: two language-pure planes (2026-07-27; supersedes D6's framing — D6 asked the
+question, this answers it with the toolchains' own behavior).**
+
+The glob question was settled **empirically**, not by taste. Scratch workspaces, both toolchains:
+
+```
+uv  lock, members=["pkgs/*"], one TS dir inside   → error: Workspace member `…/pkgs/tspkg` is missing
+                                                    a `pyproject.toml` (matches: `pkgs/*`)
+uv  lock, + exclude=["pkgs/tspkg"]                → Resolved 2 packages   (enumeration through the back door)
+bun install, workspaces=["pkgs/*"], one Py dir    → Done! Checked 2 packages   (SILENTLY skipped)
+```
+
+So a mixed `packages/` forces uv into enumeration (or an exclude list that is enumeration renamed), and
+bun's silent skip is its own hazard — the day a Python package gains a `package.json` (e.g. for a turbo
+script), bun sweeps it in without a word. **Language-pure directories are the only shape where globs are
+both possible and safe.** Combined with the measured fact that there are ZERO cross-language package deps
+in either repo, the tree is:
+
+```
+/
+├── frontend/                        ← the JS plane, wholesale = lance-ns's proven tree
+│   ├── components/frontends/{home,lakehouse,media,annotator,compute,studio}
+│   ├── packages/{api,ui,config,engine,labeling,media-api,zone-contract}    ← TS-only → globs
+│   └── package.json · bun.lock · turbo.json · .oxlintrc.json · .oxfmtrc.json
+├── services/                        ← Python deployables, src-layout, uv members via GLOB
+│   ├── catalog/ lineage/ medallion/ compaction/ viewer/ search/ annotator/
+│   └── gateway/ core/ ray_api/ … (rask's, absorbed per P1/P7) · runners/assist
+├── packages/                        ← Python-only shared → uv glob works
+│   ├── common/ ratch/ storage/ service-kit/ ray-kit/ htr/ tracker/ validate/
+├── chart/ · .docker/ · .dagger/ · scripts/ · tests/ · docs/
+└── pyproject.toml                   ← [tool.uv.workspace] members = ["packages/*", "services/*"]
+```
+
+**What this changes in the phases:**
+- **The P0 frontend direction FLIPS.** lance-ns's `frontend/` tree comes wholesale — bun.lock, turbo.json,
+  oxlint/oxfmt configs, and all 13 zone-contract gate files **unchanged**, because `FRONTEND_ROOT`'s
+  internal shape is preserved and its repo-relative reads of `chart/` and `scripts/` still resolve. rask's
+  `compute` + `studio` zones (2) move INTO it, instead of 3 lance zones moving out into
+  `components/frontends` — fewer moves, and the proven gates travel as-is.
+- **`components/` dissolves**: `components/services/*` → `services/*`; `components/cli/runner` →
+  `services/` (it is a deployable); `components/scripts` → `scripts/`; `components/frontends/*` →
+  `frontend/components/frontends/*`.
+- **P2's 3-way `packages/ui` merge inverts**: rask's storybook + `navMain(project)` fold INTO
+  `frontend/packages/ui` (`@repo/ui`), not the other way. Keep-from-rask list unchanged.
+- **The manifest-completeness gate becomes unnecessary** — globs enforce membership structurally. (If D7
+  is vetoed and the mixed root stays, that gate reverts to REQUIRED.)
+- Two `packages/` directories exist (root = Python, `frontend/packages` = TS). Each is unambiguous in
+  context; a reader inside a plane sees exactly one, and each plane's own convention calls it `packages/`.
+- **Per-individual-service `packages/` is REJECTED**: code shared by one service is not shared — it is
+  that service's `src/` internals. Packages exist per PLANE.
+
+**~~PROPOSED D6~~ — subsumed by D7 (owner question,
+2026-07-27).**
 
 The evidence says the mixed root is grouping by the wrong property. Measured in both repos:
 
@@ -331,6 +382,7 @@ changelog preview. Update `CLAUDE.md`, `docs/architecture/*`, and the vendored `
 | R7 | **Platform renames to `Lagom`** — after the merge stabilizes; a named follow-up, nothing renamed on this branch. |
 | R8 | **The surviving zone set is `home + lakehouse + media + annotator + compute` (+ `studio`, per R9)** (2026-07-27). Three parts: (a) rask's **browse / viewing / search** surfaces are eaten by the media plane — this is R6, reconfirmed; (b) what survives of rask's own frontend is **compute** — the Ray dashboard, jobs, actors, cluster views — because that is the plane rask owns; (c) rask's **`storage` zone folds INTO the lakehouse**: an S3 object browser is a lakehouse view of the warehouse's own buckets, not a separate destination. `train` folds in with it (lance `models` absorbed it, and `models` is a lakehouse route). `overview` folds into home as already proposed. `studio` is ruled separately in **R9**. |
 
+| R10 | **All lance-ns configs come to rask** (2026-07-27): the chart, and the frontend toolchain — **oxlint + oxfmt + rsvelte-fmt WIN over rask's eslint + prettier**. This RESOLVES the P2 toolchain precondition: the pure-format commit reformats rask's surviving zones (`compute`, `studio`, home content) and `packages/{api,ui}` under the lance-ns toolchain, and eslint/prettier retire. `@repo/zone-contract`'s script-parity gate then applies to every package unchanged. P2 step 1's `prettier-plugin-tailwindcss` premise is dead. |
 | R9 | **`studio` survives as its own top-navbar zone** (2026-07-27). It is not folded into anything. This closes the one gap R8 left open. It matches what `studio` already is on the rask side: a top-level nav entry in `packages/ui/src/lib/shell/nav-config.ts:81` (`Studio`, `Shapes` icon, `${b}/studio`) with its own `/animation` route — so the ruling preserves the surface rather than inventing one. **Final merged zone set: `home + lakehouse + media + annotator + compute + studio` — six zones.** |
 
 **Defaults written in as PROPOSED (veto in review):** lance `models` absorbs rask `train`; `overview` folds into home; rask zones stay auth-free this branch (`authEnabled:false` unless `frontend.oidc.enabled`); relational remainder after P7 = the `openfga` + `lineage` databases only; the media corpus hostPath is replaced by a PVC or rustfs-backed bucket in P4 (no hostPath ships).
