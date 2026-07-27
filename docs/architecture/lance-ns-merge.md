@@ -83,7 +83,44 @@ enforces it. Three things in lance-ns that only exist because there is no worksp
 library living in the services directory (no `main.py`, no `app.py`), `src/ratch` sits at the root excluded
 from the root's own tooling, and `runners/` has nowhere to be. All three get a home here.
 
-**One root `packages/`, mixed-language — the cost, and the guard it requires (owner question, 2026-07-27).**
+**PROPOSED D6 — colocate packages by language instead of one mixed root `packages/` (owner question,
+2026-07-27; needs ratification, it changes rask's own layout).**
+
+The evidence says the mixed root is grouping by the wrong property. Measured in both repos:
+
+```
+lance-ns TS packages   engine → @repo/config · labeling → @repo/config, @repo/media-api
+                       zone-contract → @repo/config · api, ui, config, media-api → (none internal)
+rask Python packages   htr → storage · service-kit → storage · ray-kit, tracker, validate, storage → PyPI only
+rask TS packages       api, ui → no internal deps at all
+CROSS-LANGUAGE DEPS    ZERO — in both repos, in both directions
+```
+
+Two strictly partitioned dependency graphs share one directory. `packages/` groups by *"is a library"*, a
+property **neither toolchain nor any developer ever queries across the boundary**; it hides *language*,
+which every toolchain queries on every run. That is not an aesthetic point — it is the direct cause of the
+enumeration tax below.
+
+**The proposal:** TS shared packages live under the frontend tree, Python shared packages live with the
+services. Then `packages/*` globs work on both sides, and the silent-omission failure mode **disappears**
+rather than needing a guard.
+
+The one package that looked like a counterexample is not: `@repo/zone-contract` reads `chart/values.yaml`,
+`chart/templates/*` and `scripts/verify_*` — but those are repo-relative **file reads at test time**, not
+package dependencies, so it works from anywhere in the tree.
+
+**Sequencing is the real risk, not correctness.** Restructuring rask's packages *during* a merge into rask
+adds churn to a merge that already carries 190 commits of drift and two red preconditions. Two honest
+options:
+- **(i) Pre-P1 commit, provable against rask alone** — like clearing the 70 `ty` errors. Attractive because
+  the ~11 incoming packages then land in the right place **once**, instead of landing in `packages/` and
+  being moved later.
+- **(ii) Named follow-up after P6 is green** — lowest risk to the merge, at the cost of moving twice.
+
+If D6 is rejected, the mixed root stays and the manifest-completeness gate below becomes **required**, not
+optional. If D6 is accepted, that gate is unnecessary — globs enforce it structurally.
+
+**The cost of keeping one root `packages/`, if D6 is rejected.**
 rask keeps TS and Python side by side in `packages/` (`api`/`ui` TS; `htr`/`ray-kit`/`service-kit`/`storage`/
 `tracker`/`validate` Python). That is the target and it is not being changed — but it has a measurable price
 worth naming, because the merge triples the number of packages:
