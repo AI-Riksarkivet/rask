@@ -19,6 +19,10 @@ def tmp_buckets(tmp_path: Path):
     return src, sink
 
 
+# slow: brings up a local Ray instance and runs a real Ray Data pipeline — tens of minutes
+# on a shared box (this test class was the bulk of the pre-seal "~32 min" suite). Fake model,
+# real runtime: exactly the long-runtime contract the slow marker documents.
+@pytest.mark.slow
 def test_fake_pipeline_via_ray_data(tmp_buckets):
     """Test that actors compose under ray.data.map_batches without a full cluster."""
     pytest.importorskip("ray", minversion="2.0")
