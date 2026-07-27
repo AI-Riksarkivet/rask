@@ -126,15 +126,20 @@ The runners are exactly that, measured: `assist` is already an independent proje
 the pytorch index, and its dockerfile syncs `--frozen` from its own lockfile; the offline runners pin CUDA
 torch builds (`torch==2.11.0+cu128`) whose index and cadence must never enter the fleet's resolution. So:
 
-- **Membership test:** shares the fleet's resolution → workspace member (`services/*`, `packages/*`).
-  Pinned to an external runtime (Ray image Python, CUDA torch, a model SDK) → `runners/`, own env.
+- **The rule is ABSOLUTE (owner-ruled 2026-07-27): a runner is NEVER a workspace member.** Every runner is
+  its own sealed project — own `pyproject.toml`, own dependencies, its own `uv.lock` where it builds an
+  image — full stop. There is no "resolves with the fleet, so it may join" case: even a runner whose pins
+  happen to resolve today is kept out, because the whole point is that its model's pins (CUDA torch, a Ray
+  minor, a model SDK) move on their own cadence and must never be able to hold the fleet's resolution
+  hostage tomorrow. The shares-the-fleet's-resolution test applies only to `services/*` and `packages/*`.
 - **Runners are NOT under `services/`** — the `services/*` glob would sweep them into the workspace. They
   are top-level, matched by no members glob, needing no `exclude`.
 - **Runners are sealed and self-contained** (owner-ruled): each carries its own README + `pyproject.toml`
   (+ `uv.lock` where it builds an image), and the tree has **no `__init__.py` package glue** — done in
-  lance-ns at `a4cf8f6`. `rask/components/cli/runner` (the HTR runner, `ray>=2.52,<2.56` inside today's
-  workspace) is re-evaluated at the P1 Ray unification: if it still resolves with the fleet it may stay a
-  member; the moment it needs the Ray image's pin it moves to `runners/`. P7 re-cuts it as movers anyway.
+  lance-ns at `a4cf8f6`. `rask/components/cli/runner` (the HTR runner, `ray>=2.52,<2.56` — today a
+  workspace member) **moves OUT of the workspace to `runners/htr` at copy time**, gaining its own
+  `pyproject.toml`-as-sealed-project and its own lock. No hedge: the earlier "may stay a member if it still
+  resolves" was mine, not the owner's, and it is struck. P7 re-cuts it as movers anyway, from `runners/`.
 - **The ratch↔runner seam**: ratch knows runner NAMES and hands each runner's `pyproject.toml` to Ray as
   the worker `runtime_env`. ratch `cli/`'s leftover repo-relative imports (`from runners.diarize.… import`)
   are lance-audio heritage, unwired today, and are replaced by the name seam when the pipeline step lands
