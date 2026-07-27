@@ -6,6 +6,9 @@
 
 # Merge plan: lance-ns → rask (`feat/lance-ns-merge`)
 
+> **PART B COPY PIN: lance-ns `main@083b49a`** (re-pinned 2026-07-27 at copy time; source tree clean,
+> 28 top-level items). Every copy in Part B is taken fresh from this SHA.
+
 > **Rebased onto `origin/main` 2026-07-27.** The branch had been cut from a local `main` last pulled
 > 2026-06-25 and was 69 commits behind. All 14 branch commits replayed; the branch is now 0 behind.
 > Four rows below were CONTRADICTED by what those commits shipped and are struck through in place:
