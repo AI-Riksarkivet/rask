@@ -95,6 +95,7 @@ services:
     port: 8801
     replicas: 1
     waitFor: ["postgres", "minio"]
+    rayClient: true # submits Ray jobs (JobSubmissionClient) => gets the RAY_AUTH_* pair when ray.auth.enabled
   search-api:
     module: "search_api:app"
     port: 8802
@@ -110,12 +111,14 @@ services:
     port: 8804
     replicas: 1
     waitFor: []
+    rayClient: true # dashboard introspection + /api/serve proxy => gets the RAY_AUTH_* pair when ray.auth.enabled
   orchestrator:
     module: "orchestrator:app"
     port: 8810
     replicas: 1            # MUST stay 1 (in-process singleton)
     singleton: true        # => strategy Recreate + RASK_ORCHESTRATOR_AUTOSTART
     waitFor: ["postgres"]
+    rayClient: true # submits Ray jobs (JobSubmissionClient) => gets the RAY_AUTH_* pair when ray.auth.enabled
   gateway:
     module: "gateway:app"
     port: 8888
@@ -790,6 +793,21 @@ rustfs:
 
 ray:
   enabled: true
+  # --- Ray token auth (gate 7 / R3) — RAY_AUTH_MODE=token on the head + every Ray-talking client.
+  # DEFAULT OFF, and the flip is COUPLED TO THE KUBERAY >= 1.6.0 BUMP (Chart.yaml pins 1.4.2):
+  # rask deploys a RayService, and the RayService controller is itself a dashboard-REST client
+  # (it PUTs/polls /api/serve/applications to reconcile Serve apps). With auth on and a pre-1.6.0
+  # operator those controller calls 401 and the RayService wedges at WaitForServeDeploymentReady.
+  # All the token surfaces below (Secret, head env, fleet consumer env, ESO sync) are wired now;
+  # enabling is a one-line values flip at the Ray-convergence step, together with the operator bump.
+  # At that step also verify whether KubeRay's native spec.authOptions can consume a pre-existing
+  # Secret (if operator-generated-only, rask.rayAuthToken flips to consuming the operator's Secret).
+  auth:
+    enabled: false
+    # Optional explicit token. Empty => chart-generated (randAlphaNum 32), pinned across upgrades
+    # via lookup — same lifecycle as secrets.postgresPassword. NEVER commit a real value; prod
+    # supplies it out-of-band (--set / values pipeline) or via externalSecrets (OpenBao/ESO).
+    token: ""
   rayVersion: "2.55.1"
   image:
     repository: ray

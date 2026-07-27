@@ -38,6 +38,13 @@ spec:
               image: "{{ .Values.ray.image.repository }}:{{ .Values.ray.image.tag }}"
               imagePullPolicy: {{ .Values.ray.image.pullPolicy }}
               env:
+                {{- /* Token auth (gate 7 / R3): the env pair, not `system_config` — Ray raises if
+                     auth mode is set via system_config. `ray start --head` fails closed when
+                     RAY_AUTH_MODE=token and no token resolves. Any future workerGroupSpecs entry
+                     MUST carry the same include. This is the "legacy/manual" KubeRay wiring —
+                     valid mechanically on any operator, but only OPERABLE with kuberay >= 1.6.0
+                     (the RayService controller must send the token too; see values.yaml ray.auth). */}}
+                {{- include "rask.rayAuthEnv" . | nindent 16 }}
                 - name: RAY_ENABLE_UV_RUN_RUNTIME_ENV
                   value: "0"
                 - name: HF_HOME

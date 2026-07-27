@@ -88,6 +88,40 @@ app.kubernetes.io/component: {{ $component }}
 {{- end -}}
 {{- end -}}
 
+{{/* Ray auth token (gate 7 / R3): explicit value -> lookup-pinned existing Secret -> random.
+     Clones rask.pgPassword exactly. The Secret data key is `auth_token` — the KubeRay
+     operator-Secret convention (kuberay-auth user guide), so a later move to spec.authOptions
+     needs no key rename. */}}
+{{- define "rask.rayAuthToken" -}}
+{{- if .Values.ray.auth.token -}}
+{{- .Values.ray.auth.token -}}
+{{- else -}}
+{{- $existing := (lookup "v1" "Secret" .Release.Namespace (printf "%s-ray-auth-token" (include "rask.fullname" .))) -}}
+{{- if and $existing $existing.data (index $existing.data "auth_token") -}}
+{{- index $existing.data "auth_token" | b64dec -}}
+{{- else -}}
+{{- randAlphaNum 32 -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The RAY_AUTH_MODE/RAY_AUTH_TOKEN env pair for any container that talks to a token-authed
+     Ray (head, fleet consumers, future worker groups). No-op unless ray.auth.enabled — so every
+     consumer flips with the ONE toggle and the secretKeyRef can never dangle (the Secret renders
+     under the same gate in ray-auth-token.yaml; when externalSecrets.enabled the ESO-synced
+     Secret carries the same name+key). Usage: {{- include "rask.rayAuthEnv" . | nindent 16 }} */}}
+{{- define "rask.rayAuthEnv" -}}
+{{- if .Values.ray.auth.enabled -}}
+- name: RAY_AUTH_MODE
+  value: "token"
+- name: RAY_AUTH_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "rask.fullname" . }}-ray-auth-token
+      key: auth_token
+{{- end -}}
+{{- end -}}
+
 {{/* rask.minioAccessKey / rask.minioSecretKey are GONE (lance-ns-merge P4 RustFS unification):
      the ONE store's root credential is rustfs.accessKey/secretKey everywhere — the Tenant credsSecret,
      the fleet's AWS_*, infra-credentials, and the hooks all read that single pair. */}}

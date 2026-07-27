@@ -107,6 +107,14 @@ spec:
             - name: RASK_RUNNER_CMD
               value: {{ $root.Values.orchestrator.runnerCmd | quote }}
             {{- end }}
+            {{- if $svc.rayClient }}
+            {{- /* Ray token auth (gate 7 / R3): only the services flagged rayClient in
+                 .Values.services (core-api, orchestrator, ray-api) get the pair — least
+                 privilege; gateway/search/volumes never talk to Ray. No-op unless
+                 ray.auth.enabled (the include gates itself). JobSubmissionClient +
+                 ray-kit's httpx paths read RAY_AUTH_TOKEN and attach the Bearer header. */}}
+            {{- include "rask.rayAuthEnv" $root | nindent 12 }}
+            {{- end }}
           readinessProbe:
             httpGet: {path: {{ $svc.healthPath | default "/api/health" }}, port: http}
             initialDelaySeconds: 5
