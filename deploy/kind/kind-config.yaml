@@ -1,0 +1,7 @@
+# kind cluster for the lance-ns event-driven platform. No host port mappings (the host already runs the
+# compose demo on 8001/5174); reach services with `kubectl port-forward` (see the Makefile / NOTES).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: lance
+nodes:
+  - role: control-plane
