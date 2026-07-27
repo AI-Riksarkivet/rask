@@ -42,8 +42,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-#: uuid5 namespace for deterministic run ids (this package's own derivation).
-_RUN_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Borg93/rask/packages/lineage-kit")
+#: uuid5 namespace for deterministic run ids. ALIGNED to the lance-ns URL (migration note #1, gate 5):
+#: the incumbent emitters (``service_kit.openlineage.run_id_for`` and its inlined ray-job mirrors) seed
+#: from this URL, and every deterministic run id already in the lineage graph derives from it — a
+#: different namespace here would break redelivery MERGE for every adopter that swaps emitters.
+_RUN_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Borg93/lance-ns")
 
 #: Coercible dataset forms: a model, or a bare ``(namespace, name)`` pair.
 type DatasetLike = Dataset | tuple[str, str]

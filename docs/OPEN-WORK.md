@@ -139,6 +139,32 @@ compliance deploy must raise it manually (`API.md` records the caveat).
 
 ---
 
+## D2. P7a follow-ups (compute-plane cutover, 2026-07-27)
+
+### D2a · The core-api husk retires with the R6/R20 media wave
+
+**What.** P7a deleted the batches/orchestrator plane; `services/core` + `services/core_api` survive as a
+transitional husk (health + the EAD `/catalog/search` over the LanceDB `archive_catalog` table).
+**What closes it.** lance `search` serving a catalog-governed EAD table (R6) — then delete
+`services/core`, `services/core_api`, the gateway core rows, and the chart's `core-api` fleet entry.
+
+### D2b · The lines FTS indexer died with `scripts/index_alto.py`
+
+**What.** P7a deleted `index_alto.py` + `submit_index.py` (batches.db-coupled `index-all` driver), so
+`search_api`'s Lance `lines` table has no re-indexer until lance `search` over a governed lines table
+lands (plan §d, gated on the P5 pin test). Existing indexed data keeps serving.
+**What closes it.** The R6 search wave — or, if it lags materially, a batches-free reindex CLI.
+
+### D2c · P7b executes the sealed-runner re-cut this gate only pinned
+
+**What.** `runners/htr` still carries `prefetch_pipeline`/`PrefetchActor`, the S3-diff resumability, and
+the `PageLoaderActor`/`AltoWriterActor` endcaps — flagged-D, runner READ-only this gate. The seam they're
+replaced by is pinned: mover `stageJob` values knob (`MEDALLION_RAY_ENTRYPOINT`), the gold contract
+(`medallion/schemas/htr.py::GOLD_CONTRACT_COLUMNS` + its unit pin), and the `/ingest-iiif` head.
+**What closes it.** The P7b gate: the runner CLI grows a `stage` subcommand; layout/lines + transcribe
+run as `medallion.bronze`/`medallion.silver` movers; the HTR-cascade e2e (IIIF → raw → bronze → silver →
+gold with lineage populated) goes green.
+
 ## E. Latent — surfaced by the pre-copy docs audit (2026-07-27), adversarially verified open
 
 These were living only inside reference docs, several anchored to tracker IDs that no longer exist.

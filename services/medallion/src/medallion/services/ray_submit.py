@@ -171,6 +171,65 @@ async def _await_success(client: httpx.AsyncClient, submission_id: str, poll_int
             raise RayJobError(f"ray stage job {submission_id} {status}: {payload.get('message')}")
 
 
+def _lineage_env() -> dict[str, str]:
+    """This pod's ``RASK_LINEAGE_*`` config, forwarded into the job's ``runtime_env`` (P7a seam contract):
+    a job that grows lineage-kit actor/stage emission inherits the same endpoint/namespace the fleet uses.
+    Empty when unconfigured — the job's lineage-kit degrades to its no-op emitter."""
+    return {key: value for key, value in os.environ.items() if key.startswith("RASK_LINEAGE_")}
+
+
+async def submit_iiif_ingest_job(
+    settings: MedallionSettings,
+    *,
+    raw_uri: str,
+    volume_id: str,
+    max_pages: int | None,
+    token: str | None,
+) -> None:
+    """Submit (or re-attach to) the IIIF→raw harvest job (``scripts/ray_iiif_ingest_job.py``) and block
+    until it succeeds — the P7a producer's Ray branch, on the same Jobs-REST seam as the stage movers.
+
+    Deterministic ``ray-iiif-ingest-<volume>-<token>`` submission id → an at-least-once retry re-attaches
+    instead of racing a second harvest of the same volume. Raises :class:`RayJobError` on a submit
+    failure, a FAILED/STOPPED job, or a timeout; on success the raw page dataset exists at ``raw_uri``
+    and the caller measures it for the ONE raw-write emit.
+    """
+    submission_id = _submission_id(f"iiif-ingest-{volume_id}", token)
+    env_vars = {
+        "VOLUME_ID": volume_id,
+        "RAW_URI": raw_uri,
+        "IIIF_BASE_URL": settings.iiif_base_url,
+        "IIIF_QUERY_PARAMS": settings.iiif_query_params,
+        "MAX_PAGES": "" if max_pages is None else str(max_pages),
+        "S3_ENDPOINT": settings.s3_endpoint,
+        "S3_KEY": settings.s3_access_key_id,
+        "S3_SECRET": settings.s3_secret_access_key.get_secret_value(),
+        "S3_REGION": settings.s3_region,
+        "OTEL_EXPORTER_OTLP_ENDPOINT": os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+        "OTEL_EXPORTER_OTLP_PROTOCOL": os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", ""),
+        "OTEL_EXPORTER_OTLP_HEADERS": os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", ""),
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS": os.environ.get("OTEL_EXPORTER_OTLP_TRACES_HEADERS", ""),
+        "OTEL_SERVICE_NAME": os.environ.get("OTEL_SERVICE_NAME", ""),
+        "OTEL_RESOURCE_ATTRIBUTES": os.environ.get("OTEL_RESOURCE_ATTRIBUTES", ""),
+        **_lineage_env(),
+        **_trace_env(),
+    }
+    body = {
+        "entrypoint": settings.iiif_ray_entrypoint,
+        "submission_id": submission_id,
+        "runtime_env": {"env_vars": env_vars},
+    }
+    async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
+        await _submit_or_reattach(client, submission_id, body)
+        log.info("ray_iiif_ingest_submitted", extra={"submission_id": submission_id, "volume_id": volume_id})
+        try:
+            async with asyncio.timeout(settings.ray_job_timeout_seconds):
+                await _await_success(client, submission_id, settings.ray_poll_interval_seconds)
+        except TimeoutError as exc:
+            raise RayJobError(f"ray iiif ingest job {submission_id} did not finish within {settings.ray_job_timeout_seconds}s") from exc
+    log.info("ray_iiif_ingest_succeeded", extra={"submission_id": submission_id, "volume_id": volume_id})
+
+
 async def submit_train_job(
     settings: MedallionSettings,
     *,

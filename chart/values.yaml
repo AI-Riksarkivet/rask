@@ -1,7 +1,7 @@
 # rask umbrella chart values — the MERGED estate (rask 0.2.0 + lance-ns 0.1.0, one release named `rask`).
 #
 # Two systems now install from this one file:
-#   * the rask HTR fleet (gateway/core-api/orchestrator/ray-api/search-api/volumes-api/controlplane),
+#   * the rask fleet (gateway/core-api/ray-api/search-api/volumes-api/controlplane),
 #     KubeRay Serve, CloudNativePG, the RustFS Tenant, the SvelteKit microfrontend zones;
 #   * the lance-ns lakehouse (catalog + lineage + medallion + compaction + media), governance
 #     (Dex OIDC + OpenFGA), the Dapr/NATS event fabric, OpenBao, and the OTel-first observability tier.
@@ -44,21 +44,16 @@ existingSecret: ""
 
 # Random creds are generated once on first install and pinned across upgrades
 # via `lookup`. Override here to force a value.
-# For in-cluster postgres, SET postgresPassword (the local `make k3s-up` injects it from .env
-# POSTGRES_PASSWORD; leaving it empty falls back to a fresh randAlphaNum on every render — which the
-# `rask-postgres` secret and the `rask-app` DATABASE_URL generate INDEPENDENTLY, so they won't match).
 # The OBJECT-STORE credential pair is NOT here (lance-ns-merge P4 RustFS unification): it is
 # rustfs.accessKey/secretKey — one pair for the Tenant credsSecret, the fleet AWS_*, and the lakehouse
 # apps; `make k3s-up` injects it from .env AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY.
+# (postgresPassword died at P7a with the rask app-DB Cluster; the AGE Postgres creds live under `age`.)
 secrets:
-  postgresPassword: ""   # in-cluster pg: set this (else fresh-render mismatch); from .env POSTGRES_PASSWORD
   hfToken: ""            # HuggingFace token for the gated TrOCR model; from .env HF_TOKEN
 
 # Non-secret env shared by the fleet ConfigMap.
 config:
   RASK_SOURCE_MODE: "s3"
-  RASK_HTR_PIPELINE: "htrflow"
-  RASK_PREFETCH_PIPELINE: "none"
   RASK_VIEWER_INPUT: "s3://images-batch"
   RASK_VIEWER_OUTPUT: "s3://images-batch-alto"
   RASK_CACHE_BUCKET: "images-batch"
@@ -66,13 +61,6 @@ config:
   RASK_SEARCH_BUCKET: "images-batch-search"
   RASK_IIIF_URL: ""
   RASK_API_PREFIX: "/api"
-  # How the orchestrator invokes the runner CLI in the Ray job entrypoint. The
-  # in-cluster ray image ships the installed `runner` console script on PATH (no
-  # uv, no source tree), so override the dev default (`uv run --project
-  # projects/runner runner`) — otherwise the job fails with `uv: not found` (127).
-  RASK_RUNNER_CMD: "runner"
-  RASK_ORCHESTRATOR_INTERVAL_SECONDS: "60"
-  RASK_ORCHESTRATOR_RECONCILE_SECONDS: "600"
   RASK_SERVE_REPLICAS: "1"
   RASK_SERVE_GPU_FRAC: "1.0"
   AWS_REGION: "us-east-1"
@@ -94,13 +82,12 @@ services:
     module: "core_api:app"
     port: 8801
     replicas: 1
-    waitFor: ["postgres", "minio"]
-    rayClient: true # submits Ray jobs (JobSubmissionClient) => gets the RAY_AUTH_* pair when ray.auth.enabled
+    waitFor: ["minio"]
   search-api:
     module: "search_api:app"
     port: 8802
     replicas: 1
-    waitFor: ["postgres"]
+    waitFor: ["minio"] # Lance lines FTS + S3 thumbnails — no DB (the postgres wait died at P7a)
   volumes-api:
     module: "volumes_api:app"
     port: 8803
@@ -112,13 +99,6 @@ services:
     replicas: 1
     waitFor: []
     rayClient: true # dashboard introspection + /api/serve proxy => gets the RAY_AUTH_* pair when ray.auth.enabled
-  orchestrator:
-    module: "orchestrator:app"
-    port: 8810
-    replicas: 1            # MUST stay 1 (in-process singleton)
-    singleton: true        # => strategy Recreate + RASK_ORCHESTRATOR_AUTOSTART
-    waitFor: ["postgres"]
-    rayClient: true # submits Ray jobs (JobSubmissionClient) => gets the RAY_AUTH_* pair when ray.auth.enabled
   gateway:
     module: "gateway:app"
     port: 8888
@@ -300,12 +280,6 @@ controlplane:
   enabled: true
   port: 8820
   urlScheme: http
-
-orchestrator:
-  autostart: "false"
-  # In-cluster the ray image ships the installed `runner` console script on PATH
-  # (no uv, no source tree), so override the dev default `uv run --project runners/htr runner`.
-  runnerCmd: "runner"
 
 # --- Micro-frontend zones: the SvelteKit SSR zones deployed from the ONE parametrized
 # frontend.dockerfile (image <name>:tag). The catch-all `home` owns "/"; each domain zone is pinned to
@@ -589,6 +563,11 @@ medallion:
     operation: lance_ray_ingest
     author: ray
     rawTopic: medallion.raw
+    # The IIIF page lane (P7a): /ingest-iiif harvests a volume's pages into THIS raw dataset
+    # (beside rawDataset — /raw-arrival fires the cascade for either name). The raw page dataset
+    # replaced the prefetch lane + the IIIFCachedSource cache; HTR then runs as cascade compute
+    # (raw→bronze media promotion, then the P7b layout/lines + transcribe movers).
+    iiifRawDataset: raw_pages
   # The 4 stage movers run medallion.mover:app, differing only by env. order = the DAG.
   # requiredAction/serviceIdentity gate each hop when fgaEnabled: silver→gold needs `can_promote`
   # (validator-only); the others `can_create_table` (writer). Each mover checks as its own identity.
@@ -597,6 +576,10 @@ medallion:
   # typo 503s the whole cascade at the FGA gate instead of denying it. Pinned by
   # tests/unit/test_fga_model_contract.py::test_chart_medallion_required_actions_exist_on_namespace.
   movers:
+    # Optional per-mover `stageJob: "python /home/ray/jobs/<job>.py"` — the Ray stage-job entrypoint
+    # this mover submits when medallion.ray is on (MEDALLION_RAY_ENTRYPOINT). This is the P7b seam:
+    # the HTR lanes select the layout/lines + transcribe stage jobs here (runner re-cut gate); unset
+    # falls back to the shared ray_stage_job.py default.
     # serviceIdentity is a BARE subject — common.fga.check prefixes `user:` itself (a `user:` here would
     # double-prefix and always deny). The seeded FGA tuples grant these `user:service-*` identities.
     # Optional per-mover `requiredColumns: "id,embedding"` — declared consumer dependencies
@@ -805,7 +788,7 @@ ray:
   auth:
     enabled: false
     # Optional explicit token. Empty => chart-generated (randAlphaNum 32), pinned across upgrades
-    # via lookup — same lifecycle as secrets.postgresPassword. NEVER commit a real value; prod
+    # via lookup. NEVER commit a real value; prod
     # supplies it out-of-band (--set / values pipeline) or via externalSecrets (OpenBao/ESO).
     token: ""
   rayVersion: "2.55.1"
@@ -826,13 +809,6 @@ ray:
   resources:
     requests: {cpu: "2", memory: "8Gi"}
     limits: {cpu: "4", memory: "16Gi"}
-
-migrations:
-  enabled: true
-  command: ["sh", "-c", "cd /app/services/core && alembic upgrade head"]
-  resources:
-    requests: {cpu: "100m", memory: "256Mi"}
-    limits: {cpu: "1", memory: "1Gi"}
 
 ingress:
   enabled: true
@@ -1046,7 +1022,7 @@ openfga:
     waitForMigrations: false
 
 # --- Apache AGE Postgres (first-party template) — the lineage graph store AND openfga's datastore --
-# Separate from the `cnpg` Cluster below (rask's batches/chunks state of record): CNPG's stock image
+# The ONLY relational store post-P7a (the rask batches/chunks CNPG Cluster is gone): CNPG's stock image
 # has no AGE extension, so this is a plain StatefulSet on apache/age. See docs/CNPG-AGE.md for the
 # ImageVolume path that eventually folds it into CloudNativePG.
 age:
@@ -1125,22 +1101,12 @@ externalSecrets:
   kubernetesAuthPath: kubernetes # the Vault Kubernetes auth backend mount
   role: lance-infra # the Vault role the operator's ServiceAccount assumes
 
-# In-cluster Postgres via the CloudNativePG operator (Cluster CR + operator
-# subchart). `enabled` gates BOTH the operator subchart (Chart.yaml condition
-# cnpg.enabled) and the Cluster template. Turn off for an external/managed DB
-# (provide DATABASE_URL via existingSecret).
+# CloudNativePG OPERATOR toggle (Chart.yaml condition cnpg.enabled). The rask app-DB
+# Cluster + its Alembic migration Job died at P7a (the batches table is gone — Lance +
+# the AGE Postgres are the only state); the operator stays for the AGE-on-CNPG path
+# (age.cnpgCluster) and per-project stacks.
 cnpg:
   enabled: true
-  instances: 1
-  imageName: "ghcr.io/cloudnative-pg/postgresql:16"
-  user: "rask"
-  database: "rask"
-  port: 5432
-  storage: "8Gi"
-  storageClass: "local-path"
-  resources:
-    requests: {cpu: "100m", memory: "256Mi"}
-    limits: {cpu: "1", memory: "1Gi"}
 
 # cloudnative-pg operator subchart (Chart.yaml dep, gated by cnpg.enabled).
 # Webhook failurePolicy=Ignore so a Cluster created before the operator pod is

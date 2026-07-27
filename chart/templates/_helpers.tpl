@@ -27,8 +27,8 @@ guarantee a rask selector can never adopt a lance pod inside the shared release.
 ===================================================================================================== */}}
 
 {{/* ---------------------------------------------------------------------------------------------------
-     rask — the base chart's helpers (fleet: core-api, gateway, orchestrator, ray-api, search-api,
-     volumes-api, controlplane, frontends).
+     rask — the base chart's helpers (fleet: core-api, gateway, ray-api, search-api,
+     volumes-api, controlplane, frontends — the orchestrator died at P7a).
      --------------------------------------------------------------------------------------------------- */}}
 
 {{- define "rask.name" -}}
@@ -74,22 +74,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: {{ $component }}
 {{- end -}}
 
-{{/* Postgres password: pinned across upgrades via lookup, else random. */}}
-{{- define "rask.pgPassword" -}}
-{{- if .Values.secrets.postgresPassword -}}
-{{- .Values.secrets.postgresPassword -}}
-{{- else -}}
-{{- $existing := (lookup "v1" "Secret" .Release.Namespace (printf "%s-postgres" (include "rask.fullname" .))) -}}
-{{- if and $existing $existing.data (index $existing.data "password") -}}
-{{- index $existing.data "password" | b64dec -}}
-{{- else -}}
-{{- randAlphaNum 24 -}}
-{{- end -}}
-{{- end -}}
-{{- end -}}
-
 {{/* Ray auth token (gate 7 / R3): explicit value -> lookup-pinned existing Secret -> random.
-     Clones rask.pgPassword exactly. The Secret data key is `auth_token` — the KubeRay
+     The Secret data key is `auth_token` — the KubeRay
      operator-Secret convention (kuberay-auth user guide), so a later move to spec.authOptions
      needs no key rename. */}}
 {{- define "rask.rayAuthToken" -}}
@@ -125,11 +111,6 @@ app.kubernetes.io/component: {{ $component }}
 {{/* rask.minioAccessKey / rask.minioSecretKey are GONE (lance-ns-merge P4 RustFS unification):
      the ONE store's root credential is rustfs.accessKey/secretKey everywhere — the Tenant credsSecret,
      the fleet's AWS_*, infra-credentials, and the hooks all read that single pair. */}}
-
-{{/* asyncpg DATABASE_URL pointing at the in-cluster postgres service. */}}
-{{- define "rask.databaseUrl" -}}
-{{- printf "postgresql+asyncpg://%s:%s@%s-postgres-rw:%v/%s" .Values.cnpg.user (include "rask.pgPassword" .) (include "rask.fullname" .) .Values.cnpg.port .Values.cnpg.database -}}
-{{- end -}}
 
 {{/* Dapr sidecar pod annotations (no-op unless dapr.sidecars) — the ONE annotation surface for the whole
      estate: the rask fleet + controlplane AND the lance planes (services.yaml catalog/lineage,

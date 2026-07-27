@@ -11,7 +11,7 @@ import pyarrow as pa
 import pyarrow.fs as pafs
 import pytest
 from medallion.services import ingest as ingest_module
-from medallion.services.ingest import ingest_to_bronze
+from medallion.services.ingest import ExtraColumns, ingest_to_bronze
 from PIL import Image
 
 from service_kit.lakehouse.sinks import LocalDirSink, S3Sink
@@ -145,9 +145,9 @@ def test_ingest_batch_flushes_on_bytes_before_count(tmp_path: Path, monkeypatch:
     batch_sizes: list[int] = []
     real_chunk_batch = ingest_module._chunk_batch
 
-    def counting_chunk_batch(chunk: list[SourceObject], first_id: int) -> pa.RecordBatch:
+    def counting_chunk_batch(chunk: list[SourceObject], first_id: int, extra_columns: ExtraColumns | None = None) -> pa.RecordBatch:
         batch_sizes.append(len(chunk))
-        return real_chunk_batch(chunk, first_id)
+        return real_chunk_batch(chunk, first_id, extra_columns)
 
     monkeypatch.setattr(ingest_module, "_chunk_batch", counting_chunk_batch)
     result = ingest_to_bronze(LocalDirSource(source_dir, "*.png"), bronze, {}, chunk_objects=1000, chunk_bytes=1)

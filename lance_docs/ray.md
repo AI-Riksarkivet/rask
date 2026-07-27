@@ -422,22 +422,14 @@ import lance_ray as lr
 dataset = lance.dataset("path/to/dataset")
 
 # Build distributed index
-updated_dataset = lr.create_scalar_index(
-   uri=dataset.uri,
-   column="text",
-   index_type="INVERTED",
-   num_workers=4
-)
+updated_dataset = lr.create_scalar_index(uri=dataset.uri, column="text", index_type="INVERTED", num_workers=4)
 
 # Verify index creation
 indices = updated_dataset.describe_indices()
 print(f"Index list: {indices}")
 
 # Use index for search
-results = updated_dataset.scanner(
-   full_text_query="search term",
-   columns=["id", "text"]
-).to_table()
+results = updated_dataset.scanner(full_text_query="search term", columns=["id", "text"]).to_table()
 print(f"Search results: {results}")
 ```
 
@@ -474,7 +466,7 @@ updated_dataset = lr.create_index(
     num_partitions=256,
     num_sub_vectors=16,
     sample_rate=64,
-    metric="l2"
+    metric="l2",
 )
 
 # Build a distributed IVF_SQ index
@@ -527,11 +519,7 @@ print(plan)
 
 ```python
 updated_dataset = lr.create_scalar_index(
-   uri="path/to/dataset",
-   column="text",
-   index_type="INVERTED",
-   num_workers=4,
-   ray_remote_args={"num_cpus": 2, "resources": {"custom_resource": 1}}
+    uri="path/to/dataset", column="text", index_type="INVERTED", num_workers=4, ray_remote_args={"num_cpus": 2, "resources": {"custom_resource": 1}}
 )
 ```
 
@@ -571,22 +559,16 @@ The current global Pool integration is limited to `vector_search()`.  The same p
 
 ```python
 # Create index with custom name
-updated_dataset = lr.create_scalar_index(
-   uri="path/to/dataset",
-   column="text",
-   index_type="INVERTED",
-   name="my_text_index",
-   num_workers=4
-)
+updated_dataset = lr.create_scalar_index(uri="path/to/dataset", column="text", index_type="INVERTED", name="my_text_index", num_workers=4)
 
 # Try to create another index with the same name (will replace by default)
 updated_dataset = lr.create_scalar_index(
-   uri="path/to/dataset",
-   column="text",
-   index_type="INVERTED",
-   name="my_text_index",  # Same name as before
-   replace=True,          # Explicitly allow replacement (default behavior)
-   num_workers=4
+    uri="path/to/dataset",
+    column="text",
+    index_type="INVERTED",
+    name="my_text_index",  # Same name as before
+    replace=True,  # Explicitly allow replacement (default behavior)
+    num_workers=4,
 )
 
 # Prevent index replacement
@@ -594,12 +576,12 @@ import lance_ray as lr
 
 try:
     updated_dataset = lr.create_scalar_index(
-       uri="path/to/dataset",
-       column="text",
-       index_type="INVERTED",
-       name="my_text_index",  # Same name as existing index
-       replace=False,         # Prevent replacement
-       num_workers=4
+        uri="path/to/dataset",
+        column="text",
+        index_type="INVERTED",
+        name="my_text_index",  # Same name as existing index
+        replace=False,  # Prevent replacement
+        num_workers=4,
     )
 except ValueError as e:
     print(f"Index creation failed: {e}")
@@ -662,11 +644,7 @@ filtered_ds = ds.filter(lambda row: row["age"] > 30)
 print(f"Filtered count: {filtered_ds.count()}")
 
 # Read with column selection and filtering
-ds_filtered = read_lance(
-    "sample_dataset.lance",
-    columns=["user_id", "name", "score"],
-    filter="score > 75.0"
-)
+ds_filtered = read_lance("sample_dataset.lance", columns=["user_id", "name", "score"], filter="score > 75.0")
 print(f"Schema: {ds_filtered.schema()}")
 ```
 
@@ -677,16 +655,14 @@ print(f"Schema: {ds_filtered.schema()}")
 from lance_ray import add_columns
 import pyarrow as pa
 
+
 def add_computed_column(batch: pa.RecordBatch) -> pa.RecordBatch:
     df = batch.to_pandas()
-    df['computed'] = df['value'] * 2 + df['id']
+    df["computed"] = df["value"] * 2 + df["id"]
     return pa.RecordBatch.from_pandas(df[["computed"]])
 
-add_columns(
-    uri="sample_dataset.lance",
-    transform=add_computed_column,
-    concurrency=4
-)
+
+add_columns(uri="sample_dataset.lance", transform=add_computed_column, concurrency=4)
 ```
 
 ## Using Namespace
@@ -736,7 +712,7 @@ from lance_ray import read_lance, write_lance
 # Initialize Ray
 ray.init()
 
-# Connect to AWS Glue catalog 
+# Connect to AWS Glue catalog
 # using the default account and region in the current AWS environment
 namespace = ln.connect("glue", {})
 
@@ -744,12 +720,7 @@ namespace = ln.connect("glue", {})
 data = ray.data.range(1000).map(lambda row: {"id": row["id"], "value": row["id"] * 2})
 
 # Write to Lance format using metadata catalog
-write_lance(
-    data, 
-    uri="s3://my-bucket/my-table", 
-    namespace=namespace, 
-    table_id=["default", "my_table"]
-)
+write_lance(data, uri="s3://my-bucket/my-table", namespace=namespace, table_id=["default", "my_table"])
 
 # Read Lance dataset back using metadata catalog
 ray_dataset = read_lance(namespace=namespace, table_id=["default", "my_table"])

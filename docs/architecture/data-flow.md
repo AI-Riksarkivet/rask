@@ -1,5 +1,13 @@
 # Data Flow
 
+!!! warning "P7a (2026-07-27): the batches/orchestrator plane described below is DELETED"
+    The compute-plane cutover (`lance-ns-merge.md` P7a) removed the orchestrator loop + entrypoint
+    (`:8810`), the `batches` table + Alembic lineage, S3-sync, chunk submission, and the prefetch lane.
+    Ingestion is now the medallion producer's `POST /ingest-iiif` (IIIF → raw page-image Lance dataset,
+    ONE raw-write OpenLineage event) and HTR runs as event-driven cascade compute on the unified Ray
+    cluster. Sections referring to batches/chunks/orchestrator are kept as historical context until the
+    P8 doc re-draw.
+
 How an image becomes searchable ALTO XML, and how the SvelteKit (SSR) frontend reads it back.
 
 ## Image → ALTO XML (the `htr` pipeline)

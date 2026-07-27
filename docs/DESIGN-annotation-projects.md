@@ -502,46 +502,48 @@ training consumer wants. A skipped task contributes exactly one sentinel row (`s
 an exclusion set. Filter `shape_type != 'none'` for shapes; read `task_outcome` for coverage.
 
 ```python
-PUBLISHED_LABELS_SCHEMA = pa.schema([
-    # provenance of the project (never a join key into the corpus)
-    ("project_id",        pa.string()),
-    ("project_slug",      pa.string()),
-    ("publish_id",        pa.string()),
-    ("task_id",           pa.string()),
-    ("task_outcome",      pa.string()),     # accepted | skipped
-    # the send capture — informational strings, copied at send time
-    ("item_source_kind",  pa.string()),     # search | atlas | saved_view | manual | prediction_import
-    ("item_dataset",      pa.string()),
-    ("item_key_path",     pa.string()),
-    # the label
-    ("annotation_id",     pa.string()),
-    ("shape_type",        pa.string()),     # bbox|polygon|mask|segment|tag|text|none
-    ("x",                 pa.float32()),
-    ("y",                 pa.float32()),
-    ("width",             pa.float32()),
-    ("height",            pa.float32()),
-    ("rotation",          pa.float32()),
-    ("polygon",           pa.list_(pa.float32())),
-    ("t_start",           pa.float32()),
-    ("t_end",             pa.float32()),
-    ("mask",              pa.string()),
-    ("label",             pa.string()),
-    ("text",              pa.string()),
-    ("attributes",        pa.string()),     # json
-    ("group",             pa.string()),
-    ("difficult",         pa.bool_()),
-    # who made it — server-stamped, never client-claimed
-    ("source",            pa.string()),     # human | model | propagated
-    ("model_version",     pa.string()),
-    ("confidence",        pa.float32()),
-    ("annotated_by",      pa.string()),
-    ("annotated_at",      pa.timestamp("us", tz="UTC")),
-    ("reviewed_by",       pa.string()),     # '' when review_required = False
-    ("reviewed_at",       pa.timestamp("us", tz="UTC")),
-    ("review_action",     pa.string()),     # accepted | fix_and_accept | none
-    ("lead_time_seconds", pa.float32()),
-    ("published_at",      pa.timestamp("us", tz="UTC")),
-])
+PUBLISHED_LABELS_SCHEMA = pa.schema(
+    [
+        # provenance of the project (never a join key into the corpus)
+        ("project_id", pa.string()),
+        ("project_slug", pa.string()),
+        ("publish_id", pa.string()),
+        ("task_id", pa.string()),
+        ("task_outcome", pa.string()),  # accepted | skipped
+        # the send capture — informational strings, copied at send time
+        ("item_source_kind", pa.string()),  # search | atlas | saved_view | manual | prediction_import
+        ("item_dataset", pa.string()),
+        ("item_key_path", pa.string()),
+        # the label
+        ("annotation_id", pa.string()),
+        ("shape_type", pa.string()),  # bbox|polygon|mask|segment|tag|text|none
+        ("x", pa.float32()),
+        ("y", pa.float32()),
+        ("width", pa.float32()),
+        ("height", pa.float32()),
+        ("rotation", pa.float32()),
+        ("polygon", pa.list_(pa.float32())),
+        ("t_start", pa.float32()),
+        ("t_end", pa.float32()),
+        ("mask", pa.string()),
+        ("label", pa.string()),
+        ("text", pa.string()),
+        ("attributes", pa.string()),  # json
+        ("group", pa.string()),
+        ("difficult", pa.bool_()),
+        # who made it — server-stamped, never client-claimed
+        ("source", pa.string()),  # human | model | propagated
+        ("model_version", pa.string()),
+        ("confidence", pa.float32()),
+        ("annotated_by", pa.string()),
+        ("annotated_at", pa.timestamp("us", tz="UTC")),
+        ("reviewed_by", pa.string()),  # '' when review_required = False
+        ("reviewed_at", pa.timestamp("us", tz="UTC")),
+        ("review_action", pa.string()),  # accepted | fix_and_accept | none
+        ("lead_time_seconds", pa.float32()),
+        ("published_at", pa.timestamp("us", tz="UTC")),
+    ]
+)
 ```
 
 **Deliberately absent, and this is the decision, not an omission:** task state, `assignee`, leases, claim

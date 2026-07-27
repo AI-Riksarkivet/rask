@@ -370,25 +370,24 @@ class ProjectReader(Protocol):
 ```
 and to `K8sProjectReader.__init__` add the networking client, plus the method:
 ```python
-    def __init__(self) -> None:
-        from kubernetes import client, config
+def __init__(self) -> None:
+    from kubernetes import client, config
 
-        try:
-            config.load_incluster_config()
-        except config.ConfigException:
-            config.load_kube_config()
-        self._api = client.CustomObjectsApi()
-        self._net = client.NetworkingV1Api()
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
+    self._api = client.CustomObjectsApi()
+    self._net = client.NetworkingV1Api()
 
-    def ingress_host(self, namespace: str) -> str | None:
-        resp = self._net.list_namespaced_ingress(
-            namespace, label_selector="platform.rask.io/project"
-        )
-        for ing in resp.items:
-            for rule in ing.spec.rules or []:
-                if rule.host:
-                    return rule.host
-        return None
+
+def ingress_host(self, namespace: str) -> str | None:
+    resp = self._net.list_namespaced_ingress(namespace, label_selector="platform.rask.io/project")
+    for ing in resp.items:
+        for rule in ing.spec.rules or []:
+            if rule.host:
+                return rule.host
+    return None
 ```
 
 - [ ] **Step 3: Write the failing url tests**

@@ -30,9 +30,7 @@ def test_htr_http_spec_is_http_kind_with_boto3() -> None:
 def test_runner_kind_specs_match_runner_pipelines() -> None:
     runner_kind = {k for k, v in PIPELINE_SPECS.items() if v.entrypoint_kind == "runner"}
     assert runner_kind == _EXPECTED_RUNNER_PIPELINES
-    runner_pipelines = pytest.importorskip(
-        "runner.pipeline", reason="runner not on the viewer test path"
-    ).PIPELINES
+    runner_pipelines = pytest.importorskip("runner.pipeline", reason="runner not on the viewer test path").PIPELINES
     assert runner_kind == set(runner_pipelines)
 ```
 
@@ -149,11 +147,13 @@ def build_entrypoint(batch_ids: list[str], *, params: RunnerParams, spec: Pipeli
 - [ ] **Step 4: Add `pip` to the job `runtime_env`.** In `submit_chunk`'s `_submit`, change the `runtime_env` dict:
 
 ```python
-            runtime_env={
-                "working_dir": str(params.repo_root),
-                "env_vars": _passthrough_env(env if env is not None else os.environ),
-                **({"pip": list(spec.pip)} if spec.pip else {}),
-            },
+runtime_env = (
+    {
+        "working_dir": str(params.repo_root),
+        "env_vars": _passthrough_env(env if env is not None else os.environ),
+        **({"pip": list(spec.pip)} if spec.pip else {}),
+    },
+)
 ```
 
 - [ ] **Step 5: Run tests to verify they pass**
@@ -181,6 +181,7 @@ git commit -m "feat(submission): build htr_chunk_job entrypoint + boto3 pip for 
 
 ```python
 """The orchestrator must NOT submit prefetch jobs when prefetch is disabled."""
+
 import contextlib
 from types import SimpleNamespace
 
@@ -383,9 +384,7 @@ def list_keys(s3: object, bucket: str, prefix: str, suffix_ok) -> list[str]:
 
 
 def transcribe(endpoint: str, img: bytes) -> str:
-    req = urllib.request.Request(
-        endpoint, data=img, headers={"Content-Type": "application/octet-stream"}, method="POST"
-    )
+    req = urllib.request.Request(endpoint, data=img, headers={"Content-Type": "application/octet-stream"}, method="POST")
     with urllib.request.urlopen(req, timeout=600) as resp:
         return resp.read().decode("utf-8", "replace")
 

@@ -87,8 +87,10 @@ for core-api).
 def get_lines_tbl(request: Request) -> AsyncTable | None:
     return request.app.state.lines_tbl
 
+
 def get_s3(request: Request) -> S3Client:
     return request.app.state.s3
+
 
 LinesTblDep = Annotated[AsyncTable | None, Depends(get_lines_tbl)]
 S3Dep = Annotated[S3Client, Depends(get_s3)]

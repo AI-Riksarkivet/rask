@@ -1,7 +1,7 @@
 [project]
 name = "core-api"
 version = "0.1.0"
-description = "core-api backend — batches/chunks/catalog over the core brick."
+description = "core-api backend — health + EAD catalog search over the transitional core husk (the batches/chunks estate died at P7a)."
 requires-python = ">=3.13"
 license = "AGPL-3.0-only"
 dependencies = [

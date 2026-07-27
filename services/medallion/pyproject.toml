@@ -6,6 +6,8 @@ requires-python = ">=3.13"
 license = "AGPL-3.0-only"
 dependencies = [
     "service-kit[governed,lakehouse]",
+    "storage",
+    "lineage-kit",
     "fastapi>=0.115",
     "pydantic>=2.7",
     "pydantic-settings>=2.5",
@@ -35,3 +37,5 @@ packages = ["src/medallion"]
 
 [tool.uv.sources]
 service-kit = { workspace = true }
+storage = { workspace = true }
+lineage-kit = { workspace = true }

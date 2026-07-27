@@ -110,11 +110,11 @@ from service_kit import make_service_app
 def _client() -> TestClient:
     r = APIRouter()
 
-    @r.get("/items/")          # canonical WITH trailing slash
+    @r.get("/items/")  # canonical WITH trailing slash
     def items() -> dict:
         return {"ok": "items"}
 
-    @r.get("/ping")            # canonical WITHOUT trailing slash
+    @r.get("/ping")  # canonical WITHOUT trailing slash
     def ping() -> dict:
         return {"ok": "ping"}
 

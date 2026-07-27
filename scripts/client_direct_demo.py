@@ -50,7 +50,7 @@ def _sub(tok: str) -> str:
 
 def _store_model() -> tuple[str, str]:
     stores = requests.get(f"{FGA}/stores", timeout=10).json()["stores"]
-    st = sorted(stores, key=lambda s: s["created_at"])[-1]["id"]
+    st = max(stores, key=lambda s: s["created_at"])["id"]
     m = requests.get(f"{FGA}/stores/{st}/authorization-models", timeout=10).json()
     return st, m["authorization_models"][0]["id"]
 

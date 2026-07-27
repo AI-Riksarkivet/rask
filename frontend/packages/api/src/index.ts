@@ -11,8 +11,9 @@ export * from './parse';
 export * from './me';
 // rask's own domain clients — the compute/storage services these back are still live in the
 // merged tree (core-api, ray-api, search-api, volumes-api), so they survive the lance-ns fold.
+// (batches.ts died at P7a with the batches table — ingestion is ingest.ts → the medallion producer.)
 export * from './ray';
-export * from './batches';
+export * from './ingest';
 export * from './projects';
 export * from './search';
 export * from './volumes';

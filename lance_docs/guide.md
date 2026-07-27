@@ -107,11 +107,7 @@ are not read into memory automatically.
 ```python
 from lance.arrow import ImageURIArray
 
-ImageURIArray.from_uris([
-   "/tmp/image1.jpg",
-   "file:///tmp/image2.jpg",
-   "s3://example/image3.jpg"
-])
+ImageURIArray.from_uris(["/tmp/image1.jpg", "file:///tmp/image2.jpg", "s3://example/image3.jpg"])
 # <lance.arrow.ImageURIArray object at 0x...>
 # ['/tmp/image1.jpg', 'file:///tmp/image2.jpg', 's3://example/image3.jpg']
 ```
@@ -157,14 +153,14 @@ uris = [os.path.join(os.path.dirname(__file__), "images/1.png")]
 encoded_images = ImageURIArray.from_uris(uris).read_uris()
 print(encoded_images.to_tensor())
 
+
 def pillow_decoder(images):
     import io
     import numpy as np
     from PIL import Image
 
-    return np.stack(
-        np.asarray(Image.open(io.BytesIO(img.as_py()))) for img in images.storage
-    )
+    return np.stack(np.asarray(Image.open(io.BytesIO(img.as_py()))) for img in images.storage)
+
 
 print(encoded_images.to_tensor(pillow_decoder))
 # <lance.arrow.FixedShapeImageTensorArray object at 0x...>
@@ -238,10 +234,12 @@ import lance
 import pyarrow as pa
 from lance import blob_array, blob_field
 
-schema = pa.schema([
-    pa.field("id", pa.int64()),
-    blob_field("blob"),
-])
+schema = pa.schema(
+    [
+        pa.field("id", pa.int64()),
+        blob_field("blob"),
+    ]
+)
 
 table = pa.table(
     {
@@ -282,10 +280,12 @@ import lance
 import pyarrow as pa
 from lance import Blob, blob_array, blob_field
 
-schema = pa.schema([
-    pa.field("id", pa.int64()),
-    blob_field("blob", nullable=True),
-])
+schema = pa.schema(
+    [
+        pa.field("id", pa.int64()),
+        blob_field("blob", nullable=True),
+    ]
+)
 
 # A single column can mix:
 # - inline bytes
@@ -295,12 +295,14 @@ schema = pa.schema([
 rows = pa.table(
     {
         "id": [1, 2, 3, 4],
-        "blob": blob_array([
-            b"inline-bytes",
-            "s3://bucket/path/video.mp4",
-            Blob.from_uri("s3://bucket/archive.tar", position=4096, size=8192),
-            None,
-        ]),
+        "blob": blob_array(
+            [
+                b"inline-bytes",
+                "s3://bucket/path/video.mp4",
+                Blob.from_uri("s3://bucket/archive.tar", position=4096, size=8192),
+                None,
+            ]
+        ),
     },
     schema=schema,
 )
@@ -359,10 +361,12 @@ with tarfile.open("container.tar", "r") as tf:
         m = tf.getmember(name)
         blob_values.append(Blob.from_uri(container_uri, position=m.offset_data, size=m.size))
 
-schema = pa.schema([
-    pa.field("name", pa.utf8()),
-    blob_field("blob"),
-])
+schema = pa.schema(
+    [
+        pa.field("name", pa.utf8()),
+        blob_field("blob"),
+    ]
+)
 
 rows = pa.table(
     {
@@ -492,14 +496,16 @@ and mark `LargeBinary` fields with a metadata kwarg `"lance-encoding:blob": true
 import lance
 import pyarrow as pa
 
-schema = pa.schema([
-    pa.field("id", pa.int64()),
-    pa.field(
-        "video",
-        pa.large_binary(),
-        metadata={"lance-encoding:blob": "true"},
-    ),
-])
+schema = pa.schema(
+    [
+        pa.field("id", pa.int64()),
+        pa.field(
+            "video",
+            pa.large_binary(),
+            metadata={"lance-encoding:blob": "true"},
+        ),
+    ]
+)
 
 table = pa.table(
     {
@@ -531,10 +537,12 @@ from lance import blob_array, blob_field
 legacy = lance.dataset("./legacy_blob_dataset")
 raw = legacy.scanner(columns=["id", "video"], blob_handling="all_binary").to_table()
 
-new_schema = pa.schema([
-    pa.field("id", pa.int64()),
-    blob_field("video"),
-])
+new_schema = pa.schema(
+    [
+        pa.field("id", pa.int64()),
+        blob_field("video"),
+    ]
+)
 
 rewritten = pa.table(
     {
@@ -616,22 +624,30 @@ dataset = lance.write_dataset(table, "null_columns")
 
 # With pyarrow Field
 dataset.add_columns(pa.field("embedding", pa.list_(pa.float32(), 128)))
-assert dataset.schema == pa.schema([
-    ("id", pa.int64()),
-    ("embedding", pa.list_(pa.float32(), 128)),
-])
+assert dataset.schema == pa.schema(
+    [
+        ("id", pa.int64()),
+        ("embedding", pa.list_(pa.float32(), 128)),
+    ]
+)
 
 # With pyarrow Schema
-dataset.add_columns(pa.schema([
-    ("label", pa.string()),
-    ("score", pa.float32()),
-]))
-assert dataset.schema == pa.schema([
-    ("id", pa.int64()),
-    ("embedding", pa.list_(pa.float32(), 128)),
-    ("label", pa.string()),
-    ("score", pa.float32()),
-])
+dataset.add_columns(
+    pa.schema(
+        [
+            ("label", pa.string()),
+            ("score", pa.float32()),
+        ]
+    )
+)
+assert dataset.schema == pa.schema(
+    [
+        ("id", pa.int64()),
+        ("embedding", pa.list_(pa.float32(), 128)),
+        ("label", pa.string()),
+        ("score", pa.float32()),
+    ]
+)
 ```
 
 This operation is very fast, as it only updates the metadata of the dataset.
@@ -655,10 +671,12 @@ existing rows.
 ```python
 table = pa.table({"name": pa.array(["Alice", "Bob", "Carla"])})
 dataset = lance.write_dataset(table, "names")
-dataset.add_columns({
-    "hash": "sha256(name)",
-    "status": "'active'",
-})
+dataset.add_columns(
+    {
+        "hash": "sha256(name)",
+        "status": "'active'",
+    }
+)
 print(dataset.to_table().to_pandas())
 #     name                                               hash  status
 # 0  Alice  b';\xc5\x10b\x97<E\x8dZo-\x8dd\xa0#$cT\xad~\x0...  active
@@ -685,13 +703,13 @@ import numpy as np
 table = pa.table({"id": pa.array([1, 2, 3])})
 dataset = lance.write_dataset(table, "ids")
 
+
 @lance.batch_udf(checkpoint_file="embedding_checkpoint.sqlite")
 def add_random_vector(batch):
     embeddings = np.random.rand(batch.num_rows, 128).astype("float32")
-    return pa.RecordBatch.from_arrays(
-        [pa.FixedSizeListArray.from_arrays(embeddings.flatten(), 128)],
-        names=["embedding"]
-    )
+    return pa.RecordBatch.from_arrays([pa.FixedSizeListArray.from_arrays(embeddings.flatten(), 128)], names=["embedding"])
+
+
 dataset.add_columns(add_random_vector)
 ```
 
@@ -708,21 +726,14 @@ dataset.
 For example, imagine we have a dataset of embeddings and ids:
 
 ```python
-table = pa.table({
-   "id": pa.array([1, 2, 3]),
-   "embedding": pa.array([np.array([1, 2, 3]), np.array([4, 5, 6]),
-                          np.array([7, 8, 9])])
-})
+table = pa.table({"id": pa.array([1, 2, 3]), "embedding": pa.array([np.array([1, 2, 3]), np.array([4, 5, 6]), np.array([7, 8, 9])])})
 dataset = lance.write_dataset(table, "embeddings", mode="overwrite")
 ```
 
 Now if we want to add a column of labels we have generated, we can do so by merging a new table:
 
 ```python
-new_data = pa.table({
-   "id": pa.array([1, 2, 3]),
-   "label": pa.array(["horse", "rabbit", "cat"])
-})
+new_data = pa.table({"id": pa.array([1, 2, 3]), "label": pa.array(["horse", "rabbit", "cat"])})
 dataset.merge(new_data, "id")
 print(dataset.to_table().to_pandas())
 #    id  embedding   label
@@ -738,8 +749,7 @@ method. This is a metadata-only operation and does not delete the data on disk. 
 it very quick.
 
 ```python
-table = pa.table({"id": pa.array([1, 2, 3]),
-                 "name": pa.array(["Alice", "Bob", "Carla"])})
+table = pa.table({"id": pa.array([1, 2, 3]), "name": pa.array(["Alice", "Bob", "Carla"])})
 dataset = lance.write_dataset(table, "names", mode="overwrite")
 dataset.drop_columns(["name"])
 print(dataset.schema)
@@ -786,15 +796,22 @@ This works for nested columns as well. To address a nested column, use a dot
 
 ```python
 data = [
-  {"meta": {"id": 1, "name": "Alice"}},
-  {"meta": {"id": 2, "name": "Bob"}},
+    {"meta": {"id": 1, "name": "Alice"}},
+    {"meta": {"id": 2, "name": "Bob"}},
 ]
-schema = pa.schema([
-    ("meta", pa.struct([
-        ("id", pa.int32()),
-        ("name", pa.string()),
-    ]))
-])
+schema = pa.schema(
+    [
+        (
+            "meta",
+            pa.struct(
+                [
+                    ("id", pa.int32()),
+                    ("name", pa.string()),
+                ]
+            ),
+        )
+    ]
+)
 dataset = lance.write_dataset(data, "nested_rename")
 dataset.alter_columns({"path": "meta.id", "name": "new_id"})
 print(dataset.to_table().to_pandas())
@@ -820,14 +837,9 @@ can change a float32 embedding column into a float16 column to save disk space
 at the cost of lower precision:
 
 ```python
-table = pa.table({
-   "id": pa.array([1, 2, 3]),
-   "embedding": pa.FixedShapeTensorArray.from_numpy_ndarray(
-       np.random.rand(3, 128).astype("float32"))
-})
+table = pa.table({"id": pa.array([1, 2, 3]), "embedding": pa.FixedShapeTensorArray.from_numpy_ndarray(np.random.rand(3, 128).astype("float32"))})
 dataset = lance.write_dataset(table, "embeddings")
-dataset.alter_columns({"path": "embedding",
-                       "data_type": pa.list_(pa.float16(), 128)})
+dataset.alter_columns({"path": "embedding", "data_type": pa.list_(pa.float16(), 128)})
 print(dataset.schema)
 # id: int64
 # embedding: fixed_size_list<item: halffloat>[128]
@@ -888,10 +900,12 @@ import lance
 import pyarrow as pa
 from lance import blob_array, blob_field
 
-schema = pa.schema([
-    pa.field("id", pa.int64()),
-    blob_field("video"),
-])
+schema = pa.schema(
+    [
+        pa.field("id", pa.int64()),
+        blob_field("video"),
+    ]
+)
 
 table = pa.table(
     {
@@ -914,22 +928,27 @@ import pyarrow as pa
 import lance
 
 # Define schema with a blob column for videos
-schema = pa.schema([
-    pa.field("id", pa.int64()),
-    pa.field("filename", pa.utf8()),
-    pa.field("video", pa.large_binary(), metadata={"lance-encoding:blob": "true"}),
-])
+schema = pa.schema(
+    [
+        pa.field("id", pa.int64()),
+        pa.field("filename", pa.utf8()),
+        pa.field("video", pa.large_binary(), metadata={"lance-encoding:blob": "true"}),
+    ]
+)
 
 # Read video file
 with open("sample_video.mp4", "rb") as f:
     video_data = f.read()
 
 # Create and write dataset
-table = pa.table({
-    "id": [1],
-    "filename": ["sample_video.mp4"],
-    "video": [video_data],
-}, schema=schema)
+table = pa.table(
+    {
+        "id": [1],
+        "filename": ["sample_video.mp4"],
+        "video": [video_data],
+    },
+    schema=schema,
+)
 
 ds = lance.write_dataset(
     table,
@@ -954,6 +973,7 @@ blobs = ds.take_blobs("video", indices=[0])
 
 # Use with libraries that accept file-like objects
 import av  # pip install av
+
 with av.open(blobs[0]) as container:
     for frame in container.decode(video=0):
         # Process video frames without loading entire video into memory
@@ -979,21 +999,26 @@ Lance provides excellent support for array types, which are critical for storing
 
     # Create a schema with a vector embedding column
     # This defines a 128-dimensional float32 vector
-    schema = pa.schema([
-        pa.field("id", pa.int64()),
-        pa.field("text", pa.utf8()),
-        pa.field("vector", pa.list_(pa.float32(), 128)),  # FixedSizeList of 128 floats
-    ])
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int64()),
+            pa.field("text", pa.utf8()),
+            pa.field("vector", pa.list_(pa.float32(), 128)),  # FixedSizeList of 128 floats
+        ]
+    )
 
     # Create sample data with embeddings
     num_rows = 1000
     vectors = np.random.rand(num_rows, 128).astype(np.float32)
 
-    table = pa.Table.from_pydict({
-        "id": list(range(num_rows)),
-        "text": [f"document_{i}" for i in range(num_rows)],
-        "vector": [v.tolist() for v in vectors],
-    }, schema=schema)
+    table = pa.Table.from_pydict(
+        {
+            "id": list(range(num_rows)),
+            "text": [f"document_{i}" for i in range(num_rows)],
+            "vector": [v.tolist() for v in vectors],
+        },
+        schema=schema,
+    )
 
     # Write to Lance format
     ds = lance.write_dataset(table, "./embeddings.lance")
@@ -1114,17 +1139,22 @@ import lance
 import pyarrow as pa
 
 # Schema with variable-length arrays
-schema = pa.schema([
-    pa.field("id", pa.int64()),
-    pa.field("tags", pa.list_(pa.utf8())),      # Variable number of string tags
-    pa.field("scores", pa.list_(pa.float32())), # Variable number of float scores
-])
+schema = pa.schema(
+    [
+        pa.field("id", pa.int64()),
+        pa.field("tags", pa.list_(pa.utf8())),  # Variable number of string tags
+        pa.field("scores", pa.list_(pa.float32())),  # Variable number of float scores
+    ]
+)
 
-table = pa.Table.from_pydict({
-    "id": [1, 2, 3],
-    "tags": [["python", "ml"], ["rust"], ["data", "analytics", "ai"]],
-    "scores": [[0.9, 0.8], [0.95], [0.7, 0.85, 0.9]],
-}, schema=schema)
+table = pa.Table.from_pydict(
+    {
+        "id": [1, 2, 3],
+        "tags": [["python", "ml"], ["rust"], ["data", "analytics", "ai"]],
+        "scores": [[0.9, 0.8], [0.95], [0.7, 0.85, 0.9]],
+    },
+    schema=schema,
+)
 
 ds = lance.write_dataset(table, "./variable_arrays.lance")
 ```
@@ -1140,27 +1170,37 @@ import lance
 import pyarrow as pa
 
 # Schema with nested struct
-schema = pa.schema([
-    pa.field("id", pa.int64()),
-    pa.field("metadata", pa.struct([
-        pa.field("source", pa.utf8()),
-        pa.field("timestamp", pa.timestamp("us")),
-        pa.field("embedding_model", pa.utf8()),
-    ])),
-    pa.field("vector", pa.list_(pa.float32(), 384)),  # 384-dim embedding
-])
+schema = pa.schema(
+    [
+        pa.field("id", pa.int64()),
+        pa.field(
+            "metadata",
+            pa.struct(
+                [
+                    pa.field("source", pa.utf8()),
+                    pa.field("timestamp", pa.timestamp("us")),
+                    pa.field("embedding_model", pa.utf8()),
+                ]
+            ),
+        ),
+        pa.field("vector", pa.list_(pa.float32(), 384)),  # 384-dim embedding
+    ]
+)
 
-table = pa.Table.from_pydict({
-    "id": [1, 2],
-    "metadata": [
-        {"source": "web", "timestamp": "2024-01-15T10:30:00", "embedding_model": "text-embedding-3-small"},
-        {"source": "api", "timestamp": "2024-01-15T11:45:00", "embedding_model": "text-embedding-3-small"},
-    ],
-    "vector": [
-        [0.1] * 384,
-        [0.2] * 384,
-    ],
-}, schema=schema)
+table = pa.Table.from_pydict(
+    {
+        "id": [1, 2],
+        "metadata": [
+            {"source": "web", "timestamp": "2024-01-15T10:30:00", "embedding_model": "text-embedding-3-small"},
+            {"source": "api", "timestamp": "2024-01-15T11:45:00", "embedding_model": "text-embedding-3-small"},
+        ],
+        "vector": [
+            [0.1] * 384,
+            [0.2] * 384,
+        ],
+    },
+    schema=schema,
+)
 
 ds = lance.write_dataset(table, "./with_metadata.lance")
 ```
@@ -1174,18 +1214,23 @@ Map writes require Lance file format version 2.2 or later.
 import lance
 import pyarrow as pa
 
-schema = pa.schema([
-    pa.field("id", pa.int64()),
-    pa.field("attributes", pa.map_(pa.utf8(), pa.utf8())),
-])
+schema = pa.schema(
+    [
+        pa.field("id", pa.int64()),
+        pa.field("attributes", pa.map_(pa.utf8(), pa.utf8())),
+    ]
+)
 
-table = pa.Table.from_pydict({
-    "id": [1, 2],
-    "attributes": [
-        [("color", "red"), ("size", "large")],
-        [("color", "blue"), ("material", "cotton")],
-    ],
-}, schema=schema)
+table = pa.Table.from_pydict(
+    {
+        "id": [1, 2],
+        "attributes": [
+            [("color", "red"), ("size", "large")],
+            [("color", "blue"), ("material", "cotton")],
+        ],
+    },
+    schema=schema,
+)
 
 ds = lance.write_dataset(table, "./with_maps.lance", data_storage_version="2.2")
 ```
@@ -1262,10 +1307,7 @@ This maps to Lance's `FixedSizeList(Float32, 384)` type, which is optimized for:
 
     ```python
     # Combine vector search with metadata filtering
-    results = ds.to_table(
-        filter="category = 'electronics'",
-        nearest={"column": "vector", "q": query, "k": 10}
-    )
+    results = ds.to_table(filter="category = 'electronics'", nearest={"column": "vector", "q": query, "k": 10})
     ```
 
 ## See Also
@@ -1505,10 +1547,12 @@ from lance.fragment import write_fragments
 
 # Run on each worker
 data_uri = "./dist_write"
-schema = pa.schema([
-    ("a", pa.int32()),
-    ("b", pa.string()),
-])
+schema = pa.schema(
+    [
+        ("a", pa.int32()),
+        ("b", pa.string()),
+    ]
+)
 
 # Run on worker 1
 data1 = {
@@ -1544,13 +1588,12 @@ fragments_json1 = [json.dumps(fragment.to_json()) for fragment in fragments_1]
 fragments_json2 = [json.dumps(fragment.to_json()) for fragment in fragments_2]
 
 # On one worker, collect all fragments
-all_fragments = [FragmentMetadata.from_json(f) for f in \
-    fragments_json1 + fragments_json2]
+all_fragments = [FragmentMetadata.from_json(f) for f in fragments_json1 + fragments_json2]
 
 # Commit the fragments into a single dataset
 # Use LanceOperation.Overwrite to overwrite the dataset or create new dataset.
 op = lance.LanceOperation.Overwrite(schema, all_fragments)
-read_version = 0 # Because it is empty at the time.
+read_version = 0  # Because it is empty at the time.
 lance.LanceDataset.commit(
     data_uri,
     op,
@@ -1583,7 +1626,7 @@ Appending additional data follows a similar process. Use `lance.LanceOperation.A
 import lance
 
 ds = lance.dataset(data_uri)
-read_version = ds.version # record the read version
+read_version = ds.version  # record the read version
 
 op = lance.LanceOperation.Append(all_fragments)
 lance.LanceDataset.commit(
@@ -1604,10 +1647,13 @@ import pyarrow.compute as pc
 
 dataset = lance.dataset("./add_columns_example")
 assert len(dataset.get_fragments()) == 2
-assert dataset.to_table().combine_chunks() == pa.Table.from_pydict({
-    "name": ["alice", "bob", "charlie", "craig", "dave", "eve"],
-    "age": [25, 33, 44, 55, 66, 77],
-}, schema=schema)
+assert dataset.to_table().combine_chunks() == pa.Table.from_pydict(
+    {
+        "name": ["alice", "bob", "charlie", "craig", "dave", "eve"],
+        "age": [25, 33, 44, 55, 66, 77],
+    },
+    schema=schema,
+)
 
 
 def name_len(names: RecordBatch) -> RecordBatch:
@@ -1615,6 +1661,7 @@ def name_len(names: RecordBatch) -> RecordBatch:
         [pc.utf8_length(names["name"])],
         ["name_len"],
     )
+
 
 # On Worker 1
 frag1 = dataset.get_fragments()[0]
@@ -1707,15 +1754,11 @@ update_data2 = pa.table(
 
 # Update fragment 0
 fragment0 = dataset.get_fragment(0)
-updated_fragment0, fields_modified0 = fragment0.update_columns(
-    update_data1, left_on="id", right_on="id"
-)
+updated_fragment0, fields_modified0 = fragment0.update_columns(update_data1, left_on="id", right_on="id")
 
 # Update fragment 1
 fragment1 = dataset.get_fragment(1)
-updated_fragment1, fields_modified1 = fragment1.update_columns(
-    update_data2, left_on="id", right_on="id"
-)
+updated_fragment1, fields_modified1 = fragment1.update_columns(update_data2, left_on="id", right_on="id")
 
 union_fields_modified = list(set(fields_modified0 + fields_modified1))
 # Commit the changes for both fragments
@@ -1723,9 +1766,7 @@ op = lance.LanceOperation.Update(
     updated_fragments=[updated_fragment0, updated_fragment1],
     fields_modified=union_fields_modified,
 )
-updated_dataset = lance.LanceDataset.commit(
-    str(dataset_uri), op, read_version=dataset.version
-)
+updated_dataset = lance.LanceDataset.commit(str(dataset_uri), op, read_version=dataset.version)
 
 # Verify the update
 dataset = lance.dataset(dataset_uri)
@@ -1796,9 +1837,7 @@ Extracts a value from JSON using JSONPath syntax.
 **Example:**
 ```python
 # Sample data: {"user": {"name": "Alice", "age": 30}}
-result = dataset.to_table(
-    filter="json_extract(data, '$.user.name') = '\"Alice\"'"
-)
+result = dataset.to_table(filter="json_extract(data, '$.user.name') = '\"Alice\"'")
 # Returns: "\"Alice\"" for strings, "30" for numbers, "true" for booleans
 ```
 
@@ -1821,9 +1860,7 @@ Retrieves a field or array element from JSON, returning it as JSONB for further 
 ```python
 # Access nested JSON by chaining json_get calls
 # Sample data: {"user": {"profile": {"name": "Alice"}}}
-result = dataset.to_table(
-    filter="json_get_string(json_get(json_get(data, 'user'), 'profile'), 'name') = 'Alice'"
-)
+result = dataset.to_table(filter="json_get_string(json_get(json_get(data, 'user'), 'profile'), 'name') = 'Alice'")
 
 # Access array elements by index
 # Sample data: ["first", "second", "third"]
@@ -1851,9 +1888,7 @@ Extracts a string value from JSON.
 
 **Example:**
 ```python
-result = dataset.to_table(
-    filter="json_get_string(data, 'name') = 'Alice'"
-)
+result = dataset.to_table(filter="json_get_string(data, 'name') = 'Alice'")
 
 # Array access example
 # Sample data: ["first", "second"]
@@ -1878,9 +1913,7 @@ Extracts an integer value with strict type conversion.
 **Example:**
 ```python
 # {"age": 30} works, {"age": "30"} may work if JSONB allows string parsing
-result = dataset.to_table(
-    filter="json_get_int(data, 'age') > 25"
-)
+result = dataset.to_table(filter="json_get_int(data, 'age') > 25")
 ```
 
 #### json_get_float
@@ -1898,9 +1931,7 @@ Extracts a floating-point value with strict type conversion.
 
 **Example:**
 ```python
-result = dataset.to_table(
-    filter="json_get_float(data, 'score') >= 90.5"
-)
+result = dataset.to_table(filter="json_get_float(data, 'score') >= 90.5")
 ```
 
 #### json_get_bool
@@ -1918,9 +1949,7 @@ Extracts a boolean value with strict type conversion.
 
 **Example:**
 ```python
-result = dataset.to_table(
-    filter="json_get_bool(data, 'active') = true"
-)
+result = dataset.to_table(filter="json_get_bool(data, 'active') = true")
 ```
 
 ### Existence and Array Functions
@@ -1936,9 +1965,7 @@ Checks if a JSONPath exists in the JSON data.
 **Example:**
 ```python
 # Find records that have an age field
-result = dataset.to_table(
-    filter="json_exists(data, '$.user.age')"
-)
+result = dataset.to_table(filter="json_exists(data, '$.user.age')")
 ```
 
 #### json_array_contains
@@ -1957,9 +1984,7 @@ Checks if a JSON array contains a specific value.
 **Example:**
 ```python
 # Sample data: {"tags": ["python", "ml", "data"]}
-result = dataset.to_table(
-    filter="json_array_contains(data, '$.tags', 'python')"
-)
+result = dataset.to_table(filter="json_array_contains(data, '$.tags', 'python')")
 ```
 
 #### json_array_length
@@ -1976,14 +2001,10 @@ Returns the length of a JSON array.
 **Example:**
 ```python
 # Find records with more than 3 tags
-result = dataset.to_table(
-    filter="json_array_length(data, '$.tags') > 3"
-)
+result = dataset.to_table(filter="json_array_length(data, '$.tags') > 3")
 
 # Empty arrays return 0
-result = dataset.to_table(
-    filter="json_array_length(data, '$.empty_array') = 0"
-)
+result = dataset.to_table(filter="json_array_length(data, '$.empty_array') = 0")
 ```
 
 ## JSON Indexing
@@ -2001,15 +2022,20 @@ import lance
 import pyarrow as pa
 from lance.indices import IndexConfig
 
-table = pa.table({
-    "id": [1, 2, 3, 4],
-    "data": pa.array([
-        json.dumps({"x": 7, "y": 10}),
-        json.dumps({"x": 11, "y": 22}),
-        json.dumps({"y": 0}),
-        json.dumps({"x": 10}),
-    ], type=pa.json_()),
-})
+table = pa.table(
+    {
+        "id": [1, 2, 3, 4],
+        "data": pa.array(
+            [
+                json.dumps({"x": 7, "y": 10}),
+                json.dumps({"x": 11, "y": 22}),
+                json.dumps({"y": 0}),
+                json.dumps({"x": 10}),
+            ],
+            type=pa.json_(),
+        ),
+    }
+)
 
 lance.write_dataset(table, "json-index.lance")
 dataset = lance.dataset("json-index.lance")
@@ -2066,103 +2092,77 @@ import json
 
 # Create nested JSON data
 data = [
-    {
-        "id": 1,
-        "user": {
-            "profile": {
-                "name": "Alice",
-                "settings": {
-                    "theme": "dark",
-                    "notifications": True
-                }
-            },
-            "scores": [95, 87, 92]
-        }
-    },
-    {
-        "id": 2,
-        "user": {
-            "profile": {
-                "name": "Bob",
-                "settings": {
-                    "theme": "light",
-                    "notifications": False
-                }
-            },
-            "scores": [88, 91, 85]
-        }
-    }
+    {"id": 1, "user": {"profile": {"name": "Alice", "settings": {"theme": "dark", "notifications": True}}, "scores": [95, 87, 92]}},
+    {"id": 2, "user": {"profile": {"name": "Bob", "settings": {"theme": "light", "notifications": False}}, "scores": [88, 91, 85]}},
 ]
 
 # Convert to Lance dataset
 json_strings = [json.dumps(d) for d in data]
-table = pa.table({
-    "data": pa.array(json_strings, type=pa.json_())
-})
+table = pa.table({"data": pa.array(json_strings, type=pa.json_())})
 
 lance.write_dataset(table, "nested.lance")
 dataset = lance.dataset("nested.lance")
 
 # Query nested fields using JSONPath
-dark_theme_users = dataset.to_table(
-    filter="json_extract(data, '$.user.profile.settings.theme') = '\"dark\"'"
-)
+dark_theme_users = dataset.to_table(filter="json_extract(data, '$.user.profile.settings.theme') = '\"dark\"'")
 
 # Or using chained json_get
-high_scorers = dataset.to_table(
-    filter="json_array_length(data, '$.user.scores') >= 3"
-)
+high_scorers = dataset.to_table(filter="json_array_length(data, '$.user.scores') >= 3")
 ```
 
 ### Combining JSON with Other Data Types
 
 ```python
 # Create mixed-type table with JSON metadata
-products = pa.table({
-    "id": [1, 2, 3],
-    "name": ["Laptop", "Phone", "Tablet"],
-    "price": [999.99, 599.99, 399.99],
-    "specs": pa.array([
-        json.dumps({"cpu": "i7", "ram": 16, "storage": 512}),
-        json.dumps({"screen": 6.1, "battery": 4000, "5g": True}),
-        json.dumps({"screen": 10.5, "battery": 7000, "stylus": True})
-    ], type=pa.json_())
-})
+products = pa.table(
+    {
+        "id": [1, 2, 3],
+        "name": ["Laptop", "Phone", "Tablet"],
+        "price": [999.99, 599.99, 399.99],
+        "specs": pa.array(
+            [
+                json.dumps({"cpu": "i7", "ram": 16, "storage": 512}),
+                json.dumps({"screen": 6.1, "battery": 4000, "5g": True}),
+                json.dumps({"screen": 10.5, "battery": 7000, "stylus": True}),
+            ],
+            type=pa.json_(),
+        ),
+    }
+)
 
 lance.write_dataset(products, "products.lance")
 dataset = lance.dataset("products.lance")
 
 # Find products with specific specs
-result = dataset.to_table(
-    filter="price < 600 AND json_get_bool(specs, '5g') = true"
-)
+result = dataset.to_table(filter="price < 600 AND json_get_bool(specs, '5g') = true")
 ```
 
 ### Handling Arrays in JSON
 
 ```python
 # Create data with JSON arrays
-records = pa.table({
-    "id": [1, 2, 3],
-    "data": pa.array([
-        json.dumps({"name": "Project A", "tags": ["python", "ml", "production"]}),
-        json.dumps({"name": "Project B", "tags": ["rust", "systems"]}),
-        json.dumps({"name": "Project C", "tags": ["python", "web", "api", "production"]})
-    ], type=pa.json_())
-})
+records = pa.table(
+    {
+        "id": [1, 2, 3],
+        "data": pa.array(
+            [
+                json.dumps({"name": "Project A", "tags": ["python", "ml", "production"]}),
+                json.dumps({"name": "Project B", "tags": ["rust", "systems"]}),
+                json.dumps({"name": "Project C", "tags": ["python", "web", "api", "production"]}),
+            ],
+            type=pa.json_(),
+        ),
+    }
+)
 
 lance.write_dataset(records, "projects.lance")
 dataset = lance.dataset("projects.lance")
 
 # Find projects with Python
-python_projects = dataset.to_table(
-    filter="json_array_contains(data, '$.tags', 'python')"
-)
+python_projects = dataset.to_table(filter="json_array_contains(data, '$.tags', 'python')")
 
 # Find projects with more than 3 tags
-complex_projects = dataset.to_table(
-    filter="json_array_length(data, '$.tags') > 3"
-)
+complex_projects = dataset.to_table(filter="json_array_length(data, '$.tags') > 3")
 ```
 
 ## Performance Considerations
@@ -2325,6 +2325,7 @@ storage option:
 
 ```python
 import lance
+
 ds = lance.dataset("s3://path", storage_options={"timeout": "60s"})
 ```
 
@@ -2356,6 +2357,7 @@ override them for that base only.
 
 ```python
 import lance
+
 ds = lance.dataset(
     "az://account-a/path",
     storage_options={
@@ -2386,13 +2388,14 @@ passed as parameters to the `storage_options` parameter:
 
 ```python
 import lance
+
 ds = lance.dataset(
     "s3://bucket/path",
     storage_options={
         "access_key_id": "my-access-key",
         "secret_access_key": "my-secret-key",
         "session_token": "my-session-token",
-    }
+    },
 )
 ```
 
@@ -2422,12 +2425,13 @@ specify both region and endpoint:
 
 ```python
 import lance
+
 ds = lance.dataset(
     "s3://bucket/path",
     storage_options={
         "region": "us-east-1",
         "endpoint": "http://minio:9000",
-    }
+    },
 )
 ```
 
@@ -2447,12 +2451,13 @@ you can configure express bucket access explicitly through storage option `s3_ex
 
 ```python
 import lance
+
 ds = lance.dataset(
     "s3://my-bucket--use1-az4--x-s3/path/imagenet.lance",
     storage_options={
         "region": "us-east-1",
         "s3_express": "true",
-    }
+    },
 )
 ```
 
@@ -2464,11 +2469,12 @@ Alternatively, you can pass the path to the JSON file in the `storage_options`
 
 ```python
 import lance
+
 ds = lance.dataset(
     "gs://my-bucket/my-dataset",
     storage_options={
         "service_account": "path/to/service-account.json",
-    }
+    },
 )
 ```
 
@@ -2495,12 +2501,13 @@ the account name and key in the `storage_options` parameter:
 
 ```python
 import lance
+
 ds = lance.dataset(
     "az://my-container/my-dataset",
     storage_options={
         "account_name": "some-account",
         "account_key": "some-key",
-    }
+    },
 )
 ```
 
@@ -2533,6 +2540,7 @@ passed as parameters to the `storage_options` parameter:
 
 ```python
 import lance
+
 ds = lance.dataset(
     "oss://bucket/path",
     storage_options={
@@ -2541,7 +2549,7 @@ ds = lance.dataset(
         "oss_access_key_id": "my-access-key",
         "oss_secret_access_key": "my-secret-key",
         "oss_security_token": "my-session-token",
-    }
+    },
 )
 ```
 
@@ -2563,6 +2571,7 @@ parameter; explicit `storage_options` override environment variables:
 
 ```python
 import lance
+
 ds = lance.dataset(
     "tos://bucket/path",
     storage_options={
@@ -2571,7 +2580,7 @@ ds = lance.dataset(
         "tos_access_key_id": "my-access-key",
         "tos_secret_access_key": "my-secret-key",
         "tos_security_token": "my-session-token",
-    }
+    },
 )
 ```
 
@@ -2595,13 +2604,14 @@ parameter; explicit `storage_options` override environment variables:
 
     ```python
     import lance
+
     ds = lance.dataset(
         "cos://bucket/path",
         storage_options={
             "cos_endpoint": "https://cos.ap-guangzhou.myqcloud.com",
             "cos_secret_id": "my-secret-id",
             "cos_secret_key": "my-secret-key",
-        }
+        },
     )
     ```
 
@@ -3337,8 +3347,7 @@ Begin by writing a `pyarrow.Table` using the `lance.write_dataset` function.
 import lance
 import pyarrow as pa
 
-table = pa.Table.from_pylist([{"name": "Alice", "age": 20},
-                              {"name": "Bob", "age": 30}])
+table = pa.Table.from_pylist([{"name": "Alice", "age": 20}, {"name": "Bob", "age": 30}])
 ds = lance.write_dataset(table, "./alice_and_bob.lance")
 ```
 
@@ -3349,19 +3358,21 @@ You will need to provide a `pyarrow.Schema` for the dataset in this case.
 ```python
 from typing import Iterator
 
+
 def producer() -> Iterator[pa.RecordBatch]:
     """An iterator of RecordBatches."""
     yield pa.RecordBatch.from_pylist([{"name": "Alice", "age": 20}])
     yield pa.RecordBatch.from_pylist([{"name": "Bob", "age": 30}])
 
-schema = pa.schema([
-    ("name", pa.string()),
-    ("age", pa.int32()),
-])
 
-ds = lance.write_dataset(producer(),
-                         "./alice_and_bob.lance",
-                         schema=schema, mode="overwrite")
+schema = pa.schema(
+    [
+        ("name", pa.string()),
+        ("age", pa.int32()),
+    ]
+)
+
+ds = lance.write_dataset(producer(), "./alice_and_bob.lance", schema=schema, mode="overwrite")
 print(ds.count_rows())  # Output: 2
 ```
 
@@ -3377,8 +3388,7 @@ or `lance.write_dataset` with `mode=append`.
 import lance
 import pyarrow as pa
 
-table = pa.Table.from_pylist([{"name": "Alice", "age": 20},
-                              {"name": "Bob", "age": 30}])
+table = pa.Table.from_pylist([{"name": "Alice", "age": 20}, {"name": "Bob", "age": 30}])
 ds = lance.write_dataset(table, "./insert_example.lance")
 
 new_table = pa.Table.from_pylist([{"name": "Carla", "age": 37}])
@@ -3456,15 +3466,14 @@ more efficient to use the merge insert operation described below.
 import lance
 
 # Change the ages of both Alice and Bob
-new_table = pa.Table.from_pylist([{"name": "Alice", "age": 30},
-                                  {"name": "Bob", "age": 20}])
+new_table = pa.Table.from_pylist([{"name": "Alice", "age": 30}, {"name": "Bob", "age": 20}])
 
 # This works, but is inefficient, see below for a better approach
 dataset = lance.dataset("./alice_and_bob.lance")
 for idx in range(new_table.num_rows):
-  name = new_table[0][idx].as_py()
-  new_age = new_table[1][idx].as_py()
-  dataset.update({"age": new_age}, where=f"name='{name}'")
+    name = new_table[0][idx].as_py()
+    new_age = new_table[1][idx].as_py()
+    dataset.update({"age": new_age}, where=f"name='{name}'")
 ```
 
 ## Merge Insert
@@ -3489,14 +3498,11 @@ print(dataset.to_table().to_pandas())
 # 1    Bob   30
 
 # Change the ages of both Alice and Bob
-new_table = pa.Table.from_pylist([{"name": "Alice", "age": 2},
-                                  {"name": "Bob", "age": 3}])
+new_table = pa.Table.from_pylist([{"name": "Alice", "age": 2}, {"name": "Bob", "age": 3}])
 # This will use `name` as the key for matching rows.  Merge insert
 # uses a JOIN internally and so you typically want this column to
 # be a unique key or id of some kind.
-rst = dataset.merge_insert("name") \
-       .when_matched_update_all() \
-       .execute(new_table)
+rst = dataset.merge_insert("name").when_matched_update_all().execute(new_table)
 print(dataset.to_table().to_pandas())
 #     name  age
 # 0  Alice    2
@@ -3518,15 +3524,12 @@ this:
 
 ```python
 # Bob is already in the table, but Carla is new
-new_table = pa.Table.from_pylist([{"name": "Bob", "age": 30},
-                                  {"name": "Carla", "age": 37}])
+new_table = pa.Table.from_pylist([{"name": "Bob", "age": 30}, {"name": "Carla", "age": 37}])
 
 dataset = lance.dataset("./alice_and_bob.lance")
 
 # This will insert Carla but leave Bob unchanged
-_ = dataset.merge_insert("name") \
-       .when_not_matched_insert_all() \
-       .execute(new_table)
+_ = dataset.merge_insert("name").when_not_matched_insert_all().execute(new_table)
 # Verify that Carla was added but Bob remains unchanged
 print(dataset.to_table().to_pandas())
 #     name  age
@@ -3547,16 +3550,12 @@ import lance
 import pyarrow as pa
 
 # Change Carla's age and insert David
-new_table = pa.Table.from_pylist([{"name": "Carla", "age": 27},
-                                  {"name": "David", "age": 42}])
+new_table = pa.Table.from_pylist([{"name": "Carla", "age": 27}, {"name": "David", "age": 42}])
 
 dataset = lance.dataset("./alice_and_bob.lance")
 
 # This will update Carla and insert David
-_ = dataset.merge_insert("name") \
-       .when_matched_update_all() \
-       .when_not_matched_insert_all() \
-       .execute(new_table)
+_ = dataset.merge_insert("name").when_matched_update_all().when_not_matched_insert_all().execute(new_table)
 # Verify the results
 print(dataset.to_table().to_pandas())
 #     name  age
@@ -3577,8 +3576,7 @@ example:
 import lance
 import pyarrow as pa
 
-new_table = pa.Table.from_pylist([{"name": "Edgar", "age": 46},
-                                  {"name": "Francene", "age": 44}])
+new_table = pa.Table.from_pylist([{"name": "Edgar", "age": 46}, {"name": "Francene", "age": 44}])
 
 dataset = lance.dataset("./alice_and_bob.lance")
 print(dataset.to_table().to_pandas())
@@ -3589,10 +3587,7 @@ print(dataset.to_table().to_pandas())
 # 3    Donna   50
 
 # This will remove anyone above 40 and insert our new data
-_ = dataset.merge_insert("name") \
-       .when_not_matched_insert_all() \
-       .when_not_matched_by_source_delete("age >= 40") \
-       .execute(new_table)
+_ = dataset.merge_insert("name").when_not_matched_insert_all().when_not_matched_by_source_delete("age >= 40").execute(new_table)
 # Verify the results - people over 40 replaced with new data
 print(dataset.to_table().to_pandas())
 #        name  age
@@ -3608,6 +3603,7 @@ To open a Lance dataset, use the `lance.dataset` function:
 
 ```python
 import lance
+
 ds = lance.dataset("s3://bucket/path/imagenet.lance")
 # Or local path
 ds = lance.dataset("./imagenet.lance")
@@ -3629,11 +3625,7 @@ Due to Lance being a high-performance columnar format, it enables efficient read
 **Column (projection)** push-down and **filter (predicates)** push-downs.
 
 ```python
-table = ds.to_table(
-    columns=["image", "label"],
-    filter="label = 2 AND text IS NOT NULL",
-    limit=1000,
-    offset=3000)
+table = ds.to_table(columns=["image", "label"], filter="label = 2 AND text IS NOT NULL", limit=1000, offset=3000)
 ```
 
 Lance understands the cost of reading heavy columns such as `image`.
@@ -3881,8 +3873,8 @@ ds = lance.write_dataset(
     table,
     "./my_dataset.lance",
     auto_cleanup_options=AutoCleanupConfig(
-        interval=20,             # run cleanup every 20 commits
-        older_than_seconds=3600, # remove versions older than 1 hour
+        interval=20,  # run cleanup every 20 commits
+        older_than_seconds=3600,  # remove versions older than 1 hour
     ),
 )
 ```
@@ -3908,10 +3900,12 @@ ds.optimize.disable_auto_cleanup()
 Auto cleanup parameters can also be set directly via dataset config keys:
 
 ```python
-ds.update_config({
-    "lance.auto_cleanup.interval": "20",
-    "lance.auto_cleanup.older_than": "3600s",
-})
+ds.update_config(
+    {
+        "lance.auto_cleanup.interval": "20",
+        "lance.auto_cleanup.older_than": "3600s",
+    }
+)
 ```
 
 !!! warning

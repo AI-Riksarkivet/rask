@@ -9,6 +9,7 @@ from storage.iiif import DEFAULT_IIIF_BASE as DEFAULT_IIIF_BASE
 from storage.iiif import DEFAULT_QUERY_PARAMS as DEFAULT_QUERY_PARAMS
 from storage.iiif import IIIFCachedSource as IIIFCachedSource
 from storage.iiif import build_image_url as build_image_url
+from storage.iiif import fetch_image as fetch_image
 from storage.iiif import file_extension as file_extension
 from storage.iiif import get_image_ids as get_image_ids
 from storage.s3 import S3Sink as S3Sink

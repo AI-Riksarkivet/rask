@@ -31,10 +31,10 @@ The tree is split by **language first**, then by layer. Each globbed directory i
 | **scripts**          | `scripts/`                          | ALL dev/ops scripts, shell **and** python, flat            | one-shot, **not** a workspace member |
 
 Current Python packages: `htr`, `ray-kit`, `service-kit`, `storage`, `tracker`, `validate`.
-Current Python services: `core`, `core_api`, `gateway`, `orchestrator`, `ray_api`, `runner`, `search_api`, `volumes_api`.
+Current Python services: `core`, `core_api`, `gateway`, `ray_api`, `search_api`, `volumes_api`, `controlplane` — plus the lance plane (`catalog`, `lineage`, `medallion`, `compaction`, `viewer`, `search`, `annotator`).
 Current JS packages: `api` (@rask/api, the valibot client), `ui` (@rask/ui, the design system), `zone-contract` (@rask/zone-contract, the cross-zone link guard test).
 Current zones: `home` (catch-all), `overview`, `compute`, `discover`, `storage`, `train`, `studio`.
-Current deployables (each = a workspace member + a `.docker/<name>.dockerfile`): `core-api`, `gateway`, `orchestrator`, `ray-api`, `runner`, `search-api`, `volumes-api` — plus the one parametrized `frontend.dockerfile` built per zone.
+Current deployables (each = a workspace member + a `.docker/<name>.dockerfile`): `core-api`, `gateway`, `ray-api`, `runner`, `search-api`, `volumes-api` — plus the one parametrized `frontend.dockerfile` built per zone.
 
 ## The composition seam: `make_service_app` + injectable lifespan
 
@@ -43,27 +43,25 @@ Current deployables (each = a workspace member + a `.docker/<name>.dockerfile`):
 A thin entrypoint is **~15 lines** — import routers + a lifespan from the domain package, call the factory. `core_api/__init__.py`:
 
 ```python
-from core.api.v1.endpoints import batches, catalog, chunks, health
+from core.api.v1.endpoints import catalog, health
 from core.lifespan import make_lifespan
 from service_kit import make_service_app
 
 app = make_service_app(
     title="core-api",
-    routers=[health.router, batches.router, chunks.router, catalog.router],
+    routers=[health.router, catalog.router],
     lifespan=make_lifespan,
 )
 ```
 
-`orchestrator/__init__.py` is the same shape over the **same `core` package** (`routers=[health.router, orchestrator.router]`, same `make_lifespan`).
-
 ## Domain package vs entrypoint: `core` is NOT deployable
 
-`services/core` is the **core domain package** (package `core`): owns `alembic/`, `db.py`, `lifespan.py`, models, repositories, domain services, endpoints, and `main.py` (the monolith for tests + `make viewer`). It is **composed by two thin entrypoints** — `core_api` (:8801, orchestrator loop OFF) and `orchestrator` (:8810, loop ON via `RASK_ORCHESTRATOR_AUTOSTART`). They are **two processes over one package sharing the `batches` table transactionally** — not independent services. The loop must run in exactly one process; that's why it's split by config, not by code.
+`services/core` is the **core domain package** (package `core`) — since P7a a **transitional husk**: health + the EAD catalog search, composed by the `core_api` entrypoint (:8801) and by `main.py` (the app factory tests build). The batches table, the Alembic lineage, the orchestrator loop and the `orchestrator` entrypoint are **deleted** (docs/architecture/lance-ns-merge.md P7a): ingestion is the medallion IIIF producer, HTR runs as cascade compute on the lakehouse. The husk retires with the R6/R20 media wave.
 
 ## Hard invariants (the gotchas)
 
 - **Workspace membership is globbed — and that is only safe because every globbed dir is single-language.** Root `pyproject.toml` has `[tool.uv.workspace] members = ["packages/*", "services/*"]`; `frontend/package.json` has `workspaces = ["microfrontends/*", "packages/*"]` (paths relative to `frontend/`). Drop a directory in the right plane and it is a member — **no manifest edit**. The safety condition is the language purity, and the two toolchains fail **asymmetrically** when it breaks: a dir under a uv glob without a `pyproject.toml` is a **hard error** (`Workspace member … is missing a pyproject.toml`), fixable only by an `exclude` list (enumeration by another name); a dir under a bun glob without a `package.json` is **SILENTLY skipped** — bun prints "Done!" and the package is simply never installed, built, linted or tested, and nothing says so. So: **never put a JS package under root `packages/`/`services/`, and never put a Python package under `frontend/`.** (The root manifest also notes `runners/*` is deliberately matched by *no* glob — sealed model envs whose heavy pins must never enter the fleet's resolution.) See `references/adding-a-package.md`.
-- **One lock.** The root `uv.lock` is the only Python lockfile — dev, tests, and every docker image resolve from it (`uv sync --frozen --package <name>`). The runner is invoked the same way: `uv run --package runner runner` (the orchestrator's `runner_cmd` default; the in-cluster ray image overrides via `RASK_RUNNER_CMD` since it ships the console script on PATH).
+- **One lock.** The root `uv.lock` is the only Python lockfile — dev, tests, and every fleet docker image resolve from it (`uv sync --frozen --package <name>`). The sealed `runners/htr` project carries its **own** lock and is invoked via `uv run --project runners/htr runner` (in-cluster the ray image ships the console script on PATH).
 - **`service-kit` stays dependency-light.** Its only deps are `storage`, `fastapi`, `pydantic`, `pydantic-settings`, `python-dotenv`. **Never** add `lancedb`, `ray`, or `sqlmodel` — those belong to the packages that need them (`core`, `ray-kit`, …). service-kit is shared by every service including the DB-free ones (`volumes_api`, `search_api`, `ray_api`).
 - **Do not resurrect `viewer` or `control`.** The monolithic `viewer` service was dissolved (2026-06) into the gateway + per-domain services + the `core` package. There is no `control` package. New domain code lands in an existing package or a new one — never a revived monolith.
 - **The `viewer`/`viewer_*` names live on only as the `core` package's `main.py` (dev convenience) and `RASK_VIEWER_INPUT`/`RASK_VIEWER_OUTPUT` settings.** Don't infer a deployable from them.

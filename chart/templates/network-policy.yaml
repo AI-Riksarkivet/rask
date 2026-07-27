@@ -220,11 +220,10 @@ spec:
                   - rustfs-mkbucket # the bucket-provisioning hook Job — blocked, no install ever gets buckets
                   # rask's own S3 clients (audit 2026-07-27 defect 5: absent, so prod default-deny cut
                   # the fleet off object storage). Labels are fleet.yaml's `app.kubernetes.io/component:
-                  # <name>`. core-api + orchestrator run the `core` package's sync/discover S3 reconcile
-                  # (both waitFor minio/postgres over the same batches table); search-api serves S3
-                  # thumbnails; volumes-api is the S3/IIIF image+ALTO proxy.
+                  # <name>`. core-api opens the EAD catalog Lance table; search-api serves S3
+                  # thumbnails; volumes-api is the S3/IIIF image+ALTO proxy. (The orchestrator died
+                  # at P7a — HTR runs as cascade compute on the lakehouse.)
                   - core-api
-                  - orchestrator
                   - search-api
                   - volumes-api
                   {{- range .Values.medallion.movers }}

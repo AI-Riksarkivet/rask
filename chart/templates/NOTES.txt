@@ -34,9 +34,6 @@ Services (ClusterIP):
   - media:     {{ include "rask.fullname" $root }}-{viewer,search,annotator} (the media plane, /api/media/*)
 {{- end }}
 {{- end }}
-{{- if .Values.cnpg.enabled }}
-  - postgres:  {{ include "rask.fullname" $root }}-postgres-rw:{{ .Values.cnpg.port }} (CNPG in-cluster)
-{{- end }}
 {{- with .Values.age }}
 {{- if .enabled }}
   - age:       {{ include "lance.ageHost" $root }}:5432 (Apache AGE — the lineage graph)
@@ -155,9 +152,6 @@ Auth (Dex OIDC + OpenFGA): {{ if .enabled }}ENABLED{{ else }}off — set auth.en
 Inspect:  kubectl get pods   (or: k9s)
 
 Reminders:
-  * The orchestrator starts only if RASK_ORCHESTRATOR_AUTOSTART=true (default false);
-    otherwise POST /api/v1/orchestrator/start.
-  * DO NOT scale the orchestrator above 1 replica (in-process singleton).
 {{- with .Values.networkPolicy }}
 {{- if .enabled }}
   * NetworkPolicies are ENFORCING (namespace default-deny). A pod that cannot reach a dependency is a

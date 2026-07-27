@@ -8,7 +8,7 @@ The per-stage ML then flows the blob forward (``compute._carry_forward``) and de
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
 from itertools import chain
 
 import lance
@@ -22,6 +22,18 @@ from service_kit.lakehouse.sources import SourceAdapter, SourceObject
 
 _INGEST_SCHEMA = pa.schema([pa.field("id", pa.int64()), blob_field("payload"), pa.field("source_uri", pa.string())])
 
+#: Extra STRING columns appended after the core ingest triple — ``{column_name: extractor(obj)}``,
+#: applied in mapping order. The IIIF page lane uses this for ``volume_id``/``page_key`` (P7a); the
+#: media/events lanes pass none and stay byte-identical to the pre-P7a write.
+type ExtraColumns = Mapping[str, Callable[[SourceObject], str]]
+
+
+def _ingest_schema(extra_columns: ExtraColumns | None) -> pa.Schema:
+    fields = list(_INGEST_SCHEMA)
+    for name in extra_columns or {}:
+        fields.append(pa.field(name, pa.string()))
+    return pa.schema(fields)
+
 
 class IngestResult(BaseModel):
     """What one ingest produced: the bronze version + rows, the source URIs (for the lineage edge), and the
@@ -33,20 +45,20 @@ class IngestResult(BaseModel):
     fields: list[dict[str, str]]
 
 
-def _chunk_batch(chunk: list[SourceObject], first_id: int) -> pa.RecordBatch:
+def _chunk_batch(chunk: list[SourceObject], first_id: int, extra_columns: ExtraColumns | None = None) -> pa.RecordBatch:
     """One chunk's rows as a RecordBatch; ``first_id`` keeps the positional id GLOBAL across chunks."""
-    return pa.record_batch(
-        {
-            # Positional id — the cascade is OVERWRITE-ONLY and compute._carry_forward re-reads blobs by
-            # the same range(rows); batches land in yield order within the single write, so the global
-            # offset keeps id == position. If ingest ever gains true append mode, derive a stable id
-            # from source_uri.
-            "id": pa.array(range(first_id, first_id + len(chunk)), pa.int64()),
-            "payload": blob_array([obj.data for obj in chunk]),
-            "source_uri": pa.array([obj.uri for obj in chunk], pa.string()),
-        },
-        schema=_INGEST_SCHEMA,
-    )
+    columns: dict[str, pa.Array] = {
+        # Positional id — the cascade is OVERWRITE-ONLY and compute._carry_forward re-reads blobs by
+        # the same range(rows); batches land in yield order within the single write, so the global
+        # offset keeps id == position. If ingest ever gains true append mode, derive a stable id
+        # from source_uri.
+        "id": pa.array(range(first_id, first_id + len(chunk)), pa.int64()),
+        "payload": blob_array([obj.data for obj in chunk]),
+        "source_uri": pa.array([obj.uri for obj in chunk], pa.string()),
+    }
+    for name, extract in (extra_columns or {}).items():
+        columns[name] = pa.array([extract(obj) for obj in chunk], pa.string())
+    return pa.record_batch(columns, schema=_ingest_schema(extra_columns))
 
 
 def ingest_to_bronze(
@@ -58,6 +70,7 @@ def ingest_to_bronze(
     max_total_bytes: int = 1 << 30,
     chunk_objects: int = 64,
     chunk_bytes: int = 64 << 20,
+    extra_columns: ExtraColumns | None = None,
 ) -> IngestResult:
     """Write every object from ``source`` into a bronze blob-v2 table at 2.2 — ONE ATOMIC, BOUNDED-MEMORY
     commit via Lance's NATIVE streaming write.
@@ -125,18 +138,18 @@ def ingest_to_bronze(
                 raise ceiling_error
             chunk_size += len(obj.data)
             if len(chunk) >= chunk_objects or chunk_size >= chunk_bytes:
-                yield _chunk_batch(chunk, next_id)
+                yield _chunk_batch(chunk, next_id, extra_columns)
                 next_id += len(chunk)
                 chunk = []
                 chunk_size = 0
         if chunk:
-            yield _chunk_batch(chunk, next_id)
+            yield _chunk_batch(chunk, next_id, extra_columns)
 
     try:
         dataset = lance.write_dataset(
             batches(),
             bronze_uri,
-            schema=_INGEST_SCHEMA,
+            schema=_ingest_schema(extra_columns),
             mode="overwrite",
             storage_options=storage_options,
             data_storage_version="2.2",

@@ -54,7 +54,7 @@ spec:
         paths:
           {{- /* /api is the FLEET gateway (services.gateway, uvicorn `gateway:app` on
                  :8888): it path-routes to core-api, search-api, volumes-api, ray-api and
-                 the orchestrator, and it is what the zones' relative /api/* client fetches
+                 it is what the zones' relative /api/* client fetches
                  resolve to (SSR uses the in-cluster URL instead). It renders in every
                  install (fleet.yaml is not gated), so this rule never dangles.
 

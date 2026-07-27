@@ -204,11 +204,7 @@ async def upload_batch(
         data = await upload.read()
         key = f"{batch_id}/{name}"
         content_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
-        await to_thread.run_sync(
-            lambda k=key, d=data, ct=content_type: s3.put_object(
-                Bucket=settings.cache_bucket, Key=k, Body=d, ContentType=ct
-            )
-        )
+        await to_thread.run_sync(lambda k=key, d=data, ct=content_type: s3.put_object(Bucket=settings.cache_bucket, Key=k, Body=d, ContentType=ct))
         written += 1
 
     if written == 0:

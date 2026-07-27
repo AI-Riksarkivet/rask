@@ -2588,10 +2588,12 @@ PQ uses 16 num_sub_vectors (m=16) with 8 num_bits per subvector, and distance ty
 - Rows with Arrow schema:
 
 ```python
-pa.schema([
-    pa.field("_rowid", pa.uint64()),
-    pa.field("__pq_code", pa.list(pa.uint8(), list_size=16)), # m subvector codes
-])
+pa.schema(
+    [
+        pa.field("_rowid", pa.uint64()),
+        pa.field("__pq_code", pa.list(pa.uint8(), list_size=16)),  # m subvector codes
+    ]
+)
 ```
 
 ### Appendix 2: Example IVF_RQ Format
@@ -2625,13 +2627,15 @@ auxiliary schema also includes `__ex_codes`, `__add_factors_ex`, and `__scale_fa
 - Rows with Arrow schema:
 
 ```python
-pa.schema([
-    pa.field("_rowid", pa.uint64()),
-    pa.field("_rabit_codes", pa.list(pa.uint8(), list_size=16)), # dimension/8 = 128/8 = 16 bytes
-    pa.field("__add_factors", pa.float32()),
-    pa.field("__scale_factors", pa.float32()),
-    pa.field("__error_factors", pa.float32()),
-])
+pa.schema(
+    [
+        pa.field("_rowid", pa.uint64()),
+        pa.field("_rabit_codes", pa.list(pa.uint8(), list_size=16)),  # dimension/8 = 128/8 = 16 bytes
+        pa.field("__add_factors", pa.float32()),
+        pa.field("__scale_factors", pa.float32()),
+        pa.field("__error_factors", pa.float32()),
+    ]
+)
 ```
 
 ### Appendix 3: Accessing Index File with Python
@@ -2666,6 +2670,7 @@ aux_reader = lance.LanceFileReader.read_file("path/to/auxiliary.idx")
 storage_metadata = aux_reader.metadata().schema.metadata.get(b"storage_metadata")
 if storage_metadata:
     import json
+
     pq_metadata = json.loads(storage_metadata.decode())[0]  # First element of the list
     pq_params = json.loads(pq_metadata)
 

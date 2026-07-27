@@ -1,9 +1,8 @@
 // Dagger module for the rask monorepo.
 //
 // Functions live in sibling .go files by concern:
-//   - postgres.go : ephemeral postgres:16 service (matches `make pg-up`)
-//   - migrate.go  : `alembic upgrade head` against an ephemeral pg (CI proof)
-//   - test.go     : viewer pytest with the migrated pg attached
+//   - test.go     : the offline pytest suite (the app-DB pg legs died at P7a —
+//                   the batches table and its Alembic lineage are gone)
 //
 // All callable via `dagger call <kebab-case-name>`.
 package main

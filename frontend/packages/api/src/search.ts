@@ -1,4 +1,7 @@
-// @rask/api/search — line FTS + catalog search/browse.
+// @rask/api/search — line FTS + EAD catalog search.
+// P7a: the batches.db-coupled surface (browse tiers, /batches/{id}/catalog, the
+// listed/cached/transcribed enrichment flags) died with the batches table; hits are
+// pure EAD rows now. The whole module retires with the R6/R20 media wave.
 
 import * as v from 'valibot';
 import { parse } from './parse.js';
@@ -21,15 +24,6 @@ export const CatalogHitSchema = v.object({
 	bildvisning_url: v.string(),
 	iiif_manifest: v.string(),
 	thumbnail_url: v.string(),
-	/** Three nested local-state flags (transcribed ⊂ cached ⊂ listed):
-	 *  - listed:      bild_id is in batches.db (we know the manifest).
-	 *  - cached:      cached_pages > 0 (at least one image downloaded).
-	 *  - transcribed: transcribed_pages > 0 (at least one ALTO produced).
-	 *  Used to pick the click target (our viewer when cached, Riksarkivet
-	 *  otherwise) and to render escalating progress badges. */
-	listed: v.boolean(),
-	cached: v.boolean(),
-	transcribed: v.boolean(),
 });
 export type CatalogHit = v.InferOutput<typeof CatalogHitSchema>;
 
@@ -48,12 +42,6 @@ export const SearchHitSchema = v.object({
 	polygon: v.string(),
 	thumb_key: v.string(),
 	thumb_url: v.nullable(v.string()),
-	/** Parent volume's EAD row, or null when the batch isn't in the harvested
-	 *  catalog. Backend joins by batch_id == bild_id at search time. The
-	 *  embedded row doesn't carry the listed/cached/transcribed flags — we
-	 *  already know it's transcribed (otherwise it wouldn't be in the line
-	 *  index in the first place). */
-	catalog: v.nullable(CatalogHitSchema),
 });
 export type SearchHit = v.InferOutput<typeof SearchHitSchema>;
 
@@ -111,71 +99,4 @@ export async function catalogStats(fetchFn: typeof fetch = fetch): Promise<Searc
 	const res = await fetchFn('/api/catalog/search/stats');
 	if (!res.ok) throw new Error(`catalogStats: HTTP ${res.status}`);
 	return parse(SearchStatsSchema, await res.json());
-}
-
-export type CatalogTier = 'listed' | 'cached' | 'transcribed';
-
-export const CatalogBrowseResponseSchema = v.object({
-	ok: v.boolean(),
-	tier: v.picklist(['listed', 'cached', 'transcribed']),
-	count: v.number(),
-	total: v.number(),
-	offset: v.number(),
-	hits: v.array(CatalogHitSchema),
-});
-export type CatalogBrowseResponse = v.InferOutput<typeof CatalogBrowseResponseSchema>;
-
-/** Browse mode — list batches at >= `tier` from batches.db, enriched with
- *  EAD catalog metadata. Returns at most `limit` rows (server-capped at 2000)
- *  starting at `offset`. Used by the /browse page. */
-export async function browseCatalog(
-	tier: CatalogTier = 'cached',
-	limit = 500,
-	offset = 0,
-	fetchFn: typeof fetch = fetch,
-): Promise<CatalogBrowseResponse> {
-	const params = new URLSearchParams({ tier, limit: String(limit), offset: String(offset) });
-	const res = await fetchFn(`/api/catalog/browse?${params}`);
-	if (!res.ok) throw new Error(`browseCatalog: HTTP ${res.status}`);
-	return parse(CatalogBrowseResponseSchema, await res.json());
-}
-
-// The /batches/{id}/catalog endpoint returns just the EAD row, not the
-// {listed, cached, transcribed} enrichment flags (those are search-time only).
-// Parse against this flag-less row schema, then fill the flags as false below.
-const CatalogRowSchema = v.object({
-	id: v.string(),
-	reference_code: v.string(),
-	archive_code: v.string(),
-	fonds_id: v.string(),
-	fonds_title: v.string(),
-	series_id: v.string(),
-	series_title: v.string(),
-	volume_id: v.string(),
-	volume_title: v.string(),
-	date_text: v.string(),
-	date_start: v.nullable(v.number()),
-	date_end: v.nullable(v.number()),
-	description: v.string(),
-	bild_id: v.string(),
-	bildvisning_url: v.string(),
-	iiif_manifest: v.string(),
-	thumbnail_url: v.string(),
-});
-
-/** Direct catalog lookup by batch_id (== bild_id). Returns null when the
- *  batch isn't in the harvested EAD catalog (e.g. test batches), so the
- *  viewer can render conditionally without a separate error path. */
-export async function getBatchCatalog(
-	batchId: string,
-	fetchFn: typeof fetch = fetch,
-): Promise<CatalogHit | null> {
-	const res = await fetchFn(`/api/batches/${encodeURIComponent(batchId)}/catalog`);
-	if (res.status === 404) return null;
-	if (!res.ok) throw new Error(`getBatchCatalog: HTTP ${res.status}`);
-	// The endpoint returns just the row, not the {listed, cached, transcribed}
-	// flags — those are search-time enrichment. Fill them in as false so the
-	// type matches; consumers reading them will see "no local state known".
-	const row = parse(CatalogRowSchema, await res.json());
-	return { listed: false, cached: false, transcribed: false, ...row };
 }

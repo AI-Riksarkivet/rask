@@ -3037,12 +3037,9 @@ pip install openfga_sdk
 ```python
 from openfga_sdk import ClientConfiguration, OpenFgaClient
 
+
 async def main():
-    configuration = ClientConfiguration(
-        api_url="http://localhost:8080",
-        store_id="YOUR_STORE_ID",
-        authorization_model_id="YOUR_MODEL_ID"
-    )
+    configuration = ClientConfiguration(api_url="http://localhost:8080", store_id="YOUR_STORE_ID", authorization_model_id="YOUR_MODEL_ID")
     async with OpenFgaClient(configuration) as fga_client:
         result = await fga_client.check(body)
         return result
@@ -3054,11 +3051,9 @@ async def main():
 from openfga_sdk.client import ClientConfiguration
 from openfga_sdk.sync import OpenFgaClient
 
+
 def main():
-    configuration = ClientConfiguration(
-        api_url="http://localhost:8080",
-        store_id="YOUR_STORE_ID"
-    )
+    configuration = ClientConfiguration(api_url="http://localhost:8080", store_id="YOUR_STORE_ID")
     with OpenFgaClient(configuration) as fga_client:
         result = fga_client.check(body)
         return result
@@ -3070,13 +3065,7 @@ def main():
 from openfga_sdk.credentials import Credentials, CredentialConfiguration
 
 configuration = ClientConfiguration(
-    api_url="http://localhost:8080",
-    credentials=Credentials(
-        method='api_token',
-        configuration=CredentialConfiguration(
-            api_token="YOUR_TOKEN"
-        )
-    )
+    api_url="http://localhost:8080", credentials=Credentials(method="api_token", configuration=CredentialConfiguration(api_token="YOUR_TOKEN"))
 )
 ```
 
@@ -3086,14 +3075,11 @@ configuration = ClientConfiguration(
 configuration = ClientConfiguration(
     api_url="http://localhost:8080",
     credentials=Credentials(
-        method='client_credentials',
+        method="client_credentials",
         configuration=CredentialConfiguration(
-            api_issuer="YOUR_ISSUER",
-            api_audience="YOUR_AUDIENCE",
-            client_id="YOUR_CLIENT_ID",
-            client_secret="YOUR_CLIENT_SECRET"
-        )
-    )
+            api_issuer="YOUR_ISSUER", api_audience="YOUR_AUDIENCE", client_id="YOUR_CLIENT_ID", client_secret="YOUR_CLIENT_SECRET"
+        ),
+    ),
 )
 ```
 
@@ -3106,14 +3092,12 @@ import json
 from openfga_sdk import WriteAuthorizationModelRequest
 
 # Read JSON file
-with open('model.json', 'r') as f:
+with open("model.json", "r") as f:
     model_json = json.load(f)
 
 # Create request from JSON
 body = WriteAuthorizationModelRequest(
-    schema_version=model_json.get('schema_version', '1.1'),
-    type_definitions=model_json['type_definitions'],
-    conditions=model_json.get('conditions')
+    schema_version=model_json.get("schema_version", "1.1"), type_definitions=model_json["type_definitions"], conditions=model_json.get("conditions")
 )
 
 response = await fga_client.write_authorization_model(body)
@@ -3149,27 +3133,14 @@ response = await fga_client.check(body)
 ### Batch Check
 
 ```python
-from openfga_sdk.client.models import (
-    ClientBatchCheckItem,
-    ClientBatchCheckRequest
-)
+from openfga_sdk.client.models import ClientBatchCheckItem, ClientBatchCheckRequest
 
 checks = [
-    ClientBatchCheckItem(
-        user="user:anne",
-        relation="viewer",
-        object="document:roadmap"
-    ),
-    ClientBatchCheckItem(
-        user="user:bob",
-        relation="editor",
-        object="document:budget"
-    )
+    ClientBatchCheckItem(user="user:anne", relation="viewer", object="document:roadmap"),
+    ClientBatchCheckItem(user="user:bob", relation="editor", object="document:budget"),
 ]
 
-response = await fga_client.batch_check(
-    ClientBatchCheckRequest(checks=checks)
-)
+response = await fga_client.batch_check(ClientBatchCheckRequest(checks=checks))
 ```
 
 ### Write Tuples
@@ -3178,20 +3149,8 @@ response = await fga_client.batch_check(
 from openfga_sdk.client.models import ClientTuple, ClientWriteRequest
 
 body = ClientWriteRequest(
-    writes=[
-        ClientTuple(
-            user="user:anne",
-            relation="viewer",
-            object="document:roadmap"
-        )
-    ],
-    deletes=[
-        ClientTuple(
-            user="user:bob",
-            relation="editor",
-            object="document:budget"
-        )
-    ]
+    writes=[ClientTuple(user="user:anne", relation="viewer", object="document:roadmap")],
+    deletes=[ClientTuple(user="user:bob", relation="editor", object="document:budget")],
 )
 
 response = await fga_client.write(body)
@@ -3202,11 +3161,7 @@ response = await fga_client.write(body)
 ```python
 from openfga_sdk.client.models import ClientListObjectsRequest
 
-body = ClientListObjectsRequest(
-    user="user:anne",
-    relation="viewer",
-    type="document"
-)
+body = ClientListObjectsRequest(user="user:anne", relation="viewer", type="document")
 
 response = await fga_client.list_objects(body)
 # response.objects = ["document:roadmap", "document:budget"]
@@ -3215,11 +3170,7 @@ response = await fga_client.list_objects(body)
 ### Stream List Objects
 
 ```python
-request = ClientListObjectsRequest(
-    user="user:anne",
-    relation="viewer",
-    type="document"
-)
+request = ClientListObjectsRequest(user="user:anne", relation="viewer", type="document")
 
 results = []
 async for response in fga_client.streamed_list_objects(request):
@@ -3231,11 +3182,7 @@ async for response in fga_client.streamed_list_objects(request):
 ```python
 from openfga_sdk.client.models import ClientListRelationsRequest
 
-body = ClientListRelationsRequest(
-    user="user:anne",
-    object="document:roadmap",
-    relations=["can_view", "can_edit"]
-)
+body = ClientListRelationsRequest(user="user:anne", object="document:roadmap", relations=["can_view", "can_edit"])
 
 response = await fga_client.list_relations(body)
 # response.relations = ["can_view"]
@@ -3250,10 +3197,7 @@ from openfga_sdk.models.fga_object import FgaObject
 request = ClientListUsersRequest(
     object=FgaObject(type="document", id="roadmap"),
     relation="can_read",
-    user_filters=[
-        UserTypeFilter(type="user"),
-        UserTypeFilter(type="team", relation="member")
-    ]
+    user_filters=[UserTypeFilter(type="user"), UserTypeFilter(type="team", relation="member")],
 )
 
 response = await fga_client.list_users(request)
@@ -3264,11 +3208,7 @@ response = await fga_client.list_users(request)
 ```python
 from openfga_sdk import ReadRequestTupleKey
 
-body = ReadRequestTupleKey(
-    user="user:anne",
-    relation="viewer",
-    object="document:roadmap"
-)
+body = ReadRequestTupleKey(user="user:anne", relation="viewer", object="document:roadmap")
 
 response = await fga_client.read(body)
 # response.tuples = [Tuple(...), ...]
@@ -3279,13 +3219,7 @@ response = await fga_client.read(body)
 ```python
 from openfga_sdk.client.models import WriteTransactionOpts
 
-options = {
-    "transaction": WriteTransactionOpts(
-        disabled=True,
-        max_parallel_requests=10,
-        max_per_chunk=100
-    )
-}
+options = {"transaction": WriteTransactionOpts(disabled=True, max_parallel_requests=10, max_per_chunk=100)}
 
 response = await fga_client.write(body, options)
 ```
@@ -3293,17 +3227,10 @@ response = await fga_client.write(body, options)
 ### Handle Write Conflicts
 
 ```python
-from openfga_sdk.client.models.write_conflict_opts import (
-    ConflictOptions,
-    ClientWriteRequestOnDuplicateWrites,
-    ClientWriteRequestOnMissingDeletes
-)
+from openfga_sdk.client.models.write_conflict_opts import ConflictOptions, ClientWriteRequestOnDuplicateWrites, ClientWriteRequestOnMissingDeletes
 
 options = {
-    "conflict": ConflictOptions(
-        on_duplicate_writes=ClientWriteRequestOnDuplicateWrites.IGNORE,
-        on_missing_deletes=ClientWriteRequestOnMissingDeletes.IGNORE
-    )
+    "conflict": ConflictOptions(on_duplicate_writes=ClientWriteRequestOnDuplicateWrites.IGNORE, on_missing_deletes=ClientWriteRequestOnMissingDeletes.IGNORE)
 }
 
 response = await fga_client.write(body, options)
@@ -3314,13 +3241,7 @@ response = await fga_client.write(body, options)
 ```python
 from openfga_sdk.configuration import RetryParams
 
-config = ClientConfiguration(
-    api_url="http://localhost:8080",
-    retry_params=RetryParams(
-        max_retry=5,
-        min_wait_in_ms=250
-    )
-)
+config = ClientConfiguration(api_url="http://localhost:8080", retry_params=RetryParams(max_retry=5, min_wait_in_ms=250))
 ```
 
 ### Error Handling

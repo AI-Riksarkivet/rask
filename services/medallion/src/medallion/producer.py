@@ -24,6 +24,7 @@ from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 
 from medallion.api.health import router as health_router
+from medallion.api.ingest_iiif import router as ingest_iiif_router
 from medallion.api.ingest_media import router as ingest_media_router
 from medallion.api.produce import router as produce_router
 from medallion.api.raw_arrival import register_raw_arrival_route
@@ -111,6 +112,9 @@ app.include_router(produce_router)
 # The multimodal head (§9): POST /ingest-media lands external media as bronze blobs + triggers the
 # media chain (bronze→silver derive) — the deployed twin of the manual media pipeline scripts.
 app.include_router(ingest_media_router)
+# The P7a IIIF page head: POST /ingest-iiif harvests a volume into the raw page-image dataset; its ONE
+# raw-write event (not a direct trigger publish) is what /raw-arrival reacts to — HTR as cascade compute.
+app.include_router(ingest_iiif_router)
 # The event-driven cascade head: subscribe to the lineage topic; a raw-dataset write fires medallion.raw.
 _dapr_app = register_raw_arrival_route(app)
 # The Ray TRAIN head (#115a): POST /train + the training-trigger subscription (own topic; submit-and-ack).

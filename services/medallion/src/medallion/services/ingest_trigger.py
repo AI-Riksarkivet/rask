@@ -32,12 +32,14 @@ _SUCCESS = {"status": "SUCCESS"}
 _RETRY = {"status": "RETRY"}
 
 
-def _writes_raw(event: dict[str, Any], settings: MedallionSettings, project: str) -> bool:
-    """True iff this event is a COMPLETED write to the raw dataset (the cascade's entry point).
+def _raw_write_dataset(event: dict[str, Any], settings: MedallionSettings, project: str) -> str | None:
+    """The raw dataset this event COMPLETED a write to (the cascade's entry point), else ``None``.
 
     Filters on ``eventType == COMPLETE``: a START or FAIL raw event announces intent / failure, not a
     landed batch, so firing the cascade off one would kick the pipeline over data that isn't there (yet).
-    Only a terminal-success raw write is a real arrival.
+    Only a terminal-success raw write is a real arrival. TWO raw lanes share the head: the events lane
+    (``raw_dataset``) and the IIIF page lane (``iiif_raw_dataset``, P7a) — the returned name is the one
+    actually written, so the trigger tells the mover which lane fired.
 
     With a ``project`` (#84, from the event's ``lance.project`` facet) the expected pair is the
     project-QUALIFIED one (``acme-raw`` / ``acme-raw_events``) — a per-project raw write fires the head
@@ -46,11 +48,14 @@ def _writes_raw(event: dict[str, Any], settings: MedallionSettings, project: str
     never equals the (equally qualified) raw namespace.
     """
     if str(event.get("eventType", "")).upper() != "COMPLETE":
-        return False
+        return None
     expected_namespace = project_namespace(project, settings.raw_namespace)
-    expected_name = project_namespace(project, settings.raw_dataset)
+    expected = {project_namespace(project, name): name for name in (settings.raw_dataset, settings.iiif_raw_dataset)}
     outputs = event.get("outputs") or []
-    return any(isinstance(o, dict) and o.get("namespace") == expected_namespace and o.get("name") == expected_name for o in outputs)
+    for output in outputs:
+        if isinstance(output, dict) and output.get("namespace") == expected_namespace and output.get("name") in expected:
+            return expected[str(output.get("name"))]
+    return None
 
 
 def _cascade_token(event: dict[str, Any]) -> str:
@@ -99,10 +104,11 @@ async def handle_raw_arrival(dapr: DaprClient, settings: MedallionSettings, even
     if not isinstance(data, dict):
         return _SUCCESS  # not a parseable lineage event — ack so Dapr doesn't redeliver
     project = _cascade_project(data)
-    if not _writes_raw(data, settings, project):
+    dataset = _raw_write_dataset(data, settings, project)
+    if dataset is None:
         return _SUCCESS  # not a raw write — ack so Dapr doesn't redeliver, but drive nothing
     token = _cascade_token(data)
-    trigger = {"token": token, "dataset": settings.raw_dataset, "namespace": settings.raw_namespace}
+    trigger = {"token": token, "dataset": dataset, "namespace": settings.raw_namespace}
     if project:  # #84: PROPAGATE the tenant onto the stage trigger; omitted (byte-identical) when unset
         trigger["project"] = project
     try:
@@ -118,5 +124,5 @@ async def handle_raw_arrival(dapr: DaprClient, settings: MedallionSettings, even
     except Exception as exc:
         log.warning("medallion_raw_arrival_publish_failed", extra={"token": token, "error": str(exc)})
         return _RETRY
-    log.info("medallion_cascade_triggered", extra={"token": token, "dataset": settings.raw_dataset})
+    log.info("medallion_cascade_triggered", extra={"token": token, "dataset": dataset})
     return _SUCCESS

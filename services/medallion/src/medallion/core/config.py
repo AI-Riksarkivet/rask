@@ -276,6 +276,26 @@ class MedallionSettings(BaseSettings):
     # an external media drop). Prod points the bucket/prefix at real media and turns this off.
     media_seed_samples: bool = Field(default=True, alias="MEDALLION_MEDIA_SEED_SAMPLES")
 
+    # --- IIIF ingest head (P7a — the lance-ray seam producer that replaced rask's prefetch lane +
+    # ``IIIFCachedSource``'s cache role). POST /ingest-iiif harvests a volume's pages from the IIIF Image
+    # API and lands them as the RAW page-image blob-v2 Lance dataset; the raw→bronze mover's MEDIA path
+    # then promotes them (stage stamp, source_rowid, thumbnail/embedding) — HTR runs as cascade compute
+    # downstream. The head emits ONE raw-write OpenLineage event and NEVER publishes ``medallion.raw``
+    # itself: the /raw-arrival subscription reacts to the COMPLETE write matching
+    # ``raw_namespace``/``iiif_raw_dataset`` and fires the cascade (publishing both would double-fire).
+    # Empty ``iiif_raw_uri`` = the head is off (POST /ingest-iiif → 409). ------------------------------
+    iiif_base_url: str = Field(default="https://iiifintern-ai.ra.se", alias="MEDALLION_IIIF_BASE_URL")
+    iiif_query_params: str = Field(default="full/max/0/default.jpg", alias="MEDALLION_IIIF_QUERY_PARAMS")
+    iiif_raw_uri: str = Field(default="", alias="MEDALLION_IIIF_RAW_URI")
+    # The page lane's raw DATASET name — a values knob beside raw_dataset (chart medallion.producer):
+    # /raw-arrival fires for a COMPLETE write to (raw_namespace, iiif_raw_dataset) exactly as it does for
+    # (raw_namespace, raw_dataset), so the page lane and the events lane share one cascade head.
+    iiif_raw_dataset: str = Field(default="raw_pages", alias="MEDALLION_IIIF_RAW_DATASET")
+    iiif_timeout_seconds: float = Field(default=15.0, gt=0, alias="MEDALLION_IIIF_TIMEOUT_SECONDS")
+    # The Ray branch (requires ray_enabled): the self-contained harvest job baked into the unified ray
+    # image, submitted via the Ray Jobs REST API exactly like the stage transforms.
+    iiif_ray_entrypoint: str = Field(default="python /home/ray/jobs/ray_iiif_ingest_job.py", alias="MEDALLION_IIIF_RAY_ENTRYPOINT")
+
 
 def project_namespace(project: str, name: str) -> str:
     """Project-qualify a lineage namespace or dataset name — ``("acme", "bronze")`` → ``"acme-bronze"``.

@@ -57,9 +57,7 @@ from service_kit.config import Settings
 
 
 def _settings(**env: str) -> Settings:
-    return Settings.model_validate(
-        {"RASK_VIEWER_INPUT": "/dev/null", "RASK_VIEWER_OUTPUT": "/dev/null", **env}
-    )
+    return Settings.model_validate({"RASK_VIEWER_INPUT": "/dev/null", "RASK_VIEWER_OUTPUT": "/dev/null", **env})
 
 
 def test_dapr_disabled_by_default() -> None:
@@ -84,12 +82,11 @@ Expected: FAIL — `AttributeError: 'Settings' object has no attribute 'dapr_ena
 In `packages/service-kit/src/service_kit/config.py`, immediately after the `orchestrator_autostart` field (line 96), add:
 
 ```python
-
-    # Dapr service invocation. When false, build_dapr_client returns None and the
-    # gateway falls back to direct httpx upstreams. DAPR_HTTP_PORT is set by the
-    # Dapr sidecar injector in-cluster.
-    dapr_enabled: bool = Field(default=False, alias="RASK_DAPR_ENABLED")
-    dapr_http_port: str = Field(default="3500", alias="DAPR_HTTP_PORT")
+# Dapr service invocation. When false, build_dapr_client returns None and the
+# gateway falls back to direct httpx upstreams. DAPR_HTTP_PORT is set by the
+# Dapr sidecar injector in-cluster.
+dapr_enabled: bool = Field(default=False, alias="RASK_DAPR_ENABLED")
+dapr_http_port: str = Field(default="3500", alias="DAPR_HTTP_PORT")
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -205,31 +202,33 @@ DaprClientDep = Annotated["DaprClient | None", Depends(get_dapr)]
 Then wrap the lifespan inside `make_service_app` so every app gets `app.state.dapr`. Replace the body from `lifespan_factory: LifespanFactory = ...` (line 76) through the `app = FastAPI(...)` block with:
 
 ```python
-    base_factory: LifespanFactory = lifespan if lifespan is not None else default_lifespan
+base_factory: LifespanFactory = lifespan if lifespan is not None else default_lifespan
 
-    def lifespan_factory(s: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
-        base = base_factory(s)
 
-        @asynccontextmanager
-        async def wrapped(app: FastAPI) -> AsyncIterator[None]:
-            app.state.dapr = build_dapr_client(s)
-            try:
-                async with base(app):
-                    yield
-            finally:
-                if app.state.dapr is not None:
-                    app.state.dapr.close()
+def lifespan_factory(s: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
+    base = base_factory(s)
 
-        return wrapped
+    @asynccontextmanager
+    async def wrapped(app: FastAPI) -> AsyncIterator[None]:
+        app.state.dapr = build_dapr_client(s)
+        try:
+            async with base(app):
+                yield
+        finally:
+            if app.state.dapr is not None:
+                app.state.dapr.close()
 
-    app = FastAPI(
-        title=title,
-        version="0.1.0",
-        lifespan=lifespan_factory(settings),
-        docs_url=f"{settings.api_prefix}/docs",
-        redoc_url=f"{settings.api_prefix}/redoc",
-        openapi_url=f"{settings.api_prefix}/openapi.json",
-    )
+    return wrapped
+
+
+app = FastAPI(
+    title=title,
+    version="0.1.0",
+    lifespan=lifespan_factory(settings),
+    docs_url=f"{settings.api_prefix}/docs",
+    redoc_url=f"{settings.api_prefix}/redoc",
+    openapi_url=f"{settings.api_prefix}/openapi.json",
+)
 ```
 
 - [ ] **Step 5: Resolve the dapr pin, then run tests**

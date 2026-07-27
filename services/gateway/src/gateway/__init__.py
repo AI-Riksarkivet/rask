@@ -60,7 +60,8 @@ Route = tuple[str, str, str, str]
 The upstream prefix REPLACES the public one when forwarding. rask rows keep it
 identical (the fleet services mount under RASK_API_PREFIX themselves); lance rows
 rewrite — catalog/lineage serve `/v1/...`/`/runs` at root, the medallion producer
-serves `/produce`+`/train` at root, and the media trio serves `/api/...` internally.
+serves `/produce`+`/ingest-iiif`+`/train` at root, and the media trio serves
+`/api/...` internally.
 """
 
 
@@ -73,7 +74,6 @@ def _routes() -> list[Route]:
     search = ("search-api", os.environ.get("RASK_SEARCH_API_URL", "http://127.0.0.1:8802"))
     volumes = ("volumes-api", os.environ.get("RASK_VOLUMES_API_URL", "http://127.0.0.1:8803"))
     ray = ("ray-api", os.environ.get("RASK_RAY_API_URL", "http://127.0.0.1:8804"))
-    orch = ("orchestrator", os.environ.get("RASK_ORCH_API_URL", "http://127.0.0.1:8810"))
     controlplane = ("controlplane", os.environ.get("RASK_CONTROLPLANE_URL", "http://127.0.0.1:8820"))
     # lance-plane upstreams (P1 gateway fold). Localhost defaults follow the lance
     # dev conventions: catalog 2333, lineage 8000, the lance-ray producer 8002 (the
@@ -96,11 +96,11 @@ def _routes() -> list[Route]:
         ("/api/catalog", "", *catalog),
         ("/api/lineage", "", *lineage),
         ("/api/produce", "/produce", *medallion),
+        ("/api/ingest-iiif", "/ingest-iiif", *medallion),
         ("/api/train", "/train", *medallion),
         (f"{prefix}/search", f"{prefix}/search", *search),
         (f"{prefix}/volumes", f"{prefix}/volumes", *volumes),
         (f"{prefix}/ray", f"{prefix}/ray", *ray),
-        (f"{prefix}/orchestrator", f"{prefix}/orchestrator", *orch),
         (f"{prefix}/projects", f"{prefix}/projects", *controlplane),
         ("/api/serve", "/api/serve", *ray),
         (prefix, prefix, *core),

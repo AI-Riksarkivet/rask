@@ -1,10 +1,9 @@
-.PHONY: help install build test test-slow lint fmt clean storybook typecheck knip check ci viewer dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status search-index search-index-fresh harvest-ead catalog-index pg-up pg-down pg-status pg-deps pg-migrate pg-revision claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge tilt-registry tilt-up tilt-down e2e
+.PHONY: help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead catalog-index claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge tilt-registry tilt-up tilt-down e2e
 
 help:
 	@echo "Targets:"
 	@echo "  install build test lint fmt clean storybook"
 	@echo "  typecheck knip check ci   frontend-check frontend-build"
-	@echo "  viewer                                 — core monolith dev server (:8888)"
 	@echo "  dev-micro                              — backend fleet (gateway :8888 + per-domain services)"
 	@echo "  dev-frontends                          — all 6 zones behind the :3024 proxy (browse http://localhost:3024)"
 	@echo "  dev-frontends-k3s                      — same, but /api → the IN-CLUSTER gateway (port-forwarded)"
@@ -12,8 +11,7 @@ help:
 	@echo "  ray-up ray-down ray-status   ray-up-htr (2-GPU pool, GPUs 0,1)"
 	@echo "  serve-up serve-down serve-status   serve-up-both (transcribe+htrflow)"
 	@echo "  qwen-serve                             — vLLM Qwen3.6-27B on GPU 2 for OpenCode"
-	@echo "  search-index search-index-fresh harvest-ead catalog-index"
-	@echo "  pg-up pg-down pg-status pg-migrate pg-revision MSG='...'"
+	@echo "  harvest-ead catalog-index"
 	@echo "  claude-bootstrap                       — install Claude Code skills & verify config"
 
 install:
@@ -93,19 +91,12 @@ claude-bootstrap:
 	@echo "==> Done — re-run anytime (idempotent). Skills come from the ra-skills marketplace; see .claude/README.md."
 	@echo "    Authenticate any MCP servers if prompted on first use."
 
-# ---- viewer ----------------------------------------------------------------
-# Port must be 8888 — frontend/microfrontends/home Vite proxy defaults
-# VIEWER_BACKEND to http://localhost:8888.
-VIEWER_INPUT  ?= s3://images-batch
-VIEWER_OUTPUT ?= s3://images-batch-alto
-
-viewer:
-	RASK_VIEWER_INPUT=$(VIEWER_INPUT) RASK_VIEWER_OUTPUT=$(VIEWER_OUTPUT) \
-		uv run uvicorn core.main:app --host 0.0.0.0 --port 8888 --reload
-
+# ---- backend fleet ---------------------------------------------------------
 # Local microservice fleet (gateway + per-domain backends) via scripts/dev-micro.sh.
-# Bring up deps first: `make ray-up`, `make pg-up` (+ `make pg-migrate`); S3/HCP
-# from .env. The gateway listens on :8888 so the frontends' /api proxy works.
+# Bring up deps first: `make ray-up`; S3/HCP from .env. The gateway listens on
+# :8888 so the frontends' /api proxy works. (The `viewer` monolith target and the
+# local postgres/alembic targets died at P7a — the app DB is gone; the lineage/
+# openfga databases are chart-provisioned.)
 dev-micro:
 	uv sync --all-packages
 	./scripts/dev-micro.sh
@@ -113,13 +104,13 @@ dev-micro:
 # ---- frontends (SvelteKit microfrontends) ----------------------------------
 # Six independent SvelteKit SSR zones (svelte-adapter-bun) + the shared ui
 # library's watcher, orchestrated by Turborepo. Each zone's Vite dev server proxies
-# /api/* → VIEWER_BACKEND (the gateway / `make viewer`, :8888). The zones come up on
+# /api/* → VIEWER_BACKEND (the gateway, :8888). The zones come up on
 # their own ports AND Turborepo auto-starts its built-in microfrontends proxy (from
 # frontend/microfrontends/home/microfrontends.json — no extra package) on :3024:
 #   single origin → http://localhost:3024   (browse THIS for cross-zone nav)
 #   home :5273 (catch-all: /) · media :5173 /media · lakehouse :5174 /lakehouse · compute :5175 /compute · studio :5176 /studio · annotator :5177 /annotator
 # The shared ui-package shell + nav render with NO backend; start one
-# (`make dev-micro` or `make viewer`) only when you need live /api data.
+# (`make dev-micro`) only when you need live /api data.
 
 # The zone estate — one entry per directory under frontend/microfrontends/. Drives
 # `make k3s-build`/`k3s-import` (one image per zone via --build-arg APP=$z) and
@@ -255,38 +246,14 @@ qwen-serve:
 	  --max-model-len $(QWEN_CTX) --max-num-seqs $(QWEN_MAX_SEQS) --reasoning-parser qwen3
 
 # ---- search / catalog index ------------------------------------------------
-search-index:
-	uv run python scripts/submit_index.py
-
-search-index-fresh:
-	uv run python scripts/submit_index.py --skip-existing
-
+# (search-index / search-index-fresh died at P7a with scripts/index_alto.py — the
+# batches.db-driven lines indexer; lance `search` over a governed lines table
+# replaces it in the R6 media wave.)
 harvest-ead:
 	uv run python scripts/harvest_ead.py
 
 catalog-index:
 	uv run python scripts/index_catalog.py --no-embed --digitized-only
-
-# ---- local postgres (for alembic + viewer testing) -------------------------
-# Local dev postgres in a docker container. Connect from the VS Code
-# `ms-ossdata.vscode-pgsql` extension or any psql client at:
-#   postgresql://rask:rask@localhost:5432/rask
-PG_URL ?= postgresql+asyncpg://rask:rask@localhost:5432/rask
-
-pg-up:
-	docker run -d --name rask-pg \
-	  -e POSTGRES_USER=rask -e POSTGRES_PASSWORD=rask -e POSTGRES_DB=rask \
-	  -p 5432:5432 postgres:16
-	@echo "Postgres up. Connect via:"
-	@echo "  - VS Code (ms-ossdata.vscode-pgsql): host=localhost port=5432 db=rask user=rask password=rask"
-	@echo "  - psql:    psql postgresql://rask:rask@localhost:5432/rask"
-	@echo "  - alembic: make pg-migrate"
-
-pg-down:
-	docker rm -f rask-pg
-
-pg-status:
-	docker ps --filter name=rask-pg --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 
 # ---- rustfs (S3-compatible object storage) smoke ---------------------------
 # Prove packages/storage + LanceDB work against a REAL rustfs backend (not moto).
@@ -306,19 +273,8 @@ smoke-rustfs: ## Storage smoke vs rustfs (S3 round-trip + LanceDB) — needs rus
 	  RASK_S3_INSECURE=1 RASK_SMOKE_BUCKET=rask-rustfs-smoke \
 	  uv run python scripts/smoke_rustfs.py
 
-pg-deps:
-	uv sync --package core --extra postgres --extra migrations
-
-pg-migrate: pg-deps
-	cd services/core && \
-	  DATABASE_URL=$(PG_URL) uv run --package core alembic upgrade head
-
-pg-revision: pg-deps
-	cd services/core && \
-	  DATABASE_URL=$(PG_URL) uv run --package core alembic revision --autogenerate -m "$(MSG)"
-
 # ---- local k3s ------------------------------------------------------------
-COMPOSE_IMAGES = gateway core-api search-api volumes-api ray-api orchestrator controlplane
+COMPOSE_IMAGES = gateway core-api search-api volumes-api ray-api controlplane
 # SvelteKit SSR microfrontend zone images — one per $(ZONES) entry, all built from
 # the one parametrized .docker/frontend.dockerfile via --build-arg APP=<name>.
 # "home" is the catch-all; the rest are pinned to their /<zone> base path.
@@ -374,7 +330,6 @@ k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait 
 	$(HELM) upgrade --install rask ./chart --wait --timeout 20m \
 	  --force-conflicts --take-ownership \
 	  $${HF_TOKEN:+--set-string secrets.hfToken=$$HF_TOKEN} \
-	  $${POSTGRES_PASSWORD:+--set-string secrets.postgresPassword=$$POSTGRES_PASSWORD} \
 	  $${AWS_ACCESS_KEY_ID:+--set-string rustfs.accessKey=$$AWS_ACCESS_KEY_ID} \
 	  $${AWS_SECRET_ACCESS_KEY:+--set-string rustfs.secretKey=$$AWS_SECRET_ACCESS_KEY}
 	$(KUBECTL) rollout status deploy/rask-gateway --timeout=300s

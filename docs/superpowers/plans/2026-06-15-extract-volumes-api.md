@@ -131,6 +131,7 @@ For `volumes_api/__init__.py` **also add `lifespan=make_lifespan` for now** (no 
 
 ```python
 from viewer.core.lifespan import make_lifespan
+
 app = make_service_app(title="volumes-api", routers=[volumes.router], lifespan=make_lifespan)
 ```
 

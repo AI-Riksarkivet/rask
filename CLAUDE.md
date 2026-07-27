@@ -50,32 +50,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make ray-up            # local Ray head on :6379, dashboard :8265
 make serve-up          # deploy /transcribe + /htrflow on Ray Serve
 make dev-micro         # the fleet: gateway :8888 + core-api :8801 + search :8802 +
-                       #   volumes :8803 + ray :8804 + orchestrator :8810 (via scripts/dev-micro.sh)
-make viewer            # the `core.main:app` monolith on :8888 (single-process dev convenience)
+                       #   volumes :8803 + ray :8804 + controlplane :8820 (via scripts/dev-micro.sh)
 make home   # SvelteKit dev server, proxies /api → :8888 (the gateway)
 ```
 
-The frontend's Vite proxy targets `:8888` either way — in the fleet that's the
-**gateway**; with `make viewer` it's the monolith. `scripts/dev-micro.sh` is the source
-of truth for the fleet's process list and ports.
+The frontend's Vite proxy targets `:8888` — the **gateway**. `scripts/dev-micro.sh` is
+the source of truth for the fleet's process list and ports.
 
-`make serve-down` / `make ray-down` to tear down. Indexing pipelines: `make search-index`, `make catalog-index`, `make harvest-ead`.
-
-### Local postgres + migrations
-
-```bash
-make pg-up                  # docker postgres:16 at localhost:5432, rask/rask/rask
-make pg-migrate             # alembic upgrade head against PG_URL
-make pg-revision MSG="..."  # autogenerate next migration from SQLModel changes
-make pg-status / pg-down
-```
-
-Reproducible CI equivalent via Dagger (`.dagger/`):
-
-```bash
-dagger call migrate-up      # ephemeral pg + alembic upgrade — CI proof-of-clean-migration
-dagger call test-pg         # same as above + the core pytest suite
-```
+`make serve-down` / `make ray-down` to tear down. Catalog pipelines: `make catalog-index`, `make harvest-ead`.
+(The app database, Alembic migrations and the `pg-*`/`viewer` targets died at P7a — the only relational
+stores left are the chart-managed lineage (AGE) and OpenFGA databases.)
 
 ## Repository layout
 
@@ -84,21 +68,20 @@ Two **language-pure planes** — **don't blur them**. Python lives at the repo r
 - `packages/` — reusable **Python** libraries, **no entrypoints**. uv workspace members.
   - `packages/storage` — `FSSource/Sink`, `S3Source/Sink`, `IIIFCachedSource`, `iter_keys`, `s3_client`
   - `packages/service-kit` — shared **platform library**: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`/`SettingsDep`, the injectable lifespan. Dependency-light (no lancedb/ray/sqlmodel).
-  - `packages/ray-kit` — Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, the dashboard service). Shared by `ray-api` and the core orchestrator.
+  - `packages/ray-kit` — Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, the dashboard service). Used by `ray-api`.
   - `packages/tracker` — pluggable transfer-state tracking (SQLite / Postgres backends)
   - `packages/validate` — pre-upload image validation (TIFF/JPEG/PNG corruption detection + pluggable rules)
-- `services/` — runnable **Python** code. **The old monolithic `viewer` service is gone** — it was dissolved (2026-06) into a gateway + per-domain services + a shared `core` package:
-  - `services/gateway` — reverse proxy on `:8888` (the frontend's proxy target). Path-routes `/api/*` to the services below (longest-prefix-first); owns no state. Upstreams are env-overridable (`RASK_CORE_API_URL` :8801, `RASK_SEARCH_API_URL` :8802, `RASK_VOLUMES_API_URL` :8803, `RASK_RAY_API_URL` :8804, `RASK_ORCH_API_URL` :8810).
-  - `services/core` — the **core domain package** (the dissolved `viewer`; package `core`). Owns `alembic/`, `core/db.py`, `core/lifespan.py`, `models/{batch,enums,pipelines}`, `repositories/`, the domain services (`services/{batches,submission,sync}`, `services/orchestrator/{derive,loop}`, `services/discover/catalog`), the batches/chunks/catalog/orchestrator endpoints, and `main.py` (monolith factory, still used by tests + `make viewer`). **Not a deployable** — composed by the two entrypoints below, which share the `batches` table transactionally (so they're two processes over one package, not independent services).
-  - `services/core_api` — thin entrypoint (`:8801`): health + batches + chunks + catalog over `core`; orchestrator loop **off**.
-  - `services/orchestrator` — thin entrypoint (`:8810`): health + orchestrator endpoints over `core`; the lifespan-managed orchestrator loop **on** (`RASK_ORCHESTRATOR_AUTOSTART`).
+- `services/` — runnable **Python** code. **The old monolithic `viewer` service is gone**, and so is the whole batches/orchestrator plane (P7a compute-plane cutover — see `docs/architecture/lance-ns-merge.md` P7):
+  - `services/gateway` — reverse proxy on `:8888` (the frontend's proxy target). Path-routes `/api/*` to the services below (longest-prefix-first) plus the lance-plane rows (`/api/catalog`, `/api/lineage`, `/api/produce`, `/api/train`, `/api/media/*`); owns no state. Upstreams are env-overridable (`RASK_CORE_API_URL` :8801, `RASK_SEARCH_API_URL` :8802, `RASK_VOLUMES_API_URL` :8803, `RASK_RAY_API_URL` :8804, `RASK_CONTROLPLANE_URL` :8820).
+  - `services/core` — the **core domain package** (package `core`), since P7a a **transitional husk**: health + the EAD catalog search (`core/lifespan.py`, `services/discover/catalog`, the catalog endpoint, `main.py` app factory for tests). The batches table, Alembic lineage, orchestrator loop, submission, and S3-sync are **deleted**. Composed by `services/core_api` (`:8801`); retires with the R6/R20 media wave (lance `search` over a catalog-governed EAD table).
   - `services/{volumes_api,search_api,ray_api}` — independent, **viewer-free** services (`:8803`/`:8802`/`:8804`): S3/IIIF image+ALTO proxy (stateless); Lance `lines` FTS + S3 thumbnails (owns a lines-only lifespan); Ray dashboard introspection (`/api/ray/*`) + the `/api/serve/*` proxy (thin shell over `ray-kit`). Each depends only on `service-kit` + its own libs — no `core`, no DB.
+  - `services/medallion` — the lakehouse cascade (producer + movers). Its producer owns the **P7a IIIF→raw page head**: `POST /ingest-iiif` harvests a volume from the IIIF Image API into the raw blob-v2 page-image Lance dataset and emits the ONE raw-write OpenLineage event through `packages/lineage-kit`; `/raw-arrival` fires the `medallion.raw` cascade (raw→bronze media promotion, then the P7b HTR movers).
 - `frontend/` — the **JS/TS plane** and its own workspace root: `package.json`, `bun.lock`, `turbo.json`, `knip.json`, `.oxlintrc.json`, `.oxfmtrc.json`, `patches/`, `assets/` (the shared favicon source). The only JS outside it is `tests/e2e`, a standalone Playwright project with its own lockfile (`make e2e`).
   - `frontend/microfrontends/home` — the **catch-all** microfrontend (package `home`) owning `/` (the platform home), SvelteKit 2 + Svelte 5, **SSR** via `svelte-adapter-bun` (a real Bun server: `bun ./build/index.js`). Vite dev proxy sends `/api` → the gateway on `:8888`. The frontend is **already decomposed into 7 SvelteKit microfrontend zones** under Turborepo — this catch-all plus 6 domain apps (`{overview,compute,discover,storage,train,studio}`), each pinned to base `/default/<domain>` and composed by the `:3024` microfrontends proxy in dev (k3s Ingress in prod). Every domain app renders the **shared `@rask/ui/shell` AppShell sidebar** (grouped, per-domain) — see `docs/architecture/frontend-microfrontends.md`.
   - `frontend/packages/ui` — Svelte 5 + Bits UI + Tailwind 4 component library (`@rask/ui`; the former `component-lib`) w/ Storybook 10 (`@storybook/svelte-vite`). The shared design system every microfrontend imports via `workspace:*` — **styled components live here, not in the apps** (apps only supply theme tokens in their `app.css` + an `@source` pointing at `frontend/packages/ui/dist`). Subpath exports: `@rask/ui/{button,badge,card,dialog,dropdown-menu,avatar,collapsible,table,checkbox,alert-dialog,progress,sort-header,sidebar,utils}` + **`@rask/ui/shell`** (the shared `AppShell` + grouped `AppSidebar` + `nav-config` — so every app renders the _same_ sidebar, zero drift). See `docs/architecture/frontend-microfrontends.md`.
   - `frontend/packages/api` — `@rask/api`, the shared frontend data layer (typed gateway client + types, split by domain). JIT TS: apps import the source directly, no build step.
   - `frontend/packages/zone-contract` — `@rask/zone-contract`, the cross-zone link guard (a cross-zone `<a>` must carry `data-sveltekit-reload`). It is a **vitest test**, not a lint rule — the retired ESLint rule was ported here when the frontend moved to oxlint.
-- `scripts/` — **all** dev/ops scripts, shell + Python: one-shot setup / debug tools (`build_batches_db`, `chunk_batches`, `harvest_ead`, `index_alto`, `index_catalog`, `download_*`, `bench_framework`, `smoke_s3`, …) plus `dev-micro.sh` and `k3s-install.sh`. **No production-state-changing CLIs** — sync / submit / orchestrate all run through the HTTP services (core-api endpoints + the orchestrator service's lifespan loop).
+- `scripts/` — **all** dev/ops scripts, shell + Python: one-shot setup / debug tools (`harvest_ead`, `index_catalog`, `download_*`, `smoke_s3`, the self-contained Ray jobs `ray_stage_job`/`ray_train_job`/`ray_iiif_ingest_job`, …) plus `dev-micro.sh` and `k3s-install.sh`. **No production-state-changing CLIs** — ingestion and the cascade run through the HTTP services (the medallion producer + movers).
 
 - `runners/` — **sealed model environments, NOT workspace members.** `runners/htr` holds the Ray Data HTR pipeline (`src/runner`) *and* the model actors (`src/htr`) in one project with its **own `pyproject.toml` and own `uv.lock`**. Matched by no glob, so torch/htrflow/ultralytics/transformers never enter the fleet's resolution (root lock 200 → 145 packages; fleet tests ~32 min → ~6 s). `storage` is a **path** dep. Its tests are invisible to the root pytest — `make test` runs them separately; its images build from **its** lock; it carries its own ruff config (ruff resolves the nearest pyproject). Ray entrypoint: `uv run --project runners/htr runner`, overridden in-cluster by `RASK_RUNNER_CMD=runner`.
 
@@ -109,7 +92,7 @@ Two **language-pure planes** — **don't blur them**. Python lives at the repo r
 
 A new Python library/service or a new zone is picked up by the glob — but it **must** ship a `pyproject.toml` (Python) or a `package.json` (JS), or its plane silently drops it.
 
-Deployables are just workspace members with a dockerfile: `.docker/<name>.dockerfile` runs `uv sync --frozen --package <name>` against the **root** `uv.lock` (the deployable set is `gateway`, `core-api`, `orchestrator`, `volumes-api`, `search-api`, `ray-api`, `runner`).
+Deployables are just workspace members with a dockerfile: `.docker/<name>.dockerfile` runs `uv sync --frozen --package <name>` against the **root** `uv.lock` (the deployable set is `gateway`, `core-api`, `volumes-api`, `search-api`, `ray-api`, `runner`).
 
 ## Architecture (image → ALTO XML)
 
@@ -122,9 +105,9 @@ Deployables are just workspace members with a dockerfile: `.docker/<name>.docker
   - **`/htrflow`** — collapses Layout+Line+Transcribe+Alto into a single 1-replica CPU Serve deployment. Used when actor fan-out isn't worth it for a batch shape.
 - **GPU sizing is hardcoded** in `runners/htr/src/runner/pipeline.py` for a 3-GPU node. Changing target hardware means editing that file.
 - **No auth, no app middleware.** The services assume localhost / trusted network. The frontend hits `/api/*` on the **gateway** (`:8888`), which path-routes to the per-domain services; `/api/ray/*` and the `/api/serve/*` proxy are served by the standalone **ray-api** service (over `ray-kit`). SSR `load`/remote functions reach the gateway server-side via an absolute base URL (`RASK_GATEWAY_URL`); client code uses the relative `/api/*` proxy. The gateway sits **behind** the SvelteKit Bun server (it does not serve the SPA shell).
-- **State surface:** relational DB behind a backend-agnostic ORM (SQLModel + SQLAlchemy async), owned by the **`core` package**. **SQLite for dev** (`.cache/batches.db`, not committed); **Postgres for prod** via `DATABASE_URL=postgresql+asyncpg://…`. Schema changes go through **Alembic** (`components/services/core/alembic/`, run via `make pg-migrate` = `uv run --package core alembic upgrade head`) — never `SQLModel.metadata.create_all` in app startup. The `Batch` SQLModel uses `SAEnum(values_callable=...)` so `htr_status`/`manifest_status` round-trip as lowercase strings against postgres-native ENUM types or sqlite VARCHAR. Plus S3 two-bucket setup (`images-batch` input, `images-batch-alto` output). **No Redis, no queue, no event bus, no compose stack.** The Helm chart in `chart/` is the single deploy artifact for both local k3s and production — in-cluster CloudNativePG (`Cluster` → `rask-postgres-rw:5432`), RustFS operator (`Tenant` → `rask-rustfs-io:9000`), and KubeRay are gated by `cnpg.enabled`/`rustfs.enabled`/`ray.enabled` values toggles; each toggle gates both the operator subchart and its custom resource. Local deploy: `make k3s-install` (one-time) → `make k3s-build` → `make k3s-import` → `make k3s-up`; tear down with `make k3s-down` / `make k3s-purge`. See `docs/architecture/deployment.md` and `chart/README.md`.
+- **State surface:** the lakehouse (Lance datasets on RustFS S3) governed by the catalog, plus the chart-managed **lineage (AGE)** and **OpenFGA** Postgres databases (CloudNativePG). **The app's own relational DB is gone** (P7a): no batches table, no Alembic, no `DATABASE_URL` in the fleet. **No Redis, no compose stack**; events ride Dapr pub/sub on NATS JetStream. The Helm chart in `chart/` is the single deploy artifact for both local k3s and production — in-cluster CloudNativePG (`Cluster`), RustFS operator (`Tenant` → `rask-rustfs-io:9000`), and KubeRay are gated by `cnpg.enabled`/`rustfs.enabled`/`ray.enabled` values toggles; each toggle gates both the operator subchart and its custom resource. Local deploy: `make k3s-install` (one-time) → `make k3s-build` → `make k3s-import` → `make k3s-up`; tear down with `make k3s-down` / `make k3s-purge`. See `docs/architecture/deployment.md` and `chart/README.md`.
 - **Observability (optional, `observability.enabled`):** Vector → GreptimeDB (on RustFS S3 bucket `rask-observability`) → Perses; fleet (incl. the gateway) + Ray export OTLP/HTTP **traces and RED metrics** to `rask-greptimedb-standalone:4000/v1/otlp` via `service_kit.setup_otel` (FastAPI/HTTPX instrumentation emits `http.server.*` metrics automatically). OTLP headers split by signal: traces carry `x-greptime-pipeline-name=greptime_trace_v1` (GreptimeDB requires it for trace ingestion → `opentelemetry_traces` table), metrics use db-name only (→ PromQL series). The chart provisions a Perses "Fleet — RED" dashboard (`chart/templates/perses-dashboards.yaml`). Standard OTLP throughout (not OTel-Arrow).
-- **Orchestrator runs in the `orchestrator` service** (a thin entrypoint over the `core` package). A lifespan-managed `asyncio.Task` ticks every `RASK_ORCHESTRATOR_INTERVAL_SECONDS`: reconcile S3 → submit next prefetch / htr chunk. `RASK_ORCHESTRATOR_AUTOSTART` controls whether the loop starts on boot (the fleet runs `core-api` with it OFF and `orchestrator` with it ON, so the loop runs in exactly one process); operators flip it at runtime via `POST /api/v1/orchestrator/start` and `/stop`. Per-chunk control via `POST /api/v1/chunks/{id}/stop`. See `core/services/orchestrator/loop.py`. **Transitional — to be replaced by a NATS JetStream consumer once that lands.**
+- **The orchestrator is gone (P7a).** Ingestion is the medallion producer's `POST /ingest-iiif`: harvest a IIIF volume → write the raw blob-v2 page-image Lance dataset → emit ONE raw-write OpenLineage event through `packages/lineage-kit` (never publishing `medallion.raw` directly — the `/raw-arrival` subscription fires the cascade). HTR runs as event-triggered movers on the unified Ray cluster (P7b re-cuts the sealed runner's stages; the gold schema contract is pinned in `medallion/schemas/htr.py`).
 - **Source images:** IIIF (Riksarkivet) with S3 read-through cache. `PageLoaderActor` hits S3 first, IIIF on miss.
 - **Remote KubeRay:** the runner accepts `--address ray://...:10001`. No K8s manifests live in this repo — the remote cluster is managed elsewhere.
 
@@ -143,5 +126,5 @@ Deployables are just workspace members with a dockerfile: `.docker/<name>.docker
 
 - All project-local config lives under `.claude/`. **No `.mcp.json` at repo root** by design — the svelte MCP server is registered at `local` scope via `make claude-bootstrap` (idempotent). The install command in the `Makefile` is the source of truth for which MCP servers this project needs.
 - `.claude/settings.json` is committed (team-shared: `enabledPlugins`, `extraKnownMarketplaces`, permissions, hooks). `.claude/settings.local.json` is gitignored (personal overrides + local-scope MCP).
-- **Shared skills come from the [`ra-skills`](https://github.com/AI-Riksarkivet/ra-skills) marketplace** (language/toolchain: writing-python, fastapi, dagger, dockerfile, otel, testing-python, turborepo, zensical-_, …) — not vendored; `make claude-bootstrap` installs them, and you change one by editing it in ra-skills. **rask's own project skills (`rask-architecture`, `rask-services-fleet`, `rask-htr-pipeline`, `rask-orchestrator`, `rask-frontend`) are vendored in `.claude/skills/`** — they describe rask internals and evolve with the code, so edit them in place (the same way ra-hcp keeps its `hcp-_` skills local).
+- **Shared skills come from the [`ra-skills`](https://github.com/AI-Riksarkivet/ra-skills) marketplace** (language/toolchain: writing-python, fastapi, dagger, dockerfile, otel, testing-python, turborepo, zensical-_, …) — not vendored; `make claude-bootstrap` installs them, and you change one by editing it in ra-skills. **rask's own project skills (`rask-architecture`, `rask-services-fleet`, `rask-htr-pipeline`, `rask-frontend`) are vendored in `.claude/skills/`** — they describe rask internals and evolve with the code, so edit them in place (the same way ra-hcp keeps its `hcp-_` skills local).
 - See `.claude/README.md` for the full plugin/marketplace/MCP surface and bootstrap steps.

@@ -28,8 +28,8 @@ zones additionally get the media plane's upstreams, scoped per zone.
 {{- $root := . -}}
 {{- $fe := .Values.frontend -}}
 {{- /* The zones' gateway is the RASK FLEET gateway (services.gateway, uvicorn `gateway:app`
-       on :8888) — the process that path-routes /api/* to core-api/search/volumes/ray/
-       orchestrator, and the target the zones' relative /api/* fetches resolve to through
+       on :8888) — the process that path-routes /api/* to core-api/search/volumes/ray,
+       and the target the zones' relative /api/* fetches resolve to through
        the Ingress. lance-ns's own nginx gateway (top-level `gateway:`, :8080,
        templates/gateway.yaml) is RETIRED and deleted (lance-ns-merge.md decision 4/P4),
        so `<fullname>-gateway` names exactly one object — the fleet gateway. kgateway is

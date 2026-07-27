@@ -2,7 +2,7 @@ apiVersion: v2
 name: rask
 description: >-
   rask — the Swedish National Archives' data platform as ONE umbrella chart (one `helm install`,
-  one release named `rask`): the HTR pipeline fleet (gateway, core-api, orchestrator, ray-api,
+  one release named `rask`): the HTR pipeline fleet (gateway, core-api, ray-api,
   search-api, volumes-api, controlplane + the SvelteKit microfrontend zones), the Lance lakehouse
   REST catalog with in-service lineage (OpenLineage → Apache AGE), the medallion + media planes,
   governance (Dex OIDC + OpenFGA), event-driven on Dapr pub/sub over NATS JetStream, plus the

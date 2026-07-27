@@ -1,7 +1,5 @@
 from pydantic import BaseModel
 
-from core.models.enums import BrowseTier
-
 
 class CatalogRow(BaseModel):
     """Lance columns for `archive_catalog`. Field order = projection order."""
@@ -26,24 +24,13 @@ class CatalogRow(BaseModel):
 
 
 class CatalogHit(CatalogRow):
-    listed: bool | None = None
-    cached: bool | None = None
-    transcribed: bool | None = None
+    """A search hit — a pure EAD row (the batches.db status flags died with the batches table, P7a)."""
 
 
 class CatalogSearchResponse(BaseModel):
     ok: bool
     query: str
     count: int
-    hits: list[CatalogHit]
-
-
-class CatalogBrowseResponse(BaseModel):
-    ok: bool
-    tier: BrowseTier
-    count: int
-    total: int
-    offset: int = 0
     hits: list[CatalogHit]
 
 

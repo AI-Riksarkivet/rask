@@ -52,7 +52,7 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.source="https://github.com/AI-Riksarkivet/rask" \
       org.opencontainers.image.title="rask-core-api" \
-      org.opencontainers.image.description="rask core-api service — batches/chunks/catalog over the core brick, FastAPI on :8801"
+      org.opencontainers.image.description="rask core-api service — the transitional core husk (EAD catalog search + health), FastAPI on :8801"
 
 # curl: used by the docker-compose healthcheck (GET /api/v1/health).
 # hadolint ignore=DL3008  # Reason: tini and ca-certificates have no stable version pins in apt on slim; pinning would break on next base image update.
@@ -63,12 +63,6 @@ RUN apt-get update \
 
 RUN --network=none --mount=from=builder,source=/opt/venv,target=/tmp/venv \
     cp -a /tmp/venv /opt/venv
-
-# Copy alembic migrations so this image can double as the `migrate` one-shot job.
-# working_dir in docker-compose.yml: /app/services/core
-RUN mkdir -p /app/services/core
-COPY --chown=app:app services/core/alembic.ini /app/services/core/alembic.ini
-COPY --chown=app:app services/core/alembic /app/services/core/alembic
 
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \

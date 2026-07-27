@@ -70,12 +70,30 @@ Contains three things and no import-time side effects:
   module-level tuple:
   ```python
   _EXTRA_KEYS = (
-      "method", "path", "status", "duration_ms",
-      "pipeline", "chunk_id", "chunk_total", "slot", "submission_id", "batch_count",
-      "interval_seconds", "skipped_reason",
-      "prefetch_eligible_count", "htr_eligible_count", "cooldowns",
-      "cached_total", "transcribed_total", "rows_updated", "by_status",
-      "driver_job_id", "url", "table", "error", "error_type",
+      "method",
+      "path",
+      "status",
+      "duration_ms",
+      "pipeline",
+      "chunk_id",
+      "chunk_total",
+      "slot",
+      "submission_id",
+      "batch_count",
+      "interval_seconds",
+      "skipped_reason",
+      "prefetch_eligible_count",
+      "htr_eligible_count",
+      "cooldowns",
+      "cached_total",
+      "transcribed_total",
+      "rows_updated",
+      "by_status",
+      "driver_job_id",
+      "url",
+      "table",
+      "error",
+      "error_type",
   )
   ```
   `format()` copies only those keys that are present on the record (`for k in _EXTRA_KEYS: if k in
@@ -129,6 +147,7 @@ from contextvars import ContextVar
 
 request_id_ctx: ContextVar[str] = ContextVar("request_id", default="-")
 
+
 def current_request_id() -> str:
     return request_id_ctx.get()
 ```
@@ -152,7 +171,7 @@ async def dispatch(self, request, call_next):
         response.headers[_REQUEST_ID_HEADER] = request_id
         return response
     finally:
-        request_id_ctx.reset(token)   # MUST reset, else ids leak across requests under worker reuse
+        request_id_ctx.reset(token)  # MUST reset, else ids leak across requests under worker reuse
 ```
 
 This is the only change to the existing middleware behavior; `request.state.request_id` stays for any
@@ -194,8 +213,10 @@ line for asset/proxy traffic.
 ```python
 _NO_LOG_PREFIXES = ("/_app", "/api/v0", "/api/jobs", "/logs", "/ray-dashboard")
 
+
 class LoggingMiddleware(BaseHTTPMiddleware):
     log = logging.getLogger("viewer.requests")
+
     async def dispatch(self, request, call_next):
         if request.url.path.startswith(_NO_LOG_PREFIXES):
             return await call_next(request)
@@ -203,14 +224,19 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except Exception:
-            self.log.exception("request_failed", extra={
-                "method": request.method, "path": request.url.path,
-                "duration_ms": round((time.perf_counter() - start) * 1000, 1)})
+            self.log.exception(
+                "request_failed", extra={"method": request.method, "path": request.url.path, "duration_ms": round((time.perf_counter() - start) * 1000, 1)}
+            )
             raise
-        self.log.info("request_completed", extra={
-            "method": request.method, "path": request.url.path,
-            "status": response.status_code,
-            "duration_ms": round((time.perf_counter() - start) * 1000, 1)})
+        self.log.info(
+            "request_completed",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "status": response.status_code,
+                "duration_ms": round((time.perf_counter() - start) * 1000, 1),
+            },
+        )
         return response
 ```
 
@@ -246,11 +272,15 @@ chunk-id lists — those are already named one-per-line by the per-submission `c
 unboundedly):
 
 ```python
-log.info("orchestrator_tick", extra={
-    "prefetch_eligible_count": len(state.prefetch.eligible),
-    "htr_eligible_count": len(state.htr.eligible),
-    "cooldowns": len(state.cooldowns),
-    "skipped_reason": None})  # set to "ray_unreachable" / "slot_unavailable" on the early-return paths
+log.info(
+    "orchestrator_tick",
+    extra={
+        "prefetch_eligible_count": len(state.prefetch.eligible),
+        "htr_eligible_count": len(state.htr.eligible),
+        "cooldowns": len(state.cooldowns),
+        "skipped_reason": None,
+    },
+)  # set to "ray_unreachable" / "slot_unavailable" on the early-return paths
 ```
 
 `skipped_reason` is the one genuinely-invisible thing today: the `if not state.ok: return` /
@@ -274,10 +304,16 @@ log.info("orchestrator_submitting", extra={"pipeline": settings.prefetch_pipelin
 
 ```python
 # after (no equivalent before — submission was silent)
-log.info("chunk_submitted", extra={
-    "chunk_id": chunk_id, "chunk_total": membership.chunk_total,
-    "pipeline": spec.name, "submission_id": submission_id,
-    "batch_count": len(membership.batch_ids)})
+log.info(
+    "chunk_submitted",
+    extra={
+        "chunk_id": chunk_id,
+        "chunk_total": membership.chunk_total,
+        "pipeline": spec.name,
+        "submission_id": submission_id,
+        "batch_count": len(membership.batch_ids),
+    },
+)
 ```
 
 **C. S3 reconcile summary — `loop.py:45` (capture the currently-discarded `SyncResult`)**
@@ -287,9 +323,15 @@ log.info("chunk_submitted", extra={
 await reconcile_from_s3(session, hcp_endpoint=..., cache_bucket=..., output_bucket=...)
 # after
 result = await reconcile_from_s3(session, hcp_endpoint=..., cache_bucket=..., output_bucket=...)
-log.info("s3_reconcile_complete", extra={
-    "cached_total": result.cached_total, "transcribed_total": result.transcribed_total,
-    "rows_updated": result.rows_updated, "by_status": result.by_status})
+log.info(
+    "s3_reconcile_complete",
+    extra={
+        "cached_total": result.cached_total,
+        "transcribed_total": result.transcribed_total,
+        "rows_updated": result.rows_updated,
+        "by_status": result.by_status,
+    },
+)
 ```
 
 **D. Transient Ray warning — `derive.py:130`**

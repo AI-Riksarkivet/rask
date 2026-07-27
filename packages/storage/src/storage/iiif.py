@@ -76,6 +76,34 @@ def file_extension(query_params: str = DEFAULT_QUERY_PARAMS) -> str:
     return "." + query_params.rsplit(".", 1)[-1]
 
 
+def fetch_image(url: str, *, client: httpx.Client, attempts: int = 3, base_delay: float = 1.0) -> bytes:
+    """GET one IIIF image with retry on transient httpx errors and 5xx — the shared reading primitive.
+
+    The IIIF server hands out RST under load (Errno 104 at ~64 concurrent reads); three tries with
+    exponential backoff convert a transient hiccup into a slowdown instead of a pipeline kill. Real 4xx
+    (except 429) raise immediately — those won't get better. Used by both :class:`IIIFCachedSource` (the
+    legacy cache role) and the medallion IIIF→raw producer (the P7a harvest library role).
+    """
+    import time as _time
+
+    last: Exception | None = None
+    for i in range(attempts):
+        try:
+            resp = client.get(url)
+            resp.raise_for_status()
+            return resp.content
+        except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+            if isinstance(exc, httpx.HTTPStatusError):
+                code = exc.response.status_code
+                if code != 429 and 400 <= code < 500:
+                    raise
+            last = exc
+            if i < attempts - 1:
+                _time.sleep(base_delay * (2**i))
+    assert last is not None
+    raise last
+
+
 class IIIFCachedSource:
     """Source that reads images from S3, falling back to IIIF on cache miss.
 
@@ -194,23 +222,5 @@ class IIIFCachedSource:
         return data
 
     def _fetch_with_retry(self, url: str, *, attempts: int = 3, base_delay: float = 1.0) -> bytes:
-        """GET ``url`` with retry on transient httpx errors and 5xx."""
-        import time as _time
-
-        last: Exception | None = None
-        for i in range(attempts):
-            try:
-                resp = self.http.get(url)
-                resp.raise_for_status()
-                return resp.content
-            except (httpx.TransportError, httpx.HTTPStatusError) as exc:
-                # Don't retry on real 4xx (except 429) — those won't get better.
-                if isinstance(exc, httpx.HTTPStatusError):
-                    code = exc.response.status_code
-                    if code != 429 and 400 <= code < 500:
-                        raise
-                last = exc
-                if i < attempts - 1:
-                    _time.sleep(base_delay * (2**i))
-        assert last is not None
-        raise last
+        """GET ``url`` with retry — delegates to the module-level :func:`fetch_image` primitive."""
+        return fetch_image(url, client=self.http, attempts=attempts, base_delay=base_delay)

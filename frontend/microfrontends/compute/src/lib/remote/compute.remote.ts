@@ -11,9 +11,6 @@ import {
 	tasksList,
 	serveApplications,
 	rayJobLogs,
-	listBatches,
-	listChunks,
-	type ChunkRow,
 	type OverviewPayload,
 	type RayJobsPayload,
 	type RayClusterPayload,
@@ -23,12 +20,11 @@ import {
 	type TaskInfo,
 	type ServePayload,
 	type JobLogsPayload,
-	type BatchesPayload,
 } from '@rask/api';
 
 // Compute (Ray/cluster) microfrontend data layer — SvelteKit remote functions
-// (server-only). Also carries the batches/chunks reads folded in from the
-// retired overview zone (R16): the landing page is the batches/HTR dashboard.
+// (server-only). The batches/chunks reads died at P7a with the batches table — the
+// landing's pipeline surface is the lineage runs feed (lib/live/feeds.remote.ts).
 //
 // THE ONE PATTERN: every read is a `query()` whose body calls a `@rask/api`
 // function, passing `getRequestEvent().fetch`. That `event.fetch` is SvelteKit's
@@ -73,20 +69,6 @@ export const getTasks = query(async (): Promise<TaskInfo[]> => {
 /** Serve applications/deployments — polled every 5s. Offline-safe payload. */
 export const getServe = query(async (): Promise<ServePayload> => {
 	return serveApplications(getRequestEvent().fetch);
-});
-
-/** Batch inventory + summary tiles — the landing's SSR-rendered initial frame
- *  (the job-detail progress card reads it too). Refreshed by the landing's
- *  sync/submit mutations rather than polled. */
-export const getBatches = query(async (): Promise<BatchesPayload> => {
-	return listBatches(getRequestEvent().fetch);
-});
-
-/** Chunk strip rows — SSR-rendered initial frame on the landing. Refreshed by
- *  the landing's sync mutation rather than polled. */
-export const getChunks = query(async (): Promise<ChunkRow[]> => {
-	const { chunks } = await listChunks(getRequestEvent().fetch);
-	return chunks;
 });
 
 /** Driver logs for one submission id. Param query so navigating the id re-keys

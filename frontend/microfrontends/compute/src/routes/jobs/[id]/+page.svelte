@@ -2,21 +2,15 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { base } from '$app/paths';
-	import { type TaskInfo, type BatchRow } from '@rask/api';
-	import {
-		getRayJobs,
-		getTasks,
-		getRayCluster,
-		getBatches,
-		getRayJobLogs,
-	} from '$lib/remote/compute.remote';
+	import { type TaskInfo } from '@rask/api';
+	import { getRayJobs, getTasks, getRayCluster, getRayJobLogs } from '$lib/remote/compute.remote';
 	import { Card } from '@rask/ui/card';
 	import { Badge, type BadgeVariant } from '@rask/ui/badge';
 	import { SortHeader } from '@rask/ui/sort-header';
 	import { ArrowLeft, TriangleAlert, FileText, ChevronRight, RefreshCw } from '@lucide/svelte';
 
-	// THE ONE PATTERN (see lib/remote/compute.remote.ts): the four dashboards
-	// (jobs/tasks/cluster/batches) are cached remote queries read imperatively
+	// THE ONE PATTERN (see lib/remote/compute.remote.ts): the three dashboards
+	// (jobs/tasks/cluster) are cached remote queries read imperatively
 	// (`.current`) and polled below. The driver logs are a PARAM query keyed by
 	// `{ id }` so navigating the submission id re-keys it; extract `id` to a
 	// `$derived` first so the logs query re-runs on navigation.
@@ -25,14 +19,12 @@
 	const jobsQuery = getRayJobs();
 	const tasksQuery = getTasks();
 	const clusterQuery = getRayCluster();
-	const batchesQuery = getBatches();
 	// Param query — re-keys when `id` changes (navigation between job details).
 	const logsQuery = $derived(getRayJobLogs({ id }));
 
 	const jobs = $derived(jobsQuery.current?.jobs ?? []);
 	const tasks = $derived(tasksQuery.current ?? []);
 	const nodes = $derived(clusterQuery.current?.nodes ?? []);
-	const batches = $derived(batchesQuery.current?.batches ?? []);
 	const logsPayload = $derived(logsQuery.current ?? null);
 	const logText = $derived(logsPayload?.ok ? logsPayload.logs : '');
 	const logsLoading = $derived(logsQuery.loading);
@@ -73,7 +65,6 @@
 			jobsQuery.refresh().catch(() => {});
 			tasksQuery.refresh().catch(() => {});
 			clusterQuery.refresh().catch(() => {});
-			batchesQuery.refresh().catch(() => {});
 			if (running) logsQuery.refresh().catch(() => {});
 		}, 5000);
 		return () => clearInterval(timer);
@@ -90,18 +81,6 @@
 
 	const nodeMap = $derived(new Map(nodes.map((n) => [n.node_id, n])));
 	const jobTasks = $derived(job?.job_id ? tasks.filter((t) => t.job_id === job.job_id) : []);
-
-	// Per-batch progress for this job (chunk jobs carry their batch ids).
-	const jobBatches = $derived.by<BatchRow[]>(() => {
-		if (!job?.batches.length || !batches.length) return [];
-		const want = new Set(job.batches);
-		return batches.filter((b) => want.has(b.batch_id));
-	});
-	const progress = $derived.by(() => {
-		const total = jobBatches.reduce((a, b) => a + (b.page_count ?? 0), 0);
-		const done = jobBatches.reduce((a, b) => a + (b.transcribed_pages ?? 0), 0);
-		return { total, done, pct: total ? (done / total) * 100 : 0 };
-	});
 
 	const sortedTasks = $derived.by(() => {
 		const dir = sortDir === 'asc' ? 1 : -1;
@@ -129,11 +108,6 @@
 	function taskStateVariant(s: string): 'success' | 'secondary' | 'destructive' {
 		if (s === 'FINISHED') return 'success';
 		if (s === 'FAILED') return 'destructive';
-		return 'secondary';
-	}
-	function batchVariant(s: string | null): 'success' | 'secondary' | 'warning' {
-		if (s === 'done') return 'success';
-		if (s === 'partial') return 'warning';
 		return 'secondary';
 	}
 	const typeLabel = (t: string | null) =>
@@ -263,7 +237,7 @@
 				<div
 					class="grid grid-cols-2 gap-x-6 gap-y-1.5 border-t px-4 py-3 font-mono text-[11px] sm:grid-cols-3 lg:grid-cols-6"
 				>
-					{#each [{ k: 'job_id', v: job.job_id }, { k: 'started', v: fmtTime(job.start_time) }, { k: 'ended', v: fmtTime(job.end_time) }, { k: 'batches', v: job.batches.length }, { k: 'chunk', v: job.metadata?.chunk_id != null ? `${job.metadata.chunk_id}/${job.metadata.chunk_total ?? '?'}` : '—' }, { k: 'driver_exit', v: job.driver_exit_code ?? '—' }] as row (row.k)}
+					{#each [{ k: 'job_id', v: job.job_id }, { k: 'started', v: fmtTime(job.start_time) }, { k: 'ended', v: fmtTime(job.end_time) }, { k: 'driver_exit', v: job.driver_exit_code ?? '—' }] as row (row.k)}
 						<div class="flex justify-between gap-2 border-b border-dashed py-0.5">
 							<span class="text-muted-foreground">{row.k}</span><span
 								class="truncate"
@@ -285,45 +259,6 @@
 					</details>
 				{/if}
 			</Card>
-
-			<!-- Batch progress -->
-			{#if jobBatches.length}
-				<Card class="overflow-hidden">
-					<div class="flex items-center gap-3 border-b px-4 py-2">
-						<span class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase"
-							>Progress</span
-						>
-						<div class="bg-muted h-1.5 w-44 overflow-hidden rounded-full">
-							<div
-								class="h-full bg-emerald-500 transition-all"
-								style:width={`${progress.pct}%`}
-							></div>
-						</div>
-						<span class="font-mono text-xs tabular-nums"
-							>{progress.done.toLocaleString()}/{progress.total.toLocaleString()} pages ({progress.pct.toFixed(
-				1,
-			)}%)</span
-						>
-					</div>
-					<div class="grid gap-x-6 px-4 py-2 sm:grid-cols-2 lg:grid-cols-3">
-						{#each jobBatches as b (b.batch_id)}
-							{@const pct = b.page_count ? ((b.transcribed_pages ?? 0) / b.page_count) * 100 : 0}
-							<div class="flex items-center gap-2 py-1 text-xs">
-								<span class="w-20 shrink-0 font-mono">{b.batch_id}</span>
-								<Badge variant={batchVariant(b.htr_status)} class="scale-90">{b.htr_status}</Badge>
-								<div class="bg-muted h-1.5 min-w-0 flex-1 overflow-hidden rounded-full">
-									<div class="h-full bg-emerald-500 transition-all" style:width={`${pct}%`}></div>
-								</div>
-								<span
-									class="text-muted-foreground w-24 shrink-0 text-right font-mono text-[10px] tabular-nums"
-								>
-									{b.transcribed_pages ?? 0}/{b.page_count ?? 0}
-								</span>
-							</div>
-						{/each}
-					</div>
-				</Card>
-			{/if}
 
 			<!-- Driver logs -->
 			<Card class="overflow-hidden">
