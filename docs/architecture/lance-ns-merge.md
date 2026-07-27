@@ -50,7 +50,7 @@ case); catalog 501s **confirmed at 7** (`docs/COVERAGE.md`, 47/54 backed).
 | lance-ns source | rask destination | Rule |
 |---|---|---|
 | `services/{catalog,lineage,medallion,compaction,viewer,search,annotator}` | `components/services/{catalog,lineage,medallion,compaction,viewer,search,annotator}` (converted to src-layout: `src/<name>/…`, entrypoints preserved: `catalog.main:app`) | rask shape: workspace member + `.docker/<name>.dockerfile` per deployable (no `projects/` layer — removed 2026-07). The media trio (viewer/search/annotator, folded from lance-audio) is IN scope (total merge, owner-ruled); lance `search` coexists with rask's `search_api` until P7 retires the latter (gated on the P5 pin test) |
-| `src/ratch` | **`packages/ratch`** (uv workspace member, src-layout) | **RE-PIN — no plan row existed.** Owner-ruled 2026-07-27: ratch is a **package**, not a deployable — it does not belong in `components/cli`. It is the folded lance-media pipeline tree, currently UNWIRED (lance-ns `pyproject.toml:113` excludes it, with the note *"no service imports them … ratch's ray[data]/lance-ray/typer stack lands with the pipeline step"*). Making it a workspace member is what **resolves** that exclusion: its heavy deps live in its own `pyproject.toml` instead of the root's, which is precisely why it was excluded |
+| ~~`src/ratch`~~ **`packages/ratch`** (already moved in lance-ns, `45912c8`) | `packages/ratch` (uv workspace member, src-layout) | **RE-PIN — no plan row existed.** Owner-ruled 2026-07-27: ratch is a **package**, not a deployable — it does not belong in `components/cli`. It is the folded lance-media pipeline tree, currently UNWIRED (lance-ns `pyproject.toml:113` excludes it, with the note *"no service imports them … ratch's ray[data]/lance-ray/typer stack lands with the pipeline step"*). Making it a workspace member is what **resolves** that exclusion: its heavy deps live in its own `pyproject.toml` instead of the root's, which is precisely why it was excluded |
 | `services/common` | `packages/common` (distribution name `lance-common`, import root stays `common` so zero import rewrites) | Transitional; long-term converge on `service-kit`'s `make_service_app`, keeping common's auth/FGA/audit middleware as the governed variant — NOT on this branch |
 | ~~`frontend/components/frontends/{data,lineage,models,admin}`~~ **`frontend/components/frontends/lakehouse`** | `components/frontends/lakehouse` | **RE-PIN**: the four are one zone since `bb099df` — `data`/`lineage`/`models`/`admin` are its *routes*. One app, one port slot, one ingress rule, one `.docker` build, one spec dir. Per **R8** it also absorbs rask's `storage` (the S3 object browser) and `train` |
 | `frontend/components/frontends/{media,annotator}` | `components/frontends/{media,annotator}` | The media zones are **`ssr=false` SPAs with NO BFF** — root-absolute `/api/*` fetches, a different deploy/env shape than the SSR zones; their fetch bases are rewritten to the `/api/media/*` namespace (owner-ruled, see P1) |
@@ -109,12 +109,40 @@ in either repo, the tree is:
 │   └── package.json · bun.lock · turbo.json · .oxlintrc.json · .oxfmtrc.json
 ├── services/                        ← Python deployables, src-layout, uv members via GLOB
 │   ├── catalog/ lineage/ medallion/ compaction/ viewer/ search/ annotator/
-│   └── gateway/ core/ ray_api/ … (rask's, absorbed per P1/P7) · runners/assist
+│   └── gateway/ core/ ray_api/ … (rask's, absorbed per P1/P7)
 ├── packages/                        ← Python-only shared → uv glob works
 │   ├── common/ ratch/ storage/ service-kit/ ray-kit/ htr/ tracker/ validate/
+├── runners/                         ← SEALED projects, deliberately OUTSIDE the workspace (see below)
+│   ├── asr/ diarize/ kg/ topics/ voiceprint/   (offline Ray Data: pyproject = the worker runtime_env)
+│   └── assist/                                 (online server: own uv.lock, own image)
 ├── chart/ · .docker/ · .dagger/ · scripts/ · tests/ · docs/
 └── pyproject.toml                   ← [tool.uv.workspace] members = ["packages/*", "services/*"]
 ```
+
+**The `runners/` plane — a third kind, and the membership rule (owner-ruled 2026-07-27).** A uv workspace
+is ONE `uv.lock` and one joint resolution, so anything pinned to an external runtime must stay out of it.
+The runners are exactly that, measured: `assist` is already an independent project — own `pyproject.toml`,
+**own `uv.lock`**, `requires-python = ">=3.12,<3.14"` against the root's `>=3.13`, `torch==2.9.1+cpu` from
+the pytorch index, and its dockerfile syncs `--frozen` from its own lockfile; the offline runners pin CUDA
+torch builds (`torch==2.11.0+cu128`) whose index and cadence must never enter the fleet's resolution. So:
+
+- **Membership test:** shares the fleet's resolution → workspace member (`services/*`, `packages/*`).
+  Pinned to an external runtime (Ray image Python, CUDA torch, a model SDK) → `runners/`, own env.
+- **Runners are NOT under `services/`** — the `services/*` glob would sweep them into the workspace. They
+  are top-level, matched by no members glob, needing no `exclude`.
+- **Runners are sealed and self-contained** (owner-ruled): each carries its own README + `pyproject.toml`
+  (+ `uv.lock` where it builds an image), and the tree has **no `__init__.py` package glue** — done in
+  lance-ns at `a4cf8f6`. `rask/components/cli/runner` (the HTR runner, `ray>=2.52,<2.56` inside today's
+  workspace) is re-evaluated at the P1 Ray unification: if it still resolves with the fleet it may stay a
+  member; the moment it needs the Ray image's pin it moves to `runners/`. P7 re-cuts it as movers anyway.
+- **The ratch↔runner seam**: ratch knows runner NAMES and hands each runner's `pyproject.toml` to Ray as
+  the worker `runtime_env`. ratch `cli/`'s leftover repo-relative imports (`from runners.diarize.… import`)
+  are lance-audio heritage, unwired today, and are replaced by the name seam when the pipeline step lands
+  — they must NOT be "fixed" by making runners importable again.
+
+Note the tree above is already half-real in lance-ns: **`src/ratch` → `packages/ratch` is DONE**
+(`45912c8`) and the runners restructure is DONE (`a4cf8f6`) — the copy is straight across, no path
+translation.
 
 **What this changes in the phases:**
 - **The P0 frontend direction FLIPS.** lance-ns's `frontend/` tree comes wholesale — bun.lock, turbo.json,
