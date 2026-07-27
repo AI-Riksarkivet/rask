@@ -14,8 +14,9 @@ Both gate movement. The checks use ``count_rows`` (with a filter) so they never 
 from __future__ import annotations
 
 import lance
-from common import blobs
 from pydantic import BaseModel
+
+from service_kit.lakehouse import blobs
 
 
 #: Assertion names — stable identifiers the ``dataQualityAssertions`` facet carries (and the gate keys on).
@@ -66,7 +67,7 @@ def assert_quality(
     # runtime failure in the consumer's job into a pre-promotion contract violation here.
     for column in required_columns:
         assertions.append(Assertion(assertion=COLUMN_DECLARED, success=column in ds.schema.names, column=column))
-    # The probe itself is SHARED with reconcile (common.blobs.blob_column_resolves): the gate checks
+    # The probe itself is SHARED with reconcile (service_kit.lakehouse.blobs.blob_column_resolves): the gate checks
     # pointers AT promotion; the reconcile sweep re-checks the already-promoted estate — one probe,
     # two enforcement points, so the two can never drift on what "resolves" means.
     for column in blobs.blob_field_names(ds.schema):

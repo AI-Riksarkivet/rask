@@ -189,7 +189,7 @@ def test_the_row_is_in_postgres_under_the_prefixed_key(catalog: str, alice: str)
         headers=_auth(alice),
         timeout=15,
     ).raise_for_status()
-    from common.user_state import UserStateDocument, state_key
+    from service_kit.governed.user_state import UserStateDocument, state_key
 
     key = state_key(_sub(alice), UserStateDocument.WORKFLOW_GRAPH)
     sql = f"select key from state where key = 'catalog||{key}'"  # noqa: S608 — key is base64url + literals

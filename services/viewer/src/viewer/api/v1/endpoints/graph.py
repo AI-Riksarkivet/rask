@@ -26,9 +26,13 @@ from typing import TYPE_CHECKING, Any
 
 import lance
 import lance_graph as lg
-from common.deps import StateDep
-from common.lancekit import store
-from common.schemas.graph import (
+from fastapi import APIRouter
+from pydantic import BaseModel, ConfigDict
+
+from service_kit.lancekit import store
+from service_kit.media.deps import StateDep
+from service_kit.media.state import dataset_handle
+from service_kit.schemas.graph import (
     CypherResponse,
     EntityClip,
     EntityCooccur,
@@ -42,14 +46,11 @@ from common.schemas.graph import (
     GraphStatusResponse,
     SubgraphResponse,
 )
-from common.state import dataset_handle
-from fastapi import APIRouter
-from pydantic import BaseModel, ConfigDict
 
 
 if TYPE_CHECKING:
-    from common.lancekit.descriptor import Declared
-    from common.lancekit.registry import DatasetHandle
+    from service_kit.lancekit.descriptor import Declared
+    from service_kit.lancekit.registry import DatasetHandle
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ _TRAILING_LIMIT = re.compile(r"(?is)\blimit\s+(\d+)\s*$")
 
 # EntityClip's one non-structural field is the corpus display column the clip
 # query surfaces. Its name is read from the response model at import time so
-# it lives only in common.schemas (this module stays corpus-literal-free);
+# it lives only in service_kit.schemas (this module stays corpus-literal-free);
 # the matching kg-chunks column comes from the descriptor's ``graph_presets``.
 _CLIP_STRUCTURAL_FIELDS = frozenset({"chunk_id", "doc_id", "start", "end", "text"})
 _CLIP_TITLE_FIELD = next(f for f in EntityClip.model_fields if f not in _CLIP_STRUCTURAL_FIELDS)

@@ -1,4 +1,4 @@
-"""Unit tests for :class:`common.oidc.OIDCVerifier.verify`.
+"""Unit tests for :class:`service_kit.governed.oidc.OIDCVerifier.verify`.
 
 These exercise the *real* verification path — signature, issuer, audience, expiry,
 and the algorithm allowlist — with zero network. We generate an RSA keypair locally
@@ -43,11 +43,12 @@ from typing import Any
 
 import jwt
 import pytest
-from common import oidc as oidc_module
-from common.oidc import IDToken, OIDCVerifier, _Discovery, _Provider
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from lance_namespace import UnauthenticatedError
+
+from service_kit.governed import oidc as oidc_module
+from service_kit.governed.oidc import IDToken, OIDCVerifier, _Discovery, _Provider
 
 
 ISSUER = "https://idp.example"

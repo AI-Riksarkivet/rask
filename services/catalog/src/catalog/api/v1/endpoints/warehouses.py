@@ -21,9 +21,6 @@ import logging
 import re
 from datetime import UTC, datetime
 
-from common import fga
-from common.audit import SUCCESS, audit
-from common.oidc import IDToken
 from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
@@ -57,6 +54,9 @@ from catalog.schemas import (
     WarehouseResponse,
 )
 from catalog.services import native, warehouses
+from service_kit.governed import fga
+from service_kit.governed.audit import SUCCESS, audit
+from service_kit.governed.oidc import IDToken
 
 
 log = logging.getLogger(__name__)

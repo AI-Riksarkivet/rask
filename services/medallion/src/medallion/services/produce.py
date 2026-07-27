@@ -16,8 +16,6 @@ import json
 import logging
 import uuid
 
-from common import outbox
-from common.warehouse_registry import UnresolvableProjectError, project_root
 from dapr.aio.clients import DaprClient
 from fastapi.concurrency import run_in_threadpool
 from opentelemetry import trace
@@ -25,6 +23,8 @@ from opentelemetry import trace
 from medallion.core.config import MedallionSettings, project_namespace
 from medallion.schemas.events import build_run_event
 from medallion.services.compute import seed_raw
+from service_kit.lakehouse import outbox
+from service_kit.lakehouse.warehouse_registry import UnresolvableProjectError, project_root
 
 
 log = logging.getLogger(__name__)

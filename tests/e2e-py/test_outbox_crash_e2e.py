@@ -32,8 +32,9 @@ import uuid
 
 import pytest
 import requests
-from common import outbox
 from medallion.schemas.events import build_run_event
+
+from service_kit.lakehouse import outbox
 
 
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "").rstrip("/")
@@ -109,7 +110,7 @@ def _kill_producer_mid_flight(event_json: str, run_id: str) -> None:
     child = textwrap.dedent(f"""
         import sys, time
         sys.path.insert(0, {os.path.join(os.getcwd(), "services")!r})
-        from common import outbox
+        from service_kit.lakehouse import outbox
         outbox.stage_event({OUTBOX_URI!r}, {_so()!r}, {run_id!r}, {event_json!r})
         print("STAGED", flush=True)          # the commit→publish window is now OPEN
         time.sleep(300)                       # ...and we die inside it

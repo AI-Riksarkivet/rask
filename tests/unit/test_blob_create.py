@@ -14,7 +14,6 @@ import lance
 import pyarrow as pa
 import pytest
 from catalog.services.dataplane import create_table
-from common import blobs
 from lance import Blob, blob_array, blob_field
 from lance_namespace import (
     CreateNamespaceRequest,
@@ -25,6 +24,8 @@ from lance_namespace import (
     TableNotFoundError,
     connect,
 )
+
+from service_kit.lakehouse import blobs
 
 
 def _declare_namespace(ns: object, name: str) -> None:

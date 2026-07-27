@@ -15,13 +15,13 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any
 
-from common.dapr_auth import require_dapr_token
 from dapr.ext.fastapi import DaprApp
 from fastapi import Depends, FastAPI, Request
 
 from lineage.core.config import get_settings
 from lineage.core.metrics import Outcome, record_outcome
 from lineage.services.consumer import handle_cloud_event
+from service_kit.governed.dapr_auth import require_dapr_token
 
 
 log = logging.getLogger(__name__)

@@ -21,15 +21,15 @@ import os
 import secrets
 from typing import Annotated
 
-from common import fga
-from common.audit import ALLOW, DENY, FAILURE, audit
-from common.oidc import OIDCVerifier
-from common.warehouse_registry import PROJECT_PATTERN
 from fastapi import Header, HTTPException, Query, Request
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 
 from medallion.api.dependencies import FgaClientDep, SettingsDep
+from service_kit.governed import fga
+from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
+from service_kit.governed.oidc import OIDCVerifier
+from service_kit.lakehouse.warehouse_registry import PROJECT_PATTERN
 
 
 #: The optional per-tenant project (#84) — shared by the auth gate and the /produce route (FastAPI

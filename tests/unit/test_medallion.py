@@ -15,12 +15,13 @@ from typing import Any, cast
 
 import medallion.services.transform as mover
 import pytest
-from common.openlineage import run_id_for
 from medallion.core.config import MedallionSettings
 from medallion.schemas.events import build_run_event
 from medallion.services.compute import WriteResult
 from medallion.services.ingest_trigger import handle_raw_arrival
 from medallion.services.produce import produce
+
+from service_kit.openlineage import run_id_for
 
 
 class _FakeDapr:

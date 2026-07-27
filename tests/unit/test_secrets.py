@@ -6,8 +6,9 @@ from __future__ import annotations
 
 import httpx
 import pytest
-from common.secrets import fetch_dapr_secret
 from lineage.core.config import LineageSettings, _with_db_password, apply_dapr_secrets
+
+from service_kit.governed.secrets import fetch_dapr_secret
 
 
 def test_with_db_password_splices_userinfo() -> None:
@@ -59,7 +60,7 @@ def test_apply_dapr_secrets_noop_when_disabled(monkeypatch: pytest.MonkeyPatch) 
         called = True
         return {}
 
-    monkeypatch.setattr("common.secrets.fetch_dapr_secret", _fail)
+    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", _fail)
     # model_validate (not LineageSettings(...)) so field-name keys validate cleanly past ty: the fields
     # carry LINEAGE_* aliases and populate_by_name accepts the names only at runtime.
     settings = LineageSettings.model_validate({"secrets_from_dapr": False})
@@ -69,7 +70,7 @@ def test_apply_dapr_secrets_noop_when_disabled(monkeypatch: pytest.MonkeyPatch) 
 
 def test_apply_dapr_secrets_consumes_store_as_sole_source(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "common.secrets.fetch_dapr_secret",
+        "service_kit.governed.secrets.fetch_dapr_secret",
         lambda *_a, **_k: {"rustfs-secret-key": "from-store", "postgres-password": "db-from-store"},
     )
     settings = LineageSettings.model_validate({"secrets_from_dapr": True, "database_url": "postgresql://lance@age:5432/lineage"})
@@ -80,7 +81,7 @@ def test_apply_dapr_secrets_consumes_store_as_sole_source(monkeypatch: pytest.Mo
 
 def test_apply_dapr_secrets_fails_closed_without_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     # Store empty AND no env fallback → must raise, never boot with an empty S3 key.
-    monkeypatch.setattr("common.secrets.fetch_dapr_secret", lambda *_a, **_k: {})
+    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: {})
     settings = LineageSettings.model_validate({"secrets_from_dapr": True, "s3_secret_access_key": ""})
     with pytest.raises(RuntimeError, match="failing closed"):
         apply_dapr_secrets(settings)
@@ -90,7 +91,7 @@ def test_apply_dapr_secrets_keeps_db_url_when_store_lacks_password(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # S3 secret present (so it doesn't fail closed) but no DB password in the bundle → URL unchanged.
-    monkeypatch.setattr("common.secrets.fetch_dapr_secret", lambda *_a, **_k: {"rustfs-secret-key": "x"})
+    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: {"rustfs-secret-key": "x"})
     settings = LineageSettings.model_validate({"secrets_from_dapr": True, "database_url": "postgresql://lance:envpw@age:5432/lineage"})
     apply_dapr_secrets(settings)
     assert settings.database_url == "postgresql://lance:envpw@age:5432/lineage"

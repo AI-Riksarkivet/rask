@@ -12,13 +12,13 @@ import logging
 from typing import Annotated, Any
 
 import httpx
-from common.deps import DatasetParam, StateDep
-from common.lancekit.introspect import ColumnInfo
-from common.lancekit.registry import table_dataset
-from common.schemas.system import ColumnKind, DbFacts, FilterColumn, HealthResponse, VllmPing
-from common.state import dataset_handle
 from fastapi import APIRouter, Query
 
+from service_kit.lancekit.introspect import ColumnInfo
+from service_kit.lancekit.registry import table_dataset
+from service_kit.media.deps import DatasetParam, StateDep
+from service_kit.media.state import dataset_handle
+from service_kit.schemas.system import ColumnKind, DbFacts, FilterColumn, HealthResponse, VllmPing
 from viewer.api.v1.endpoints.transcripts import alignments_binding
 
 

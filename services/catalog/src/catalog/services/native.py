@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from common.exceptions import as_unsupported_if_stub
 from lance_namespace import LanceNamespace, UnsupportedOperationError
+
+from service_kit.lakehouse.ns_errors import as_unsupported_if_stub
 
 
 # These three native ``DirectoryNamespace`` methods are typed ``request: dict`` and forward to Rust WITHOUT

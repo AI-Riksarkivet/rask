@@ -28,10 +28,10 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 SERVICES = REPO / "services"
-# The rask merge converted every service to src-layout (services/<n>/src/<n>/…) and moved the
-# shared lib out of services/ entirely (packages/common/src/common). rglob("*.py") over SERVICES
+# The rask merge converted every service to src-layout (services/<n>/src/<n>/…) and merged the
+# shared lib into service-kit (packages/service-kit/src/service_kit). rglob("*.py") over SERVICES
 # still sees every service module; these two helpers resolve the paths the assertions name.
-COMMON = REPO / "packages" / "common" / "src" / "common"
+SERVICE_KIT = REPO / "packages" / "service-kit" / "src" / "service_kit"
 
 
 def _svc(name: str) -> pathlib.Path:
@@ -110,8 +110,8 @@ def _first_party_source() -> str:
     """
     parts = [p.read_text(errors="ignore") for p in SERVICES.rglob("*.py")]
     # The shared platform lib is first-party but lives OUTSIDE services/ after the rask merge
-    # (packages/common, packages/ratch). common/core/config.py is where most MEDIA_*/LANCE_* envs
-    # are actually read, so omitting packages/ would report live config as dead.
+    # (packages/service-kit, packages/ratch). service_kit/media/config.py is where most
+    # MEDIA_*/LANCE_* envs are actually read, so omitting packages/ would report live config as dead.
     pkgs = REPO / "packages"
     if pkgs.exists():
         parts += [p.read_text(errors="ignore") for p in pkgs.rglob("*.py")]
@@ -149,7 +149,7 @@ def test_no_dead_chart_env_vars() -> None:
 
 
 def _model_relations() -> dict[str, set[str]]:
-    model = json.loads((COMMON / "auth/model.json").read_text())
+    model = json.loads((SERVICE_KIT / "governed/auth/model.json").read_text())
     return {t["type"]: set(t.get("relations") or {}) for t in model["type_definitions"]}
 
 
@@ -342,13 +342,14 @@ def test_catalog_authz_primitive_fails_closed_on_openfga_outage(monkeypatch: pyt
     from unittest.mock import MagicMock
 
     from catalog.api import fga_deps as cat_fga
-    from common import fga as common_fga
     from lance_namespace import ServiceUnavailableError
 
     async def _outage(*_a: object, **_k: object) -> bool:
         raise ServiceUnavailableError("openfga down")
 
-    monkeypatch.setattr(common_fga, "check", _outage)
+    # Patch the fga module AS SEEN BY fga_deps (the consuming module), so the outage reaches
+    # the exact `fga.check` reference `_require` calls.
+    monkeypatch.setattr(cat_fga.fga, "check", _outage)
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(cat_fga._require(MagicMock(), user="u", relation="can_read_data", obj="table:x"))
 
@@ -384,7 +385,7 @@ def test_batch_authz_and_credential_vending_are_audited() -> None:
 #: breaking change, ships a NEW `.vN` topic with parallel consumers), never a drive-by edit.
 _PINNED_TOPICS: list[tuple[str, str]] = [
     # the two cross-plane topics carry an explicit .v1 (the versioned compatibility unit)
-    ("packages/common/src/common/control_events.py", 'CONTROL_TOPIC = "catalog.control.v1"'),
+    ("packages/service-kit/src/service_kit/control_events.py", 'CONTROL_TOPIC = "catalog.control.v1"'),
     ("services/lineage/src/lineage/core/config.py", 'default="lineage.events.v1", alias="LINEAGE_DAPR_TOPIC"'),
     ("services/catalog/src/catalog/core/config.py", 'default="lineage.events.v1", alias="LANCE_DAPR_TOPIC"'),
     ("services/compaction/src/compaction/core/config.py", 'default="lineage.events.v1", alias="COMPACTION_LINEAGE_TOPIC"'),
@@ -442,14 +443,14 @@ def test_every_publish_site_uses_a_named_topic_constant() -> None:
 
 
 def _direct_publish_event_calls() -> list[str]:
-    """Every ``.publish_event(`` call site OUTSIDE the wrapper module ``common/dapr_publish.py``.
+    """Every ``.publish_event(`` call site OUTSIDE the wrapper module ``service_kit/dapr_publish.py``.
 
     The wrapper exists because the Dapr SDK's ``publish_event`` has no per-call timeout and no default
     gRPC deadline — a wedged sidecar hangs the caller forever. ``dapr_publish.publish_event(...)`` is
     the wrapper itself (excluded by the lookbehind); a direct ``client.publish_event(...)`` reopens the
     hang the wrapper closes, so no first-party module outside the wrapper may make one.
     """
-    wrapper = SERVICES / "common" / "dapr_publish.py"
+    wrapper = SERVICE_KIT / "dapr_publish.py"
     direct_re = re.compile(r"(?<!dapr_publish)\.publish_event\(")
     offenders: list[str] = []
     for py in SERVICES.rglob("*.py"):
@@ -464,7 +465,7 @@ def _direct_publish_event_calls() -> list[str]:
 def test_every_publish_goes_through_the_timeout_wrapper() -> None:
     offenders = _direct_publish_event_calls()
     assert not offenders, (
-        "these sites call .publish_event( directly instead of common.dapr_publish.publish_event — the "
+        "these sites call .publish_event( directly instead of service_kit.dapr_publish.publish_event — the "
         f"unbounded SDK call a wedged sidecar hangs forever: {offenders}. Route the publish through the "
         "wrapper (it forwards **kwargs and enforces timeout_seconds)."
     )
@@ -573,7 +574,7 @@ def test_no_pod_container_is_read_by_index() -> None:
 
 
 def test_every_dapr_component_resolves_its_secrets_through_the_secret_store() -> None:
-    """A password-bearing DSN was put in a k8s Secret — the exact anti-pattern `common/secrets.py` records.
+    """A password-bearing DSN was put in a k8s Secret — the exact anti-pattern `service_kit/governed/secrets.py` records.
 
     The estate's rule is that app-tier secrets come from OpenBao through the Dapr secret store as the sole
     source, fail-closed; k8s Secrets are for the infra tier (an owner's own credential, consumed by

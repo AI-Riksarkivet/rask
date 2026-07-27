@@ -40,8 +40,6 @@ from datetime import UTC, datetime
 from typing import Any, Final
 
 import psycopg
-from common.openlineage import RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for
-from common.schema import SchemaFields
 from psycopg import sql
 from psycopg_pool import AsyncConnectionPool
 
@@ -75,6 +73,8 @@ from lineage.schemas import (
     RunStatus,
     SchemaField,
 )
+from service_kit.lakehouse.schema import SchemaFields
+from service_kit.openlineage import RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for
 
 
 log = logging.getLogger(__name__)

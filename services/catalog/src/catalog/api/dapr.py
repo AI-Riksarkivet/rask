@@ -20,13 +20,13 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any
 
-from common.control_events import CONTROL_TOPIC, CatalogControlEvent
-from common.dapr_auth import require_dapr_token
 from dapr.ext.fastapi import DaprApp
 from fastapi import Depends, FastAPI, Request
 from pydantic import ValidationError
 
 from catalog.core.config import get_settings
+from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent
+from service_kit.governed.dapr_auth import require_dapr_token
 
 
 log = logging.getLogger(__name__)

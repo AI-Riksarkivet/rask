@@ -26,7 +26,7 @@ def test_flag_off_is_a_no_op_and_never_fetches(monkeypatch: pytest.MonkeyPatch) 
     # ASSERTS: with MEDALLION_SECRETS_FROM_DAPR unset (the default), apply_dapr_secrets touches
     # NOTHING — the env value survives byte-identical and no store fetch is even attempted
     # (behavior-preserving default: every dev/demo boot is exactly as before this batch).
-    import common.secrets as secrets_mod
+    import service_kit.governed.secrets as secrets_mod
 
     def boom(*_a: Any, **_kw: Any) -> dict[str, str]:
         raise AssertionError("must not fetch when the flag is off")
@@ -40,7 +40,7 @@ def test_flag_off_is_a_no_op_and_never_fetches(monkeypatch: pytest.MonkeyPatch) 
 def test_flag_on_store_is_the_sole_source(monkeypatch: pytest.MonkeyPatch) -> None:
     # ASSERTS: flag on → the store bundle's field REPLACES whatever env held (store wins — the
     # chart ships no env in this mode, and any residue must never shadow the store).
-    import common.secrets as secrets_mod
+    import service_kit.governed.secrets as secrets_mod
 
     def fake_fetch(store: str, key: str, *, require: str) -> dict[str, str]:
         assert (store, key, require) == ("lance-secrets", "lance", "rustfs-secret-key")
@@ -57,7 +57,7 @@ def test_flag_on_store_is_the_sole_source(monkeypatch: pytest.MonkeyPatch) -> No
 def test_flag_on_store_miss_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     # ASSERTS: an empty/miss bundle raises (through the REAL fetch_required_secrets fail-closed
     # path) — the service must never boot on an empty key or silently fall back to env.
-    import common.secrets as secrets_mod
+    import service_kit.governed.secrets as secrets_mod
 
     monkeypatch.setattr(secrets_mod, "fetch_dapr_secret", lambda *_a, **_kw: {})
     settings = _settings(MEDALLION_SECRETS_FROM_DAPR="true")

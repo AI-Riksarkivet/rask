@@ -21,7 +21,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from common.core.exceptions import ServiceUnavailableError
+from service_kit.media.exceptions import ServiceUnavailableError
 
 
 logger = logging.getLogger(__name__)

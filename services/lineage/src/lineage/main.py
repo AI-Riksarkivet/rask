@@ -12,13 +12,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from common import fga
-from common.audit import configure_audit
-from common.dapr_auth import assert_app_token_configured
-from common.exceptions import install_problem_handlers
-from common.lance_metrics import instrument_lance_if_available
-from common.obs import configure_app_logging
-from common.oidc import OIDCVerifier
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
@@ -30,6 +23,13 @@ from lineage.api.v1.router import api_router
 from lineage.core.age import make_pool, run_cypher
 from lineage.core.config import apply_dapr_secrets, get_settings
 from lineage.services.repository import LineageRepository
+from service_kit.governed import fga
+from service_kit.governed.audit import configure_audit
+from service_kit.governed.dapr_auth import assert_app_token_configured
+from service_kit.governed.oidc import OIDCVerifier
+from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
+from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.obs import configure_app_logging
 
 
 log = logging.getLogger(__name__)

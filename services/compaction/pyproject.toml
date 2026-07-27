@@ -5,7 +5,7 @@ description = "Lance maintenance sweep — a Dapr cron binding ticks compact_fil
 requires-python = ">=3.13"
 license = "AGPL-3.0-only"
 dependencies = [
-    "lance-common",
+    "service-kit[governed,lakehouse]",
     "fastapi>=0.115",
     "pydantic>=2.7",
     "pydantic-settings>=2.5",
@@ -24,4 +24,4 @@ build-backend = "hatchling.build"
 packages = ["src/compaction"]
 
 [tool.uv.sources]
-lance-common = { workspace = true }
+service-kit = { workspace = true }

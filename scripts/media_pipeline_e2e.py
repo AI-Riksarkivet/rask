@@ -34,12 +34,13 @@ from PIL import Image
 with contextlib.suppress(NameError):  # NameError => run from stdin; services/ already on PYTHONPATH
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "services"))
 
-from common import schema
-from common.sinks import S3Sink
-from common.sources import S3Source
 from medallion.schemas.events import build_run_event
 from medallion.services import media
 from medallion.services.ingest import ingest_to_bronze
+
+from service_kit.lakehouse import schema
+from service_kit.lakehouse.sinks import S3Sink
+from service_kit.lakehouse.sources import S3Source
 
 
 RUN = os.environ["RUN"]

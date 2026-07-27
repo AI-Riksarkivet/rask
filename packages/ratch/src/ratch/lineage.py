@@ -12,7 +12,7 @@ Here we produce the SAME `WriteResult` from a stage we wrote, plus the
 harness turns into the `columnLineage` facet.
 
 The facet primitives (`WriteResult`, `facet_fields`, `build_run_event`, the spec
-constants) are KERNEL-owned (`common.lancekit.openlineage`, re-exported here for
+constants) are KERNEL-owned (`service_kit.lancekit.openlineage`, re-exported here for
 the pipeline's callers); this module adds only the `Stage`-aware layer.
 
 Two modes, one seam (`emit_stage_lineage`):
@@ -33,7 +33,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import lance
-from common.lancekit.openlineage import (
+
+from ratch.core.registry import Stage, StageShape
+from service_kit.lancekit.openlineage import (
     PRODUCER,
     SCHEMA_URL,
     ColumnEdge,
@@ -42,8 +44,6 @@ from common.lancekit.openlineage import (
     facet_fields,
     run_id_for,
 )
-
-from ratch.core.registry import Stage, StageShape
 
 
 if TYPE_CHECKING:

@@ -1,6 +1,6 @@
 """#3-A — warehouse registry, runtime bucket provisioning, and the admin FGA gate (unit).
 
-The registry round-trips against a LOCAL filesystem root (``common.objectfs.fs_and_base`` falls back to
+The registry round-trips against a LOCAL filesystem root (``service_kit.lakehouse.objectfs.fs_and_base`` falls back to
 the local FS for a non-``s3://`` uri), so no object storage is needed here. Provisioning is boto3,
 mocked. The gate is driven through the real ``require_can_create_warehouse`` resolver, and a separate test
 asserts the (type, relation)
@@ -20,9 +20,10 @@ from botocore.exceptions import ClientError
 from catalog.api import dependencies, fga_deps
 from catalog.core.config import Settings
 from catalog.services import warehouses
-from common import fga as fga_module
-from common.oidc import IDToken
 from lance_namespace import InvalidInputError, PermissionDeniedError, ServiceUnavailableError
+
+from service_kit.governed import fga as fga_module
+from service_kit.governed.oidc import IDToken
 
 
 def _root(tmp_path: Any) -> str:

@@ -30,8 +30,6 @@ import asyncio
 import logging
 from typing import Literal
 
-from common import fga
-from common.oidc import IDToken
 from fastapi import APIRouter
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
@@ -40,6 +38,8 @@ from pydantic import BaseModel
 from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
+from service_kit.governed import fga
+from service_kit.governed.oidc import IDToken
 
 
 log = logging.getLogger(__name__)

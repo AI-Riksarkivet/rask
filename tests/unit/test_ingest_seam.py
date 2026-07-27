@@ -10,11 +10,12 @@ import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
 import pytest
-from common.sinks import LocalDirSink, S3Sink
-from common.sources import LocalDirSource, S3Source, SourceObject
 from medallion.services import ingest as ingest_module
 from medallion.services.ingest import ingest_to_bronze
 from PIL import Image
+
+from service_kit.lakehouse.sinks import LocalDirSink, S3Sink
+from service_kit.lakehouse.sources import LocalDirSource, S3Source, SourceObject
 
 
 def _write_png(path: Path, color: tuple[int, int, int]) -> None:

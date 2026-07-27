@@ -18,8 +18,6 @@ from typing import Annotated
 
 import lance
 from botocore.exceptions import BotoCoreError, ClientError
-from common import fga
-from common.audit import ALLOW, DENY, FAILURE, SUCCESS, audit
 from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
@@ -36,6 +34,8 @@ from catalog.core.identifiers import parse_identifier
 from catalog.core.vending import Tier
 from catalog.schemas import CredentialResponse
 from catalog.services import native
+from service_kit.governed import fga
+from service_kit.governed.audit import ALLOW, DENY, FAILURE, SUCCESS, audit
 
 
 router = APIRouter(prefix="/v1/table", tags=["credentials"])

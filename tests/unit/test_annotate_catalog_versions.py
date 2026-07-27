@@ -21,14 +21,15 @@ import lance
 import pyarrow as pa
 import pytest
 from annotator.annotations.router import router as annotations_router
-from common.core.config import Settings
-from common.core.exceptions import NotFoundError
-from common.core.handlers import register_handlers
-from common.lancekit.descriptor import Declared
-from common.lancekit.reader import CatalogVersion
-from common.state import AppState
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from service_kit.lancekit.descriptor import Declared
+from service_kit.lancekit.reader import CatalogVersion
+from service_kit.media.config import Settings
+from service_kit.media.exceptions import NotFoundError
+from service_kit.media.handlers import register_handlers
+from service_kit.media.state import AppState
 
 
 if TYPE_CHECKING:
@@ -109,7 +110,7 @@ def _make_client(settings: Settings, handle: object) -> TestClient:
 def catalog_harness(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, _FakeTransport]:
     """The annotations routes in FULL catalog mode, REST transport mocked at the seam."""
     transport = _FakeTransport()
-    monkeypatch.setattr("common.lancekit.reader.RestCatalogTransport", lambda *a, **k: transport)
+    monkeypatch.setattr("service_kit.lancekit.reader.RestCatalogTransport", lambda *a, **k: transport)
     settings = Settings(
         MEDIA_READ_BACKEND="catalog",
         MEDIA_WRITE_BACKEND="catalog",

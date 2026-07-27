@@ -1,7 +1,7 @@
 """OpenFGA authorization dependency.
 
 Router-level guard: when FGA is enabled it maps the request (resource + operation) to a
-``can_*`` ACTION relation defined in the model (``services/common/auth/model.fga``) and checks the
+``can_*`` ACTION relation defined in the model (``service_kit/governed/auth/model.fga``) and checks the
 authenticated caller against OpenFGA. A no-op when FGA is disabled.
 
 The op -> ``can_*`` mapping below is the ONLY policy logic in the app; the privilege math
@@ -25,9 +25,6 @@ from __future__ import annotations
 
 import logging
 
-from common import fga
-from common.audit import ALLOW, DENY, FAILURE, audit
-from common.oidc import IDToken
 from fastapi import Request
 from lance_namespace import (
     PermissionDeniedError,
@@ -40,12 +37,15 @@ from catalog.api.dependencies import SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
+from service_kit.governed import fga
+from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
+from service_kit.governed.oidc import IDToken
 
 
 log = logging.getLogger(__name__)
 
 # Guarded resource prefixes, in match order. Each maps to its own dedicated FGA type in the model
-# (``services/common/auth/model.fga``): ``materialized_view`` and ``transaction`` are no longer aliased
+# (``service_kit/governed/auth/model.fga``): ``materialized_view`` and ``transaction`` are no longer aliased
 # to ``table``. A transaction is authorized PARENT-SCOPED against its enclosing namespace (see
 # ``_authorize_transaction``) — the old ``table:<txn-id>`` alias targeted an object nothing ever seeds,
 # so every transaction op always-denied.
@@ -588,7 +588,7 @@ async def require_can_create_warehouse(
     """Gate the #3-A admin control-plane warehouse-create on ``project#can_create_warehouse``.
 
     This wires the model's highest-privilege action (``project.can_create_warehouse = admin``,
-    ``services/common/auth/model.fga``) that until now was defined but NEVER enforced — provisioning a
+    ``service_kit/governed/auth/model.fga``) that until now was defined but NEVER enforced — provisioning a
     physical bucket is a platform/project-admin operation, not the writer-tier create-on-parent that guards
     tables/namespaces. Fail-closed like every other gate: 403 on deny, 503 on an OpenFGA outage (via
     ``_require``/``fga.check``). No-op when FGA is off / unwired / unauthenticated (parity with the other
@@ -636,7 +636,7 @@ async def seed_warehouse(
     under it. No-op when FGA is off / unauthenticated / unwired.
 
     NOTE: the warehouse's parent-pointer relation is ``project`` (``define project: [project]`` in
-    ``services/common/auth/model.fga``) — NOT the ``parent`` name that namespaces/tables use. So this writes
+    ``service_kit/governed/auth/model.fga``) — NOT the ``parent`` name that namespaces/tables use. So this writes
     the two tuples directly rather than via :func:`fga.grant_on_create` (whose parent edge is hardcoded to
     ``parent``, a relation the ``warehouse`` type does not define — writing it makes OpenFGA reject the whole
     seed → 503). Idempotent: ``write_tuples`` swallows duplicate-tuple writes on a create retry.

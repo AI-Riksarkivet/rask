@@ -6,7 +6,8 @@ import sys
 import types
 
 import pytest
-from common.lance_metrics import instrument_lance_if_available
+
+from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 
 
 def test_activates_against_the_really_installed_pylance() -> None:

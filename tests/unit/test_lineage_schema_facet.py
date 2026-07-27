@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import cast
 
 import pyarrow as pa
-from common import schema
 from lance import blob_field
 from medallion.schemas.events import build_run_event
+
+from service_kit.lakehouse import schema
 
 
 def test_type_label_renders_media_types() -> None:
@@ -45,9 +46,9 @@ def test_type_label_renders_a_json_column_as_json() -> None:
 
 def test_lancekit_mirror_labels_json_the_same_way() -> None:
     # ASSERTS the vendored mirror stays in step: the same column labelled by
-    # ``common.lancekit.openlineage`` (the ratch/annotation emit path) and by ``common.schema``
+    # ``service_kit.lancekit.openlineage`` (the ratch/annotation emit path) and by ``service_kit.lakehouse.schema``
     # (the medallion emit path) must reach the lineage graph as the SAME type string.
-    from common.lancekit import openlineage as lancekit_ol
+    from service_kit.lancekit import openlineage as lancekit_ol
 
     arrow_schema = pa.schema([pa.field("id", pa.int64()), pa.field("alignments_json", pa.json_())])
     assert lancekit_ol.facet_fields(arrow_schema) == schema.facet_fields(arrow_schema)
@@ -96,7 +97,7 @@ def test_schema_facet_caps_metadata_bloat(caplog) -> None:
     # from storage where the manifest IS the schema).
     import logging
 
-    from common import openlineage as ol
+    from service_kit import openlineage as ol
 
     wide = [{"name": f"c{i}", "type": "int64"} for i in range(ol.FACET_MAX_FIELDS + 88)]
     with caplog.at_level(logging.WARNING):
@@ -113,7 +114,7 @@ def test_schema_facet_under_cap_is_untouched(caplog) -> None:
     # semantics, no warning (the cap must never perturb the normal path).
     import logging
 
-    from common import openlineage as ol
+    from service_kit import openlineage as ol
 
     fields = [{"name": "id", "type": "int64"}]
     with caplog.at_level(logging.WARNING):

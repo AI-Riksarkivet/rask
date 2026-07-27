@@ -190,7 +190,7 @@ class Settings(BaseSettings):
     # namespace links to it as its `parent`, so a grant here cascades into all namespaces/tables;
     # (2) it gates create-on-parent for top-level creation when fga_lock_root_create is on. Grant
     # admins owner/writer on it to bootstrap — OR attach it to a `project:` (and the project to a
-    # `team:`) for the full Lakekeeper-style multi-tenant hierarchy (see services/common/auth/model.fga).
+    # `team:`) for the full Lakekeeper-style multi-tenant hierarchy (see service_kit/governed/auth/model.fga).
     # Must be a `warehouse:` object (the model's catalog-root type). Bootstrapped by an admin granting
     # owner/writer on it (there is no auto-seed) — only needed when fga_lock_root_create is on.
     fga_root_object: str = Field(default="warehouse:lance_catalog", alias="LANCE_FGA_ROOT_OBJECT")

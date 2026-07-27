@@ -12,15 +12,16 @@ alignments column is the ``alignments`` capability's column part. Sync handlers
 import logging
 from typing import Any
 
-from common.core.exceptions import NotFoundError
-from common.deps import DatasetParam, StateDep
-from common.lancekit.alignments import parse_alignments_json
-from common.lancekit.descriptor import Declared
-from common.lancekit.keys import chunk_key_filter, validate_doc_key
-from common.lancekit.predicate import eq
-from common.lancekit.registry import table_dataset
-from common.state import dataset_handle
 from fastapi import APIRouter
+
+from service_kit.lancekit.alignments import parse_alignments_json
+from service_kit.lancekit.descriptor import Declared
+from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
+from service_kit.lancekit.predicate import eq
+from service_kit.lancekit.registry import table_dataset
+from service_kit.media.deps import DatasetParam, StateDep
+from service_kit.media.exceptions import NotFoundError
+from service_kit.media.state import dataset_handle
 
 
 logger = logging.getLogger(__name__)

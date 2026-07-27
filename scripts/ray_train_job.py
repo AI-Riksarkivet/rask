@@ -14,7 +14,7 @@ publishes per the D4 crash-safe order:
    (2) leaves orphan files, never a half-registered model. Model version N == Lance version N.
 
 Self-contained by design (baked into the ray image; no ``services/`` imports) — the run-id derivation
-mirrors ``common.openlineage.run_id_for`` byte-for-byte and is pinned against it by a unit test.
+mirrors ``service_kit.openlineage.run_id_for`` byte-for-byte and is pinned against it by a unit test.
 
 Env: MODEL FEATURES(json [{dataset,version,uri}]) CONFIG TOKEN MODELS_NAMESPACE REGISTRY_URI
      ARTIFACT_BASE [LINEAGE_URL] [LINEAGE_TOKEN] S3_ENDPOINT S3_KEY S3_SECRET [S3_REGION]
@@ -22,6 +22,12 @@ Env: MODEL FEATURES(json [{dataset,version,uri}]) CONFIG TOKEN MODELS_NAMESPACE 
      when the submitting consumer injected its span + OTLP config, the job runs under one root span
      parented on that trace; absent → untraced, exactly as before.
 """
+# TOKEN-AUTHED CLUSTER (gate 7 / R3): with RAY_AUTH_MODE=token on the head, export
+# RAY_AUTH_MODE=token + RAY_AUTH_TOKEN (kubectl get secret rask-ray-auth-token -o
+# jsonpath='{.data.auth_token}' | base64 -d) before submitting. `ray job submit` /
+# JobSubmissionClient then attach `Authorization: Bearer` themselves; any RAW
+# requests/httpx call against the dashboard (:8265) must send that header itself.
+# NEVER put the token in runtime_env.env_vars — the jobs API echoes runtime_env back.
 
 from __future__ import annotations
 
@@ -43,7 +49,7 @@ _BASE_FACET = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/BaseFac
 #: Same spec pin as the medallion emitter (services/medallion/schemas/events.py) — equality-pinned by
 #: tests/unit/test_train_job.py so the two emitters can never drift on the facet version.
 _VERSION_FACET_SCHEMA = "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json#/$defs/DatasetVersionDatasetFacet"
-#: Mirrors common.openlineage._RUN_ID_NAMESPACE (uuid5 of the project URL under NAMESPACE_URL) —
+#: Mirrors service_kit.openlineage._RUN_ID_NAMESPACE (uuid5 of the project URL under NAMESPACE_URL) —
 #: pinned equal by tests/unit/test_train_job.py so the two derivations can never drift.
 _RUN_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Borg93/lance-ns")
 

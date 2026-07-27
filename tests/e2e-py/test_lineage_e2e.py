@@ -238,12 +238,13 @@ def test_reconcile_backfills_a_dropped_write(dsn: str, tmp_path: Path) -> None:
     """
     import lance
     import pyarrow as pa
-    from common.openlineage import run_id_for
     from lineage.core.age import make_pool, run_cypher
     from lineage.core.reconcile import read_storage_version, reconcile_all
     from lineage.models import RunEvent
     from lineage.schemas import ReconcileState
     from lineage.services.repository import LineageRepository
+
+    from service_kit.openlineage import run_id_for
 
     # The back-fill run id is now a deterministic UUID (spec fix), not the readable seed string.
     backfill_rid = run_id_for("reconcile-recon$t-v2")

@@ -2,14 +2,14 @@
 
 The media zone's workflow canvas and its saved views were ``localStorage``, so the same person on another
 machine (or after clearing site data) found an empty canvas. These routes give both documents a home the
-estate owns; :mod:`common.user_state` holds the store client and the key rules, and
-:mod:`common.schemas.workflow` mirrors the zone's valibot schemas so a document round-trips unchanged.
+estate owns; :mod:`service_kit.governed.user_state` holds the store client and the key rules, and
+:mod:`service_kit.schemas.workflow` mirrors the zone's valibot schemas so a document round-trips unchanged.
 
 **Why the catalog owns this.** Only two app-ids are in the state store's ``scopes``
 (``chart/values.yaml`` → ``stateStore.scopes``): ``annotator`` and ``catalog``. Of those two, only the
 catalog has a verified subject to key on — ``services/annotator/main.py`` builds no ``OIDCVerifier`` and
 ``services/annotator/api/dependencies.py`` re-exports only ``AuthorDep``, whose ``get_author``
-(``common/deps.py``) reads a **trusted ``X-User`` header** and defaults to ``"anon"``. Per-subject storage
+(``service_kit/media/deps.py``) reads a **trusted ``X-User`` header** and defaults to ``"anon"``. Per-subject storage
 keyed on a client-settable header is the exact leak these routes exist to prevent. The catalog instead has
 ``api/security.py``'s ``CurrentToken``, the router-wide ``Depends(authorize)`` that 401s an anonymous
 caller, and — the reachability half — a BFF proxy the media zone already uses
@@ -38,8 +38,6 @@ import logging
 from datetime import datetime
 from typing import Annotated
 
-from common.schemas.workflow import SavedView, WorkflowGraph
-from common.user_state import UserStateDocument, UserStateStore, UserStateUnreadable
 from fastapi import APIRouter, Depends, Request, Response, status
 from lance_namespace import (
     InvalidInputError,
@@ -51,6 +49,8 @@ from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from catalog.api.dependencies import SettingsDep
 from catalog.api.security import CurrentToken
+from service_kit.governed.user_state import UserStateDocument, UserStateStore, UserStateUnreadable
+from service_kit.schemas.workflow import SavedView, WorkflowGraph
 
 
 log = logging.getLogger(__name__)

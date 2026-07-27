@@ -1,13 +1,13 @@
 """Warehouse registry + runtime bucket provisioning (#3-A) — the admin control plane.
 
 A *warehouse* = one physical S3 bucket owned by a project (the FGA model's catalog-root type,
-``services/common/auth/model.fga``: "A warehouse = exactly one S3 bucket, owned by one project"). Today
+``service_kit/governed/auth/model.fga``: "A warehouse = exactly one S3 bucket, owned by one project"). Today
 the catalog is single-bucket (one ``LANCE_REST_ROOT``); this makes a warehouse a **runtime-provisioned,
 physically isolated bucket**, so a table created under warehouse A lands in bucket-a and is ABSENT from
 bucket-b — Lakekeeper-style physical multi-tenancy, provisioned through an admin API rather than a static
 Helm ``mc mb`` loop.
 
-Stateless-over-object-store, the same shape as ``services/common/outbox.py``: the registry IS a set of JSON
+Stateless-over-object-store, the same shape as ``service_kit/lakehouse/outbox.py``: the registry IS a set of JSON
 objects under ``<control_root>/_warehouses/`` — there is no DB to add. A warehouse record lives at
 ``_warehouses/<id>.json``; a namespace→warehouse binding at ``_warehouses/bindings/<top_ns>.json`` (so any
 op on a bound namespace can resolve its physical root). Bucket creation uses boto3 ``create_bucket``,
@@ -21,7 +21,8 @@ import logging
 from typing import Any
 
 import pyarrow.fs as pafs
-from common.objectfs import StorageOptions, fs_and_base
+
+from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
 
 log = logging.getLogger(__name__)

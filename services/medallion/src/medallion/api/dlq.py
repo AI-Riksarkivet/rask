@@ -14,11 +14,11 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any
 
-from common.dapr_auth import require_dapr_token
 from dapr.ext.fastapi import DaprApp
 from fastapi import Depends
 
 from medallion.core.metrics import record_dead_letter
+from service_kit.governed.dapr_auth import require_dapr_token
 
 
 log = logging.getLogger(__name__)

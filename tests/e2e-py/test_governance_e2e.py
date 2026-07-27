@@ -27,7 +27,8 @@ from collections.abc import Callable
 import pyarrow as pa
 import pytest
 import requests
-from common.openlineage import RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for
+
+from service_kit.openlineage import RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for
 
 
 #: OpenLineage ``producer`` URI for the promote event this suite emits — the spec requires one, and a

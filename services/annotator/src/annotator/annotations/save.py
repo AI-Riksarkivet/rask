@@ -12,12 +12,6 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 
 import pyarrow as pa
-from common.deps import AuthorDep, DatasetParam, StateDep
-from common.lancekit.keys import chunk_key_filter, validate_doc_key
-from common.lancekit.reader import open_reader
-from common.lancekit.registry import table_dataset
-from common.lancekit.writer import open_writer
-from common.state import dataset_handle
 from fastapi import APIRouter
 
 from annotator.annotations.commit import check_base_version_value, delete_by_ids, finalize_commit
@@ -29,6 +23,12 @@ from annotator.annotations.schema import (
     SaveResult,
     identity_values,
 )
+from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
+from service_kit.lancekit.reader import open_reader
+from service_kit.lancekit.registry import table_dataset
+from service_kit.lancekit.writer import open_writer
+from service_kit.media.deps import AuthorDep, DatasetParam, StateDep
+from service_kit.media.state import dataset_handle
 
 
 logger = logging.getLogger(__name__)

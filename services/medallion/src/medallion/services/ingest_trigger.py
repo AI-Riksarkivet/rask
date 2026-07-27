@@ -18,12 +18,12 @@ import logging
 import uuid
 from typing import Any
 
-from common import dapr_publish
-from common.warehouse_registry import is_safe_project
 from dapr.aio.clients import DaprClient
 
 from medallion.core.config import MedallionSettings, project_namespace
 from medallion.core.metrics import record_transition
+from service_kit import dapr_publish
+from service_kit.lakehouse.warehouse_registry import is_safe_project
 
 
 log = logging.getLogger(__name__)

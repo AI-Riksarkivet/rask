@@ -19,7 +19,6 @@ import logging
 import re
 from typing import Annotated
 
-from common import fga
 from fastapi import APIRouter, Header, Query
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidInputError, TableNotFoundError
@@ -38,6 +37,7 @@ from catalog.schemas import (
     PromoteResponse,
 )
 from catalog.services import models as registry
+from service_kit.governed import fga
 
 
 log = logging.getLogger(__name__)

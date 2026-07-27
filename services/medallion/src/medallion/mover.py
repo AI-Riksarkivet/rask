@@ -17,10 +17,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
-from common import fga
-from common.dapr_auth import assert_app_token_configured
-from common.lance_metrics import instrument_lance_if_available
-from common.obs import configure_app_logging
 from dapr.aio.clients import DaprClient
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
@@ -28,6 +24,10 @@ from fastapi.concurrency import run_in_threadpool
 from medallion.api.events import register_stage_route
 from medallion.api.health import router as health_router
 from medallion.core.config import apply_dapr_secrets, get_settings
+from service_kit.governed import fga
+from service_kit.governed.dapr_auth import assert_app_token_configured
+from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
+from service_kit.obs import configure_app_logging
 
 
 configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (obs audit 2026-07-13)

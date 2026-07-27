@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from common.dapr_auth import require_dapr_token
 from dapr.ext.fastapi import DaprApp
 from fastapi import APIRouter, Depends, FastAPI, Header, Request
 from fastapi.responses import JSONResponse
@@ -25,6 +24,7 @@ from medallion.services.train import (
     submit_train_request,
     train_head_enabled,
 )
+from service_kit.governed.dapr_auth import require_dapr_token
 
 
 router = APIRouter(tags=["train"])

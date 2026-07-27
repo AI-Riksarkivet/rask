@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from common.warehouse_registry import UnresolvableProjectError
 from fastapi import APIRouter, Depends, Header
 from fastapi.responses import JSONResponse
 
 from medallion.api.dependencies import DaprClientDep, SettingsDep
 from medallion.api.produce_auth import ProjectParam, authorize_produce
 from medallion.services.produce import produce as run_produce
+from service_kit.lakehouse.warehouse_registry import UnresolvableProjectError
 
 
 router = APIRouter(tags=["produce"])

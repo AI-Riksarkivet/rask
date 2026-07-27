@@ -17,8 +17,9 @@ import os
 
 import pytest
 import requests
-from common import outbox
 from medallion.schemas.events import build_run_event
+
+from service_kit.lakehouse import outbox
 
 
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "").rstrip("/")

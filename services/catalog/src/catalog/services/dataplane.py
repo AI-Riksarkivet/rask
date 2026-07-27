@@ -23,9 +23,6 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
-from common import blobs
-from common.objectfs import s3_filesystem
-from common.schema import SchemaFields, facet_fields
 from lance_namespace import (
     AlterTableAddColumnsRequest,
     AlterTableAddColumnsResponse,
@@ -75,6 +72,9 @@ from lance_namespace import (
 
 from catalog.core.namespace import open_dataset
 from catalog.services import native
+from service_kit.lakehouse import blobs
+from service_kit.lakehouse.objectfs import s3_filesystem
+from service_kit.lakehouse.schema import SchemaFields, facet_fields
 
 
 log = logging.getLogger(__name__)

@@ -14,8 +14,6 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
-from common import outbox, outbox_metrics
-from common.dapr_auth import require_dapr_token
 from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 from pydantic import ValidationError
@@ -33,6 +31,8 @@ from lineage.core.reconcile import (
 )
 from lineage.models import RunEvent
 from lineage.services.consumer import record_event_best_effort
+from service_kit.governed.dapr_auth import require_dapr_token
+from service_kit.lakehouse import outbox, outbox_metrics
 
 
 log = logging.getLogger(__name__)

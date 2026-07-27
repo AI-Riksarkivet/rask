@@ -15,10 +15,11 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pytest
-from common import maintenance_policies as mp
 from compaction.core.config import CompactionSettings
 from compaction.services.optimize import compact_one
 from compaction.services.sweep import _policy_skip_reason
+
+from service_kit.lakehouse import maintenance_policies as mp
 
 
 def _policy(kind: str = "table", id_: str = "db$t", path: str = "bkt/u1_db$t", **fields: Any) -> dict[str, Any]:
@@ -163,7 +164,7 @@ def test_resolve_overlapping_project_claims_warns_and_matches_nothing(
         _project_policy(id_="acme", buckets=["shared-bkt"], retention_days=365),
         _project_policy(id_="evil", buckets=["shared-bkt", "evil-wh"], retention_days=1),
     ]
-    with caplog.at_level("WARNING", logger="common.maintenance_policies"):
+    with caplog.at_level("WARNING", logger="service_kit.lakehouse.maintenance_policies"):
         assert mp.resolve_policy(contested, "s3://shared-bkt/u1_db$t") is None
     assert any(r.message == "maintenance_policy_project_overlap" for r in caplog.records)
     # The uncontested bucket in the same records still resolves its (single) claimant.

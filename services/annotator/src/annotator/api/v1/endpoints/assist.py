@@ -14,12 +14,13 @@ catalog transport). Shapes are in IMAGE coordinates — the annotator's own spac
 import logging
 
 import httpx
-from common.core.exceptions import ServiceUnavailableError
-from common.deps import DatasetParam, StateDep
-from common.lancekit.keys import validate_doc_key
-from common.state import AppState, dataset_handle
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
+
+from service_kit.lancekit.keys import validate_doc_key
+from service_kit.media.deps import DatasetParam, StateDep
+from service_kit.media.exceptions import ServiceUnavailableError
+from service_kit.media.state import AppState, dataset_handle
 
 
 logger = logging.getLogger(__name__)

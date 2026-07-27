@@ -2,7 +2,7 @@
 
 The lineage service owns the audit graph, so it must protect it itself (in-service, not
 via a gateway). It mirrors the catalog's authz guard (``services/catalog/api/fga_deps.py``) and **reuses
-the catalog's core** — :func:`common.fga.check` / ``batch_check`` — so the OpenFGA check has
+the catalog's core** — :func:`service_kit.governed.fga.check` / ``batch_check`` — so the OpenFGA check has
 one source of truth. The thin FastAPI authz + filter dependencies are re-derived here
 because they bind to ``LineageSettings`` rather than the catalog's ``Settings``. (Shared
 *library* code; the service makes no runtime call to the catalog — it talks only to the IdP
@@ -30,7 +30,6 @@ import logging
 from collections.abc import Callable
 from typing import Annotated, Any
 
-from common import fga
 from fastapi import Depends, Request
 from lance_namespace import (
     PermissionDeniedError,
@@ -42,6 +41,7 @@ from lineage.api.dependencies import RepositoryDep, SettingsDep
 from lineage.api.security import CurrentToken, Principal
 from lineage.core.config import LineageSettings
 from lineage.models import RunEvent
+from service_kit.governed import fga
 
 
 log = logging.getLogger(__name__)

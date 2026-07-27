@@ -9,12 +9,13 @@ skipped from the listing (logged), never half-served.
 
 import logging
 
-from common.deps import StateDep
-from common.lancekit.descriptor import DatasetDescriptor
-from common.lancekit.registry import DatasetRegistry, UnknownDatasetError
-from common.state import AppState, dataset_handle
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
+
+from service_kit.lancekit.descriptor import DatasetDescriptor
+from service_kit.lancekit.registry import DatasetRegistry, UnknownDatasetError
+from service_kit.media.deps import StateDep
+from service_kit.media.state import AppState, dataset_handle
 
 
 logger = logging.getLogger(__name__)

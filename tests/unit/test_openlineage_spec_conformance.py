@@ -26,13 +26,14 @@ from typing import Any
 
 import pytest
 from catalog.core import lineage_emit as catalog_emit
-from common import openlineage as ol
-from common.lancekit import openlineage as lancekit_ol
 from compaction.core import lineage_emit as compaction_emit
 from jsonschema import Draft202012Validator, FormatChecker
 from lineage.models import Dataset, RunEvent
 from medallion.schemas import events as medallion_events
 from openlineage.client import facet_v2
+
+from service_kit import openlineage as ol
+from service_kit.lancekit import openlineage as lancekit_ol
 
 
 _SPEC_PATH = Path(__file__).resolve().parents[1] / "data" / "openlineage-2-0-2.json"

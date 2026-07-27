@@ -23,9 +23,18 @@ def tmp_buckets(tmp_path: Path):
 # on a shared box (this test class was the bulk of the pre-seal "~32 min" suite). Fake model,
 # real runtime: exactly the long-runtime contract the slow marker documents.
 @pytest.mark.slow
-def test_fake_pipeline_via_ray_data(tmp_buckets):
+def test_fake_pipeline_via_ray_data(tmp_buckets, monkeypatch):
     """Test that actors compose under ray.data.map_batches without a full cluster."""
     pytest.importorskip("ray", minversion="2.0")
+
+    # Ray Data's V2 cluster autoscaler runs a coordinator ACTOR; on this 4-CPU local
+    # instance the pipeline's actors consume every slot, the coordinator starves, and
+    # try_trigger_scaling dies with "Failed to get allocated resources ... after 10
+    # consecutive failures" after ~30 min of retries (root-caused 2026-07-27, full
+    # traceback in the merge plan's finding). There is nothing to autoscale on a
+    # single local node — select the actorless V1 autoscaler. Must be set BEFORE
+    # ray.data imports read it.
+    monkeypatch.setenv("RAY_DATA_CLUSTER_AUTOSCALER", "V1")
 
     src_dir, sink_dir = tmp_buckets
 

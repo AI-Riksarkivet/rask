@@ -11,7 +11,7 @@ The sidecar owns retry/backoff + trace-propagation (no DLQ — see docs/RESILIEN
 config (no broker client here).
 
 Self-contained: the compaction service never imports the catalog (zero cross-service imports — the
-mergeability invariant). The only shared code is ``common.fga`` for the id↔namespace derivation, so the
+mergeability invariant). The only shared code is ``service_kit.governed.fga`` for the id↔namespace derivation, so the
 lineage ``Dataset`` name == the OpenFGA object id == the catalog table id across all three governance axes.
 
 Two deliberate choices:
@@ -35,9 +35,10 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
-from common import dapr_publish
-from common.openlineage import ERROR_MESSAGE_FACET_SCHEMA_URL, RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for
 from dapr.aio.clients import DaprClient
+
+from service_kit import dapr_publish
+from service_kit.openlineage import ERROR_MESSAGE_FACET_SCHEMA_URL, RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for
 
 
 log = logging.getLogger(__name__)

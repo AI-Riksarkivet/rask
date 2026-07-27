@@ -2,7 +2,7 @@
 # #123 gate: the chart's `encoders.*` values are what turn the vector search modes on.
 #
 # Before this change `MEDIA_EMBED_URL` / `MEDIA_RERANK_URL` were unreachable from an operator:
-# `services/common/core/config.py` defaults them to `http://127.0.0.1:8001` / `:8002`, which inside
+# `service_kit/media/config.py` defaults them to `http://127.0.0.1:8001` / `:8002`, which inside
 # a pod is the POD's own loopback, and no template rendered the env. So `semantic`, `visual`,
 # `scene`, `hybrid`, `all` and `rerank=true` were permanently 503 on any deployment, with no value
 # an operator could set. That unchangeable default IS the bug — not a missing service.

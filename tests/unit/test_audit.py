@@ -1,4 +1,4 @@
-"""Unit tests for the compliance audit trail (``common.audit``)."""
+"""Unit tests for the compliance audit trail (``service_kit.governed.audit``)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,8 @@ import logging
 from collections.abc import Iterator
 
 import pytest
-from common.audit import ALLOW, AUDIT_LOGGER, DENY, audit, configure_audit
+
+from service_kit.governed.audit import ALLOW, AUDIT_LOGGER, DENY, audit, configure_audit
 
 
 class _Capture(logging.Handler):

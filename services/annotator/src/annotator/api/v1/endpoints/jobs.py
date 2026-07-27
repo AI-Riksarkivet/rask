@@ -17,11 +17,12 @@ import logging
 from typing import Literal
 
 import httpx
-from common.core.exceptions import ServiceUnavailableError
-from common.deps import StateDep
-from common.state import AppState
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
+
+from service_kit.media.deps import StateDep
+from service_kit.media.exceptions import ServiceUnavailableError
+from service_kit.media.state import AppState
 
 
 logger = logging.getLogger(__name__)

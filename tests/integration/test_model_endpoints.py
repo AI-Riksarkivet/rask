@@ -19,9 +19,10 @@ import pyarrow as pa
 import pytest
 from catalog.api.dependencies import get_settings
 from catalog.core.config import Settings
-from common import fga as fga_module
-from common.oidc import IDToken
 from fastapi.testclient import TestClient
+
+from service_kit.governed import fga as fga_module
+from service_kit.governed.oidc import IDToken
 
 
 def _publish(uri: str, metrics: dict[str, Any], token: str, *, first: bool) -> int:

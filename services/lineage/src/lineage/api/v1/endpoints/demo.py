@@ -16,7 +16,6 @@ import logging
 from typing import Any
 
 import lance
-from common import schema
 from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import PermissionDeniedError
@@ -26,6 +25,7 @@ from lineage.api.fga_deps import require_metadata_access
 from lineage.api.security import CurrentToken
 from lineage.core.config import get_settings, storage_options
 from lineage.schemas import DemoDataset, DemoDatasets, DemoField, DemoVersion
+from service_kit.lakehouse import schema
 
 
 log = logging.getLogger(__name__)

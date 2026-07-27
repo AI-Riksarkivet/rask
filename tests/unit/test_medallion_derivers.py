@@ -112,7 +112,7 @@ def test_blob_field_detection_keys_on_lance_type(tmp_path: Path) -> None:
     """Blob detection keys on the LANCE TYPE (blob column present), nothing else. (Was the Ray-path GATE
     until 2026-07-13 — the gate is gone now that the Ray stage job round-trips blobs; the detection still
     routes a media stage to the pylance blob path, in the job itself.)"""
-    from common import blobs
+    from service_kit.lakehouse import blobs
 
     blobby = _bronze_media(tmp_path, [_png((1, 2, 3))])
     tabular = str(tmp_path / "plain")

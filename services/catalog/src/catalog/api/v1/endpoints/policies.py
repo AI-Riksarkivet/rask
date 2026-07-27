@@ -21,8 +21,6 @@ from __future__ import annotations
 import logging
 import re
 
-from common import fga
-from common import maintenance_policies as policies
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
@@ -40,6 +38,8 @@ from catalog.core.control_emit import emit_control
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import PolicyDeleteResponse, PolicyRequest, PolicyResponse
 from catalog.services import native, warehouses
+from service_kit.governed import fga
+from service_kit.lakehouse import maintenance_policies as policies
 
 
 log = logging.getLogger(__name__)

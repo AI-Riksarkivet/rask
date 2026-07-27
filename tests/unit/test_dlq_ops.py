@@ -1,6 +1,6 @@
 """#83 DLQ ops — the transactional-outbox view + on-demand replay endpoints.
 
-Driven against a REAL local outbox (a tmp dir): stage events with ``common.outbox``, then exercise the
+Driven against a REAL local outbox (a tmp dir): stage events with ``service_kit.lakehouse.outbox``, then exercise the
 handlers directly. Covers the happy path (list summaries oldest-first, replay re-ingests + drops), the
 poison object (surfaced in the view, un-replayable), the fail-closed auth ladder (FGA on + no token → 401),
 per-dataset governance of the list, and the replay writer gate (a non-writer of the event's outputs is 403).
@@ -17,9 +17,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from common import fga, outbox
-from common.audit import AUDIT_LOGGER, configure_audit
-from common.oidc import IDToken
 from lance_namespace import (
     PermissionDeniedError,
     TransactionNotFoundError,
@@ -29,6 +26,11 @@ from lance_namespace import (
 from lineage.api.fga_deps import DatasetFilter
 from lineage.api.v1.endpoints import dlq
 from lineage.core.config import LineageSettings, storage_options
+
+from service_kit.governed import fga
+from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
+from service_kit.governed.oidc import IDToken
+from service_kit.lakehouse import outbox
 
 
 _FULL_AUTH = {

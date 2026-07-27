@@ -14,9 +14,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from catalog.core.config import Settings, get_settings
 from catalog.services import warehouses as wh_svc
-from common import fga as fga_module
-from common.oidc import IDToken
 from fastapi.testclient import TestClient
+
+from service_kit.governed import fga as fga_module
+from service_kit.governed.oidc import IDToken
 
 
 def _settings(tmp_path: Any, *, enabled: bool = True, fga: bool = False, reserved: str = "") -> Settings:
@@ -223,7 +224,7 @@ def test_mallory_cross_tenant_bucket_takeover_fails_at_every_layer(client: TestC
     # EVERY layer — the warehouse create (front door), the project-policy set (defense in depth if a rival
     # record got into the registry anyway), and the sweep's resolution (if a contested policy record got
     # written anyway). No layer may fall back to first-encountered-wins over the victim's data.
-    from common import maintenance_policies as mp
+    from service_kit.lakehouse import maintenance_policies as mp
 
     monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
     s = _settings(tmp_path)

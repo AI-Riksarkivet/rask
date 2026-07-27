@@ -1,6 +1,6 @@
 """Blob-v2 column detection — the single seam every blob decision routes through.
 
-The lance-ns pattern (``services/common/blobs.py``): a blob-v2 column is
+The lance-ns pattern (now ``service_kit.lakehouse.blobs``): a blob-v2 column is
 identified by the ``lance.blob.v2`` Arrow extension type (registered when
 ``lance`` is imported), with the raw ``ARROW:extension:name`` field-metadata
 fallback for schemas decoded where the extension isn't registered.

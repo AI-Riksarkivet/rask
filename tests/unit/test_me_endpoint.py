@@ -16,8 +16,9 @@ from typing import Any
 
 import pytest
 from catalog.api.v1.endpoints import me as ep
-from common.oidc import IDToken
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
+
+from service_kit.governed.oidc import IDToken
 
 
 def _settings(*, fga_enabled: bool = False) -> Any:
@@ -173,7 +174,7 @@ def test_slow_fga_degrades_on_the_shared_budget(monkeypatch: pytest.MonkeyPatch)
 def test_model_defines_the_relations_this_endpoint_checks() -> None:
     # A mock pins the passed string, not that the relation EXISTS on the type (a phantom relation 400s
     # in OpenFGA → degraded-to-empty forever while every unit test stays green).
-    from common import fga as fga_module
+    from service_kit.governed import fga as fga_module
 
     model = fga_module.load_model()
     defined = {(t["type"], rel) for t in model["type_definitions"] for rel in (t.get("relations") or {})}

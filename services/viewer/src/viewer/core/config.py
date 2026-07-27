@@ -7,8 +7,9 @@ three), and only service-local knobs (VIEWER_*) are prefixed.
 
 from functools import lru_cache
 
-from common.core.config import Settings
 from pydantic import Field
+
+from service_kit.media.config import Settings
 
 
 class ViewerSettings(Settings):

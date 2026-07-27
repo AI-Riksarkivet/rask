@@ -22,8 +22,6 @@ import logging
 from functools import lru_cache
 from typing import Annotated
 
-from common import fga
-from common.audit import FAILURE, SUCCESS, audit
 from fastapi import APIRouter, Query, Request
 from lance_namespace import (
     InvalidInputError,
@@ -42,6 +40,8 @@ from catalog.schemas import (
     AccessTuple,
     AccessTuplesPage,
 )
+from service_kit.governed import fga
+from service_kit.governed.audit import FAILURE, SUCCESS, audit
 
 
 log = logging.getLogger(__name__)

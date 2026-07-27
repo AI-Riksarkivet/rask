@@ -69,7 +69,7 @@ def doc_id_for_audio_path(db_path: Path, table: str, audio_path: str) -> str | N
     chunks_path = db_path / f"{table}.lance"
     if not chunks_path.exists():
         return None
-    # Escape quotes at render time (ratch can't import common.lancekit.predicate);
+    # Escape quotes at render time (mirrors service_kit.lancekit.predicate's escaping);
     # % / _ stay live — the suffix wildcard IS the semantics here.
     escaped = audio_path.replace("'", "''")
     rows = lance.dataset(str(chunks_path)).to_table(columns=["doc_id"], filter=f"audio_path LIKE '%{escaped}'", limit=1).to_pylist()

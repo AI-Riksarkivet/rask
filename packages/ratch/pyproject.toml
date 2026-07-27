@@ -5,7 +5,9 @@ description = "Media pipeline library — Lance ingestion, Ray-distributed featu
 requires-python = ">=3.13"
 license = "AGPL-3.0-only"
 dependencies = [
-    "lance-common",
+    # The lineage seam (ratch/lineage.py) re-exports the kernel primitives from
+    # `service_kit.lancekit.openlineage` — the lancekit extra carries that subtree's deps.
+    "service-kit[lancekit]",
     # Lance/Arrow core — `import lance`, `pyarrow`/`pyarrow.fs`, `lancedb{,.index,.rerankers}`.
     "pylance>=9.0.0",
     "pyarrow",
@@ -48,4 +50,4 @@ build-backend = "hatchling.build"
 packages = ["src/ratch"]
 
 [tool.uv.sources]
-lance-common = { workspace = true }
+service-kit = { workspace = true }

@@ -2,7 +2,7 @@
 
 Port of the old ``backend/voice/service.py`` for the media_api group: the
 retrieval logic is unchanged, but every table/column that used to be hardcoded
-is now resolved from the request's :class:`~common.lancekit.registry.DatasetHandle`
+is now resolved from the request's :class:`~service_kit.lancekit.registry.DatasetHandle`
 descriptor — the voice/speakers capability targets, the row table, the identity
 key fields, and the time axis. The hit post-processing (empty ``alignments`` +
 representative-frame caption attach) is vendored here rather than imported from
@@ -28,18 +28,18 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from common.core.exceptions import NotFoundError, ServiceUnavailableError, ValidationError
-from common.lancekit import store
-from common.lancekit.predicate import and_, eq, isin, ne
-from common.schemas.voice import (
+from pydantic import BaseModel
+
+from service_kit.lancekit import store
+from service_kit.lancekit.predicate import and_, eq, isin, ne
+from service_kit.media.exceptions import NotFoundError, ServiceUnavailableError, ValidationError
+from service_kit.schemas.voice import (
     VoiceAnchor,
     VoiceIdentityAppearance,
     VoiceIdentityResponse,
     VoiceSimilarResponse,
     VoiceStatusResponse,
 )
-from pydantic import BaseModel
-
 from viewer.services.wespeaker import (
     MIN_TURN_DURATION_S,
     TARGET_SAMPLE_RATE,
@@ -52,9 +52,8 @@ from viewer.services.wespeaker import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from common.lancekit.descriptor import Declared
-    from common.lancekit.registry import DatasetHandle
-
+    from service_kit.lancekit.descriptor import Declared
+    from service_kit.lancekit.registry import DatasetHandle
     from viewer.services.wespeaker import TurnBatchEncoder
 
 logger = logging.getLogger(__name__)

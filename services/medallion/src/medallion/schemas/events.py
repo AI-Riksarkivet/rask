@@ -13,7 +13,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from common.openlineage import (
+from service_kit.lakehouse.schema import SchemaFields
+from service_kit.openlineage import (
     DATASOURCE_FACET_SCHEMA_URL,
     ERROR_MESSAGE_FACET_SCHEMA_URL,
     RUN_EVENT_SCHEMA_URL,
@@ -23,7 +24,6 @@ from common.openlineage import (
     run_id_for,
     schema_facet,
 )
-from common.schema import SchemaFields
 
 
 #: OpenLineage ``producer`` URI — identifies the software that emitted the event.
@@ -66,7 +66,7 @@ def _dataset(
     facets: dict[str, Any] = {}
     # schema is an OUTPUT facet — the produced dataset's real columns (name + concise type, blob/vector
     # aware). Present only when the compute measured a write and captured the schema; inputs omit it.
-    # Built by the SHARED common.openlineage helper — one spec version across all emitters.
+    # Built by the SHARED service_kit.openlineage helper — one spec version across all emitters.
     if schema_fields:
         facets["schema"] = schema_facet(_PRODUCER, schema_fields)
     # columnLineage is an OUTPUT facet — field-to-field provenance (#1). Present only when the transform

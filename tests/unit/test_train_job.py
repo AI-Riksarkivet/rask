@@ -4,7 +4,7 @@ Covers the job's three contracts:
 - LINEAGE (D3): spec-true RunEvents that round-trip through ``lineage.models.RunEvent`` — the official
   ``jobType=TRAINING`` facet, per-input version PINS, COMPLETE carries the registry version, FAIL keeps
   a BARE output + the standard ``errorMessage`` facet; run ids derive EXACTLY like the services' shared
-  ``common.openlineage.run_id_for`` (pinned so the two copies can never drift).
+  ``service_kit.openlineage.run_id_for`` (pinned so the two copies can never drift).
 - REGISTRATION (D4): bytes FIRST (token-keyed, idempotent overwrite), then ONE Lance commit = the
   atomic registration; a crash between the two leaves orphan files but NEVER a half-registered model,
   and the token-keyed retry converges. Model version N == Lance version N.
@@ -25,8 +25,9 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pytest
-from common import openlineage as common_ol
 from lineage.models import RunEvent
+
+from service_kit import openlineage as common_ol
 
 
 _JOB_PATH = Path(__file__).parents[2] / "scripts" / "ray_train_job.py"
@@ -51,7 +52,7 @@ _FEATURES = [{"dataset": "silver$features", "version": 7, "uri": "unused-here"}]
 
 
 def test_run_id_derivation_is_pinned_to_the_shared_helper() -> None:
-    # The job mirrors common.openlineage.run_id_for byte-for-byte (it cannot import services/). This
+    # The job mirrors service_kit.openlineage.run_id_for byte-for-byte (it cannot import services/). This
     # pin is what makes the mirror safe: any drift in namespace or algorithm fails here.
     for seed in ("train-abc123", "train-", "x"):
         assert job.run_id_for(seed) == common_ol.run_id_for(seed)
@@ -86,7 +87,7 @@ def test_version_facet_spec_pin_matches_the_medallion_emitter() -> None:
     )
     assert complete["outputs"][0]["facets"]["schema"]["_schemaURL"] == common_ol.SCHEMA_FACET_SCHEMA_URL
     # dataSource + errorMessage were the two mirrors still UNPINNED, and both had drifted a version
-    # behind (1-0-0 while common stamps 1-0-1) — the 1-0-0 documents even $ref the retired 1-0-2 core
+    # behind (1-0-0 while service_kit stamps 1-0-1) — the 1-0-0 documents even $ref the retired 1-0-2 core
     # spec while this event's envelope declares 2-0-2. Pinned now so the whole mirror is guarded.
     assert complete["outputs"][0]["facets"]["dataSource"]["_schemaURL"] == common_ol.DATASOURCE_FACET_SCHEMA_URL
     failed = job.build_event(

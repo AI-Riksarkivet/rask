@@ -1,7 +1,7 @@
 """The lance-ray producer's MEDIA ingest business logic — the multimodal head of the cascade (§9).
 
 :func:`ingest_media` lands external media objects as a bronze blob-v2 table (through the provider-agnostic
-:class:`common.sources.S3Source` seam), emits the ``source URIs -> bronze media`` OpenLineage event with the
+:class:`service_kit.lakehouse.sources.S3Source` seam), emits the ``source URIs -> bronze media`` OpenLineage event with the
 blob-aware schema facet, then publishes the media-chain trigger — the deployed bronze→silver media mover
 consumes it and derives the inline artifacts (thumbnail + embedding) by CONTENT in the generic compute.
 
@@ -19,9 +19,6 @@ import logging
 import uuid
 
 import pyarrow.fs as pafs
-from common import dapr_publish, outbox
-from common.objectfs import s3_filesystem
-from common.sources import S3Source
 from dapr.aio.clients import DaprClient
 from fastapi.concurrency import run_in_threadpool
 from opentelemetry import trace
@@ -30,6 +27,10 @@ from PIL import Image
 from medallion.core.config import MedallionSettings
 from medallion.schemas.events import build_run_event
 from medallion.services.ingest import IngestResult, ingest_to_bronze
+from service_kit import dapr_publish
+from service_kit.lakehouse import outbox
+from service_kit.lakehouse.objectfs import s3_filesystem
+from service_kit.lakehouse.sources import S3Source
 
 
 log = logging.getLogger(__name__)

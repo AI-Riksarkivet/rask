@@ -1,6 +1,6 @@
 """Land external source objects into a bronze Lance blob table — the ingest head of the cascade.
 
-Reads a provider-agnostic ``SourceAdapter`` (:mod:`common.sources`) and writes each object's bytes as a
+Reads a provider-agnostic ``SourceAdapter`` (:mod:`service_kit.lakehouse.sources`) and writes each object's bytes as a
 managed blob-v2 column at file format 2.2, keeping the object's source URI as a column so provenance
 survives in the data itself (the caller emits the ``source -> bronze`` lineage edge from ``source_uris``).
 The per-stage ML then flows the blob forward (``compute._carry_forward``) and derives the silver artifacts.
@@ -13,10 +13,11 @@ from itertools import chain
 
 import lance
 import pyarrow as pa
-from common import schema
-from common.sources import SourceAdapter, SourceObject
 from lance import blob_array, blob_field
 from pydantic import BaseModel
+
+from service_kit.lakehouse import schema
+from service_kit.lakehouse.sources import SourceAdapter, SourceObject
 
 
 _INGEST_SCHEMA = pa.schema([pa.field("id", pa.int64()), blob_field("payload"), pa.field("source_uri", pa.string())])

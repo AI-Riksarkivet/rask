@@ -1,7 +1,7 @@
 """IVF_PQ recall knobs + reserved column names for the search layer.
 
 These are algorithmic constants (not env-varying), so they stay module
-constants, not :class:`~common.core.config.Settings`. Unlike the old
+constants, not :class:`~service_kit.media.config.Settings`. Unlike the old
 ``backend.search.constants``, the hit projection is no longer a constant — it
 is derived per dataset from the descriptor (see
 :func:`search.services.target.hit_columns`).

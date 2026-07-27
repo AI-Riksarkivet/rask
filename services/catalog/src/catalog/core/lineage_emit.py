@@ -33,18 +33,20 @@ from datetime import UTC, datetime
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 import httpx
-from common import dapr_publish, fga
-from common.openlineage import (
+from dapr.aio.clients import DaprClient
+from opentelemetry import metrics
+from pydantic import BaseModel
+
+from service_kit import dapr_publish
+from service_kit.governed import fga
+from service_kit.lakehouse.schema import SchemaFields
+from service_kit.openlineage import (
     DATASOURCE_FACET_SCHEMA_URL,
     RUN_EVENT_SCHEMA_URL,
     VERSION_FACET_SCHEMA_URL,
     custom_facet,
     schema_facet,
 )
-from common.schema import SchemaFields
-from dapr.aio.clients import DaprClient
-from opentelemetry import metrics
-from pydantic import BaseModel
 
 
 log = logging.getLogger(__name__)
@@ -216,7 +218,7 @@ def build_write_event(
     if schema_fields:
         # Standard schema facet → the per-version column schema (blob/vector-aware) on the WROTE edge (#24),
         # so a catalog-written table has real columns in the graph, not empty until a compute job re-asserts.
-        # Built by the SHARED common.openlineage helper — one spec version across all emitters.
+        # Built by the SHARED service_kit.openlineage helper — one spec version across all emitters.
         facets["schema"] = schema_facet(_PRODUCER, schema_fields)
     if facets:
         output["facets"] = facets

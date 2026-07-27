@@ -17,19 +17,18 @@ import logging
 import re
 from typing import TYPE_CHECKING, Annotated
 
-from common.core.exceptions import ServiceUnavailableError, ValidationError
-from common.deps import StateDep
-from common.schemas.voice import VoiceIdentityResponse, VoiceSimilarResponse, VoiceStatusResponse
-from common.state import AppState, dataset_handle
 from fastapi import APIRouter, File, UploadFile
 from starlette.concurrency import run_in_threadpool
 
+from service_kit.media.deps import StateDep
+from service_kit.media.exceptions import ServiceUnavailableError, ValidationError
+from service_kit.media.state import AppState, dataset_handle
+from service_kit.schemas.voice import VoiceIdentityResponse, VoiceSimilarResponse, VoiceStatusResponse
 from viewer.services import voice_service
 
 
 if TYPE_CHECKING:
-    from common.lancekit.registry import DatasetHandle
-
+    from service_kit.lancekit.registry import DatasetHandle
     from viewer.services.wespeaker import VoiceEncoder
 
 logger = logging.getLogger(__name__)

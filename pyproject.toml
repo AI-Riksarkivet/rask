@@ -96,7 +96,19 @@ ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
 "services/viewer/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "services/search/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "services/annotator/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
-"packages/common/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+# The gate-3 (R19) port of packages/common into service-kit moved the files verbatim, so the same
+# scoped exemption travels with them: the governed/lakehouse/lancekit/media/schemas subtrees plus the
+# four flat modules ported to the base (obs, openlineage, dapr_publish, control_events).
+# packages/common is deleted; its per-file-ignores entry died with it.
+"packages/service-kit/src/service_kit/governed/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+"packages/service-kit/src/service_kit/lakehouse/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+"packages/service-kit/src/service_kit/lancekit/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+"packages/service-kit/src/service_kit/media/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+"packages/service-kit/src/service_kit/schemas/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+"packages/service-kit/src/service_kit/obs.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+"packages/service-kit/src/service_kit/openlineage.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+"packages/service-kit/src/service_kit/dapr_publish.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+"packages/service-kit/src/service_kit/control_events.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "packages/ratch/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "runners/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "scripts/ray_stage_job.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
@@ -150,7 +162,7 @@ exclude = [
 # never silently vanish from the gate (tests/unit/test_e2e_collection_gate.py asserts it), but
 # excluded from offline runs via `-m "not e2e"` (make test / test-slow), the same way `slow` is.
 # tests/e2e-py/conftest.py force-applies the e2e marker to every item collected under it.
-testpaths = ["packages/lineage-kit/tests", "packages/storage/tests", "packages/tracker/tests", "packages/validate/tests", "services/core/tests", "services/gateway/tests", "services/volumes_api/tests", "services/search_api/tests", "services/ray_api/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
+testpaths = ["packages/lineage-kit/tests", "packages/ray-kit/tests", "packages/service-kit/tests", "packages/storage/tests", "packages/tracker/tests", "packages/validate/tests", "services/core/tests", "services/gateway/tests", "services/volumes_api/tests", "services/search_api/tests", "services/ray_api/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
 addopts = "--cov --cov-report=term-missing:skip-covered --import-mode=importlib"
 markers = [
     "slow: marks tests requiring real models or long runtimes (deselect with '-m \"not slow\"')",

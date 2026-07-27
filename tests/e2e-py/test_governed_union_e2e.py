@@ -165,8 +165,8 @@ def alice(stack: tuple[str, str], fga_store: tuple[str, str]) -> Iterator[dict[s
 
 def _run_id_for(operation: str, token: str) -> str:
     """The deterministic per-stage run id — uuid5 over "<operation>-<token>", the producer's own scheme
-    (common.openlineage.run_id_for), so one /produce token names every stage run it caused."""
-    from common.openlineage import run_id_for
+    (service_kit.openlineage.run_id_for), so one /produce token names every stage run it caused."""
+    from service_kit.openlineage import run_id_for
 
     return run_id_for(f"{operation}-{token}")
 

@@ -13,9 +13,10 @@ from functools import lru_cache
 from typing import Self
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from common.objectfs import lance_storage_options
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from service_kit.lakehouse.objectfs import lance_storage_options
 
 
 class LineageSettings(BaseSettings):
@@ -187,7 +188,7 @@ def apply_dapr_secrets(settings: LineageSettings) -> None:
     off. Imported lazily so the catalog dep isn't pulled in dev/tests."""
     if not settings.secrets_from_dapr:
         return
-    from common.secrets import fetch_required_secrets
+    from service_kit.governed.secrets import fetch_required_secrets
 
     bundle = fetch_required_secrets(settings.dapr_secret_store, settings.dapr_secret_key, require=settings.dapr_secret_s3_field)
     settings.s3_secret_access_key = SecretStr(bundle[settings.dapr_secret_s3_field])

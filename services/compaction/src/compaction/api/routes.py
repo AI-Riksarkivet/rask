@@ -9,13 +9,13 @@ import asyncio
 import logging
 from typing import Any
 
-from common.dapr_auth import require_dapr_token
 from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 
 from compaction.api.dependencies import LineageEmitterDep, SettingsDep
 from compaction.core.config import get_settings
 from compaction.services.sweep import emit_sweep_lineage, run_sweep, summarize
+from service_kit.governed.dapr_auth import require_dapr_token
 
 
 log = logging.getLogger(__name__)

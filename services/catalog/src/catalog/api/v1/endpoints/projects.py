@@ -1,6 +1,6 @@
 """``GET /v1/projects`` — first-class tenant enumeration, DERIVED from the warehouse registry (no new DB).
 
-A *project* is the FGA model's tenant type (``services/common/auth/model.fga``): warehouses hang off it via
+A *project* is the FGA model's tenant type (``service_kit/governed/auth/model.fga``): warehouses hang off it via
 their ``project`` field, and every grant cascades down from it. The estate never stores a project record —
 a project EXISTS exactly when a warehouse record claims it — so these endpoints derive the tenant list by
 grouping the warehouse registry (``catalog.services.warehouses.list_warehouses``, which already skips a
@@ -29,7 +29,6 @@ import asyncio
 import logging
 import re
 
-from common import fga
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidInputError, ServiceUnavailableError, TableNotFoundError
@@ -41,6 +40,7 @@ from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.services import warehouses
+from service_kit.governed import fga
 
 
 log = logging.getLogger(__name__)

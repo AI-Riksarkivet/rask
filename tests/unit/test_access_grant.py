@@ -15,8 +15,9 @@ from typing import Any, cast
 import pytest
 from catalog.api.v1.endpoints import access
 from catalog.core.config import Settings
-from common.oidc import IDToken
 from lance_namespace import ServiceUnavailableError, UnsupportedOperationError
+
+from service_kit.governed.oidc import IDToken
 
 
 def _run(

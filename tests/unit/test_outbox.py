@@ -8,7 +8,8 @@ import time
 from typing import Any, cast
 
 import pytest
-from common import outbox
+
+from service_kit.lakehouse import outbox
 
 
 def _uri(tmp_path: Any) -> str:

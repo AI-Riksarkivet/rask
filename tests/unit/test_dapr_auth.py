@@ -1,4 +1,4 @@
-"""Unit tests for ``common.dapr_auth`` — the guard on every sidecar-delivered route.
+"""Unit tests for ``service_kit.governed.dapr_auth`` — the guard on every sidecar-delivered route.
 
 The app-api-token check is the ONLY auth layer on those routes that survives a gateway swap
 (the nginx 403s are replaceable edge config), so its contract is pinned here: constant-time
@@ -14,9 +14,10 @@ import asyncio
 from typing import Any
 
 import pytest
-from common.dapr_auth import assert_app_token_configured, require_dapr_token
 from fastapi import HTTPException
 from lineage.core.config import LineageSettings
+
+from service_kit.governed.dapr_auth import assert_app_token_configured, require_dapr_token
 
 
 # --------------------------------------------------------------------------- #

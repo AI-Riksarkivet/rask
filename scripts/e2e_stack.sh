@@ -205,7 +205,7 @@ SUB="$(ALICE="$ALICE" uv run python -c "
 import os,base64,json
 p = os.environ['ALICE'].split('.')[1]; p += '=' * (-len(p) % 4)
 print(json.loads(base64.urlsafe_b64decode(p))['sub'])")"
-# NEWEST store of that name — the same selector common.fga.provision uses (max created_at), so a boot-race
+# NEWEST store of that name — the same selector service_kit.governed.fga.provision uses (max created_at), so a boot-race
 # double-create (two catalog pods provisioning against a freshly-rolled OpenFGA) can never make the seeder
 # and the serving catalog disagree about which store the grants live in (CI flake 2026-07-15: the CLI
 # verified can_create_warehouse=allowed on stores[0] while the catalog checked its own newer store → 403).

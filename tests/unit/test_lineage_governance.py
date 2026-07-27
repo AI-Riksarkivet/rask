@@ -14,8 +14,6 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from common import fga
-from common.oidc import IDToken
 from lance_namespace import (
     InvalidInputError,
     PermissionDeniedError,
@@ -29,6 +27,9 @@ from lineage.core.config import LineageSettings
 from lineage.schemas import DatasetGovernance, DescriptionUpdate
 from lineage.services import repository as repository_module
 from lineage.services.repository import LineageRepository
+
+from service_kit.governed import fga
+from service_kit.governed.oidc import IDToken
 
 
 _FULL_AUTH = {

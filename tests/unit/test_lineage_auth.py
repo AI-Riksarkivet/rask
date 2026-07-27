@@ -19,8 +19,6 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from common import fga
-from common.oidc import IDToken
 from fastapi import Request
 from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials
@@ -51,6 +49,9 @@ from lineage.schemas import (
 from lineage.services.repository import LineageRepository
 from openfga_sdk import OpenFgaClient
 from pydantic import ValidationError
+
+from service_kit.governed import fga
+from service_kit.governed.oidc import IDToken
 
 
 _ISSUER = "https://idp.example.com"

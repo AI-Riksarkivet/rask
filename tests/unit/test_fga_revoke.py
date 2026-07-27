@@ -1,4 +1,4 @@
-"""Unit tests for the revoke-on-delete path (common.fga + catalog.fga_deps).
+"""Unit tests for the revoke-on-delete path (service_kit.governed.fga + catalog.fga_deps).
 
 A dropped / renamed-away object's FGA tuples must be removed, or a later object reusing the id
 inherits the old grants (stale-grant privilege bleed). These pin the read+delete contract WITHOUT
@@ -17,11 +17,12 @@ from typing import Any, cast
 import aiohttp
 import pytest
 from catalog.api import fga_deps
-from common import fga
 from lance_namespace import ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientTuple
 from openfga_sdk.exceptions import ApiException
+
+from service_kit.governed import fga
 
 
 def _tuple(user: str, relation: str, obj: str) -> SimpleNamespace:

@@ -173,7 +173,7 @@ PYEOF
 echo
 echo "== 2) OpenFGA tuples for removed warehouses/projects ($OPENFGA_API_URL) =="
 # Store selection = the seed scripts' pattern: NEWEST store named lance-catalog (max created_at — the
-# same selector common.fga.provision uses, so we clean the store the catalog actually serves from).
+# same selector service_kit.governed.fga.provision uses, so we clean the store the catalog actually serves from).
 SID="$("$FGA_BIN" store list --api-url "$OPENFGA_API_URL" \
   | uv run --no-sync python -c "import sys,json;s=[x for x in json.load(sys.stdin)['stores'] if x['name']=='lance-catalog'];print(max(s,key=lambda x:x['created_at'])['id'] if s else '')")"
 if [ -z "$SID" ]; then

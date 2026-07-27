@@ -12,15 +12,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
 import httpx
-from common import fga
-from common.audit import configure_audit
-from common.dapr_auth import assert_app_token_configured
-from common.exceptions import install_problem_handlers
-from common.lance_metrics import instrument_lance_if_available
-from common.obs import configure_app_logging
-from common.oidc import OIDCVerifier
-from common.secrets import fetch_required_secrets
-from common.user_state import UserStateStore
 from dapr.aio.clients import DaprClient
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
@@ -39,6 +30,15 @@ from catalog.core.control_emit import make_control_emitter
 from catalog.core.lineage_emit import make_emitter
 from catalog.core.namespace import build_namespace
 from catalog.core.vending import make_vendor
+from service_kit.governed import fga
+from service_kit.governed.audit import configure_audit
+from service_kit.governed.dapr_auth import assert_app_token_configured
+from service_kit.governed.oidc import OIDCVerifier
+from service_kit.governed.secrets import fetch_required_secrets
+from service_kit.governed.user_state import UserStateStore
+from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
+from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.obs import configure_app_logging
 
 
 log = logging.getLogger(__name__)

@@ -24,7 +24,8 @@ from typing import Any, cast
 import pytest
 from catalog.core.control_emit import NoopControlEmitter
 from catalog.core.identifiers import parse_identifier
-from common import fga
+
+from service_kit.governed import fga
 
 
 # Default plus three non-default delimiters (single-char and multi-char).

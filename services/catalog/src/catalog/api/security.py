@@ -14,13 +14,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from common.audit import FAILURE, SUCCESS, audit
-from common.oidc import IDToken, OIDCVerifier
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
 from catalog.api.dependencies import SettingsDep
+from service_kit.governed.audit import FAILURE, SUCCESS, audit
+from service_kit.governed.oidc import IDToken, OIDCVerifier
 
 
 # auto_error=False: we raise UnauthenticatedError ourselves so 401s are problem+json.

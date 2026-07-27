@@ -1,4 +1,4 @@
-"""Per-subject user state on the Dapr state store (``common/user_state.py``, ``/v1/user-state/*``).
+"""Per-subject user state on the Dapr state store (``service_kit/governed/user_state.py``, ``/v1/user-state/*``).
 
 Three things are being pinned, and only the first is ordinary:
 
@@ -30,9 +30,12 @@ import httpx
 import pytest
 from catalog.api.v1.endpoints import user_state as ep
 from catalog.core.config import Settings, get_settings
-from common.oidc import IDToken
-from common.schemas.workflow import SavedView, SearchSpec, WorkflowGraph, WorkflowSearchMode
-from common.user_state import (
+from fastapi import FastAPI, Request, Response
+from fastapi.testclient import TestClient
+from lance_namespace import ServiceUnavailableError
+
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.user_state import (
     DAPR_APP_ID_SEPARATOR,
     StoredState,
     UserStateDocument,
@@ -42,9 +45,7 @@ from common.user_state import (
     encode_subject,
     state_key,
 )
-from fastapi import FastAPI, Request, Response
-from fastapi.testclient import TestClient
-from lance_namespace import ServiceUnavailableError
+from service_kit.schemas.workflow import SavedView, SearchSpec, WorkflowGraph, WorkflowSearchMode
 
 
 # ── a stand-in for the local Dapr sidecar's state API ────────────────────────────────────────────────
@@ -173,7 +174,7 @@ def test_percent_encoding_would_not_have_worked(sidecar: FakeSidecar) -> None:
     """The reason base64url is used, pinned: a percent-encoded '|' decodes back to '|' at the sidecar.
 
     Not a test of our code — a test of the constraint our code is shaped by. If this ever stops holding,
-    the comment in ``common/user_state.py`` explaining the encoding choice is wrong.
+    the comment in ``service_kit/governed/user_state.py`` explaining the encoding choice is wrong.
     """
     from urllib.parse import quote
 
@@ -279,9 +280,9 @@ def test_an_unparseable_record_is_unreadable_not_absent(store: UserStateStore, s
 
 
 def test_search_modes_match_the_search_service() -> None:
-    """The mirror in ``common.schemas.workflow`` cannot drift from the real ``SearchMode``.
+    """The mirror in ``service_kit.schemas.workflow`` cannot drift from the real ``SearchMode``.
 
-    ``common`` may not import a service package (it is the shared kernel every service imports), so the
+    ``service_kit`` may not import a service package (it is the shared kernel every service imports), so the
     seven modes are restated there — and this is what keeps the restatement honest.
     """
     from search.services.spec import SearchMode
@@ -509,7 +510,7 @@ def test_defaults_are_the_zones_own_fallbacks() -> None:
     ``frontend/components/frontends/media/src/lib/workflow/persistence.ts``. Change one without changing
     the other and a reload silently rewrites the user's node config; this table is what notices.
     """
-    from common.schemas.workflow import DEFAULT_N, WorkflowNodeConfig
+    from service_kit.schemas.workflow import DEFAULT_N, WorkflowNodeConfig
 
     filled = WorkflowNodeConfig().model_dump(mode="json", by_alias=True)
     assert filled == {

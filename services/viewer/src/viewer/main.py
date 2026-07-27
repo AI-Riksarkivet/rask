@@ -12,13 +12,13 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import httpx
-from common.core.handlers import register_handlers
-from common.core.middleware import register_middleware
-from common.core.probes import router as probes_router
-from common.obs import configure_app_logging
-from common.state import AppState, dataset_handle
 from fastapi import FastAPI
 
+from service_kit.media.handlers import register_handlers
+from service_kit.media.middleware import register_middleware
+from service_kit.media.probes import router as probes_router
+from service_kit.media.state import AppState, dataset_handle
+from service_kit.obs import configure_app_logging
 from viewer.api.v1.router import router as api_router
 from viewer.core.config import get_viewer_settings
 
@@ -68,14 +68,14 @@ def run() -> None:
 
 def create_viewer_state(settings=None) -> AppState:
     """Standalone viewer state — registry + HTTP pool (the test/tooling seam)."""
-    from common.core.config import get_settings
+    from service_kit.media.config import get_settings
 
     return AppState(settings=settings or get_settings(), http=httpx.Client())
 
 
 def create_viewer_app(settings=None, state: AppState | None = None) -> FastAPI:
     """Viewer app around shared or standalone state — the test/composition seam."""
-    from common.core.config import get_settings
+    from service_kit.media.config import get_settings
 
     settings = settings or get_settings()
     test_app = FastAPI(title="viewer api")

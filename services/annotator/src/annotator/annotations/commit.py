@@ -11,21 +11,20 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from common.core.exceptions import ConflictError
-from common.lancekit.lineage_emit import emit_save
-from common.lancekit.predicate import isin
-from common.lancekit.reader import open_reader
-from common.lancekit.registry import table_dataset
-
 from annotator.annotations.schema import ANNOTATIONS_TABLE, SaveResult
+from service_kit.lancekit.lineage_emit import emit_save
+from service_kit.lancekit.predicate import isin
+from service_kit.lancekit.reader import open_reader
+from service_kit.lancekit.registry import table_dataset
+from service_kit.media.exceptions import ConflictError
 
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from common.core.config import Settings
-    from common.lancekit.registry import DatasetHandle
-    from common.lancekit.writer import TableWriter
+    from service_kit.lancekit.registry import DatasetHandle
+    from service_kit.lancekit.writer import TableWriter
+    from service_kit.media.config import Settings
 
 
 def check_base_version_value(current: int, base_version: int | None) -> None:

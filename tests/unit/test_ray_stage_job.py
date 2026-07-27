@@ -2,7 +2,7 @@
 
 ``scripts/ray_stage_job.py`` is a standalone script baked into the Ray image (no ``services/`` imports —
 lance_ray is Ray-image-only), so for the MEDIA path it INLINES the blob-v2 detection + the thumbnail /
-embedding derivation instead of importing ``common.blobs`` / ``medallion.services.media``. That is the
+embedding derivation instead of importing ``service_kit.lakehouse.blobs`` / ``medallion.services.media``. That is the
 repo's self-contained-ray-job convention (``ray_train_job`` inlines ``run_id_for`` the same way).
 
 Inlining is only safe if it CANNOT DRIFT from the in-process path — otherwise a media dataset would get a
@@ -25,9 +25,10 @@ from types import ModuleType
 
 import pyarrow as pa
 import pytest
-from common import blobs
 from lance import blob_array, blob_field
 from medallion.services import media
+
+from service_kit.lakehouse import blobs
 
 
 _JOB_PATH = Path(__file__).parents[2] / "scripts" / "ray_stage_job.py"
@@ -72,7 +73,7 @@ def test_inlined_is_image_matches_services(png_bytes: bytes) -> None:
 
 
 def test_inlined_blob_detection_matches_common() -> None:
-    """The Ray job's ``_is_blob_field`` / ``_blob_field_names`` agree with ``common.blobs`` on a real schema.
+    """The Ray job's ``_is_blob_field`` / ``_blob_field_names`` agree with ``service_kit.lakehouse.blobs`` on a real schema.
 
     Built with the same ``blob_field`` the ingest uses, so a blob column is detected identically on the Ray
     path and the in-process path — the gate that sends a media stage down the pylance round-trip."""
@@ -80,7 +81,7 @@ def test_inlined_blob_detection_matches_common() -> None:
     assert job._blob_field_names(schema) == blobs.blob_field_names(schema) == ["payload"]
     for field in schema:
         assert job._is_blob_field(field) == blobs.is_blob_field(field)
-    # And the constant the detection keys on hasn't drifted from common.blobs.
+    # And the constant the detection keys on hasn't drifted from service_kit.lakehouse.blobs.
     assert job._BLOB_V2_EXTENSION_NAME == blobs.BLOB_V2_EXTENSION_NAME
 
 

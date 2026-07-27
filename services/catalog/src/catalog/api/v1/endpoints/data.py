@@ -8,7 +8,6 @@ import re
 import uuid
 from typing import Annotated, Any
 
-from common import fga
 from fastapi import APIRouter, Body, Header, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
@@ -51,6 +50,7 @@ from catalog.core.lineage_metadata import build_lineage_metadata, inject_into_ar
 from catalog.core.serialization import dump
 from catalog.schemas import CommitFragmentsRequest, CommitFragmentsResponse
 from catalog.services import dataplane, native
+from service_kit.governed import fga
 
 
 log = logging.getLogger(__name__)

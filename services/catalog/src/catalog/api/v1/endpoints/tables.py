@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from common import fga
 from fastapi import APIRouter, Header
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
@@ -56,6 +55,7 @@ from catalog.core.lineage_emit import (
     emit_write_event,
 )
 from catalog.services import dataplane, native
+from service_kit.governed import fga
 
 
 log = logging.getLogger(__name__)

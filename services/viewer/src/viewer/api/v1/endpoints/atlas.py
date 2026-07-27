@@ -20,17 +20,17 @@ import logging
 from typing import Annotated, Any
 
 import lance
-from common.core.exceptions import NotFoundError, ValidationError
-from common.deps import DatasetParam, StateDep
-from common.lancekit.alignments import parse_alignments_json
-from common.lancekit.descriptor import AtlasSpace, Declared
-from common.lancekit.keys import chunk_key_filter, validate_doc_key
-from common.lancekit.predicate import and_, eq, isin
-from common.lancekit.registry import DatasetHandle, table_dataset
-from common.schemas.atlas import ChunkRowIds
-from common.state import dataset_handle
 from fastapi import APIRouter, Query, Response
 
+from service_kit.lancekit.alignments import parse_alignments_json
+from service_kit.lancekit.descriptor import AtlasSpace, Declared
+from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
+from service_kit.lancekit.predicate import and_, eq, isin
+from service_kit.lancekit.registry import DatasetHandle, table_dataset
+from service_kit.media.deps import DatasetParam, StateDep
+from service_kit.media.exceptions import NotFoundError, ValidationError
+from service_kit.media.state import dataset_handle
+from service_kit.schemas.atlas import ChunkRowIds
 from viewer.api.v1.endpoints.media import FRAME_INDEX_COLUMN
 from viewer.api.v1.endpoints.system import DURATION_COLUMN
 from viewer.api.v1.endpoints.transcripts import alignments_binding

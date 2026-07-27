@@ -1,6 +1,6 @@
 """The shared publish helper (§9 P1 claim-check guard + the sidecar timeout, 2026-07-11).
 
-Every publish site in the repo funnels through ``common.dapr_publish.publish_event`` (grep-verified
+Every publish site in the repo funnels through ``service_kit.dapr_publish.publish_event`` (grep-verified
 at review time: catalog + compaction lineage emitters, medallion produce/media/transform/train/
 ingest_trigger), so enforcing the claim-check invariant HERE covers them all:
 - payload > MAX_PAYLOAD_BYTES (900 KiB, just under NATS's ~1 MiB) → ``ValueError`` BEFORE any I/O —
@@ -17,7 +17,8 @@ import logging
 from typing import Any
 
 import pytest
-from common import dapr_publish
+
+from service_kit import dapr_publish
 
 
 class _Publisher:

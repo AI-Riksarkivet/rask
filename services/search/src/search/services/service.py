@@ -1,7 +1,7 @@
 """Decoupled search business logic — the mode-aware retrieval core.
 
 Ported from ``backend.search.service``, descriptor-driven: ``run_search`` takes
-a :class:`~common.lancekit.registry.DatasetHandle`, resolves it to a
+a :class:`~service_kit.lancekit.registry.DatasetHandle`, resolves it to a
 :class:`~search.services.target.SearchTarget` once, and routes a
 :class:`~search.services.spec.SearchSpec` across the seven modes
 (fts / semantic / visual / scene / scene_fts / hybrid / all), returning a
@@ -19,7 +19,7 @@ frame table rank there and join back by the identity key fields.
 
 It takes the two vLLM client getters as plain callables, so this module never
 imports the FastAPI app or app state — only domain exceptions from
-:mod:`common.core.exceptions` for error mapping. The HTTP router wires it to
+:mod:`service_kit.media.exceptions` for error mapping. The HTTP router wires it to
 the request via dependency injection.
 """
 
@@ -29,7 +29,6 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 import httpx
-from common.core.exceptions import ServiceUnavailableError, ValidationError
 from pydantic import BaseModel, ConfigDict
 
 from search.services.constants import (
@@ -44,16 +43,16 @@ from search.services.rerank import rerank_by_text
 from search.services.spec import SearchMode, SearchSpec
 from search.services.target import SearchTarget, resolve_target
 from search.services.vector import vector_search
+from service_kit.media.exceptions import ServiceUnavailableError, ValidationError
 
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-    from common.lancekit.descriptor import FtsBinding, VectorBinding
-    from common.lancekit.registry import DatasetHandle
-
     from search.services.encoders.embedding import EmbeddingClient
     from search.services.encoders.reranker import VLLMReranker
+    from service_kit.lancekit.descriptor import FtsBinding, VectorBinding
+    from service_kit.lancekit.registry import DatasetHandle
 
 logger = logging.getLogger(__name__)
 

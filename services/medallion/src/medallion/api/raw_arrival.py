@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from common.dapr_auth import require_dapr_token
 from dapr.ext.fastapi import DaprApp
 from fastapi import Depends, FastAPI
 
@@ -18,6 +17,7 @@ from medallion.api.dependencies import DaprClientDep, SettingsDep
 from medallion.api.dlq import register_dlq_route
 from medallion.core.config import get_settings
 from medallion.services.ingest_trigger import handle_raw_arrival
+from service_kit.governed.dapr_auth import require_dapr_token
 
 
 def register_raw_arrival_route(app: FastAPI) -> DaprApp:

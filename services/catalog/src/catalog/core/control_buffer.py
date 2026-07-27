@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections import deque
 
-from common.control_events import CatalogControlEvent
+from service_kit.control_events import CatalogControlEvent
 
 
 class ControlEventBuffer:

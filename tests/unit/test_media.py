@@ -8,10 +8,11 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
-from common import blobs
 from lance import blob_array, blob_field
 from medallion.services import media
 from PIL import Image, UnidentifiedImageError
+
+from service_kit.lakehouse import blobs
 
 
 def _png(color: tuple[int, int, int] = (10, 20, 30), size: tuple[int, int] = (64, 48)) -> bytes:

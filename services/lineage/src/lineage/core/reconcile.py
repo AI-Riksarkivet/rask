@@ -14,10 +14,10 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 import lance
-from common import blobs
-from common.schema import SchemaFields, facet_fields
 
 from lineage.schemas import DatasetSummary, ReconcileState, ReconcileStatus
+from service_kit.lakehouse import blobs
+from service_kit.lakehouse.schema import SchemaFields, facet_fields
 
 
 def _swallow_dataset_error(exc: BaseException) -> None:
@@ -63,7 +63,7 @@ def read_storage_schema(uri: str, storage_options: dict[str, str], version: int)
 def read_dangling_blob_columns(uri: str, storage_options: dict[str, str]) -> list[str]:
     """Blob-v2 columns at ``uri`` whose payloads no longer dereference — ``[]`` when healthy/no blobs.
 
-    The reconcile half of the shared pointer-health probe (``common.blobs`` — same probe the quality
+    The reconcile half of the shared pointer-health probe (``service_kit.lakehouse.blobs`` — same probe the quality
     gate runs at promotion): the sweep re-checks the ALREADY-promoted estate, because an external
     object deleted after promotion (bucket wipe) changes no Lance version and so is invisible to the
     version comparison. Cheap by construction — a metadata open plus two 1-byte reads per blob

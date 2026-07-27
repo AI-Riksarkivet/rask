@@ -9,16 +9,16 @@ annotations yet is not an error).
 from typing import Annotated
 
 import pyarrow as pa
-from common.core.exceptions import NotFoundError
-from common.deps import DatasetParam, StateDep
-from common.lancekit.keys import chunk_key_filter, validate_doc_key
-from common.lancekit.reader import open_catalog_reader, open_reader
-from common.lancekit.registry import table_dataset
-from common.state import dataset_handle
 from fastapi import APIRouter, Query, Response
 
 from annotator.annotations.schema import ANNOTATIONS_TABLE, EMPTY_SCHEMA
 from annotator.annotations.versions import VERSION_SOURCE_HEADER, checkout
+from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
+from service_kit.lancekit.reader import open_catalog_reader, open_reader
+from service_kit.lancekit.registry import table_dataset
+from service_kit.media.deps import DatasetParam, StateDep
+from service_kit.media.exceptions import NotFoundError
+from service_kit.media.state import dataset_handle
 
 
 router = APIRouter(tags=["annotate"])

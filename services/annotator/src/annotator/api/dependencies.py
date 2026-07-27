@@ -4,7 +4,7 @@ Annotated aliases over ``app.state`` come from the shared kernel; service-specif
 deps would live here beside them.
 """
 
-from common.deps import AuthorDep, DatasetParam, StateDep
+from service_kit.media.deps import AuthorDep, DatasetParam, StateDep
 
 
 __all__ = ["AuthorDep", "DatasetParam", "StateDep"]

@@ -2,7 +2,7 @@
 
 The bug class this exists to make unshippable: the app checks a ``can_*`` relation that the target
 type does not define. OpenFGA answers that with a 400 (``relation 'namespace#can_write_data' not
-found``, error code 2000) — an ``ApiException`` that is NOT retryable, so ``common.fga.check``'s
+found``, error code 2000) — an ``ApiException`` that is NOT retryable, so ``service_kit.governed.fga.check``'s
 fail-closed handler converts it to ``ServiceUnavailableError`` → **HTTP 503 for every caller, owners
 included**, logged as ``openfga_check_unavailable`` (an outage, which it is not). It is a total
 outage of the route that masquerades as an infra blip. That is exactly how the namespaced
@@ -15,7 +15,7 @@ not be the pairs the *app* sends (the yaml exercised ``transaction:``; the app c
 ``namespace:``). Only a cross-check of the app's own mapping tables against the compiled model
 closes it — so this test enumerates the pairs by DRIVING the real resolvers in
 ``catalog.api.fga_deps`` (never a hand-copied list, which would drift) and asserts each pair
-resolves in ``services/common/auth/model.json``, the file the app actually loads.
+resolves in ``service_kit/governed/auth/model.json``, the file the app actually loads.
 
 Also guards the 3-copy model sync (model.fga authored / model.fga.yaml tested / model.json loaded)
 at the type+relation level, so a relation added to one copy but not the others fails here rather
@@ -33,14 +33,15 @@ import pytest
 from catalog.api import fga_deps
 from catalog.api.v1.endpoints import access
 from catalog.core.config import Settings
-from common import fga as fga_module
-from common.oidc import IDToken
 from fastapi import Request
 from openfga_sdk import OpenFgaClient
 
+from service_kit.governed import fga as fga_module
+from service_kit.governed.oidc import IDToken
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-AUTH_DIR = REPO_ROOT / "packages" / "common" / "src" / "common" / "auth"
+AUTH_DIR = REPO_ROOT / "packages" / "service-kit" / "src" / "service_kit" / "governed" / "auth"
 
 #: Sentinel FGA client. The resolvers only ever hand it to ``fga.check``/``fga.batch_check``, which the
 #: recording fakes below replace — so nothing ever calls a method on it, and the cast is safe.
@@ -168,8 +169,10 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
         checked.extend((_obj_type(o), relation) for o in objects)
         return dict.fromkeys(objects, True)
 
-    monkeypatch.setattr(fga_module, "check", rec_check)
-    monkeypatch.setattr(fga_module, "batch_check", rec_batch)
+    # Patch the fga module AS SEEN BY fga_deps (the consuming module), so the recording fakes
+    # intercept the exact `fga.check`/`fga.batch_check` references the resolvers call.
+    monkeypatch.setattr(fga_deps.fga, "check", rec_check)
+    monkeypatch.setattr(fga_deps.fga, "batch_check", rec_batch)
 
     for segments in (["db1", "txn1"], ["txn1"]):  # namespaced (parent-scoped) + opaque (object-scoped)
         for suffix in ("describe", "alter"):
@@ -228,8 +231,8 @@ def test_every_relation_the_catalog_checks_exists_in_the_model(monkeypatch: pyte
 
     phantom = sorted(f"{t}#{r}" for t, r in pairs if t not in model or r not in model.get(t, set()))
     assert not phantom, (
-        f"the app can check relations that do NOT exist in services/common/auth/model.json: {phantom}. "
-        "OpenFGA rejects these (relation not found) and common.fga fails closed → 503 for every caller."
+        f"the app can check relations that do NOT exist in service_kit/governed/auth/model.json: {phantom}. "
+        "OpenFGA rejects these (relation not found) and service_kit.governed.fga fails closed → 503 for every caller."
     )
 
 
@@ -268,7 +271,7 @@ def test_transaction_alter_checks_a_real_namespace_writer_relation(
         checked.append((obj, relation))
         return True
 
-    monkeypatch.setattr(fga_module, "check", rec_check)
+    monkeypatch.setattr(fga_deps.fga, "check", rec_check)
     asyncio.run(fga_deps._authorize_transaction(_CLIENT, _settings(lock_root=False), ["db1", "txn1"], "alter", user="alice"))
 
     obj, relation = checked[-1]

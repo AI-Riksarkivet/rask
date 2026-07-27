@@ -19,7 +19,6 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from common.audit import AUDIT_LOGGER, configure_audit
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
@@ -29,6 +28,8 @@ from medallion.api.produce import router
 from medallion.api.train import router as train_router
 from medallion.core.config import MedallionSettings
 from openfga_sdk import OpenFgaClient
+
+from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
 
 
 # ── direct-function tests: every fail-closed branch of authorize_produce ──────────────────────────

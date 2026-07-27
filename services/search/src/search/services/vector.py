@@ -11,13 +11,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from common.core.exceptions import ValidationError
-
 from search.services.constants import (
     VECTOR_MAX_NPROBES,
     VECTOR_NPROBES,
     VECTOR_REFINE_FACTOR,
 )
+from service_kit.media.exceptions import ValidationError
 
 
 logger = logging.getLogger(__name__)

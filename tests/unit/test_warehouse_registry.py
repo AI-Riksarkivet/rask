@@ -15,8 +15,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from common import warehouse_registry
-from common.warehouse_registry import clear_cache, is_safe_project, project_gold_root, project_root
+
+from service_kit.lakehouse import warehouse_registry
+from service_kit.lakehouse.warehouse_registry import clear_cache, is_safe_project, project_gold_root, project_root
 
 
 @pytest.fixture(autouse=True)

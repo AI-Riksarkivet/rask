@@ -19,12 +19,13 @@ from typing import Any
 import pytest
 from catalog.api.v1.endpoints import access_admin as ep
 from catalog.schemas import AccessTuple
-from common import fga
 from lance_namespace import (
     InvalidInputError,
     ServiceUnavailableError,
     UnsupportedOperationError,
 )
+
+from service_kit.governed import fga
 
 
 def _settings(*, fga_enabled: bool = True) -> Any:

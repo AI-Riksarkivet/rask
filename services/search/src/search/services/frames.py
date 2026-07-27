@@ -14,8 +14,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from common.core.exceptions import ValidationError
-from common.lancekit.predicate import eq
 from lancedb.query import MatchQuery
 
 from search.services.constants import (
@@ -24,6 +22,8 @@ from search.services.constants import (
     VECTOR_REFINE_FACTOR,
 )
 from search.services.postprocess import RowKey, row_key
+from service_kit.lancekit.predicate import eq
+from service_kit.media.exceptions import ValidationError
 
 
 #: Cap on OR-of-ANDs composite-key clauses in the frame→row join — Lance's

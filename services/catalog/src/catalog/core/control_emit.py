@@ -6,7 +6,7 @@ best-effort**: the mutation endpoints `await` it AFTER the backend/FGA mutation 
 is never announced), but it swallows every error, so the bus being down/slow can never fail a catalog
 mutation — the audit trail still records it, we just skip the live-refresh hint (fail-open, the
 `lineage_emit` principle). No broker client in app code: we publish to the local Dapr sidecar via
-`common.dapr_publish.publish_event` (the sidecar owns retry/backoff/DLQ as component config); the catalog
+`service_kit.dapr_publish.publish_event` (the sidecar owns retry/backoff/DLQ as component config); the catalog
 subscribes to the same topic WITHOUT a queueGroupName, so every replica gets every event (broadcast).
 """
 
@@ -15,15 +15,16 @@ from __future__ import annotations
 import logging
 from typing import Any, Protocol, runtime_checkable
 
-from common import dapr_publish
-from common.control_events import (
+from dapr.aio.clients import DaprClient
+from opentelemetry import metrics
+
+from service_kit import dapr_publish
+from service_kit.control_events import (
     CONTROL_TOPIC,
     CatalogControlEvent,
     ControlAction,
     ControlObjectType,
 )
-from dapr.aio.clients import DaprClient
-from opentelemetry import metrics
 
 
 log = logging.getLogger(__name__)

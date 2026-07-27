@@ -11,7 +11,6 @@ from typing import Any, cast
 import lance
 import pyarrow as pa
 import pytest
-from common.schema import SchemaFields
 from lineage.api.reconcile_cron import _on_cron
 from lineage.core.config import LineageSettings
 from lineage.core.reconcile import (
@@ -22,6 +21,8 @@ from lineage.core.reconcile import (
     reconcile_all,
 )
 from lineage.schemas import DatasetSummary, ReconcileState
+
+from service_kit.lakehouse.schema import SchemaFields
 
 
 def _settings(**values: Any) -> LineageSettings:

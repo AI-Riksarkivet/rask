@@ -20,13 +20,14 @@ import re
 import uuid
 from typing import Any
 
-from common import dapr_publish, fga
 from dapr.aio.clients import DaprClient
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ServiceUnavailableError
 
 from medallion.core.config import MedallionSettings
 from medallion.services import ray_submit
+from service_kit import dapr_publish
+from service_kit.governed import fga
 
 
 log = logging.getLogger(__name__)
@@ -235,7 +236,7 @@ async def handle_train_trigger(settings: MedallionSettings, event: Any, *, fga_c
         # LINEAGE_FGA_ENABLED. Idempotent (duplicate writes are swallowed); a dangling link for a
         # job that later fails is harmless (same posture as the pre-seeded mover links). Placed
         # before the ack so an outage RETRYs rather than acking with the link half-missing.
-        from common.fga import ClientTuple  # openfga_sdk re-export — only needed on this path
+        from service_kit.governed.fga import ClientTuple  # openfga_sdk re-export — only needed on this path
 
         try:
             await fga.write_tuples(

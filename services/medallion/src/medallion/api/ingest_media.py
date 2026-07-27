@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from common.dapr_auth import require_dapr_token
 from fastapi import APIRouter, Depends, Header
 from fastapi.responses import JSONResponse
 
 from medallion.api.dependencies import DaprClientDep, SettingsDep
 from medallion.services.media_produce import ingest_media as run_ingest_media
+from service_kit.governed.dapr_auth import require_dapr_token
 
 
 router = APIRouter(tags=["media"])

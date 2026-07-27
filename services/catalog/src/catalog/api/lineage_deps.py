@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from common.oidc import IDToken
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import LanceNamespace
 
@@ -26,6 +25,7 @@ from catalog.core.config import Settings
 from catalog.core.lineage_emit import InputPin, LineageEmitter, emit_write_event
 from catalog.services import dataplane
 from catalog.services.dataplane import StorageOptions
+from service_kit.governed.oidc import IDToken
 
 
 async def emit_measured_write(

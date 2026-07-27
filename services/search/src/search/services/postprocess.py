@@ -13,9 +13,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from common.lancekit.predicate import and_, eq, isin
-
 from search.services.constants import REPRESENTATIVE_FRAME_INDEX
+from service_kit.lancekit.predicate import and_, eq, isin
 
 
 if TYPE_CHECKING:

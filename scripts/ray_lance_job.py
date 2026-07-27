@@ -11,6 +11,12 @@ job against Lance datasets on RustFS (S3):
 
 Env: S3_ENDPOINT S3_KEY S3_SECRET [S3_REGION] [RUN].
 """
+# TOKEN-AUTHED CLUSTER (gate 7 / R3): with RAY_AUTH_MODE=token on the head, export
+# RAY_AUTH_MODE=token + RAY_AUTH_TOKEN (kubectl get secret rask-ray-auth-token -o
+# jsonpath='{.data.auth_token}' | base64 -d) before submitting. `ray job submit` /
+# JobSubmissionClient then attach `Authorization: Bearer` themselves; any RAW
+# requests/httpx call against the dashboard (:8265) must send that header itself.
+# NEVER put the token in runtime_env.env_vars — the jobs API echoes runtime_env back.
 
 from __future__ import annotations
 

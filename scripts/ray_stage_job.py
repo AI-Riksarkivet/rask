@@ -23,6 +23,12 @@ Env: FROM_URI TO_URI STAGE  S3_ENDPOINT S3_KEY S3_SECRET [S3_REGION]
      when the submitting mover injected its span + OTLP config, the job runs under one root span
      parented on that trace; absent → untraced, exactly as before.
 """
+# TOKEN-AUTHED CLUSTER (gate 7 / R3): with RAY_AUTH_MODE=token on the head, export
+# RAY_AUTH_MODE=token + RAY_AUTH_TOKEN (kubectl get secret rask-ray-auth-token -o
+# jsonpath='{.data.auth_token}' | base64 -d) before submitting. `ray job submit` /
+# JobSubmissionClient then attach `Authorization: Bearer` themselves; any RAW
+# requests/httpx call against the dashboard (:8265) must send that header itself.
+# NEVER put the token in runtime_env.env_vars — the jobs API echoes runtime_env back.
 
 from __future__ import annotations
 
@@ -45,15 +51,15 @@ from lance import blob_array, blob_field
 # (tests/unit/test_ray_stage_job.py), exactly as ray_train_job keeps `lance` out of its module top.
 
 # --- blob + deriver primitives, inlined + drift-pinned to services (test_ray_stage_job.py) --------------
-# Kept byte-identical to common.blobs.is_blob_field / medallion.services.media so the Ray path and the
+# Kept byte-identical to service_kit.lakehouse.blobs.is_blob_field / medallion.services.media so the Ray path and the
 # in-process path derive the SAME thumbnail/embedding; the pin test fails if either side drifts.
-_BLOB_V2_EXTENSION_NAME = "lance.blob.v2"  # == common.blobs.BLOB_V2_EXTENSION_NAME
+_BLOB_V2_EXTENSION_NAME = "lance.blob.v2"  # == service_kit.lakehouse.blobs.BLOB_V2_EXTENSION_NAME
 _THUMBNAIL_SIZE = (128, 128)  # == media.THUMBNAIL_SIZE
 _EMBEDDING_DIMS = 8  # == media.EMBEDDING_DIMS
 
 
 def _is_blob_field(field: pa.Field) -> bool:
-    """Mirror of common.blobs.is_blob_field: registered extension name, else the raw field metadata."""
+    """Mirror of service_kit.lakehouse.blobs.is_blob_field: registered extension name, else the raw field metadata."""
     if getattr(field.type, "extension_name", None) == _BLOB_V2_EXTENSION_NAME:
         return True
     metadata = field.metadata or {}

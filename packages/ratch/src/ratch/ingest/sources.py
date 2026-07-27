@@ -1,6 +1,6 @@
 """Provider-agnostic SOURCE adapters + MIME sniffing — the media-agnostic ingest seam.
 
-The lance-ns pattern (``services/common/sources.py``): a *source* yields raw
+The lance-ns pattern (now ``service_kit.lakehouse.sources``): a *source* yields raw
 objects as bytes plus a stable URI; the provider client stays behind the small
 :class:`SourceAdapter` protocol so no provider code leaks into the pipeline.
 Deterministic (sorted) iteration order keeps ingests reproducible — same

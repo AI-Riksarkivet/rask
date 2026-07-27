@@ -27,8 +27,6 @@ from __future__ import annotations
 import asyncio
 from functools import lru_cache
 
-from common import fga
-from common.audit import FAILURE, SUCCESS, audit
 from fastapi import APIRouter, Request
 from lance_namespace import ServiceUnavailableError, UnsupportedOperationError
 
@@ -48,6 +46,8 @@ from catalog.schemas import (
     GraphNode,
     RelationGrants,
 )
+from service_kit.governed import fga
+from service_kit.governed.audit import FAILURE, SUCCESS, audit
 
 
 table_router = APIRouter(prefix="/v1/table", tags=["access"])
@@ -55,7 +55,7 @@ namespace_router = APIRouter(prefix="/v1/namespace", tags=["access"])
 
 
 # The base rungs an admin may directly assign. The model defines each as ``[user, role#assignee] or …``
-# (services/common/auth/model.fga) — a real user/userset grant, unlike the derived ``can_*`` actions or the
+# (service_kit/governed/auth/model.fga) — a real user/userset grant, unlike the derived ``can_*`` actions or the
 # structural ``parent`` edge, neither of which may be hand-granted. Intersected with the model below so a
 # renamed rung drops out (and test_fga_model_contract would catch the drift).
 _GRANTABLE_BASE: tuple[str, ...] = ("owner", "writer", "reader", "validator")

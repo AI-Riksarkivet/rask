@@ -11,9 +11,10 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Self
 
-from common.objectfs import lance_storage_options
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from service_kit.lakehouse.objectfs import lance_storage_options
 
 
 class MedallionSettings(BaseSettings):
@@ -47,7 +48,7 @@ class MedallionSettings(BaseSettings):
     # #84 per-tenant medallion routing (opt-in): the catalog's warehouse-registry/control root (the
     # LANCE_CONTROL_ROOT / LANCE_REST_ROOT value, e.g. ``s3://<bucket>``). When set, a ``project``-carrying
     # /produce request or stage trigger resolves that project's ACTIVE warehouse root off the registry
-    # (``common.warehouse_registry``) and the stage reads/writes ``<root>/medallion/<namespace>`` instead of
+    # (``service_kit.lakehouse.warehouse_registry``) and the stage reads/writes ``<root>/medallion/<namespace>`` instead of
     # the env URIs. Empty (default) = resolution DISABLED: a project-carrying trigger is DROPPED (fail
     # closed — never a fallback to the shared roots), and every project-less path stays byte-identical.
     control_root: str = Field(default="", alias="MEDALLION_CONTROL_ROOT")
@@ -101,7 +102,7 @@ class MedallionSettings(BaseSettings):
     fga_store_id: str = Field(default="", alias="MEDALLION_FGA_STORE_ID")
     fga_model_id: str = Field(default="", alias="MEDALLION_FGA_MODEL_ID")
     fga_timeout_seconds: float = Field(default=5.0, alias="MEDALLION_FGA_TIMEOUT_SECONDS")
-    # BARE subject (no ``user:`` prefix) — ``common.fga.check`` adds ``user:`` itself, so ``user:service-*``
+    # BARE subject (no ``user:`` prefix) — ``service_kit.governed.fga.check`` adds ``user:`` itself, so ``user:service-*``
     # here would double-prefix (``user:user:service-*``) and the gate would always deny. Matches the
     # catalog's convention (it passes the bare OIDC sub to fga.check).
     fga_service_identity: str = Field(default="service-mover", alias="MEDALLION_FGA_SERVICE_IDENTITY")
@@ -305,7 +306,7 @@ def apply_dapr_secrets(settings: MedallionSettings) -> None:
     """
     if not settings.secrets_from_dapr:
         return
-    from common.secrets import fetch_required_secrets
+    from service_kit.governed.secrets import fetch_required_secrets
 
     bundle = fetch_required_secrets(settings.dapr_secret_store, settings.dapr_secret_key, require=settings.dapr_secret_s3_field)
     settings.s3_secret_access_key = SecretStr(bundle[settings.dapr_secret_s3_field])

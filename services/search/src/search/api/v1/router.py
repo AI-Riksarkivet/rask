@@ -19,9 +19,6 @@ objects.
 
 from typing import Annotated, Any
 
-from common.core.exceptions import ValidationError
-from common.lancekit.registry import DatasetHandle
-from common.state import AppState, dataset_handle
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from starlette.concurrency import run_in_threadpool
 
@@ -30,6 +27,9 @@ from search.services.filters import TOPIC_FILTER, extract_filters
 from search.services.result_cache import run_cached
 from search.services.service import run_search
 from search.services.spec import PostSearchSpec, SearchMode, SearchSpec
+from service_kit.lancekit.registry import DatasetHandle
+from service_kit.media.exceptions import ValidationError
+from service_kit.media.state import AppState, dataset_handle
 
 
 router = APIRouter(prefix="/api", tags=["search"])

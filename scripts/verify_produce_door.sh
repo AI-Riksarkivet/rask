@@ -28,7 +28,7 @@ step "1/7 apply the chart change (medallion OIDC env + web MEDALLION_API)"
 helm upgrade "$RELEASE" ./chart --reuse-values --set medallion.produceAdminProject=acme --timeout 200s
 
 step "2/7 roll the freshly-loaded images (kind same-tag → delete pods, not just rollout)"
-# catalog too: it carries the #68 access-simulator fix (services/common/fga.py qualify flag) under the same
+# catalog too: it carries the #68 access-simulator fix (service_kit/governed/fga.py qualify flag) under the same
 # :dev tag, so without an explicit pod delete the running catalog keeps the old double-prefix Check.
 kubectl delete pod -l app.kubernetes.io/component=lance-ray --wait=false
 kubectl delete pod -l app.kubernetes.io/component=catalog --wait=false

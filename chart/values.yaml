@@ -398,7 +398,7 @@ auth:
   # into LANCE_AUDIT_ENABLED only when auth is on (that is where a real subject exists); set false to silence
   # the stream even with auth on.
   audit: true
-  # Pin the OpenFGA store (and optionally model) id — the production posture packages/common's fga.py
+  # Pin the OpenFGA store (and optionally model) id — the production posture service_kit.governed.fga
   # documents. When set, EVERY FGA consumer (catalog, lineage, medallion) receives its
   # *_FGA_STORE_ID/*_FGA_MODEL_ID env from these SAME values, and the bootstrap-admin Job grants into the
   # pinned store — one value, every consumer, so the store the Job grants into can never diverge from the
@@ -593,7 +593,7 @@ medallion:
   # requiredAction/serviceIdentity gate each hop when fgaEnabled: silver→gold needs `can_promote`
   # (validator-only); the others `can_create_table` (writer). Each mover checks as its own identity.
   # ⚠ Every requiredAction below MUST be a real relation on the `namespace` type in
-  # packages/common/src/common/auth/model.json — the mover checks it on namespace:<toNamespace>, and a
+  # packages/service-kit/src/service_kit/governed/auth/model.json — the mover checks it on namespace:<toNamespace>, and a
   # typo 503s the whole cascade at the FGA gate instead of denying it. Pinned by
   # tests/unit/test_fga_model_contract.py::test_chart_medallion_required_actions_exist_on_namespace.
   movers:
@@ -700,7 +700,7 @@ stateStore:
   name: lance-statestore
   componentVersion: v1
   # The Dapr secret store that resolves the connection string — OpenBao, not a k8s Secret. See
-  # packages/common's secrets module for why the store must be the sole source.
+  # service_kit.governed.secrets for why the store must be the sole source.
   secretStore: lance-secrets
   tableName: state
   metadataTableName: dapr_metadata

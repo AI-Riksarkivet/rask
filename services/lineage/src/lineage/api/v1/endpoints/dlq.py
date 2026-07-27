@@ -2,7 +2,7 @@
 
 The lineage delivery path has two failure backstops (see ``docs/RESILIENCE.md``): the Dapr-native DLQ on a
 NATS JetStream stream (park-and-alert, replayed from the stream on restart — not app-queryable, by design),
-and the **transactional outbox** (``common.outbox``) — an object-store of events staged BEFORE publish and
+and the **transactional outbox** (``service_kit.lakehouse.outbox``) — an object-store of events staged BEFORE publish and
 dropped on ack. A surviving outbox object is a committed write whose lineage was not yet confirmed delivered:
 the at-risk set the reconcile relay drains on a timer. This module surfaces that set for an operator and lets
 them replay one on demand instead of waiting for the next reconcile tick.
@@ -18,8 +18,6 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from common import audit, outbox
-from common.audit import SUCCESS
 from fastapi import APIRouter, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import TransactionNotFoundError, UnauthenticatedError, UnsupportedOperationError
@@ -32,6 +30,9 @@ from lineage.core.config import storage_options
 from lineage.models import RunEvent
 from lineage.schemas import DlqBacklog, DlqEvent, DlqReplayResponse
 from lineage.services.consumer import record_event_best_effort
+from service_kit.governed import audit
+from service_kit.governed.audit import SUCCESS
+from service_kit.lakehouse import outbox
 
 
 log = logging.getLogger(__name__)

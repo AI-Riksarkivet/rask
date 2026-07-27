@@ -23,11 +23,11 @@ from typing import Any, cast
 
 import lance
 import pyarrow as pa
-from common import blobs, schema
 from lance import blob_array, blob_field
 from pydantic import BaseModel, Field
 
 from medallion.services.derivers import ARTIFACT_COLUMNS, derive_artifacts
+from service_kit.lakehouse import blobs, schema
 
 
 _STAGE_COLUMN = "stage"

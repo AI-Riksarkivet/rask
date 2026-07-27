@@ -1,4 +1,4 @@
-"""Unit tests for the OpenFGA resilience + id-canonicalisation fixes in common.fga.
+"""Unit tests for the OpenFGA resilience + id-canonicalisation fixes in service_kit.governed.fga.
 
 These pin the audit-confirmed contracts WITHOUT touching the network:
 
@@ -19,10 +19,11 @@ from typing import cast
 
 import aiohttp
 import pytest
-from common import fga
 from lance_namespace import ServiceUnavailableError
 from openfga_sdk import ApiException, OpenFgaClient
 from openfga_sdk.client.models import ClientCheckRequest, ClientTuple, ClientWriteRequest
+
+from service_kit.governed import fga
 
 
 def test_is_transient_classifies_network_errors() -> None:

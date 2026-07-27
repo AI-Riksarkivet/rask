@@ -35,8 +35,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from catalog.api.v1.endpoints.access import _can_relations as _model_can_relations
 from catalog.core.config import Settings, get_settings
-from common import fga as fga_module
-from common.oidc import IDToken
 from fastapi.testclient import TestClient
 from lance_namespace import (
     CreateNamespaceResponse,
@@ -50,6 +48,9 @@ from lance_namespace import (
     ListTablesResponse,
     ServiceUnavailableError,
 )
+
+from service_kit.governed import fga as fga_module
+from service_kit.governed.oidc import IDToken
 
 
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -947,7 +948,7 @@ def test_authz_decision_emits_an_audit_event(client: TestClient, fake_ns: MagicM
     # #41: every authz decision (not just denials) lands on the dedicated audit stream with who/what/outcome.
     import logging
 
-    from common.audit import AUDIT_LOGGER, configure_audit
+    from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
 
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://x")
     _wire(client)

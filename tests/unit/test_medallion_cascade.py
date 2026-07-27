@@ -24,14 +24,15 @@ from typing import Any, cast
 
 import lance
 import pytest
-from common import warehouse_registry
-from common.warehouse_registry import UnresolvableProjectError
 from dapr.aio.clients import DaprClient
 from lineage.models import Dataset, RunEvent
 from medallion.core.config import MedallionSettings
 from medallion.services.ingest_trigger import handle_raw_arrival
 from medallion.services.produce import produce
 from medallion.services.transform import handle_stage
+
+from service_kit.lakehouse import warehouse_registry
+from service_kit.lakehouse.warehouse_registry import UnresolvableProjectError
 
 
 class _FakeDapr:

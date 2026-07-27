@@ -23,13 +23,14 @@ from typing import Any
 
 import lance
 import pyarrow.fs as pafs
-from common.objectfs import fs_and_base
 from lance_namespace import (
     InvalidInputError,
     InvalidTableStateError,
     TableNotFoundError,
     TableVersionNotFoundError,
 )
+
+from service_kit.lakehouse.objectfs import fs_and_base
 
 
 #: The reserved tag that names the promoted ("blessed") model version. A move of this tag IS the promotion.

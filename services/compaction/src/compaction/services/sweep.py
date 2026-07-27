@@ -17,8 +17,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pyarrow.fs as pafs
-from common import fga, maintenance_policies
-from common.objectfs import s3_filesystem
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 
@@ -26,6 +24,9 @@ from compaction.core.config import CompactionSettings
 from compaction.core.lineage_emit import MaintenanceEmitter, table_id_from_uri
 from compaction.core.metrics import record_reclaimed, record_run
 from compaction.services.optimize import DatasetResult, compact_one, discover_dataset_uris
+from service_kit.governed import fga
+from service_kit.lakehouse import maintenance_policies
+from service_kit.lakehouse.objectfs import s3_filesystem
 
 
 log = logging.getLogger(__name__)
@@ -215,7 +216,7 @@ async def emit_sweep_lineage(emitter: MaintenanceEmitter, results: list[DatasetR
       the DOCUMENTED blind spot for the medallion-nested datasets (``s3://<bucket>/medallion/<ns>`` has no
       catalog id to reconstruct — a URI→id map is out of proportion here).
 
-    The parent namespace is derived via :func:`common.fga.parent_namespace_id` so events land on the SAME
+    The parent namespace is derived via :func:`service_kit.governed.fga.parent_namespace_id` so events land on the SAME
     ``(:Dataset)`` the catalog created. COMPLETE emits stay awaited inline (unchanged semantics); the FAIL
     batch is gathered CONCURRENTLY (each publish already bounded by the emitter's 5s timeout) and capped
     at ``_MAX_FAIL_EMITS_PER_TICK`` so a bucket of failing datasets can't push the cron handler past the

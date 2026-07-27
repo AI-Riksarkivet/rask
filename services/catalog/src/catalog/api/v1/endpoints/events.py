@@ -23,8 +23,6 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from common.audit import SUCCESS, audit
-from common.control_events import CatalogControlEvent
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 
@@ -32,6 +30,8 @@ from catalog.api import fga_deps
 from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.control_buffer import ControlEventBuffer
+from service_kit.control_events import CatalogControlEvent
+from service_kit.governed.audit import SUCCESS, audit
 
 
 log = logging.getLogger(__name__)
