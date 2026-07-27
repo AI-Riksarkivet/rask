@@ -477,3 +477,11 @@ changelog preview. Update `CLAUDE.md`, `docs/architecture/*`, and the vendored `
 > the next goal alongside the ONE-Ray-cluster-latest work (R3) — the runner's Ray stack is
 > touched there anyway. Full traceback not captured (launcher tailed the log); reproduce with
 > `cd runners/htr && uv run --frozen pytest tests/test_pipeline_smoke.py -q`.
+>
+> **Update (2026-07-27, three measured runs):** the V2-autoscaler coordinator starvation was real but
+> not the root: with `RAY_DATA_CLUSTER_AUTOSCALER=V1` the run still dies at ~38 min in a raw
+> `ray.exceptions` object-fetch timeout inside the streaming executor — a resource-starvation class on
+> this shared 4-CPU-constrained local init, not reproducible logic. The test stays slow-marked and the
+> investigation moves to the R3 Ray-convergence step: re-test on Ray-latest, in-cluster (KubeRay), where
+> the equivalent lance-ns pipelines demonstrably run. If it passes there, the smoke gains an in-cluster
+> variant and the local variant gets a smaller pipeline shape (fewer stages) sized to 4 CPUs.
