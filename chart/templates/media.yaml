@@ -40,14 +40,9 @@ spec:
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
       {{- if $root.Values.dapr.sidecars }}
       annotations:
-        dapr.io/enabled: "true"
-        dapr.io/app-id: {{ $svc.daprAppId | quote }}
-        dapr.io/app-port: {{ $svc.port | quote }}
-        dapr.io/log-level: {{ $root.Values.dapr.logLevel | quote }}
-        {{- include "lance.daprSidecarResources" $root | nindent 8 }}
-        {{- if include "lance.otelEnabled" $root }}
-        dapr.io/config: "lance-tracing"
-        {{- end }}
+        {{- /* Shared annotation surface (app-id = $svc.daprAppId — viewer/search/annotator, the exact
+             ids the gateway's route rows invoke); the helper owns the full set so it never drifts. */}}
+        {{- include "rask.daprAnnotations" (list $root $svc.daprAppId $svc.port) | nindent 8 }}
       {{- end }}
     spec:
       terminationGracePeriodSeconds: {{ $root.Values.lifecycle.terminationGracePeriodSeconds }}

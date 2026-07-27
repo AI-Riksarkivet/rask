@@ -24,15 +24,7 @@ spec:
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
       {{- if .Values.dapr.sidecars }}
       annotations:
-        dapr.io/enabled: "true"
-        dapr.io/app-id: {{ .Values.medallion.producer.daprAppId | quote }}
-        dapr.io/app-port: {{ $port | quote }}
-        dapr.io/log-level: {{ .Values.dapr.logLevel | quote }}
-        dapr.io/app-token-secret: {{ .Release.Name }}-dapr-app-token
-        {{- include "lance.daprSidecarResources" . | nindent 8 }}
-        {{- if include "lance.otelEnabled" $root }}
-        dapr.io/config: "lance-tracing"
-        {{- end }}
+        {{- include "rask.daprAnnotations" (list $root .Values.medallion.producer.daprAppId $port) | nindent 8 }}
       {{- end }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
@@ -207,15 +199,7 @@ spec:
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
       {{- if $root.Values.dapr.sidecars }}
       annotations:
-        dapr.io/enabled: "true"
-        dapr.io/app-id: {{ .daprAppId | quote }}
-        dapr.io/app-port: {{ $port | quote }}
-        dapr.io/log-level: {{ $root.Values.dapr.logLevel | quote }}
-        dapr.io/app-token-secret: {{ $root.Release.Name }}-dapr-app-token
-        {{- include "lance.daprSidecarResources" $root | nindent 8 }}
-        {{- if include "lance.otelEnabled" $root }}
-        dapr.io/config: "lance-tracing"
-        {{- end }}
+        {{- include "rask.daprAnnotations" (list $root .daprAppId $port) | nindent 8 }}
       {{- end }}
     spec:
       terminationGracePeriodSeconds: {{ $root.Values.lifecycle.terminationGracePeriodSeconds }}

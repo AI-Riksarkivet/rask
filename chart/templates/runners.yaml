@@ -26,6 +26,7 @@ spec:
         # a miss); no lance.dev/logs=otlp: the runner carries no OTel SDK, the Collector's filelog
         # tail ships its logs.
         app.kubernetes.io/component: assist
+      # No Dapr sidecar by design: runners/ code calls no Dapr building block (grep 2026-07-27: zero dapr/pubsub/invoke/cloudevent hits) — assist is plain HTTP behind MEDIA_ASSIST_URL, so dapr.sidecars deliberately skips runner workloads.
     spec:
       terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
       {{- if .Values.security.serviceAccounts.enabled }}

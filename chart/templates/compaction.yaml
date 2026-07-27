@@ -38,15 +38,7 @@ spec:
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
       {{- if .Values.dapr.sidecars }}
       annotations:
-        dapr.io/enabled: "true"
-        dapr.io/app-id: {{ .Values.compaction.daprAppId | quote }}
-        dapr.io/app-port: {{ $port | quote }}
-        dapr.io/log-level: {{ .Values.dapr.logLevel | quote }}
-        dapr.io/app-token-secret: {{ .Release.Name }}-dapr-app-token
-        {{- include "lance.daprSidecarResources" . | nindent 8 }}
-        {{- if include "lance.otelEnabled" $root }}
-        dapr.io/config: "lance-tracing"
-        {{- end }}
+        {{- include "rask.daprAnnotations" (list $root .Values.compaction.daprAppId $port) | nindent 8 }}
       {{- end }}
     spec:
       # Longer grace than the other apps: an in-flight sweep/Lance write must finish, not be SIGKILLed.

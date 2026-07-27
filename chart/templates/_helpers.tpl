@@ -97,8 +97,19 @@ app.kubernetes.io/component: {{ $component }}
 {{- printf "postgresql+asyncpg://%s:%s@%s-postgres-rw:%v/%s" .Values.cnpg.user (include "rask.pgPassword" .) (include "rask.fullname" .) .Values.cnpg.port .Values.cnpg.database -}}
 {{- end -}}
 
-{{/* Dapr sidecar pod annotations (no-op unless dapr.sidecars). Shared by fleet +
-     controlplane so the annotation set never drifts.
+{{/* Dapr sidecar pod annotations (no-op unless dapr.sidecars) — the ONE annotation surface for the whole
+     estate: the rask fleet + controlplane AND the lance planes (services.yaml catalog/lineage,
+     medallion.yaml producer/movers, compaction.yaml, media.yaml viewer/search/annotator) all render
+     THIS helper, so the sidecar contract can never drift between planes (DAPRIFY 2026-07-27). Carries the full union of what the two planes shipped:
+       - enabled / app-id / app-port / log-level (the original rask surface)
+       - max-body-size (when dapr.maxBodySize is set — Dapr's 4Mi default rejects multi-image batch uploads)
+       - app-token-secret → the shared <release>-dapr-app-token Secret (dapr-app-token.yaml, same
+         dapr.sidecars gate, so the reference can never dangle): Dapr injects APP_API_TOKEN and stamps
+         `dapr-api-token` on delivered requests → sidecar-only routes reject forged direct POSTs
+       - the daprd resource bounds + disable-builtin-k8s-secret-store (+ optional seccomp) via
+         lance.daprSidecarResources
+       - dapr.io/config: lance-tracing — gated on lance.otelEnabled EXACTLY like the app containers' OTel
+         wiring (observability.enabled OR externalOtlpEndpoint), so sidecar traces flip with the apps'.
      Usage: {{- include "rask.daprAnnotations" (list $root $appId $appPort) | nindent 8 }} */}}
 {{- define "rask.daprAnnotations" -}}
 {{- $root := index . 0 -}}
@@ -111,6 +122,11 @@ dapr.io/app-port: {{ $appPort | quote }}
 dapr.io/log-level: {{ $root.Values.dapr.logLevel | quote }}
 {{- with $root.Values.dapr.maxBodySize }}
 dapr.io/max-body-size: {{ . | quote }}
+{{- end }}
+dapr.io/app-token-secret: {{ $root.Release.Name }}-dapr-app-token
+{{- include "lance.daprSidecarResources" $root | nindent 0 }}
+{{- if include "lance.otelEnabled" $root }}
+dapr.io/config: "lance-tracing"
 {{- end }}
 {{- end }}
 {{- end -}}

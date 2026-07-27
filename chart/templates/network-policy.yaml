@@ -110,8 +110,13 @@ spec:
 ---
 # (3b) openbao:8200 — THE crown jewel (the audit's headline: "reachable by any pod"). Only the
 # secret-consuming app pods' daprd sidecars may connect: catalog, lineage, compaction, the
-# medallion producer (lance-ray) and every mover. web/gateway/dex/rustfs/age can NEVER reach it.
-# External-secrets (off-namespace, when enabled) needs an entry in networkPolicy.openbaoExtraFrom.
+# medallion producer (lance-ray), every mover, and (DAPRIFY 2026-07-27) the state-store-scoped
+# apps — their daprd resolves the state store's connectionString through the lance-secrets
+# component at boot (dapr-component.yaml derives the secret-store scope from stateStore.scopes the
+# same way), so blocking them here wedges the sidecar on component init. The newly-sidecared fleet/
+# controlplane pods load NO openbao-backed component and stay excluded: web/gateway/dex/rustfs/age
+# can NEVER reach it. External-secrets (off-namespace, when enabled) needs an entry in
+# networkPolicy.openbaoExtraFrom.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -127,13 +132,19 @@ spec:
             matchExpressions:
               - key: app.kubernetes.io/component
                 operator: In
+                {{- /* stateStore.scopes is APPENDED + uniq'd (app-id == component label for these
+                     pods — media.yaml keys them identically), so this list and the secret-store
+                     component's scope (dapr-component.yaml) cannot drift. */}}
+                {{- $openbaoClients := list "catalog" "lineage" "compaction" "lance-ray" }}
+                {{- range .Values.medallion.movers }}
+                {{- $openbaoClients = append $openbaoClients .name }}
+                {{- end }}
+                {{- if and .Values.dapr.sidecars .Values.stateStore.enabled }}
+                {{- $openbaoClients = concat $openbaoClients .Values.stateStore.scopes }}
+                {{- end }}
                 values:
-                  - catalog
-                  - lineage
-                  - compaction
-                  - lance-ray
-                  {{- range .Values.medallion.movers }}
-                  - {{ .name }}
+                  {{- range ($openbaoClients | uniq) }}
+                  - {{ . }}
                   {{- end }}
         {{- with .Values.networkPolicy.openbaoExtraFrom }}
         {{- toYaml . | nindent 8 }}
@@ -141,9 +152,12 @@ spec:
       ports:
         - { protocol: TCP, port: 8200 }
 ---
-# (3c) age-postgres:5432 — the lineage graph + the OpenFGA datastore. Clients: lineage,
-# openfga (subchart pods carry app.kubernetes.io/name=openfga), the openfga-migrate job, the
-# pg backup job, and the catalog (per the audit's client list).
+# (3c) age-postgres:5432 — the lineage graph + the OpenFGA datastore + the Dapr state store
+# (dapr-statestore.yaml rides this same instance). Clients: lineage, openfga (subchart pods carry
+# app.kubernetes.io/name=openfga), the openfga-migrate job, the pg backup job, the catalog (per the
+# audit's client list), and (DAPRIFY 2026-07-27) the state-store-scoped apps — daprd's
+# state.postgresql component connects DIRECTLY to this postgres, so those pods' sidecars are real
+# 5432 clients (blocked = the state store never loads and actor hosting silently disables).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -159,7 +173,15 @@ spec:
             matchExpressions:
               - key: app.kubernetes.io/component
                 operator: In
-                values: [lineage, catalog, openfga-migrate, backup-pg]
+                {{- /* stateStore.scopes appended + uniq'd, same derivation as the openbao rule above. */}}
+                {{- $ageClients := list "lineage" "catalog" "openfga-migrate" "backup-pg" }}
+                {{- if and .Values.dapr.sidecars .Values.stateStore.enabled }}
+                {{- $ageClients = concat $ageClients .Values.stateStore.scopes }}
+                {{- end }}
+                values:
+                  {{- range ($ageClients | uniq) }}
+                  - {{ . }}
+                  {{- end }}
         - podSelector:
             matchLabels: { app.kubernetes.io/name: openfga }
       ports:
