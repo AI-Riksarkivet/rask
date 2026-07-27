@@ -1,0 +1,900 @@
+[
+  {
+    "eventTime": "2026-06-20T09:00:00Z",
+    "eventType": "COMPLETE",
+    "inputs": [
+      {
+        "facets": {
+          "dataSource": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasourceDatasetFacet.json#/$defs/DatasourceDatasetFacet",
+            "name": "s3://landing/raw/events",
+            "uri": "s3://landing/raw/events"
+          },
+          "tags": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-0/TagsDatasetFacet.json#/$defs/TagsDatasetFacet",
+            "tags": [
+              {
+                "key": "layer",
+                "value": "raw"
+              }
+            ]
+          }
+        },
+        "inputFacets": {},
+        "name": "raw_events",
+        "namespace": "source"
+      }
+    ],
+    "job": {
+      "facets": {
+        "jobType": {
+          "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+          "_schemaURL": "https://openlineage.io/spec/facets/2-0-3/JobTypeJobFacet.json#/$defs/JobTypeJobFacet",
+          "integration": "RAY",
+          "jobType": "ETL",
+          "processingType": "BATCH"
+        },
+        "ownership": {
+          "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+          "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/OwnershipJobFacet.json#/$defs/OwnershipJobFacet",
+          "owners": [
+            {
+              "name": "alice",
+              "type": "user"
+            }
+          ]
+        }
+      },
+      "name": "ingest_events",
+      "namespace": "ray-jobs"
+    },
+    "outputs": [
+      {
+        "facets": {
+          "dataSource": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasourceDatasetFacet.json#/$defs/DatasourceDatasetFacet",
+            "name": "s3://lakehouse/bronze/events",
+            "uri": "s3://lakehouse/bronze/events"
+          },
+          "schema": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-2-0/SchemaDatasetFacet.json#/$defs/SchemaDatasetFacet",
+            "fields": [
+              {
+                "fields": [],
+                "name": "id",
+                "type": "int"
+              },
+              {
+                "fields": [],
+                "name": "payload",
+                "type": "blob"
+              },
+              {
+                "fields": [],
+                "name": "payload_src",
+                "type": "string"
+              }
+            ]
+          },
+          "tags": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-0/TagsDatasetFacet.json#/$defs/TagsDatasetFacet",
+            "tags": [
+              {
+                "key": "layer",
+                "value": "bronze"
+              }
+            ]
+          },
+          "version": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json#/$defs/DatasetVersionDatasetFacet",
+            "datasetVersion": "1"
+          }
+        },
+        "name": "bronze$events",
+        "namespace": "bronze",
+        "outputFacets": {}
+      }
+    ],
+    "producer": "https://github.com/Borg93/lance-ns/tree/main/lineage",
+    "run": {
+      "facets": {
+        "author": {
+          "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+          "_schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunFacet",
+          "name": "alice",
+          "sub": "alice"
+        }
+      },
+      "runId": "11111111-1111-1111-1111-111111111111"
+    },
+    "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
+  },
+  {
+    "eventTime": "2026-06-21T08:00:00Z",
+    "eventType": "FAIL",
+    "inputs": [
+      {
+        "facets": {
+          "dataSource": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasourceDatasetFacet.json#/$defs/DatasourceDatasetFacet",
+            "name": "s3://lakehouse/bronze/events",
+            "uri": "s3://lakehouse/bronze/events"
+          },
+          "schema": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-2-0/SchemaDatasetFacet.json#/$defs/SchemaDatasetFacet",
+            "fields": [
+              {
+                "fields": [],
+                "name": "id",
+                "type": "int"
+              },
+              {
+                "fields": [],
+                "name": "payload",
+                "type": "blob"
+              },
+              {
+                "fields": [],
+                "name": "payload_src",
+                "type": "string"
+              }
+            ]
+          },
+          "tags": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-0/TagsDatasetFacet.json#/$defs/TagsDatasetFacet",
+            "tags": [
+              {
+                "key": "layer",
+                "value": "bronze"
+              }
+            ]
+          }
+        },
+        "inputFacets": {},
+        "name": "bronze$events",
+        "namespace": "bronze"
+      }
+    ],
+    "job": {
+      "facets": {
+        "jobType": {
+          "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+          "_schemaURL": "https://openlineage.io/spec/facets/2-0-3/JobTypeJobFacet.json#/$defs/JobTypeJobFacet",
+          "integration": "RAY",
+          "jobType": "TRANSFORMATION",
+          "processingType": "BATCH"
+        },
+        "ownership": {
+          "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+          "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/OwnershipJobFacet.json#/$defs/OwnershipJobFacet",
+          "owners": [
+            {
+              "name": "data_eng",
+              "type": "user"
+            }
+          ]
+        }
+      },
+      "name": "embed_features",
+      "namespace": "ray-jobs"
+    },
+    "outputs": [
+      {
+        "facets": {
+          "columnLineage": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-2-0/ColumnLineageDatasetFacet.json#/$defs/ColumnLineageDatasetFacet",
+            "dataset": [],
+            "fields": {
+              "embedding": {
+                "inputFields": [
+                  {
+                    "field": "payload",
+                    "name": "bronze$events",
+                    "namespace": "bronze",
+                    "transformations": [
+                      {
+                        "subtype": "TRANSFORMATION",
+                        "type": "DIRECT"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "id": {
+                "inputFields": [
+                  {
+                    "field": "id",
+                    "name": "bronze$events",
+                    "namespace": "bronze",
+                    "transformations": [
+                      {
+                        "subtype": "IDENTITY",
+                        "type": "DIRECT"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "payload_src": {
+                "inputFields": [
+                  {
+                    "field": "payload_src",
+                    "name": "bronze$events",
+                    "namespace": "bronze",
+                    "transformations": [
+                      {
+                        "subtype": "IDENTITY",
+                        "type": "DIRECT"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "dataSource": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasourceDatasetFacet.json#/$defs/DatasourceDatasetFacet",
+            "name": "s3://lakehouse/silver/features",
+            "uri": "s3://lakehouse/silver/features"
+          },
+          "schema": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-2-0/SchemaDatasetFacet.json#/$defs/SchemaDatasetFacet",
+            "fields": [
+              {
+                "fields": [],
+                "name": "id",
+                "type": "int"
+              },
+              {
+                "fields": [],
+                "name": "payload_src",
+                "type": "string"
+              },
+              {
+                "fields": [],
+                "name": "embedding",
+                "type": "array<float>"
+              }
+            ]
+          },
+          "tags": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-0/TagsDatasetFacet.json#/$defs/TagsDatasetFacet",
+            "tags": [
+              {
+                "key": "layer",
+                "value": "silver"
+              },
+              {
+                "key": "pii",
+                "value": "false"
+              }
+            ]
+          }
+        },
+        "name": "silver$features",
+        "namespace": "silver",
+        "outputFacets": {}
+      }
+    ],
+    "producer": "https://github.com/Borg93/lance-ns/tree/main/lineage",
+    "run": {
+      "facets": {
+        "author": {
+          "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+          "_schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunFacet",
+          "name": "data_eng",
+          "sub": "data_eng"
+        },
+        "errorMessage": {
+          "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+          "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/ErrorMessageRunFacet.json#/$defs/ErrorMessageRunFacet",
+          "message": "CUDA OOM while embedding batch 7/12",
+          "programmingLanguage": "PYTHON"
+        }
+      },
+      "runId": "22222222-2222-2222-2222-222222222220"
+    },
+    "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
+  },
+  {
+    "eventTime": "2026-06-21T09:00:00Z",
+    "eventType": "COMPLETE",
+    "inputs": [
+      {
+        "facets": {
+          "dataSource": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasourceDatasetFacet.json#/$defs/DatasourceDatasetFacet",
+            "name": "s3://lakehouse/bronze/events",
+            "uri": "s3://lakehouse/bronze/events"
+          },
+          "schema": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-2-0/SchemaDatasetFacet.json#/$defs/SchemaDatasetFacet",
+            "fields": [
+              {
+                "fields": [],
+                "name": "id",
+                "type": "int"
+              },
+              {
+                "fields": [],
+                "name": "payload",
+                "type": "blob"
+              },
+              {
+                "fields": [],
+                "name": "payload_src",
+                "type": "string"
+              }
+            ]
+          },
+          "tags": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-0/TagsDatasetFacet.json#/$defs/TagsDatasetFacet",
+            "tags": [
+              {
+                "key": "layer",
+                "value": "bronze"
+              }
+            ]
+          }
+        },
+        "inputFacets": {},
+        "name": "bronze$events",
+        "namespace": "bronze"
+      }
+    ],
+    "job": {
+      "facets": {
+        "jobType": {
+          "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+          "_schemaURL": "https://openlineage.io/spec/facets/2-0-3/JobTypeJobFacet.json#/$defs/JobTypeJobFacet",
+          "integration": "RAY",
+          "jobType": "TRANSFORMATION",
+          "processingType": "BATCH"
+        },
+        "ownership": {
+          "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+          "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/OwnershipJobFacet.json#/$defs/OwnershipJobFacet",
+          "owners": [
+            {
+              "name": "data_eng",
+              "type": "user"
+            }
+          ]
+        }
+      },
+      "name": "embed_features",
+      "namespace": "ray-jobs"
+    },
+    "outputs": [
+      {
+        "facets": {
+          "columnLineage": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-2-0/ColumnLineageDatasetFacet.json#/$defs/ColumnLineageDatasetFacet",
+            "dataset": [],
+            "fields": {
+              "embedding": {
+                "inputFields": [
+                  {
+                    "field": "payload",
+                    "name": "bronze$events",
+                    "namespace": "bronze",
+                    "transformations": [
+                      {
+                        "subtype": "TRANSFORMATION",
+                        "type": "DIRECT"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "id": {
+                "inputFields": [
+                  {
+                    "field": "id",
+                    "name": "bronze$events",
+                    "namespace": "bronze",
+                    "transformations": [
+                      {
+                        "subtype": "IDENTITY",
+                        "type": "DIRECT"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "payload_src": {
+                "inputFields": [
+                  {
+                    "field": "payload_src",
+                    "name": "bronze$events",
+                    "namespace": "bronze",
+                    "transformations": [
+                      {
+                        "subtype": "IDENTITY",
+                        "type": "DIRECT"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "dataSource": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasourceDatasetFacet.json#/$defs/DatasourceDatasetFacet",
+            "name": "s3://lakehouse/silver/features",
+            "uri": "s3://lakehouse/silver/features"
+          },
+          "schema": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-2-0/SchemaDatasetFacet.json#/$defs/SchemaDatasetFacet",
+            "fields": [
+              {
+                "fields": [],
+                "name": "id",
+                "type": "int"
+              },
+              {
+                "fields": [],
+                "name": "payload_src",
+                "type": "string"
+              },
+              {
+                "fields": [],
+                "name": "embedding",
+                "type": "array<float>"
+              }
+            ]
+          },
+          "tags": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-0/TagsDatasetFacet.json#/$defs/TagsDatasetFacet",
+            "tags": [
+              {
+                "key": "layer",
+                "value": "silver"
+              },
+              {
+                "key": "pii",
+                "value": "false"
+              }
+            ]
+          },
+          "version": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json#/$defs/DatasetVersionDatasetFacet",
+            "datasetVersion": "1"
+          }
+        },
+        "name": "silver$features",
+        "namespace": "silver",
+        "outputFacets": {}
+      }
+    ],
+    "producer": "https://github.com/Borg93/lance-ns/tree/main/lineage",
+    "run": {
+      "facets": {
+        "author": {
+          "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+          "_schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunFacet",
+          "name": "data_eng",
+          "sub": "data_eng"
+        }
+      },
+      "runId": "22222222-2222-2222-2222-222222222222"
+    },
+    "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
+  },
+  {
+    "eventTime": "2026-06-21T11:00:00Z",
+    "eventType": "COMPLETE",
+    "inputs": [
+      {
+        "facets": {
+          "dataSource": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasourceDatasetFacet.json#/$defs/DatasourceDatasetFacet",
+            "name": "s3://lakehouse/silver/features",
+            "uri": "s3://lakehouse/silver/features"
+          },
+          "schema": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-2-0/SchemaDatasetFacet.json#/$defs/SchemaDatasetFacet",
+            "fields": [
+              {
+                "fields": [],
+                "name": "id",
+                "type": "int"
+              },
+              {
+                "fields": [],
+                "name": "payload_src",
+                "type": "string"
+              },
+              {
+                "fields": [],
+                "name": "embedding",
+                "type": "array<float>"
+              }
+            ]
+          },
+          "tags": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-0/TagsDatasetFacet.json#/$defs/TagsDatasetFacet",
+            "tags": [
+              {
+                "key": "layer",
+                "value": "silver"
+              },
+              {
+                "key": "pii",
+                "value": "false"
+              }
+            ]
+          }
+        },
+        "inputFacets": {},
+        "name": "silver$features",
+        "namespace": "silver"
+      }
+    ],
+    "job": {
+      "facets": {
+        "jobType": {
+          "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+          "_schemaURL": "https://openlineage.io/spec/facets/2-0-3/JobTypeJobFacet.json#/$defs/JobTypeJobFacet",
+          "integration": "RAY",
+          "jobType": "TRANSFORMATION",
+          "processingType": "BATCH"
+        },
+        "ownership": {
+          "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+          "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/OwnershipJobFacet.json#/$defs/OwnershipJobFacet",
+          "owners": [
+            {
+              "name": "data_eng",
+              "type": "user"
+            }
+          ]
+        }
+      },
+      "name": "caption_features",
+      "namespace": "ray-jobs"
+    },
+    "outputs": [
+      {
+        "facets": {
+          "columnLineage": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-2-0/ColumnLineageDatasetFacet.json#/$defs/ColumnLineageDatasetFacet",
+            "dataset": [],
+            "fields": {
+              "caption": {
+                "inputFields": [
+                  {
+                    "field": "embedding",
+                    "name": "silver$features",
+                    "namespace": "silver",
+                    "transformations": [
+                      {
+                        "subtype": "TRANSFORMATION",
+                        "type": "DIRECT"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "dataSource": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasourceDatasetFacet.json#/$defs/DatasourceDatasetFacet",
+            "name": "s3://lakehouse/silver/features",
+            "uri": "s3://lakehouse/silver/features"
+          },
+          "schema": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-2-0/SchemaDatasetFacet.json#/$defs/SchemaDatasetFacet",
+            "fields": [
+              {
+                "fields": [],
+                "name": "id",
+                "type": "int"
+              },
+              {
+                "fields": [],
+                "name": "payload_src",
+                "type": "string"
+              },
+              {
+                "fields": [],
+                "name": "embedding",
+                "type": "array<float>"
+              },
+              {
+                "fields": [],
+                "name": "caption",
+                "type": "string"
+              }
+            ]
+          },
+          "tags": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-0/TagsDatasetFacet.json#/$defs/TagsDatasetFacet",
+            "tags": [
+              {
+                "key": "layer",
+                "value": "silver"
+              },
+              {
+                "key": "pii",
+                "value": "false"
+              }
+            ]
+          },
+          "version": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json#/$defs/DatasetVersionDatasetFacet",
+            "datasetVersion": "2"
+          }
+        },
+        "name": "silver$features",
+        "namespace": "silver",
+        "outputFacets": {}
+      }
+    ],
+    "producer": "https://github.com/Borg93/lance-ns/tree/main/lineage",
+    "run": {
+      "facets": {
+        "author": {
+          "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+          "_schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunFacet",
+          "name": "data_eng",
+          "sub": "data_eng"
+        }
+      },
+      "runId": "33333333-3333-3333-3333-333333333333"
+    },
+    "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
+  },
+  {
+    "eventTime": "2026-06-21T12:00:00Z",
+    "eventType": "COMPLETE",
+    "inputs": [
+      {
+        "facets": {
+          "dataSource": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasourceDatasetFacet.json#/$defs/DatasourceDatasetFacet",
+            "name": "s3://lakehouse/silver/features",
+            "uri": "s3://lakehouse/silver/features"
+          },
+          "schema": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-2-0/SchemaDatasetFacet.json#/$defs/SchemaDatasetFacet",
+            "fields": [
+              {
+                "fields": [],
+                "name": "id",
+                "type": "int"
+              },
+              {
+                "fields": [],
+                "name": "payload_src",
+                "type": "string"
+              },
+              {
+                "fields": [],
+                "name": "embedding",
+                "type": "array<float>"
+              },
+              {
+                "fields": [],
+                "name": "caption",
+                "type": "string"
+              }
+            ]
+          },
+          "tags": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-0/TagsDatasetFacet.json#/$defs/TagsDatasetFacet",
+            "tags": [
+              {
+                "key": "layer",
+                "value": "silver"
+              },
+              {
+                "key": "pii",
+                "value": "false"
+              }
+            ]
+          }
+        },
+        "inputFacets": {},
+        "name": "silver$features",
+        "namespace": "silver"
+      }
+    ],
+    "job": {
+      "facets": {
+        "jobType": {
+          "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+          "_schemaURL": "https://openlineage.io/spec/facets/2-0-3/JobTypeJobFacet.json#/$defs/JobTypeJobFacet",
+          "integration": "RAY",
+          "jobType": "TRANSFORMATION",
+          "processingType": "BATCH"
+        },
+        "ownership": {
+          "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+          "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/OwnershipJobFacet.json#/$defs/OwnershipJobFacet",
+          "owners": [
+            {
+              "name": "analyst",
+              "type": "user"
+            }
+          ]
+        }
+      },
+      "name": "aggregate_gold",
+      "namespace": "ray-jobs"
+    },
+    "outputs": [
+      {
+        "facets": {
+          "columnLineage": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-2-0/ColumnLineageDatasetFacet.json#/$defs/ColumnLineageDatasetFacet",
+            "dataset": [],
+            "fields": {
+              "caption": {
+                "inputFields": [
+                  {
+                    "field": "caption",
+                    "name": "silver$features",
+                    "namespace": "silver",
+                    "transformations": [
+                      {
+                        "subtype": "IDENTITY",
+                        "type": "DIRECT"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "embedding": {
+                "inputFields": [
+                  {
+                    "field": "embedding",
+                    "name": "silver$features",
+                    "namespace": "silver",
+                    "transformations": [
+                      {
+                        "subtype": "IDENTITY",
+                        "type": "DIRECT"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "id": {
+                "inputFields": [
+                  {
+                    "field": "id",
+                    "name": "silver$features",
+                    "namespace": "silver",
+                    "transformations": [
+                      {
+                        "subtype": "IDENTITY",
+                        "type": "DIRECT"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "payload_src": {
+                "inputFields": [
+                  {
+                    "field": "payload_src",
+                    "name": "silver$features",
+                    "namespace": "silver",
+                    "transformations": [
+                      {
+                        "subtype": "IDENTITY",
+                        "type": "DIRECT"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "dataSource": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasourceDatasetFacet.json#/$defs/DatasourceDatasetFacet",
+            "name": "s3://lakehouse/gold/catalog",
+            "uri": "s3://lakehouse/gold/catalog"
+          },
+          "schema": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-2-0/SchemaDatasetFacet.json#/$defs/SchemaDatasetFacet",
+            "fields": [
+              {
+                "fields": [],
+                "name": "id",
+                "type": "int"
+              },
+              {
+                "fields": [],
+                "name": "payload_src",
+                "type": "string"
+              },
+              {
+                "fields": [],
+                "name": "embedding",
+                "type": "array<float>"
+              },
+              {
+                "fields": [],
+                "name": "caption",
+                "type": "string"
+              },
+              {
+                "fields": [],
+                "name": "lineage",
+                "type": "json"
+              }
+            ]
+          },
+          "tags": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-0/TagsDatasetFacet.json#/$defs/TagsDatasetFacet",
+            "tags": [
+              {
+                "key": "layer",
+                "value": "gold"
+              }
+            ]
+          },
+          "version": {
+            "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+            "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json#/$defs/DatasetVersionDatasetFacet",
+            "datasetVersion": "1"
+          }
+        },
+        "name": "gold$catalog",
+        "namespace": "gold",
+        "outputFacets": {}
+      }
+    ],
+    "producer": "https://github.com/Borg93/lance-ns/tree/main/lineage",
+    "run": {
+      "facets": {
+        "author": {
+          "_producer": "https://github.com/OpenLineage/OpenLineage/tree/1.50.0/client/python",
+          "_schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunFacet",
+          "name": "analyst",
+          "sub": "analyst"
+        }
+      },
+      "runId": "44444444-4444-4444-4444-444444444444"
+    },
+    "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
+  }
+]

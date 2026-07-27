@@ -1,0 +1,22 @@
+# The `asr` runner — easytranscriber (whisper/wav2vec2) transcription + language ID.
+# Its deps ARE ratch's old [models] extra; the runner owns them so ratch's driver
+# stays model-free (workers get this env via the stage runtime_env on a cluster).
+[project]
+name = "ratch-runner-asr"
+version = "0.0.0"
+description = "ASR + language-ID runner (easytranscriber, torch cu128)."
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "easytranscriber",
+    "torch==2.11.0+cu128",
+    "torchaudio==2.11.0+cu128",
+]
+
+[tool.uv]
+package = false
+
+# The cu128 wheels live only on the pytorch index (local-version pins are not on
+# PyPI). ratch's runner_env() turns these urls into pip --extra-index-url options
+# for the per-stage runtime_env, so the env declaration stays entirely in-file.
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cu128"

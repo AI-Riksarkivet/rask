@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lance Lineage — live medallion</title>
+<style>
+  :root {
+    --bg:#0c1018; --panel:#141b27; --line:#243245; --ink:#e6edf6; --mut:#8aa0bd;
+    --raw:#ff9457; --bronze:#cd7f32; --silver:#9fb6cf; --gold:#ffc14d; --fail:#ff5d6c; --ok:#46f9b8;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:14px/1.45 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:16px; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  header .sub { color:var(--mut); font-size:12px; }
+  #status { margin-left:auto; color:var(--mut); font-size:12px; }
+  #status b { color:var(--ok); }
+  main { display:grid; grid-template-columns:1fr 320px; gap:0; height:calc(100vh - 52px); }
+  #stage { position:relative; overflow:auto; }
+  svg { display:block; width:100%; height:100%; min-width:980px; }
+  .node { cursor:pointer; }
+  .nbox { rx:10; stroke-width:1.5; }
+  .nlabel { font-weight:600; font-size:13px; fill:var(--ink); }
+  .nsub { font-size:10.5px; fill:var(--mut); }
+  .chip { font-size:10px; fill:#0c1018; font-weight:700; }
+  .chipbg { rx:7; }
+  .edge { stroke:var(--line); stroke-width:2; fill:none; marker-end:url(#arrow); }
+  aside { border-left:1px solid var(--line); padding:16px 18px; overflow:auto; background:var(--panel); }
+  aside h2 { font-size:13px; margin:0 0 4px; }
+  aside .hint { color:var(--mut); font-size:12px; }
+  .run { border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin:8px 0; font-size:12px; }
+  .run.fail { border-color:var(--fail); }
+  .run .top { display:flex; justify-content:space-between; gap:8px; }
+  .run .who { color:var(--mut); }
+  .badge { display:inline-block; padding:1px 7px; border-radius:7px; font-size:11px; font-weight:700; }
+  .badge.v { background:var(--ok); color:#06210f; }
+  .badge.f { background:var(--fail); color:#2a0307; }
+  .legend { display:flex; gap:12px; flex-wrap:wrap; font-size:11px; color:var(--mut); }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:4px; vertical-align:middle; }
+  code { color:var(--silver); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Lance Lineage <span class="sub">live medallion — OpenLineage → Apache AGE</span></h1>
+  <div class="legend">
+    <span><i style="background:var(--raw)"></i>raw</span>
+    <span><i style="background:var(--bronze)"></i>bronze</span>
+    <span><i style="background:var(--silver)"></i>silver</span>
+    <span><i style="background:var(--gold)"></i>gold</span>
+    <span><i style="background:var(--fail)"></i>failed run</span>
+  </div>
+  <div id="status">connecting…</div>
+</header>
+<main>
+  <div id="stage"><svg id="svg" viewBox="0 0 980 360" preserveAspectRatio="xMinYMin meet">
+    <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3a4d68"/></marker></defs>
+    <g id="edges"></g><g id="nodes"></g>
+  </svg></div>
+  <aside id="panel">
+    <h2>Click a node</h2>
+    <p class="hint">Shows the runs that produced it — who, when, which Lance version, and any failed
+    attempts (with the error). The graph polls the live lineage service every 2s, so you watch the
+    DAG build and silver evolve v1 → v2 as <code>scripts/medallion_demo.py</code> runs.</p>
+  </aside>
+</main>
+<script>
+const API = new URLSearchParams(location.search).get("api") || "";
+const KNOWN = ["raw_events", "bronze$events", "silver$features", "gold$catalog"];
+const LAYER = { "raw_events":0, "bronze$events":1, "silver$features":2, "gold$catalog":3 };
+const COLOR = { 0:"var(--raw)", 1:"var(--bronze)", 2:"var(--silver)", 3:"var(--gold)" };
+const enc = s => encodeURIComponent(s);
+let selected = null;
+let lastProducers = {};
+
+async function getJSON(path) {
+  try { const r = await fetch(API + path); if (!r.ok) return null; return await r.json(); }
+  catch { return null; }
+}
+
+async function poll() {
+  const producers = {}, present = [];
+  for (const id of KNOWN) {
+    const p = await getJSON(`/datasets/${enc(id)}/producers`);
+    producers[id] = (p && p.producers) || [];
+    if (producers[id].length) present.push(id);
+  }
+  const edges = new Set(), meta = {};
+  for (const id of present) {
+    const g = await getJSON(`/datasets/${enc(id)}/graph`);
+    if (!g) continue;
+    for (const n of g.nodes) meta[n.id] = n;
+    for (const e of g.edges) edges.add(e.source + "|" + e.target);
+  }
+  const nodes = new Set(present);
+  for (const key of edges) { const [s, t] = key.split("|"); nodes.add(s); nodes.add(t); }
+  lastProducers = producers;
+  render([...nodes], edges, meta, producers);
+  const versions = (producers["silver$features"] || []).map(r => r.dataset_version).filter(Boolean);
+  const fails = Object.values(producers).flat().filter(r => /FAIL|ABORT/i.test(r.event_type || "")).length;
+  document.getElementById("status").innerHTML =
+    `<b>live</b> · ${nodes.size} datasets · silver ${versions.length ? "v" + versions.join(", v") : "—"}` +
+    ` · ${fails} failed run${fails === 1 ? "" : "s"} · ${new Date().toLocaleTimeString()}`;
+}
+
+function render(nodes, edges, meta, producers) {
+  const W = 210, H = 96, GAPX = 240, X0 = 40, Y0 = 30;
+  const byLayer = {};
+  for (const id of nodes) { const l = LAYER[id] ?? 4; (byLayer[l] ||= []).push(id); }
+  const pos = {};
+  for (const l of Object.keys(byLayer)) byLayer[l].forEach((id, i) => {
+    pos[id] = { x: X0 + l * GAPX, y: Y0 + i * (H + 22) };
+  });
+  const ng = document.getElementById("nodes"), eg = document.getElementById("edges");
+  ng.innerHTML = ""; eg.innerHTML = "";
+
+  // edges: DERIVED_FROM (source derives from target) → draw arrow target→source (data-flow direction)
+  for (const key of edges) {
+    const [s, t] = key.split("|"); if (!pos[s] || !pos[t]) continue;
+    const a = pos[t], b = pos[s];
+    const x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x, y2 = b.y + H / 2, mx = (x1 + x2) / 2;
+    eg.insertAdjacentHTML("beforeend",
+      `<path class="edge" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2 - 2},${y2}"/>`);
+  }
+
+  for (const id of nodes) {
+    const p = pos[id], l = LAYER[id] ?? 4, color = COLOR[l] || "var(--mut)";
+    const runs = producers[id] || [];
+    const vers = [...new Set(runs.map(r => r.dataset_version).filter(Boolean))].sort();
+    const failed = runs.some(r => /FAIL|ABORT/i.test(r.event_type || ""));
+    const src = (meta[id] && meta[id].source_uri) || "";
+    const tags = (meta[id] && meta[id].tags) || [];
+    let chips = "", cx = 12;
+    for (const v of vers) { chips += chipSVG(cx, "v" + v, "var(--ok)"); cx += 34; }
+    if (failed) chips += chipSVG(cx, "⚠ failed", "var(--fail)");
+    const tagline = tags.length ? tags.join("  ") : (src || "");
+    ng.insertAdjacentHTML("beforeend", `
+      <g class="node" transform="translate(${p.x},${p.y})" onclick="select('${id}')">
+        <rect class="nbox" width="${W}" height="${H}" fill="var(--panel)"
+              stroke="${id === selected ? "var(--ok)" : color}" ${id === selected ? 'stroke-width="2.5"' : ""}/>
+        <rect width="6" height="${H}" rx="3" fill="${color}"/>
+        <text class="nlabel" x="16" y="26">${id}</text>
+        <text class="nsub" x="16" y="44">${esc(src || "(pending)")}</text>
+        <text class="nsub" x="16" y="60">${esc(tagline)}</text>
+        <g transform="translate(4,${H - 26})">${chips}</g>
+      </g>`);
+  }
+}
+
+function chipSVG(x, label, color) {
+  const w = label.length * 6.6 + 12;
+  return `<g transform="translate(${x},0)"><rect class="chipbg" width="${w}" height="18" fill="${color}"/>` +
+    `<text class="chip" x="6" y="13">${esc(label)}</text></g>`;
+}
+function esc(s) { return String(s).replace(/[&<>]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;" }[c])); }
+
+function select(id) {
+  selected = id;
+  const runs = (lastProducers[id] || []).slice().sort((a, b) => (a.event_time || "").localeCompare(b.event_time || ""));
+  const rows = runs.map(r => {
+    const fail = /FAIL|ABORT/i.test(r.event_type || "");
+    const badge = fail ? `<span class="badge f">${r.event_type}</span>`
+                       : `<span class="badge v">${r.dataset_version ? "v" + r.dataset_version : r.event_type}</span>`;
+    return `<div class="run ${fail ? "fail" : ""}">
+      <div class="top"><span>${badge}</span><span class="who">${esc(r.author || "—")}</span></div>
+      <div class="who">${esc(r.event_time || "")}</div>
+      ${r.error_message ? `<div style="color:var(--fail)">${esc(r.error_message)}</div>` : ""}
+      ${r.producer ? `<div class="who" style="word-break:break-all">${esc(r.producer)}</div>` : ""}
+    </div>`;
+  }).join("");
+  document.getElementById("panel").innerHTML =
+    `<h2>${esc(id)}</h2><p class="hint">${runs.length} producing run${runs.length === 1 ? "" : "s"}</p>` +
+    (rows || `<p class="hint">No producers yet — waiting for a run to write this dataset.</p>`);
+  poll();
+}
+
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>

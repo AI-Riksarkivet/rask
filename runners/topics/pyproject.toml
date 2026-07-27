@@ -1,0 +1,28 @@
+# The `topics` model service — its OWN isolated env.
+#
+# Toponymy transitively needs transformers<5; the ratch project resolves
+# transformers 5.x (via the ASR/torch stack). Those two never meet because this
+# is a SEPARATE env — that is the entire reason topics is its own service, not a
+# module in ratch. At merge this becomes a Ray Serve deployment built from this
+# pyproject (one image per model service).
+[project]
+name = "ratch-model-topics"
+version = "0.0.0"
+description = "Toponymy topic-modelling — an online model service ratch calls (offline compute stays in ratch)."
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "toponymy",
+    "openai>=1.40",
+    "pylance>=4.0",
+    "numpy<3",
+]
+
+# At merge, add the serving deps and build the Ray Serve deployment from here:
+[project.optional-dependencies]
+serve = ["ray[serve]", "fastapi"]
+
+# No [project.scripts]: with `package = false` uv never installs this project,
+# so console scripts would not resolve. The two entrypoints are
+# `python -m runners.topics.worker` (Make target / Ray Job) and deployment.py.
+[tool.uv]
+package = false

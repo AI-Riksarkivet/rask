@@ -1,0 +1,31 @@
+# The `assist` runner — the annotator's interactive AI-assist model server (ONLINE, CPU).
+# Serves the `MEDIA_ASSIST_URL` contract (services/annotator/api/v1/endpoints/assist.py::_remote):
+# GroundingDINO-tiny for text-prompted open-vocabulary detection + SAM-ViT-base for box/point
+# segmentation. Deliberately CPU wheels (the pytorch cpu index below) — proven ~2.5 s/frame
+# detection + ~1.8 s/frame segmentation on the 64-core box, no CUDA anywhere in this env.
+# Unlike the offline Ray Data runners this one ships as its OWN image
+# (.docker/assist-runner.dockerfile), so it carries a committed uv.lock for a --frozen build.
+[project]
+name = "ratch-runner-assist"
+version = "0.0.0"
+description = "Interactive assist model server (GroundingDINO-tiny + SAM-ViT-base, CPU) behind MEDIA_ASSIST_URL."
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "httpx>=0.27",
+    "pydantic-settings>=2.6",
+    "transformers>=4.49",
+    "torch==2.9.1+cpu",
+    "pillow>=11",
+    "numpy>=2,<3",
+    "opencv-python-headless>=4.10",
+]
+
+[tool.uv]
+package = false
+
+# The +cpu wheels live only on the pytorch index (local-version pins are not on PyPI) —
+# same idiom as the cu128 runners, opposite direction: this env must never pull CUDA.
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cpu"

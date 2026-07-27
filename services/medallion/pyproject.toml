@@ -1,0 +1,37 @@
+[project]
+name = "medallion"
+version = "0.1.0"
+description = "Medallion service — bronze/silver/gold producer and movers: Dapr pub/sub events, Lance writes, and the Ray Jobs REST submit seam."
+requires-python = ">=3.13"
+license = "AGPL-3.0-only"
+dependencies = [
+    "lance-common",
+    "fastapi>=0.115",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.5",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "openfga-sdk>=0.9",
+    "pillow>=12.3.0",
+    "pyarrow",
+    "pylance[otel]>=9.0.0",
+    "lance-namespace>=0.9.0",
+    "dapr>=1.18.1",
+    "dapr-ext-fastapi>=1.18.1",
+    "opentelemetry-distro>=0.64b0",
+    "opentelemetry-exporter-otlp>=1.43.0",
+    "opentelemetry-instrumentation-fastapi>=0.64b0",
+    "opentelemetry-instrumentation-httpx>=0.64b0",
+    "opentelemetry-instrumentation-grpc>=0.64b0",
+    "opentelemetry-instrumentation-logging>=0.64b0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/medallion"]
+
+[tool.uv.sources]
+lance-common = { workspace = true }

@@ -1,0 +1,28 @@
+[project]
+name = "viewer"
+version = "0.1.0"
+description = "Media-plane viewer API — documents, blob columns and Range-streamed media over Lance tables."
+requires-python = ">=3.13"
+license = "AGPL-3.0-only"
+dependencies = [
+    "lance-common",
+    "fastapi>=0.115",
+    "pydantic>=2.7",
+    "python-multipart>=0.0.9",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "pylance[otel]>=9.0.0",
+    "lance-graph>=0.5.4",
+    "pyarrow",
+    "numpy",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/viewer"]
+
+[tool.uv.sources]
+lance-common = { workspace = true }

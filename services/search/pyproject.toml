@@ -1,0 +1,28 @@
+[project]
+name = "search"
+version = "0.1.0"
+description = "Media-plane search API — FTS, vector and hybrid lookups over Lance tables."
+requires-python = ">=3.13"
+license = "AGPL-3.0-only"
+dependencies = [
+    "lance-common",
+    "fastapi>=0.115",
+    "pydantic>=2.7",
+    "python-multipart>=0.0.9",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "pylance[otel]>=9.0.0",
+    "lancedb>=0.34.0",
+    "pillow>=12.3.0",
+    "numpy",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/search"]
+
+[tool.uv.sources]
+lance-common = { workspace = true }

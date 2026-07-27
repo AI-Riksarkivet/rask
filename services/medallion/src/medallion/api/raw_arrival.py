@@ -1,0 +1,52 @@
+"""lance-ray's Dapr pub/sub subscription route (``/raw-arrival``) — the event-driven cascade head.
+
+The :class:`DaprApp` wrapper serves ``GET /dapr/subscribe`` (read by the sidecar at startup) and routes
+deliveries of the shared lineage topic to :func:`handle_raw_arrival`, which fires the cascade only for a
+write to the raw dataset (loop-guarded). Authenticated by the Dapr app-api-token (``require_dapr_token``) so
+a forged event can't drive the pipeline — symmetric with the movers' ``/medallion-event`` route.
+"""
+
+from __future__ import annotations
+
+from typing import Annotated, Any
+
+from common.dapr_auth import require_dapr_token
+from dapr.ext.fastapi import DaprApp
+from fastapi import Depends, FastAPI
+
+from medallion.api.dependencies import DaprClientDep, SettingsDep
+from medallion.api.dlq import register_dlq_route
+from medallion.core.config import get_settings
+from medallion.services.ingest_trigger import handle_raw_arrival
+
+
+def register_raw_arrival_route(app: FastAPI) -> DaprApp:
+    """Wrap ``app`` in a :class:`DaprApp` and register the raw-arrival subscription (the cascade head).
+
+    Registers the producer's ONE DLQ parking route here (train reuses this ``DaprApp`` — a second
+    registration would duplicate ``/dlq-event``); both producer subscriptions declare the same
+    ``deadLetterTopic`` when configured, so an exhausted head/train trigger parks visibly.
+    """
+    settings = get_settings()
+    dapr_app = DaprApp(app)
+    if settings.dlq_topic:
+        register_dlq_route(dapr_app, pubsub=settings.pubsub, dlq_topic=settings.dlq_topic, app_label="producer")
+
+    @dapr_app.subscribe(
+        pubsub=settings.pubsub,
+        topic=settings.lineage_topic,
+        route="/raw-arrival",
+        dead_letter_topic=settings.dlq_topic or None,
+    )
+    async def on_raw_arrival(
+        event: dict[str, Any],
+        dapr: DaprClientDep,
+        config: SettingsDep,
+        _: Annotated[None, Depends(require_dapr_token)],
+    ) -> dict[str, str]:
+        """The Dapr subscription route — thin wrapper over the testable :func:`handle_raw_arrival`. ``event``
+        is typed ``dict`` so FastAPI parses the CloudEvent JSON body (an ``Any`` param → query param → 422).
+        Authenticated by the Dapr app-api-token so a forged raw-arrival event can't drive the cascade."""
+        return await handle_raw_arrival(dapr, config, event)
+
+    return dapr_app

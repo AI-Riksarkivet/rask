@@ -1,0 +1,227 @@
+"""Lineage service settings (pydantic-settings, ``LINEAGE_*`` env vars).
+
+Auth is **opt-in and default OFF** (exactly like the catalog: ``LANCE_OIDC_ENABLED`` /
+``LANCE_FGA_ENABLED``) so dev and tests run open; **production MUST enable both**. When
+enabled the service reuses the catalog's ``OIDCVerifier`` + the **shared** OpenFGA store
+(read-only) — so its FGA store/model ids must match the catalog's. Fail-closed config:
+enabling a layer without the inputs it needs raises at startup, never silently opens.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from typing import Self
+from urllib.parse import quote, urlsplit, urlunsplit
+
+from common.objectfs import lance_storage_options
+from pydantic import Field, SecretStr, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class LineageSettings(BaseSettings):
+    """Config for the lineage service, its Apache AGE graph store, and its auth gate."""
+
+    model_config = SettingsConfigDict(populate_by_name=True, extra="ignore")
+
+    database_url: str = Field(
+        default="postgresql://lineage:lineage@localhost:5433/lineage",
+        alias="LINEAGE_DATABASE_URL",
+    )
+    graph: str = Field(default="lineage", alias="LINEAGE_GRAPH")
+    # Server-side per-statement timeout on every pooled AGE connection — bounds a runaway Cypher traversal
+    # so it can't pin a pooled connection forever (§4). Generous: normal statements are point MERGEs.
+    age_statement_timeout_seconds: float = Field(default=30.0, ge=1.0, alias="LINEAGE_AGE_STATEMENT_TIMEOUT_SECONDS")
+
+    # --- OIDC (authn) — verifies the bearer token on reads + ingest --------------------
+    oidc_enabled: bool = Field(default=False, alias="LINEAGE_OIDC_ENABLED")
+    oidc_issuer: str | None = Field(default=None, alias="LINEAGE_OIDC_ISSUER")
+    # Split-horizon fetch location (see the catalog twin): empty = derive from the issuer.
+    oidc_discovery_url: str | None = Field(default=None, alias="LINEAGE_OIDC_DISCOVERY_URL")
+    oidc_audience: str | None = Field(default=None, alias="LINEAGE_OIDC_AUDIENCE")
+    oidc_cache_ttl: int = Field(default=3600, alias="LINEAGE_OIDC_CACHE_TTL")
+    oidc_leeway: int = Field(default=60, alias="LINEAGE_OIDC_LEEWAY")
+    oidc_allow_insecure: bool = Field(default=False, alias="LINEAGE_OIDC_ALLOW_INSECURE")
+
+    # --- OpenFGA (authz) — reuses the catalog's store READ-ONLY -------------------------
+    fga_enabled: bool = Field(default=False, alias="LINEAGE_FGA_ENABLED")
+    fga_api_url: str = Field(default="http://openfga:8080", alias="LINEAGE_FGA_API_URL")
+    fga_store_id: str | None = Field(default=None, alias="LINEAGE_FGA_STORE_ID")
+    fga_model_id: str | None = Field(default=None, alias="LINEAGE_FGA_MODEL_ID")
+    fga_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LINEAGE_FGA_TIMEOUT_SECONDS")
+    # The FGA object type a Lance dataset maps to. A lineage Dataset node's ``name`` is the
+    # catalog ``table:<id>``, so a read is gated on ``can_get_metadata`` of ``table:<name>``.
+    fga_object_type: str = Field(default="table", alias="LINEAGE_FGA_OBJECT_TYPE")
+    # Bare FGA subjects (comma-separated, e.g. "service-trainer") that may ingest over the HTTP route as
+    # an in-cluster SERVICE — authenticated by the app token, not OIDC (lineage/api/security.py
+    # ServicePrincipal). Empty (the default) = the service door is shut and the HTTP ingest is OIDC-only.
+    # The allowlist is what stops an app-token holder from speaking as a human; outputs are still
+    # FGA-checked as the named subject, so each service is bounded by its own rung (D5).
+    service_subjects: str = Field(default="", alias="LINEAGE_SERVICE_SUBJECTS")
+
+    # --- Dapr pub/sub durable ingest (opt-in) — the catalog publishes to the Dapr pubsub.jetstream
+    # component and the sidecar delivers each event to this service's subscription handler over HTTP, so
+    # a lineage outage never loses provenance (the sidecar persists to NATS + redelivers per backOff).
+    # The HTTP /api/v1/lineage endpoint stays for external producers. Off by default (HTTP is dev default).
+    dapr_enabled: bool = Field(default=False, alias="LINEAGE_DAPR_ENABLED")
+    dapr_pubsub: str = Field(default="lineage-pubsub", alias="LINEAGE_DAPR_PUBSUB")
+    dapr_topic: str = Field(default="lineage.events.v1", alias="LINEAGE_DAPR_TOPIC")
+    # Dead-letter topic for the ingest subscription (Dapr-native DLQ). "" (default) = none — the
+    # pre-existing behavior. Ships together with the chart's Resiliency retry policy (a DLQ without
+    # one dead-letters on the FIRST failure per Dapr's documented default). Lineage's recovery story
+    # stays replay-from-stream (ephemeral deliverPolicy=all consumer); the DLQ adds operator
+    # VISIBILITY for deliveries that exhausted retries, it does not replace the replay.
+    dapr_dlq_topic: str = Field(default="", alias="LINEAGE_DLQ_TOPIC")
+    # Freshness budget in hours (data-contract gap #2): 0 (default) = the axis is OFF (no probe).
+    # >0 = the reconcile sweep + per-dataset GET flag `stale: true` for any dataset whose newest
+    # version commit is older — arrival cadence becomes an ASSERTED contract clause, not a dashboard.
+    freshness_budget_hours: float = Field(default=0, alias="LINEAGE_FRESHNESS_BUDGET_HOURS")
+    # Declared consumer dependencies per dataset (data-contract, Batch 23): a JSON map
+    # {"dataset": ["col", ...]} the chart derives from the movers' requiredColumns. The reconcile
+    # sweep compares each declared dataset's STORAGE schema against it and reports
+    # missing_declared_columns — the estate-patrol half of the gate's column_declared assertion
+    # (same two-enforcement-point pattern as the blob probe). "" (default) = no checks, no reads.
+    declared_columns: str = Field(default="", alias="LINEAGE_DECLARED_COLUMNS")
+    # Periodic storage->graph reconciliation (B4) — a Dapr cron binding POSTs to /<name> on a schedule to
+    # back-fill Lance writes whose lineage event was lost (the outbox gap). Empty = the cron route isn't
+    # mounted (the /datasets/{name}/reconcile read endpoint is always available regardless).
+    reconcile_binding_name: str = Field(default="", alias="LINEAGE_RECONCILE_BINDING_NAME")
+
+    # --- Demo data peek (DEMO ONLY) — reads the real Lance datasets on S3 so the UI can show
+    # what is changing in storage (schema/versions/rows). Off by default; never enable in prod.
+    demo_data_enabled: bool = Field(default=False, alias="LINEAGE_DEMO_DATA_ENABLED")
+    # Cap on how many (newest) Lance versions the peek reports per dataset — the peek's cost grew
+    # LINEARLY with total versions (one S3 dataset-open per version, polled every 2s) before the
+    # 2026-07-11 version-keyed cache; the cap bounds the very first (cold) tick too.
+    demo_max_versions: int = Field(default=50, ge=1, alias="LINEAGE_DEMO_MAX_VERSIONS")
+    s3_endpoint: str | None = Field(default=None, alias="LINEAGE_S3_ENDPOINT")
+    s3_access_key_id: str | None = Field(default=None, alias="LINEAGE_S3_ACCESS_KEY_ID")
+    # SecretStr so the value is redacted in repr/model_dump (parity with the catalog) — read it with
+    # .get_secret_value() at the object-store call site.
+    s3_secret_access_key: SecretStr = Field(default=SecretStr(""), alias="LINEAGE_S3_SECRET_ACCESS_KEY")
+    s3_region: str = Field(default="us-east-1", alias="LINEAGE_S3_REGION")
+    s3_bucket: str = Field(default="lakehouse", alias="LINEAGE_S3_BUCKET")
+    # #4: the durable lineage-outbox prefix (shared with the medallion movers). When set, the reconcile
+    # sweep also DRAINS it — re-ingesting any event a producer staged but whose publish never got acked
+    # (a crash between the Lance commit and the publish), then deleting it. Empty = drain disabled. Must
+    # point at the SAME object-store prefix as ``MEDALLION_LINEAGE_OUTBOX_URI``.
+    outbox_uri: str = Field(default="", alias="LINEAGE_OUTBOX_URI")
+    # Max staged events one reconcile tick drains, OLDEST FIRST (docs/DECISIONS.md P1.2 (bounded drain)).
+    # The drain used to materialise the ENTIRE prefix in memory inside the single-flight lock, so a backlog
+    # — precisely the situation the outbox exists to survive — could OOM or stall the tick, making the relay
+    # fail hardest
+    # exactly when it was needed most. The remainder drains on the next tick; oldest-first means nothing
+    # starves behind a steady arrival rate. 0 = unbounded (the old behavior; not recommended).
+    outbox_drain_limit: int = Field(default=500, alias="LINEAGE_OUTBOX_DRAIN_LIMIT")
+
+    # --- Secret consumption from the Dapr secret store (OpenBao) — the audit's 'wired but never read' /
+    # 'plaintext still ships' fix, symmetric with the catalog. When on, the S3 secret (reconcile reads the
+    # real Lance file with it) and the AGE DB password come from the store at boot, NOT plaintext env: the
+    # chart omits both from pod env. apply_dapr_secrets() splices them in and fails closed on the S3 secret.
+    secrets_from_dapr: bool = Field(default=False, alias="LINEAGE_SECRETS_FROM_DAPR")
+    dapr_secret_store: str = Field(default="lance-secrets", alias="LINEAGE_DAPR_SECRET_STORE")
+    dapr_secret_key: str = Field(default="lance", alias="LINEAGE_DAPR_SECRET_KEY")
+    dapr_secret_s3_field: str = Field(default="rustfs-secret-key", alias="LINEAGE_DAPR_SECRET_S3_FIELD")
+    dapr_secret_db_field: str = Field(default="postgres-password", alias="LINEAGE_DAPR_SECRET_DB_FIELD")
+
+    # --- Durable /events feed retention — keep at most this many most-recent rows in public.lineage_events
+    # (older rows pruned on ingest). 0 = unbounded. The feed is a secondary projection of the AGE graph
+    # (the authoritative provenance), so capping it bounds the high-volume log without losing lineage.
+    events_retention: int = Field(default=20000, ge=0, alias="LINEAGE_EVENTS_RETENTION")
+
+    # --- Run-node retention (§4) — prune graph :Run nodes older than this many days on each reconcile
+    # sweep (under its cluster-wide lock). 0 = off (the dev/demo default: keep full provenance). Pruning a
+    # run deletes its WROTE edges — per-version schema/stats history goes with it, which is what retention
+    # means; the next sweep back-fills a fresh reconcile run for any dataset left without a versioned edge.
+    run_retention_days: int = Field(default=0, ge=0, alias="LINEAGE_RUN_RETENTION_DAYS")
+
+    # --- Read/access audit (#6) — record WHO READ which dataset on the gated read endpoints (an access
+    # log, complementing the write provenance in the graph). Off by default; needs an authenticated subject,
+    # so it is effectively a no-op unless OIDC is on. Best-effort: an audit-write failure never fails a read.
+    read_audit_enabled: bool = Field(default=False, alias="LINEAGE_READ_AUDIT_ENABLED")
+
+    # Compliance audit trail (#41): gate the dedicated `lance.audit` stream (the DLQ-replay record) exactly
+    # like the catalog — the SHARED LANCE_AUDIT_ENABLED env (not a LINEAGE_* twin), so one flag governs the
+    # estate's compliance posture. Default on; without the lifespan's configure_audit call the stream is
+    # silently OFF (the logger inherits root WARNING and the INFO records drop before any handler).
+    audit_enabled: bool = Field(default=True, alias="LANCE_AUDIT_ENABLED")
+
+    # Serve /docs + /openapi.json (default on for dev; prod sets false, like the catalog's LANCE_REST_DOCS).
+    docs_enabled: bool = Field(default=True, alias="LINEAGE_DOCS")
+
+    @model_validator(mode="after")
+    def _validate_auth(self) -> Self:
+        """Fail closed: a half-configured auth layer is a startup error, not open access."""
+        if self.oidc_enabled and not (self.oidc_issuer and self.oidc_audience):
+            raise ValueError("LINEAGE_OIDC_ENABLED requires LINEAGE_OIDC_ISSUER and LINEAGE_OIDC_AUDIENCE")
+        if self.fga_enabled and not self.oidc_enabled:
+            raise ValueError("LINEAGE_FGA_ENABLED requires LINEAGE_OIDC_ENABLED (need a verified subject)")
+        # NOTE: store_id/model_id are intentionally NOT required here. main.py provisions the store by NAME
+        # ("lance-catalog") at boot when they are absent — the idempotent convergence the catalog uses too —
+        # so pinning them ahead of time is optional, not mandatory. Requiring them here crashed the lineage
+        # pod in governed mode (the chart can't know the runtime-provisioned ids at helm-template time).
+        return self
+
+
+@lru_cache
+def get_settings() -> LineageSettings:
+    """Return the process-wide cached lineage settings."""
+    return LineageSettings()
+
+
+def _with_db_password(url: str, password: str) -> str:
+    """Return ``url`` with its userinfo password set to ``password`` — so the AGE password comes from the
+    secret store, not a plaintext connection string in pod env (the chart ships the URL password-less)."""
+    parts = urlsplit(url)
+    userinfo = f"{parts.username or ''}:{quote(password, safe='')}"
+    host = parts.hostname or ""
+    netloc = f"{userinfo}@{host}{f':{parts.port}' if parts.port else ''}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
+def apply_dapr_secrets(settings: LineageSettings) -> None:
+    """Consume sensitive values (S3 secret, AGE DB password) from the Dapr secret store and splice them
+    into ``settings`` in place. When ``secrets_from_dapr`` is on the store is the STRICT sole source for
+    the S3 secret: a store miss FAILS CLOSED (raises), never falling back to a plaintext env value (the
+    chart ships none). The DB password is spliced only when present (the chart ships a password-less URL,
+    so a missing password leaves an unusable DSN that pool.open() rejects → still fail-closed). No-op when
+    off. Imported lazily so the catalog dep isn't pulled in dev/tests."""
+    if not settings.secrets_from_dapr:
+        return
+    from common.secrets import fetch_required_secrets
+
+    bundle = fetch_required_secrets(settings.dapr_secret_store, settings.dapr_secret_key, require=settings.dapr_secret_s3_field)
+    settings.s3_secret_access_key = SecretStr(bundle[settings.dapr_secret_s3_field])
+    db_password = bundle.get(settings.dapr_secret_db_field)
+    if db_password:
+        settings.database_url = _with_db_password(settings.database_url, db_password)
+
+
+def declared_columns_map(settings: LineageSettings) -> dict[str, list[str]]:
+    """The parsed dataset→declared-columns map — fail-safe: malformed JSON logs and yields {} (the
+    contract check silently OFF beats a lineage service that won't boot over a values typo)."""
+    import json as _json
+    import logging as _logging
+
+    if not settings.declared_columns:
+        return {}
+    try:
+        raw = _json.loads(settings.declared_columns)
+        return {str(dataset): [str(c) for c in columns] for dataset, columns in raw.items() if isinstance(columns, list)}
+    except Exception as exc:
+        _logging.getLogger(__name__).warning("declared_columns_unparseable", extra={"error": str(exc)})
+        return {}
+
+
+def storage_options(settings: LineageSettings) -> dict[str, str]:
+    """Object-store options for reading Lance datasets directly (reconcile #23, demo peek).
+
+    The same S3-compatible config the catalog writes with, so the lineage service reads the *actual*
+    on-disk version to cross-check the graph. Empty strings let the object-store client fall back to
+    its default credential chain (e.g. real AWS) when the ``LINEAGE_S3_*`` env vars are unset.
+    """
+    return lance_storage_options(
+        settings.s3_endpoint or "",
+        settings.s3_access_key_id or "",
+        settings.s3_secret_access_key.get_secret_value(),
+        settings.s3_region,
+    )

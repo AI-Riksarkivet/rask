@@ -1,0 +1,43 @@
+[project]
+name = "lineage"
+version = "0.1.0"
+description = "Lineage service — OpenLineage event ingest over Dapr pub/sub into the Apache AGE property graph (datasets, runs, column lineage)."
+requires-python = ">=3.13"
+license = "AGPL-3.0-only"
+dependencies = [
+    "lance-common",
+    "fastapi>=0.115",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.5",
+    "uvicorn[standard]>=0.30",
+    "psycopg[binary]>=3.2",
+    "psycopg-pool>=3.2",
+    "pylance[otel]>=9.0.0",
+    "lance-namespace>=0.9.0",
+    "dapr>=1.18.1",
+    "dapr-ext-fastapi>=1.18.1",
+    "opentelemetry-distro>=0.64b0",
+    "opentelemetry-exporter-otlp>=1.43.0",
+    "opentelemetry-instrumentation-fastapi>=0.64b0",
+    "opentelemetry-instrumentation-psycopg>=0.64b0",
+    "opentelemetry-instrumentation-logging>=0.64b0",
+]
+
+# `lineage.seed` is the producer-side OpenLineage emitter for the mock medallion flow — compute-layer
+# instrumentation the service itself never imports (see its module docstring). Kept out of `dependencies`
+# so it never ships in the deployable image; run it with `uv run --group seed python -m lineage.seed`.
+[dependency-groups]
+seed = [
+    "openlineage-python",
+    "attrs",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lineage"]
+
+[tool.uv.sources]
+lance-common = { workspace = true }
