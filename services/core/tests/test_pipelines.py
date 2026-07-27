@@ -54,7 +54,7 @@ from service_kit.config import RunnerParams
 # by " \<newline>  ". Reconstructed by hand so this pins the format rather than
 # echoing build_entrypoint's own join.
 _GOLDEN_PREFIX = (
-    "uv run --package runner runner \\\n"
+    "uv run --project runners/htr runner \\\n"
     "  --cache-bucket images-batch \\\n"
     "  --output s3://images-batch-alto \\\n"
     "  --iiif-url https://iiifintern-ai.ra.se \\\n"
@@ -474,11 +474,7 @@ def test_build_entrypoint_http_kind_runs_the_job_script() -> None:
     )
     out = build_entrypoint(["VOL_A", "VOL_B"], params=params, spec=spec)
     assert out == (
-        "python components/scripts/htr_chunk_job.py \\\n"
-        "  --cache-bucket images-batch \\\n"
-        "  --output s3://images-batch-alto \\\n"
-        "  --batch VOL_A \\\n"
-        "  --batch VOL_B"
+        "python scripts/htr_chunk_job.py \\\n  --cache-bucket images-batch \\\n  --output s3://images-batch-alto \\\n  --batch VOL_A \\\n  --batch VOL_B"
     )
 
 
@@ -494,7 +490,11 @@ def test_build_entrypoint_s3_mode_uses_input_prefix() -> None:
     )
     out = build_entrypoint(["VOL_A"], params=params, spec=PIPELINE_SPECS["htrflow"])
     assert out == (
-        "uv run --package runner runner \\\n  --input s3://images-batch \\\n  --output s3://images-batch-alto \\\n  --prefix VOL_A/ \\\n  --pipeline htrflow"
+        "uv run --project runners/htr runner \\\n"
+        "  --input s3://images-batch \\\n"
+        "  --output s3://images-batch-alto \\\n"
+        "  --prefix VOL_A/ \\\n"
+        "  --pipeline htrflow"
     )
 
 
