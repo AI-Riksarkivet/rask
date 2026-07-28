@@ -8,6 +8,14 @@
     cluster. Sections referring to batches/chunks/orchestrator are kept as historical context until the
     P8 doc re-draw.
 
+!!! warning "P7b / R6+R20 (2026-07-28): core-api, search-api and volumes-api are DELETED too"
+    The R6/R20 media wave retired the remaining trio. The gateway now routes only the
+    `ray` service (renamed from ray-api — R20), controlplane, and the lance
+    lakehouse/media planes; the S3 object browser lives in the media viewer
+    (`/api/media/object*`), and lines/EAD FTS re-land as catalog-governed Lance
+    tables behind `/api/media/search`. Sections naming the deleted services are
+    historical context.
+
 Snapshot of the **current** architecture across runner, Ray, backend, frontend
 and storage. No proposals here — see siblings (`frontend-microfrontends.md`,
 `deployment.md`) for direction.

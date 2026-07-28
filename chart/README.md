@@ -9,11 +9,7 @@ both local k3s and production. In-cluster CloudNativePG (Postgres), RustFS
 | Component | Port | Notes |
 |---|---|---|
 | `gateway` | 8888 | Reverse proxy; path-routes `/api/*` to per-domain services |
-| `core-api` | 8801 | Batches, chunks, catalog endpoints |
-| `orchestrator` | 8810 | Reconcile loop (`replicas: 1`, `Recreate`) |
-| `volumes-api` | 8803 | S3/IIIF image + ALTO proxy (stateless) |
-| `search-api` | 8802 | Lance FTS + S3 thumbnails |
-| `ray-api` | 8804 | Ray dashboard proxy + `/api/serve/*` |
+| `ray` | 8804 | Ray dashboard proxy + `/api/serve/*` (uv member `ray-api`) |
 | `frontend` | 3000 | SvelteKit SSR (svelte-adapter-bun) |
 | migration | — | pre-install/pre-upgrade Job: `alembic upgrade head` |
 | Ingress (Traefik) | 80 | `/api` → gateway:8888, `/` → rask-home:3000 |

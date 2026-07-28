@@ -1,7 +1,7 @@
 [project]
 name = "ray-api"
 version = "0.1.0"
-description = "ray-api backend — Ray dashboard introspection + Ray Serve proxy over ray-kit."
+description = "the ray service — Ray dashboard introspection + Ray Serve proxy over ray-kit (uv member stays ray-api: a `ray` package would shadow PyPI ray)."
 requires-python = ">=3.13"
 license = "AGPL-3.0-only"
 dependencies = [

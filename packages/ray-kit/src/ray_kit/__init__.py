@@ -1,5 +1,5 @@
 """ray-kit — Ray Job SDK + Dashboard HTTP wrapper (schemas, dashboard service,
-shared transient-error tuple, client constructor). Used by ray-api (the viewer
+shared transient-error tuple, client constructor). Used by the ray service (the viewer
 orchestrator, its other consumer, died at P7a). No FastAPI, no viewer, no DB."""
 
 from ray.job_submission import JobSubmissionClient

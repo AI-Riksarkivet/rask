@@ -35,13 +35,10 @@ zone composition.
 ```mermaid
 flowchart LR
     home["home (SSR catch-all, /)"] -->|/api| gateway["gateway :8888"]
-    domains["overview · compute · discover · storage · train · studio"] -->|/api| gateway
-    gateway --> core_api["core-api :8801"]
-    gateway --> search_api["search-api :8802"]
-    gateway --> volumes_api["volumes-api :8803"]
-    gateway --> ray_api["ray-api :8804"]
-    gateway --> orch["orchestrator :8810"]
-    core_api --> db[("DB")]
-    volumes_api --> s3[("S3")]
-    search_api --> s3
+    domains["lakehouse · media · annotator · compute · studio · train"] -->|/api| gateway
+    gateway --> ray["ray :8804"]
+    gateway --> cp["controlplane :8820"]
+    gateway --> lake["lance lakehouse<br/>catalog · lineage · medallion"]
+    gateway --> mediaplane["lance media<br/>viewer · search · annotator"]
+    mediaplane --> s3[("S3")]
 ```

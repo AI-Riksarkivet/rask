@@ -1,5 +1,15 @@
 # Viewer decomposition into microservices
 
+!!! warning "P7b / R6+R20 (2026-07-28): the fleet described below is RETIRED down to gateway + ray + controlplane"
+    The R6/R20 media wave deleted `core-api` (the transitional husk), `search-api`, and
+    `volumes-api`. Their still-needed capabilities serve from the **media plane**: the S3 object
+    browser moved into the lance `viewer` (`/api/media/objects` → viewer `/api/objects`); lines FTS
+    and the EAD catalog search re-land as catalog-governed Lance tables behind `/api/media/search`.
+    `ray-api` survives and took the clean name **`ray`** (k8s/dapr/image/gateway; the uv member
+    stays `ray-api` because a Python package named `ray` would shadow PyPI ray). The gateway's
+    `/api` catch-all is gone — an unmatched `/api/*` 404s. Upstream env vars are `RASK_RAY_URL`,
+    `RASK_CONTROLPLANE_URL`, and the `RASK_MEDIA_*`/lance rows.
+
 !!! warning "P7a (2026-07-27): the batches/orchestrator plane described below is DELETED"
     The compute-plane cutover (`lance-ns-merge.md` P7a) removed the orchestrator loop + entrypoint
     (`:8810`), the `batches` table + Alembic lineage, S3-sync, chunk submission, and the prefetch lane.

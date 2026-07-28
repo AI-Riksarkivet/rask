@@ -14,8 +14,6 @@ members = [
     "catalog",
     "compaction",
     "controlplane",
-    "core",
-    "core-api",
     "gateway",
     "lineage",
     "lineage-kit",
@@ -25,13 +23,11 @@ members = [
     "ray-api",
     "ray-kit",
     "search",
-    "search-api",
     "service-kit",
     "storage",
     "tracker",
     "validate",
     "viewer",
-    "volumes-api",
 ]
 overrides = [
     { name = "lance-namespace", specifier = ">=0.9.0" },
@@ -572,50 +568,6 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "kubernetes", specifier = ">=31" },
-    { name = "service-kit", editable = "packages/service-kit" },
-    { name = "uvicorn", specifier = ">=0.30" },
-]
-
-[[package]]
-name = "core"
-version = "0.1.0"
-source = { editable = "services/core" }
-dependencies = [
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "lancedb" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "service-kit" },
-    { name = "storage" },
-    { name = "uvicorn" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", specifier = ">=0.115" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "lancedb", specifier = ">=0.20" },
-    { name = "pydantic", specifier = ">=2.7" },
-    { name = "pydantic-settings", specifier = ">=2.5" },
-    { name = "service-kit", editable = "packages/service-kit" },
-    { name = "storage", editable = "packages/storage" },
-    { name = "uvicorn", specifier = ">=0.30" },
-]
-
-[[package]]
-name = "core-api"
-version = "0.1.0"
-source = { editable = "services/core_api" }
-dependencies = [
-    { name = "core" },
-    { name = "service-kit" },
-    { name = "uvicorn" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "core", extras = ["migrations", "postgres"], editable = "services/core" },
     { name = "service-kit", editable = "packages/service-kit" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
@@ -3958,25 +3910,6 @@ requires-dist = [
 ]
 
 [[package]]
-name = "search-api"
-version = "0.1.0"
-source = { editable = "services/search_api" }
-dependencies = [
-    { name = "lancedb" },
-    { name = "service-kit" },
-    { name = "storage" },
-    { name = "uvicorn" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "lancedb", specifier = ">=0.20" },
-    { name = "service-kit", editable = "packages/service-kit" },
-    { name = "storage", editable = "packages/storage" },
-    { name = "uvicorn", specifier = ">=0.30" },
-]
-
-[[package]]
 name = "service-kit"
 version = "0.1.0"
 source = { editable = "packages/service-kit" }
@@ -4411,6 +4344,7 @@ dependencies = [
     { name = "pylance", extra = ["otel"] },
     { name = "python-multipart" },
     { name = "service-kit", extra = ["lancekit"] },
+    { name = "storage" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -4425,6 +4359,7 @@ requires-dist = [
     { name = "pylance", extras = ["otel"], specifier = ">=9.0.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "service-kit", extras = ["lancekit"], editable = "packages/service-kit" },
+    { name = "storage", editable = "packages/storage" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 
@@ -4441,23 +4376,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/15/ba/1f6e8c957e4932be060dcdc482d339c12e0216351478add3645cdaa53c05/virtualenv-21.3.3.tar.gz", hash = "sha256:f5bda277e553b1c2b3c1a8debfc30496e1288cc93ce6b7b71b3280047e317328", size = 7613784, upload-time = "2026-05-13T18:01:30.19Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/34/a9dbe051de88a63eb7408ea66630bac38e72f7f6077d4be58737106860d9/virtualenv-21.3.3-py3-none-any.whl", hash = "sha256:7d5987d8369e098e41406efb780a3d4ca79280097293899e351a6407ee153ab3", size = 7594554, upload-time = "2026-05-13T18:01:27.815Z" },
-]
-
-[[package]]
-name = "volumes-api"
-version = "0.1.0"
-source = { editable = "services/volumes_api" }
-dependencies = [
-    { name = "service-kit" },
-    { name = "storage" },
-    { name = "uvicorn" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "service-kit", editable = "packages/service-kit" },
-    { name = "storage", editable = "packages/storage" },
-    { name = "uvicorn", specifier = ">=0.30" },
 ]
 
 [[package]]

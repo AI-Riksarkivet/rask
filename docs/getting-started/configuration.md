@@ -40,37 +40,26 @@ service URLs are overridable via:
 
 | Variable | Default | Upstream |
 |---|---|---|
-| `RASK_CORE_API_URL` | `http://localhost:8801` | core-api |
-| `RASK_SEARCH_API_URL` | `http://localhost:8802` | search-api |
-| `RASK_VOLUMES_API_URL` | `http://localhost:8803` | volumes-api |
-| `RASK_RAY_API_URL` | `http://localhost:8804` | ray-api |
-| `RASK_ORCH_API_URL` | `http://localhost:8810` | orchestrator |
+| `RASK_RAY_URL` | `http://127.0.0.1:8804` | ray (`/api/ray`, `/api/serve`) |
+| `RASK_CONTROLPLANE_URL` | `http://127.0.0.1:8820` | controlplane (`/api/projects`) |
+| `RASK_CATALOG_API_URL` | `http://127.0.0.1:2333` | lance catalog (`/api/catalog`) |
+| `RASK_LINEAGE_API_URL` | `http://127.0.0.1:8000` | lineage (`/api/lineage`) |
+| `RASK_MEDALLION_API_URL` | `http://127.0.0.1:8002` | medallion producer (`/api/produce`, `/api/ingest-iiif`, `/api/train`) |
+| `RASK_MEDIA_VIEWER_URL` | `http://127.0.0.1:8101` | media viewer (`/api/media`, incl. the objects browser) |
+| `RASK_MEDIA_SEARCH_URL` | `http://127.0.0.1:8102` | media search (`/api/media/search`) |
+| `RASK_MEDIA_ANNOTATOR_URL` | `http://127.0.0.1:8103` | annotator (`/api/media/annotations`) |
 
-## Core service (core-api + orchestrator)
+There is **no `/api` catch-all** since the R6/R20 wave — an unmatched `/api/*`
+404s at the gateway. (The core-api/search-api/volumes-api upstream vars died
+with their services.)
+
+## The ray service
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `RASK_VIEWER_INPUT` / `RASK_VIEWER_OUTPUT` | — | Required `s3://` input/output prefixes. |
-| `RASK_API_PREFIX` | `/api/v1` | Route prefix; the Vite proxy assumes it. |
+| `RASK_API_PREFIX` | `/api/v1` | Route prefix; the Vite proxy assumes `/api`. |
 | `RASK_CORS_ORIGINS` | `[]` | Allowed CORS origins. |
-| `DATABASE_URL` | — | Postgres DSN; falls back to SQLite when unset. |
-| `RAY_DASHBOARD_URL` | `http://localhost:8265` | Ray cluster the orchestrator submits to; also used by ray-api. |
-
-## Orchestrator
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `RASK_ORCHESTRATOR_AUTOSTART` | `false` | Start the submission loop on boot. |
-| `RASK_ORCHESTRATOR_INTERVAL_SECONDS` | `60` | Tick interval. |
-| `RASK_HTR_PIPELINE` | `htr` | Pipeline submitted for the HTR lane. |
-| `RASK_PREFETCH_PIPELINE` | `prefetch` | Prefetch lane pipeline (`none` to disable). |
-| `RASK_HTR_MAX_INFLIGHT` | `0` | Max concurrent HTR jobs (`0` = unlimited). |
-
-!!! tip "Targeting a shared cluster"
-    Point `RAY_DASHBOARD_URL` at a remote KubeRay dashboard to submit jobs
-    there. On clusters whose workers lack the runner's heavy dependencies, set
-    `RASK_HTR_PIPELINE=htr_http` so the orchestrator submits the lightweight
-    HTTP driver instead.
+| `RAY_DASHBOARD_URL` | `http://localhost:8265` | The Ray dashboard the service introspects/proxies. |
 
 Changes to `.env` are read once at service startup — restart the relevant
 service to pick them up.

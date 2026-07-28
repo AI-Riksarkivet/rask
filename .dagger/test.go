@@ -20,7 +20,7 @@ func (m *Rask) Test(
 ) (string, error) {
 	return m.base(src).
 		// base() only syncs the root project; the suites IMPORT the workspace members
-		// (search_api, core, storage, …), so install every member like `make dev-micro` does.
+		// (ray_api, gateway, storage, …), so install every member like `make dev-micro` does.
 		WithExec([]string{"uv", "sync", "--all-packages"}).
 		WithExec([]string{"uv", "run", "--no-sync", "pytest", "-q", "-m", "not e2e and not slow"}).
 		Stdout(ctx)

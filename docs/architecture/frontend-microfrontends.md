@@ -114,8 +114,8 @@ There are **two distinct layers** — keep them separate:
 1. **Page composition** — which _app_ serves a URL path (`/storage` → storage).
 2. **Data** — how an app reaches the _backend_. The frontend **never** talks to a domain
    service directly; it always hits the **gateway** (`:8888`), which path-routes `/api/*`
-   to the per-domain services (`core-api` :8801, `search-api` :8802, `volumes-api` :8803,
-   `ray-api` :8804, `orchestrator` :8810) longest-prefix-first.
+   longest-prefix-first (`ray` :8804, controlplane :8820, and the lance
+   lakehouse/media planes — `/api/catalog`, `/api/lineage`, `/api/media/*`).
 
 ```mermaid
 sequenceDiagram
@@ -128,9 +128,9 @@ sequenceDiagram
   B->>APP: GET /storage
   APP-->>B: SSR HTML (shared shell + page)
   Note over B,SVC: data — /api/* always via the one gateway
-  B->>APP: GET /api/volumes/objects
+  B->>APP: GET /api/media/objects
   APP->>GW: Vite dev proxy / same-origin forwards /api/*
-  GW->>SVC: longest-prefix route → volumes-api
+  GW->>SVC: longest-prefix route → the media viewer
   SVC-->>B: JSON
 ```
 

@@ -27,8 +27,8 @@ guarantee a rask selector can never adopt a lance pod inside the shared release.
 ===================================================================================================== */}}
 
 {{/* ---------------------------------------------------------------------------------------------------
-     rask — the base chart's helpers (fleet: core-api, gateway, ray-api, search-api,
-     volumes-api, controlplane, frontends — the orchestrator died at P7a).
+     rask — the base chart's helpers (fleet: gateway, ray, controlplane, frontends —
+     the orchestrator died at P7a; core-api/search-api/volumes-api died in the R6/R20 wave).
      --------------------------------------------------------------------------------------------------- */}}
 
 {{- define "rask.name" -}}

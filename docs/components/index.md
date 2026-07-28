@@ -15,19 +15,16 @@ zones in `frontend/microfrontends/`, and one-shot tools in `scripts/`.
 | `frontend/microfrontends/train` | SvelteKit SSR app — `train` domain (Bun server) | [UI Components](ui.md) |
 | `frontend/microfrontends/studio` | SvelteKit SSR app — `studio` domain (Bun server) | [UI Components](ui.md) |
 | `services/gateway` | Reverse proxy (`:8888`) | [Services](services.md) |
-| `services/core` | Core domain package (shared by core-api + orchestrator) | [Services](services.md) |
-| `services/core_api` | Batches/chunks/catalog API (`:8801`) | [Services](services.md) |
-| `services/orchestrator` | Orchestrator loop + endpoints (`:8810`) | [Services](services.md) |
-| `services/volumes_api` | S3/IIIF image+ALTO proxy (`:8803`) | [Services](services.md) |
-| `services/search_api` | Lance FTS + thumbnails (`:8802`) | [Services](services.md) |
-| `services/ray_api` | Ray dashboard + Serve proxy (`:8804`) | [Services](services.md) |
+| `services/ray_api` | The `ray` service — Ray dashboard + Serve proxy (`:8804`) | [Services](services.md) |
+| `services/controlplane` | Project provisioning (`:8820`) | [Services](services.md) |
+| `services/{viewer,search,annotator}` | The lance media plane (`/api/media/*`; the viewer carries the S3 object browser) | [Services](services.md) |
+| `services/{catalog,lineage,medallion,compaction}` | The lance lakehouse plane | [Services](services.md) |
 | `scripts/` | One-shot Python tools (+ the dev/ops shell scripts) | below |
 
 ## `scripts/`
 
 One-shot setup and debug tools — **no production-state-changing CLIs**. Anything
-that mutates live state (sync, submit, orchestrate) goes through the HTTP
-services (core-api endpoints + the orchestrator service's lifespan loop). Notable scripts:
+that mutates live state goes through the HTTP services. Notable scripts:
 
 | Script | Purpose |
 |---|---|
@@ -42,5 +39,5 @@ services (core-api endpoints + the orchestrator service's lifespan loop). Notabl
 ## In this section
 
 - **[Frontends](frontends.md)** — the runner CLI and the SSR frontend apps (catch-all + the six domain microfrontends: overview, compute, discover, storage, train, studio).
-- **[Services](services.md)** — the gateway, core package, and the five per-domain services.
+- **[Services](services.md)** — the gateway, the ray service, controlplane, and the lance lakehouse/media planes.
 - **[UI Components](ui.md)** — the SvelteKit app and the `@rask/ui` library (frontend/packages/ui).

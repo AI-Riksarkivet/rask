@@ -51,7 +51,7 @@ log = logging.getLogger(__name__)
 # its construct-time check to builtin ConnectionError, so live calls can still raise
 # requests exceptions directly. AuthenticationError (a RayError) surfaces on 401/403
 # from an authenticated cluster. (Its other consumers, core's submission.py +
-# orchestrator/derive.py, died at P7a — ray-api and the medallion Ray seam remain.)
+# orchestrator/derive.py, died at P7a — the ray service and the medallion Ray seam remain.)
 RAY_TRANSIENT_ERRORS = (RuntimeError, ConnectionError, requests.exceptions.RequestException, AuthenticationError)
 
 _BATCH_RE = re.compile(r"--batch[\s=]+(\S+)")

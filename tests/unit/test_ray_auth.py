@@ -5,8 +5,9 @@ The live tokenless-rejection proof runs at the cluster gates; these tests pin wh
 
   * auth ON  -> the token Secret renders (key `auth_token`, the KubeRay convention),
     the Ray head carries the RAY_AUTH_MODE/RAY_AUTH_TOKEN pair, and the pair lands on
-    EXACTLY the Ray-talking fleet services (ray-api — core-api/orchestrator died at
-    P7a) — least privilege: gateway/search-api/volumes-api never talk to Ray and never see it.
+    EXACTLY the Ray-talking fleet services (ray — the orchestrator died at P7a;
+    search-api/volumes-api/core-api died in the R6/R20 wave) — least privilege:
+    gateway/controlplane never talk to Ray and never see it.
   * auth OFF (default) -> zero auth manifests/env anywhere (current behavior intact).
   * externalSecrets ON -> the ESO ExternalSecret owns the same-named Secret and the
     static one is skipped (no plaintext token in the chart).
@@ -28,8 +29,8 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 CHART = REPO / "chart"
 
-RAY_TALKERS = {"rask-ray-api"}
-NEVER_RAY = {"rask-gateway", "rask-search-api", "rask-volumes-api", "rask-core-api"}
+RAY_TALKERS = {"rask-ray"}
+NEVER_RAY = {"rask-gateway", "rask-controlplane"}
 
 # Values that satisfy the OTHER prod guards (infra-credentials, dapr-app-token) so the
 # prod-signal tests isolate the ray-auth guard.

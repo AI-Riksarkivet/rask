@@ -61,7 +61,7 @@ class AppState(BaseModel):
     search_cache: dict[tuple[str, str, str], list[Any]] = Field(default_factory=dict)
     # Multi-dataset registry (LANCE_MEDIA_MERGE §4.4) — the schema-agnostic
     # resolution path. The legacy per-table fields above stay during the
-    # media_api/search_api port and are stripped at integration.
+    # media/search service port and are stripped at integration.
     registry: Any | None = None  # service_kit.lancekit.registry.DatasetRegistry
 
 

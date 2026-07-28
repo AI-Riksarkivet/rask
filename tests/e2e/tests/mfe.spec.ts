@@ -36,13 +36,14 @@ for (const route of ROUTES) {
 	});
 }
 
-// Requires the fleet backend (core-api) — i.e. a full/`singleTenant` deploy, not the
-// front-door-only install where `/api/health` has no upstream (gateway 502). (The
-// batches endpoints died at P7a; the husk's health route keeps the round-trip probed.)
+// Requires the fleet backend (the ray service) — i.e. a full/`singleTenant` deploy, not
+// the front-door-only install where `/api/ray/health` has no upstream (gateway 502).
+// (The core-api husk and its /api/health died in the R6/R20 wave; the ray service's
+// own /health keeps the gateway round-trip probed.)
 test('api round-trip via gateway returns 2xx (no internal-URL redirect)', async ({ request }) => {
-	const res = await request.get('/api/health', { maxRedirects: 0 });
+	const res = await request.get('/api/ray/health', { maxRedirects: 0 });
 	// 200 with data, OR a redirect whose Location is relative (never an absolute
-	// internal address). A 3xx to http://127.0.0.1:8801/... is the bug.
+	// internal address). A 3xx to http://127.0.0.1:8804/... is the bug.
 	if (res.status() >= 300 && res.status() < 400) {
 		const loc = res.headers()['location'] ?? '';
 		expect(loc, 'redirect Location must be relative').not.toMatch(/^https?:\/\//);

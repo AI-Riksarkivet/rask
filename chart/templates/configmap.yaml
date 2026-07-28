@@ -9,11 +9,9 @@ data:
   {{ $k }}: {{ $v | quote }}
   {{- end }}
   RASK_DAPR_ENABLED: {{ .Values.dapr.sidecars | quote }}
-  # Gateway upstreams (in-cluster DNS).
-  RASK_CORE_API_URL: {{ printf "http://%s-core-api:8801" (include "rask.fullname" .) | quote }}
-  RASK_SEARCH_API_URL: {{ printf "http://%s-search-api:8802" (include "rask.fullname" .) | quote }}
-  RASK_VOLUMES_API_URL: {{ printf "http://%s-volumes-api:8803" (include "rask.fullname" .) | quote }}
-  RASK_RAY_API_URL: {{ printf "http://%s-ray-api:8804" (include "rask.fullname" .) | quote }}
+  # Gateway upstreams (in-cluster DNS). The core/search/volumes rows died in the
+  # R6/R20 media wave — their capabilities serve from the media plane below.
+  RASK_RAY_URL: {{ printf "http://%s-ray:8804" (include "rask.fullname" .) | quote }}
   RASK_CONTROLPLANE_URL: {{ printf "http://%s-controlplane:8820" (include "rask.fullname" .) | quote }}
   # lance-plane gateway upstreams (lance-ns-merge.md P1 gateway fold + P4): the fleet gateway carries
   # /api/catalog, /api/lineage, /api/produce, /api/train and the /api/media/* namespace. Service names

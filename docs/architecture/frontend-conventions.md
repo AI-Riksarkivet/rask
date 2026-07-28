@@ -76,7 +76,8 @@ export const getRayJobs = query(async (): Promise<RayJobsPayload> => {
 });
 ```
 
-When the endpoint isn't in `@rask/api` yet (e.g. storage's volumes-api), the
+When the endpoint isn't in `@rask/api` yet (e.g. the lakehouse storage
+browser's media-viewer objects routes), the
 query still fetches **relative `/api/*` via `getRequestEvent().fetch`** — the
 same `hooks.server.ts` rewrite carries it to the gateway, so there is **no
 absolute-URL special case**. The only difference is that the response is parsed
@@ -85,8 +86,8 @@ against a **local valibot schema** instead of an imported `@rask/api` one
 with `error(502, …)` (a plain throw becomes a generic "Internal Error"):
 
 ```ts
-const res = await getRequestEvent().fetch(`/api/volumes/objects?${params}`);
-if (!res.ok) error(502, `volumes-api → HTTP ${res.status} ${res.statusText}`);
+const res = await getRequestEvent().fetch(`/api/media/objects?${params}`);
+if (!res.ok) error(502, `media viewer → HTTP ${res.status} ${res.statusText}`);
 return v.parse(S3ListingSchema, await res.json());
 ```
 

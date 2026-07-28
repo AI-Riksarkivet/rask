@@ -14,7 +14,7 @@ Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
 - `services/` — runnable Python services (uv workspace members):
   - lakehouse: `catalog` (governed Lance REST catalog), `lineage` (OpenLineage → AGE), `medallion` (cascade movers), `compaction`
   - media: `viewer`, `search`, `annotator`
-  - fleet: `gateway` (reverse proxy `:8888`), the `core` package (a transitional husk composed by the `core_api` entrypoint), `controlplane`, `volumes_api`, `search_api`, `ray_api`
+  - fleet: `gateway` (reverse proxy `:8888`), `ray` (Ray introspection + Serve proxy; uv member `ray-api`), `controlplane` — the core-api husk and search/volumes died in the R6/R20 media wave (their capabilities serve from the media plane)
 - `runners/` — **sealed model environments, not workspace members** (own `pyproject.toml` + `uv.lock` each, so torch/model pins never enter the fleet's resolution): `htr`, `asr`, `diarize`, `voiceprint`, `topics`, `kg`, `assist`
 - `frontend/` — the JS/TS plane; its own Bun + Turborepo workspace root:
   - `microfrontends/` — **seven SvelteKit 2 + Svelte 5 zones**: `home` (catch-all, owns `/`) + `lakehouse`, `media`, `annotator`, `compute`, `studio`, `train` — composed by the Turborepo `:3024` proxy in dev, Ingress in-cluster

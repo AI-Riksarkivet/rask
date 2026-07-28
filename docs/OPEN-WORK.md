@@ -141,19 +141,46 @@ compliance deploy must raise it manually (`API.md` records the caveat).
 
 ## D2. P7a follow-ups (compute-plane cutover, 2026-07-27)
 
-### D2a · The core-api husk retires with the R6/R20 media wave
+### D2a · ~~The core-api husk retires with the R6/R20 media wave~~ **CLOSED 2026-07-28, with evidence**
 
-**What.** P7a deleted the batches/orchestrator plane; `services/core` + `services/core_api` survive as a
-transitional husk (health + the EAD `/catalog/search` over the LanceDB `archive_catalog` table).
-**What closes it.** lance `search` serving a catalog-governed EAD table (R6) — then delete
-`services/core`, `services/core_api`, the gateway core rows, and the chart's `core-api` fleet entry.
+**Closed by the R6/R20 wave (P7b):** `services/core`, `services/core_api`, `services/search_api`
+and `services/volumes_api` are deleted; the gateway's core rows AND its `/api` catch-all are gone
+(an unmatched `/api/*` now 404s `no upstream` — pinned by
+`services/gateway/tests/test_routing.py::test_no_catch_all_since_the_r6_r20_wave`); the chart's
+`core-api`/`search-api`/`volumes-api` fleet entries, configmap URL rows, dockerfiles and Makefile
+image-list entries are deleted; `ray-api` took the clean `ray` name everywhere external (R20 —
+the uv member stays `ray-api`, a `ray` package would shadow PyPI ray). The S3 object browser was
+ported into the media viewer (`viewer/api/v1/endpoints/objects.py`, public `/api/media/object*`,
+tests `tests/unit/test_objects_browser.py`) and the lakehouse storage browser re-pointed to it.
+The EAD `/catalog/search` endpoint retired with **zero frontend callers**; its re-land is D2d below.
 
-### D2b · The lines FTS indexer died with `scripts/index_alto.py`
+### D2b · The lines FTS surface is dark until the governed lines table lands *(re-anchored 2026-07-28)*
 
-**What.** P7a deleted `index_alto.py` + `submit_index.py` (batches.db-coupled `index-all` driver), so
-`search_api`'s Lance `lines` table has no re-indexer until lance `search` over a governed lines table
-lands (plan §d, gated on the P5 pin test). Existing indexed data keeps serving.
-**What closes it.** The R6 search wave — or, if it lags materially, a batches-free reindex CLI.
+**What.** P7a deleted the indexer; the R6/R20 wave deleted `search_api` itself, so the old
+"existing indexed data keeps serving" clause **ended** — there is no lines FTS surface at all right
+now (nothing called it: `searchLines`/`searchStats` had zero zone importers). The frozen
+`s3://images-batch-search/lines` table is a corpse.
+**What closes it.** The P7b gold wave: a **catalog-governed lines table** (line text/geometry/
+confidence are `GOLD_CONTRACT_COLUMNS`) + a `DatasetRegistry` descriptor, served at
+`/api/media/search?dataset=lines&mode=fts`. Thumb crops ride as a blob column served by the media
+blob route — no raw-S3-key proxy gets re-created.
+
+### D2d · The EAD catalog re-lands as a catalog-governed Lance table *(new, 2026-07-28 — the second half of D2a)*
+
+**What.** `scripts/index_catalog.py` + `make catalog-index` are deleted; `scripts/harvest_ead.py`
+survives (EAD download only). The `archive_catalog` Lance table at `s3://images-batch-search` is
+frozen and unserved.
+**What closes it.** An ingest job that writes the EAD table **through the catalog** (governed), plus
+a descriptor, so `/api/media/search?dataset=archive_catalog&mode=fts` serves it (media search's
+dynamic filterable params cover `archive_code`/`date_*` natively).
+
+### D2e · Warehouse-bucket generalization of the objects browser *(new, 2026-07-28 — the R8 follow-up)*
+
+**What.** The viewer's objects endpoints keep volumes-api's two-bucket `Literal` allowlist
+(`images-batch`, `images-batch-alto`). R8 frames the browser as "a lakehouse view of the
+warehouse's own buckets".
+**What closes it.** Replace the hardcoded pair with a warehouse-derived bucket set (and per-bucket
+authz once FGA fronts the browser). Recorded, deliberately not widened in the R6/R20 pass.
 
 ### D2c · P7b executes the sealed-runner re-cut this gate only pinned
 

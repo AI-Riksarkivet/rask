@@ -42,7 +42,7 @@ _HOP_BY_HOP = frozenset(
 
 def _rewrite_location(location: str) -> str:
     """Scrub an upstream redirect Location: an absolute URL (which carries the
-    upstream's internal host, e.g. 127.0.0.1:8801) becomes path(+query) so the
+    upstream's internal host, e.g. 127.0.0.1:8804) becomes path(+query) so the
     caller resolves it against the gateway origin instead of an unreachable
     in-cluster address."""
     u = httpx.URL(location)
@@ -70,10 +70,7 @@ def _routes() -> list[Route]:
     # mount. load_dotenv() so the gateway sees the same .env config the backends do.
     load_dotenv()
     prefix = os.environ.get("RASK_API_PREFIX", "/api/v1").rstrip("/")
-    core = ("core-api", os.environ.get("RASK_CORE_API_URL", "http://127.0.0.1:8801"))
-    search = ("search-api", os.environ.get("RASK_SEARCH_API_URL", "http://127.0.0.1:8802"))
-    volumes = ("volumes-api", os.environ.get("RASK_VOLUMES_API_URL", "http://127.0.0.1:8803"))
-    ray = ("ray-api", os.environ.get("RASK_RAY_API_URL", "http://127.0.0.1:8804"))
+    ray = ("ray", os.environ.get("RASK_RAY_URL", "http://127.0.0.1:8804"))
     controlplane = ("controlplane", os.environ.get("RASK_CONTROLPLANE_URL", "http://127.0.0.1:8820"))
     # lance-plane upstreams (P1 gateway fold). Localhost defaults follow the lance
     # dev conventions: catalog 2333, lineage 8000, the lance-ray producer 8002 (the
@@ -86,9 +83,9 @@ def _routes() -> list[Route]:
     media_search = ("search", os.environ.get("RASK_MEDIA_SEARCH_URL", "http://127.0.0.1:8102"))
     annotator = ("annotator", os.environ.get("RASK_MEDIA_ANNOTATOR_URL", "http://127.0.0.1:8103"))
     # longest / most-specific prefixes first; the prefix itself is the catch-all.
-    # The two deeper media rows MUST outrank /api/media, and every lance row must
-    # outrank the /api catch-all (bare /api→viewer cannot coexist with rask's
-    # /api→core-api catch-all — hence the /api/media namespace, owner-ruled).
+    # The two deeper media rows MUST outrank /api/media. There is NO bare /api
+    # catch-all since the R6/R20 wave (core-api/search-api/volumes-api retired):
+    # an unmatched /api/* 404s at the gateway with "no upstream", which is correct.
     return [
         ("/api/media/search", "/api/search", *media_search),
         ("/api/media/annotations", "/api/annotations", *annotator),
@@ -98,13 +95,9 @@ def _routes() -> list[Route]:
         ("/api/produce", "/produce", *medallion),
         ("/api/ingest-iiif", "/ingest-iiif", *medallion),
         ("/api/train", "/train", *medallion),
-        (f"{prefix}/search", f"{prefix}/search", *search),
-        (f"{prefix}/volumes", f"{prefix}/volumes", *volumes),
         (f"{prefix}/ray", f"{prefix}/ray", *ray),
         (f"{prefix}/projects", f"{prefix}/projects", *controlplane),
         ("/api/serve", "/api/serve", *ray),
-        (prefix, prefix, *core),
-        ("/api", "/api", *core),
     ]
 
 

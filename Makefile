@@ -1,4 +1,4 @@
-.PHONY: help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead catalog-index claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge tilt-registry tilt-up tilt-down e2e
+.PHONY: help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge tilt-registry tilt-up tilt-down e2e
 
 help:
 	@echo "Targets:"
@@ -11,7 +11,7 @@ help:
 	@echo "  ray-up ray-down ray-status   ray-up-htr (2-GPU pool, GPUs 0,1)"
 	@echo "  serve-up serve-down serve-status   serve-up-both (transcribe+htrflow)"
 	@echo "  qwen-serve                             — vLLM Qwen3.6-27B on GPU 2 for OpenCode"
-	@echo "  harvest-ead catalog-index"
+	@echo "  harvest-ead"
 	@echo "  claude-bootstrap                       — install Claude Code skills & verify config"
 
 install:
@@ -135,7 +135,7 @@ dev-frontends-k3s:    # frontend HMR (Path A) against the IN-CLUSTER backend
 	@echo "==> port-forward rask-gateway → http://localhost:8888 (Ctrl-C stops both)"
 	@$(KUBECTL) port-forward svc/rask-gateway 8888:8888 >/dev/null 2>&1 & \
 	  PF=$$!; trap 'kill $$PF 2>/dev/null' EXIT INT TERM; \
-	  until curl -sf http://localhost:8888/api/health >/dev/null 2>&1; do sleep 1; done; \
+	  until curl -sf http://localhost:8888/api/ray/health >/dev/null 2>&1; do sleep 1; done; \
 	  echo "==> gateway reachable; starting frontends (Vite HMR)"; \
 	  VIEWER_BACKEND=http://localhost:8888 RASK_GATEWAY_URL=http://localhost:8888 \
 	    bunx turbo --cwd=frontend run build --filter='./packages/ui' --filter='./packages/api' && \
@@ -245,15 +245,13 @@ qwen-serve:
 	  --port $(QWEN_PORT) --tensor-parallel-size 1 \
 	  --max-model-len $(QWEN_CTX) --max-num-seqs $(QWEN_MAX_SEQS) --reasoning-parser qwen3
 
-# ---- search / catalog index ------------------------------------------------
-# (search-index / search-index-fresh died at P7a with scripts/index_alto.py — the
-# batches.db-driven lines indexer; lance `search` over a governed lines table
-# replaces it in the R6 media wave.)
+# ---- EAD harvest -----------------------------------------------------------
+# (search-index / search-index-fresh died at P7a with scripts/index_alto.py;
+# catalog-index died in the R6/R20 wave with scripts/index_catalog.py — the EAD
+# data re-lands as a catalog-governed Lance table served at /api/media/search.
+# harvest-ead survives: it only downloads the EAD source files.)
 harvest-ead:
 	uv run python scripts/harvest_ead.py
-
-catalog-index:
-	uv run python scripts/index_catalog.py --no-embed --digitized-only
 
 # ---- rustfs (S3-compatible object storage) smoke ---------------------------
 # Prove packages/storage + LanceDB work against a REAL rustfs backend (not moto).
@@ -274,7 +272,7 @@ smoke-rustfs: ## Storage smoke vs rustfs (S3 round-trip + LanceDB) — needs rus
 	  uv run python scripts/smoke_rustfs.py
 
 # ---- local k3s ------------------------------------------------------------
-COMPOSE_IMAGES = gateway core-api search-api volumes-api ray-api controlplane
+COMPOSE_IMAGES = gateway ray controlplane
 # SvelteKit SSR microfrontend zone images — one per $(ZONES) entry, all built from
 # the one parametrized .docker/frontend.dockerfile via --build-arg APP=<name>.
 # "home" is the catch-all; the rest are pinned to their /<zone> base path.
@@ -284,7 +282,7 @@ KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
 # lance-rest-catalog is the ONE lakehouse image (catalog + lineage + medallion + compaction +
 # media trio — chart `image.catalog`); the default render runs 8 containers from it, so the
 # build/import set must carry it or kind/k3s deploys ImagePullBackOff on every lakehouse pod.
-K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES) ray lance-rest-catalog
+K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES) ray-cluster lance-rest-catalog
 
 # Subchart repos (Chart.yaml dependencies). OCI deps (kueue) need no repo add.
 K3S_DEP_REPOS = nvdp=https://nvidia.github.io/k8s-device-plugin \
@@ -304,7 +302,7 @@ k3s-deps: ## Add subchart repos + vendor chart dependencies into chart/charts/
 	@helm repo update >/dev/null
 	helm dependency build ./chart
 
-k3s-build: ## Build all fleet + frontend (6 MFEs) + ray images as :dev (native arm64)
+k3s-build: ## Build all fleet + frontend zone + ray-cluster images as :dev (native arm64)
 	@for s in $(COMPOSE_IMAGES); do \
 	  echo ">> building $$s:dev"; \
 	  docker buildx build -f .docker/$$s.dockerfile -t $$s:dev --load . || exit 1; \
@@ -313,7 +311,7 @@ k3s-build: ## Build all fleet + frontend (6 MFEs) + ray images as :dev (native a
 	  echo ">> building $$a:dev (frontend.dockerfile APP=$$a)"; \
 	  docker buildx build -f .docker/frontend.dockerfile --build-arg APP=$$a -t $$a:dev --load . || exit 1; \
 	done
-	docker buildx build -f .docker/ray.dockerfile -t ray:dev --load .
+	docker buildx build -f .docker/ray-cluster.dockerfile -t ray-cluster:dev --load .
 	# The lakehouse fleet image — dockerfile name (rest-catalog) != image name, so it can't
 	# ride the COMPOSE_IMAGES loop. Same build scripts/e2e_stack.sh does.
 	docker buildx build -f .docker/rest-catalog.dockerfile -t lance-rest-catalog:dev --load .
@@ -334,7 +332,7 @@ k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait 
 	  $${AWS_SECRET_ACCESS_KEY:+--set-string rustfs.secretKey=$$AWS_SECRET_ACCESS_KEY}
 	$(KUBECTL) rollout status deploy/rask-gateway --timeout=300s
 	@echo "UI → http://<node-ip>/   (catch-all ingress; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
-	@echo "API → http://<node-ip>/api/health"
+	@echo "API → http://<node-ip>/api/ray/health"
 
 k3s-down: ## Uninstall the rask release (keep PVCs)
 	$(HELM) uninstall rask || true
@@ -379,7 +377,7 @@ kind-up: bootstrap ## Create the rask kind cluster (idempotent; deploy/kind/kind
 	@$(KIND) get clusters 2>/dev/null | grep -qx $(KIND_CLUSTER) || \
 	  $(KIND) create cluster --name $(KIND_CLUSTER) --config deploy/kind/kind-config.yaml --wait 150s
 
-kind-images: k3s-build ## Build the full :dev image set (same builds k3s uses — fleet + zones + ray)
+kind-images: k3s-build ## Build the full :dev image set (same builds k3s uses — fleet + zones + ray-cluster)
 
 kind-load: ## Side-load the :dev image set into the kind cluster
 	$(KIND) load docker-image $(foreach i,$(KIND_IMAGES),$(i):dev) --name $(KIND_CLUSTER)

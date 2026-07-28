@@ -43,10 +43,11 @@ def test_lance_rows_present_and_ordered(gw) -> None:
     # the two deeper media rows outrank /api/media
     assert prefixes.index("/api/media/search") < prefixes.index("/api/media")
     assert prefixes.index("/api/media/annotations") < prefixes.index("/api/media")
-    # every lance row outranks the /api catch-all
-    catch_all = prefixes.index("/api")
+    # the /api catch-all died with core-api (R6/R20): every row is an explicit
+    # prefix, an unmatched /api/* 404s at the gateway
+    assert "/api" not in prefixes
     for row in ("/api/media/search", "/api/media/annotations", "/api/media", "/api/catalog", "/api/lineage", "/api/produce", "/api/train"):
-        assert prefixes.index(row) < catch_all, f"{row} must outrank the /api catch-all"
+        assert row in prefixes
 
 
 @pytest.mark.parametrize(
@@ -95,6 +96,6 @@ def test_media_upstreams_env_overridable(gw, monkeypatch: pytest.MonkeyPatch) ->
 
 def test_rask_rows_still_forward_unrewritten(gw, proxied) -> None:
     client, captured = proxied
-    resp = client.get("/api/volumes/objects")
+    resp = client.get("/api/ray/jobs")
     assert resp.status_code == 200
-    assert str(captured[-1].url) == "http://127.0.0.1:8803/api/volumes/objects"
+    assert str(captured[-1].url) == "http://127.0.0.1:8804/api/ray/jobs"

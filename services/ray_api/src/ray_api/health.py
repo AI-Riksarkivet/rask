@@ -1,21 +1,17 @@
-"""ray-api health endpoint — the canonical service-kit /health shape (the
-`input`/`output` fields are service-kit Settings' shared viewer I/O paths)."""
+"""The ray service's health endpoint — process liveness (Ray reachability is
+`/ray/health`'s job, not this one's)."""
 
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from service_kit.dependencies import SettingsDep
-
 
 class Health(BaseModel):
     status: str
-    input: str
-    output: str
 
 
 router = APIRouter(tags=["health"])
 
 
 @router.get("/health")
-def health(settings: SettingsDep) -> Health:
-    return Health(status="ok", input=settings.viewer_input, output=settings.viewer_output)
+def health() -> Health:
+    return Health(status="ok")

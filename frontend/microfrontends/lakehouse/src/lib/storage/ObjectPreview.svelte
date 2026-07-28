@@ -1,5 +1,5 @@
 <script lang="ts">
-	// The object browser's PREVIEW pane (R18): metadata from the volumes-api HEAD, then a
+	// The object browser's PREVIEW pane (R18): metadata from the viewer's object HEAD, then a
 	// kind-appropriate body — images render inline through the object byte proxy, text/XML/JSON
 	// decode to a capped text block, anything else states its type and offers the download. Missing
 	// (404) and unreachable states are explicit; a dead backend can never hang a spinner here.
@@ -93,7 +93,7 @@
 	{:else if offline}
 		<div class="empty">
 			<RefreshCw size={14} />
-			<p>Volumes service unreachable (HTTP {lastStatus}).</p>
+			<p>Storage service unreachable (HTTP {lastStatus}).</p>
 			<button class="btn" onclick={load}>Retry</button>
 		</div>
 	{:else if head !== null}

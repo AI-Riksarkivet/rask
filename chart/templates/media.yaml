@@ -81,6 +81,20 @@ spec:
               valueFrom:
                 secretKeyRef: { name: {{ include "lance.fullname" $root }}-media-catalog-token, key: token }
             {{- end }}
+            {{- if eq $name "viewer" }}
+            # The S3 object browser (ported from the retired volumes-api, R6/R20): the viewer's
+            # objects endpoints read s3://images-batch* via storage.s3_client, which resolves
+            # endpoint + creds from env. Same ONE credential pair as the fleet (P4 RustFS
+            # unification). The viewer also joins the rustfs netpol ingress allowlist.
+            - { name: RASK_S3_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" $root | quote }} }
+            {{- $appSecret := $root.Values.existingSecret | default (printf "%s-app" (include "rask.fullname" $root)) }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: { name: {{ $appSecret }}, key: AWS_ACCESS_KEY_ID }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ $appSecret }}, key: AWS_SECRET_ACCESS_KEY }
+            {{- end }}
             {{- if or (eq $name "search") (eq $name "viewer") }}
             # Query encoders (values.encoders). search CALLS them (vector/hybrid/rerank legs); viewer
             # only PROBES them for /api/health, which is what drives the media zone's mode gating — so

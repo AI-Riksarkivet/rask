@@ -1,7 +1,7 @@
 # rask umbrella chart values — the MERGED estate (rask 0.2.0 + lance-ns 0.1.0, one release named `rask`).
 #
 # Two systems now install from this one file:
-#   * the rask fleet (gateway/core-api/ray-api/search-api/volumes-api/controlplane),
+#   * the rask fleet (gateway/ray/controlplane),
 #     KubeRay Serve, CloudNativePG, the RustFS Tenant, the SvelteKit microfrontend zones;
 #   * the lance-ns lakehouse (catalog + lineage + medallion + compaction + media), governance
 #     (Dex OIDC + OpenFGA), the Dapr/NATS event fabric, OpenBao, and the OTel-first observability tier.
@@ -53,13 +53,6 @@ secrets:
 
 # Non-secret env shared by the fleet ConfigMap.
 config:
-  RASK_SOURCE_MODE: "s3"
-  RASK_VIEWER_INPUT: "s3://images-batch"
-  RASK_VIEWER_OUTPUT: "s3://images-batch-alto"
-  RASK_CACHE_BUCKET: "images-batch"
-  RASK_OUTPUT_BUCKET: "images-batch-alto"
-  RASK_SEARCH_BUCKET: "images-batch-search"
-  RASK_IIIF_URL: ""
   RASK_API_PREFIX: "/api"
   RASK_SERVE_REPLICAS: "1"
   RASK_SERVE_GPU_FRAC: "1.0"
@@ -68,7 +61,7 @@ config:
   RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
 
 # Per-service definitions. TWO planes share this map, by design of the merge:
-#   * the rask FLEET (core-api … gateway) — rendered by templates/fleet.yaml, which ranges over this
+#   * the rask FLEET (ray, gateway) — rendered by templates/fleet.yaml, which ranges over this
 #     map but only emits the `gateway` entry unless singleTenant.enabled;
 #   * the lance-ns LAKEHOUSE apps (catalog, lineage) — rendered by templates/services.yaml, which
 #     reads .Values.services.catalog / .Values.services.lineage by NAME.
@@ -78,22 +71,12 @@ config:
 # services.yaml. A new lakehouse entry added to this map must also be added to that list.
 services:
   # ---- rask fleet (uvicorn modules, one Deployment each via templates/fleet.yaml) ----
-  core-api:
-    module: "core_api:app"
-    port: 8801
-    replicas: 1
-    waitFor: ["minio"]
-  search-api:
-    module: "search_api:app"
-    port: 8802
-    replicas: 1
-    waitFor: ["minio"] # Lance lines FTS + S3 thumbnails — no DB (the postgres wait died at P7a)
-  volumes-api:
-    module: "volumes_api:app"
-    port: 8803
-    replicas: 1
-    waitFor: ["minio"]
-  ray-api:
+  # (core-api/search-api/volumes-api died in the R6/R20 media wave: the S3 object browser
+  # rides the media-plane viewer at /api/media/object*; lines/EAD FTS re-land as
+  # catalog-governed Lance tables behind /api/media/search. The `ray` k8s/dapr name is
+  # R20's suffix-death — the uv member stays `ray-api` because a Python package named
+  # `ray` would shadow PyPI ray.)
+  ray:
     module: "ray_api:app"
     port: 8804
     replicas: 1
@@ -104,9 +87,9 @@ services:
     port: 8888
     replicas: 1
     extraArgs: ["--proxy-headers", "--forwarded-allow-ips=127.0.0.1"]
-    # The gateway proxies /api/* to backends, so /api/health depends on core-api.
-    # Probe its own unproxied /healthz instead, so it stays Ready in a front-door-only
-    # install (no domain backends).
+    # The gateway proxies /api/* to backends, so probing a proxied path would couple
+    # its readiness to an upstream. Probe its own unproxied /healthz instead, so it
+    # stays Ready in a front-door-only install (no domain backends).
     healthPath: /healthz
     waitFor: []
 
@@ -160,7 +143,7 @@ services:
 # Image registry/tag shared by every fleet + migration container, PLUS the per-image lance-ns block so
 # Tilt can inject each built image independently (image_keys → image.catalog.repository/tag).
 image:
-  repository: ""          # empty => bare "<component>" name (e.g. core-api)
+  repository: ""          # empty => bare "<component>" name (e.g. gateway)
   tag: "dev"
   pullPolicy: IfNotPresent
   # The lakehouse image: catalog (catalog.main:app) + lineage (lineage.main:app) + the medallion
@@ -793,7 +776,9 @@ ray:
     token: ""
   rayVersion: "2.55.1"
   image:
-    repository: ray
+    # `ray-cluster`, not `ray`: the fleet's ray SERVICE image took the bare `ray`
+    # name when the -api suffix died (R20), so the cluster image renamed with it.
+    repository: ray-cluster
     tag: "dev"
     pullPolicy: IfNotPresent
   serveRoutePrefix: "/htrflow"
@@ -906,8 +891,8 @@ dapr:
   sidecars: true
   logLevel: "info"
   # Max request body size for Dapr service invocation. Dapr defaults to 4Mi,
-  # which rejects multi-image batch uploads (POST /api/batches/<id>/upload routes
-  # gateway -> core-api over Dapr). Raise it to fit real batches.
+  # which rejects multi-image uploads proxied over the gateway's sidecar. Raise it
+  # to fit real batches.
   maxBodySize: "32Mi"
   # PodSecurity `restricted` compliance for the injected daprd sidecar. OFF by default (prod posture, like
   # networkPolicy.enabled). Our app containers are already `restricted`-clean (lance.securityContext:

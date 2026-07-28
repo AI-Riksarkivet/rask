@@ -14,7 +14,7 @@ surfaces, so a consumer works whether or not its own process also exports
 - ``build_client`` passes it as the ``JobSubmissionClient`` default headers
   (Ray never overrides a caller-supplied ``Authorization`` header);
 - the raw-httpx dashboard paths expect an ``httpx.AsyncClient`` constructed with
-  ``headers=auth_headers()`` (ray-api's lifespan does this).
+  ``headers=auth_headers()`` (the ray service's lifespan does this).
 
 Absent a token, both surfaces behave exactly as before (auth off). The token is
 read at call time, not import time, so env changes (tests, late injection) take

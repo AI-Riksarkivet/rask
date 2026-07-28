@@ -12,26 +12,23 @@ This section holds **narrative notes on rask's deployables and sub-projects**.
 | Deployable | Workspace member | Docs |
 |---|---|---|
 | `gateway` | `services/gateway` | [Services](../components/services.md) |
-| `core-api` | `services/core_api` (over `core`) | [Services](../components/services.md) |
-| `orchestrator` | `services/orchestrator` (over `core`) | [Services](../components/services.md) |
-| `volumes-api` | `services/volumes_api` | [Services](../components/services.md) |
-| `search-api` | `services/search_api` | [Services](../components/services.md) |
-| `ray-api` | `services/ray_api` | [Services](../components/services.md) |
+| `ray` | `services/ray_api` (uv member `ray-api`) | [Services](../components/services.md) |
+| `controlplane` | `services/controlplane` | [Services](../components/services.md) |
 | `runner` | `runners/htr` (+ `htr`, `storage`, `htrflow` from git) | [Runner](runner.md) |
 
-There is no `viewer` deployable — the viewer was dissolved (June 2026) into the
-gateway + per-domain services above.
+There is no `viewer` deployable in the fleet — the old viewer monolith was
+dissolved (June 2026), and the R6/R20 wave (2026-07-28) retired
+core-api/search-api/volumes-api into the media plane (which builds from the
+`lance-rest-catalog` image).
 
 ## Building a deployable
 
 One dockerfile per deployable under `.docker/`:
 
 - `rask-gateway` ← `.docker/gateway.dockerfile` (slim Python, `:8888`).
-- `rask-core-api` ← `.docker/core-api.dockerfile` (slim Python, `:8801`).
-- `rask-orchestrator` ← `.docker/orchestrator.dockerfile` (slim Python, `:8810`).
-- `rask-volumes-api` ← `.docker/volumes-api.dockerfile` (slim Python, `:8803`).
-- `rask-search-api` ← `.docker/search-api.dockerfile` (slim Python, `:8802`).
-- `rask-ray-api` ← `.docker/ray-api.dockerfile` (slim Python, `:8804`).
+- `ray` ← `.docker/ray.dockerfile` (slim Python, `:8804`).
+- `controlplane` ← `.docker/controlplane.dockerfile` (slim Python, `:8820`).
+- `ray-cluster` ← `.docker/ray-cluster.dockerfile` (CUDA base — the Ray head/Serve image).
 - `rask-runner` ← `.docker/runner.dockerfile` (CUDA base, GPU).
 
 The seven SvelteKit SSR apps under `frontend/microfrontends/` (`home` — the catch-all — plus `overview`/`compute`/`discover`/`storage`/`train`/`studio`)

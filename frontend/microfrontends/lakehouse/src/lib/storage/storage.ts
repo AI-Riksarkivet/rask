@@ -1,7 +1,8 @@
-// Typed client for the rask VOLUMES service via this zone's /api/v1/volumes BFF route (the R18
-// storage browser's data layer). The route forwards the path unchanged to the rask gateway, which
-// path-routes /api/v1/volumes/* to volumes-api — shapes are hand-mirrored from
-// services/volumes_api/schemas.py (no OpenAPI codegen exists for the rask fleet yet).
+// Typed client for the media-plane VIEWER's object browser via this zone's /api/media BFF route
+// (the R18 storage browser's data layer). The route forwards the path unchanged to the rask
+// gateway, whose /api/media row routes it to the viewer (`/api/media/objects` → viewer
+// `/api/objects`; the R6/R20 wave retired volumes-api). Shapes are hand-mirrored from
+// services/viewer/src/viewer/api/v1/endpoints/objects.py (no OpenAPI codegen for the fleet yet).
 import {
 	bffPath,
 	requestBinary as binary,
@@ -9,7 +10,8 @@ import {
 	type ApiResult,
 } from '$lib/http';
 
-/** The two fixed rask buckets (input images + derived ALTO) — mirrors `Bucket` in the service. */
+/** The two fixed rask buckets (input images + derived ALTO) — mirrors `Bucket` in the viewer's
+ *  objects endpoint. */
 export const BUCKETS = ['images-batch', 'images-batch-alto'] as const;
 export type Bucket = (typeof BUCKETS)[number];
 
@@ -35,21 +37,21 @@ const q = (params: Record<string, string>): string => new URLSearchParams(params
 
 /** One delimiter-scoped level of `bucket`/`prefix` for the object browser. */
 export const listObjects = (bucket: Bucket, prefix: string): Promise<ApiResult<S3Listing>> =>
-	requestJSON<S3Listing>(`v1/volumes/objects?${q({ bucket, prefix })}`);
+	requestJSON<S3Listing>(`media/objects?${q({ bucket, prefix })}`);
 
 /** Size / content-type / modified / etag for a single object (404 when it vanished). */
 export const headObject = (bucket: Bucket, key: string): Promise<ApiResult<S3ObjectHead>> =>
-	requestJSON<S3ObjectHead>(`v1/volumes/object?${q({ bucket, key })}`);
+	requestJSON<S3ObjectHead>(`media/object?${q({ bucket, key })}`);
 
 /** The object byte proxy (download disposition). Doubles as the inline `<img src>`: a disposition
- *  header never stops an `<img>` fetch from rendering, and unlike the `/{vol}/pages/{key}/image`
- *  route this one covers BOTH buckets and any key shape. */
+ *  header never stops an `<img>` fetch from rendering, and it covers BOTH buckets and any key
+ *  shape. */
 export const downloadUrl = (bucket: Bucket, key: string): string =>
-	bffPath(`/api/v1/volumes/object/download?${q({ bucket, key })}`);
+	bffPath(`/api/media/object/download?${q({ bucket, key })}`);
 
 /** The object's raw bytes — the text-preview read (errors keep the 404 ≠ 0 status split). */
 export const fetchObjectBytes = (bucket: Bucket, key: string): Promise<ApiResult<ArrayBuffer>> =>
-	binary('/api', `v1/volumes/object/download?${q({ bucket, key })}`);
+	binary('/api', `media/object/download?${q({ bucket, key })}`);
 
 /** How the preview pane renders an object: inline image, decoded text, or metadata-only. */
 export type PreviewKind = 'image' | 'text' | 'binary';

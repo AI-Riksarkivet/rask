@@ -85,7 +85,7 @@ def test_build_client_sends_no_headers_without_token(monkeypatch: pytest.MonkeyP
 
 def _client_with_capture(seen: list[httpx.Request], response: httpx.Response | None = None) -> httpx.AsyncClient:
     """AsyncClient carrying auth_headers() as defaults over a capturing transport —
-    the exact construction ray-api's lifespan uses."""
+    the exact construction the ray service's lifespan uses."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)

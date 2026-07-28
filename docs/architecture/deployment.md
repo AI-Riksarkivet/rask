@@ -21,8 +21,9 @@ make e2e              # verify MFE hydration + API round-trip end-to-end (run af
 make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
 ```
 
-`k3s-build` builds the full fleet (gateway, core-api, search-api, volumes-api,
-ray-api, orchestrator) plus all 7 frontend images and the ray image as `:dev` tags.
+`k3s-build` builds the fleet (gateway, ray, controlplane) plus the frontend zone
+images, the `ray-cluster` image, and the `lance-rest-catalog` lakehouse image as
+`:dev` tags.
 `k3s-import` side-loads them into k3s containerd via `docker save | ctr images
 import`, so no registry is needed.
 
@@ -35,7 +36,7 @@ Production-shaped image definitions live at `.docker/`, built with `docker build
 |---|---|---|
 | `rask-runner` | `nvidia/cuda:12.4.0-runtime-ubuntu22.04` | GPU. uv-managed Python + venv; `CMD ["runner"]`. Needs `--shm-size`, `--ulimit nofile=65535`, GPU via nvidia-container-toolkit. |
 | `home` / `<domain>` (7 images) | build + serve on `oven/bun:1-debian` | All built from **one parametrized** `.docker/frontend.dockerfile` via `--build-arg APP=<dir>`. **SSR via `svelte-adapter-bun`** (no longer an nginx SPA). `APP=home` is the catch-all (home, owns `/`); the six domain apps (overview/compute/discover/storage/train/studio) each pin base `/default/<domain>` and are probed there. Pre-builds `@rask/ui`, then `bun build`; the final stage ships the Bun runtime + `node_modules` and runs `bun build/index.js` on `:3000`. tini as PID 1, non-root UID 10001. |
-| backend services (per-workload) | uv-managed Python | One dockerfile each: `gateway`, `core-api`, `orchestrator`, `volumes-api`, `search-api`, `ray-api` (plus `ray.dockerfile` for the Serve image). |
+| backend services (per-workload) | uv-managed Python | One dockerfile each: `gateway`, `ray` (plus `ray-cluster.dockerfile` for the Ray head/Serve image and `rest-catalog.dockerfile` for the lakehouse+media image). |
 
 The one frontend dockerfile encodes a non-obvious build contract (documented in its
 header): `svelte-adapter-bun` externalizes `@sveltejs/kit`, so the final
@@ -53,9 +54,9 @@ are build-stage only, never shipped.
     service) image builds into Dagger or a GitHub Actions matrix is a
     deployment-cycle follow-up.
 
-The dissolved `viewer` monolith no longer has a dockerfile; its per-service
-entrypoints each ship their own (`gateway`, `core-api`, `orchestrator`,
-`volumes-api`, `search-api`, `ray-api`).
+The dissolved `viewer` monolith no longer has a dockerfile; the surviving fleet
+services ship their own (`gateway`, `ray`) — core-api/search-api/volumes-api's
+dockerfiles died with their services in the R6/R20 wave.
 
 The frontend topology those images serve — the Turborepo vertical-microfrontend
 proxy, the shared `@rask/ui` shell, and per-app `kit.paths.base` — is documented in
@@ -93,15 +94,13 @@ orchestrator points at an external cluster via `config.RAY_DASHBOARD_URL`.
 
 `make k3s-up` runs `helm upgrade --install rask ./chart --wait`. The chart deploys:
 
-- **gateway** — reverse proxy on `:8888` (path-routes `/api/*` to per-domain services).
-- **core-api** — batches + chunks + catalog endpoints on `:8801`.
-- **orchestrator** — the reconcile loop on `:8810` (`replicas: 1`, `Recreate`).
-- **volumes-api** — S3/IIIF image + ALTO proxy on `:8803`.
-- **search-api** — Lance FTS + S3 thumbnails on `:8802`.
-- **ray-api** — Ray dashboard proxy + `/api/serve/*` on `:8804`.
-- **frontend** — SvelteKit SSR app on `:3000`.
-- **migration** — pre-install/pre-upgrade hook Job running `alembic upgrade head`.
-- **Ingress** (Traefik) — `/api` → gateway:8888, `/` → frontend:3000.
+- **gateway** — reverse proxy on `:8888` (path-routes `/api/*`, no catch-all).
+- **ray** — Ray dashboard proxy + `/api/serve/*` on `:8804` (singleTenant).
+- **controlplane** — project provisioning on `:8820`.
+- **the lance planes** — catalog/lineage/medallion/compaction + the media trio
+  (viewer/search/annotator; the viewer carries the S3 object browser).
+- **frontend zones** — SvelteKit SSR apps on `:3000` each.
+- **Ingress** (Traefik) — `/api` → gateway:8888, `/` → the zone services.
 - **In-cluster deps** (gated by values toggles — each gate covers both the operator subchart and its CR):
   - `cnpg.enabled` — CloudNativePG operator + `Cluster` named `rask-postgres`; app connects to `rask-postgres-rw:5432`. Values under `cnpg.*` (instances, storage, imageName, user, database).
   - `rustfs.enabled` — RustFS operator (vendored at `third_party/rustfs-operator/`, refreshed via `scripts/vendor-rustfs-operator.sh`) + `Tenant` named `rask-rustfs`; S3 at `rask-rustfs-io:9000`, console at `rask-rustfs-console:9001`. Standalone mode: 1 pod / 4 PVCs (erasure-coding minimum). Buckets provisioned natively via `spec.buckets` — no init Job. Values under `rustfs.*`.

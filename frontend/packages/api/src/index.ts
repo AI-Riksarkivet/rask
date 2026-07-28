@@ -9,12 +9,11 @@
 export * from './gateway';
 export * from './parse';
 export * from './me';
-// rask's own domain clients — the compute/storage services these back are still live in the
-// merged tree (core-api, ray-api, search-api, volumes-api), so they survive the lance-ns fold.
-// (batches.ts died at P7a with the batches table — ingestion is ingest.ts → the medallion producer.)
+// rask's own domain clients. ray backs the compute zone via the `ray` service (`/api/ray/*` +
+// `/api/serve/*`). (batches.ts died at P7a with the batches table — ingestion is ingest.ts → the
+// medallion producer; search.ts/volumes.ts died in the R6/R20 wave — lines FTS re-lands as a
+// catalog-governed table behind /api/media/search, and the S3 object browser now rides the
+// media-plane viewer at /api/media/object*.)
 export * from './ray';
 export * from './ingest';
 export * from './projects';
-export * from './search';
-export * from './volumes';
-export * from './types';

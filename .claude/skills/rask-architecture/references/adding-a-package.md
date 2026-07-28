@@ -75,9 +75,8 @@ those are **per-package turbo tasks**, never centralized in the root.
 
 Add the import name to `pyproject.toml`
 `[tool.ruff.lint.isort] known-first-party` so import sorting treats it as
-first-party (current list: `htr, storage, runner, core, gateway, service_kit,
-core_api, search_api, volumes_api, ray_api, orchestrator, ray_kit, tracker,
-validate`).
+first-party (current list: `storage, gateway, service_kit, ray_api, ray_kit,
+tracker, validate`).
 
 ## 5. If it has tests
 

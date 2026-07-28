@@ -31,40 +31,41 @@ The tree is split by **language first**, then by layer. Each globbed directory i
 | **scripts**          | `scripts/`                          | ALL dev/ops scripts, shell **and** python, flat            | one-shot, **not** a workspace member |
 
 Current Python packages: `htr`, `ray-kit`, `service-kit`, `storage`, `tracker`, `validate`.
-Current Python services: `core`, `core_api`, `gateway`, `ray_api`, `search_api`, `volumes_api`, `controlplane` — plus the lance plane (`catalog`, `lineage`, `medallion`, `compaction`, `viewer`, `search`, `annotator`).
+Current Python services: `gateway`, `ray_api` (the `ray` service), `controlplane` — plus the lance plane (`catalog`, `lineage`, `medallion`, `compaction`, `viewer`, `search`, `annotator`). (`core`/`core_api`/`search_api`/`volumes_api` died in the R6/R20 media wave.)
 Current JS packages: `api` (@rask/api, the valibot client), `ui` (@rask/ui, the design system), `zone-contract` (@rask/zone-contract, the cross-zone link guard test).
 Current zones: `home` (catch-all), `overview`, `compute`, `discover`, `storage`, `train`, `studio`.
-Current deployables (each = a workspace member + a `.docker/<name>.dockerfile`): `core-api`, `gateway`, `ray-api`, `runner`, `search-api`, `volumes-api` — plus the one parametrized `frontend.dockerfile` built per zone.
+Current deployables (each = a workspace member + a `.docker/<name>.dockerfile`): `gateway`, `ray` (uv member `ray-api` — a Python package named `ray` would shadow PyPI ray), `controlplane`, `runner` — plus the one parametrized `frontend.dockerfile` built per zone, `ray-cluster.dockerfile` (the Ray head/Serve image) and `rest-catalog.dockerfile` (the lakehouse+media image).
 
 ## The composition seam: `make_service_app` + injectable lifespan
 
 `service_kit.make_service_app(*, title, routers, proxy_router=None, lifespan=None)` builds the FastAPI app with shared config/handlers/middleware. The **lifespan is injectable**: stateless services get the minimal `default_lifespan` (settings only); stateful ones pass a `LifespanFactory`, e.g. `core.lifespan.make_lifespan` (DB/Lance/Ray/S3). Routers mount under `settings.api_prefix` (`/api/v1`); `proxy_router` mounts at root.
 
-A thin entrypoint is **~15 lines** — import routers + a lifespan from the domain package, call the factory. `core_api/__init__.py`:
+A thin entrypoint is **~20 lines** — import routers + a lifespan from the domain package, call the factory. `ray_api/__init__.py`:
 
 ```python
-from core.api.v1.endpoints import catalog, health
-from core.lifespan import make_lifespan
+from ray_api import health, proxy, routes
+from ray_api.lifespan import make_lifespan
 from service_kit import make_service_app
 
 app = make_service_app(
-    title="core-api",
-    routers=[health.router, catalog.router],
+    title="ray",
+    routers=[health.router, routes.router],
+    proxy_router=proxy.router,
     lifespan=make_lifespan,
 )
 ```
 
-## Domain package vs entrypoint: `core` is NOT deployable
+## The core husk is GONE (R6/R20, 2026-07-28)
 
-`services/core` is the **core domain package** (package `core`) — since P7a a **transitional husk**: health + the EAD catalog search, composed by the `core_api` entrypoint (:8801) and by `main.py` (the app factory tests build). The batches table, the Alembic lineage, the orchestrator loop and the `orchestrator` entrypoint are **deleted** (docs/architecture/lance-ns-merge.md P7a): ingestion is the medallion IIIF producer, HTR runs as cascade compute on the lakehouse. The husk retires with the R6/R20 media wave.
+`services/core` + `services/core_api` (the post-P7a transitional husk) are deleted, with `search_api` and `volumes_api`. Their capabilities live in the media plane: the S3 object browser is the viewer's `objects.py` endpoints (`/api/media/object*`); lines/EAD FTS re-land as catalog-governed Lance tables behind `/api/media/search` (docs/architecture/lance-ns-merge.md R6). Do not resurrect them.
 
 ## Hard invariants (the gotchas)
 
 - **Workspace membership is globbed — and that is only safe because every globbed dir is single-language.** Root `pyproject.toml` has `[tool.uv.workspace] members = ["packages/*", "services/*"]`; `frontend/package.json` has `workspaces = ["microfrontends/*", "packages/*"]` (paths relative to `frontend/`). Drop a directory in the right plane and it is a member — **no manifest edit**. The safety condition is the language purity, and the two toolchains fail **asymmetrically** when it breaks: a dir under a uv glob without a `pyproject.toml` is a **hard error** (`Workspace member … is missing a pyproject.toml`), fixable only by an `exclude` list (enumeration by another name); a dir under a bun glob without a `package.json` is **SILENTLY skipped** — bun prints "Done!" and the package is simply never installed, built, linted or tested, and nothing says so. So: **never put a JS package under root `packages/`/`services/`, and never put a Python package under `frontend/`.** (The root manifest also notes `runners/*` is deliberately matched by *no* glob — sealed model envs whose heavy pins must never enter the fleet's resolution.) See `references/adding-a-package.md`.
 - **One lock.** The root `uv.lock` is the only Python lockfile — dev, tests, and every fleet docker image resolve from it (`uv sync --frozen --package <name>`). The sealed `runners/htr` project carries its **own** lock and is invoked via `uv run --project runners/htr runner` (in-cluster the ray image ships the console script on PATH).
-- **`service-kit` stays dependency-light.** Its only deps are `storage`, `fastapi`, `pydantic`, `pydantic-settings`, `python-dotenv`. **Never** add `lancedb`, `ray`, or `sqlmodel` — those belong to the packages that need them (`core`, `ray-kit`, …). service-kit is shared by every service including the DB-free ones (`volumes_api`, `search_api`, `ray_api`).
+- **`service-kit` stays dependency-light.** Its only deps are `storage`, `fastapi`, `pydantic`, `pydantic-settings`, `python-dotenv`. **Never** add `lancedb`, `ray`, or `sqlmodel` — those belong to the packages that need them (`core`, `ray-kit`, …). service-kit is shared by every service including the DB-free ones (`gateway` via `setup_otel`, `ray_api`).
 - **Do not resurrect `viewer` or `control`.** The monolithic `viewer` service was dissolved (2026-06) into the gateway + per-domain services + the `core` package. There is no `control` package. New domain code lands in an existing package or a new one — never a revived monolith.
-- **The `viewer`/`viewer_*` names live on only as the `core` package's `main.py` (dev convenience) and `RASK_VIEWER_INPUT`/`RASK_VIEWER_OUTPUT` settings.** Don't infer a deployable from them.
+- **`viewer` now means the lance media viewer** (`services/viewer`, `:8101`) — the old rask viewer monolith and the `RASK_VIEWER_*` settings are gone.
 
 ## When to load each reference
 

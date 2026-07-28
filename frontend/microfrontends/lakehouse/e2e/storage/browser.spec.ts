@@ -1,10 +1,11 @@
 import { test, expect, type Route } from '@playwright/test';
 
 // Hermetic coverage for the R18 storage area: /lakehouse/storage is the S3 object browser over the
-// two rask buckets, served through this zone's /api/v1/volumes BFF route onto the rask gateway.
-// Only the browser's backend calls are stubbed — empty, populated (prefix navigation + the text
-// preview pane) and unreachable states are each asserted, so a dead volumes-api can never render as
-// a stuck spinner.
+// two rask buckets, served through this zone's /api/media BFF route onto the rask gateway, whose
+// /api/media row routes to the media-plane viewer's objects endpoints (volumes-api retired in the
+// R6/R20 wave). Only the browser's backend calls are stubbed — empty, populated (prefix navigation
+// + the text preview pane) and unreachable states are each asserted, so a dead viewer can never
+// render as a stuck spinner.
 
 const json = (route: Route, body: unknown, status = 200) =>
 	route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
@@ -12,9 +13,9 @@ const json = (route: Route, body: unknown, status = 200) =>
 test('an empty bucket renders the honest empty state, with search + bucket controls', async ({
 	page,
 }) => {
-	await page.route('**/api/v1/volumes/**', (route) => {
+	await page.route('**/api/media/**', (route) => {
 		const url = new URL(route.request().url());
-		if (url.pathname.endsWith('/volumes/objects')) {
+		if (url.pathname.endsWith('/media/objects')) {
 			return json(route, { bucket: 'images-batch', prefix: '', prefixes: [], objects: [] });
 		}
 		return json(route, { detail: 'unstubbed' }, 404);
@@ -30,10 +31,10 @@ test('an empty bucket renders the honest empty state, with search + bucket contr
 test('prefix navigation lists one level and the preview pane decodes a text object', async ({
 	page,
 }) => {
-	await page.route('**/api/v1/volumes/**', (route) => {
+	await page.route('**/api/media/**', (route) => {
 		const url = new URL(route.request().url());
 		const prefix = url.searchParams.get('prefix') ?? '';
-		if (url.pathname.endsWith('/volumes/objects')) {
+		if (url.pathname.endsWith('/media/objects')) {
 			if (prefix === 'vol1/') {
 				return json(route, {
 					bucket: 'images-batch',
@@ -46,7 +47,7 @@ test('prefix navigation lists one level and the preview pane decodes a text obje
 			}
 			return json(route, { bucket: 'images-batch', prefix: '', prefixes: ['vol1/'], objects: [] });
 		}
-		if (url.pathname.endsWith('/volumes/object')) {
+		if (url.pathname.endsWith('/media/object')) {
 			return json(route, {
 				key: 'vol1/readme.txt',
 				size: 24,
@@ -55,7 +56,7 @@ test('prefix navigation lists one level and the preview pane decodes a text obje
 				etag: 'abc123',
 			});
 		}
-		if (url.pathname.endsWith('/volumes/object/download')) {
+		if (url.pathname.endsWith('/media/object/download')) {
 			return route.fulfill({
 				status: 200,
 				contentType: 'text/plain',
@@ -79,15 +80,15 @@ test('prefix navigation lists one level and the preview pane decodes a text obje
 	await expect(pane).toContainText('hello from the warehouse');
 	await expect(pane.getByRole('link', { name: 'Download' })).toHaveAttribute(
 		'href',
-		'/lakehouse/api/v1/volumes/object/download?bucket=images-batch&key=vol1%2Freadme.txt',
+		'/lakehouse/api/media/object/download?bucket=images-batch&key=vol1%2Freadme.txt',
 	);
 });
 
-test('a dead volumes service renders the unreachable state with retry — no spinner hang', async ({
+test('a dead storage backend renders the unreachable state with retry — no spinner hang', async ({
 	page,
 }) => {
-	await page.route('**/api/v1/volumes/**', (route) => json(route, { error: 'ECONNREFUSED' }, 502));
+	await page.route('**/api/media/**', (route) => json(route, { error: 'ECONNREFUSED' }, 502));
 	await page.goto('/lakehouse/storage');
-	await expect(page.getByText('Volumes service unreachable (HTTP 502).')).toBeVisible();
+	await expect(page.getByText('Storage service unreachable (HTTP 502).')).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();
 });

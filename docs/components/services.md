@@ -1,143 +1,83 @@
 # Services
 
-!!! warning "P7a (2026-07-27): the batches/orchestrator plane described below is DELETED"
-    The compute-plane cutover (`lance-ns-merge.md` P7a) removed the orchestrator loop + entrypoint
-    (`:8810`), the `batches` table + Alembic lineage, S3-sync, chunk submission, and the prefetch lane.
-    Ingestion is now the medallion producer's `POST /ingest-iiif` (IIIF → raw page-image Lance dataset,
-    ONE raw-write OpenLineage event) and HTR runs as event-driven cascade compute on the unified Ray
-    cluster. Sections referring to batches/chunks/orchestrator are kept as historical context until the
-    P8 doc re-draw.
+`services/` holds every runnable Python service — the rask **fleet** (gateway +
+ray + controlplane), the lance **lakehouse** plane (catalog, lineage, medallion,
+compaction), and the lance **media** plane (viewer, search, annotator).
 
-`services/` holds the HTTP backend fleet — a **gateway** reverse proxy plus five
-per-domain services, all built over a shared **core** package. The old
-monolithic `viewer` service was dissolved (June 2026) into this layout.
+The old monolithic `viewer` service was dissolved (June 2026) into a fleet of
+per-domain services; the batches/orchestrator plane died at P7a (2026-07-27,
+compute-plane cutover); and the R6/R20 media wave (2026-07-28) retired
+`core-api`, `search-api`, and `volumes-api` — their still-needed capabilities
+serve from the media plane. History: `docs/architecture/microservices.md` and
+`docs/architecture/lance-ns-merge.md`.
 
 ## Gateway — `services/gateway`
 
 App `gateway:app`, port **:8888**. The frontend's single proxy target and the
 only external-facing service. Receives `/api/*` and routes by longest-prefix to
-the services below; owns no state and no DB. Upstream URLs are env-overridable:
+the services below; owns no state and no DB. **There is no `/api` catch-all** —
+an unmatched `/api/*` 404s with `no upstream`. Upstream URLs are env-overridable:
 
 | Env var | Default | Upstream |
 |---|---|---|
-| `RASK_CORE_API_URL` | `http://localhost:8801` | core-api |
-| `RASK_SEARCH_API_URL` | `http://localhost:8802` | search-api |
-| `RASK_VOLUMES_API_URL` | `http://localhost:8803` | volumes-api |
-| `RASK_RAY_API_URL` | `http://localhost:8804` | ray-api |
-| `RASK_ORCH_API_URL` | `http://localhost:8810` | orchestrator |
+| `RASK_RAY_URL` | `http://127.0.0.1:8804` | ray (`/api/ray`, `/api/serve`) |
+| `RASK_CONTROLPLANE_URL` | `http://127.0.0.1:8820` | controlplane (`/api/projects`) |
+| `RASK_CATALOG_API_URL` | `http://127.0.0.1:2333` | lance catalog (`/api/catalog`) |
+| `RASK_LINEAGE_API_URL` | `http://127.0.0.1:8000` | lineage (`/api/lineage`) |
+| `RASK_MEDALLION_API_URL` | `http://127.0.0.1:8002` | medallion producer (`/api/produce`, `/api/ingest-iiif`, `/api/train`) |
+| `RASK_MEDIA_VIEWER_URL` | `http://127.0.0.1:8101` | media viewer (`/api/media`) |
+| `RASK_MEDIA_SEARCH_URL` | `http://127.0.0.1:8102` | media search (`/api/media/search`) |
+| `RASK_MEDIA_ANNOTATOR_URL` | `http://127.0.0.1:8103` | annotator (`/api/media/annotations`) |
 
-## Core package — `services/core`
-
-Package `core`. **Not a deployable on its own** — composed by `core-api` and
-`orchestrator`, which run as two processes over the same package so they share the
-`batches` table transactionally.
-
-Owns:
-
-- **DB** — `core/db.py`, `core/lifespan.py`, Alembic migrations in
-  `services/core/alembic/`.
-- **Models** — `models/{batch,enums,pipelines}`. `Batch` SQLModel; enums
-  (`HtrStatus`, `ManifestStatus`) stored as lowercase strings via
-  `SAEnum(values_callable=…)`. `PipelineSpec` + `PIPELINE_SPECS` (`htr`,
-  `htrflow`, `htr_http`, `prefetch`, `fake`).
-- **Repositories** — `repositories/batch`.
-- **Domain services:**
-  - `services/sync.py` — `reconcile_from_s3`: count cached/transcribed pages per
-    batch, update `htr_status`. Idempotent; powers `POST /batches/sync` and the
-    orchestrator.
-  - `services/submission.py` — `submit_chunk` / `stop_chunk`; `build_entrypoint`
-    picks `uv run … runner` (runner specs) vs. `python … htr_chunk_job.py`
-    (http specs). Submission IDs are `<pipeline>-chunk-NNN-of-MMM-<timestamp>`.
-  - `services/orchestrator/loop.py` — the tick/`run_loop` task (transitional →
-    NATS).
-  - `services/orchestrator/derive.py` — `derive_state`: classify Ray jobs into
-    prefetch/HTR lanes, compute eligible chunks excluding in-flight +
-    cooled-down.
-  - `services/discover/catalog.py` — EAD FTS + browse over Lance tables.
-- **Endpoints** — health / batches / chunks / catalog / orchestrator.
-- **`main.py`** — monolith app factory used by `make viewer` (single-process dev
-  convenience) and the test suite.
-
-ORM is **SQLModel + SQLAlchemy async** — SQLite in dev (`.cache/batches.db`),
-Postgres in prod via `DATABASE_URL`. Schema changes go through **Alembic**
-(never `create_all`).
-
-```bash
-make pg-migrate   # uv run --package core alembic upgrade head
-```
-
-## core-api — `services/core_api`
-
-App `core_api:app`, port **:8801**. Thin entrypoint over core: health +
-batches + chunks + catalog endpoints. Orchestrator loop **off**. Exposes no
-state of its own.
-
-## orchestrator — `services/orchestrator`
-
-App `orchestrator:app`, port **:8810**. Thin entrypoint over core: health +
-orchestrator endpoints. Orchestrator lifespan loop **on**
-(`RASK_ORCHESTRATOR_AUTOSTART`). Toggle at runtime via
-`POST /api/v1/orchestrator/start` and `/stop`; inspect with
-`GET /api/v1/orchestrator/state`.
-
-!!! note "Two processes, one package"
-    `core-api` (loop OFF) and `orchestrator` (loop ON) are deliberately split
-    so the submission loop runs in exactly one process. They share the same
-    `batches` table and the same `core` source tree. The loop is explicitly
-    transitional — the intended successor is a NATS JetStream consumer.
-
-## volumes-api — `services/volumes_api`
-
-Port **:8803**. Independent, stateless S3/IIIF image + ALTO proxy. No DB, no
-`core` dependency. Deps: `service-kit` + `storage`.
-
-Endpoint groups:
-
-| Group | Routes |
-|---|---|
-| health | `GET /health` |
-| volumes | `GET /volumes/{vol}/pages`, `…/pages/{key}/image`, `…/pages/{key}/alto` |
-
-## search-api — `services/search_api`
-
-Port **:8802**. Lance `lines` FTS + S3 thumbnails. Owns a `lines`-only
-lifespan (opens Lance tables on startup). No DB, no `core` dependency. Deps:
-`service-kit` + `storage` + `lancedb`.
-
-Endpoint groups:
-
-| Group | Routes |
-|---|---|
-| health | `GET /health` |
-| search | `GET /search/`, `/search/stats`, `/search/thumb/{path}` |
-
-## ray-api — `services/ray_api`
+## ray — `services/ray_api`
 
 Port **:8804**. Ray dashboard introspection (`/api/ray/*`) + the
-`/api/serve/*` proxy. Thin shell over `ray-kit`. No DB, no `core` dependency.
-Deps: `service-kit` + `ray-kit` + `httpx`.
+`/api/serve/*` proxy. Thin shell over `ray-kit`. No DB. Deps: `service-kit` +
+`ray-kit` + `httpx`.
+
+!!! note "Named `ray`, packaged `ray-api`"
+    The k8s Deployment/Service, dapr app-id, image, and gateway row are all
+    `ray` (R20 — the `-api` suffix died with the R6/R20 wave). The uv workspace
+    member stays `ray-api` (import package `ray_api`) because a Python package
+    named `ray` would shadow the PyPI `ray` that `ray-kit` depends on.
 
 Endpoint groups:
 
 | Group | Routes |
 |---|---|
-| health | `GET /health` |
+| health | `GET /health` (process liveness) |
 | ray | `GET /ray/health`, `/ray/jobs`, `/ray/jobs/{id}/logs`, `/ray/cluster`, `/ray/actors`, `/ray/tasks`, `/ray/overview`, `/ray/logs` |
-| serve proxy | `/api/serve/*` passthrough |
+| serve proxy | `/api/serve/*` passthrough (mounted at root, outside `RASK_API_PREFIX`) |
+
+## controlplane — `services/controlplane`
+
+Port **:8820**. Project provisioning over the k8s API (`/api/projects`). See
+`docs/architecture/lance-ns-merge.md` for its role in the merged estate.
+
+## The media plane — `services/{viewer,search,annotator}`
+
+Ports **:8101/:8102/:8103**, public under `/api/media/*` through the gateway.
+The **viewer** additionally serves the **S3 object browser** ported from the
+retired volumes-api (`/api/media/objects`, `/api/media/object`,
+`/api/media/object/download` → viewer `/api/object*`) — the lakehouse zone's
+storage browser backend. It reads the two fixed rask buckets via
+`storage.s3_client` (env: `RASK_S3_ENDPOINT_URL` + `AWS_*`).
+
+Retired capabilities and where they re-land (R6):
+
+| Retired | Replacement |
+|---|---|
+| search-api lines FTS (`/api/v1/search`) | a catalog-governed `lines` Lance table served at `/api/media/search?dataset=lines&mode=fts` (re-lands with P7b gold) |
+| core-api EAD catalog search (`/api/v1/catalog`) | a catalog-governed `archive_catalog` table behind `/api/media/search` (ingest job refit of `harvest_ead`) |
+| volumes-api page/ALTO viewing | media-plane Blob-V2 viewing over the P7b datasets; ALTO becomes a P7c `exporter` projection |
+| volumes-api `/objects` S3 browser | **ported now** into the viewer (above) |
 
 ## Endpoint summary
 
-All paths are under `RASK_API_PREFIX` (default `/api/v1`), then routed through
-the gateway. The `/api/serve/*` proxy (for the Ray Serve management API) is
-served by `ray-api` at the root level.
-
 | Group | Service | Selected routes |
 |---|---|---|
-| health | all services | `GET /health` |
-| batches | core-api | `GET /batches/`, `/batches/{id}`, `/batches/{id}/catalog`, `GET /batches/random`, `POST /batches/sync` |
-| chunks | core-api | `GET /chunks/`, `POST /chunks/{id}/submit`, `POST /chunks/{id}/stop` |
-| catalog | core-api | `GET /catalog/search`, `/catalog/search/stats`, `/catalog/browse` |
-| volumes | volumes-api | `GET /volumes/{vol}/pages`, `…/pages/{key}/image`, `…/pages/{key}/alto` |
-| search | search-api | `GET /search/`, `/search/stats`, `/search/thumb/{path}` |
-| orchestrator | orchestrator | `GET /orchestrator/state`, `POST /orchestrator/start`, `/stop` |
-| ray | ray-api | `GET /ray/health`, `/ray/jobs`, `/ray/jobs/{id}/logs`, `/ray/cluster`, `/ray/actors`, `/ray/tasks`, `/ray/overview`, `/ray/logs` + `/api/serve/*` proxy |
+| health | gateway | `GET /healthz` (unproxied) |
+| ray | ray | `GET /api/ray/health`, `/api/ray/jobs`, … + `/api/serve/*` proxy |
+| projects | controlplane | `/api/projects/*` |
+| lakehouse | catalog / lineage / medallion | `/api/catalog/*`, `/api/lineage/*`, `/api/produce`, `/api/ingest-iiif`, `/api/train` |
+| media | viewer / search / annotator | `/api/media/*`, `/api/media/search`, `/api/media/annotations`, `/api/media/object*` |

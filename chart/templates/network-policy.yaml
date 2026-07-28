@@ -218,14 +218,13 @@ spec:
                   - rustfs-backup
                   - backup-pg # the pg-backup CronJob uploads its dumps to the lakehouse (_backups/pg/)
                   - rustfs-mkbucket # the bucket-provisioning hook Job — blocked, no install ever gets buckets
-                  # rask's own S3 clients (audit 2026-07-27 defect 5: absent, so prod default-deny cut
-                  # the fleet off object storage). Labels are fleet.yaml's `app.kubernetes.io/component:
-                  # <name>`. core-api opens the EAD catalog Lance table; search-api serves S3
-                  # thumbnails; volumes-api is the S3/IIIF image+ALTO proxy. (The orchestrator died
-                  # at P7a — HTR runs as cascade compute on the lakehouse.)
-                  - core-api
-                  - search-api
-                  - volumes-api
+                  # The media-plane viewer serves the S3 object browser (ported from the retired
+                  # volumes-api in the R6/R20 wave) — it reads s3://images-batch* from its pod, so
+                  # blocking it here kills the lakehouse storage browser under prod default-deny
+                  # (audit 2026-07-27 defect 5's exact failure class). Label is media.yaml's
+                  # `app.kubernetes.io/component: viewer`. (core-api/search-api/volumes-api died
+                  # with the wave; the orchestrator died at P7a.)
+                  - viewer
                   {{- range .Values.medallion.movers }}
                   - {{ .name }}
                   {{- end }}
