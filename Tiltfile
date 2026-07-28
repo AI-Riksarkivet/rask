@@ -67,7 +67,12 @@ helm_resource(
     # on 5 never-built zone images. Tilt runs the BACKEND (catalog/lineage/…) for the dev loop; drive the
     # zones with `make frontend-images && make frontend-load` + a `helm upgrade --set frontend.enabled=true`
     # (see docs/DEPLOY.md). Zone-in-Tilt live_update is a follow-up.
-    flags=['--timeout=300s', '--set', 'frontend.enabled=false',
+    # 300s was not enough for this chart and it failed in a way that COMPOUNDS: helm dies
+    # with "context deadline exceeded" mid-upgrade, the release is left in pending-upgrade,
+    # and every later `helm upgrade` — Tilt's or a human's — is refused until someone
+    # rolls back by hand. Observed twice (rev 3 failed, rev 5 stuck 22min). Matched to
+    # kind-deploy's 900s; k3s-up allows 20m.
+    flags=['--timeout=900s', '--set', 'frontend.enabled=false',
            # Without this the synced files land in the pod and uvicorn never re-reads
            # them — live_update looks like it works and changes nothing.
            '--set', 'dev.reload=true'],
