@@ -12,6 +12,7 @@ re-reads tasks from their own actors precisely to catch that, so it is tested di
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -21,13 +22,23 @@ from annotator.projects.saga import run_publish, table_id_for
 
 
 PUBLISH_TOKEN = "0123456789abcdef0123456789abcdef"
+MINTED_AT = datetime(2026, 7, 28, 9, 0, tzinfo=UTC)
 
 
 class _Project:
     """The project actor, in memory, with the real set-once / converge semantics."""
 
     def __init__(self, state: ProjectState = ProjectState.PUBLISHING, token: str | None = PUBLISH_TOKEN) -> None:
-        self.doc = AnnotationProject(project_id="p1", tenant="acme", slug="vasa", state=state, pending_publish_id=token).model_dump(mode="json")
+        self.doc = AnnotationProject(
+            project_id="p1",
+            tenant="acme",
+            slug="vasa",
+            state=state,
+            pending_publish_id=token,
+            # Minted WITH the token by the real actor, so the double must do the same or the
+            # replay-determinism tests below would be testing a fiction.
+            pending_publish_at=MINTED_AT if token else None,
+        ).model_dump(mode="json")
         self.index: dict[str, str] = {}
         self.fired: list[str] = []
 
@@ -49,7 +60,10 @@ class _Project:
             self.doc["publish_error"] = str(payload.get("error", "publish failed"))
         elif payload["event"] == "publish":
             self.doc["publish_error"] = None
-            self.doc["pending_publish_id"] = self.doc.get("pending_publish_id") or "minted-fresh"
+            # Mint token AND instant together, once — mirroring the real actor.
+            if not self.doc.get("pending_publish_id"):
+                self.doc["pending_publish_id"] = "minted-fresh"
+                self.doc["pending_publish_at"] = MINTED_AT.isoformat()
         self.fired.append(payload["event"])
         return dict(self.doc)
 
@@ -72,20 +86,24 @@ class _Task:
             source={"kind": "chunks", "keys": [task_id]},  # type: ignore[arg-type]
             media={"kind": "image", "image_url": "s3://b/x.jpg"},  # type: ignore[arg-type]
         ).model_dump(mode="json")
-        self.shapes = shapes
+        # Shape ids are minted at SAVE time by the real actor and PERSISTED, so a re-read returns
+        # the same ids. Minting them here per read would make the double lie about replay stability
+        # — which is exactly what it did until this was fixed, and it is why the annotation_id
+        # column, not published_at, was the thing that drifted.
+        self.draft_shapes = [{"shape_id": f"{task_id}-shape-{i}", "shape_type": "bbox", "x": 1.0, "y": 1.0, "width": 1.0, "height": 1.0} for i in range(shapes)]
 
     async def get(self) -> dict[str, Any] | None:
         return dict(self.doc)
 
     async def get_draft(self) -> dict[str, Any] | None:
-        if not self.shapes:
+        if not self.draft_shapes:
             return None
         return {
             "task_id": self.doc["task_id"],
             "project_id": "p1",
             "author": "gina",
             "revision": 1,
-            "shapes": [{"shape_type": "bbox", "x": 1.0, "y": 1.0, "width": 1.0, "height": 1.0} for _ in range(self.shapes)],
+            "shapes": [dict(s) for s in self.draft_shapes],
         }
 
 
@@ -293,3 +311,35 @@ async def test_a_missing_token_stops_rather_than_minting_one() -> None:
     with pytest.raises(PublishRefusal, match="no publish token"):
         await _run(project, {"t0": _Task("t0", TaskState.ACCEPTED)}, publisher)
     assert publisher.creates == 0
+
+
+@pytest.mark.asyncio
+async def test_a_retry_writes_the_SAME_published_at_as_the_attempt_it_resumes() -> None:
+    """`published_at` lands in every row and in the PublishRecord. Stamping it per ATTEMPT would make
+    a retry rewrite the dataset with different values than the crashed attempt — falsifying the
+    "a replay is byte-identical" property in exactly the case it exists to cover.
+
+    Minted with the token, at the transition, so both survive the crash together.
+    """
+    project, publisher = _Project(), _Publisher(fail_on="tag")
+    tasks = {"t0": _Task("t0", TaskState.ACCEPTED, 1)}
+
+    with pytest.raises(RuntimeError):
+        await _run(project, tasks, publisher)
+    first_rows = [dict(r) for r in publisher.rows]
+
+    await project.fire({"event": "publish"})
+    publisher.fail_on = None
+    await _run(project, tasks, publisher)
+
+    assert publisher.rows == first_rows, "the retry rewrote the dataset with a different published_at"
+    assert project.doc["published"]["published_at"] == MINTED_AT.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_the_instant_is_reused_not_re_minted_on_a_retry() -> None:
+    project = _Project()
+    before = project.doc["pending_publish_at"]
+    await project.fire({"event": "publish_failed", "error": "x"})
+    await project.fire({"event": "publish"})
+    assert project.doc["pending_publish_at"] == before, "a retry re-minted the publish instant"

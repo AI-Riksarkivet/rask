@@ -288,3 +288,26 @@ async def test_an_unreachable_project_does_not_fail_the_annotator_s_transition(m
 
     assert out["state"] == TaskState.CLAIMED, "an unreachable project rolled back the annotator's claim"
     assert (await _state(actor))["state"] == TaskState.CLAIMED, "the task's own state was not persisted"
+
+
+@pytest.mark.asyncio
+async def test_shape_ids_are_minted_at_save_and_PERSISTED_so_a_republish_is_stable() -> None:
+    """`Shape.shape_id` has a `default_factory`, so an id is minted whenever a shape is PARSED
+    without one. The publish saga's replay-determinism therefore rests on the actor persisting the
+    id at save time — otherwise every re-read of a draft would mint new ids and a retried publish
+    would write a different `annotation_id` for the same annotation.
+
+    That dependency is invisible from the saga, which is why it is pinned here: a change to
+    `save_draft` that dropped shape ids would break a crash-recovery property two modules away.
+    """
+    actor = await _seeded()
+    await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "bbox"}, {"shape_type": "polygon"}]})
+
+    first = await actor.get_draft()
+    second = await actor.get_draft()
+
+    assert first is not None and second is not None
+    ids = [s["shape_id"] for s in first["shapes"]]
+    assert all(ids), "a shape was stored without an id"
+    assert ids == [s["shape_id"] for s in second["shapes"]], "re-reading a draft minted new shape ids"
+    assert len(set(ids)) == 2, "two shapes collided on one id"
