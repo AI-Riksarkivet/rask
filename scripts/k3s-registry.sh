@@ -32,13 +32,50 @@ configs:
 EOF
 
 # 3. Restart k3s to load the registry config (brief control-plane blip; workloads
-#    keep running). Falls back to a hint if k3s isn't a systemd service.
+#    keep running).
+#
+# The detection here is `systemctl cat`, NOT `list-unit-files | grep -q`. Under this
+# script's `set -o pipefail`, `grep -q` exits the instant it matches, and if systemctl
+# still has output to write it dies of SIGPIPE — so pipefail turns a SUCCESSFUL match
+# into a false negative, non-deterministically, depending on how many units the host has
+# and whether the remainder fits the 64 KiB pipe buffer. That misfire is what reported
+# "k3s is not a systemd service here" on a host where `k3s.service` was loaded, active
+# and running. `systemctl cat` needs no pipe and cannot exhibit it: exit 0 iff the unit
+# exists.
 echo ">> restarting k3s to pick up the registry config"
-if systemctl list-unit-files 2>/dev/null | grep -q '^k3s\.service'; then
+if systemctl cat k3s.service >/dev/null 2>&1; then
   sudo systemctl restart k3s
+  # A restart is asynchronous — returning before the API server is back makes the very
+  # next `kubectl`/`tilt` call fail for a reason that has nothing to do with the caller.
+  echo ">> waiting for the k3s API server to come back"
+  for _ in $(seq 1 60); do
+    if sudo k3s kubectl get --raw='/readyz' >/dev/null 2>&1; then break; fi
+    sleep 2
+  done
+  sudo k3s kubectl get --raw='/readyz' >/dev/null 2>&1 || {
+    echo "!! k3s did not become ready within 120s after restart — check 'systemctl status k3s'"; exit 1; }
+elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^k3d-'; then
+  # k3d runs k3s inside containers and does NOT read /etc/rancher/k3s/registries.yaml on
+  # the host; its registry config is per-cluster. Say so rather than implying success.
+  echo "!! k3s here is k3d (containerised). The host $REGFILE this script just wrote does"
+  echo "   NOT apply to it — configure the registry with 'k3d registry create' / recreate"
+  echo "   the cluster with '--registry-use'. See https://k3d.io/stable/usage/registries/"
+  exit 1
 else
-  echo "!! k3s is not a systemd service here — restart it however you run it, then re-run."
-  exit 0
+  # NEVER exit 0 here. The registry config is written but UNLOADED, so tilt will fail to
+  # pull with an error that points nowhere near this script. A silent success is the same
+  # defect class as a green helm install over a failed Job.
+  echo "!! k3s is not a systemd service here and no k3d cluster was found."
+  echo "   $REGFILE has been written but is NOT loaded — restart k3s however you run it,"
+  echo "   then re-run this script."
+  exit 1
+fi
+
+# 4. Prove the registry is actually reachable before claiming success.
+if curl -fsS "http://localhost:${REG_PORT}/v2/" >/dev/null 2>&1; then
+  echo ">> registry responding on localhost:${REG_PORT}"
+else
+  echo "!! registry container is up but http://localhost:${REG_PORT}/v2/ did not answer"; exit 1
 fi
 
 echo ">> done. Push to localhost:${REG_PORT}/<image>:dev; k3s will pull it. Run 'make tilt-up'."
