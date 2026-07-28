@@ -17,21 +17,34 @@ helm_repo('openfga-repo', 'https://openfga.github.io/helm-charts', labels=['infr
 
 # Build the catalog/lineage image (shared) + the web image. `only=` keeps the build context tight so
 # unrelated edits don't trigger rebuilds; live_update syncs source for uvicorn --reload.
+# Where the wheels land in the final image (see .docker/rest-catalog.dockerfile).
+SITE = '/opt/venv/lib/python3.13/site-packages'
+
 docker_build(
     'lance-rest-catalog', '.',
     dockerfile='.docker/rest-catalog.dockerfile',
-    only=['.docker', 'pyproject.toml', 'uv.lock', 'services'],
+    only=['.docker', 'pyproject.toml', 'uv.lock', 'packages', 'services'],
     live_update=[
-        # All services + common live under services/; the image copies them to /srv/services. Sync the
-        # whole tree so an edit to any service hot-reloads (uvicorn --reload) without a full rebuild.
-        sync('services', '/srv/services'),
+        # The src-layout rewrite (2026-07-28) made this image install its members as WHEELS into
+        # /opt/venv — there is no /srv/services any more, so the old `sync('services', '/srv/services')`
+        # silently synced into a path that does not exist and hot reload never worked. Sync each
+        # member's package root into site-packages, which is where uvicorn --reload actually watches.
+        sync('services/catalog/src/catalog', SITE + '/catalog'),
+        sync('services/lineage/src/lineage', SITE + '/lineage'),
+        sync('services/medallion/src/medallion', SITE + '/medallion'),
+        sync('services/compaction/src/compaction', SITE + '/compaction'),
+        sync('services/viewer/src/viewer', SITE + '/viewer'),
+        sync('services/search/src/search', SITE + '/search'),
+        sync('services/annotator/src/annotator', SITE + '/annotator'),
+        sync('packages/service-kit/src/service_kit', SITE + '/service_kit'),
+        sync('packages/lineage-kit/src/lineage_kit', SITE + '/lineage_kit'),
     ],
 )
 # Deploy the umbrella chart via real helm (post-install hooks + subchart CRDs honored — unlike Tilt's
 # bare helm() which only templates). Tilt injects the freshly built images into the chart's per-image
 # repository/tag values and side-loads them into kind.
 helm_resource(
-    'lance-ns',
+    'rask',
     'chart',
     # The P5 micro-frontend zones (frontend.enabled, default on) build from the parametrized
     # frontend.dockerfile — NOT wired into Tilt's dev loop yet, so disable them here or `tilt ci` would wait
@@ -44,7 +57,7 @@ helm_resource(
         ('image.catalog.repository', 'image.catalog.tag'),
     ],
     resource_deps=['dapr-repo', 'nats-repo', 'openfga-repo'],
-    labels=['lance-ns'],
+    labels=['rask'],
 )
 
 # kind has no host ports — port-forward manually once up (see chart NOTES / DEPLOY.md):

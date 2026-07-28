@@ -440,8 +440,8 @@ tilt-registry: ## One-time: local image registry + point k3s at it (sudo; restar
 	bash scripts/k3s-registry.sh
 
 tilt-up: ## Dev loop: editable fleet images + uvicorn --reload via Tilt (needs k3s-up + tilt-registry)
-	@command -v tilt >/dev/null 2>&1 || { echo "!! tilt not installed — https://docs.tilt.dev/install.html"; exit 1; }
-	tilt up
+	@command -v $(LOCALBIN)/tilt >/dev/null 2>command -v tilt >/dev/null 2>&1 1 || { echo "!! tilt not installed — https://docs.tilt.dev/install.html"; exit 1; }
+	$(LOCALBIN)/tilt up
 
 tilt-down: ## Stop the Tilt session and revert the dev deploy (keeps the cluster/data)
 	tilt down
