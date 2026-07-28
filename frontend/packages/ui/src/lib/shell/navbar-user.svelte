@@ -23,12 +23,17 @@
 	}: { user?: NavUser | null; authEnabled?: boolean; pathname?: string } = $props();
 
 	const signedIn = $derived(!!user);
-	// The identity shown on the trigger: the real user, the auth-off local placeholder, or a "Sign in" cue.
+	// The identity shown on the trigger. NEVER invent one: this used to fall back to
+	// `{ name: 'rask', email: 'local', initials: 'RA' }` when auth was off, which rendered a
+	// fabricated logged-in user named after the product — in a GOVERNANCE UI, where the whole
+	// point is knowing who you are. An operator could not distinguish "no auth configured" from
+	// "signed in as someone". Signed-out now says signed-out, in both auth modes; only the cue
+	// differs (a live sign-in link vs. a statement that this stack is ungoverned).
 	const identity = $derived(
 		user ??
 			(authEnabled
 				? { name: 'Sign in', email: 'not signed in', initials: '?' }
-				: { name: 'rask', email: 'local', initials: 'RA' }),
+				: { name: 'Not signed in', email: 'auth disabled on this stack', initials: '—' }),
 	);
 	// Return to the zone the user signed in from (validated as a local path in the login route).
 	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(pathname || '/')}`);
@@ -39,7 +44,7 @@
 		{#snippet child({ props })}
 			<Button {...props} variant="ghost" size="icon" class="rounded-full" aria-label="Account">
 				<Avatar class="size-7 rounded-full">
-					<AvatarFallback class="rounded-full text-xs">{identity.initials ?? 'RA'}</AvatarFallback>
+					<AvatarFallback class="rounded-full text-xs">{identity.initials ?? '—'}</AvatarFallback>
 				</Avatar>
 			</Button>
 		{/snippet}
@@ -48,7 +53,7 @@
 		<DropdownMenu.Label class="p-0 font-normal">
 			<div class="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
 				<Avatar class="size-8 rounded-lg">
-					<AvatarFallback class="rounded-lg">{identity.initials ?? 'RA'}</AvatarFallback>
+					<AvatarFallback class="rounded-lg">{identity.initials ?? '—'}</AvatarFallback>
 				</Avatar>
 				<div class="grid flex-1 text-left text-sm leading-tight">
 					<span class="truncate font-medium">{identity.name}</span>

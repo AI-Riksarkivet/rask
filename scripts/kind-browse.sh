@@ -29,11 +29,12 @@ declare -A ZONE_PORT=(
 ZONE_PORT[media]=9279
 
 PIDS=()
-cleanup() { echo; echo "==> tearing down port-forwards"; for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done; }
+cleanup() { echo; echo "==> tearing down port-forwards"; for p in "${PIDS[@]:-}"; do kill -- "-$p" 2>/dev/null || kill "$p" 2>/dev/null || true; done; pkill -P $$ 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
-fwd() { # fwd <svc> <local> <remote>
-  "$KUBECTL" --context "$CTX" port-forward "svc/$1" "$2:$3" >/dev/null 2>&1 &
+fwd() { # fwd <svc> <local> <remote> — RESPAWNING: kubectl port-forward dies on idle or pod restart,
+        # and a silently dead forward is indistinguishable from a broken backend.
+  ( while true; do "$KUBECTL" --context "$CTX" port-forward "svc/$1" "$2:$3" >/dev/null 2>&1; sleep 2; done ) &
   PIDS+=($!)
 }
 
@@ -63,14 +64,24 @@ Bun.serve({
 			if (url.pathname === prefix || url.pathname.startsWith(prefix + '/')) { target = p; break; }
 		}
 		const upstream = new URL(url.pathname + url.search, `http://localhost:${target}`);
-		const res = await fetch(upstream, {
+		let res: Response;
+		try {
+			res = await fetch(upstream, {
 			method: req.method,
 			headers: req.headers,
 			body: req.body,
 			redirect: 'manual',
 			// @ts-expect-error bun streaming bodies
-			duplex: 'half',
-		});
+				duplex: 'half',
+			});
+		} catch (err) {
+			// A dead `kubectl port-forward` must be UNMISTAKABLE. Without this the fetch throws,
+			// Bun renders its own HTML error page, and a tunnel user sees a 500 that looks exactly
+			// like a backend fault — which cost a real debugging detour on 2026-07-28.
+			const msg = `edge-proxy: upstream localhost:${target} is unreachable (the kubectl port-forward for this route died). Restart ./scripts/kind-browse.sh`;
+			console.error('!! ' + msg);
+			return new Response(msg, { status: 502, headers: { 'content-type': 'text/plain' } });
+		}
 		// Drop the encoding header — the body is already decoded by fetch, and a stale
 		// content-encoding makes the browser fail with ERR_CONTENT_DECODING_FAILED.
 		const headers = new Headers(res.headers);

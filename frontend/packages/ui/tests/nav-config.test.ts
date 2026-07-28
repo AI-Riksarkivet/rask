@@ -23,11 +23,15 @@ describe('topNav', () => {
 		expect(topNav(false).map((e) => e.href)).toEqual([
 			'/',
 			'/lakehouse/data',
-			'/media',
-			'/annotator',
-			'/compute',
-			'/train',
-			'/studio',
+			// Trailing slashes are LOAD-BEARING, not cosmetic: each zone's `paths.base` serves the
+			// trailing form, so a bare '/compute' href cost a 308 redirect round-trip on EVERY
+			// cross-zone hop (measured on all five zones, 2026-07-28) — visible as flicker over a
+			// tunnel. The href must be what the zone actually serves.
+			'/media/',
+			'/annotator/',
+			'/compute/',
+			'/train/',
+			'/studio/',
 		]);
 	});
 
@@ -137,7 +141,8 @@ describe('topNav', () => {
 			'Logs',
 			'API docs',
 		]);
-		expect(compute.items![0]!.href).toBe('/compute');
+		// Trailing form: the zone's paths.base serves '/compute/', so the bare href cost a 308 per hop.
+		expect(compute.items![0]!.href).toBe('/compute/');
 	});
 
 	it('Train and Studio are single-surface zones — plain links with disjoint matches (R17)', () => {
@@ -163,7 +168,9 @@ describe('topNav', () => {
 				.find((e) => e.title === 'Lakehouse')!
 				.groups!.map((g) => [g.label, g.items.map((i) => i.title)]),
 		);
-		expect(groups.Catalog).toEqual(['Projects', 'Tables', 'Namespaces', 'Warehouses']);
+		// R28: Storage joins the panel — the object browser was previously reachable ONLY by typing
+		// the URL, because the lakehouse sidebar is area-scoped and no other area linked to it.
+		expect(groups.Catalog).toEqual(['Projects', 'Tables', 'Namespaces', 'Warehouses', 'Storage']);
 		expect(groups.Models).toEqual(['Registry', 'Experiments', 'Pipeline']);
 		expect(groups.Governance).toEqual(['Access', 'Tenants', 'Audit']);
 		expect(groups.Operations).toEqual(['Events', 'Streams', 'DLQ']);

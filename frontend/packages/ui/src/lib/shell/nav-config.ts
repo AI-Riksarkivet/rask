@@ -124,6 +124,14 @@ const DATA_ITEMS: TopNavItem[] = [
 		href: '/lakehouse/data/warehouses',
 		description: 'Storage bindings — one bucket per project.',
 	},
+	{
+		// R28: the object browser was reachable ONLY by typing the URL — the sidebar is area-scoped,
+		// so no other area linked to it and the panel never listed it. Storage is an area of this
+		// zone, so it belongs in this zone's panel.
+		title: 'Storage',
+		href: '/lakehouse/storage/',
+		description: 'Objects in the warehouse buckets — browse and preview.',
+	},
 ];
 
 const LINEAGE_ITEMS: TopNavItem[] = [
@@ -155,7 +163,7 @@ const LINEAGE_ITEMS: TopNavItem[] = [
 ];
 
 const MEDIA_ITEMS: TopNavItem[] = [
-	{ title: 'Search', href: '/media', description: 'Semantic search over the corpus.' },
+	{ title: 'Search', href: '/media/', description: 'Semantic search over the corpus.' },
 	{ title: 'Atlas', href: '/media/atlas', description: 'The embedding map of the corpus.' },
 	{ title: 'Tree', href: '/media/tree', description: 'The corpus by topic hierarchy.' },
 	{ title: 'Graph', href: '/media/graph', description: 'Relations between media entities.' },
@@ -200,7 +208,7 @@ const GOVERNANCE_ITEMS: TopNavItem[] = [
  *  zone root IS the overview and rides the panel as its first row (matching exactly, like Media's
  *  Search at /media). */
 const COMPUTE_ITEMS: TopNavItem[] = [
-	{ title: 'Overview', href: '/compute', description: 'The Ray plane at a glance.' },
+	{ title: 'Overview', href: '/compute/', description: 'The Ray plane at a glance.' },
 	{ title: 'Jobs', href: '/compute/jobs', description: 'Submitted Ray jobs and their lifecycle.' },
 	{ title: 'Cluster', href: '/compute/cluster', description: 'Nodes and their resource load.' },
 	{ title: 'Actors', href: '/compute/actors', description: 'Live actors across the cluster.' },
@@ -294,7 +302,7 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			// directory it lives in: a person looking for a moment in the corpus is searching, and
 			// "Media" described our folder layout rather than their task.
 			title: 'Search',
-			href: '/media',
+			href: '/media/',
 			icon: Search,
 			match: under('/media'),
 			items: [...MEDIA_ITEMS],
@@ -305,7 +313,7 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			// briefly a row inside Search's panel, which broke that rule and buried the labeling
 			// workflow one hover deep. A single surface, so a plain link rather than a panel.
 			title: 'Annotate',
-			href: '/annotator',
+			href: '/annotator/',
 			icon: PenLine,
 			match: under('/annotator'),
 		},
@@ -313,7 +321,7 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			// COMPUTE is the Ray/job plane — the merged rask zone. The old overview zone folded in
 			// here (R16), so the zone root is the overview and the panel lists the Ray surfaces.
 			title: 'Compute',
-			href: '/compute',
+			href: '/compute/',
 			icon: Cpu,
 			match: under('/compute'),
 			items: [...COMPUTE_ITEMS],
@@ -324,14 +332,14 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			// entry rides the bar NOW (R15: a zone missing from the navbar is a defect regardless of
 			// scaffold status); a plain link until its areas are real enough to panel.
 			title: 'Train',
-			href: '/train',
+			href: '/train/',
 			icon: Brain,
 			match: under('/train'),
 		},
 		{
 			// STUDIO stays the sandbox/PoC zone (R17) — one experimental surface, so a plain link.
 			title: 'Studio',
-			href: '/studio',
+			href: '/studio/',
 			icon: FlaskConical,
 			match: under('/studio'),
 		},

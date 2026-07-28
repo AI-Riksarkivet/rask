@@ -85,6 +85,11 @@
 		children: Snippet;
 	} = $props();
 
+	// A zone with one leaf has nothing to navigate — home's sole leaf was "Projects → /", a link to
+	// the page you are already on. A rail there costs horizontal width and implies areas that do not
+	// exist, so zones like the catch-all render no rail and no collapse trigger at all.
+	const hasNav = $derived((zoneNav?.leaves?.length ?? 0) > 1);
+
 	// Project-first breadcrumb via HOST: the project IS the request host, so the path
 	// carries only the domain + in-project trail. The project is the breadcrumb ROOT
 	// (from the host, client-side); every path segment — the domain first — is a crumb.
@@ -110,7 +115,9 @@
 
 <Sidebar.Provider class="h-svh overflow-hidden">
 	{#if !canvas}
-		<AppSidebar {pathname} {zoneNav} footer={sidebarFooter} />
+		{#if hasNav}
+			<AppSidebar {pathname} {zoneNav} footer={sidebarFooter} />
+		{/if}
 	{/if}
 	<Sidebar.Inset class="flex min-w-0 flex-col overflow-hidden">
 		<header class="flex min-w-0 shrink-0 flex-col">
@@ -128,7 +135,9 @@
 			>
 				{#if !canvas}
 					<!-- Nothing to toggle when there is no sidebar; the switcher and identity stay either way. -->
-					<Sidebar.Trigger class="text-muted-foreground hover:text-foreground -ml-1 shrink-0" />
+					{#if hasNav}
+						<Sidebar.Trigger class="text-muted-foreground hover:text-foreground -ml-1 shrink-0" />
+					{/if}
 					<Separator orientation="vertical" class="data-[orientation=vertical]:h-4" />
 				{/if}
 				<ProjectSwitcher project={shellProject} />
