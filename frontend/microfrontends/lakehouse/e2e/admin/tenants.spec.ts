@@ -63,7 +63,7 @@ test('a row click opens the drawer with the full record and linked context', asy
 		drawer.getByRole('link', { name: 'Audit events for this warehouse' }),
 	).toHaveAttribute('href', '/lakehouse/admin/audit?resource=acme-cold');
 	const jump = drawer.getByRole('link', { name: /Open warehouse admin/ });
-	await expect(jump).toHaveAttribute('href', '/lakehouse/data/warehouses');
+	await expect(jump).toHaveAttribute('href', '/lakehouse/catalog/warehouses');
 	// The warehouse admin page is in the catalog AREA of this same zone now, so this jump is a soft
 	// navigation — forcing a document reload on it would discard the merge's payoff.
 	await expect(jump).not.toHaveAttribute('data-sveltekit-reload', '');

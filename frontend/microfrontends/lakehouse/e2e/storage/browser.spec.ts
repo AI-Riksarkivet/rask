@@ -1,6 +1,6 @@
 import { test, expect, type Route } from '@playwright/test';
 
-// Hermetic coverage for the R18 storage area: /lakehouse/storage is the S3 object browser over the
+// Hermetic coverage for the R18 storage area: /lakehouse/catalog/storage is the S3 object browser over the
 // two rask buckets, served through this zone's /api/media BFF route onto the rask gateway, whose
 // /api/media row routes to the media-plane viewer's objects endpoints (volumes-api retired in the
 // R6/R20 wave). Only the browser's backend calls are stubbed — empty, populated (prefix navigation
@@ -20,7 +20,7 @@ test('an empty bucket renders the honest empty state, with search + bucket contr
 		}
 		return json(route, { detail: 'unstubbed' }, 404);
 	});
-	await page.goto('/lakehouse/storage');
+	await page.goto('/lakehouse/catalog/storage');
 	await expect(
 		page.getByText('No objects under this prefix — the bucket is empty here.'),
 	).toBeVisible();
@@ -65,7 +65,7 @@ test('prefix navigation lists one level and the preview pane decodes a text obje
 		}
 		return json(route, { detail: 'unstubbed' }, 404);
 	});
-	await page.goto('/lakehouse/storage');
+	await page.goto('/lakehouse/catalog/storage');
 	// the root level lists the volume "folder"; clicking it descends one delimiter level
 	await page.getByRole('button', { name: 'vol1/' }).click();
 	const objectRow = page.getByRole('button', { name: /readme\.txt/ });
@@ -88,7 +88,7 @@ test('a dead storage backend renders the unreachable state with retry — no spi
 	page,
 }) => {
 	await page.route('**/api/media/**', (route) => json(route, { error: 'ECONNREFUSED' }, 502));
-	await page.goto('/lakehouse/storage');
+	await page.goto('/lakehouse/catalog/storage');
 	await expect(page.getByText('Storage service unreachable (HTTP 502).')).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();
 });
@@ -116,7 +116,7 @@ test('an unprovisioned bucket names itself instead of claiming the service is un
 			404,
 		),
 	);
-	await page.goto('/lakehouse/storage');
+	await page.goto('/lakehouse/catalog/storage');
 	await expect(page.getByText(/bucket not found: images-batch/)).toBeVisible();
 	await expect(page.getByText(/rustfs\.buckets/)).toBeVisible();
 	await expect(page.getByText('Storage service unreachable (HTTP 404).')).toHaveCount(0);

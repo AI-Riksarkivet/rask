@@ -142,7 +142,7 @@ test('this zone is a ROW of the Lakehouse panel, and its rows link where they cl
 		'data-sveltekit-reload',
 		'',
 	);
-	await expect(panel.locator('a[href="/lakehouse/data/tables"]')).not.toHaveAttribute(
+	await expect(panel.locator('a[href="/lakehouse/catalog/tables"]')).not.toHaveAttribute(
 		'data-sveltekit-reload',
 		'',
 	);

@@ -99,7 +99,7 @@ test('a row click opens the drawer with the full record and linked context', asy
 	await expect(drawer).toContainText('DENY');
 	// …a cross-zone jump link to the resource page (hard nav)…
 	const jump = drawer.getByRole('link', { name: /Open resource/ });
-	await expect(jump).toHaveAttribute('href', '/lakehouse/data/tables/db1%24t');
+	await expect(jump).toHaveAttribute('href', '/lakehouse/catalog/tables/db1%24t');
 	await expect(jump).toHaveAttribute('data-sveltekit-reload', '');
 	// …and the "related events" pivot: filter to this subject re-queries the BFF.
 	await drawer.getByRole('button', { name: 'Events by this subject' }).click();

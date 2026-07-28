@@ -25,7 +25,16 @@ function humanise(seg: string): string {
 	} catch {
 		// keep the raw segment
 	}
-	return decoded.replace(/-/g, ' ');
+	const spaced = decoded.replace(/-/g, ' ');
+	// Sentence-case the label, so a trail reads "Lakehouse > Catalog > Storage" instead of shouting
+	// lowercase. Only the FIRST character, and only when it is a lowercase ASCII letter:
+	//   - per-word title case would render "api docs" as "Api Docs", which is worse than either;
+	//   - a segment starting with anything else is an IDENTIFIER — `silver$features`, `A0060198`, a
+	//     uuid, a table name — and is left EXACTLY as it is. Capitalising a dataset id would
+	//     misreport the data the page is about, which is a worse failure than an ugly crumb.
+	// The guard tests the WHOLE label, not just its first character: `gold$catalog` starts with a
+	// lowercase letter but is an identifier, and a first-char-only check rendered it `Gold$catalog`.
+	return /^[a-z][a-z ]*$/.test(spaced) ? spaced[0]!.toUpperCase() + spaced.slice(1) : spaced;
 }
 
 /**

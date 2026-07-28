@@ -170,10 +170,10 @@ test('a domain trigger opens a panel of its rows — pointer and keyboard, same-
 	// The rows link where they claim — the Catalog column over the data area, the Models column over
 	// the models area, both under the one trigger and both inside THIS zone.
 	for (const [row, href] of [
-		['Projects', '/lakehouse/data/projects'],
-		['Tables', '/lakehouse/data/tables'],
-		['Namespaces', '/lakehouse/data/namespaces'],
-		['Warehouses', '/lakehouse/data/warehouses'],
+		['Projects', '/lakehouse/catalog/projects'],
+		['Tables', '/lakehouse/catalog/tables'],
+		['Namespaces', '/lakehouse/catalog/namespaces'],
+		['Warehouses', '/lakehouse/catalog/warehouses'],
 		['Registry', '/lakehouse/models'],
 		['Experiments', '/lakehouse/models/experiments'],
 		['Pipeline', '/lakehouse/models/pipeline'],
@@ -186,7 +186,7 @@ test('a domain trigger opens a panel of its rows — pointer and keyboard, same-
 	// These rows used to leave this zone's route manifest and had to hard-navigate. Since the catalog,
 	// lineage, models and admin areas merged into ONE zone they are same-zone soft navigations, and the
 	// shell must NOT force a document reload on them — that is the whole payoff of the merge.
-	await expect(panel.locator('a[href="/lakehouse/data/tables"]')).not.toHaveAttribute(
+	await expect(panel.locator('a[href="/lakehouse/catalog/tables"]')).not.toHaveAttribute(
 		'data-sveltekit-reload',
 		'',
 	);

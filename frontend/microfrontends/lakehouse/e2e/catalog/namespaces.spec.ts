@@ -40,13 +40,13 @@ test('the client fetches the BFF under the zone base path, not a bare /capi', as
 	// Regression lock for the base-path bug: the zone is served under /data, so its BFF proxy lives at
 	// /data/capi/* — a bare /capi never reaches this zone through the Ingress (proven: bare → 404). The
 	// mocked glob (**/capi/**) matches both, so THIS asserts the real request carries the base.
-	await page.goto('/lakehouse/data/namespaces');
+	await page.goto('/lakehouse/catalog/namespaces');
 	// Poll — the fetch fires from an $effect after mount, so wait for the intercept rather than racing it.
 	await expect.poll(() => lastCapiPath).toBe('/lakehouse/capi/v1/table');
 });
 
 test('lists one sortable row per namespace with table counts + tier badges', async ({ page }) => {
-	await page.goto('/lakehouse/data/namespaces');
+	await page.goto('/lakehouse/catalog/namespaces');
 	await expect(page.getByRole('heading', { name: 'Namespaces' })).toBeVisible();
 	// One DataTable row per namespace (goal cond 4), derived from the registry ids.
 	const bronze = page.locator('tr', { has: page.locator('a.ns-name', { hasText: 'bronze' }) });
@@ -57,7 +57,7 @@ test('lists one sortable row per namespace with table counts + tier badges', asy
 	// the name links into the namespace detail view
 	await expect(page.locator('a.ns-name', { hasText: 'bronze' })).toHaveAttribute(
 		'href',
-		'/lakehouse/data/namespaces/bronze',
+		'/lakehouse/catalog/namespaces/bronze',
 	);
 	// the text search narrows the rows
 	await page.getByPlaceholder('Search namespaces…').fill('bronze');
@@ -70,17 +70,17 @@ test('the New-namespace affordance points at the governed warehouse-bind flow', 
 }) => {
 	// Deliberate scope: no bare create surface here — creation goes through POST
 	// /v1/warehouses/{id}/namespaces on the warehouses page (bucket-per-warehouse tenancy).
-	await page.goto('/lakehouse/data/namespaces');
+	await page.goto('/lakehouse/catalog/namespaces');
 	await expect(page.getByRole('link', { name: 'New namespace' })).toHaveAttribute(
 		'href',
-		'/lakehouse/data/warehouses',
+		'/lakehouse/catalog/warehouses',
 	);
 });
 
 test('drop confirms via the AlertDialog, posts the cascade behavior, and the row disappears', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/namespaces');
+	await page.goto('/lakehouse/catalog/namespaces');
 	await expect(page.locator('a.ns-name', { hasText: 'bronze' })).toBeVisible();
 	await page.getByRole('button', { name: 'Drop namespace bronze', exact: true }).click();
 	// The confirm is the portalled @rask/ui AlertDialog — drive it by role, not the trigger row.
@@ -104,7 +104,7 @@ test('drop confirms via the AlertDialog, posts the cascade behavior, and the row
 test('an unticked confirm posts Restrict — the default must never silently cascade', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/namespaces');
+	await page.goto('/lakehouse/catalog/namespaces');
 	await page.getByRole('button', { name: 'Drop namespace gold', exact: true }).click();
 	const dialog = page.getByRole('alertdialog');
 	await expect(dialog).toContainText('Drop namespace gold');
@@ -118,7 +118,7 @@ test('an unticked confirm posts Restrict — the default must never silently cas
 });
 
 test('cancelling the confirm never posts the drop', async ({ page }) => {
-	await page.goto('/lakehouse/data/namespaces');
+	await page.goto('/lakehouse/catalog/namespaces');
 	await page.getByRole('button', { name: 'Drop namespace gold', exact: true }).click();
 	await page.getByRole('alertdialog').getByRole('button', { name: 'Cancel' }).click();
 	await expect(page.getByRole('alertdialog')).toHaveCount(0);
@@ -130,7 +130,7 @@ test('a 403 drop surfaces the forbidden state and keeps the namespace listed', a
 	// A later page.route wins over the beforeEach glob — deny the drop like the catalog's FGA gate
 	// (owner-tier can_delete) does for a non-owner.
 	await page.route('**/capi/v1/namespace/**', (route) => json(route, { detail: 'forbidden' }, 403));
-	await page.goto('/lakehouse/data/namespaces');
+	await page.goto('/lakehouse/catalog/namespaces');
 	await page.getByRole('button', { name: 'Drop namespace gold', exact: true }).click();
 	await page.getByRole('alertdialog').getByRole('button', { name: 'Drop', exact: true }).click();
 	await expect(page.locator('.banner.fail')).toContainText(
@@ -140,7 +140,7 @@ test('a 403 drop surfaces the forbidden state and keeps the namespace listed', a
 });
 
 test('the shared sidebar marks the Namespaces leaf active', async ({ page }) => {
-	await page.goto('/lakehouse/data/namespaces');
+	await page.goto('/lakehouse/catalog/namespaces');
 	// The AppShell sidebar (shared @rask/ui) reflects the current route via data-active.
 	await expect(
 		page.locator('[data-active="true"]').filter({ hasText: 'Namespaces' }),

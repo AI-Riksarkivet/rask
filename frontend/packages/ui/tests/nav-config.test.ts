@@ -22,7 +22,7 @@ describe('topNav', () => {
 		]);
 		expect(topNav(false).map((e) => e.href)).toEqual([
 			'/',
-			'/lakehouse/data',
+			'/lakehouse/catalog',
 			// Trailing slashes are LOAD-BEARING, not cosmetic: each zone's `paths.base` serves the
 			// trailing form, so a bare '/compute' href cost a 308 redirect round-trip on EVERY
 			// cross-zone hop (measured on all five zones, 2026-07-28) — visible as flicker over a
@@ -71,8 +71,8 @@ describe('topNav', () => {
 		// that can light up together.
 		const lakehouse = topNav(true).find((e) => e.title === 'Lakehouse')!;
 		for (const p of [
-			'/lakehouse/data',
-			'/lakehouse/data/tables/db$t',
+			'/lakehouse/catalog',
+			'/lakehouse/catalog/tables/db$t',
 			'/lakehouse/models',
 			'/lakehouse/models/pipeline',
 			'/lakehouse/admin/audit',
@@ -116,7 +116,7 @@ describe('topNav', () => {
 		const home = topNav(false).find((e) => e.title === 'Home')!;
 		expect(home.match('/')).toBe(true);
 		expect(home.match('')).toBe(true);
-		for (const p of ['/lakehouse/data', '/media', '/annotator', '/compute', '/train', '/studio']) {
+		for (const p of ['/lakehouse/catalog', '/media', '/annotator', '/compute', '/train', '/studio']) {
 			expect(home.match(p), p).toBe(false);
 		}
 		// A single surface — a plain link, not a one-row dropdown.
@@ -196,10 +196,10 @@ describe('topNav', () => {
 
 describe('ZoneNav matchers', () => {
 	it('seg: matches the exact route and anything nested under it', () => {
-		const m = seg('/lakehouse/data/tables');
-		expect(m('/lakehouse/data/tables')).toBe(true);
-		expect(m('/lakehouse/data/tables/x')).toBe(true);
-		expect(m('/lakehouse/data/namespaces')).toBe(false);
+		const m = seg('/lakehouse/catalog/tables');
+		expect(m('/lakehouse/catalog/tables')).toBe(true);
+		expect(m('/lakehouse/catalog/tables/x')).toBe(true);
+		expect(m('/lakehouse/catalog/namespaces')).toBe(false);
 	});
 
 	it('exact: matches only its own path — the root-leaf (href == zone href) case', () => {
@@ -220,7 +220,7 @@ describe('ZoneNav matchers', () => {
 	it('zoneOf: first path segment, with the home zone at the empty key', () => {
 		// The whole estate is ONE zone now, so every lakehouse area shares a zone key — which is what
 		// makes a hop between them a soft nav rather than a full document load.
-		expect(zoneOf('/lakehouse/data/tables')).toBe('lakehouse');
+		expect(zoneOf('/lakehouse/catalog/tables')).toBe('lakehouse');
 		expect(zoneOf('/lakehouse/admin')).toBe('lakehouse');
 		expect(zoneOf('/media/atlas')).toBe('media');
 		expect(zoneOf('/')).toBe('');

@@ -46,13 +46,13 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('the drawer Preview action lands on the detail preview tab with rows', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables');
+	await page.goto('/lakehouse/catalog/tables');
 	// open the row drawer via the stage cell (the id/namespace cells are links of their own)
 	await page.locator('tbody tr', { hasText: 'raw$events' }).locator('.stage').click();
 	const drawer = page.getByRole('dialog');
 	await expect(drawer.getByRole('link', { name: 'Preview' })).toHaveAttribute(
 		'href',
-		'/lakehouse/data/tables/raw%24events?tab=preview',
+		'/lakehouse/catalog/tables/raw%24events?tab=preview',
 	);
 	await drawer.getByRole('link', { name: 'Preview' }).click();
 	// the deep link selects the preview tab, and the existing query machinery renders the rows

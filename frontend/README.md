@@ -28,7 +28,7 @@ frontend/
   microfrontends/
     home/           # catch-all zone (base '/'); owns the OIDC /auth/{login,callback,logout} routes
     lakehouse/      # /lakehouse — the governed estate, four AREAS in one router:
-                    #     /lakehouse/data     projects, tables, namespaces, warehouses
+                    #     /lakehouse/catalog     projects, tables, namespaces, warehouses
                     #     /lakehouse/lineage  the lineage graph explorer
                     #     /lakehouse/models   model registry, experiments, pipeline
                     #     /lakehouse/admin    access, tenants, audit, events, streams, DLQ

@@ -147,18 +147,18 @@ export type TopNavEntry = {
 const DATA_ITEMS: TopNavItem[] = [
 	{
 		title: 'Projects',
-		href: '/lakehouse/data/projects',
+		href: '/lakehouse/catalog/projects',
 		description: 'Tenants, their warehouses and their members.',
 	},
-	{ title: 'Tables', href: '/lakehouse/data/tables', description: 'The governed table registry.' },
+	{ title: 'Tables', href: '/lakehouse/catalog/tables', description: 'The governed table registry.' },
 	{
 		title: 'Namespaces',
-		href: '/lakehouse/data/namespaces',
+		href: '/lakehouse/catalog/namespaces',
 		description: 'Medallion namespaces and their maintenance policies.',
 	},
 	{
 		title: 'Warehouses',
-		href: '/lakehouse/data/warehouses',
+		href: '/lakehouse/catalog/warehouses',
 		description: 'Storage bindings — one bucket per project.',
 	},
 	{
@@ -166,7 +166,7 @@ const DATA_ITEMS: TopNavItem[] = [
 		// so no other area linked to it and the panel never listed it. Storage is an area of this
 		// zone, so it belongs in this zone's panel.
 		title: 'Storage',
-		href: '/lakehouse/storage/',
+		href: '/lakehouse/catalog/storage/',
 		description: 'Objects in the warehouse buckets — browse and preview.',
 	},
 ];
@@ -327,7 +327,7 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 		},
 		{
 			title: 'Lakehouse',
-			href: '/lakehouse/data',
+			href: '/lakehouse/catalog',
 			icon: Database,
 			// The whole merged zone — catalog, models, lineage, and (for an admin) governance and
 			// operations. No carve-out: every area is a column of this one trigger.

@@ -43,7 +43,7 @@ describe('findDeadLinks', () => {
 
 	it('accepts a served zone path, at the root or deep', () => {
 		expect(findDeadLinks('<a href="/lakehouse">x</a>', served)).toEqual([]);
-		expect(findDeadLinks('<a href="/lakehouse/data/projects/x">y</a>', served)).toEqual([]);
+		expect(findDeadLinks('<a href="/lakehouse/catalog/projects/x">y</a>', served)).toEqual([]);
 	});
 
 	it('ignores same-zone `{base}/…` links — they never carry a zone prefix', () => {

@@ -60,7 +60,7 @@ test.beforeEach(async ({ page }) => {
 test('lazy-shows the authorization graph with the focus object + subject nodes', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await page.getByRole('tab', { name: 'access' }).click();
 	await page.getByRole('button', { name: 'Show authorization graph' }).click();
 	const graph = page.locator('.ag');
@@ -72,7 +72,7 @@ test('lazy-shows the authorization graph with the focus object + subject nodes',
 });
 
 test('inline grant on the graph posts through the BFF', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await page.getByRole('tab', { name: 'access' }).click();
 	await page.getByRole('button', { name: 'Show authorization graph' }).click();
 	const graph = page.locator('.ag');

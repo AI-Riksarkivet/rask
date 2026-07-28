@@ -53,7 +53,7 @@
 		<DropdownMenu.Label class="text-muted-foreground text-xs">Projects</DropdownMenu.Label>
 		<DropdownMenu.Item class="p-0">
 			<a
-				href="/lakehouse/data"
+				href="/lakehouse/catalog"
 				data-sveltekit-reload
 				class="flex w-full items-center gap-2 px-2 py-1.5"
 			>

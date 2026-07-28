@@ -41,7 +41,7 @@ test.beforeEach(async ({ page }) => {
 test('a table row opens the record drawer with stage, namespace and the two jump links', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/tables');
+	await page.goto('/lakehouse/catalog/tables');
 	// click the row's STAGE badge (the id/namespace cells are links with their own navigation)
 	await page.locator('tbody tr', { hasText: 'raw$events' }).locator('.stage').click();
 	const drawer = page.getByRole('dialog');
@@ -51,11 +51,11 @@ test('a table row opens the record drawer with stage, namespace and the two jump
 	// jump links: the detail page, and the detail page's Access tab (?tab= deep link)
 	await expect(drawer.getByRole('link', { name: 'Open detail' })).toHaveAttribute(
 		'href',
-		'/lakehouse/data/tables/raw%24events',
+		'/lakehouse/catalog/tables/raw%24events',
 	);
 	await expect(drawer.getByRole('link', { name: 'Access tab' })).toHaveAttribute(
 		'href',
-		'/lakehouse/data/tables/raw%24events?tab=access',
+		'/lakehouse/catalog/tables/raw%24events?tab=access',
 	);
 });
 
@@ -74,7 +74,7 @@ test('the access jump link lands on the detail page with the Access tab selected
 			policy: null,
 		}),
 	);
-	await page.goto('/lakehouse/data/tables');
+	await page.goto('/lakehouse/catalog/tables');
 	await page.locator('tbody tr', { hasText: 'raw$events' }).locator('.stage').click();
 	await page.getByRole('dialog').getByRole('link', { name: 'Access tab' }).click();
 	await expect(page).toHaveURL(/\/data\/tables\/raw%24events\?tab=access$/);
@@ -96,14 +96,14 @@ test('an in-cell table link navigates WITHOUT opening the drawer (stopPropagatio
 			policy: null,
 		}),
 	);
-	await page.goto('/lakehouse/data/tables');
+	await page.goto('/lakehouse/catalog/tables');
 	await page.getByRole('link', { name: 'db1$t', exact: true }).click();
 	await expect(page).toHaveURL(/\/data\/tables\/db1%24t$/);
 	await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
 test('a namespace row opens the record drawer with the member count', async ({ page }) => {
-	await page.goto('/lakehouse/data/namespaces');
+	await page.goto('/lakehouse/catalog/namespaces');
 	// the db1 namespace groups one table — click its COUNT cell (the name cell is a link)
 	await page.locator('tbody tr', { hasText: 'db1' }).getByText('1', { exact: true }).click();
 	const drawer = page.getByRole('dialog');
@@ -111,14 +111,14 @@ test('a namespace row opens the record drawer with the member count', async ({ p
 	await expect(drawer).toContainText('tables');
 	await expect(drawer.getByRole('link', { name: 'Open detail' })).toHaveAttribute(
 		'href',
-		'/lakehouse/data/namespaces/db1',
+		'/lakehouse/catalog/namespaces/db1',
 	);
 });
 
 test('a warehouse row opens the full record with the serving marker + project jump link', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/warehouses');
+	await page.goto('/lakehouse/catalog/warehouses');
 	// the gold serving record: click its PROJECT cell (id is a link, actions is a button)
 	await page
 		.locator('tbody tr', { hasText: 'acme-gold-bucket' })
@@ -131,14 +131,14 @@ test('a warehouse row opens the full record with the serving marker + project ju
 	await expect(drawer.getByText('serving · gold')).toBeVisible();
 	await expect(drawer.getByRole('link', { name: 'Open project' })).toHaveAttribute(
 		'href',
-		'/lakehouse/data/projects/acme',
+		'/lakehouse/catalog/projects/acme',
 	);
 });
 
 test('a work warehouse row states the work class honestly (no serving marker)', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/warehouses');
+	await page.goto('/lakehouse/catalog/warehouses');
 	await page
 		.locator('tbody tr', { hasText: 'acme-bucket' })
 		.first()

@@ -23,7 +23,7 @@
 				{#each data.projects as p (p.project)}
 					<!-- Cross-zone card into the data zone's project page (hard nav). -->
 					<a
-						href={`/lakehouse/data/projects/${p.project}`}
+						href={`/lakehouse/catalog/projects/${p.project}`}
 						data-sveltekit-reload
 						class="group block"
 					>

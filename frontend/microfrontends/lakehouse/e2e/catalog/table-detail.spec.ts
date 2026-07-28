@@ -185,7 +185,7 @@ async function openHistory(page: import('@playwright/test').Page): Promise<void>
 test('the commit log lists every version newest-first, with branches and tags (#66/#113)', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await expect(page.getByRole('heading', { name: 'db1$t' })).toBeVisible();
 	// The old surface is GONE from overview — one version table in the zone, not two.
 	await expect(page.getByText('Versions, branches & tags')).toHaveCount(0);
@@ -206,7 +206,7 @@ test('the commit log lists every version newest-first, with branches and tags (#
 });
 
 test('tagging is a per-row action on the selected commit (#64/#113)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await openHistory(page);
 	// "pin THIS version" — select the commit, then name it. No version dropdown to get wrong.
 	await page.getByRole('button', { name: 'details for v3', exact: true }).click();
@@ -217,7 +217,7 @@ test('tagging is a per-row action on the selected commit (#64/#113)', async ({ p
 });
 
 test('restore needs the version TYPED before it posts {version} (#64/#113)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await openHistory(page);
 	await page.getByRole('button', { name: 'details for v2', exact: true }).click();
 	const panel = page.getByTestId('commit-panel');
@@ -236,7 +236,7 @@ test('restore needs the version TYPED before it posts {version} (#64/#113)', asy
 test('insert-rows form encodes JSON to an Arrow-IPC body and posts to /insert (#64)', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Insert rows' });
 	await section.locator('textarea.ins').fill('[{ "id": 9, "name": "z" }]');
 	await section.getByRole('button', { name: 'Insert' }).click();
@@ -246,7 +246,7 @@ test('insert-rows form encodes JSON to an Arrow-IPC body and posts to /insert (#
 });
 
 test('builds a vector index through the create form (#73)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Indexes' });
 	await section.getByLabel('Index column').fill('vec');
 	await section.getByLabel('Index type').click();
@@ -260,14 +260,14 @@ test('builds a vector index through the create form (#73)', async ({ page }) => 
 });
 
 test('drops an index via the chip × (#73)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Indexes' });
 	await section.getByRole('button', { name: 'drop index id_idx' }).click();
 	await expect.poll(() => indexDrop).toContain('/index/id_idx/drop');
 });
 
 test('GC preview lists reclaimable versions + protected tags (#75)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Maintenance policy' });
 	await section.getByRole('spinbutton', { name: 'keep last' }).fill('2');
 	await section.getByRole('button', { name: 'Preview' }).click();
@@ -277,7 +277,7 @@ test('GC preview lists reclaimable versions + protected tags (#75)', async ({ pa
 });
 
 test('GC reclaim is a two-click confirm and posts to /maintenance/run (#75)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const gc = page.locator('section', { hasText: 'Maintenance policy' }).locator('.gc');
 	await gc.getByRole('spinbutton', { name: 'keep last' }).fill('2');
 	await gc.getByRole('button', { name: 'Preview' }).click();
@@ -292,7 +292,7 @@ test('GC reclaim is a two-click confirm and posts to /maintenance/run (#75)', as
 test('compact-now posts to /maintenance/compact with the policy target size (#76)', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const gc = page.locator('section', { hasText: 'Maintenance policy' }).locator('.gc');
 	await gc.getByRole('button', { name: 'Compact now' }).click();
 	await expect.poll(() => compactBody).toEqual({ target_rows_per_fragment: 1048576 });
@@ -300,13 +300,13 @@ test('compact-now posts to /maintenance/compact with the policy target size (#76
 });
 
 test('the policy surfaces the compaction target size (#76)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Maintenance policy' });
 	await expect(section).toContainText('target 1048576 rows/frag');
 });
 
 test('add-column posts a SQL-expression column (#74)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Schema' }).first();
 	await section.getByLabel('New column name').fill('doubled');
 	await section.getByLabel('Column SQL expression').fill('id * 2');
@@ -316,7 +316,7 @@ test('add-column posts a SQL-expression column (#74)', async ({ page }) => {
 });
 
 test('drop-column via the row × posts {columns} (#74)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Schema' }).first();
 	await section.getByRole('button', { name: 'drop id' }).click();
 	await expect.poll(() => colPost?.op).toBe('drop');
@@ -324,7 +324,7 @@ test('drop-column via the row × posts {columns} (#74)', async ({ page }) => {
 });
 
 test('rename-column via the row ✎ posts an alter path→rename (#74)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Schema' }).first();
 	await section.getByRole('button', { name: 'rename id' }).click();
 	await section.getByLabel('rename id to').fill('identifier');
@@ -334,7 +334,7 @@ test('rename-column via the row ✎ posts an alter path→rename (#74)', async (
 });
 
 test('re-type-column via the row ⇄ posts an alter path→data_type (#74 tail)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Schema' }).first();
 	await section.getByRole('button', { name: 're-type id' }).click();
 	// the target type is the @rask/ui Select (bits-ui) — open it, pick float32
@@ -346,7 +346,7 @@ test('re-type-column via the row ⇄ posts an alter path→data_type (#74 tail)'
 });
 
 test('save table properties posts the full metadata map (#74 tail)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Properties' });
 	// the seed row is describe.metadata { owner: "data-eng" }; add a second key, then save the whole map
 	await section.getByRole('button', { name: '+ add row' }).click();
@@ -359,7 +359,7 @@ test('save table properties posts the full metadata map (#74 tail)', async ({ pa
 });
 
 test('set a column property merges one key (#74 tail)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Properties' });
 	await section.getByLabel('Column for properties').click();
 	await page.getByRole('option', { name: 'id', exact: true }).click();
@@ -375,7 +375,7 @@ test('set a column property merges one key (#74 tail)', async ({ page }) => {
 });
 
 test('delete a column property posts a null-valued key (#74 tail)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Properties' });
 	await section.getByLabel('Column for properties').click();
 	await page.getByRole('option', { name: 'id', exact: true }).click();
@@ -387,7 +387,7 @@ test('delete a column property posts a null-valued key (#74 tail)', async ({ pag
 });
 
 test('deleting a tag asks first, then posts (#74/#113)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await openHistory(page);
 	const section = page.locator('section.hist');
 	await section.getByRole('button', { name: 'delete tag blessed' }).click();
@@ -399,7 +399,7 @@ test('deleting a tag asks first, then posts (#74/#113)', async ({ page }) => {
 });
 
 test('move a tag to another version (#74)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await openHistory(page);
 	const section = page.locator('section.hist');
 	await section.getByRole('button', { name: 'move tag blessed' }).click();
@@ -411,7 +411,7 @@ test('move a tag to another version (#74)', async ({ page }) => {
 });
 
 test('create a branch from a version (#74)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await openHistory(page);
 	const section = page.locator('section.hist');
 	await section.getByLabel('New branch name').fill('feature');
@@ -423,7 +423,7 @@ test('create a branch from a version (#74)', async ({ page }) => {
 });
 
 test('deleting a branch asks first, then posts (#74/#113)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await openHistory(page);
 	const section = page.locator('section.hist');
 	await section.getByRole('button', { name: 'delete branch dev' }).click();
@@ -434,7 +434,7 @@ test('deleting a branch asks first, then posts (#74/#113)', async ({ page }) => 
 });
 
 test('surfaces the Lance file format badge (#78)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const stats = page.locator('section', { hasText: 'Stats' }).first();
 	await expect(stats).toContainText('Lance · storage v2.2');
 });
@@ -443,7 +443,7 @@ test('surfaces the validator quality gate when a run passed it (#82)', async ({ 
 	producersFixture = [
 		{ run_id: 'r1', quality_passed: true, quality_assertions: [{ assertion: 'row_count' }] },
 	];
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const stats = page.locator('section', { hasText: 'Stats' }).first();
 	await expect(stats).toContainText('quality passed · 1 check');
 });
@@ -456,7 +456,7 @@ test('surfaces a blocked quality gate (#82)', async ({ page }) => {
 			quality_assertions: [{ assertion: 'not_null' }, { assertion: 'unique' }],
 		},
 	];
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const stats = page.locator('section', { hasText: 'Stats' }).first();
 	await expect(stats).toContainText('quality blocked · 2 checks');
 });
@@ -464,7 +464,7 @@ test('surfaces a blocked quality gate (#82)', async ({ page }) => {
 test("states 'no quality gate' honestly when no run recorded assertions (#82)", async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t'); // producersFixture defaults to []
+	await page.goto('/lakehouse/catalog/tables/db1%24t'); // producersFixture defaults to []
 	const stats = page.locator('section', { hasText: 'Stats' }).first();
 	await expect(stats).toContainText('no quality gate');
 });
@@ -475,7 +475,7 @@ test('danger-zone drop confirms via the AlertDialog, closes it, and the registry
 	page,
 }) => {
 	registryTables = ['db1$other']; // the post-drop world the registry re-lists after navigation
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const danger = page.locator('section.dangerzone');
 	await danger.getByRole('button', { name: 'Drop table' }).click();
 	// The confirm is the portalled @rask/ui AlertDialog — drive it by role, not the trigger section.
@@ -494,7 +494,7 @@ test('danger-zone drop confirms via the AlertDialog, closes it, and the registry
 });
 
 test('danger-zone deregister confirms via its own AlertDialog copy (#85)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await page.locator('section.dangerzone').getByRole('button', { name: 'Deregister' }).click();
 	const dialog = page.getByRole('alertdialog');
 	await expect(dialog).toContainText('Deregister table db1$t');
@@ -506,7 +506,7 @@ test('danger-zone deregister confirms via its own AlertDialog copy (#85)', async
 });
 
 test('cancelling the danger-zone confirm never posts (#85)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await page.locator('section.dangerzone').getByRole('button', { name: 'Drop table' }).click();
 	await page.getByRole('alertdialog').getByRole('button', { name: 'Cancel' }).click();
 	await expect(page.getByRole('alertdialog')).toHaveCount(0);
@@ -518,7 +518,7 @@ test('cancelling the danger-zone confirm never posts (#85)', async ({ page }) =>
 test('a 403 drop surfaces the owner-denied state and stays on the page (#85)', async ({ page }) => {
 	// A later page.route wins over the beforeEach glob — deny like the catalog's FGA gate (can_drop).
 	await page.route('**/capi/v1/table/*/drop', (route) => json(route, { detail: 'forbidden' }, 403));
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const danger = page.locator('section.dangerzone');
 	await danger.getByRole('button', { name: 'Drop table' }).click();
 	await page.getByRole('alertdialog').getByRole('button', { name: 'Drop', exact: true }).click();
@@ -530,7 +530,7 @@ test('a 403 drop surfaces the owner-denied state and stays on the page (#85)', a
 test('rename posts {new_table_name} and navigates to the renamed detail (#85)', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const danger = page.locator('section.dangerzone');
 	await danger.getByLabel('Rename table to').fill('t2');
 	await danger.getByRole('button', { name: 'Rename' }).click();
@@ -549,7 +549,7 @@ test('a 409 rename surfaces "already exists" and stays on the page (#85)', async
 	await page.route('**/capi/v1/table/*/rename', (route) =>
 		json(route, { detail: 'conflict' }, 409),
 	);
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const danger = page.locator('section.dangerzone');
 	await danger.getByLabel('Rename table to').fill('other');
 	await danger.getByRole('button', { name: 'Rename' }).click();
@@ -563,7 +563,7 @@ test('a 409 rename surfaces "already exists" and stays on the page (#85)', async
 test('update rows posts the exact {predicate, updates} wire body and surfaces the count (#85)', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Update / delete rows' });
 	await section.getByLabel('Row predicate').fill('id > 3');
 	await section.getByLabel('SET column 1').fill('name');
@@ -582,7 +582,7 @@ test('a partially-filled SET pair blocks the update with an inline hint (#85)', 
 }) => {
 	// A half-filled pair must BLOCK, not be silently dropped — else the write that fires differs from
 	// the form on screen (audit 2026-07-23).
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Update / delete rows' });
 	const update = section.getByRole('button', { name: 'Update rows' });
 	await section.getByLabel('SET column 1').fill('name');
@@ -602,7 +602,7 @@ test('a partially-filled SET pair blocks the update with an inline hint (#85)', 
 });
 
 test('update with an empty predicate omits the key (all rows) (#85)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Update / delete rows' });
 	await section.getByLabel('SET column 1').fill('flag');
 	await section.getByLabel('SET expression 1').fill('true');
@@ -612,7 +612,7 @@ test('update with an empty predicate omits the key (all rows) (#85)', async ({ p
 });
 
 test('delete rows is a two-click confirm and posts {predicate} only (#85)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Update / delete rows' });
 	await section.getByLabel('Row predicate').fill('id = 9');
 	await section.getByRole('button', { name: 'Delete rows' }).click();
@@ -629,7 +629,7 @@ test('a 403 row update renders the writer-denied state (#85)', async ({ page }) 
 	await page.route('**/capi/v1/table/*/update', (route) =>
 		json(route, { detail: 'forbidden' }, 403),
 	);
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Update / delete rows' });
 	await section.getByLabel('SET column 1').fill('name');
 	await section.getByLabel('SET expression 1').fill("'x'");
@@ -642,7 +642,7 @@ test('a 403 row update renders the writer-denied state (#85)', async ({ page }) 
 test('backfill posts {column, where} through the columns allowlist and surfaces the job id (#85)', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Schema' }).first();
 	await section.getByRole('button', { name: 'backfill id' }).click();
 	await section.getByLabel('backfill id where').fill('id > 0');
@@ -654,7 +654,7 @@ test('backfill posts {column, where} through the columns allowlist and surfaces 
 });
 
 test('backfill with no predicate omits the where key (#85)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Schema' }).first();
 	await section.getByRole('button', { name: 'backfill id' }).click();
 	await section.getByRole('button', { name: 'run' }).click();

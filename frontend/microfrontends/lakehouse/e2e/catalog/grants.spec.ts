@@ -63,7 +63,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('grant writes a base rung and shows the result', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await page.getByRole('tab', { name: 'access' }).click();
 	await page.getByRole('button', { name: 'Access review' }).click();
 	await expect(page.locator('table.acl')).toContainText('can_read_data');
@@ -77,7 +77,7 @@ test('grant writes a base rung and shows the result', async ({ page }) => {
 });
 
 test('revoke hits the revoke endpoint', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await page.getByRole('tab', { name: 'access' }).click();
 	await page.getByRole('button', { name: 'Access review' }).click();
 	await page.getByPlaceholder('user (e.g. alice), or role:… / team:…#member').last().fill('bob');

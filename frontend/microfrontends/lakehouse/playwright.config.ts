@@ -14,7 +14,7 @@ import {
 // Every `/capi/**` + `/api/**` response is mocked via page.route, so no live backend is needed: the dev
 // server runs the real SSR + client hydration under this zone's `/lakehouse` base path, and the
 // browser's backend calls are the only thing stubbed. Specs `goto` the base-prefixed routes
-// (`/lakehouse/data/...`, `/lakehouse/admin/...`, …), so a hop between AREAS is now exercised as the
+// (`/lakehouse/catalog/...`, `/lakehouse/admin/...`, …), so a hop between AREAS is now exercised as the
 // soft navigation it became.
 //
 // TWO app servers, because the admin area's suite is the one that exercises the REAL login gate: it

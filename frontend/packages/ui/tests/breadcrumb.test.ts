@@ -9,22 +9,22 @@ describe('pathCrumbs', () => {
 	it('keeps the domain as the first crumb on a nested path', () => {
 		// /compute/jobs -> Compute > Jobs (the domain must NOT be dropped)
 		expect(pathCrumbs('/compute/jobs')).toEqual([
-			{ id: 'compute', label: 'compute', href: '/compute' },
-			{ id: 'compute/jobs', label: 'jobs', href: '/compute/jobs' },
+			{ id: 'compute', label: 'Compute', href: '/compute' },
+			{ id: 'compute/jobs', label: 'Jobs', href: '/compute/jobs' },
 		]);
 	});
 
 	it('yields a single domain crumb for a bare domain landing', () => {
 		// /overview -> Overview (previously produced an empty trail)
 		expect(pathCrumbs('/overview')).toEqual([
-			{ id: 'overview', label: 'overview', href: '/overview' },
+			{ id: 'overview', label: 'Overview', href: '/overview' },
 		]);
 	});
 
 	it('humanises dashed segments and keeps repeated segments unique', () => {
 		expect(pathCrumbs('/compute/api-docs')).toEqual([
-			{ id: 'compute', label: 'compute', href: '/compute' },
-			{ id: 'compute/api-docs', label: 'api docs', href: '/compute/api-docs' },
+			{ id: 'compute', label: 'Compute', href: '/compute' },
+			{ id: 'compute/api-docs', label: 'Api docs', href: '/compute/api-docs' },
 		]);
 		expect(pathCrumbs('/studio/studio').map((c) => c.id)).toEqual(['studio', 'studio/studio']);
 	});
@@ -79,16 +79,16 @@ describe('collapseCrumbs', () => {
 
 	it('folds the middle, keeping the first crumb and the current page', () => {
 		const { lead, hidden, tail } = collapseCrumbs(trail, 4);
-		expect(lead.map((c) => c.label)).toEqual(['data']);
-		expect(tail.map((c) => c.label)).toEqual(['gold', 'tables', 'gold$catalog']);
-		expect(hidden.map((c) => c.label)).toEqual(['warehouses', 'acme wh', 'namespaces']);
+		expect(lead.map((c) => c.label)).toEqual(['Data']);
+		expect(tail.map((c) => c.label)).toEqual(['Gold', 'Tables', 'gold$catalog']);
+		expect(hidden.map((c) => c.label)).toEqual(['Warehouses', 'Acme wh', 'Namespaces']);
 		// Nothing is dropped — every crumb is still somewhere, so every ancestor stays reachable.
 		expect([...lead, ...hidden, ...tail]).toEqual(trail);
 	});
 
 	it('keeps the current page at the narrowest setting', () => {
 		const { lead, hidden, tail } = collapseCrumbs(trail, 2);
-		expect(lead.map((c) => c.label)).toEqual(['data']);
+		expect(lead.map((c) => c.label)).toEqual(['Data']);
 		expect(tail.map((c) => c.label)).toEqual(['gold$catalog']);
 		expect([...lead, ...hidden, ...tail]).toEqual(trail);
 	});

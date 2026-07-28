@@ -235,7 +235,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 async function openLog(page: Page): Promise<void> {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await page.getByRole('tab', { name: 'history' }).click();
 	await expect(page.locator('section.hist')).toBeVisible();
 }

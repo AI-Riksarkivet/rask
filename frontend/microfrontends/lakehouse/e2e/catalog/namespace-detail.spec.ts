@@ -68,14 +68,14 @@ test.beforeEach(async ({ page }) => {
 test('renders the header, table roster, and policy chips from the mocked list + policy', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/namespaces/gold');
+	await page.goto('/lakehouse/catalog/namespaces/gold');
 	await expect(page.getByRole('heading', { name: 'gold', exact: true })).toBeVisible();
 	// The count comes from the registry list, grouped by the `<namespace>$` prefix. Scoped to the page's
 	// own header: the AppShell topbar and the access-graph card both contribute <header> elements too.
 	await expect(page.locator('.page > header')).toContainText('2 tables');
 	await expect(page.locator('a.row', { hasText: 'gold$catalog' })).toHaveAttribute(
 		'href',
-		'/lakehouse/data/tables/gold%24catalog',
+		'/lakehouse/catalog/tables/gold%24catalog',
 	);
 	// bronze's table must NOT bleed into gold's roster.
 	await expect(page.locator('a.row', { hasText: 'bronze$events' })).toHaveCount(0);
@@ -87,7 +87,7 @@ test('renders the header, table roster, and policy chips from the mocked list + 
 test('a grant POSTs the exact {user, relation} body to the NAMESPACE access route', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/namespaces/gold');
+	await page.goto('/lakehouse/catalog/namespaces/gold');
 	await page.getByRole('tab', { name: 'access' }).click();
 	await page.getByRole('button', { name: 'Access review' }).click();
 	await expect(page.locator('table.acl')).toContainText('can_delete');
@@ -110,7 +110,7 @@ test('a grant POSTs the exact {user, relation} body to the NAMESPACE access rout
 test('editing the policy PUTs the drafted bounds to the namespace policy route', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/namespaces/gold');
+	await page.goto('/lakehouse/catalog/namespaces/gold');
 	await page.getByRole('button', { name: 'Edit', exact: true }).click();
 	await page.getByLabel('retention days').fill('30');
 	await page.getByRole('button', { name: 'Save policy' }).click();
@@ -127,7 +127,7 @@ test('editing the policy PUTs the drafted bounds to the namespace policy route',
 test('removing the policy DELETEs it and the card falls back to the global-defaults state', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/namespaces/gold');
+	await page.goto('/lakehouse/catalog/namespaces/gold');
 	await page.getByRole('button', { name: 'Remove', exact: true }).click();
 	await expect.poll(() => policyDeleted).toBe('/v1/namespace/gold/policy');
 	await expect(page.getByText('No policy — the sweep applies the global defaults.')).toBeVisible();
@@ -139,7 +139,7 @@ test('a 403 access review renders the denial state, never the ACL', async ({ pag
 	await page.route('**/capi/v1/namespace/gold/access/list', (route) =>
 		json(route, { detail: 'forbidden' }, 403),
 	);
-	await page.goto('/lakehouse/data/namespaces/gold');
+	await page.goto('/lakehouse/catalog/namespaces/gold');
 	await page.getByRole('tab', { name: 'access' }).click();
 	await page.getByRole('button', { name: 'Access review' }).click();
 	await expect(
@@ -152,7 +152,7 @@ test('a 403 policy write surfaces the owner-rung denial on the card', async ({ p
 	await page.route('**/capi/v1/namespace/gold/policy', (route) =>
 		json(route, { detail: 'forbidden' }, 403),
 	);
-	await page.goto('/lakehouse/data/namespaces/gold');
+	await page.goto('/lakehouse/catalog/namespaces/gold');
 	await page.getByRole('button', { name: 'Edit', exact: true }).click();
 	await page.getByRole('button', { name: 'Save policy' }).click();
 	await expect(
@@ -161,10 +161,10 @@ test('a 403 policy write surfaces the owner-rung denial on the card', async ({ p
 });
 
 test('the registry links each namespace name to its detail page', async ({ page }) => {
-	await page.goto('/lakehouse/data/namespaces');
+	await page.goto('/lakehouse/catalog/namespaces');
 	await expect(page.locator('a.ns-name', { hasText: 'gold' })).toHaveAttribute(
 		'href',
-		'/lakehouse/data/namespaces/gold',
+		'/lakehouse/catalog/namespaces/gold',
 	);
 	await page.locator('a.ns-name', { hasText: 'gold' }).click();
 	await expect(page).toHaveURL(/\/data\/namespaces\/gold$/);

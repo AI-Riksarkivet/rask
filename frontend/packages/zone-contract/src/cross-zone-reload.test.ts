@@ -5,11 +5,11 @@ import { findViolations, isCrossZonePath, ZONES } from './cross-zone-reload';
 import { FRONTEND_ROOT, zoneDirs } from './manifest';
 import { globSync } from 'node:fs';
 
-// Cross-zone hrefs are single-segment, domain-relative (`/lakehouse/data/tables`, `/media`).
+// Cross-zone hrefs are single-segment, domain-relative (`/lakehouse/catalog/tables`, `/media`).
 // The guard predicate must match the current scheme or it silently protects nothing.
 describe('isCrossZonePath', () => {
 	it('matches a nested cross-zone path', () => {
-		expect(isCrossZonePath('/lakehouse/data/tables')).toBe(true);
+		expect(isCrossZonePath('/lakehouse/catalog/tables')).toBe(true);
 		expect(isCrossZonePath('/media/atlas')).toBe(true);
 	});
 

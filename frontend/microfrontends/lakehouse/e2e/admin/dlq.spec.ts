@@ -88,7 +88,7 @@ test('a row click opens the drawer with the staged payload and a replay action',
 	await expect(drawer.getByLabel('Staged event payload')).toContainText('"bronze$a"');
 	// The output dataset jump link hard-navigates cross-zone.
 	const jump = drawer.getByRole('link', { name: /bronze\$a/ });
-	await expect(jump).toHaveAttribute('href', '/lakehouse/data/tables/bronze%24a');
+	await expect(jump).toHaveAttribute('href', '/lakehouse/catalog/tables/bronze%24a');
 	// Replay from the drawer drains the event (the drawer closes; the bar reports).
 	await drawer.getByRole('button', { name: 'Replay this event' }).click();
 	await expect(page.locator('.msg')).toContainText('Replayed run-1');

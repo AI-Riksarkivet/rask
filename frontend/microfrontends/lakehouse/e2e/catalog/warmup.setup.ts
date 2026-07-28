@@ -5,14 +5,14 @@ import { test } from '@playwright/test';
 test('warm the dev server routes', async ({ page }) => {
 	test.setTimeout(180_000);
 	for (const path of [
-		'/lakehouse/data/tables',
-		'/lakehouse/data/tables/db1%24t',
-		'/lakehouse/data/namespaces',
-		'/lakehouse/data/namespaces/gold',
-		'/lakehouse/data/warehouses',
-		'/lakehouse/data/warehouses/acme-wh',
-		'/lakehouse/data/projects',
-		'/lakehouse/data/projects/acme',
+		'/lakehouse/catalog/tables',
+		'/lakehouse/catalog/tables/db1%24t',
+		'/lakehouse/catalog/namespaces',
+		'/lakehouse/catalog/namespaces/gold',
+		'/lakehouse/catalog/warehouses',
+		'/lakehouse/catalog/warehouses/acme-wh',
+		'/lakehouse/catalog/projects',
+		'/lakehouse/catalog/projects/acme',
 	]) {
 		await page.goto(path).catch(() => {});
 	}

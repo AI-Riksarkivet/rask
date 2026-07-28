@@ -64,7 +64,7 @@ test.beforeEach(async ({ page }) => {
 test('the preview tab posts {limit} and renders the typed grid from real Arrow bytes', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await page.getByRole('tab', { name: 'preview' }).click();
 	// the BFF contract: the browser sends ONLY the row budget
 	await expect.poll(() => queryBody).toEqual({ limit: 50 });
@@ -78,7 +78,7 @@ test('the preview tab posts {limit} and renders the typed grid from real Arrow b
 });
 
 test('blob cells render the honest size chip, never raw bytes (goal cond 5)', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await page.getByRole('tab', { name: 'preview' }).click();
 	const section = page.locator('section', { hasText: 'Preview' });
 	// 2048 B → 2kB, 512 B → 0.5kB — the chip states the size, the bytes stay opaque
@@ -87,7 +87,7 @@ test('blob cells render the honest size chip, never raw bytes (goal cond 5)', as
 });
 
 test('a changed row limit reloads with the new budget', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await page.getByRole('tab', { name: 'preview' }).click();
 	const section = page.locator('section', { hasText: 'Preview' });
 	await expect.poll(() => queryBody).toEqual({ limit: 50 });
@@ -98,7 +98,7 @@ test('a changed row limit reloads with the new budget', async ({ page }) => {
 
 test('an empty table states the honest empty message', async ({ page }) => {
 	queryResponse = emptyFixture();
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await page.getByRole('tab', { name: 'preview' }).click();
 	await expect(
 		page.getByText('No rows — the table is empty at its current version.'),
@@ -109,7 +109,7 @@ test('a 403 preview renders the reader-denied state (never an empty grid)', asyn
 	await page.route('**/capi/v1/table/*/query', (route) =>
 		json(route, { detail: 'forbidden' }, 403),
 	);
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await page.getByRole('tab', { name: 'preview' }).click();
 	await expect(
 		page.getByText("You don't have read access to this table's data (can_read_data)."),
@@ -124,13 +124,13 @@ test('a non-Arrow body surfaces the parse-drift error instead of lying', async (
 			body: Buffer.from('this is not arrow'),
 		}),
 	);
-	await page.goto('/lakehouse/data/tables/db1%24t');
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	await page.getByRole('tab', { name: 'preview' }).click();
 	await expect(page.getByText(/preview response is not readable Arrow IPC/)).toBeVisible();
 });
 
 test('?tab=preview deep-links straight onto the tab', async ({ page }) => {
-	await page.goto('/lakehouse/data/tables/db1%24t?tab=preview');
+	await page.goto('/lakehouse/catalog/tables/db1%24t?tab=preview');
 	await expect(page.getByRole('tab', { name: 'preview' })).toHaveAttribute('aria-selected', 'true');
 	await expect.poll(() => queryBody).toEqual({ limit: 50 });
 });

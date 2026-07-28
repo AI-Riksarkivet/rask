@@ -21,7 +21,7 @@ describe('zone proxy routing', () => {
 
 	it.each([
 		['/lakehouse', 'lakehouse'],
-		['/lakehouse/data/tables', 'lakehouse'],
+		['/lakehouse/catalog/tables', 'lakehouse'],
 		['/media', 'media'],
 		['/media/atlas', 'media'],
 		['/annotator/', 'annotator'],

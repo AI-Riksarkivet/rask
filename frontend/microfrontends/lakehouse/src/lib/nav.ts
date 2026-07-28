@@ -32,7 +32,7 @@ import { exact, seg, type ZoneNav } from '@rask/ui/shell';
  * at all.
  *
  * The cost was not cosmetic. Standing in the catalog you could not see that lineage, models,
- * governance or admin existed, and the object browser at /lakehouse/storage was reachable ONLY by
+ * governance or admin existed, and the object browser at /lakehouse/catalog/storage was reachable ONLY by
  * typing its URL, because no area's list was permitted to name another area's route. Grouping is
  * exactly what the shadcn sidebar primitives (Group / GroupLabel / MenuSub) exist for, and they were
  * already vendored in @rask/ui — merely never used for structure.
@@ -47,34 +47,34 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 		items: [
 			{
 				title: 'Projects',
-				href: '/lakehouse/data/projects',
-				match: seg('/lakehouse/data/projects'),
+				href: '/lakehouse/catalog/projects',
+				match: seg('/lakehouse/catalog/projects'),
 				icon: FolderKanban,
 			},
 			{
 				title: 'Namespaces',
-				href: '/lakehouse/data/namespaces',
-				match: seg('/lakehouse/data/namespaces'),
+				href: '/lakehouse/catalog/namespaces',
+				match: seg('/lakehouse/catalog/namespaces'),
 				icon: Boxes,
 			},
 			{
 				title: 'Tables',
-				href: '/lakehouse/data/tables',
-				match: seg('/lakehouse/data/tables'),
+				href: '/lakehouse/catalog/tables',
+				match: seg('/lakehouse/catalog/tables'),
 				icon: Database,
 			},
 			{
 				title: 'Warehouses',
-				href: '/lakehouse/data/warehouses',
-				match: seg('/lakehouse/data/warehouses'),
+				href: '/lakehouse/catalog/warehouses',
+				match: seg('/lakehouse/catalog/warehouses'),
 				icon: Warehouse,
 			},
 			{
 				// R28: the object browser belongs WITH the catalog that governs it, not beside it as a
 				// sibling area. Being neither is precisely why nothing linked to it.
 				title: 'Storage',
-				href: '/lakehouse/storage',
-				match: seg('/lakehouse/storage'),
+				href: '/lakehouse/catalog/storage',
+				match: seg('/lakehouse/catalog/storage'),
 				icon: HardDrive,
 			},
 		],

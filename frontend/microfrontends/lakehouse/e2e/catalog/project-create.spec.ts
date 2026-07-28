@@ -65,7 +65,7 @@ test.beforeEach(async ({ page }) => {
 test('creates work + gold warehouses and grants the initial admin, with the exact wire bodies', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/data/projects');
+	await page.goto('/lakehouse/catalog/projects');
 	await page.getByRole('button', { name: 'New project' }).click();
 	const dialog = page.getByRole('dialog');
 	await dialog.getByLabel('Project name').fill('acme');
@@ -95,7 +95,7 @@ test('creates work + gold warehouses and grants the initial admin, with the exac
 });
 
 test('gold warehouse and admin grant are optional — one create, no tuple', async ({ page }) => {
-	await page.goto('/lakehouse/data/projects');
+	await page.goto('/lakehouse/catalog/projects');
 	await page.getByRole('button', { name: 'New project' }).click();
 	const dialog = page.getByRole('dialog');
 	await dialog.getByLabel('Project name').fill('solo');
@@ -115,7 +115,7 @@ test('a denied first create toasts the failure and keeps the dialog open for a r
 	page,
 }) => {
 	warehouseStatus = 403;
-	await page.goto('/lakehouse/data/projects');
+	await page.goto('/lakehouse/catalog/projects');
 	await page.getByRole('button', { name: 'New project' }).click();
 	const dialog = page.getByRole('dialog');
 	await dialog.getByLabel('Project name').fill('acme');
@@ -133,7 +133,7 @@ test('a failed admin grant is a NAMED partial outcome, not a fake success', asyn
 	await page.route('**/capi/v1/access/tuples', (route) =>
 		json(route, { detail: 'forbidden' }, 403),
 	);
-	await page.goto('/lakehouse/data/projects');
+	await page.goto('/lakehouse/catalog/projects');
 	await page.getByRole('button', { name: 'New project' }).click();
 	const dialog = page.getByRole('dialog');
 	await dialog.getByLabel('Project name').fill('acme');
@@ -146,7 +146,7 @@ test('a failed admin grant is a NAMED partial outcome, not a fake success', asyn
 
 test('the creation flow is invisible to a non-estate-admin (the /v1/me gate)', async ({ page }) => {
 	me = { ...ME_ALICE, sub: 'user:bob', name: 'Bob', estate_admin: false };
-	await page.goto('/lakehouse/data/projects');
+	await page.goto('/lakehouse/catalog/projects');
 	// the gallery renders (empty estate list) but the admin affordance never does
 	await expect(page.getByText('No projects visible')).toBeVisible();
 	await expect(page.getByRole('button', { name: 'New project' })).toHaveCount(0);

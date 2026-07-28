@@ -47,7 +47,7 @@ test.beforeEach(async ({ page }) => {
 
 test('drills project → warehouse → namespace with tier badges along the way', async ({ page }) => {
 	// The projects rung: the estate list renders acme with its role + warehouse count.
-	await page.goto('/lakehouse/data/projects');
+	await page.goto('/lakehouse/catalog/projects');
 	const acmeRow = page.locator('a.row', { hasText: 'acme' });
 	await expect(acmeRow).toContainText('admin');
 	await expect(acmeRow).toContainText('1 warehouse');
@@ -89,7 +89,7 @@ test('the table detail header carries the derived tier badge', async ({ page }) 
 			policy: null,
 		}),
 	);
-	await page.goto('/lakehouse/data/tables/acme-gold%24catalog');
+	await page.goto('/lakehouse/catalog/tables/acme-gold%24catalog');
 	await expect(page.locator('header .stage')).toHaveText('gold');
 	// The tab bar defaults to overview; the Access tab hosts the FGA view.
 	await expect(page.getByRole('tab', { name: 'overview' })).toHaveAttribute(
@@ -115,7 +115,7 @@ test('a member without the estate privilege still gets their membership gallery'
 		}),
 	);
 	await page.route('**/capi/v1/projects', (route) => json(route, { detail: 'forbidden' }, 403));
-	await page.goto('/lakehouse/data/projects');
+	await page.goto('/lakehouse/catalog/projects');
 	await expect(page.getByText('your memberships')).toBeVisible();
 	await expect(page.locator('a.row', { hasText: 'acme' })).toContainText('member');
 });
