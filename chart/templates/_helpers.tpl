@@ -761,8 +761,15 @@ The reload dirs are the site-packages the images actually install into. They pre
 directories and reloaded on nothing. Verified in-cluster: `python -c "import gateway"` resolves
 under /opt/venv/lib/python3.13/site-packages.
 
-Watch the service's own package plus the two shared kits, NOT all of site-packages: the latter
-means an inotify watch per installed dependency, which is slow and can exhaust the watch limit.
+Watch the service's own package plus dev.reloadKits, NOT all of site-packages: the latter means
+an inotify watch per installed dependency, which is slow and can exhaust the watch limit.
+
+Every --reload-dir MUST exist in EVERY image this renders for: uvicorn does not skip a missing
+one, it refuses to start ("Error: Invalid value for '--reload-dir': Path ... does not exist"),
+so one absent directory crashloops the service. lineage_kit was in this list and is absent from
+the gateway image, which crashlooped the ingress. Hence reloadKits is a value, defaulting to the
+one package every first-party image is guaranteed to carry (service_kit — every service is built
+on its make_service_app factory).
 */}}
 {{- define "lance.devReloadArgs" -}}
 {{- $root := index . 0 -}}
@@ -770,7 +777,8 @@ means an inotify watch per installed dependency, which is slow and can exhaust t
 {{- if $root.Values.dev.reload }}
 - "--reload"
 - "--reload-dir=/opt/venv/lib/python3.13/site-packages/{{ $pkg }}"
-- "--reload-dir=/opt/venv/lib/python3.13/site-packages/service_kit"
-- "--reload-dir=/opt/venv/lib/python3.13/site-packages/lineage_kit"
+{{- range $root.Values.dev.reloadKits }}
+- "--reload-dir=/opt/venv/lib/python3.13/site-packages/{{ . }}"
+{{- end }}
 {{- end }}
 {{- end -}}

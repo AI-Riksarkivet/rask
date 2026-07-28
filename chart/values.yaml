@@ -188,6 +188,11 @@ dev:
   # /app/{packages,components} paths have not existed since that rewrite.
   # The Tiltfile sets this; never enable it in production.
   reload: false
+  # Shared packages to hot-reload alongside each service's own. MUST exist in every image the
+  # chart renders for — uvicorn refuses to start on a missing --reload-dir rather than skipping
+  # it. lineage_kit is deliberately NOT here: the gateway image does not ship it, and including
+  # it crashlooped the ingress. Add it only if every deployed image is known to carry it.
+  reloadKits: ["service_kit"]
 
 resources:
   # rask fleet tier (templates/fleet.yaml).
