@@ -68,9 +68,7 @@ def _resolve(state: StateDep, table: str) -> str:
     """
     base = state.settings.catalog_uri
     if not base:
-        raise NotFoundError(
-            "the viewer has no catalog configured (MEDIA_CATALOG_URI), so it cannot resolve a table"
-        )
+        raise NotFoundError("the viewer has no catalog configured (MEDIA_CATALOG_URI), so it cannot resolve a table")
     try:
         with httpx.Client(base_url=base, timeout=30.0) as http:
             r = http.post(f"/v1/table/{table}/describe", json={})

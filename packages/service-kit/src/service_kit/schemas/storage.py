@@ -126,9 +126,7 @@ def registered_stores(raw: str | None = None) -> list[Store]:
     try:
         return [Store.model_validate(item) for item in json.loads(value)]
     except Exception:
-        logging.getLogger(__name__).exception(
-            "RASK_STORES is not a valid JSON array of stores; using defaults"
-        )
+        logging.getLogger(__name__).exception("RASK_STORES is not a valid JSON array of stores; using defaults")
         return list(DEFAULT_STORES)
 
 
