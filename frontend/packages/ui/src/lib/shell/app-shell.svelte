@@ -117,7 +117,10 @@
 
 	// A canvas zone starts with the rail icon-collapsed so the canvas keeps its width; every other
 	// zone starts expanded. Initial state only — bound, so the trigger and cmd/ctrl+b still work
-	// everywhere. Not $derived: that would fight the user, snapping the rail back on every rerender.
+	// everywhere. Deliberately NOT $derived: that would fight the user, snapping the rail back to
+	// the prop's value every time anything rerendered. `canvas` is fixed per zone (it is passed as a
+	// literal by the one zone that sets it), so capturing it once is the correct reading.
+	// svelte-ignore state_referenced_locally
 	let sidebarOpen = $state(!canvas);
 </script>
 
@@ -145,11 +148,12 @@
 					? 'border-border/60 border-b'
 					: ''}"
 			>
-				{#if !canvas}
-					<!-- Nothing to toggle when there is no sidebar; the switcher and identity stay either way. -->
-					{#if hasNav}
-						<Sidebar.Trigger class="text-muted-foreground hover:text-foreground -ml-1 shrink-0" />
-					{/if}
+				<!-- Nothing to toggle when there is no sidebar; the switcher and identity stay either way.
+				     Gated on hasNav ALONE, not on canvas: a canvas zone now renders a rail (collapsed),
+				     so suppressing its trigger would leave the annotator with a sidebar nobody could
+				     expand. -->
+				{#if hasNav}
+					<Sidebar.Trigger class="text-muted-foreground hover:text-foreground -ml-1 shrink-0" />
 					<Separator orientation="vertical" class="data-[orientation=vertical]:h-4" />
 				{/if}
 				<ProjectSwitcher project={shellProject} />
