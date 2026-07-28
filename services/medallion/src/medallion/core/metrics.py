@@ -37,6 +37,12 @@ _dlq_parked = _meter.create_counter(
     description="Cascade deliveries DEAD-LETTERED — parked after the Dapr retry schedule was exhausted.",
 )
 
+_stage_other_lane = _meter.create_counter(
+    "medallion.stage.other_lane",
+    unit="{trigger}",
+    description="Stage triggers DROPped as another ingest lane's (the arrived dataset is not this mover's input).",
+)
+
 
 def record_transition(transition: str) -> None:
     """Increment the stage-transition counter for ``transition`` (``"<from>-><to>"``)."""
@@ -51,6 +57,21 @@ def record_denied(transition: str) -> None:
 def record_quality_blocked(transition: str) -> None:
     """Increment the quality-blocked counter (the produced data failed a quality assertion → not promoted)."""
     _stage_quality_blocked.add(1, {"lance.medallion.transition": transition})
+
+
+def record_other_lane(transition: str) -> None:
+    """Count one trigger DROPped as another ingest lane's (the arrived dataset is not this mover's input).
+
+    Labelled by transition only, never by the arrived dataset name — a dataset is caller-supplied and
+    would make this counter's cardinality unbounded.
+
+    This exists because the drop is otherwise invisible. DROP is an ack, so Dapr neither redelivers nor
+    dead-letters, and the app records nothing. Before the lane guard, a ``bronze$pages`` arrival drove
+    the events mover into a deterministic FAIL — and that FAIL is precisely the evidence
+    ``docs/architecture/live-proof-2026-07-28.md`` used to show the page lane had no consumer. Fixing
+    the wrong behaviour must not also delete the signal that revealed it.
+    """
+    _stage_other_lane.add(1, {"lance.medallion.transition": transition})
 
 
 def record_dead_letter(app_label: str) -> None:

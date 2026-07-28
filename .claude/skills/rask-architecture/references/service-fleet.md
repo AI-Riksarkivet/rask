@@ -29,6 +29,17 @@ world, bronze the first governed tier); `/bronze-arrival` fires the
 `medallion.bronze` cascade, and the
 HTR stages run as event-triggered movers on the unified Ray cluster (P7b).
 
+**Both ingest lanes share one topic, so movers must discriminate.** The events
+lane (`bronze$events`) and the IIIF page lane (`bronze$pages`) both publish
+`medallion.bronze`, so every mover subscribed to it sees both arrivals. The
+trigger carries the `dataset` that was actually written
+(`ingest_trigger._bronze_write_dataset`) and `handle_stage` DROPs a name that is
+not its own `from_dataset` — compared against the RAW setting, never the
+project-qualified one, since the trigger is unqualified for every tenant. An
+ABSENT `dataset` makes no claim and proceeds. Without that check a page arrival
+drove the events mover to completion: a real write plus a COMPLETE attributed to
+the other lane's token.
+
 ## Why the fleet services never grow heavy deps
 
 `compute` depends only on `service-kit` + `ray-kit` — **no DB**. `service-kit`'s
