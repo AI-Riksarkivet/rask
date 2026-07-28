@@ -198,7 +198,14 @@ async def send_items(project_id: ProjectId, payload: SendItemsRequest, checker: 
             **({"task_id": item.task_id} if item.task_id else {}),
         )
         body = task.model_dump(mode="json")
-        await _task_proxy(task.task_id).seed(body)
+        # `seed` is idempotent and returns what is ALREADY there. Checking its return is what stops
+        # a client-chosen `task_id` that already belongs to another project from being indexed here:
+        # the index entry would be written from the payload, the task's own `_report_state` would
+        # only ever address its real owner, and this project's entry would freeze at its seeded value
+        # — permanently non-terminal, so `may_publish` is false forever with no way to clear it.
+        seeded = await _task_proxy(task.task_id).seed(body)
+        if str(seeded.get("project_id")) != project_id:
+            raise ConflictError(f"task {task.task_id} already belongs to project {seeded.get('project_id')} — refusing to index it into {project_id}")
         result = await _project_proxy(project_id).send(body)
         if result.get("created"):
             created.append(task.task_id)

@@ -116,3 +116,23 @@ def get_checker(request: Request, settings: SettingsDep) -> FgaChecker:
 
 
 CheckerDep = Annotated[FgaChecker, Depends(get_checker)]
+
+
+def get_fga_client(request: Request, settings: SettingsDep) -> object | None:
+    """The raw OpenFGA client, for WRITES (ownership seeding) rather than checks.
+
+    `None` when FGA is disabled — seeding is then a no-op, matching `get_checker`'s permissive
+    branch, so an offline stack behaves as before. When FGA is ENABLED but no client was built we
+    raise, exactly as the checker does: a create that silently skipped its ownership seed would
+    return 201 for a project nobody can ever act on, which is worse than failing.
+    """
+    if not settings.fga_enabled:
+        return None
+    client = getattr(request.app.state, "fga", None)
+    if client is None:
+        audit("authz", FAILURE, reason="fga_unavailable")
+        raise ServiceUnavailableError("Authorization is enabled but unavailable")
+    return client
+
+
+FgaClientDep = Annotated[object | None, Depends(get_fga_client)]
