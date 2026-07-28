@@ -35,9 +35,30 @@ case "$CMD" in
   *)          RELOAD="NO — dev.reload is not set on this deploy; a synced file will NOT be re-read" ;;
 esac
 
+# Is this pod even Tilt's? live_update only touches containers Tilt itself built and deployed.
+# Running `helm upgrade` by hand while Tilt is up replaces Tilt's injected image with the chart
+# default and Tilt silently stops managing that deployment — after which live_update CANNOT
+# fire, no matter how correct everything else is. Without this check the failure is
+# indistinguishable from a broken sync, which cost a long detour on 2026-07-28.
+IMAGE="$("$KUBECTL" get pods "$POD" -o jsonpath='{.spec.containers[0].image}' 2>/dev/null || true)"
+case "$IMAGE" in
+  *:tilt-*) OWNED="yes" ;;
+  *)        OWNED="NO" ;;
+esac
+
 MARKER="TILT_VERIFY_$$_$(cksum <<<"$POD" | cut -d' ' -f1)"
 echo ">> service=${SERVICE} pod=${POD}"
+echo ">> image=${IMAGE}"
 echo ">> uvicorn --reload: ${RELOAD}"
+if [ "$OWNED" = "NO" ]; then
+  echo "!! this pod is NOT Tilt's build (Tilt tags images :tilt-<hash> and pushes to the"
+  echo "   registry from make tilt-registry). Tilt is not managing this deployment, so"
+  echo "   live_update cannot reach it. Someone ran 'helm upgrade' while Tilt was up, or"
+  echo "   Tilt is not running. Restart Tilt and let it own the release:"
+  echo "     sudo pkill -f '/tilt up'   # if a Tilt from another user holds :10350"
+  echo "     make tilt-up"
+  exit 1
+fi
 
 CLEAN() { sed -i "/^# ${MARKER}\$/d" "$SRC" 2>/dev/null || true; }
 trap CLEAN EXIT INT TERM
