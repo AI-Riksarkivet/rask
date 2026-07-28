@@ -272,6 +272,90 @@ Verified item-by-item against the code; none appear in DECISIONS §9. In priorit
 
 ---
 
+## F. The docs sweep — split in two so it cannot collide *(new, 2026-07-28)*
+
+An external classification (39 agents, every proposed delete adversarially verified) found `docs/` is
+**not junk-heavy, it is stale-heavy**: 25 of 35 proposed deletions were killed because the files are
+referenced from `zensical.toml` nav, from code docstrings, or from tests. Only 3 files survived as safe
+deletes; the real work is ~82 docs needing UPDATE.
+
+Every claim below was re-verified against this tree on 2026-07-28 before being recorded here.
+
+**Why it is split.** A second workstream (the information-architecture goal: grouped sidebar, the
+`/lakehouse/data/*` → `/lakehouse/catalog/*` rename, one shell per zone, the storage registry) rewrites
+the very things a third of these docs describe. Fixing those docs first means fixing them twice. F1 is
+everything disjoint from that work and can start immediately; **F2 is not optional and not dropped** — it
+is the same sweep, deferred until the IA goal closes.
+
+### F1 · The collision-free sweep *(ready now)*
+
+**Delete (verified zero live references after their nav rows go):**
+`docs/MERGE-HANDOFF-PROMPT.md` — inbound refs are exactly `zensical.toml:93` and
+`docs/lakehouse/index.md:55`; remove both in the same commit. `docs/architecture/phase2-schema.dbml`
+(DBML for the deleted relational control plane) and `docs/architecture/viewer-phase3-plan.md` (a plan for
+a service dissolved in June) have **zero** inbound references.
+
+**R19 — `packages/common` and `services/common` are both gone.** 27 citations across 13 docs still point
+at `services/common/*` or `from common.X`: `DATA-CONTRACT.md`, `ARCHITECTURE.md`, `DECISIONS.md`,
+`COVERAGE.md`, `BENCH-2026-07-22.md`, `OPEN-WORK.md` (§E3 above), `DESIGN-annotation-projects.md`,
+`FLOW.md`, `MEDALLION.md`, `SYSTEM-SKETCH.md`, `DEPLOY.md`, `ASSESSMENT-2026-07-15.md`,
+`RASK-INTEGRATION.md`, `architecture/lance-ns-merge.md`. The real homes are
+`packages/service-kit/src/service_kit/{dapr_publish,control_events,lakehouse/outbox}.py` and
+`service_kit/governed/`. `dapr_publish.py:19,61` cites `DATA-CONTRACT.md` back — fix the pair together;
+it is the one code file in F1's scope.
+
+**Dead paths.** `deploy/cnpg-age-cluster.yaml` does not exist — it shipped as
+`chart/templates/age-cluster.yaml` — and is cited **three** times: `CNPG-AGE.md:40`, `CNPG-AGE.md:73`,
+`OPERATORS.md:14`. `API.md:4` claims a `make openapi-check` CI guard that is **not in the Makefile**:
+either add the target or drop the claim.
+
+**`ASSESSMENT-2026-07-15.md` is not a delete.** §1–§2 are discharged and describe the dead pre-merge tree,
+but §3 is the only in-tree gap-by-gap prod-readiness enumeration and **two** things depend on it —
+`OPEN-WORK.md:118` (C4) and `RUNBOOK-oncall.md:63` ("ASSESSMENT gap #5"). Cut or hard-banner §1–§2; keep
+§3 and both inbound refs intact.
+
+**Folds and layout.** The flat copy created duplicate pairs: `SYSTEM-SKETCH.md` (272L) → `ARCHITECTURE.md`
+(359L); `DEPLOY.md` (252L) → `architecture/deployment.md` (206L). And the lance docs sit flat at
+`docs/*.md` while rask's site uses subdirs — `RUNBOOK-oncall.md` and `RUNBOOK-restore.md` belong in
+`docs/runbooks/` beside the `llm-cluster.md` already there.
+
+**Closes when.** Both gates shown green: every `zensical.toml` nav target resolves (it is green **today**
+— 0 missing — so this is a regression guard, and a delete without its nav row turns it red), and
+`grep -rn "services/common\|from common\." docs/` returns nothing.
+
+### F2 · The deferred remainder *(blocked on the information-architecture goal)*
+
+Not dropped — deferred because the IA goal rewrites the subject matter. Pick this up the day that goal
+closes; each item names why it waits.
+
+- **`AUTHZ.md`'s per-zone disclosure table** — line 54 tabulates `` `lakehouse/data` ``, the exact path the
+  IA goal renames to `/lakehouse/catalog`. The table also lists fewer than the 7 real zones, and R15 makes
+  a missing zone a defect — **that applies to the doc too**.
+- **The frontend doc cluster** — `architecture/frontend-microfrontends.md` (305L),
+  `architecture/frontend-conventions.md` (592L), `architecture/layout.md`, `components/frontends.md` (44L,
+  folds into frontend-microfrontends), `components/progress.md` (264L, self-declares "historical", is
+  referenced from `frontend-microfrontends.md:305`), and `architecture/frontend-monorepo.md` (34L, folds
+  into frontend-conventions). All describe the `AppShell`/`ZoneNav` structure the IA goal replaces.
+  One fix is independent of that goal and should ride along: `frontend-conventions.md:319,347` ship a
+  copy-pasteable `@source '../../../../packages/ui/dist'` with **four** `../`; three is correct
+  (`frontend/microfrontends/home/src/app.css:7`). Copy-pasting it renders every `@rask/ui` class unstyled
+  with no error.
+- **`API.md`'s path counts** — says 75/24, the committed specs hold **100/29**, and the IA goal's storage
+  registry adds more. Prefer deleting the hardcoded numbers in favour of the `make openapi-check` guard
+  over correcting a number that will go wrong again.
+- **The three viewer/relational tombstones** — `architecture/data-model.md` (132L, its thesis is the dead
+  relational batches control plane, but it carries an ER diagram someone may still want),
+  `architecture/viewer-design.md` (659L for a dissolved monolith, referenced from `architecture/index.md`
+  and `microservices.md`), `projects/viewer.md` (71L, a tombstone for a plane that has itself since died).
+  Two independent verifiers disagreed on all three, so they need a judgment call rather than a blind `rm`.
+  Whatever is deleted, fix the inbound reference in the same commit.
+
+**Closes when.** The F1 gates still pass, `AUTHZ.md` lists all 7 zones with post-rename paths, no doc
+references a `ZoneNav`/shell shape the code no longer has, and each of the three tombstones has been
+explicitly kept-with-a-banner or deleted-with-its-referrers-fixed.
+
+---
+
 ## How this survives
 
 1. **P0** of `docs/architecture/lance-ns-merge.md` copies this file to `rask/docs/OPEN-WORK.md`.
