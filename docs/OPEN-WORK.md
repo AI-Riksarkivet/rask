@@ -383,8 +383,13 @@ killed by P7a/P7b/R15–R28.
 
 - **`docs/superpowers/**` is not in the published nav** (`grep -c superpowers zensical.toml` → 0).
   Its `plans/` and `specs/` are **dated process artifacts** — a plan written 2026-06-16 correctly
-  describes the tree of 2026-06-16. Sweeping them would falsify the record for no reader benefit.
-  **Ruling: `docs/superpowers/**` is an archive and is out of scope for every staleness sweep.**
+  describes the tree of 2026-06-16, so *rewriting* them would falsify the record.
+
+    **Owner ruling, 2026-07-28: the unreferenced ones were deleted** (34 files — 26 orphans, then 8
+    specs that the first pass orphaned by removing the plans that linked them). Git history keeps
+    them; they were unpublished and described planes that no longer exist. **The 10 still linked from
+    `docs/lakehouse/index.md` are kept, and remain out of scope for content sweeps** — do not update
+    them to current state; they are records of what was decided when.
 - `lance-ns-merge.md` and this file legitimately name dead things in order to declare them dead.
 
 What remains is **11 nav-served files**, and `architecture/system-overview.md` already carries a
