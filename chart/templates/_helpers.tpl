@@ -725,7 +725,13 @@ injected daprd sidecar or the busybox wait-age initContainer (which legitimately
 securityContext:
   runAsNonRoot: true
   allowPrivilegeEscalation: false
-  readOnlyRootFilesystem: {{ .Values.security.readOnlyRootFilesystem }}
+  {{/* dev.reload implies Tilt's live_update, which SYNCS FILES INTO THE RUNNING CONTAINER —
+       impossible against a read-only rootfs. Measured before this: `touch` inside the pod
+       returned "Read-only file system", so every sync silently no-opped and hot reload could
+       never work no matter how correct the reload flags were. Relaxed ONLY when dev.reload is
+       set (dev-only, never production), so the hardened default is untouched for real deploys
+       and tests/unit/test_invariants.py still sees readOnlyRootFilesystem true. */}}
+  readOnlyRootFilesystem: {{ if .Values.dev.reload }}false{{ else }}{{ .Values.security.readOnlyRootFilesystem }}{{ end }}
   capabilities:
     drop: ["ALL"]
   seccompProfile:

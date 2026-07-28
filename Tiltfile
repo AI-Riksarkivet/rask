@@ -9,6 +9,12 @@
 
 load('ext://helm_resource', 'helm_resource', 'helm_repo')
 
+# Re-run the release when the CHART changes, not just the Tiltfile. helm_resource does not
+# watch its own chart directory, so editing a template or values.yaml left Tilt happily serving
+# the previous release with no indication anything was stale — chart edits appeared to do
+# nothing. `tilt alpha tiltfile-result` lists the watched ConfigFiles if this needs checking.
+watch_file('chart')
+
 # Tilt refuses to deploy to a context it does not recognise as local ("might be production").
 # It knows kind-*, k3d-*, minikube, docker-desktop and rancher-desktop by name, but a plain k3s
 # install names its context 'default', so it gets blocked. This repo is not k3s-specific — the
