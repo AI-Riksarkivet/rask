@@ -3,6 +3,27 @@
 Evidence log for the lineage track. Each section states a claim, the command that tested it, and the
 verdict. Live checks run against the kind cluster `lance` (helm release `lance-ns`).
 
+!!! danger "The §1 verdict below is OUT OF DATE — gold DOES embed lineage now (re-checked 2026-07-28)"
+
+    The table immediately below answers *"Does the product gold write embed lineage today?"* with
+    **No**. That is no longer true. `services/medallion/src/medallion/services/compute.py:43-50`
+    defines `_LINEAGE_COLUMN = "lineage"`, stamps it on **every** stage via `_RESTAMPED_COLUMNS`, and
+    builds a `lineage_run_id_idx` index on the JSON path `run_id` — i.e. exactly the follow-up this
+    document filed as unbuilt. `UpstreamFacts.chain` then reads the upstream `lineage` cell to walk
+    provenance back to bronze without a round-trip (R25b).
+
+    **This matters beyond the doc:** `OPEN-WORK.md` C3 still lists "the gold whole-history JSONB
+    embed" as the lineage track's remaining work, citing this page. That item needs re-deriving
+    against the code rather than against this verdict.
+
+    Two other things here have rotted with the merge and are **not** to be copied: the module paths
+    (`common.schema.type_label`, `common.lancekit.openlineage._type_label`, `common.openlineage.run_id_for`)
+    moved to `packages/service-kit/src/service_kit/lakehouse/schema.py` and `.../lancekit/openlineage.py`
+    at R19; and every reproduce command targets the retired kind cluster / `lance-ns` release.
+
+    The *method* — claim, command, verdict — is why this page is kept rather than deleted. Re-run it
+    before trusting any individual row.
+
 ## Gold: lineage as JSON in the Lance file
 
 **The claim under test** (from `docs/LINEAGE.md`, `services/lineage/seed.py`, and the medallion demo

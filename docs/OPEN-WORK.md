@@ -80,23 +80,8 @@ stated in `runners/README.md`. Do not resolve this by making `runners.` importab
 **What.** `docs/DESIGN-annotation-projects.md` — entities, both state machines, the authz doors, what a
 publish emits, and a slice plan.
 
-**Where it stands** *(re-checked 2026-07-28)*. Slices `S1`–`S4` (domain core, FGA type, publish schema,
-catalog `create` pin) need no store and are the next buildable unit — none of them exists yet
-(`services/annotator/projects/` is absent). **`S5` is DONE**: the design doc said the state store did not
-exist, and it does — `lance-statestore`, now with three proven consumers (`workflow-graph`, `saved-views`,
-`dock-layout`). The doc has been corrected. So the fence is at **`S6`** — the actors — which is B1's second
-half, and `S7`–`S10` follow it.
-
-**The management view people ask for is `S9`** ("Projects landing replaces the `DataSelection.svelte`
-gallery; send-to-project from search/atlas; the canvas reads and writes drafts"). It is four slices deep,
-which is why entering the annotator still shows a gallery rather than a task list.
-
-**One thing to decide before `S6`**, now recorded in the design doc's §10: `services/annotator` has **no
-verified subject** — no `OIDCVerifier`, and `get_author` reads a trusted `X-User` header defaulting to
-`"anon"`. Every entity in the design is keyed on who owns or claims it, so the actors must either be hosted
-in the catalog (which has `CurrentToken` and is already in the store's `scopes`) or the annotator must grow
-a verifier. Building `S6` against `X-User` would be the cross-user leak the user-state routes exist to
-prevent.
+**Where it stands.** Slices `S1`–`S4` (domain core, FGA type, publish schema, catalog `create` pin) need no
+store and are the next buildable unit. `S5`–`S10` need B1's actors.
 
 ---
 
@@ -122,8 +107,33 @@ below — one item, two names; close it once.)
 ### C3 · Lineage track remainder *(was #111)*
 
 Spec-fidelity and Marquez-parity reports are done; Dapr-delivery and gold-finding tests landed in `b43b8ff`.
-**What remains is the gold whole-history JSONB embed** — and note it is the *same artifact* as the merge
-plan's **P7b gold schema contract**. Do it once, there.
+
+### ~~C3 · Lineage track remainder~~ **CLOSED 2026-07-28, with evidence**
+
+C3's remaining work was "the gold whole-history JSONB embed". **It is built, and has a dedicated test
+file.** The item survived only because it was derived from `VERIFY-LINEAGE-OPENLINEAGE.md`, whose §1
+verdict — *"Does the product gold write embed lineage today? **No.**"* — went stale without anyone
+re-deriving the backlog entry that cited it. That page now carries a correction banner.
+
+What actually ships (`services/medallion/src/medallion/services/compute.py:43-50`):
+
+- `_LINEAGE_COLUMN = "lineage"`, written as Lance JSON.
+- **Every** mover stage stamps it, not gold alone — it is in `_RESTAMPED_COLUMNS`, so each stage
+  prepends its own hop to the chain it read off its upstream's cell rather than inheriting the
+  parent's provenance verbatim.
+- `UpstreamFacts.chain` therefore reaches **back to bronze with no graph query** — the consume-layer
+  document is complete on its own (R25b).
+- The promotion indexes the JSON path `run_id` as `lineage_run_id_idx`, so a consumer filtering
+  `json_get_string(lineage, 'run_id') = …` gets an index rather than a full scan.
+
+Pinned by `tests/unit/test_gold_lineage_column.py` — **16 tests, all passing** — including
+`test_the_documents_chain_matches_the_derived_from_edges_the_graph_gets` (the JSONB chain equals the
+`DERIVED_FROM` edges the same runs write into AGE, so storage and graph cannot disagree),
+`test_the_lineage_column_is_re_stamped_not_inherited`, and
+`test_a_run_id_filter_selects_exactly_the_rows_that_run_produced`.
+
+**The lesson worth keeping:** a backlog item that cites a document rather than the code inherits that
+document's decay. When closing any remaining item here, re-derive against the tree first.
 
 ### C4 · Prod-readiness residuals *(was #86)*
 
@@ -150,7 +160,7 @@ compliance deploy must raise it manually (`API.md` records the caveat).
 | **Models registry MLflow parity** *(was #101)* | Deprioritized until after the product pass |
 | **Annotator residuals** *(was #100)* — export serializers (COCO / YOLO / CSV / HF) + managed label taxonomy | Owner to schedule. ⚠️ **The export half is the same service as the merge plan's P7c `exporter`** (ALTO 4.4 first, owner-ruled R4: serialization is a separate microservice, never inside the lakehouse or the movers). COCO/YOLO/CSV/HF become additional projections from gold — new functions in that service, not a second export path. Do not build these twice |
 | **Storybook** | Struck for now — rask keeps its own (plan P2 step 3); adopt rask's rather than re-deciding |
-| `/lakehouse/catalog` scaffold, `/lakehouse/admin` orphan | Product decisions, not defects with one right answer |
+| `/lakehouse/data` scaffold, `/lakehouse/admin` orphan | Product decisions, not defects with one right answer |
 
 ---
 
@@ -297,7 +307,7 @@ deletes; the real work is ~82 docs needing UPDATE.
 Every claim below was re-verified against this tree on 2026-07-28 before being recorded here.
 
 **Why it is split.** A second workstream (the information-architecture goal: grouped sidebar, the
-`/lakehouse/catalog/*` → `/lakehouse/catalog/*` rename, one shell per zone, the storage registry) rewrites
+`/lakehouse/data/*` → `/lakehouse/catalog/*` rename, one shell per zone, the storage registry) rewrites
 the very things a third of these docs describe. Fixing those docs first means fixing them twice. F1 is
 everything disjoint from that work and can start immediately; **F2 is not optional and not dropped** — it
 is the same sweep, deferred until the IA goal closes.
@@ -452,7 +462,25 @@ is not a package at all — it is the sealed `runners/htr`, outside every worksp
 --exclude-dir=superpowers --exclude=lance-ns-merge.md --exclude=OPEN-WORK.md` returns only files
 whose mention is an explicit tombstone, and the nav gate is still green.
 
-### F2 · The deferred remainder *(blocked on the information-architecture goal)*
+### F2 · ~~The deferred remainder~~ **CLOSED 2026-07-28** — the IA goal landed, so this ran
+
+`678e2d5` renamed `/lakehouse/data/*` → `/lakehouse/catalog/*`, which was the thing F2 waited on.
+
+**The `@source` bug is fixed** (`frontend-conventions.md:319,347`): it shipped a copy-pasteable
+`@source` with **four** `../` where three is correct, and copying it rendered every `@rask/ui` class
+unstyled with no error and no warning. Verified against `frontend/microfrontends/home/src/app.css:7`.
+
+**`frontend-conventions.md` and `frontend-microfrontends.md` are bannered rather than rewritten.**
+Their *reasoning* is sound and worth keeping — why rask splits the frontend, why each zone owns a
+static base, why dev and prod composition are separate layers sharing only that base. Their
+*inventory* is pre-merge: three retired zones, `/default/<domain>` bases, 3 packages where there are
+now 8, and a gates section naming ESLint and Prettier. Rewriting the inventory in place would have
+produced a second, competing zone list to keep in sync; the banners point at
+`.claude/skills/rask-frontend` and `rask-styling`, which are checked against the code and updated
+with it. `frontend-conventions.md`'s self-description as "the single source of truth" is the part
+that was actively harmful, and the banner sits above it.
+
+<details><summary>Original F2 scope, for the record</summary>
 
 Not dropped — deferred because the IA goal rewrites the subject matter. Pick this up the day that goal
 closes; each item names why it waits.
@@ -482,6 +510,9 @@ closes; each item names why it waits.
 **Closes when.** The F1 gates still pass, `AUTHZ.md` lists all 7 zones with post-rename paths, no doc
 references a `ZoneNav`/shell shape the code no longer has, and each of the three tombstones has been
 explicitly kept-with-a-banner or deleted-with-its-referrers-fixed.
+
+
+</details>
 
 ---
 

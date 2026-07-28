@@ -8230,6 +8230,74 @@
         "title": "SerializedDock",
         "type": "object"
       },
+      "StorageRole": {
+        "description": "What a store is FOR.\n\nThe three governed tiers are exactly bronze/silver/gold (R23): the medallion is\nbronze->silver->gold, and RAW is deliberately outside it \u2014 raw is the external world (a IIIF\nendpoint, a drop bucket), never a governed tier. DERIVED covers artefacts produced from a tier\nbut not themselves governed as one (exported ALTO, thumbnails); OBSERVABILITY covers the\ntelemetry store, which is operational rather than archival.",
+        "enum": [
+          "raw",
+          "bronze",
+          "silver",
+          "gold",
+          "derived",
+          "observability"
+        ],
+        "title": "StorageRole",
+        "type": "string"
+      },
+      "Store": {
+        "description": "One registered object store.",
+        "properties": {
+          "bucket": {
+            "description": "The bucket backing it on the configured S3 endpoint.",
+            "title": "Bucket",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "description": "What a reader should expect to find here.",
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "description": "Stable identifier used by the object browser and the API.",
+            "title": "Name",
+            "type": "string"
+          },
+          "read_only": {
+            "default": true,
+            "description": "Whether the estate writes here through the UI. The browser is a READER; a store the cascade owns must not be presented as editable just because S3 would allow it.",
+            "title": "Read Only",
+            "type": "boolean"
+          },
+          "role": {
+            "$ref": "#/components/schemas/StorageRole",
+            "description": "Where this store sits in the cascade."
+          }
+        },
+        "required": [
+          "name",
+          "bucket",
+          "role"
+        ],
+        "title": "Store",
+        "type": "object"
+      },
+      "StoreRegistry": {
+        "description": "Every store the catalog knows, newest contract first.\n\nReturned whole rather than paged: the registry is estate configuration, not data, and a\nfrontend that has to page through it cannot render a tier->store view in one pass.",
+        "properties": {
+          "stores": {
+            "items": {
+              "$ref": "#/components/schemas/Store"
+            },
+            "title": "Stores",
+            "type": "array"
+          }
+        },
+        "required": [
+          "stores"
+        ],
+        "title": "StoreRegistry",
+        "type": "object"
+      },
       "StringFtsQuery": {
         "description": "StringFtsQuery",
         "properties": {
@@ -11255,6 +11323,67 @@
         "summary": "Get Project",
         "tags": [
           "projects"
+        ]
+      }
+    },
+    "/v1/stores": {
+      "get": {
+        "description": "The whole registry in one response \u2014 it is estate config, and the tier view needs all of it.",
+        "operationId": "list_stores_v1_stores_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreRegistry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Every registered object store",
+        "tags": [
+          "stores"
+        ]
+      }
+    },
+    "/v1/stores/tiers": {
+      "get": {
+        "description": "The tier -> store view, DERIVED from the registry rather than transcribed.\n\nEvery governed tier appears even when empty: a bronze row with nothing in it says \"no store\nbacks bronze here\", which is a fact worth showing. Roles outside the medallion (raw, derived,\nobservability) are grouped under their own names \u2014 raw is deliberately not a tier (R23).",
+        "operationId": "stores_by_tier_v1_stores_tiers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "items": {
+                      "$ref": "#/components/schemas/Store"
+                    },
+                    "type": "array"
+                  },
+                  "title": "Response Stores By Tier V1 Stores Tiers Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Stores grouped by medallion tier",
+        "tags": [
+          "stores"
         ]
       }
     },

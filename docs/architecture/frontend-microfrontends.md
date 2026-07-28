@@ -7,6 +7,24 @@ status: new
 
 # Frontend Microfrontends
 
+!!! warning "Historical — this describes the PRE-MERGE zone set (2026-07-28)"
+
+    The *reasoning* is why this page is kept: why rask splits the frontend at all, why each zone owns
+    a static base, and why dev composition and prod composition are separate layers that share only
+    that base path. All of that still holds.
+
+    **The inventory does not.** Every zone table and routing example below is superseded:
+
+    | Below | Actually |
+    |---|---|
+    | zones `overview`, `storage`, `discover` | **retired** — `/storage` and `/catalog` are routes inside `lakehouse` |
+    | base `/default/<domain>` | a bare `/<zone>`; `/default/lakehouse` is asserted *not* to be a zone path |
+    | `/<project>/<domain>` | the project comes from the request **host** (`demo.localhost` → `demo`) |
+    | 7 zones, 3 packages | 7 zones, **8** packages — `@rask/dockview`, `@rask/engine`, `@rask/labeling`, `@rask/media-api`, `@rask/config` all arrived with the merge |
+
+    For the current zone list, ports, data dialects, dock workbenches and gates, read
+    **`.claude/skills/rask-frontend`** — it is checked against the code and updated with it.
+
 This page explains **what we are building** for the rask frontend, **how it works**,
 and **where each piece lives** — so you can read a URL and know which app served it.
 
