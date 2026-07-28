@@ -24,11 +24,13 @@
 	import { File, Folder, RefreshCw } from '@lucide/svelte';
 	import { untrack } from 'svelte';
 	import ObjectPreview from './ObjectPreview.svelte';
+	import PagePreview from './PagePreview.svelte';
 	import {
 		fmtModified,
 		fmtSize,
 		listObjects,
 		listStores,
+		looksLikeLanceDataset,
 		type Bucket,
 		type S3Listing,
 		type Store,
@@ -102,6 +104,15 @@
 		bucket = found.name;
 		prefix = '';
 	}
+
+	// A Lance dataset is a DIRECTORY of objects, so the browser can walk into one. Detect that and
+	// swap the byte-preview for the page viewer — same panel, read as what the location actually is.
+	const isLanceDataset = $derived(
+		listing !== null && looksLikeLanceDataset(listing.prefixes, listing.objects),
+	);
+	// The dataset URI the viewer reads: this store's bucket plus the prefix we walked into, minus
+	// the trailing slash Lance does not expect.
+	const datasetUri = $derived(`s3://${bucket}/${prefix.replace(/\/$/, '')}`);
 
 	const crumbs = $derived.by(() => {
 		const parts = prefix.split('/').filter(Boolean);
@@ -282,7 +293,12 @@
 					onrowclick={openRow}
 				/>
 			</div>
-			{#if selected !== null}
+			{#if isLanceDataset}
+				<!-- Walking into a Lance dataset with the plain object browser shows `.lance` fragments
+				     and a `_versions` manifest — the storage layout, not the document. When the current
+				     prefix IS a dataset, the panel reads it as rows with a blob-v2 image column instead. -->
+				<PagePreview dataset={datasetUri} />
+			{:else if selected !== null}
 				<ObjectPreview {bucket} key={selected.id} onclose={() => (selected = null)} />
 			{/if}
 		</div>

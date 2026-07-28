@@ -113,3 +113,41 @@ export function fmtSize(bytes: number): string {
 export function fmtModified(iso: string | null): string {
 	return iso === null ? '—' : iso.slice(0, 19).replace('T', ' ');
 }
+
+
+// ── Bronze page datasets (the document viewer) ────────────────────────────────────────────────
+// A Lance dataset is a DIRECTORY of objects in a store, so the object browser walks into it and
+// shows `.lance` fragments and a `_versions` manifest — bytes, not pages. These read the dataset
+// as what it is: rows with a blob-v2 image column, served page-at-a-time by the viewer.
+
+/** One page's metadata. `has_image` is false when the harvest produced no payload for that row —
+ *  surfaced rather than hidden, because a viewer that silently skips a failed page reports a volume
+ *  as complete when it is not. */
+export type Page = {
+	id: number;
+	source_uri: string;
+	stage: string;
+	size: number;
+	has_image: boolean;
+};
+
+export type PageListing = { dataset: string; pages: Page[] };
+
+/** Page metadata for a bronze dataset (never the bytes — a listing that inlined them would move
+ *  hundreds of MB to draw a contact sheet). */
+export const listPages = (dataset: string): Promise<ApiResult<PageListing>> =>
+	request<PageListing>('/api', `media/pages?${q({ dataset })}`);
+
+/** One page's image bytes, as an `<img src>`. Selected by the `id` COLUMN, never by row position —
+ *  positional indexing into a blob read is the misattribution bug the read path exists to avoid. */
+export const pageImageUrl = (dataset: string, id: number): string =>
+	bffPath(`/api/media/page?${q({ dataset, id: String(id) })}`);
+
+/** Does this browser location look like a Lance dataset rather than a folder of loose objects?
+ *  Lance writes a `_versions/` manifest directory and `.lance` fragments; either is conclusive. */
+export function looksLikeLanceDataset(prefixes: string[], objects: { key: string }[]): boolean {
+	return (
+		prefixes.some((p) => p.endsWith('_versions/') || p.endsWith('data/')) ||
+		objects.some((o) => o.key.endsWith('.lance') || o.key.includes('/_versions/'))
+	);
+}
