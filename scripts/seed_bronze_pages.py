@@ -94,9 +94,7 @@ def register(location: str) -> None:
 
 
 def main() -> None:
-    src = IIIFVolumeSource(
-        VOLUME, base_url=BASE, query_params="full/max/0/default.jpg", timeout=60.0, max_pages=PAGES
-    )
+    src = IIIFVolumeSource(VOLUME, base_url=BASE, query_params="full/max/0/default.jpg", timeout=60.0, max_pages=PAGES)
     res = ingest_to_bronze(src, URI, OPTS, max_objects=10, max_total_bytes=200 << 20)
     print(f"ingested {res.row_count} pages -> {URI}")
     print("registering with the catalog (the governed half):")
