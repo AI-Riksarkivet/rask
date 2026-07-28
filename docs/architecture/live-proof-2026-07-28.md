@@ -170,3 +170,28 @@ pre-fix chart/code (each was checked against the original render).
 Install-flow notes: `helm install --wait` deadlocks against the OpenFGA-migrate hook (the documented
 `scripts/e2e_stack.sh` behavior) — revs 1–2 `failed` before rev 4+ succeeded; and the IIIF head is
 off by default (`medallion.compute=false` → `/ingest-iiif` 409s), which is correct but worth knowing.
+
+---
+
+## Defects found by DRIVING THE UI (2026-07-28, owner-witnessed)
+
+Every one of these was invisible to a green test suite and to the agent reports; each surfaced only
+because the owner opened the running estate through an SSH tunnel and clicked. They are recorded here
+because they arrived AFTER the goal's ten gates were written, and a defect that lives only in a chat
+transcript does not exist. Ruling **R28** covers the storage-registry half; the rest are listed here.
+
+| # | defect | evidence | status |
+|---|---|---|---|
+| 1 | **Storage has no nav entry.** `lakehouseNav()` is area-scoped, so `/lakehouse/storage` is reachable only by typing the URL; the topnav's Lakehouse panel lists Catalog/Models/Lineage (+admin) but never Storage. | read `lib/nav.ts`; the area map contains `storage` but no other area links to it | **R28** |
+| 2 | **The tiers are not storage.** The browser's bucket set is a hardcoded `Literal["images-batch","images-batch-alto"]` — the import sink and export sink. The governed bronze/silver/gold Lance datasets (`lance-catalog/medallion/*`) cannot be selected, though the code comment claims "the warehouse buckets". | `services/viewer/.../objects.py` + `lib/storage/storage.ts` | **R28** |
+| 3 | **Nothing declares what a sink IS.** No registry states which storage is an import sink, an export sink, a tier store or observability — so the UI must hardcode names and cannot ask. The catalog already owns warehouse roots (`_warehouses/*.json`) and is the natural authority. | grep: no role/kind field anywhere in the storage path | **R28** |
+| 4 | **A fabricated identity is rendered when signed out.** `navbar-user.svelte` falls back to `{ name: 'rask', email: 'local', initials: 'RA' }`, and `'RA'` is also the `AvatarFallback` default. A governance UI must never invent a logged-in user — signed-out shows signed-out. | `frontend/packages/ui/src/lib/shell/navbar-user.svelte:30-51` | OPEN |
+| 5 | **Half-governed deploys are possible and silent.** The live stack runs `auth.enabled=true` (backend governed) while the zones carry ZERO oidc/session env — so the home project picker 401s and shows "This stack is governed — sign in to browse projects" with no door to walk through. Dex IS deployed and working (a real `alice@example.com` token was minted against it). Nothing makes backend auth and `frontend.oidc.enabled` move together. | `kubectl get deploy rask-web-home -o jsonpath=…env[*].name` → no oidc/session vars | OPEN |
+| 6 | **Home renders a phantom sidebar** whose only leaf is "Projects → /" — a link to the page you are already on. Home is the catch-all with no areas; the rail costs width and implies navigation that does not exist. | `home/src/lib/nav.ts` — `leaves: [{ title: 'Projects', href: '/' }]` | OPEN |
+| 7 | **Every cross-zone hop pays a 308 redirect.** The topnav links to the bare base (`/annotator`, `/compute`, `/train`, `/studio`, `/media`) but each zone serves the trailing-slash form — measured 308 on all five. Over a tunnel this reads as flicker, on top of the (correct, by-design) hard navigation and PixiJS canvas init. **The gate gap:** zone-contract verifies cross-zone links hard-navigate, but nothing checks the href a nav points at is the one the zone actually serves — a href↔resolved-base test would have caught all five. | `curl` per zone; `nav-config.ts` hrefs | OPEN |
+| 8 | **Object BYTES 500 while listing succeeds.** `/api/media/objects` returns JSON 200 (10 staged pages listed), but `/api/media/object` and `/api/media/object/download` both return ~67 KB of `text/html` with HTTP 500 — an HTML error page, not FastAPI JSON, so something upstream of the viewer errors. Net effect: the storage preview can never render an image. Root cause NOT yet isolated. | `curl -w` on both endpoints after staging 10 real JPEGs | OPEN, unisolated |
+
+**Staged test data now exists** for anyone continuing: 10 real Riksarkivet page JPEGs (332 KB – 1.09 MB)
+at `s3://images-batch/A0060198/`, read back out of the bronze blob column in-cluster and written as
+objects — which also proves `read_blobs` works on live data when mapped by `row_address` rather than
+positional zip (the null-drop landmine in `lance-blob-v2-findings.md`).
