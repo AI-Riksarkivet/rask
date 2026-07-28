@@ -385,6 +385,27 @@ kind-images: k3s-build ## Build the full :dev image set (same builds k3s uses �
 kind-load: ## Side-load the :dev image set into the kind cluster
 	$(KIND) load docker-image $(foreach i,$(KIND_IMAGES),$(i):dev) --name $(KIND_CLUSTER)
 
+# Third-party images the chart pulls (dapr x5, nats, openfga, cnpg, greptimedb, perses, kuberay,
+# kueue, dex, openbao, otel-collector, …). kind's containerd is a SEPARATE image store from the
+# host's docker, so a fresh cluster re-pulls every one of them from the internet — ~20 minutes of
+# pure network before a single app pod starts. The host docker cache, by contrast, persists across
+# clusters: pull once here, side-load, and every later cluster starts in seconds. Derived from the
+# actual render (not a hand-list, which would rot) with our own :dev images filtered out. Tags
+# ending in ':' or ':release' are subchart defaults the render leaves incomplete — skipped, they
+# are pulled by the pods that resolve them.
+kind-preload: bootstrap ## Pull the chart's third-party images into the host cache, then side-load them
+	@imgs=$$(helm template rask ./chart --set singleTenant.enabled=true --set media.enabled=true \
+	    --set observability.enabled=true 2>/dev/null \
+	  | grep -oE 'image: *"?[a-z0-9./:@_-]+' | sed 's/image: *"\?//' \
+	  | grep -vE "^($$(echo '$(K3S_IMAGES)' | tr ' ' '|'))(:|$$)" \
+	  | grep -E ':[a-z0-9][a-z0-9._-]*$$' | sort -u); \
+	  echo "$$imgs" | sed 's/^/  + /'; \
+	  for i in $$imgs; do docker image inspect $$i >/dev/null 2>&1 || docker pull -q $$i || \
+	    echo "  !! pull failed (skipped): $$i"; done; \
+	  for i in $$imgs; do docker image inspect $$i >/dev/null 2>&1 && \
+	    $(KIND) load docker-image $$i --name $(KIND_CLUSTER) >/dev/null 2>&1 || true; done; \
+	  echo "==> third-party images cached on the host and side-loaded into kind-$(KIND_CLUSTER)"
+
 kind-deploy: k3s-deps ## helm upgrade --install release `rask` into the kind cluster
 	helm upgrade --install rask ./chart --kube-context kind-$(KIND_CLUSTER) --timeout 600s
 	$(LOCALBIN)/kubectl --context kind-$(KIND_CLUSTER) rollout status deploy/rask-gateway --timeout=300s
