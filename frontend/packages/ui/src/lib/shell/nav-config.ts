@@ -142,6 +142,11 @@ export type TopNavEntry = {
 	/** Grouped alternative to `items` — rendered as labelled columns. Used by Lakehouse, whose panel
 	 *  spans the catalog, the model registry and the governance surfaces. */
 	groups?: TopNavGroup[];
+	/** Visual weight in the bar. 'primary' is where the work happens — the lakehouse you govern and
+	 *  the compute that fills it — and those lead the bar. Everything else is a real zone but a
+	 *  destination you go to for a specific task, so it reads one step quieter. Six equally-weighted
+	 *  entries give a newcomer no idea where to start; this is the ONLY thing that says so. */
+	tier?: 'primary' | 'secondary';
 };
 
 const DATA_ITEMS: TopNavItem[] = [
@@ -333,6 +338,17 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			// operations. No carve-out: every area is a column of this one trigger.
 			match: under('/lakehouse'),
 			groups: lakehouse,
+			tier: 'primary',
+		},
+		{
+			// COMPUTE is the Ray/job plane — the merged rask zone. The old overview zone folded in
+			// here (R16), so the zone root is the overview and the panel lists the Ray surfaces.
+			title: 'Compute',
+			href: '/compute/',
+			icon: Cpu,
+			match: under('/compute'),
+			items: [...COMPUTE_ITEMS],
+			tier: 'primary',
 		},
 		{
 			// SEARCH is the media read plane — the viewer. Named for what it is FOR, not for the
@@ -353,15 +369,6 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			href: '/annotator/',
 			icon: PenLine,
 			match: under('/annotator'),
-		},
-		{
-			// COMPUTE is the Ray/job plane — the merged rask zone. The old overview zone folded in
-			// here (R16), so the zone root is the overview and the panel lists the Ray surfaces.
-			title: 'Compute',
-			href: '/compute/',
-			icon: Cpu,
-			match: under('/compute'),
-			items: [...COMPUTE_ITEMS],
 		},
 		{
 			// TRAIN is its own zone again (R17): submit, watch, monitor and analyse training, plus the

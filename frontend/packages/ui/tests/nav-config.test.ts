@@ -13,23 +13,31 @@ describe('topNav', () => {
 	it('carries every zone of the estate, in order, for a non-admin (fail-closed)', () => {
 		// No 'Home': the origin root is reached by the project switcher and the sidebar header, not
 		// by a third control in a bar whose job is moving BETWEEN zones.
+		// Lakehouse and Compute LEAD the bar and are tier 'primary': the lakehouse you govern and the
+		// compute that fills it are where the work happens. The rest are real zones but task
+		// destinations, so they follow and read one step quieter — six equally-weighted entries told a
+		// newcomer nothing about where to start.
 		expect(topNav(false).map((e) => e.title)).toEqual([
 			'Lakehouse',
+			'Compute',
 			'Search',
 			'Annotate',
-			'Compute',
 			'Train',
 			'Studio',
 		]);
+		expect(topNav(false).filter((e) => e.tier === 'primary').map((e) => e.title)).toEqual([
+			'Lakehouse',
+			'Compute',
+		]);
 		expect(topNav(false).map((e) => e.href)).toEqual([
 			'/lakehouse/catalog',
+			'/compute/',
 			// Trailing slashes are LOAD-BEARING, not cosmetic: each zone's `paths.base` serves the
 			// trailing form, so a bare '/compute' href cost a 308 redirect round-trip on EVERY
 			// cross-zone hop (measured on all five zones, 2026-07-28) — visible as flicker over a
 			// tunnel. The href must be what the zone actually serves.
 			'/media/',
 			'/annotator/',
-			'/compute/',
 			'/train/',
 			'/studio/',
 		]);
