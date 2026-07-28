@@ -55,7 +55,7 @@ if [ "$OWNED" = "NO" ]; then
   echo "   registry from make tilt-registry). Tilt is not managing this deployment, so"
   echo "   live_update cannot reach it. Someone ran 'helm upgrade' while Tilt was up, or"
   echo "   Tilt is not running. Restart Tilt and let it own the release:"
-  echo "     sudo pkill -f '/tilt up'   # if a Tilt from another user holds :10350"
+  echo "     sudo pkill -x tilt   # if a Tilt from another user holds :10350"
   echo "     make tilt-up"
   exit 1
 fi

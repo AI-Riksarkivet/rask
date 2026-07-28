@@ -455,7 +455,15 @@ tilt-up: ## Dev loop: editable fleet images + uvicorn --reload via Tilt (needs k
 	@# Tilt's own "address already in use" does not say WHO holds the port. When the running
 	@# instance belongs to another user (a `sudo make tilt-up` earlier), Ctrl-C in your own
 	@# shell does nothing and the stale instance keeps owning the release.
-	@if pgrep -f '/tilt up' >/dev/null 2>&1; then 	  echo "!! tilt is already running and holds :10350 —"; 	  ps -o pid,user,etime,args -p $$(pgrep -f '/tilt up' | head -1) 2>/dev/null | tail -1; 	  echo "   stop it first:  sudo pkill -f '/tilt up'   (or Ctrl-C in the terminal that owns it)"; 	  exit 1; 	fi
+	@# `pgrep -x tilt` matches the BINARY's process name. `pgrep -f '/tilt up'` matched any
+	@# command LINE containing that string — including this recipe's own shell, so the guard
+	@# always tripped on itself and made tilt-up impossible to run.
+	@if pgrep -x tilt >/dev/null 2>&1; then \
+	  echo "!! tilt is already running and holds :10350 —"; \
+	  ps -o pid,user,etime -p $$(pgrep -x tilt | head -1) 2>/dev/null | tail -1; \
+	  echo "   stop it first:  sudo pkill -x tilt   (or Ctrl-C in the terminal that owns it)"; \
+	  exit 1; \
+	fi
 	@KUBECONFIG=$(KUBECONFIG) $(LOCALBIN)/tilt up
 
 tilt-verify: ## Prove Tilt's live_update actually reaches a running pod (SERVICE=catalog)
