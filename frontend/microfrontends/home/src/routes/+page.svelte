@@ -62,9 +62,9 @@
 					     user who already signed in round a loop that cannot fix it — the fault is the
 					     identity lookup, not the session. -->
 					<p class="text-muted-foreground">
-						You are signed in, but the catalog could not confirm your identity, so your projects
-						cannot be listed. This is a backend fault, not a sign-in problem — retry, or check
-						that the catalog is reachable.
+						You are signed in, but the catalog could not confirm your identity, so your projects cannot be
+						listed. This is a backend fault, not a sign-in problem — retry, or check that the catalog is
+						reachable.
 					</p>
 					<Button href="/">Retry</Button>
 				{:else if data.authEnabled}

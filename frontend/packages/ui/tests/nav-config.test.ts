@@ -25,10 +25,11 @@ describe('topNav', () => {
 			'Train',
 			'Studio',
 		]);
-		expect(topNav(false).filter((e) => e.tier === 'primary').map((e) => e.title)).toEqual([
-			'Lakehouse',
-			'Compute',
-		]);
+		expect(
+			topNav(false)
+				.filter((e) => e.tier === 'primary')
+				.map((e) => e.title),
+		).toEqual(['Lakehouse', 'Compute']);
 		expect(topNav(false).map((e) => e.href)).toEqual([
 			'/lakehouse/catalog',
 			'/compute/',
