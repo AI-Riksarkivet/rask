@@ -31,6 +31,7 @@
 		listObjects,
 		listStores,
 		looksLikeLanceDataset,
+		tableIdForPrefix,
 		type Bucket,
 		type S3Listing,
 		type Store,
@@ -110,9 +111,11 @@
 	const isLanceDataset = $derived(
 		listing !== null && looksLikeLanceDataset(listing.prefixes, listing.objects),
 	);
-	// The dataset URI the viewer reads: this store's bucket plus the prefix we walked into, minus
-	// the trailing slash Lance does not expect.
-	const datasetUri = $derived(`s3://${bucket}/${prefix.replace(/\/$/, '')}`);
+	// The CATALOG TABLE the viewer reads — `<namespace>$<table>`, derived from the prefix, because
+	// tiers are namespaces and a registered table lives at `<namespace>/<table>/`. Null for a dataset
+	// sitting anywhere else: that is real storage but not a registered table, and the viewer reads
+	// through the catalog rather than round it.
+	const datasetTable = $derived(tableIdForPrefix(prefix));
 
 	const crumbs = $derived.by(() => {
 		const parts = prefix.split('/').filter(Boolean);
@@ -293,11 +296,11 @@
 					onrowclick={openRow}
 				/>
 			</div>
-			{#if isLanceDataset}
+			{#if isLanceDataset && datasetTable}
 				<!-- Walking into a Lance dataset with the plain object browser shows `.lance` fragments
 				     and a `_versions` manifest — the storage layout, not the document. When the current
 				     prefix IS a dataset, the panel reads it as rows with a blob-v2 image column instead. -->
-				<PagePreview dataset={datasetUri} />
+				<PagePreview table={datasetTable} />
 			{:else if selected !== null}
 				<ObjectPreview {bucket} key={selected.id} onclose={() => (selected = null)} />
 			{/if}

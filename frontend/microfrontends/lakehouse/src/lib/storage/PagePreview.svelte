@@ -11,7 +11,7 @@
 	// The bytes never travel through this component. `pageImageUrl` hands the browser a URL and the
 	// <img> streams it, so a 900 KB page costs one image request rather than a base64 round-trip
 	// through JSON.
-	let { dataset }: { dataset: string } = $props();
+	let { table }: { table: string } = $props();
 
 	let pages = $state<Page[]>([]);
 	let selected = $state<number | null>(null);
@@ -21,9 +21,9 @@
 
 	async function load(): Promise<void> {
 		settled = false;
-		const want = dataset;
+		const want = table;
 		const res = await listPages(want);
-		if (dataset !== want) return; // latest-wins: the user moved on while this was in flight
+		if (table !== want) return; // latest-wins: the user moved on while this was in flight
 		settled = true;
 		if (res.ok) {
 			pages = res.data.pages;
@@ -41,7 +41,7 @@
 	}
 
 	$effect(() => {
-		void dataset;
+		void table;
 		void load();
 	});
 
@@ -73,7 +73,7 @@
 						title={page.has_image ? `Page ${page.id}` : `Page ${page.id} — no image payload`}
 					>
 						{#if page.has_image}
-							<img src={pageImageUrl(dataset, page.id)} alt="Page {page.id}" loading="lazy" />
+							<img src={pageImageUrl(table, page.id)} alt="Page {page.id}" loading="lazy" />
 						{:else}
 							<span class="missing"><FileWarning size={14} /></span>
 						{/if}
@@ -86,7 +86,7 @@
 		{#if current}
 			<figure>
 				{#if current.has_image}
-					<img class="full" src={pageImageUrl(dataset, current.id)} alt="Page {current.id}" />
+					<img class="full" src={pageImageUrl(table, current.id)} alt="Page {current.id}" />
 				{:else}
 					<p class="err">This page has no image payload — the harvest produced none.</p>
 				{/if}
