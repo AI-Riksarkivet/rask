@@ -531,3 +531,111 @@ def test_defaults_are_the_zones_own_fallbacks() -> None:
         "label": "",  # v.fallback(v.string(), '')
         "enabled": True,  # v.fallback(v.boolean(), true)
     }
+
+
+# ── dock workbench layouts ───────────────────────────────────────────────────────────────────────────
+#
+# The dock-layout document diverges from the two above in one way that matters, and these tests are that
+# divergence. `workflow.py` documents unknown keys being DROPPED as acceptable ("a zone shipping a new
+# field ahead of the catalog loses the field, not the document"). A dock layout inverts it: `activeGroup`,
+# `floatingGroups`, `popoutGroups` and `edgeGroups` are all OPTIONAL in dockview's `SerializedDockview`,
+# so a catalog that dropped one would hand back a layout with the user's floating panels deleted — data
+# loss wearing the costume of a missing feature.
+
+
+def _dock(workbench: str = "lineage") -> dict[str, object]:
+    """A layout shaped like a real `DockviewApi.toJSON()` — grid tree, panels, and a floating group."""
+    return {
+        "workbenches": {
+            workbench: {
+                "grid": {
+                    "root": {
+                        "type": "branch",
+                        "data": [{"type": "leaf", "data": {"views": ["runs"], "id": "1"}}],
+                    },
+                    "width": 1200,
+                    "height": 800,
+                    "orientation": "HORIZONTAL",
+                },
+                "panels": {"runs": {"id": "runs", "contentComponent": "runs", "title": "Runs"}},
+                "activeGroup": "1",
+                "floatingGroups": [
+                    {
+                        "data": {"views": ["graph"], "id": "2", "activeView": "graph"},
+                        "position": {"top": 40, "left": 60, "width": 520, "height": 360},
+                    }
+                ],
+            }
+        }
+    }
+
+
+def test_a_dock_layout_round_trips_losslessly(app_client: TestClient) -> None:
+    """Every optional key dockview wrote must come back — through the STORE, not just the PUT echo.
+
+    The PUT response is the model we just parsed, so it proves nothing about storage. Reading it back is
+    what catches a field lost between pydantic and the sidecar.
+    """
+    sent = _dock()
+    assert app_client.put("/v1/user-state/dock-layout", json=sent, headers=_as(app_client, "alice")).status_code == 200
+
+    got = app_client.get("/v1/user-state/dock-layout", headers=_as(app_client, "alice")).json()
+    assert got["exists"] is True
+    assert got["value"] == sent, "a dock layout must survive the catalog byte-for-byte"
+
+
+def test_a_key_dockview_adds_later_is_not_silently_dropped(app_client: TestClient) -> None:
+    """Forward compatibility is the whole reason these models are `extra="allow"`.
+
+    A zone on a newer dockview writes a key this catalog has never heard of. Dropping it would quietly
+    downgrade the user's layout on the next save — the failure is invisible until they notice a panel
+    arrangement they never chose.
+    """
+    sent = _dock()
+    workbench = sent["workbenches"]["lineage"]  # type: ignore[index]
+    workbench["edgeGroups"] = {"top": {"views": ["inspector"], "collapsed": False}}  # type: ignore[index]
+    workbench["someFutureDockviewKey"] = {"kept": True}  # type: ignore[index]
+
+    app_client.put("/v1/user-state/dock-layout", json=sent, headers=_as(app_client, "alice"))
+    value = app_client.get("/v1/user-state/dock-layout", headers=_as(app_client, "alice")).json()["value"]
+    assert value["workbenches"]["lineage"]["edgeGroups"] == {"top": {"views": ["inspector"], "collapsed": False}}
+    assert value["workbenches"]["lineage"]["someFutureDockviewKey"] == {"kept": True}
+
+
+def test_one_document_holds_many_workbenches(app_client: TestClient) -> None:
+    """The reason `UserStateDocument` did not have to grow a member per workbench.
+
+    The zone chooses the key, so a new workbench needs no release of service-kit and no new enum member —
+    which is what keeps the key space closed rather than caller-supplied.
+    """
+    both = {"workbenches": {**_dock("lineage")["workbenches"], **_dock("tables")["workbenches"]}}  # type: ignore[dict-item]
+    app_client.put("/v1/user-state/dock-layout", json=both, headers=_as(app_client, "alice"))
+    value = app_client.get("/v1/user-state/dock-layout", headers=_as(app_client, "alice")).json()["value"]
+    assert sorted(value["workbenches"]) == ["lineage", "tables"]
+
+
+def test_a_layout_missing_the_grid_is_422(app_client: TestClient) -> None:
+    """`grid` and `panels` are the two fields `SerializedDockview` declares non-optional.
+
+    A document without them is not a dock layout, and storing it would hand dockview something that
+    throws on `fromJSON` — which the client can only recover from by discarding the user's workspace.
+    """
+    broken = {"workbenches": {"lineage": {"panels": {}}}}
+    resp = app_client.put("/v1/user-state/dock-layout", json=broken, headers=_as(app_client, "alice"))
+    assert resp.status_code == 422
+
+
+def test_an_unexpected_top_level_key_is_422(app_client: TestClient) -> None:
+    """The envelope is OURS, so `extra="forbid"` there — unlike the dockview-owned interiors."""
+    resp = app_client.put(
+        "/v1/user-state/dock-layout",
+        json={"workbenches": {}, "surprise": 1},
+        headers=_as(app_client, "alice"),
+    )
+    assert resp.status_code == 422
+
+
+def test_bob_cannot_read_alices_dock_layout(app_client: TestClient) -> None:
+    app_client.put("/v1/user-state/dock-layout", json=_dock(), headers=_as(app_client, "alice"))
+    got = app_client.get("/v1/user-state/dock-layout", headers=_as(app_client, "bob")).json()
+    assert got["exists"] is False and got["subject"] == "bob"

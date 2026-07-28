@@ -1,0 +1,116 @@
+/* ────────────────────────────────────────────────────────────────────────────────────────────
+ * @rask/dockview — the ONE line a consuming zone adds to its app.css:
+ *
+ *     @import '@rask/dockview/styles.css' layer(base);
+ *
+ * `layer(base)` matters and is not decoration. dockview ships 124 KB of unlayered CSS whose
+ * selectors (`.dv-tab`, `.dv-groupview` …) would otherwise out-specify the Tailwind utilities a
+ * panel's own content is styled with. Putting the vendor sheet in `base` puts every utility above
+ * it, permanently. The lakehouse zone already imports `@xyflow/svelte`'s stylesheet exactly this
+ * way — same problem, same fix, same line shape.
+ *
+ * There is no `@source` to add for this package: it ships no Tailwind utility classes of its own.
+ * Everything below is a `--dv-*` custom property resolved against a rask OKLCH token, which is
+ * also why a light/dark flip needs no JavaScript — mode-watcher toggles `.dark` on <html>, the
+ * tokens re-declare underneath, and the dock re-themes with them. See `theme.ts` on why
+ * `DockviewTheme.colorScheme` is deliberately unset.
+ * ──────────────────────────────────────────────────────────────────────────────────────────── */
+
+@import 'dockview/dist/styles/dockview.css';
+
+.dockview-theme-rask {
+	/* ── surfaces ─────────────────────────────────────────────────────────────────────────── */
+	--dv-group-view-background-color: var(--card);
+	--dv-tabs-and-actions-container-background-color: var(--background);
+	--dv-separator-border: var(--border);
+	--dv-tab-divider-color: var(--border);
+
+	/* ── tabs. Four states: {active,inactive} group × {visible,hidden} panel. The active group's
+	 *    visible tab is the only one that reads as "current"; the rest recede to muted. ────── */
+	--dv-activegroup-visiblepanel-tab-background-color: var(--card);
+	--dv-activegroup-visiblepanel-tab-color: var(--foreground);
+	--dv-activegroup-hiddenpanel-tab-background-color: var(--background);
+	--dv-activegroup-hiddenpanel-tab-color: var(--muted-foreground);
+	--dv-inactivegroup-visiblepanel-tab-background-color: var(--card);
+	--dv-inactivegroup-visiblepanel-tab-color: var(--muted-foreground);
+	--dv-inactivegroup-hiddenpanel-tab-background-color: var(--background);
+	--dv-inactivegroup-hiddenpanel-tab-color: var(--muted-foreground);
+
+	/* ── sashes. Idle sashes are invisible (the `gap` in theme.ts is the only resting cue);
+	 *    the ring token marks the one being dragged, matching every focus affordance. ─────── */
+	--dv-sash-color: transparent;
+	--dv-active-sash-color: var(--ring);
+	--dv-active-sash-transition-duration: 0.1s;
+	--dv-active-sash-transition-delay: 0s;
+
+	/* ── drag & drop ──────────────────────────────────────────────────────────────────────── */
+	--dv-drag-over-background-color: color-mix(in oklch, var(--primary) 16%, transparent);
+	--dv-drag-over-border-color: var(--ring);
+	--dv-drag-over-border: 2px solid var(--ring);
+
+	/* ── floating groups ──────────────────────────────────────────────────────────────────── */
+	--dv-floating-border: 1px solid var(--border);
+	--dv-floating-group-border: 1px solid var(--border);
+	--dv-floating-box-shadow: 0 10px 30px -10px oklch(0 0 0 / 45%);
+	--dv-floating-group-dragging-opacity: 0.85;
+	--dv-floating-titlebar-background-color: var(--muted);
+	--dv-floating-titlebar-border-bottom: 1px solid var(--border);
+
+	/* ── context menu + tab-overflow dropdown ─────────────────────────────────────────────── */
+	--dv-context-menu-background-color: var(--popover);
+	--dv-context-menu-color: var(--popover-foreground);
+	--dv-icon-hover-background-color: var(--accent);
+
+	/* ── scrollbars. The tab strip's own; panel bodies keep the zone's scrollbar rules. ───── */
+	--dv-scrollbar-background-color: var(--border);
+	--dv-tabs-container-scrollbar-color: var(--border);
+
+	/* ── paneview (unused in v1, themed so it cannot render VSCode-blue if adopted) ────────── */
+	--dv-paneview-header-border-color: var(--border);
+	--dv-paneview-active-outline-color: var(--ring);
+
+	/* ── geometry + type. Radii derive from the estate's --radius scale, not fixed pixels. ── */
+	--dv-border-radius: calc(var(--radius) - 2px);
+	--dv-tab-border-radius: calc(var(--radius) - 4px);
+	--dv-sash-border-radius: 2px;
+	--dv-dropdown-border-radius: calc(var(--radius) - 2px);
+	--dv-tab-group-chip-border-radius: calc(var(--radius) - 4px);
+	--dv-tabs-and-actions-container-height: 2.25rem;
+	--dv-tabs-and-actions-container-font-size: 0.8125rem;
+	--dv-tab-font-size: 0.8125rem;
+	--dv-tab-close-icon-size: 0.875rem;
+	--dv-tab-margin: 2px;
+	--dv-spacing-padding: 0.5rem;
+	--dv-transition-duration: 0.12s;
+
+	/* NOT mapped, on purpose:
+	 *   --dv-color-{abyss,gh,mocha,monokai,nord,sol}-*  — the OTHER shipped themes' private
+	 *     palettes. They are read only by their own theme classes and are dead weight here.
+	 *   --dv-tab-group-color-*  — the nine user-pickable tab-group accents. Those are a user's
+	 *     semantic choice per group, not a theme surface; overriding them would silently
+	 *     collapse nine distinguishable colours onto the estate palette.
+	 *   --dv-overlay-z-index  — dockview's default sits above the grid and below a Bits UI
+	 *     portal, which is the ordering the estate wants. Changing it is a zone's call. */
+}
+
+.rask-dock {
+	display: flex;
+	flex: 1 1 0;
+	min-height: 0;
+	width: 100%;
+}
+
+.rask-dock-panel {
+	height: 100%;
+	width: 100%;
+	overflow: auto;
+}
+
+.rask-dock-missing {
+	display: grid;
+	place-items: center;
+	padding: 1.5rem;
+	text-align: center;
+	font-size: 0.8125rem;
+	color: var(--muted-foreground);
+}

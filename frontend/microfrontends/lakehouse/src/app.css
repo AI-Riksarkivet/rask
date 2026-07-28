@@ -4,6 +4,12 @@
 /* Svelte Flow's stylesheet, ONCE for the zone and under `base` so Tailwind utilities still win over
    it (svelte-flow rule 3 — importing it per component lands it in that component's layer instead). */
 @import '@xyflow/svelte/dist/style.css' layer(base);
+/* @rask/dockview: the vendor sheet plus the --dv-* → OKLCH token mapping, in ONE import and under
+   `base` for the same reason as Svelte Flow's above — dockview ships 124 KB of unlayered CSS whose
+   selectors would otherwise out-specify the Tailwind utilities a panel's own content is styled with.
+   The dock itself is dynamically imported by the workbench route; this stylesheet is not, because
+   splitting CSS behind a dynamic import buys ~10 KB gzipped and costs a flash of unstyled dock. */
+@import '@rask/dockview/styles.css' layer(base);
 
 /* Scan the shared @rask/ui component library so its Tailwind classes are generated —
    Tailwind 4 ignores node_modules by default. */

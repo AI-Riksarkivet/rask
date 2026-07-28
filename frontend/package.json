@@ -19,6 +19,7 @@
 		"dev:lakehouse": "turbo run dev --filter=lakehouse...",
 		"dev:media": "turbo run dev --filter=media...",
 		"dev:studio": "turbo run dev --filter=studio...",
+		"dev:train": "turbo run dev --filter=train...",
 		"dev:ui": "turbo run dev --filter=@rask/ui",
 		"dev:zones": "turbo run dev",
 		"fmt": "turbo run fmt",

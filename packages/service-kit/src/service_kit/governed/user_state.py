@@ -57,6 +57,11 @@ class UserStateDocument(StrEnum):
 
     WORKFLOW_GRAPH = "workflow-graph"
     SAVED_VIEWS = "saved-views"
+    #: Every dock workbench layout this subject has arranged, keyed by workbench id inside ONE
+    #: document (see :class:`service_kit.schemas.dock_layout.DockLayouts`). One member rather than one
+    #: per workbench on purpose: the enum is a closed key space precisely so a caller cannot mint keys,
+    #: and a zone adding a workbench must not require a release of this package to store its layout.
+    DOCK_LAYOUT = "dock-layout"
 
 
 class UserStateUnreadable(Exception):

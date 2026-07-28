@@ -1,4 +1,4 @@
-import { Activity, Boxes, Columns3, Cpu, Network } from '@lucide/svelte';
+import { Activity, Boxes, Columns3, Cpu, LayoutDashboard, Network } from '@lucide/svelte';
 import { exact, seg, type ZoneNav } from '@rask/ui/shell';
 
 // The lineage area's sidebar routes inside the lakehouse zone (Marquez-parity IA): the four first-class views —
@@ -37,6 +37,12 @@ export const LINEAGE_ZONE_NAV: ZoneNav = {
 			href: '/lakehouse/lineage',
 			match: exact('/lakehouse/lineage'),
 			icon: Network,
+		},
+		{
+			title: 'Workbench',
+			href: '/lakehouse/lineage/workbench',
+			match: seg('/lakehouse/lineage/workbench'),
+			icon: LayoutDashboard,
 		},
 	],
 };

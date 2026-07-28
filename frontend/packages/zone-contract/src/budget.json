@@ -9,7 +9,7 @@
 		"lakehouse": {
 			"staticGzipKB": 600,
 			"deferredGzipKB": 120,
-			"note": "Four areas (catalog, lineage, models, admin) in one router. Carries @xyflow/svelte for the lineage graph and layerchart for the model experiments. Measured 490 / 46."
+			"note": "Four areas (catalog, lineage, models, admin) in one router. Carries @xyflow/svelte for the lineage graph and layerchart for the model experiments. Measured 523 / 113. Both numbers moved when the lineage WORKBENCH landed (@rask/dockview): the dock's ~290 KB of JS is behind a dynamic import in `routes/lineage/workbench`, so it lands in the deferred half (+67); its stylesheet is imported from app.css and rides the root layout's sheet (+33 static), because deferring 10 KB of gzipped CSS would buy a flash of unstyled dock. Standalone the library gzips to ~162 KB, but measured IN the bundle it costs ~100 — the gate gzips one combined stream, and rolldown drops the splitview/gridview/paneview exports nothing imports. ~4 KB of that is the `dockview` wrapper over `dockview-core`, which is NOT optional: it registers the ContextMenu, KeyboardDocking, AdvancedDnD, TabGroupChips and Accessibility modules, so importing core directly silently ships a dock with no aria-live announcements. Neither ceiling needed raising; deferred now has ~7 KB of headroom, so the NEXT lazy addition to this zone is the one that has to argue for a raise."
 		},
 		"media": {
 			"staticGzipKB": 1050,
