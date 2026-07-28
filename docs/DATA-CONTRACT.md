@@ -34,7 +34,7 @@ D1; unit-proven: pinned-v1 means ≠ LATEST means in `tests/unit/test_train_job.
 | When | Gate | What it enforces | Code |
 |---|---|---|---|
 | **Promotion-time** | Quality gate (`MEDALLION_QUALITY_ENABLED`) | the DATA is good enough to promote: `row_count_positive` + `not_null(key_column)` + `blob_resolves` per blob column (2026-07-12: one real byte read from the first+last rows' payloads — catches a dangling external pointer/bucket wipe AT promotion instead of at first downstream read); a failure still emits the run + its `dataQualityAssertions` facet (auditable) but BLOCKS the next stage trigger — a bad batch cannot cascade | `services/medallion/services/quality.py` |
-| **Access-time** | OpenFGA (fail-closed) | WHO may read/write/promote: concentric owner⊇writer⊇reader rungs + the separate `validator` rung for promotion; movers/trainer check as their OWN service identities before spending compute (deny → DROP) | `services/common/fga.py`, `handle_train_trigger`, mover gates |
+| **Access-time** | OpenFGA (fail-closed) | WHO may read/write/promote: concentric owner⊇writer⊇reader rungs + the separate `validator` rung for promotion; movers/trainer check as their OWN service identities before spending compute (deny → DROP) | `packages/service-kit/src/service_kit/governed/fga.py`, `handle_train_trigger`, mover gates |
 | **Drift-time** | B4 reconcile (cron) | the GRAPH matches STORAGE: back-fills Lance writes whose lineage event was lost; flags `missing_on_storage`; and probes blob-POINTER health (2026-07-12: `dangling_blob_columns` — an external payload deleted after promotion changes no Lance version, so only the 1-byte probe sees it; same shared probe as the quality gate) | `services/lineage/api/v1/endpoints/reconcile.py` |
 
 Plus edge validation where the bus meets code: consumers treat the bus as a wider trust surface
@@ -127,7 +127,7 @@ or an inline topic literal fails CI, not a live stack.
 
 ### 7.1 Envelope: CloudEvents, supplied by Dapr
 
-Every publish goes through the one bounded wrapper `services/common/dapr_publish.py::publish_event`
+Every publish goes through the one bounded wrapper `packages/service-kit/src/service_kit/dapr_publish.py::publish_event`
 with `data_content_type="application/json"`; the Dapr **sidecar** wraps the payload in a CloudEvents
 envelope (id, source, type, traceparent) — application code never builds an envelope. Consumers
 receive the envelope as a dict and read `body["data"]`: `handle_cloud_event` in
@@ -139,8 +139,8 @@ treat `body` as an untrusted `Any` and guard with `isinstance` before touching `
 
 | Topic | Producer → consumer | Schema (the pydantic model) | Where the name lives |
 |---|---|---|---|
-| `lineage.events.v1` | catalog (`catalog/core/lineage_emit.py`), movers/trainer (via the `services/common/outbox.py` stage→publish→drop path), compaction (`compaction/core/lineage_emit.py`) → lineage subscriber | `lineage.models.RunEvent` (OpenLineage) | defaults on `LINEAGE_DAPR_TOPIC` / `LANCE_DAPR_TOPIC` / `COMPACTION_LINEAGE_TOPIC` / `MEDALLION_LINEAGE_TOPIC` in each service's `core/config.py` |
-| `catalog.control.v1` | catalog (`catalog/core/control_emit.py`) → every catalog replica (broadcast, no `queueGroupName`) | `common.control_events.CatalogControlEvent` | `CONTROL_TOPIC` in `services/common/control_events.py` — the ONE shared constant both sides import |
+| `lineage.events.v1` | catalog (`catalog/core/lineage_emit.py`), movers/trainer (via the `packages/service-kit/src/service_kit/lakehouse/outbox.py` stage→publish→drop path), compaction (`compaction/core/lineage_emit.py`) → lineage subscriber | `lineage.models.RunEvent` (OpenLineage) | defaults on `LINEAGE_DAPR_TOPIC` / `LANCE_DAPR_TOPIC` / `COMPACTION_LINEAGE_TOPIC` / `MEDALLION_LINEAGE_TOPIC` in each service's `core/config.py` |
+| `catalog.control.v1` | catalog (`catalog/core/control_emit.py`) → every catalog replica (broadcast, no `queueGroupName`) | `service_kit.control_events.CatalogControlEvent` | `CONTROL_TOPIC` in `packages/service-kit/src/service_kit/control_events.py` — the ONE shared constant both sides import |
 | `medallion.bronze` / `medallion.silver` / `medallion.media` | producer head (bronze arrival) + each mover → the next mover | pointer trigger `{token, dataset, namespace[, project]}` (claim-check §5) | `MEDALLION_BRONZE_TOPIC` / `MEDALLION_MEDIA_TOPIC` defaults in `medallion/core/config.py`; per-mover `subTopic`/`pubTopic` in `chart/values.yaml` `medallion.movers` |
 | `training.jobs` | `POST /train` head (`medallion/services/train.py`) → the trainer consumer | pointer trigger `{token, model, features:[{dataset, version}], config}` | `MEDALLION_TRAIN_TOPIC` default in `medallion/core/config.py` (`medallion.train.topic` in values) |
 | `dlq.*` | the Dapr sidecar on retry exhaustion → each app's parking route | the original delivery, parked | `dlq.lineage.events` (chart `services.yaml`), `dlq.<subTopic>` + `dlq.lance-ray` (chart `medallion.yaml`); the `DLQ` stream binds `dlq.>` in `nats-stream-job.yaml` |

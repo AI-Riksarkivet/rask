@@ -33,11 +33,11 @@ docker build -f .docker/cnpg-age-ext.dockerfile -t <registry>/age-cnpg-ext:1.7.0
 docker push <registry>/age-cnpg-ext:1.7.0-18
 ```
 Pin the AGE branch to the PG major (`--build-arg AGE_REF=release/PG18/1.7.0`); a PG-major bump means rebuilding
-this small image for the new major (the same lockstep the PG-major runbook in `docs/RUNBOOK-restore.md` covers)
+this small image for the new major (the same lockstep the PG-major runbook in `docs/runbooks/RUNBOOK-restore.md` covers)
 — but it's an isolated extension image, not a whole Postgres fork.
 
 ### 2. Apply the Cluster + Database CRs
-`deploy/cnpg-age-cluster.yaml` — a stock-image `Cluster` with `spec.postgresql.extensions[].image.reference`
+`chart/templates/age-cluster.yaml` — a stock-image `Cluster` with `spec.postgresql.extensions[].image.reference`
 pointing at the extension image, `shared_preload_libraries: [age]`, and `Database` CRs that run
 `CREATE EXTENSION age` in the lineage DB (OpenFGA gets its own DB, plain SQL). CNPG auto-appends
 `/extensions/age/share` → `extension_control_path` and `/extensions/age/lib` → `dynamic_library_path`.
@@ -70,7 +70,7 @@ environment snag, not an AGE one.
      CNPG-1.30-deployment-on-this-kind issue that resisted reasonable fixes and is **orthogonal to AGE**.
    CNPG runs normally on standard/managed clusters (it's their own CI substrate). Both extension images are
    built (`age-cnpg-ext:1.7.0-18`, `cnpg-pg16-age:bridge`); with (1)+(2) proven, running
-   `deploy/cnpg-age-cluster.yaml` on any conformant cluster closes the last mile.
+   `chart/templates/age-cluster.yaml` on any conformant cluster closes the last mile.
 
 ## Bridge (older clusters without ImageVolume): a custom full image
 If your prod K8s can't do ImageVolume yet, build AGE into a **custom CNPG Postgres image** and point the

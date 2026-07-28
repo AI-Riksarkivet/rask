@@ -118,7 +118,7 @@ than the lance-ns one — several will have been answered by rask's operators.
 **Where the enumeration lives:** `ASSESSMENT-2026-07-15.md` §3 is the only in-tree gap-by-gap roll-up
 (kept for exactly this reason — historical banner, live enumeration). Verified still open on 2026-07-27:
 gap 1 (Dex demo-IdP prod posture — `values-prod.yaml` does not touch dex), gap 5 (OpenBao auto-unseal via
-a secrets operator — ESO / bank-vaults; `RUNBOOK-oncall.md:63` cites "ASSESSMENT gap #5", and
+a secrets operator — ESO / bank-vaults; `runbooks/RUNBOOK-oncall.md:63` cites "ASSESSMENT gap #5", and
 `OPERATORS.md` §5 row 5 says *verify whether rask already operates one* before adopting), gap 6
 (registry-qualified image repos + `imagePullSecrets` — zero hits in `chart/`). Also unnamed anywhere else:
 audit-log retention rides the observability store's TTL (`observability.retention`, 14d default) — a
@@ -255,7 +255,7 @@ decide and record it when this is picked up.
 Verified item-by-item against the code; none appear in DECISIONS §9. In priority order:
 
 - **#12 · URL-encode user IDs when serializing to OpenFGA** — subjects are raw-interpolated
-  (`f"user:{user}"`, `services/common/fga.py`); the study ruled this *mandatory before prod OIDC* if
+  (`f"user:{user}"`, `packages/service-kit/src/service_kit/governed/fga.py`); the study ruled this *mandatory before prod OIDC* if
   subjects can contain `@`/`+`/`:`. OIDC subjects here are emails. Smallest and sharpest of the set.
 - **#9 · Versioned authz-model migration** (`ACTIVE_MODEL_VERSION` + idempotent `migrate()`) — was ruled
   "mandatory before the 3-axis model"; the 3-axis model shipped without it.
@@ -287,7 +287,25 @@ the very things a third of these docs describe. Fixing those docs first means fi
 everything disjoint from that work and can start immediately; **F2 is not optional and not dropped** — it
 is the same sweep, deferred until the IA goal closes.
 
-### F1 · The collision-free sweep *(ready now)*
+### F1 · ~~The collision-free sweep~~ **CLOSED 2026-07-28, with evidence** *(branch `docs/p8-sweep`)*
+
+Executed as specified, with **two corrections to this spec** found during the work:
+
+1. **The fold half of "Folds and layout" was assessed and REJECTED — the pairs are not duplicates.**
+   `SYSTEM-SKETCH.md` carries the Lakekeeper diff, the gap register and the adoption backlog that
+   **§E3 above depends on by name** ("study wfb25lg74"); `ARCHITECTURE.md` contains none of it, and
+   SYSTEM-SKETCH already opens with a banner delegating current-state questions to `ARCHITECTURE.md`.
+   `DEPLOY.md` is a lance-ns-on-kind walkthrough (governance + observability drive-throughs);
+   `architecture/deployment.md` is rask's k3s/helm/images/CI reference. Same name, different subject.
+   Folding either would have destroyed load-bearing content — the same error the adversarial pass
+   caught in 25 of 35 proposed deletions, applied to a merge instead of a delete. **The layout half
+   shipped:** both runbooks moved to `docs/runbooks/` with all 8 inbound links rewritten.
+2. **The gate as originally written was unsatisfiable.** `grep -rn "services/common\|from common\."
+   docs/` can never return nothing, because `ARCHITECTURE.md`, `lance-ns-merge.md` and this section
+   all *name* the dead path in order to declare it dead. The meaningful gate is the one below.
+3. `API.md` claimed **two** nonexistent Makefile targets, not one — `make openapi` as well as
+   `make openapi-check`. Adding them is out of a docs-only scope, so both claims were dropped and
+   replaced with a warning admonition; the missing drift guard is now tracked as **F3** below.
 
 **Delete (verified zero live references after their nav rows go):**
 `docs/MERGE-HANDOFF-PROMPT.md` — inbound refs are exactly `zensical.toml:93` and
@@ -311,7 +329,7 @@ either add the target or drop the claim.
 
 **`ASSESSMENT-2026-07-15.md` is not a delete.** §1–§2 are discharged and describe the dead pre-merge tree,
 but §3 is the only in-tree gap-by-gap prod-readiness enumeration and **two** things depend on it —
-`OPEN-WORK.md:118` (C4) and `RUNBOOK-oncall.md:63` ("ASSESSMENT gap #5"). Cut or hard-banner §1–§2; keep
+`OPEN-WORK.md:118` (C4) and `runbooks/RUNBOOK-oncall.md:63` ("ASSESSMENT gap #5"). Cut or hard-banner §1–§2; keep
 §3 and both inbound refs intact.
 
 **Folds and layout.** The flat copy created duplicate pairs: `SYSTEM-SKETCH.md` (272L) → `ARCHITECTURE.md`
@@ -319,9 +337,28 @@ but §3 is the only in-tree gap-by-gap prod-readiness enumeration and **two** th
 `docs/*.md` while rask's site uses subdirs — `RUNBOOK-oncall.md` and `RUNBOOK-restore.md` belong in
 `docs/runbooks/` beside the `llm-cluster.md` already there.
 
-**Closes when.** Both gates shown green: every `zensical.toml` nav target resolves (it is green **today**
-— 0 missing — so this is a regression guard, and a delete without its nav row turns it red), and
-`grep -rn "services/common\|from common\." docs/` returns nothing.
+**Closed when — both gates green (they are):**
+
+1. Every `zensical.toml` nav target resolves. This is a **regression guard**, not a repair target — it
+   was green before the sweep too, so a delete that skips its nav row is what turns it red.
+2. No doc cites the dead path *as live*:
+   `grep -rn "services/common/\|from common\." docs/ --exclude=OPEN-WORK.md` returns nothing. The
+   trailing slash is what makes this meaningful — it matches a **file path**, so the three surviving
+   prose mentions (which state the path is gone) correctly do not match.
+
+### F3 · The OpenAPI specs have no drift guard *(new, 2026-07-28 — surfaced by F1)*
+
+**What.** `docs/API.md` claimed the two committed specs were regenerated by `make openapi` and guarded
+in CI by `make openapi-check`. **Neither target exists in the Makefile**, and neither ever has — so
+`catalog-openapi.json` (100 paths) and `lineage-openapi.json` (29 paths) can drift from the FastAPI apps
+with nothing reporting it. They already had: API.md advertised 75 and 24.
+
+**Why open.** F1 was docs-only, so the false claim was removed rather than made true. The counts were
+deleted rather than corrected, because the information-architecture goal's storage registry (R28) adds
+catalog paths and would re-stale any number written today.
+
+**Closes when.** A `make openapi` target regenerates both specs from the live apps, a `make
+openapi-check` fails on drift, CI runs it, and API.md's warning admonition is replaced by the guarantee.
 
 ### F2 · The deferred remainder *(blocked on the information-architecture goal)*
 

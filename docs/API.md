@@ -1,14 +1,22 @@
 # API surface
 
-The canonical, machine-readable contract lives in two generated OpenAPI files, refreshed from the live
-FastAPI apps by `make openapi` and drift-guarded in CI (`make openapi-check`):
+The canonical, machine-readable contract lives in two generated OpenAPI files, committed alongside this
+page:
 
-- [`catalog-openapi.json`](./catalog-openapi.json) — the catalog service (75 paths)
-- [`lineage-openapi.json`](./lineage-openapi.json) — the lineage service (24 paths)
+- [`catalog-openapi.json`](./catalog-openapi.json) — the catalog service
+- [`lineage-openapi.json`](./lineage-openapi.json) — the lineage service
+
+!!! warning "There is no drift guard yet"
+
+    This page previously claimed the specs were refreshed by `make openapi` and guarded in CI by
+    `make openapi-check`. **Neither target exists in the Makefile**, so the committed JSON can drift
+    from the code with nothing reporting it. Until a guard lands (tracked in
+    [`OPEN-WORK.md`](OPEN-WORK.md) §F1), regenerate the specs by hand when you change a route and
+    treat these files as best-effort rather than authoritative.
 
 This page is the human index: which capability each endpoint group serves, and which parts are **net-new to
-this project** (★) versus the upstream Lance-namespace REST contract. Regenerate both specs and this page's
-counts after adding or changing a route — CI fails if the committed JSON drifts from the code.
+this project** (★) versus the upstream Lance-namespace REST contract. Per-service path counts are
+deliberately not stated here — they went stale twice; count the `paths` keys in the JSON instead.
 
 ## Catalog service
 

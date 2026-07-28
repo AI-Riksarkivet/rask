@@ -379,7 +379,7 @@ fga tuple delete --api-url http://localhost:8081 --store-id "$SID" user:alice me
 ```
 
 **Rationale.** The model deliberately routes team access through roles (resource rungs do not accept
-`team#member` directly — `services/common/auth/model.fga`), so identity administration is a *membership*
+`team#member` directly — `packages/service-kit/src/service_kit/governed/auth/model.fga`), so identity administration is a *membership*
 concern, which is exactly what an IdP owns. Writing it twice (manual surface now, sync later) buys a
 reconciliation problem for a capability the CLI already covers.
 
@@ -528,7 +528,7 @@ AGE-on-CNPG path is documented and proven (docs/CNPG-AGE.md; CNPG physical PITR 
 path). Adopting either = flip the value.
 
 **The open backup gaps that follow** (accepted loss windows until externalized; operational detail in
-docs/DURABILITY.md + docs/RUNBOOK-restore.md):
+docs/DURABILITY.md + docs/runbooks/RUNBOOK-restore.md):
 - the pg_dump lands on RustFS, so a total RustFS loss loses both the Lance data *and* the DB dumps
   (fate-sharing) — ship the dumps off-cluster, or externalize to CNPG PITR;
 - the OpenBao file-backend PVC has no backup path (back up the unseal material out-of-band);
