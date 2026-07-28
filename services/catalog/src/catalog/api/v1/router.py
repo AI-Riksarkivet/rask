@@ -20,6 +20,7 @@ from catalog.api.v1.endpoints import (
     namespaces,
     policies,
     projects,
+    stores,
     tables,
     tags,
     transactions,
@@ -55,5 +56,6 @@ for _module in (
     me,
     maintenance,
     user_state,
+    stores,
 ):
     api_router.include_router(_module.router)

@@ -101,10 +101,16 @@ def test_download_missing_object_is_404(client: TestClient) -> None:
 
 
 def test_unlisted_bucket_is_rejected(client: TestClient) -> None:
-    # The Literal allowlist: anything outside the two fixed rask buckets is a 422,
-    # never a listing of an arbitrary bucket.
+    # R28: the allowlist is the catalog's STORAGE REGISTRY, not a Literal union — but the guarantee
+    # is unchanged, and it is the one that matters: a bucket nobody registered is never listed.
+    #
+    # The status moved 422 -> 404 deliberately. An unregistered store is a MISSING RESOURCE, not a
+    # malformed request: the browser populates its picker from the registry, so if it asks for a
+    # store, the registry said that store existed. 404 tells it the registry changed underneath it;
+    # 422 would claim the client sent nonsense it could not have constructed.
     resp = client.get("/api/objects", params={"bucket": "secrets", "prefix": ""})
-    assert resp.status_code == 422
+    assert resp.status_code == 404
+    assert "secrets" in resp.text
 
 
 # --------------------------------------------------------------------------------------------------

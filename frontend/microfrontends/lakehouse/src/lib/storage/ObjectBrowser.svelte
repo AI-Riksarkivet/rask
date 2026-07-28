@@ -25,15 +25,20 @@
 	import { untrack } from 'svelte';
 	import ObjectPreview from './ObjectPreview.svelte';
 	import {
-		BUCKETS,
 		fmtModified,
 		fmtSize,
 		listObjects,
+		listStores,
 		type Bucket,
 		type S3Listing,
+		type Store,
 	} from './storage';
 
-	let bucket = $state<Bucket>('images-batch');
+	// The stores come from the catalog's registry (R28), not a hardcoded const. Empty until the
+	// first read lands, so the picker renders whatever the estate actually registered — including
+	// stores this build has never heard of.
+	let stores = $state<Store[]>([]);
+	let bucket = $state<Bucket>('');
 	let prefix = $state('');
 	let listing = $state<S3Listing | null>(null);
 	let lastStatus = $state(0);
@@ -47,7 +52,18 @@
 	const loading = $derived(listing === null && !settled);
 	const offline = $derived(listing === null && settled);
 
+	/** Pull the registry, then land on the first store. R28: which stores exist is the CATALOG's
+	 *  answer, so an estate that registers a new bucket gets it here without a frontend release. */
+	async function loadStores(): Promise<void> {
+		const res = await listStores();
+		if (!res.ok) return;
+		stores = res.data.stores;
+		if (!bucket && stores.length) bucket = stores[0]!.name;
+	}
+
 	async function load(): Promise<void> {
+		// Nothing to list until the registry says which stores exist.
+		if (!bucket) return;
 		// Latest-wins: a slow response for a level the user already left must not clobber the view.
 		const wantBucket = bucket;
 		const wantPrefix = prefix;
@@ -67,6 +83,10 @@
 	}
 
 	$effect(() => {
+		void loadStores();
+	});
+
+	$effect(() => {
 		// Reset + reload on bucket/prefix change; untracked so load()'s own reads don't retrigger.
 		void bucket;
 		void prefix;
@@ -77,9 +97,9 @@
 	/** Bucket switch via a function binding: a new bucket starts at ITS root, never at a prefix that
 	 *  only existed in the previous one. */
 	function setBucket(next: string): void {
-		const found = BUCKETS.find((b) => b === next);
-		if (!found || found === bucket) return;
-		bucket = found;
+		const found = stores.find((s) => s.name === next);
+		if (!found || found.name === bucket) return;
+		bucket = found.name;
 		prefix = '';
 	}
 
@@ -220,8 +240,8 @@
 	<div class="toolbar">
 		<Select
 			bind:value={() => bucket, setBucket}
-			options={BUCKETS.map((b) => ({ value: b, label: b }))}
-			ariaLabel="Bucket"
+			options={stores.map((s) => ({ value: s.name, label: `${s.name} · ${s.role}` }))}
+			ariaLabel="Store"
 		/>
 		<DataTableTextFilter bind:value={globalFilter} placeholder="Search objects…" />
 		<button class="btn refresh" onclick={load} disabled={loading}>

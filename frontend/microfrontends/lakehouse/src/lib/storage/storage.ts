@@ -10,10 +10,34 @@ import {
 	type ApiResult,
 } from '$lib/http';
 
-/** The two fixed rask buckets (input images + derived ALTO) — mirrors `Bucket` in the viewer's
- *  objects endpoint. */
-export const BUCKETS = ['images-batch', 'images-batch-alto'] as const;
-export type Bucket = (typeof BUCKETS)[number];
+/** Where a store sits in the cascade. Mirrors `StorageRole` in service_kit.schemas.storage; the
+ *  three GOVERNED tiers are exactly bronze/silver/gold (R23) — raw is the external world, never a
+ *  tier, and derived/observability sit alongside the medallion rather than inside it. */
+export type StorageRole = 'raw' | 'bronze' | 'silver' | 'gold' | 'derived' | 'observability';
+
+/** One registered object store (mirrors `Store`). */
+export type Store = {
+	name: string;
+	bucket: string;
+	role: StorageRole;
+	description: string;
+	read_only: boolean;
+};
+
+/** A store NAME. This replaced `BUCKETS`, a hardcoded two-value const that duplicated a Python
+ *  `Literal` union by hand — two copies of one fact in two languages, kept in step by discipline,
+ *  neither saying what either bucket was FOR. The registry is now fetched, so registering a store
+ *  is config rather than a code change in both languages. */
+export type Bucket = string;
+
+/** Every store the catalog knows, with its role. */
+export const listStores = (): Promise<ApiResult<{ stores: Store[] }>> =>
+	requestJSON<{ stores: Store[] }>('catalog/v1/stores');
+
+/** The tier -> store view, grouped by the catalog. Derived there rather than transcribed here, so
+ *  a store's tier cannot drift between the registry and the page that displays it. */
+export const listStoresByTier = (): Promise<ApiResult<Record<string, Store[]>>> =>
+	requestJSON<Record<string, Store[]>>('catalog/v1/stores/tiers');
 
 /** One object under a prefix (mirrors `S3Object`). */
 export type S3Object = { key: string; size: number; last_modified: string | null };

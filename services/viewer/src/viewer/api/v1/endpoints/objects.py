@@ -28,15 +28,36 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from service_kit.exceptions import NotFoundError
+from service_kit.schemas.storage import store_by_name
 from storage import BucketNotFoundError, ObjectNotFoundError, s3_client, s3_errors
 
 
 router = APIRouter(prefix="/api", tags=["objects"])
 
-#: The two fixed rask buckets (input images + derived ALTO); mirrors `BUCKETS` in the
-#: lakehouse zone's storage.ts. Generalizing to the warehouse's own buckets is a
-#: recorded follow-up (docs/OPEN-WORK.md), not silently widened here.
-Bucket = Literal["images-batch", "images-batch-alto"]
+#: R28: the bucket a request may name is validated against the CATALOG'S STORAGE REGISTRY, not a
+#: Literal union. It used to be ``Literal["images-batch", "images-batch-alto"]``, hand-mirrored into
+#: the lakehouse zone's storage.ts — two copies of one fact in two languages, kept in step by
+#: discipline, and neither saying what either bucket was FOR. Registering a store is now config
+#: (``LANCE_STORES``); this endpoint and the UI validate against the SAME list, so they cannot
+#: disagree about which stores exist.
+def _registered_bucket(name: str) -> str:
+    """Resolve a store NAME to its bucket, or 404 naming the store.
+
+    A 404 rather than a 422: an unregistered store is a missing resource, not a malformed request,
+    and the distinction matters to a browser that lists stores from the registry — if it asks for
+    one, the registry said it existed.
+    """
+    store = store_by_name(name)
+    if store is None:
+        raise NotFoundError(f"no registered store named {name!r}")
+    return store.bucket
+
+
+#: The dependency every route uses in place of the deleted union.
+BucketName = Annotated[
+    str,
+    Query(description="A store registered in the catalog's storage registry (GET /v1/stores)."),
+]
 
 
 class S3Object(BaseModel):
@@ -110,7 +131,7 @@ def _bucket_missing(client: object, bucket: str) -> bool:
         return False
     try:
         with s3_errors(bucket=bucket):
-            head_bucket(Bucket=bucket)
+            head_bucket(Bucket=_registered_bucket(bucket))
     except BucketNotFoundError:
         return True
     except Exception:  # noqa: BLE001 — an inconclusive probe is not evidence; fall back to the key answer
@@ -120,7 +141,7 @@ def _bucket_missing(client: object, bucket: str) -> bool:
 
 @router.get("/objects")
 def list_objects(
-    bucket: Annotated[Bucket, Query(description="One of the two fixed rask buckets.")],
+    bucket: BucketName,
     prefix: Annotated[str, Query(description='Key prefix to list under (delimiter "/").')] = "",
 ) -> S3Listing:
     """List one delimiter-scoped level of `bucket`/`prefix` for the storage browser.
@@ -136,7 +157,7 @@ def list_objects(
         # first HTTP call — and therefore NoSuchBucket — happens on iteration, not on
         # `paginate(...)`. Wrapping only the call would translate nothing.
         with s3_errors(bucket=bucket):
-            for page in paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter="/"):
+            for page in paginator.paginate(Bucket=_registered_bucket(bucket), Prefix=prefix, Delimiter="/"):
                 prefixes.extend(cp["Prefix"] for cp in page.get("CommonPrefixes", []))
                 for obj in page.get("Contents", []):
                     # Skip the prefix's own placeholder key (the "folder" marker).
@@ -157,7 +178,7 @@ def list_objects(
 
 @router.get("/object")
 def head_object(
-    bucket: Annotated[Bucket, Query(description="One of the two fixed rask buckets.")],
+    bucket: BucketName,
     key: Annotated[str, Query(description="Full object key to describe.")],
 ) -> S3ObjectHead:
     """Metadata (size/content-type/last-modified/etag) for a single object.
@@ -170,7 +191,7 @@ def head_object(
     client = s3_client()
     try:
         with s3_errors(bucket=bucket, key=key):
-            resp = client.head_object(Bucket=bucket, Key=key)
+            resp = client.head_object(Bucket=_registered_bucket(bucket), Key=key)
     except BucketNotFoundError as exc:
         raise _missing_bucket(exc.bucket) from exc
     except ObjectNotFoundError as exc:
@@ -188,7 +209,7 @@ def head_object(
 
 @router.get("/object/download")
 def download_object(
-    bucket: Annotated[Bucket, Query(description="One of the two fixed rask buckets.")],
+    bucket: BucketName,
     key: Annotated[str, Query(description="Full object key to download.")],
 ) -> Response:
     """The object's bytes with a download disposition (404 if missing).
@@ -204,7 +225,7 @@ def download_object(
     client = s3_client()
     try:
         with s3_errors(bucket=bucket, key=key):
-            resp = client.get_object(Bucket=bucket, Key=key)
+            resp = client.get_object(Bucket=_registered_bucket(bucket), Key=key)
             data = resp["Body"].read()
     except BucketNotFoundError as exc:
         raise _missing_bucket(exc.bucket) from exc
