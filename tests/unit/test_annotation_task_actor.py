@@ -242,3 +242,49 @@ async def test_a_stale_base_revision_is_refused_so_two_tabs_cannot_clobber() -> 
     await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [], "base_revision": 1})
     with pytest.raises(IllegalTransition):
         await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [], "base_revision": 1})
+
+
+# --------------------------------------------------------------------------------------------------
+# Reporting to the project index
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_transition_reports_its_new_state_to_the_project(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The project index is what makes publish decidable, so every transition must reach it."""
+    reported: list[dict[str, Any]] = []
+
+    class _ProjectProxy:
+        async def task_state_changed(self, payload: dict[str, Any]) -> dict[str, Any]:
+            reported.append(payload)
+            return {}
+
+    import dapr.actor
+
+    monkeypatch.setattr(dapr.actor.ActorProxy, "create", classmethod(lambda cls, *a, **k: _ProjectProxy()))
+    actor = await _seeded()
+
+    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.fire({"event": "submit", "actor": "gina"})
+
+    assert [r["state"] for r in reported] == [TaskState.CLAIMED, TaskState.IN_REVIEW]
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_project_does_not_fail_the_annotator_s_transition(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A submit must not fail because the project actor is briefly unreachable. The cost is a stale
+    index — which BLOCKS a publish rather than allowing one, and the workflow re-reads besides."""
+
+    class _Broken:
+        async def task_state_changed(self, payload: dict[str, Any]) -> dict[str, Any]:
+            raise RuntimeError("sidecar unreachable")
+
+    import dapr.actor
+
+    monkeypatch.setattr(dapr.actor.ActorProxy, "create", classmethod(lambda cls, *a, **k: _Broken()))
+    actor = await _seeded()
+
+    out = await actor.fire({"event": "claim", "actor": "gina"})
+
+    assert out["state"] == TaskState.CLAIMED, "an unreachable project rolled back the annotator's claim"
+    assert (await _state(actor))["state"] == TaskState.CLAIMED, "the task's own state was not persisted"

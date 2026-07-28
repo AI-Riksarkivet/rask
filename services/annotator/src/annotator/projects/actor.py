@@ -25,6 +25,7 @@ actor stays testable without OpenFGA, and the op→privilege map has exactly one
 from __future__ import annotations
 
 import json
+import logging
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -33,6 +34,10 @@ from dapr.actor import Actor, ActorInterface, Remindable, actormethod
 
 from annotator.projects.machines import IllegalTransition, submit_target, task_transition
 from annotator.projects.models import Draft, Shape, Task, TaskState, Transition
+from annotator.projects.project_actor import AnnotationProjectActorInterface
+
+
+logger = logging.getLogger(__name__)
 
 
 #: State keys inside the actor's own store partition. Two documents, not one: the Task is small and
@@ -157,7 +162,37 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
             task.review_action = "accepted" if event == "accept" else event  # type: ignore[assignment]
 
         await self._store(task)
+        await self._report_state(task)
         return task.model_dump(mode="json")
+
+    async def _report_state(self, task: Task) -> None:
+        """Tell the project actor where this task landed, so the publish precondition stays decidable.
+
+        AFTER the store, never before. If this call fails the index holds the task's OLD state, and
+        for every edge that moves a task toward terminal that is the safe direction — a stale
+        `in_review` BLOCKS publish. Reporting first would invert that: the index would claim
+        `accepted` for a task whose own actor never persisted it.
+
+        Non-fatal on purpose. An annotator's submit must not fail because the project actor is
+        briefly unreachable; the cost is a delayed publish, and the publish workflow re-reads the
+        tasks it is about to commit, so a stale index cannot let unreviewed work into silver.
+        """
+        try:
+            from dapr.actor import ActorId, ActorProxy  # noqa: PLC0415 - opens a sidecar channel
+
+            proxy = ActorProxy.create(
+                "AnnotationProjectActor",
+                ActorId(task.project_id),
+                AnnotationProjectActorInterface,
+            )
+            await proxy.task_state_changed({"task_id": task.task_id, "state": str(task.state)})
+        except Exception:
+            logger.warning(
+                "task %s could not report %s to project %s — the index is stale until its next transition",
+                task.task_id,
+                task.state,
+                task.project_id,
+            )
 
     # ---------------------------------------------------------------------------------------------
     # Draft — one document per (task, author), not a row per shape (§4.3)
