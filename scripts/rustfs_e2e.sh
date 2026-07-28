@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Storage-agnostic e2e against RustFS: run the SAME catalog lifecycle test (tests/e2e/test_e2e.py)
+# Storage-agnostic e2e against RustFS: run the SAME catalog lifecycle test (tests/e2e-py/test_e2e.py)
 # that the MinIO stack runs, but with the bytes on RustFS — proving the catalog is S3-agnostic.
 # (Auth is OFF here; this exercises the data path. For the governance/auth stack see auth_e2e.sh.)
 #
@@ -30,5 +30,5 @@ until curl -fsS "$SERVER/livez" >/dev/null 2>&1; do sleep 1; done
 sleep 2
 
 echo "== run the storage-agnostic lifecycle e2e against RustFS =="
-LANCE_REST_E2E_URL="$SERVER" uv run --no-sync pytest tests/e2e/test_e2e.py -v
+LANCE_REST_E2E_URL="$SERVER" uv run --no-sync pytest tests/e2e-py/test_e2e.py -v
 echo "== DONE — same catalog lifecycle passed on RustFS =="

@@ -75,9 +75,9 @@ Kind: `page` = has `+page.svelte`; `endpoint` = `+server.ts`; `redirect` = `+pag
 | lakehouse | `/lakehouse/models/pipeline` | page | `MODELS_ZONE_NAV` `models/nav.ts:17`; `MODEL_ITEMS` `nav-config.ts:152` |
 | lakehouse | `/lakehouse/models/experiments` | page | `MODELS_ZONE_NAV` `models/nav.ts:23`; `MODEL_ITEMS` `nav-config.ts:147` |
 | lakehouse | `/lakehouse/admin` | page | **breadcrumb only** (`breadcrumb.ts:43`) — no nav-config leaf, no `href=`, no `goto()`. See F-1 |
-| lakehouse | `/lakehouse/admin/access` | page | `ADMIN_ZONE_NAV` `lakehouse/src/lib/admin/nav.ts:36`; `GOVERNANCE_ITEMS` `nav-config.ts:163` |
+| lakehouse | `/lakehouse/governance/access` | page | `ADMIN_ZONE_NAV` `lakehouse/src/lib/admin/nav.ts:36`; `GOVERNANCE_ITEMS` `nav-config.ts:163` |
 | lakehouse | `/lakehouse/admin/tenants` | page | `ADMIN_ZONE_NAV` `admin/nav.ts:11`; `GOVERNANCE_ITEMS` `nav-config.ts:168` |
-| lakehouse | `/lakehouse/admin/audit` | page | `ADMIN_ZONE_NAV` `admin/nav.ts:17`; `GOVERNANCE_ITEMS` `nav-config.ts:173`; `TenantsPanel.svelte:278,285` |
+| lakehouse | `/lakehouse/governance/audit` | page | `ADMIN_ZONE_NAV` `admin/nav.ts:17`; `GOVERNANCE_ITEMS` `nav-config.ts:173`; `TenantsPanel.svelte:278,285` |
 | lakehouse | `/lakehouse/admin/streams` | page | `ADMIN_ZONE_NAV` `admin/nav.ts:23`; `OPERATIONS_ITEMS` `nav-config.ts:183` |
 | lakehouse | `/lakehouse/admin/dlq` | page | `ADMIN_ZONE_NAV` `admin/nav.ts:27`; `OPERATIONS_ITEMS` `nav-config.ts:187`; `lib/admin/StreamConsumers.svelte:208` |
 | lakehouse | `/lakehouse/admin/events` | page | `ADMIN_ZONE_NAV` `admin/nav.ts:31`; `OPERATIONS_ITEMS` `nav-config.ts:179` |
@@ -444,7 +444,7 @@ Page tab sets (verified from the `.vue` sources):
 | catalog hierarchy | `/lakehouse/catalog/projects`, `…/projects/[project]`, `…/warehouses`, `…/warehouses/[id]`, `…/namespaces`, `…/namespaces/[id]`, `…/tables`, `…/tables/[table]` |
 | lineage | `/lakehouse/lineage` (DAG), `…/datasets`, `…/datasets/[name]`, `…/jobs`, `…/jobs/[...job]`, `…/runs`, `…/columns` |
 | models | `/lakehouse/models`, `…/models/experiments`, `…/models/pipeline` |
-| governance / ops | `/lakehouse/admin/access`, `…/tenants`, `…/audit`, `…/streams`, `…/dlq`, `…/events` |
+| governance / ops | `/lakehouse/governance/access`, `…/tenants`, `…/audit`, `…/streams`, `…/dlq`, `…/events` |
 
 Our table detail tabs: `TABS = ['overview', 'preview', 'access']`
 (`lakehouse/src/lib/data/TableDetail.svelte:67`), with the overview tab stacking sections `Stats` (`:968`),
@@ -496,7 +496,7 @@ Our access workbench tabs: `TABS = ['Graph', 'Tuples', 'Check', 'Model']`
    explorer, a raw Tuples browser, a live Check simulator, and the compiled Model as read-only source
    (`routes/admin/access/+page.svelte:16`). Their `PermissionManager` is a per-object tab; we additionally
    answer "why does this principal have this?" and "what would happen if…".
-4. **A compliance audit trail** — `/lakehouse/admin/audit`, with resource-pivot jump links back into the
+4. **A compliance audit trail** — `/lakehouse/governance/audit`, with resource-pivot jump links back into the
    catalog (`lib/admin/AuditViewer.svelte:170-177`). Not in their route set.
 5. **Event-plane operations** — `admin/events` (live control-event feed), `admin/streams` (JetStream
    consumers + lag), `admin/dlq` (dead-lettered runs with replay). They emit change events to Nats/Kafka

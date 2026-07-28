@@ -145,8 +145,14 @@ def test_handle_stage_writes_real_data_and_emits_the_real_version(tmp_path: Any)
     assert any(p["topic"] == "silver.ready" for p in dapr.published)
 
 
-def test_handle_stage_compute_off_writes_no_data_and_emits_version_one(tmp_path: Any) -> None:
-    # The gate: with compute OFF the mover stays a dummy-emitter — no downstream dataset, version 1.
+def test_handle_stage_compute_off_writes_no_data(tmp_path: Any) -> None:
+    # The gate: with compute OFF the mover writes no downstream dataset and still names the output.
+    #
+    # This test used to assert `datasetVersion == "1"` — it pinned the phantom AS the contract. That
+    # half of it is deleted rather than relaxed: the claim it protected was false, and what a COMPLETE
+    # may assert with no compute is now covered properly by
+    # `test_compute_off_emits_no_phantom_complete`. What remains here is the part that was always
+    # right — the output is still NAMED (the cascade shape survives) and nothing is written to disk.
     bronze, silver = str(tmp_path / "bronze"), str(tmp_path / "silver")
     seed_bronze(bronze, {}, rows=4)
     settings = _mover_settings(bronze, silver)
@@ -156,15 +162,67 @@ def test_handle_stage_compute_off_writes_no_data_and_emits_version_one(tmp_path:
     asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t1"}}))
     lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
     output = lineage["data"]["outputs"][0]
-    assert output["facets"]["version"]["datasetVersion"] == "1"
-    # …and a dummy emit measured nothing, so it must NOT claim an outputStatistics facet.
-    assert "outputStatistics" not in output["facets"]
+    assert output["name"] == "silver$features" and output["namespace"] == "silver"
     # No write happened — opening the downstream path as a dataset must fail (it was never created).
     try:
         lance.dataset(silver)
         raise AssertionError("downstream dataset must not exist when compute is off")
     except ValueError:
         pass
+
+
+def test_compute_off_emits_no_phantom_complete(tmp_path: Any) -> None:
+    """A COMPLETE must never describe a dataset that was never written.
+
+    ``chart/values.yaml`` defaults ``compute.enabled: false``, so this is the DEPLOYED path, not an
+    edge case. With compute off the mover writes nothing, yet it emitted a COMPLETE whose output
+    carried ``version: "1"`` — a measured property of a dataset that does not exist. A consumer of
+    the graph cannot distinguish that from a real v1 write, which is the specific way lineage stops
+    being evidence and becomes decoration.
+
+    The contract asserted here is the one the FAIL path already uses (``events.py``: "A FAIL run
+    produced no data: it keeps a BARE output (name only) and NO version/stats"): a run that produced
+    no data describes no data, and says so in the ``lance`` facet so a consumer can filter provenance-
+    only runs deliberately rather than by inferring it from a missing facet.
+    """
+    bronze, silver = str(tmp_path / "bronze"), str(tmp_path / "silver")
+    seed_bronze(bronze, {}, rows=4)
+    settings = _mover_settings(bronze, silver)
+    settings.compute_enabled = False
+    dapr = _FakeDapr()
+
+    asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t1"}}))
+    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
+    output = lineage["data"]["outputs"][0]
+
+    # The run is still recorded — the producer's emit IS the cascade head, so suppression is not an
+    # option — but it is marked, and the mark is machine-readable rather than a naming convention.
+    assert lineage["data"]["run"]["facets"]["lance"]["synthetic"] is True
+    # …and it claims NOTHING measured about a dataset it never wrote.
+    assert "version" not in output.get("facets", {}), (
+        f"COMPLETE claims a version for a dataset that was never written: {output.get('facets', {}).get('version')}"
+    )
+    assert "outputStatistics" not in output.get("facets", {})
+    assert "dataSource" not in output.get("facets", {})
+
+
+def test_produce_compute_off_emits_no_phantom_complete(tmp_path: Any) -> None:
+    """Same contract at the cascade HEAD, which has the identical `result if else 1` shape.
+
+    Separate from the mover case on purpose: ``produce`` is where suppressing the event would
+    actually break the pipeline (``/bronze-arrival`` subscribes to THIS event to publish
+    ``medallion.bronze``), so it is the site that proves marking was the necessary choice.
+    """
+    settings = MedallionSettings.model_validate({"compute_enabled": False, "bronze_uri": str(tmp_path / "bronze")})
+    dapr = _FakeDapr()
+
+    asyncio.run(produce(cast(DaprClient, dapr), settings, token="t1"))
+    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
+    output = lineage["data"]["outputs"][0]
+
+    assert lineage["data"]["run"]["facets"]["lance"]["synthetic"] is True
+    assert "version" not in output.get("facets", {})
+    assert "outputStatistics" not in output.get("facets", {})
 
 
 def test_produce_seeds_real_bronze_and_emits_its_version(tmp_path: Any) -> None:

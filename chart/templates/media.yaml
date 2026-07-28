@@ -104,6 +104,7 @@ spec:
             {{- if include "lance.otelEnabled" $root }}
             {{- include "lance.otelEnv" (list $root $svc.daprAppId) | nindent 12 }}
             {{- end }}
+            {{- include "lance.lineageEmitEnv" (list $root) | nindent 12 }}
             # In-pod bind: the settings default is 127.0.0.1 (dev); a pod must listen on all interfaces.
             - { name: MEDIA_HOST, value: "0.0.0.0" }
             # The corpus, mounted read-only from the node (see the volume below). db_root anchors the

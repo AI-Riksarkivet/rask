@@ -158,7 +158,7 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 		'/lakehouse/lineage/columns',
 		'/media',
 		'/annotator',
-		'/lakehouse/admin/access',
+		'/lakehouse/governance/access',
 		'/lakehouse/admin/dlq',
 	]) {
 		await expect(panel.locator(`a[href="${href}"]`)).toHaveCount(1);
@@ -227,7 +227,9 @@ test('the breadcrumb truncates MIDDLE segments and always shows the current page
 	baseURL,
 }) => {
 	await page.setViewportSize({ width: 600, height: 900 });
-	await page.goto(projectUrl(baseURL, `/lakehouse/catalog/tables/${encodeURIComponent(TABLES[0])}`));
+	await page.goto(
+		projectUrl(baseURL, `/lakehouse/catalog/tables/${encodeURIComponent(TABLES[0])}`),
+	);
 	const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' });
 	// The current page is the LAST crumb and is never the one that gets dropped (the label is the
 	// humanised segment — `pathCrumbs` percent-decodes and un-dashes it for display).

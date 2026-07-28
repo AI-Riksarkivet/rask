@@ -156,9 +156,9 @@ LANCE_E2E_AUTH_SERVER=http://localhost:2333 \
 LANCE_E2E_LINEAGE_URL=http://localhost:8000 LANCE_E2E_DEX=http://localhost:5556/dex \
 LANCE_E2E_FGA=http://localhost:8081 LANCE_E2E_DAPR_TOKEN="$DAPR_TOKEN" LANCE_E2E_GREPTIME_URL="" \
 PYTHONPATH=services uv run pytest \
-  tests/e2e/test_ray_batch_e2e.py \
-  tests/e2e/test_ray_train_e2e.py \
-  tests/e2e/test_governance_e2e.py \
+  tests/e2e-py/test_ray_batch_e2e.py \
+  tests/e2e-py/test_ray_train_e2e.py \
+  tests/e2e-py/test_governance_e2e.py \
   -v -rs -p no:cacheprovider | tee /tmp/e2e-ray.log
 # No silent skips: the stack IS up, so a skip means a misconfigured env var, not "not applicable".
 if grep -qE "[1-9][0-9]* skipped" /tmp/e2e-ray.log; then

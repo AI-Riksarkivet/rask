@@ -101,12 +101,24 @@ def stack() -> tuple[str, str]:
 
 
 @pytest.fixture(scope="module")
-def fga_store() -> tuple[str, str]:
+def fga_store(stack: tuple[str, str]) -> tuple[str, str]:
     """The lance-catalog OpenFGA store + latest authorization model id (raw HTTP, like the services)."""
-    stores = requests.get(f"{FGA}/stores", timeout=10).json()["stores"]
-    store = next(s["id"] for s in stores if s["name"] == "lance-catalog")
-    models = requests.get(f"{FGA}/stores/{store}/authorization-models", timeout=10).json()
-    return store, models["authorization_models"][0]["id"]
+    _ = stack  # gate on the stack fixture's env + reachability (+ auth-on) skips BEFORE touching OpenFGA
+    try:
+        stores = requests.get(f"{FGA}/stores", timeout=10).json()["stores"]
+    except Exception:
+        # Unreachable/unset FGA must SKIP, not ERROR: an unguarded request raises out of a module-scoped
+        # fixture, which pytest reports as an error for every test that uses it — indistinguishable in CI
+        # from a real failure, on a suite that is supposed to be inert without a live stack.
+        pytest.skip(f"openfga not reachable at {FGA or '<unset>'}")
+    store = next((s["id"] for s in stores if s["name"] == "lance-catalog"), None)
+    if store is None:
+        # A bare next() raises StopIteration here — an unseeded stack is a skip, not a failure.
+        pytest.skip("no 'lance-catalog' OpenFGA store — the stack is not seeded (scripts/seed_medallion_fga.sh)")
+    models = requests.get(f"{FGA}/stores/{store}/authorization-models", timeout=10).json()["authorization_models"]
+    if not models:
+        pytest.skip("the lance-catalog OpenFGA store carries no authorization model")
+    return store, models[0]["id"]
 
 
 def _tuples(fga_store: tuple[str, str], *, writes: list[dict] | None = None, deletes: list[dict] | None = None) -> None:
@@ -451,7 +463,7 @@ def test_media_lane_derives_under_governance(stack: tuple[str, str], alice: dict
     upstream.raise_for_status()
     assert "bronze-media$objects" in {d["name"] for d in upstream.json().get("related", [])}
     # The external s3:// SOURCE objects are recorded in the graph (the auth-off media e2e —
-    # tests/e2e/test_media_e2e.py via `make e2e-media` — asserts their PRESENCE, which is what keeps
+    # tests/e2e-py/test_media_e2e.py via `make e2e-media` — asserts their PRESENCE, which is what keeps
     # this negative non-vacuous) but alice holds no grant on them — the transitive-disclosure filter
     # must DROP them from her governed view rather than leak external-source names through a
     # related-datasets side channel.

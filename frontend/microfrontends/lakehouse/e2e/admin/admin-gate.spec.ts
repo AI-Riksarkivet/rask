@@ -47,7 +47,7 @@ test('a non-estate-admin sees ForbiddenPage on every admin route + no admin nav 
 	await mockMe(page, ME_MEMBER);
 	for (const path of [
 		'/lakehouse/admin/tenants',
-		'/lakehouse/admin/audit',
+		'/lakehouse/governance/audit',
 		'/lakehouse/admin/dlq',
 	]) {
 		await page.goto(path);
@@ -105,9 +105,9 @@ test("an estate admin passes the door and gets Lakehouse's governance columns", 
 	await expect(panel.getByText('Governance', { exact: true })).toBeVisible();
 	await expect(panel.getByText('Operations', { exact: true })).toBeVisible();
 	for (const href of [
-		'/lakehouse/admin/access',
+		'/lakehouse/governance/access',
 		'/lakehouse/admin/tenants',
-		'/lakehouse/admin/audit',
+		'/lakehouse/governance/audit',
 		'/lakehouse/admin/events',
 		'/lakehouse/admin/streams',
 		'/lakehouse/admin/dlq',

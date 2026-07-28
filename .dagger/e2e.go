@@ -35,6 +35,6 @@ func (m *Rask) TestLineage(
 	return m.base(src).
 		WithServiceBinding("age", age).
 		WithEnvVariable("LINEAGE_DATABASE_URL", "postgresql://lineage:lineage@age:5432/lineage").
-		WithExec([]string{"uv", "run", "--no-sync", "pytest", "tests/e2e/test_lineage_e2e.py", "-q"}).
+		WithExec([]string{"uv", "run", "--no-sync", "pytest", "tests/e2e-py/test_lineage_e2e.py", "-q"}).
 		Stdout(ctx)
 }

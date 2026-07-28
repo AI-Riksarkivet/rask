@@ -18,7 +18,7 @@ Run (port-forward the three services first), or `make e2e-obs`:
     LANCE_E2E_CATALOG_URL=http://localhost:2333 \
     LANCE_E2E_LINEAGE_URL=http://localhost:8000 \
     LANCE_E2E_GREPTIME_URL=http://localhost:4000 \
-    uv run pytest tests/e2e/test_observability_e2e.py -v
+    uv run pytest tests/e2e-py/test_observability_e2e.py -v
 """
 
 from __future__ import annotations

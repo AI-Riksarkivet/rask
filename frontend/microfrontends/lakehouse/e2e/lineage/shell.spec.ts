@@ -136,9 +136,9 @@ test('an estate admin gets the Governance + Operations columns inside the Lakeho
 	}
 	// Each governance/operations row links where it claims.
 	for (const [row, href] of [
-		['Access', '/lakehouse/admin/access'],
+		['Access', '/lakehouse/governance/access'],
 		['Tenants', '/lakehouse/admin/tenants'],
-		['Audit', '/lakehouse/admin/audit'],
+		['Audit', '/lakehouse/governance/audit'],
 		['Events', '/lakehouse/admin/events'],
 		['Streams', '/lakehouse/admin/streams'],
 		['DLQ', '/lakehouse/admin/dlq'],

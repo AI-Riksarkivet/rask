@@ -14,7 +14,7 @@ test('signed-out: a page navigation redirects to /auth/login?redirect=<original 
 }) => {
 	// The gate answers 302 → /auth/login, which the home zone owns; in this isolated admin server the
 	// follow-up 404s, so pin the CONTRACT on the un-followed redirect response itself.
-	const res = await page.request.get('/lakehouse/admin/audit', {
+	const res = await page.request.get('/lakehouse/governance/audit', {
 		maxRedirects: 0,
 		headers: { accept: 'text/html' },
 	});
@@ -38,7 +38,7 @@ test('signed-in: the shared nav-user shows the session identity when auth is ena
 	await page.route('**/api/audit**', (route) =>
 		route.fulfill({ status: 200, contentType: 'application/json', body: '{"events":[]}' }),
 	);
-	await page.goto('/lakehouse/admin/audit');
+	await page.goto('/lakehouse/governance/audit');
 	await expect(page.getByRole('heading', { name: 'Audit log' })).toBeVisible();
 	// The navbar profile dropdown renders the minted session's name — proof that the cookie session
 	// flowed session→user→AppShell→TopNavbar→nav-user and selected the signed-in branch.
