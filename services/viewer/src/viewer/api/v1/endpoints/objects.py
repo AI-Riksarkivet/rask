@@ -21,7 +21,7 @@ only a genuine outage — unreachable endpoint, bad credentials — still reache
 500 path, which is what a 500 should mean.
 """
 
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import APIRouter, Query
 from fastapi.responses import Response
@@ -33,6 +33,7 @@ from storage import BucketNotFoundError, ObjectNotFoundError, s3_client, s3_erro
 
 
 router = APIRouter(prefix="/api", tags=["objects"])
+
 
 #: R28: the bucket a request may name is validated against the CATALOG'S STORAGE REGISTRY, not a
 #: Literal union. It used to be ``Literal["images-batch", "images-batch-alto"]``, hand-mirrored into

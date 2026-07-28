@@ -20,6 +20,7 @@ from lance_namespace import (
     GetTableStatsResponse,
     GetTableTagVersionRequest,
     InvalidInputError,
+    LanceNamespace,
     ListNamespacesRequest,
     ListTablesRequest,
     ListTablesResponse,
@@ -68,9 +69,7 @@ router = APIRouter(prefix="/v1/table", tags=["table"])
 _MAX_NAMESPACE_DEPTH = 8
 
 
-def _collect_tables(
-    ns: object, delimiter: str, root_tables: list[str], include_declared: bool
-) -> list[str]:
+def _collect_tables(ns: LanceNamespace, delimiter: str, root_tables: list[str], include_declared: bool) -> list[str]:
     """Every table in the tree, fully qualified — root tables plus each namespace's, depth-first.
 
     Synchronous and run in a threadpool by the caller: the native namespace client is blocking, and
@@ -93,11 +92,14 @@ def _collect_tables(
             path = [*parent, child]
             stack.append(path)
             try:
-                tables = native.call(
-                    ns,
-                    "list_tables",
-                    ListTablesRequest(id=path, include_declared=include_declared),
-                ).tables or []
+                tables = (
+                    native.call(
+                        ns,
+                        "list_tables",
+                        ListTablesRequest(id=path, include_declared=include_declared),
+                    ).tables
+                    or []
+                )
             except Exception:  # noqa: BLE001 — same: one bad namespace, not a blank registry
                 log.warning("could not list tables in %s", path, exc_info=True)
                 continue
@@ -129,9 +131,7 @@ async def list_all_tables(
     #
     # Names come back FULLY QUALIFIED (`bronze$pages`), which is what the UI already assumes — it
     # groups on the delimiter — and what the FGA filter below matches against `table:<name>`.
-    response.tables = await run_in_threadpool(
-        _collect_tables, ns, settings.delimiter, response.tables, include_declared
-    )
+    response.tables = await run_in_threadpool(_collect_tables, ns, settings.delimiter, response.tables, include_declared)
     # When FGA is on and the caller is known, return only the tables they can read.
     # Each table name is the canonical id suffix, matching ``table:<name>`` from list_objects.
     if settings.fga_enabled and token is not None and client is not None:

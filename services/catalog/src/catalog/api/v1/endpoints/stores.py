@@ -14,13 +14,14 @@ endpoint module to share a fact would be a layering violation.
 from __future__ import annotations
 
 from fastapi import APIRouter
+
 from service_kit.schemas.storage import (
     GOVERNED_TIERS,
     Store,
-    StorageRole,
     StoreRegistry,
     registered_stores,
 )
+
 
 router = APIRouter(prefix="/v1", tags=["stores"])
 
