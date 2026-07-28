@@ -1,4 +1,4 @@
-.PHONY: help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap tilt-registry tilt-up tilt-down e2e
+.PHONY: help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap tilt-registry tilt-up tilt-verify tilt-down e2e
 
 help:
 	@echo "Targets:"
@@ -453,6 +453,9 @@ tilt-registry: ## One-time: local image registry + point k3s at it (sudo; restar
 tilt-up: ## Dev loop: editable fleet images + uvicorn --reload via Tilt (needs k3s-up + tilt-registry)
 	@test -x $(LOCALBIN)/tilt || command -v tilt >/dev/null 2>&1 || { echo "!! tilt not installed — https://docs.tilt.dev/install.html"; exit 1; }
 	@KUBECONFIG=$(KUBECONFIG) $(LOCALBIN)/tilt up
+
+tilt-verify: ## Prove Tilt's live_update actually reaches a running pod (SERVICE=catalog)
+	@bash scripts/tilt-verify.sh
 
 tilt-down: ## Stop the Tilt session and revert the dev deploy (keeps the cluster/data)
 	@KUBECONFIG=$(KUBECONFIG) $(LOCALBIN)/tilt down
