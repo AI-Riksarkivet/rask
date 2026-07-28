@@ -17,9 +17,9 @@ import httpx
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from service_kit.exceptions import ServiceUnavailableError
 from service_kit.lancekit.keys import validate_doc_key
 from service_kit.media.deps import DatasetParam, StateDep
-from service_kit.media.exceptions import ServiceUnavailableError
 from service_kit.media.state import AppState, dataset_handle
 
 

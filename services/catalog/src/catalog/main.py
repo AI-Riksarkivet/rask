@@ -15,7 +15,6 @@ import httpx
 from dapr.aio.clients import DaprClient
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse
 from lance_namespace import LanceNamespaceError
 from pydantic import SecretStr
 
@@ -39,6 +38,8 @@ from service_kit.governed.user_state import UserStateStore
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.obs import configure_app_logging
+from service_kit.probes import make_probes_router
+from service_kit.schemas.health import Readiness, ReadinessStatus
 
 
 log = logging.getLogger(__name__)
@@ -199,24 +200,17 @@ app.add_middleware(WriteConcurrencyLimitMiddleware, max_concurrent=_settings.max
 install_problem_handlers(app, log)
 
 
-@app.get("/livez", tags=["health"])
-async def livez() -> dict[str, str]:
-    # async (not sync def) so the probe runs ON the event loop, not the blocking data-plane threadpool —
-    # else liveness queues behind heavy Arrow-IPC work and fails exactly when the pod is busiest. No I/O here.
-    return {"status": "ok"}
-
-
-@app.get("/readyz", tags=["health"])
-async def readyz(request: Request) -> JSONResponse:
-    state = request.app.state
-    if getattr(state, "shutting_down", False):
-        return JSONResponse(status_code=503, content={"status": "shutting_down"})
-    if not getattr(state, "startup_complete", False):
-        return JSONResponse(status_code=503, content={"status": "starting"})
-
-    body: dict[str, object] = {"status": "ready"}
-    ns = getattr(state, "namespace", None)
+async def _namespace_ready(request: Request) -> Readiness:
+    """Report the resolved namespace id alongside ``ready`` — a boot-config fact worth surfacing on
+    the probe. Best-effort: a backend that cannot answer ``namespace_id()`` is not a readiness fault
+    (per-request resolution surfaces that as a domain error), so the pod stays Ready without the fact."""
+    body = Readiness(status=ReadinessStatus.ready)
+    ns = getattr(request.app.state, "namespace", None)
     if ns is not None:
         with suppress(LanceNamespaceError):
-            body["namespace"] = ns.namespace_id()
-    return JSONResponse(status_code=200, content=body)
+            body.components["namespace"] = str(ns.namespace_id())
+    return body
+
+
+# /livez + /readyz — the shared router (service_kit.probes), not a hand-rolled copy.
+app.include_router(make_probes_router(_namespace_ready))

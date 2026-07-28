@@ -16,11 +16,11 @@ from fastapi import FastAPI
 
 from search.api.v1.router import router as api_router
 from search.core.config import get_search_settings
-from service_kit.media.handlers import register_handlers
+from service_kit.exceptions import register_handlers
 from service_kit.media.middleware import register_middleware
-from service_kit.media.probes import router as probes_router
 from service_kit.media.state import AppState, dataset_handle
 from service_kit.obs import configure_app_logging
+from service_kit.probes import router as probes_router
 
 
 logger = logging.getLogger(__name__)

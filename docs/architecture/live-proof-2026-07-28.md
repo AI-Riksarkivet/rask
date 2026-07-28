@@ -11,7 +11,7 @@
 |---|---|
 | Platform | kind cluster `rask` (kindest/node v1.36.1), context `kind-rask`, no sudo |
 | Release | `rask`, helm rev 7 `deployed` |
-| Values | `singleTenant.enabled=true`, `media.enabled=true`, `medallion.compute=true`, `auth.enabled=true`, `medallion.fgaEnabled=true`, `ray.auth.enabled=true`, `ray.gpuCount=0`, `RASK_SERVE_GPU_FRAC=0`, `rustfs.storageClass=standard` |
+| Values | `singleTenant.enabled=true`, `media.enabled=true`, `medallion.compute=true`, `auth.enabled=true`, `medallion.fgaEnabled=true`, `ray.auth.enabled=true`, `ray.gpuCount=0`, `RASK_SERVE_GPU_FRAC=0`, `rustfs.storageClass=standard` — the last four were **manual workarounds for chart defects**, and are the chart's own defaults (or derived) since the defect fixes below; the same install today needs only the first six. |
 | Images | built from this tree, `kind load`ed (zones as `web-<zone>:dev` per R22's image-namespace fix) |
 | Not present | GPU (nvdp + gpu-feature-discovery permanently `ContainerCreating` — no nvidia OCI runtime on kind); ingress controller (reproduced faithfully with per-zone port-forwards behind a `:3024` proxy carrying the Ingress path table) |
 
@@ -100,21 +100,72 @@ Documented degradations only (no-OIDC `capi/v1/me` 401s; empty corpus 404s). Zer
 
 ## Defects the live run surfaced
 
-Each is a real chart/app defect, not a kind quirk — recorded here as the proof's yield:
+Each is a real chart/app defect, not a kind quirk — recorded here as the proof's yield. **All seven are
+now fixed**; the "Fix" line names the change and the guard that keeps it fixed. Every guard fails on the
+pre-fix chart/code (each was checked against the original render).
 
 1. `MEDALLION_IIIF_BASE_URL` has no values knob; the code default is RA-internal, so any external
    deploy needs `kubectl set env`.
+   **Fix:** `medallion.producer.iiifBaseUrl` (+ `iiifQueryParams`) → `MEDALLION_IIIF_BASE_URL` /
+   `MEDALLION_IIIF_QUERY_PARAMS` in `medallion.yaml`; the values comment names the PUBLIC endpoint
+   (`https://lbiiif.riksarkivet.se`) beside the RA-internal default. The one knob also reaches the Ray
+   harvest branch (`ray_submit` already forwards `IIIF_BASE_URL`).
+   *Guard:* `test_invariants.py::test_the_iiif_ingest_head_takes_its_endpoint_from_values`.
 2. `rustfs.storageClass: "local-path"` does not exist on stock kind (`standard`) → Tenant PVCs wedge
    `Pending` with no diagnostic; a StorageClass alias was needed to proceed.
+   **Fix:** `rustfs.storageClass` defaults to `""` → the key is omitted → the **cluster's default**
+   StorageClass provisions. Same defect at a second site nobody had noticed: `rayservice.yaml` hardcoded
+   `storageClassName: local-path` on the HF-cache PVC, taking the Ray head down with it — now
+   `ray.hfCacheStorageClass`, also `""`.
+   *Guard:* `test_no_pvc_hardcodes_a_provisioner_specific_storage_class` — scans EVERY rendered doc, not
+   just `kind: PersistentVolumeClaim`, because the Tenant volumes are a `volumeClaimTemplate` inside a CR.
 3. The htrflow serve actor demands a full GPU, so a GPU-less cluster leaves the RayService
    permanently `Initializing`, never creates the stable head Service, and the compute zone reads
    "Ray offline" despite a healthy head.
+   **Fix:** `ray.gpuCount` is now the chart's ONE GPU signal (default **0**) and everything GPU-shaped
+   derives from it via `rask.gpuEnabled` / `rask.serveGpuFrac`: the Serve fraction (in BOTH the
+   ConfigMap and `serveConfigV2`), the head's `num-gpus` + `nvidia.com/gpu` limit, `runtimeClassName`,
+   the `RuntimeClass` object, and the Kueue `nvidia.com/gpu` quota. No manual override is needed for the
+   CPU path; the incoherent GPU pairings fail the render (`gpu-coherence.yaml`).
+   *Guard:* `test_a_gpuless_estate_renders_a_gpuless_ray_serve` (both directions).
 4. media + annotator poll `/api/health`, for which the gateway has no upstream → a console 404 per
    page load.
+   **Root cause, corrected:** the routing was fine — `/media/api/health` and `/annotator/api/health` both
+   reach the viewer through each zone's BFF catch-all, and the gateway's `/api/media` row maps to the
+   viewer's `/api` too. The 404 came from the **viewer**: `/api/health` resolved the default dataset
+   before answering, so an un-loaded corpus made the plane's liveness probe 404
+   (`dataset 'transcripts_v2' not found under /media-corpus`). That is the wrong layer to fix at the edge
+   — a probe must distinguish "service down" from "no corpus".
+   **Fix:** `/api/health` always 200s; `db` is `DbFacts | None` with `db_error` carrying the reason.
+   Frontend follows: the valibot schema accepts `db: null`, the badge says "No dataset loaded" (warning,
+   not destructive — destructive is reserved for unreachable), and the descriptor store / annotator
+   picker stop dereferencing `db`. Dataset-bound endpoints still 404, correctly.
+   *Guards:* `tests/unit/test_media_health_degrades.py` (4 tests, incl. one proving `/api/columns` on the
+   same app still 404s) + `frontend/packages/media-api/src/health-no-dataset.test.ts`.
 5. `media.enabled=true` requires `/var/media-corpus` to pre-exist on the node (hostPath type
    `Directory`) or the trio wedges `ContainerCreating` — the plan says no hostPath ships.
+   **Fix:** `media.corpus.mode` ∈ `emptyDir` (default — works on an unprepared node) | `pvc` (prod;
+   existing `claimName`, else a chart-created `<release>-media-corpus` with `helm.sh/resource-policy:
+   keep`) | `hostPath` (opt-in, and now `DirectoryOrCreate` so it cannot wedge). A typo'd mode fails the
+   render instead of silently serving an empty corpus. This is why defect 4's fix is a prerequisite: the
+   default corpus is now empty, so the probe MUST degrade.
+   *Guard:* `test_no_workload_mounts_a_hostpath_that_must_pre_exist`.
 6. nvdp + gpu-feature-discovery DaemonSets render unconditionally on GPU-less clusters.
+   **Fix:** `nvdp.enabled` defaults **false**. Helm resolves a subchart `condition:` against a static
+   values path and cannot express `ray.gpuCount > 0`, so the pair is enforced instead: `nvdp.enabled=true`
+   with `ray.gpuCount=0` **fails the render** with the fix in the message. The reverse pair is legitimate
+   (an externally-managed device plugin) and warns in NOTES.
+   *Guard:* `test_the_gpu_device_plugin_cannot_render_without_gpu_workloads`.
 7. `services.lineage.reconcile` defaults OFF while the helm NOTES warns a lost event stays lost.
+   **Decision: default it ON — and `services.lineage.outbox` with it.** Staging and draining are one
+   mechanism (#4); half of it is worse than either half (reconcile alone back-fills only that a version
+   exists — author/inputs/columnLineage are gone; the outbox alone stages events nothing drains). Safe
+   because ingest MERGEs on `run_id` (idempotent), the sweep is single-flighted, the only destructive
+   behaviour (`:Run` pruning) is separately gated by `runRetentionDays: 0`, staleness only WARNs, and the
+   cron binding renders only with Dapr sidecars. The NOTES warning now fires ONLY when an operator broke
+   the chain, and says which half and what is lost.
+   *Guard:* `test_the_lineage_durability_chain_is_on_by_default` — which renders the real NOTES through a
+   throwaway probe chart, because `helm template` omits NOTES.txt and `--dry-run` needs a live cluster.
 
 Install-flow notes: `helm install --wait` deadlocks against the OpenFGA-migrate hook (the documented
 `scripts/e2e_stack.sh` behavior) — revs 1–2 `failed` before rev 4+ succeeded; and the IIIF head is

@@ -339,9 +339,13 @@ frontend claims falsifiable and must be wired into rask's test run or it silentl
   Ingress (**not ours to keep** — Traefik needs its equivalent). Without it every zone reconnects on a timer
   and each reconnect re-primes the event window and writes an audit record. Verify with
   `scripts/verify_live_stream_timeout.mjs`, which takes `HOLD_S` — run it past 255 against rask's ingress.
-- **RE-PIN — the media corpus hostPath.** Already ruled "no hostPath ships"; the work that satisfies it is
-  lance-ns `#103` (corpus as catalog-governed project tables). It is deferred on the lance-ns side and
-  **blocking here**.
+- **RE-PIN — the media corpus hostPath. ✅ SATISFIED 2026-07-28** (live-proof defect 5). No hostPath ships:
+  `media.corpus.mode` defaults to `emptyDir` (a fresh cluster comes up with zero node preparation) with
+  `pvc` for prod — existing `claimName` or a chart-created, `resource-policy: keep` PVC — and `hostPath`
+  demoted to an opt-in mode, rendered `DirectoryOrCreate` so it can no longer wedge the trio in
+  `ContainerCreating`. Pinned by `test_invariants.py::test_no_workload_mounts_a_hostpath_that_must_pre_exist`.
+  lance-ns `#103` (corpus as catalog-governed project tables) remains the eventual shape, but it is no
+  longer blocking: the chart no longer depends on a prepared node.
 
 **Gates**: helm lint; `make charts` render invariants (incl. uniqueness assertion on rendered object names — the collision guard); `prod_render_check` (0 plaintext secrets, HA/deny flags on); promtool alert-rules proof; `test_invariants.py` chart checks (no dead env vars, helm-set keys exist). **Live-proof**: fresh kind install — all pods Ready, all hooks Completed, 13+ NetworkPolicies present, JetStream streams exist (nats CLI), OpenFGA model migrated + bootstrap tuple readable, AGE Cypher round-trip, rask's own fleet (gateway/core-api/ray-api/search-api) still serves under default-deny.
 

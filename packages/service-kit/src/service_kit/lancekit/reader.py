@@ -40,7 +40,7 @@ import lance
 import pyarrow as pa
 from pydantic import BaseModel
 
-from service_kit.media.exceptions import (
+from service_kit.exceptions import (
     ConflictError,
     ForbiddenError,
     NotFoundError,

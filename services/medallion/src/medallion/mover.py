@@ -15,6 +15,7 @@ Run: ``uvicorn medallion.mover:app``.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
@@ -23,15 +24,18 @@ from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 
 from medallion.api.events import register_stage_route
-from medallion.api.health import router as health_router
 from medallion.core.config import apply_dapr_secrets, get_settings
 from service_kit.governed import fga
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.obs import configure_app_logging
+from service_kit.probes import router as health_router
 
 
 configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (obs audit 2026-07-13)
+
+log = logging.getLogger(__name__)
 _settings = get_settings()
 
 
@@ -75,6 +79,10 @@ app = FastAPI(
     docs_url="/docs" if _settings.docs_enabled else None,  # gate /docs (off in prod), like the catalog
     openapi_url="/openapi.json" if _settings.docs_enabled else None,
 )
+# Problem+json handlers — parity with catalog/lineage/compaction: medallion runs the same lance stack,
+# so a LanceNamespaceError (or any unhandled error) must surface as the same RFC 9457 body, not
+# Starlette's plain 500 text. Installed BEFORE the routers so no route can outrun the taxonomy.
+install_problem_handlers(app, log)
 app.include_router(health_router)
 # The DaprApp wrapper serves GET /dapr/subscribe (read by the sidecar at startup) and routes deliveries
 # of `sub_topic` to /medallion-event. Each mover has its own app-id + sub_topic, so no consumer clash.

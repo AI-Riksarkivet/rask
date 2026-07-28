@@ -14,13 +14,13 @@ from typing import Any
 
 from fastapi import APIRouter
 
+from service_kit.exceptions import NotFoundError
 from service_kit.lancekit.alignments import parse_alignments_json
 from service_kit.lancekit.descriptor import Declared
 from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
 from service_kit.lancekit.predicate import eq
 from service_kit.lancekit.registry import table_dataset
 from service_kit.media.deps import DatasetParam, StateDep
-from service_kit.media.exceptions import NotFoundError
 from service_kit.media.state import dataset_handle
 
 

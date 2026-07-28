@@ -104,8 +104,39 @@ orchestrator points at an external cluster via `config.RAY_DASHBOARD_URL`.
 - **In-cluster deps** (gated by values toggles — each gate covers both the operator subchart and its CR):
   - `cnpg.enabled` — CloudNativePG operator + `Cluster` named `rask-postgres`; app connects to `rask-postgres-rw:5432`. Values under `cnpg.*` (instances, storage, imageName, user, database).
   - `rustfs.enabled` — RustFS operator (vendored at `third_party/rustfs-operator/`, refreshed via `scripts/vendor-rustfs-operator.sh`) + `Tenant` named `rask-rustfs`; S3 at `rask-rustfs-io:9000`, console at `rask-rustfs-console:9001`. Standalone mode: 1 pod / 4 PVCs (erasure-coding minimum). Buckets provisioned natively via `spec.buckets` — no init Job. Values under `rustfs.*`.
-  - `ray.enabled` — KubeRay `RayService` (head + worker with GPU limits).
+  - `ray.enabled` — KubeRay `RayService` (head + Serve app). GPU-shaped rendering is derived, see below.
   - `observability.enabled` — two optional subcharts + the first-party OTel Collector (see below).
+
+### GPU: one signal, `ray.gpuCount` (default 0)
+
+The chart ships a **CPU-only** estate so a fresh kind/CI/laptop cluster installs with no overrides, and
+`ray.gpuCount` is the single fact everything GPU-shaped derives from (`rask.gpuEnabled` /
+`rask.serveGpuFrac` in `chart/templates/_helpers.tpl`):
+
+| Derived from `ray.gpuCount` | At 0 (default) |
+|---|---|
+| `RASK_SERVE_GPU_FRAC` — the htrflow Serve actor's reservation, in the fleet ConfigMap **and** `serveConfigV2` | `0` (the CPU path; the raw `config.RASK_SERVE_GPU_FRAC` is never passed through) |
+| head `num-gpus` rayStartParam + `nvidia.com/gpu` limit | `0` / omitted |
+| `runtimeClassName: nvidia` on the head + the `RuntimeClass` object | not rendered |
+| Kueue ClusterQueue `nvidia.com/gpu` nominalQuota | `0` |
+
+A GPU node: `--set ray.gpuCount=<n> --set nvdp.enabled=true` (and a real
+`config.RASK_SERVE_GPU_FRAC`, e.g. `0.49` for two replicas per GPU).
+
+`nvdp.enabled` is the one thing that cannot be derived — Helm resolves a subchart `condition:` against a
+static values path — so the pair is enforced: **`nvdp.enabled=true` with `ray.gpuCount=0` fails the
+render** (`chart/templates/gpu-coherence.yaml`) rather than leaving the device-plugin and
+GPU-Feature-Discovery DaemonSets `ContainerCreating` forever. `ray.gpuCount>0` with `nvdp.enabled=false` is
+allowed (an externally-managed device plugin / the NVIDIA GPU Operator) and warns in NOTES.
+
+### StorageClasses: omit, don't guess
+
+No template names a StorageClass. `rustfs.storageClass`, `ray.hfCacheStorageClass` and
+`media.corpus.storageClass` all default to `""`, which omits `storageClassName` so the **cluster's
+default** class provisions — the only portable answer (`local-path` is k3s's provisioner name and does not
+exist on kind, whose default is `standard`). Note `storageClassName: ""` is *not* the same as omitting it:
+the empty string disables dynamic provisioning, which is why the templates use `with`. Pinned by
+`tests/unit/test_invariants.py::test_no_pvc_hardcodes_a_provisioner_specific_storage_class`.
 
 ### Observability stack (`observability.enabled`)
 

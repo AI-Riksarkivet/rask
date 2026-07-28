@@ -40,6 +40,13 @@ class DescriptorStore {
 				// is a single store.
 				const health = await serviceHealth.ensure();
 				if (health === null) throw new Error(serviceHealth.error ?? 'health unavailable');
+				// `db` is null when the service is up but no corpus dataset resolves (an empty corpus
+				// volume — the chart default). That is a DIFFERENT failure from an unreachable backend and
+				// must read as one: `db_error` is the backend's own reason, so the page says "no dataset"
+				// rather than blaming the network, and nothing throws on a property of null.
+				if (!health.db) {
+					throw new Error(health.db_error ?? 'no dataset is loaded on the media service');
+				}
 				id =
 					health.db.path
 						.replace(/\.lance$/, '')

@@ -24,11 +24,11 @@ import lance
 from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 
+from service_kit.exceptions import NotFoundError, ValidationError
 from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
 from service_kit.lancekit.predicate import eq
 from service_kit.lancekit.registry import DatasetHandle, table_dataset
 from service_kit.media.deps import DatasetParam, StateDep
-from service_kit.media.exceptions import NotFoundError, ValidationError
 from service_kit.media.state import dataset_handle
 from viewer.services.clips import MAX_CLIP_S, build_clip
 

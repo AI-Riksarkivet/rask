@@ -30,6 +30,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
 from service_kit import setup_otel
+from service_kit.schemas.health import Liveness
 
 
 log = logging.getLogger("gateway")
@@ -226,13 +227,17 @@ async def lineage_sidecar_guard(request: Request, call_next: Callable[[Request],
 
 
 @app.get("/healthz")
-async def healthz() -> dict[str, str]:
+async def healthz() -> Liveness:
     """Gateway process liveness/readiness — served by the gateway itself, never
     proxied (it is not under /api), so it stays green even when no domain
     backends are deployed (e.g. a front-door-only install). Probing a proxied
     path like /api/health instead would 502 once its upstream is removed and
-    take the gateway NotReady."""
-    return {"status": "ok"}
+    take the gateway NotReady.
+
+    The body is the estate-wide ``Liveness`` model, so the gateway's probe schema
+    matches compute's/controlplane's ``/api/health`` and the lance plane's ``/livez``
+    (the path differs by design — see above — the shape must not)."""
+    return Liveness()
 
 
 @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])

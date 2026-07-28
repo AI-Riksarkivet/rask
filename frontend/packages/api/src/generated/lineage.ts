@@ -605,12 +605,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Readyz
-         * @description Gate readiness on the AGE pool AND the graph — lineage's sole hard dependency — plus the lifecycle
-         *     flags, so a pod with an unhealthy pool (or mid-boot / draining) is pulled from rotation instead of
-         *     serving 500s.
-         */
+        /** Readyz */
         get: operations["readyz_readyz_get"];
         put?: never;
         post?: never;
@@ -814,6 +809,15 @@ export interface components {
          *     ``facets`` carries the standard OpenLineage dataset facets; we read several:
          *     ``version`` (which Lance version a run produced), ``dataSource`` (where the table
          *     physically lives — the S3-compatible location), and ``tags`` (governance labels).
+         *
+         *     The spec splits dataset metadata across THREE slots, by the facet's base type: plain
+         *     ``DatasetFacet``s ride ``facets``, ``InputDatasetFacet``s ride ``inputFacets`` on an input, and
+         *     ``OutputDatasetFacet``s ride ``outputFacets`` on an output. Two facets we consume are not plain
+         *     ``DatasetFacet``s — ``OutputStatisticsOutputDatasetFacet`` is an output facet and
+         *     ``DataQualityAssertionsDatasetFacet`` is an input facet — so the official ``openlineage-python``
+         *     client (and therefore Spark/Airflow/dbt/Marquez producers, and our own ``lineage.seed``) serialises
+         *     them into the typed slots, NOT into ``facets``. Reading only ``facets`` silently dropped them from
+         *     every such producer; :meth:`facet` looks in all three.
          */
         Dataset: {
             /** Facets */
@@ -1178,6 +1182,16 @@ export interface components {
             /** Root */
             root: string;
         };
+        /** Liveness */
+        Liveness: {
+            /** @default ok */
+            status: components["schemas"]["LivenessStatus"];
+        };
+        /**
+         * LivenessStatus
+         * @enum {string}
+         */
+        LivenessStatus: "ok";
         /**
          * Namespaces
          * @description The namespaces containing at least one dataset the caller may see.
@@ -1281,6 +1295,19 @@ export interface components {
             /** Readers */
             readers?: components["schemas"]["ReaderInfo"][];
         };
+        /** Readiness */
+        Readiness: {
+            /** Components */
+            components?: {
+                [key: string]: string;
+            };
+            status: components["schemas"]["ReadinessStatus"];
+        };
+        /**
+         * ReadinessStatus
+         * @enum {string}
+         */
+        ReadinessStatus: "starting" | "ready" | "shutting_down" | "degraded";
         /**
          * ReconcileState
          * @description Result of reconciling the lineage graph's recorded version against the on-disk Lance version.
@@ -2325,9 +2352,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["Liveness"];
                 };
             };
         };
@@ -2379,7 +2404,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Readiness"];
                 };
             };
         };

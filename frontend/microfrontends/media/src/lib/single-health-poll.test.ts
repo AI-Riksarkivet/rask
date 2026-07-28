@@ -58,7 +58,7 @@ describe('the zone fetches health once', () => {
 		]);
 
 		expect(calls()).toBe(1);
-		expect(a?.db.path).toBe('/data/transcripts_v2.lance');
+		expect(a?.db?.path).toBe('/data/transcripts_v2.lance');
 		expect(b).toBe(a); // the same object, not three parses of three responses
 		expect(c).toBe(a);
 		vi.unstubAllGlobals();
@@ -88,7 +88,7 @@ describe('the zone fetches health once', () => {
 		// otherwise a page loaded during a restart stays permanently degraded.
 		const { fetch: f, calls } = countingFetch();
 		vi.stubGlobal('fetch', f);
-		expect((await serviceHealth.ensure())?.db.chunks).toBe(12);
+		expect((await serviceHealth.ensure())?.db?.chunks).toBe(12);
 		expect(calls()).toBe(1);
 		vi.unstubAllGlobals();
 	});

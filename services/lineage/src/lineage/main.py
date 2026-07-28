@@ -14,7 +14,6 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from lineage.api.dapr import register_dapr
@@ -30,6 +29,8 @@ from service_kit.governed.oidc import OIDCVerifier
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.obs import configure_app_logging
+from service_kit.probes import make_probes_router
+from service_kit.schemas.health import Readiness, ReadinessStatus
 
 
 log = logging.getLogger(__name__)
@@ -136,35 +137,29 @@ app.include_router(api_router)
 install_problem_handlers(app, log)
 
 
-@app.get("/livez", tags=["health"])
-async def livez() -> dict[str, str]:
-    return {"status": "ok"}
+async def _graph_ready(request: Request) -> Readiness:
+    """Gate readiness on the AGE pool AND the graph — lineage's sole hard dependency — so a pod with an
+    unhealthy pool is pulled from rotation instead of serving 500s.
 
-
-@app.get("/readyz", tags=["health"])
-async def readyz(request: Request) -> JSONResponse:
-    """Gate readiness on the AGE pool AND the graph — lineage's sole hard dependency — plus the lifecycle
-    flags, so a pod with an unhealthy pool (or mid-boot / draining) is pulled from rotation instead of
-    serving 500s."""
-    state = request.app.state
-    if getattr(state, "shutting_down", False):
-        return JSONResponse(status_code=503, content={"status": "shutting_down"})
-    if not getattr(state, "startup_complete", False):
-        return JSONResponse(status_code=503, content={"status": "starting"})
+    Graph health, not just POOL health: `ensure_graph_constraints` is best-effort non-fatal, so a pod whose
+    AGE graph is absent/broken (an external-PG that was never bootstrapped, a failed create_graph, a bad
+    restore) would otherwise report Ready, get rotated in, and then silently DISCARD every delivered event —
+    provenance loss as a green rollout. A trivial Cypher proves the graph is actually queryable; if it
+    isn't, fail the pod loudly. (prod-readiness P1)
+    """
     try:
         async with asyncio.timeout(2):
-            async with state.pool.connection() as conn:
+            async with request.app.state.pool.connection() as conn:
                 await conn.execute("SELECT 1")
-                # Graph health, not just POOL health: `ensure_graph_constraints` is best-effort non-fatal, so
-                # a pod whose AGE graph is absent/broken (an external-PG that was never bootstrapped, a failed
-                # create_graph, a bad restore) would otherwise report Ready, get rotated in, and then silently
-                # DISCARD every delivered event — provenance loss as a green rollout. A trivial Cypher proves
-                # the graph is actually queryable; if it isn't, fail the pod loudly. (prod-readiness P1)
                 await run_cypher(conn, get_settings().graph, "RETURN 1")
     except Exception:
         log.warning("readyz_db_unavailable")
-        return JSONResponse(status_code=503, content={"status": "degraded", "database": "unavailable"})
-    return JSONResponse(status_code=200, content={"status": "ready"})
+        return Readiness(status=ReadinessStatus.degraded, components={"database": "unavailable"})
+    return Readiness(status=ReadinessStatus.ready, components={"database": "healthy"})
+
+
+# /livez + /readyz — the shared router (service_kit.probes), not a hand-rolled copy.
+app.include_router(make_probes_router(_graph_ready))
 
 
 # Demo data peek (reads the real Lance datasets on S3) — mounted only when explicitly enabled.

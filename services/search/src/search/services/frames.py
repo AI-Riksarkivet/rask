@@ -22,8 +22,8 @@ from search.services.constants import (
     VECTOR_REFINE_FACTOR,
 )
 from search.services.postprocess import RowKey, row_key
+from service_kit.exceptions import ValidationError
 from service_kit.lancekit.predicate import eq
-from service_kit.media.exceptions import ValidationError
 
 
 #: Cap on OR-of-ANDs composite-key clauses in the frame→row join — Lance's

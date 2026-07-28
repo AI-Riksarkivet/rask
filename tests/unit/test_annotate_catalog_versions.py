@@ -24,11 +24,10 @@ from annotator.annotations.router import router as annotations_router
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from service_kit.exceptions import NotFoundError, register_handlers
 from service_kit.lancekit.descriptor import Declared
 from service_kit.lancekit.reader import CatalogVersion
 from service_kit.media.config import Settings
-from service_kit.media.exceptions import NotFoundError
-from service_kit.media.handlers import register_handlers
 from service_kit.media.state import AppState
 
 

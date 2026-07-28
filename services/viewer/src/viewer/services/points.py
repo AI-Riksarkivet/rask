@@ -21,8 +21,8 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 
+from service_kit.exceptions import ValidationError
 from service_kit.lancekit.descriptor import AtlasSpace, Declared
-from service_kit.media.exceptions import ValidationError
 
 
 def _dictionary(column: pa.ChunkedArray) -> pa.Array:

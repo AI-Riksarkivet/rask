@@ -19,7 +19,7 @@ frame table rank there and join back by the identity key fields.
 
 It takes the two vLLM client getters as plain callables, so this module never
 imports the FastAPI app or app state — only domain exceptions from
-:mod:`service_kit.media.exceptions` for error mapping. The HTTP router wires it to
+:mod:`service_kit.exceptions` for error mapping. The HTTP router wires it to
 the request via dependency injection.
 """
 
@@ -43,7 +43,7 @@ from search.services.rerank import rerank_by_text
 from search.services.spec import SearchMode, SearchSpec
 from search.services.target import SearchTarget, resolve_target
 from search.services.vector import vector_search
-from service_kit.media.exceptions import ServiceUnavailableError, ValidationError
+from service_kit.exceptions import ServiceUnavailableError, ValidationError
 
 
 if TYPE_CHECKING:

@@ -276,7 +276,7 @@ def test_check_keys_arity_rejects_mismatched_client_keys() -> None:
     # keys pair POSITIONALLY with the descriptor's non-doc identity fields; a short
     # list would stamp NULL identity columns (rows no chunk filter ever matches) and
     # a long one silently drops keys — both must 400 at the boundary, before any write.
-    from service_kit.media.exceptions import ValidationError
+    from service_kit.exceptions import ValidationError
 
     ok = [TagWrite(doc_id="d1", keys=[0, 19], labels=["x"])]
     check_keys_arity(_MEDIA_DECLARED, ok)  # correct arity passes
@@ -384,7 +384,7 @@ def test_version_history_counts_this_units_rows_per_version(tmp_path: Path) -> N
 def test_checkout_translates_bad_version_to_notfound(tmp_path: Path) -> None:
     from annotator.annotations.versions import checkout
 
-    from service_kit.media.exceptions import NotFoundError
+    from service_kit.exceptions import NotFoundError
 
     uri = str(tmp_path / "annotations.lance")
     lance.write_dataset(pa.Table.from_pylist([{"id": "a1"}], schema=_full_schema()), uri)

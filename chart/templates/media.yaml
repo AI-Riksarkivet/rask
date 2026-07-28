@@ -1,5 +1,18 @@
 {{- if .Values.media.enabled }}
 {{- $root := . }}
+{{- /* `| default dict` + a `default` per key, NOT a bare `.Values.media.corpus.mode` — the same
+     `--reuse-values` hazard this file already documents for `encoders`, and it is not theoretical:
+     `media.corpus` is a NEW key, and a stored release whose user values carry `media: {enabled: true}`
+     makes helm 3.20 leave `media.corpus` NIL, aborting the ENTIRE render with "nil pointer evaluating
+     interface {}.mode" (reproduced against the live rask release, 2026-07-28). Every read of the block
+     goes through these variables so no site can regress independently. */}}
+{{- $corpus := .Values.media.corpus | default dict }}
+{{- $corpusMode := $corpus.mode | default "emptyDir" }}
+{{- /* A typo'd mode would otherwise fall through to the emptyDir branch and quietly serve an EMPTY
+     corpus — the same class of silent-wrong as the hostPath wedge this replaced, only harder to see. */}}
+{{- if not (has $corpusMode (list "emptyDir" "pvc" "hostPath")) }}
+{{- fail (printf "rask chart: media.corpus.mode=%q is not one of emptyDir|pvc|hostPath" $corpusMode) }}
+{{- end }}
 {{- if .Values.media.catalogToken }}
 # The media services' catalog identity (auth-on catalogs): a bearer the annotator presents on every
 # catalog read/write — FGA decides what that identity may do (the merge's writer-rung rehearsal).
@@ -14,13 +27,38 @@ stringData:
   token: {{ .Values.media.catalogToken | quote }}
 ---
 {{- end }}
+{{- if and (eq $corpusMode "pvc") (not $corpus.claimName) }}
+# The corpus PVC the chart owns (media.corpus.mode=pvc with no pre-existing claimName). All three
+# services mount it READ-ONLY, so accessModes must admit three concurrent readers: ReadWriteMany is the
+# default and the only safe answer on a multi-node cluster. On single-node dev the default RWO-only
+# provisioners (k3s local-path, kind's `standard`) will still bind an RWX claim because every pod lands
+# on the one node — but that is luck, not a contract, which is why `emptyDir` and not this is the dev
+# default. storageClassName is deliberately omitted when empty: the CLUSTER default provisions it
+# (naming a class that doesn't exist is defect 2, and `storageClassName: ""` disables provisioning).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "lance.fullname" . }}-media-corpus
+  labels: {{- include "lance.labels" . | nindent 4 }}
+  annotations:
+    # The corpus is loaded once and read forever — never discard it on `helm uninstall`.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [{{ $corpus.accessMode | default "ReadWriteMany" | quote }}]
+  {{- with $corpus.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources: { requests: { storage: {{ $corpus.size | default "50Gi" | quote }} } }
+---
+{{- end }}
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 # lance-media plane (merged from the lance-audio checkout per docs/LANCE_NS_HANDOFF.md): the viewer,
 # search, and annotator services. All three share the catalog image (services/ tree is COPY'd whole),
-# read the CORPUS from a node-local hostPath (NO data move — the corpus never migrates; on this kind
-# cluster it is staged at /var/media-corpus on the node, the kind adaptation of the runbook's
-# hostPath/extraMount), and run CATALOG-mode reads/writes: only the annotations table lives in the
-# catalog (MEDIA_READ/WRITE_BACKEND=catalog, MEDIA_CATALOG_URI → the in-release catalog Service).
+# mount the CORPUS read-only from the volume media.corpus.mode selects (emptyDir by default — a fresh
+# cluster must come up with no node preparation; `pvc` for prod; `hostPath` opt-in for a node-staged
+# corpus, see the volume block below), and run CATALOG-mode reads/writes: only the annotations table
+# lives in the catalog (MEDIA_READ/WRITE_BACKEND=catalog, MEDIA_CATALOG_URI → the in-release catalog
+# Service).
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 {{- range $name, $svc := .Values.media.services }}
 apiVersion: apps/v1
@@ -130,9 +168,22 @@ spec:
             - { name: corpus, mountPath: {{ $root.Values.media.corpusMountPath | quote }}, readOnly: true }
       volumes:
         {{- include "lance.tmpVolume" $root | nindent 8 }}
-        # NO data move: the corpus stays node-local (staged from the lance-audio box), never in RustFS.
+        {{- /* The corpus volume, by media.corpus.mode. NO hostPath ships by DEFAULT (live-proof
+             2026-07-28, defect 5): `hostPath` with `type: Directory` requires /var/media-corpus to
+             already exist on the node, and when it doesn't all three pods wedge ContainerCreating with
+             a kubelet event as the only clue — on a fresh cluster that is the FIRST thing media.enabled
+             does. `emptyDir` starts every pod cleanly anywhere (the corpus datasets are then loaded into
+             the pod, or read from the catalog); `pvc` is the prod posture; `hostPath` stays available for
+             the node-staged corpus but is now opt-in AND DirectoryOrCreate, so it cannot wedge. */}}
         - name: corpus
-          hostPath: { path: {{ $root.Values.media.corpusHostPath | quote }}, type: Directory }
+        {{- if eq $corpusMode "pvc" }}
+          persistentVolumeClaim:
+            claimName: {{ $corpus.claimName | default (printf "%s-media-corpus" (include "lance.fullname" $root)) | quote }}
+        {{- else if eq $corpusMode "hostPath" }}
+          hostPath: { path: {{ $corpus.hostPath | default "/var/media-corpus" | quote }}, type: DirectoryOrCreate }
+        {{- else }}
+          emptyDir: {}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

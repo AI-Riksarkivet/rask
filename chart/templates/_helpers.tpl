@@ -115,6 +115,35 @@ app.kubernetes.io/component: {{ $component }}
      the ONE store's root credential is rustfs.accessKey/secretKey everywhere — the Tenant credsSecret,
      the fleet's AWS_*, infra-credentials, and the hooks all read that single pair. */}}
 
+{{/* ── The ONE GPU signal: ray.gpuCount ────────────────────────────────────────────────────────────
+     `ray.gpuCount` is the single fact every GPU-shaped decision in this chart derives from. It exists
+     because a live kind run (docs/architecture/live-proof-2026-07-28.md, defects 3 + 6) needed FOUR
+     manual overrides to make a GPU-less estate coherent — ray.gpuCount=0, config.RASK_SERVE_GPU_FRAC=0,
+     ray.runtimeClassName="" and nvdp off — and getting any one of them wrong wedged the deploy with no
+     diagnostic (the RayService stayed `Initializing`, so no stable head Service ever appeared and the
+     compute zone read "Ray offline" beside a perfectly healthy head).
+
+     Derived from it: the head's `num-gpus` rayStartParam + `nvidia.com/gpu` limit, the nvidia
+     RuntimeClass (runtimeclass.yaml), the htrflow Serve actor's GPU fraction (rask.serveGpuFrac, fed to
+     BOTH the fleet ConfigMap and the RayService serveConfigV2), and the Kueue ClusterQueue's
+     nvidia.com/gpu nominalQuota. The ONE thing it cannot gate is the nvidia-device-plugin SUBCHART:
+     Helm resolves `condition:` against a static values path and cannot compute `gpuCount > 0`, so that
+     stays `nvdp.enabled` — kept honest by the fail-closed coherence guard in gpu-coherence.yaml. */}}
+
+{{/* "true" when this estate has GPUs at all; "" (falsey) otherwise. */}}
+{{- define "rask.gpuEnabled" -}}
+{{- if gt (int .Values.ray.gpuCount) 0 }}true{{- end -}}
+{{- end -}}
+
+{{/* The htrflow Serve actor's GPU fraction, DERIVED — never the raw config value. `config.RASK_SERVE_GPU_FRAC`
+     states the intent for a GPU node; on a GPU-less estate it MUST collapse to 0 or Ray Serve waits forever
+     for a resource the cluster will never advertise, and the whole RayService (hence the stable head
+     Service, hence the compute zone) never comes up. Both render sites include this, so the ConfigMap and
+     the serveConfigV2 runtime_env cannot disagree. */}}
+{{- define "rask.serveGpuFrac" -}}
+{{- if include "rask.gpuEnabled" . }}{{ .Values.config.RASK_SERVE_GPU_FRAC }}{{ else }}0{{ end }}
+{{- end -}}
+
 {{/* Dapr sidecar pod annotations (no-op unless dapr.sidecars) — the ONE annotation surface for the whole
      estate: the rask fleet + controlplane AND the lance planes (services.yaml catalog/lineage,
      medallion.yaml producer/movers, compaction.yaml, media.yaml viewer/search/annotator) all render

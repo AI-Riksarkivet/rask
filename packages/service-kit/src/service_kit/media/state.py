@@ -69,11 +69,11 @@ def dataset_handle(state: AppState, dataset_id: str | None = None):
     """Resolve a dataset by id through the registry (``None`` → the default).
 
     The one resolution path both router groups share; raises
-    ``service_kit.media.exceptions.NotFoundError`` for unknown ids so the RFC 9457
+    ``service_kit.exceptions.NotFoundError`` for unknown ids so the RFC 9457
     handler renders a clean 404.
     """
+    from service_kit.exceptions import NotFoundError
     from service_kit.lancekit.registry import DatasetRegistry, UnknownDatasetError
-    from service_kit.media.exceptions import NotFoundError
 
     if state.registry is None:
         state.registry = DatasetRegistry(

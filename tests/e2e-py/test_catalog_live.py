@@ -29,9 +29,9 @@ import pytest
 from annotator.annotations.commit import check_base_version_value
 from annotator.annotations.schema import EMPTY_SCHEMA
 
+from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
 from service_kit.lancekit.reader import CatalogTableReader, RestCatalogTransport
 from service_kit.lancekit.writer import CatalogTableWriter, RestCatalogWriteTransport
-from service_kit.media.exceptions import ConflictError, ForbiddenError, NotFoundError
 
 
 CATALOG_URL = os.environ.get("MEDIA_CATALOG_URL", "")

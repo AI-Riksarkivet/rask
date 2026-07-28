@@ -116,8 +116,11 @@
 				id: d.id,
 				docs: d.tables?.['documents']?.row_count ?? null,
 			}));
+			// `db` is null when the viewer is up with no corpus dataset resolved (the chart's default
+			// emptyDir corpus volume) — optional-chained, not asserted: there is simply no default id to
+			// derive, and `listDatasets()` above still drives the picker.
 			defaultId =
-				health?.db.path
+				health?.db?.path
 					.replace(/\.lance$/, '')
 					.split('/')
 					.pop() ?? null;

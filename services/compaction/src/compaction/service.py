@@ -11,23 +11,27 @@ Thin entrypoint: lifespan + ``FastAPI()`` + health, with the cron route + OPTION
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
 from dapr.aio.clients import DaprClient
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse
 
 from compaction.api.routes import router
 from compaction.core.config import apply_dapr_secrets, get_settings
 from compaction.core.lineage_emit import make_emitter
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.obs import configure_app_logging
+from service_kit.probes import router as probes_router
 
 
 configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (obs audit 2026-07-13)
+
+log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -83,21 +87,12 @@ app = FastAPI(
 )
 
 
-@app.get("/livez", tags=["health"])
-async def livez() -> dict[str, str]:
-    return {"status": "ok"}
+# Problem+json handlers (parity with catalog/lineage — compaction runs the same lance stack, so an
+# unhandled LanceNamespaceError must surface as the same RFC 9457 body, not Starlette's plain 500 text).
+install_problem_handlers(app, log)
 
-
-@app.get("/readyz", tags=["health"])
-async def readyz(request: Request) -> JSONResponse:
-    """Gate on the lifespan flags (parity with catalog/lineage) so k8s pulls the pod during boot + drain."""
-    state = request.app.state
-    if getattr(state, "shutting_down", False):
-        return JSONResponse(status_code=503, content={"status": "shutting_down"})
-    if not getattr(state, "startup_complete", False):
-        return JSONResponse(status_code=503, content={"status": "starting"})
-    return JSONResponse(status_code=200, content={"status": "ready"})
-
+# /livez + /readyz — the shared router, not a hand-rolled copy (service_kit.probes).
+app.include_router(probes_router)
 
 # The Dapr cron route (POST /<binding-name>) + its OPTIONS discovery ack, with the require_dapr_token gate.
 app.include_router(router)

@@ -12,11 +12,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from annotator.annotations.schema import ANNOTATIONS_TABLE, SaveResult
+from service_kit.exceptions import ConflictError
 from service_kit.lancekit.lineage_emit import emit_save
 from service_kit.lancekit.predicate import isin
 from service_kit.lancekit.reader import open_reader
 from service_kit.lancekit.registry import table_dataset
-from service_kit.media.exceptions import ConflictError
 
 
 if TYPE_CHECKING:

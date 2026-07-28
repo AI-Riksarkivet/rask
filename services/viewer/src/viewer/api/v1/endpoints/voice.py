@@ -20,8 +20,8 @@ from typing import TYPE_CHECKING, Annotated
 from fastapi import APIRouter, File, UploadFile
 from starlette.concurrency import run_in_threadpool
 
+from service_kit.exceptions import ServiceUnavailableError, ValidationError
 from service_kit.media.deps import StateDep
-from service_kit.media.exceptions import ServiceUnavailableError, ValidationError
 from service_kit.media.state import AppState, dataset_handle
 from service_kit.schemas.voice import VoiceIdentityResponse, VoiceSimilarResponse, VoiceStatusResponse
 from viewer.services import voice_service

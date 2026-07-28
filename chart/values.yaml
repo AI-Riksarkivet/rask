@@ -123,19 +123,43 @@ services:
     # LINEAGE_READ_AUDIT_ENABLED only when auth.enabled (that is where a real subject exists to record) —
     # the read-side mirror of auth.audit; set false to keep the panel dark even with auth on.
     readAudit: true
-    # Periodic storage->graph reconciliation (B4) — a Dapr cron binding POSTs to /<bindingName> on `schedule`
-    # to back-fill Lance writes whose lineage event was lost (the outbox gap). Off by default (the demo ships
-    # without it); the /datasets/{name}/reconcile read endpoint is available regardless.
+    # Periodic storage->graph reconciliation (B4) — a Dapr cron binding POSTs to /<bindingName> on
+    # `schedule` to back-fill Lance writes whose lineage event was lost, and to DRAIN the #4 outbox.
+    #
+    # DEFAULT ON (was off, which the helm NOTES then had to warn about on every single install — "a
+    # lineage event lost between the Lance commit and the publish stays lost"; live-proof 2026-07-28,
+    # defect 7. A default that every install is told to change is a wrong default, and the thing it
+    # protects is the provenance graph's completeness, i.e. the whole point of the lineage plane.)
+    #
+    # Why default-ON is safe, not just desirable:
+    #   * IDEMPOTENT — ingest MERGEs on run_id, so re-ingesting an event the graph already has is a
+    #     no-op; the sweep cannot duplicate provenance.
+    #   * SINGLE-FLIGHTED — the sweep holds a lock, so overlapping ticks (or multiple lineage replicas
+    #     in the competing-consumer group) cannot run it concurrently.
+    #   * NON-DESTRUCTIVE by default — the only deleting behaviour is :Run pruning, gated separately by
+    #     runRetentionDays (0 = off, below), and staleness only WARNs (freshnessBudgetHours, 0 = off).
+    #   * RENDER-GATED — the cron binding renders only with dapr.enabled + dapr.sidecars, so a
+    #     sidecar-less install silently gets nothing new rather than a dangling component.
+    #   * BOUNDED — one sweep per `schedule` (300s here; prod wants a cron expression), reading Lance
+    #     versions the graph already tracks.
+    # Set false only for a deliberately inert demo; the /datasets/{name}/reconcile READ endpoint is
+    # available either way.
     reconcile:
-      enabled: false
+      enabled: true
       bindingName: lineage-reconcile-cron
       schedule: "@every 300s" # demo cadence (prod: e.g. "0 */15 * * * *")
     # #4 transactional outbox: producers stage each lineage event to s3://<rustfs.bucket>/_lineage_outbox
     # BEFORE the fire-and-forget publish; the reconcile sweep DRAINS any survivor (a crash between the Lance
     # commit and the publish), re-ingesting the FULL event (inputs/author/columnLineage) — closing the loss
     # window the DLQ + version-only back-fill cannot. Requires reconcile.enabled (the drain runs in the sweep).
+    #
+    # DEFAULT ON, with reconcile above: staging and draining are ONE mechanism, and half of it is worse
+    # than either half alone — reconcile without the outbox can only back-fill that a version EXISTS
+    # (author, inputs and column lineage are gone), and the outbox without reconcile stages events that
+    # nothing ever drains. Cost is one S3 PUT + DELETE per lineage event against the already-provisioned
+    # `rustfs.bucket`; the whole thing is a no-op when the URI env isn't rendered.
     outbox:
-      enabled: false
+      enabled: true
     # Run-node retention (§4): the reconcile cron prunes graph :Run nodes older than this many days
     # (batched DETACH DELETE under the sweep's single-flight lock). 0 = off — keep full provenance
     # (the dev/demo default). Only meaningful with reconcile.enabled (the cron is the pruner).
@@ -557,6 +581,19 @@ medallion:
     # bronze page dataset replaced the prefetch lane + the IIIFCachedSource cache; HTR then runs as
     # cascade compute (the P7b layout/lines + transcribe movers).
     iiifBronzeDataset: bronze$pages
+    # The IIIF Image API the page lane harvests from (MEDALLION_IIIF_BASE_URL). This value used to live
+    # ONLY as a code default in services/medallion/core/config.py with no chart knob at all, so any
+    # deploy outside the Riksarkivet network could not ingest a page without `kubectl set env` on a
+    # running Deployment (live-proof 2026-07-28, defect 1 — a fix that dies with the pod).
+    #   * https://iiifintern-ai.ra.se     — RA-INTERNAL (the default below); resolves only on RA's network.
+    #   * https://lbiiif.riksarkivet.se   — the PUBLIC Riksarkivet IIIF endpoint; same `arkis!<image-id>`
+    #                                       path shape, reachable from anywhere. Use this for any deploy
+    #                                       (or CI/demo cluster) that is not inside RA.
+    iiifBaseUrl: "https://iiifintern-ai.ra.se"
+    # The IIIF Image API derivative requested per page, appended to `{base}/arkis!{image-id}/`.
+    # `full/max/0/default.jpg` is the full-resolution default; a server that caps derivative size wants
+    # e.g. `full/2000,/0/default.jpg`.
+    iiifQueryParams: "full/max/0/default.jpg"
   # The 3 stage movers run medallion.mover:app, differing only by env. order = the DAG. (R23: there is
   # no raw→bronze mover — its stage stamp/provenance logic merged into the producer's bronze ingest.)
   # requiredAction/serviceIdentity gate each hop when fgaEnabled: silver→gold needs `can_promote`
@@ -610,10 +647,29 @@ compaction:
 # catalog; MEDIA_READ/WRITE_BACKEND=catalog is the merge's env flip, "direct" restores standalone dev).
 media:
   enabled: false
-  # Where the corpus is staged ON THE NODE (k3s: into the node at /var/media-corpus — the adaptation of
-  # the runbook's hostPath/extraMount; prod uses a real PV) and where the pods mount it (read-only).
-  corpusHostPath: /var/media-corpus
+  # Where the pods mount the corpus (read-only, all three services).
   corpusMountPath: /media-corpus
+  # HOW the corpus volume is provided. This used to be an unconditional `hostPath` with
+  # `type: Directory` pointed at /var/media-corpus — which means media.enabled=true on a cluster where
+  # nobody had pre-created that directory wedged all three pods in ContainerCreating, with a kubelet
+  # event as the only diagnostic (live-proof 2026-07-28, defect 5; the plan already said no hostPath
+  # ships). Modes:
+  #   * emptyDir (DEFAULT) — the trio starts on ANY cluster with zero node preparation. The corpus
+  #     datasets are then loaded into the pod, or read through the catalog (MEDIA_READ_BACKEND=catalog).
+  #     With no dataset present the viewer's /api/health degrades honestly (db: null) instead of 404ing
+  #     — see services/viewer/api/v1/endpoints/system.py.
+  #   * pvc — the PROD posture. Set `claimName` to mount an EXISTING claim (the chart touches nothing);
+  #     leave it empty and the chart creates `<release>-media-corpus` from the fields below
+  #     (helm.sh/resource-policy: keep — the corpus outlives the release).
+  #   * hostPath — a node-staged corpus (the lance-audio runbook's posture). Now OPT-IN, and rendered
+  #     with `type: DirectoryOrCreate` so a missing directory can no longer wedge the pods.
+  corpus:
+    mode: emptyDir            # emptyDir | pvc | hostPath
+    claimName: ""             # mode=pvc: an existing PVC; empty => the chart creates one
+    size: 50Gi                # chart-created PVC only
+    accessMode: ReadWriteMany # chart-created PVC only — three services read it concurrently
+    storageClass: ""          # chart-created PVC only; "" => the cluster's DEFAULT StorageClass
+    hostPath: /var/media-corpus # mode=hostPath only
   readBackend: catalog
   writeBackend: catalog
   # Default: the in-release catalog Service (rendered in media.yaml); set to override.
@@ -737,7 +793,14 @@ rustfs:
   # Per Tenant volume: 4 volumes × 15Gi => ~60Gi total (local-path is unmetered on dev k3s);
   # values-prod raises it to 200Gi/volume for the real lakehouse + 14d of observability.
   storage: "15Gi"
-  storageClass: "local-path"          # Tenant PVCs
+  # Tenant PVCs. EMPTY = the CLUSTER'S DEFAULT StorageClass — the only portable default, and the reason
+  # this is no longer `"local-path"`: that is the name k3s's provisioner happens to use, it does NOT
+  # exist on stock kind (whose default class is `standard`) or on any managed cluster, and a
+  # non-existent class makes the four Tenant PVCs sit Pending FOREVER with no event on the pod and no
+  # chart-level complaint (live-proof 2026-07-28, defect 2 — the run had to alias a StorageClass into
+  # the cluster to proceed). Set an explicit class only to pin a specific one (prod: a CSI class that
+  # supports VolumeSnapshot + encryption, see values-prod.yaml).
+  storageClass: ""                    # Tenant PVCs; "" => the cluster's default StorageClass
   accessKey: rustfsadmin
   secretKey: rustfsadmin
   # The Lance lakehouse ROOT bucket (catalog LANCE_REST_ROOT + the warehouse registry). Referenced by
@@ -796,9 +859,28 @@ ray:
   servePort: 8000
   clientPort: 10001
   redisPort: 6379
-  gpuCount: 1
-  runtimeClassName: "nvidia"
+  # ── THE ONE GPU SIGNAL ──────────────────────────────────────────────────────────────────────────
+  # GPUs the Ray head advertises. Everything GPU-shaped in this chart DERIVES from this number
+  # (rask.gpuEnabled / rask.serveGpuFrac in templates/_helpers.tpl):
+  #   * the head's `num-gpus` rayStartParam and its `nvidia.com/gpu` limit (omitted entirely at 0),
+  #   * `runtimeClassName: nvidia` on the head + the RuntimeClass object itself (runtimeclass.yaml),
+  #   * RASK_SERVE_GPU_FRAC — the htrflow Serve actor's reservation — in BOTH the fleet ConfigMap and
+  #     the RayService serveConfigV2; at 0 it collapses to 0, which is what makes the CPU path work,
+  #   * the Kueue ClusterQueue's nvidia.com/gpu nominalQuota.
+  # DEFAULT 0, i.e. a CPU-only estate that installs cleanly on kind/CI/a laptop. It used to default to
+  # 1 while the Serve fraction defaulted to 1.0, so a GPU-less cluster left the RayService permanently
+  # `Initializing` — no stable head Service, and the compute zone reporting "Ray offline" next to a
+  # Running head (live-proof 2026-07-28, defect 3; it took THREE manual --set overrides to unstick).
+  # A GPU node sets `--set ray.gpuCount=<n> --set nvdp.enabled=true` (see nvdp below — the device
+  # plugin is the one thing Helm cannot gate on this number, so the pair is guarded at render time by
+  # templates/gpu-coherence.yaml).
+  gpuCount: 0
+  runtimeClassName: "nvidia" # only rendered when gpuCount > 0
   hfCacheStorage: "10Gi"
+  # The HF weight-cache PVC's class. "" => the cluster's DEFAULT StorageClass (this was hardcoded
+  # `local-path`, the same non-portable name as rustfs.storageClass — it wedged the PVC, and with it
+  # the Ray head, on any cluster whose provisioner is named anything else).
+  hfCacheStorageClass: ""
   shmSize: "8Gi"
   resources:
     requests: {cpu: "2", memory: "8Gi"}
@@ -843,7 +925,18 @@ ingress:
 # under the same key as the toggle.
 # nvidia-device-plugin subchart (aliased 'nvdp' in Chart.yaml)
 nvdp:
-  enabled: true
+  # The GPU device plugin (and the NFD+GFD DaemonSets bundled inside its tgz). DEFAULT OFF, and it must
+  # be flipped ON TOGETHER WITH ray.gpuCount > 0 — those two are one decision.
+  #
+  # Why this isn't derived from ray.gpuCount like everything else GPU-shaped: Helm resolves a subchart
+  # `condition:` (Chart.yaml) against a STATIC values path and cannot express `gpuCount > 0`. So the
+  # pair is enforced instead — templates/gpu-coherence.yaml FAILS the render on
+  # `nvdp.enabled=true` + `ray.gpuCount=0`, which is the combination that left two DaemonSets
+  # ContainerCreating forever on a GPU-less kind cluster (live-proof 2026-07-28, defect 6).
+  # The reverse (gpuCount > 0, this false) is legitimate and only warns in NOTES: that is a cluster
+  # whose GPUs are advertised by an externally-managed plugin (the NVIDIA GPU Operator, or a cloud
+  # provider's).
+  enabled: false
   # k3s registers the nvidia container runtime but doesn't make it the default,
   # so the plugin pod must run under the nvidia RuntimeClass to see the GPU.
   runtimeClassName: nvidia

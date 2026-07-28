@@ -23,13 +23,13 @@ from annotator.annotations.schema import (
     TagWrite,
     identity_values,
 )
+from service_kit.exceptions import ValidationError
 from service_kit.lancekit.descriptor import Declared
 from service_kit.lancekit.keys import validate_doc_key
 from service_kit.lancekit.reader import open_reader
 from service_kit.lancekit.registry import table_dataset
 from service_kit.lancekit.writer import open_writer
 from service_kit.media.deps import AuthorDep, DatasetParam, StateDep
-from service_kit.media.exceptions import ValidationError
 from service_kit.media.state import dataset_handle
 
 

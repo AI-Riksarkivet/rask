@@ -20,8 +20,8 @@ import httpx
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from service_kit.exceptions import ServiceUnavailableError
 from service_kit.media.deps import StateDep
-from service_kit.media.exceptions import ServiceUnavailableError
 from service_kit.media.state import AppState
 
 

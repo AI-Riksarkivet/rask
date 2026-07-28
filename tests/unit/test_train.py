@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any, cast
 
 import httpx
@@ -21,6 +22,8 @@ from medallion.api.dependencies import get_dapr, get_settings
 from medallion.api.train import router
 from medallion.core.config import MedallionSettings
 from medallion.services import ray_submit, train
+
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 def _settings(**overrides: Any) -> MedallionSettings:
@@ -123,6 +126,9 @@ def test_head_surfaces_resolution_and_publish_failures(monkeypatch: pytest.Monke
 def test_train_route_enforces_the_app_token(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_API_TOKEN", "s3cret")
     app = FastAPI()
+    # Same problem+json handlers the producer installs: the guard raises the lance_namespace domain
+    # errors (PermissionDeniedError), which a bare FastAPI() would surface as 500 rather than 403.
+    install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(router)
     app.dependency_overrides[get_dapr] = lambda: None
     app.dependency_overrides[get_settings] = lambda: _settings()

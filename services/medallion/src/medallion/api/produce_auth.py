@@ -21,8 +21,8 @@ import os
 import secrets
 from typing import Annotated
 
-from fastapi import Header, HTTPException, Query, Request
-from lance_namespace import ServiceUnavailableError, UnauthenticatedError
+from fastapi import Header, Query, Request
+from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 
 from medallion.api.dependencies import FgaClientDep, SettingsDep
@@ -48,10 +48,10 @@ async def _require_admin(fga_client: OpenFgaClient, *, user: str, obj: str) -> N
         allowed = await fga.check(fga_client, user=user, relation="can_administer", obj=obj)
     except ServiceUnavailableError:  # authz layer down during a trigger attempt — audit, then fail closed
         audit("can_administer", FAILURE, subject=user, resource=obj, reason="authz_unavailable")
-        raise HTTPException(status_code=503, detail="authorization service is not available") from None
+        raise ServiceUnavailableError("authorization service is not available") from None
     audit("can_administer", ALLOW if allowed else DENY, subject=user, resource=obj)
     if not allowed:
-        raise HTTPException(status_code=403, detail="produce needs project admin (can_administer) or the service token")
+        raise PermissionDeniedError("produce needs project admin (can_administer) or the service token")
 
 
 async def authorize_produce(
@@ -82,10 +82,7 @@ async def authorize_produce(
     if dapr_api_token and secrets.compare_digest(dapr_api_token.encode(), expected.encode()):
         if project and project != settings.produce_admin_project:
             audit("produce_service_token", DENY, subject="service", resource=obj, reason="cross_project")
-            raise HTTPException(
-                status_code=403,
-                detail="the service token cannot produce into another project; use a project-admin bearer",
-            )
+            raise PermissionDeniedError("the service token cannot produce into another project; use a project-admin bearer")
         audit("produce_service_token", ALLOW, subject="service", resource=obj)
         return
     # Human path: a signed-in project admin. Only when OIDC is configured + a verifier is wired.
@@ -94,20 +91,20 @@ async def authorize_produce(
         # OIDC enabled but no verifier wired (startup/discovery skew): an infrastructure fault, not a
         # caller authz verdict — 503, mirroring catalog/lineage security ("enabled but unavailable"),
         # so a valid admin bearer is not misreported as denied and 503-keyed monitoring sees the outage.
-        raise HTTPException(status_code=503, detail="authentication is enabled but unavailable")
+        raise ServiceUnavailableError("authentication is enabled but unavailable")
     if settings.oidc_enabled and verifier is not None and authorization:
         scheme, _, raw = authorization.partition(" ")
         if scheme.lower() != "bearer" or not raw:
-            raise HTTPException(status_code=401, detail="malformed bearer")
+            raise UnauthenticatedError("malformed bearer")
         try:
             token = verifier.verify(raw)
         except UnauthenticatedError:
-            raise HTTPException(status_code=401, detail="invalid token") from None
+            raise UnauthenticatedError("invalid token") from None
         if fga_client is None:  # OIDC on but FGA unwired → fail closed, never an unauthorized trigger
-            raise HTTPException(status_code=503, detail="authorization service is not available")
+            raise ServiceUnavailableError("authorization service is not available")
         await _require_admin(fga_client, user=token.sub, obj=obj)
         return
-    raise HTTPException(status_code=403, detail="invalid or missing produce credential")
+    raise PermissionDeniedError("invalid or missing produce credential")
 
 
 async def authorize_train(

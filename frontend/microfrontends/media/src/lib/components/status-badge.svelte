@@ -18,12 +18,15 @@
 	const lastError = $derived(serviceHealth.error);
 	const refresh = () => serviceHealth.refresh();
 
-	/** Overall dot: success when both are up, warning when one is down, destructive
-	 *  when both are down or the backend is unreachable — the estate status tokens. */
+	/** Overall dot: success when both encoders are up AND a dataset resolved, warning when something is
+	 *  degraded but the service answered, destructive only when the service itself did not answer — the
+	 *  estate status tokens. `destructive` is reserved for "unreachable" on purpose: an up service with
+	 *  no corpus loaded reported as red is what made this dot permanently ignorable. */
 	const tone = $derived.by(() => {
 		if (!health) return 'bg-destructive';
 		const up = (health.embed.ok ? 1 : 0) + (health.rerank.ok ? 1 : 0);
-		return up === 2 ? 'bg-success' : up === 1 ? 'bg-warning' : 'bg-destructive';
+		if (!health.db) return 'bg-warning';
+		return up === 2 ? 'bg-success' : 'bg-warning';
 	});
 
 	const dotClass = (ok: boolean | undefined) =>
@@ -82,17 +85,29 @@
 
 					<div class="border-border border-t pt-2">
 						<div class="text-foreground mb-1 font-semibold">Lance dataset</div>
-						<div class="text-muted-foreground font-mono text-[0.7rem] break-all">
-							{health.db.path}
-						</div>
-						<div class="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5">
-							<span class="text-muted-foreground">tables</span>
-							<span class="text-foreground font-mono">{health.db.tables.join(', ')}</span>
-							<span class="text-muted-foreground">chunks</span>
-							<span class="text-foreground font-mono">{health.db.chunks.toLocaleString()}</span>
-							<span class="text-muted-foreground">documents</span>
-							<span class="text-foreground font-mono">{health.db.documents.toLocaleString()}</span>
-						</div>
+						{#if health.db}
+							<div class="text-muted-foreground font-mono text-[0.7rem] break-all">
+								{health.db.path}
+							</div>
+							<div class="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5">
+								<span class="text-muted-foreground">tables</span>
+								<span class="text-foreground font-mono">{health.db.tables.join(', ')}</span>
+								<span class="text-muted-foreground">chunks</span>
+								<span class="text-foreground font-mono">{health.db.chunks.toLocaleString()}</span>
+								<span class="text-muted-foreground">documents</span>
+								<span class="text-foreground font-mono">{health.db.documents.toLocaleString()}</span>
+							</div>
+						{:else}
+							<!-- The service is UP and answered; it just has no corpus dataset (an empty corpus
+							     volume). Naming that explicitly is the whole point of the db/db_error split —
+							     the dot used to sit red here and imply the backend was unreachable. -->
+							<div class="text-warning">No dataset loaded</div>
+							{#if health.db_error}
+								<div class="text-muted-foreground mt-0.5 font-mono text-[0.7rem] break-all">
+									{health.db_error}
+								</div>
+							{/if}
+						{/if}
 					</div>
 
 					<Button variant="outline" size="sm" class="w-full" onclick={refresh}>Refresh</Button>

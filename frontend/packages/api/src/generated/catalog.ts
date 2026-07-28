@@ -1403,6 +1403,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/table/{id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Table History
+         * @description The table's commit log — one row per version, newest first: **what** changed and **when**.
+         *
+         *     Answers the question a Lakekeeper-style history view asks, from the format itself rather than from a
+         *     side-table we would have to keep in sync. Lance is immutable and append-only at the manifest level, so
+         *     ``versions()`` gives the timestamps and the transaction log gives the substance: the operation kind, the
+         *     delete predicate exactly as the caller wrote it, which fields an update rewrote, fragment deltas, and
+         *     whether the schema was set at that version.
+         *
+         *     **It does not answer WHO, deliberately.** Lance's transaction log has no notion of a user and should not
+         *     have one — identity is this estate's concern, not the format's. The actor per version already lives in
+         *     the lineage store, on the ``author`` run facet
+         *     (``GET /datasets/{name}/producers`` → ``dataset_version`` + ``author`` + ``operation``), which is written
+         *     from the verified OIDC subject on every governed write. A who/when/what view joins the two on the version
+         *     number. Two sources, each authoritative for its own half — a third that merged them would just be a copy
+         *     of one of them, free to drift.
+         *
+         *     Reader-tier: ``can_get_metadata`` on the table, the same rung as describe/list-versions. A commit log is
+         *     metadata about the data, and it leaks real information (predicates name values, field names name
+         *     columns), so it is gated exactly like the schema is rather than being treated as public.
+         *
+         *     ``limit`` bounds the per-version transaction reads — a table with 10k versions must not turn a UI page
+         *     into 10k object-store round trips.
+         */
+        get: operations["table_history_v1_table__id__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/table/{id}/index/list": {
         parameters: {
             query?: never;
@@ -2035,6 +2076,62 @@ export interface paths {
          */
         post: operations["describe_transaction_v1_transaction__id__describe_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/user-state/saved-views": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Saved Views
+         * @description The caller's named read-plane selections, in the order the client stored them.
+         */
+        get: operations["get_saved_views_v1_user_state_saved_views_get"];
+        /**
+         * Put Saved Views
+         * @description Replace the caller's saved-view list wholesale — the client owns the ordering and the dedupe.
+         */
+        put: operations["put_saved_views_v1_user_state_saved_views_put"];
+        post?: never;
+        /**
+         * Delete Saved Views
+         * @description Discard the caller's saved views.
+         */
+        delete: operations["delete_saved_views_v1_user_state_saved_views_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/user-state/workflow-graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workflow Graph
+         * @description The caller's saved workflow canvas, or ``exists: false`` if they have never saved one.
+         */
+        get: operations["get_workflow_graph_v1_user_state_workflow_graph_get"];
+        /**
+         * Put Workflow Graph
+         * @description Save the caller's workflow canvas, replacing whatever they had.
+         */
+        put: operations["put_workflow_graph_v1_user_state_workflow_graph_put"];
+        post?: never;
+        /**
+         * Delete Workflow Graph
+         * @description Discard the caller's saved canvas.
+         */
+        delete: operations["delete_workflow_graph_v1_user_state_workflow_graph_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4857,6 +4954,16 @@ export interface components {
              */
             tables: string[];
         };
+        /** Liveness */
+        Liveness: {
+            /** @default ok */
+            status: components["schemas"]["LivenessStatus"];
+        };
+        /**
+         * LivenessStatus
+         * @enum {string}
+         */
+        LivenessStatus: "ok";
         /**
          * MatchQuery
          * @description MatchQuery
@@ -5359,6 +5466,19 @@ export interface components {
              */
             single_vector?: (number)[] | null;
         };
+        /** Readiness */
+        Readiness: {
+            /** Components */
+            components?: {
+                [key: string]: string;
+            };
+            status: components["schemas"]["ReadinessStatus"];
+        };
+        /**
+         * ReadinessStatus
+         * @enum {string}
+         */
+        ReadinessStatus: "starting" | "ready" | "shutting_down" | "degraded";
         /**
          * RefreshMaterializedViewRequest
          * @description RefreshMaterializedViewRequest
@@ -5593,6 +5713,55 @@ export interface components {
              * @description Optional transaction identifier
              */
             transaction_id?: string | null;
+        };
+        /**
+         * SavedView
+         * @description A named selection for a dataset (``""`` = the default DB), as ``saved-views.ts`` stores it.
+         */
+        SavedView: {
+            /** Dataset */
+            dataset: string;
+            /** Name */
+            name: string;
+            spec: components["schemas"]["SearchSpec"];
+        };
+        /**
+         * SearchSpec
+         * @description A read-plane selection — mirrors the ``SearchSpec`` interface in ``@repo/media-api``.
+         *
+         *     ``image`` (a ``File``) is absent by design: ``stripEphemeral`` drops it before a view is saved, and a
+         *     file handle cannot round-trip anyway.
+         */
+        SearchSpec: {
+            /** Dataset */
+            dataset?: string | null;
+            /** Filters */
+            filters?: {
+                [key: string]: string;
+            } | null;
+            /** Fuzziness */
+            fuzziness?: (0 | 1 | 2) | null;
+            mode?: components["schemas"]["WorkflowSearchMode"] | null;
+            /** N */
+            n?: number | null;
+            /** Phrase */
+            phrase?: boolean | null;
+            /** Prefilter */
+            prefilter?: boolean | null;
+            /** Q */
+            q: string;
+            /** Qvec */
+            qVec?: string | null;
+            /** Rerank */
+            rerank?: boolean | null;
+            /** Rerankn */
+            rerankN?: number | null;
+            /** Topic */
+            topic?: string | null;
+            /** Weight */
+            weight?: number | null;
+            /** Where */
+            where?: string | null;
         };
         /**
          * StringFtsQuery
@@ -5915,6 +6084,35 @@ export interface components {
              */
             transaction_id?: string | null;
         };
+        /**
+         * UserStateDocument
+         * @description The documents a user owns. A closed set: the key space is ours, not the caller's.
+         * @enum {string}
+         */
+        UserStateDocument: "workflow-graph" | "saved-views";
+        /** UserStateEnvelope[WorkflowGraph] */
+        UserStateEnvelope_WorkflowGraph_: {
+            document: components["schemas"]["UserStateDocument"];
+            /** Exists */
+            exists: boolean;
+            /** Subject */
+            subject: string;
+            /** Updated At */
+            updated_at?: string | null;
+            value?: components["schemas"]["WorkflowGraph"] | null;
+        };
+        /** UserStateEnvelope[list[SavedView]] */
+        UserStateEnvelope_list_SavedView__: {
+            document: components["schemas"]["UserStateDocument"];
+            /** Exists */
+            exists: boolean;
+            /** Subject */
+            subject: string;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Value */
+            value?: components["schemas"]["SavedView"][] | null;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -5977,6 +6175,156 @@ export interface components {
             /** Status */
             status?: string | null;
         };
+        /**
+         * WorkflowEdge
+         * @description A persisted edge. ``target_handle`` distinguishes the Search node's two input ports.
+         */
+        WorkflowEdge: {
+            /** Id */
+            id: string;
+            /** Label */
+            label?: string | null;
+            /** Source */
+            source: string;
+            /** Target */
+            target: string;
+            /** Targethandle */
+            targetHandle?: string | null;
+        };
+        /**
+         * WorkflowGraph
+         * @description A whole persisted canvas — the document behind ``lance-media-workflow-graph-v1``.
+         *
+         *     ``nodes`` must be non-empty, mirroring ``v.minLength(1)``: an empty canvas is what the client seeds,
+         *     not something worth storing.
+         */
+        WorkflowGraph: {
+            /** Config */
+            config?: {
+                [key: string]: components["schemas"]["WorkflowNodeConfig"];
+            };
+            /** Edges */
+            edges?: components["schemas"]["WorkflowEdge"][];
+            /** Nodes */
+            nodes: components["schemas"]["WorkflowNode"][];
+            /** Tags */
+            tags?: {
+                [key: string]: string[];
+            };
+        };
+        /**
+         * WorkflowNode
+         * @description A persisted node: identity, kind and position. Runtime results are never persisted.
+         */
+        WorkflowNode: {
+            /** Id */
+            id: string;
+            position: components["schemas"]["WorkflowNodePosition"];
+            type: components["schemas"]["WorkflowNodeKind"];
+        };
+        /**
+         * WorkflowNodeConfig
+         * @description Per-node user input — one flat shape covering every kind, as the zone stores it.
+         *
+         *     ``captured_atlas_selection`` is typed ``None`` on purpose: the zone deliberately does NOT persist the
+         *     atlas capture (a full ``Row[]`` — too heavy and stale-prone), so a document carrying one is a client
+         *     bug, not something to store.
+         */
+        WorkflowNodeConfig: {
+            /** Capturedatlasselection */
+            capturedAtlasSelection?: null;
+            /**
+             * Combinemode
+             * @default union
+             * @enum {string}
+             */
+            combineMode: "union" | "intersect";
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Exportcolumns */
+            exportColumns?: string[] | null;
+            /**
+             * Exportformat
+             * @default csv
+             * @enum {string}
+             */
+            exportFormat: "json" | "csv";
+            /** Filters */
+            filters?: {
+                [key: string]: string;
+            };
+            /**
+             * Imagename
+             * @default
+             */
+            imageName: string;
+            /**
+             * Label
+             * @default
+             */
+            label: string;
+            /** Minscore */
+            minScore?: number | null;
+            /** @default fts */
+            mode: components["schemas"]["WorkflowSearchMode"];
+            /**
+             * N
+             * @default 24
+             */
+            n: number;
+            /**
+             * Q
+             * @default
+             */
+            q: string;
+            /**
+             * Refinescope
+             * @default video
+             * @enum {string}
+             */
+            refineScope: "video" | "chunk";
+            /**
+             * Rerank
+             * @default false
+             */
+            rerank: boolean;
+            /** Tags */
+            tags?: string[];
+            /**
+             * Where
+             * @default
+             */
+            where: string;
+        };
+        /**
+         * WorkflowNodeKind
+         * @description The pipeline stages — mirrors ``NODE_KINDS`` in the zone's ``workflow/types.ts``.
+         * @enum {string}
+         */
+        WorkflowNodeKind: "query" | "image" | "filter" | "atlas" | "search" | "combine" | "tagger" | "results" | "export";
+        /**
+         * WorkflowNodePosition
+         * @description A node's canvas coordinates.
+         */
+        WorkflowNodePosition: {
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+        };
+        /**
+         * WorkflowSearchMode
+         * @description Mirrors the zone's ``MODE_VALUES`` (itself ``satisfies readonly SearchMode[]``).
+         *
+         *     Duplicated rather than imported from ``search.services.spec``: ``service_kit`` is the shared kernel every
+         *     service imports, so importing a service package here would invert the layering. The duplication cannot
+         *     drift — ``tests/unit/test_user_state.py`` asserts these members equal ``SearchMode``'s.
+         * @enum {string}
+         */
+        WorkflowSearchMode: "fts" | "semantic" | "visual" | "scene" | "scene_fts" | "hybrid" | "all";
     };
     responses: never;
     parameters: never;
@@ -6021,9 +6369,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["Liveness"];
                 };
             };
         };
@@ -6043,7 +6389,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Readiness"];
                 };
             };
         };
@@ -8093,6 +8439,41 @@ export interface operations {
             };
         };
     };
+    table_history_v1_table__id__history_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_table_indices_v1_table__id__index_list_post: {
         parameters: {
             query?: {
@@ -9152,6 +9533,148 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    get_saved_views_v1_user_state_saved_views_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserStateEnvelope_list_SavedView__"];
+                };
+            };
+        };
+    };
+    put_saved_views_v1_user_state_saved_views_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SavedView"][];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserStateEnvelope_list_SavedView__"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_saved_views_v1_user_state_saved_views_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_workflow_graph_v1_user_state_workflow_graph_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserStateEnvelope_WorkflowGraph_"];
+                };
+            };
+        };
+    };
+    put_workflow_graph_v1_user_state_workflow_graph_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowGraph"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserStateEnvelope_WorkflowGraph_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_workflow_graph_v1_user_state_workflow_graph_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

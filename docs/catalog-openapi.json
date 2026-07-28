@@ -6082,6 +6082,23 @@
         "title": "ListTablesResponse",
         "type": "object"
       },
+      "Liveness": {
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/LivenessStatus",
+            "default": "ok"
+          }
+        },
+        "title": "Liveness",
+        "type": "object"
+      },
+      "LivenessStatus": {
+        "enum": [
+          "ok"
+        ],
+        "title": "LivenessStatus",
+        "type": "string"
+      },
       "MatchQuery": {
         "description": "MatchQuery",
         "properties": {
@@ -7387,6 +7404,35 @@
         },
         "title": "QueryTableRequestVector",
         "type": "object"
+      },
+      "Readiness": {
+        "properties": {
+          "components": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Components",
+            "type": "object"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReadinessStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "Readiness",
+        "type": "object"
+      },
+      "ReadinessStatus": {
+        "enum": [
+          "starting",
+          "ready",
+          "shutting_down",
+          "degraded"
+        ],
+        "title": "ReadinessStatus",
+        "type": "string"
       },
       "RefreshMaterializedViewRequest": {
         "description": "RefreshMaterializedViewRequest",
@@ -9292,7 +9338,7 @@
         "type": "object"
       },
       "WorkflowSearchMode": {
-        "description": "Mirrors the zone's ``MODE_VALUES`` (itself ``satisfies readonly SearchMode[]``).\n\nDuplicated rather than imported from ``search.services.spec``: ``common`` is the shared kernel every\nservice imports, so importing a service package here would invert the layering. The duplication cannot\ndrift \u2014 ``tests/unit/test_user_state.py`` asserts these members equal ``SearchMode``'s.",
+        "description": "Mirrors the zone's ``MODE_VALUES`` (itself ``satisfies readonly SearchMode[]``).\n\nDuplicated rather than imported from ``search.services.spec``: ``service_kit`` is the shared kernel every\nservice imports, so importing a service package here would invert the layering. The duplication cannot\ndrift \u2014 ``tests/unit/test_user_state.py`` asserts these members equal ``SearchMode``'s.",
         "enum": [
           "fts",
           "semantic",
@@ -9347,11 +9393,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Livez Livez Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/Liveness"
                 }
               }
             },
@@ -9371,7 +9413,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
               }
             },
             "description": "Successful Response"

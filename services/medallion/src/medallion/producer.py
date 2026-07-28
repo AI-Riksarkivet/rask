@@ -18,6 +18,7 @@ Run: ``uvicorn medallion.producer:app``. Publishes/subscribes through the local 
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
@@ -26,7 +27,6 @@ from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 
 from medallion.api.bronze_arrival import register_bronze_arrival_route
-from medallion.api.health import router as health_router
 from medallion.api.ingest_iiif import router as ingest_iiif_router
 from medallion.api.ingest_media import router as ingest_media_router
 from medallion.api.produce import router as produce_router
@@ -38,10 +38,14 @@ from service_kit.governed.audit import configure_audit
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.oidc import OIDCVerifier
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.obs import configure_app_logging
+from service_kit.probes import router as health_router
 
 
 configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (obs audit 2026-07-13)
+
+log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -109,6 +113,10 @@ app = FastAPI(
     docs_url="/docs" if _docs else None,
     openapi_url="/openapi.json" if _docs else None,
 )
+# Problem+json handlers — parity with catalog/lineage/compaction: medallion runs the same lance stack,
+# so a LanceNamespaceError (or any unhandled error) must surface as the same RFC 9457 body, not
+# Starlette's plain 500 text. Installed BEFORE the routers so no route can outrun the taxonomy.
+install_problem_handlers(app, log)
 app.include_router(health_router)
 app.include_router(produce_router)
 # The multimodal head (§9): POST /ingest-media lands external media as bronze blobs + triggers the

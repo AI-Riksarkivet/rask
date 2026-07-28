@@ -15,6 +15,9 @@ class ReadinessStatus(StrEnum):
     starting = "starting"
     ready = "ready"
     shutting_down = "shutting_down"
+    #: Started, not draining, but a hard dependency is unhealthy (e.g. lineage's AGE
+    #: pool/graph) — a 503 that pulls the pod from rotation without failing liveness.
+    degraded = "degraded"
 
 
 class Liveness(BaseModel):

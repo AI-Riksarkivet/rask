@@ -159,11 +159,39 @@ Reminders:
     policy blocks it silently. Check the policies before you debug the app.
 {{- end }}
 {{- end }}
-{{- with .Values.services.lineage }}
-{{- with .reconcile }}
-{{- if not .enabled }}
-  * lineage reconcile is OFF, so the #4 outbox is never drained: a lineage event lost between the Lance
-    commit and the publish stays lost. Set services.lineage.reconcile.enabled=true to close that window.
+{{- if and (include "rask.gpuEnabled" .) (not .Values.nvdp.enabled) }}
+  * ray.gpuCount={{ .Values.ray.gpuCount }} but nvdp.enabled=false — this chart is NOT installing a device plugin, so
+    something else must already advertise nvidia.com/gpu (the NVIDIA GPU Operator, or your cloud
+    provider's plugin). If nothing does, the Ray head stays Pending on an unschedulable
+    nvidia.com/gpu request. Check: kubectl get nodes -o jsonpath='{.items[*].status.allocatable}' | tr ' ' '\n' | grep nvidia
 {{- end }}
+{{- if not (include "rask.gpuEnabled" .) }}
+  * GPU-LESS estate (ray.gpuCount=0, the chart default): the htrflow Serve actor is derived to
+    RASK_SERVE_GPU_FRAC=0 and runs on CPU, no nvidia RuntimeClass is created, and the device-plugin +
+    GPU-Feature-Discovery DaemonSets are not installed. For a GPU node:
+      helm upgrade ... --set ray.gpuCount=<n> --set nvdp.enabled=true --set config.RASK_SERVE_GPU_FRAC=<frac>
+{{- end }}
+{{- /* The #4 durability chain is stage (outbox) -> publish -> drain (reconcile sweep). BOTH default ON
+     now, so this only fires when an operator deliberately broke the chain — and then it says exactly
+     WHICH half is missing and what is lost, instead of the old generic line that every default install
+     printed and everyone learned to scroll past (live-proof 2026-07-28, defect 7). */}}
+{{- with .Values.services.lineage }}
+{{- $reconcile := .reconcile.enabled }}
+{{- $outbox := .outbox.enabled }}
+{{- if not (and $reconcile $outbox) }}
+
+  !! DATA LOSS WINDOW OPEN — the #4 lineage durability chain is broken.
+     A lineage event is staged to the outbox, published fire-and-forget, then dropped; the reconcile
+     sweep drains whatever a crash left behind. Both halves are ON by default; this install disabled:
+{{- if not $outbox }}
+       - services.lineage.outbox.enabled=false  -> nothing is staged, so a crash between the Lance
+         commit and the publish loses the event's author, inputs and column lineage PERMANENTLY.
+         Reconcile can then only back-fill that a version exists.
+{{- end }}
+{{- if not $reconcile }}
+       - services.lineage.reconcile.enabled=false -> nothing drains the outbox and nothing back-fills.
+         A lost event stays lost, and staged events accumulate in s3://{{ $.Values.rustfs.bucket }}/_lineage_outbox forever.
+{{- end }}
+     Re-enable with: helm upgrade ... --set services.lineage.outbox.enabled=true --set services.lineage.reconcile.enabled=true
 {{- end }}
 {{- end }}

@@ -33,8 +33,24 @@ DURATION_COLUMN = "duration"
 
 @router.get("/health")
 def health(state: StateDep, dataset: DatasetParam = None) -> HealthResponse:
-    """Frontend status badge: pings vLLM embed/rerank, reports DB facts."""
-    handle = dataset_handle(state, dataset)
+    """Frontend status badge: pings vLLM embed/rerank, reports DB facts.
+
+    ALWAYS 200 — this is the media plane's liveness/capability probe, not a dataset read.
+
+    It used to resolve the dataset FIRST, so a deployment whose corpus volume is empty (now the chart
+    default: ``media.corpus.mode=emptyDir``, since the old hostPath wedged every fresh cluster) answered
+    404 "dataset 'transcripts_v2' not found" to the one endpoint the media and annotator zones poll on
+    every page load. Observed live 2026-07-28 through both zones' BFF proxies: a console 404 per load,
+    the sidebar dot permanently red, and — because the descriptor store derives the default dataset id
+    from ``db.path`` — no dataset at all, all reported as "backend unreachable" when the backend was
+    perfectly healthy and simply had nothing loaded.
+
+    A probe that cannot distinguish "service down" from "no corpus mounted" is worse than no probe, so
+    the dataset became OPTIONAL here: encoder reachability is always reported (it does not depend on a
+    dataset), and ``db`` is ``None`` with ``db_error`` carrying the resolution failure verbatim. The
+    dataset-bound endpoints beside this one still 404 — that is correct for a read of a thing that isn't
+    there; it is only wrong for the probe that asks whether anything is there at all.
+    """
     # One pooled client per process (state.http); the module fallback only fires
     # for bare AppState constructions in unit tests.
     http = state.http if state.http is not None else httpx
@@ -48,6 +64,21 @@ def health(state: StateDep, dataset: DatasetParam = None) -> HealthResponse:
             # don't identify whether it was a timeout, refusal, or DNS failure.
             first_line = str(e).split("\n")[0][:100]
             return VllmPing(ok=False, url=url, error=f"{type(e).__name__}: {first_line}")
+
+    # Pinged FIRST and unconditionally: encoder reachability is what the search-mode gating reads and it
+    # has nothing to do with whether a dataset is loaded.
+    embed = _ping(state.settings.embed_url)
+    rerank = _ping(state.settings.rerank_url)
+
+    try:
+        handle = dataset_handle(state, dataset)
+    except Exception as e:
+        # NotFoundError (unknown id / missing-or-invalid descriptor) is the expected case on an
+        # un-loaded corpus; anything else (a broken S3 endpoint, a corrupt manifest) is equally a
+        # "no db facts" answer and equally not a reason to fail the probe.
+        logger.info("health: no dataset resolved (%s: %s)", type(e).__name__, e)
+        reason = f"{type(e).__name__}: {str(e).splitlines()[0][:200]}"
+        return HealthResponse(db=None, db_error=reason, embed=embed, rerank=rerank)
 
     declared = handle.descriptor.declared
     tables = handle.descriptor.tables
@@ -63,8 +94,8 @@ def health(state: StateDep, dataset: DatasetParam = None) -> HealthResponse:
             chunks=row_info.row_count if row_info is not None else 0,
             documents=doc_info.row_count if doc_info is not None else 0,
         ),
-        embed=_ping(state.settings.embed_url),
-        rerank=_ping(state.settings.rerank_url),
+        embed=embed,
+        rerank=rerank,
     )
 
 

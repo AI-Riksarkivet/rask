@@ -17,7 +17,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from service_kit.media.exceptions import NotFoundError
+from service_kit.exceptions import NotFoundError
 from storage import s3_client
 
 

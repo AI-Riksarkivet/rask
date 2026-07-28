@@ -305,13 +305,20 @@ export async function getDiarization(
 
 // ── Health ──────────────────────────────────────────────────────────────
 const PingSchema = v.object({ ok: v.boolean(), url: v.string(), error: v.nullish(v.string()) });
+// `db` is NULLISH by contract, not defensively: /api/health is the plane's liveness probe and answers 200
+// with `db: null` + `db_error` when no corpus dataset resolves (the chart's default emptyDir corpus
+// volume). Before that it 404'd, which every media/annotator page load logged to the console and the badge
+// reported as "backend unreachable" — see services/viewer/api/v1/endpoints/system.py.
 const HealthSchema = v.object({
-	db: v.object({
-		path: v.string(),
-		tables: v.array(v.string()),
-		chunks: v.number(),
-		documents: v.number(),
-	}),
+	db: v.nullish(
+		v.object({
+			path: v.string(),
+			tables: v.array(v.string()),
+			chunks: v.number(),
+			documents: v.number(),
+		}),
+	),
+	db_error: v.nullish(v.string()),
 	embed: PingSchema,
 	rerank: PingSchema,
 });

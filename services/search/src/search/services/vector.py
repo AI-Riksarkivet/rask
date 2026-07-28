@@ -16,7 +16,7 @@ from search.services.constants import (
     VECTOR_NPROBES,
     VECTOR_REFINE_FACTOR,
 )
-from service_kit.media.exceptions import ValidationError
+from service_kit.exceptions import ValidationError
 
 
 logger = logging.getLogger(__name__)

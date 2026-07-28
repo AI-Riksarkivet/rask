@@ -17,10 +17,10 @@ from pydantic import BaseModel, ConfigDict
 from search.services.constants import DURATION_COLUMN
 from search.services.filters import topic_layer_columns
 from search.services.spec import SearchMode
+from service_kit.exceptions import ValidationError
 from service_kit.lancekit.descriptor import Declared, FtsBinding, VectorBinding
 from service_kit.lancekit.introspect import TableInfo
 from service_kit.lancekit.registry import DatasetHandle
-from service_kit.media.exceptions import ValidationError
 
 
 logger = logging.getLogger(__name__)

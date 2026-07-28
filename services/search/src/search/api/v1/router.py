@@ -27,8 +27,8 @@ from search.services.filters import TOPIC_FILTER, extract_filters
 from search.services.result_cache import run_cached
 from search.services.service import run_search
 from search.services.spec import PostSearchSpec, SearchMode, SearchSpec
+from service_kit.exceptions import ValidationError
 from service_kit.lancekit.registry import DatasetHandle
-from service_kit.media.exceptions import ValidationError
 from service_kit.media.state import AppState, dataset_handle
 
 

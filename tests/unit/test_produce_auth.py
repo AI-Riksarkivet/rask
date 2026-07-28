@@ -19,9 +19,9 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
-from lance_namespace import ServiceUnavailableError, UnauthenticatedError
+from lance_namespace import LanceNamespaceError, ServiceUnavailableError, UnauthenticatedError
 from medallion.api import produce_auth
 from medallion.api.dependencies import get_dapr, get_settings
 from medallion.api.produce import router
@@ -30,6 +30,7 @@ from medallion.core.config import MedallionSettings
 from openfga_sdk import OpenFgaClient
 
 from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
+from service_kit.lakehouse.ns_errors import install_problem_handlers, status_for
 
 
 # ── direct-function tests: every fail-closed branch of authorize_produce ──────────────────────────
@@ -87,9 +88,11 @@ def _run(
 
 
 def _expect(monkeypatch: pytest.MonkeyPatch, status: int, **kw: object) -> None:
-    with pytest.raises(HTTPException) as exc:
+    # The gate raises the lance_namespace domain errors (same taxonomy as catalog/lineage security), so the
+    # HTTP status is the ns_errors mapping of the error code, not an HTTPException attribute.
+    with pytest.raises(LanceNamespaceError) as exc:
         _run(monkeypatch, **kw)  # ty: ignore[invalid-argument-type]
-    assert exc.value.status_code == status
+    assert status_for(int(exc.value.code)) == status
 
 
 def test_dev_open_when_no_service_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -147,6 +150,10 @@ def test_wrong_service_token_and_oidc_off_is_403(monkeypatch: pytest.MonkeyPatch
 def _client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("APP_API_TOKEN", "s3cret")
     app = FastAPI()
+    # The synthetic app installs the SAME problem+json handlers the producer does, so the guard's
+    # domain errors map to their HTTP statuses here exactly as in production (they are lance_namespace
+    # errors, not HTTPExceptions — a bare FastAPI() would surface them as 500).
+    install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(router)
     # Fakes so only the guard is exercised — a rejected request never reaches the handler anyway. Settings
     # carries oidc_enabled=False (no verifier wired on app.state) so the human door stays shut in the test.
@@ -285,6 +292,7 @@ def test_train_gate_checks_the_configured_project(monkeypatch: pytest.MonkeyPatc
 def _train_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("APP_API_TOKEN", "s3cret")
     app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(train_router)
     app.include_router(router)  # /produce mounted alongside, to contrast the per-project behavior
     app.dependency_overrides[get_dapr] = lambda: None

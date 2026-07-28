@@ -18,7 +18,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from search.services.spec import SearchMode
-from service_kit.media.exceptions import ServiceUnavailableError
+from service_kit.exceptions import ServiceUnavailableError
 from service_kit.media.state import dataset_handle
 
 

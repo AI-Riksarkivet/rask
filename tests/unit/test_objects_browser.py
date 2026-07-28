@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from viewer.api.v1.endpoints.objects import router as objects_router
 
-from service_kit.media.handlers import register_handlers
+from service_kit.exceptions import register_handlers
 
 
 @pytest.fixture

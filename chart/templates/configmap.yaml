@@ -6,8 +6,17 @@ metadata:
     {{- include "rask.labels" . | nindent 4 }}
 data:
   {{- range $k, $v := .Values.config }}
+  {{- /* RASK_SERVE_GPU_FRAC is DERIVED below, never passed through — it must collapse to 0 on a
+       GPU-less estate. Emitting the raw value here too would let this ConfigMap contradict the
+       RayService's serveConfigV2, which is precisely the kind of "configured 1.0, running 0" split
+       that costs a live debugging round. */}}
+  {{- if ne $k "RASK_SERVE_GPU_FRAC" }}
   {{ $k }}: {{ $v | quote }}
   {{- end }}
+  {{- end }}
+  # The htrflow Serve actor's GPU fraction, derived from the ONE GPU signal (ray.gpuCount) by
+  # rask.serveGpuFrac — the same include the RayService uses, so the two cannot drift.
+  RASK_SERVE_GPU_FRAC: {{ include "rask.serveGpuFrac" . | quote }}
   RASK_DAPR_ENABLED: {{ .Values.dapr.sidecars | quote }}
   # Gateway upstreams (in-cluster DNS). The core/search/volumes rows died in the
   # R6/R20 media wave — their capabilities serve from the media plane below.

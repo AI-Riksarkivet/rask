@@ -14,11 +14,11 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
 
-from service_kit.media.handlers import register_handlers
+from service_kit.exceptions import register_handlers
 from service_kit.media.middleware import register_middleware
-from service_kit.media.probes import router as probes_router
 from service_kit.media.state import AppState, dataset_handle
 from service_kit.obs import configure_app_logging
+from service_kit.probes import router as probes_router
 from viewer.api.v1.router import router as api_router
 from viewer.core.config import get_viewer_settings
 

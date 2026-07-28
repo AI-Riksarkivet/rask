@@ -1040,6 +1040,23 @@
         "title": "LineageGraph",
         "type": "object"
       },
+      "Liveness": {
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/LivenessStatus",
+            "default": "ok"
+          }
+        },
+        "title": "Liveness",
+        "type": "object"
+      },
+      "LivenessStatus": {
+        "enum": [
+          "ok"
+        ],
+        "title": "LivenessStatus",
+        "type": "string"
+      },
       "Namespaces": {
         "description": "The namespaces containing at least one dataset the caller may see.",
         "properties": {
@@ -1283,6 +1300,35 @@
         ],
         "title": "Readers",
         "type": "object"
+      },
+      "Readiness": {
+        "properties": {
+          "components": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Components",
+            "type": "object"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReadinessStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "Readiness",
+        "type": "object"
+      },
+      "ReadinessStatus": {
+        "enum": [
+          "starting",
+          "ready",
+          "shutting_down",
+          "degraded"
+        ],
+        "title": "ReadinessStatus",
+        "type": "string"
       },
       "ReconcileState": {
         "description": "Result of reconciling the lineage graph's recorded version against the on-disk Lance version.",
@@ -3783,11 +3829,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Livez Livez Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/Liveness"
                 }
               }
             },
@@ -3873,13 +3915,14 @@
     },
     "/readyz": {
       "get": {
-        "description": "Gate readiness on the AGE pool AND the graph \u2014 lineage's sole hard dependency \u2014 plus the lifecycle\nflags, so a pod with an unhealthy pool (or mid-boot / draining) is pulled from rotation instead of\nserving 500s.",
         "operationId": "readyz_readyz_get",
         "responses": {
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
               }
             },
             "description": "Successful Response"

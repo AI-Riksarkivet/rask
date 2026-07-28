@@ -1,0 +1,28 @@
+{{- /*
+GPU COHERENCE GUARD — renders no object; it exists to make an incoherent GPU posture a LOUD
+render failure instead of a silent cluster wedge.
+
+`ray.gpuCount` is the chart's ONE GPU signal (see rask.gpuEnabled in _helpers.tpl): the head's
+num-gpus + nvidia.com/gpu limit, the nvidia RuntimeClass, the htrflow Serve actor's GPU fraction
+and the Kueue nvidia.com/gpu quota all derive from it. The nvidia-device-plugin (and the GPU
+Feature Discovery DaemonSet that ships inside it) is the one consumer that CANNOT: Helm evaluates
+a subchart `condition:` against a static values path and has no way to express `gpuCount > 0`.
+
+So the pair is guarded instead. `nvdp.enabled=true` with `ray.gpuCount=0` is the exact
+combination that produced live-proof 2026-07-28 defect 6: two DaemonSets stuck
+`ContainerCreating` forever on a cluster with no nvidia OCI runtime, contributing nothing and
+explaining nothing. It is never a posture anyone wants, so it fails here with the fix in the
+message rather than at `kubectl get pods` twenty minutes later.
+
+The reverse pair (`ray.gpuCount>0`, `nvdp.enabled=false`) is LEGITIMATE — that is a cluster whose
+GPUs are advertised by an externally-managed device plugin (the NVIDIA GPU Operator, or a cloud
+provider's) — so it is a NOTES warning, not a failure.
+*/ -}}
+{{- if and .Values.nvdp.enabled (not (include "rask.gpuEnabled" .)) }}
+{{- fail (printf "rask chart: nvdp.enabled=true but ray.gpuCount=%v — the nvidia device-plugin and its GPU-Feature-Discovery DaemonSet would sit ContainerCreating forever on a cluster with no GPU workload to serve. Fix: for a GPU node set `--set ray.gpuCount=<n>` alongside nvdp.enabled; for a GPU-less cluster (kind/CI/CPU dev) set `--set nvdp.enabled=false` (the chart default)." .Values.ray.gpuCount) }}
+{{- end }}
+{{- /* hasKey first: under `helm upgrade --reuse-values` a stored release may carry no such key, and
+     `float64 nil` is 0 — which would fail a legitimate GPU upgrade for the wrong reason. */}}
+{{- if and (include "rask.gpuEnabled" .) (hasKey .Values.config "RASK_SERVE_GPU_FRAC") (eq (float64 .Values.config.RASK_SERVE_GPU_FRAC) 0.0) }}
+{{- fail (printf "rask chart: ray.gpuCount=%v (a GPU estate) but config.RASK_SERVE_GPU_FRAC=%v — the htrflow Serve actor would reserve no GPU and TrOCR would run on CPU while %v GPU(s) sit idle. Set config.RASK_SERVE_GPU_FRAC to the per-replica fraction (e.g. 0.49 for 2 replicas/GPU), or set ray.gpuCount=0 for a deliberate CPU estate." .Values.ray.gpuCount .Values.config.RASK_SERVE_GPU_FRAC .Values.ray.gpuCount) }}
+{{- end }}

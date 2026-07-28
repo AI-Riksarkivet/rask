@@ -599,3 +599,244 @@ def test_every_dapr_component_resolves_its_secrets_through_the_secret_store() ->
         assert not literal, (
             f"component {label} carries a credential inline: {literal.group(0)[:60]}… — it must be a secretKeyRef resolved through the secret store"
         )
+
+
+# --------------------------------------------------------------------------------------------------
+# 9. The live-proof 2026-07-28 defect classes (docs/architecture/live-proof-2026-07-28.md)
+#
+# A first real end-to-end install on a stock kind cluster needed SIX manual overrides and one
+# `kubectl set env` before it would come up. Every one of them was a chart default that only works on
+# the maintainer's k3s box, and every failure mode was SILENT (Pending PVCs, ContainerCreating
+# DaemonSets, a RayService stuck Initializing). Prose in a values comment cannot catch those; a render
+# can. These guards are what make the fixes stay fixed.
+# --------------------------------------------------------------------------------------------------
+
+
+def _helm_notes(*set_values: str) -> str:
+    """The rendered NOTES.txt — `helm template` deliberately omits it, and `helm install --dry-run`
+    needs a live cluster (and trips over CRD ownership from an existing release), so neither can guard
+    what the release notes actually SAY.
+
+    A NOTES warning is the only thing some operators ever read, so its conditions deserve a real render
+    rather than a grep over the template source. This builds a throwaway probe chart — the real
+    values.yaml, the real _helpers.tpl, and the real NOTES.txt wrapped in a define + emitted as a
+    ConfigMap value — so helm's own engine evaluates the same conditions with the same values.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    helm = shutil.which("helm") or str(REPO / ".localbin/helm")
+    if not Path(helm).exists():
+        pytest.skip("helm not available")
+    with tempfile.TemporaryDirectory() as tmp:
+        probe = Path(tmp) / "notes-probe"
+        (probe / "templates").mkdir(parents=True)
+        (probe / "Chart.yaml").write_text("apiVersion: v2\nname: rask\nversion: 0.0.0\n")
+        shutil.copy(CHART / "values.yaml", probe / "values.yaml")
+        shutil.copy(CHART / "templates" / "_helpers.tpl", probe / "templates" / "_helpers.tpl")
+        body = (CHART / "templates" / "NOTES.txt").read_text()
+        (probe / "templates" / "notes-probe.yaml").write_text(
+            '{{- define "notes.body" -}}\n'
+            + body
+            + "\n{{- end -}}\napiVersion: v1\nkind: ConfigMap\nmetadata: { name: notes-probe }\n"
+            + 'data:\n  notes: {{ include "notes.body" . | quote }}\n'
+        )
+        argv = [helm, "template", "rask", str(probe)]
+        for value in set_values:
+            argv += ["--set", value]
+        out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
+    # The notes ride as one quoted scalar; unescape so assertions read naturally.
+    return out.encode().decode("unicode_escape")
+
+
+def _pvc_docs(rendered: str) -> list[str]:
+    return [d for d in rendered.split("\n---") if re.search(r"^kind: PersistentVolumeClaim$", d, re.MULTILINE)]
+
+
+def test_no_pvc_hardcodes_a_provisioner_specific_storage_class() -> None:
+    """`storageClassName: local-path` is k3s's provisioner NAME, and it does not exist anywhere else.
+
+    kind's default class is `standard`; a managed cluster's is `gp3`/`standard-rwo`/whatever. A PVC that
+    names a class the cluster does not have sits **Pending forever** — no pod event, no chart complaint,
+    and (for the RustFS Tenant and the Ray HF cache) it takes the whole data plane or the Ray head down
+    with it. That is exactly how live-proof defect 2 burned an install.
+
+    The portable answer is to OMIT `storageClassName` so the cluster's DEFAULT class provisions, which is
+    why the chart reads its class from a value that defaults to `""` and renders the key only `with` a
+    non-empty one. This asserts on the RENDER: no PVC the chart emits may carry a hardcoded class, and no
+    template may name one as a literal. (Note `storageClassName: ""` is NOT the same as omitting it — the
+    empty string DISABLES dynamic provisioning — so an empty literal is an offender too.)
+    """
+    rendered = _helm_template("singleTenant.enabled=true", "media.enabled=true", "media.corpus.mode=pvc")
+    assert _pvc_docs(rendered), "the chart rendered no PVCs — this guard would pass vacuously"
+    offenders: list[str] = []
+    # EVERY doc, not just kind: PersistentVolumeClaim — the four RustFS Tenant volumes are a
+    # `volumeClaimTemplate` INSIDE the Tenant CR, which is precisely where defect 2 lived, and a
+    # PVC-kind-only scan would have declared the fix verified while missing it. CRDs are skipped:
+    # their OpenAPI schemas describe `storageClassName` as documentation, not as a value.
+    for doc in rendered.split("\n---"):
+        if re.search(r"^kind: CustomResourceDefinition$", doc, re.MULTILINE):
+            continue
+        name = re.search(r"^  name: (\S+)", doc, re.MULTILINE)
+        kind = re.search(r"^kind: (\S+)", doc, re.MULTILINE)
+        for cls in re.finditer(r"^\s+storageClassName:\s*(\S.*)$", doc, re.MULTILINE):
+            offenders.append(f"{kind.group(1) if kind else '?'}/{name.group(1) if name else '?'} pins storageClassName: {cls.group(1)}")
+    assert not offenders, (
+        "these rendered PVCs pin a StorageClass with the chart's DEFAULT values, so the install only works "
+        "on a cluster that happens to have that class:\n  " + "\n  ".join(offenders)
+    )
+
+    literals = [
+        f"{path.relative_to(REPO)}:{n}: {line.strip()}"
+        for path in sorted((CHART / "templates").rglob("*"))
+        if path.is_file()
+        for n, line in enumerate(_uncommented(path.read_text()).splitlines(), 1)
+        if re.search(r"storageClassName:\s*[\"']?[a-zA-Z]", line)
+    ]
+    assert not literals, "a StorageClass name must come from values (empty => the cluster default), never a template literal:\n  " + "\n  ".join(literals)
+
+
+def test_a_gpuless_estate_renders_a_gpuless_ray_serve() -> None:
+    """ray.gpuCount=0 must make the htrflow Serve actor ask for 0 GPU — or nothing ever becomes ready.
+
+    live-proof defect 3: `config.RASK_SERVE_GPU_FRAC` defaulted to "1.0" INDEPENDENTLY of ray.gpuCount, so
+    a GPU-less cluster deployed a Serve deployment waiting on a resource that would never be advertised.
+    The RayService then stayed `Initializing` forever, KubeRay never created the stable
+    `<release>-ray-head-svc`, and the compute zone reported "Ray offline" beside a Running, healthy head —
+    three symptoms, none of them pointing at the actual cause.
+
+    Both render sites are checked, because a fraction that is right in the RayService and wrong in the
+    fleet ConfigMap is the next debugging round.
+    """
+    rendered = _helm_template("singleTenant.enabled=true")  # ray.gpuCount defaults to 0
+    fracs = re.findall(r"RASK_SERVE_GPU_FRAC:\s*\"?([0-9.]+)\"?", rendered)
+    assert fracs, "RASK_SERVE_GPU_FRAC renders nowhere — the guard would pass vacuously"
+    assert all(float(f) == 0.0 for f in fracs), (
+        f"with ray.gpuCount=0 every RASK_SERVE_GPU_FRAC must derive to 0, got {fracs} — a Serve actor that "
+        "reserves a GPU on a GPU-less cluster leaves the RayService Initializing forever"
+    )
+    rayservice = next((d for d in rendered.split("\n---") if re.search(r"^kind: RayService$", d, re.MULTILINE)), None)
+    assert rayservice is not None, "singleTenant.enabled=true rendered no RayService"
+    assert "nvidia.com/gpu" not in rayservice, "a GPU-less head must not request the nvidia.com/gpu extended resource"
+    assert "runtimeClassName" not in rayservice, (
+        "a GPU-less head must not name the nvidia RuntimeClass — its handler is not registered on a CPU node "
+        "(and runtimeclass.yaml does not even create the object), so every head pod fails to create"
+    )
+
+    # ...and the GPU posture still renders the GPU wiring, or the derivation is a one-way ratchet.
+    gpu = _helm_template("singleTenant.enabled=true", "ray.gpuCount=1", "nvdp.enabled=true")
+    gpu_service = next((d for d in gpu.split("\n---") if re.search(r"^kind: RayService$", d, re.MULTILINE)), None)
+    assert gpu_service is not None
+    assert re.search(r"RASK_SERVE_GPU_FRAC:\s*\"1.0\"", gpu_service), "ray.gpuCount=1 must pass config.RASK_SERVE_GPU_FRAC through"
+    assert "nvidia.com/gpu: 1" in gpu_service and "runtimeClassName: nvidia" in gpu_service
+    assert re.search(r"^kind: RuntimeClass$", gpu, re.MULTILINE), "a GPU estate must create the nvidia RuntimeClass"
+
+
+def test_the_gpu_device_plugin_cannot_render_without_gpu_workloads() -> None:
+    """nvdp + GPU-Feature-Discovery on a GPU-less cluster = two DaemonSets ContainerCreating forever.
+
+    live-proof defect 6. Helm resolves a subchart `condition:` against a STATIC values path and cannot
+    express `ray.gpuCount > 0`, so the chart cannot gate the device plugin on the same expression it gates
+    every other GPU render on. It fails the render on the incoherent pair instead — which is a gate, just
+    one that speaks. The reverse pair is legitimate (an externally-managed device plugin) and only warns.
+    """
+    import subprocess
+
+    with pytest.raises(subprocess.CalledProcessError) as exc:
+        _helm_template("nvdp.enabled=true")  # ray.gpuCount defaults to 0
+    message = (exc.value.stderr or "") + (exc.value.stdout or "")
+    assert "nvdp.enabled=true" in message and "ray.gpuCount" in message, f"the render must fail with the incoherent pair NAMED, got: {message[:400]}"
+    assert "--set nvdp.enabled=false" in message, "a fail-closed guard must carry the fix in the message"
+
+    # The coherent GPU pair renders, and it renders the plugin.
+    gpu = _helm_template("ray.gpuCount=1", "nvdp.enabled=true")
+    assert "nvdp" in gpu, "the coherent GPU pair must actually install the device plugin"
+    # The default (GPU-less) render must carry neither DaemonSet.
+    plain = _helm_template()
+    daemonsets = [d for d in plain.split("\n---") if re.search(r"^kind: DaemonSet$", d, re.MULTILINE)]
+    gpu_daemons = [d for d in daemonsets if "nvdp" in d or "gpu-feature-discovery" in d]
+    assert not gpu_daemons, (
+        f"the DEFAULT (GPU-less) render still emits {len(gpu_daemons)} GPU DaemonSet(s) — they will sit "
+        "ContainerCreating forever on any cluster without an nvidia OCI runtime"
+    )
+
+
+def test_no_workload_mounts_a_hostpath_that_must_pre_exist() -> None:
+    """`hostPath` + `type: Directory` = ContainerCreating forever unless a human prepared the node.
+
+    live-proof defect 5: `media.enabled=true` mounted /var/media-corpus with `type: Directory`, so on a
+    fresh cluster all three media pods wedged with a kubelet event as the only clue — and the plan already
+    said no hostPath ships. First-party workloads must default to a volume that needs no node preparation
+    (emptyDir for dev, a PVC for prod); where a node-local path IS the point (the OTel collector tailing
+    /var/log/pods) it must be `DirectoryOrCreate`, never the fail-if-absent `Directory`.
+    """
+    rendered = _helm_template("singleTenant.enabled=true", "media.enabled=true", "observability.enabled=true")
+    offenders: list[str] = []
+    for doc in rendered.split("\n---"):
+        if "hostPath" not in doc:
+            continue
+        name = re.search(r"^  name: (\S+)", doc, re.MULTILINE)
+        for m in re.finditer(r"hostPath:\s*\{?[^}\n]*", doc):
+            if re.search(r"type:\s*Directory\b(?!OrCreate)", m.group(0)):
+                offenders.append(f"{name.group(1) if name else '?'}: {m.group(0).strip()[:90]}")
+    assert not offenders, (
+        "these rendered workloads mount a hostPath that must ALREADY exist on the node, so a fresh cluster "
+        "wedges them in ContainerCreating:\n  " + "\n  ".join(offenders)
+    )
+    # The media corpus specifically: the DEFAULT must be node-independent.
+    media_pods = [d for d in rendered.split("\n---") if "app.kubernetes.io/component: viewer" in d and "kind: Deployment" in d]
+    assert media_pods, "media.enabled=true rendered no viewer Deployment"
+    assert "hostPath" not in media_pods[0], (
+        "the media corpus volume still defaults to a hostPath — set media.corpus.mode's default to a volume that works on an unprepared node"
+    )
+
+
+def test_the_iiif_ingest_head_takes_its_endpoint_from_values() -> None:
+    """A code-only default that is reachable from ONE network is a deploy-time `kubectl set env`.
+
+    live-proof defect 1: `MEDALLION_IIIF_BASE_URL` had no chart knob at all, and its code default
+    (https://iiifintern-ai.ra.se) resolves only inside the Riksarkivet network — so every deploy outside
+    it patched a running Deployment, a fix that dies with the pod.
+    """
+    rendered = _helm_template("singleTenant.enabled=true", "medallion.compute=true")
+    assert "MEDALLION_IIIF_BASE_URL" in rendered, "the IIIF ingest head's endpoint is not wired through the chart"
+    override = _helm_template(
+        "singleTenant.enabled=true",
+        "medallion.compute=true",
+        "medallion.producer.iiifBaseUrl=https://lbiiif.riksarkivet.se",
+    )
+    assert 'MEDALLION_IIIF_BASE_URL, value: "https://lbiiif.riksarkivet.se"' in override, (
+        "medallion.producer.iiifBaseUrl does not reach MEDALLION_IIIF_BASE_URL — the knob is decorative"
+    )
+    values = (CHART / "values.yaml").read_text()
+    assert "lbiiif.riksarkivet.se" in values, (
+        "values.yaml must document the PUBLIC IIIF endpoint beside the RA-internal default, or an outside operator has a knob and no idea what to put in it"
+    )
+
+
+def test_the_lineage_durability_chain_is_on_by_default() -> None:
+    """The #4 chain (stage -> publish -> drain) shipped OFF while NOTES warned about it on every install.
+
+    live-proof defect 7. A default that the release notes tell every operator to change is the wrong
+    default; worse, the warning became scenery. Both halves are ON now — and the pair matters: reconcile
+    without the outbox can only back-fill that a version exists (author/inputs/columnLineage are gone),
+    and the outbox without reconcile stages events nothing drains. This pins BOTH, and pins that the NOTES
+    warning still fires (loudly) when someone turns one off.
+    """
+    import yaml
+
+    values = yaml.safe_load((CHART / "values.yaml").read_text())
+    lineage = values["services"]["lineage"]
+    assert lineage["reconcile"]["enabled"] is True, "services.lineage.reconcile must default ON (it drains the outbox)"
+    assert lineage["outbox"]["enabled"] is True, "services.lineage.outbox must default ON (reconcile has nothing to drain without it)"
+
+    assert "DATA LOSS WINDOW OPEN" not in _helm_notes(), "the default install must not print a durability warning it cannot act on"
+    broken = _helm_notes("services.lineage.reconcile.enabled=false")
+    assert "DATA LOSS WINDOW OPEN" in broken and "reconcile.enabled=false" in broken, (
+        f"disabling reconcile must produce an unmissable NOTES warning naming the half that is missing; got:\n{broken}"
+    )
+    half = _helm_notes("services.lineage.outbox.enabled=false")
+    assert "outbox.enabled=false" in half and "PERMANENTLY" in half, (
+        f"disabling only the outbox must say what is lost (author/inputs/columnLineage), got:\n{half}"
+    )
