@@ -635,6 +635,43 @@ signals.md § Exclude noisy endpoints). Launcher-driven instrumentation → the 
 {{- end -}}
 
 
+{{/* lineage-kit's HTTP transport (call: include "lance.lineageEmitEnv" $root).
+
+TWO INDEPENDENT lineage paths exist and they are easy to confuse:
+
+  1. Dapr pub/sub — what the medallion producer/movers, compaction and the catalog use TODAY
+     (<APP>_LINEAGE_TOPIC → NATS → the lineage service's subscriber). Wired separately.
+  2. lineage-kit's `LineageRun` / `@stage` / actor machinery — the DECORATABLE seam meant for the Ray
+     Data pipeline (P7b). It resolves its transport through `LineageRun.emitter` → `default_emitter()`
+     → `build_emitter()`, which reads RASK_LINEAGE_ENDPOINT.
+
+Path 2's failure mode is silent by construction: with no endpoint, `build_emitter` logs ONE
+`log.warning("lineage_http_without_endpoint …")` at startup and returns `NoopEmitter`, which then
+drops every event at DEBUG. A pipeline emitting into a no-op is indistinguishable, from outside,
+from a pipeline that never emitted — the graph is simply empty and everything reports success.
+
+So the transport is rendered BEFORE anything emits through it, for the same reason the `parent` facet
+is parsed before anything emits one: the arrival of the first real actor run must not be the moment
+we discover the wire was never connected. Points at the lineage service's HTTP ingest
+(`POST /api/v1/lineage` — services/lineage/api/v1/endpoints/ingest.py), which is the same graph the
+Dapr subscriber writes to, so both paths converge.
+
+endpoint_path is rendered explicitly rather than left to its in-code default: a drift between the two
+would 404, and ClientEmitter catches-and-logs transport errors, so that too would fail silently. */}}
+{{- define "lance.lineageEmitEnv" -}}
+{{- $root := index . 0 -}}
+- { name: RASK_LINEAGE_ENDPOINT, value: "http://{{ include "lance.fullname" $root }}-lineage:{{ $root.Values.services.lineage.port }}" }
+- { name: RASK_LINEAGE_ENDPOINT_PATH, value: "api/v1/lineage" }
+{{- /* NO service-door credentials are rendered here, deliberately. These pods reach lineage over the
+     DAPR subscription route, which the sidecar-stamped app token already guards; the HTTP service door
+     (LINEAGE_SERVICE_TOKEN + LINEAGE_SERVICE_ID) exists for the sidecar-LESS producers — the Ray train
+     job (ray_submit.py passes both through the job's runtime_env) and the frontend zones' governed read
+     (lance.frontendEnv). Both already carry them, and lineage-kit reads those exact names, so a producer
+     that has them authenticates and one that does not stays on the open dev path. The allowlist those
+     subjects are checked against is rendered once, on the lineage service (services.yaml). */}}
+{{- end -}}
+
+
 {{/* Rollout drain: a preStop sleep holds SIGTERM until endpoint removal has propagated to kube-proxy /
 the Dapr sidecar, so in-flight requests drain instead of hitting connection-refused — this is what makes
 the apps' /readyz shutting_down branch actually reachable during a rollout. Pairs with pod-level

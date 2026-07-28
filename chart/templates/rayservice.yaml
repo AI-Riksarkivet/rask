@@ -82,6 +82,17 @@ spec:
                     secretKeyRef:
                       name: {{ $secretName }}
                       key: HF_TOKEN
+                {{- /* PRE-STAGED for P7b, and inert today — stated plainly so nobody reads it as wiring
+                     that already works. This image is built solely from runners/htr's own lock
+                     (.docker/ray-cluster.dockerfile), and lineage-kit is deliberately NOT a dependency
+                     there, so nothing in this container can call build_emitter() at all. The env is
+                     rendered now so the transport is present the day the actor seam lands, rather than
+                     that day beginning with a silent NoopEmitter; wiring the emission itself is P7b's
+                     job. Workers inherit the raylet's environment, and workerGroupSpecs is empty today.
+                     NOTE: a P7b image that ships lineage-kit will ALSO need the service door
+                     (LINEAGE_SERVICE_TOKEN + LINEAGE_SERVICE_ID) under auth.enabled — ray_submit.py
+                     already threads both into the train job's runtime_env; follow that shape. */}}
+                {{- include "lance.lineageEmitEnv" (list .) | nindent 16 }}
               ports:
                 - {containerPort: 6379, name: gcs}
                 - {containerPort: 8265, name: dashboard}
