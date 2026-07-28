@@ -171,8 +171,10 @@ name = "annotator"
 version = "0.1.0"
 source = { editable = "services/annotator" }
 dependencies = [
+    { name = "dapr-ext-fastapi" },
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "lineage-kit" },
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pylance", extra = ["otel"] },
@@ -182,8 +184,10 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "dapr-ext-fastapi", specifier = ">=1.18.1" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "lineage-kit", editable = "packages/lineage-kit" },
     { name = "pyarrow" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pylance", extras = ["otel"], specifier = ">=9.0.0" },
