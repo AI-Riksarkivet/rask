@@ -130,17 +130,32 @@ async def test_an_illegal_edge_raises_rather_than_being_reimplemented_here() -> 
 
 
 @pytest.mark.asyncio
-async def test_submit_honours_review_required() -> None:
-    actor = await _seeded()
-    await actor.fire({"event": "claim", "actor": "gina"})
-    out = await actor.fire({"event": "submit", "actor": "gina", "review_required": False})
-    assert out["state"] == TaskState.ACCEPTED  # review waived → straight to accepted
+async def test_submit_honours_the_review_required_captured_on_the_TASK() -> None:
+    """Captured at send time from the project — never read from the fire payload. A payload-supplied
+    `review_required` would let the submitting annotator waive their own review and self-accept."""
+    waived = _Actor()
+    await waived.seed(_task(review_required=False))
+    await waived.fire({"event": "claim", "actor": "gina"})
+    out = await waived.fire({"event": "submit", "actor": "gina"})
+    assert out["state"] == TaskState.ACCEPTED  # review waived on the task → straight to accepted
 
-    other = await _seeded()
-    await other.fire({"event": "claim", "actor": "gina"})
-    out2 = await other.fire({"event": "submit", "actor": "gina", "review_required": True})
+    required = await _seeded()  # the default is review_required=True
+    await required.fire({"event": "claim", "actor": "gina"})
+    out2 = await required.fire({"event": "submit", "actor": "gina"})
     assert out2["state"] == TaskState.IN_REVIEW
     assert out2["submitted_by"] == "gina"
+
+
+@pytest.mark.asyncio
+async def test_a_payload_cannot_override_the_tasks_review_requirement() -> None:
+    """The self-accept hole, closed. The task says review IS required; a fire payload claiming
+    otherwise must be ignored entirely."""
+    actor = await _seeded()
+    await actor.fire({"event": "claim", "actor": "gina"})
+
+    out = await actor.fire({"event": "submit", "actor": "gina", "review_required": False})
+
+    assert out["state"] == TaskState.IN_REVIEW, "a request payload waived the task's review requirement"
 
 
 @pytest.mark.asyncio

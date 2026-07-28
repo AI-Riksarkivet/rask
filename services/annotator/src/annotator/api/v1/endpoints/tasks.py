@@ -16,14 +16,14 @@ Two rules the machine cannot express, enforced here because they need the task's
 
 from __future__ import annotations
 
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Final, cast
 
 from fastapi import APIRouter, Path, status
 from pydantic import BaseModel, Field
 
 from annotator.api.security import CheckerDep, CurrentSubject
 from annotator.projects.actor import AnnotationTaskActorInterface
-from annotator.projects.machines import SELF_REVIEW_FORBIDDEN, IllegalTransition, task_transition
+from annotator.projects.machines import SELF_REVIEW_FORBIDDEN, TASK_EDGES, IllegalTransition, task_transition
 from annotator.projects.models import Shape, TaskState
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
@@ -31,21 +31,29 @@ from service_kit.governed.audit import FAILURE, SUCCESS, audit
 
 router = APIRouter(prefix="/tasks", tags=["annotation-tasks"])
 
+#: Edges whose `TASK_EDGES` permission is `None` — caused by the system (an actor reminder), never by
+#: a principal. They are REFUSED on the HTTP surface rather than waved through: "no permission
+#: required" is a statement about the actor's internal caller, and treating it as "no permission
+#: checked" would let anyone POST `lease_expired` to strip another annotator's claim.
+SYSTEM_ONLY_EVENTS: Final[frozenset[str]] = frozenset(e for (_s, e), (_t, p) in TASK_EDGES.items() if p is None)
+
 TaskId = Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")]
 
 
 class FireRequest(BaseModel):
-    """One event against a task. `event` must be an edge in `TASK_EDGES`."""
+    """One event against a task. `event` must be an edge in `TASK_EDGES`.
+
+    Deliberately narrow. It carries NO project/tenant — the authorization object is read from the
+    task's own record, so a caller cannot name the object its permission is checked against — and no
+    `review_required`, which is captured on the task at send time from the project; a caller able to
+    pass it would submit with review waived and self-accept.
+    """
 
     event: str = Field(min_length=1)
-    project: str = Field(min_length=1, description="the tenant — the FGA parent the check runs against")
-    lease_seconds: int = Field(default=1800, gt=0)
-    review_required: bool = True
+    lease_seconds: int = Field(default=1800, gt=0, le=86_400)
 
 
 class SaveDraftRequest(BaseModel):
-    project: str = Field(min_length=1)
-    project_id: str = Field(min_length=1)
     shapes: list[Shape] = Field(default_factory=list)
     base_revision: int | None = None
     origin: str = "human"
@@ -65,14 +73,23 @@ def _proxy(task_id: str) -> AnnotationTaskActorInterface:
     return cast(AnnotationTaskActorInterface, proxy)
 
 
-async def _authorize(checker: Any, subject: str, permission: str | None, tenant: str, what: str) -> None:
-    """Check one relation on the tenant, fail closed, and audit either way."""
-    if permission is None:  # a system-caused edge — no principal, nothing to authorize
-        return
-    parent = f"project:{tenant}"
-    if not await checker(user=subject, relation=permission, obj=parent):
-        audit(what, FAILURE, subject=subject, resource=parent, relation=permission)
-        raise ForbiddenError(f"{subject} lacks {permission} on {parent}")
+async def _authorize(checker: Any, subject: str, permission: str, project_id: str, what: str) -> None:
+    """Check one relation on the ANNOTATION PROJECT, fail closed, and audit either way.
+
+    The object is `annotation_project:<project_id>`, because that is the type on which
+    `service_kit.governed.auth.model.fga` defines `can_claim` / `can_annotate` / `can_review` /
+    `can_manage`. Checking them on `project:<tenant>` — as this did until 2026-07-28 — asks OpenFGA
+    for a relation that type does not define, which fails closed and makes the entire task plane
+    return 403 the moment FGA is switched on. Only `can_create_annotation_project` lives on the
+    tenant, because at create time the child does not exist yet.
+
+    The project id comes from the TASK's own record, never from the request, so a caller cannot
+    choose which object its permission is evaluated against.
+    """
+    obj = f"annotation_project:{project_id}"
+    if not await checker(user=subject, relation=permission, obj=obj):
+        audit(what, FAILURE, subject=subject, resource=obj, relation=permission)
+        raise ForbiddenError(f"{subject} lacks {permission} on {obj}")
 
 
 @router.post("/{task_id}/events", status_code=status.HTTP_200_OK)
@@ -82,6 +99,9 @@ async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: Checke
     The permission comes from the transition table, so adding an edge to `TASK_EDGES` automatically
     gates it — there is no per-route ladder here to forget to update.
     """
+    if payload.event in SYSTEM_ONLY_EVENTS:
+        raise ForbiddenError(f"{payload.event} is caused by the system, not by a principal, and cannot be fired over HTTP")
+
     actor = _proxy(task_id)
     current = await actor.get()
     if current is None:
@@ -92,8 +112,11 @@ async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: Checke
         _target, permission = task_transition(state, payload.event)
     except IllegalTransition as exc:
         raise ConflictError(str(exc)) from exc
+    if permission is None:  # unreachable via SYSTEM_ONLY_EVENTS, kept so a new None edge fails closed
+        raise ForbiddenError(f"{payload.event} requires no principal permission and is not exposed")
 
-    await _authorize(checker, subject, permission, payload.project, f"task.{payload.event}")
+    project_id = str(current["project_id"])
+    await _authorize(checker, subject, permission, project_id, f"task.{payload.event}")
 
     # Rules the table cannot express, because they depend on the task's own rows.
     if payload.event in SELF_REVIEW_FORBIDDEN and current.get("submitted_by") == subject:
@@ -103,14 +126,7 @@ async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: Checke
         raise ForbiddenError(f"task {task_id} is held by {current['assignee']}")
 
     try:
-        updated = await actor.fire(
-            {
-                "event": payload.event,
-                "actor": subject,
-                "lease_seconds": payload.lease_seconds,
-                "review_required": payload.review_required,
-            }
-        )
+        updated = await actor.fire({"event": payload.event, "actor": subject, "lease_seconds": payload.lease_seconds})
     except IllegalTransition as exc:  # lost a race — the state moved between our read and the call
         raise ConflictError(str(exc)) from exc
 
@@ -119,11 +135,13 @@ async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: Checke
 
 
 @router.get("/{task_id}")
-async def get_task(task_id: TaskId, checker: CheckerDep, subject: CurrentSubject, project: str) -> dict[str, Any]:
-    await _authorize(checker, subject, "can_view", project, "task.view")
+async def get_task(task_id: TaskId, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
+    """Read one task. The task is fetched FIRST to learn which project to authorize against, then the
+    check runs before anything is returned — the fetch is not the disclosure, the return is."""
     task = await _proxy(task_id).get()
     if task is None:
         raise ConflictError(f"task {task_id} has not been sent into a project")
+    await _authorize(checker, subject, "can_view", str(task["project_id"]), "task.view")
     return task
 
 
@@ -131,12 +149,18 @@ async def get_task(task_id: TaskId, checker: CheckerDep, subject: CurrentSubject
 async def save_draft(task_id: TaskId, payload: SaveDraftRequest, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
     """Replace the whole shape set in one keyed write. `base_revision` is the etag — a mismatch is a
     409, which is how two tabs of one annotator are stopped from silently clobbering each other."""
-    await _authorize(checker, subject, "can_annotate", payload.project, "task.save_draft")
     actor = _proxy(task_id)
-
     current = await actor.get()
     if current is None:
         raise ConflictError(f"task {task_id} has not been sent into a project")
+    await _authorize(checker, subject, "can_annotate", str(current["project_id"]), "task.save_draft")
+
+    # A draft is only writable while the task is CLAIMED. Without this an ACCEPTED task's shapes
+    # could be rewritten after review — and during a publish — which would put annotations into the
+    # lakehouse that no reviewer ever saw. `TASK_EDGES` already says `save_draft` is legal only from
+    # CLAIMED; this is the HTTP surface honouring the machine instead of writing around it.
+    if TaskState(current["state"]) is not TaskState.CLAIMED:
+        raise ConflictError(f"task {task_id} is {current['state']} — a draft is only writable while the task is claimed")
     if current.get("assignee") not in (None, subject):
         raise ForbiddenError(f"task {task_id} is held by {current['assignee']}")
 
@@ -144,7 +168,7 @@ async def save_draft(task_id: TaskId, payload: SaveDraftRequest, checker: Checke
         draft = await actor.save_draft(
             {
                 "task_id": task_id,
-                "project_id": payload.project_id,
+                "project_id": str(current["project_id"]),
                 "author": subject,
                 "shapes": [s.model_dump(mode="json") for s in payload.shapes],
                 "base_revision": payload.base_revision,
@@ -159,9 +183,13 @@ async def save_draft(task_id: TaskId, payload: SaveDraftRequest, checker: Checke
 
 
 @router.get("/{task_id}/draft")
-async def get_draft(task_id: TaskId, checker: CheckerDep, subject: CurrentSubject, project: str) -> dict[str, Any]:
-    await _authorize(checker, subject, "can_view", project, "task.view_draft")
-    draft = await _proxy(task_id).get_draft()
+async def get_draft(task_id: TaskId, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
+    actor = _proxy(task_id)
+    task = await actor.get()
+    if task is None:
+        raise ConflictError(f"task {task_id} has not been sent into a project")
+    await _authorize(checker, subject, "can_view", str(task["project_id"]), "task.view_draft")
+    draft = await actor.get_draft()
     if draft is None:
         raise NotFoundError(f"task {task_id} has no draft")
     return draft

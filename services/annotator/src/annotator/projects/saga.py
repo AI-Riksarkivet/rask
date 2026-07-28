@@ -40,7 +40,7 @@ from typing import Any, Protocol
 
 from annotator.projects.machines import IllegalTransition
 from annotator.projects.models import AnnotationProject, Draft, ProjectState, Task, TaskState
-from annotator.projects.publish import PublishPlan, PublishRefusal, build_plan, project_facet, table_properties
+from annotator.projects.publish import PROJECT_FACET, PublishPlan, PublishRefusal, build_plan, project_facet, table_properties
 
 
 logger = logging.getLogger(__name__)
@@ -145,6 +145,14 @@ async def run_publish(
     if project.published is not None:
         # A retry that got all the way through last time. Converged — report it rather than
         # republishing, which would create a second table for one logical publish.
+        #
+        # But CONVERGE THE STATE FIRST. A crash between `record_publish` and `publish_succeeded`
+        # leaves `published` set while the project is still `publishing`, and `PROJECT_EDGES` has no
+        # edge out of `publishing` except the two system ones — so returning here without firing
+        # would strand the project in `publishing` forever, on the exact crash this saga exists to
+        # survive. Returning early WITHOUT this was the bug.
+        if project.state is ProjectState.PUBLISHING:
+            await _converge(project_handle, {"event": "publish_succeeded", "actor": subject})
         record = project.published
         return PublishOutcome(
             project_id=project.project_id,
@@ -180,7 +188,11 @@ async def run_publish(
             table_id,
             plan,
             properties=table_properties(project, plan),
-            run_facet=project_facet(project, plan),
+            # KEYED by the facet name. `project_facet` returns the spec-legal PAYLOAD; the catalog's
+            # `X-Lance-Run-Facets` is a {name: payload} mapping, so handing it the bare payload would
+            # emit a facet with no name — dropped or rejected at the far end, which is provenance
+            # that silently does not arrive.
+            run_facet={PROJECT_FACET: project_facet(project, plan)},
         )
         await publisher.tag_version(table_id, version, tag)
 
@@ -208,9 +220,16 @@ async def run_publish(
     except Exception as exc:
         # `publish_failed` is a RESTING state, not a dead end: the project can be published again and
         # the retry reuses the same token. Recording the reason is what makes that retry informed.
-        # A failure to record the failure must not mask the original error.
-        await _converge(project_handle, {"event": "publish_failed", "actor": subject, "error": str(exc)})
+        #
+        # The log comes FIRST and the recording is itself guarded, because a failure while recording
+        # the failure must not replace the original exception — the operator would then be shown the
+        # actor's error instead of the one that actually broke the publish, and the real cause would
+        # never be logged at all. That is precisely what an unguarded call here did.
         logger.exception("publish saga failed for project %s (token %s)", project.project_id, publish_id)
+        try:
+            await _converge(project_handle, {"event": "publish_failed", "actor": subject, "error": str(exc)})
+        except Exception:
+            logger.exception("could not record the publish failure for project %s — the original error stands", project.project_id)
         raise
 
 

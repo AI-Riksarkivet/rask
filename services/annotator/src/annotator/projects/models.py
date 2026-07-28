@@ -185,6 +185,11 @@ class Task(BaseModel):
     lease_expires_at: datetime | None = None
     source: ItemSource
     media: MediaRef
+    #: Captured from the PROJECT at send time. It decides whether `submit` lands in `in_review` or
+    #: straight in `accepted`, so it must never be a request field: an annotator who could pass it
+    #: would self-accept and walk straight past review — the one guarantee this whole plane exists
+    #: to provide.
+    review_required: bool = True
     submitted_by: str | None = None
     submitted_at: datetime | None = None
     reviewed_by: str | None = None
