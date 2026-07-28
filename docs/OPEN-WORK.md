@@ -80,8 +80,23 @@ stated in `runners/README.md`. Do not resolve this by making `runners.` importab
 **What.** `docs/DESIGN-annotation-projects.md` — entities, both state machines, the authz doors, what a
 publish emits, and a slice plan.
 
-**Where it stands.** Slices `S1`–`S4` (domain core, FGA type, publish schema, catalog `create` pin) need no
-store and are the next buildable unit. `S5`–`S10` need B1's actors.
+**Where it stands** *(re-checked 2026-07-28)*. Slices `S1`–`S4` (domain core, FGA type, publish schema,
+catalog `create` pin) need no store and are the next buildable unit — none of them exists yet
+(`services/annotator/projects/` is absent). **`S5` is DONE**: the design doc said the state store did not
+exist, and it does — `lance-statestore`, now with three proven consumers (`workflow-graph`, `saved-views`,
+`dock-layout`). The doc has been corrected. So the fence is at **`S6`** — the actors — which is B1's second
+half, and `S7`–`S10` follow it.
+
+**The management view people ask for is `S9`** ("Projects landing replaces the `DataSelection.svelte`
+gallery; send-to-project from search/atlas; the canvas reads and writes drafts"). It is four slices deep,
+which is why entering the annotator still shows a gallery rather than a task list.
+
+**One thing to decide before `S6`**, now recorded in the design doc's §10: `services/annotator` has **no
+verified subject** — no `OIDCVerifier`, and `get_author` reads a trusted `X-User` header defaulting to
+`"anon"`. Every entity in the design is keyed on who owns or claims it, so the actors must either be hosted
+in the catalog (which has `CurrentToken` and is already in the store's `scopes`) or the annotator must grow
+a verifier. Building `S6` against `X-User` would be the cross-user leak the user-state routes exist to
+prevent.
 
 ---
 
@@ -135,7 +150,7 @@ compliance deploy must raise it manually (`API.md` records the caveat).
 | **Models registry MLflow parity** *(was #101)* | Deprioritized until after the product pass |
 | **Annotator residuals** *(was #100)* — export serializers (COCO / YOLO / CSV / HF) + managed label taxonomy | Owner to schedule. ⚠️ **The export half is the same service as the merge plan's P7c `exporter`** (ALTO 4.4 first, owner-ruled R4: serialization is a separate microservice, never inside the lakehouse or the movers). COCO/YOLO/CSV/HF become additional projections from gold — new functions in that service, not a second export path. Do not build these twice |
 | **Storybook** | Struck for now — rask keeps its own (plan P2 step 3); adopt rask's rather than re-deciding |
-| `/lakehouse/data` scaffold, `/lakehouse/admin` orphan | Product decisions, not defects with one right answer |
+| `/lakehouse/catalog` scaffold, `/lakehouse/admin` orphan | Product decisions, not defects with one right answer |
 
 ---
 
@@ -282,7 +297,7 @@ deletes; the real work is ~82 docs needing UPDATE.
 Every claim below was re-verified against this tree on 2026-07-28 before being recorded here.
 
 **Why it is split.** A second workstream (the information-architecture goal: grouped sidebar, the
-`/lakehouse/data/*` → `/lakehouse/catalog/*` rename, one shell per zone, the storage registry) rewrites
+`/lakehouse/catalog/*` → `/lakehouse/catalog/*` rename, one shell per zone, the storage registry) rewrites
 the very things a third of these docs describe. Fixing those docs first means fixing them twice. F1 is
 everything disjoint from that work and can start immediately; **F2 is not optional and not dropped** — it
 is the same sweep, deferred until the IA goal closes.

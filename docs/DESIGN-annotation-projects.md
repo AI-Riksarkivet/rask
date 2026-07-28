@@ -711,15 +711,28 @@ facet actually reach the event.
 
 ---
 
-**The fence.** Everything below needs `#124`. Not "would be nicer with" — needs. There is no state store in
-the cluster (§1.2), so there is nowhere to put a project, and Dapr workflow uses the actor framework
-internally, so the one `actorStateStore: "true"` flag gates `S6` and `S8` as well as `S5`.
+**The fence — and it has MOVED.** As written, everything below needed `#124` because there was no state
+store in the cluster (§1.2). There is one now, so the fence is no longer at `S5`; it is at `S6`. Dapr
+workflow still uses the actor framework internally, so the same `actorStateStore: "true"` flag continues to
+gate `S6` and `S8` — but the flag is on, and the store beneath it is proven.
 
-### `S5` — the state store — **blocked on `#124`**
+### `S5` — the state store — **DONE** *(corrected 2026-07-28)*
 
-A `state.redis`-compatible component with `actorStateStore: "true"` plus its backing store, in `chart/`.
-Blocked twice over: the component does not exist, and `chart/` is owned by another workstream. Useful beyond
-this design — `#102`'s `query.live` and the atlas/lineage read caches want the same store.
+~~A `state.redis`-compatible component with `actorStateStore: "true"` plus its backing store, in `chart/`.
+Blocked twice over: the component does not exist, and `chart/` is owned by another workstream.~~
+
+`lance-statestore` is live: `state.postgresql` on the already-deployed AGE Postgres, DSN resolved from
+OpenBao through the `lance-secrets` Dapr secret store, `actorStateStore: "true"`, scoped to `catalog` and
+`annotator` (`chart/templates/dapr-statestore.yaml`, `chart/values.yaml` → `stateStore`). Postgres rather
+than Redis, decided on properties rather than preference — see `docs/DESIGN-interactive-state.md`: durable
+workflow that loses its state on a pod restart is not durable, and `maxmemory-policy` is server-wide, so one
+Redis cannot safely be both an evicting cache and an actor store.
+
+It is proven by **three** consumers, not one: `workflow-graph` and `saved-views` (the media zone's canvas
+and searches) and `dock-layout` (every zone's dock workbench arrangement), all per-subject and all
+round-tripping through the sidecar. Whoever picks up `S6` should read
+`packages/service-kit/src/service_kit/governed/user_state.py` first — the key rules, the fail-closed
+posture, and the `||` separator trap are already solved there.
 
 ### `S6` — repositories and actors — **blocked on `S5`**
 
@@ -778,6 +791,16 @@ The payoff, in the units of §1.1: **615 Lance versions for 3 rows becomes one L
 
 Recorded rather than hidden, each with what would unblock it:
 
+* **The annotator service has no verified subject** *(found 2026-07-28 — decide this BEFORE `S6`)*.
+  Every entity in §4 is keyed on who owns or claims it, and `services/annotator` cannot answer that:
+  it builds no `OIDCVerifier`, and its `get_author` (`service_kit/media/deps.py`) reads a **trusted
+  `X-User` header** defaulting to `"anon"`. Task assignment keyed on a client-settable header is the
+  exact cross-user leak the per-subject user-state routes were built to prevent — which is precisely
+  why those routes live in the **catalog** and not here (`catalog/api/v1/endpoints/user_state.py`
+  states the reasoning in full). Two ways out, and they are not equivalent: host `ProjectActor` /
+  `TaskActor` in the catalog, which already has `CurrentToken` and is already in the state store's
+  `scopes`; or give the annotator a verifier of its own, which is more work but keeps the domain where
+  §3 put it. Unblocked by picking one. Do not build `S6` against `X-User`.
 * **Consensus / multi-annotator overlap** (LS `overlap` + `precomputed_agreement`, CVAT consensus replicas +
   majority-vote merge). Out of v1. Unblocked by a real user needing agreement metrics; costs an agreement
   metric, a merge algorithm, and `Draft` going from one-per-task to N-per-task.
