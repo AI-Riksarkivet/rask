@@ -47,7 +47,7 @@ export const MEDIA_ZONE_NAV: ZoneNav = {
 				},
 				{
 					title: 'Annotate',
-					href: '/annotator',
+					href: '/annotator/',
 					match: seg('/annotator'),
 					icon: SquarePen,
 					reload: true,
