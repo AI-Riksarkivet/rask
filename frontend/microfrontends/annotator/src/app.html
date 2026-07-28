@@ -26,7 +26,12 @@
 		<script>
 			(function () {
 				try {
-					var mode = localStorage.getItem('mode-watcher-mode') || 'system';
+					// Fall back to 'dark', NOT 'system'. This must agree with the
+					// <ModeWatcher defaultMode="dark" /> every zone mounts: with an empty
+					// localStorage this script decided the first paint on its own, so the
+					// annotator followed the OS preference and rendered LIGHT while every other
+					// zone rendered dark — the one zone that looked like a different product.
+					var mode = localStorage.getItem('mode-watcher-mode') || 'dark';
 					var light =
 						mode === 'light' ||
 						(mode === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches);
