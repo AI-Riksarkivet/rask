@@ -37,6 +37,7 @@ from annotator.projects.models import (
     PublishRecord,
     Task,
     TaskState,
+    new_id,
 )
 
 
@@ -166,6 +167,17 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface):
             project.publish_error = str(payload.get("error", "publish failed"))
         elif event == "publish":
             project.publish_error = None  # a retry clears the previous failure
+            # Mint the idempotency token ONCE, here, and reuse it on every retry. This is what makes
+            # the saga's only non-idempotent step — creating the table — idempotent BY KEY: the table
+            # id is derived from this token, so a retry after a crash finds the table it already
+            # created rather than making a second one. Minting it per-attempt would produce a fresh
+            # table per retry and leave orphans nobody is tracking; minting it at the END (inside
+            # `PublishRecord`) would be too late for the step that needs it.
+            #
+            # This is the "token-keyed idempotent" property `docs/OPERATORS.md` §4 requires of every
+            # multi-step path, and it is why this saga needs no workflow engine.
+            if project.pending_publish_id is None:
+                project.pending_publish_id = new_id()
 
         await self._store(project)
         return project.model_dump(mode="json")

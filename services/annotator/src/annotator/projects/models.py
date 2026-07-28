@@ -217,6 +217,13 @@ class AnnotationProject(BaseModel):
     updated_at: datetime | None = None
     published: PublishRecord | None = None
     publish_error: str | None = None
+    #: The idempotency token for the publish saga, minted at the `publish` transition and REUSED by
+    #: every retry. It exists so the saga's non-idempotent step — creating the table — becomes
+    #: idempotent by key: the table id is derived from it, so a retry after a crash either finds the
+    #: table it already created or creates it, but never makes a second one. `PublishRecord.publish_id`
+    #: is the same value, copied on success; this field is what a RETRY reads, and it must therefore
+    #: outlive a failure rather than being cleared with `publish_error`.
+    pending_publish_id: str | None = None
 
     @property
     def fga_object(self) -> str:

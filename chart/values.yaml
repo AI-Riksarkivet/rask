@@ -749,8 +749,13 @@ stateStore:
   # Only the services that own operational state may load it. An unscoped component is loadable by
   # every app-id in the namespace, which would let any service write another's state.
   scopes:
-    - annotator # #122 task/project state, and the actor per task
-    - catalog # workflow instances for the publish saga
+    - annotator # #122 task/project state, plus the per-task and per-project actors and their reminders
+    # The catalog is scoped for the publish saga's own state. NOTE: the saga does NOT run on a
+    # workflow engine — it is token-keyed idempotent (docs/OPERATORS.md §4), driven by the annotator's
+    # project actor off `pending_publish_id`. This scope predates that decision; it stays because the
+    # catalog is the service that creates the published table, but nothing here provisions workflow
+    # instances and none are expected.
+    - catalog
 
 # --- Backups — a FALLBACK for the SELF-CONTAINED in-cluster path only. OFF by default. When you run the
 # managed/operator path (CloudNativePG for AGE, rustfs-operator for S3 — the rask deployment), DISABLE these
@@ -1101,10 +1106,17 @@ dapr:
       # or a subchart-default flip silently dropping inter-service encryption. Confirm live with
       # `dapr mtls -k` (sidecars 2/2 with SPIFFE identities).
       enabled: true
-    # NOTE: we use pub/sub + bindings + secret stores + service invocation only (no actors/workflows/jobs),
-    # so placement + scheduler are logically unused — BUT do NOT disable them: daprd 1.18 connects to BOTH
-    # at startup unconditionally and never becomes Ready without them (verified live — sidecars stuck 1/2
-    # with "no such host: dapr-placement-server / dapr-scheduler-server-a"). The control plane stays.
+    # NOTE: we use pub/sub + bindings + secret stores + service invocation + ACTORS. Workflows and jobs
+    # stay un-adopted (docs/OPERATORS.md §4). Placement is therefore LOAD-BEARING, not spare: the
+    # annotator registers AnnotationTaskActor and AnnotationProjectActor, and Dapr's single-activation
+    # guarantee for those is what serialises two annotators claiming one task — placement is the
+    # component that provides it. (This comment claimed "no actors" until 2026-07-28, which was true
+    # when written and false the moment the task plane landed; a stale claim here is how someone
+    # concludes placement is spare and disables it.)
+    # Scheduler is likewise not optional: it backs actor REMINDERS, which is how task leases expire.
+    # And independently of both, do NOT disable either — daprd 1.18 connects to BOTH at startup
+    # unconditionally and never becomes Ready without them (verified live — sidecars stuck 1/2 with
+    # "no such host: dapr-placement-server / dapr-scheduler-server-a").
 
 kueue:
   enabled: true

@@ -98,6 +98,31 @@ skill + #115 review): **Dapr Workflow stays un-adopted** — every multi-step pa
 redeliver-the-whole-message model suffices; a workflow engine would add a sidecar state store
 dependency for crash-recovery semantics we already get from idempotency keys.
 
+> **Re-examined 2026-07-28 against the annotation publish saga, and upheld — but the ruling is now
+> load-bearing rather than incidental, so here is what upholding it cost.** The publish saga
+> (project → catalog-created table → tag → publish record → `publish_succeeded`) is the first path
+> with a step that is *not naturally* idempotent: creating a table. The ruling's own criterion is
+> what decided it — the step is made idempotent BY KEY. `AnnotationProject.pending_publish_id` is
+> minted once by the project actor at the `publish` transition and reused by every retry, and the
+> table id is derived from it, so a crashed-and-retried publish converges on the table it already
+> created. Minting the token per attempt would leave one orphan table per crash; minting it at the
+> end (inside `PublishRecord`) would be too late for the step that needs it.
+>
+> `tests/unit/test_publish_saga.py` is the evidence, not this paragraph: it kills the saga after each
+> step and re-runs it, asserting one table and one publish record throughout, and it fails loudly if
+> the token is ever re-minted.
+>
+> **What the estate DOES now use that this section predates: actors.** The annotator registers
+> `AnnotationTaskActor` and `AnnotationProjectActor`. That makes Dapr **placement** load-bearing (the
+> single-activation guarantee is the claim lock) and **scheduler** load-bearing (reminders are how
+> task leases expire). Actors were never covered by the workflow ruling and are not affected by it,
+> but `chart/values.yaml` asserted "no actors" until the same date — corrected there.
+>
+> **When to reopen this.** If a multi-step path appears whose steps cannot be made idempotent by any
+> caller-chosen key — the honest signal is finding yourself wanting to *generate* an id mid-saga —
+> the argument above stops applying and a workflow engine earns its dependency. That is a real
+> possibility for silver→gold quality promotion, whose assertions may need per-attempt run identity.
+
 **Lance — no operator exists, none is missing.** Lance is a format + libraries; its "control
 plane" is the manifest on S3, and CAS commits are the reconciler. The operator-shaped concerns it
 DOES have are already owned elsewhere:
