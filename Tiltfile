@@ -1,13 +1,24 @@
 # -*- mode: Python -*-
-# lance-ns dev loop on kind. One `tilt up` builds the app images, deploys the umbrella Helm chart
+# rask dev loop on k3s. One `tilt up` builds the app images, deploys the umbrella Helm chart
 # (every component — catalog, lineage, web, Dapr, NATS, Apache-AGE Postgres, OpenFGA, Dex, RustFS,
 # OpenBao), and HOT-RELOADS the FastAPI services on source change (Tilt syncs the file, uvicorn
 # --reload restarts the worker in ~1s instead of a full rebuild).
 #
-# Prereqs: a kind cluster (`kind create cluster --config deploy/kind/kind-config.yaml`) + helm.
-# Then: tilt up   (inspect with k9s, or the Tilt UI at http://localhost:10350)
+# Prereqs: `make k3s-up` (the cluster + release) and `make tilt-registry` (once).
+# Then: `make tilt-up`   (inspect with `make k9s`, or the Tilt UI at http://localhost:10350)
 
 load('ext://helm_resource', 'helm_resource', 'helm_repo')
+
+# k3s' context is plainly named 'default', which Tilt does NOT recognise as a local cluster
+# (it knows kind-*, k3d-*, minikube, docker-desktop, …). Without this it refuses to deploy at
+# all — "might be production" — and the dev loop never starts. Named explicitly rather than
+# via allow_k8s_contexts(k8s_context()), which would wave through a real remote cluster.
+allow_k8s_contexts('default')
+
+# k3s serves containerd, NOT the host docker daemon, so a locally-built image is invisible to it.
+# `make tilt-registry` runs a registry on :5000 and points k3s' containerd at it over plaintext;
+# this pushes there so the cluster can actually pull what Tilt builds.
+default_registry('localhost:5000')
 
 # Subchart repos (helm_resource resolves dapr/nats/openfga from chart/charts/, vendored via
 # `helm dependency build ./chart` — these keep them refreshable).

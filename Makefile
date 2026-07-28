@@ -1,4 +1,4 @@
-.PHONY: help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge tilt-registry tilt-up tilt-down e2e
+.PHONY: help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap tilt-registry tilt-up tilt-down e2e
 
 help:
 	@echo "Targets:"
@@ -341,6 +341,9 @@ k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait 
 	@echo "UI → http://<node-ip>/   (catch-all ingress; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
 	@echo "API → http://<node-ip>/api/ray/health"
 
+k9s: bootstrap ## Browse the k3s cluster in k9s (the chart's NOTES.txt points here)
+	@KUBECONFIG=$(KUBECONFIG) $(LOCALBIN)/k9s
+
 k3s-down: ## Uninstall the rask release (keep PVCs)
 	$(HELM) uninstall rask || true
 
@@ -369,6 +372,9 @@ HOST_ARCH := $(shell uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
 KIND_V    := v0.25.0
 KUBECTL_V := v1.31.3
 FGA_V     := 0.6.4
+K9S_V     := v0.32.7
+# k9s tags its assets Linux/Darwin (capitalised), unlike everything else above.
+K9S_OS    := $(shell uname -s)
 
 bootstrap: ## Download kind/kubectl/fga into .localbin (idempotent) — helm + docker must be on PATH
 	@mkdir -p $(LOCALBIN)
@@ -376,6 +382,7 @@ bootstrap: ## Download kind/kubectl/fga into .localbin (idempotent) — helm + d
 	@test -x $(KIND)              || { echo "kind ->"; curl -fsSL -o $(KIND) "https://kind.sigs.k8s.io/dl/$(KIND_V)/kind-$(HOST_OS)-$(HOST_ARCH)" && chmod +x $(KIND); }
 	@test -x $(LOCALBIN)/kubectl  || { echo "kubectl ->"; curl -fsSL -o $(LOCALBIN)/kubectl "https://dl.k8s.io/release/$(KUBECTL_V)/bin/$(HOST_OS)/$(HOST_ARCH)/kubectl" && chmod +x $(LOCALBIN)/kubectl; }
 	@test -x $(LOCALBIN)/fga      || { echo "fga ->"; curl -fsSL "https://github.com/openfga/cli/releases/download/v$(FGA_V)/fga_$(FGA_V)_$(HOST_OS)_$(HOST_ARCH).tar.gz" | tar xz -C $(LOCALBIN) fga; }
+	@test -x $(LOCALBIN)/k9s      || { echo "k9s ->"; curl -fsSL "https://github.com/derailed/k9s/releases/download/$(K9S_V)/k9s_$(K9S_OS)_$(HOST_ARCH).tar.gz" | tar xz -C $(LOCALBIN) k9s; }
 	@command -v docker >/dev/null || { echo "!! docker not on PATH — install https://docs.docker.com/get-docker/"; exit 1; }
 	@command -v helm   >/dev/null || { echo "!! helm not on PATH — install https://helm.sh/docs/intro/install/"; exit 1; }
 	@echo "toolchain ready in .localbin ($(HOST_OS)/$(HOST_ARCH))"
@@ -444,11 +451,11 @@ tilt-registry: ## One-time: local image registry + point k3s at it (sudo; restar
 	bash scripts/k3s-registry.sh
 
 tilt-up: ## Dev loop: editable fleet images + uvicorn --reload via Tilt (needs k3s-up + tilt-registry)
-	@command -v $(LOCALBIN)/tilt >/dev/null 2>command -v tilt >/dev/null 2>&1 1 || { echo "!! tilt not installed — https://docs.tilt.dev/install.html"; exit 1; }
-	$(LOCALBIN)/tilt up
+	@test -x $(LOCALBIN)/tilt || command -v tilt >/dev/null 2>&1 || { echo "!! tilt not installed — https://docs.tilt.dev/install.html"; exit 1; }
+	@KUBECONFIG=$(KUBECONFIG) $(LOCALBIN)/tilt up
 
 tilt-down: ## Stop the Tilt session and revert the dev deploy (keeps the cluster/data)
-	tilt down
+	@KUBECONFIG=$(KUBECONFIG) $(LOCALBIN)/tilt down
 
 # ---- e2e (Playwright) -------------------------------------------------------
 e2e: ## Browser e2e against a running deploy (RASK_E2E_BASE_URL, default http://localhost)
