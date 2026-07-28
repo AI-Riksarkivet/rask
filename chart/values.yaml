@@ -383,6 +383,11 @@ frontend:
 # --- Governance (Dex OIDC + OpenFGA). Off → open dev mode; on → the full governed demo. ------------
 auth:
   enabled: false
+  # Permit auth.enabled=true WITHOUT a frontend sign-in flow. Off by default, and the chart REFUSES
+  # that combination (templates/auth-consistency.yaml): it installs green and then shows every user
+  # a governed UI with no way in, while the catalog 401s each read. Set this only for an estate that
+  # is deliberately API-only — it must be a decision, never an omission.
+  allowHeadless: false
   # Lock root (top-level) namespace/table creation to warehouse-create-grant holders. Off in dev
   # (open self-serve); values-prod sets it true so a token alone can't squat root namespaces.
   lockRootCreate: false
