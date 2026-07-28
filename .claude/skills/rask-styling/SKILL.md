@@ -1,6 +1,6 @@
 ---
 name: rask-styling
-description: Styling and component authoring in rask's `@rask/ui` design system — OKLCH tokens, Tailwind 4 `@source`, `tv()` variants, `data-slot`, dark mode, the legacy palette bridge. Use when a zone renders unstyled, when picking a colour or writing `class=`, when adding or skinning a `@rask/ui` component, when touching `tokens.css` / `app.css` / a `*.stories.svelte`, or when a Bits UI primitive needs wrapping.
+description: Styling and component authoring in rask's `@rask/ui` design system — OKLCH tokens, Tailwind 4 `@source`, `tv()` variants, `data-slot`, dark mode, the legacy palette bridge, and theming third-party stylesheets (dockview's `--dv-*`, Svelte Flow) through `layer(base)`. Use when a zone renders unstyled, when picking a colour or writing `class=`, when adding or skinning a `@rask/ui` component, when a vendor stylesheet out-specifies Tailwind utilities, when theming or animating a dock, or when touching `tokens.css` / `app.css` / a `*.stories.svelte`.
 ---
 
 # rask styling (`@rask/ui`)
@@ -20,6 +20,12 @@ Every zone's `src/app.css` is exactly this, and the `@source` depth is **three**
 @source '../../../packages/ui/dist';
 ```
 
+A zone that mounts a **dock** adds one more line — see § *Third-party stylesheets*:
+
+```css
+@import '@rask/dockview/styles.css' layer(base);   /* lakehouse, media, compute */
+```
+
 Tailwind 4 skips `node_modules`, so without `@source` every `@rask/ui` class is silently dropped — no error, no warning, just an unstyled page. It points at **`dist`**, so a component edit reaches a zone's CSS only after `svelte-package` reruns (`bun --cwd=frontend/packages/ui run build`, or the `dev` watcher).
 
 > `docs/architecture/frontend-conventions.md:319,347` ships this line with **four** `../`. That copy is wrong; three is correct — verified at `frontend/microfrontends/home/src/app.css:7`.
@@ -31,6 +37,47 @@ Tailwind 4 skips `node_modules`, so without `@source` every `@rask/ui` class is 
 Beyond the shadcn set, rask defines **`success` / `warning`** pairs — consumed by `badgeVariants` (`badge.svelte:14-15`). Radius derives from `--radius: 0.625rem` via `calc()`. Fonts are Inter and JetBrains Mono.
 
 **The legacy bridge** (`tokens.css:48-68`) aliases `--ink/--mut/--faint/--line/--panel/--panel-2/--ok/--fail/--warn/--amber` onto the real tokens. Those names were referenced by ~800 sites across 45 components while being **undefined** — so `border-color: var(--line)` fell back to `currentColor` and painted every hairline in full text colour. That was the estate's long-standing "why does this look weird". When you touch a component still on the bridge, migrate it to the token name; the block retires when `grep -r "var(--ink" frontend/` comes back empty.
+
+## Third-party stylesheets — `layer(base)`, always
+
+A vendor sheet ships unlayered CSS whose selectors out-specify Tailwind utilities, so a zone's own
+`class=` on that library's content silently loses. Import it into `base` and every utility sits above
+it, permanently. Two zones already do this and a third pattern-matched it:
+
+```css
+@import '@xyflow/svelte/dist/style.css' layer(base);   /* lakehouse, media */
+@import '@rask/dockview/styles.css'      layer(base);   /* lakehouse, media, compute */
+```
+
+`@rask/dockview/styles.css` is **one import, not two** — it pulls dockview's own 124 KB sheet and then
+the rask theme block. There is no `@source` to add for it: the package ships no Tailwind utility
+classes, only `--dv-*` custom properties.
+
+## Theming dockview — 40 custom properties, zero JavaScript
+
+dockview exposes 113 `--dv-*` custom properties and 18 shipped themes. rask defines its own,
+`.dockview-theme-rask`, mapping ~40 of them onto OKLCH tokens — surfaces to `--card`/`--background`,
+the four tab states to `--foreground`/`--muted-foreground`, sashes to `--ring`, the drag overlay to a
+`color-mix()` of `--primary`, radii to `calc(var(--radius) - …)`.
+
+**The light/dark flip needs no JavaScript**, and that is the design point: every `--dv-*` resolves
+through a rask token that is itself re-declared under `.dark`, so mode-watcher toggling the class
+re-themes the dock underneath. `DockviewTheme.colorScheme` is therefore **deliberately unset** — it is
+a static field on a theme object and would be a second source of truth that could only go stale.
+
+Three groups are **deliberately unmapped**, and re-mapping them is a regression:
+
+- `--dv-color-{abyss,gh,mocha,monokai,nord,sol}-*` — the other shipped themes' private palettes. Read
+  only by their own theme classes; dead weight here.
+- `--dv-tab-group-color-*` — the nine user-pickable tab-group accents. A user's semantic choice per
+  group, not a theme surface. Overriding them collapses nine distinguishable colours onto one.
+- `--dv-overlay-z-index` — dockview's default already sits above the grid and below a Bits UI portal,
+  which is the ordering the estate wants.
+
+The non-CSS half lives in `theme.ts` (`gap`, `dndTabIndicator`, `tabAnimation`, `dndOverlayMounting`,
+`tabGroupIndicator`) — behavioural fields CSS cannot express. **Do not add GSAP to the dock chrome:**
+dockview rewrites panel transforms every frame under `defaultRenderer: 'always'`, so a tween on the
+same property is a second writer and reads as jank. Animate *inside* a panel if you want motion.
 
 ## Dark mode
 

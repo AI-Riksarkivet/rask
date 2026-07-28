@@ -1,6 +1,6 @@
 ---
 name: rask-frontend
-description: The rask `frontend/` plane — seven SvelteKit 2 + Svelte 5 zones composed by Turborepo's microfrontend proxy, three data-fetching dialects, and the oxlint/oxfmt/zone-contract gates. Use when touching a zone, `@rask/api`, `@rask/zone-contract`, `microfrontends.json`, or any `.svelte`; when adding a route or fetching data; when a cross-zone link 404s or an SSR fetch hairpins; or when adding a zone or a frontend dependency.
+description: The rask `frontend/` plane — seven SvelteKit 2 + Svelte 5 zones composed by Turborepo's microfrontend proxy, three data-fetching dialects, the `@rask/dockview` workbenches, and the oxlint/oxfmt/zone-contract gates. Use when touching a zone, `@rask/api`, `@rask/dockview`, `@rask/zone-contract`, `microfrontends.json`, or any `.svelte`; when adding a route or fetching data; when working on a dock, panel, workbench or saved layout; when a panel loses its state on drag or a cross-zone link 404s or an SSR fetch hairpins; or when adding a zone or a frontend dependency.
 ---
 
 # rask frontend
@@ -27,19 +27,64 @@ Package name equals directory name for all seven (`manifest.test.ts:53`). Base i
 
 Nav labels decouple from directory names on purpose — "named for what it is FOR, not the directory it lives in" (`nav-config.ts:301-303`).
 
-## The seven packages
+## The eight packages
 
 Only `@rask/ui` has a build (`svelte-package` → `dist/`); the rest are consumed JIT as raw TS.
 
 | package | what it is |
 |---|---|
 | `@rask/ui` | Design system + `@rask/ui/shell`. → **`rask-styling`** |
-| `@rask/api` | Gateway client (`ray`, `ingest`, `projects`, `me`) **plus** the OIDC/BFF plane (`bff.ts`, `oidc.ts`) and the lineage client |
+| `@rask/api` | Gateway client (`ray`, `ingest`, `projects`, `me`) **plus** the OIDC/BFF plane (`bff.ts`, `oidc.ts`), the lineage client, and `@rask/api/dock-layout` |
+| `@rask/dockview` | Svelte 5 binding over **dockview 7** — the docked workbenches. → **§ Workbenches** |
 | `@rask/media-api` | Arrow-backed media/viewer client |
 | `@rask/engine` | Framework-agnostic PixiJS/WebGPU annotation canvas (ra-anno lineage) |
 | `@rask/labeling` | The `LabelOp` model + annotator Arrow-IPC transport |
-| `@rask/zone-contract` | **Test-only** — 12 files / 699 tests gating the estate's shape |
+| `@rask/zone-contract` | **Test-only** — 12 files / 711 tests gating the estate's shape |
 | `@rask/config` | One shared `tsconfig.base.json`, extended by 6 of 14 packages |
+
+## Workbenches — `@rask/dockview`
+
+Three zones ship a **dock**: an arrangeable, per-user-persisted panel layout. `lakehouse`
+(`/lineage/workbench` — graph · runs · events), `media` (`/workbench` — atlas · treemap · topic
+results), `compute` (`/workbench` — jobs · cluster · actors). It is a **thin binding, not a wrapper**:
+consumers hold the real `DockviewApi` and call its documented methods.
+
+Depend on **`dockview`, never `dockview-core`.** Their *type* entrypoints are identical
+(`export * from 'dockview-core'`), which makes core look like the leaner honest choice — it is not.
+`dockview`'s runtime entry is a 37 KB layer that `registerModules(...)` for **ContextMenu,
+KeyboardDocking, AdvancedDnD, TabGroupChips and Accessibility**. Import core and all five are
+silently absent, including the aria-live announcements; the library logs the mistake once, at
+runtime, where nothing fails.
+
+**Four invariants.** Break any and the dock is wrong:
+
+1. **Panels mount once.** `SveltePanelRenderer` calls Svelte's `mount()` in `init()` and `unmount()`
+   only in `dispose()`. Verified in dockview's shipped bundle: a panel's renderer is built once in the
+   `DockviewPanelModel` constructor and disposed only from `_doRemovePanel` when `skipDispose` is
+   falsy — every *move* path re-parents the same instance. So a running interval, an `@xyflow/svelte`
+   viewport and an open subscription all survive a drag. Anything that mounts outside `init()` breaks it.
+2. **`defaultRenderer: 'always'`.** Component state survives a move under either renderer, but
+   **DOM-held** state (scrollTop, focus, `<video>` position) does not — the default `onlyWhenVisible`
+   *removes the element from the document*. Measured: a list scrolled to 260 px returned at 0 while the
+   panel's own counter ticked straight through. `'always'` parks panels in the overlay container instead.
+3. **Layout is per-subject, not localStorage.** One `@rask/api/dock-layout` store for the estate, over
+   the catalog's `dock-layout` user-state document on the Dapr state store. Three outcomes —
+   `ok` / `absent` / **`unreadable`** — and `unreadable` must refuse to save. Treat it as empty and the
+   next autosave overwrites a workspace that is still there.
+4. **The dock is dynamically imported.** ~100 KB gzipped in-bundle, on one route of ~11–25. It must
+   land in `deferredGzipKB`, never the entry graph. Its *stylesheet* is imported statically (10 KB, and
+   deferring it buys a flash of unstyled dock).
+
+Context crosses the mount boundary: `<Dock>` captures its own tree with `getAllContexts()` and hands
+it to every panel mount, so a zone uses ordinary `createContext` above the dock and panels call the
+getter. Layout is SSR-read via a remote `query()` and passed as `initial`, so the saved arrangement is
+the first paint rather than a replacement for seeded defaults.
+
+⚠️ **The chrome is currently thin.** Only 2 of dockview's ~21 options are wired (`dndStrategy`,
+`defaultRenderer`). Split affordances, popout, floating groups, context menus, keyboard docking,
+custom tabs and the watermark are all available in the MIT core and **not yet enabled**. Note also
+that `dndStrategy: 'pointer'` — chosen for Linux reliability and Playwright testability — *disables
+cross-window drag*, which is exactly what popout needs. Resolve that trade before wiring popout.
 
 ## Fetching data — three dialects, one per zone family
 
