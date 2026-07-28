@@ -40,7 +40,7 @@ service URLs are overridable via:
 
 | Variable | Default | Upstream |
 |---|---|---|
-| `RASK_RAY_URL` | `http://127.0.0.1:8804` | ray (`/api/ray`, `/api/serve`) |
+| `RASK_COMPUTE_URL` | `http://127.0.0.1:8804` | compute (`/api/ray`, `/api/serve`) |
 | `RASK_CONTROLPLANE_URL` | `http://127.0.0.1:8820` | controlplane (`/api/projects`) |
 | `RASK_CATALOG_API_URL` | `http://127.0.0.1:2333` | lance catalog (`/api/catalog`) |
 | `RASK_LINEAGE_API_URL` | `http://127.0.0.1:8000` | lineage (`/api/lineage`) |

@@ -42,15 +42,15 @@ def _subs(client: TestClient) -> list[dict]:
 
 def test_mover_default_has_no_dlq_declaration(monkeypatch: pytest.MonkeyPatch) -> None:
     subs = _subs(_mover_app(monkeypatch, None))
-    assert [s["topic"] for s in subs] == ["medallion.raw"]  # only the stage subscription
+    assert [s["topic"] for s in subs] == ["medallion.bronze"]  # only the stage subscription
     assert not subs[0].get("deadLetterTopic")  # pre-existing shape — no silent behavior change
 
 
 def test_mover_dlq_declares_dead_letter_and_parking_route(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = _mover_app(monkeypatch, "dlq.medallion.raw")
+    client = _mover_app(monkeypatch, "dlq.medallion.bronze")
     subs = {s["topic"]: s for s in _subs(client)}
-    assert subs["medallion.raw"]["deadLetterTopic"] == "dlq.medallion.raw"
-    assert subs["dlq.medallion.raw"]["route"].endswith("/dlq-event")  # the parking subscription
+    assert subs["medallion.bronze"]["deadLetterTopic"] == "dlq.medallion.bronze"
+    assert subs["dlq.medallion.bronze"]["route"].endswith("/dlq-event")  # the parking subscription
 
 
 def test_dlq_route_parks_with_error_log_and_acks(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
@@ -60,11 +60,11 @@ def test_dlq_route_parks_with_error_log_and_acks(monkeypatch: pytest.MonkeyPatch
 
     parked: list[str] = []
     monkeypatch.setattr(dlq_mod, "record_dead_letter", parked.append)
-    client = _mover_app(monkeypatch, "dlq.medallion.raw")
+    client = _mover_app(monkeypatch, "dlq.medallion.bronze")
     with caplog.at_level(logging.ERROR, logger="medallion.api.dlq"):
         response = client.post(
             "/dlq-event",
-            json={"id": "evt-1", "topic": "medallion.raw", "data": {"token": "t-123"}},
+            json={"id": "evt-1", "topic": "medallion.bronze", "data": {"token": "t-123"}},
             headers={"dapr-api-token": "s3cret"},
         )
     assert response.status_code == 200
@@ -75,7 +75,7 @@ def test_dlq_route_parks_with_error_log_and_acks(monkeypatch: pytest.MonkeyPatch
 
 def test_dlq_route_rejects_forged_deliveries(monkeypatch: pytest.MonkeyPatch) -> None:
     # Same token guard as every sidecar-delivered route — a forged POST can't fake a parked message.
-    client = _mover_app(monkeypatch, "dlq.medallion.raw")
+    client = _mover_app(monkeypatch, "dlq.medallion.bronze")
     assert client.post("/dlq-event", json={}).status_code == 403
 
 

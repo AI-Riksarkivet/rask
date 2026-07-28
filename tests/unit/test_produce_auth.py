@@ -291,7 +291,7 @@ def _train_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     # ray_enabled=False → a request PASSING the guard hits the disabled-head 409 (a crisp "guard passed"
     # signal distinct from the guard's own 403); oidc off keeps the human door shut.
     app.dependency_overrides[get_settings] = lambda: SimpleNamespace(
-        oidc_enabled=False, produce_admin_project="acme", ray_enabled=False, s3_endpoint="", raw_uri=""
+        oidc_enabled=False, produce_admin_project="acme", ray_enabled=False, s3_endpoint="", bronze_uri=""
     )
     return TestClient(app, raise_server_exceptions=False)
 

@@ -1,12 +1,13 @@
 # syntax=docker/dockerfile:1.11
-# rask ray service image — FastAPI on python:3.13-slim-bookworm.
-# (uv member stays `ray-api`: a Python package named `ray` would shadow PyPI ray.)
+# rask compute service image — FastAPI on python:3.13-slim-bookworm.
+# (R22: the Ray-plane service is `compute` on every surface — uv member, import,
+# k8s/dapr/image name. The Ray CLUSTER image stays .docker/ray-cluster.dockerfile.)
 # Build:
-#   docker buildx build -f .docker/ray.dockerfile \
+#   docker buildx build -f .docker/compute.dockerfile \
 #     --build-arg BUILD_DATE=$(date -u +%FT%TZ) \
 #     --build-arg VCS_REF=$(git rev-parse HEAD) \
 #     --build-arg VERSION=$(git describe --always) \
-#     -t ray:dev .
+#     -t compute:dev .
 
 # ---- builder stage: install deps via uv ------------------------------------
 # hadolint ignore=DL3026  # Reason: python:slim-bookworm is the official Docker Hub image; digest-pinned for reproducibility.
@@ -29,14 +30,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=packages,target=packages \
     --mount=type=bind,source=services,target=services \
-    uv sync --frozen --no-install-workspace --package ray-api --no-editable
+    uv sync --frozen --no-install-workspace --package compute --no-editable
 
 # Step 2: COPY real sources and resolve the workspace package (locked).
 COPY pyproject.toml uv.lock ./
 COPY packages    packages
 COPY services  services
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --package ray-api --no-editable
+    uv sync --locked --package compute --no-editable
 
 # Strip residual setuid bits before the venv leaves the builder.
 RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
@@ -52,8 +53,8 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.source="https://github.com/AI-Riksarkivet/rask" \
-      org.opencontainers.image.title="rask-ray" \
-      org.opencontainers.image.description="rask ray service — Ray dashboard introspection + serve proxy, FastAPI on :8804"
+      org.opencontainers.image.title="rask-compute" \
+      org.opencontainers.image.description="rask compute service — Ray dashboard introspection + serve proxy, FastAPI on :8804"
 
 # curl: used by the docker-compose healthcheck.
 # hadolint ignore=DL3008  # Reason: tini and ca-certificates have no stable version pins in apt on slim; pinning would break on next base image update.
@@ -79,7 +80,7 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 # This service sits behind the FastAPI gateway (services/gateway); --forwarded-allow-ips
 # MUST be the gateway's CIDR at deploy time, never '*' (header-spoofing risk).
 # --workers intentionally unset.
-CMD ["uvicorn", "ray_api:app", \
+CMD ["uvicorn", "compute:app", \
      "--host", "0.0.0.0", "--port", "8804", \
      "--proxy-headers", \
      "--forwarded-allow-ips", "127.0.0.1"]

@@ -13,6 +13,7 @@ members = [
     "annotator",
     "catalog",
     "compaction",
+    "compute",
     "controlplane",
     "gateway",
     "lineage",
@@ -20,7 +21,6 @@ members = [
     "medallion",
     "rask-workspace",
     "ratch",
-    "ray-api",
     "ray-kit",
     "search",
     "service-kit",
@@ -553,6 +553,25 @@ requires-dist = [
     { name = "pylance", extras = ["otel"], specifier = ">=9.0.0" },
     { name = "service-kit", extras = ["governed", "lakehouse"], editable = "packages/service-kit" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
+]
+
+[[package]]
+name = "compute"
+version = "0.1.0"
+source = { editable = "services/compute" }
+dependencies = [
+    { name = "httpx" },
+    { name = "ray-kit" },
+    { name = "service-kit" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "ray-kit", editable = "packages/ray-kit" },
+    { name = "service-kit", editable = "packages/service-kit" },
+    { name = "uvicorn", specifier = ">=0.30" },
 ]
 
 [[package]]
@@ -3505,25 +3524,6 @@ default = [
     { name = "requests" },
     { name = "smart-open" },
     { name = "virtualenv" },
-]
-
-[[package]]
-name = "ray-api"
-version = "0.1.0"
-source = { editable = "services/ray_api" }
-dependencies = [
-    { name = "httpx" },
-    { name = "ray-kit" },
-    { name = "service-kit" },
-    { name = "uvicorn" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "ray-kit", editable = "packages/ray-kit" },
-    { name = "service-kit", editable = "packages/service-kit" },
-    { name = "uvicorn", specifier = ">=0.30" },
 ]
 
 [[package]]

@@ -37,13 +37,14 @@ async def produce(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")] = None,
     project: ProjectParam = None,
 ) -> dict[str, str] | JSONResponse:
-    """Ingest (dummy) the raw dataset and emit its write event — the event-driven cascade head.
+    """Ingest (dummy) the bronze dataset and emit its write event — the event-driven cascade head.
 
-    Seeds ``raw_events`` (with compute) and emits ONE OpenLineage event for it; lance-ray's ``/raw-arrival``
-    subscription reacts to that event and publishes the ``medallion.raw`` trigger, so the cascade is driven
-    by the arrival event, not this call. The raw-write emit is therefore the **cascade head** — if it is
-    dropped, the entire raw→bronze→silver→gold run silently never happens. So a publish failure surfaces as
-    **503** (not the 202 that would hide it), letting the caller retry; the request is otherwise 202.
+    Seeds ``bronze$events`` (with compute) and emits ONE OpenLineage event for it; lance-ray's
+    ``/bronze-arrival`` subscription reacts to that event and publishes the ``medallion.bronze`` trigger,
+    so the cascade is driven by the arrival event, not this call. The bronze-write emit is therefore the
+    **cascade head** — if it is dropped, the entire bronze→silver→gold run silently never happens. So a
+    publish failure surfaces as **503** (not the 202 that would hide it), letting the caller retry; the
+    request is otherwise 202.
 
     Guarded by ``require_dapr_token`` (the shared app-api-token) so an in-cluster workload can't forge the
     cascade head: /produce is a direct operator trigger (not sidecar-delivered), and without this any pod that
@@ -52,10 +53,10 @@ async def produce(
 
     ``Idempotency-Key`` (optional) is the retry pairing this route's own 503+Retry-After contract demands:
     a retry that REUSES the key converges onto the same cascade token (deterministic run_ids → the graph
-    MERGEs the duplicate head) instead of double-firing two unrelated raw→gold runs.
+    MERGEs the duplicate head) instead of double-firing two unrelated bronze→gold runs.
 
     ``project`` (optional, #84 per-tenant routing) seeds THAT project's warehouse
-    (``<root>/medallion/raw``, resolved off the warehouse registry) and stamps the project into the head
+    (``<root>/medallion/bronze``, resolved off the warehouse registry) and stamps the project into the head
     event so the whole cascade routes per-tenant; ``authorize_produce`` gates ``can_administer`` on the
     requested project. Unresolvable (routing disabled, or no active warehouse) → **409** (fail closed —
     never a silent fallback to the shared root). Absent → today's single-tenant behavior, unchanged.

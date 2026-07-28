@@ -5,7 +5,8 @@ quality gate ON**, against the real kind stack (Dapr/NATS/AGE/RustFS/Dex/OpenFGA
 class here is the never-driven union — each feature green in isolation while the composition breaks —
 so this suite asserts, live:
 
-  1. the governed ALLOW path: one ``/produce`` cascades raw→bronze→silver→gold with the seeded service
+  1. the governed ALLOW path: one ``/produce`` cascades bronze→silver→gold (R23: the producer ingests
+     straight into bronze) with the seeded service
      grants, correlated by the deterministic per-stage run ids; quality verdicts recorded; and the same
      stack really enforces (anon → 401, ungranted user → 403);
   2. FGA-deny → DROP: with the gold validator tuple revoked, the SAME drive stops at silver — gold's
@@ -68,7 +69,7 @@ SILVER_WRITER = {"user": "user:service-bronze-to-silver", "relation": "writer", 
 #: (backOff: 30s,…). Test 2 must observe a denied run stay absent PAST this, measured — not choreographed.
 REDELIVERY_WINDOW = 30.0
 #: stage operation names (chart values) — each stage's run id is uuid5-derived from "<operation>-<token>".
-OPERATIONS = ("lance_ray_ingest", "ingest_events", "embed_features", "aggregate_gold")
+OPERATIONS = ("lance_ray_ingest", "embed_features", "aggregate_gold")
 
 pytestmark = [pytest.mark.e2e, pytest.mark.governed_union]
 
@@ -218,10 +219,10 @@ def test_governed_allow_full_cascade_with_quality_verdicts(stack: tuple[str, str
     token = _produce(lance_ray)
     rids = {op: _run_id_for(op, token) for op in OPERATIONS}
 
-    # All four stage runs land COMPLETE under the seeded service grants — correlated to THIS drive by the
-    # deterministic run ids (not by counts), so a stale graph can't false-pass. The diagnostic is a
+    # All three stage runs land COMPLETE under the seeded service grants — correlated to THIS drive by
+    # the deterministic run ids (not by counts), so a stale graph can't false-pass. The diagnostic is a
     # CALLABLE so a timeout reports the final observed states, not the pre-poll snapshot (one fetch,
-    # not one per operation — a per-op fetch would be 4 round-trips of 4 different snapshots).
+    # not one per operation — a per-op fetch would be 3 round-trips of 3 different snapshots).
     def _states_diag() -> str:
         states = _run_states(lineage, alice)
         return f"governed cascade did not complete for token {token}: { {op: states.get(rid) for op, rid in rids.items()} }"
@@ -264,12 +265,13 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
     lance_ray, lineage = stack
 
     # -- sub-phase A: WRITER-gate deny — revoke the bronze→silver mover's writer rung. The cascade must
-    # reach bronze (raw→bronze keeps its grant) and stop there: silver's run never lands. This was the
-    # audit's untested half — only the validator (can_promote) deny was ever proven.
+    # land bronze (the producer's own ingest, ungated by the mover rung — R23) and stop there: silver's
+    # run never lands. This was the audit's untested half — only the validator (can_promote) deny was
+    # ever proven.
     _tuples(fga_store, deletes=[SILVER_WRITER])
     try:
         w_token = _produce(lance_ray)
-        bronze_rid = _run_id_for("ingest_events", w_token)
+        bronze_rid = _run_id_for("lance_ray_ingest", w_token)
         denied_silver_rid = _run_id_for("embed_features", w_token)
         _poll(
             lambda: _run_states(lineage, alice).get(bronze_rid) == "COMPLETE",

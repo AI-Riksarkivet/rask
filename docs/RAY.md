@@ -29,7 +29,7 @@ via `--runtime-env-json` (exec-level env is NOT propagated to a Ray job). The jo
 > is no governed dataset to attribute, and lineage on scratch data would be noise). Governed batch
 > provenance lives in the medallion cascade's Ray stage path (`ray_stage_job.py`), which threads
 > `source_rowid` and emits the `WROTE` edge exactly as the in-process compute does; that lineage was
-> verified end-to-end (raw→bronze→silver→gold connected, `source_rowid` present, `/reconcile` in_sync).
+> verified end-to-end (bronze→silver→gold connected, `source_rowid` present, `/reconcile` in_sync).
 > The redeploy loop this target uses is the digest-verified pod-delete (not `rollout restart`) — a
 > rebuilt same-tag image is asserted onto the running head before the job submits.
 
@@ -109,9 +109,10 @@ that preserves inline blob typing on read/write, drop the round-trip (and the in
 media through the distributed path too. The `thumbnail`/`embedding` derivation is our business logic and
 is never something `lance_ray` provides — that stays regardless.
 
-**Live-proven on kind:** (tabular) `/produce` → the `raw-to-bronze` mover (ray on) submitted a Ray job that
-produced `bronze` (`stage=bronze`, 2.2, `stable_row_ids=True`), AGE shows `bronze$events` DERIVED_FROM
-`raw_events` with real measured stats. (media, 2026-07-13) `/ingest-media` (ray on) → the media stage ran
+**Live-proven on kind (pre-R23 shape, kept as history):** (tabular) `/produce` → the then raw-to-bronze
+mover (ray on) submitted a Ray job that produced `bronze` (`stage=bronze`, 2.2, `stable_row_ids=True`)
+with real measured stats — that mover has since collapsed into the producer's bronze ingest head (R23:
+the cascade's first Ray-backed hop is now bronze→silver). (media, 2026-07-13) `/ingest-media` (ray on) → the media stage ran
 **as a Ray job** (no more `medallion_ray_blob_fallback`) and `silver-media` came back with `payload` still a
 blob-v2 column **plus** derived `thumbnail` + `embedding`. With the flag off, `make e2e-medallion`
 (fake-Ray path) still passes.

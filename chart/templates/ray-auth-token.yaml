@@ -1,7 +1,7 @@
 {{- if and .Values.ray.enabled .Values.singleTenant.enabled }}
 # Ray auth token Secret (gate 7 / R3) — the ONE credential for RAY_AUTH_MODE=token: the Ray head
 # enforces it on the dashboard HTTP (:8265, 401 missing / 403 invalid) and the gRPC surfaces
-# (GCS :6379, client :10001); every Ray-talking consumer (the ray service — the
+# (GCS :6379, client :10001); every Ray-talking consumer (the compute service — the
 # services flagged `rayClient` in .Values.services) presents it via the same secretKeyRef
 # (rask.rayAuthEnv). k8s probes keep working with auth on: Ray whitelists /api/healthz,
 # /api/gcs_healthz and /api/local_raylet_healthz.

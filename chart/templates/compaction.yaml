@@ -93,7 +93,7 @@ spec:
             {{- /* EVERY bucket that can hold Lance data must be swept, or its tables accumulate superseded
                    versions + small fragments FOREVER (audit 2026-07-14: the sweep saw exactly ONE bucket,
                    so the medallion zone buckets and every #3-B multi-base data bucket leaked storage
-                   silently). Union of: the medallion storage zones (raw/gold live in their own buckets) and
+                   silently). Union of: the medallion storage zones (gold can live in its own bucket) and
                    the approved multi-base data bases. Per-warehouse (#3-A) buckets are provisioned at
                    RUNTIME, so they are appended by the operator as tenants are onboarded. */}}
             {{- $extra := list }}

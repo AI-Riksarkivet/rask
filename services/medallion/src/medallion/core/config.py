@@ -1,9 +1,14 @@
 """Medallion service settings (pydantic-settings, ``MEDALLION_*`` env vars).
 
-The 3 movers run the **same** module (``medallion.mover:app``) and differ only by env — each is one stage
+The movers run the **same** module (``medallion.mover:app``) and differ only by env — each is one stage
 edge of the DAG (from-dataset → to-dataset, subscribe-topic → publish-topic). The producer
-(``medallion.producer:app``) reads its own ``MEDALLION_RAW_*`` / producer fields. Both publish through the
-shared Dapr ``pubsub.jetstream`` component the catalog/lineage already use.
+(``medallion.producer:app``) reads its own ``MEDALLION_BRONZE_*`` / producer fields. Both publish through
+the shared Dapr ``pubsub.jetstream`` component the catalog/lineage already use.
+
+R23: raw is NOT a governed tier — it is the external world (the IIIF Image API, external object
+storage). The governed medallion is exactly bronze → silver → gold; the producer harvests external raw
+and writes BRONZE directly (the bronze ingest head), so there is no raw dataset, raw topic, or
+raw-to-bronze mover anywhere in this config.
 """
 
 from __future__ import annotations
@@ -55,19 +60,20 @@ class MedallionSettings(BaseSettings):
     # Gold SERVING warehouse (DECISIONS "Medallion tiers — hybrid physical layout", opt-in): when set, a
     # ``project``-carrying trigger's TARGET root becomes the project's gold serving warehouse (the registry
     # record carrying ``"serving": "gold"``) when one exists — the chart wires this env ONLY onto the
-    # terminal silver→gold mover (medallion.goldWarehouse), so raw/bronze/silver stay in the work
+    # terminal silver→gold mover (medallion.goldWarehouse), so bronze/silver stay in the work
     # warehouse. Absent gold warehouse or flag off → byte-identical work-warehouse behavior; the
     # projectless path never retargets (it has no registry resolution at all).
     gold_warehouse_enabled: bool = Field(default=False, alias="MEDALLION_GOLD_WAREHOUSE_ENABLED")
 
-    # --- mover stage config (the 3 movers share medallion.mover:app, differ only by these) ------
-    from_dataset: str = Field(default="raw_events", alias="MEDALLION_FROM_DATASET")
-    from_namespace: str = Field(default="raw", alias="MEDALLION_FROM_NAMESPACE")
-    to_dataset: str = Field(default="bronze$events", alias="MEDALLION_TO_DATASET")
-    to_namespace: str = Field(default="bronze", alias="MEDALLION_TO_NAMESPACE")
-    operation: str = Field(default="ingest_events", alias="MEDALLION_OPERATION")
-    author: str = Field(default="alice", alias="MEDALLION_AUTHOR")
-    sub_topic: str = Field(default="medallion.raw", alias="MEDALLION_SUB_TOPIC")
+    # --- mover stage config (the movers share medallion.mover:app, differ only by these; defaults
+    # describe the first edge of the governed cascade, bronze→silver) ----------------------------
+    from_dataset: str = Field(default="bronze$events", alias="MEDALLION_FROM_DATASET")
+    from_namespace: str = Field(default="bronze", alias="MEDALLION_FROM_NAMESPACE")
+    to_dataset: str = Field(default="silver$features", alias="MEDALLION_TO_DATASET")
+    to_namespace: str = Field(default="silver", alias="MEDALLION_TO_NAMESPACE")
+    operation: str = Field(default="embed_features", alias="MEDALLION_OPERATION")
+    author: str = Field(default="data_eng", alias="MEDALLION_AUTHOR")
+    sub_topic: str = Field(default="medallion.bronze", alias="MEDALLION_SUB_TOPIC")
     pub_topic: str = Field(default="", alias="MEDALLION_PUB_TOPIC")  # "" = terminal stage (gold)
     # Dead-letter topic for this app's subscriptions (Dapr-native DLQ - docs/RESILIENCE.md gap #2).
     # "" (default) = no DLQ declared, exactly the pre-existing behavior. MUST ship together with the
@@ -133,7 +139,7 @@ class MedallionSettings(BaseSettings):
         return f"namespace:{to_namespace or self.to_namespace}"
 
     # --- Fake-Ray in-process compute (the lance-ray SEAM) — OFF by default (movers stay dummy-emitters).
-    # When on, each stage does a REAL Lance write: the producer seeds raw_events; each mover reads its
+    # When on, each stage does a REAL Lance write: the producer seeds bronze$events; each mover reads its
     # upstream Lance dataset, applies a stage transform, and writes the downstream one — so the emitted
     # lineage carries the REAL version and the whole event-driven loop produces actual versioned data, not
     # just provenance. Same read→transform→write→version contract a distributed Ray Data job fills at rask;
@@ -228,18 +234,19 @@ class MedallionSettings(BaseSettings):
             )
         return self
 
-    # --- producer (lance-ray) config — produces the raw dataset + the first trigger -------------
-    raw_dataset: str = Field(default="raw_events", alias="MEDALLION_RAW_DATASET")
-    raw_namespace: str = Field(default="raw", alias="MEDALLION_RAW_NAMESPACE")
-    raw_uri: str = Field(default="", alias="MEDALLION_RAW_URI")  # where the producer seeds raw_events (compute)
+    # --- producer (lance-ray) config — the BRONZE ingest head (R23: writes the first governed tier
+    # directly; raw is the external world it harvests FROM) --------------------------------------
+    bronze_dataset: str = Field(default="bronze$events", alias="MEDALLION_BRONZE_DATASET")
+    bronze_namespace: str = Field(default="bronze", alias="MEDALLION_BRONZE_NAMESPACE")
+    bronze_uri: str = Field(default="", alias="MEDALLION_BRONZE_URI")  # where the producer seeds bronze$events (compute)
     stage_base_uri: str = Field(default="", alias="MEDALLION_STAGE_BASE_URI")
     """The medallion (project) bucket base ``s3://<bucket>/medallion`` where the STAGE datasets (bronze/
     silver) and the model registry live. The trainer resolves feature + model URIs from HERE, not from
-    ``raw_uri`` — so it stays correct when raw (ingest source) and gold (sink) are zoned into their OWN
-    buckets. Empty → derive from ``raw_uri`` (the single-bucket default, unchanged)."""
+    ``bronze_uri`` — so it stays correct when gold (sink) is zoned into its OWN bucket. Empty → derive
+    from ``bronze_uri`` (the single-bucket default, unchanged)."""
     producer_operation: str = Field(default="lance_ray_ingest", alias="MEDALLION_PRODUCER_OPERATION")
     producer_author: str = Field(default="ray", alias="MEDALLION_PRODUCER_AUTHOR")
-    raw_topic: str = Field(default="medallion.raw", alias="MEDALLION_RAW_TOPIC")
+    bronze_topic: str = Field(default="medallion.bronze", alias="MEDALLION_BRONZE_TOPIC")
     # --- Ray TRAIN head (#115a, docs/RAY-TRAIN.md): OWN topic (D1 — long-running, terminal-on-failure;
     # never a field on the stage trigger) + submit-and-ack consumer (D2). The trainer has its OWN service
     # identity + rung (D5): reader on the feature namespaces, writer on namespace:<models> ONLY.
@@ -278,19 +285,20 @@ class MedallionSettings(BaseSettings):
 
     # --- IIIF ingest head (P7a — the lance-ray seam producer that replaced rask's prefetch lane +
     # ``IIIFCachedSource``'s cache role). POST /ingest-iiif harvests a volume's pages from the IIIF Image
-    # API and lands them as the RAW page-image blob-v2 Lance dataset; the raw→bronze mover's MEDIA path
-    # then promotes them (stage stamp, source_rowid, thumbnail/embedding) — HTR runs as cascade compute
-    # downstream. The head emits ONE raw-write OpenLineage event and NEVER publishes ``medallion.raw``
-    # itself: the /raw-arrival subscription reacts to the COMPLETE write matching
-    # ``raw_namespace``/``iiif_raw_dataset`` and fires the cascade (publishing both would double-fire).
-    # Empty ``iiif_raw_uri`` = the head is off (POST /ingest-iiif → 409). ------------------------------
+    # API (external raw, R23) and lands them DIRECTLY as the BRONZE page-image blob-v2 Lance dataset
+    # (stage stamp at ingest; source_rowid roots at bronze) — HTR runs as cascade compute downstream.
+    # The head emits ONE bronze-write OpenLineage event (input = the external ``iiif://…`` source) and
+    # NEVER publishes ``medallion.bronze`` itself: the /bronze-arrival subscription reacts to the
+    # COMPLETE write matching ``bronze_namespace``/``iiif_bronze_dataset`` and fires the cascade
+    # (publishing both would double-fire). Empty ``iiif_bronze_uri`` = the head is off (→ 409). -------
     iiif_base_url: str = Field(default="https://iiifintern-ai.ra.se", alias="MEDALLION_IIIF_BASE_URL")
     iiif_query_params: str = Field(default="full/max/0/default.jpg", alias="MEDALLION_IIIF_QUERY_PARAMS")
-    iiif_raw_uri: str = Field(default="", alias="MEDALLION_IIIF_RAW_URI")
-    # The page lane's raw DATASET name — a values knob beside raw_dataset (chart medallion.producer):
-    # /raw-arrival fires for a COMPLETE write to (raw_namespace, iiif_raw_dataset) exactly as it does for
-    # (raw_namespace, raw_dataset), so the page lane and the events lane share one cascade head.
-    iiif_raw_dataset: str = Field(default="raw_pages", alias="MEDALLION_IIIF_RAW_DATASET")
+    iiif_bronze_uri: str = Field(default="", alias="MEDALLION_IIIF_BRONZE_URI")
+    # The page lane's bronze DATASET name — a values knob beside bronze_dataset (chart
+    # medallion.producer): /bronze-arrival fires for a COMPLETE write to (bronze_namespace,
+    # iiif_bronze_dataset) exactly as it does for (bronze_namespace, bronze_dataset), so the page lane
+    # and the events lane share one cascade head.
+    iiif_bronze_dataset: str = Field(default="bronze$pages", alias="MEDALLION_IIIF_BRONZE_DATASET")
     iiif_timeout_seconds: float = Field(default=15.0, gt=0, alias="MEDALLION_IIIF_TIMEOUT_SECONDS")
     # The Ray branch (requires ray_enabled): the self-contained harvest job baked into the unified ray
     # image, submitted via the Ray Jobs REST API exactly like the stage transforms.

@@ -272,9 +272,12 @@ smoke-rustfs: ## Storage smoke vs rustfs (S3 round-trip + LanceDB) — needs rus
 	  uv run python scripts/smoke_rustfs.py
 
 # ---- local k3s ------------------------------------------------------------
-COMPOSE_IMAGES = gateway ray controlplane
-# SvelteKit SSR microfrontend zone images — one per $(ZONES) entry, all built from
-# the one parametrized .docker/frontend.dockerfile via --build-arg APP=<name>.
+COMPOSE_IMAGES = gateway compute controlplane
+# SvelteKit SSR microfrontend zone images — one web-<zone> image per $(ZONES) entry,
+# all built from the one parametrized .docker/frontend.dockerfile via --build-arg
+# APP=<name>. (R22: the web- prefix keeps the zone image namespace disjoint from the
+# fleet's — the compute SERVICE image owns the bare `compute` name, and there is a
+# compute ZONE.)
 # "home" is the catch-all; the rest are pinned to their /<zone> base path.
 KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 HELM ?= KUBECONFIG=$(KUBECONFIG) helm
@@ -282,7 +285,7 @@ KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
 # lance-rest-catalog is the ONE lakehouse image (catalog + lineage + medallion + compaction +
 # media trio — chart `image.catalog`); the default render runs 8 containers from it, so the
 # build/import set must carry it or kind/k3s deploys ImagePullBackOff on every lakehouse pod.
-K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES) ray-cluster lance-rest-catalog
+K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog
 
 # Subchart repos (Chart.yaml dependencies). OCI deps (kueue) need no repo add.
 K3S_DEP_REPOS = nvdp=https://nvidia.github.io/k8s-device-plugin \
@@ -308,8 +311,8 @@ k3s-build: ## Build all fleet + frontend zone + ray-cluster images as :dev (nati
 	  docker buildx build -f .docker/$$s.dockerfile -t $$s:dev --load . || exit 1; \
 	done
 	@for a in $(ZONES); do \
-	  echo ">> building $$a:dev (frontend.dockerfile APP=$$a)"; \
-	  docker buildx build -f .docker/frontend.dockerfile --build-arg APP=$$a -t $$a:dev --load . || exit 1; \
+	  echo ">> building web-$$a:dev (frontend.dockerfile APP=$$a)"; \
+	  docker buildx build -f .docker/frontend.dockerfile --build-arg APP=$$a -t web-$$a:dev --load . || exit 1; \
 	done
 	docker buildx build -f .docker/ray-cluster.dockerfile -t ray-cluster:dev --load .
 	# The lakehouse fleet image — dockerfile name (rest-catalog) != image name, so it can't

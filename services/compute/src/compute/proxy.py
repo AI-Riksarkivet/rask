@@ -6,7 +6,7 @@ transparent proxy, not an application route."""
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
-from ray_api.dependencies import HttpDep
+from compute.dependencies import HttpDep
 from ray_kit import dashboard
 from service_kit.dependencies import SettingsDep
 
@@ -27,7 +27,7 @@ def _canonical(path: str) -> str:
     is the resource; the slash-less form 404s. Intermediaries on the request path
     (notably the dapr sidecar's service-invoke) normalize the trailing slash away,
     so this proxy — which exists solely to forward Ray's Serve status API — restores
-    it. Keeps ray-api correct on its own behind any proxy, not just direct calls."""
+    it. Keeps the compute service correct on its own behind any proxy, not just direct calls."""
     return path if path.endswith("/") else path + "/"
 
 

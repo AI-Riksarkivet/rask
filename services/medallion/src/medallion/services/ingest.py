@@ -3,7 +3,10 @@
 Reads a provider-agnostic ``SourceAdapter`` (:mod:`service_kit.lakehouse.sources`) and writes each object's bytes as a
 managed blob-v2 column at file format 2.2, keeping the object's source URI as a column so provenance
 survives in the data itself (the caller emits the ``source -> bronze`` lineage edge from ``source_uris``).
-The per-stage ML then flows the blob forward (``compute._carry_forward``) and derives the silver artifacts.
+Bronze is the FIRST governed tier (R23 — raw is the external world): the ``stage`` provenance stamp the
+retired raw→bronze mover used to apply is written here at ingest, and ``source_rowid`` roots at these
+bronze rows (minted by the first downstream derive from bronze's stable ``_rowid``). The per-stage ML
+then flows the blob forward (``compute._carry_forward``) and derives the silver artifacts.
 """
 
 from __future__ import annotations
@@ -20,6 +23,11 @@ from service_kit.lakehouse import schema
 from service_kit.lakehouse.sources import SourceAdapter, SourceObject
 
 
+#: The ``stage`` provenance stamp every governed dataset carries — bronze gets it AT INGEST (R23: the
+#: bronze head absorbed the retired raw→bronze mover); downstream movers re-stamp it per stage.
+_STAGE_COLUMN = "stage"
+_BRONZE_STAGE = "bronze"
+
 _INGEST_SCHEMA = pa.schema([pa.field("id", pa.int64()), blob_field("payload"), pa.field("source_uri", pa.string())])
 
 #: Extra STRING columns appended after the core ingest triple — ``{column_name: extractor(obj)}``,
@@ -32,6 +40,7 @@ def _ingest_schema(extra_columns: ExtraColumns | None) -> pa.Schema:
     fields = list(_INGEST_SCHEMA)
     for name in extra_columns or {}:
         fields.append(pa.field(name, pa.string()))
+    fields.append(pa.field(_STAGE_COLUMN, pa.string()))  # last, mirroring the movers' stamp position
     return pa.schema(fields)
 
 
@@ -58,6 +67,7 @@ def _chunk_batch(chunk: list[SourceObject], first_id: int, extra_columns: ExtraC
     }
     for name, extract in (extra_columns or {}).items():
         columns[name] = pa.array([extract(obj) for obj in chunk], pa.string())
+    columns[_STAGE_COLUMN] = pa.array([_BRONZE_STAGE] * len(chunk), pa.string())
     return pa.record_batch(columns, schema=_ingest_schema(extra_columns))
 
 

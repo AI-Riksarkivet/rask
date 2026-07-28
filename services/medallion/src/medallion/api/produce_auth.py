@@ -1,6 +1,6 @@
 """Dual-auth for ``POST /produce`` (#64): the DAPR app-api-token OR a signed-in project admin.
 
-The cascade head must never be forgeable (a raw-write event fabricates provenance), so the existing
+The cascade head must never be forgeable (a bronze-write event fabricates provenance), so the existing
 service-to-service guard — the shared app-api-token — is kept UNCHANGED. This adds a SECOND, human door:
 a signed-in OIDC user who holds ``can_administer`` on the project may trigger produce, so the web BFF can
 forward the *user's* bearer and the web pod never holds the service token (no secrets-posture change).

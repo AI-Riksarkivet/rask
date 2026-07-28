@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Seed the medallion mover service-identity grants into OpenFGA, so the FGA-enforced movers
-# (chart value medallion.fgaEnabled=true) are authorized to produce their target stage:
-#   - the writer movers (raw→bronze, bronze→silver) get `writer` on the warehouse (→ can_create_table)
+# Seed the medallion service-identity grants into OpenFGA, so the FGA-enforced movers
+# (chart value medallion.fgaEnabled=true) are authorized to produce their target stage (R23: the
+# governed tiers are bronze/silver/gold — raw is the external world and owns no namespace):
+#   - the bronze ingest head (lance-ray, the producer) + the bronze→silver / media movers get `writer`
+#     on the warehouse (→ can_create_table)
 #   - the silver→gold mover gets `validator` on the gold namespace (→ can_promote)
 # Revoke the last grant (`fga tuple delete ... validator namespace:gold`) to SEE the enforcement: the
 # silver→gold mover is then denied and the cascade stops at silver — a plain writer cannot promote.
@@ -35,7 +37,6 @@ w() {
 # medallion stage namespaces under the warehouse (so the rung cascade reaches them) — the MEDIA lane's
 # namespaces included: without them the media mover's can_create_table check on namespace:silver-media
 # finds no parent chain and the governed cascade silently DROPs every media trigger (audit blocker).
-w "$WAREHOUSE" parent namespace:raw
 w "$WAREHOUSE" parent namespace:bronze
 w "$WAREHOUSE" parent namespace:silver
 w "$WAREHOUSE" parent namespace:gold
@@ -50,14 +51,16 @@ w "$WAREHOUSE" parent namespace:silver-media
 # rung cascade, not just reads — a warehouse *writer* also gains can_write_data on every linked medallion
 # table (that concentric inheritance is the model working as designed, not a leak). Grant warehouse rungs
 # accordingly: humans who should only browse the estate get `reader`, never `writer`.
-w namespace:raw parent 'table:raw_events'
 w namespace:bronze parent 'table:bronze$events'
+w namespace:bronze parent 'table:bronze$pages'
 w namespace:silver parent 'table:silver$features'
 w namespace:gold parent 'table:gold$catalog'
 w namespace:bronze-media parent 'table:bronze-media$objects'
 w namespace:silver-media parent 'table:silver-media$features'
-# writer movers → can_create_table on their stage; the promoter mover → can_promote on gold
-w user:service-raw-to-bronze writer "$WAREHOUSE"
+# writers → can_create_table on their stage; the promoter mover → can_promote on gold. The bronze
+# ingest head writes as the PRODUCER's identity (lance-ray) — the retired raw→bronze mover's writer
+# rung moved here with the collapse (R23).
+w user:service-lance-ray writer "$WAREHOUSE"
 w user:service-bronze-to-silver writer "$WAREHOUSE"
 w user:service-media-to-silver writer "$WAREHOUSE"
 w user:service-silver-to-gold validator namespace:gold
@@ -99,13 +102,12 @@ echo "✓ seeded medallion grants (mover writers + media lane, silver→gold val
 PROJECT="${1:-}"
 if [ -n "$PROJECT" ]; then
   ZONE_WH="${2:?usage: seed_medallion_fga.sh <project> <zone-warehouse-id> (the tenant medallion bucket warehouse)}"
-  for ns in raw bronze silver gold; do
+  for ns in bronze silver gold; do
     w "warehouse:$ZONE_WH" parent "namespace:$PROJECT-$ns"
   done
-  w user:service-raw-to-bronze writer "namespace:$PROJECT-bronze"
+  w user:service-lance-ray writer "namespace:$PROJECT-bronze"
   w user:service-bronze-to-silver writer "namespace:$PROJECT-silver"
   w user:service-silver-to-gold validator "namespace:$PROJECT-gold"
-  w "namespace:$PROJECT-raw" parent "table:$PROJECT-raw_events"
   w "namespace:$PROJECT-bronze" parent "table:$PROJECT-bronze\$events"
   w "namespace:$PROJECT-silver" parent "table:$PROJECT-silver\$features"
   w "namespace:$PROJECT-gold" parent "table:$PROJECT-gold\$catalog"

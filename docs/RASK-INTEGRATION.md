@@ -120,13 +120,15 @@ two things, and only the second travels:
 ## lance-ray seam contract (so the real job drops in)
 The dummy producer/movers define the contract the real Ray Data jobs must reproduce **exactly**:
 
-- **Producer (head):** write the raw Lance dataset, then **publish ONE OpenLineage run event** to the Dapr
-  pubsub `lineage-pubsub` / topic `lineage.events.v1` — `inputs=[]` → `outputs=[raw_events]`, the `WROTE` edge
-  carrying the **Lance version** facet (`DatasetVersionDatasetFacet`). **That is all the real Ray job does.**
-  ⚠️ **It must NOT publish `medallion.raw` itself** — post-B2 the deployed lance-ray app *subscribes* to the
-  lineage topic (`/raw-arrival`) and publishes the first `medallion.raw` trigger when it sees a raw-namespace
-  write. A job that also published `medallion.raw` would **double-fire the cascade**. The head is event-driven:
-  emit the raw-write event; the arrival subscription does the triggering.
+- **Producer (head):** write the BRONZE Lance dataset directly (R23 — raw is the external world; bronze
+  is the first governed tier), then **publish ONE OpenLineage run event** to the Dapr pubsub
+  `lineage-pubsub` / topic `lineage.events.v1` — `inputs=[<external source: iiif://… or s3://…>]` →
+  `outputs=[bronze$events / bronze$pages]`, the `WROTE` edge carrying the **Lance version** facet
+  (`DatasetVersionDatasetFacet`). **That is all the real Ray job does.**
+  ⚠️ **It must NOT publish `medallion.bronze` itself** — post-B2 the deployed lance-ray app *subscribes*
+  to the lineage topic (`/bronze-arrival`) and publishes the first `medallion.bronze` trigger when it
+  sees a bronze write. A job that also published `medallion.bronze` would **double-fire the cascade**.
+  The head is event-driven: emit the bronze-write event; the arrival subscription does the triggering.
 - **Each mover:** subscribe to its upstream trigger → transform (read the from-stage Lance version-range as a
   CDF, write the to-stage) → emit the **`DERIVED_FROM`** OpenLineage edge → publish the next trigger.
 - **Gold mover (terminal):** write the gold dataset **with the embedded `lineage` JSONB column** (per

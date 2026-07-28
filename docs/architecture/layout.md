@@ -14,7 +14,7 @@ into `services/`, `frontend/`, and `scripts/`.)
 flowchart TD
     subgraph py["Python plane · repo root · uv workspace"]
         subgraph services["services/ · runnable code"]
-            cs["gateway · ray_api · controlplane<br/>catalog · lineage · medallion · compaction<br/>viewer · search · annotator"]
+            cs["gateway · compute · controlplane<br/>catalog · lineage · medallion · compaction<br/>viewer · search · annotator"]
         end
         subgraph packages["packages/ · reusable libraries (no entrypoints)"]
             pst["storage"]
@@ -45,7 +45,7 @@ plane, and language purity is what lets both workspaces glob their members.
 |---|---|---|
 | [`packages/storage`](../packages/storage.md) | Python | `FSSource/Sink`, `S3Source/Sink`, `IIIFCachedSource`, `s3_client`, `iter_keys`, HCP credential derivation. |
 | `packages/service-kit` | Python | Platform library: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`, injectable lifespan. Dependency-light (no lancedb/ray/sqlmodel). |
-| `packages/ray-kit` | Python | Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, dashboard service). Used by the `ray` service. |
+| `packages/ray-kit` | Python | Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, dashboard service). Used by the `compute` service. |
 | `packages/tracker` | Python | Run/metric tracking helpers (`tracker`; optional `tracker[postgres]` extra). |
 | `packages/validate` | Python | Validation helpers (`validate`). |
 | `frontend/packages/ui` | TS / Svelte | Svelte 5 + Bits UI + Tailwind 4 component library with Storybook (package `@rask/ui`); `@rask/ui/shell` exports the shared `AppShell`/`AppSidebar`/`nav-config` every app imports. |
@@ -64,7 +64,7 @@ plane, and language purity is what lets both workspaces glob their members.
 | `frontend/microfrontends/home` | SvelteKit 2 + Svelte 5 (SSR) | Catch-all app (package `home`, `:5273`) on `svelte-adapter-bun` — owns `/` (the platform home) behind the gateway ([UI Components](../components/ui.md), [Frontend microfrontends](frontend-microfrontends.md)). |
 | `frontend/microfrontends/{overview,compute,discover,storage,train,studio}` | SvelteKit 2 + Svelte 5 (SSR) | The six domain microfrontend zones (`svelte-adapter-bun`), each pinned to base `/default/<domain>` on its own dev port (`:5174`–`:5179`) and rendering the shared `@rask/ui/shell` sidebar. Composed by the Turborepo microfrontends proxy in dev / the k3s Ingress in prod. |
 | `services/gateway` | FastAPI | Reverse proxy on `:8888` — path-routes `/api/*` to per-domain services (longest-prefix-first, no catch-all). |
-| `services/ray_api` | FastAPI | The `ray` service: Ray dashboard introspection + `/api/serve/*` proxy on `:8804`; no DB. Deps: `service-kit` + `ray-kit` + httpx. (uv member `ray-api` — a `ray` package would shadow PyPI ray.) |
+| `services/compute` | FastAPI | The `compute` service: Ray dashboard introspection + `/api/serve/*` proxy on `:8804`; no DB. Deps: `service-kit` + `ray-kit` + httpx. (`compute` on every surface — R22; public paths stay `/api/ray` + `/api/serve`.) |
 | `services/controlplane` | FastAPI | Project provisioning on `:8820` (`/api/projects`). |
 | `services/{catalog,lineage,medallion,compaction}` | FastAPI | The lance lakehouse plane (governed REST catalog, OpenLineage → AGE, the medallion movers, compaction). |
 | `services/{viewer,search,annotator}` | FastAPI | The lance media plane (`:8101`–`:8103`, public `/api/media/*`). The viewer also serves the S3 object browser ported from the retired volumes-api. |
@@ -96,7 +96,7 @@ Consequences that follow from the seal, all deliberate:
 ## Deployables — workspace members with a dockerfile
 
 There is **no `projects/` layer**. The fleet deployables are `runner` plus
-`gateway`, `ray` (uv member `ray-api`), and `controlplane`; each is an ordinary
+`gateway`, `compute`, and `controlplane`; each is an ordinary
 workspace member built by its `.docker/<name>.dockerfile` via
 `uv sync --frozen --package <name>` against the **root** `uv.lock` (one lock for
 dev, tests, and every image). The lakehouse + media services build from the one

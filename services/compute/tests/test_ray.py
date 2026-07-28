@@ -1,4 +1,4 @@
-"""ray-api smoke tests — offline (Ray dashboard unreachable per conftest)."""
+"""compute service smoke tests — offline (Ray dashboard unreachable per conftest)."""
 
 from collections.abc import Iterator
 
@@ -11,7 +11,7 @@ from service_kit import build_settings
 
 @pytest.fixture
 def client() -> Iterator[TestClient]:
-    from ray_api import app
+    from compute import app
 
     with TestClient(app) as c:
         yield c
@@ -70,7 +70,7 @@ def test_serve_proxy_restores_trailing_slash(client: TestClient, monkeypatch: py
 
 def test_get_ray_client_rebuilds_lazily_when_none(monkeypatch: pytest.MonkeyPatch) -> None:
     """A None client (Ray not yet up at boot) is rebuilt on first use and cached."""
-    from ray_api import dependencies
+    from compute import dependencies
 
     # A real app + Request, so app.state and the scope behave exactly as in prod.
     app = FastAPI()

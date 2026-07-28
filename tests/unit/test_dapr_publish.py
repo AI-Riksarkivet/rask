@@ -34,7 +34,7 @@ def test_oversize_payload_raises_before_any_io() -> None:
     publisher = _Publisher()
     huge = "x" * (dapr_publish.MAX_PAYLOAD_BYTES + 1)
     with pytest.raises(ValueError, match="POINTERS"):
-        asyncio.run(dapr_publish.publish_event(publisher, timeout_seconds=5, topic_name="medallion.raw", data=huge))
+        asyncio.run(dapr_publish.publish_event(publisher, timeout_seconds=5, topic_name="medallion.bronze", data=huge))
     assert publisher.published == []
 
 

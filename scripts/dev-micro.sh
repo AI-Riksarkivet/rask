@@ -27,18 +27,18 @@ export RASK_API_PREFIX="${RASK_API_PREFIX:-/api}"
 
 # PORT_OFFSET shifts every port so a second fleet can run on one host without
 # colliding (e.g. another user already holds the defaults): PORT_OFFSET=1000 →
-# gateway :9888, ray :9804, viewer :9101, … Then point the frontend at it:
+# gateway :9888, compute :9804, viewer :9101, … Then point the frontend at it:
 #   PORT_OFFSET=1000 make dev-micro
 #   VIEWER_BACKEND=http://localhost:9888 RASK_GATEWAY_URL=http://localhost:9888 make dev-frontends
 OFFSET="${PORT_OFFSET:-0}"
 GATEWAY_PORT="${GATEWAY_PORT:-$((8888 + OFFSET))}"
-RAY_PORT="${RAY_PORT:-$((8804 + OFFSET))}"
+COMPUTE_PORT="${COMPUTE_PORT:-$((8804 + OFFSET))}"
 CONTROLPLANE_PORT="${CONTROLPLANE_PORT:-$((8820 + OFFSET))}"
 VIEWER_PORT="${VIEWER_PORT:-$((8101 + OFFSET))}"
 
 # Wire the gateway's upstreams to THIS fleet's per-service ports (else, when
 # offset, it would route to whatever holds the default ports). No-op at OFFSET=0.
-export RASK_RAY_URL="${RASK_RAY_URL:-http://127.0.0.1:${RAY_PORT}}"
+export RASK_COMPUTE_URL="${RASK_COMPUTE_URL:-http://127.0.0.1:${COMPUTE_PORT}}"
 export RASK_CONTROLPLANE_URL="${RASK_CONTROLPLANE_URL:-http://127.0.0.1:${CONTROLPLANE_PORT}}"
 export RASK_MEDIA_VIEWER_URL="${RASK_MEDIA_VIEWER_URL:-http://127.0.0.1:${VIEWER_PORT}}"
 # The viewer reads its own VIEWER_PORT (media-plane settings), exported here so
@@ -55,7 +55,7 @@ run() {  # run <name> <port> <module> [extra env assignments...]
 }
 
 run gateway      "$GATEWAY_PORT"      gateway:app
-run ray          "$RAY_PORT"          ray_api:app
+run compute      "$COMPUTE_PORT"      compute:app
 run controlplane "$CONTROLPLANE_PORT" controlplane:app
 # The media-plane viewer: /api/media/* (incl. the lakehouse storage browser's
 # /api/media/object* routes). Its DatasetRegistry is lazy, so it boots without a

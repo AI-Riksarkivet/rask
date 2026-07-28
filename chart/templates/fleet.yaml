@@ -95,7 +95,7 @@ spec:
             {{- include "rask.otelEnv" (list $root $name) | nindent 12 }}
             {{- if $svc.rayClient }}
             {{- /* Ray token auth (gate 7 / R3): only the services flagged rayClient in
-                 .Values.services (ray) get the pair — least
+                 .Values.services (compute) get the pair — least
                  privilege; the gateway never talks to Ray. No-op unless
                  ray.auth.enabled (the include gates itself). JobSubmissionClient +
                  ray-kit's httpx paths read RAY_AUTH_TOKEN and attach the Bearer header. */}}

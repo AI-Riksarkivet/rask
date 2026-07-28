@@ -1,10 +1,11 @@
 """A medallion stage mover — one DAG edge, event-driven (FastAPI application entry).
 
-All three movers run THIS module (``medallion.mover:app``) and differ only by ``MEDALLION_*`` env: each
+All movers run THIS module (``medallion.mover:app``) and differ only by ``MEDALLION_*`` env: each
 subscribes to its upstream stage's trigger topic, emits a standard OpenLineage transform event
 (``inputs=[from_dataset]`` → ``outputs=[to_dataset]`` — the ``DERIVED_FROM`` edge), and publishes the next
-stage's trigger. So a single producer event cascades raw→bronze→silver→gold, and because every hop is a
-Dapr publish over the instrumented gRPC client, the W3C trace context propagates → one distributed trace.
+stage's trigger. So a single producer event cascades bronze→silver→gold (R23: bronze is the first
+governed tier — the producer ingests external raw straight into it), and because every hop is a Dapr
+publish over the instrumented gRPC client, the W3C trace context propagates → one distributed trace.
 
 Idempotent + best-effort: with ``MEDALLION_COMPUTE_ENABLED`` each stage does a REAL in-process Lance write
 (the fake-Ray compute) so the cascade produces data, not just provenance; off, it's a pure lineage emit.

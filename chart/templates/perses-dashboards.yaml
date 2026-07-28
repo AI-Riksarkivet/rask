@@ -176,7 +176,7 @@ data:
           "medallionFlow": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Medallion cascade /s (raw→bronze→silver→gold edges)" },
+              "display": { "name": "Medallion cascade /s (bronze→silver→gold edges)" },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
                 "query": "sum by (lance_medallion_transition) (rate(medallion_stage_transitions_total[5m]))",

@@ -36,11 +36,11 @@ cleanup() {
     # Cascade state: on a fixture timeout the movers stay Running (so the loop above misses them), yet the
     # cascade may have stalled at a Ray stage job. Dump the ignition + stage-submit trail + head job list.
     echo "--- cascade trail (lance-ray ignition + movers' ray stage jobs) ---"
-    for c in lance-ray raw-to-bronze bronze-to-silver silver-to-gold; do
+    for c in lance-ray bronze-to-silver silver-to-gold; do
       echo "  [$c]"
       kubectl logs -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=$c" \
         --all-containers --tail=60 2>/dev/null \
-        | grep -iE "cascade|raw_arrival|ray_stage_job|RETRY|quality|error|traceback|timeout" | tail -20 || true
+        | grep -iE "cascade|bronze_arrival|ray_stage_job|RETRY|quality|error|traceback|timeout" | tail -20 || true
     done
     echo "--- ray-lance-head job list (SUCCEEDED/RUNNING/FAILED per stage) ---"
     kubectl exec deploy/ray-lance-head -- ray job list 2>/dev/null | tail -25 || true
@@ -105,7 +105,7 @@ helm upgrade --install "$RELEASE" ./chart --timeout 600s \
   --set frontend.enabled=false
 # Dapr sidecar-injector race + fresh-cluster recreate (see e2e_stack.sh for the full rationale).
 kubectl rollout status deploy/dapr-sidecar-injector --timeout=300s
-for d in catalog lineage lance-ray raw-to-bronze bronze-to-silver silver-to-gold media-to-silver gateway; do
+for d in catalog lineage lance-ray bronze-to-silver silver-to-gold media-to-silver gateway; do
   kubectl delete pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=$d" \
     --ignore-not-found >/dev/null 2>&1 || true
 done
@@ -147,7 +147,7 @@ DAPR_TOKEN="$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.t
 
 step "6/6 run the two Ray-path suites against the live ray-on stack"
 # Batch FIRST: its ray_lance_job submit cold-starts the Ray runtime env, so the ray cluster is warm
-# when the train suite's raw→bronze→silver cascade (also Ray jobs) runs — avoids stacking cold-starts.
+# when the train suite's bronze→silver cascade (also Ray jobs) runs — avoids stacking cold-starts.
 # The env vars MUST stay a contiguous command-prefix to `uv run pytest` (no comment splitting the `\`
 # continuation) — a comment there ends the line, demoting them to non-exported shell vars the child
 # pytest never sees, and every suite would skip "set LANCE_E2E_...".

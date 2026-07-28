@@ -1,8 +1,9 @@
-"""End-to-end test for the event-driven medallion cascade (lance-ray → 3 movers → lineage DAG).
+"""End-to-end test for the event-driven medallion cascade (lance-ray → 2 movers → lineage DAG).
 
-ONE call to lance-ray's ``/produce`` must cascade the whole pipeline — raw → bronze → silver → gold —
-purely through Dapr pub/sub, and the lineage graph must end up showing gold transitively derived from
-raw. This is the regression guard for "the medallion services are wired and the triggers chain".
+ONE call to lance-ray's ``/produce`` must cascade the whole pipeline — bronze → silver → gold (R23:
+the producer ingests straight into bronze; raw is the external world) — purely through Dapr pub/sub,
+and the lineage graph must end up showing gold transitively derived from bronze. This is the
+regression guard for "the medallion services are wired and the triggers chain".
 
 Run (port-forward lance-ray + lineage to distinct local ports first), or `make e2e-medallion`:
 
@@ -54,12 +55,12 @@ def _run_count(lineage: str) -> int:
     return len(resp.json().get("runs", []))
 
 
-def test_produce_cascades_raw_to_gold(urls: tuple[str, str]) -> None:
+def test_produce_cascades_bronze_to_gold(urls: tuple[str, str]) -> None:
     lance_ray, lineage = urls
 
     # Snapshot the run count FIRST. gold's upstream set may already exist from earlier produces, so
     # set-membership alone can't prove THIS trigger did anything — the graph would look identical if the
-    # cascade silently no-op'd. A fresh produce mints a new run per stage (producer + 3 movers = +4), so a
+    # cascade silently no-op'd. A fresh produce mints a new run per stage (producer + 2 movers = +3), so a
     # strictly rising run count is the real "the cascade fired just now" signal.
     before = _run_count(lineage)
 
@@ -69,15 +70,15 @@ def test_produce_cascades_raw_to_gold(urls: tuple[str, str]) -> None:
     assert produced.status_code == 202 and produced.json()["status"] == "produced", produced.text
 
     # ASSERT — the cascade reached gold (its transitive upstream is the full chain) AND it did so from THIS
-    # produce: all four stages emitted a fresh run, so the count grew by the producer + 3 movers.
-    chain = {"raw_events", "bronze$events", "silver$features"}
+    # produce: all three stages emitted a fresh run, so the count grew by the producer + 2 movers.
+    chain = {"bronze$events", "silver$features"}
     deadline = time.monotonic() + 60.0
     upstream: list[str] = []
     while time.monotonic() < deadline:
         resp = requests.get(f"{lineage}/datasets/gold$catalog/upstream", headers=_LINEAGE_HEADERS, timeout=8)
         if resp.status_code == 200:
             upstream = [ref["name"] for ref in resp.json().get("related", [])]
-            if chain <= set(upstream) and _run_count(lineage) >= before + 4:
+            if chain <= set(upstream) and _run_count(lineage) >= before + 3:
                 return
         time.sleep(3)
-    pytest.fail(f"gold$catalog cascade did not complete within 60s (upstream={upstream}, runs {before}->{_run_count(lineage)}, expected >= {before + 4})")
+    pytest.fail(f"gold$catalog cascade did not complete within 60s (upstream={upstream}, runs {before}->{_run_count(lineage)}, expected >= {before + 3})")

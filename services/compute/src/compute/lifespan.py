@@ -1,4 +1,4 @@
-"""ray service lifespan — build the dashboard HTTP client + the Ray Job SDK client
+"""compute service lifespan — build the dashboard HTTP client + the Ray Job SDK client
 on app.state. No DB/Lance/S3/orchestrator. Tolerant of an unreachable dashboard
 (build_client returns None)."""
 

@@ -3,7 +3,7 @@
 ``medallion.schemas.events.build_run_event`` became a thin construction over
 ``lineage_kit.schemas.RunEvent``. This suite freezes the RETIRED hand-built builder verbatim
 (``_legacy_build_run_event`` below) and asserts the new path's output is byte-identical across the full
-argument matrix — every lane (raw produce, media ingest, IIIF ingest, stage transform with
+argument matrix — every lane (bronze produce, media ingest, IIIF ingest, stage transform with
 stats/schema/columns/assertions, FAIL, per-project, token-less). ``eventTime`` is the one
 non-deterministic field: it is compared for FORMAT and popped before the dict equality.
 
@@ -159,14 +159,14 @@ def _legacy_build_run_event(**kwargs: Any) -> dict[str, Any]:
 
 
 _MATRIX: list[dict[str, Any]] = [
-    # The raw produce head (no inputs, dummy version-1 emit).
+    # The bronze produce head (no inputs, dummy version-1 emit — R23: bronze is the first tier).
     {
         "operation": "lance_ray_ingest",
         "author": "ray",
         "job_namespace": "lance-medallion",
         "inputs": [],
-        "output_namespace": "raw",
-        "output_name": "raw_events",
+        "output_namespace": "bronze",
+        "output_name": "bronze$events",
         "token": "tok1",
     },
     # The media head: one input per source object, blob schema facet, measured stats without size.
@@ -183,17 +183,17 @@ _MATRIX: list[dict[str, Any]] = [
         "schema_fields": [{"name": "payload", "type": "blob"}],
         "token": "tok2",
     },
-    # The IIIF head (P7a): one bare manifest input, blob page dataset out.
+    # The IIIF head (P7a, re-tiered by R23): one external iiif:// input, bronze blob page dataset out.
     {
         "operation": "iiif-ingest",
         "author": "ray",
         "job_namespace": "lance-medallion",
-        "inputs": [("iiif", "A0068688")],
-        "output_namespace": "raw",
-        "output_name": "raw_pages",
+        "inputs": [("iiif://iiifintern-ai.ra.se", "A0068688")],
+        "output_namespace": "bronze",
+        "output_name": "bronze$pages",
         "version": 2,
         "row_count": 12,
-        "source_uri": "s3://lake/medallion/raw",
+        "source_uri": "s3://lake/medallion/bronze-pages",
         "schema_fields": [{"name": "payload", "type": "blob"}, {"name": "page_key", "type": "string"}],
         "token": "tok3",
     },
@@ -228,7 +228,7 @@ _MATRIX: list[dict[str, Any]] = [
         "error_message": "boom",
     },
     # Author-less, token-less defensive fallback (random run id — compared modulo runId).
-    {"operation": "op", "author": None, "job_namespace": "ns", "inputs": [], "output_namespace": "raw", "output_name": "raw_events"},
+    {"operation": "op", "author": None, "job_namespace": "ns", "inputs": [], "output_namespace": "bronze", "output_name": "bronze$events"},
 ]
 
 

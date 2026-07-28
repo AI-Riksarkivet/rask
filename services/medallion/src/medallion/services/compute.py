@@ -1,10 +1,10 @@
 """The fake-Ray in-process Lance compute for the medallion cascade (the lance-ray seam, #25 / P1 #6).
 
 Default OFF (``MEDALLION_COMPUTE_ENABLED``): the movers/producer stay dummy-emitters (lineage, no data).
-When on, each stage does a **real** Lance write — the producer seeds ``raw_events``; each mover reads its
-upstream Lance dataset, applies a stage transform, and writes the downstream one — so the emitted lineage
-carries the **real** Lance version and the whole event-driven loop produces actual versioned data, not just
-provenance.
+When on, each stage does a **real** Lance write — the producer seeds ``bronze$events`` (the first governed
+tier, R23); each mover reads its upstream Lance dataset, applies a stage transform, and writes the
+downstream one — so the emitted lineage carries the **real** Lance version and the whole event-driven loop
+produces actual versioned data, not just provenance.
 
 This is the **same** ``read → transform → write → version`` contract a distributed Ray Data job
 (``lance-ray`` on rask's KubeRay) fills in production; here it runs **in-process** so the cascade is
@@ -31,11 +31,12 @@ from service_kit.lakehouse import blobs, schema
 
 
 _STAGE_COLUMN = "stage"
-#: Row-level provenance: the stable ``_rowid`` of the RAW-zone row this output descends from. Minted at the
-#: cascade head from the upstream row's reserved ``_rowid`` metacolumn (durable because every stage writes
+#: Row-level provenance: the stable ``_rowid`` of the BRONZE row this output descends from (bronze is the
+#: root of the governed cascade, R23 — raw is the external world and owns no rows). Minted at the first
+#: derive from the bronze row's reserved ``_rowid`` metacolumn (durable because every stage writes
 #: ``enable_stable_row_ids=True``) and carried forward unchanged thereafter — so a gold row names the exact
-#: source row it came from in ONE join, not a hop-by-hop walk. ``_rowid`` advances on overwrite, so this is a
-#: snapshot taken at cascade-run time; a fresh cascade run over a re-seeded raw table re-captures it.
+#: bronze row it came from in ONE join, not a hop-by-hop walk. ``_rowid`` advances on overwrite, so this is a
+#: snapshot taken at cascade-run time; a fresh cascade run over a re-ingested bronze table re-captures it.
 _SOURCE_ROWID_COLUMN = "source_rowid"
 
 
@@ -60,7 +61,7 @@ class WriteResult(BaseModel):
     #: the standard ``columnLineage`` facet so the LIVE cascade populates the field-to-field graph (#1), not
     #: just ``seed.py``. Populated by :func:`transform_stage` (in-process, from the table it just built) and
     #: by :func:`measure_stage` (distributed, RECONSTRUCTED from the on-disk schemas of a write this process
-    #: never saw). Empty only where there is genuinely nothing to declare: the raw head (no upstream), the
+    #: never saw). Empty only where there is genuinely nothing to declare: the bronze ingest head (no governed upstream), the
     #: dummy compute-off emit, and a bare :func:`measure` — which is why a stage the Ray job wrote MUST be
     #: read back with ``measure_stage``, or its columnLineage facet silently disappears.
     column_map: list[tuple[str, str, str]] = Field(default_factory=list)
@@ -102,16 +103,19 @@ def measure_stage(from_uri: str, to_uri: str, storage_options: dict[str, str]) -
     return result
 
 
-def seed_raw(uri: str, storage_options: dict[str, str], *, rows: int = 8) -> WriteResult:
-    """Seed a small synthetic ``raw_events`` dataset — the fake lance-ray ingest at the head of the cascade.
+def seed_bronze(uri: str, storage_options: dict[str, str], *, rows: int = 8) -> WriteResult:
+    """Seed a small synthetic ``bronze$events`` dataset — the fake lance-ray ingest at the head of the
+    cascade (R23: the producer writes the first governed tier directly; there is no raw dataset).
 
-    Overwrites any existing dataset (idempotent re-seed) and returns the resulting Lance version + the
-    measured output statistics (rows + on-disk bytes) the emit records as an ``outputStatistics`` facet.
+    Carries the ``stage`` stamp the retired raw→bronze mover used to apply (merged into the bronze ingest
+    head). Overwrites any existing dataset (idempotent re-seed) and returns the resulting Lance version +
+    the measured output statistics (rows + on-disk bytes) the emit records as an ``outputStatistics`` facet.
     """
     table = pa.table(
         {
             "id": pa.array(list(range(rows)), pa.int64()),
             "payload": pa.array([f"event-{i}" for i in range(rows)]),
+            _STAGE_COLUMN: pa.array(["bronze"] * rows, pa.string()),
         }
     )
     # data_storage_version="2.2" — the current Lance format (blob v2 + Map need it; pylance 8 still
@@ -136,8 +140,8 @@ def transform_stage(from_uri: str, to_uri: str, storage_options: dict[str, str],
 
     Every stage stamps the ``stage`` provenance column (set, not appended twice, so re-running over an
     already-stamped upstream replaces the value), threads the row-level ``source_rowid`` provenance column
-    (minted at the head from the upstream ``_rowid``, carried forward thereafter — so a gold row names the
-    exact raw row it descends from), carries blob columns of ANY media kind through intact
+    (minted at the first derive from the bronze ``_rowid``, carried forward thereafter — so a gold row names
+    the exact bronze row it descends from), carries blob columns of ANY media kind through intact
     (``_carry_forward``), and derives whatever the blob CONTENT supports (``derive_artifacts`` — image →
     thumbnail+embedding, unrecognised → untouched, tabular → no-op). Returns the new downstream Lance
     version + the measured output statistics (rows + on-disk bytes) for the emit.
@@ -154,7 +158,7 @@ def transform_stage(from_uri: str, to_uri: str, storage_options: dict[str, str],
     ds = lance.dataset(from_uri, storage_options=storage_options)
     out, blob_payloads = _carry_forward(ds, stage)
     out = derive_artifacts(out, blob_payloads)
-    # 2.2 + stable row ids like seed_raw: every dataset the cascade writes is on the current format (so a blob
+    # 2.2 + stable row ids like seed_bronze: every dataset the cascade writes is on the current format (so a blob
     # column never trips "Blob v2 requires file version >= 2.2" mid-cascade) and keeps durable row identity.
     lance.write_dataset(
         out,
@@ -185,7 +189,7 @@ def _column_map(in_schema: pa.Schema, out_names: list[str], blob_cols: set[str])
     """
     in_names = {f.name for f in in_schema}
     deps: list[tuple[str, str, str]] = [(name, name, "IDENTITY") for name in out_names if name != _STAGE_COLUMN and name in in_names]
-    # source_rowid is minted at the cascade head from the upstream row's reserved ``_rowid`` metacolumn (root
+    # source_rowid is minted at the first derive from the bronze row's reserved ``_rowid`` metacolumn (root
     # provenance) — declare that as its input edge. Once it exists it is carried forward like any column, so
     # a later stage (source_rowid in BOTH schemas) is already handled as IDENTITY by the rule above.
     if _SOURCE_ROWID_COLUMN in set(out_names) and _SOURCE_ROWID_COLUMN not in in_names:
@@ -214,7 +218,7 @@ def _carry_forward(ds: lance.LanceDataset, stage: str) -> tuple[pa.Table, dict[s
     # row ids); a distributed job would stream instead. `range(rows)` aligns with `to_table()` only because
     # the cascade is overwrite-only (no soft-deleted rows to shift positions).
     rows = ds.count_rows()
-    # with_row_id so the head can mint source_rowid from the SAME scan the rows come from (positionally
+    # with_row_id so the first derive off bronze can mint source_rowid from the SAME scan the rows come from (positionally
     # aligned with read_blobs(range(rows)); a carried source_rowid is a plain column already in this read).
     plain = ds.to_table(
         columns=[f.name for f in ds.schema if f.name not in blob_cols and f.name != _STAGE_COLUMN],
@@ -235,7 +239,7 @@ def _carry_forward(ds: lance.LanceDataset, stage: str) -> tuple[pa.Table, dict[s
             fields.append(plain.schema.field(f.name))
             columns[f.name] = plain.column(f.name)
     # Root provenance: a carried source_rowid came through the loop above (a plain upstream column); at the
-    # cascade head it is minted here from the just-read _rowid (same aligned scan). _rowid is not persisted.
+    # first derive off bronze it is minted here from the just-read _rowid (same aligned scan). _rowid is not persisted.
     if _SOURCE_ROWID_COLUMN not in columns:
         fields.append(pa.field(_SOURCE_ROWID_COLUMN, pa.uint64()))
         columns[_SOURCE_ROWID_COLUMN] = plain.column("_rowid").cast(pa.uint64())
@@ -245,16 +249,17 @@ def _carry_forward(ds: lance.LanceDataset, stage: str) -> tuple[pa.Table, dict[s
 
 
 def _carry_source_rowid(table: pa.Table) -> pa.Table:
-    """Ensure ``source_rowid`` holds the stable _rowid of the RAW row this output descends from (root
-    provenance). An upstream that already carries it (a later stage) keeps it; the cascade head mints it from
-    the reserved ``_rowid`` metacolumn of the row just read. ``_rowid`` itself is never persisted (it is a
+    """Ensure ``source_rowid`` holds the stable _rowid of the BRONZE row this output descends from (root
+    provenance — bronze is the first governed tier, R23). An upstream that already carries it (a later
+    stage) keeps it; the first derive off bronze mints it from the reserved ``_rowid`` metacolumn of the
+    row just read. ``_rowid`` itself is never persisted (it is a
     reserved name and would advance on the next overwrite). Input MUST be read ``with_row_id=True``.
 
-    HEAD DETECTION IS HEURISTIC (absence of ``source_rowid``), not positional. In the steady state only the
-    raw head lacks it, so this is exact. During a MIXED-VERSION ROLLOUT a mid-cascade dataset written by
+    HEAD DETECTION IS HEURISTIC (absence of ``source_rowid``), not positional. In the steady state only
+    bronze (the root) lacks it, so this is exact. During a MIXED-VERSION ROLLOUT a mid-cascade dataset written by
     pre-#38a code also lacks it; a stage reading such an upstream mints from the IMMEDIATE parent's _rowid
     (parent, not root) for that one cycle — the best available id when the root was never captured — and
-    self-heals on the next full run from raw. Acceptable because the cascade is overwrite-only and re-runs.
+    self-heals on the next full run from bronze. Acceptable because the cascade is overwrite-only and re-runs.
     """
     if _SOURCE_ROWID_COLUMN in table.column_names:
         return table.drop_columns(["_rowid"]) if "_rowid" in table.column_names else table

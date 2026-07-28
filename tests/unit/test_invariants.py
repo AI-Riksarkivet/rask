@@ -53,7 +53,7 @@ def _bare_lineage_publishes() -> list[str]:
     A lineage event MUST go through `outbox.publish_lineage_with_outbox` (stage → publish → drop) so a
     crash between the Lance commit and the publish ack leaves the event recoverable. A bare publish is
     the exact commit→publish loss window #4 exists to close. TRIGGER topics (pub_topic / media_topic /
-    raw_topic / train_topic) are correctly bare: the outbox re-ingests lineage, it never re-fires triggers.
+    bronze_topic / train_topic) are correctly bare: the outbox re-ingests lineage, it never re-fires triggers.
     """
     offenders: list[str] = []
     for py in SERVICES.rglob("*.py"):
@@ -211,7 +211,7 @@ def test_every_first_party_deployment_is_hardened() -> None:
 
     first_party = (
         "gateway", "catalog", "lineage", "compaction", "lance-ray",
-        "raw-to-bronze", "bronze-to-silver", "silver-to-gold", "media-to-silver", "web",
+        "bronze-to-silver", "silver-to-gold", "media-to-silver", "web",
     )  # fmt: skip
     unhardened: list[str] = []
     for doc in rendered.split("\n---"):
@@ -391,8 +391,8 @@ _PINNED_TOPICS: list[tuple[str, str]] = [
     ("services/compaction/src/compaction/core/config.py", 'default="lineage.events.v1", alias="COMPACTION_LINEAGE_TOPIC"'),
     ("services/medallion/src/medallion/core/config.py", 'default="lineage.events.v1", alias="MEDALLION_LINEAGE_TOPIC"'),
     # the intra-cascade trigger topics (unversioned by design: both ends deploy atomically from one chart)
-    ("services/medallion/src/medallion/core/config.py", 'default="medallion.raw", alias="MEDALLION_SUB_TOPIC"'),
-    ("services/medallion/src/medallion/core/config.py", 'default="medallion.raw", alias="MEDALLION_RAW_TOPIC"'),
+    ("services/medallion/src/medallion/core/config.py", 'default="medallion.bronze", alias="MEDALLION_SUB_TOPIC"'),
+    ("services/medallion/src/medallion/core/config.py", 'default="medallion.bronze", alias="MEDALLION_BRONZE_TOPIC"'),
     ("services/medallion/src/medallion/core/config.py", 'default="training.jobs", alias="MEDALLION_TRAIN_TOPIC"'),
     ("services/medallion/src/medallion/core/config.py", 'default="medallion.media", alias="MEDALLION_MEDIA_TOPIC"'),
     # the stream bindings the topics land on (nats-stream-job) + the DLQ parking subjects

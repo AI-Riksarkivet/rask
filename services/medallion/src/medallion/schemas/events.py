@@ -170,8 +170,8 @@ def build_run_event(
 ) -> dict[str, Any]:
     """Build the OpenLineage ``RunEvent`` (wire JSON) for one medallion transform — via ``lineage_kit``.
 
-    ``inputs`` is a list of ``(namespace, name)`` upstream datasets (empty for the raw producer, which has
-    no upstream). The single output carries the standard version facet so the ``WROTE`` edge records the
+    ``inputs`` is a list of ``(namespace, name)`` upstream datasets (external ``iiif://…``/``s3://…``
+    sources at the bronze ingest head, R23; empty for the dummy seed). The single output carries the standard version facet so the ``WROTE`` edge records the
     Lance version, plus — when the compute measured the write (``row_count`` / ``size_bytes`` set) — the
     standard ``outputStatistics`` facet, when the compute knows the URI (``source_uri``) the standard
     ``dataSource`` facet, and when the quality gate validated the write (``assertions`` set) the standard
@@ -180,7 +180,7 @@ def build_run_event(
     set, so two tenants reusing the same token never collide onto one run (spec-valid + stable across
     redelivery either way); the raw ``token`` rides the ``lance`` run facet for cascade correlation.
     ``project`` (#84 per-tenant routing) also rides the ``lance`` facet, so the cascade head
-    (``/raw-arrival``) can copy it onto the stage trigger — omitted when unset, keeping the
+    (``/bronze-arrival``) can copy it onto the stage trigger — omitted when unset, keeping the
     single-tenant emit (run id included) byte-identical. ``event_type='FAIL'`` + ``error_message``
     records a failed run (no version, no outputs asserted); the standard ``errorMessage`` run facet
     carries the reason.

@@ -15,7 +15,7 @@ zones in `frontend/microfrontends/`, and one-shot tools in `scripts/`.
 | `frontend/microfrontends/train` | SvelteKit SSR app — `train` domain (Bun server) | [UI Components](ui.md) |
 | `frontend/microfrontends/studio` | SvelteKit SSR app — `studio` domain (Bun server) | [UI Components](ui.md) |
 | `services/gateway` | Reverse proxy (`:8888`) | [Services](services.md) |
-| `services/ray_api` | The `ray` service — Ray dashboard + Serve proxy (`:8804`) | [Services](services.md) |
+| `services/compute` | The `compute` service — Ray dashboard + Serve proxy (`:8804`) | [Services](services.md) |
 | `services/controlplane` | Project provisioning (`:8820`) | [Services](services.md) |
 | `services/{viewer,search,annotator}` | The lance media plane (`/api/media/*`; the viewer carries the S3 object browser) | [Services](services.md) |
 | `services/{catalog,lineage,medallion,compaction}` | The lance lakehouse plane | [Services](services.md) |
@@ -39,5 +39,5 @@ that mutates live state goes through the HTTP services. Notable scripts:
 ## In this section
 
 - **[Frontends](frontends.md)** — the runner CLI and the SSR frontend apps (catch-all + the six domain microfrontends: overview, compute, discover, storage, train, studio).
-- **[Services](services.md)** — the gateway, the ray service, controlplane, and the lance lakehouse/media planes.
+- **[Services](services.md)** — the gateway, the compute service, controlplane, and the lance lakehouse/media planes.
 - **[UI Components](ui.md)** — the SvelteKit app and the `@rask/ui` library (frontend/packages/ui).

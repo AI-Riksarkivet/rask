@@ -9,7 +9,7 @@ the root `packages/`, TS/Svelte libraries in `frontend/packages/`.
 | `runners/htr` (the sealed HTR runner) | Python | runner, scripts | [HTR](htr.md) · [API reference](../reference/htr.md) |
 | `packages/storage` | Python | runner, the media viewer (objects browser), gateway/ray via service-kit, scripts | [Storage](storage.md) · [API reference](../reference/storage.md) |
 | `packages/service-kit` | Python | gateway, ray, the lance planes (`service_kit.media`/`lancekit`/`lakehouse`) | — |
-| `packages/ray-kit` | Python | the ray service, medallion | — |
+| `packages/ray-kit` | Python | the compute service, medallion | — |
 | `packages/tracker` | Python | (standalone; not yet wired into a component) | — |
 | `packages/validate` | Python | (standalone; not yet wired into a component) | — |
 | `frontend/packages/ui` (`@rask/ui`) | TS / Svelte | all 7 frontend apps | [UI Components](../components/ui.md) |

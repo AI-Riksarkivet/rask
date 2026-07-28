@@ -2,8 +2,9 @@
 
 Infra-free: no sidecar, no broker. A fake Dapr client records publishes; we pin the contract each
 service must honor — the mover emits the transform's lineage (inputs→outputs) AND the next stage's
-trigger, returns SUCCESS (RETRY on a publish outage), the producer emits ONLY the raw-write event, and the
-event-driven head (/raw-arrival) fires the medallion.raw trigger for a raw write while ignoring others.
+trigger, returns SUCCESS (RETRY on a publish outage), the producer emits ONLY the bronze-write event
+(R23: bronze is the first governed tier — never a direct cascade publish), and the event-driven head
+(/bronze-arrival) fires the medallion.bronze trigger for a bronze ingest while ignoring others.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import pytest
 from medallion.core.config import MedallionSettings
 from medallion.schemas.events import build_run_event
 from medallion.services.compute import WriteResult
-from medallion.services.ingest_trigger import handle_raw_arrival
+from medallion.services.ingest_trigger import handle_bronze_arrival
 from medallion.services.produce import produce
 
 from service_kit.openlineage import run_id_for
@@ -280,26 +281,28 @@ def test_mover_retries_on_publish_failure() -> None:
     assert status == {"status": "RETRY"}
 
 
-def test_producer_emits_only_the_raw_write_event() -> None:
-    # Event-driven head (B2): produce() emits ONLY the raw-write lineage event — it no longer publishes the
-    # medallion.raw trigger. The /raw-arrival subscription reacts to this event and fires the trigger.
+def test_producer_emits_only_the_bronze_write_event() -> None:
+    # Event-driven head (B2, re-tiered by R23): produce() emits ONLY the bronze-write lineage event — it
+    # never publishes the medallion.bronze trigger. /bronze-arrival reacts to this event and fires it.
     dapr = _FakeDapr()
 
     result = asyncio.run(produce(cast(Any, dapr), MedallionSettings()))
 
     assert result["status"] == "produced"
     assert len(dapr.calls) == 1
-    (raw_lineage,) = dapr.calls
-    assert raw_lineage["topic"] == "lineage.events.v1"
-    assert raw_lineage["data"]["outputs"][0]["name"] == "raw_events"
-    assert raw_lineage["data"]["inputs"] == []  # raw is the source — no upstream
-    assert all(c["topic"] != "medallion.raw" for c in dapr.calls)  # the trigger is the subscription's job
+    (bronze_lineage,) = dapr.calls
+    assert bronze_lineage["topic"] == "lineage.events.v1"
+    assert bronze_lineage["data"]["outputs"][0]["name"] == "bronze$events"
+    assert bronze_lineage["data"]["outputs"][0]["namespace"] == "bronze"
+    assert bronze_lineage["data"]["inputs"] == []  # the dummy seed has no external source
+    assert all(c["topic"] != "medallion.bronze" for c in dapr.calls)  # the trigger is the subscription's job
 
 
-def test_iiif_producer_emits_only_the_raw_write_event(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The P7a IIIF twin of the pin above: ingest_iiif() emits ONLY the raw-write lineage event — it never
-    # publishes the medallion.raw trigger itself (the /raw-arrival subscription fires the cascade off the
-    # event; publishing both would double-fire it).
+def test_iiif_producer_emits_only_the_bronze_write_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The P7a IIIF twin of the pin above (R23 event-shape proof): ingest_iiif() emits ONLY the
+    # bronze-write lineage event — input is the EXTERNAL iiif://… source, output the bronze dataset —
+    # and it never publishes the medallion.bronze trigger itself (the /bronze-arrival subscription fires
+    # the cascade off the event; publishing both would double-fire it).
     import medallion.services.iiif_produce as iiif_mod
     from medallion.services.iiif_produce import ingest_iiif
     from medallion.services.ingest import IngestResult
@@ -310,108 +313,109 @@ def test_iiif_producer_emits_only_the_raw_write_event(monkeypatch: pytest.Monkey
         lambda *_a: IngestResult(version=2, row_count=3, source_uris=[], fields=[{"name": "payload", "type": "blob"}]),
     )
     dapr = _FakeDapr()
-    settings = MedallionSettings.model_validate({"compute_enabled": True, "iiif_raw_uri": "memory://raw"})
+    settings = MedallionSettings.model_validate({"compute_enabled": True, "iiif_bronze_uri": "memory://bronze"})
 
     result = asyncio.run(ingest_iiif(cast(Any, dapr), settings, "A0068688", token="tok9"))
 
     assert result["status"] == "ingested"
     assert len(dapr.calls) == 1
-    (raw_lineage,) = dapr.calls
-    assert raw_lineage["topic"] == "lineage.events.v1"
-    assert raw_lineage["data"]["outputs"][0] == {
-        "namespace": "raw",
-        "name": "raw_pages",
-        "facets": raw_lineage["data"]["outputs"][0]["facets"],  # facet content asserted below
+    (bronze_lineage,) = dapr.calls
+    assert bronze_lineage["topic"] == "lineage.events.v1"
+    assert bronze_lineage["data"]["outputs"][0] == {
+        "namespace": "bronze",
+        "name": "bronze$pages",
+        "facets": bronze_lineage["data"]["outputs"][0]["facets"],  # facet content asserted below
     }
-    assert raw_lineage["data"]["inputs"] == [{"namespace": "iiif", "name": "A0068688"}]  # ONE bare manifest input
-    assert raw_lineage["data"]["run"]["runId"] == run_id_for("iiif-ingest-tok9")  # deterministic → redelivery MERGEs
-    assert raw_lineage["data"]["outputs"][0]["facets"]["schema"]["fields"] == [{"name": "payload", "type": "blob"}]
-    assert all(c["topic"] != "medallion.raw" for c in dapr.calls)  # the trigger is the subscription's job
+    # ONE external-source input: the iiif:// manifest (scheme://authority namespace + volume-id name).
+    assert bronze_lineage["data"]["inputs"] == [{"namespace": "iiif://iiifintern-ai.ra.se", "name": "A0068688"}]
+    assert bronze_lineage["data"]["run"]["runId"] == run_id_for("iiif-ingest-tok9")  # deterministic → redelivery MERGEs
+    assert bronze_lineage["data"]["outputs"][0]["facets"]["schema"]["fields"] == [{"name": "payload", "type": "blob"}]
+    assert all(c["topic"] != "medallion.bronze" for c in dapr.calls)  # the trigger is the subscription's job
 
 
-def test_raw_arrival_fires_the_cascade_for_the_page_lane() -> None:
-    # The IIIF page lane shares the cascade head: a COMPLETE write to (raw, raw_pages) fires medallion.raw
-    # with the PAGE dataset named on the trigger, so the mover knows which lane arrived.
+def test_bronze_arrival_fires_the_cascade_for_the_page_lane() -> None:
+    # The IIIF page lane shares the cascade head: a COMPLETE write to (bronze, bronze$pages) fires
+    # medallion.bronze with the PAGE dataset named on the trigger, so the mover knows which lane arrived.
     dapr = _FakeDapr()
     event = {
         "data": build_run_event(
             operation="iiif-ingest",
             author="ray",
             job_namespace="lance-medallion",
-            inputs=[("iiif", "A0068688")],
-            output_namespace="raw",
-            output_name="raw_pages",
+            inputs=[("iiif://iiifintern-ai.ra.se", "A0068688")],
+            output_namespace="bronze",
+            output_name="bronze$pages",
             version=2,
             token="tok77",
         )
     }
 
-    status = asyncio.run(handle_raw_arrival(cast(Any, dapr), MedallionSettings(), event))
+    status = asyncio.run(handle_bronze_arrival(cast(Any, dapr), MedallionSettings(), event))
 
     assert status == {"status": "SUCCESS"}
     (trigger,) = dapr.calls
-    assert trigger["topic"] == "medallion.raw"
-    assert trigger["data"] == {"token": "tok77", "dataset": "raw_pages", "namespace": "raw"}
+    assert trigger["topic"] == "medallion.bronze"
+    assert trigger["data"] == {"token": "tok77", "dataset": "bronze$pages", "namespace": "bronze"}
 
 
-def _raw_write_cloudevent(token: str = "tok123") -> dict[str, Any]:
-    """A Dapr CloudEvent whose data is a raw-dataset write (what /raw-arrival reacts to)."""
+def _bronze_write_cloudevent(token: str = "tok123") -> dict[str, Any]:
+    """A Dapr CloudEvent whose data is a bronze-dataset write (what /bronze-arrival reacts to)."""
     return {
         "data": build_run_event(
             operation="lance_ray_ingest",
             author="ray",
             job_namespace="lance-medallion",
             inputs=[],
-            output_namespace="raw",
-            output_name="raw_events",
+            output_namespace="bronze",
+            output_name="bronze$events",
             version=1,
             token=token,
         )
     }
 
 
-def test_raw_arrival_fires_the_cascade() -> None:
-    # A raw-dataset write event drives the head: publish the medallion.raw trigger (event-driven B2).
+def test_bronze_arrival_fires_the_cascade() -> None:
+    # A bronze-dataset write event drives the head: publish the medallion.bronze trigger (event-driven B2).
     dapr = _FakeDapr()
 
-    status = asyncio.run(handle_raw_arrival(cast(Any, dapr), MedallionSettings(), _raw_write_cloudevent()))
+    status = asyncio.run(handle_bronze_arrival(cast(Any, dapr), MedallionSettings(), _bronze_write_cloudevent()))
 
     assert status == {"status": "SUCCESS"}
     assert len(dapr.calls) == 1
     (trigger,) = dapr.calls
-    assert trigger["topic"] == "medallion.raw"
+    assert trigger["topic"] == "medallion.bronze"
     assert trigger["data"] == {
-        "token": "tok123",  # threaded from the raw event's lance.token facet, not its (now-UUID) runId
-        "dataset": "raw_events",
-        "namespace": "raw",
+        "token": "tok123",  # threaded from the bronze event's lance.token facet, not its (now-UUID) runId
+        "dataset": "bronze$events",
+        "namespace": "bronze",
     }
 
 
-def test_raw_arrival_ignores_non_raw_event() -> None:
-    # Loop guard: a mover's bronze write on the SAME topic is acked and drives nothing — the head can't
+def test_bronze_arrival_ignores_non_bronze_event() -> None:
+    # Loop guard: a mover's silver write on the SAME topic is acked and drives nothing — the head can't
     # self-trigger off the cascade it started.
     dapr = _FakeDapr()
-    bronze = {
+    silver = {
         "data": build_run_event(
-            operation="ingest_events",
-            author="alice",
+            operation="embed_features",
+            author="data_eng",
             job_namespace="lance-medallion",
-            inputs=[("raw", "raw_events")],
-            output_namespace="bronze",
-            output_name="bronze$events",
+            inputs=[("bronze", "bronze$events")],
+            output_namespace="silver",
+            output_name="silver$features",
             version=1,
             token="tok456",
         )
     }
 
-    status = asyncio.run(handle_raw_arrival(cast(Any, dapr), MedallionSettings(), bronze))
+    status = asyncio.run(handle_bronze_arrival(cast(Any, dapr), MedallionSettings(), silver))
 
     assert status == {"status": "SUCCESS"}
     assert dapr.calls == []  # nothing published
 
 
-def test_raw_arrival_retries_on_publish_failure() -> None:
-    status = asyncio.run(handle_raw_arrival(cast(Any, _FakeDapr(fail=True)), MedallionSettings(), _raw_write_cloudevent()))
+def test_bronze_arrival_retries_on_publish_failure() -> None:
+    status = asyncio.run(handle_bronze_arrival(cast(Any, _FakeDapr(fail=True)), MedallionSettings(), _bronze_write_cloudevent()))
     assert status == {"status": "RETRY"}
 
 

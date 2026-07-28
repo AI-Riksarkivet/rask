@@ -146,7 +146,7 @@ def standing_features(stack: tuple[str, str, str], alice: dict[str, str]) -> Non
         return
     resp = requests.post(f"{lance_ray}/produce", headers={"dapr-api-token": DAPR_TOKEN}, timeout=30)
     assert resp.status_code == 202, f"/produce to seed silver$features failed: {resp.status_code} {resp.text}"
-    # Generous window: on a FRESH kind cluster the cascade is raw→bronze→silver via sequential Ray jobs,
+    # Generous window: on a FRESH kind cluster the cascade is bronze→silver via sequential Ray jobs,
     # and the first Ray job cold-starts its runtime env (~2 min) before any stage completes.
     _poll(lambda: _silver_written() or None, timeout=480.0, label="a COMPLETE silver$features producer run")
 

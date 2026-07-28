@@ -1,15 +1,17 @@
 """lance-ray — the dummy Ray ingest job that is the HEAD of the medallion pipeline (FastAPI entry).
 
-Event-driven head (GOAL 4 B2): ``POST /produce`` (with ``compute_enabled``) seeds a real ``raw_events``
-Lance dataset and emits ONE OpenLineage event for it. It does NOT itself publish ``medallion.raw`` — this
-app also *subscribes* to the shared lineage topic (``/raw-arrival``), reacts to a raw-dataset write event,
-and publishes the trigger the ``raw→bronze`` mover consumes. So the cascade is driven by the raw-data
-*arrival event*, not the call: every stage, the head included, reacts to an event on the bus. What drives
-it is specifically a COMPLETE write whose output matches ``raw_namespace``/``raw_dataset`` (``raw`` /
-``raw_events``) — this dummy today, or a real Ray raw-ingest job that writes that same dataset. (An
-ordinary catalog table write does NOT: its output namespace/name won't match the raw filter — the head
-reacts to the *raw* dataset, not to any write.) In production the head is a real Ray Data job emitting the
-same event; here it is a dummy emitter, which is all the event-driven demo needs.
+Event-driven head (GOAL 4 B2, reshaped by R23 — bronze is the FIRST governed tier; raw is the external
+world): ``POST /produce`` (with ``compute_enabled``) seeds a real ``bronze$events`` Lance dataset and
+emits ONE OpenLineage event for it. It does NOT itself publish ``medallion.bronze`` — this app also
+*subscribes* to the shared lineage topic (``/bronze-arrival``), reacts to a bronze-dataset write event,
+and publishes the trigger the ``bronze→silver`` mover consumes. So the cascade is driven by the
+*arrival of external raw INTO bronze*, not the call: every stage, the head included, reacts to an event
+on the bus. What drives it is specifically a COMPLETE write whose output matches
+``bronze_namespace``/``bronze_dataset`` (``bronze`` / ``bronze$events``, or the IIIF page lane's
+``bronze$pages``) — this dummy today, or a real Ray ingest job that writes that same dataset. (An
+ordinary catalog table write does NOT: its output namespace/name won't match the bronze filter — the
+head reacts to the *bronze* dataset, not to any write.) In production the head is a real Ray Data job
+emitting the same event; here it is a dummy emitter, which is all the event-driven demo needs.
 
 Run: ``uvicorn medallion.producer:app``. Publishes/subscribes through the local Dapr sidecar (best-effort).
 """
@@ -23,11 +25,11 @@ from dapr.aio.clients import DaprClient
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 
+from medallion.api.bronze_arrival import register_bronze_arrival_route
 from medallion.api.health import router as health_router
 from medallion.api.ingest_iiif import router as ingest_iiif_router
 from medallion.api.ingest_media import router as ingest_media_router
 from medallion.api.produce import router as produce_router
-from medallion.api.raw_arrival import register_raw_arrival_route
 from medallion.api.train import register_train_trigger_route
 from medallion.api.train import router as train_router
 from medallion.core.config import apply_dapr_secrets, get_settings
@@ -44,8 +46,8 @@ configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (obs audit 2026-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # Fail closed if behind a Dapr sidecar but the app-token is unset — /raw-arrival would otherwise be an
-    # open forged-trigger path (symmetric with the movers + lineage). No-op in dev (dapr_enabled off).
+    # Fail closed if behind a Dapr sidecar but the app-token is unset — /bronze-arrival would otherwise be
+    # an open forged-trigger path (symmetric with the movers + lineage). No-op in dev (dapr_enabled off).
     app.state.startup_complete = False
     app.state.shutting_down = False
     configure_audit(enabled=get_settings().audit_enabled)  # #41 gate the compliance audit stream
@@ -112,11 +114,12 @@ app.include_router(produce_router)
 # The multimodal head (§9): POST /ingest-media lands external media as bronze blobs + triggers the
 # media chain (bronze→silver derive) — the deployed twin of the manual media pipeline scripts.
 app.include_router(ingest_media_router)
-# The P7a IIIF page head: POST /ingest-iiif harvests a volume into the raw page-image dataset; its ONE
-# raw-write event (not a direct trigger publish) is what /raw-arrival reacts to — HTR as cascade compute.
+# The P7a IIIF page head: POST /ingest-iiif harvests a volume into the BRONZE page-image dataset (R23);
+# its ONE bronze-write event (not a direct trigger publish) is what /bronze-arrival reacts to — HTR as
+# cascade compute.
 app.include_router(ingest_iiif_router)
-# The event-driven cascade head: subscribe to the lineage topic; a raw-dataset write fires medallion.raw.
-_dapr_app = register_raw_arrival_route(app)
+# The event-driven cascade head: subscribe to the lineage topic; a bronze write fires medallion.bronze.
+_dapr_app = register_bronze_arrival_route(app)
 # The Ray TRAIN head (#115a): POST /train + the training-trigger subscription (own topic; submit-and-ack).
 app.include_router(train_router)
 register_train_trigger_route(app, _dapr_app)

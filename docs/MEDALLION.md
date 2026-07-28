@@ -1,47 +1,51 @@
 # Event-driven medallion pipeline
 
-The medallion lakehouse pattern — **raw → bronze → silver → gold** — implemented as **event-driven
-microservices** on Dapr pub/sub (over NATS JetStream), not a script. One trigger cascades the whole
-chain, each hop emits OpenLineage (so the graph grows the DAG), and Dapr propagates the trace context
-so the whole cascade is **one distributed trace**.
+The governed medallion — **bronze → silver → gold** (R23: raw is the EXTERNAL world — the IIIF Image
+API, external object storage — never a catalog tier; bronze is the first Lance dataset we own) —
+implemented as **event-driven microservices** on Dapr pub/sub (over NATS JetStream), not a script. One
+ingest cascades the whole chain, each hop emits OpenLineage (so the graph grows the DAG), and Dapr
+propagates the trace context so the whole cascade is **one distributed trace**.
 
 ## Is `lance-ray` the head of the pipeline? — Yes, and it's event-driven.
 
-`lance-ray` is the **head of the pipeline** (a dummy Ray ingest job), **one hop upstream of bronze**. It is
-NOT poked by a manual RPC: `POST /produce` (with compute) seeds `raw_events` and emits ONE OpenLineage event
-*announcing that write*. `lance-ray` also **subscribes** to the shared lineage topic (`/raw-arrival`) and —
-only for a write to the raw dataset — publishes the first trigger `medallion.raw`. So the cascade is driven
-by the raw-data **arrival event**, not the call; any raw writer (this dummy, or the catalog) that emits a
-raw-write event drives it. Loop-guarded: the movers' own bronze/silver/gold events on that same topic are
-ignored, so the head can't self-trigger. `raw→bronze` subscribes to `medallion.raw` and produces bronze:
+`lance-ray` is the **head of the pipeline** (a dummy Ray ingest job) — the **bronze ingest head**. It is
+NOT poked by a manual RPC: `POST /produce` (with compute) seeds `bronze$events` (stage-stamped at ingest)
+and emits ONE OpenLineage event *announcing that write*. `lance-ray` also **subscribes** to the shared
+lineage topic (`/bronze-arrival`) and — only for a write to the bronze dataset — publishes the first
+trigger `medallion.bronze`. So the cascade is driven by the **arrival of external raw INTO bronze**, not
+the call; any bronze ingester (this dummy, the IIIF head, or the catalog) that emits a bronze-write event
+drives it. Loop-guarded: the movers' own silver/gold events on that same topic are ignored, so the head
+can't self-trigger. `bronze→silver` subscribes to `medallion.bronze` and derives silver:
 
 ```
-   POST /produce ─▶ lance-ray ──emits raw_events write event──▶ lineage.events.v1 ─▶ (lineage svc → AGE)
-   (any raw writer)     ▲                                              │
-                        └────────── /raw-arrival subscription ◀────────┘   (reacts ONLY to a RAW write)
-                                     publishes medallion.raw  (the FIRST trigger)
+   POST /produce ─▶ lance-ray ──emits bronze$events write event──▶ lineage.events.v1 ─▶ (lineage svc → AGE)
+ (any bronze ingester)  ▲                                              │
+                        └───────── /bronze-arrival subscription ◀──────┘   (reacts ONLY to a BRONZE write)
+                                    publishes medallion.bronze  (the FIRST trigger)
                                           │
                                           ▼
-              ┌─────────────────┐   medallion.bronze   ┌───────────────────┐   medallion.silver   ┌─────────────────┐
-              │  raw→bronze     │ ───────────────────▶ │  bronze→silver    │ ───────────────────▶ │  silver→gold    │
-              │  (ingest_events)│                      │  (embed_features) │                      │ (aggregate_gold)│
-              └────────┬────────┘                      └─────────┬─────────┘                      └────────┬────────┘
-        emits          │ raw_events → bronze$events              │ bronze$events → silver$features         │ silver$features → gold$catalog
-        lineage ───────┴──▶ (lineage svc → AGE DERIVED_FROM edge) every hop; the lineage DAG ends up:      ▼
-                                                                                              (terminal — no next trigger)
+              ┌───────────────────┐   medallion.silver   ┌─────────────────┐
+              │  bronze→silver    │ ───────────────────▶ │  silver→gold    │
+              │  (embed_features) │                      │ (aggregate_gold)│
+              └─────────┬─────────┘                      └────────┬────────┘
+        emits           │ bronze$events → silver$features         │ silver$features → gold$catalog
+        lineage ────────┴──▶ (lineage svc → AGE DERIVED_FROM edge) every hop                    ▼
+                                                                              (terminal — no next trigger)
 
-   resulting lineage DAG:   raw_events ─▶ bronze$events ─▶ silver$features ─▶ gold$catalog
+   resulting lineage DAG:   bronze$events ─▶ silver$features ─▶ gold$catalog
 ```
 
-`lance-ray` does **not** produce bronze itself — it produces `raw_events`; its `/raw-arrival` subscription
-then *triggers* the `raw→bronze` mover, which produces bronze. Because the head is now a subscriber like
-every other stage, the pipeline is event-driven end to end — nothing polls or waits on a timer (GOAL 4 B2).
+`lance-ray` produces bronze **directly** (R23 collapsed the old raw→bronze mover into the ingest head —
+its stage stamp lands at ingest; `source_rowid` roots at bronze, minted by the first derive); its
+`/bronze-arrival` subscription then *triggers* the `bronze→silver` mover. Because the head is a
+subscriber like every other stage, the pipeline is event-driven end to end — nothing polls or waits on a
+timer (GOAL 4 B2).
 
 > **`/produce` is the demo entry point, not a prod surface.** It carries no auth (it sidesteps
 > `enforce_author` — a caller could trigger cascades and forge medallion provenance), so its gateway
 > route is values-gated: `medallion.producer.expose` (on for the dev demo, **off in `values-prod.yaml`**).
 > That closes the **external/edge** path — from the gateway, the prod head fires only from real
-> raw-namespace writes via `/raw-arrival`. It does **not** close the in-cluster path: the lance-ray pod
+> bronze ingests via `/bronze-arrival`. It does **not** close the in-cluster path: the lance-ray pod
 > still serves the unauthenticated `/produce` on its ClusterIP, and this route is *not* sidecar-delivered
 > so it skips `require_dapr_token`; no NetworkPolicy ships either. So an in-cluster workload can still
 > reach it. Hardening that (a NetworkPolicy, or a token/authz on `/produce`) is tracked in
@@ -54,13 +58,13 @@ Off: the producer + movers are pure **emitters** — they grow the lineage DAG b
 event-driven *choreography* demo needs), so the graph asserts datasets that aren't on disk (`#23` reconcile
 would flag them `missing_on_storage`). **On** (`--set medallion.compute=true`): each stage runs the
 **fake-Ray compute** (`services/medallion/services/compute.py`) — a
-REAL in-process Lance write: `lance-ray` seeds `raw_events`, then each mover reads its upstream Lance
+REAL in-process Lance write: `lance-ray` seeds `bronze$events`, then each mover reads its upstream Lance
 dataset, stamps a `stage` provenance column, and writes the downstream dataset — so the whole loop produces
 **actual versioned data** and the emitted OpenLineage carries the **real** Lance version (not a hardcoded
 `1`). This is the **lance-ray seam**: the exact `read → transform → write → version` contract a
 distributed Ray Data job (`lance-ray` on rask's KubeRay) swaps into in production; in-process here so the
 loop is end-to-end testable without a Ray cluster (`tests/unit/test_medallion_cascade.py` runs the full
-raw→gold cascade and asserts both the data and the `DERIVED_FROM` chain).
+bronze→gold cascade and asserts both the data and the `DERIVED_FROM` chain).
 
 > **The real Ray seam** (`docs/RAY.md`, `make ray-demo`): a genuine Ray cluster in kind + `ray job submit`
 > runs a distributed `lance_ray` job proving Lance's distributed **write** (fragment-parallel + one commit),
@@ -77,14 +81,13 @@ raw→gold cascade and asserts both the data and the `DERIVED_FROM` chain).
 
 | Service | App-id | Module | Subscribes | Publishes |
 | ------- | ------ | ------ | ---------- | --------- |
-| **lance-ray** (producer) | `lance-ray` | `medallion.producer:app` | `lineage.events.v1` (raw filter, `/raw-arrival`) + `POST /produce` | raw-write lineage → then `medallion.raw` on a raw arrival |
-| **raw→bronze** | `raw-to-bronze` | `medallion.mover:app` | `medallion.raw` | `medallion.bronze` + lineage |
+| **lance-ray** (producer) | `lance-ray` | `medallion.producer:app` | `lineage.events.v1` (bronze filter, `/bronze-arrival`) + `POST /produce` | bronze-write lineage → then `medallion.bronze` on a bronze arrival |
 | **bronze→silver** | `bronze-to-silver` | `medallion.mover:app` | `medallion.bronze` | `medallion.silver` + lineage |
 | **silver→gold** | `silver-to-gold` | `medallion.mover:app` | `medallion.silver` | — (terminal) + lineage |
 | **lance-ray** (media head) | `lance-ray` | `medallion.producer:app` | `POST /ingest-media` | bronze-media write lineage + `medallion.media` |
 | **media→silver** (media lane) | `media-to-silver` | `medallion.mover:app` | `medallion.media` | — (terminal) + lineage |
 
-The 4 movers are the **same module**, differing only by `MEDALLION_*` env (from/to dataset, sub/pub
+The 3 movers are the **same module**, differing only by `MEDALLION_*` env (from/to dataset, sub/pub
 topic, operation, author) — see `chart/values.yaml` `medallion.movers`. Triggers ride a dedicated
 `MEDALLION` JetStream stream (`medallion.>`); the OpenLineage events ride the existing `LINEAGE` stream.
 
@@ -116,8 +119,8 @@ auth prescribes (network isolation primary + token secondary).
 
 With `medallion.projectsEnabled`, `/produce?project=<p>` runs the whole cascade inside the **tenant's own
 bucket** (the project's zone warehouse from the registry — multiple actives resolve deterministically to
-the lowest warehouse id) with every lineage/FGA identity **project-qualified** (`<p>-raw_events`,
-`<p>-bronze$events`, …). The trigger's auth is per-project (`can_administer` on `project:<p>`); `/train`
+the lowest warehouse id) with every lineage/FGA identity **project-qualified** (`<p>-bronze$events`,
+`<p>-silver$features`, …). The trigger's auth is per-project (`can_administer` on `project:<p>`); `/train`
 deliberately declares **no** project parameter and stays pinned to `medallion.produceAdminProject`.
 
 The qualified namespaces inherit **nothing** from the estate seed, so out of the box the movers are
@@ -155,8 +158,10 @@ describes; a future human-approval rung can layer on the same `quality_passed` s
 
 ## External edges — the ingest & egress seam
 
-The cascade above is the *interior* (`raw → bronze → silver → gold`). Its two edges to the outside world
-are a **provider-agnostic seam** so no provider SDK leaks into the pipeline:
+The cascade above is the *interior* (`bronze → silver → gold`). Its two edges to the outside world —
+external raw in, gold egress out (R23: external raw spans at least two source families, the IIIF Image
+API and external object storage via `packages/storage`) — are a **provider-agnostic seam** so no
+provider SDK leaks into the pipeline:
 
 | Edge | Contract | Adapters (concrete) | Provenance |
 | ---- | -------- | ------------------- | ---------- |
@@ -169,7 +174,7 @@ implement the `SourceAdapter`/`SinkAdapter` Protocol — the `S3Source`/`S3Sink`
 
 `services/medallion/services/ingest.py::ingest_to_bronze(source, bronze_uri, so)` is the ingest head: it
 writes every object's bytes into a **bronze blob-v2 table at file format 2.2** (`id, payload` (blob),
-`source_uri`) with **`enable_stable_row_ids=True`** and returns the source URIs for the lineage edge. The
+`source_uri`, the ingest-time `stage` stamp) with **`enable_stable_row_ids=True`** and returns the source URIs for the lineage edge. The
 write is **Lance's native streaming write** — a bounded-memory `Iterator[RecordBatch]` (batched by
 `MEDALLION_INGEST_CHUNK_OBJECTS`/`_CHUNK_BYTES`, byte bound first) into **one atomic commit**: a mid-ingest
 failure commits nothing and a failed re-ingest leaves the previous bronze fully readable; the refusal
@@ -192,18 +197,18 @@ against an in-memory fake filesystem (`tests/unit/test_ingest_seam.py`), with th
 
 ```bash
 make medallion        # fire lance-ray /produce, then print gold's provenance (the cascade result)
-make e2e-medallion    # the automated regression test: produce → assert gold derives from raw end-to-end
+make e2e-medallion    # the automated regression test: produce → assert gold derives from bronze end-to-end
 ```
 
 ## What you can observe (all verified)
 
-- **Lineage DAG** (Apache AGE): `raw_events → bronze$events → silver$features → gold$catalog`. Query
-  `GET /datasets/gold$catalog/upstream` — gold transitively derives from all three upstream stages.
+- **Lineage DAG** (Apache AGE): `bronze$events → silver$features → gold$catalog`. Query
+  `GET /datasets/gold$catalog/upstream` — gold transitively derives from the upstream stages.
 - **One distributed trace** (GreptimeDB `opentelemetry_traces`): a single `trace_id` spans `lance-ray`,
-  `raw-to-bronze`, `bronze-to-silver`, `silver-to-gold`, **and** `lineage` — the event followed across
+  `bronze-to-silver`, `silver-to-gold`, **and** `lineage` — the event followed across
   every Dapr hop (the gRPC publish injects `traceparent`; each subscriber continues the trace).
 - **Metrics** (PromQL): `medallion_stage_transitions_total{lance_medallion_transition}` counts each hop
-  (`source->raw`, `raw->bronze`, `bronze->silver`, `silver->gold`); `medallion_stage_denied_total` and
+  (`source->bronze`, `bronze->silver`, `silver->gold`); `medallion_stage_denied_total` and
   `medallion_stage_quality_blocked_total` count promotions stopped by the authz and quality gates.
 - **Measured output** (when compute is on): each `WROTE` edge carries the runtime-measured `row_count` +
   `size_bytes` the stage actually wrote (the `outputStatistics` facet), surfaced in `producers()`.

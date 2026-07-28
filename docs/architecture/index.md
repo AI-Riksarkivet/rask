@@ -53,7 +53,7 @@ flowchart TB
 - **No auth anywhere.** Only optional CORS plus request-id/timing headers; the
   fleet assumes a trusted/localhost network. The frontend hits `/api/*` on the
   gateway (SSR `load` uses the absolute gateway URL server-side);
-  `/api/serve/*` is proxied by the ray service.
+  `/api/serve/*` is proxied by the compute service.
 - **State** lives in the governed Lance lakehouse on S3 (the batches DB and the
   orchestrator died at P7a; core-api/search-api/volumes-api died in the R6/R20
   wave). A Helm chart in `chart/` deploys everything to Kubernetes, while the

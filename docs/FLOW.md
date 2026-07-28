@@ -14,45 +14,47 @@ are design sketches, **not** the current mechanism.
 > (a real Ray Data job); its in-process stand-in fills the identical contract so the loop is testable.
 
 ```
-            POST /produce                 medallion.raw          medallion.bronze        medallion.silver
- (you/cron) ───────────▶ lance-ray ──pub──────────▶ raw→bronze ──pub──────▶ bronze→silver ──pub──▶ silver→gold
-                         (producer)                  (mover)                 (mover)                (mover, terminal)
-                            │ seed raw_events           │ transform             │ transform            │ transform
-                            │ + emit lineage            │ + emit + GATE         │ + emit + GATE        │ + emit + GATE
-                            ▼                           ▼                       ▼                      ▼
+            POST /produce                    medallion.bronze          medallion.silver
+ (you/cron) ───────────▶ lance-ray ──pub────────────▶ bronze→silver ──pub────────▶ silver→gold
+                         (producer)                    (mover)                     (mover, terminal)
+                            │ ingest bronze$events        │ transform                 │ transform
+                            │ + emit lineage              │ + emit + GATE             │ + emit + GATE
+                            ▼                             ▼                           ▼
    every stage emits an OpenLineage RunEvent ─pub(lineage.events)─▶ lineage consumer ─▶ Apache AGE graph
                                                                                          (Run/Job/Dataset + edges)
-   resulting lineage DAG:   raw_events ─▶ bronze$events ─▶ silver$features ─▶ gold$catalog
+   resulting lineage DAG:   bronze$events ─▶ silver$features ─▶ gold$catalog
    compaction cron ──every N──▶ discover every dataset ─▶ compact + GC old versions ─▶ emit maintenance lineage
 ```
 
 ## 1. Ingest — the `lance-ray` producer registers the run and fires the cascade head
 
 `lance-ray` is the **head** (a dummy Ray ingest job; `services/medallion/producer.py`, deployed as the
-`lance-ns-lance-ray` pod running `medallion.producer:app`). On **`POST /produce`** it:
+`lance-ns-lance-ray` pod running `medallion.producer:app`) — the **bronze ingest head** (R23: raw is the
+external world; bronze is the first governed tier, written directly). On **`POST /produce`** it:
 
-1. (compute on) seeds a real `raw_events` Lance dataset — the fake-Ray ingest;
-2. emits an OpenLineage `RunEvent` for `raw_events` (no inputs — raw is the source).
+1. (compute on) seeds a real `bronze$events` Lance dataset (stage-stamped at ingest) — the fake-Ray ingest;
+2. emits an OpenLineage `RunEvent` for `bronze$events` (external sources ride the IIIF/S3 heads' inputs;
+   the dummy seed has none).
 
-It does **not** itself publish `medallion.raw`. `lance-ray` also *subscribes* to the lineage topic
-(`/raw-arrival`) and — only for a raw-dataset write — publishes the first trigger `medallion.raw`. So the
-cascade is driven by the raw-data **arrival event**, not the call (GOAL 4 B2); any raw writer (this dummy,
-or the catalog) that emits a raw-write event drives it, and the head is a subscriber like every other stage.
-Loop-guarded so the movers' own downstream events can't re-fire it.
+It does **not** itself publish `medallion.bronze`. `lance-ray` also *subscribes* to the lineage topic
+(`/bronze-arrival`) and — only for a bronze-dataset write — publishes the first trigger
+`medallion.bronze`. So the cascade is driven by the **arrival of external raw INTO bronze**, not the call
+(GOAL 4 B2); any bronze ingester (this dummy, the IIIF head, or the catalog) that emits a bronze-write
+event drives it, and the head is a subscriber like every other stage. Loop-guarded so the movers' own
+downstream events can't re-fire it.
 
-A failed raw-write emit is the cascade head failing, so `/produce` returns **503** (the caller retries) —
-not a silent 202. The raw-write event *is* the registered run; `/raw-arrival` turns it into `medallion.raw`,
-and each mover downstream picks that up.
+A failed bronze-write emit is the cascade head failing, so `/produce` returns **503** (the caller
+retries) — not a silent 202. The bronze-write event *is* the registered run; `/bronze-arrival` turns it
+into `medallion.bronze`, and each mover downstream picks that up.
 
 → [`MEDALLION.md`](MEDALLION.md) · code: `services/medallion/{producer.py,services/produce.py}`
 
 ## 2. Transform — the movers (one Dapr subscriber per DAG edge)
 
-The three movers run the **same** module (`medallion.mover:app`), differing only by `MEDALLION_*` env:
+The movers run the **same** module (`medallion.mover:app`), differing only by `MEDALLION_*` env:
 
 | Mover | subscribes | publishes | operation |
 |-------|-----------|-----------|-----------|
-| `raw→bronze` | `medallion.raw` | `medallion.bronze` | `ingest_events` |
 | `bronze→silver` | `medallion.bronze` | `medallion.silver` | `embed_features` |
 | `silver→gold` | `medallion.silver` | — (terminal) | `aggregate_gold` |
 
@@ -109,7 +111,7 @@ event_time)`). Queries: `upstream`/`downstream`/`producers`/`graph`/`reconcile` 
 A **compaction** service (`services/compaction/`) runs on a Dapr cron binding: it discovers every dataset in
 the bucket and, per dataset, compacts small fragments + `cleanup_old_versions(older_than=7d)`, then emits a
 versionless `compaction` maintenance run so the GC shows up in `producers()`. Tiers differ in durability:
-raw/bronze/silver are **transient** (re-derivable; their old versions are GC'd), gold/catalog are
+bronze/silver are **transient** (re-derivable; their old versions are GC'd), gold/catalog are
 **permanent** (the system of record). The current version is always kept (no data loss); only time-travel
 *depth* is capped.
 

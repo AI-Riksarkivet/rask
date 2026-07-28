@@ -148,8 +148,9 @@ and `services/volumes_api` are deleted; the gateway's core rows AND its `/api` c
 (an unmatched `/api/*` now 404s `no upstream` — pinned by
 `services/gateway/tests/test_routing.py::test_no_catch_all_since_the_r6_r20_wave`); the chart's
 `core-api`/`search-api`/`volumes-api` fleet entries, configmap URL rows, dockerfiles and Makefile
-image-list entries are deleted; `ray-api` took the clean `ray` name everywhere external (R20 —
-the uv member stays `ray-api`, a `ray` package would shadow PyPI ray). The S3 object browser was
+image-list entries are deleted; `ray-api` took the clean `ray` name everywhere external (R20),
+then became `compute` on EVERY surface — uv member and import included — at R22 (`import compute`
+shadows nothing, so R20's PyPI-shadow exception died with the rename). The S3 object browser was
 ported into the media viewer (`viewer/api/v1/endpoints/objects.py`, public `/api/media/object*`,
 tests `tests/unit/test_objects_browser.py`) and the lakehouse storage browser re-pointed to it.
 The EAD `/catalog/search` endpoint retired with **zero frontend callers**; its re-land is D2d below.
@@ -189,8 +190,34 @@ the `PageLoaderActor`/`AltoWriterActor` endcaps — flagged-D, runner READ-only 
 replaced by is pinned: mover `stageJob` values knob (`MEDALLION_RAY_ENTRYPOINT`), the gold contract
 (`medallion/schemas/htr.py::GOLD_CONTRACT_COLUMNS` + its unit pin), and the `/ingest-iiif` head.
 **What closes it.** The P7b gate: the runner CLI grows a `stage` subcommand; layout/lines + transcribe
-run as `medallion.bronze`/`medallion.silver` movers; the HTR-cascade e2e (IIIF → raw → bronze → silver →
-gold with lineage populated) goes green.
+run as `medallion.bronze`/`medallion.silver` movers; the HTR-cascade e2e (IIIF → bronze → silver →
+gold with lineage populated) goes green. *(R23 re-tiered the head: the IIIF harvest lands bronze
+directly — there is no raw tier.)*
+
+### D2f · The `/ingest-s3` head route for the second external-raw source family *(new, 2026-07-28 — R23)*
+
+**What.** R23 names TWO external-raw source families: the IIIF Image API (shipped: `/ingest-iiif`) and
+external object storage (the ra-hcp pattern). The **adapter seam is landed**:
+`medallion/services/s3_harvest.py` (`S3PrefixSource` over `packages/storage`'s provider-agnostic
+`storage.S3Source` + `s3_input()` for the `(s3://<bucket>, <prefix>)` OpenLineage input), unit-tested
+against moto incl. the bronze blob-v2 landing (`tests/unit/test_s3_harvest.py`).
+**Why it is open.** The producer HEAD ROUTE (`POST /ingest-s3`: config for source bucket/prefix
+allowlists, token/admin auth, #84 project routing — symmetric with `/ingest-iiif`) is scaffolding-only:
+wiring it properly needs the same auth/ceiling/project design pass the IIIF head got, out of the R23
+corrective wave's scope.
+**What closes it.** The route + settings (`MEDALLION_S3_SOURCE_*`), emitting input=`s3://…` /
+output=bronze through the same `/bronze-arrival` seam, with the double-fire pin extended to it.
+
+### D2g · The bronze ingest head's own FGA write gate *(new, 2026-07-28 — R23 collapse residue)*
+
+**What.** The retired raw→bronze mover carried the FGA `can_create_table` self-check for producing
+bronze. With the collapse, the bronze write happens in the producer, whose ingest routes are door-gated
+(app-token / admin OIDC) but do not self-check a writer rung before the Lance write.
+`scripts/seed_medallion_fga.sh` now grants `writer` to `user:service-lance-ray` (the producer identity),
+so the model DESCRIBES the intended rung.
+**What closes it.** The ingest heads (`/produce`, `/ingest-iiif`, `/ingest-media`) check
+`can_create_table` on `namespace:bronze` as `service-lance-ray` when `MEDALLION_FGA_ENABLED` — the same
+enforce-not-describe posture the movers keep.
 
 ## E. Latent — surfaced by the pre-copy docs audit (2026-07-27), adversarially verified open
 

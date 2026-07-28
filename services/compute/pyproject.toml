@@ -1,7 +1,7 @@
 [project]
-name = "ray-api"
+name = "compute"
 version = "0.1.0"
-description = "the ray service — Ray dashboard introspection + Ray Serve proxy over ray-kit (uv member stays ray-api: a `ray` package would shadow PyPI ray)."
+description = "the compute service — Ray dashboard introspection + Ray Serve proxy over ray-kit (R22: `compute` aligns service ↔ zone ↔ plane; import `compute` shadows nothing)."
 requires-python = ">=3.13"
 license = "AGPL-3.0-only"
 dependencies = [
@@ -16,7 +16,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ray_api"]
+packages = ["src/compute"]
 
 [tool.uv.sources]
 service-kit = { workspace = true }

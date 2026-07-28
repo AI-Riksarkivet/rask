@@ -9,7 +9,7 @@ both local k3s and production. In-cluster CloudNativePG (Postgres), RustFS
 | Component | Port | Notes |
 |---|---|---|
 | `gateway` | 8888 | Reverse proxy; path-routes `/api/*` to per-domain services |
-| `ray` | 8804 | Ray dashboard proxy + `/api/serve/*` (uv member `ray-api`) |
+| `compute` | 8804 | Ray dashboard proxy + `/api/serve/*` (R22 — `compute` on every surface; public paths stay `/api/ray` + `/api/serve`) |
 | `frontend` | 3000 | SvelteKit SSR (svelte-adapter-bun) |
 | migration | — | pre-install/pre-upgrade Job: `alembic upgrade head` |
 | Ingress (Traefik) | 80 | `/api` → gateway:8888, `/` → rask-home:3000 |

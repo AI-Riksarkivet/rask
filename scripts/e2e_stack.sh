@@ -120,7 +120,7 @@ kubectl rollout status deploy/dapr-sidecar-injector --timeout=300s
 # freshly-scheduled pod, and delete forces that reschedule to pull the just-loaded digest from the node
 # cache (IfNotPresent) — the kind same-tag staleness fix (memory: kind-same-tag-image-gotcha). On a fresh
 # cluster this is simply the sidecar-injection recreate.
-for d in catalog lineage lance-ray raw-to-bronze bronze-to-silver silver-to-gold media-to-silver gateway; do
+for d in catalog lineage lance-ray bronze-to-silver silver-to-gold media-to-silver gateway; do
   kubectl delete pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=$d" \
     --ignore-not-found >/dev/null 2>&1 || true
 done

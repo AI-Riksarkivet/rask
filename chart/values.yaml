@@ -1,7 +1,7 @@
 # rask umbrella chart values — the MERGED estate (rask 0.2.0 + lance-ns 0.1.0, one release named `rask`).
 #
 # Two systems now install from this one file:
-#   * the rask fleet (gateway/ray/controlplane),
+#   * the rask fleet (gateway/compute/controlplane),
 #     KubeRay Serve, CloudNativePG, the RustFS Tenant, the SvelteKit microfrontend zones;
 #   * the lance-ns lakehouse (catalog + lineage + medallion + compaction + media), governance
 #     (Dex OIDC + OpenFGA), the Dapr/NATS event fabric, OpenBao, and the OTel-first observability tier.
@@ -61,7 +61,7 @@ config:
   RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
 
 # Per-service definitions. TWO planes share this map, by design of the merge:
-#   * the rask FLEET (ray, gateway) — rendered by templates/fleet.yaml, which ranges over this
+#   * the rask FLEET (compute, gateway) — rendered by templates/fleet.yaml, which ranges over this
 #     map but only emits the `gateway` entry unless singleTenant.enabled;
 #   * the lance-ns LAKEHOUSE apps (catalog, lineage) — rendered by templates/services.yaml, which
 #     reads .Values.services.catalog / .Values.services.lineage by NAME.
@@ -73,11 +73,14 @@ services:
   # ---- rask fleet (uvicorn modules, one Deployment each via templates/fleet.yaml) ----
   # (core-api/search-api/volumes-api died in the R6/R20 media wave: the S3 object browser
   # rides the media-plane viewer at /api/media/object*; lines/EAD FTS re-land as
-  # catalog-governed Lance tables behind /api/media/search. The `ray` k8s/dapr name is
-  # R20's suffix-death — the uv member stays `ray-api` because a Python package named
-  # `ray` would shadow PyPI ray.)
-  ray:
-    module: "ray_api:app"
+  # catalog-governed Lance tables behind /api/media/search. The Ray-plane service is
+  # `compute` on EVERY surface — uv member, import, k8s objects, dapr app-id, image —
+  # per R22, which supersedes R20's `ray` choice and its ray-api PyPI-shadow exception.
+  # Its public gateway rows stay /api/ray + /api/serve: the URL namespace names the
+  # Ray cluster, not the service. The zone image namespace is web-<zone>, so the bare
+  # `compute` image name is this service's.)
+  compute:
+    module: "compute:app"
     port: 8804
     replicas: 1
     waitFor: []
@@ -437,7 +440,7 @@ catalog:
 
 # Dapr pub/sub: the publish-side component name + the lineage topic. Each SUBSCRIBER app additionally
 # gets its own derived component `<name>-<app-id>` carrying its queue group + deliver policy
-# (dapr-component.yaml); the subscription routes live in app code (/lineage-events, /raw-arrival,
+# (dapr-component.yaml); the subscription routes live in app code (/lineage-events, /bronze-arrival,
 # /medallion-event).
 pubsub:
   name: lineage-pubsub
@@ -448,21 +451,24 @@ pubsub:
   # default (services/catalog/core/config.py). Rendered only when catalog.controlEmit is on.
   controlName: catalog-control-pubsub
 
-# --- Event-driven medallion pipeline (raw → bronze → silver → gold) --------------------------------
-# lance-ray (dummy producer) is the HEAD: POST /produce emits the raw_events lineage + the first trigger
-# (medallion.raw). Each mover subscribes to its upstream stage's trigger, emits the transform's lineage
-# (the DERIVED_FROM edge), and publishes the next trigger — one source event cascades the whole DAG, and
-# Dapr propagates the trace context across every hop. All 5 share the catalog image (different entrypoint).
+# --- Event-driven medallion pipeline (bronze → silver → gold; R23 — raw is the EXTERNAL world) -----
+# lance-ray (dummy producer) is the HEAD: it ingests external raw straight into BRONZE (POST /produce
+# seeds bronze$events; /ingest-iiif harvests bronze$pages) and emits the bronze lineage; its OWN
+# /bronze-arrival subscription publishes the first trigger (medallion.bronze). Each mover subscribes to
+# its upstream stage's trigger, emits the transform's lineage (the DERIVED_FROM edge), and publishes the
+# next trigger — one ingest cascades the whole DAG, and Dapr propagates the trace context across every
+# hop. All 4 share the catalog image (different entrypoint).
 medallion:
   enabled: true
   port: 8000
-  # Storage ZONES (ingest SOURCE → medallion → gold SINK). Maps a stage NAMESPACE to its S3 bucket;
-  # anything unset falls back to the shared `rustfs.bucket`, so the DEFAULT here is the single-bucket
-  # layout (unchanged, e2e-safe). Override to separate the boundaries — raw (ingest source) and gold
-  # (sink/output) into their OWN buckets/tenants, while bronze/silver (the project's medallion internals)
-  # stay in the project bucket. Any non-default bucket listed here is auto-provisioned by rustfs-mkbucket.
-  # Same RustFS endpoint/creds serve all buckets; a truly external S3 per zone (own endpoint) is future.
-  buckets: {} # e.g. { raw: lance-source, gold: lance-sink }
+  # Storage ZONES (medallion → gold SINK). Maps a stage NAMESPACE to its S3 bucket; anything unset
+  # falls back to the shared `rustfs.bucket`, so the DEFAULT here is the single-bucket layout
+  # (unchanged, e2e-safe). Override to zone gold (sink/output) into its OWN bucket/tenant, while
+  # bronze/silver (the project's medallion internals) stay in the project bucket. External raw is NOT a
+  # zone (R23): the ingest sources (IIIF, external object storage) live outside the lakehouse entirely.
+  # Any non-default bucket listed here is auto-provisioned by rustfs-mkbucket. Same RustFS endpoint/creds
+  # serve all buckets; a truly external S3 per zone (own endpoint) is future.
+  buckets: {} # e.g. { gold: lance-sink }
   # #84 per-tenant medallion routing (OPT-IN). When true, the producer + movers get
   # MEDALLION_CONTROL_ROOT (the catalog's warehouse-registry root — the same s3://<rustfs.bucket> the
   # catalog's LANCE_REST_ROOT names), so a `project`-carrying POST /produce (or stage trigger) resolves
@@ -475,7 +481,7 @@ medallion:
   # Gold SERVING warehouse (OPT-IN; composes with projectsEnabled). When true, the terminal silver→gold
   # mover gets MEDALLION_GOLD_WAREHOUSE_ENABLED: a `project`-carrying trigger's TARGET root becomes the
   # project's gold serving warehouse — the registry record created with `"serving": "gold"` on POST
-  # /v1/warehouses — when one exists. The upstream read + raw/bronze/silver stay in the tenant's WORK
+  # /v1/warehouses — when one exists. The upstream read + bronze/silver stay in the tenant's WORK
   # warehouse. Absent gold warehouse, or this false (default), → byte-identical work-warehouse routing.
   goldWarehouse: false
   # ReBAC enforcement: when true, each mover CHECKS it's authorized (OpenFGA) to produce its target stage
@@ -492,14 +498,14 @@ medallion:
   # Replica counts — each mover's own pubsub component carries queueGroupName=<app-id>, so its replicas
   # form a competing-consumer group (single delivery per trigger; without the queue group every replica
   # would process EVERY trigger — up to 8× at gold with 2 replicas per stage). Movers are idempotent on
-  # top (MERGE on run_id). lance-ray is a subscriber too (/raw-arrival). All stateless.
+  # top (MERGE on run_id). lance-ray is a subscriber too (/bronze-arrival). All stateless.
   producerReplicas: 1
   moverReplicas: 1
   # When true, every stage does a REAL in-process Lance read->transform->write (the fake-Ray compute) so the
   # event-driven cascade produces actual versioned data on RustFS, not just provenance — the lineage graph
   # then reflects what storage holds and outputStatistics carry real rows/bytes. Off by default (the demo
   # ships as a pure lineage-emit). Each stage's FROM_URI/TO_URI derive from rustfs.bucket + its namespace, so
-  # the chain lines up (producer raw -> raw->bronze -> bronze->silver -> silver->gold). REQUIRES OpenBao off
+  # the chain lines up (producer bronze -> bronze->silver -> silver->gold). REQUIRES OpenBao off
   # (`--set openbao.enabled=false`): the medallion is a dummy producer with no OpenBao secret-fetch (unlike
   # the catalog), so with OpenBao on the plaintext S3 secret is withheld and it fails fast at boot. Real
   # compute is a Ray job at rask.
@@ -538,20 +544,21 @@ medallion:
     daprAppId: lance-ray
     # Expose POST /produce through the gateway (the DEMO entry point for the cascade). It carries no
     # auth — a caller could trigger cascades / forge medallion provenance — so values-prod sets it false;
-    # the EDGE head then fires only from real raw writes via /raw-arrival. NB this gates only the gateway
-    # route — the in-cluster ClusterIP route stays reachable + unauthenticated.
+    # the EDGE head then fires only from real bronze ingests via /bronze-arrival. NB this gates only the
+    # gateway route — the in-cluster ClusterIP route stays reachable + unauthenticated.
     expose: true
-    rawDataset: raw_events
-    rawNamespace: raw
+    bronzeDataset: bronze$events
+    bronzeNamespace: bronze
     operation: lance_ray_ingest
     author: ray
-    rawTopic: medallion.raw
-    # The IIIF page lane (P7a): /ingest-iiif harvests a volume's pages into THIS raw dataset
-    # (beside rawDataset — /raw-arrival fires the cascade for either name). The raw page dataset
-    # replaced the prefetch lane + the IIIFCachedSource cache; HTR then runs as cascade compute
-    # (raw→bronze media promotion, then the P7b layout/lines + transcribe movers).
-    iiifRawDataset: raw_pages
-  # The 4 stage movers run medallion.mover:app, differing only by env. order = the DAG.
+    bronzeTopic: medallion.bronze
+    # The IIIF page lane (P7a, re-tiered by R23): /ingest-iiif harvests a volume's pages into THIS
+    # bronze dataset (beside bronzeDataset — /bronze-arrival fires the cascade for either name). The
+    # bronze page dataset replaced the prefetch lane + the IIIFCachedSource cache; HTR then runs as
+    # cascade compute (the P7b layout/lines + transcribe movers).
+    iiifBronzeDataset: bronze$pages
+  # The 3 stage movers run medallion.mover:app, differing only by env. order = the DAG. (R23: there is
+  # no raw→bronze mover — its stage stamp/provenance logic merged into the producer's bronze ingest.)
   # requiredAction/serviceIdentity gate each hop when fgaEnabled: silver→gold needs `can_promote`
   # (validator-only); the others `can_create_table` (writer). Each mover checks as its own identity.
   # ⚠ Every requiredAction below MUST be a real relation on the `namespace` type in
@@ -568,7 +575,6 @@ medallion:
     # Optional per-mover `requiredColumns: "id,embedding"` — declared consumer dependencies
     # (data-contract gap #1): the quality gate adds a `column_declared` assertion per name, so a
     # promotion that dropped/renamed a declared column is BLOCKED (the breaking-change detector).
-    - { name: raw-to-bronze, daprAppId: raw-to-bronze, fromNamespace: raw, fromDataset: raw_events, toNamespace: bronze, toDataset: bronze$events, operation: ingest_events, author: alice, subTopic: medallion.raw, pubTopic: medallion.bronze, requiredAction: can_create_table, serviceIdentity: "service-raw-to-bronze" }
     - { name: bronze-to-silver, daprAppId: bronze-to-silver, fromNamespace: bronze, fromDataset: bronze$events, toNamespace: silver, toDataset: silver$features, operation: embed_features, author: data_eng, subTopic: medallion.bronze, pubTopic: medallion.silver, requiredAction: can_create_table, serviceIdentity: "service-bronze-to-silver", requiredColumns: "id" }
     - { name: silver-to-gold, daprAppId: silver-to-gold, fromNamespace: silver, fromDataset: silver$features, toNamespace: gold, toDataset: gold$catalog, operation: aggregate_gold, author: analyst, subTopic: medallion.silver, pubTopic: "", requiredAction: can_promote, serviceIdentity: "service-silver-to-gold", requiredColumns: "id" }
     # The MEDIA lane (multimodal §9): POST /ingest-media on lance-ray lands bronze-media blobs and
@@ -776,7 +782,8 @@ ray:
     token: ""
   rayVersion: "2.55.1"
   image:
-    # `ray-cluster`, not `ray`: the fleet's ray SERVICE image took the bare `ray`
+    # `ray-cluster`: names the KubeRay cluster image, distinct from the fleet's
+    # Ray-plane SERVICE image (`ray` under R20, `compute` since R22)
     # name when the -api suffix died (R20), so the cluster image renamed with it.
     repository: ray-cluster
     tag: "dev"

@@ -1,13 +1,15 @@
-"""End-to-end test of the fake-Ray medallion CASCADE (#25) — raw → bronze → silver → gold, in-process.
+"""End-to-end test of the fake-Ray medallion CASCADE (#25) — bronze → silver → gold, in-process.
 
-This is the regression guard for "the event-driven loop produces real DATA + a correct lineage CHAIN".
-It runs the producer + all three stage movers in sequence with the fake-Ray compute ON, against a temp
-directory (real Lance, no S3/Dapr/AGE), capturing every emitted OpenLineage event, and asserts BOTH halves:
+R23: bronze is the FIRST governed tier — the producer ingests straight into it (raw is the external
+world and owns no dataset). This is the regression guard for "the event-driven loop produces real DATA +
+a correct lineage CHAIN". It runs the producer + both stage movers in sequence with the fake-Ray compute
+ON, against a temp directory (real Lance, no S3/Dapr/AGE), capturing every emitted OpenLineage event, and
+asserts BOTH halves:
 
 * **Data** — each stage's Lance dataset really exists, the original rows flow all the way to gold, and each
   hop is stamped with its stage; the lineage carries the real (advancing) Lance versions.
 * **Lineage** — the captured events parse as the lineage service's ``RunEvent`` and form the
-  ``raw → bronze → silver → gold`` ``DERIVED_FROM`` chain (each hop's input is the previous hop's output),
+  ``bronze → silver → gold`` ``DERIVED_FROM`` chain (each hop's input is the previous hop's output),
   i.e. the exact graph the lineage consumer would ingest.
 
 The Dapr pub/sub fan-out + AGE ingest are exercised by the gated live e2e
@@ -27,7 +29,7 @@ import pytest
 from dapr.aio.clients import DaprClient
 from lineage.models import Dataset, RunEvent
 from medallion.core.config import MedallionSettings
-from medallion.services.ingest_trigger import handle_raw_arrival
+from medallion.services.ingest_trigger import handle_bronze_arrival
 from medallion.services.produce import produce
 from medallion.services.transform import handle_stage
 
@@ -47,23 +49,25 @@ class _FakeDapr:
 
 # The medallion DAG as (operation, from_ns, from_ds, to_ns, to_ds) — the same shape the chart wires per mover.
 _HOPS = [
-    ("ingest_events", "raw", "raw_events", "bronze", "bronze$events"),
     ("embed", "bronze", "bronze$events", "silver", "silver$features"),
     ("aggregate", "silver", "silver$features", "gold", "gold$catalog"),
 ]
 
 
 def test_cascade_produces_real_data_and_a_correct_lineage_chain(tmp_path: Any) -> None:
-    uris = {ns: str(tmp_path / ns) for ns in ("raw", "bronze", "silver", "gold")}
+    uris = {ns: str(tmp_path / ns) for ns in ("bronze", "silver", "gold")}
     dapr = _FakeDapr()
 
-    # Head of the pipeline: lance-ray seeds raw_events (real Lance write).
-    producer = MedallionSettings.model_validate({"compute_enabled": True, "raw_uri": uris["raw"], "raw_namespace": "raw", "raw_dataset": "raw_events"})
+    # Head of the pipeline: lance-ray seeds bronze$events DIRECTLY (real Lance write — R23).
+    producer = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": uris["bronze"]})
     asyncio.run(produce(cast(DaprClient, dapr), producer))
-    raw_rows = lance.dataset(uris["raw"]).to_table().num_rows
-    assert raw_rows > 0
+    bronze_tbl = lance.dataset(uris["bronze"]).to_table()
+    bronze_rows = bronze_tbl.num_rows
+    assert bronze_rows > 0
+    # The retired raw→bronze mover's stage stamp merged into the bronze ingest head (R23).
+    assert set(bronze_tbl.column("stage").to_pylist()) == {"bronze"}
 
-    # The 3 movers, each reading its upstream Lance dataset and writing the downstream one.
+    # The 2 movers, each reading its upstream Lance dataset and writing the downstream one.
     for op, from_ns, from_ds, to_ns, to_ds in _HOPS:
         settings = MedallionSettings.model_validate(
             {
@@ -83,15 +87,14 @@ def test_cascade_produces_real_data_and_a_correct_lineage_chain(tmp_path: Any) -
 
     # --- Data: the original rows flowed all the way to gold, stamped at each stage. ---
     gold = lance.dataset(uris["gold"]).to_table()
-    assert gold.num_rows == raw_rows  # no rows lost across the cascade
+    assert gold.num_rows == bronze_rows  # no rows lost across the cascade
     assert set(gold.column("stage").to_pylist()) == {"gold"}
 
-    # --- Lineage: the emitted events form the raw → bronze → silver → gold DERIVED_FROM chain. ---
+    # --- Lineage: the emitted events form the bronze → silver → gold DERIVED_FROM chain. ---
     events = [RunEvent.model_validate(p["data"]) for p in dapr.published if p["topic"] == producer.lineage_topic]
     by_output = {e.outputs[0].name: e for e in events}
-    assert set(by_output) == {"raw_events", "bronze$events", "silver$features", "gold$catalog"}
-    assert by_output["raw_events"].inputs == []  # raw is the source — no upstream
-    assert by_output["bronze$events"].inputs[0].name == "raw_events"
+    assert set(by_output) == {"bronze$events", "silver$features", "gold$catalog"}
+    assert by_output["bronze$events"].inputs == []  # the dummy seed has no external source
     assert by_output["silver$features"].inputs[0].name == "bronze$events"
     assert by_output["gold$catalog"].inputs[0].name == "silver$features"
     # Every successful hop carries the real Lance version on its output (the WROTE edge the graph records).
@@ -99,24 +102,27 @@ def test_cascade_produces_real_data_and_a_correct_lineage_chain(tmp_path: Any) -
         assert by_output[name].output_version(name) == str(lance.dataset(uris[ns]).version)
 
 
-def test_source_rowid_traces_every_derived_row_back_to_its_exact_raw_source_row(tmp_path: Any) -> None:
-    """#38a ROOT PROVENANCE: every bronze/silver/gold row carries ``source_rowid`` = the stable ``_rowid`` of
-    the RAW row it descends from, so a gold row names its exact source in ONE join — not a hop-by-hop walk.
+def test_source_rowid_traces_every_derived_row_back_to_its_exact_bronze_source_row(tmp_path: Any) -> None:
+    """#38a ROOT PROVENANCE (re-rooted by R23): every silver/gold row carries ``source_rowid`` = the stable
+    ``_rowid`` of the BRONZE row it descends from, so a gold row names its exact root in ONE join — not a
+    hop-by-hop walk.
 
-    Minted at the head (bronze ← the raw row's reserved ``_rowid`` metacolumn) and CARRIED UNCHANGED across
-    silver and gold (NOT re-set to each parent's ``_rowid``). The columnLineage edge tells the two apart: the
-    head declares ``source_rowid ← raw_events._rowid``, every carried stage ``source_rowid ← source_rowid``.
+    Minted at the first derive (silver ← the bronze row's reserved ``_rowid`` metacolumn) and CARRIED
+    UNCHANGED across gold (NOT re-set to each parent's ``_rowid``). The columnLineage edge tells the two
+    apart: the first derive declares ``source_rowid ← bronze$events._rowid``, every carried stage
+    ``source_rowid ← source_rowid``.
     """
-    uris = {ns: str(tmp_path / ns) for ns in ("raw", "bronze", "silver", "gold")}
+    uris = {ns: str(tmp_path / ns) for ns in ("bronze", "silver", "gold")}
     dapr = _FakeDapr()
-    producer = MedallionSettings.model_validate({"compute_enabled": True, "raw_uri": uris["raw"], "raw_namespace": "raw", "raw_dataset": "raw_events"})
+    producer = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": uris["bronze"]})
     asyncio.run(produce(cast(DaprClient, dapr), producer))
 
-    # The raw row identities the whole cascade must be able to name — captured AT seed time (id → _rowid),
-    # because _rowid advances on any later overwrite, so only a snapshot taken now is join-valid.
-    raw_tbl = lance.dataset(uris["raw"]).to_table(with_row_id=True)
-    root_rowid_by_id = dict(zip(raw_tbl.column("id").to_pylist(), raw_tbl.column("_rowid").to_pylist(), strict=True))
-    assert "source_rowid" not in raw_tbl.column_names  # raw IS the source — it carries none of its own
+    # The bronze row identities the whole cascade must be able to name — captured AT seed time
+    # (id → _rowid), because _rowid advances on any later overwrite, so only a snapshot taken now is
+    # join-valid.
+    bronze_tbl = lance.dataset(uris["bronze"]).to_table(with_row_id=True)
+    root_rowid_by_id = dict(zip(bronze_tbl.column("id").to_pylist(), bronze_tbl.column("_rowid").to_pylist(), strict=True))
+    assert "source_rowid" not in bronze_tbl.column_names  # bronze IS the root — it carries none of its own
 
     for op, from_ns, from_ds, to_ns, to_ds in _HOPS:
         settings = MedallionSettings.model_validate(
@@ -134,14 +140,14 @@ def test_source_rowid_traces_every_derived_row_back_to_its_exact_raw_source_row(
         )
         assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t"}})) == {"status": "SUCCESS"}
 
-    # DATA: every stage names the SAME root raw row per id — bronze, silver AND gold, unchanged.
-    for ns in ("bronze", "silver", "gold"):
+    # DATA: every stage names the SAME root bronze row per id — silver AND gold, unchanged.
+    for ns in ("silver", "gold"):
         tbl = lance.dataset(uris[ns]).to_table()
         assert "source_rowid" in tbl.column_names, f"{ns} dropped row-level provenance"
         by_id = dict(zip(tbl.column("id").to_pylist(), tbl.column("source_rowid").to_pylist(), strict=True))
         assert by_id == root_rowid_by_id, f"{ns} lost or rewrote the root source_rowid"
 
-    # LINEAGE: the head MINTS the edge from the reserved _rowid; a carried stage declares plain IDENTITY.
+    # LINEAGE: the first derive MINTS the edge from the reserved _rowid; a carried stage declares IDENTITY.
     pubs = {p["data"]["outputs"][0]["name"]: p["data"] for p in dapr.published if p["topic"] == producer.lineage_topic}
 
     def _srid_edge(output_name: str) -> tuple[str, str, str]:
@@ -149,7 +155,7 @@ def test_source_rowid_traces_every_derived_row_back_to_its_exact_raw_source_row(
         edge = next(e for e in out.column_edges if e["out_field"] == "source_rowid")
         return edge["name"], edge["field"], edge["subtype"]
 
-    assert _srid_edge("bronze$events") == ("raw_events", "_rowid", "IDENTITY")  # minted at the head
+    assert _srid_edge("silver$features") == ("bronze$events", "_rowid", "IDENTITY")  # minted at the first derive
     assert _srid_edge("gold$catalog") == ("silver$features", "source_rowid", "IDENTITY")  # carried forward
 
 
@@ -190,31 +196,31 @@ def _mover_settings(hop: tuple[str, str, str, str, str], uris: dict[str, str], *
 
 
 def test_project_cascade_routes_into_the_project_warehouse_and_qualifies_lineage(tmp_path: Any) -> None:
-    """#84 happy path, head→gold: /produce {project} seeds the PROJECT warehouse, /raw-arrival copies the
-    project onto the stage trigger, every mover resolves its URIs off the registry (the env decoy URIs are
-    never touched), each next-trigger PROPAGATES the project, and the lineage chain is project-qualified
-    end to end (distinct graph nodes per tenant)."""
+    """#84 happy path, head→gold: /produce {project} seeds the PROJECT warehouse, /bronze-arrival copies
+    the project onto the stage trigger, every mover resolves its URIs off the registry (the env decoy URIs
+    are never touched), each next-trigger PROPAGATES the project, and the lineage chain is
+    project-qualified end to end (distinct graph nodes per tenant)."""
     control, wh = tmp_path / "control", tmp_path / "acme-wh"
     _provision(control, "acme", wh)
     # Env-derived defaults every stage would use WITHOUT the project — they must stay untouched.
-    decoys = {ns: str(tmp_path / f"default-{ns}") for ns in ("raw", "bronze", "silver", "gold")}
+    decoys = {ns: str(tmp_path / f"default-{ns}") for ns in ("bronze", "silver", "gold")}
     dapr = _FakeDapr()
 
-    producer = MedallionSettings.model_validate({"compute_enabled": True, "raw_uri": decoys["raw"], "control_root": str(control)})
+    producer = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": decoys["bronze"], "control_root": str(control)})
     result = asyncio.run(produce(cast(DaprClient, dapr), producer, project="acme"))
-    assert result["status"] == "produced" and result["dataset"] == "acme-raw_events"
-    assert lance.dataset(str(wh / "medallion" / "raw")).to_table().num_rows > 0
-    assert not Path(decoys["raw"]).exists()  # fail-closed routing: the shared root was never written
+    assert result["status"] == "produced" and result["dataset"] == "acme-bronze$events"
+    assert lance.dataset(str(wh / "medallion" / "bronze")).to_table().num_rows > 0
+    assert not Path(decoys["bronze"]).exists()  # fail-closed routing: the shared root was never written
 
-    raw_event = next(p["data"] for p in dapr.published if p["topic"] == producer.lineage_topic)
-    assert raw_event["outputs"][0]["namespace"] == "acme-raw"
-    assert raw_event["outputs"][0]["name"] == "acme-raw_events"
-    assert raw_event["run"]["facets"]["lance"]["project"] == "acme"
+    bronze_event = next(p["data"] for p in dapr.published if p["topic"] == producer.lineage_topic)
+    assert bronze_event["outputs"][0]["namespace"] == "acme-bronze"
+    assert bronze_event["outputs"][0]["name"] == "acme-bronze$events"
+    assert bronze_event["run"]["facets"]["lance"]["project"] == "acme"
 
-    # The cascade HEAD: the raw-arrival subscription matches the QUALIFIED pair + propagates the project.
-    assert asyncio.run(handle_raw_arrival(cast(DaprClient, dapr), producer, {"data": raw_event})) == {"status": "SUCCESS"}
+    # The cascade HEAD: the bronze-arrival subscription matches the QUALIFIED pair + propagates the project.
+    assert asyncio.run(handle_bronze_arrival(cast(DaprClient, dapr), producer, {"data": bronze_event})) == {"status": "SUCCESS"}
     head = dapr.published[-1]
-    assert head["topic"] == producer.raw_topic and head["data"]["project"] == "acme"
+    assert head["topic"] == producer.bronze_topic and head["data"]["project"] == "acme"
 
     trigger = head["data"]
     for hop in _HOPS:
@@ -233,12 +239,11 @@ def test_project_cascade_routes_into_the_project_warehouse_and_qualifies_lineage
     events = [RunEvent.model_validate(p["data"]) for p in dapr.published if p["topic"] == producer.lineage_topic]
     by_output = {e.outputs[0].name: e for e in events}
     assert set(by_output) == {
-        "acme-raw_events",
         "acme-bronze$events",
         "acme-silver$features",
         "acme-gold$catalog",
     }
-    assert by_output["acme-bronze$events"].inputs[0].name == "acme-raw_events"
+    assert by_output["acme-silver$features"].inputs[0].name == "acme-bronze$events"
     assert by_output["acme-gold$catalog"].inputs[0].name == "acme-silver$features"
     assert by_output["acme-gold$catalog"].outputs[0].namespace == "acme-gold"
 
@@ -246,33 +251,33 @@ def test_project_cascade_routes_into_the_project_warehouse_and_qualifies_lineage
 def test_project_trigger_with_routing_disabled_is_dropped_fail_closed(tmp_path: Any) -> None:
     """No MEDALLION_CONTROL_ROOT + a project-carrying trigger → DROP with NOTHING emitted or written —
     falling back to the default roots would transform the wrong tenant's data under real-looking lineage."""
-    uris = {ns: str(tmp_path / ns) for ns in ("raw", "bronze")}
+    uris = {ns: str(tmp_path / ns) for ns in ("bronze", "silver")}
     dapr = _FakeDapr()
     settings = _mover_settings(_HOPS[0], uris)  # control_root unset (the default)
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t", "project": "acme"}}))
     assert status == {"status": "DROP"}
     assert dapr.published == []  # no lineage emit, no next trigger
-    assert not Path(uris["bronze"]).exists()  # and the default root was never written
+    assert not Path(uris["silver"]).exists()  # and the default root was never written
 
 
 def test_project_trigger_with_no_active_warehouse_records_fail_and_drops(tmp_path: Any) -> None:
     control = tmp_path / "control"
     (control / "_warehouses").mkdir(parents=True)  # registry exists, but no warehouse for the project
-    uris = {ns: str(tmp_path / ns) for ns in ("raw", "bronze")}
+    uris = {ns: str(tmp_path / ns) for ns in ("bronze", "silver")}
     dapr = _FakeDapr()
     settings = _mover_settings(_HOPS[0], uris, control_root=str(control))
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t", "project": "ghost"}}))
     assert status == {"status": "DROP"}
-    assert not Path(uris["bronze"]).exists()
+    assert not Path(uris["silver"]).exists()
     (fail,) = [p["data"] for p in dapr.published if p["topic"] == settings.lineage_topic]
     assert fail["eventType"] == "FAIL"  # the audit trail: the refused run is recorded, project-qualified
-    assert fail["outputs"][0] == {"namespace": "ghost-bronze", "name": "ghost-bronze$events"}
+    assert fail["outputs"][0] == {"namespace": "ghost-silver", "name": "ghost-silver$features"}
     assert "no active warehouse" in fail["run"]["facets"]["errorMessage"]["message"]
 
 
 def test_unsafe_project_in_trigger_is_dropped_without_any_emit(tmp_path: Any) -> None:
     dapr = _FakeDapr()
-    settings = _mover_settings(_HOPS[0], {"raw": str(tmp_path / "raw"), "bronze": str(tmp_path / "bronze")})
+    settings = _mover_settings(_HOPS[0], {"bronze": str(tmp_path / "bronze"), "silver": str(tmp_path / "silver")})
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t", "project": "../evil"}}))
     assert status == {"status": "DROP"} and dapr.published == []
 
@@ -280,15 +285,15 @@ def test_unsafe_project_in_trigger_is_dropped_without_any_emit(tmp_path: Any) ->
 def test_produce_with_project_fails_closed_when_unresolvable(tmp_path: Any) -> None:
     dapr = _FakeDapr()
     # Routing disabled (no control_root) → refused before any write or publish.
-    producer = MedallionSettings.model_validate({"compute_enabled": True, "raw_uri": str(tmp_path / "raw")})
+    producer = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": str(tmp_path / "bronze")})
     with pytest.raises(UnresolvableProjectError):
         asyncio.run(produce(cast(DaprClient, dapr), producer, project="acme"))
     # Routing enabled but the project has no active warehouse → equally refused.
     (tmp_path / "control" / "_warehouses").mkdir(parents=True)
-    configured = MedallionSettings.model_validate({"compute_enabled": True, "raw_uri": str(tmp_path / "raw"), "control_root": str(tmp_path / "control")})
+    configured = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": str(tmp_path / "bronze"), "control_root": str(tmp_path / "control")})
     with pytest.raises(UnresolvableProjectError):
         asyncio.run(produce(cast(DaprClient, dapr), configured, project="acme"))
-    assert dapr.published == [] and not (tmp_path / "raw").exists()
+    assert dapr.published == [] and not (tmp_path / "bronze").exists()
 
 
 def test_projectless_cascade_is_byte_identical_even_with_routing_configured(tmp_path: Any) -> None:
@@ -297,31 +302,31 @@ def test_projectless_cascade_is_byte_identical_even_with_routing_configured(tmp_
     facet, and trigger payloads EXACTLY equal to the pre-#84 three-field shape."""
     control, wh = tmp_path / "control", tmp_path / "acme-wh"
     _provision(control, "acme", wh)
-    uris = {ns: str(tmp_path / ns) for ns in ("raw", "bronze")}
+    uris = {ns: str(tmp_path / ns) for ns in ("bronze", "silver")}
     dapr = _FakeDapr()
 
-    producer = MedallionSettings.model_validate({"compute_enabled": True, "raw_uri": uris["raw"], "control_root": str(control)})
+    producer = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": uris["bronze"], "control_root": str(control)})
     asyncio.run(produce(cast(DaprClient, dapr), producer))
-    raw_event = next(p["data"] for p in dapr.published if p["topic"] == producer.lineage_topic)
-    assert raw_event["outputs"][0]["namespace"] == "raw"
-    assert raw_event["outputs"][0]["name"] == "raw_events"
-    assert "project" not in raw_event["run"]["facets"]["lance"]
-    token = raw_event["run"]["facets"]["lance"]["token"]
+    bronze_event = next(p["data"] for p in dapr.published if p["topic"] == producer.lineage_topic)
+    assert bronze_event["outputs"][0]["namespace"] == "bronze"
+    assert bronze_event["outputs"][0]["name"] == "bronze$events"
+    assert "project" not in bronze_event["run"]["facets"]["lance"]
+    token = bronze_event["run"]["facets"]["lance"]["token"]
 
-    assert asyncio.run(handle_raw_arrival(cast(DaprClient, dapr), producer, {"data": raw_event})) == {"status": "SUCCESS"}
+    assert asyncio.run(handle_bronze_arrival(cast(DaprClient, dapr), producer, {"data": bronze_event})) == {"status": "SUCCESS"}
     # EXACT equality — the head trigger is the old three-field payload, no project key.
-    assert dapr.published[-1]["data"] == {"token": token, "dataset": "raw_events", "namespace": "raw"}
+    assert dapr.published[-1]["data"] == {"token": token, "dataset": "bronze$events", "namespace": "bronze"}
 
     settings = _mover_settings(_HOPS[0], uris, control_root=str(control))
     assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": dapr.published[-1]["data"]})) == {"status": "SUCCESS"}
     # The env URI was used; the provisioned project warehouse stayed untouched.
-    assert lance.dataset(uris["bronze"]).to_table().num_rows > 0
+    assert lance.dataset(uris["silver"]).to_table().num_rows > 0
     assert not (wh / "medallion").exists()
     # EXACT equality on the next-stage trigger too.
-    assert dapr.published[-1]["data"] == {"token": token, "dataset": "bronze$events", "namespace": "bronze"}
-    bronze_event = next(p["data"] for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["outputs"][0]["name"] == "bronze$events")
-    assert bronze_event["outputs"][0]["namespace"] == "bronze"
-    assert "project" not in bronze_event["run"]["facets"]["lance"]
+    assert dapr.published[-1]["data"] == {"token": token, "dataset": "silver$features", "namespace": "silver"}
+    silver_event = next(p["data"] for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["outputs"][0]["name"] == "silver$features")
+    assert silver_event["outputs"][0]["namespace"] == "silver"
+    assert "project" not in silver_event["run"]["facets"]["lance"]
 
 
 # ── gold serving warehouse: the terminal mover's tenant target root (DECISIONS "Medallion tiers") ──
@@ -370,7 +375,7 @@ def test_gold_mover_target_selection(tmp_path: Any, flag_on: bool, gold_present:
     decoys = {ns: str(tmp_path / f"default-{ns}") for ns in ("silver", "gold")}
     dapr = _FakeDapr()
 
-    settings = _mover_settings(_HOPS[2], decoys, control_root=str(control), gold_warehouse_enabled=flag_on)
+    settings = _mover_settings(_HOPS[1], decoys, control_root=str(control), gold_warehouse_enabled=flag_on)
     trigger = {"data": {"token": "t", "project": "acme"}}
     assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, trigger)) == {"status": "SUCCESS"}
 

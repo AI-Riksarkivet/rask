@@ -29,7 +29,7 @@ def _settings(**overrides: Any) -> MedallionSettings:
         "MEDALLION_COMPUTE_ENABLED": "true",
         "MEDALLION_S3_ENDPOINT": "http://rustfs:9000",
         "MEDALLION_S3_SECRET_ACCESS_KEY": "k",
-        "MEDALLION_RAW_URI": "s3://lake/medallion/raw",
+        "MEDALLION_BRONZE_URI": "s3://lake/medallion/bronze",
     }
     values.update(overrides)
     return MedallionSettings.model_validate(values)
@@ -48,7 +48,7 @@ class _FakeDapr:
 # --------------------------------------------------------------------------- #
 
 
-def test_stage_uri_derives_the_sibling_stage_from_the_raw_uri() -> None:
+def test_stage_uri_derives_the_sibling_stage_from_the_bronze_uri() -> None:
     assert train.stage_uri_for(_settings(), "silver$features") == "s3://lake/medallion/silver"
     assert train.stage_uri_for(_settings(), "gold$catalog") == "s3://lake/medallion/gold"
 
@@ -58,7 +58,7 @@ def test_registry_and_artifact_layout_derivation() -> None:
     # (never inside a Lance dataset directory — GC/orphan safety + the #92 allowlist prefix).
     assert train.registry_uri_for(_settings(), "churn") == "s3://lake/medallion/models/churn"
     assert train.artifact_base_for(_settings(), "churn") == "s3://lake/models/churn"
-    local = _settings(MEDALLION_RAW_URI="/data/medallion/raw")
+    local = _settings(MEDALLION_BRONZE_URI="/data/medallion/bronze")
     assert train.registry_uri_for(local, "churn") == "/data/medallion/models/churn"
     assert train.artifact_base_for(local, "churn") == "/data/medallion/model-artifacts/churn"
 
@@ -288,11 +288,11 @@ def test_consumer_drops_path_unsafe_names(monkeypatch: pytest.MonkeyPatch) -> No
     for data in (
         {"token": "t1", "model": "../etc", "features": [ok]},
         {"token": "a/b", "model": "churn", "features": [ok]},
-        {"token": "t1", "model": "churn", "features": [{"dataset": "silver$../raw", "version": 1}]},
+        {"token": "t1", "model": "churn", "features": [{"dataset": "silver$../evil", "version": 1}]},
         {"token": "t1", "model": "churn", "features": [{"dataset": "a$b$c", "version": 1}]},
         # a BARE dataset name is rejected too: it would derive a wrong stage URI AND (in the job's
         # lineage) a namespace equal to the whole name, corrupting the shared graph node's namespace
-        {"token": "t1", "model": "churn", "features": [{"dataset": "raw_events", "version": 1}]},
+        {"token": "t1", "model": "churn", "features": [{"dataset": "events", "version": 1}]},
     ):
         assert asyncio.run(train.handle_train_trigger(_settings(), {"data": data})) == {"status": "DROP"}
 
@@ -327,8 +327,8 @@ def test_train_route_422s_the_names_its_consumer_would_drop() -> None:
     ok_feature = {"dataset": "silver$features", "version": 1}
     for body in (
         {"model": "../etc", "features": [ok_feature]},
-        {"model": "churn", "features": [{"dataset": "raw_events", "version": 1}]},  # bare name
-        {"model": "churn", "features": [{"dataset": "silver$../raw", "version": 1}]},
+        {"model": "churn", "features": [{"dataset": "events", "version": 1}]},  # bare name
+        {"model": "churn", "features": [{"dataset": "silver$../evil", "version": 1}]},
         {"model": "churn", "features": [ok_feature] * (train.MAX_FEATURES + 1)},
     ):
         assert client.post("/train", json=body).status_code == 422

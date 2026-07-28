@@ -3,9 +3,10 @@
 {{- $port := .Values.medallion.port }}
 {{- $img := include "lance.catalogImage" . }}
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-# lance-ray — the dummy producer / HEAD of the medallion pipeline. POST /produce emits ONLY the raw_events
-# OpenLineage event; lance-ray's OWN /raw-arrival subscription reacts to that event and publishes the first
-# trigger (medallion.raw) the raw→bronze mover consumes — the event-driven head (B2), not a direct publish.
+# lance-ray — the dummy producer / HEAD of the medallion pipeline (R23: bronze is the FIRST governed
+# tier; raw is the external world). POST /produce emits ONLY the bronze$events OpenLineage event;
+# lance-ray's OWN /bronze-arrival subscription reacts to that event and publishes the first trigger
+# (medallion.bronze) the bronze→silver mover consumes — the event-driven head (B2), not a direct publish.
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 apiVersion: apps/v1
 kind: Deployment
@@ -48,30 +49,30 @@ spec:
             {{- include "lance.otelEnv" (list $root .Values.medallion.producer.daprAppId) | nindent 12 }}
             {{- end }}
             - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
-            # Fail-closed at boot if behind a sidecar but the app-token is unset — /raw-arrival would
+            # Fail-closed at boot if behind a sidecar but the app-token is unset — /bronze-arrival would
             # otherwise be an open forged-trigger path (symmetric with the movers).
             - { name: MEDALLION_DAPR_ENABLED, value: {{ .Values.dapr.sidecars | quote }} }
-            - name: APP_API_TOKEN  # verify the Dapr-stamped header on /raw-arrival (forged-trigger guard)
+            - name: APP_API_TOKEN  # verify the Dapr-stamped header on /bronze-arrival (forged-trigger guard)
               valueFrom:
                 secretKeyRef: { name: {{ .Release.Name }}-dapr-app-token, key: token }
             # lance-ray's OWN subscriber component (queueGroupName=lance-ray, deliverPolicy=new) — it
-            # subscribes on /raw-arrival AND publishes through the same handle (same NATS subjects).
+            # subscribes on /bronze-arrival AND publishes through the same handle (same NATS subjects).
             - { name: MEDALLION_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.medallion.producer.daprAppId) | quote }} }
             - { name: MEDALLION_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
             {{- if .Values.services.lineage.outbox.enabled }}
             - { name: MEDALLION_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.rustfs.bucket }}/_lineage_outbox" }
             {{- end }}
-            - { name: MEDALLION_RAW_DATASET, value: {{ .Values.medallion.producer.rawDataset | quote }} }
-            # The IIIF page lane's raw dataset name (P7a) — a values knob beside rawDataset; hasKey+
-            # ternary so a stored release predating P7a renders the code default under --reuse-values.
-            - { name: MEDALLION_IIIF_RAW_DATASET, value: {{ hasKey .Values.medallion.producer "iiifRawDataset" | ternary .Values.medallion.producer.iiifRawDataset "raw_pages" | quote }} }
-            - { name: MEDALLION_RAW_NAMESPACE, value: {{ .Values.medallion.producer.rawNamespace | quote }} }
+            - { name: MEDALLION_BRONZE_DATASET, value: {{ .Values.medallion.producer.bronzeDataset | quote }} }
+            # The IIIF page lane's bronze dataset name (P7a, re-tiered by R23) — a values knob beside
+            # bronzeDataset; /bronze-arrival fires the cascade for either name.
+            - { name: MEDALLION_IIIF_BRONZE_DATASET, value: {{ .Values.medallion.producer.iiifBronzeDataset | quote }} }
+            - { name: MEDALLION_BRONZE_NAMESPACE, value: {{ .Values.medallion.producer.bronzeNamespace | quote }} }
             - { name: MEDALLION_PRODUCER_OPERATION, value: {{ .Values.medallion.producer.operation | quote }} }
             - { name: MEDALLION_PRODUCER_AUTHOR, value: {{ .Values.medallion.producer.author | quote }} }
-            - { name: MEDALLION_RAW_TOPIC, value: {{ .Values.medallion.producer.rawTopic | quote }} }
+            - { name: MEDALLION_BRONZE_TOPIC, value: {{ .Values.medallion.producer.bronzeTopic | quote }} }
             {{- if .Values.medallion.projectsEnabled }}
             # #84 per-tenant routing (opt-in): the catalog's warehouse-registry root. A `project`-carrying
-            # /produce resolves that project's ACTIVE warehouse and seeds <root>/medallion/raw there;
+            # /produce resolves that project's ACTIVE warehouse and seeds <root>/medallion/bronze there;
             # project-less requests keep the shared URIs below byte-identically.
             - { name: MEDALLION_CONTROL_ROOT, value: "s3://{{ .Values.rustfs.bucket }}" }
             {{- end }}
@@ -128,19 +129,20 @@ spec:
             - { name: MEDALLION_PRODUCE_ADMIN_PROJECT, value: {{ .Values.medallion.produceAdminProject | quote }} }
             {{- end }}
             {{- if .Values.dapr.resiliency.enabled }}
-            # Dapr-native DLQ (ships with the Resiliency CRD): the producer's raw-arrival + train
+            # Dapr-native DLQ (ships with the Resiliency CRD): the producer's bronze-arrival + train
             # subscriptions park exhausted deliveries here, ERROR-logged by /dlq-event.
             - { name: MEDALLION_DLQ_TOPIC, value: "dlq.lance-ray" }
             {{- end }}
             {{- if .Values.medallion.compute }}
-            # Real fake-Ray compute: the producer seeds the raw Lance dataset (so the cascade writes actual
-            # versioned data on RustFS). S3 secret follows the catalog's two-tier rule (plaintext only when
-            # OpenBao is off — compute + OpenBao is not a shipped combo).
+            # Real fake-Ray compute: the producer seeds the BRONZE Lance dataset directly (R23 — so the
+            # cascade writes actual versioned data on RustFS). The URI derives from the bronze namespace,
+            # exactly where the bronze→silver mover's FROM_URI points. S3 secret follows the catalog's
+            # two-tier rule (plaintext only when OpenBao is off — compute + OpenBao is not a shipped combo).
             - { name: MEDALLION_COMPUTE_ENABLED, value: "true" }
-            - { name: MEDALLION_RAW_URI, value: "s3://{{ include "lance.stageBucket" (list . .Values.medallion.producer.rawNamespace) }}/medallion/{{ .Values.medallion.producer.rawNamespace }}" }
+            - { name: MEDALLION_BRONZE_URI, value: "s3://{{ include "lance.stageBucket" (list . .Values.medallion.producer.bronzeNamespace) }}/medallion/{{ .Values.medallion.producer.bronzeNamespace }}" }
             # The medallion (project) bucket base — where bronze/silver + the model registry live. The
             # trainer resolves feature + model URIs from HERE (via silver's zone), so it stays in the project
-            # bucket even when raw (source) and gold (sink) are zoned out. `silver` is unmapped by default →
+            # bucket even when gold (sink) is zoned out. `silver` is unmapped by default →
             # rustfs.bucket, so this is s3://<project-bucket>/medallion, unchanged on the single-bucket path.
             - { name: MEDALLION_STAGE_BASE_URI, value: "s3://{{ include "lance.stageBucket" (list . "silver") }}/medallion" }
             # The media ingest head (multimodal §9): /ingest-media seeds/reads the source prefix in the
@@ -153,9 +155,9 @@ spec:
             # bool_parsing boot crash on this producer).
             - { name: MEDALLION_MEDIA_SEED_SAMPLES, value: {{ hasKey .Values.medallion "mediaSeedSamples" | ternary .Values.medallion.mediaSeedSamples true | quote }} }
             - { name: MEDALLION_MEDIA_BRONZE_URI, value: "s3://{{ include "lance.stageBucket" (list . "bronze-media") }}/medallion/bronze-media" }
-            # The IIIF page head (P7a): /ingest-iiif lands the raw page-image blob dataset beside the
-            # events lane's raw URI (same namespace root, its own dataset directory).
-            - { name: MEDALLION_IIIF_RAW_URI, value: "s3://{{ include "lance.stageBucket" (list . .Values.medallion.producer.rawNamespace) }}/medallion/{{ .Values.medallion.producer.rawNamespace }}-pages" }
+            # The IIIF page head (P7a): /ingest-iiif lands the BRONZE page-image blob dataset beside the
+            # events lane's bronze URI (same namespace root, its own dataset directory).
+            - { name: MEDALLION_IIIF_BRONZE_URI, value: "s3://{{ include "lance.stageBucket" (list . .Values.medallion.producer.bronzeNamespace) }}/medallion/{{ .Values.medallion.producer.bronzeNamespace }}-pages" }
             - { name: MEDALLION_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
             - { name: MEDALLION_S3_ACCESS_KEY_ID, value: {{ .Values.rustfs.accessKey | quote }} }
             {{- if not (include "lance.secretsViaDapr" .) }}

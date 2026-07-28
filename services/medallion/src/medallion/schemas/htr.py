@@ -11,7 +11,7 @@ The P7b movers on the unified cluster fill the lanes:
 =============  ==================  ============================================  =====================
 Edge           Trigger             Compute (mover stage job)                     Output
 =============  ==================  ============================================  =====================
-raw→bronze     ``medallion.raw``   ``ray_stage_job.py`` MEDIA path               bronze page-images
+iiif→bronze    (ingest head)       ``ray_iiif_ingest_job.py`` (P7a producer)     bronze page-images
 bronze→silver  ``medallion.bronze``  HTR layout+lines stage job (sealed runner)  region/line geometry
 silver→gold    ``medallion.silver``  transcribe stage job (warm Serve handle)    THIS contract
 =============  ==================  ============================================  =====================
@@ -31,5 +31,5 @@ GOLD_CONTRACT_COLUMNS: tuple[str, ...] = (
     "reading_order",  # line ordering within the page
     "text",  # the transcriptions, one per line
     "confidences",  # per-line model confidence (ALTO WC)
-    "source_rowid",  # row-level provenance back to the bronze page (stable _rowid, minted raw→bronze)
+    "source_rowid",  # row-level provenance back to the bronze page (stable _rowid, rooted at bronze)
 )

@@ -28,7 +28,7 @@ from dapr.aio.clients import DaprClient
 from lineage.models import Dataset
 from medallion.core.config import MedallionSettings
 from medallion.schemas.events import build_run_event
-from medallion.services.compute import _column_map, measure_stage, seed_raw, transform_stage
+from medallion.services.compute import _column_map, measure_stage, seed_bronze, transform_stage
 from medallion.services.transform import handle_stage
 
 from service_kit.openlineage import column_lineage_facet
@@ -96,15 +96,16 @@ def test_column_map_transformation_for_derived_artifacts() -> None:
 def test_measure_stage_reconstructs_identity_edges_from_disk(tmp_path: Any) -> None:
     # The Ray job writes out-of-process, so nothing in this process saw the transform: measure_stage must
     # recover the SAME edges transform_stage declared, from the upstream + written schemas alone.
-    raw, bronze = str(tmp_path / "raw"), str(tmp_path / "bronze")
-    seed_raw(raw, {}, rows=3)  # columns [id, payload]
-    declared = transform_stage(raw, bronze, {}, stage="bronze").column_map
+    bronze, silver = str(tmp_path / "bronze"), str(tmp_path / "silver")
+    seed_bronze(bronze, {}, rows=3)  # columns [id, payload, stage]
+    declared = transform_stage(bronze, silver, {}, stage="silver").column_map
 
-    result = measure_stage(raw, bronze, {})
+    result = measure_stage(bronze, silver, {})
 
     assert set(result.column_map) == set(declared)
-    # source_rowid is minted at the head from the raw row's reserved _rowid metacolumn (root provenance);
-    # id/payload are carried IDENTITY. measure_stage recovers the SAME head edge from the two schemas alone.
+    # source_rowid is minted at the first derive from the bronze row's reserved _rowid metacolumn (root
+    # provenance — bronze is the root, R23); id/payload are carried IDENTITY. measure_stage recovers the
+    # SAME edge from the two schemas alone.
     assert set(result.column_map) == {
         ("id", "id", "IDENTITY"),
         ("payload", "payload", "IDENTITY"),
@@ -139,9 +140,9 @@ def test_build_run_event_attaches_columnlineage_on_output() -> None:
         operation="ingest_events",
         author="data_eng",
         job_namespace="medallion",
-        inputs=[("raw", "raw_events")],
-        output_namespace="bronze",
-        output_name="bronze$events",
+        inputs=[("bronze", "bronze$events")],
+        output_namespace="silver",
+        output_name="silver$features",
         version=2,
         column_map=[("id", "id", "IDENTITY"), ("hash", "payload", "TRANSFORMATION")],
         token="t1",
@@ -149,8 +150,8 @@ def test_build_run_event_attaches_columnlineage_on_output() -> None:
     output = Dataset.model_validate(event["outputs"][0])
     edges = {(e["out_field"], e["name"], e["field"], e["subtype"]) for e in output.column_edges}
     assert edges == {
-        ("id", "raw_events", "id", "IDENTITY"),
-        ("hash", "raw_events", "payload", "TRANSFORMATION"),
+        ("id", "bronze$events", "id", "IDENTITY"),
+        ("hash", "bronze$events", "payload", "TRANSFORMATION"),
     }
     # The facet lives ONLY on the output — inputs never carry columnLineage.
     assert "columnLineage" not in (event["inputs"][0].get("facets") or {})
@@ -161,9 +162,9 @@ def test_build_run_event_without_column_map_omits_facet() -> None:
         operation="ingest_events",
         author=None,
         job_namespace="medallion",
-        inputs=[("raw", "raw_events")],
-        output_namespace="bronze",
-        output_name="bronze$events",
+        inputs=[("bronze", "bronze$events")],
+        output_namespace="silver",
+        output_name="silver$features",
         version=1,
         token="t1",
     )
@@ -176,9 +177,9 @@ def test_build_run_event_failed_run_carries_no_column_lineage() -> None:
         operation="ingest_events",
         author=None,
         job_namespace="medallion",
-        inputs=[("raw", "raw_events")],
-        output_namespace="bronze",
-        output_name="bronze$events",
+        inputs=[("bronze", "bronze$events")],
+        output_namespace="silver",
+        output_name="silver$features",
         column_map=[("id", "id", "IDENTITY")],
         token="t1",
         event_type="FAIL",
@@ -200,27 +201,27 @@ class _FakeDapr:
         self.published.append({"topic": topic_name, "data": json.loads(data)})
 
 
-def _mover_settings(raw: str, bronze: str) -> MedallionSettings:
+def _mover_settings(bronze: str, silver: str) -> MedallionSettings:
     return MedallionSettings.model_validate(
         {
             "compute_enabled": True,
-            "from_uri": raw,
-            "to_uri": bronze,
-            "from_namespace": "raw",
-            "from_dataset": "raw_events",
-            "to_namespace": "bronze",
-            "to_dataset": "bronze$events",
-            "operation": "ingest_events",
-            "pub_topic": "bronze.ready",
+            "from_uri": bronze,
+            "to_uri": silver,
+            "from_namespace": "bronze",
+            "from_dataset": "bronze$events",
+            "to_namespace": "silver",
+            "to_dataset": "silver$features",
+            "operation": "embed_features",
+            "pub_topic": "silver.ready",
         }
     )
 
 
 def test_handle_stage_emits_identity_column_edges(tmp_path: Any) -> None:
-    raw, bronze = str(tmp_path / "raw"), str(tmp_path / "bronze")
-    seed_raw(raw, {}, rows=4)  # columns [id, payload]
+    bronze, silver = str(tmp_path / "bronze"), str(tmp_path / "silver")
+    seed_bronze(bronze, {}, rows=4)  # columns [id, payload, stage]
     dapr = _FakeDapr()
-    settings = _mover_settings(raw, bronze)
+    settings = _mover_settings(bronze, silver)
 
     result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t1"}}))
     assert result == {"status": "SUCCESS"}
@@ -228,13 +229,13 @@ def test_handle_stage_emits_identity_column_edges(tmp_path: Any) -> None:
     lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
     output = Dataset.model_validate(lineage["data"]["outputs"][0])
     edges = {(e["out_field"], e["name"], e["field"], e["subtype"]) for e in output.column_edges}
-    # The LIVE cascade (not seed.py) produced field-to-field identity edges pointing at the raw input —
-    # including source_rowid, minted at the head from the raw row's reserved _rowid metacolumn (root
-    # provenance: the bronze row names the exact raw row it descends from).
+    # The LIVE cascade (not seed.py) produced field-to-field identity edges pointing at the bronze input —
+    # including source_rowid, minted at the first derive from the bronze row's reserved _rowid metacolumn
+    # (root provenance: the silver row names the exact bronze row it descends from — R23 re-root).
     assert edges == {
-        ("id", "raw_events", "id", "IDENTITY"),
-        ("payload", "raw_events", "payload", "IDENTITY"),
-        ("source_rowid", "raw_events", "_rowid", "IDENTITY"),
+        ("id", "bronze$events", "id", "IDENTITY"),
+        ("payload", "bronze$events", "payload", "IDENTITY"),
+        ("source_rowid", "bronze$events", "_rowid", "IDENTITY"),
     }
 
 
@@ -281,16 +282,22 @@ def _ray_job_write(from_uri: str, to_uri: str, stage: str) -> None:
     test that fakes the SUBMIT but leaves the write in-process would not exercise the reconstruction at all.
     """
     upstream = lance.dataset(from_uri).to_table()
-    out = upstream.append_column(pa.field("stage", pa.string()), pa.array([stage] * upstream.num_rows, pa.string()))
+    field = pa.field("stage", pa.string())
+    marker = pa.array([stage] * upstream.num_rows, pa.string())
+    # Set-or-append like the real job's _stamp_stage — bronze already carries the ingest-time stamp (R23).
+    if "stage" in upstream.column_names:
+        out = upstream.set_column(upstream.schema.get_field_index("stage"), field, marker)
+    else:
+        out = upstream.append_column(field, marker)
     lance.write_dataset(out, to_uri, mode="overwrite", data_storage_version="2.2", enable_stable_row_ids=True)
 
 
 def test_ray_branch_emits_column_edges_reconstructed_from_disk(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """THE production seam (MEDALLION_COMPUTE_ENABLED + MEDALLION_RAY_ENABLED): the transform runs on the
     Ray cluster, so handle_stage must still emit real columnLineage — parsed back out by the consumer."""
-    raw, bronze = str(tmp_path / "raw"), str(tmp_path / "bronze")
-    seed_raw(raw, {}, rows=4)  # columns [id, payload]
-    settings = _mover_settings(raw, bronze).model_copy(update={"ray_enabled": True})
+    bronze, silver = str(tmp_path / "bronze"), str(tmp_path / "silver")
+    seed_bronze(bronze, {}, rows=4)  # columns [id, payload, stage]
+    settings = _mover_settings(bronze, silver).model_copy(update={"ray_enabled": True})
 
     async def fake_submit(_settings: Any, *, from_uri: str, to_uri: str, stage: str, token: str) -> None:
         _ray_job_write(from_uri, to_uri, stage)  # the cluster wrote it; this process only measures
@@ -305,9 +312,9 @@ def test_ray_branch_emits_column_edges_reconstructed_from_disk(tmp_path: Any, mo
     output = Dataset.model_validate(lineage["data"]["outputs"][0])
     edges = {(e["out_field"], e["name"], e["field"], e["subtype"]) for e in output.column_edges}
     assert edges == {
-        ("id", "raw_events", "id", "IDENTITY"),
-        ("payload", "raw_events", "payload", "IDENTITY"),
+        ("id", "bronze$events", "id", "IDENTITY"),
+        ("payload", "bronze$events", "payload", "IDENTITY"),
     }
     # …and it is the REAL written version being described, not a fabricated one.
     facets = lineage["data"]["outputs"][0]["facets"]
-    assert facets["version"]["datasetVersion"] == str(lance.dataset(bronze).version)
+    assert facets["version"]["datasetVersion"] == str(lance.dataset(silver).version)

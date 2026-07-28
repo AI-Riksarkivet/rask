@@ -1,4 +1,4 @@
-"""The ray service's health endpoint — process liveness (Ray reachability is
+"""The compute service's health endpoint — process liveness (Ray reachability is
 `/ray/health`'s job, not this one's)."""
 
 from fastapi import APIRouter

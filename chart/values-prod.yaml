@@ -14,7 +14,7 @@ image:
   # web:     { tag: v1.2.3 }   # the released web image tag
 
 # --- Governance ON — Dex OIDC + OpenFGA. auth.enabled governs the catalog + lineage; medallion.fgaEnabled
-# additionally governs the raw→bronze→silver→gold movers' WRITE path (can_create_table / can_promote).
+# additionally governs the bronze→silver→gold movers' WRITE path (can_create_table / can_promote).
 # PREREQUISITE: seed the mover-identity grants first (scripts/seed_medallion_fga.sh) or the movers fail
 # closed and the pipeline stalls. ------------------------------------------------------------------
 auth:
@@ -27,7 +27,7 @@ medallion:
   # Raise only after a cross-pod lock ships.
   moverReplicas: 1
   producer:
-    expose: false # /produce is the unauthenticated demo entry — the prod head fires from real raw writes
+    expose: false # /produce is the unauthenticated demo entry — the prod head fires from real bronze ingests
 
 # --- HA (P3): multi-replica stateless services + a PodDisruptionBudget. Stateful HA (AGE/RustFS) is the
 # operators' job in rask (CNPG / rustfs-operator), not here. Optionally also set autoscaling.enabled. -----

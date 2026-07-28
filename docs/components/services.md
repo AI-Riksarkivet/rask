@@ -20,7 +20,7 @@ an unmatched `/api/*` 404s with `no upstream`. Upstream URLs are env-overridable
 
 | Env var | Default | Upstream |
 |---|---|---|
-| `RASK_RAY_URL` | `http://127.0.0.1:8804` | ray (`/api/ray`, `/api/serve`) |
+| `RASK_COMPUTE_URL` | `http://127.0.0.1:8804` | compute (`/api/ray`, `/api/serve`) |
 | `RASK_CONTROLPLANE_URL` | `http://127.0.0.1:8820` | controlplane (`/api/projects`) |
 | `RASK_CATALOG_API_URL` | `http://127.0.0.1:2333` | lance catalog (`/api/catalog`) |
 | `RASK_LINEAGE_API_URL` | `http://127.0.0.1:8000` | lineage (`/api/lineage`) |
@@ -29,17 +29,18 @@ an unmatched `/api/*` 404s with `no upstream`. Upstream URLs are env-overridable
 | `RASK_MEDIA_SEARCH_URL` | `http://127.0.0.1:8102` | media search (`/api/media/search`) |
 | `RASK_MEDIA_ANNOTATOR_URL` | `http://127.0.0.1:8103` | annotator (`/api/media/annotations`) |
 
-## ray — `services/ray_api`
+## compute — `services/compute`
 
 Port **:8804**. Ray dashboard introspection (`/api/ray/*`) + the
 `/api/serve/*` proxy. Thin shell over `ray-kit`. No DB. Deps: `service-kit` +
 `ray-kit` + `httpx`.
 
-!!! note "Named `ray`, packaged `ray-api`"
-    The k8s Deployment/Service, dapr app-id, image, and gateway row are all
-    `ray` (R20 — the `-api` suffix died with the R6/R20 wave). The uv workspace
-    member stays `ray-api` (import package `ray_api`) because a Python package
-    named `ray` would shadow the PyPI `ray` that `ray-kit` depends on.
+!!! note "`compute` on every surface (R22)"
+    The k8s Deployment/Service, dapr app-id, image, gateway row, uv workspace
+    member and import package are all `compute` (R22, superseding R20's `ray`
+    choice and its `ray-api` PyPI-shadow exception — `import compute` shadows
+    nothing). The public URL namespace stays `/api/ray` + `/api/serve`: it names
+    the Ray cluster the endpoints introspect, not the service.
 
 Endpoint groups:
 

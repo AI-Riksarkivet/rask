@@ -69,19 +69,19 @@ def _safe_dataset(value: Any) -> bool:
 
 
 def train_head_enabled(settings: MedallionSettings) -> bool:
-    """The train head needs the Ray path + S3 + a raw URI to derive stage URIs from — 409 otherwise
+    """The train head needs the Ray path + S3 + a bronze URI to derive stage URIs from — 409 otherwise
     (an explicit contract, like the media head; never a KeyError 500)."""
-    return bool(settings.ray_enabled and settings.s3_endpoint and settings.raw_uri)
+    return bool(settings.ray_enabled and settings.s3_endpoint and settings.bronze_uri)
 
 
 def _stage_base(settings: MedallionSettings) -> str:
     """The medallion (project) bucket base ``…/medallion`` where the STAGE datasets (bronze/silver) and the
-    model registry live. Prefers the explicit ``MEDALLION_STAGE_BASE_URI`` — which stays correct when raw
-    (ingest source) and gold (sink) are zoned into their OWN buckets — and falls back to the raw URI's
+    model registry live. Prefers the explicit ``MEDALLION_STAGE_BASE_URI`` — which stays correct when
+    gold (sink) is zoned into its OWN bucket — and falls back to the bronze URI's
     parent for the single-bucket default (unchanged)."""
     if settings.stage_base_uri:
         return settings.stage_base_uri.rstrip("/")
-    return settings.raw_uri.rstrip("/").rsplit("/", 1)[0]
+    return settings.bronze_uri.rstrip("/").rsplit("/", 1)[0]
 
 
 def stage_uri_for(settings: MedallionSettings, dataset: str) -> str:
@@ -98,7 +98,7 @@ def stage_uri_for(settings: MedallionSettings, dataset: str) -> str:
 def registry_uri_for(settings: MedallionSettings, model: str) -> str:
     """The model-REGISTRY Lance dataset URI (D4 step 2): ``…/medallion/models/<model>`` — one dataset
     per model under the medallion base, so the registry sits in the project bucket beside the stages it
-    trained on (NOT the raw source or gold sink bucket when those are zoned out)."""
+    trained on (NOT the external source or gold sink bucket when those are zoned out)."""
     return f"{_stage_base(settings)}/models/{model}"
 
 

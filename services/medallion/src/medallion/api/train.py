@@ -74,10 +74,10 @@ async def train(
 ) -> dict[str, Any] | JSONResponse:
     """Request a training run: pin feature versions (omitted → LATEST, resolved HERE) and publish the
     training trigger — 202 with the correlation ``token``. Token-guarded like ``/produce``; a disabled
-    head (no Ray path / S3 / raw URI) is an explicit 409, a lost trigger an explicit 503 — never a 202
+    head (no Ray path / S3 / bronze URI) is an explicit 409, a lost trigger an explicit 503 — never a 202
     that silently trains nothing."""
     if not train_head_enabled(settings):
-        return _problem(409, "Conflict", "train head not configured (needs ray_enabled + S3 + raw URI)")
+        return _problem(409, "Conflict", "train head not configured (needs ray_enabled + S3 + bronze URI)")
     result = await submit_train_request(
         dapr,
         settings,

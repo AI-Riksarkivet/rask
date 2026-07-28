@@ -70,7 +70,11 @@ def _routes() -> list[Route]:
     # mount. load_dotenv() so the gateway sees the same .env config the backends do.
     load_dotenv()
     prefix = os.environ.get("RASK_API_PREFIX", "/api/v1").rstrip("/")
-    ray = ("ray", os.environ.get("RASK_RAY_URL", "http://127.0.0.1:8804"))
+    # The Ray-plane service is `compute` (R22) — dapr app-id `compute`, upstream
+    # RASK_COMPUTE_URL. Its PUBLIC rows stay /api/ray + /api/serve: the URL
+    # namespace names the Ray cluster those endpoints introspect/proxy, not the
+    # service that serves them, so renaming the service does not move the paths.
+    compute = ("compute", os.environ.get("RASK_COMPUTE_URL", "http://127.0.0.1:8804"))
     controlplane = ("controlplane", os.environ.get("RASK_CONTROLPLANE_URL", "http://127.0.0.1:8820"))
     # lance-plane upstreams (P1 gateway fold). Localhost defaults follow the lance
     # dev conventions: catalog 2333, lineage 8000, the lance-ray producer 8002 (the
@@ -95,9 +99,9 @@ def _routes() -> list[Route]:
         ("/api/produce", "/produce", *medallion),
         ("/api/ingest-iiif", "/ingest-iiif", *medallion),
         ("/api/train", "/train", *medallion),
-        (f"{prefix}/ray", f"{prefix}/ray", *ray),
+        (f"{prefix}/ray", f"{prefix}/ray", *compute),
         (f"{prefix}/projects", f"{prefix}/projects", *controlplane),
-        ("/api/serve", "/api/serve", *ray),
+        ("/api/serve", "/api/serve", *compute),
     ]
 
 

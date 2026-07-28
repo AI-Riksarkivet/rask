@@ -54,7 +54,7 @@ field will not work. Neither is needed here — a cache and a KV inbox use get/s
 ETag — so record the constraint and do not reach for the Query API later expecting it to be there.
 
 **JetStream stays, and Dapr Workflow does not replace it.** These are different tools and it matters:
-the medallion cascade (`medallion.raw` → `medallion.bronze` → …), control events and lineage delivery are
+the medallion cascade (`medallion.bronze` → `medallion.silver` → …), control events and lineage delivery are
 **event-driven fan-out**, which is exactly what JetStream is for and is already high-performance and proven
 here. Dapr Workflow is **orchestration with queryable status** — a named instance, a step counter, retries
 and compensation. It is additive, for the `#122` publish saga and export jobs where a user needs "step 3 of

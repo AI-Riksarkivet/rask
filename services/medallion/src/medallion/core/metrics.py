@@ -2,7 +2,7 @@
 
 The golden signal for the cascade: how many stage transitions each mover completed. Exported via the
 OTel SDK (``opentelemetry-instrument``) over OTLP to GreptimeDB, queryable in PromQL / Perses. Bounded
-cardinality — only the namespaced ``lance.medallion.transition`` label (e.g. ``raw->bronze``); per-run ids
+cardinality — only the namespaced ``lance.medallion.transition`` label (e.g. ``bronze->silver``); per-run ids
 stay on spans/logs. (Dot-namespaced under the project's `lance.*` convention —
 deliberately NOT the otel skill's reverse-DNS letter, pinned in todo_fable; in PromQL the dots
 become underscores →
@@ -19,7 +19,7 @@ _meter = metrics.get_meter("lance.medallion")
 _stage_transitions = _meter.create_counter(
     "medallion.stage.transitions",
     unit="{transition}",
-    description="Medallion stage transitions completed, by transition (e.g. raw->bronze).",
+    description="Medallion stage transitions completed, by transition (e.g. bronze->silver).",
 )
 _stage_denied = _meter.create_counter(
     "medallion.stage.denied",

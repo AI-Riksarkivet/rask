@@ -1,4 +1,4 @@
-"""ray service DI: the Ray Job SDK client + the dashboard HTTP client, from app.state."""
+"""compute service DI: the Ray Job SDK client + the dashboard HTTP client, from app.state."""
 
 from typing import Annotated
 
@@ -14,7 +14,7 @@ def get_http(request: Request) -> httpx.AsyncClient:
 
 def get_ray_client(request: Request) -> JobSubmissionClient | None:
     # The client is built once in lifespan, but there is no startup ordering
-    # guarantee between the ray service and the Ray head (under k8s it boots first
+    # guarantee between the compute service and the Ray head (under k8s it boots first
     # and build_client returns None until the dashboard is reachable — minutes,
     # on a fresh cluster). Rebuild lazily when still unset so /health and /jobs
     # recover on their own once Ray comes up, with no pod restart.

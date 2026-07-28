@@ -5,9 +5,10 @@
     `volumes-api`. Their still-needed capabilities serve from the **media plane**: the S3 object
     browser moved into the lance `viewer` (`/api/media/objects` → viewer `/api/objects`); lines FTS
     and the EAD catalog search re-land as catalog-governed Lance tables behind `/api/media/search`.
-    `ray-api` survives and took the clean name **`ray`** (k8s/dapr/image/gateway; the uv member
-    stays `ray-api` because a Python package named `ray` would shadow PyPI ray). The gateway's
-    `/api` catch-all is gone — an unmatched `/api/*` 404s. Upstream env vars are `RASK_RAY_URL`,
+    `ray-api` survives as the **`compute` service** (`ray` at R20; R22 renamed it `compute` on
+    every surface — uv member, import, k8s/dapr/image/gateway — killing the ray-api PyPI-shadow
+    exception; the public paths stay `/api/ray` + `/api/serve`). The gateway's
+    `/api` catch-all is gone — an unmatched `/api/*` 404s. Upstream env vars are `RASK_COMPUTE_URL`,
     `RASK_CONTROLPLANE_URL`, and the `RASK_MEDIA_*`/lance rows.
 
 !!! warning "P7a (2026-07-27): the batches/orchestrator plane described below is DELETED"

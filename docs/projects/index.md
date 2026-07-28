@@ -12,7 +12,7 @@ This section holds **narrative notes on rask's deployables and sub-projects**.
 | Deployable | Workspace member | Docs |
 |---|---|---|
 | `gateway` | `services/gateway` | [Services](../components/services.md) |
-| `ray` | `services/ray_api` (uv member `ray-api`) | [Services](../components/services.md) |
+| `compute` | `services/compute` | [Services](../components/services.md) |
 | `controlplane` | `services/controlplane` | [Services](../components/services.md) |
 | `runner` | `runners/htr` (+ `htr`, `storage`, `htrflow` from git) | [Runner](runner.md) |
 

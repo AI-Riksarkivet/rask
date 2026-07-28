@@ -38,7 +38,7 @@ spec:
               S="{{ include "lance.natsUrl" . }}"
               until nats --server "$S" stream ls >/dev/null 2>&1; do echo wait-nats; sleep 3; done
               # LINEAGE carries OpenLineage events; MEDALLION carries the stage triggers that cascade the
-              # event-driven pipeline (medallion.raw/bronze/silver); TRAINING carries the train triggers
+              # event-driven pipeline (medallion.bronze/silver/media); TRAINING carries the train triggers
               # (training.jobs — docs/RAY-TRAIN.md D1: its OWN stream, so the durable consumer names stay
               # per-stream and a slow train path never shares limits with the stage cascade). Each created
               # once (idempotent skip).

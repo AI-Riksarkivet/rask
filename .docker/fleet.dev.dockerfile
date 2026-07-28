@@ -22,7 +22,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.5@sha256:7bff3c3776ec467fc1437960f2c469d8beb3
 
 WORKDIR /app
 
-# Which workspace package this image runs (gateway, ray-api, controlplane, ...).
+# Which workspace package this image runs (gateway, compute, controlplane, ...).
 ARG PACKAGE
 
 # Step 1: external deps only (frozen, no workspace sources yet) — cached across edits.

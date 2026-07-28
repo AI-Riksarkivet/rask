@@ -1,11 +1,13 @@
-"""Unit tests for the IIIF→raw ingest head (P7a) — the producer that replaced rask's prefetch lane.
+"""Unit tests for the IIIF→bronze ingest head (P7a, re-tiered by R23) — the producer that replaced
+rask's prefetch lane. Bronze is the first governed tier; the IIIF Image API is external raw.
 
 Infra-free: IIIF rides an ``httpx.MockTransport`` (no network), the Lance write lands on a local tmp
 path (the established unit pattern for the compute seams), and a fake Dapr client is the capture
 transport for the emitted lineage. Pinned here: the head's contract (disabled → explicit refusal,
-publish failure → retryable), the harvested RAW page dataset's superset schema
-(id/payload/source_uri/volume_id/page_key — design §2.2), and the drift pins tying the self-contained
-``scripts/ray_iiif_ingest_job.py`` helpers to ``storage.iiif`` (the job cannot import ``services/``).
+publish failure → retryable), the harvested BRONZE page dataset's superset schema
+(id/payload/source_uri/volume_id/page_key/stage — design §2.2 + the merged raw→bronze stage stamp), and
+the drift pins tying the self-contained ``scripts/ray_iiif_ingest_job.py`` helpers to ``storage.iiif``
+(the job cannot import ``services/``).
 """
 
 from __future__ import annotations
@@ -65,7 +67,7 @@ class _FakeDapr:
 
 
 def _settings(**overrides: Any) -> MedallionSettings:
-    values: dict[str, Any] = {"compute_enabled": True, "iiif_raw_uri": "memory://unused"}
+    values: dict[str, Any] = {"compute_enabled": True, "iiif_bronze_uri": "memory://unused"}
     values.update(overrides)
     return MedallionSettings.model_validate(values)
 
@@ -113,11 +115,11 @@ def test_project_without_routing_fails_closed(monkeypatch: pytest.MonkeyPatch) -
         asyncio.run(ingest_iiif(cast(DaprClient, _FakeDapr()), _settings(), _VOLUME, project="acme"))
 
 
-def test_harvest_writes_the_raw_page_dataset_with_provenance(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The in-process harvest lands the blob-v2 page dataset with the §2.2 superset schema, page order
-    sorted by image id (reproducible positional ids)."""
-    raw_uri = str(tmp_path / "raw_pages")
-    settings = _settings(iiif_raw_uri=raw_uri)
+def test_harvest_writes_the_bronze_page_dataset_with_provenance(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The in-process harvest lands the blob-v2 page dataset with the §2.2 superset schema (+ the
+    ingest-time bronze stage stamp, R23), page order sorted by image id (reproducible positional ids)."""
+    bronze_uri = str(tmp_path / "bronze_pages")
+    settings = _settings(iiif_bronze_uri=bronze_uri)
     client = _mock_iiif_client()
 
     def _source_with_mock_client(volume_id: str, *, base_url: str, query_params: str, timeout: float, max_pages: int | None = None) -> IIIFVolumeSource:
@@ -125,28 +127,29 @@ def test_harvest_writes_the_raw_page_dataset_with_provenance(tmp_path: Any, monk
 
     monkeypatch.setattr("medallion.services.iiif_produce.IIIFVolumeSource", _source_with_mock_client)
 
-    result = _harvest_and_ingest(settings, raw_uri, _VOLUME, None)
+    result = _harvest_and_ingest(settings, bronze_uri, _VOLUME, None)
 
     assert result.row_count == 2
-    dataset = lance.dataset(raw_uri)
-    assert dataset.schema.names == ["id", "payload", "source_uri", "volume_id", "page_key"]
+    dataset = lance.dataset(bronze_uri)
+    assert dataset.schema.names == ["id", "payload", "source_uri", "volume_id", "page_key", "stage"]
+    assert set(dataset.to_table(columns=["stage"]).column("stage").to_pylist()) == {"bronze"}
     table = dataset.to_table(columns=["id", "source_uri", "volume_id", "page_key"])
     assert table.column("page_key").to_pylist() == [f"{_VOLUME}_00001", f"{_VOLUME}_00002"]  # sorted, not manifest order
     assert table.column("volume_id").to_pylist() == [_VOLUME] * 2
     assert all(uri.startswith("https://") and "arkis!" in uri for uri in table.column("source_uri").to_pylist())
-    # blob-aware schema facet at the page head — the raw dataset IS the page cache now.
+    # blob-aware schema facet at the page head — the bronze dataset IS the page cache now.
     assert {"name": "payload", "type": "blob"} in result.fields
 
 
 def test_max_pages_bounds_the_harvest(tmp_path: Any) -> None:
-    raw_uri = str(tmp_path / "raw_pages")
+    bronze_uri = str(tmp_path / "bronze_pages")
     source = IIIFVolumeSource(
         _VOLUME, base_url="https://iiifintern-ai.ra.se", query_params="full/max/0/default.jpg", timeout=5.0, max_pages=1, client=_mock_iiif_client()
     )
     objects = list(source.iter_objects())
     assert len(objects) == 1
     assert objects[0].data == f"JPEG-BYTES-{_VOLUME}_00001".encode()
-    assert raw_uri  # tmp_path kept for symmetry; nothing written in this source-only test
+    assert bronze_uri  # tmp_path kept for symmetry; nothing written in this source-only test
 
 
 def test_ray_job_helpers_are_drift_pinned_to_storage_iiif() -> None:

@@ -2,7 +2,8 @@
 
 :func:`handle_stage` is the heart of a medallion mover: given one upstream stage trigger it emits the
 transform's OpenLineage event (``inputs=[from_dataset]`` -> ``outputs=[to_dataset]`` — the ``DERIVED_FROM``
-edge) and publishes the next stage's trigger, so a single producer event cascades raw->bronze->silver->gold.
+edge) and publishes the next stage's trigger, so a single producer event cascades bronze->silver->gold
+(R23: the producer ingests external raw straight into bronze; there is no raw tier).
 
 Idempotent + best-effort: with ``compute_enabled`` the transform does a REAL in-process Lance write (the
 fake-Ray compute) and the emit carries the real version; off, it's a pure lineage emit (version 1). The

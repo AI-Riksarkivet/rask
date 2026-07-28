@@ -53,9 +53,11 @@ _URIS: dict[str, str] = {
     "silver$features": "s3://lakehouse/silver/features",
     "gold$catalog": "s3://lakehouse/gold/catalog",
 }
-# Governance labels per dataset — the standard ``tags`` facet.
+# Governance labels per dataset — the standard ``tags`` facet. ``raw_events`` is the EXTERNAL source
+# system upstream of bronze (R23: raw is the external world, never a governed tier — the medallion's
+# governed layers are exactly bronze/silver/gold).
 _TAGS: dict[str, tuple[tuple[str, str], ...]] = {
-    "raw_events": (("layer", "raw"),),
+    "raw_events": (("layer", "external"),),
     "bronze$events": (("layer", "bronze"),),
     "silver$features": (("layer", "silver"), ("pii", "false")),
     "gold$catalog": (("layer", "gold"),),

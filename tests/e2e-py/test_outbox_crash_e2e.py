@@ -151,7 +151,7 @@ def test_sigkilled_producer_loses_nothing(lineage: str) -> None:
         operation="e2e_crash_probe",
         author="e2e",
         job_namespace="medallion",
-        inputs=[("raw", "e2e_crash_src")],
+        inputs=[("external", "e2e_crash_src")],
         output_namespace="bronze",
         output_name="e2e_crash_ds",
         version=1,

@@ -3,7 +3,7 @@ cluster, …). Thin shell over ray_kit.dashboard."""
 
 from fastapi import APIRouter
 
-from ray_api.dependencies import HttpDep, RayClientDep
+from compute.dependencies import HttpDep, RayClientDep
 from ray_kit import dashboard
 from ray_kit.schemas import (
     RayActorsPayload,

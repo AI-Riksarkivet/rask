@@ -1,17 +1,18 @@
-"""Self-contained Ray IIIF→raw harvest job — the P7a producer's Ray branch.
+"""Self-contained Ray IIIF→bronze harvest job — the P7a producer's Ray branch (re-tiered by R23).
 
 The medallion producer submits this via the Ray Jobs REST API (``ray_submit.submit_iiif_ingest_job``) in
-response to ``POST /ingest-iiif``: fetch one volume's manifest from the IIIF Image API, harvest every page
-image across Ray workers, and write the RAW blob-v2 page dataset (file format 2.2, stable row ids) in ONE
-atomic overwrite commit on the driver. The producer then measures the committed dataset and emits the ONE
-raw-write OpenLineage event itself — this job writes data, never lineage (the head owns the emit, so a
-crashed job can't leave a phantom COMPLETE).
+response to ``POST /ingest-iiif``: fetch one volume's manifest from the IIIF Image API (external raw),
+harvest every page image across Ray workers, and write the BRONZE blob-v2 page dataset (file format 2.2,
+stable row ids, the ``stage`` stamp — bronze is the first governed tier) in ONE atomic overwrite commit on
+the driver. The producer then measures the committed dataset and emits the ONE bronze-write OpenLineage
+event itself — this job writes data, never lineage (the head owns the emit, so a crashed job can't leave
+a phantom COMPLETE).
 
 SELF-CONTAINED like ``ray_stage_job.py`` / ``ray_train_job.py``: no ``services/`` imports — the manifest
 parse + URL shape below are drift-pinned to ``packages/storage/src/storage/iiif.py`` by
 ``tests/unit/test_iiif_ingest.py`` (the unit venv imports this module, so ``ray``/``lance`` stay lazy).
 
-Env: VOLUME_ID RAW_URI  [IIIF_BASE_URL IIIF_QUERY_PARAMS MAX_PAGES]
+Env: VOLUME_ID BRONZE_URI  [IIIF_BASE_URL IIIF_QUERY_PARAMS MAX_PAGES]
      [S3_ENDPOINT S3_KEY S3_SECRET S3_REGION] — empty endpoint = local-path target (dev).
      [TRACEPARENT TRACESTATE OTEL_* RASK_LINEAGE_*] — trace + lineage config injected by the submitter.
 """
@@ -95,7 +96,7 @@ def main() -> int:
     from lance import blob_array, blob_field
 
     volume_id = os.environ["VOLUME_ID"]
-    raw_uri = os.environ["RAW_URI"]
+    bronze_uri = os.environ["BRONZE_URI"]
     base_url = os.environ.get("IIIF_BASE_URL", DEFAULT_IIIF_BASE).rstrip("/")
     query_params = os.environ.get("IIIF_QUERY_PARAMS", DEFAULT_QUERY_PARAMS)
     max_pages_raw = os.environ.get("MAX_PAGES", "")
@@ -106,7 +107,7 @@ def main() -> int:
     if max_pages is not None:
         image_ids = image_ids[:max_pages]
     if not image_ids:
-        print(f"manifest for {volume_id} yielded no pages; refusing to write an empty raw dataset", file=sys.stderr)
+        print(f"manifest for {volume_id} yielded no pages; refusing to write an empty bronze dataset", file=sys.stderr)
         return 1
 
     ray.init()  # in-cluster: attaches to the running Ray; the submitter injected creds + trace env
@@ -123,6 +124,7 @@ def main() -> int:
             pa.field("source_uri", pa.string()),
             pa.field("volume_id", pa.string()),
             pa.field("page_key", pa.string()),
+            pa.field("stage", pa.string()),  # bronze gets the stage stamp AT INGEST (R23) — matches services ingest
         ]
     )
     batch = pa.record_batch(
@@ -132,19 +134,20 @@ def main() -> int:
             "source_uri": pa.array([url for _, url, _ in fetched], pa.string()),
             "volume_id": pa.array([volume_id] * len(fetched), pa.string()),
             "page_key": pa.array([image_id for image_id, _, _ in fetched], pa.string()),
+            "stage": pa.array(["bronze"] * len(fetched), pa.string()),
         },
         schema=schema,
     )
     dataset = lance.write_dataset(
         [batch],
-        raw_uri,
+        bronze_uri,
         schema=schema,
         mode="overwrite",
         storage_options=_storage_options() or None,
         data_storage_version="2.2",
         enable_stable_row_ids=True,
     )
-    print(f"wrote {dataset.count_rows()} pages of {volume_id} to {raw_uri} (version {dataset.version})")
+    print(f"wrote {dataset.count_rows()} pages of {volume_id} to {bronze_uri} (version {dataset.version})")
     return 0
 
 

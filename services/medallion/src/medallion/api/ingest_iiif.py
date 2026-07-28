@@ -50,12 +50,13 @@ async def ingest_iiif(
     _: Annotated[None, Depends(require_dapr_token)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")] = None,
 ) -> dict[str, str] | JSONResponse:
-    """Harvest a IIIF volume into the raw page-image dataset — the P7a cascade head for HTR.
+    """Harvest a IIIF volume into the BRONZE page-image dataset — the P7a cascade head for HTR.
 
-    Fetches the volume's manifest + page images from the IIIF Image API, lands them as the raw blob-v2
-    page dataset (in-process, or the Ray harvest job with ``MEDALLION_RAY_ENABLED``), and emits the ONE
-    raw-write lineage event; ``/raw-arrival`` reacts to that event and fires the ``medallion.raw``
-    cascade (raw→bronze media promotion, then the HTR movers). 409 when the head isn't configured or the
+    Fetches the volume's manifest + page images from the IIIF Image API (external raw, R23), lands them
+    as the bronze blob-v2 page dataset (in-process, or the Ray harvest job with ``MEDALLION_RAY_ENABLED``),
+    and emits the ONE bronze-write lineage event (input = the external ``iiif://…`` source);
+    ``/bronze-arrival`` reacts to that event and fires the ``medallion.bronze`` cascade (the HTR movers).
+    409 when the head isn't configured or the
     project is unresolvable; 400 on ingest refusals (empty manifest, ceilings); 503 when the emit or the
     Ray job fails (retryable — the harvest is an idempotent overwrite and ``Idempotency-Key`` converges
     the retry onto the same run). Token-guarded like ``/produce``/``/ingest-media``.
@@ -80,7 +81,7 @@ async def ingest_iiif(
         return _problem(
             409,
             "Conflict",
-            "iiif ingest head is not configured (requires MEDALLION_COMPUTE_ENABLED and MEDALLION_IIIF_RAW_URI)",
+            "iiif ingest head is not configured (requires MEDALLION_COMPUTE_ENABLED and MEDALLION_IIIF_BRONZE_URI)",
         )
     if result.get("status") == "publish_failed":
         return _problem(503, "ServiceUnavailable", "iiif ingest publish failed; retry", headers={"Retry-After": "5"})

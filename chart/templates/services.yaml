@@ -65,7 +65,7 @@ spec:
             # LANCE_REST_ROOT (backward-compatible). The warehouse registry lives under LANCE_REST_ROOT
             # (control_root defaults to it), so no extra bucket is needed.
             - { name: LANCE_WAREHOUSES_ENABLED, value: {{ .Values.catalog.warehouses.enabled | default false | quote }} }
-            # Buckets no warehouse may claim (audit 2026-07-23): the medallion ZONE buckets (raw/gold can
+            # Buckets no warehouse may claim (audit 2026-07-23): the medallion ZONE buckets (gold can
             # live outside the shared bucket) — the catalog root/registry bucket is always reserved in-app.
             {{- $reserved := list }}
             {{- range $ns, $bkt := .Values.medallion.buckets }}{{- $reserved = append $reserved $bkt }}{{- end }}

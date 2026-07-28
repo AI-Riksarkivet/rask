@@ -181,23 +181,23 @@ def _lineage_env() -> dict[str, str]:
 async def submit_iiif_ingest_job(
     settings: MedallionSettings,
     *,
-    raw_uri: str,
+    bronze_uri: str,
     volume_id: str,
     max_pages: int | None,
     token: str | None,
 ) -> None:
-    """Submit (or re-attach to) the IIIF→raw harvest job (``scripts/ray_iiif_ingest_job.py``) and block
+    """Submit (or re-attach to) the IIIF→bronze harvest job (``scripts/ray_iiif_ingest_job.py``) and block
     until it succeeds — the P7a producer's Ray branch, on the same Jobs-REST seam as the stage movers.
 
     Deterministic ``ray-iiif-ingest-<volume>-<token>`` submission id → an at-least-once retry re-attaches
     instead of racing a second harvest of the same volume. Raises :class:`RayJobError` on a submit
-    failure, a FAILED/STOPPED job, or a timeout; on success the raw page dataset exists at ``raw_uri``
-    and the caller measures it for the ONE raw-write emit.
+    failure, a FAILED/STOPPED job, or a timeout; on success the bronze page dataset exists at
+    ``bronze_uri`` and the caller measures it for the ONE bronze-write emit.
     """
     submission_id = _submission_id(f"iiif-ingest-{volume_id}", token)
     env_vars = {
         "VOLUME_ID": volume_id,
-        "RAW_URI": raw_uri,
+        "BRONZE_URI": bronze_uri,
         "IIIF_BASE_URL": settings.iiif_base_url,
         "IIIF_QUERY_PARAMS": settings.iiif_query_params,
         "MAX_PAGES": "" if max_pages is None else str(max_pages),

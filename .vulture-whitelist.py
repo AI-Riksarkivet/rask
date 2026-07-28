@@ -10,7 +10,7 @@ and a NEW dead symbol stands out immediately. That is the whole point: keep the 
 
 The categories held here, all verified by reading the call site:
   · FastAPI route handlers / exception handlers  — invoked by the router, never by name.
-  · Dapr pub-sub + cron handlers (on_stage, on_raw_arrival, on_train_trigger) — invoked by the sidecar.
+  · Dapr pub-sub + cron handlers (on_stage, on_bronze_arrival, on_train_trigger) — invoked by the sidecar.
   · pydantic `model_config` + `@model_validator` / `@field_validator` methods — invoked by pydantic.
   · pydantic MODEL FIELDS on response/claims schemas — "used" via serialization, not by name.
   · Test hooks (e.g. _reset_peek_cache) and unittest.mock attributes (return_value / side_effect).
@@ -43,7 +43,7 @@ description  # unused variable (services/lineage/schemas.py:112)
 transformation_type  # unused variable (services/lineage/schemas.py:164)
 description  # unused variable (services/lineage/schemas.py:167)
 on_stage  # unused function (services/medallion/api/events.py:36)
-on_raw_arrival  # unused function (services/medallion/api/raw_arrival.py:37)
+on_bronze_arrival  # unused function (services/medallion/api/bronze_arrival.py:41)
 on_train_trigger  # unused function (services/medallion/api/train.py:100)
 model_config  # unused variable (services/medallion/core/config.py:21)
 pytestmark  # unused variable (tests/e2e/test_auth_e2e.py:24)

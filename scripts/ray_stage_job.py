@@ -348,7 +348,7 @@ def _run_stage(from_uri: str, to_uri: str, stage: str, so: dict[str, str]) -> No
     elif "source_rowid" not in upstream.schema.names:
         # CASCADE HEAD (tabular): mint root-provenance source_rowid from the upstream _rowid. lance_ray's
         # distributed read does not surface the reserved _rowid metacolumn, and provenance must be exact, so
-        # the head is a native pylance overwrite on the driver (the raw head is small); deeper tabular stages,
+        # the head is a native pylance overwrite on the driver (the bronze root is small); deeper tabular stages,
         # which already CARRY source_rowid as a plain column, distribute below. Same 2.2 + stable-id contract.
         _reset_if_legacy(to_uri, so)
         lance.write_dataset(

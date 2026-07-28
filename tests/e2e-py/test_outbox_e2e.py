@@ -59,7 +59,7 @@ def test_reconcile_sweep_drains_a_staged_outbox_event(lineage: str) -> None:
         operation="e2e_outbox_probe",
         author="e2e",
         job_namespace="medallion",
-        inputs=[("raw", "e2e_outbox_src")],
+        inputs=[("external", "e2e_outbox_src")],
         output_namespace="bronze",
         output_name="e2e_outbox_ds",
         version=1,

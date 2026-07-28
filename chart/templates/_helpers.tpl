@@ -27,7 +27,7 @@ guarantee a rask selector can never adopt a lance pod inside the shared release.
 ===================================================================================================== */}}
 
 {{/* ---------------------------------------------------------------------------------------------------
-     rask — the base chart's helpers (fleet: gateway, ray, controlplane, frontends —
+     rask — the base chart's helpers (fleet: gateway, compute, controlplane, frontends —
      the orchestrator died at P7a; core-api/search-api/volumes-api died in the R6/R20 wave).
      --------------------------------------------------------------------------------------------------- */}}
 
@@ -379,11 +379,12 @@ This is what makes the docs/DURABILITY.md tier-3 externalization real (values-pr
 {{- if .Values.rustfs.externalEndpoint -}}{{ .Values.rustfs.externalEndpoint }}{{- else -}}http://{{ include "lance.rustfsHost" . }}:{{ .Values.rustfs.port }}{{- end -}}
 {{- end -}}
 {{/*
-lance.stageBucket — the S3 bucket for a medallion stage NAMESPACE, honouring the ingest→medallion→sink
-zone model. `medallion.buckets` maps a namespace to its bucket; anything unset falls back to the shared
-`rustfs.bucket`. So raw (ingest SOURCE) and gold (SINK/output) can live in their own buckets/tenants while
-bronze/silver (the project's medallion internals) stay in the project bucket — and the DEFAULT (no override)
-is the single-bucket layout, unchanged. Call: {{ include "lance.stageBucket" (list $root "raw") }}.
+lance.stageBucket — the S3 bucket for a medallion stage NAMESPACE, honouring the medallion→sink zone
+model (R23: external raw is NOT a zone — ingest sources live outside the lakehouse). `medallion.buckets`
+maps a namespace to its bucket; anything unset falls back to the shared `rustfs.bucket`. So gold
+(SINK/output) can live in its own bucket/tenant while bronze/silver (the project's medallion internals)
+stay in the project bucket — and the DEFAULT (no override) is the single-bucket layout, unchanged.
+Call: {{ include "lance.stageBucket" (list $root "gold") }}.
 */}}
 {{- define "lance.stageBucket" -}}
 {{- $root := index . 0 -}}{{- $ns := index . 1 -}}
