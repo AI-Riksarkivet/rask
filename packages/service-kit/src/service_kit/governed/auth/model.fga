@@ -42,6 +42,10 @@ type project
     # ---- actions ----
     define can_administer: admin
     define can_create_warehouse: admin
+    # Create-on-parent for annotation projects: the child object does not exist yet, so the door is
+    # the TENANT. `member`, not `admin` — labeling is ordinary tenant work, and the creator becomes
+    # the new project's owner via seed_ownership.
+    define can_create_annotation_project: member
 
 # A warehouse = exactly one S3 bucket, owned by one project. The catalog root object is a `warehouse:`.
 # Concentric rungs inherit from the project (admins own; members read).
@@ -145,3 +149,32 @@ type transaction
     define can_set_property: editor
     define can_set_status: committer
     define can_cancel: committer
+
+# An annotation project = a labeling work domain owned by a tenant. Its state (tasks, claims, drafts,
+# reviews) is the annotator's own and NEVER enters the governed plane until a publish — which is why this
+# type hangs off `project` (the tenant) and not off warehouse/namespace. Rungs are concentric:
+# owner ⊇ manager ⊇ reviewer ⊇ annotator ⊇ viewer.
+#
+# Two rung choices, owned (docs/DESIGN-annotation-projects.md §6.1): `reviewer ⊇ annotator` because a
+# reviewer must be able to fix_and_accept, which IS annotating; and `can_publish: manager` rather than a
+# fifth `publisher` rung, which would earn nothing over the manager who froze the project.
+#
+# Publish is deliberately a TWO-DOOR operation (§6.2) and only door 1 lives here: `can_publish` on the
+# annotation_project. Door 2 is `can_create_table` on the TARGET namespace, already on both `namespace`
+# and `warehouse`. Do not collapse them — the annotator's domain must never imply governed-plane write.
+type annotation_project
+  relations
+    define tenant: [project]
+    define owner: [user, role#assignee] or admin from tenant
+    define manager: [user, role#assignee] or owner
+    define reviewer: [user, role#assignee] or manager
+    define annotator: [user, role#assignee] or reviewer
+    define viewer: [user, role#assignee] or annotator or member from tenant
+    # ---- actions ----
+    define can_view: viewer
+    define can_send_items: annotator
+    define can_claim: annotator
+    define can_annotate: annotator
+    define can_review: reviewer
+    define can_manage: manager
+    define can_publish: manager

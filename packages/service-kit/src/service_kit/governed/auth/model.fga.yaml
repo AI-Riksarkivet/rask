@@ -26,47 +26,92 @@ model: |
   model
     schema 1.1
 
+  # Lance catalog authorization model — Lakekeeper-style multi-tenant ReBAC (OpenFGA / Zanzibar).
+  #
+  # Hierarchy:  team -> project -> warehouse(= one S3 bucket) -> namespace (self-nesting) -> table
+  #   mirrors Lakekeeper's  server -> project -> warehouse -> namespace -> table  hierarchy, with lance's
+  #   concentric-rung style (owner > writer > reader) layered on top, plus a `validator` rung.
+  #   `materialized_view` and `transaction` hang off namespace/warehouse and inherit the SAME rungs via
+  #   `parent`, so a grant on the enclosing stage reaches the views + transactions inside it.
+  # Privileges: concentric rungs cascade DOWN via `parent` / `project`. A SEPARATE `validator` rung gates
+  #   medallion stage PROMOTION (e.g. silver -> gold): a plain writer can write within a stage but cannot
+  #   promote INTO a gated stage; only an owner or an explicit validator can (`can_promote: validator`).
+  # Multi-tenancy: a team owns a project (members inherit project admin); a team can own MANY projects;
+  #   each project has exactly ONE warehouse (bucket). Projects are isolated — a grant on project A's
+  #   warehouse never reaches project B.
+  # Permissions: every API operation is checked against a `can_*` ACTION relation (the model, not the app,
+  #   owns the op->privilege mapping). Roles (`role#assignee`) are first-class subjects on every rung, so a
+  #   grant can target a persona, not just a single user. Teams (`team#member`) flow in INDIRECTLY — a team
+  #   can be assigned to a role or made a project member; the resource rungs deliberately do NOT accept
+  #   `team#member` directly (grant a role to the team instead), keeping team access auditable via roles.
+
   type user
 
+  # A team — a group of users. `team:eng#member` is usable anywhere a [user] subject is.
   type team
     relations
       define member: [user]
 
+  # An assignable role (persona): `role:validators#assignee` is a first-class subject. Members can be
+  # users, whole teams, or other roles (nesting).
   type role
     relations
       define assignee: [user, team#member, role#assignee]
 
+  # A project = a tenant. Owned by a team (members become admins). Holds one warehouse.
   type project
     relations
       define team: [team]
       define admin: [user, role#assignee] or member from team
       define member: [user, team#member, role#assignee] or admin
+      # ---- actions ----
       define can_administer: admin
       define can_create_warehouse: admin
+      # Create-on-parent for annotation projects: the child object does not exist yet, so the door is
+      # the TENANT. `member`, not `admin` — labeling is ordinary tenant work, and the creator becomes
+      # the new project's owner via seed_ownership.
+      define can_create_annotation_project: member
 
+  # A warehouse = exactly one S3 bucket, owned by one project. The catalog root object is a `warehouse:`.
+  # Concentric rungs inherit from the project (admins own; members read).
   type warehouse
     relations
       define project: [project]
       define owner: [user, role#assignee] or admin from project
       define writer: [user, role#assignee] or owner
       define reader: [user, role#assignee] or writer or member from project
+      # A warehouse-level validator validates EVERY stage below it.
       define validator: [user, role#assignee] or owner
+      # ---- actions ----
       define can_get_metadata: reader
       define can_create_namespace: writer
       define can_create_table: writer
+      # The warehouse root is ALSO the create-on-parent target for a TOP-LEVEL child (no enclosing
+      # namespace) when `fga_lock_root_create` is on, so every `can_create_*` the app can check on a parent
+      # must exist on BOTH `namespace` and `warehouse` — otherwise the check 400s ("relation not found") and
+      # fails closed to a 503 for everyone. Same writer rung as can_create_table.
       define can_create_materialized_view: writer
+      # Estate-wide control-plane event feed (GET /v1/events): observing EVERY project's governance changes is
+      # a platform-admin privilege, checked ONLY on the root object (fga_root_object). Owner-tier, so a mere
+      # per-project admin can NOT read the estate feed — authz scope == data scope (the feed is estate-wide).
       define can_observe_events: owner
 
+  # Namespace = a medallion stage (bronze/silver/gold) or a domain namespace; self-nesting under a warehouse.
   type namespace
     relations
       define parent: [warehouse, namespace]
       define owner: [user, role#assignee] or owner from parent
       define writer: [user, role#assignee] or owner or writer from parent
       define reader: [user, role#assignee] or writer or reader from parent
+      # The validator rung is SEPARATE from writer — a writer is NOT a validator. Inherits from the parent
+      # so a warehouse/parent validator validates this stage. This is what gates promotion INTO the stage.
       define validator: [user, role#assignee] or owner or validator from parent
+      # ---- actions ----
       define can_get_metadata: reader
       define can_create_namespace: writer
       define can_create_table: writer
+      # Creating a materialized view is a create-on-parent op gated on the enclosing namespace (writer rung),
+      # exactly like can_create_table — the view itself does not exist yet at authorization time.
       define can_create_materialized_view: writer
       define can_update_properties: writer
       define can_promote: validator
@@ -79,27 +124,44 @@ model: |
       define writer: [user, role#assignee] or owner or writer from parent
       define reader: [user, role#assignee] or writer or reader from parent
       define validator: [user, role#assignee] or owner or validator from parent
+      # ---- actions ----
       define can_get_metadata: reader
       define can_read_data: reader
       define can_write_data: writer
       define can_promote: validator
       define can_drop: owner
       define can_deregister: owner
+      # Ref-plane / history ops (OWNER tier — admin-inclusive via the parent cascade). A plain data WRITER
+      # appends/overwrites within the current line; FORKING history (branch/tag) or REWINDING it (restore)
+      # is privileged. `can_restore` is DESTRUCTIVE (rewinds to an older version), so it sits strictly ABOVE
+      # writer — never grantable to a mere writer.
       define can_create_branch: owner
       define can_create_tag: owner
       define can_update_tag: owner
       define can_restore: owner
 
+  # A materialized view = a derived, refreshable dataset under a namespace (id = namespace path + view
+  # name). Concentric rungs mirror `table`: owner ⊇ refresher ⊇ reader, all cascading from the parent
+  # namespace. `refresher` is the writer-equivalent rung — it gates the async REFRESH (rematerialize) op,
+  # a data-plane write — while `reader` only reads the view + its metadata.
   type materialized_view
     relations
       define parent: [namespace]
       define owner: [user, role#assignee] or owner from parent
       define refresher: [user, role#assignee] or owner or writer from parent
       define reader: [user, role#assignee] or refresher or reader from parent
+      # ---- actions ----
       define can_get_metadata: reader
       define can_read: reader
       define can_refresh: refresher
 
+  # A transaction = a coordination artifact scoped to the namespace/warehouse whose tables it commits
+  # (id = the opaque transaction path). Rungs separate the privileged LIFECYCLE (commit/abort/cancel via
+  # set_status) from lighter PROPERTY edits: owner ⊇ committer ⊇ editor ⊇ viewer. A `committer` may change
+  # the transaction status; an `editor` may only edit its properties (NOT commit/abort); a `viewer` may
+  # describe it. All rungs cascade from the enclosing namespace/warehouse, so a namespace writer can drive
+  # the transactions it opens — the fix for the old always-deny (the check used to target a `table:<txn-id>`
+  # object nothing ever seeds).
   type transaction
     relations
       define parent: [namespace, warehouse]
@@ -107,11 +169,40 @@ model: |
       define committer: [user, role#assignee] or owner or writer from parent
       define editor: [user, role#assignee] or committer
       define viewer: [user, role#assignee] or editor or reader from parent
+      # ---- actions ----
       define can_describe: viewer
       define can_set_property: editor
       define can_set_status: committer
       define can_cancel: committer
 
+  # An annotation project = a labeling work domain owned by a tenant. Its state (tasks, claims, drafts,
+  # reviews) is the annotator's own and NEVER enters the governed plane until a publish — which is why this
+  # type hangs off `project` (the tenant) and not off warehouse/namespace. Rungs are concentric:
+  # owner ⊇ manager ⊇ reviewer ⊇ annotator ⊇ viewer.
+  #
+  # Two rung choices, owned (docs/DESIGN-annotation-projects.md §6.1): `reviewer ⊇ annotator` because a
+  # reviewer must be able to fix_and_accept, which IS annotating; and `can_publish: manager` rather than a
+  # fifth `publisher` rung, which would earn nothing over the manager who froze the project.
+  #
+  # Publish is deliberately a TWO-DOOR operation (§6.2) and only door 1 lives here: `can_publish` on the
+  # annotation_project. Door 2 is `can_create_table` on the TARGET namespace, already on both `namespace`
+  # and `warehouse`. Do not collapse them — the annotator's domain must never imply governed-plane write.
+  type annotation_project
+    relations
+      define tenant: [project]
+      define owner: [user, role#assignee] or admin from tenant
+      define manager: [user, role#assignee] or owner
+      define reviewer: [user, role#assignee] or manager
+      define annotator: [user, role#assignee] or reviewer
+      define viewer: [user, role#assignee] or annotator or member from tenant
+      # ---- actions ----
+      define can_view: viewer
+      define can_send_items: annotator
+      define can_claim: annotator
+      define can_annotate: annotator
+      define can_review: reviewer
+      define can_manage: manager
+      define can_publish: manager
 tuples:
   # teams + members
   - { user: user:alice, relation: member, object: team:eng }
@@ -146,6 +237,15 @@ tuples:
   # root_admin: owner of the ROOT warehouse (fga_root_object). ONLY this estate/platform tier reads the
   # estate-wide control-plane event feed (can_observe_events, GET /v1/events) — a per-project admin cannot.
   - { user: user:root_admin, relation: owner, object: warehouse:lance_catalog }
+
+  # ---- annotation projects (B3/S2) -------------------------------------------------------------
+  # gina is a PLAIN project member (not via team:eng, so not an admin) — the subject that proves
+  # "tenant member is a viewer but NOT an annotator". frank belongs to a different tenant entirely.
+  - { user: user:gina, relation: member, object: project:acme }
+  - { user: project:acme, relation: tenant, object: annotation_project:labels_2026 }
+  - { user: user:dave, relation: annotator, object: annotation_project:labels_2026 }
+  - { user: user:carol, relation: reviewer, object: annotation_project:labels_2026 }
+  - { user: user:henry, relation: manager, object: annotation_project:labels_2026 }
 
 tests:
   - name: only a ROOT-warehouse (estate) admin can observe the estate-wide control-plane event feed
@@ -342,3 +442,44 @@ tests:
         type: materialized_view
         assertions:
           can_refresh: [materialized_view:acme_silver$daily_agg]
+
+  - name: an annotation project's rungs are concentric, and tenant membership only reaches viewer
+    check:
+      # A tenant member sees the project but cannot label in it — labeling is an explicit grant.
+      - user: user:gina
+        object: annotation_project:labels_2026
+        assertions: { can_view: true, can_annotate: false, can_review: false, can_publish: false }
+      # An explicit annotator may annotate/claim/send, but reviewing is a rung above.
+      - user: user:dave
+        object: annotation_project:labels_2026
+        assertions: { can_view: true, can_claim: true, can_annotate: true, can_review: false, can_publish: false }
+      # reviewer > annotator ON PURPOSE: a reviewer must be able to fix_and_accept, which IS annotating.
+      - user: user:carol
+        object: annotation_project:labels_2026
+        assertions: { can_annotate: true, can_review: true, can_publish: false }
+      # can_publish is the manager rung — no separate publisher rung exists.
+      - user: user:henry
+        object: annotation_project:labels_2026
+        assertions: { can_review: true, can_manage: true, can_publish: true }
+      # A tenant ADMIN owns the annotation project by cascade (admin from tenant).
+      - user: user:alice
+        object: annotation_project:labels_2026
+        assertions: { can_publish: true, can_manage: true }
+      # Another tenant's admin gets nothing — project isolation holds for annotation projects too.
+      - user: user:frank
+        object: annotation_project:labels_2026
+        assertions: { can_view: false, can_annotate: false, can_publish: false }
+
+  - name: creating an annotation project is authorized on the PARENT tenant, not the child
+    check:
+      # Ordinary tenant membership is the door — labeling is normal tenant work.
+      - user: user:gina
+        object: project:acme
+        assertions: { can_create_annotation_project: true }
+      - user: user:alice
+        object: project:acme
+        assertions: { can_create_annotation_project: true }
+      # A member of a DIFFERENT tenant cannot create one here.
+      - user: user:frank
+        object: project:acme
+        assertions: { can_create_annotation_project: false }

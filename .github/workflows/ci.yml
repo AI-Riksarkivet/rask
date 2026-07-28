@@ -80,14 +80,18 @@ jobs:
           FGA_V=0.6.4
           curl -fsSL "https://github.com/openfga/cli/releases/download/v${FGA_V}/fga_${FGA_V}_linux_amd64.tar.gz" \
             | tar xz -C /usr/local/bin fga
-          fga model test --tests services/common/auth/model.fga.yaml
+          # R19 moved this tree: `services/common/auth/` no longer exists, and these four paths
+          # pointed at it until 2026-07-28 — so this entire step was failing on a missing file and
+          # the authz-model gate had not actually run since the merge. Paths are now the real ones.
+          AUTH=packages/service-kit/src/service_kit/governed/auth
+          fga model test --tests $AUTH/model.fga.yaml
           # The model exists in three copies (model.fga authored, model.fga.yaml tested above,
           # model.json the app LOADS). CI previously exercised only the yaml copy — a drift between
           # the tested model and the shipped one passed silently. Transform the authored .fga and
           # diff it against the committed .json so drift fails HERE. (jq normalizes key order.)
-          fga model transform --file services/common/auth/model.fga > /tmp/model.transformed.json
+          fga model transform --file $AUTH/model.fga > /tmp/model.transformed.json
           jq -S . /tmp/model.transformed.json > /tmp/model.a.json
-          jq -S . services/common/auth/model.json > /tmp/model.b.json
+          jq -S . $AUTH/model.json > /tmp/model.b.json
           diff -u /tmp/model.b.json /tmp/model.a.json || { echo "model.json drifted from model.fga"; exit 1; }
 
   # Frontend suites (§7 "not in CI" gap, closed 2026-07-11): svelte-check (types over the runes
