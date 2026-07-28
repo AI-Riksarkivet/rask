@@ -327,8 +327,12 @@ k3s-import: ## Side-load :dev images into k3s containerd
 
 k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait for the gateway
 	@set -a; [ -f .env ] && . ./.env; set +a; \
-	if [ -z "$$HF_TOKEN" ]; then echo "WARN: HF_TOKEN unset (env or .env) — htrflow Serve will 401 on the gated TrOCR model"; fi; \
-	$(HELM) upgrade --install rask ./chart --wait --timeout 20m \
+	if [ -z "$$HF_TOKEN" ] && [ -r "$${HF_HOME:-$$HOME/.cache/huggingface}/token" ]; then \
+	  HF_TOKEN="$$(cat "$${HF_HOME:-$$HOME/.cache/huggingface}/token")"; \
+	  echo ">> HF_TOKEN from $${HF_HOME:-$$HOME/.cache/huggingface}/token (hf auth login)"; \
+	fi; \
+	if [ -z "$$HF_TOKEN" ]; then echo "WARN: no HF token (env, .env, or 'hf auth login') — htrflow Serve will 401 on the gated TrOCR model"; fi; \
+	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m \
 	  --take-ownership \
 	  $${HF_TOKEN:+--set-string secrets.hfToken=$$HF_TOKEN} \
 	  $${AWS_ACCESS_KEY_ID:+--set-string rustfs.accessKey=$$AWS_ACCESS_KEY_ID} \
@@ -415,7 +419,7 @@ kind-preload: bootstrap ## Pull the chart's third-party images into the host cac
 # and post-install hooks run AFTER --wait, which was itself blocked on the server the migration had to
 # unblock. Keeping --wait off was the workaround; keeping it ON is now the regression test.
 kind-deploy: k3s-deps ## helm upgrade --install release `rask` into the kind cluster
-	helm upgrade --install rask ./chart --kube-context kind-$(KIND_CLUSTER) --wait --timeout 900s
+	helm upgrade --install rask ./chart --kube-context kind-$(KIND_CLUSTER) --wait --wait-for-jobs --timeout 900s
 	$(LOCALBIN)/kubectl --context kind-$(KIND_CLUSTER) rollout status deploy/rask-gateway --timeout=300s
 
 kind-down: ## Delete the rask kind cluster

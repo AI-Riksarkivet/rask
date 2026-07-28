@@ -753,7 +753,9 @@ backups:
     enabled: false
     schedule: "0 3 * * *" # daily 03:00
     snapshotClassName: "" # the cluster's VolumeSnapshotClass; "" = the cluster default
-    kubectlImage: bitnami/kubectl:1.31 # creates the VolumeSnapshot CR (override to your cluster's kubectl image)
+    # creates the VolumeSnapshot CR via `sh -c`, so this image needs a shell AND kubectl.
+    # (was bitnami/kubectl:1.31 — Bitnami retired the public catalog; that tag now 404s.)
+    kubectlImage: alpine/k8s:1.31.3
 
 # --- HA: PodDisruptionBudget + (optional) HPA for the stateless request-serving services. Off by default
 # (single-node dev); the prod overlay turns the PDB on. Stateful stores (AGE/RustFS) get HA from their
@@ -1021,7 +1023,9 @@ dapr:
   # order), so a first install always creates a few app pods while no webhook exists yet. Those pods
   # are admitted un-injected and nothing replaces them — the Job recreates exactly those. kubectl
   # image, pinned; passes × 5s bounds how long it keeps trying before failing with the diagnosis.
-  sweepImage: registry.k8s.io/kubectl:v1.31.3
+  # MUST carry a shell: the sweep script is `sh -c`. registry.k8s.io/kubectl is DISTROLESS —
+  # it has no /bin/sh, so the container never starts ("exec: sh: executable file not found").
+  sweepImage: alpine/k8s:1.31.3
   sweepPasses: 40
   logLevel: "info"
   # Max request body size for Dapr service invocation. Dapr defaults to 4Mi,

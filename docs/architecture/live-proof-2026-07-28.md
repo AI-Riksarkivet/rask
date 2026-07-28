@@ -271,3 +271,59 @@ BLOCKED (connection never established)
 An earlier attempt at this probe produced NO output and I nearly read the silence as proof — it was
 `kubectl run --rm` swallowing the result. Silence is not evidence; the run above uses a persistent
 probe pod and `exec` so both sides print.
+
+## Gate 5 — a green install was hiding a permanently-broken Job
+
+Witnessed on the real k3s cluster, not a throwaway: `helm status rask` reported **`deployed`**
+while a bootstrap Job had never completed and never could.
+
+```
+JOB                         COMPLETIONS   FAILED   ACTIVE
+rask-dapr-inject-sweep-r1   <none>        <none>   1        <- crash-looping since install
+rask-nats-stream-r1         1             <none>   <none>
+rask-openbao-seed-r1        1             <none>   <none>
+rask-openfga-migrate-r1     1             <none>   <none>
+rask-rustfs-mkbucket-r1     1             <none>   <none>
+
+release status: deployed        <- helm's verdict, with the above underneath it
+```
+
+**Two independent defects, both required for the failure to stay invisible.**
+
+### 1. The sweep could never start — distroless image, `sh` entrypoint
+
+```
+Error: failed to create containerd task: ... exec: "sh": executable file not found in $PATH
+Back-off restarting failed container sweep
+```
+
+`registry.k8s.io/kubectl` is **distroless** — no `/bin/sh`. The sweep's script is `sh -c`, so the
+container never started on any pass. It was not flaky and not a race; it had a 0% success rate from
+the day it was written. `kueue-queues` uses the same distroless image *correctly*, via `args:`
+straight to kubectl's entrypoint — which is why that one works and hid the pattern.
+
+Fixed by moving the two shell-using kubectl Jobs to `alpine/k8s:1.31.3` (shell + kubectl, verified by
+running it). Jobs that need a shell and Jobs that don't now differ by image, deliberately.
+
+### 2. `helm --wait` does not wait for Jobs
+
+From helm's own flag help:
+
+> `--wait`: will wait until all **Pods, PVCs, Services, and minimum number of Pods of a Deployment,
+> StatefulSet, or ReplicaSet** are in a ready state…
+> `--wait-for-jobs`: if set **and `--wait` enabled**, will wait until all Jobs have been completed…
+
+Jobs are absent from `--wait`'s list. Every bootstrap Job in this chart is an *ordinary-wave*
+resource (they left the hook lifecycle in the deadlock fix), and ordinary-wave Jobs are exactly what
+`--wait` ignores — so the deadlock fix, correct on its own terms, moved the Jobs into helm's blind
+spot. `--wait-for-jobs` is now set on both install paths (`k3s-up`, `kind-deploy`).
+
+Hook Jobs (`kueue-queues`, `greptimedb-ttl`, `bootstrap-admin`) were never affected — helm fails a
+release when a hook Job fails. The gap was only ever the ordinary wave.
+
+### 3. A second dead image, found by the same check
+
+`bitnami/kubectl:1.31` — the default for the RustFS VolumeSnapshot Job — now **404s**
+(`docker.io/bitnami/kubectl:1.31: not found`); Bitnami retired the public catalog. That Job also runs
+`sh -c`, so it moved to `alpine/k8s:1.31.3` with the sweep. It had not been exercised, so nothing had
+reported it.
