@@ -25,7 +25,7 @@ import pytest
 from annotator.api.security import current_subject, get_checker
 from annotator.api.v1.endpoints import tasks as tasks_ep
 from annotator.projects.machines import TASK_EDGES
-from annotator.projects.models import TaskState
+from annotator.projects.models import ProjectState, TaskState
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -83,6 +83,27 @@ def _task(**kw: Any) -> dict[str, Any]:
     }
     base.update(kw)
     return base
+
+
+class _FakeProjectActor:
+    """The project the task belongs to. Read on every task event to enforce §5.2 rule 5."""
+
+    def __init__(self, state: ProjectState = ProjectState.LABELING) -> None:
+        self.state = state
+
+    async def get(self) -> dict[str, Any]:
+        return {"state": str(self.state), "project_id": PROJECT_ID}
+
+
+@pytest.fixture(autouse=True)
+def _live_project(monkeypatch: pytest.MonkeyPatch) -> _FakeProjectActor:
+    """Every task event now reads its project's state (§5.2 rule 5 — nothing escapes a published
+    project). Autouse so each test gets a LABELING project by default; the freeze tests mutate it."""
+    from annotator.api.v1.endpoints import project_events as pe
+
+    project = _FakeProjectActor()
+    monkeypatch.setattr(pe, "_project_proxy", lambda _p: project)
+    return project
 
 
 #: Edges a principal may fire — everything with a declared permission.
@@ -301,3 +322,113 @@ def test_reading_a_task_authorizes_before_returning_it(monkeypatch: pytest.Monke
 
     assert r.status_code == 403
     assert seen[0] == {"user": SUBJECT, "relation": "can_view", "obj": f"annotation_project:{PROJECT_ID}"}
+
+
+# --------------------------------------------------------------------------------------------------
+# §5.2 rule 5 — nothing escapes a published project
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("frozen", [ProjectState.PUBLISHING, ProjectState.PUBLISHED, ProjectState.ARCHIVED])
+def test_no_task_transition_survives_a_published_project(frozen: ProjectState, _live_project: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provenance is frozen with the artifact. A task that moved after the publish would describe a
+    dataset that no longer matches it — and during `publishing` it could change the very rows the
+    saga is mid-way through reading. The rule was documented and enforced nowhere."""
+    _live_project.state = frozen
+    actor = _FakeActor(_task(state=TaskState.IN_REVIEW, submitted_by="dave"))
+    monkeypatch.setattr(tasks_ep, "_proxy", lambda _t: actor)
+    client = TestClient(_app(allow=True))
+
+    r = client.post("/tasks/t1/events", json={"event": "accept"})
+
+    assert r.status_code == 409, r.text
+    assert "frozen with the published artifact" in r.text
+    assert actor.fired == []
+
+
+def test_a_draft_cannot_be_saved_into_a_publishing_project(_live_project: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sharpest case: the saga is reading drafts right now to build the plan."""
+    _live_project.state = ProjectState.PUBLISHING
+    actor = _FakeActor(_task(state=TaskState.CLAIMED, assignee=SUBJECT))
+    monkeypatch.setattr(tasks_ep, "_proxy", lambda _t: actor)
+    client = TestClient(_app(allow=True))
+
+    r = client.put("/tasks/t1/draft", json={"shapes": [{"shape_type": "bbox"}]})
+
+    assert r.status_code == 409
+    assert actor.drafts == []
+
+
+# --------------------------------------------------------------------------------------------------
+# §5.2 rule 2 — only the lease holder writes, "even a manager"
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("event", ["submit", "skip"])
+def test_skip_and_submit_are_lease_holder_only(event: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`skip` was missing from this check, so any annotator could discard work someone else was
+    holding — and with `requeue_for_others`, consume their turn at it."""
+    actor = _FakeActor(_task(state=TaskState.CLAIMED, assignee="dave"))
+    monkeypatch.setattr(tasks_ep, "_proxy", lambda _t: actor)
+    client = TestClient(_app(allow=True))
+
+    r = client.post("/tasks/t1/events", json={"event": event})
+
+    assert r.status_code == 403
+    assert "held by dave" in r.text
+    assert actor.fired == []
+
+
+def test_release_is_refused_to_a_non_holder_without_can_manage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """§5.2: `release` is "lease holder OR can_manage". Gating it on plain `can_annotate` let any
+    annotator break another's claim."""
+    actor = _FakeActor(_task(state=TaskState.CLAIMED, assignee="dave"))
+    monkeypatch.setattr(tasks_ep, "_proxy", lambda _t: actor)
+    seen: list[dict[str, Any]] = []
+
+    async def checker(*, user: str, relation: str, obj: str) -> bool:
+        seen.append({"relation": relation})
+        return relation == "can_annotate"  # holds the rung, but is not a manager
+
+    app = FastAPI()
+    register_handlers(app)
+    app.include_router(tasks_ep.router)
+    app.dependency_overrides[get_checker] = lambda: checker
+    app.dependency_overrides[current_subject] = lambda: SUBJECT
+    r = TestClient(app).post("/tasks/t1/events", json={"event": "release"})
+
+    assert r.status_code == 403
+    assert "needs can_manage" in r.text
+    assert {"relation": "can_manage"} in seen, "the manager escape hatch was never consulted"
+
+
+def test_a_manager_may_release_a_task_held_by_someone_else(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The documented escape hatch for a task pinned to someone unavailable."""
+    actor = _FakeActor(_task(state=TaskState.CLAIMED, assignee="dave"))
+    monkeypatch.setattr(tasks_ep, "_proxy", lambda _t: actor)
+    client = TestClient(_app(allow=True))  # holds everything, including can_manage
+
+    r = client.post("/tasks/t1/events", json={"event": "release"})
+
+    assert r.status_code == 200, r.text
+    assert actor.fired[0]["event"] == "release"
+
+
+# --------------------------------------------------------------------------------------------------
+# assign names a recipient
+# --------------------------------------------------------------------------------------------------
+
+
+def test_a_manager_assigns_to_a_NAMED_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The bug this replaces made `assign` set the assignee to the manager who fired it, so a manager
+    could only ever assign to themselves — silently turning the one manager-driven distribution
+    mechanism in the whole plane into a self-claim."""
+    actor = _FakeActor(_task(state=TaskState.UNASSIGNED))
+    monkeypatch.setattr(tasks_ep, "_proxy", lambda _t: actor)
+    client = TestClient(_app(allow=True))
+
+    r = client.post("/tasks/t1/events", json={"event": "assign", "assignee": "dave"})
+
+    assert r.status_code == 200, r.text
+    assert actor.fired[0]["assignee"] == "dave"
+    assert actor.fired[0]["actor"] == SUBJECT, "the manager is still recorded as the actor"

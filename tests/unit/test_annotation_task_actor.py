@@ -326,3 +326,68 @@ async def test_shape_ids_are_minted_at_save_and_PERSISTED_so_a_republish_is_stab
     assert all(ids), "a shape was stored without an id"
     assert ids == [s["shape_id"] for s in second["shapes"]], "re-reading a draft minted new shape ids"
     assert len(set(ids)) == 2, "two shapes collided on one id"
+
+
+@pytest.mark.asyncio
+async def test_assign_names_the_recipient_not_the_manager_who_fired_it() -> None:
+    """§5.2's `assign` is the ONE manager-driven distribution mechanism in the plane. Setting
+    `assignee = actor` made a manager able to assign only to themselves, quietly turning it into a
+    self-claim — the "assign a user to a task" feature, present in the state machine and absent in
+    behaviour."""
+    actor = await _seeded()
+
+    out = await actor.fire({"event": "assign", "actor": "henry", "assignee": "gina"})
+
+    assert out["assignee"] == "gina", "the manager assigned the task to themselves"
+    assert out["transitions"][-1]["by"] == "henry", "the manager is still the recorded actor"
+    assert out["lease_expires_at"] is None, "a pinned task must not take a lease"
+
+
+@pytest.mark.asyncio
+async def test_assign_without_a_named_recipient_falls_back_to_the_actor() -> None:
+    """A manager assigning with no name is taking it themselves — legal, and better than an empty
+    assignee, which would be a CLAIMED task nobody holds."""
+    actor = await _seeded()
+    out = await actor.fire({"event": "assign", "actor": "henry"})
+    assert out["assignee"] == "henry"
+
+
+@pytest.mark.asyncio
+async def test_request_changes_appends_the_reviewers_reason() -> None:
+    """§5.2: `request_changes` appends a `ReviewNote`. Without it the annotator gets the task back
+    with no statement of what to change, which makes the whole changes_requested loop useless."""
+    actor = await _seeded()
+    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.fire({"event": "submit", "actor": "gina"})
+
+    out = await actor.fire({"event": "request_changes", "actor": "carol", "message": "the second box is off by a line", "shape_ids": ["s1"]})
+
+    assert out["state"] == TaskState.CHANGES_REQUESTED
+    assert len(out["review_notes"]) == 1
+    note = out["review_notes"][0]
+    assert note["by"] == "carol" and note["message"] == "the second box is off by a line"
+    assert note["shape_ids"] == ["s1"]
+
+
+@pytest.mark.asyncio
+async def test_review_notes_are_append_only_across_rounds() -> None:
+    """Two rounds of review must leave two notes — the history of what was asked for is the record."""
+    actor = await _seeded()
+    for message in ("first pass", "second pass"):
+        await actor.fire({"event": "claim", "actor": "gina"})
+        await actor.fire({"event": "submit", "actor": "gina"})
+        await actor.fire({"event": "request_changes", "actor": "carol", "message": message})
+
+    notes = (await _state(actor))["review_notes"]
+    assert [n["message"] for n in notes] == ["first pass", "second pass"]
+
+
+@pytest.mark.asyncio
+async def test_accepting_writes_no_review_note() -> None:
+    """Only `request_changes` carries a reason. An accept with an empty note would be noise in an
+    append-only structure."""
+    actor = await _seeded()
+    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.fire({"event": "submit", "actor": "gina"})
+    out = await actor.fire({"event": "accept", "actor": "carol"})
+    assert out["review_notes"] == []

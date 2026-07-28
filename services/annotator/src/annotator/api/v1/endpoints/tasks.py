@@ -23,8 +23,16 @@ from pydantic import BaseModel, Field
 
 from annotator.api.security import CheckerDep, CurrentSubject
 from annotator.projects.actor import AnnotationTaskActorInterface
-from annotator.projects.machines import SELF_REVIEW_FORBIDDEN, TASK_EDGES, IllegalTransition, task_transition
-from annotator.projects.models import Shape, TaskState
+from annotator.projects.machines import (
+    FROZEN_PROJECT_STATES,
+    HOLDER_OR_MANAGER,
+    LEASE_HOLDER_ONLY,
+    SELF_REVIEW_FORBIDDEN,
+    TASK_EDGES,
+    IllegalTransition,
+    task_transition,
+)
+from annotator.projects.models import ProjectState, Shape, TaskState
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 
@@ -51,6 +59,14 @@ class FireRequest(BaseModel):
 
     event: str = Field(min_length=1)
     lease_seconds: int = Field(default=1800, gt=0, le=86_400)
+    #: `assign` only. The user a MANAGER is assigning the task to — this is what makes the edge a
+    #: distribution mechanism rather than a self-claim. Safe as a request field because it names the
+    #: RECIPIENT, not the caller: the caller's own authority is still `can_manage`, checked against
+    #: the task's project.
+    assignee: str | None = Field(default=None, max_length=128)
+    #: `request_changes` only — the reviewer's reason, appended as a `ReviewNote`.
+    message: str = Field(default="", max_length=4000)
+    shape_ids: list[str] = Field(default_factory=list, max_length=500)
 
 
 class SaveDraftRequest(BaseModel):
@@ -92,6 +108,24 @@ async def _authorize(checker: Any, subject: str, permission: str, project_id: st
         raise ForbiddenError(f"{subject} lacks {permission} on {obj}")
 
 
+async def _refuse_if_project_frozen(project_id: str, event: str) -> None:
+    """§5.2 rule 5 — nothing escapes a published project.
+
+    Once the project is publishing, published or archived, EVERY task transition is rejected:
+    provenance is frozen with the artifact, and a task that moved after the publish would describe a
+    dataset that no longer matches it. Costs one actor read per task event, which is the honest price
+    of a guarantee that would otherwise be documented and unenforced.
+    """
+    from annotator.api.v1.endpoints.project_events import _project_proxy  # noqa: PLC0415 - import cycle
+
+    project = await _project_proxy(project_id).get()
+    if project is None:
+        return  # an orphaned task; the transition's own preconditions still apply
+    state = ProjectState(project["state"])
+    if state in FROZEN_PROJECT_STATES:
+        raise ConflictError(f"project {project_id} is {state} — {event} is rejected; provenance is frozen with the published artifact")
+
+
 @router.post("/{task_id}/events", status_code=status.HTTP_200_OK)
 async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
     """Drive one task transition.
@@ -118,15 +152,39 @@ async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: Checke
     project_id = str(current["project_id"])
     await _authorize(checker, subject, permission, project_id, f"task.{payload.event}")
 
+    await _refuse_if_project_frozen(project_id, payload.event)
+
     # Rules the table cannot express, because they depend on the task's own rows.
     if payload.event in SELF_REVIEW_FORBIDDEN and current.get("submitted_by") == subject:
         audit(f"task.{payload.event}", FAILURE, subject=subject, resource=task_id, reason="self_review")
         raise ForbiddenError("a reviewer may not review their own submission")
-    if payload.event in {"save_draft", "submit"} and current.get("assignee") not in (None, subject):
-        raise ForbiddenError(f"task {task_id} is held by {current['assignee']}")
+    holder = current.get("assignee")
+    if payload.event in LEASE_HOLDER_ONLY and holder not in (None, subject):
+        # §5.2 rule 2 — "even a manager". A manager who wants the task must `release` and re-`assign`.
+        raise ForbiddenError(f"task {task_id} is held by {holder}")
+    # §5.2 — `release` is the documented escape hatch for a task pinned to someone unavailable, so a
+    # manager may take it; anyone else may not break another annotator's claim.
+    if (
+        payload.event in HOLDER_OR_MANAGER
+        and holder not in (None, subject)
+        and not await checker(user=subject, relation="can_manage", obj=f"annotation_project:{project_id}")
+    ):
+        raise ForbiddenError(f"task {task_id} is held by {holder} — releasing it needs can_manage")
 
     try:
-        updated = await actor.fire({"event": payload.event, "actor": subject, "lease_seconds": payload.lease_seconds})
+        updated = await actor.fire(
+            {
+                "event": payload.event,
+                # `actor` is always the VERIFIED caller. `assignee` is the recipient a manager names
+                # on `assign` — a different thing, and conflating them is what made `assign` a
+                # self-claim. `review_required` is deliberately absent: it lives on the task.
+                "actor": subject,
+                "lease_seconds": payload.lease_seconds,
+                "assignee": payload.assignee,
+                "message": payload.message,
+                "shape_ids": payload.shape_ids,
+            }
+        )
     except IllegalTransition as exc:  # lost a race — the state moved between our read and the call
         raise ConflictError(str(exc)) from exc
 
@@ -159,6 +217,7 @@ async def save_draft(task_id: TaskId, payload: SaveDraftRequest, checker: Checke
     # could be rewritten after review — and during a publish — which would put annotations into the
     # lakehouse that no reviewer ever saw. `TASK_EDGES` already says `save_draft` is legal only from
     # CLAIMED; this is the HTTP surface honouring the machine instead of writing around it.
+    await _refuse_if_project_frozen(str(current["project_id"]), "save_draft")
     if TaskState(current["state"]) is not TaskState.CLAIMED:
         raise ConflictError(f"task {task_id} is {current['state']} — a draft is only writable while the task is claimed")
     if current.get("assignee") not in (None, subject):
