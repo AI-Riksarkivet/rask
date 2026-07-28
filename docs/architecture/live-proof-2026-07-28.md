@@ -235,3 +235,39 @@ does (it exists to re-trigger Dapr sidecar injection — the exact race that wed
 this session, where the media trio came up 1/2 without sidecars), a green install that silently
 tolerates its failure is a gate that cannot catch the problem it was written for. Not investigated —
 the throwaway cluster was deleted before this was noticed. **Open.**
+
+## k3s acceptance — the two things kind CANNOT prove (2026-07-28)
+
+Both run against the box's own k3s (`dmlpai01`, v1.36.2+k3s1). Note for anyone repeating this:
+`/etc/rancher/k3s/k3s.yaml` is world-readable, so DRIVING k3s needs no sudo — only
+`make k3s-import` does (it writes k3s's root-owned containerd image store).
+
+### GPU — the device plugin actually schedules onto a Blackwell
+
+kind has no nvidia OCI runtime, which is why `rask-nvdp` sat in `ContainerCreating` for the whole
+kind session. On k3s:
+
+```
+node allocatable : {'cpu': '64', 'memory': '527780680Ki', 'nvidia.com/gpu': '3'}
+nvidia-device-plugin-q4qsm   1/1   Running
+
+# a pod with runtimeClassName: nvidia and limits {nvidia.com/gpu: 1}
+phase=Succeeded
+0, NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition
+```
+
+### NetworkPolicy — default-deny actually BLOCKS
+
+kindnet accepts NetworkPolicy objects and silently ignores them, so the chart's 12 policies
+(default-deny, the exclusive OpenBao lock, the rustfs client list) are decorative on kind. k3s ships
+kube-router, which enforces. Same probe pod, same target Service, one policy applied in between:
+
+```
+BEFORE policy      : HTTP 200
+AFTER default-deny : HTTP 000
+BLOCKED (connection never established)
+```
+
+An earlier attempt at this probe produced NO output and I nearly read the silence as proof — it was
+`kubectl run --rm` swallowing the result. Silence is not evidence; the run above uses a persistent
+probe pod and `exec` so both sides print.
