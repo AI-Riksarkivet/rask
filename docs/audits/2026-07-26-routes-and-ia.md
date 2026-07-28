@@ -55,15 +55,15 @@ Kind: `page` = has `+page.svelte`; `endpoint` = `+server.ts`; `redirect` = `+pag
 | zone | route | kind | reachable-from |
 |---|---|---|---|
 | lakehouse | `/lakehouse` | redirect (`+page.ts:7`) | breadcrumb crumb `lakehouse` → `/lakehouse` (`frontend/packages/ui/src/lib/shell/breadcrumb.ts:39-45`, rendered `app-shell.svelte:83,124`). No nav-config entry targets it |
-| lakehouse | `/lakehouse/data` | page | **breadcrumb only on desktop** — `breadcrumb.ts:43` builds `/lakehouse/data` as the 2nd crumb of any `/lakehouse/data/*` path; narrow-viewport overflow row `top-navbar.svelte:94-105` ("Lakehouse home"). It is the `topNav` entry href (`nav-config.ts:236`) but that href renders as a `<button>` trigger, not a link, when `groups` is set (`top-navbar.svelte:173-175`) — see F-7 |
-| lakehouse | `/lakehouse/data/projects` | page | `DATA_ZONE_NAV` leaf `lakehouse/src/lib/data/nav.ts:13`; `DATA_ITEMS` `packages/ui/src/lib/shell/nav-config.ts:92`; back-link `lakehouse/src/routes/data/projects/[project]/+page.svelte:53` |
-| lakehouse | `/lakehouse/data/projects/[project]` | page | `lakehouse/src/routes/data/projects/+page.svelte:106`; `lakehouse/src/lib/data/WarehouseAdmin.svelte:373,402`; `routes/data/warehouses/[id]/+page.svelte:113` |
-| lakehouse | `/lakehouse/data/tables` | page | `DATA_ZONE_NAV` leaf `data/nav.ts:19`; `DATA_ITEMS` `nav-config.ts:95`; `TableDetail.svelte:256` `goto(${base}/data/tables)` |
-| lakehouse | `/lakehouse/data/tables/[table]` | page | `lib/data/TableRegistry.svelte:200,312,313`; `TableDetail.svelte:285` `goto(...)`; `lib/admin/DlqPanel.svelte:308`; `lib/admin/AuditViewer.svelte:170-172` (`resourceHref`); `routes/data/namespaces/[id]/+page.svelte:285` |
-| lakehouse | `/lakehouse/data/namespaces` | page | `DATA_ZONE_NAV` leaf `data/nav.ts:25`; `DATA_ITEMS` `nav-config.ts:98`; `lib/admin/TenantsPanel.svelte:203`; `routes/data/namespaces/[id]/+page.svelte:249` |
-| lakehouse | `/lakehouse/data/namespaces/[id]` | page | `lib/data/NamespaceRegistry.svelte:211,295`; `lib/data/TableRegistry.svelte:210,300`; `routes/data/warehouses/[id]/+page.svelte:136`; `AuditViewer.svelte:173-174` |
-| lakehouse | `/lakehouse/data/warehouses` | page | `DATA_ZONE_NAV` leaf `data/nav.ts:31`; `DATA_ITEMS` `nav-config.ts:102`; `TenantsPanel.svelte:202,290`; `NamespaceRegistry.svelte:238`; `AuditViewer.svelte:175` |
-| lakehouse | `/lakehouse/data/warehouses/[id]` | page | `lib/data/WarehouseAdmin.svelte:238,399`; `routes/data/projects/[project]/+page.svelte:92` |
+| lakehouse | `/lakehouse/catalog` | page | **breadcrumb only on desktop** — `breadcrumb.ts:43` builds `/lakehouse/catalog` as the 2nd crumb of any `/lakehouse/catalog/*` path; narrow-viewport overflow row `top-navbar.svelte:94-105` ("Lakehouse home"). It is the `topNav` entry href (`nav-config.ts:236`) but that href renders as a `<button>` trigger, not a link, when `groups` is set (`top-navbar.svelte:173-175`) — see F-7 |
+| lakehouse | `/lakehouse/catalog/projects` | page | `DATA_ZONE_NAV` leaf `lakehouse/src/lib/data/nav.ts:13`; `DATA_ITEMS` `packages/ui/src/lib/shell/nav-config.ts:92`; back-link `lakehouse/src/routes/data/projects/[project]/+page.svelte:53` |
+| lakehouse | `/lakehouse/catalog/projects/[project]` | page | `lakehouse/src/routes/data/projects/+page.svelte:106`; `lakehouse/src/lib/data/WarehouseAdmin.svelte:373,402`; `routes/data/warehouses/[id]/+page.svelte:113` |
+| lakehouse | `/lakehouse/catalog/tables` | page | `DATA_ZONE_NAV` leaf `data/nav.ts:19`; `DATA_ITEMS` `nav-config.ts:95`; `TableDetail.svelte:256` `goto(${base}/data/tables)` |
+| lakehouse | `/lakehouse/catalog/tables/[table]` | page | `lib/data/TableRegistry.svelte:200,312,313`; `TableDetail.svelte:285` `goto(...)`; `lib/admin/DlqPanel.svelte:308`; `lib/admin/AuditViewer.svelte:170-172` (`resourceHref`); `routes/data/namespaces/[id]/+page.svelte:285` |
+| lakehouse | `/lakehouse/catalog/namespaces` | page | `DATA_ZONE_NAV` leaf `data/nav.ts:25`; `DATA_ITEMS` `nav-config.ts:98`; `lib/admin/TenantsPanel.svelte:203`; `routes/data/namespaces/[id]/+page.svelte:249` |
+| lakehouse | `/lakehouse/catalog/namespaces/[id]` | page | `lib/data/NamespaceRegistry.svelte:211,295`; `lib/data/TableRegistry.svelte:210,300`; `routes/data/warehouses/[id]/+page.svelte:136`; `AuditViewer.svelte:173-174` |
+| lakehouse | `/lakehouse/catalog/warehouses` | page | `DATA_ZONE_NAV` leaf `data/nav.ts:31`; `DATA_ITEMS` `nav-config.ts:102`; `TenantsPanel.svelte:202,290`; `NamespaceRegistry.svelte:238`; `AuditViewer.svelte:175` |
+| lakehouse | `/lakehouse/catalog/warehouses/[id]` | page | `lib/data/WarehouseAdmin.svelte:238,399`; `routes/data/projects/[project]/+page.svelte:92` |
 | lakehouse | `/lakehouse/lineage` | page | `LINEAGE_ZONE_NAV` Graph leaf `lakehouse/src/lib/lineage/nav.ts:37`; `LINEAGE_ITEMS` `nav-config.ts:131` |
 | lakehouse | `/lakehouse/lineage/datasets` | page | `LINEAGE_ZONE_NAV` `lineage/nav.ts:13`; `LINEAGE_ITEMS` `nav-config.ts:111`; `routes/lineage/+page.svelte:364`; `routes/lineage/columns/+page.svelte:85`; `routes/lineage/datasets/[name]/+page.svelte:89` |
 | lakehouse | `/lakehouse/lineage/datasets/[name]` | page | `routes/lineage/datasets/+page.svelte:148,201` (`goto`); `routes/lineage/+page.svelte:285` (`goto(${base}/lineage/${kind}/…)`); `routes/lineage/jobs/+page.svelte:136`; `routes/lineage/jobs/[...job]/+page.svelte:79,87,120`; `routes/lineage/runs/+page.svelte:228` |
@@ -209,7 +209,7 @@ route manifest is `/`, `/auth/*`, `/capi/v1/projects` (`find home/src/routes -ty
 <a href={`/data/projects/${p.project}`} data-sveltekit-reload class="group block">
 ```
 with the comment on `:24` still reading "Cross-zone card into the data zone's project page". The live
-route is `/lakehouse/data/projects/<project>`
+route is `/lakehouse/catalog/projects/<project>`
 (`lakehouse/src/routes/data/projects/[project]/+page.svelte`). This is the **primary call-to-action of
 the signed-in landing page** — every card 404s.
 
@@ -219,7 +219,7 @@ the signed-in landing page** — every card 404s.
 <a href="/data" data-sveltekit-reload class="flex w-full items-center gap-2 px-2 py-1.5">
 ```
 It lives in `@repo/ui`, so it is broken in **all four zones** — `nav-config.ts:214-215` states the
-switcher "sits at the head of the bar on every zone". Correct target: `/lakehouse/data`.
+switcher "sits at the head of the bar on every zone". Correct target: `/lakehouse/catalog`.
 
 **F-5 — three "explorer / Lineage" links point at the dead `/lineage`. Verdict: BUG.**
 - `lakehouse/src/lib/data/TableDetail.svelte:930` — `<a href="/lineage" data-sveltekit-reload>explorer</a>` (the "not a catalog-registered table" empty state)
@@ -236,7 +236,7 @@ Verdict: BUG.**
 ```
 <a class="viewlink" href="{base}/"><Network size={12} /> graph</a>
 ```
-`{base}` is `/lakehouse`, so this resolves to `/lakehouse/` → `+page.ts:7` `redirect(307, '/lakehouse/data')`
+`{base}` is `/lakehouse`, so this resolves to `/lakehouse/` → `+page.ts:7` `redirect(307, '/lakehouse/catalog')`
 → the data scaffold page (F-8). The intended target is `/lakehouse/lineage` (the DAG canvas,
 `routes/lineage/+page.svelte`). Pre-merge, when the lineage zone's own base *was* `/lineage`, `{base}/`
 was correct. Cross-check that this is a miss and not a convention: the sibling back-link six lines up
@@ -244,7 +244,7 @@ was correct. Cross-check that this is a miss and not a convention: the sibling b
 
 ### Design-intent deviations
 
-**F-7 — the wide navbar provides no link to `/lakehouse/data` (the zone root), contradicting an explicit
+**F-7 — the wide navbar provides no link to `/lakehouse/catalog` (the zone root), contradicting an explicit
 in-code rule. Verdict: BUG.**
 `frontend/packages/ui/src/lib/shell/top-navbar.svelte:215-218` states the rule for the `items` branch:
 ```
@@ -256,10 +256,10 @@ and prepends a root row accordingly (`:216-233`). The **`groups` branch** — th
 (`nav-config.ts:240` sets `groups`, never `items`) — has no such row: `top-navbar.svelte:168-208` renders
 only `entry.groups[*].items`, and the `NavigationMenu.Trigger` at `:173-175` is a button with no `href`.
 The narrow/collapsed path *does* honour the rule (`top-navbar.svelte:94-105` `overflowItems` prepends a
-"Lakehouse home" row), so the two breakpoints disagree: on desktop, `/lakehouse` and `/lakehouse/data`
+"Lakehouse home" row), so the two breakpoints disagree: on desktop, `/lakehouse` and `/lakehouse/catalog`
 are reachable only by typing a URL or clicking a breadcrumb from a deeper page.
 
-**F-8 — `/lakehouse/data` is a P0 scaffold, and it is the zone's landing target. Verdict: BUG.**
+**F-8 — `/lakehouse/catalog` is a P0 scaffold, and it is the zone's landing target. Verdict: BUG.**
 `lakehouse/src/routes/data/+page.svelte:1-8` in full:
 ```
 <h1 class="text-2xl font-semibold">Data</h1>
@@ -306,7 +306,7 @@ zones = dirs holding `src/`):
 
 Method: enumerate `+page.svelte` under `<zone>/src/routes` in each tree, map every pre-merge route to its
 canonical post-merge URL `/<zone-dir> + route` → `/lakehouse/<area>/…` (the URL scheme the commit message
-declares at `bb099df`: "URLs move rather than being redirected … `/data/tables` -> `/lakehouse/data/tables`"),
+declares at `bb099df`: "URLs move rather than being redirected … `/data/tables` -> `/lakehouse/catalog/tables`"),
 then diff the two URL sets.
 
 | pre-merge zone | pages | routes |
@@ -322,7 +322,7 @@ then diff the two URL sets.
 - **GAINED (post-merge page with no pre-merge origin): NONE**
 
 Both set differences are empty. Verdict: **CONFORMS** — the page inventory is exactly preserved, including
-the two placeholder roots (`data/` and `admin/`, which map to `/lakehouse/data` and `/lakehouse/admin`).
+the two placeholder roots (`data/` and `admin/`, which map to `/lakehouse/catalog` and `/lakehouse/admin`).
 
 Note tying §2 to history: the two scaffold pages of F-1 and F-8 are **not** merge damage. Their pre-merge
 content is byte-comparable placeholder copy —
@@ -441,7 +441,7 @@ Page tab sets (verified from the `.vue` sources):
 
 | area | routes |
 |---|---|
-| catalog hierarchy | `/lakehouse/data/projects`, `…/projects/[project]`, `…/warehouses`, `…/warehouses/[id]`, `…/namespaces`, `…/namespaces/[id]`, `…/tables`, `…/tables/[table]` |
+| catalog hierarchy | `/lakehouse/catalog/projects`, `…/projects/[project]`, `…/warehouses`, `…/warehouses/[id]`, `…/namespaces`, `…/namespaces/[id]`, `…/tables`, `…/tables/[table]` |
 | lineage | `/lakehouse/lineage` (DAG), `…/datasets`, `…/datasets/[name]`, `…/jobs`, `…/jobs/[...job]`, `…/runs`, `…/columns` |
 | models | `/lakehouse/models`, `…/models/experiments`, `…/models/pipeline` |
 | governance / ops | `/lakehouse/admin/access`, `…/tenants`, `…/audit`, `…/streams`, `…/dlq`, `…/events` |
@@ -514,18 +514,18 @@ Our access workbench tabs: `TABS = ['Graph', 'Tuples', 'Check', 'Model']`
 ### One concrete recommendation
 
 **Make the namespace and warehouse detail pages the hierarchy's landing surfaces, and delete the two
-scaffold pages — specifically: replace `/lakehouse/data/+page.svelte` with the projects list, and drop
+scaffold pages — specifically: replace `/lakehouse/catalog/+page.svelte` with the projects list, and drop
 `/lakehouse/admin/+page.svelte`.**
 
 Reason, in their terms and ours: Lakekeeper's IA has **no dead middle**. Every level of
 Project → Warehouse → Namespace → Table is a page whose first tab is *the next level down*
 (`warehouse/[id].vue` first tab = `namespaces`; `[id].namespace.[nsid].vue` first tab = `namespaces`, then
 `tables`), so drilling in never lands on a page that explains nothing. Ours has two dead middles at exactly
-the points a first-time user hits first: `/lakehouse` redirects to `/lakehouse/data`
+the points a first-time user hits first: `/lakehouse` redirects to `/lakehouse/catalog`
 (`routes/+page.ts:7`), which is the P0 scaffold reading "Routes move here from apps/web in P3"
 (`routes/data/+page.svelte:6`, F-8) — that is the *canonical entry point of our main zone* — and
 `/lakehouse/admin` is a second copy of the same placeholder (`routes/admin/+page.svelte:6`, F-1), reachable
-by clicking the `admin` breadcrumb. Turning `/lakehouse/data` into the projects list (the real top of our
+by clicking the `admin` breadcrumb. Turning `/lakehouse/catalog` into the projects list (the real top of our
 hierarchy, already built at `routes/data/projects/+page.svelte`) fixes four separate defects at once: F-8
 (scaffold landing), F-6's mislinked "graph" affordance which lands there, F-7's missing zone-root
 destination becomes worth reaching, and the desktop-vs-narrow-navbar disagreement stops mattering. Deleting
@@ -553,7 +553,7 @@ Sources for §4: [lakekeeper/console (GitHub)](https://github.com/lakekeeper/con
 | F-5 | BUG | three links → dead `/lineage` (`TableDetail.svelte:930,938`; `PipelineControl.svelte:86`) |
 | F-6 | BUG | lineage dataset detail "graph" link → `{base}/` → the data scaffold, not the DAG (`lineage/datasets/[name]/+page.svelte:95`) |
 | F-7 | BUG | wide navbar has no link to the Lakehouse zone root; the `groups` branch omits the root row the `items` branch's own comment declares mandatory (`top-navbar.svelte:168-208` vs `:215-233`) |
-| F-8 | BUG | `/lakehouse/data` is a P0 scaffold and it is the zone's landing target (`routes/data/+page.svelte:6`; `routes/+page.ts:7`; `nav-config.ts:236`) |
+| F-8 | BUG | `/lakehouse/catalog` is a P0 scaffold and it is the zone's landing target (`routes/data/+page.svelte:6`; `routes/+page.ts:7`; `nav-config.ts:236`) |
 | F-10 | BUG | the cross-zone-reload gate is structurally blind to a dead-path link, its test pins `/data/tables` and `/lineage` as acceptable, and it never scans `packages/ui/**` — 163 assertions green while 5 links 404 (section 5) |
 | F-9 | DEVIATES-WITH-REASON | `/media/guide` in the sidebar but not the cross-zone panel; reason at `nav-config.ts:81-83` |
 | §3 pages | CONFORMS | 26 pre-merge pages → 26 post-merge; set difference empty in both directions |
@@ -658,8 +658,8 @@ catch-all (home). `/data/projects/<p>` 404s in dev and on the cluster.
 "broken in all four zones" claim holds. Its sibling at `:65` (`href={homeUrl}`) is fine.
 
 ### ★ F-7 — wide navbar has no route to the Lakehouse zone root — **CONFIRMED (and understated)**
-Chain verified end to end: `nav-config.ts:234-241` gives the Lakehouse entry `href: '/lakehouse/data'` and
-`groups: lakehouse` (never `items`); `DATA_ITEMS` starts at `/lakehouse/data/projects`
+Chain verified end to end: `nav-config.ts:234-241` gives the Lakehouse entry `href: '/lakehouse/catalog'` and
+`groups: lakehouse` (never `items`); `DATA_ITEMS` starts at `/lakehouse/catalog/projects`
 (`nav-config.ts:92`), so **no group item's href equals the entry href**; `top-navbar.svelte:167-208` (the
 `groups` branch) renders only `entry.groups[*].items` and its `NavigationMenu.Trigger` at `:173-175` is
 `bits-ui`'s `NavigationMenuPrimitive.Trigger` — a `<button>`
@@ -737,7 +737,7 @@ Recomputed from git, not from the report's numbers.
 `bb099df^` and 34 on HEAD**. Mapping each pre-merge `<zone>|<route>` to `/lakehouse/<zone>/<route>`: pre
 `admin` 7 + `data` 9 + `lineage` 7 + `models` 3 = **26**, post `lakehouse` = **26**, and the two sorted URL
 sets are **identical** (both set differences empty, including the `data|` and `admin|` roots →
-`/lakehouse/data`, `/lakehouse/admin`). Endpoints: pre `+server.ts` files under the four merged zones =
+`/lakehouse/catalog`, `/lakehouse/admin`). Endpoints: pre `+server.ts` files under the four merged zones =
 **60**, post under `lakehouse` = **50**; distinct BFF paths after stripping `…/src/routes` and
 `/+server.ts` = **50 vs 50**, `diff` of the sorted lists is **empty**. The 60→50 drop is de-duplication,
 as claimed.

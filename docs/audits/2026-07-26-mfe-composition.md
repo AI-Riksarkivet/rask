@@ -181,10 +181,10 @@ Blast radius, worst first:
 - **(b) is the product's front door.** `home/src/routes/+page.svelte:21-46` is the landing page's
   project grid — the first click a signed-in user makes lands on a 404.
 
-Correct form is `/lakehouse/data…` / `/lakehouse/lineage`, which is what the nav config already uses
+Correct form is `/lakehouse/catalog…` / `/lakehouse/lineage`, which is what the nav config already uses
 (`frontend/packages/ui/src/lib/shell/nav-config.ts:92,95,98,103,111,115,119,123,131`) and what the
 e2e suites assert (`lakehouse/e2e/admin/tenants.spec.ts:66`, `:69` expect
-`/lakehouse/admin/audit?…` and `/lakehouse/data/warehouses`).
+`/lakehouse/admin/audit?…` and `/lakehouse/catalog/warehouses`).
 
 Verdict: **BUG**. This is the failure mode the skill names in `principles.md:136-142`
 ("Integration-test the composed page … broken cross-slice navigation — every failure mode that
@@ -211,7 +211,7 @@ already exists — `zoneDirs()`, `svelteBase()`, `chartApps()` in
 ### 2.3 BUG — one same-zone link forces a document reload, and an e2e test pins the wrong contract
 
 `frontend/components/frontends/lakehouse/src/lib/admin/AuditViewer.svelte:170-177` builds the jump
-target with `${base}` (so `/lakehouse/data/tables/…` — *same zone*), then hard-navigates it:
+target with `${base}` (so `/lakehouse/catalog/tables/…` — *same zone*), then hard-navigates it:
 
 ```
 AuditViewer.svelte:340-341
@@ -219,7 +219,7 @@ AuditViewer.svelte:340-341
 	<a class="btn jumplink" href={resourceHref(drawerEvent.resource)} data-sveltekit-reload>
 ```
 
-The comment is stale post-merge: `/lakehouse/data/tables/[table]` *is* in this zone's manifest
+The comment is stale post-merge: `/lakehouse/catalog/tables/[table]` *is* in this zone's manifest
 (`grep -oE '\bid: "/data[^"]*"' lakehouse/build/server/manifest.js` → `id: "/data/tables/[table]"`).
 The sibling panel gets it right, with the reason written down:
 
@@ -235,7 +235,7 @@ frontend/components/frontends/lakehouse/e2e/admin/tenants.spec.ts:70-72
 ```
 frontend/components/frontends/lakehouse/e2e/admin/audit.spec.ts:100-103
 	// …a cross-zone jump link to the resource page (hard nav)…
-	await expect(jump).toHaveAttribute('href', '/lakehouse/data/tables/db1%24t');
+	await expect(jump).toHaveAttribute('href', '/lakehouse/catalog/tables/db1%24t');
 	await expect(jump).toHaveAttribute('data-sveltekit-reload', '');
 ```
 
@@ -381,7 +381,7 @@ graph is a single edge; no cycles possible. **CONFORMS**.
 ### 4.4 Zone-specific logic inside a shared package — DEVIATES-WITH-REASON, one instance is a BUG
 
 `packages/ui/src/lib/shell/nav-config.ts:89-262` hard-codes **22 route rows for other zones**
-(`/lakehouse/data/projects`, `/media/atlas`, `/annotator`, …). By `principles.md:105-110` that is
+(`/lakehouse/catalog/projects`, `/media/atlas`, `/annotator`, …). By `principles.md:105-110` that is
 correct — the shell owns top-level routing and the cross-zone jump list, and the file says so
 (`nav-config.ts:80-83`: *"Deliberately a SUBSET of the zone's own sidebar (`ZoneNav`): this is the
 cross-zone jump list, not a mirror of in-zone navigation"*). The complementary two-level half is
@@ -462,7 +462,7 @@ and the script dies at `:35` — **before** reaching the drive it exists to perf
 comment: it is the executable gate.
 
 The `.mjs` half it wraps was correctly updated (`scripts/verify_cross_zone_oidc.mjs:49,51,53,66,73,85`
-all use `/lakehouse/data`, `/media`, `/lakehouse/models/pipeline`), so the shell wrapper drifted
+all use `/lakehouse/catalog`, `/media`, `/lakehouse/models/pipeline`), so the shell wrapper drifted
 away from its own payload. Two stale comments in the same file: `:3` "(sign in on /data → still
 signed in on /admin)" and `:7` "the 5 zone images built" (there are four).
 
@@ -822,7 +822,7 @@ $ cd frontend/components/frontends/home && PORT=5417 HOST=127.0.0.1 bun ./build/
 /models                  -> 404
 /admin                   -> 404
 /auth/login              -> 302
-/lakehouse/data          -> 404
+/lakehouse/catalog          -> 404
 ```
 
 Blast radius re-checked and confirmed: `app-shell.svelte:7` imports and `:107` renders

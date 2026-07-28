@@ -64,7 +64,7 @@ describe('the path → service mapping follows the BFF routes', () => {
 
 	it('attributes nothing outside /api/', () => {
 		expect(upstreamFor('/media/not-the-api')).toBeNull();
-		expect(upstreamFor('/lakehouse/data')).toBeNull();
+		expect(upstreamFor('/lakehouse/catalog')).toBeNull();
 	});
 });
 

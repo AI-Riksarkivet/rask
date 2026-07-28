@@ -76,7 +76,7 @@ Screenshots in the session record (`live-*.png`). Highlights:
   `iiif-ingest · Completed` and `embed_features · Failed` with the exact Lance error. 0 console errors.
 - **compute** — "Ray connected", NODES 1/1, SERVE APPS 1/1, the runs feed showing both runs, and
   RECENT RAYJOBS listing `SUCCEEDED raysubmit_TLuPSj1U2P66Hz` — the authed job from §2. 0 errors.
-- **lakehouse** — the durable runs board prints both run_ids verbatim; `/lakehouse/storage` lists
+- **lakehouse** — the durable runs board prints both run_ids verbatim; `/lakehouse/catalog/storage` lists
   its buckets on the **media-plane** backend (the R6 re-home), honest-empty on this stack.
 - **studio / train** — scaffolds render, 0 console errors (train's "Scaffold — not wired" label is
   the app's own honesty).
@@ -182,7 +182,7 @@ transcript does not exist. Ruling **R28** covers the storage-registry half; the 
 
 | # | defect | evidence | status |
 |---|---|---|---|
-| 1 | **Storage has no nav entry.** `lakehouseNav()` is area-scoped, so `/lakehouse/storage` is reachable only by typing the URL; the topnav's Lakehouse panel lists Catalog/Models/Lineage (+admin) but never Storage. | read `lib/nav.ts`; the area map contains `storage` but no other area links to it | **R28** |
+| 1 | **Storage has no nav entry.** `lakehouseNav()` is area-scoped, so `/lakehouse/catalog/storage` is reachable only by typing the URL; the topnav's Lakehouse panel lists Catalog/Models/Lineage (+admin) but never Storage. | read `lib/nav.ts`; the area map contains `storage` but no other area links to it | **R28** |
 | 2 | **The tiers are not storage.** The browser's bucket set is a hardcoded `Literal["images-batch","images-batch-alto"]` — the import sink and export sink. The governed bronze/silver/gold Lance datasets (`lance-catalog/medallion/*`) cannot be selected, though the code comment claims "the warehouse buckets". | `services/viewer/.../objects.py` + `lib/storage/storage.ts` | **R28** |
 | 3 | **Nothing declares what a sink IS.** No registry states which storage is an import sink, an export sink, a tier store or observability — so the UI must hardcode names and cannot ask. The catalog already owns warehouse roots (`_warehouses/*.json`) and is the natural authority. | grep: no role/kind field anywhere in the storage path | **R28** |
 | 4 | **A fabricated identity is rendered when signed out.** `navbar-user.svelte` falls back to `{ name: 'rask', email: 'local', initials: 'RA' }`, and `'RA'` is also the `AvatarFallback` default. A governance UI must never invent a logged-in user — signed-out shows signed-out. | `frontend/packages/ui/src/lib/shell/navbar-user.svelte:30-51` | OPEN |

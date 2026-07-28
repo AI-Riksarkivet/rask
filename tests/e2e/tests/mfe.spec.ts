@@ -9,7 +9,7 @@ import { test, expect } from '@playwright/test';
 // Catch-all `/` (picker/landing) + each domain zone's real entry route (lakehouse has no index).
 const ROUTES = [
 	'/',
-	'/lakehouse/data',
+	'/lakehouse/catalog',
 	'/media',
 	'/annotator',
 	'/compute',

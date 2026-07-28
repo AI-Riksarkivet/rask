@@ -159,7 +159,7 @@ Ingress controller. These steps mutate the cluster — run them yourself (or `!`
 # 4. drive the cross-zone login + authz (the script does its own ingress/dex/openfga port-forwards +
 #    seeds alice=admin project:acme, then runs the headless browser through the ingress origin)
 !bash scripts/verify_cross_zone_oidc.sh
-#    → alice signs in on /lakehouse/data → still signed-in on /media (one origin, shared cookie —
+#    → alice signs in on /lakehouse/catalog → still signed-in on /media (one origin, shared cookie —
 #      it must cross a real ZONE boundary to prove anything); alice 2xx / bob 403
 ```
 
