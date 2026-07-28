@@ -105,7 +105,11 @@ class Transition(BaseModel):
     from_state: str = Field(alias="from")
     to_state: str = Field(alias="to")
 
-    model_config = {"populate_by_name": True}
+    #: `from` is a Python keyword, so the field is `from_state` and the WIRE name is the alias.
+    #: `serialize_by_alias` makes the wire shape the default in both directions — without it a caller
+    #: that forgets `by_alias=True` silently emits `from_state`/`to_state`, and the audit trail ends
+    #: up with two shapes depending on which code path wrote the row.
+    model_config = {"populate_by_name": True, "serialize_by_alias": True}
 
 
 class ReviewNote(BaseModel):

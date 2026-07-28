@@ -1,0 +1,224 @@
+"""The annotation-task actor — S6, the estate's first registered actor.
+
+These tests drive the REAL actor class against a fake state manager and a recording reminder API, so
+every behaviour below is provable without a Dapr sidecar, a placement service or a database. What
+they cannot prove is the runtime guarantee itself — that Dapr routes one actor id to one pod and
+serialises calls to it — which needs a live sidecar; that is the round-trip proof, not a unit test.
+
+What they DO pin is everything the runtime cannot give us for free: that the transition table stays
+the single source of truth, that the lease reminder is armed and disarmed on exactly the right edges,
+and that a lapsed lease never costs an annotator their draft.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import timedelta
+from typing import Any
+
+import pytest
+from annotator.projects.actor import DRAFT_KEY, LEASE_REMINDER, TASK_KEY, AnnotationTaskActor
+from annotator.projects.machines import IllegalTransition
+from annotator.projects.models import Task, TaskState
+
+
+class _FakeStateManager:
+    """The actor's state partition, in a dict. `try_get_state` returns (found, value) like Dapr's."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+        self.saves = 0
+
+    async def try_get_state(self, key: str) -> tuple[bool, str | None]:
+        return (key in self.store, self.store.get(key))
+
+    async def set_state(self, key: str, value: str) -> None:
+        self.store[key] = value
+
+    async def save_state(self) -> None:
+        self.saves += 1
+
+
+class _Actor(AnnotationTaskActor):
+    """The real actor with its Dapr plumbing replaced — state and reminders recorded in memory."""
+
+    def __init__(self) -> None:  # noqa: D107 - deliberately bypasses Actor.__init__ (needs a runtime)
+        self._state_manager = _FakeStateManager()  # type: ignore[assignment]
+        self.reminders: list[tuple[str, float]] = []
+        self.unregistered: list[str] = []
+
+    async def register_reminder(  # type: ignore[override]
+        self, name: str, state: bytes, due_time: timedelta, period: timedelta, ttl: Any = None
+    ) -> None:
+        self.reminders.append((name, due_time.total_seconds()))
+
+    async def unregister_reminder(self, name: str) -> None:  # type: ignore[override]
+        self.unregistered.append(name)
+
+
+def _task(**kw: Any) -> dict[str, Any]:
+    base = Task(
+        project_id="p1",
+        source={"kind": "chunks", "keys": ["doc_1"]},  # type: ignore[arg-type]
+        media={"kind": "image", "image_url": "s3://b/p.jpg"},  # type: ignore[arg-type]
+    ).model_dump(mode="json")
+    base.update(kw)
+    return base
+
+
+async def _seeded() -> _Actor:
+    actor = _Actor()
+    await actor.seed(_task())
+    return actor
+
+
+# --------------------------------------------------------------------------------------------------
+# State and the machine
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_seed_is_idempotent_so_a_redelivered_send_cannot_reset_a_claim() -> None:
+    """Send arrives twice (JetStream redelivers). The second must not wipe an in-progress claim."""
+    actor = await _seeded()
+    await actor.fire({"event": "claim", "actor": "gina"})
+
+    again = await actor.seed(_task())
+
+    assert again["state"] == TaskState.CLAIMED
+    assert again["assignee"] == "gina", "re-seeding reset a task someone was holding"
+
+
+@pytest.mark.asyncio
+async def test_state_round_trips_through_the_state_manager() -> None:
+    actor = await _seeded()
+    await actor.fire({"event": "claim", "actor": "gina"})
+
+    stored = json.loads(actor._state_manager.store[TASK_KEY])  # noqa: SLF001
+    assert stored["state"] == TaskState.CLAIMED
+    assert (await actor.get())["state"] == TaskState.CLAIMED  # type: ignore[index]
+    assert actor._state_manager.saves >= 2  # noqa: SLF001 — seed + claim both persisted
+
+
+@pytest.mark.asyncio
+async def test_an_illegal_edge_raises_rather_than_being_reimplemented_here() -> None:
+    """The actor consults TASK_EDGES; it does not restate the machine. Reviewing an unsubmitted task
+    must fail the same way `task_transition` fails."""
+    actor = await _seeded()
+    with pytest.raises(IllegalTransition):
+        await actor.fire({"event": "accept", "actor": "carol"})
+
+
+@pytest.mark.asyncio
+async def test_submit_honours_review_required() -> None:
+    actor = await _seeded()
+    await actor.fire({"event": "claim", "actor": "gina"})
+    out = await actor.fire({"event": "submit", "actor": "gina", "review_required": False})
+    assert out["state"] == TaskState.ACCEPTED  # review waived → straight to accepted
+
+    other = await _seeded()
+    await other.fire({"event": "claim", "actor": "gina"})
+    out2 = await other.fire({"event": "submit", "actor": "gina", "review_required": True})
+    assert out2["state"] == TaskState.IN_REVIEW
+    assert out2["submitted_by"] == "gina"
+
+
+@pytest.mark.asyncio
+async def test_every_transition_is_appended_to_the_audit_trail() -> None:
+    actor = await _seeded()
+    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.fire({"event": "submit", "actor": "gina"})
+    trail = (await actor.get())["transitions"]  # type: ignore[index]
+    assert [t["event"] for t in trail] == ["claim", "submit"]
+    assert trail[0]["from"] == TaskState.UNASSIGNED and trail[0]["to"] == TaskState.CLAIMED
+
+
+# --------------------------------------------------------------------------------------------------
+# The lease reminder — armed and disarmed on exactly the right edges
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_claim_arms_the_lease_reminder_with_the_project_lease() -> None:
+    actor = await _seeded()
+    await actor.fire({"event": "claim", "actor": "gina", "lease_seconds": 900})
+    assert actor.reminders == [(LEASE_REMINDER, 900.0)]
+
+
+@pytest.mark.asyncio
+async def test_assign_pins_the_task_and_arms_nothing() -> None:
+    """§4.2: `lease_expires_at is None` while CLAIMED means manager-pinned — it never expires."""
+    actor = await _seeded()
+    out = await actor.fire({"event": "assign", "actor": "henry"})
+    assert out["state"] == TaskState.CLAIMED
+    assert out["lease_expires_at"] is None
+    assert actor.reminders == [], "a pinned task must not arm an expiry"
+
+
+@pytest.mark.asyncio
+async def test_saving_a_draft_renews_the_lease() -> None:
+    actor = await _seeded()
+    await actor.fire({"event": "claim", "actor": "gina", "lease_seconds": 60})
+    await actor.fire({"event": "save_draft", "actor": "gina", "lease_seconds": 60})
+    assert len(actor.reminders) == 2, "save_draft must re-arm, not let the lease run down"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event", ["submit", "release", "skip"])
+async def test_leaving_claimed_disarms_the_reminder(event: str) -> None:
+    """A reminder left armed would expire a task that already moved on — outliving what it guarded."""
+    actor = await _seeded()
+    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.fire({"event": event, "actor": "gina"})
+    assert LEASE_REMINDER in actor.unregistered
+
+
+@pytest.mark.asyncio
+async def test_an_expired_lease_returns_the_task_and_KEEPS_the_draft() -> None:
+    """The whole point of a lease: the work is not lost, only the hold on it."""
+    actor = await _seeded()
+    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "bbox", "x": 1, "y": 2, "width": 3, "height": 4}]})
+
+    await actor.receive_reminder(LEASE_REMINDER, b"", timedelta(0), timedelta(0))
+
+    task = await actor.get()
+    assert task["state"] == TaskState.UNASSIGNED  # type: ignore[index]
+    assert task["assignee"] is None  # type: ignore[index]
+    draft = await actor.get_draft()
+    assert draft is not None and len(draft["shapes"]) == 1, "an expired lease destroyed the draft"
+
+
+@pytest.mark.asyncio
+async def test_a_stale_reminder_for_a_moved_on_task_is_a_no_op() -> None:
+    """A reminder can outrace its unregister. Firing it must not drag a submitted task backwards."""
+    actor = await _seeded()
+    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.fire({"event": "submit", "actor": "gina"})
+
+    await actor.receive_reminder(LEASE_REMINDER, b"", timedelta(0), timedelta(0))
+
+    assert (await actor.get())["state"] == TaskState.IN_REVIEW  # type: ignore[index]
+
+
+# --------------------------------------------------------------------------------------------------
+# The draft — one document, etag-guarded
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_draft_is_one_write_for_the_whole_shape_set() -> None:
+    actor = await _seeded()
+    out = await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "bbox"}, {"shape_type": "polygon"}]})
+    assert out["revision"] == 1
+    assert len(json.loads(actor._state_manager.store[DRAFT_KEY])["shapes"]) == 2  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_a_stale_base_revision_is_refused_so_two_tabs_cannot_clobber() -> None:
+    """`revision` is the etag. Saving against a revision that has moved on is the 409."""
+    actor = await _seeded()
+    await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": []})
+    await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [], "base_revision": 1})
+    with pytest.raises(IllegalTransition):
+        await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [], "base_revision": 1})
