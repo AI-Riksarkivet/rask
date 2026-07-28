@@ -498,20 +498,47 @@ def test_mover_retries_on_fga_outage(monkeypatch: pytest.MonkeyPatch) -> None:
     assert dapr.calls == []  # nothing emitted while authz is unanswerable
 
 
-def test_mover_emits_fail_event_on_transform_failure() -> None:
-    # A genuine transform failure (the FIRST publish — the COMPLETE emit — fails) records a FAIL RunEvent:
-    # it keeps a BARE output (so the lineage repo makes a WROTE edge → producers() surfaces the attempt)
-    # with NO version facet, carries the standard errorMessage facet, and returns RETRY.
-    dapr = _AttemptDapr(fail_at=0)  # the COMPLETE emit fails
-    status = asyncio.run(mover.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, {"data": {"token": "t"}}))
+def test_mover_emits_fail_event_on_transform_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A GENUINE transform failure — the write itself raises, so nothing was committed — records a FAIL
+    # RunEvent: BARE output (so the lineage repo makes a WROTE edge → producers() surfaces the attempt)
+    # with NO version facet, the standard errorMessage facet, and RETRY.
+    #
+    # This test previously drove `_AttemptDapr(fail_at=0)` and called that "a genuine transform
+    # failure". It was not: a failed COMPLETE *publish* happens AFTER the Lance write has committed,
+    # so the run succeeded. See the next test for that case, which is now the opposite assertion.
+    # A real transform failure had no coverage at all until 2026-07-28.
+    settings = _BRONZE_TO_SILVER.model_copy(update={"compute_enabled": True, "from_uri": "/tmp/f", "to_uri": "/tmp/t"})
+
+    def _boom(*_a: Any, **_k: Any) -> WriteResult:
+        raise RuntimeError("lance write failed")
+
+    monkeypatch.setattr(mover, "transform_stage", _boom)
+    _fake_upstream(monkeypatch)
+
+    dapr = _AttemptDapr(fail_at=99)  # publishing works; the WRITE is what fails
+    status = asyncio.run(mover.handle_stage(cast(Any, dapr), settings, {"data": {"token": "t"}}))
     assert status == {"status": "RETRY"}
-    # Two ATTEMPTS: the COMPLETE (failed), then the best-effort FAIL.
     fail_events = [e for e in dapr.attempts if e.get("eventType") == "FAIL"]
     assert fail_events, "a transform failure must emit a FAIL RunEvent"
     fail = fail_events[-1]
     assert fail["outputs"][0]["name"] == "silver$features"  # bare output → WROTE edge for producers()
     assert "version" not in fail["outputs"][0].get("facets", {})  # a failed run asserts no version
-    assert fail["run"]["facets"]["errorMessage"]["message"] == "sidecar down"
+    assert fail["run"]["facets"]["errorMessage"]["message"] == "lance write failed"
+
+
+def test_a_failed_complete_publish_is_not_a_run_failure() -> None:
+    # CONTRACT (2026-07-28): the COMPLETE *publish* failing is NOT a transform failure. The Lance write
+    # already committed, so the run SUCCEEDED, and `publish_lineage_with_outbox` left the COMPLETE
+    # STAGED for the relay. Emitting a FAIL here would both mislabel a successful run and — because
+    # `stage_event` keys on run_id alone while `build_run_event` excludes event_type from it —
+    # OVERWRITE that staged COMPLETE, destroying the object the outbox exists to preserve.
+    # Same principle as the trigger-publish case below, one step earlier in the sequence.
+    dapr = _AttemptDapr(fail_at=0)  # the COMPLETE emit fails
+    status = asyncio.run(mover.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, {"data": {"token": "t"}}))
+    assert status == {"status": "RETRY"}  # redelivery re-emits the idempotent COMPLETE
+    assert not any(e.get("eventType") == "FAIL" for e in dapr.attempts), (
+        "a FAIL was emitted for a run whose data committed — and it would overwrite the staged COMPLETE"
+    )
 
 
 def test_mover_does_not_fail_run_when_only_the_trigger_publish_fails() -> None:

@@ -138,19 +138,24 @@ def test_fga_off_is_permissive_so_an_offline_stack_behaves_as_before() -> None:
 # --------------------------------------------------------------------------------------------------
 
 
-def test_authorization_without_authentication_is_refused_at_construction() -> None:
+def test_authorization_without_authentication_is_refused_at_construction(monkeypatch: pytest.MonkeyPatch) -> None:
     """FGA answers "may THIS subject", so enabling it without OIDC would check an unverified subject.
 
     Caught when settings are built, not at the first request.
+
+    Driven through the ENVIRONMENT rather than kwargs: `LANCE_*` are the field aliases, so this also
+    proves the names an operator actually sets are the ones that bind. Passing them as keyword
+    arguments would exercise a path no deployment uses.
     """
+    monkeypatch.setenv("LANCE_FGA_ENABLED", "true")
+    monkeypatch.setenv("LANCE_OIDC_ENABLED", "false")
     with pytest.raises(ValueError, match="LANCE_OIDC_ENABLED is required"):
-        # By ALIAS, through model_validate rather than kwargs: the aliases are what a deployment
-        # actually sets, but a type checker sees the FIELD names and rejects them as unknown
-        # arguments. The `# type: ignore[call-arg]` here was mypy syntax, which `ty` does not honour,
-        # so `make check` failed on it. Same construction, same validation, no suppression.
-        AnnotatorSettings.model_validate({"LANCE_FGA_ENABLED": True, "LANCE_OIDC_ENABLED": False})
+        AnnotatorSettings()
 
 
-def test_oidc_without_issuer_and_audience_is_refused_at_construction() -> None:
+def test_oidc_without_issuer_and_audience_is_refused_at_construction(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LANCE_OIDC_ENABLED", "true")
+    monkeypatch.delenv("LANCE_OIDC_ISSUER", raising=False)
+    monkeypatch.delenv("LANCE_OIDC_AUDIENCE", raising=False)
     with pytest.raises(ValueError, match="LANCE_OIDC_ISSUER and LANCE_OIDC_AUDIENCE are required"):
-        AnnotatorSettings.model_validate({"LANCE_OIDC_ENABLED": True})
+        AnnotatorSettings()

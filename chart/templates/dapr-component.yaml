@@ -92,10 +92,14 @@ spec:
     # effective ack window, so it must not undercut the slowest handler (a compute-on mover does real
     # S3 reads+writes) — a 1s first step would concurrently redeliver mid-handling even at 1 replica.
     {{- if $.Values.dapr.resiliency.enabled }}
-    # Resiliency ON: the SIDECAR owns delivery retries (Resiliency CRD, ~10.5 min total) and parks
-    # exhausted messages on the DLQ — so broker redelivery becomes the CRASH-RECOVERY layer only. Its
-    # first step must exceed the sidecar's total retry span, else the broker would redeliver while the
-    # sidecar still holds the message mid-retry (concurrent duplicate handling).
+    # Resiliency ON: the SIDECAR owns delivery retries (Resiliency CRD, 450s = 7.5 min total: 30+60+
+    # 120+240, jitter pinned off) and parks exhausted messages on the DLQ — so broker redelivery
+    # becomes the CRASH-RECOVERY layer only. Its first step must exceed the sidecar's total retry
+    # span, else the broker would redeliver while the sidecar still holds the message mid-retry
+    # (concurrent duplicate handling). 720s > 450s holds with 270s of margin.
+    # (This comment said "~10.5 min" until 2026-07-28 and dapr-resiliency.yaml said "~7.5 min" — two
+    # different numbers for one schedule, neither of which the chart rendered. Both now state 7.5,
+    # and .dagger/charts.go asserts the rendered value so they cannot drift apart again.)
     - { name: ackWait, value: "720s" }
     - { name: maxDeliver, value: "3" }
     - { name: backOff, value: "720s,720s" }

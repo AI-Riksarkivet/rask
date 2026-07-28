@@ -106,6 +106,27 @@ const resiliencyGate = `set -euo pipefail
 helm template chart > /tmp/resil.yaml
 grep -q "kind: Resiliency" /tmp/resil.yaml
 grep -q "pubsubDeliveryRetry" /tmp/resil.yaml
+# The schedule must MATCH the policy it declares, and the comments must state what renders.
+# Presence-only checking (the two greps above, which were the whole gate until 2026-07-28) passed a
+# policy whose fields contradicted its type: "policy: exponential" with "duration: 30s", a
+# PolicyConstant-ONLY field (dapr/kit retry.go). Dapr ignored the duration, initialInterval stayed at
+# its 500ms default, and the rendered window was ~4s where both comments claimed minutes — so
+# resiliency ON was ~125x SHORTER than OFF, inverting the point of the CRD. Assert the numbers.
+awk '/^ +pubsubDeliveryRetry:/{f=1;next} f&&/^ +[a-zA-Z]+: /{print} f&&/^ +[a-z]+:$/{exit}' /tmp/resil.yaml > /tmp/policy.txt
+grep -q "policy: exponential" /tmp/policy.txt
+grep -q "initialInterval: 30s" /tmp/policy.txt
+grep -q "multiplier: 2" /tmp/policy.txt
+grep -q "randomizationFactor: 0" /tmp/policy.txt
+! grep -q "duration:" /tmp/policy.txt
+init=$(sed -n 's/.*initialInterval: \([0-9]*\)s.*/\1/p' /tmp/policy.txt)
+mult=$(sed -n 's/.*multiplier: \([0-9]*\).*/\1/p' /tmp/policy.txt)
+cap=$(sed -n 's/.*maxInterval: \([0-9]*\)s.*/\1/p' /tmp/policy.txt)
+n=$(sed -n 's/.*maxRetries: \([0-9]*\).*/\1/p' /tmp/policy.txt)
+w=0; step=$init
+for _ in $(seq 1 "$n"); do [ "$step" -gt "$cap" ] && step=$cap; w=$((w+step)); step=$((step*mult)); done
+[ "$w" -ge 400 ] && [ "$w" -le 500 ] || { echo "FAIL: rendered retry window ${w}s is not the ~450s (7.5 min) the comments claim"; exit 1; }
+[ "$w" -lt 720 ] || { echo "FAIL: retry window ${w}s meets/exceeds the broker's 720s first backOff step — the broker would redeliver mid-retry"; exit 1; }
+echo "resiliency window ${w}s — matches the documented 7.5 min, under the 720s broker step"
 dlq=$(grep -c "DLQ_TOPIC" /tmp/resil.yaml || true); [ "$dlq" -ge 3 ] || exit 1
 grep -q '"dlq.>"' /tmp/resil.yaml
 grep -q "720s,720s" /tmp/resil.yaml
