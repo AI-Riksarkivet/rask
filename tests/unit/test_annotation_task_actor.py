@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from annotator.projects.actor import DRAFT_KEY, LEASE_REMINDER, TASK_KEY, AnnotationTaskActor
@@ -43,16 +43,28 @@ class _Actor(AnnotationTaskActor):
     """The real actor with its Dapr plumbing replaced — state and reminders recorded in memory."""
 
     def __init__(self) -> None:  # noqa: D107 - deliberately bypasses Actor.__init__ (needs a runtime)
-        self._state_manager = _FakeStateManager()  # type: ignore[assignment]
+        # `sm` is the TYPED handle the assertions read; `_state_manager` is the same object cast into
+        # the slot the actor reads. Casting only at the injection point keeps the double's own surface
+        # honest — asserting through `_state_manager` would have to fight the base class's type.
+        self.sm = _FakeStateManager()
+        self._state_manager = cast(Any, self.sm)
         self.reminders: list[tuple[str, float]] = []
         self.unregistered: list[str] = []
 
-    async def register_reminder(  # type: ignore[override]
-        self, name: str, state: bytes, due_time: timedelta, period: timedelta, ttl: Any = None
+    async def register_reminder(
+        self,
+        name: str,
+        state: bytes,
+        due_time: timedelta,
+        period: timedelta | None = None,
+        ttl: timedelta | None = None,
+        failure_policy: Any = None,
     ) -> None:
+        """Signature mirrors `Actor.register_reminder` exactly. A narrower override would type-error,
+        and — worse — would stop compiling the day the actor starts passing `failure_policy`."""
         self.reminders.append((name, due_time.total_seconds()))
 
-    async def unregister_reminder(self, name: str) -> None:  # type: ignore[override]
+    async def unregister_reminder(self, name: str) -> None:
         self.unregistered.append(name)
 
 
@@ -64,6 +76,14 @@ def _task(**kw: Any) -> dict[str, Any]:
     ).model_dump(mode="json")
     base.update(kw)
     return base
+
+
+async def _state(actor: _Actor) -> dict[str, Any]:
+    """`get()` is Optional by contract. Assert once here rather than suppressing at each call site —
+    a None would then be a named failure ("the actor lost its state") instead of a TypeError."""
+    task = await actor.get()
+    assert task is not None, "the actor lost its state"
+    return task
 
 
 async def _seeded() -> _Actor:
@@ -94,10 +114,10 @@ async def test_state_round_trips_through_the_state_manager() -> None:
     actor = await _seeded()
     await actor.fire({"event": "claim", "actor": "gina"})
 
-    stored = json.loads(actor._state_manager.store[TASK_KEY])  # noqa: SLF001
+    stored = json.loads(actor.sm.store[TASK_KEY])
     assert stored["state"] == TaskState.CLAIMED
-    assert (await actor.get())["state"] == TaskState.CLAIMED  # type: ignore[index]
-    assert actor._state_manager.saves >= 2  # noqa: SLF001 — seed + claim both persisted
+    assert (await _state(actor))["state"] == TaskState.CLAIMED
+    assert actor.sm.saves >= 2  # seed + claim both persisted
 
 
 @pytest.mark.asyncio
@@ -128,7 +148,7 @@ async def test_every_transition_is_appended_to_the_audit_trail() -> None:
     actor = await _seeded()
     await actor.fire({"event": "claim", "actor": "gina"})
     await actor.fire({"event": "submit", "actor": "gina"})
-    trail = (await actor.get())["transitions"]  # type: ignore[index]
+    trail = (await _state(actor))["transitions"]
     assert [t["event"] for t in trail] == ["claim", "submit"]
     assert trail[0]["from"] == TaskState.UNASSIGNED and trail[0]["to"] == TaskState.CLAIMED
 
@@ -182,9 +202,9 @@ async def test_an_expired_lease_returns_the_task_and_KEEPS_the_draft() -> None:
 
     await actor.receive_reminder(LEASE_REMINDER, b"", timedelta(0), timedelta(0))
 
-    task = await actor.get()
-    assert task["state"] == TaskState.UNASSIGNED  # type: ignore[index]
-    assert task["assignee"] is None  # type: ignore[index]
+    task = await _state(actor)
+    assert task["state"] == TaskState.UNASSIGNED
+    assert task["assignee"] is None
     draft = await actor.get_draft()
     assert draft is not None and len(draft["shapes"]) == 1, "an expired lease destroyed the draft"
 
@@ -198,7 +218,7 @@ async def test_a_stale_reminder_for_a_moved_on_task_is_a_no_op() -> None:
 
     await actor.receive_reminder(LEASE_REMINDER, b"", timedelta(0), timedelta(0))
 
-    assert (await actor.get())["state"] == TaskState.IN_REVIEW  # type: ignore[index]
+    assert (await _state(actor))["state"] == TaskState.IN_REVIEW
 
 
 # --------------------------------------------------------------------------------------------------
@@ -211,7 +231,7 @@ async def test_a_draft_is_one_write_for_the_whole_shape_set() -> None:
     actor = await _seeded()
     out = await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "bbox"}, {"shape_type": "polygon"}]})
     assert out["revision"] == 1
-    assert len(json.loads(actor._state_manager.store[DRAFT_KEY])["shapes"]) == 2  # noqa: SLF001
+    assert len(json.loads(actor.sm.store[DRAFT_KEY])["shapes"]) == 2
 
 
 @pytest.mark.asyncio
