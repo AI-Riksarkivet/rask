@@ -8,7 +8,7 @@ the single-entry story (or the Dapr-invoke wiring) silently broke.
 Run (port-forward the gateway), or `make e2e-gateway`:
 
     kubectl port-forward svc/lance-ns-gateway 8088:8080 &
-    LANCE_E2E_GATEWAY_URL=http://localhost:8088 uv run pytest tests/e2e/test_gateway_e2e.py -v
+    LANCE_E2E_GATEWAY_URL=http://localhost:8088 uv run pytest tests/e2e-py/test_gateway_e2e.py -v
 """
 
 from __future__ import annotations

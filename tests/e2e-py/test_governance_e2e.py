@@ -33,7 +33,7 @@ from service_kit.openlineage import RUN_EVENT_SCHEMA_URL, custom_facet, run_id_f
 
 #: OpenLineage ``producer`` URI for the promote event this suite emits — the spec requires one, and a
 #: fixture standing in for a real lance-ray job has to look like one.
-_PRODUCER = "https://github.com/Borg93/lance-ns/tree/main/tests/e2e/test_governance_e2e.py"
+_PRODUCER = "https://github.com/Borg93/lance-ns/tree/main/tests/e2e-py/test_governance_e2e.py"
 
 SERVER = os.environ.get("LANCE_E2E_AUTH_SERVER", "")
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "")
