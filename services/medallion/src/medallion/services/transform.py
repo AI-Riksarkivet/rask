@@ -274,6 +274,16 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
         # (the lineage relay re-ingests any staged survivor, idempotent on run_id). Degrades to a plain
         # publish when no outbox_uri is set. Runs even on a quality failure, so the failed assertions are
         # recorded and the bad batch stays auditable.
+        # Set BEFORE the emit, not after it returns. `publish_lineage_with_outbox` STAGES the COMPLETE
+        # and only then publishes, re-raising on failure with the event left staged — that is the
+        # crash window working. But `stage_event` keys on run_id alone and `build_run_event` excludes
+        # event_type from the run_id, so a COMPLETE and a FAIL for one run share `<run_id>.json`. With
+        # the flag set after the await, a COMPLETE whose PUBLISH failed left `completed = False`, the
+        # handler below staged a FAIL, and that truncating write destroyed the staged COMPLETE — the
+        # exact object the outbox exists to preserve, on a run whose Lance write had already committed.
+        # The run succeeded the moment that write committed; redelivery re-publishes the staged
+        # COMPLETE, idempotent on its deterministic run_id.
+        completed = True
         await outbox.publish_lineage_with_outbox(
             dapr,
             outbox_uri=settings.lineage_outbox_uri,
@@ -284,7 +294,6 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
             topic_name=settings.lineage_topic,
             timeout_seconds=settings.publish_timeout_seconds,
         )
-        completed = True  # the COMPLETE is recorded — a later trigger-publish failure is NOT a run failure
         # 2. Quality gate: a failed assertion BLOCKS promotion — record it, but do NOT trigger the next
         # stage, so a bad batch can't cascade. Composes with the FGA gate above (authz AND data-quality).
         if assertions and not passed(assertions):
