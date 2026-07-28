@@ -4,7 +4,7 @@ Skipped unless ``LINEAGE_DATABASE_URL`` points at a running AGE Postgres, e.g.:
 
     docker compose -f .docker/docker-compose.yml -f .docker/docker-compose.lineage.yml up -d lineage-postgres
     LINEAGE_DATABASE_URL=postgresql://lineage:lineage@localhost:5433/lineage \
-        uv run pytest tests/e2e/test_lineage_e2e.py
+        uv run pytest tests/e2e-py/test_lineage_e2e.py
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from lineage.schemas import Readers
 
 DSN = os.environ.get("LINEAGE_DATABASE_URL", "")
-_SAMPLE = Path(__file__).resolve().parents[2] / "services" / "lineage" / "sample_events.json"
+_SAMPLE = Path(__file__).resolve().parents[2] / "services" / "lineage" / "src" / "lineage" / "sample_events.json"
 
 pytestmark = pytest.mark.e2e
 

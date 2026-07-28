@@ -5,7 +5,7 @@
 #
 # Stack = base + auth (OIDC/OpenFGA) + lineage (AGE) + governance (lineage-api + emit on).
 #
-#   ./scripts/governance_e2e.sh            # pytest e2e (tests/e2e/test_governance_e2e.py)
+#   ./scripts/governance_e2e.sh            # pytest e2e (tests/e2e-py/test_governance_e2e.py)
 #   DEMO=1 ./scripts/governance_e2e.sh     # run the narrated demo instead
 set -euo pipefail
 
@@ -54,6 +54,6 @@ if [ "${DEMO:-0}" = "1" ]; then
   uv run --no-sync scripts/governance_demo.py
 else
   echo "== run governance e2e =="
-  uv run --no-sync pytest tests/e2e/test_governance_e2e.py -v
+  uv run --no-sync pytest tests/e2e-py/test_governance_e2e.py -v
 fi
 echo "== DONE =="

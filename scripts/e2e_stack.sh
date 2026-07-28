@@ -271,12 +271,12 @@ PG_PASS=$(kubectl get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.po
 export LINEAGE_DATABASE_URL="postgresql://${PG_USER}:${PG_PASS}@localhost:5433/${PG_DB}"
 
 PYTHONPATH=services uv run pytest \
-  tests/e2e/test_object_store_cas_e2e.py \
-  tests/e2e/test_client_direct_e2e.py \
-  tests/e2e/test_warehouses_e2e.py \
-  tests/e2e/test_multibase_e2e.py \
-  tests/e2e/test_outbox_e2e.py \
-  tests/e2e/test_outbox_crash_e2e.py \
+  tests/e2e-py/test_object_store_cas_e2e.py \
+  tests/e2e-py/test_client_direct_e2e.py \
+  tests/e2e-py/test_warehouses_e2e.py \
+  tests/e2e-py/test_multibase_e2e.py \
+  tests/e2e-py/test_outbox_e2e.py \
+  tests/e2e-py/test_outbox_crash_e2e.py \
   -v -rs -p no:cacheprovider | tee /tmp/e2e-stack.log
 
 # NO SILENT SKIPS. Every suite above is skip-guarded on "is the stack reachable?" — which is the right
@@ -297,7 +297,7 @@ fi
 # fetches the extension from duckdb.org, so a transient CDN miss should skip (offline), not red the whole
 # guarded suite; but a real READ failure returns non-zero and — under `set -o pipefail` — still fails the job.
 PYTHONPATH=services uv run pytest \
-  tests/e2e/test_duckdb_lance_e2e.py \
+  tests/e2e-py/test_duckdb_lance_e2e.py \
   -v -rs -p no:cacheprovider | tee /tmp/e2e-duckdb.log
 
 # The two Ray-path suites (#53, test_ray_{train,batch}_e2e.py) are NOT run here on purpose. They need a

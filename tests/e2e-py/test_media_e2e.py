@@ -11,7 +11,7 @@ Run (port-forward lance-ray + lineage first), or ``make e2e-media``:
     kubectl port-forward svc/lance-ns-lance-ray 8002:8000 &
     kubectl port-forward svc/lance-ns-lineage   8000:8000 &
     LANCE_E2E_LANCERAY_URL=http://localhost:8002 LANCE_E2E_LINEAGE_URL=http://localhost:8000 \
-    uv run pytest tests/e2e/test_media_e2e.py -v
+    uv run pytest tests/e2e-py/test_media_e2e.py -v
 """
 
 from __future__ import annotations
