@@ -26,7 +26,7 @@ export type NotificationFeed = {
  *  otherwise. */
 export type ZoneNavLeaf = {
 	title: string;
-	/** ABSOLUTE, domain-relative href (e.g. /data/tables). */
+	/** ABSOLUTE, domain-relative href (e.g. /lakehouse/catalog/tables). */
 	href: string;
 	/** Active predicate vs the FULL pathname. */
 	match: (p: string) => boolean;
@@ -34,15 +34,52 @@ export type ZoneNavLeaf = {
 	/** True for a leaf that leaves this zone's route manifest (e.g. media's Annotate → /annotator):
 	 *  the sidebar link then hard-navigates (data-sveltekit-reload) instead of soft-routing. */
 	reload?: boolean;
+	/** Sub-routes, rendered as a `Sidebar.MenuSub` under this leaf and auto-expanded while any of
+	 *  them (or the parent) is active. One level only — a third tier is a sign the ZONE should have
+	 *  been split, not the menu. */
+	children?: ZoneNavLeaf[];
+};
+
+/** One labelled section of the sidebar — a `Sidebar.Group` with its own `GroupLabel`. */
+export type ZoneNavGroup = {
+	/** The section heading (e.g. "Catalog", "Lineage", "Governance"). */
+	label: string;
+	items: ZoneNavLeaf[];
+	/** Collapsible via the label (default true). Set false to pin a section open. */
+	collapsible?: boolean;
+	/** Start collapsed. Ignored while the group contains the active route — a section that hides
+	 *  where you currently are reads as a broken sidebar. */
+	defaultCollapsed?: boolean;
 };
 
 /** The per-zone sidebar config: each zone passes ITS OWN routes to the shared AppShell. The zone
- *  list itself lives in the top navbar (`topNav`) — the sidebar never renders other zones. */
+ *  list itself lives in the top navbar (`topNav`) — the sidebar never renders other zones.
+ *
+ *  GROUPED, not flat. This was `{ title, leaves[] }` — one unlabelled list — which forced Lakehouse
+ *  to swap the WHOLE sidebar per area, keyed off the pathname, so standing in the catalog you
+ *  could not see lineage, models, governance or admin at all. Storage was reachable only by typing
+ *  its URL, because no area's flat list could mention another area's route. Groups let one zone
+ *  present its whole surface at once, which is what the shadcn sidebar primitives were built for
+ *  and what the estate already had installed but never used. */
 export type ZoneNav = {
-	/** The zone's display name — the sidebar group label (e.g. "Data"). */
+	/** The zone's display name — shown as the sidebar's own heading. */
 	title: string;
-	leaves: ZoneNavLeaf[];
+	groups: ZoneNavGroup[];
 };
+
+/** Every leaf in a zone's nav, flattened depth-first (parents before their children). The shell uses
+ *  it to decide whether a rail is worth rendering; `@rask/zone-contract` uses it to walk every href. */
+export function zoneNavLeaves(nav: ZoneNav | null | undefined): ZoneNavLeaf[] {
+	if (!nav) return [];
+	const out: ZoneNavLeaf[] = [];
+	for (const group of nav.groups) {
+		for (const item of group.items) {
+			out.push(item);
+			if (item.children) out.push(...item.children);
+		}
+	}
+	return out;
+}
 
 /** A selectable project — the sidebar header switcher. One implicit "default" today. */
 export type Project = { name: string; subtitle?: string };

@@ -9,6 +9,7 @@
 	import { IsMobile, SHELL_COLLAPSE_BREAKPOINT } from '../hooks/is-mobile.svelte.js';
 	import { ChevronRight, MoreHorizontal } from '@lucide/svelte';
 	import { gsap } from 'gsap';
+	import { zoneNavLeaves } from './nav-config.js';
 	import type { Me, NotificationFeed, Project, NavUser, ZoneNav } from './nav-config.js';
 	import { collapseCrumbs, pathCrumbs, projectFromHost } from './breadcrumb.js';
 
@@ -88,7 +89,9 @@
 	// A zone with one leaf has nothing to navigate — home's sole leaf was "Projects → /", a link to
 	// the page you are already on. A rail there costs horizontal width and implies areas that do not
 	// exist, so zones like the catch-all render no rail and no collapse trigger at all.
-	const hasNav = $derived((zoneNav?.leaves?.length ?? 0) > 1);
+	// Counted across every group AND nested child, so a zone that splits one list into two groups
+	// does not accidentally fall under the threshold.
+	const hasNav = $derived(zoneNavLeaves(zoneNav).length > 1);
 
 	// Project-first breadcrumb via HOST: the project IS the request host, so the path
 	// carries only the domain + in-project trail. The project is the breadcrumb ROOT

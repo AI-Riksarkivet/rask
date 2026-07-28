@@ -7,16 +7,36 @@ import { exact, seg, type ZoneNav } from '@rask/ui/shell';
 // every sibling area (see nav-config's Registry/Graph precedent).
 export const TRAIN_ZONE_NAV: ZoneNav = {
 	title: 'Train',
-	leaves: [
-		{ title: 'Submit', href: '/train', match: exact('/train'), icon: Rocket },
-		{ title: 'Runs', href: '/train/runs', match: seg('/train/runs'), icon: ListChecks },
+	groups: [
 		{
-			title: 'Monitoring',
-			href: '/train/monitoring',
-			match: seg('/train/monitoring'),
-			icon: Activity,
+			label: 'Training',
+			items: [
+				{ title: 'Submit', href: '/train', match: exact('/train'), icon: Rocket },
+				{ title: 'Runs', href: '/train/runs', match: seg('/train/runs'), icon: ListChecks },
+			],
 		},
-		{ title: 'Analysis', href: '/train/analysis', match: seg('/train/analysis'), icon: ChartLine },
-		{ title: 'Models', href: '/train/models', match: seg('/train/models'), icon: Boxes },
+		{
+			label: 'Analysis',
+			items: [
+				{
+					title: 'Monitoring',
+					href: '/train/monitoring',
+					match: seg('/train/monitoring'),
+					icon: Activity,
+				},
+				{
+					title: 'Analysis',
+					href: '/train/analysis',
+					match: seg('/train/analysis'),
+					icon: ChartLine,
+				},
+			],
+		},
+		{
+			label: 'Models',
+			items: [
+				{ title: 'Registry', href: '/train/models', match: seg('/train/models'), icon: Boxes },
+			],
+		},
 	],
 };

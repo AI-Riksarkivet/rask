@@ -1,41 +1,224 @@
 import { base } from '$app/paths';
-import type { ZoneNav } from '@rask/ui/shell';
-import { DATA_ZONE_NAV } from '$lib/data/nav';
-import { LINEAGE_ZONE_NAV } from '$lib/lineage/nav';
-import { MODELS_ZONE_NAV } from '$lib/models/nav';
-import { ADMIN_ZONE_NAV } from '$lib/admin/nav';
-import { STORAGE_ZONE_NAV } from '$lib/storage/nav';
+import {
+	Activity,
+	Boxes,
+	Building2,
+	Columns3,
+	Cpu,
+	Database,
+	FlaskConical,
+	FolderKanban,
+	HardDrive,
+	Inbox,
+	Layers,
+	LayoutDashboard,
+	Network,
+	Package,
+	Radio,
+	ScrollText,
+	ShieldCheck,
+	Warehouse,
+	Workflow,
+} from '@lucide/svelte';
+import { exact, seg, type ZoneNav } from '@rask/ui/shell';
 
 /**
- * The lakehouse zone hosts four areas — catalog (`data`), `lineage`, `models` and `admin` — that used
- * to be four separate SvelteKit apps. They were split by URL prefix but not by domain: all four read
- * the SAME catalog + lineage planes through the same client, the top navbar already presented them as
- * one "Lakehouse" surface, and three of them carried byte-identical copies of the lineage client. The
- * split cost four SSR servers, four copies of the shell in four bundles, and a full document reload on
- * every hop between them, and bought nothing — every zone shipped from one image tag anyway.
+ * The lakehouse zone's WHOLE surface, in one grouped sidebar.
  *
- * Merged, a hop between areas is a SOFT navigation. What the sidebar must still do is show only the
- * CURRENT area's routes, so this resolves the area from the path — the same two-level routing split as
- * before (the shell owns the namespace boundary, the area owns its interior), except now both levels
- * live in one router.
+ * This used to be five separate `ZoneNav`s — data, lineage, models, admin, storage — chosen by a
+ * function that swapped the ENTIRE sidebar based on which area you happened to be standing in. That
+ * was a leftover from when those areas were five separate SvelteKit apps: the flat `ZoneNav` could
+ * express only one unlabelled list, so showing every area at once would have meant showing no labels
+ * at all.
+ *
+ * The cost was not cosmetic. Standing in the catalog you could not see that lineage, models,
+ * governance or admin existed, and the object browser at /lakehouse/storage was reachable ONLY by
+ * typing its URL, because no area's list was permitted to name another area's route. Grouping is
+ * exactly what the shadcn sidebar primitives (Group / GroupLabel / MenuSub) exist for, and they were
+ * already vendored in @rask/ui — merely never used for structure.
+ *
+ * Governance is split out of admin deliberately: who-may-do-what (access, audit) is a different
+ * question from operating the estate (tenants, streams, events, DLQ). Merging the two is what turned
+ * "Admin" into a junk drawer.
  */
-const AREAS: Record<string, ZoneNav> = {
-	data: DATA_ZONE_NAV,
-	lineage: LINEAGE_ZONE_NAV,
-	models: MODELS_ZONE_NAV,
-	admin: ADMIN_ZONE_NAV,
-	// R18: the S3 object browser over the warehouse buckets — the absorbed storage zone, rebuilt as
-	// an area of this zone rather than merely deleted.
-	storage: STORAGE_ZONE_NAV,
-};
+const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
+	{
+		label: 'Catalog',
+		items: [
+			{
+				title: 'Projects',
+				href: '/lakehouse/data/projects',
+				match: seg('/lakehouse/data/projects'),
+				icon: FolderKanban,
+			},
+			{
+				title: 'Namespaces',
+				href: '/lakehouse/data/namespaces',
+				match: seg('/lakehouse/data/namespaces'),
+				icon: Boxes,
+			},
+			{
+				title: 'Tables',
+				href: '/lakehouse/data/tables',
+				match: seg('/lakehouse/data/tables'),
+				icon: Database,
+			},
+			{
+				title: 'Warehouses',
+				href: '/lakehouse/data/warehouses',
+				match: seg('/lakehouse/data/warehouses'),
+				icon: Warehouse,
+			},
+			{
+				// R28: the object browser belongs WITH the catalog that governs it, not beside it as a
+				// sibling area. Being neither is precisely why nothing linked to it.
+				title: 'Storage',
+				href: '/lakehouse/storage',
+				match: seg('/lakehouse/storage'),
+				icon: HardDrive,
+			},
+		],
+	},
+	{
+		label: 'Lineage',
+		items: [
+			{
+				title: 'Graph',
+				href: '/lakehouse/lineage',
+				match: exact('/lakehouse/lineage'),
+				icon: Network,
+			},
+			{
+				title: 'Datasets',
+				href: '/lakehouse/lineage/datasets',
+				match: seg('/lakehouse/lineage/datasets'),
+				icon: Boxes,
+			},
+			{
+				title: 'Jobs',
+				href: '/lakehouse/lineage/jobs',
+				match: seg('/lakehouse/lineage/jobs'),
+				icon: Cpu,
+			},
+			{
+				title: 'Runs',
+				href: '/lakehouse/lineage/runs',
+				match: seg('/lakehouse/lineage/runs'),
+				icon: Activity,
+			},
+			{
+				title: 'Columns',
+				href: '/lakehouse/lineage/columns',
+				match: seg('/lakehouse/lineage/columns'),
+				icon: Columns3,
+			},
+			{
+				title: 'Workbench',
+				href: '/lakehouse/lineage/workbench',
+				match: seg('/lakehouse/lineage/workbench'),
+				icon: LayoutDashboard,
+			},
+		],
+	},
+	{
+		label: 'Models',
+		items: [
+			{
+				title: 'Registry',
+				href: '/lakehouse/models',
+				match: exact('/lakehouse/models'),
+				icon: Package,
+			},
+			{
+				title: 'Pipeline',
+				href: '/lakehouse/models/pipeline',
+				match: seg('/lakehouse/models/pipeline'),
+				icon: Workflow,
+			},
+			{
+				title: 'Experiments',
+				href: '/lakehouse/models/experiments',
+				match: seg('/lakehouse/models/experiments'),
+				icon: FlaskConical,
+			},
+		],
+	},
+	{
+		label: 'Governance',
+		items: [
+			{
+				title: 'Access',
+				href: '/lakehouse/admin/access',
+				match: seg('/lakehouse/admin/access'),
+				icon: ShieldCheck,
+			},
+			{
+				title: 'Audit',
+				href: '/lakehouse/admin/audit',
+				match: seg('/lakehouse/admin/audit'),
+				icon: ScrollText,
+			},
+		],
+	},
+	{
+		label: 'Admin',
+		// The operational drawer — real, but not what anyone opens the lakehouse for. Collapsed until
+		// you are actually inside it (the shell auto-expands whichever group holds the active route).
+		defaultCollapsed: true,
+		items: [
+			{
+				title: 'Tenants',
+				href: '/lakehouse/admin/tenants',
+				match: seg('/lakehouse/admin/tenants'),
+				icon: Building2,
+			},
+			{
+				title: 'Streams',
+				href: '/lakehouse/admin/streams',
+				match: seg('/lakehouse/admin/streams'),
+				icon: Layers,
+			},
+			{
+				title: 'Events',
+				href: '/lakehouse/admin/events',
+				match: seg('/lakehouse/admin/events'),
+				icon: Radio,
+			},
+			{
+				title: 'DLQ',
+				href: '/lakehouse/admin/dlq',
+				match: seg('/lakehouse/admin/dlq'),
+				icon: Inbox,
+			},
+		],
+	},
+];
 
-/** The area segment right after this zone's base — `''` on the zone root. */
+/** Groups behind the estate-admin door — the ones `/lakehouse/admin/*` serves. */
+const PRIVILEGED_GROUPS = new Set(['Governance', 'Admin']);
+
+/** The area segment right after this zone's base — `''` on the zone root. Still load-bearing: the
+ *  root layout gates the admin door on it and sizes the lineage canvas with it. */
 export function areaOf(pathname: string): string {
 	const rest = pathname.startsWith(base) ? pathname.slice(base.length) : pathname;
 	return rest.split('/').filter(Boolean)[0] ?? '';
 }
 
-/** The sidebar config for whichever area the current path is in; the catalog is the zone's landing. */
-export function lakehouseNav(pathname: string): ZoneNav {
-	return AREAS[areaOf(pathname)] ?? DATA_ZONE_NAV;
+/**
+ * The zone's sidebar, minus anything the caller may not use.
+ *
+ * The door used to hide the sidebar ENTIRELY (`zoneNav = null`) for a non-admin on an admin route.
+ * That was tolerable when the sidebar only ever showed one area; with one merged nav it would blank
+ * the catalog, lineage and models rows too — punishing a user for visiting a URL they were denied.
+ * Privilege is now a per-GROUP filter, so a denied identity keeps the navigation it is entitled to
+ * and simply never sees Governance or Admin. The door itself is unchanged and still fail-closed;
+ * this only stops advertising routes it would refuse.
+ */
+export function lakehouseSidebar(estateAdmin: boolean): ZoneNav {
+	return {
+		title: 'Lakehouse',
+		groups: estateAdmin
+			? LAKEHOUSE_GROUPS
+			: LAKEHOUSE_GROUPS.filter((g) => !PRIVILEGED_GROUPS.has(g.label)),
+	};
 }

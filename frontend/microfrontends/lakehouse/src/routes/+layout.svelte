@@ -10,7 +10,7 @@
 	import { onMount, type Snippet } from 'svelte';
 	import type { Me } from '@rask/api';
 	import { fetchMeViaBff } from '$lib/http';
-	import { areaOf, lakehouseNav } from '$lib/nav';
+	import { areaOf, lakehouseSidebar } from '$lib/nav';
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
 	import type { LayoutData } from './$types';
 
@@ -61,8 +61,13 @@
 		area === 'admin' && data.authEnabled && !meLoading && !(me?.estate_admin ?? false),
 	);
 	const checking = $derived(area === 'admin' && data.authEnabled && meLoading);
-	// Don't advertise the admin area's routes to an identity the door refuses (or before the verdict).
-	const zoneNav = $derived(forbidden || checking ? null : lakehouseNav(page.url.pathname));
+	// Don't advertise the admin area's routes to an identity the door refuses (or before the verdict)
+	// — but hide only THOSE groups. Nulling the whole sidebar (what this did while each area had its
+	// own) would now blank catalog, lineage and models too, punishing a user for visiting a URL they
+	// were denied.
+	const zoneNav = $derived(
+		lakehouseSidebar(!data.authEnabled || (!meLoading && (me?.estate_admin ?? false))),
+	);
 
 	// The lineage area's Graph and Columns canvases set height:100% and must fill a SIZED flex item
 	// rather than scroll inside an auto-height one; every other area wants the plain scroll wrapper.
