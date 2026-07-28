@@ -1,4 +1,4 @@
-import { Brain, Cpu, Database, FlaskConical, House, PenLine, Search } from '@lucide/svelte';
+import { Brain, Cpu, Database, FlaskConical, PenLine, Search } from '@lucide/svelte';
 import type { RunStatusLike } from '../runs/run-status.js';
 
 /** All lucide icons share one component signature, so any icon's type fits. */
@@ -150,7 +150,11 @@ const DATA_ITEMS: TopNavItem[] = [
 		href: '/lakehouse/catalog/projects',
 		description: 'Tenants, their warehouses and their members.',
 	},
-	{ title: 'Tables', href: '/lakehouse/catalog/tables', description: 'The governed table registry.' },
+	{
+		title: 'Tables',
+		href: '/lakehouse/catalog/tables',
+		description: 'The governed table registry.',
+	},
 	{
 		title: 'Namespaces',
 		href: '/lakehouse/catalog/namespaces',
@@ -316,15 +320,11 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 		);
 	}
 	return [
-		{
-			// HOME is the catch-all zone at the origin root — the platform landing surface. It used to
-			// ride only as the product mark; R15 put every zone in the bar, so it is an entry like the
-			// rest. A single surface, so a plain link.
-			title: 'Home',
-			href: '/',
-			icon: House,
-			match: (p) => zoneOf(p) === '',
-		},
+		// NO "Home" ENTRY. The origin root is reachable two better ways already — the project
+		// switcher at the head of this same row, and the sidebar header, which names the zone you are
+		// in and links home. A third control to the same destination is noise in a bar whose job is
+		// to move you BETWEEN zones, and it made the estate's landing surface look like a peer of
+		// Lakehouse and Compute rather than the thing containing them.
 		{
 			title: 'Lakehouse',
 			href: '/lakehouse/catalog',

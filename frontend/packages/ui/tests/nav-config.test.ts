@@ -11,8 +11,9 @@ import { exact, norm, seg, topNav, under, zoneOf } from '../src/lib/shell/nav-co
 // earns a new top-level entry.
 describe('topNav', () => {
 	it('carries every zone of the estate, in order, for a non-admin (fail-closed)', () => {
+		// No 'Home': the origin root is reached by the project switcher and the sidebar header, not
+		// by a third control in a bar whose job is moving BETWEEN zones.
 		expect(topNav(false).map((e) => e.title)).toEqual([
-			'Home',
 			'Lakehouse',
 			'Search',
 			'Annotate',
@@ -21,7 +22,6 @@ describe('topNav', () => {
 			'Studio',
 		]);
 		expect(topNav(false).map((e) => e.href)).toEqual([
-			'/',
 			'/lakehouse/catalog',
 			// Trailing slashes are LOAD-BEARING, not cosmetic: each zone's `paths.base` serves the
 			// trailing form, so a bare '/compute' href cost a 308 redirect round-trip on EVERY
@@ -112,16 +112,15 @@ describe('topNav', () => {
 		expect(search.items?.some((i) => i.href === '/annotator')).toBe(false);
 	});
 
-	it('Home is the catch-all zone — active only at the origin root, never in another zone', () => {
-		const home = topNav(false).find((e) => e.title === 'Home')!;
-		expect(home.match('/')).toBe(true);
-		expect(home.match('')).toBe(true);
-		for (const p of ['/lakehouse/catalog', '/media', '/annotator', '/compute', '/train', '/studio']) {
-			expect(home.match(p), p).toBe(false);
+	it('carries NO Home entry — the origin root is not a peer zone', () => {
+		// It used to ride here as an entry like any other (R15: every zone in the bar). That made the
+		// estate's landing surface look like a sibling of Lakehouse and Compute rather than the thing
+		// containing them, and duplicated a destination the project switcher and the sidebar header
+		// already own. Pinned as an absence so it cannot drift back in unnoticed.
+		for (const admin of [false, true]) {
+			expect(topNav(admin).some((e) => e.title === 'Home')).toBe(false);
+			expect(topNav(admin).some((e) => e.href === '/')).toBe(false);
 		}
-		// A single surface — a plain link, not a one-row dropdown.
-		expect(home.items).toBeUndefined();
-		expect(home.groups).toBeUndefined();
 	});
 
 	it('Compute owns the Ray plane — the folded overview at its root plus the Ray surfaces (R16)', () => {
