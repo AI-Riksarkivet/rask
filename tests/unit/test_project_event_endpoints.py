@@ -51,12 +51,17 @@ class _FakeProject:
 
 
 class _FakeTask:
-    def __init__(self) -> None:
+    """The task actor. `seed` is idempotent: a task that already exists comes back with ITS project."""
+
+    def __init__(self, owner: str | None = None) -> None:  # noqa: D107 - see class docstring
         self.seeded: list[dict[str, Any]] = []
+        #: The project the task ALREADY belongs to, when it exists. `seed` is idempotent and returns
+        #: what is there, which is how a cross-project send is detectable at all.
+        self.owner = owner
 
     async def seed(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.seeded.append(payload)
-        return payload
+        return {**payload, "project_id": self.owner or payload["project_id"]}
 
 
 def _app(project: _FakeProject, *, grant: set[str], seen: list[dict[str, Any]], task: _FakeTask | None = None) -> FastAPI:
@@ -306,3 +311,21 @@ def test_send_captures_review_required_from_the_project(wired: Any) -> None:
     client, _p, task, _seen = wired({"can_send_items"}, state=ProjectState.LABELING)
     client.post("/projects/p1/items", json={"items": [_item("t0")]})
     assert task.seeded[0]["review_required"] is True
+
+
+def test_a_task_owned_by_another_project_is_refused_not_indexed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`task_id` is client-supplied. Re-sending one that already belongs to p1 into p2 used to write
+    p2's index entry from the PAYLOAD — but the task's own `_report_state` only ever addresses its
+    real owner, so p2's entry froze at the seeded value. Non-terminal, `may_publish` false forever,
+    no remove-item endpoint: one malformed send permanently stranded every other label in p2."""
+    project, task = _FakeProject(state=ProjectState.LABELING), _FakeTask(owner="some-other-project")
+    monkeypatch.setattr(ev, "_project_proxy", lambda _p: project)
+    monkeypatch.setattr(ev, "_task_proxy", lambda _t: task)
+    seen: list[dict[str, Any]] = []
+    client = TestClient(_app(project, grant={"can_send_items"}, seen=seen, task=task))
+
+    r = client.post("/projects/p1/items", json={"items": [_item("t0")]})
+
+    assert r.status_code == 409, r.text
+    assert "already belongs to project" in r.text
+    assert project.sent == [], "a foreign task was written into this project's index"

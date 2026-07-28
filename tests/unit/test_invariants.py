@@ -169,8 +169,14 @@ def _fga_literals() -> list[tuple[str, str, str]]:
     """
     found: list[tuple[str, str, str]] = []
     # relation="X", ... obj=f"type:{...}"  /  ClientTuple(relation="X", object=f"type:...")
-    rel_re = re.compile(r'relation=["\']([a-z_]+)["\']')
-    obj_re = re.compile(r'(?:obj|object)=f?["\']([a-z_]+):')
+    #
+    # `parent_object=` / `parent_relation=` are EXCLUDED from this naive pairing, because in
+    # `grant_on_create` the parent is the tuple's USER, not its object: the tuple is
+    # (user=<parent_object>, relation=<parent_relation>, object=<resource>:<obj_id>). Pairing them
+    # here reported `project#tenant`, which is not a relation anyone writes. They get their own,
+    # STRICTER rule below — the relation must exist on the RESOURCE type.
+    rel_re = re.compile(r'(?<!parent_)relation=["\']([a-z_]+)["\']')
+    obj_re = re.compile(r'(?<!parent_)(?:obj|object)=f?["\']([a-z_]+):')
     for py in SERVICES.rglob("*.py"):
         lines = py.read_text().splitlines()
         for i, line in enumerate(lines):
@@ -181,6 +187,42 @@ def _fga_literals() -> list[tuple[str, str, str]]:
             for obj in obj_re.finditer(window):
                 found.append((f"{py.relative_to(REPO)}:{i + 1}", obj.group(1), rel.group(1)))
     return found
+
+
+def _parent_edge_literals() -> list[tuple[str, str, str]]:
+    """(file:line, resource_type, parent_relation) for every `grant_on_create` parent edge.
+
+    The edge's relation lives on the CHILD, so `parent_relation` must exist on `resource`. Every
+    governed type spells it `parent`; `annotation_project` spells it `tenant`. Writing the wrong one
+    produces a tuple OpenFGA ACCEPTS and no rule ever reads — the inheritance silently does not
+    exist, and the object looks unowned by everyone including its creator. That failure is invisible
+    to a mocked-client unit test, which is the same blind spot the sibling check above exists for.
+    """
+    found: list[tuple[str, str, str]] = []
+    res_re = re.compile(r'resource=["\']([a-z_]+)["\']')
+    prel_re = re.compile(r'parent_relation=["\']([a-z_]+)["\']')
+    for py in SERVICES.rglob("*.py"):
+        lines = py.read_text().splitlines()
+        for i, line in enumerate(lines):
+            prel = prel_re.search(line)
+            if not prel:
+                continue
+            window = "\n".join(lines[max(0, i - 8) : i + 3])
+            res = res_re.search(window)
+            if res:
+                found.append((f"{py.relative_to(REPO)}:{i + 1}", res.group(1), prel.group(1)))
+    return found
+
+
+def test_every_parent_edge_relation_exists_on_the_child_type() -> None:
+    """The `annotation_project#tenant` class of bug, made mechanical."""
+    model = _model_relations()
+    phantom = [f"{loc} -> {res}#{rel}" for loc, res, rel in _parent_edge_literals() if res in model and rel not in model[res]]
+    assert not phantom, (
+        "a `grant_on_create` parent edge names a relation that does not exist on the child type: "
+        f"{phantom}. The write SUCCEEDS and the inheritance silently does not exist — every rung on "
+        "the object then denies for everyone, creator included."
+    )
 
 
 def test_every_fga_relation_in_code_exists_in_the_compiled_model() -> None:

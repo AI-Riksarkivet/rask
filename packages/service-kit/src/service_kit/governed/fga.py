@@ -622,6 +622,7 @@ async def grant_on_create(
     resource: str,
     obj_id: str,
     parent_object: str | None = None,
+    parent_relation: str = "parent",
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
@@ -637,6 +638,10 @@ async def grant_on_create(
     (the medallion case). A root-level table (no namespace parent) gets the owner
     grant only.
 
+    ``parent_relation`` names the edge on the CHILD that points at the parent — ``parent`` for every
+    governed type, ``tenant`` for ``annotation_project``. Get it wrong and the write succeeds while
+    the inheritance it was meant to establish silently does not exist.
+
     ``obj_id`` must be the canonical, delimited id (see ``canonical_object_id``)
     so this grant and the later authorization ``check`` agree byte-for-byte.
 
@@ -646,7 +651,11 @@ async def grant_on_create(
     obj = f"{resource}:{obj_id}"
     tuples = [ClientTuple(user=f"user:{user_sub}", relation="owner", object=obj)]
     if parent_object:
-        tuples.append(ClientTuple(user=parent_object, relation="parent", object=obj))
+        # The edge's RELATION NAME is a property of the model, not a constant. Every governed type
+        # spells it `parent`, but `annotation_project` spells it `tenant` — writing `parent` there
+        # produces a tuple OpenFGA accepts and no rule ever reads, so `admin from tenant` and
+        # `member from tenant` never resolve and the object looks unowned by everyone.
+        tuples.append(ClientTuple(user=parent_object, relation=parent_relation, object=obj))
     await write_tuples(
         client,
         tuples,

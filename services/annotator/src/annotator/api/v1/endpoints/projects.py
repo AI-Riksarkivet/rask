@@ -13,14 +13,20 @@ decides *what* — they are deliberately separate.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import APIRouter, status
 from pydantic import BaseModel, Field
 
-from annotator.api.security import CheckerDep, CurrentSubject
+from annotator.api.security import CheckerDep, CurrentSubject, FgaClientDep
 from annotator.projects.models import AnnotationProject, LabelSchema, ProjectState
 from service_kit.exceptions import ForbiddenError
+from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
+
+
+if TYPE_CHECKING:
+    from openfga_sdk import OpenFgaClient
 
 
 router = APIRouter(prefix="/projects", tags=["annotation-projects"])
@@ -43,7 +49,7 @@ class CreateProjectRequest(BaseModel):
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=AnnotationProject)
-async def create_annotation_project(payload: CreateProjectRequest, checker: CheckerDep, subject: CurrentSubject) -> AnnotationProject:
+async def create_annotation_project(payload: CreateProjectRequest, checker: CheckerDep, subject: CurrentSubject, fga_client: FgaClientDep) -> AnnotationProject:
     """Create a project in `draft`. 403 when the caller is not a member of the target tenant.
 
     `subject` is the **verified** OIDC principal (`annotator.api.security`), not a header the caller
@@ -73,5 +79,35 @@ async def create_annotation_project(payload: CreateProjectRequest, checker: Chec
         updated_at=now,
         created_by=subject,
     )
+    # PERSIST it. Until 2026-07-28 this endpoint built the model, audited, and returned it — so the
+    # single entry point into the whole plane was a no-op that reported 201, and the very next call
+    # (`POST /projects/<id>/items`) answered 409 "annotation project does not exist".
+    stored = await _create_actor(project.project_id).create(project.model_dump(mode="json"))
+
+    # SEED OWNERSHIP. Two tuples, and both are load-bearing: `owner@user:<subject>` so the creator can
+    # manage what they made, and the `tenant` edge to `project:<tenant>` so `owner: … or admin from
+    # tenant` and `viewer: … or member from tenant` resolve. Without them every rung on this object is
+    # unreachable — including door 1 of the publish crossing, which would deny for everyone forever,
+    # creator included. The relation is `tenant`, NOT `parent`: this type spells its parent edge
+    # differently from every governed type, and writing `parent` yields a tuple no rule reads.
+    if fga_client is not None:
+        await fga.grant_on_create(
+            cast("OpenFgaClient", fga_client),
+            user_sub=subject,
+            resource="annotation_project",
+            obj_id=project.project_id,
+            parent_object=f"project:{payload.tenant}",
+            parent_relation="tenant",
+        )
+
     audit("annotation_project.create", SUCCESS, subject=subject, resource=project.fga_object)
-    return project
+    return AnnotationProject.model_validate(stored)
+
+
+def _create_actor(project_id: str) -> Any:
+    """Lazy, for the same reason every other proxy here is: `ActorProxy` opens a sidecar channel."""
+    from dapr.actor import ActorId, ActorProxy  # noqa: PLC0415 - deliberate
+
+    from annotator.projects.project_actor import AnnotationProjectActorInterface  # noqa: PLC0415
+
+    return ActorProxy.create("AnnotationProjectActor", ActorId(project_id), AnnotationProjectActorInterface)

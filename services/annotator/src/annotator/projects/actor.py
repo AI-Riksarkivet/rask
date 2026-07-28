@@ -229,8 +229,18 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
         has, raw = await self._state_manager.try_get_state(DRAFT_KEY)
         current = Draft.model_validate(json.loads(raw)) if has and raw else None
         expected = payload.get("base_revision")
-        if current is not None and expected is not None and int(expected) != current.revision:
-            raise IllegalTransition("draft", f"revision {current.revision}", f"save at {expected}")
+        # An OPTIONAL precondition is not a precondition. Skipping the check when `base_revision` is
+        # absent made the etag opt-in: two tabs of one annotator both load revision 4, the first
+        # saves 30 shapes, the second saves its stale 12 with no `base_revision` — no check, 200, and
+        # 18 shapes gone. The design's promise is that two tabs CANNOT lose each other's work, so
+        # once a draft exists the caller must state which revision it is editing.
+        #
+        # The first save is exempt because there is nothing to be stale against (`current is None`).
+        if current is not None:
+            if expected is None:
+                raise IllegalTransition("draft", f"revision {current.revision}", "save without base_revision")
+            if int(expected) != current.revision:
+                raise IllegalTransition("draft", f"revision {current.revision}", f"save at {expected}")
 
         draft = Draft(
             task_id=str(payload["task_id"]),

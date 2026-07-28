@@ -391,3 +391,32 @@ async def test_accepting_writes_no_review_note() -> None:
     await actor.fire({"event": "submit", "actor": "gina"})
     out = await actor.fire({"event": "accept", "actor": "carol"})
     assert out["review_notes"] == []
+
+
+@pytest.mark.asyncio
+async def test_two_tabs_cannot_clobber_by_OMITTING_base_revision() -> None:
+    """The etag was opt-in: the conflict check was skipped entirely when `base_revision` was absent,
+    so the promise "two tabs of the same annotator cannot lose each other's work" held only for
+    clients that volunteered to be checked.
+
+    Both tabs load revision 1. Tab A saves 30 shapes (revision 2). Tab B saves its stale 12 with no
+    `base_revision` — that must be a conflict, not a silent 200 that discards A's work.
+    """
+    actor = await _seeded()
+    await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "bbox"}]})
+    await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "base_revision": 1, "shapes": [{"shape_type": "bbox"}] * 30})
+
+    with pytest.raises(IllegalTransition, match="without base_revision"):
+        await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "tag"}]})
+
+    surviving = await actor.get_draft()
+    assert surviving is not None and len(surviving["shapes"]) == 30, "the omitted-etag save clobbered 30 shapes"
+
+
+@pytest.mark.asyncio
+async def test_the_first_save_needs_no_base_revision() -> None:
+    """There is nothing to be stale against before a draft exists, so requiring it would make the
+    first save impossible rather than safe."""
+    actor = await _seeded()
+    out = await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": []})
+    assert out["revision"] == 1
