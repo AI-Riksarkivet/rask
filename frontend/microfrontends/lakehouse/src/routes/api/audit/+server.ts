@@ -105,10 +105,29 @@ export const GET: RequestHandler = async ({ url, fetch, locals }) => {
 		);
 	}
 	// Proven query shape (docs/KIND-RUNBOOK.md): filter to audit records, newest first, bounded. The
-	// finer action/outcome/subject/resource + time filters are applied below over the returned columns, so
-	// the SQL never depends on an attribute column name that may differ across GreptimeDB OTLP versions.
+	// finer action/outcome/subject/resource filters are applied below over the returned columns, so the
+	// SQL never depends on an attribute column name that may differ across GreptimeDB OTLP versions.
+	//
+	// The TIME window is different — it belongs in SQL. Without it this read took the newest 500 audit
+	// rows and nothing else, so an operator asking "what happened during the incident last Tuesday"
+	// could only get it if it fell inside the newest 500 estate-wide. A compliance trail you cannot ask
+	// a time question of is a list, not a trail.
+	//
+	// The window is an ALLOW-LIST, never interpolated user text: this SQL is built by string
+	// concatenation against GreptimeDB's HTTP endpoint, so a free-form `since` would be an injection
+	// hole. An unknown value falls back to 24h rather than widening to everything.
+	const WINDOWS: Record<string, string> = {
+		'1h': "timestamp > now() - INTERVAL '1 hour'",
+		'24h': "timestamp > now() - INTERVAL '1 day'",
+		'7d': "timestamp > now() - INTERVAL '7 days'",
+		'30d': "timestamp > now() - INTERVAL '30 days'",
+		all: '',
+	};
+	const requested = url.searchParams.get('since') ?? '24h';
+	const clause = WINDOWS[requested] ?? WINDOWS['24h']!;
 	const sql =
-		"SELECT * FROM opentelemetry_logs WHERE body = 'audit' ORDER BY timestamp DESC LIMIT 500";
+		`SELECT * FROM opentelemetry_logs WHERE body = 'audit'${clause ? ` AND ${clause}` : ''}` +
+		' ORDER BY timestamp DESC LIMIT 500';
 	try {
 		const res = await fetch(`${GREPTIME_API}/v1/sql?db=public`, {
 			method: 'POST',

@@ -90,8 +90,10 @@ function routeExists(zone: string, href: string): boolean {
 describe('every sidebar href resolves to a real route', () => {
 	it('finds leaves to check at all (guards the scanner itself)', () => {
 		// A regex that silently matched nothing would make every assertion below vacuously pass.
-		expect(ALL.length, 'no nav leaves were parsed — the scanner is broken, not the estate').
-			toBeGreaterThan(30);
+		expect(
+			ALL.length,
+			'no nav leaves were parsed — the scanner is broken, not the estate',
+		).toBeGreaterThan(30);
 	});
 
 	for (const leaf of ALL) {
