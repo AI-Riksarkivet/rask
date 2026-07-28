@@ -12,10 +12,13 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import httpx
+from dapr.ext.fastapi import DaprActor
 from fastapi import FastAPI
 
 from annotator.api.v1.router import router as api_router
 from annotator.core.config import get_annotator_settings
+from annotator.projects.actor import AnnotationTaskActor
+from annotator.projects.project_actor import AnnotationProjectActor
 from service_kit.exceptions import register_handlers
 from service_kit.governed import fga
 from service_kit.governed.oidc import OIDCVerifier
@@ -72,6 +75,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("annotator: FGA client failed to build — authorized routes will 503")
 
+    # Register the actor type with the sidecar. This is the estate's FIRST actor: `lance-statestore`
+    # has carried `actorStateStore: "true"` scoped to catalog+annotator since it was provisioned, and
+    # nothing used it. Registration must happen in the LIFESPAN, not at import — `register_actor`
+    # calls the sidecar's actor API, so doing it at module scope would make importing this module
+    # perform I/O and fail wherever daprd is absent (tests, `--help`, an image build).
+    #
+    # A failure here is logged and left non-fatal: the read-plane annotation routes do not need
+    # actors, so a task-plane outage must not take the media surface down with it. The task
+    # endpoints surface it as a 503 instead.
+    if actor_ext is not None:
+        try:
+            await actor_ext.register_actor(AnnotationTaskActor)
+            await actor_ext.register_actor(AnnotationProjectActor)
+            app.state.actors_registered = True
+            logger.info("annotator: AnnotationTaskActor + AnnotationProjectActor registered with the sidecar")
+        except Exception:
+            app.state.actors_registered = False
+            logger.exception("annotator: actor registration failed — the task plane will 503")
+
     app.state.startup_complete = True
     app.state.shutting_down = False
     yield
@@ -88,6 +110,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="lance-media annotator", lifespan=lifespan)
 register_handlers(app)
 register_middleware(app, get_annotator_settings())
+
+# Mount the actor HTTP surface the sidecar calls back on (/dapr/config, /actors/...). Constructing
+# DaprActor only adds routes — it performs no I/O — so it is safe at import; the REGISTRATION that
+# does talk to the sidecar happens in the lifespan above. Built here rather than inside the lifespan
+# because routes added after startup are not served.
+actor_ext: DaprActor | None
+try:
+    actor_ext = DaprActor(app)
+except Exception:  # pragma: no cover - a broken ext must not take the read plane down
+    actor_ext = None
+    logger.exception("annotator: could not mount the actor routes — the task plane is unavailable")
+
 app.include_router(probes_router)
 app.include_router(api_router)
 

@@ -5,6 +5,23 @@
 # ERROR-logged parking) instead of silently ceasing to redeliver after the broker's maxDeliver.
 # Schedule mirrors the previous broker one: exponential 30s→300s, 5 total attempts (~7.5 min) — under
 # the component's 720s crash-recovery ack window so broker redelivery never races these retries.
+#
+# THE FIELDS MUST MATCH THE POLICY (fixed 2026-07-28). This block previously read
+# `policy: exponential` with `duration: 30s`. Dapr reads `duration` ONLY under PolicyConstant
+# (dapr/kit retry.go: Duration drives NewConstantBackOff; InitialInterval/Multiplier/MaxInterval/
+# RandomizationFactor drive NewExponentialBackOff). Under `exponential` the duration was ignored and
+# `initialInterval` fell back to its 500ms default, so the rendered schedule was
+# 0.5 + 0.75 + 1.125 + 1.7 ≈ 4 SECONDS — not the ~7.5 min stated here, and `maxInterval: 300s` was
+# unreachable dead config. Because the sidecar DLTs and ACKs the original on exhaustion, the 720s
+# broker ackWait never applies to an app-returned RETRY, so resiliency being ON (the default)
+# SHORTENED the app-failure retry window ~125x versus OFF. The whole point of this CRD was inverted.
+#
+# The arithmetic, so the next edit can check itself: 30 + 60 + 120 + 240 = 450s = 7.5 min over 4
+# retries (5 attempts). The 4th step is 240s, under `maxInterval: 300s`, so the cap is a guard rather
+# than a participant. `randomizationFactor` is pinned to 0 rather than left at Dapr's 0.5 default:
+# with jitter the worst case is 450 x 1.5 = 675s, which still fits the 720s broker window but leaves
+# only 45s of margin — and that margin is the invariant that stops the broker redelivering while the
+# sidecar is still retrying. Deterministic beats 6% headroom here.
 apiVersion: dapr.io/v1alpha1
 kind: Resiliency
 metadata:
@@ -15,7 +32,9 @@ spec:
     retries:
       pubsubDeliveryRetry:
         policy: exponential
-        duration: 30s
+        initialInterval: 30s
+        multiplier: 2
+        randomizationFactor: 0
         maxInterval: 300s
         maxRetries: 4
   targets:
