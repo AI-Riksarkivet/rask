@@ -15,6 +15,7 @@ nav = [
     { "Quick Start" = "getting-started/index.md" },
     { "Concepts" = "getting-started/concepts.md" },
     { "Configuration" = "getting-started/configuration.md" },
+    { "Zed SSH Port-Forwards" = "zed-port-forwards.md" },
   ]},
   { "Architecture" = [
     { "Overview" = "architecture/index.md" },
