@@ -360,6 +360,34 @@ catalog paths and would re-stale any number written today.
 **Closes when.** A `make openapi` target regenerates both specs from the live apps, a `make
 openapi-check` fails on drift, CI runs it, and API.md's warning admonition is replaced by the guarantee.
 
+### F4 · The P7a/P7b dead-name sweep — the *other* cause *(new, 2026-07-28 — surfaced by F1)*
+
+**What.** The classification named **two** systematic causes of staleness. F1 closed the first (R19,
+the dead `common` package). This is the second: docs still describing the orchestrator, the
+`core_api`/`search_api`/`volumes_api` services, `packages/htr`, or `/default/<zone>` base paths — all
+killed by P7a/P7b/R15–R28.
+
+**Why the "82 stale docs" figure is misleading, measured 2026-07-28.** Two exclusions collapse it:
+
+- **`docs/superpowers/**` is not in the published nav** (`grep -c superpowers zensical.toml` → 0).
+  Its `plans/` and `specs/` are **dated process artifacts** — a plan written 2026-06-16 correctly
+  describes the tree of 2026-06-16. Sweeping them would falsify the record for no reader benefit.
+  **Ruling: `docs/superpowers/**` is an archive and is out of scope for every staleness sweep.**
+- `lance-ns-merge.md` and this file legitimately name dead things in order to declare them dead.
+
+What remains is **11 nav-served files**, and `architecture/system-overview.md` already carries a
+P7a warning banner. Five more — `architecture/frontend-conventions.md`,
+`architecture/frontend-microfrontends.md`, `architecture/layout.md`, `components/progress.md`,
+`components/ui.md` — belong to **§F2** and wait on the IA goal.
+
+**The actual F4 work-list is six files:** `architecture/microservices.md`, `architecture/deployment.md`,
+`architecture/layout.md`, `DECISIONS.md`, `packages/htr.md`, `reference/htr.md`. Note `packages/htr`
+is not a package at all — it is the sealed `runners/htr`, outside every workspace glob.
+
+**Closes when.** `grep -rl "core_api\|search_api\|volumes_api\|packages/htr\|/default/" docs/
+--exclude-dir=superpowers --exclude=lance-ns-merge.md --exclude=OPEN-WORK.md` returns only files
+whose mention is an explicit tombstone, and the nav gate is still green.
+
 ### F2 · The deferred remainder *(blocked on the information-architecture goal)*
 
 Not dropped — deferred because the IA goal rewrites the subject matter. Pick this up the day that goal
