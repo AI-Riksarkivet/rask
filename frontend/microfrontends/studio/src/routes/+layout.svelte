@@ -6,6 +6,7 @@
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
 	import { AppShell } from '@rask/ui/shell';
+	import { STUDIO_ZONE_NAV } from '$lib/nav';
 	import { onMount, type Snippet } from 'svelte';
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
 	let { children }: { children: Snippet } = $props();
@@ -51,6 +52,6 @@
 
 <!-- The shared AppShell (one grouped sidebar) from @rask/ui — identical to every
      other microfrontend, zero drift. `base` (=/studio) frames the breadcrumb. -->
-<AppShell pathname={page.url.pathname} {notifications}>
+<AppShell pathname={page.url.pathname} zoneNav={STUDIO_ZONE_NAV} {notifications}>
 	{@render children()}
 </AppShell>

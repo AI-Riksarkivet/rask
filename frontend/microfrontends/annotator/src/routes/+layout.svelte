@@ -6,6 +6,7 @@
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
 	import { AppShell } from '@rask/ui/shell';
+	import { ANNOTATOR_ZONE_NAV } from '$lib/nav';
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
 	import type { Me } from '@rask/api';
 	import { fetchMeViaBff } from '$lib/http';
@@ -65,6 +66,7 @@
 	{meLoading}
 	user={data.user}
 	authEnabled={data.authEnabled}
+	zoneNav={ANNOTATOR_ZONE_NAV}
 	canvas
 	{notifications}
 >

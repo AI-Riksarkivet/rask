@@ -114,13 +114,22 @@
 	// Every crumb but the last is a link back up its own path; the last IS the current page, so it
 	// renders as text and carries aria-current instead.
 	const lastCrumbId = $derived(trail.tail.at(-1)?.id);
+
+	// A canvas zone starts with the rail icon-collapsed so the canvas keeps its width; every other
+	// zone starts expanded. Initial state only — bound, so the trigger and cmd/ctrl+b still work
+	// everywhere. Not $derived: that would fight the user, snapping the rail back on every rerender.
+	let sidebarOpen = $state(!canvas);
 </script>
 
-<Sidebar.Provider class="h-svh overflow-hidden">
-	{#if !canvas}
-		{#if hasNav}
-			<AppSidebar {pathname} {zoneNav} footer={sidebarFooter} />
-		{/if}
+<Sidebar.Provider bind:open={sidebarOpen} class="h-svh overflow-hidden">
+	<!-- The rail renders in EVERY zone that has somewhere to go, canvas included. `canvas` used to
+	     suppress it outright, which is why the annotator was the one zone with no sidebar at all — a
+	     user landing there lost the navigation every other zone gave them, with no way to get it
+	     back. Canvas means "the content owns the viewport height", not "this zone opts out of
+	     navigation"; it now starts icon-collapsed instead (see sidebarOpen), so the canvas keeps its
+	     width and the rail is one click away. -->
+	{#if hasNav}
+		<AppSidebar {pathname} {zoneNav} footer={sidebarFooter} />
 	{/if}
 	<Sidebar.Inset class="flex min-w-0 flex-col overflow-hidden">
 		<header class="flex min-w-0 shrink-0 flex-col">
