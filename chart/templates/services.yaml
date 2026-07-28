@@ -40,10 +40,18 @@ spec:
           {{- include "lance.securityContext" . | nindent 10 }}
           {{- include "lance.preStop" . | nindent 10 }}
           {{- if include "lance.otelEnabled" $root }}
-          command: ["opentelemetry-instrument", "uvicorn", "{{ .Values.services.catalog.module }}", "--host=0.0.0.0", "--port={{ .Values.services.catalog.port }}"]
+          command: ["opentelemetry-instrument", "uvicorn"]
           {{- else }}
-          command: ["uvicorn", "{{ .Values.services.catalog.module }}", "--host=0.0.0.0", "--port={{ .Values.services.catalog.port }}"]
+          command: ["uvicorn"]
           {{- end }}
+          # command/args are split so the dev-only reload flags can be appended. These are the
+          # services Tilt's live_update syncs, but dev.reload was only ever wired into
+          # fleet.yaml — so a synced file landed in the pod and the worker never re-read it.
+          args:
+            - {{ .Values.services.catalog.module | quote }}
+            - "--host=0.0.0.0"
+            - "--port={{ .Values.services.catalog.port }}"
+            {{- include "lance.devReloadArgs" (list $root "catalog") | nindent 12 }}
           ports: [{ name: http, containerPort: {{ .Values.services.catalog.port }} }]
           env:
             {{- if include "lance.otelEnabled" $root }}
@@ -235,10 +243,18 @@ spec:
           {{- include "lance.securityContext" . | nindent 10 }}
           {{- include "lance.preStop" . | nindent 10 }}
           {{- if include "lance.otelEnabled" $root }}
-          command: ["opentelemetry-instrument", "uvicorn", "{{ .Values.services.lineage.module }}", "--host=0.0.0.0", "--port={{ .Values.services.lineage.port }}"]
+          command: ["opentelemetry-instrument", "uvicorn"]
           {{- else }}
-          command: ["uvicorn", "{{ .Values.services.lineage.module }}", "--host=0.0.0.0", "--port={{ .Values.services.lineage.port }}"]
+          command: ["uvicorn"]
           {{- end }}
+          # command/args are split so the dev-only reload flags can be appended. These are the
+          # services Tilt's live_update syncs, but dev.reload was only ever wired into
+          # fleet.yaml — so a synced file landed in the pod and the worker never re-read it.
+          args:
+            - {{ .Values.services.lineage.module | quote }}
+            - "--host=0.0.0.0"
+            - "--port={{ .Values.services.lineage.port }}"
+            {{- include "lance.devReloadArgs" (list $root "lineage") | nindent 12 }}
           ports: [{ name: http, containerPort: {{ .Values.services.lineage.port }} }]
           env:
             {{- if include "lance.otelEnabled" $root }}

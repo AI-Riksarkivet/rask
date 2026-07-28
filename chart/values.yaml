@@ -180,9 +180,13 @@ image:
 
 # Dev-only knobs, driven by the Tilt loop (Tiltfile). Never enable in production.
 dev:
-  # Append `uvicorn --reload` (+ reload-dirs) to the fleet args so Tilt's
-  # live_update sync of /app/{packages,components} hot-reloads the Python services
-  # in-cluster. Requires the editable dev image (.docker/fleet.dev.dockerfile).
+  # Append `uvicorn --reload` (+ reload-dirs) so Tilt's live_update sync hot-reloads the
+  # Python services in-cluster. Applies to BOTH fleet.yaml and services.yaml (catalog,
+  # lineage) via the shared `lance.devReloadArgs` helper — it used to be wired into
+  # fleet.yaml alone, which silently excluded the very services Tilt syncs. The reload
+  # dirs are site-packages, where the src-layout images install; the old
+  # /app/{packages,components} paths have not existed since that rewrite.
+  # The Tiltfile sets this; never enable it in production.
   reload: false
 
 resources:

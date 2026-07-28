@@ -40,10 +40,15 @@ spec:
           {{- include "lance.securityContext" . | nindent 10 }}
           {{- include "lance.preStop" . | nindent 10 }}
           {{- if include "lance.otelEnabled" $root }}
-          command: ["opentelemetry-instrument", "uvicorn", "medallion.producer:app", "--host=0.0.0.0", "--port={{ $port }}"]
+          command: ["opentelemetry-instrument", "uvicorn"]
           {{- else }}
-          command: ["uvicorn", "medallion.producer:app", "--host=0.0.0.0", "--port={{ $port }}"]
+          command: ["uvicorn"]
           {{- end }}
+          args:
+            - "medallion.producer:app"
+            - "--host=0.0.0.0"
+            - "--port={{ $port }}"
+            {{- include "lance.devReloadArgs" (list $root "medallion") | nindent 12 }}
           ports: [{ name: http, containerPort: {{ $port }} }]
           env:
             {{- if include "lance.otelEnabled" $root }}
@@ -238,10 +243,15 @@ spec:
           {{- include "lance.securityContext" $root | nindent 10 }}
           {{- include "lance.preStop" $root | nindent 10 }}
           {{- if include "lance.otelEnabled" $root }}
-          command: ["opentelemetry-instrument", "uvicorn", "medallion.mover:app", "--host=0.0.0.0", "--port={{ $port }}"]
+          command: ["opentelemetry-instrument", "uvicorn"]
           {{- else }}
-          command: ["uvicorn", "medallion.mover:app", "--host=0.0.0.0", "--port={{ $port }}"]
+          command: ["uvicorn"]
           {{- end }}
+          args:
+            - "medallion.mover:app"
+            - "--host=0.0.0.0"
+            - "--port={{ $port }}"
+            {{- include "lance.devReloadArgs" (list $root "medallion") | nindent 12 }}
           ports: [{ name: http, containerPort: {{ $port }} }]
           env:
             {{- if include "lance.otelEnabled" $root }}

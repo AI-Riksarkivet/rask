@@ -70,15 +70,7 @@ spec:
             {{- range $a := ($svc.extraArgs | default list) }}
             - {{ $a | quote }}
             {{- end }}
-            {{- if $root.Values.dev.reload }}
-            # Dev only (Tilt): hot-reload uvicorn on source change. Requires an
-            # editable dev image (.docker/fleet.dev.dockerfile) whose source lives
-            # at /app/{packages,components} so Tilt's live_update sync lands where
-            # the reloader watches. Never set dev.reload in production.
-            - "--reload"
-            - "--reload-dir=/app/packages"
-            - "--reload-dir=/app/components"
-            {{- end }}
+            {{- include "lance.devReloadArgs" (list $root (splitList "." (splitList ":" $svc.module | first) | first)) | nindent 12 }}
           # Drain delay before SIGTERM: kube-proxy can still route to a terminating pod, so
           # without it a rolling update drops in-flight requests. Matters most on the gateway,
           # which is the ingress. Pinned by

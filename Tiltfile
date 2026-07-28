@@ -9,11 +9,16 @@
 
 load('ext://helm_resource', 'helm_resource', 'helm_repo')
 
-# k3s' context is plainly named 'default', which Tilt does NOT recognise as a local cluster
-# (it knows kind-*, k3d-*, minikube, docker-desktop, …). Without this it refuses to deploy at
-# all — "might be production" — and the dev loop never starts. Named explicitly rather than
-# via allow_k8s_contexts(k8s_context()), which would wave through a real remote cluster.
-allow_k8s_contexts('default')
+# Tilt refuses to deploy to a context it does not recognise as local ("might be production").
+# It knows kind-*, k3d-*, minikube, docker-desktop and rancher-desktop by name, but a plain k3s
+# install names its context 'default', so it gets blocked. This repo is not k3s-specific — the
+# same chart runs on kind (make kind-deploy) and k3s (make k3s-up) — so allow the LOCAL context
+# names generically, and let an operator name their own via TILT_ALLOW_CONTEXT rather than
+# editing this file. Still an allow-LIST: allow_k8s_contexts(k8s_context()) would wave through
+# a genuine production cluster.
+LOCAL_CONTEXTS = ['default', 'kind-rask', 'kind-rask-dl', 'k3d-rask', 'minikube',
+                  'docker-desktop', 'rancher-desktop']
+allow_k8s_contexts(LOCAL_CONTEXTS + [c for c in [os.getenv('TILT_ALLOW_CONTEXT')] if c])
 
 # k3s serves containerd, NOT the host docker daemon, so a locally-built image is invisible to it.
 # `make tilt-registry` runs a registry on :5000 and points k3s' containerd at it over plaintext;
@@ -62,7 +67,10 @@ helm_resource(
     # on 5 never-built zone images. Tilt runs the BACKEND (catalog/lineage/…) for the dev loop; drive the
     # zones with `make frontend-images && make frontend-load` + a `helm upgrade --set frontend.enabled=true`
     # (see docs/DEPLOY.md). Zone-in-Tilt live_update is a follow-up.
-    flags=['--timeout=300s', '--set', 'frontend.enabled=false'],
+    flags=['--timeout=300s', '--set', 'frontend.enabled=false',
+           # Without this the synced files land in the pod and uvicorn never re-reads
+           # them — live_update looks like it works and changes nothing.
+           '--set', 'dev.reload=true'],
     image_deps=['lance-rest-catalog'],
     image_keys=[
         ('image.catalog.repository', 'image.catalog.tag'),

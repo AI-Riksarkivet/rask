@@ -742,3 +742,29 @@ is on; harmless (an unused tmpfs) when off, so unconditionally included keeps th
 {{- define "lance.tmpVolume" -}}
 - { name: tmp, emptyDir: {} }
 {{- end -}}
+
+{{/*
+lance.devReloadArgs — uvicorn hot-reload flags for the Tilt loop. Call with (list $root $pkg)
+where $pkg is the service's own top-level package.
+
+Emits NOTHING unless dev.reload is set, so production manifests are byte-identical.
+
+The reload dirs are the site-packages the images actually install into. They previously read
+/app/packages and /app/components, which stopped existing at the src-layout rewrite (and
+`components` was renamed away before that) — uvicorn would have watched two non-existent
+directories and reloaded on nothing. Verified in-cluster: `python -c "import gateway"` resolves
+under /opt/venv/lib/python3.13/site-packages.
+
+Watch the service's own package plus the two shared kits, NOT all of site-packages: the latter
+means an inotify watch per installed dependency, which is slow and can exhaust the watch limit.
+*/}}
+{{- define "lance.devReloadArgs" -}}
+{{- $root := index . 0 -}}
+{{- $pkg := index . 1 -}}
+{{- if $root.Values.dev.reload }}
+- "--reload"
+- "--reload-dir=/opt/venv/lib/python3.13/site-packages/{{ $pkg }}"
+- "--reload-dir=/opt/venv/lib/python3.13/site-packages/service_kit"
+- "--reload-dir=/opt/venv/lib/python3.13/site-packages/lineage_kit"
+{{- end }}
+{{- end -}}

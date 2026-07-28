@@ -54,10 +54,15 @@ spec:
           {{- include "lance.securityContext" . | nindent 10 }}
           {{- include "lance.preStop" . | nindent 10 }}
           {{- if include "lance.otelEnabled" $root }}
-          command: ["opentelemetry-instrument", "uvicorn", "compaction.service:app", "--host=0.0.0.0", "--port={{ $port }}"]
+          command: ["opentelemetry-instrument", "uvicorn"]
           {{- else }}
-          command: ["uvicorn", "compaction.service:app", "--host=0.0.0.0", "--port={{ $port }}"]
+          command: ["uvicorn"]
           {{- end }}
+          args:
+            - "compaction.service:app"
+            - "--host=0.0.0.0"
+            - "--port={{ $port }}"
+            {{- include "lance.devReloadArgs" (list $root "compaction") | nindent 12 }}
           ports: [{ name: http, containerPort: {{ $port }} }]
           env:
             {{- if include "lance.otelEnabled" $root }}
