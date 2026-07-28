@@ -40,6 +40,7 @@ import httpx
 from medallion.services.iiif_produce import IIIFVolumeSource
 from medallion.services.ingest import ingest_to_bronze
 
+
 #: The PUBLIC Riksarkivet IIIF endpoint. The chart defaults to https://iiifintern-ai.ra.se, which
 #: resolves only on RA's network, so a developer anywhere else cannot harvest at all.
 BASE = os.environ.get("SEED_IIIF_BASE", "https://lbiiif.riksarkivet.se")
