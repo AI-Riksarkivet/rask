@@ -1,3 +1,11 @@
+<script lang="ts" module>
+	// Kicked off at MODULE EVALUATION — while the route chunk is still hydrating — rather than
+	// inside onMount. The ~100 KB dock chunk then downloads in PARALLEL with hydration instead of
+	// after it, which is the other half of removing the blink. One promise per module, so a second
+	// visit in the same session reuses it instead of re-importing.
+	const dockModule = import('@rask/dockview');
+</script>
+
 <script lang="ts">
 	/**
 	 * The lineage workbench — the estate's first dock.
@@ -8,11 +16,13 @@
 	 * them to another machine instead of living in that browser's localStorage.
 	 */
 	import { onMount, type Component } from 'svelte';
-	import type { DockviewApi } from 'dockview';
+	import type { DockviewApi, SerializedDockview } from 'dockview';
 	import { LineageState } from '$lib/lineage/store.svelte';
 	import { lineageTick, liveRead } from '$lib/live/tick.svelte';
-	import { LINEAGE_STATE } from '$lib/dock/lineage-context';
-	import { makeLayoutStore } from '$lib/dock/layout-store';
+	import { setLineageState } from '$lib/dock/lineage-context';
+	import { makeDockLayoutStore } from '@rask/api/dock-layout';
+	import { dockLayout } from '$lib/dock/layout.remote';
+	import { base } from '$app/paths';
 	import GraphPanel from '$lib/dock/panels/GraphPanel.svelte';
 	import RunsPanel from '$lib/dock/panels/RunsPanel.svelte';
 	import EventsPanel from '$lib/dock/panels/EventsPanel.svelte';
@@ -24,10 +34,17 @@
 	 *  stored layout that used it, which `MissingPanelRenderer` then shows rather than crashing on. */
 	const panels = { graph: GraphPanel, runs: RunsPanel, events: EventsPanel };
 
-	// Panels are mounted imperatively and do NOT inherit this component's context tree, so the store
-	// is threaded explicitly. Built once — a new Map per render would remount nothing but is waste.
-	const context = new Map<unknown, unknown>([[LINEAGE_STATE, store]]);
-	const layoutStore = makeLayoutStore('lineage');
+	// Ordinary Svelte context. `<Dock>` forwards this component's whole context tree into every panel
+	// mount (getAllContexts), so panels reach it with the matching getter and no key is involved.
+	setLineageState(store);
+	const WORKBENCH_ID = 'lineage';
+	/** ONE implementation for the whole estate — see `@rask/api/dock-layout`. */
+	const layoutStore = makeDockLayoutStore<SerializedDockview>({
+		workbenchId: WORKBENCH_ID,
+		endpoint: `${base}/capi/v1/user-state/dock-layout`,
+	});
+	/** Read on the SERVER, so the saved layout is the FIRST paint rather than a replacement. */
+	const initial = $derived(await dockLayout(WORKBENCH_ID));
 
 	/**
 	 * Deferred on purpose. dockview is ~152 KB gzipped standalone (~96 KB measured in this bundle,
@@ -38,7 +55,7 @@
 	 */
 	let Dock = $state<Component | null>(null);
 	onMount(async () => {
-		const mod = await import('@rask/dockview');
+		const mod = await dockModule;
 		Dock = mod.Dock as unknown as Component;
 	});
 
@@ -65,9 +82,7 @@
 
 <div class="workbench">
 	{#if Dock}
-		<Dock {panels} {context} store={layoutStore} onready={seed} />
-	{:else}
-		<p class="loading">Loading workbench…</p>
+		<Dock {panels} {initial} store={layoutStore} onready={seed} />
 	{/if}
 </div>
 
@@ -76,15 +91,13 @@
 	   in pixels. The lineage area's layout wrapper is already a sized flex column (`.zone-scroll` in
 	   the zone's +layout.svelte), so filling it is enough — but `min-height: 0` is load-bearing, or the
 	   flex item refuses to shrink below its content and the dock grows without bound. */
+	/* Sized identically whether or not the dock has mounted, so there is no reflow when it arrives —
+	   and deliberately EMPTY rather than holding a "Loading…" line, which would paint, be measured,
+	   and then be replaced. An empty box of the right size is the one thing that cannot flash. */
 	.workbench {
 		display: flex;
 		flex: 1 1 0;
 		min-height: 0;
 		width: 100%;
-	}
-	.loading {
-		margin: auto;
-		font-size: 12px;
-		color: var(--muted-foreground);
 	}
 </style>

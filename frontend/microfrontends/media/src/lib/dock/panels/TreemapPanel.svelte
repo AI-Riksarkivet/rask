@@ -25,8 +25,8 @@
 			<div>
 				<p class="text-foreground mb-1 font-medium">No topics yet</p>
 				<p>
-					Run <code class="bg-muted rounded-md px-1 py-0.5">ratch feature topics</code> to cluster the
-					chunks into a topic hierarchy.
+					Run <code class="bg-muted rounded-md px-1 py-0.5">ratch feature topics</code> to cluster the chunks
+					into a topic hierarchy.
 				</p>
 			</div>
 		</div>

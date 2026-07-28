@@ -22,7 +22,7 @@
  */
 
 /** The documents this zone owns. Matches `UserStateDocument` in `services/common/user_state.py`. */
-export type UserStateDocument = 'workflow-graph' | 'saved-views';
+export type UserStateDocument = 'workflow-graph' | 'saved-views' | 'dock-layout';
 
 export type UserStateRead<T> =
 	| { readonly status: 'ok'; readonly value: T }

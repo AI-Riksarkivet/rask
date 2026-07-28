@@ -1,20 +1,15 @@
 /**
- * The context key the media workbench threads to its panels.
+ * The media workbench's context pair.
  *
- * Kept in a plain `.ts` module rather than beside the class in `workbench.svelte.ts` so a panel can
- * import the getter without pulling the rune-compiled module into its own graph.
+ * `createContext` rather than a hand-rolled `Symbol` + `getContext` + throw: the Svelte docs prefer it
+ * because it is type-safe and "makes it unnecessary to use keys", and it throws its own error when a
+ * consumer is mounted outside a provider. Available since 5.40; this workspace is on 5.56.
+ *
+ * It works across the dock boundary because `<Dock>` captures its own context tree with
+ * `getAllContexts()` and hands it to every panel mount — so calling `setMediaWorkbench(...)` anywhere
+ * above the dock is enough, exactly as if the panels were rendered in that subtree.
  */
-import { getContext } from 'svelte';
+import { createContext } from 'svelte';
 import type { MediaWorkbench } from '$lib/dock/workbench.svelte';
 
-export const MEDIA_WORKBENCH = Symbol('rask.media-workbench');
-
-export function getMediaWorkbench(): MediaWorkbench {
-	const workbench = getContext<MediaWorkbench | undefined>(MEDIA_WORKBENCH);
-	if (workbench === undefined) {
-		throw new Error(
-			'media panel mounted without a MediaWorkbench — pass it in the Dock `context` map under MEDIA_WORKBENCH',
-		);
-	}
-	return workbench;
-}
+export const [getMediaWorkbench, setMediaWorkbench] = createContext<MediaWorkbench>();

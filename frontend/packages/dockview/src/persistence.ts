@@ -18,7 +18,7 @@
 // `DockviewIDisposable`, not `IDisposable` — dockview prefixes its Event/Emitter/Disposable trio
 // deliberately (see the note in renderer.svelte.ts).
 import type { DockviewApi, DockviewIDisposable } from 'dockview';
-import type { LayoutStore } from './types';
+import type { LayoutRead, LayoutStore } from './types';
 
 export class LayoutAutosave implements DockviewIDisposable {
 	#store: LayoutStore;
@@ -43,8 +43,12 @@ export class LayoutAutosave implements DockviewIDisposable {
 	 * the user with an empty dock they can rebuild, not a blank page. Saving stays disabled in that
 	 * case, for the same reason as an unreadable read.
 	 */
-	async restore(): Promise<boolean> {
-		const read = await this.#store.load();
+	async restore(seed?: LayoutRead): Promise<boolean> {
+		// A `seed` is a read the SERVER already did (a remote `query()` in the page). Using it skips a
+		// client round trip entirely, which is the difference between the saved layout being the FIRST
+		// paint and it replacing a flash of seeded defaults. `unreadable` still disables saving — the
+		// SSR path must not be the one that quietly overwrites a user's work.
+		const read = seed ?? (await this.#store.load());
 		if (read.status === 'unreadable') {
 			this.#refuseToSave = true;
 			return false;

@@ -8,13 +8,13 @@
 	 * Zone-agnostic by construction: everything zone-shaped — which panels exist, where a layout is
 	 * stored, what context the panels need — arrives as a prop.
 	 */
-	import { onMount } from 'svelte';
+	import { getAllContexts, onMount } from 'svelte';
 	import { DockviewComponent } from 'dockview';
 	import type { DockviewApi, DockviewOptions } from 'dockview';
 	import { MissingPanelRenderer, SveltePanelRenderer } from './renderer.svelte';
 	import { LayoutAutosave } from './persistence';
 	import { raskDockTheme } from './theme';
-	import type { LayoutStore, PanelRegistry } from './types';
+	import type { LayoutRead, LayoutStore, PanelRegistry } from './types';
 
 	interface Props {
 		/** The zone's panel catalogue, keyed by the `component` string passed to `api.addPanel`. */
@@ -28,8 +28,26 @@
 		/** Where this workbench's layout lives. Omit for an ephemeral dock. */
 		store?: LayoutStore;
 		/**
-		 * Context visible to every panel via `getContext`. Panels are mounted imperatively, so they do
-		 * NOT inherit this component's context tree — anything they need must be threaded here.
+		 * A layout already read on the SERVER, so the dock restores without a client round trip.
+		 *
+		 * This is the difference between one network hop after hydration and two. Without it the dock
+		 * must download its own chunk AND then read the layout before it can paint anything but an
+		 * empty grid — two SEQUENTIAL trips, and the seeded default flashes before the saved layout
+		 * replaces it. Pass the result of a remote `query()` here and the first paint is already right.
+		 *
+		 * It is a `LayoutRead`, not a bare layout, because the three outcomes must survive the trip:
+		 * `unreadable` read on the server must still disable saving on the client, or the SSR path
+		 * becomes the one that quietly overwrites the user's work.
+		 */
+		initial?: LayoutRead;
+		/**
+		 * EXTRA context for panels, merged over what they already inherit.
+		 *
+		 * Usually unnecessary: this component captures its own context tree with `getAllContexts()` and
+		 * hands it to every panel mount, so a zone sets context the ordinary Svelte way — ideally with
+		 * `createContext`, which the docs prefer over raw keys for type safety — anywhere above `<Dock>`,
+		 * and panels just call the matching getter. Use this only for values that have no component to
+		 * live above the dock.
 		 */
 		context?: Map<unknown, unknown>;
 		/** Merged over the rask defaults at construction. Change options later via `api.updateOptions`. */
@@ -43,6 +61,7 @@
 		panels,
 		onready,
 		store,
+		initial,
 		context,
 		options,
 		saveDebounceMs = 1000,
@@ -51,6 +70,13 @@
 
 	let host: HTMLDivElement | null = $state(null);
 
+	// Captured at component INIT — `getAllContexts` must be called synchronously during initialisation,
+	// so it cannot move inside onMount. This is what makes a panel behave like it was rendered here:
+	// `mount()` starts a NEW context tree rooted at nothing, so without this a panel calling
+	// `getContext`/a `createContext` getter would find an empty tree, and every zone would be forced to
+	// re-declare its state through the `context` prop with hand-rolled keys.
+	const inheritedContext = getAllContexts();
+
 	onMount(() => {
 		// onMount, NOT {@attach}. An attachment re-runs whenever a value it read changes, and re-running
 		// this factory would DESTROY and rebuild the dock — every panel unmounted, every subscription
@@ -58,9 +84,13 @@
 		// long-lived instance reconciled through its own api, which is exactly the case onMount is for.
 		if (host === null) return;
 
-		// Built once and shared by every panel mount, so `getContext` resolves the same instances a
-		// component would have inherited had it been rendered in this subtree.
-		const panelContext = context ?? new Map<unknown, unknown>();
+		// The host's own context tree, plus any explicit extras. Built once and shared by every panel
+		// mount, so `getContext` resolves the same instances a component would have inherited had it
+		// been rendered in this subtree.
+		const panelContext =
+			context === undefined
+				? inheritedContext
+				: new Map<unknown, unknown>([...inheritedContext, ...context]);
 
 		const dock = new DockviewComponent(host, {
 			theme: raskDockTheme,
@@ -108,7 +138,7 @@
 		let disposed = false;
 
 		void (async () => {
-			const restored = autosave ? await autosave.restore() : false;
+			const restored = autosave ? await autosave.restore(initial) : false;
 			// The await above yields, so the component may already have been destroyed underneath us.
 			if (disposed) return;
 			onready?.(dock.api, restored);

@@ -8,8 +8,7 @@
 	 * creates is precisely the kind of state a remount would destroy — and the renderer's mount-once
 	 * invariant plus `defaultRenderer: 'always'` is what keeps it alive across a drag.
 	 */
-	import { browser } from '$app/environment';
-	import type { Component } from 'svelte';
+	import { onMount, type Component } from 'svelte';
 	import { activeView, getAtlasStatus } from '@rask/media-api';
 
 	type Phase = 'loading' | 'ready' | 'unavailable' | 'error';
@@ -18,8 +17,10 @@
 	let errorMsg = $state<string | null>(null);
 	let Mount = $state.raw<Component | null>(null);
 
-	$effect(() => {
-		if (!browser) return;
+	// onMount, not the `$effect` + `browser` guard the /atlas ROUTE uses. This is a one-shot probe with
+	// no reactive dependencies, and a panel only ever mounts client-side (the dock itself is created in
+	// the host's onMount), so the guard has nothing to guard and the effect nothing to re-run on.
+	onMount(() => {
 		let cancelled = false;
 
 		(async () => {
@@ -60,8 +61,8 @@
 			<div>
 				<p class="text-foreground mb-1 font-medium">No embedding map yet</p>
 				<p>
-					Run <code class="bg-muted rounded-md px-1 py-0.5">ratch feature atlas</code> to build the 2-D
-					projection of the chunks table.
+					Run <code class="bg-muted rounded-md px-1 py-0.5">ratch feature atlas</code> to build the 2-D projection
+					of the chunks table.
 				</p>
 			</div>
 		</div>

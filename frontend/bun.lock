@@ -56,9 +56,11 @@
       "dependencies": {
         "@lucide/svelte": "^1.21.0",
         "@rask/api": "workspace:*",
+        "@rask/dockview": "workspace:*",
         "@rask/ui": "workspace:*",
         "@sveltejs/kit": "^2.67.0",
         "@tailwindcss/vite": "^4.3.1",
+        "dockview": "^7.0.4",
         "mode-watcher": "^1.1.0",
         "svelte-sonner": "^1.1.1",
         "tailwindcss": "^4.3.1",
@@ -136,6 +138,7 @@
       "dependencies": {
         "@lucide/svelte": "^1.26.0",
         "@rask/api": "workspace:*",
+        "@rask/dockview": "workspace:*",
         "@rask/labeling": "workspace:*",
         "@rask/media-api": "workspace:*",
         "@rask/ui": "workspace:*",
@@ -146,6 +149,7 @@
         "d3-hierarchy": "^3.1.2",
         "d3-scale": "^4.0.2",
         "d3-scale-chromatic": "^3.1.0",
+        "dockview": "^7.0.4",
         "elkjs": "^0.12.0",
         "mode-watcher": "^1.1.0",
         "svelte": "^5.56.8",

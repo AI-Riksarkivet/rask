@@ -16,6 +16,9 @@
 /* Svelte Flow's stylesheet, ONCE for the zone and under `base` so Tailwind utilities still win over
    it (svelte-flow rule 3 — importing it per component lands it in that component's layer instead). */
 @import '@xyflow/svelte/dist/style.css' layer(base);
+/* @rask/dockview: vendor sheet + the --dv-* → OKLCH token mapping, one import, same layer
+   and same reason as Svelte Flow's above. */
+@import '@rask/dockview/styles.css' layer(base);
 
 /* Tailwind 4 + Vite auto-discovery isn't reliable for .svelte under Bun;
  * point it at the source roots explicitly (paths relative to this file). */

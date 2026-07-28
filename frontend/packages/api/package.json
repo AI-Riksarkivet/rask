@@ -9,33 +9,37 @@
 			"types": "./src/index.ts",
 			"default": "./src/index.ts"
 		},
+		"./bff": {
+			"types": "./src/bff.ts",
+			"default": "./src/bff.ts"
+		},
 		"./client": {
 			"types": "./src/client.ts",
 			"default": "./src/client.ts"
 		},
-		"./observability": {
-			"types": "./src/observability.ts",
-			"default": "./src/observability.ts"
-		},
-		"./lineage": {
-			"types": "./src/lineage/index.ts",
-			"default": "./src/lineage/index.ts"
-		},
-		"./generated/lineage": {
-			"types": "./src/generated/lineage.ts",
-			"default": "./src/generated/lineage.ts"
+		"./dock-layout": {
+			"types": "./src/dock-layout.ts",
+			"default": "./src/dock-layout.ts"
 		},
 		"./generated/catalog": {
 			"types": "./src/generated/catalog.ts",
 			"default": "./src/generated/catalog.ts"
 		},
+		"./generated/lineage": {
+			"types": "./src/generated/lineage.ts",
+			"default": "./src/generated/lineage.ts"
+		},
+		"./lineage": {
+			"types": "./src/lineage/index.ts",
+			"default": "./src/lineage/index.ts"
+		},
+		"./observability": {
+			"types": "./src/observability.ts",
+			"default": "./src/observability.ts"
+		},
 		"./oidc": {
 			"types": "./src/oidc.ts",
 			"default": "./src/oidc.ts"
-		},
-		"./bff": {
-			"types": "./src/bff.ts",
-			"default": "./src/bff.ts"
 		},
 		"./runs-feed": {
 			"types": "./src/runs-feed.ts",
