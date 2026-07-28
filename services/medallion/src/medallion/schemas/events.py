@@ -168,6 +168,7 @@ def build_run_event(
     event_type: str = "COMPLETE",
     error_message: str | None = None,
     event_time: str | None = None,
+    synthetic: bool = False,
 ) -> dict[str, Any]:
     """Build the OpenLineage ``RunEvent`` (wire JSON) for one medallion transform — via ``lineage_kit``.
 
@@ -192,11 +193,26 @@ def build_run_event(
     provenance records would differ on the one field a consumer joins runs by time on. Absent → ``now()``,
     byte-identical to before.
     """
-    lance_fields: dict[str, Any] = {"operation": operation, "version": version}
+    lance_fields: dict[str, Any] = {"operation": operation}
+    if not synthetic:
+        # Dropped for SYNTHETIC only — deliberately NOT for FAIL, whose wire is frozen byte-for-byte by
+        # `tests/unit/test_events_parity.py` against the legacy builder. Gating on `describes_no_data`
+        # here reads more symmetrical and breaks that contract; a FAIL run's run-facet version is
+        # pre-existing behaviour and not this change's to alter.
+        #
+        # It must be dropped for synthetic, though, or the phantom is merely MOVED: stripping the
+        # output dataset's version while leaving `{"operation": …, "version": 1, "synthetic": true}` on
+        # the run facet still asserts a version that was never written, to any consumer reading the run
+        # rather than the output.
+        lance_fields["version"] = version
     if token:
         lance_fields["token"] = token
     if project:
         lance_fields["project"] = project
+    if synthetic:
+        # Machine-readable, so a consumer filters provenance-only runs DELIBERATELY rather than by
+        # inferring it from a missing version facet (which is also what a merely old event looks like).
+        lance_fields["synthetic"] = True
     run_facets: dict[str, Any] = {"lance": custom_facet(_PRODUCER, **lance_fields)}
     if author:
         run_facets["author"] = custom_facet(_PRODUCER, name=author, sub=author)
@@ -218,6 +234,10 @@ def build_run_event(
         run_id = str(uuid.uuid4())
     # A FAIL run produced no data: it keeps a BARE output (name only) and NO version/stats/assertions.
     failed = event_type.upper() in {"FAIL", "ABORT"}
+    # A SYNTHETIC run produced no data either, for a different reason (compute is disabled — the chart's
+    # default), so it describes none: same bare output. Claiming `version: 1` for a dataset that was never
+    # written is indistinguishable, to every consumer, from a real v1 write.
+    describes_no_data = failed or synthetic
     # Resolve the stage's declared column map to full columnLineage edges (one upstream input by design).
     column_edges: list[tuple[str, str, str, str, str, str, bool]] | None = None
     if column_map and len(inputs) == 1:
@@ -225,7 +245,7 @@ def build_run_event(
         column_edges = [(out_field, in_ns, in_name, in_field, "DIRECT", subtype, False) for out_field, in_field, subtype in column_map]
     output = (
         _dataset(output_namespace, output_name)
-        if failed
+        if describes_no_data
         else _dataset(
             output_namespace,
             output_name,

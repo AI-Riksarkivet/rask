@@ -184,7 +184,7 @@ Blast radius, worst first:
 Correct form is `/lakehouse/catalog…` / `/lakehouse/lineage`, which is what the nav config already uses
 (`frontend/packages/ui/src/lib/shell/nav-config.ts:92,95,98,103,111,115,119,123,131`) and what the
 e2e suites assert (`lakehouse/e2e/admin/tenants.spec.ts:66`, `:69` expect
-`/lakehouse/admin/audit?…` and `/lakehouse/catalog/warehouses`).
+`/lakehouse/governance/audit?…` and `/lakehouse/catalog/warehouses`).
 
 Verdict: **BUG**. This is the failure mode the skill names in `principles.md:136-142`
 ("Integration-test the composed page … broken cross-slice navigation — every failure mode that

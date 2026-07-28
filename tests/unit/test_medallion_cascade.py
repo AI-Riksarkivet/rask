@@ -13,7 +13,7 @@ asserts BOTH halves:
   i.e. the exact graph the lineage consumer would ingest.
 
 The Dapr pub/sub fan-out + AGE ingest are exercised by the gated live e2e
-(``tests/e2e/test_medallion_e2e.py``); here we prove the compute + lineage contract the whole cascade
+(``tests/e2e-py/test_medallion_e2e.py``); here we prove the compute + lineage contract the whole cascade
 rests on, runnably and deterministically.
 """
 
@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,6 +30,7 @@ import pytest
 from dapr.aio.clients import DaprClient
 from lineage.models import Dataset, RunEvent
 from medallion.core.config import MedallionSettings
+from medallion.services.compute import seed_bronze
 from medallion.services.ingest_trigger import handle_bronze_arrival
 from medallion.services.produce import produce
 from medallion.services.transform import handle_stage
@@ -280,6 +282,117 @@ def test_unsafe_project_in_trigger_is_dropped_without_any_emit(tmp_path: Any) ->
     settings = _mover_settings(_HOPS[0], {"bronze": str(tmp_path / "bronze"), "silver": str(tmp_path / "silver")})
     status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t", "project": "../evil"}}))
     assert status == {"status": "DROP"} and dapr.published == []
+
+
+def test_the_default_config_still_cascades_with_compute_off(tmp_path: Any) -> None:
+    """The regression guard for the synthetic-emit change, on the CHART'S DEFAULT config.
+
+    `chart/values.yaml` defaults `compute.enabled: false`, so the provenance-only path is what most
+    deployments actually run. Marking those events synthetic made their output BARE — no version,
+    stats, dataSource or schema facet — and `/bronze-arrival` decides whether to fire the cascade by
+    matching `_bronze_write_dataset` against the event's outputs. Had that matcher depended on any
+    facet rather than on namespace+name, this change would have silently stopped the entire default
+    pipeline at its head: producer reports success, no trigger, no mover, empty graph, nothing logged
+    above DEBUG anywhere in the chain.
+
+    Asserted end to end (produce → arrival → trigger) rather than by reading the matcher, because the
+    question is whether the two halves still agree, not what either one says in isolation.
+    """
+    dapr = _FakeDapr()
+    producer = MedallionSettings.model_validate({"compute_enabled": False, "bronze_uri": str(tmp_path / "bronze")})
+
+    assert asyncio.run(produce(cast(DaprClient, dapr), producer, token="t1"))["status"] != "publish_failed"
+    bronze_event = next(p for p in dapr.published if p["topic"] == producer.lineage_topic)["data"]
+
+    # The head event is synthetic and describes no data — and is still a COMPLETE naming its output.
+    assert bronze_event["run"]["facets"]["lance"]["synthetic"] is True
+    assert bronze_event["outputs"][0].get("facets", {}) == {}
+    assert bronze_event["eventType"] == "COMPLETE"
+
+    # …and the arrival handler still recognises it and fires the cascade.
+    assert asyncio.run(handle_bronze_arrival(cast(DaprClient, dapr), producer, {"data": bronze_event})) == {"status": "SUCCESS"}
+    trigger = next(p for p in dapr.published if p["topic"] == producer.bronze_topic)
+    assert trigger["data"]["dataset"] == producer.bronze_dataset
+    assert trigger["data"]["token"] == "t1"
+
+
+def test_page_lane_arrival_does_not_fire_the_events_lane_mover(tmp_path: Any) -> None:
+    """P7a lane isolation: a ``bronze$pages`` arrival must not drive the ``bronze$events`` mover.
+
+    Both ingest lanes publish to the SAME ``medallion.bronze`` topic, so every mover subscribed to it
+    sees every bronze arrival. ``ingest_trigger`` already put the discriminator on the wire — its own
+    docstring says the returned name is "the one actually written, so the trigger tells the mover which
+    lane fired" — and ``handle_stage`` read only ``token`` and ``project``, so the events mover woke on a
+    page arrival and transformed ``bronze$events``: real-looking lineage for a run nothing asked for,
+    attributed to the page cascade's token.
+
+    A mismatch is deterministic — redelivery cannot make this the right mover — so it DROPs.
+    """
+    # bronze$events is seeded on purpose: without it the mover merely ERRORS on a missing dataset, which
+    # would hide the actual defect behind an accident. Seeded, the spurious run SUCCEEDS end to end —
+    # writing silver and emitting a COMPLETE — which is exactly the damage being fixed.
+    seed_bronze(str(tmp_path / "bronze"), {}, rows=2)
+    dapr = _FakeDapr()
+    settings = _mover_settings(_HOPS[0], {"bronze": str(tmp_path / "bronze"), "silver": str(tmp_path / "silver")})
+    trigger = {"data": {"token": "t", "dataset": "bronze$pages", "namespace": "bronze"}}
+
+    status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, trigger))
+
+    assert status == {"status": "DROP"}
+    assert dapr.published == [], f"the events-lane mover emitted on a page arrival: {dapr.published}"
+    assert not (tmp_path / "silver").exists(), "the events-lane mover wrote silver from a page trigger"
+
+
+def test_the_dropped_lane_is_observable(tmp_path: Any, caplog: Any) -> None:
+    """Dropping quietly would delete the signal that the page lane has no consumer.
+
+    A DROP is an ack — Dapr neither redelivers nor dead-letters — so if the app logs nothing and counts
+    nothing, a completed IIIF ingest simply vanishes. That matters concretely: before the lane guard, a
+    ``bronze$pages`` arrival drove the events mover into a deterministic FAIL, and
+    ``docs/architecture/live-proof-2026-07-28.md`` used that FAIL as its evidence that the P7b page lane
+    was unlanded. Asserted at INFO because the mover's logger is configured to INFO
+    (``configure_app_logging``), so a DEBUG record would never be emitted at all.
+    """
+    seed_bronze(str(tmp_path / "bronze"), {}, rows=2)
+    dapr = _FakeDapr()
+    settings = _mover_settings(_HOPS[0], {"bronze": str(tmp_path / "bronze"), "silver": str(tmp_path / "silver")})
+
+    with caplog.at_level(logging.INFO, logger="medallion.services.transform"):
+        asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t", "dataset": "bronze$pages"}}))
+
+    record = next((r for r in caplog.records if r.message == "medallion_stage_other_lane"), None)
+    assert record is not None, f"the drop left no INFO record: {[r.message for r in caplog.records]}"
+    assert record.arrived == "bronze$pages" and record.expects == "bronze$events"
+
+
+def test_matching_lane_trigger_still_runs(tmp_path: Any) -> None:
+    """The other half of the guard: the discriminator must not reject the lane it belongs to.
+
+    Cheap to state and the reason a naive `if dataset != from_dataset: DROP` is not obviously safe —
+    the trigger carries the RAW dataset name while the mover's own ``from_dataset`` is
+    project-QUALIFIED, so comparing the wrong one silently drops every tenant trigger.
+    """
+    seed_bronze(str(tmp_path / "bronze"), {}, rows=2)
+    dapr = _FakeDapr()
+    settings = _mover_settings(_HOPS[0], {"bronze": str(tmp_path / "bronze"), "silver": str(tmp_path / "silver")})
+    trigger = {"data": {"token": "t", "dataset": "bronze$events", "namespace": "bronze"}}
+
+    status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, trigger))
+
+    assert status == {"status": "SUCCESS"}
+    assert any(p["topic"] == "medallion.silver" for p in dapr.published)
+
+
+def test_trigger_without_a_dataset_is_still_accepted(tmp_path: Any) -> None:
+    """Absent discriminator → no claim → proceed. An external publisher (or a pre-P7a trigger still in
+    a queue at rollout) omits ``dataset`` entirely; the guard rejects a WRONG lane, not an unstated one."""
+    seed_bronze(str(tmp_path / "bronze"), {}, rows=2)
+    dapr = _FakeDapr()
+    settings = _mover_settings(_HOPS[0], {"bronze": str(tmp_path / "bronze"), "silver": str(tmp_path / "silver")})
+
+    status = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t"}}))
+
+    assert status == {"status": "SUCCESS"}
 
 
 def test_produce_with_project_fails_closed_when_unresolvable(tmp_path: Any) -> None:

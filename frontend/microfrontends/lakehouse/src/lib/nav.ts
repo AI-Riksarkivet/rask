@@ -158,14 +158,14 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 		items: [
 			{
 				title: 'Access',
-				href: '/lakehouse/admin/access',
-				match: seg('/lakehouse/admin/access'),
+				href: '/lakehouse/governance/access',
+				match: seg('/lakehouse/governance/access'),
 				icon: ShieldCheck,
 			},
 			{
 				title: 'Audit',
-				href: '/lakehouse/admin/audit',
-				match: seg('/lakehouse/admin/audit'),
+				href: '/lakehouse/governance/audit',
+				match: seg('/lakehouse/governance/audit'),
 				icon: ScrollText,
 			},
 		],

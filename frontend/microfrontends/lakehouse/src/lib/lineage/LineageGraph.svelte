@@ -34,7 +34,8 @@
 	import FlowAutoFit from '$lib/lineage/FlowAutoFit.svelte';
 	import type { LineageState } from '$lib/lineage/store.svelte';
 	import { useColorMode } from '@rask/ui/color-mode';
-	import { LAYER, type GraphEdge } from '@rask/api/lineage';
+	import { LAYER } from '@rask/api/lineage';
+	import { depths, layout } from '$lib/lineage/layout';
 
 	let { store, buildMs = $bindable(0) }: { store: LineageState; buildMs?: number } = $props();
 
@@ -80,59 +81,6 @@
 		}
 		return m;
 	});
-
-	/** Derivation depth per dataset from the DERIVED_FROM edges (`source` derived from `target` ⇒
-	 * `target` is upstream). Longest-path with an iteration cap (a cyclic payload can't loop
-	 * forever). Replaces the hardcoded medallion name map, which piled every foreign dataset onto
-	 * one x column where their labels overlapped. */
-	function depths(ids: string[], graphEdges: GraphEdge[]): Map<string, number> {
-		const depth = new Map<string, number>();
-		for (const id of ids) depth.set(id, 0);
-		for (let i = 0; i < depth.size; i += 1) {
-			let changed = false;
-			for (const e of graphEdges) {
-				// e.source derived_from e.target: source sits one column right of target.
-				const next = (depth.get(e.target) ?? 0) + 1;
-				if (e.source !== e.target && next > (depth.get(e.source) ?? 0)) {
-					depth.set(e.source, next);
-					changed = true;
-				}
-			}
-			if (!changed) break;
-		}
-		return depth;
-	}
-
-	// Card pitch — the medallion/job cards are 200px wide and ~64px tall.
-	const COL_W = 240;
-	const ROW_H = 110;
-	const X0 = 30;
-	const Y0 = 40;
-
-	/** Positions nodes by derivation depth.
-	 *
-	 * Depth-0 roots are usually most of an estate (every table nothing else derives from), and
-	 * stacking them in one column made the canvas a thin tower thousands of px tall — `fitView`
-	 * then had to zoom right out to frame it. They now pack into a `ceil(sqrt(n))` wrapped grid,
-	 * so the root block stays roughly square. Derived nodes keep their depth column, shifted right
-	 * past the root grid, and still stagger by row within the column.
-	 *
-	 * Returns a stateful placer: call it once per node, in iteration order. */
-	function placer(ids: string[], depthOf: (id: string) => number) {
-		const roots = ids.reduce((n, id) => n + (depthOf(id) === 0 ? 1 : 0), 0);
-		const rootCols = Math.max(1, Math.ceil(Math.sqrt(roots)));
-		let rootSeen = 0;
-		const perLayer: Record<number, number> = {};
-		return (id: string) => {
-			const layer = depthOf(id);
-			if (layer <= 0) {
-				const i = rootSeen++;
-				return { x: X0 + (i % rootCols) * COL_W, y: Y0 + Math.floor(i / rootCols) * ROW_H };
-			}
-			const row = (perLayer[layer] = (perLayer[layer] ?? 0) + 1) - 1;
-			return { x: X0 + (rootCols - 1 + layer) * COL_W, y: Y0 + row * ROW_H };
-		};
-	}
 
 	// Rebuild the active graph plane whenever the polled data (or the chosen view) changes.
 	// Reconcile, don't rebuild: keep each node's identity + dragged position across the poll.
@@ -187,12 +135,19 @@
 					Math.max(0, ...[...j.outputs].map((o) => dsDepth.get(o) ?? 0)),
 				]),
 			);
-			const place = placer([...jobs.keys()], (id) => jobLayer.get(id) ?? 0);
+			const jobEdges = [...jobs.entries()].flatMap(([job, j]) =>
+				[...j.inputs].flatMap((inp) =>
+					[...(producedBy.get(inp) ?? [])]
+						.filter((pj) => pj !== job)
+						.map((pj) => ({ source: job, target: pj })),
+				),
+			);
+			const place = layout([...jobs.keys()], jobEdges, (id) => jobLayer.get(id) ?? 0);
 			nodes = [...jobs.entries()].map(([job, j]) => {
 				return {
 					id: job,
 					type: 'job' as const,
-					position: prev.get(job)?.position ?? place(job),
+					position: prev.get(job)?.position ?? place.get(job) ?? { x: 0, y: 0 },
 					data: {
 						id: job.replace(/^ray-jobs\//, ''),
 						author: j.author,
@@ -229,7 +184,7 @@
 		// stack on one overlapping column), with the depth-0 roots packed into a wrapped grid.
 		const dsIds = store.nodes.map((n) => n.id);
 		const dsDepth = depths(dsIds, store.edges);
-		const place = placer(dsIds, (id) => dsDepth.get(id) ?? 0);
+		const place = layout(dsIds, store.edges, (id) => dsDepth.get(id) ?? 0);
 		nodes = store.nodes.map((n) => {
 			// Version/failed badges ride the bulk estate read's per-node rollup — no per-dataset
 			// /producers fan-out (the run detail lives on the dataset detail page).
@@ -239,7 +194,7 @@
 			return {
 				id: n.id,
 				type: 'medallion' as const,
-				position: prev.get(n.id)?.position ?? place(n.id),
+				position: prev.get(n.id)?.position ?? place.get(n.id) ?? { x: 0, y: 0 },
 				data: {
 					id: n.id,
 					// Color/icon: keep the medallion ramp for the known stage tables, else key by depth.

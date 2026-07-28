@@ -27,6 +27,9 @@
 	});
 
 	const area = $derived(areaOf(page.url.pathname));
+	// Both areas behind the estate-admin door. Governance (access, audit) split out of admin so the
+	// breadcrumb would stop contradicting the rail — it must NOT split out of the door with it.
+	const PRIVILEGED_AREAS = new Set(['admin', 'governance']);
 
 	// The navbar's notification bell (@rask/ui's NotificationCenter, mounted by AppShell). The shell owns
 	// the surface and never fetches — the zone owns the transport — so this is the transport: the ONE
@@ -58,9 +61,9 @@
 	// every panel's own 401 handling. Scoped to the area, so merging admin into this zone did not widen
 	// the gate over the catalog, lineage or models routes.
 	const forbidden = $derived(
-		area === 'admin' && data.authEnabled && !meLoading && !(me?.estate_admin ?? false),
+		PRIVILEGED_AREAS.has(area) && data.authEnabled && !meLoading && !(me?.estate_admin ?? false),
 	);
-	const checking = $derived(area === 'admin' && data.authEnabled && meLoading);
+	const checking = $derived(PRIVILEGED_AREAS.has(area) && data.authEnabled && meLoading);
 	// Don't advertise the admin area's routes to an identity the door refuses (or before the verdict)
 	// — but hide only THOSE groups. Nulling the whole sidebar (what this did while each area had its
 	// own) would now blank catalog, lineage and models too, punishing a user for visiting a URL they

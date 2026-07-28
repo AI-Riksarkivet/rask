@@ -14,7 +14,7 @@ Four things only a live run can say:
 * the work **survives the pod**, which is the whole point of leaving ``localStorage``.
 
 Run: ``kubectl port-forward svc/lance-ns-catalog 8000:8000`` + ``svc/lance-ns-dex 5556:5556``, then
-``LANCE_E2E_CATALOG_URL=http://localhost:8000 uv run pytest tests/e2e/test_user_state_e2e.py -m user_state``.
+``LANCE_E2E_CATALOG_URL=http://localhost:8000 uv run pytest tests/e2e-py/test_user_state_e2e.py -m user_state``.
 """
 
 from __future__ import annotations

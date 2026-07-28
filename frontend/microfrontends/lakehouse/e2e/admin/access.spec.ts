@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { mockMe, signIn } from './session';
 
-// `/lakehouse/admin/access` — the FGA workbench (goal cond 4) against the frozen /v1/access contract, through
+// `/lakehouse/governance/access` — the FGA workbench (goal cond 4) against the frozen /v1/access contract, through
 // the zone's thin bearer-forwarding /capi routes. Hermetic via page.route: the four tabs (Graph /
 // Tuples / Check / Model) each drive their wire calls and the mock pins the REQUEST shapes — method,
 // path, query filters and JSON bodies are the contract.
@@ -92,7 +92,7 @@ test.beforeEach(async ({ context, page }) => {
 test('the Graph tab seeds from any object id and re-seeds from a neighbor click', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/admin/access');
+	await page.goto('/lakehouse/governance/access');
 	// The registry chips offer the estate's tables as one-click seeds.
 	await page.getByRole('button', { name: 'db1$t', exact: true }).click();
 	await expect(page.getByRole('heading', { name: 'table:db1$t' })).toBeVisible();
@@ -126,7 +126,7 @@ test('the Graph tab seeds from any object id and re-seeds from a neighbor click'
 test('the Tuples tab lists, filters server-side, grants via the dialog and revokes behind a confirm', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/admin/access');
+	await page.goto('/lakehouse/governance/access');
 	await page.getByRole('tab', { name: 'Tuples' }).click();
 	const table = page.locator('table');
 	await expect(table).toContainText('user:alice');
@@ -172,7 +172,7 @@ test('the Tuples tab lists, filters server-side, grants via the dialog and revok
 });
 
 test('the Check tab renders the big verdict and the echoed triple', async ({ page }) => {
-	await page.goto('/lakehouse/admin/access');
+	await page.goto('/lakehouse/governance/access');
 	await page.getByRole('tab', { name: 'Check' }).click();
 	await page.getByLabel('Check user').fill('user:alice');
 	await page.getByLabel('Check relation').fill('can_read_data');
@@ -193,7 +193,7 @@ test('the Check tab renders the big verdict and the echoed triple', async ({ pag
 });
 
 test('the Model tab shows the read-only DSL with the code-migration note', async ({ page }) => {
-	await page.goto('/lakehouse/admin/access');
+	await page.goto('/lakehouse/governance/access');
 	await page.getByRole('tab', { name: 'Model' }).click();
 	await expect(page.getByText('Model changes are code migrations.')).toBeVisible();
 	const dsl = page.getByLabel('Authorization model DSL');

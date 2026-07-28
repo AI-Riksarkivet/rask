@@ -61,7 +61,7 @@ test('a row click opens the drawer with the full record and linked context', asy
 	// Linked context: a same-zone filtered audit view + the cross-zone warehouse admin jump.
 	await expect(
 		drawer.getByRole('link', { name: 'Audit events for this warehouse' }),
-	).toHaveAttribute('href', '/lakehouse/admin/audit?resource=acme-cold');
+	).toHaveAttribute('href', '/lakehouse/governance/audit?resource=acme-cold');
 	const jump = drawer.getByRole('link', { name: /Open warehouse admin/ });
 	await expect(jump).toHaveAttribute('href', '/lakehouse/catalog/warehouses');
 	// The warehouse admin page is in the catalog AREA of this same zone now, so this jump is a soft

@@ -58,7 +58,7 @@ test('a raw GreptimeDB nanosecond timestamp renders as a time, not as an integer
 			],
 		}),
 	);
-	await page.goto('/lakehouse/admin/audit');
+	await page.goto('/lakehouse/governance/audit');
 	const cell = page.locator('tbody tr').first().locator('td').first();
 	await expect(cell).not.toContainText(nanos);
 	await expect(cell).toContainText('5m ago');
@@ -70,7 +70,7 @@ test('a raw GreptimeDB nanosecond timestamp renders as a time, not as an integer
 });
 
 test('renders the audit trail rows', async ({ page }) => {
-	await page.goto('/lakehouse/admin/audit');
+	await page.goto('/lakehouse/governance/audit');
 	await expect(page.getByRole('heading', { name: 'Audit log' })).toBeVisible();
 	const table = page.locator('table');
 	await expect(table).toContainText('can_drop');
@@ -79,7 +79,7 @@ test('renders the audit trail rows', async ({ page }) => {
 });
 
 test('the outcome filter re-queries the BFF', async ({ page }) => {
-	await page.goto('/lakehouse/admin/audit');
+	await page.goto('/lakehouse/governance/audit');
 	await expect(page.locator('table')).toContainText('can_read_data');
 	// the outcome picker is the @rask/ui Select (bits-ui)
 	await page.getByLabel('Outcome filter').click();
@@ -90,7 +90,7 @@ test('the outcome filter re-queries the BFF', async ({ page }) => {
 });
 
 test('a row click opens the drawer with the full record and linked context', async ({ page }) => {
-	await page.goto('/lakehouse/admin/audit');
+	await page.goto('/lakehouse/governance/audit');
 	await page.locator('tbody tr', { hasText: 'can_drop' }).click();
 	// The drawer carries the full record…
 	const drawer = page.locator('[data-slot="sheet-content"]');
@@ -108,12 +108,12 @@ test('a row click opens the drawer with the full record and linked context', asy
 });
 
 test('a ?resource= deep link lands pre-filtered (the drawers link into this)', async ({ page }) => {
-	await page.goto('/lakehouse/admin/audit?resource=table%3Adb1%24t');
+	await page.goto('/lakehouse/governance/audit?resource=table%3Adb1%24t');
 	await expect.poll(() => lastQuery).toContain('resource=table%3Adb1%24t');
 	await expect(page.getByLabel('Resource filter')).toHaveValue('table:db1$t');
 });
 
 test('the shared sidebar marks the Audit leaf active', async ({ page }) => {
-	await page.goto('/lakehouse/admin/audit');
+	await page.goto('/lakehouse/governance/audit');
 	await expect(page.locator('[data-active="true"]').filter({ hasText: 'Audit' })).toBeVisible();
 });
