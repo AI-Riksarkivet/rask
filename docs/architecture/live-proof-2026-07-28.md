@@ -218,3 +218,20 @@ HELM INSTALL EXIT=0
 MINE, not the chart's, and are recorded here so nobody re-reads them as evidence: the first had no
 third-party preload against a 12-minute timeout (cold pulls), and the second was killed mid-install
 when a disk cleanup deleted its cluster. `make kind-preload` exists to remove the first cause.
+
+**Caught in the same run — a Job FAILS and the install still reports success.** The job table from the
+proving cluster:
+
+```
+rask-dapr-inject-sweep-r1   Failed     0/1   15m
+rask-nats-stream-r1         Complete   1/1
+rask-openbao-seed-r1        Complete   1/1
+rask-openfga-migrate-r1     Complete   1/1
+rask-rustfs-mkbucket-r1     Complete   1/1
+```
+
+`helm install --wait` returned **0** with `rask-dapr-inject-sweep-r1` in `Failed`. Whatever that sweep
+does (it exists to re-trigger Dapr sidecar injection — the exact race that wedged the FIRST deploy of
+this session, where the media trio came up 1/2 without sidecars), a green install that silently
+tolerates its failure is a gate that cannot catch the problem it was written for. Not investigated —
+the throwaway cluster was deleted before this was noticed. **Open.**
