@@ -390,15 +390,19 @@ kind-load: ## Side-load the :dev image set into the kind cluster
 # host's docker, so a fresh cluster re-pulls every one of them from the internet — ~20 minutes of
 # pure network before a single app pod starts. The host docker cache, by contrast, persists across
 # clusters: pull once here, side-load, and every later cluster starts in seconds. Derived from the
-# actual render (not a hand-list, which would rot) with our own :dev images filtered out. Tags
-# ending in ':' or ':release' are subchart defaults the render leaves incomplete — skipped, they
-# are pulled by the pods that resolve them.
+# actual render (not a hand-list, which would rot) with our own :dev images filtered out. An image
+# with NO tag is skipped (a subchart default the render leaves incomplete — the pod that resolves it
+# pulls it). The character classes are DELIBERATELY case-sensitive-inclusive: docker tags allow
+# uppercase, and a lowercase-only class silently TRUNCATED `apache/age:release_PG16_1.5.0` to
+# `apache/age:release_` and `minio/mc:RELEASE.…` to `minio/mc:` — so the two images the OpenFGA
+# migration and the bucket-init hook block on were the only ones this target never preloaded, which
+# is exactly backwards.
 kind-preload: bootstrap ## Pull the chart's third-party images into the host cache, then side-load them
 	@imgs=$$(helm template rask ./chart --set singleTenant.enabled=true --set media.enabled=true \
 	    --set observability.enabled=true 2>/dev/null \
-	  | grep -oE 'image: *"?[a-z0-9./:@_-]+' | sed 's/image: *"\?//' \
+	  | grep -oE 'image: *"?[A-Za-z0-9./:@_-]+' | sed 's/image: *"\?//' \
 	  | grep -vE "^($$(echo '$(K3S_IMAGES)' | tr ' ' '|'))(:|$$)" \
-	  | grep -E ':[a-z0-9][a-z0-9._-]*$$' | sort -u); \
+	  | grep -E ':[A-Za-z0-9][A-Za-z0-9._-]*$$' | sort -u); \
 	  echo "$$imgs" | sed 's/^/  + /'; \
 	  for i in $$imgs; do docker image inspect $$i >/dev/null 2>&1 || docker pull -q $$i || \
 	    echo "  !! pull failed (skipped): $$i"; done; \
@@ -406,8 +410,12 @@ kind-preload: bootstrap ## Pull the chart's third-party images into the host cac
 	    $(KIND) load docker-image $$i --name $(KIND_CLUSTER) >/dev/null 2>&1 || true; done; \
 	  echo "==> third-party images cached on the host and side-loaded into kind-$(KIND_CLUSTER)"
 
+# `--wait` is SAFE here since the bootstrap Jobs left the hook lifecycle (see "BOOTSTRAP JOBS" in
+# chart/templates/_helpers.tpl). It used to deadlock: the OpenFGA migration was a post-install hook,
+# and post-install hooks run AFTER --wait, which was itself blocked on the server the migration had to
+# unblock. Keeping --wait off was the workaround; keeping it ON is now the regression test.
 kind-deploy: k3s-deps ## helm upgrade --install release `rask` into the kind cluster
-	helm upgrade --install rask ./chart --kube-context kind-$(KIND_CLUSTER) --timeout 600s
+	helm upgrade --install rask ./chart --kube-context kind-$(KIND_CLUSTER) --wait --timeout 900s
 	$(LOCALBIN)/kubectl --context kind-$(KIND_CLUSTER) rollout status deploy/rask-gateway --timeout=300s
 
 kind-down: ## Delete the rask kind cluster

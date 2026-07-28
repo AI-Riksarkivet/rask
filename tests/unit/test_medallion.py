@@ -16,13 +16,20 @@ from typing import Any, cast
 
 import medallion.services.transform as mover
 import pytest
+from lineage_kit.consume import LineageDoc
 from medallion.core.config import MedallionSettings
 from medallion.schemas.events import build_run_event
-from medallion.services.compute import WriteResult
+from medallion.services.compute import UpstreamFacts, WriteResult
 from medallion.services.ingest_trigger import handle_bronze_arrival
 from medallion.services.produce import produce
 
 from service_kit.openlineage import run_id_for
+
+
+def _fake_upstream(monkeypatch: pytest.MonkeyPatch, *, version: int = 1) -> None:
+    """Stub the pre-write upstream read (R26): these tests fake the WRITE, so they must fake the read the
+    consume-layer ``lineage`` document is built from — there is no real Lance dataset behind ``/tmp/from``."""
+    monkeypatch.setattr(mover, "read_upstream", lambda uri, _so: UpstreamFacts(uri=uri, version=version))
 
 
 class _FakeDapr:
@@ -154,10 +161,11 @@ def test_mover_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: p
 
     submitted: dict[str, Any] = {}
 
-    async def fake_submit(_settings: Any, *, from_uri: str, to_uri: str, stage: str, token: str) -> None:
-        submitted.update({"from": from_uri, "to": to_uri, "stage": stage, "token": token})
+    async def fake_submit(_settings: Any, *, from_uri: str, to_uri: str, stage: str, token: str, lineage_json: str = "") -> None:
+        submitted.update({"from": from_uri, "to": to_uri, "stage": stage, "token": token, "lineage": lineage_json})
 
     monkeypatch.setattr(mover, "submit_stage_job", fake_submit)
+    _fake_upstream(monkeypatch)
     measured = WriteResult(version=7, row_count=5, size_bytes=99, column_map=[("id", "id", "IDENTITY")])
     measured_uris: dict[str, str] = {}
 
@@ -171,10 +179,15 @@ def test_mover_ray_branch_submits_job_then_emits_measured_lineage(monkeypatch: p
     status = asyncio.run(mover.handle_stage(cast(Any, dapr), _RAY_MOVER, {"data": {"token": "tok"}}))
 
     assert status == {"status": "SUCCESS"}
-    assert submitted == {"from": "/tmp/from", "to": "/tmp/to", "stage": "silver", "token": "tok"}
+    assert {k: submitted[k] for k in ("from", "to", "stage", "token")} == {"from": "/tmp/from", "to": "/tmp/to", "stage": "silver", "token": "tok"}
     # The measure reads BOTH ends — it needs the upstream schema to reconstruct the edges.
     assert measured_uris == {"from": "/tmp/from", "to": "/tmp/to"}
     lineage, trigger = dapr.calls  # emit then next-stage trigger
+    # R26: the consume-layer provenance document rides the submission, so the JOB stamps it in its own
+    # commit — the distributed path cannot produce a dataset the in-process path would have stamped.
+    handed_over = LineageDoc.model_validate_json(submitted["lineage"])
+    assert handed_over.run_id == lineage["data"]["run"]["runId"]
+    assert handed_over.output.name == "silver$features"
     facets = lineage["data"]["outputs"][0]["facets"]
     assert facets["version"]["datasetVersion"] == "7"  # the measured version
     assert facets["columnLineage"]["fields"]["id"]["inputFields"][0]["field"] == "id"
@@ -209,6 +222,7 @@ def test_mover_write_is_single_flight_under_concurrent_delivery(monkeypatch: pyt
         return WriteResult(version=1, row_count=1, size_bytes=1)
 
     monkeypatch.setattr(mover, "transform_stage", slow_transform)
+    _fake_upstream(monkeypatch)
 
     async def _run_two() -> list[dict[str, str]]:
         return list(
@@ -244,6 +258,7 @@ def test_ray_mover_submits_for_blob_upstreams(monkeypatch: pytest.MonkeyPatch) -
         return WriteResult(version=2, row_count=1, size_bytes=10)
 
     monkeypatch.setattr(mover, "transform_stage", fake_transform)
+    _fake_upstream(monkeypatch)
     dapr = _FakeDapr()
 
     status = asyncio.run(mover.handle_stage(cast(Any, dapr), _RAY_MOVER, {"data": {"token": "tok"}}))

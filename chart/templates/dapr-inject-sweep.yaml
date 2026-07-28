@@ -1,0 +1,118 @@
+{{- if and .Values.dapr.enabled .Values.dapr.sidecars }}
+# Dapr sidecar-injection sweep — the half of the injector-race fix that `failurePolicy: Fail` cannot
+# reach (see "DAPR SIDECAR INJECTION" in _helpers.tpl and dapr.dapr_sidecar_injector in values.yaml).
+#
+# helm applies a release in a FIXED KIND ORDER, and `MutatingWebhookConfiguration` is not in that list,
+# so it is applied AFTER every Deployment. On a first install there is therefore a window — a couple of
+# seconds, but reliably hit — in which the ReplicaSet controllers create app pods while no injector
+# webhook exists at all. Those pods are admitted with no daprd container, and NOTHING replaces them: a
+# CrashLoopBackOff restarts the container inside the same sidecar-less pod, a Deployment does not
+# recreate a pod that merely never becomes Ready, and `helm install --wait` sits there until it times
+# out. `scripts/e2e_stack.sh` papers over this with a hand-run `kubectl delete pods`; the chart should
+# not need a human for it.
+#
+# So this Job does the only thing that CAN fix an already-admitted pod: waits for the injector to be
+# Ready, then deletes exactly the pods that want a sidecar and do not have one. Their ReplicaSets
+# recreate them, and because the webhook now exists AND fails closed, the replacements are guaranteed
+# to be injected (a create that cannot reach the injector is rejected and retried, never silently
+# un-injected). It is a plain bootstrap resource, not a hook, for the same reason as its four siblings:
+# `--wait` is blocked on precisely the pods this unblocks.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "lance.fullname" . }}-sa-dapr-sweep
+  labels: {{- include "lance.labels" . | nindent 4 }}
+# This SA genuinely needs the k8s API, so it does NOT take the zero-grant `-sa-jobs` identity
+# (automountServiceAccountToken: false there) — same carve-out the snapshot CronJob and the Dapr
+# dashboard already have.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "lance.fullname" . }}-dapr-sweep
+  labels: {{- include "lance.labels" . | nindent 4 }}
+rules:
+  # Namespace-scoped and minimal: read the injector's rollout status, and list/delete pods. No create
+  # (the ReplicaSets do that), no other resource, no cluster scope.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "lance.fullname" . }}-dapr-sweep
+  labels: {{- include "lance.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "lance.fullname" . }}-dapr-sweep
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lance.fullname" . }}-sa-dapr-sweep
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "lance.fullname" . }}-dapr-inject-sweep-{{ include "rask.bootstrapRev" . }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      # No `dapr.io/enabled` label here — this pod must NOT want a sidecar (it would be sweeping
+      # itself), and the component label keeps it visible to release inventory like every other
+      # bootstrap pod.
+      labels:
+        {{- include "lance.labels" . | nindent 8 }}
+        app.kubernetes.io/component: dapr-inject-sweep
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-dapr-sweep
+      containers:
+        - name: sweep
+          image: {{ .Values.dapr.sweepImage }}
+          {{- if .Values.security.infraContexts.enabled }}
+          securityContext: { runAsNonRoot: true, runAsUser: 65532, allowPrivilegeEscalation: false, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+          {{- end }}
+          resources:
+            requests: { cpu: "10m", memory: "32Mi" }
+            limits: { cpu: "200m", memory: "128Mi" }
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              # 1. The injector must be serving before a recreate can possibly be injected.
+              until [ "$(kubectl get deploy dapr-sidecar-injector -o jsonpath='{.status.readyReplicas}' 2>/dev/null)" -ge 1 ] 2>/dev/null; do
+                echo wait-injector; sleep 3
+              done
+              echo "injector ready"
+              # 2. Sweep until a whole pass finds nothing. `-o jsonpath` prints "<pod>|<c1>,<c2>,";
+              #    a pod whose container list has no daprd raced the webhook.
+              i=0
+              while [ "$i" -lt {{ .Values.dapr.sweepPasses | int }} ]; do
+                bad=$(kubectl get pods -l 'app.kubernetes.io/instance={{ .Release.Name }},dapr.io/enabled=true' \
+                        -o 'jsonpath={range .items[*]}{.metadata.name}|{range .spec.containers[*]}{.name},{end}{"\n"}{end}' \
+                      | grep -v 'daprd' | cut -d'|' -f1)
+                if [ -z "$bad" ]; then
+                  echo "every sidecar-wanting pod carries daprd — nothing to sweep"
+                  exit 0
+                fi
+                echo "recreating pods that raced the injector webhook: $bad"
+                for p in $bad; do kubectl delete pod "$p" --wait=false || true; done
+                i=$((i + 1))
+                sleep 5
+              done
+              echo "!! pods still have no daprd sidecar after {{ .Values.dapr.sweepPasses }} sweeps."
+              echo "!! Recreated pods are still coming up un-injected, which means the injector webhook is"
+              echo "!! not being applied to them. Check that the MutatingWebhookConfiguration's"
+              echo "!! objectSelector still matches the label rask.daprPodLabels stamps:"
+              echo "!!   kubectl get mutatingwebhookconfiguration dapr-sidecar-injector -o yaml"
+              echo "!!   kubectl logs -l app=dapr-sidecar-injector"
+              exit 1
+{{- end }}

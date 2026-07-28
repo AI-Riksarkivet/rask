@@ -38,7 +38,7 @@ from medallion.schemas.events import build_run_event
 from medallion.services import media
 from medallion.services.ingest import ingest_to_bronze
 
-from service_kit.lakehouse import schema
+from service_kit.lakehouse import blobs, schema
 from service_kit.lakehouse.sinks import S3Sink
 from service_kit.lakehouse.sources import S3Source
 
@@ -113,9 +113,12 @@ def _seed_source(fs: pafs.S3FileSystem) -> None:
 
 def _silver() -> list[dict[str, str]]:
     bronze = lance.dataset(BRONZE, storage_options=SO)
-    rows = bronze.count_rows()
-    images = [payload for _addr, payload in bronze.read_blobs("payload", indices=list(range(rows)))]
-    sources = bronze.to_table(columns=["source_uri"]).column("source_uri")
+    # ONE row-aligned scan (blob_handling="all_binary") for the source URIs AND the payload bytes —
+    # read_blobs DROPS null payloads and would misalign `images` against `sources` (the R27 landmine).
+    aligned = blobs.read_aligned_table(bronze, columns=["source_uri", "payload"])
+    rows = aligned.num_rows
+    images = aligned.column("payload").to_pylist()
+    sources = aligned.column("source_uri")
     table = pa.table(
         {
             "id": pa.array(range(rows), pa.int64()),

@@ -14,7 +14,7 @@ kind + `ray job submit`, proving Lance's distributed capabilities against RustFS
 
 | Piece | File |
 | ----- | ---- |
-| Thin CPU Ray image (`rayproject/ray:2.56.0-py312-cpu` + `lance-ray` + `pylance==8.0.0`) | `.docker/ray-lance.dockerfile` |
+| Thin CPU Ray image (`rayproject/ray:2.56.1-py312-cpu` + `lance-ray==0.5.0` + `pylance==9.0.0`) | `.docker/ray-lance.dockerfile` |
 | A real Ray head (GCS 6379, dashboard/job API 8265) + Service, single node | `deploy/ray-lance-demo.yaml` |
 | The submitted job — a genuine distributed Lance pipeline | `scripts/ray_lance_job.py` |
 | One-shot driver | `make ray-demo` (and `make ray-demo-clean`) |
@@ -54,22 +54,39 @@ RAY-LANCE ALL OK
 
 ## Verified lance_ray ↔ pylance version findings (grounded in reality, not just docs)
 
-Two real incompatibilities surfaced (and are handled) — worth knowing before the rask merge pins versions:
+> **Re-measured 2026-07-28 under the R27 Ray-plane audit, after the image pins moved from
+> `lance-ray 0.4.2` / `pylance 8.0.0` / `pyarrow 19.0.1` to the fleet's `0.5.0` / `9.0.0` / `24.0.0`.**
+> The pins moved because a `pylance 8.0.0` reader **cannot read the blob-v2 datasets the fleet writes**
+> — the full matrix is in [`architecture/lance-blob-v2-findings.md`](architecture/lance-blob-v2-findings.md).
+> Findings 1–4 below are kept with their outcome at each version, because two of the three "verified"
+> claims that were acted on turned out to be right for the wrong reason.
 
 1. **Ray Data's built-in `write_lance` datasink** calls `write_fragments(storage_options_provider=…)`, a kwarg
    pylance 8.0.0 lacks → use the **`lance-ray` package** (`lance_ray.write_lance`), which is version-matched.
-2. **lance_ray's DISTRIBUTED index build is incompatible with pylance 8.0.0 — both paths, verified.** The
-   scalar path (`create_scalar_index`) calls `create_index_uncommitted(index_type=, fragment_ids=)` and the
-   vector path (`create_index`, IVF_FLAT/IVF_PQ) calls `create_index_segment_builder` — pylance 8.0.0 exposes
-   *neither* of those distributed-index primitives. And *unpinning* pylance breaks `write_dataset(min_rows_per_file=)`.
-   So on our pinned pylance the demo builds the index with the dataset's **native** pylance API inside the ray
-   job (a real index a query serves — the `index created via ray + a query uses it` contract). A truly
-   worker-distributed index needs the lance_ray↔pylance version alignment the rask/KubeRay merge will pin.
-3. `lance_ray.write_lance` has **no `enable_stable_row_ids`** param. Work around it by creating the target
-   with stable ids (a native pylance `write_dataset(enable_stable_row_ids=True)` of an empty schema) and then
-   distributed-**appending** the Ray fragments — the property is dataset-level, so the output ends up with
-   `has_stable_row_ids=True`.
+   Still the rule: the packaged integration is the supported seam.
+2. **lance_ray's DISTRIBUTED scalar index build fails at 0.4.2 + pylance 8.0.0 — but not for the recorded
+   reason.** The old note said pylance 8.0.0 "exposes neither" of `create_index_uncommitted(index_type=,
+   fragment_ids=)` / `create_index_segment_builder`. Measured: **8.0.0 HAS both `index_type` and
+   `fragment_ids`**, and the build still raises *"BTREE distributed indexing uses
+   `create_index_uncommitted(..., index_type="BTREE", fragment_ids=...)`"*. So the conclusion (fall back to
+   the native build) held while the stated cause did not. `scripts/ray_lance_job.py` no longer hardcodes the
+   fallback: it ATTEMPTS the distributed build, prints which path produced the index, and degrades — so the
+   capability job is the answer at whatever the image pins, not a note that ages.
+3. `lance_ray.write_lance` genuinely had **no `enable_stable_row_ids`** at 0.4.2 (verified by signature);
+   **it exists at 0.5.0.** The workaround — create the target with stable ids via native pylance
+   `write_dataset(enable_stable_row_ids=True)` of an empty schema, then distributed-**append** the Ray
+   fragments (the property is dataset-level) — is correct at BOTH versions, so the jobs keep it until a
+   cluster run confirms the single-call form.
 4. `compact_files` needs a real `CompactionOptions` on pylance 8 — a bare `None` trips an internal dict check.
+5. **`lance_ray.read_lance` DOES surface `_rowid`** via `scanner_options={"with_row_id": True}` (verified at
+   0.4.2 *and* 0.5.0), and 0.5.0 adds `with_metadata=True` for `_rowaddr` + a derived `_fragid`. The claim in
+   `scripts/ray_stage_job.py` that it does not — which is why the tabular cascade head writes on the driver
+   instead of distributing — was never measured and is false. Correcting the code is a live behaviour change
+   to the cascade head and is recorded as a follow-up to prove on kind.
+6. **0.5.0-only surface** (absent at 0.4.2, so any note predating the bump cannot have used it):
+   `add_columns_from`, `merge_columns_from`, `vector_search`, `init_global_pool`/`set_global_pool`
+   (reusable Ray Pool — upstream currently wires it to `vector_search` only), and `write_lance`'s
+   `target_bases` / `external_blob_mode` / `allow_external_blob_outside_bases`.
 
 ## Event-driven cascade integration (wired, not just a demo)
 
@@ -97,17 +114,25 @@ cluster). Fake-Ray in-process stays the default.
 
 ### Why the media path is a pylance round-trip and not `lance_ray` end-to-end (Phase-3 parity, 2026-07-13)
 
-`lance_ray` **is not the redundant layer here — it genuinely can't round-trip an inline blob column** on
-0.4.2. Verified live, not assumed: `lance_ray.read_lance` materialises a `lance.blob.v2` column as plain
+`lance_ray` **is not the redundant layer here — it genuinely can't round-trip an inline blob column.**
+Verified live, not assumed: `lance_ray.read_lance` materialises a `lance.blob.v2` column as plain
 `large_binary` (the schema before/after: `extension<lance.blob.v2<BlobType>>` → `large_binary`), so a
-`lance_ray.write_lance` of that Ray dataset writes plain binary and the column loses its blob typing. The
-0.4.2 blob params (`base_store_params`, `initial_bases`) are for **external** `Blob.from_uri` references,
-not inline round-trip typing; the `external_blob_mode`/`target_bases` params in `lance_docs/ray.md` are a
-**newer lance_ray than 0.4.2** (confirmed absent from the installed signature). So the media path re-wraps
-via pylance — a justified bridge, not DIY duplication. **Exit:** when the ray image bumps to a lance_ray
-that preserves inline blob typing on read/write, drop the round-trip (and the inlined deriver) and route
-media through the distributed path too. The `thumbnail`/`embedding` derivation is our business logic and
-is never something `lance_ray` provides — that stays regardless.
+`lance_ray.write_lance` of that Ray dataset writes plain binary and the column loses its blob typing.
+
+**Still true at 0.5.0 (R27, 2026-07-28) — and it is deliberate upstream, not a gap.** `lance_ray`'s
+datasource says so in the source: *"Blob v2 extension columns are exposed as plain LargeBinary bytes."*
+The blob params (`base_store_params`, `initial_bases`, and 0.5.0's `target_bases` / `external_blob_mode` /
+`allow_external_blob_outside_bases`) govern **external** `Blob.from_uri` references and where new data files
+land — not inline round-trip typing. So the media path re-wraps via pylance — a justified bridge, not DIY
+duplication. **Exit:** a lance_ray that preserves blob typing across read→write; drop the round-trip (and
+the inlined deriver) then. The `thumbnail`/`embedding` derivation is our business logic and is never
+something `lance_ray` provides — that stays regardless.
+
+Worth copying from that same datasource: it handles the **null-blob sparse alignment** explicitly, comparing
+the handle count from `take_blobs` against the scanned descriptor count and walking sparsely for blob v2
+(*"Blob v2 currently skips null rows, returning fewer handles"*). Our own read path uses the simpler
+cardinality-preserving route — `service_kit.lakehouse.blobs.read_aligned_table`, i.e.
+`scanner(blob_handling="all_binary")` — for the same reason.
 
 **Live-proven on kind (pre-R23 shape, kept as history):** (tabular) `/produce` → the then raw-to-bronze
 mover (ray on) submitted a Ray job that produced `bronze` (`stage=bronze`, 2.2, `stable_row_ids=True`)

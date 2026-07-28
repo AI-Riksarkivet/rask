@@ -73,17 +73,31 @@ def _trace_env() -> dict[str, str]:
     return {key.upper(): value for key, value in carrier.items() if key in ("traceparent", "tracestate")}
 
 
-async def submit_stage_job(settings: MedallionSettings, *, from_uri: str, to_uri: str, stage: str, token: str | None) -> None:
+async def submit_stage_job(
+    settings: MedallionSettings,
+    *,
+    from_uri: str,
+    to_uri: str,
+    stage: str,
+    token: str | None,
+    lineage_json: str = "",
+) -> None:
     """Submit (or re-attach to) the stage transform on the Ray cluster and block until it succeeds.
 
     Raises :class:`RayJobError` on a submit failure, a FAILED/STOPPED job, or a timeout — the caller maps
     that to RETRY. On success the downstream Lance dataset exists at ``to_uri`` and the caller measures it.
+
+    ``lineage_json`` is this run's consume-layer provenance document (R26). It rides the runtime_env so
+    the job writes the ``lineage`` JSONB column in the SAME commit as the data — the distributed path
+    must not produce a governed dataset the in-process path would have stamped. It is provenance, never
+    a credential, so echoing it back through the jobs API (which mirrors runtime_env) is harmless.
     """
     submission_id = _submission_id(stage, token)
     env_vars = {
         "FROM_URI": from_uri,
         "TO_URI": to_uri,
         "STAGE": stage,
+        "LINEAGE_JSON": lineage_json,
         "S3_ENDPOINT": settings.s3_endpoint,
         "S3_KEY": settings.s3_access_key_id,
         "S3_SECRET": settings.s3_secret_access_key.get_secret_value(),

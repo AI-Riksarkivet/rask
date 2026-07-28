@@ -90,13 +90,18 @@ fi
 echo "   node holds catalog digest ${CATALOG_DIGEST}"
 
 step "3/8 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, heavy extras OFF)"
-# NO `--wait` — it DEADLOCKS on a fresh cluster, which is why this job never once passed in CI.
+# HISTORY: `--wait` used to DEADLOCK on a fresh cluster, which is why this job never once passed in CI.
 # helm's order is: apply manifests → (--wait) block until every resource is Ready → run post-install hooks.
-# The OpenFGA schema migration IS a post-install hook, and the OpenFGA server cannot become Ready until its
-# schema exists. So --wait blocks on OpenFGA, OpenFGA blocks on the migration, and the migration blocks on
+# The OpenFGA schema migration WAS a post-install hook, and the OpenFGA server cannot become Ready until its
+# schema exists. So --wait blocked on OpenFGA, OpenFGA blocked on the migration, and the migration blocked on
 # --wait. It "worked" on a long-lived local cluster only because a PREVIOUS install had already migrated the
 # database, so the server came up Ready immediately and the deadlock never armed. Textbook works-on-my-machine.
-# Dropping --wait lets the hook run; we then wait EXPLICITLY, below, for what the suites actually need.
+# FIXED IN THE CHART (2026-07-28): the four bootstrap Jobs are ordinary release resources now, applied in the
+# same wave as the servers they unblock — see "BOOTSTRAP JOBS" in chart/templates/_helpers.tpl. `helm install
+# --wait` is safe with no wrapper. This script still omits it, for a DIFFERENT and still-real reason: the Dapr
+# sidecar-injector race below means the app pods that come up in the first wave are recreated anyway, so
+# waiting on them here would only buy a wait we then throw away. The explicit rollout waits are the ones that
+# matter. Do not re-read this as "the deadlock is still there".
 helm upgrade --install "$RELEASE" ./chart --timeout 600s \
   --set auth.enabled=true \
   --set medallion.fgaEnabled=true \

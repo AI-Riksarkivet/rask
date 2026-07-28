@@ -25,6 +25,16 @@ never crashes compute). See ``config.LineageSettings``.
 
 from lineage_kit.actor import LineageActorMixin
 from lineage_kit.config import LineageSettings
+from lineage_kit.consume import (
+    AUTHOR_RUN_FACET,
+    LANCE_RUN_FACET,
+    LINEAGE_DOC_SCHEMA,
+    DatasetRef,
+    LineageDoc,
+    LineageEdge,
+    as_json_rows,
+    parse_doc,
+)
 from lineage_kit.context import CONTEXT_ENV_VAR, LineageContext, coerce_context, current_context, resolve_context, use_context
 from lineage_kit.emitter import (
     ClientEmitter,
@@ -68,11 +78,14 @@ from lineage_kit.stage import stage
 
 
 __all__ = [
+    "AUTHOR_RUN_FACET",
     "BASE_FACET_SCHEMA_URL",
     "CONTEXT_ENV_VAR",
     "DATASET_VERSION_FACET_SCHEMA_URL",
     "DATASOURCE_FACET_SCHEMA_URL",
     "ERROR_MESSAGE_FACET_SCHEMA_URL",
+    "LANCE_RUN_FACET",
+    "LINEAGE_DOC_SCHEMA",
     "OUTPUT_STATISTICS_FACET_SCHEMA_URL",
     "PARENT_RUN_FACET_SCHEMA_URL",
     "PRODUCER",
@@ -81,6 +94,7 @@ __all__ = [
     "TERMINAL_STATES",
     "ClientEmitter",
     "Dataset",
+    "DatasetRef",
     "DatasetVersionFacet",
     "DatasourceFacet",
     "Emitter",
@@ -88,6 +102,8 @@ __all__ = [
     "Job",
     "LineageActorMixin",
     "LineageContext",
+    "LineageDoc",
+    "LineageEdge",
     "LineageRun",
     "LineageSettings",
     "NoopEmitter",
@@ -101,12 +117,14 @@ __all__ = [
     "SchemaDatasetFacet",
     "SchemaField",
     "ambient_emitter",
+    "as_json_rows",
     "build_emitter",
     "coerce_context",
     "current_context",
     "custom_facet",
     "default_emitter",
     "job_run",
+    "parse_doc",
     "resolve_context",
     "run_id_for",
     "set_default_emitter",

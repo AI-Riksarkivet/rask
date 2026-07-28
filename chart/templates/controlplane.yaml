@@ -20,6 +20,7 @@ spec:
       labels:
         {{- include "rask.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: controlplane
+        {{- include "rask.daprPodLabels" . | nindent 8 }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:

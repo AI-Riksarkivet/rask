@@ -12,13 +12,21 @@ the written version + statistics for the OpenLineage WROTE edge, exactly as the 
 TWO paths, chosen by whether the upstream carries a blob-v2 column:
 * TABULAR → the distributed lance_ray read→map_batches(stamp)→write path (Ray workers, one commit).
 * MEDIA (blob-v2 present) → a pylance-native round-trip on the driver: lance_ray's write strips blob
-  typing (exposes plain LargeBinary), so a blob column must be re-materialised via ``read_blobs`` and
+  typing (exposes plain LargeBinary), so a blob column must be re-materialised via a
+  ``blob_handling="all_binary"`` scan (NOT ``read_blobs`` — it drops null rows) and
   re-wrapped with ``blob_array`` before a 2.2 write, and image payloads get an inline thumbnail +
   embedding derived here. This is the SAME contract as compute.transform_stage / derivers — the deriver
   is inlined (self-contained job, like ray_train_job) and drift-pinned to services/medallion by a unit
   test. Closes the Phase-3 gap that forced media stages onto the in-process fallback (Ray blob parity).
 
-Env: FROM_URI TO_URI STAGE  S3_ENDPOINT S3_KEY S3_SECRET [S3_REGION]
+Consume-layer provenance (R26): the submitting mover hands over this run's ``LineageDoc`` as
+``LINEAGE_JSON``, and every path below writes it as the ``lineage`` column (Arrow JSON → Lance JSONB) in
+the SAME commit as the data — a governed row must never be readable without its provenance, and the
+distributed path must not produce a dataset the in-process path would have stamped. Any upstream
+``lineage`` cell is DROPPED first: it describes the parent's run, not this one. Unset/empty → no column
+(the pre-R26 shape), so the job stays runnable by hand.
+
+Env: FROM_URI TO_URI STAGE [LINEAGE_JSON]  S3_ENDPOINT S3_KEY S3_SECRET [S3_REGION]
      [TRACEPARENT TRACESTATE OTEL_*] — trace continuity across the Ray boundary (prod-readiness P3):
      when the submitting mover injected its span + OTLP config, the job runs under one root span
      parented on that trace; absent → untraced, exactly as before.
@@ -54,6 +62,7 @@ from lance import blob_array, blob_field
 # Kept byte-identical to service_kit.lakehouse.blobs.is_blob_field / medallion.services.media so the Ray path and the
 # in-process path derive the SAME thumbnail/embedding; the pin test fails if either side drifts.
 _BLOB_V2_EXTENSION_NAME = "lance.blob.v2"  # == service_kit.lakehouse.blobs.BLOB_V2_EXTENSION_NAME
+_LINEAGE_COLUMN = "lineage"  # == compute._LINEAGE_COLUMN (R26)
 _THUMBNAIL_SIZE = (128, 128)  # == media.THUMBNAIL_SIZE
 _EMBEDDING_DIMS = 8  # == media.EMBEDDING_DIMS
 
@@ -115,13 +124,25 @@ def _reset_if_legacy(to_uri: str, so: dict[str, str]) -> None:
         _reset_dataset(to_uri, so)
 
 
-def _stamp_stage(table: pa.Table, stage: str) -> pa.Table:
+def _lineage_array(lineage: str, rows: int) -> pa.Array:
+    """``rows`` copies of the run's provenance document as Arrow JSON (Lance stores it as JSONB).
+
+    Mirror of compute._lineage_column: the extension type is what makes the cell queryable in place
+    (``json_get_string`` / ``json_extract`` in a scan filter) rather than an opaque string.
+    """
+    return pa.array([lineage] * rows, pa.json_())
+
+
+def _stamp_stage(table: pa.Table, stage: str, lineage: str = "") -> pa.Table:
     """Carry every upstream column forward, thread root-provenance ``source_rowid``, and (re)stamp ``stage``
     — the generic per-stage transform, type-preserving via the pyarrow batch format.
 
     Mirrors compute._carry_source_rowid + _stamp_stage: an upstream that already carries ``source_rowid``
     keeps it (a later stage), the cascade head mints it from the reserved ``_rowid`` metacolumn (durable
     under stable row ids), and ``_rowid`` itself is never persisted (reserved name; advances on overwrite).
+
+    ``lineage`` re-stamps the consume-layer provenance column (R26) exactly like ``stage``: the inherited
+    cell is dropped, this run's document appended. Empty → the column is dropped and not re-added.
     """
     if "source_rowid" not in table.column_names and "_rowid" in table.column_names:
         table = table.append_column(pa.field("source_rowid", pa.uint64()), table.column("_rowid").cast(pa.uint64()))
@@ -129,7 +150,12 @@ def _stamp_stage(table: pa.Table, stage: str) -> pa.Table:
         table = table.drop_columns(["_rowid"])
     if "stage" in table.column_names:
         table = table.drop_columns(["stage"])
-    return table.append_column("stage", pa.array([stage] * table.num_rows, pa.string()))
+    if _LINEAGE_COLUMN in table.column_names:
+        table = table.drop_columns([_LINEAGE_COLUMN])
+    table = table.append_column("stage", pa.array([stage] * table.num_rows, pa.string()))
+    if not lineage:
+        return table
+    return table.append_column(pa.field(_LINEAGE_COLUMN, pa.json_()), _lineage_array(lineage, table.num_rows))
 
 
 def _open_guarded(payload: bytes):  # -> PIL.Image.Image
@@ -173,53 +199,67 @@ def _is_image(payload: bytes) -> bool:
     return True
 
 
-def _media_transform(from_uri: str, to_uri: str, so: dict[str, str], *, stage: str) -> None:
+def _media_transform(from_uri: str, to_uri: str, so: dict[str, str], *, stage: str, lineage: str = "") -> None:
     """The MEDIA path: pylance-native blob round-trip + inline image derivation, then a 2.2 stable-id write.
 
     Same contract as compute.transform_stage + derivers.derive_artifacts: re-materialise each blob column
-    via ``read_blobs`` and re-wrap with ``blob_array`` (lance_ray's write would demote it to plain binary),
-    stamp ``stage``, and for a blob column whose FIRST payload decodes as an image, append an inline
+    as bytes and re-wrap with ``blob_array`` (lance_ray's write would demote it to plain binary), stamp
+    ``stage``, and for a blob column whose first non-null payload decodes as an image, append an inline
     ``thumbnail`` (PNG) + ``embedding`` (fixed-size floats). Non-image blobs carry through untouched.
+    ``lineage`` re-stamps the consume-layer provenance column (R26) in this same write.
+
+    NULL-SAFE BY CONSTRUCTION (R27), mirroring compute._carry_forward: ONE
+    ``scanner(blob_handling="all_binary")`` scan carries tabular AND blob columns row-aligned with the
+    nulls intact. ``read_blobs``/``take_blobs`` DROP null rows (measured, pylance 9.0.0 —
+    docs/architecture/lance-blob-v2-findings.md), so the previous ``to_table()`` + positional
+    ``read_blobs`` pair failed the whole stage on ONE un-harvested page. A null payload now carries
+    forward as a null blob with null artifacts.
     """
     ds = lance.dataset(from_uri, storage_options=so)
     blob_cols = _blob_field_names(ds.schema)
-    rows = ds.count_rows()
     # with_row_id so the head can mint source_rowid from the SAME aligned scan (a carried source_rowid is a
     # plain column already in this read); mirrors compute._carry_forward's blob path.
-    plain = ds.to_table(
-        columns=[f.name for f in ds.schema if f.name not in blob_cols and f.name != "stage"],
+    aligned = ds.scanner(
+        columns=[f.name for f in ds.schema if f.name not in ("stage", _LINEAGE_COLUMN)],
+        blob_handling="all_binary",
         with_row_id=True,
-    )
+    ).to_table()
+    rows = aligned.num_rows
 
     columns: dict = {}
     fields: list[pa.Field] = []
-    first_payloads: dict[str, list[bytes]] = {}
+    first_payloads: dict[str, list[bytes | None]] = {}
     for f in ds.schema:
-        if f.name == "stage":
-            continue  # re-stamped below
+        if f.name in ("stage", _LINEAGE_COLUMN):
+            continue  # re-stamped below — each names THIS run/tier, never the upstream's
         if f.name in blob_cols:
-            payloads = [payload for _addr, payload in ds.read_blobs(f.name, indices=list(range(rows)))]
+            payloads = aligned.column(f.name).to_pylist()
             first_payloads[f.name] = payloads
             fields.append(blob_field(f.name))
             columns[f.name] = blob_array(payloads)
         else:
-            fields.append(plain.schema.field(f.name))
-            columns[f.name] = plain.column(f.name)
+            fields.append(aligned.schema.field(f.name))
+            columns[f.name] = aligned.column(f.name)
     # Root provenance (mirror compute._carry_source_rowid): carry source_rowid if the upstream has it, else
     # mint it from the aligned _rowid at the head. _rowid is never persisted.
     if "source_rowid" not in columns:
         fields.append(pa.field("source_rowid", pa.uint64()))
-        columns["source_rowid"] = plain.column("_rowid").cast(pa.uint64())
+        columns["source_rowid"] = aligned.column("_rowid").cast(pa.uint64())
     fields.append(pa.field("stage", pa.string()))
     columns["stage"] = pa.array([stage] * rows, pa.string())
+    if lineage:
+        fields.append(pa.field(_LINEAGE_COLUMN, pa.json_()))
+        columns[_LINEAGE_COLUMN] = _lineage_array(lineage, rows)
     out = pa.table(columns, schema=pa.schema(fields))
 
     # Derive from the first IMAGE blob column (the media lane has exactly one: `payload`). Row-wise, image
-    # payloads only — a payload past the header probe that fails full decode raises, FAILing the run.
+    # payloads only — a payload past the header probe that fails full decode raises, FAILing the run; a
+    # NULL payload (absent bytes, not bad bytes) keeps its row with null artifacts.
     for payloads in first_payloads.values():
-        if payloads and _is_image(payloads[0]):
-            thumbnails = [_derive_thumbnail(p) for p in payloads]
-            embeddings = [_derive_embedding(p) for p in payloads]
+        probe = next((p for p in payloads if p is not None), None)
+        if probe is not None and _is_image(probe):
+            thumbnails = [None if p is None else _derive_thumbnail(p) for p in payloads]
+            embeddings = [None if p is None else _derive_embedding(p) for p in payloads]
             out = out.append_column(pa.field("thumbnail", pa.large_binary()), pa.array(thumbnails, pa.large_binary()))
             out = out.append_column(
                 pa.field("embedding", pa.list_(pa.float32(), _EMBEDDING_DIMS)),
@@ -332,27 +372,37 @@ def _traced_root(name: str, attributes: dict[str, str], *, span_processor: Any =
 def main() -> None:
     so = _storage_options()
     from_uri, to_uri, stage = os.environ["FROM_URI"], os.environ["TO_URI"], os.environ["STAGE"]
+    lineage = os.environ.get("LINEAGE_JSON", "")  # this run's consume-layer provenance document (R26)
 
     # Continue the submitting mover's trace (P3): the whole stage transform runs as one child span of
     # the mover's medallion.transform span; without a handed-over context it runs exactly as before.
     with _traced_root("ray.stage_job", {"lance.medallion.stage": stage}):
-        _run_stage(from_uri, to_uri, stage, so)
+        _run_stage(from_uri, to_uri, stage, so, lineage=lineage)
 
 
-def _run_stage(from_uri: str, to_uri: str, stage: str, so: dict[str, str]) -> None:
+def _run_stage(from_uri: str, to_uri: str, stage: str, so: dict[str, str], *, lineage: str = "") -> None:
     upstream = lance.dataset(from_uri, storage_options=so)
 
     if _blob_field_names(upstream.schema):
         # MEDIA path: lance_ray strips blob typing on write, so round-trip + derive via pylance (below).
-        _media_transform(from_uri, to_uri, so, stage=stage)
+        _media_transform(from_uri, to_uri, so, stage=stage, lineage=lineage)
     elif "source_rowid" not in upstream.schema.names:
-        # CASCADE HEAD (tabular): mint root-provenance source_rowid from the upstream _rowid. lance_ray's
-        # distributed read does not surface the reserved _rowid metacolumn, and provenance must be exact, so
-        # the head is a native pylance overwrite on the driver (the bronze root is small); deeper tabular stages,
-        # which already CARRY source_rowid as a plain column, distribute below. Same 2.2 + stable-id contract.
+        # CASCADE HEAD (tabular): mint root-provenance source_rowid from the upstream _rowid, as a native
+        # pylance overwrite on the driver (the bronze root is small); deeper tabular stages, which already
+        # CARRY source_rowid as a plain column, distribute below. Same 2.2 + stable-id contract.
+        #
+        # R27 CORRECTION (2026-07-28): the reason this branch used to give — "lance_ray's distributed read
+        # does not surface the reserved _rowid metacolumn" — is FALSE and was never measured.
+        # `lr.read_lance(uri, scanner_options={"with_row_id": True})` yields keys ['_rowid', …] (verified at
+        # lance-ray 0.4.2 AND 0.5.0), and 0.5.0 additionally exposes `with_metadata=True` for
+        # `_rowaddr`/`_fragid`. So the head CAN distribute: read with with_row_id, stamp, and write with
+        # `lr.write_lance(..., enable_stable_row_ids=True)` (a 0.5.0 parameter — see the image pins).
+        # Left as a driver-side write deliberately: the change is a live-cluster behaviour change to the
+        # production cascade head and this audit could not run Ray (worker startup fails in the dev
+        # sandbox), so it is recorded as a follow-up to prove on kind, not flipped on a signature read.
         _reset_if_legacy(to_uri, so)
         lance.write_dataset(
-            _stamp_stage(upstream.to_table(with_row_id=True), stage),
+            _stamp_stage(upstream.to_table(with_row_id=True), stage, lineage),
             to_uri,
             storage_options=so,
             mode="overwrite",
@@ -361,9 +411,12 @@ def _run_stage(from_uri: str, to_uri: str, stage: str, so: dict[str, str]) -> No
         )
     else:
         base = upstream.schema
-        if "stage" in base.names:
-            base = base.remove(base.get_field_index("stage"))
+        for restamped in ("stage", _LINEAGE_COLUMN):
+            if restamped in base.names:
+                base = base.remove(base.get_field_index(restamped))
         out_schema = base.append(pa.field("stage", pa.string()))
+        if lineage:
+            out_schema = out_schema.append(pa.field(_LINEAGE_COLUMN, pa.json_()))
 
         import lance_ray as lr  #   # Ray-image only; lazy (see module top)
 
@@ -372,7 +425,7 @@ def _run_stage(from_uri: str, to_uri: str, stage: str, so: dict[str, str]) -> No
         # inherit it). concurrency>1 → fragments written in parallel + one commit. source_rowid is already a
         # plain column in `base`, so it flows through map_batches + write as ordinary data (no distributed
         # _rowid needed) — only the head, handled natively above, has to mint it.
-        transformed = lr.read_lance(from_uri, storage_options=so).map_batches(lambda table: _stamp_stage(table, stage), batch_format="pyarrow")
+        transformed = lr.read_lance(from_uri, storage_options=so).map_batches(lambda table: _stamp_stage(table, stage, lineage), batch_format="pyarrow")
         _reset_if_legacy(to_uri, so)
         lance.write_dataset(
             out_schema.empty_table(),

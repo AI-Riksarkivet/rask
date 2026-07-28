@@ -256,11 +256,23 @@ def attach_values_by_rowid(
 
 
 def _read_blobs(ds: lance.LanceDataset, column: str, row_ids: list[int]) -> list[bytes]:
-    """Read each row's blob payload by id (Blob V2 columns aren't materialised in a scan)."""
+    """Read each row's blob payload by id (Blob V2 columns aren't materialised in a scan).
+
+    ``take_blobs`` DROPS null rows (measured — docs/architecture/lance-blob-v2-findings.md), so a null
+    payload makes the result SHORT and every caller pairs it with ``row_ids`` by position. The callers'
+    ``zip(..., strict=True)`` does catch that, but with an opaque "zip() argument is shorter" — so the
+    mismatch is named here instead, at the layer that knows why.
+    """
     payloads: list[bytes] = []
     for blob in ds.take_blobs(column, ids=row_ids):
         with blob as handle:
             payloads.append(handle.read())
+    if len(payloads) != len(row_ids):
+        raise ValueError(
+            f"{column}: take_blobs returned {len(payloads)} payload(s) for {len(row_ids)} row id(s) — the "
+            "column has NULL rows and this derived column is all-or-nothing. Restrict the source rows, or "
+            f"read via ds.scanner(columns=['{column}'], blob_handling='all_binary') which keeps the nulls."
+        )
     return payloads
 
 

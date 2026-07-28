@@ -37,6 +37,10 @@
 	let prefix = $state('');
 	let listing = $state<S3Listing | null>(null);
 	let lastStatus = $state(0);
+	// The server's own problem+json `detail`. A missing bucket is a 404 that NAMES the bucket and the
+	// values key that provisions it (live-proof 2026-07-28 defect 2); rendering our own generic
+	// "unreachable" over it threw away the only sentence that said what was actually wrong.
+	let lastDetail = $state('');
 	let settled = $state(false); // distinguishes "still loading" (unsettled) from a failure (settled)
 	let selected = $state<Row | null>(null);
 
@@ -55,8 +59,10 @@
 		if (res.ok) {
 			listing = res.data;
 			lastStatus = 200;
+			lastDetail = '';
 		} else {
 			lastStatus = res.status; // status 0 (offline/timeout) reads as unreachable, not a spinner
+			lastDetail = res.detail;
 		}
 	}
 
@@ -236,7 +242,14 @@
 	{#if offline}
 		<div class="empty">
 			<RefreshCw size={16} />
-			<p>Storage service unreachable (HTTP {lastStatus}).</p>
+			{#if lastStatus === 404 && lastDetail !== ''}
+				<!-- A diagnosable, expected state (usually: the bucket was never provisioned). Show what
+				     the backend said — it names the bucket and the values key — instead of "unreachable",
+				     which is both wrong about the layer and useless for fixing it. -->
+				<p>{lastDetail}</p>
+			{:else}
+				<p>Storage service unreachable (HTTP {lastStatus}).</p>
+			{/if}
 			<button class="btn" onclick={load}>Retry</button>
 		</div>
 	{:else}

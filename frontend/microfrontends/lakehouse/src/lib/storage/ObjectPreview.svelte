@@ -25,6 +25,9 @@
 
 	let head = $state<S3ObjectHead | null>(null);
 	let lastStatus = $state(0);
+	// The backend's own problem+json `detail`: a 404 distinguishes a missing KEY from a missing
+	// BUCKET (live-proof 2026-07-28 defect 2), and only the server knows which.
+	let lastDetail = $state('');
 	let settled = $state(false);
 	let text = $state<string | null>(null);
 	let textNote = $state<string | null>(null);
@@ -49,10 +52,12 @@
 		settled = true;
 		if (!res.ok) {
 			lastStatus = res.status;
+			lastDetail = res.detail;
 			return;
 		}
 		head = res.data;
 		lastStatus = 200;
+		lastDetail = '';
 		if (previewKind(wantKey, res.data.content_type) !== 'text') return;
 		if (res.data.size > TEXT_MAX_BYTES) {
 			textNote = `too large for inline text preview (${fmtSize(res.data.size)}) — download to view`;
@@ -89,7 +94,13 @@
 	{#if !settled}
 		<p class="mut">Loading…</p>
 	{:else if missing}
-		<p class="mut">Object not found — it may have been removed since this listing.</p>
+		<!-- The server's detail says WHICH thing is absent (key vs bucket); the fallback keeps the
+		     pane readable if an older backend answers a bare 404. -->
+		<p class="mut">
+			{lastDetail === ''
+				? 'Object not found — it may have been removed since this listing.'
+				: lastDetail}
+		</p>
 	{:else if offline}
 		<div class="empty">
 			<RefreshCw size={14} />

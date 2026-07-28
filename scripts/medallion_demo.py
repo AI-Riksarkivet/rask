@@ -60,6 +60,8 @@ from lineage.schemas import LineageGraph, Producers, Runs
 from lineage.seed import build_events
 from medallion.services import media
 
+from service_kit.lakehouse import blobs
+
 
 def _load_demo_env() -> None:
     """Load demo endpoints from ``<repo>/.medallion-demo.env`` (written when the stack starts), so a
@@ -184,9 +186,13 @@ def write_silver() -> None:
     """
     opts = _storage_options()
     bronze = lance.dataset(_BRONZE, storage_options=opts)
-    base = bronze.to_table(columns=["id", "payload_src"])
+    # ONE row-aligned scan for the keys AND the payload bytes (blobs.read_aligned_table wraps
+    # blob_handling="all_binary"): read_blobs would DROP any null payload and misalign `images` against
+    # `base` — the R27 landmine. This demo seeds three real PNGs, so nothing is null here; using the
+    # aligned read anyway keeps the demo a correct example of the pattern.
+    base = blobs.read_aligned_table(bronze, columns=["id", "payload_src", "payload"])
     rows = base.num_rows
-    images = [payload for _addr, payload in bronze.read_blobs("payload", indices=list(range(rows)))]
+    images = base.column("payload").to_pylist()
     schema = pa.schema(
         [
             pa.field("id", pa.int64()),

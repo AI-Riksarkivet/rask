@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 from contextlib import suppress
+from datetime import UTC, datetime
 from typing import Any
 
 from dapr.aio.clients import DaprClient
@@ -30,8 +31,9 @@ from opentelemetry import trace
 from medallion.core.config import MedallionSettings, project_namespace
 from medallion.core.metrics import record_denied, record_quality_blocked, record_transition
 from medallion.schemas.events import build_run_event
-from medallion.services.compute import measure_stage, transform_stage
+from medallion.services.compute import measure_stage, read_upstream, transform_stage
 from medallion.services.derivers import UnderivableMediaError
+from medallion.services.promotion import promotion_lineage
 from medallion.services.quality import Assertion, assert_quality, passed
 from medallion.services.ray_submit import submit_stage_job
 from service_kit import dapr_publish
@@ -140,6 +142,10 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
 
     quality_blocked = False
     completed = False  # set once the COMPLETE lineage emit lands — gates the FAIL-on-failure below
+    # ONE instant for the whole run: the `lineage` JSONB written into the dataset (R26) and the event
+    # published to the graph must name the same eventTime, or the two provenance records disagree on the
+    # only field a consumer can join runs by time on.
+    event_time = datetime.now(UTC).isoformat()
     try:
         # #84: resolve THIS stage's roots for a tenant trigger — the registry read is blocking IO
         # (threadpool). No active warehouse is deterministic → the dedicated except below records the
@@ -166,13 +172,34 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
         # version 1, no stats (dummy emit). A compute failure → RETRY below. With the quality gate on, the
         # mover then ASSERTS quality on the dataset it just wrote (the produced data is what's validated).
         result = None
+        lineage_doc = None
         assertions: list[Assertion] = []
         if settings.compute_enabled and from_uri and to_uri:
             # Serialize the write (+ the quality read of what it just wrote) against a concurrent redelivery
             # of the same stage — single-flight so two overwrites can't race on the same target dataset.
             async with _write_lock:
+                # The consume-layer provenance document (R26) is built BEFORE the write, because it is a
+                # COLUMN of the table being written — a governed row must never be readable without it.
+                # Its inputs carry the upstream's measured version + URI, and its DERIVED_FROM tail is
+                # inherited from the upstream dataset's own `lineage` cell, so a gold row's chain reaches
+                # bronze without a single graph query.
+                upstream = await run_in_threadpool(read_upstream, from_uri, settings.storage_options())
+                lineage_doc = promotion_lineage(
+                    settings,
+                    from_namespace=from_namespace,
+                    from_dataset=from_dataset,
+                    to_namespace=to_namespace,
+                    to_dataset=to_dataset,
+                    to_uri=to_uri,
+                    upstream=upstream,
+                    event_time=event_time,
+                    token=token,
+                    project=project or None,
+                )
                 with tracer.start_as_current_span("medallion.transform") as span:
                     span.set_attribute("lance.medallion.transition", transition)
+                    span.set_attribute("lance.lineage.run_id", lineage_doc.run_id)
+                    span.set_attribute("lance.lineage.chain_depth", len(lineage_doc.derived_from))
                     use_ray = settings.ray_enabled
                     if use_ray:
                         # EVENT-DRIVEN real-Ray: submit the stage transform to the Ray cluster IN RESPONSE
@@ -186,6 +213,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                             to_uri=to_uri,
                             stage=settings.to_namespace,
                             token=token,  # deterministic submission id → redelivery re-attaches (idempotent)
+                            lineage_json=lineage_doc.to_json(),  # the job stamps it in ITS commit (R26)
                         )
                         # measure_stage, not a bare measure: the Ray job transformed out-of-process, so the
                         # column edges are RECONSTRUCTED from the upstream + written schemas — otherwise the
@@ -205,6 +233,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                             to_uri,
                             settings.storage_options(),
                             stage=settings.to_namespace,
+                            lineage=lineage_doc,
                         )
                     span.set_attribute("lance.version", result.version)
                     span.set_attribute("lance.row_count", result.row_count)
@@ -238,6 +267,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
             assertions=[a.model_dump(exclude_none=True) for a in assertions] or None,
             token=token,
             project=project or None,
+            event_time=event_time,  # the same instant the in-dataset `lineage` document names (R26)
         )
         # 1. Emit the transform's lineage DURABLY (#4): stage the full event in the object-store outbox,
         # publish, drop on ack — so a crash between the Lance commit above and this publish can't lose it

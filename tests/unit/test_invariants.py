@@ -840,3 +840,179 @@ def test_the_lineage_durability_chain_is_on_by_default() -> None:
     assert "outbox.enabled=false" in half and "PERMANENTLY" in half, (
         f"disabling only the outbox must say what is lost (author/inputs/columnLineage), got:\n{half}"
     )
+
+
+# --------------------------------------------------------------------------------------------------
+# 10. The 2026-07-28 install-flow defects (live-proof "Install-flow notes" + defects 1 and 3)
+# --------------------------------------------------------------------------------------------------
+
+
+def _docs(rendered: str) -> list[str]:
+    return rendered.split("\n---")
+
+
+def _job_by_component(rendered: str, component: str) -> str | None:
+    """The rendered Job carrying `app.kubernetes.io/component: <component>`.
+
+    Selected by LABEL, not by name: `_helm_template` renders without a release name (helm's
+    `release-name` placeholder), and the bootstrap Jobs now carry a release-revision suffix — a
+    name-prefix match would encode both accidents.
+    """
+    for doc in _docs(rendered):
+        if not re.search(r"^kind: Job$", doc, re.MULTILINE):
+            continue
+        if re.search(rf"^\s+app\.kubernetes\.io/component: {re.escape(component)}$", doc, re.MULTILINE):
+            return doc
+    return None
+
+
+#: The bootstrap Jobs that other release resources must wait for IN ORDER TO BECOME READY: the OpenFGA
+#: schema migration (the server crash-loops against an unmigrated datastore), the OpenBao seed (the
+#: medallion movers resolve S3 creds through the Dapr secret store at boot), the JetStream provisioner
+#: (a daprd sidecar subscribes at startup) and the bucket-init (the lakehouse apps' object store).
+_BOOTSTRAP_JOBS = ["openfga-migrate", "openbao-seed", "nats-stream", "rustfs-mkbucket"]
+
+#: The inverse set — Jobs that wait for the APPS and that nothing waits on. A post-install hook is
+#: exactly the right shape for these, and converting them would be the same mistake mirrored.
+_POST_APP_HOOKS = ["greptimedb-ttl", "kueue-setup"]
+
+
+def test_no_job_that_gates_readiness_is_a_post_install_hook() -> None:
+    """`helm install --wait` must be safe on a fresh cluster, with no wrapper script.
+
+    live-proof defect 1. helm's order is: pre-install hooks -> apply manifests -> (--wait) block until
+    every resource is Ready -> post-install hooks. The OpenFGA schema migration was a POST-install hook
+    and the OpenFGA server cannot start against an unmigrated datastore, so `--wait` blocked on the
+    server, the server blocked on the migration, and the migration was queued behind `--wait`. Revs 1
+    and 2 of the live-proof install died on "context deadline exceeded"; the OpenBao seed (also a
+    post-install hook) never fired at all; and `scripts/e2e_stack.sh` exists in part to drop `--wait`
+    and re-sequence the whole thing by hand.
+
+    Moving those hooks EARLIER cannot fix it either: a `pre-install` hook runs before ANY release
+    manifest exists, so the migrate Job would wait for an AGE Postgres that has not been created yet —
+    the same deadlock one phase to the left, now blocking every other resource too. The fix is to take
+    them out of the hook lifecycle entirely, which is what this pins.
+    """
+    rendered = _helm_template("singleTenant.enabled=true", "media.enabled=true")
+    offenders: list[str] = []
+    for comp in _BOOTSTRAP_JOBS:
+        doc = _job_by_component(rendered, comp)
+        assert doc is not None, f"{comp} renders no Job with the default values — this guard would pass vacuously"
+        if re.search(r'^\s*"?helm\.sh/hook"?:', doc, re.MULTILINE):
+            offenders.append(comp)
+    assert not offenders, (
+        "these Jobs gate another resource's READINESS, so as helm hooks they deadlock `helm install --wait`: "
+        + ", ".join(offenders)
+        + " — apply them in the ordinary wave (see 'BOOTSTRAP JOBS' in chart/templates/_helpers.tpl)"
+    )
+
+    # A plain Job's spec is immutable, so the name must change per revision or `helm upgrade` fails with
+    # "field is immutable" the first time anything about the Job changes.
+    for comp in _BOOTSTRAP_JOBS:
+        doc = _job_by_component(rendered, comp)
+        assert doc is not None
+        name = re.search(r"^  name: (\S+)", doc, re.MULTILINE)
+        assert name is not None and re.search(r"-r\d+$", name.group(1)), (
+            f"{comp} must carry the release revision in its name (a plain Job's spec is immutable), got {name and name.group(1)}"
+        )
+
+    # The mirror image: a Job that waits for the APPS must NOT be pulled into the wave, or `--wait`
+    # starts blocking on something that by definition cannot finish until the wait is over.
+    for comp in _POST_APP_HOOKS:
+        doc = _job_by_component(rendered, comp)
+        assert doc is not None, f"{comp} renders no Job — this half of the guard would pass vacuously"
+        assert re.search(r'^\s*"?helm\.sh/hook"?:\s*post-install', doc, re.MULTILINE), (
+            f"{comp} waits for the apps and nothing waits on it — it belongs in post-install, not the apply wave"
+        )
+
+
+def test_the_bucket_init_verifies_the_buckets_the_operator_owns() -> None:
+    """A provisioner that never checks what it did NOT provision is how a data plane goes missing.
+
+    live-proof defect 3: the rustfs-operator refused to reconcile the Tenant
+    (StatefulSetUpdateValidationFailed, "Reconcile is blocked by user-fixable configuration"), so
+    `spec.buckets` — the whole static platform set — was never created. The bucket-init Job went green
+    because it only ever created its OWN values-driven buckets, every layer in between reported
+    healthy, and the single symptom was an HTTP 500 in the storage browser three services away.
+
+    So the Job must VERIFY the operator-owned set and fail loudly, with the diagnosis in the message.
+    It must NOT create them: `mc mb` here would paper over a Tenant that is still broken for
+    everything else it owns.
+    """
+    import yaml
+
+    values = yaml.safe_load((CHART / "values.yaml").read_text())
+    expected = values["rustfs"]["buckets"]
+    assert expected, "rustfs.buckets is empty — this guard would pass vacuously"
+
+    rendered = _helm_template("singleTenant.enabled=true", "media.enabled=true")
+    job = _job_by_component(rendered, "rustfs-mkbucket")
+    assert job is not None, "the bucket-init Job does not render"
+
+    missing = [b for b in expected if b not in job]
+    assert not missing, f"the bucket-init Job never mentions these operator-owned buckets, so it cannot notice they are absent: {missing}"
+
+    assert "exit 1" in job, "the bucket-init Job must FAIL when the operator-owned buckets are absent, not log and pass"
+    assert "kubectl describe tenant" in job, "the failure message must carry the command that shows WHY the Tenant did not reconcile"
+    assert "rustfs.storageClass" in job, "the failure message must name the usual cause (a StorageClass the cluster does not have)"
+    # The create/verify split: the operator's buckets must not be silently created behind its back.
+    for bucket in expected:
+        assert f"mc mb --ignore-existing rfs/{bucket}\n" not in job or bucket == values["rustfs"]["bucket"], (
+            f"{bucket} is operator-owned (rustfs.buckets) — creating it here would mask a Tenant that never reconciled"
+        )
+
+
+def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:
+    """Fail-closed sidecar injection is only safe if the two markers stay in lockstep.
+
+    The second install-time ordering defect of 2026-07-28: Dapr's injector is a mutating webhook
+    shipping `failurePolicy: Ignore`, and the Dapr control plane is a SUBCHART of this release — so on
+    a fresh cluster the app pods are created alongside the injector, the API server calls a webhook
+    with no endpoints, and it SILENTLY admits them with no daprd container. Nothing recreates such a
+    pod (a CrashLoopBackOff restarts the container inside the same pod), so every governed app dies
+    forever on "secret unavailable from Dapr store … failing closed" and `helm install --wait` times
+    out. `scripts/e2e_stack.sh` works around it by deleting and recreating the app pods by hand.
+
+    The chart now sets `failurePolicy: Fail` with an `objectSelector` on the `dapr.io/enabled` LABEL.
+    That makes the correspondence load-bearing in BOTH directions of failure:
+      * annotation without label -> the webhook is never called -> silently un-injected again;
+      * an unscoped `Fail` -> the injector's own pod cannot be admitted -> the cluster wedges.
+    So: every pod template carrying the annotation must carry the label, and the webhook's selector
+    must be exactly that label.
+    """
+    import yaml
+
+    rendered = _helm_template("singleTenant.enabled=true", "media.enabled=true")
+    docs = [d for d in yaml.safe_load_all(rendered) if d]
+
+    webhook = next(
+        (w for d in docs if d.get("kind") == "MutatingWebhookConfiguration" for w in (d.get("webhooks") or []) if w.get("name") == "sidecar-injector.dapr.io"),
+        None,
+    )
+    assert webhook is not None, "the Dapr sidecar-injector webhook does not render — this guard would pass vacuously"
+    assert webhook["failurePolicy"] == "Fail", (
+        "the Dapr injector webhook must fail CLOSED: with `Ignore` a pod created before the injector is "
+        "ready is admitted with no sidecar, and nothing ever fixes it"
+    )
+    selector = (webhook.get("objectSelector") or {}).get("matchLabels") or {}
+    assert selector == {"dapr.io/enabled": "true"}, (
+        f"a fail-closed POD webhook MUST be scoped by objectSelector or it blocks its own injector pod and wedges the cluster; got {selector!r}"
+    )
+
+    annotated = 0
+    missing: list[str] = []
+    for doc in docs:
+        template = (doc.get("spec") or {}).get("template") if isinstance(doc.get("spec"), dict) else None
+        if not isinstance(template, dict):
+            continue
+        meta = template.get("metadata") or {}
+        if (meta.get("annotations") or {}).get("dapr.io/enabled") != "true":
+            continue
+        annotated += 1
+        if (meta.get("labels") or {}).get("dapr.io/enabled") != "true":
+            missing.append(f"{doc.get('kind')}/{(doc.get('metadata') or {}).get('name')}")
+    assert annotated, "no pod template asks for a Dapr sidecar — this guard would pass vacuously"
+    assert not missing, (
+        "these pod templates want a sidecar (dapr.io/enabled ANNOTATION) but do not carry the matching "
+        f"LABEL, so the fail-closed webhook skips them and they come up un-injected: {missing}"
+    )

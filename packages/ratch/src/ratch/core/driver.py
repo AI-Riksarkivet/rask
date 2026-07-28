@@ -101,6 +101,17 @@ class _BlobActor:
         for blob in self._ds.take_blobs(self._blob_column, ids=row_ids):
             with blob as handle:
                 payloads.append(handle.read())
+        # ``take_blobs`` DROPS null rows (measured, pylance 8.0.0 AND 9.0.0 —
+        # docs/architecture/lance-blob-v2-findings.md), so a null payload in this block would leave
+        # ``payloads`` short and pair every later value with the WRONG row id. Fail here, naming the
+        # cause, instead of letting pa.table raise an opaque length error two lines down or — worse —
+        # letting a broadcasting ``self._fn`` return the right length and commit silent misattribution.
+        if len(payloads) != len(row_ids):
+            raise ValueError(
+                f"{self._blob_column}: take_blobs returned {len(payloads)} payload(s) for {len(row_ids)} "
+                "row id(s) — the column has NULL rows, which this stage cannot key by position. Filter the "
+                f"scan to `{self._blob_column} IS NOT NULL`, or read via a blob_handling='all_binary' scan."
+            )
         values = self._fn(payloads)
         return pa.table({"_rowid": pa.array(row_ids, pa.uint64()), self._out: values})
 

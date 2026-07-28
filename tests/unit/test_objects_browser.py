@@ -4,16 +4,29 @@ Driven over HTTP at the boundary: a minimal app with the objects router + the
 problem+json handlers, S3 doubled by moto. Pins the wire shapes the lakehouse
 zone's storage.ts mirrors (S3Listing / S3ObjectHead), the 404 mapping, and the
 bucket allowlist rejection.
+
+The fixture deliberately creates ONLY `images-batch`, never `images-batch-alto`:
+the second allowlisted bucket is therefore genuinely absent, which reproduces
+live-proof defect 2 (a Tenant that never provisioned `spec.buckets`) exactly.
 """
 
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from viewer.api.v1.endpoints import objects as objects_module
 from viewer.api.v1.endpoints.objects import router as objects_router
 
 from service_kit.exceptions import register_handlers
+
+
+def _app() -> FastAPI:
+    app = FastAPI()
+    register_handlers(app)
+    app.include_router(objects_router)
+    return app
 
 
 @pytest.fixture
@@ -35,10 +48,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
         s3.put_object(Bucket="images-batch", Key="VOL/sub/b.jpg", Body=b"y")
         s3.put_object(Bucket="images-batch", Key="top.jpg", Body=b"z")
 
-        app = FastAPI()
-        register_handlers(app)
-        app.include_router(objects_router)
-        with TestClient(app) as c:
+        with TestClient(_app()) as c:
             yield c
 
 
@@ -95,3 +105,91 @@ def test_unlisted_bucket_is_rejected(client: TestClient) -> None:
     # never a listing of an arbitrary bucket.
     resp = client.get("/api/objects", params={"bucket": "secrets", "prefix": ""})
     assert resp.status_code == 422
+
+
+# --------------------------------------------------------------------------------------------------
+# live-proof 2026-07-28, defect 2 — a bucket that does not exist is a DIAGNOSABLE 404, never a 500.
+#
+# `GET /api/objects?bucket=images-batch` raised an unhandled botocore NoSuchBucket (the listing route
+# had no try/except at all), FastAPI turned it into a 500 with a traceback, and the lakehouse storage
+# browser rendered "Storage service unreachable (HTTP 500)" — a message that is wrong about the layer,
+# wrong about the cause, and names neither the bucket nor the fix. The bucket was absent because the
+# RustFS Tenant had refused to reconcile; three layers up, nothing said so.
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("path", "params"),
+    [
+        ("/api/objects", {"bucket": "images-batch-alto", "prefix": ""}),
+        ("/api/object", {"bucket": "images-batch-alto", "key": "VOL/a.xml"}),
+        ("/api/object/download", {"bucket": "images-batch-alto", "key": "VOL/a.xml"}),
+    ],
+)
+def test_a_missing_bucket_is_a_404_naming_the_bucket(client: TestClient, path: str, params: dict[str, str]) -> None:
+    """All THREE routes, not just the listing that burned us — the siblings caught
+    `Exception` and answered "object not found", which hides a missing bucket just as
+    thoroughly as a traceback does."""
+    resp = client.get(path, params=params)
+    assert resp.status_code == 404, f"{path} must degrade to 404 on a missing bucket, got {resp.status_code}"
+    assert resp.headers["content-type"] == "application/problem+json"
+    detail = resp.json()["detail"]
+    assert "images-batch-alto" in detail, f"the answer must NAME the missing bucket: {detail!r}"
+    assert "bucket not found" in detail, f"the answer must say it is the BUCKET that is missing: {detail!r}"
+    assert "rustfs.buckets" in detail, f"the answer must point at the fix: {detail!r}"
+
+
+def test_a_missing_key_and_a_missing_bucket_do_not_read_the_same(client: TestClient) -> None:
+    """The two 404s must be distinguishable — otherwise an unprovisioned store is
+    indistinguishable from an empty one, which is the whole failure mode."""
+    missing_key = client.get("/api/object", params={"bucket": "images-batch", "key": "nope.jpg"}).json()["detail"]
+    missing_bucket = client.get("/api/object", params={"bucket": "images-batch-alto", "key": "nope.jpg"}).json()["detail"]
+    assert missing_key.startswith("object not found")
+    assert missing_bucket.startswith("bucket not found")
+
+
+def test_a_body_less_404_still_names_the_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The backend-independence leg. A `HEAD` carries no body, so AWS answers a missing
+    bucket with a bare `404` that looks exactly like a missing key (moto/MinIO volunteer
+    `NoSuchBucket`; AWS does not). The endpoint must not let the quality of its own error
+    message depend on which S3 implementation is plugged in — the storage-agnostic rule —
+    so it probes the bucket on the error path. This stubs the AWS shape."""
+    from botocore.exceptions import ClientError
+
+    class _AwsShapedClient:
+        def head_object(self, **_: object) -> dict[str, Any]:
+            raise ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject")
+
+        def head_bucket(self, **_: object) -> dict[str, Any]:
+            raise ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadBucket")
+
+    monkeypatch.setattr(objects_module, "s3_client", lambda: _AwsShapedClient())
+    with TestClient(_app()) as c:
+        resp = c.get("/api/object", params={"bucket": "images-batch-alto", "key": "k"})
+    assert resp.status_code == 404
+    assert "bucket not found: images-batch-alto" in resp.json()["detail"]
+
+
+def test_a_real_outage_is_not_disguised_as_a_404(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The other direction of the same lie. `except Exception -> NotFoundError` reported an
+    unreachable endpoint as "object not found"; a 404 for an outage sends the operator hunting
+    for a key that was never the problem. Only S3's own not-found codes may become 404s."""
+
+    class _DeadClient:
+        def head_object(self, **_: object) -> dict[str, Any]:
+            raise ConnectionError("Could not connect to the endpoint URL")
+
+        def get_object(self, **_: object) -> dict[str, Any]:
+            raise ConnectionError("Could not connect to the endpoint URL")
+
+        def get_paginator(self, _name: str) -> Any:  # noqa: ANN401 — boto3 paginator has no public stub
+            raise ConnectionError("Could not connect to the endpoint URL")
+
+    monkeypatch.setattr(objects_module, "s3_client", lambda: _DeadClient())
+    with TestClient(_app(), raise_server_exceptions=False) as c:
+        for path, params in (
+            ("/api/objects", {"bucket": "images-batch", "prefix": ""}),
+            ("/api/object", {"bucket": "images-batch", "key": "VOL/a.jpg"}),
+            ("/api/object/download", {"bucket": "images-batch", "key": "VOL/a.jpg"}),
+        ):
+            assert c.get(path, params=params).status_code == 500, f"{path} must not report an outage as a 404"

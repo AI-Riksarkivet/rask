@@ -9,7 +9,9 @@ Inlining is only safe if it CANNOT DRIFT from the in-process path — otherwise 
 different thumbnail/embedding depending on whether the stage ran on Ray or in-process. This test pins the
 inlined mirrors byte-for-byte against the authoritative ``services`` implementations, so any change to one
 side without the other fails here. It also confirms *why* the inline exists is real, not assumed:
-lance-ray 0.4.2 strips blob-v2 typing on read (verified live 2026-07-13; the Ray path must re-wrap via
+lance-ray strips blob-v2 typing on read at every version we have pinned — 0.4.2 (verified live 2026-07-13)
+and 0.5.0, whose datasource says so in the source: "Blob v2 extension columns are exposed as plain
+LargeBinary bytes" (R27, 2026-07-28). The Ray path must therefore re-wrap via
 pylance), and the deriver is our business logic, never something lance-ray provides.
 
 Loaded via ``spec_from_file_location`` (the script isn't an importable package); lance_ray is imported
@@ -139,3 +141,48 @@ def test_stamp_stage_mints_source_rowid_at_the_head_and_carries_it_forward() -> 
     stamped2 = job._stamp_stage(carried, "silver")
     assert "_rowid" not in stamped2.column_names
     assert stamped2.column("source_rowid").to_pylist() == [40, 41]  # ROOT id kept, NOT the parent's _rowid
+
+
+def test_stamp_stage_re_stamps_the_lineage_column_instead_of_inheriting_it() -> None:
+    """R26 on the DISTRIBUTED path: the job writes its own provenance document, never the parent's.
+
+    Parity with compute._drop_inherited_lineage + the in-table stamp — the Ray path must not produce a
+    governed dataset the in-process path would have stamped, and an inherited cell would label gold rows
+    with silver's run. Empty ``lineage`` (the job run by hand) drops the column and adds none.
+    """
+    doc = '{"run_id": "r-1", "operation": "aggregate_gold"}'
+    parent = '{"run_id": "r-0", "operation": "embed_features"}'
+    upstream = pa.table(
+        {
+            "id": [1, 2],
+            "source_rowid": pa.array([40, 41], pa.uint64()),
+            "lineage": pa.array([parent, parent], pa.json_()),
+        }
+    )
+
+    stamped = job._stamp_stage(upstream, "gold", doc)
+    assert stamped.column_names.count("lineage") == 1
+    assert stamped.schema.field("lineage").type.extension_name == "arrow.json"  # Lance JSONB, not a string
+    assert stamped.column("lineage").to_pylist() == [doc, doc]  # THIS run's document, on every row
+
+    bare = job._stamp_stage(upstream, "gold")
+    assert "lineage" not in bare.column_names  # no document handed over → the parent's is still dropped
+
+
+def test_media_transform_stamps_the_lineage_column(tmp_path: Path, png_bytes: bytes) -> None:
+    """R26 on the Ray MEDIA path: the blob round-trip writes the provenance column in its own commit."""
+    import lance
+
+    src = str(tmp_path / "src")
+    table = pa.table(
+        {"id": pa.array([1, 2], pa.int64()), "payload": blob_array([png_bytes, png_bytes])},
+        schema=pa.schema([pa.field("id", pa.int64()), blob_field("payload")]),
+    )
+    lance.write_dataset(table, src, mode="overwrite", data_storage_version="2.2", enable_stable_row_ids=True)
+    doc = '{"run_id": "r-9", "operation": "aggregate_gold"}'
+
+    job._media_transform(src, str(tmp_path / "dst"), {}, stage="gold", lineage=doc)
+
+    out = lance.dataset(str(tmp_path / "dst"))
+    assert out.schema.field("lineage").type.extension_name == "arrow.json"
+    assert out.to_table(columns=["id"], filter="json_get_string(lineage, 'run_id') = 'r-9'").num_rows == 2

@@ -37,6 +37,7 @@ spec:
       labels:
         {{- include "rask.selectorLabels" $root | nindent 8 }}
         app.kubernetes.io/component: {{ $name }}
+        {{- include "rask.daprPodLabels" $root | nindent 8 }}
     spec:
       {{- with $root.Values.imagePullSecrets }}
       imagePullSecrets:

@@ -92,3 +92,33 @@ test('a dead storage backend renders the unreachable state with retry — no spi
 	await expect(page.getByText('Storage service unreachable (HTTP 502).')).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();
 });
+
+test('an unprovisioned bucket names itself instead of claiming the service is unreachable', async ({
+	page,
+}) => {
+	// live-proof 2026-07-28 defect 2. A missing bucket used to raise an unhandled botocore
+	// NoSuchBucket in the viewer -> HTTP 500 -> this page rendered "Storage service unreachable",
+	// which is wrong about the layer, says nothing about which bucket, and points at no fix. The
+	// backend now answers a 404 whose problem+json `detail` carries all three; the browser must show
+	// THAT, not paper over it with its own generic outage copy.
+	await page.route('**/api/media/**', (route) =>
+		json(
+			route,
+			{
+				type: 'about:blank#notfounderror',
+				title: 'Not Found',
+				status: 404,
+				detail:
+					'bucket not found: images-batch — the S3 backend has no such bucket. The platform ' +
+					'provisions it from the chart’s rustfs.buckets; check that the object store ' +
+					'actually created it.',
+			},
+			404,
+		),
+	);
+	await page.goto('/lakehouse/storage');
+	await expect(page.getByText(/bucket not found: images-batch/)).toBeVisible();
+	await expect(page.getByText(/rustfs\.buckets/)).toBeVisible();
+	await expect(page.getByText('Storage service unreachable (HTTP 404).')).toHaveCount(0);
+	await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();
+});

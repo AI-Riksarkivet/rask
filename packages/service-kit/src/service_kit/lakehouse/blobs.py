@@ -7,6 +7,9 @@ recognise a blob column from an Arrow schema without materialising the payloads.
 
 A blob-v2 column cannot be written at the default 2.1 format, so detecting one is
 what routes a write onto the ``data_storage_version="2.2"`` path.
+
+:func:`read_aligned_table` is the READ counterpart: the one blob read path that keeps
+row alignment when a payload is null (the ``read_blobs``/``take_blobs`` landmine).
 """
 
 from __future__ import annotations
@@ -47,6 +50,34 @@ def schema_has_blob(schema: pa.Schema) -> bool:
 def blob_field_names(schema: pa.Schema) -> list[str]:
     """Names of the blob-v2 columns in ``schema`` (empty when there are none)."""
     return [field.name for field in schema if is_blob_field(field)]
+
+
+def read_aligned_table(
+    ds: lance.LanceDataset,
+    *,
+    columns: list[str] | None = None,
+    with_row_id: bool = False,
+) -> pa.Table:
+    """One ROW-ALIGNED scan whose blob-v2 columns arrive as ``large_binary`` bytes, **nulls included**.
+
+    THE null-blob landmine guard (``docs/architecture/lance-blob-v2-findings.md``, re-measured on pylance
+    9.0.0): ``read_blobs`` / ``take_blobs`` silently DROP null rows — 3 selected rows with one null blob
+    return 2 payloads — so pairing their output positionally against a second scan of the tabular columns
+    is length-mismatched the moment ONE payload is null. That is precisely the medallion's own
+    "a failed harvest, a skipped page" case, and it turned a single null page into an opaque
+    ``ArrowInvalid: Column 1 named payload expected length 3 but got length 2`` that the movers route as a
+    TRANSIENT failure (RETRY storm → DLQ) even though redelivery can never fix it.
+
+    ``blob_handling="all_binary"`` is the read path that preserves logical cardinality (measured: 5 rows in,
+    5 rows out, the nulls correctly ``None``), so alignment holds **by construction** — no presence mask to
+    maintain, one scan instead of two, and the payload list can be handed straight back to
+    :func:`lance.blob_array` (which accepts ``None`` entries) to re-wrap a blob column for a 2.2 write.
+
+    Prefer this over ``read_blobs``/``take_blobs`` whenever payloads are consumed BY ROW POSITION. The
+    take-path remains correct for single-row serving (``ids=[rowid]``, where an empty result IS the null
+    signal) — see :func:`blob_column_resolves` and the viewer's blob endpoints.
+    """
+    return ds.scanner(columns=columns, blob_handling="all_binary", with_row_id=with_row_id).to_table()
 
 
 def blob_column_resolves(ds: lance.LanceDataset, column: str) -> bool:

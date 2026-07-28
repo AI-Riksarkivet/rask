@@ -167,6 +167,7 @@ def build_run_event(
     project: str | None = None,
     event_type: str = "COMPLETE",
     error_message: str | None = None,
+    event_time: str | None = None,
 ) -> dict[str, Any]:
     """Build the OpenLineage ``RunEvent`` (wire JSON) for one medallion transform — via ``lineage_kit``.
 
@@ -184,6 +185,12 @@ def build_run_event(
     single-tenant emit (run id included) byte-identical. ``event_type='FAIL'`` + ``error_message``
     records a failed run (no version, no outputs asserted); the standard ``errorMessage`` run facet
     carries the reason.
+
+    ``event_time`` pins the ``eventTime`` a caller has already fixed for the run instead of stamping
+    ``now()``. The silver→gold promotion needs this: the gold ``lineage`` JSONB column (R26) is written
+    INSIDE the dataset and must name the same instant as the event published to the graph, or the two
+    provenance records would differ on the one field a consumer joins runs by time on. Absent → ``now()``,
+    byte-identical to before.
     """
     lance_fields: dict[str, Any] = {"operation": operation, "version": version}
     if token:
@@ -233,7 +240,7 @@ def build_run_event(
     )
     event = RunEvent(
         event_type=RunState(event_type.upper()),
-        event_time=datetime.now(UTC).isoformat(),
+        event_time=event_time or datetime.now(UTC).isoformat(),
         run=Run(run_id=run_id, facets=RunFacets.model_validate(run_facets)),
         job=Job(namespace=job_namespace, name=operation, facets={"sourceCodeLocation": _job_source_location()}),
         inputs=[Dataset.model_validate(_dataset(ns, name)) for ns, name in inputs],

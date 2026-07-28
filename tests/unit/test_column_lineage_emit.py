@@ -275,11 +275,12 @@ def test_transform_stage_derives_artifact_column_edges(tmp_path: Any) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _ray_job_write(from_uri: str, to_uri: str, stage: str) -> None:
+def _ray_job_write(from_uri: str, to_uri: str, stage: str, lineage: str = "") -> None:
     """Stand in for ``scripts/ray_stage_job.py``: write the downstream dataset the way the Ray job does.
 
     The point is that the mover process never sees this table — the real job runs on the Ray cluster, so a
     test that fakes the SUBMIT but leaves the write in-process would not exercise the reconstruction at all.
+    ``lineage`` mirrors the job's R26 stamp: the consume-layer document lands in the job's OWN commit.
     """
     upstream = lance.dataset(from_uri).to_table()
     field = pa.field("stage", pa.string())
@@ -289,6 +290,8 @@ def _ray_job_write(from_uri: str, to_uri: str, stage: str) -> None:
         out = upstream.set_column(upstream.schema.get_field_index("stage"), field, marker)
     else:
         out = upstream.append_column(field, marker)
+    if lineage:
+        out = out.append_column(pa.field("lineage", pa.json_()), pa.array([lineage] * out.num_rows, pa.json_()))
     lance.write_dataset(out, to_uri, mode="overwrite", data_storage_version="2.2", enable_stable_row_ids=True)
 
 
@@ -299,8 +302,8 @@ def test_ray_branch_emits_column_edges_reconstructed_from_disk(tmp_path: Any, mo
     seed_bronze(bronze, {}, rows=4)  # columns [id, payload, stage]
     settings = _mover_settings(bronze, silver).model_copy(update={"ray_enabled": True})
 
-    async def fake_submit(_settings: Any, *, from_uri: str, to_uri: str, stage: str, token: str) -> None:
-        _ray_job_write(from_uri, to_uri, stage)  # the cluster wrote it; this process only measures
+    async def fake_submit(_settings: Any, *, from_uri: str, to_uri: str, stage: str, token: str, lineage_json: str = "") -> None:
+        _ray_job_write(from_uri, to_uri, stage, lineage_json)  # the cluster wrote it; this process only measures
 
     monkeypatch.setattr(mover, "submit_stage_job", fake_submit)
     dapr = _FakeDapr()

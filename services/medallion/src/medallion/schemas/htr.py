@@ -32,4 +32,18 @@ GOLD_CONTRACT_COLUMNS: tuple[str, ...] = (
     "text",  # the transcriptions, one per line
     "confidences",  # per-line model confidence (ALTO WC)
     "source_rowid",  # row-level provenance back to the bronze page (stable _rowid, rooted at bronze)
+    "lineage",  # R26: the run's provenance as Lance JSONB — see LINEAGE_COLUMN below
 )
+
+#: The consume-layer provenance column (R26, executing R25b) — a Lance ``pa.json_()`` (stored JSONB) cell
+#: per gold row holding the :class:`lineage_kit.consume.LineageDoc` of the run that produced it: ``run_id``,
+#: the job's namespace + name, ``author``, ``operation``, ``event_time``, the upstream dataset(s) with their
+#: Lance versions and physical URIs, and the ``derived_from`` chain back to bronze.
+#:
+#: It is in the CONTRACT because gold is what an external consumer takes away (R25): a dataset that arrives
+#: without its provenance forces the consumer back to our lineage graph, which is exactly the coupling the
+#: consume layer exists to remove — and unlike a projection the exporter can compute, provenance is
+#: unrecoverable once the row leaves the platform. Lance's JSON functions (``json_get_string`` /
+#: ``json_extract`` / ``json_exists`` / ``json_array_contains`` / ``json_array_length``) make it queryable
+#: IN PLACE from a filter, and the promotion builds a JSON scalar index over ``run_id``.
+LINEAGE_COLUMN = "lineage"

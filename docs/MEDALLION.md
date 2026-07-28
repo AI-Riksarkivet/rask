@@ -183,7 +183,9 @@ cascade write (bronze/silver/gold) sets that flag — it is *create-time-only* (
 we set it up front to keep a durable `_rowid` across compaction, which rewrites fragments and invalidates row
 *addresses*. Today `id` is still positional (the cascade is overwrite-only); the stable `_rowid` is the seam a
 future append/upsert would key blob carry-forward on instead of `range(rows)`. The blob then flows forward through the
-existing cascade (`compute._carry_forward` reads it via `read_blobs` and re-wraps with `blob_array`), and
+existing cascade (`compute._carry_forward` reads it via one row-aligned `blob_handling="all_binary"` scan —
+`service_kit.lakehouse.blobs.read_aligned_table`, NOT `read_blobs`, which drops null rows — and re-wraps
+with `blob_array`, so a page whose harvest failed carries forward as a null instead of failing the stage), and
 the silver stage derives the thumbnail + embedding — so an external image lands as a managed blob and its
 origin survives in the data *and* in the graph.
 

@@ -9,6 +9,16 @@ here), so the gateway grows zero new rows.
 Uses ``storage.s3_client`` (never raw boto3); endpoint/creds resolve from env
 (``RASK_S3_ENDPOINT_URL`` / ``AWS_*``). Routes are sync ``def`` — FastAPI runs
 the blocking boto calls in its threadpool.
+
+**Failure posture (live-proof 2026-07-28, defect 2).** A bucket that does not exist
+on the S3 backend is an EXPECTED, diagnosable state — the chart provisions
+``rustfs.buckets`` through an operator Tenant, and a blocked Tenant leaves them
+absent. It used to surface as an unhandled ``botocore`` ``NoSuchBucket`` → HTTP 500
+→ the storage browser's "Storage service unreachable", which named neither the
+bucket nor the cause. Every route below now translates the S3 boundary through
+``storage.s3_errors`` and answers **404 with the bucket (and key) in the detail**;
+only a genuine outage — unreachable endpoint, bad credentials — still reaches the
+500 path, which is what a 500 should mean.
 """
 
 from typing import Annotated, Literal
@@ -18,7 +28,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from service_kit.exceptions import NotFoundError
-from storage import s3_client
+from storage import BucketNotFoundError, ObjectNotFoundError, s3_client, s3_errors
 
 
 router = APIRouter(prefix="/api", tags=["objects"])
@@ -63,30 +73,85 @@ class S3ObjectHead(BaseModel):
     etag: str | None
 
 
+def _missing_bucket(bucket: str) -> NotFoundError:
+    """A 404 that NAMES the bucket and says who is supposed to have created it.
+
+    An empty listing would have been the other honest option, and it is the wrong one:
+    "bucket absent" and "bucket empty" would then read identically, which is exactly how
+    an unprovisioned store stayed invisible until someone read a traceback.
+    """
+    return NotFoundError(
+        f"bucket not found: {bucket} — the S3 backend has no such bucket. "
+        "The platform provisions it from the chart's rustfs.buckets; check that the "
+        "object store actually created it."
+    )
+
+
+def _resolve_missing(client: object, exc: ObjectNotFoundError) -> NotFoundError:
+    """Turn a key-level not-found into the RIGHT 404, on any S3 backend.
+
+    A `HEAD` has no response body, so some backends answer a missing bucket with a bare
+    `404` that is indistinguishable from a missing key (moto and MinIO volunteer
+    `NoSuchBucket`; AWS does not). Rather than let the answer depend on which store is
+    plugged in — the storage-agnostic contract forbids exactly that — probe the bucket
+    once, on the error path only, and say which thing is actually absent.
+    """
+    return _missing_bucket(exc.bucket) if _bucket_missing(client, exc.bucket) else NotFoundError(f"object not found: {exc.bucket}/{exc.key}")
+
+
+def _bucket_missing(client: object, bucket: str) -> bool:
+    """True only when the store positively reports the bucket as absent.
+
+    A probe that fails for any OTHER reason returns False: an inconclusive probe must
+    never manufacture a "your chart did not provision this" claim.
+    """
+    head_bucket = getattr(client, "head_bucket", None)
+    if head_bucket is None:
+        return False
+    try:
+        with s3_errors(bucket=bucket):
+            head_bucket(Bucket=bucket)
+    except BucketNotFoundError:
+        return True
+    except Exception:  # noqa: BLE001 — an inconclusive probe is not evidence; fall back to the key answer
+        return False
+    return False
+
+
 @router.get("/objects")
 def list_objects(
     bucket: Annotated[Bucket, Query(description="One of the two fixed rask buckets.")],
     prefix: Annotated[str, Query(description='Key prefix to list under (delimiter "/").')] = "",
 ) -> S3Listing:
-    """List one delimiter-scoped level of `bucket`/`prefix` for the storage browser."""
+    """List one delimiter-scoped level of `bucket`/`prefix` for the storage browser.
+
+    404s (never 500s) when the bucket itself is absent — see the module docstring.
+    """
     client = s3_client()
     paginator = client.get_paginator("list_objects_v2")
     prefixes: list[str] = []
     objects: list[S3Object] = []
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter="/"):
-        prefixes.extend(cp["Prefix"] for cp in page.get("CommonPrefixes", []))
-        for obj in page.get("Contents", []):
-            # Skip the prefix's own placeholder key (the "folder" marker).
-            if obj["Key"] == prefix:
-                continue
-            last_modified = obj.get("LastModified")
-            objects.append(
-                S3Object(
-                    key=obj["Key"],
-                    size=obj["Size"],
-                    last_modified=last_modified.isoformat() if last_modified is not None else None,
-                )
-            )
+    try:
+        # The pagination itself is inside the block: boto3's paginator is LAZY, so the
+        # first HTTP call — and therefore NoSuchBucket — happens on iteration, not on
+        # `paginate(...)`. Wrapping only the call would translate nothing.
+        with s3_errors(bucket=bucket):
+            for page in paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter="/"):
+                prefixes.extend(cp["Prefix"] for cp in page.get("CommonPrefixes", []))
+                for obj in page.get("Contents", []):
+                    # Skip the prefix's own placeholder key (the "folder" marker).
+                    if obj["Key"] == prefix:
+                        continue
+                    last_modified = obj.get("LastModified")
+                    objects.append(
+                        S3Object(
+                            key=obj["Key"],
+                            size=obj["Size"],
+                            last_modified=last_modified.isoformat() if last_modified is not None else None,
+                        )
+                    )
+    except BucketNotFoundError as exc:
+        raise _missing_bucket(exc.bucket) from exc
     return S3Listing(bucket=bucket, prefix=prefix, prefixes=prefixes, objects=objects)
 
 
@@ -95,14 +160,21 @@ def head_object(
     bucket: Annotated[Bucket, Query(description="One of the two fixed rask buckets.")],
     key: Annotated[str, Query(description="Full object key to describe.")],
 ) -> S3ObjectHead:
-    """Metadata (size/content-type/last-modified/etag) for a single object (404 if missing)."""
+    """Metadata (size/content-type/last-modified/etag) for a single object.
+
+    404 for a missing key AND for a missing bucket — with different details, so the
+    answer says which. Anything else (endpoint down, bad credentials) propagates: the
+    old blanket `except Exception` reported an outage as "object not found", which is
+    the same lie in the other direction.
+    """
     client = s3_client()
     try:
-        resp = client.head_object(Bucket=bucket, Key=key)
-    except Exception as exc:
-        # Broad catch at the storage boundary (the rule is "no reach into
-        # boto/botocore") — a missing key or any read failure is a 404.
-        raise NotFoundError(f"object not found: {bucket}/{key}") from exc
+        with s3_errors(bucket=bucket, key=key):
+            resp = client.head_object(Bucket=bucket, Key=key)
+    except BucketNotFoundError as exc:
+        raise _missing_bucket(exc.bucket) from exc
+    except ObjectNotFoundError as exc:
+        raise _resolve_missing(client, exc) from exc
     last_modified = resp.get("LastModified")
     etag = (resp.get("ETag") or "").strip('"')
     return S3ObjectHead(
@@ -125,13 +197,19 @@ def download_object(
     ALTO XML (small), so streaming isn't worth the boto3 client-lifetime juggling.
     Doubles as the browser's inline `<img src>` — a disposition header never stops
     an `<img>` fetch from rendering.
+
+    Same 404 split as the HEAD sibling (missing key vs missing bucket); outages still
+    surface as outages.
     """
     client = s3_client()
     try:
-        resp = client.get_object(Bucket=bucket, Key=key)
-    except Exception as exc:
-        raise NotFoundError(f"object not found: {bucket}/{key}") from exc
-    data = resp["Body"].read()
+        with s3_errors(bucket=bucket, key=key):
+            resp = client.get_object(Bucket=bucket, Key=key)
+            data = resp["Body"].read()
+    except BucketNotFoundError as exc:
+        raise _missing_bucket(exc.bucket) from exc
+    except ObjectNotFoundError as exc:
+        raise _resolve_missing(client, exc) from exc
     content_type = resp.get("ContentType") or "application/octet-stream"
     filename = key.rsplit("/", 1)[-1] or "download"
     return Response(

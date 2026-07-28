@@ -178,4 +178,9 @@ def test_gold_contract_is_pinned() -> None:
         "text",
         "confidences",
         "source_rowid",
+        # R26: the run's provenance as Lance JSONB. In the CONTRACT because gold is what leaves the
+        # platform (R25) — a consumer who has the data but not its lineage is coupled back to our graph,
+        # and unlike an ALTO projection the exporter can recompute, provenance cannot be reconstructed
+        # once the row is gone.
+        "lineage",
     )

@@ -1,23 +1,25 @@
 {{- if or .Values.nats.enabled .Values.nats.externalUrl }}
 # Create the JetStream LINEAGE stream (subjects lineage.events.>) that the Dapr pubsub.jetstream
 # component publishes to / consumes from. Dapr's jetstream component does NOT auto-create the stream,
-# so this post-install Job does it (idempotent: skip if it already exists). Also runs against an
+# so this Job does it (idempotent: skip if it already exists). Also runs against an
 # EXTERNAL NATS (nats.externalUrl + nats.enabled=false) — the component would otherwise point at a
 # server with no streams and every publish would fail.
+#
+# NOT a hook — see "BOOTSTRAP JOBS" in _helpers.tpl. A daprd sidecar subscribes at startup, so an
+# absent stream is a startup-time dependency of half the fleet; running the provisioner only after
+# `--wait` had already declared those pods hopeless is the wrong order in the same way the OpenFGA
+# migration was.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "lance.fullname" . }}-nats-stream
+  name: {{ include "lance.fullname" . }}-nats-stream-{{ include "rask.bootstrapRev" . }}
   labels: {{- include "lance.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 20
   template:
     metadata:
       # The explicit component label (the P4 landmine, see bootstrap-admin.yaml): nats:4222 is pod-open
-      # under the prod NetworkPolicy so nothing blocks today, but the label keeps this hook pod visible to
+      # under the prod NetworkPolicy so nothing blocks today, but the label keeps this pod visible to
       # release inventory (`kubectl get pods -l app.kubernetes.io/instance=…`) and admissible the day the
       # nats ingress gets an exclusive client list like openbao/age/rustfs.
       labels:

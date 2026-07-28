@@ -158,6 +158,35 @@ app.kubernetes.io/component: {{ $component }}
        - dapr.io/config: lance-tracing — gated on lance.otelEnabled EXACTLY like the app containers' OTel
          wiring (observability.enabled OR externalOtlpEndpoint), so sidecar traces flip with the apps'.
      Usage: {{- include "rask.daprAnnotations" (list $root $appId $appPort) | nindent 8 }} */}}
+{{/* ---------------------------------------------------------------------------------------------
+     DAPR SIDECAR INJECTION — the second `helm install --wait` ordering defect (2026-07-28).
+
+     Dapr's sidecar injector is a MUTATING WEBHOOK, and its MutatingWebhookConfiguration ships
+     `failurePolicy: Ignore` by default. The Dapr control plane is a SUBCHART of this release, so on a
+     fresh cluster the app pods are created in the same breath as the injector: the API server calls a
+     webhook with no endpoints, SILENTLY admits the pod unmutated, and the app comes up with NO daprd
+     container at all. Nothing recreates that pod — a CrashLoopBackOff restarts the container inside
+     the SAME pod, which will never gain a sidecar — so the app crash-loops forever on
+     "secret unavailable from Dapr store … failing closed" and `helm install --wait` times out. It only
+     ever "worked" on a long-lived cluster where Dapr was already running.
+
+     Fix: `failurePolicy: Fail`, scoped by an `objectSelector` to pods carrying this LABEL. Fail-closed
+     admission makes the API server REJECT the create instead of silently dropping the sidecar; the
+     ReplicaSet controller retries, and the first retry after the injector is Ready produces a properly
+     injected pod. The objectSelector is what makes `Fail` safe: an unscoped fail-closed pod webhook
+     would also block the injector's OWN pod (and every infra pod) and wedge the cluster permanently.
+
+     The label must therefore appear on EXACTLY the pods that carry the `dapr.io/enabled` ANNOTATION —
+     a pod with the annotation but no label is admitted unmutated again (the silent failure, restored),
+     and one with the label but no annotation just costs an admission round-trip. That correspondence
+     is mechanical, so it is a render guard:
+     test_invariants.py::test_every_dapr_annotated_pod_carries_the_injector_webhook_label. */}}
+{{- define "rask.daprPodLabels" -}}
+{{- if .Values.dapr.sidecars -}}
+dapr.io/enabled: "true"
+{{- end }}
+{{- end -}}
+
 {{- define "rask.daprAnnotations" -}}
 {{- $root := index . 0 -}}
 {{- $appId := index . 1 -}}
@@ -242,6 +271,38 @@ dapr.io/config: "lance-tracing"
 
 {{/* Release name is the fullname (install as `helm install rask ./chart` → all names = rask-*). */}}
 {{- define "lance.fullname" -}}{{ .Release.Name }}{{- end -}}
+
+{{/* ---------------------------------------------------------------------------------------------
+     BOOTSTRAP JOBS — the `helm install --wait` deadlock fix (live-proof 2026-07-28, defect 1).
+
+     A Job that another release resource must wait for IN ORDER TO BECOME READY cannot be a
+     post-install hook. helm's order is: pre-install hooks → apply manifests → (--wait) block until
+     every resource is Ready → post-install hooks. So `--wait` blocks on OpenFGA, OpenFGA cannot
+     start against an unmigrated schema, and the migration is queued BEHIND the wait. Circular; revs
+     1 and 2 died on "context deadline exceeded" and the OpenBao seed never fired, which is the only
+     reason scripts/e2e_stack.sh exists (it drops --wait and re-sequences by hand).
+
+     Moving the hook EARLIER does not fix it: a `pre-install` hook runs before ANY release manifest
+     exists, so the migrate Job would wait for an AGE Postgres that has not been created yet — the
+     same deadlock, one phase further left, and now it also blocks every OTHER resource.
+
+     The fix is to take those four Jobs OUT of the hook lifecycle entirely and apply them in the same
+     wave as everything else. `--wait` then waits for the Job to Complete *concurrently* with waiting
+     for the servers to become Ready, and the dependency resolves itself: the migrate pod's wait-age
+     init loops until the AGE StatefulSet (applied in the same wave) answers, migrates, exits; OpenFGA
+     stops crash-looping and goes Ready; `--wait` returns. No wrapper script, no ordering knowledge
+     outside the chart.
+
+     Jobs that depend on the APPS instead (bootstrap-admin needs a booted catalog; the Greptime TTL
+     job needs a live GreptimeDB) stay post-install hooks — nothing waits on them, which is precisely
+     what a post-install hook is for.
+
+     A plain Job's spec is IMMUTABLE, so the name carries the release revision: an upgrade renders a
+     new name (new Job, re-runs — the same semantics `before-hook-creation` gave the hooks), helm
+     deletes the previous revision's Job because it left the manifest, and a re-render of the same
+     revision is byte-identical (no patch, no immutability error).
+     --------------------------------------------------------------------------------------------- */}}
+{{- define "rask.bootstrapRev" -}}r{{ .Release.Revision }}{{- end -}}
 
 {{- define "lance.labels" -}}
 app.kubernetes.io/name: lance-ns

@@ -19,6 +19,7 @@ spec:
       labels:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: catalog
+        {{- include "rask.daprPodLabels" $root | nindent 8 }}
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
       {{- if .Values.dapr.sidecars }}
       annotations:
@@ -204,6 +205,7 @@ spec:
       labels:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: lineage
+        {{- include "rask.daprPodLabels" $root | nindent 8 }}
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
       {{- if .Values.dapr.sidecars }}
       annotations:

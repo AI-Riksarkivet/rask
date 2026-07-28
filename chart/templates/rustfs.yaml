@@ -1,5 +1,5 @@
 {{- if .Values.rustfs.enabled }}
-# RustFS bucket-init — the provisioning hook for the ONE object store, the rustfs-operator Tenant
+# RustFS bucket-init — the provisioning Job for the ONE object store, the rustfs-operator Tenant
 # (templates/rustfs-tenant.yaml, S3 Service `<tenant>-io:9000` = `lance.rustfsHost`). RESOLVED per
 # docs/architecture/lance-ns-merge.md P4 ("RustFS: rask's operator Tenant wins; ... bucket-init
 # re-pointed at operator Tenant endpoint `<tenant>-io:9000`"): the first-party RustFS Deployment and
@@ -8,19 +8,23 @@
 # CR list cannot express — the values-driven medallion zone buckets (a map whose unset entries fall
 # back to rustfs.bucket) and the observability toggle — and it also runs against
 # rustfs.externalEndpoint (managed S3, where no Tenant exists). Idempotent: `mc mb --ignore-existing`.
+#
+# It is ALSO the estate's only detector for a Tenant that silently refused to provision — see the
+# VERIFY step in the container script below (live-proof 2026-07-28, defect 3).
+#
+# NOT a hook — see "BOOTSTRAP JOBS" in _helpers.tpl. Two reasons: the whole data plane's buckets are a
+# startup dependency of the lakehouse apps, and a post-install hook's failure arrives AFTER `--wait`
+# has already blamed something else, which is exactly how a blocked Tenant stayed invisible.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "rask.fullname" . }}-rustfs-mkbucket
+  name: {{ include "rask.fullname" . }}-rustfs-mkbucket-{{ include "rask.bootstrapRev" . }}
   labels: {{- include "lance.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 20
   template:
     metadata:
-      # The explicit component label is the P4 landmine (see bootstrap-admin.yaml): hook pods without one
+      # The explicit component label is the P4 landmine (see bootstrap-admin.yaml): pods without one
       # are invisible to any component-scoped NetworkPolicy `from` list. Here it is LOAD-BEARING, not just
       # hygiene — rustfs:9000's ingress admits an enumerated client list ONLY (network-policy.yaml 3d,
       # which names rustfs-mkbucket), so an unlabeled pod's `mc alias set` loop waits forever under a
@@ -47,7 +51,10 @@ spec:
             - sh
             - -c
             - |
+              set -e
               until mc alias set rfs {{ include "lance.s3Endpoint" . }} {{ .Values.rustfs.accessKey }} "$RUSTFS_SECRET_KEY"; do echo wait-rustfs; sleep 3; done
+
+              # --- CREATE: the values-driven buckets a static CR list cannot express. -----------------
               mc mb --ignore-existing rfs/{{ .Values.rustfs.bucket }}
               {{- if .Values.observability.enabled }}
               mc mb --ignore-existing rfs/{{ .Values.observability.bucket }}  # GreptimeDB object store
@@ -56,5 +63,56 @@ spec:
               {{- if and $bkt (ne $bkt $.Values.rustfs.bucket) }}
               mc mb --ignore-existing rfs/{{ $bkt }}  # medallion storage zone ({{ $ns }}: ingest-source / gold-sink)
               {{- end }}
+              {{- end }}
+
+              {{- if .Values.rustfs.externalEndpoint }}
+              # --- CREATE (external S3): with no Tenant, nothing else provisions the static set. -------
+              {{- range .Values.rustfs.buckets }}
+              mc mb --ignore-existing rfs/{{ . }}
+              {{- end }}
+              {{- else }}
+              # --- VERIFY: the buckets the OPERATOR owns (rustfs.buckets → Tenant spec.buckets). -------
+              # live-proof 2026-07-28, defect 3: the rustfs-operator refused to reconcile the Tenant
+              # (StatefulSetUpdateValidationFailed, "Reconcile is blocked by user-fixable configuration"),
+              # so spec.buckets was never provisioned — and NOTHING said so. The store answered, this Job
+              # went green because it only ever created its OWN buckets, and the single symptom surfaced
+              # three layers up as an HTTP 500 in the storage browser. A provisioner that never checks
+              # what it did not provision is how a whole data plane goes missing quietly.
+              #
+              # So: poll (the Tenant provisions asynchronously — a fresh install legitimately needs a
+              # moment) and then FAIL LOUDLY, naming every missing bucket and the command that shows why.
+              # Deliberately NOT `mc mb` on these: creating them here would paper over a Tenant that is
+              # still broken for every OTHER thing it owns, and the next failure would be even further
+              # from its cause.
+              want="{{ join " " .Values.rustfs.buckets }}"
+              # A tick counter, not `date` arithmetic: the mc image is a micro base and carrying a
+              # dependency on coreutils' date would trade one silent failure for another.
+              tries={{ div (.Values.rustfs.bucketVerifyTimeoutSeconds | int) 5 | max 1 }}
+              i=0
+              while : ; do
+                missing=""
+                for b in $want; do
+                  mc ls "rfs/$b" >/dev/null 2>&1 || missing="$missing $b"
+                done
+                [ -z "$missing" ] && break
+                i=$((i + 1))
+                [ "$i" -ge "$tries" ] && break
+                echo "waiting for the RustFS Tenant to provision:$missing"
+                sleep 5
+              done
+              if [ -n "$missing" ]; then
+                echo "!! MISSING BUCKETS:$missing"
+                echo "!! These come from values rustfs.buckets, which render into the Tenant's spec.buckets —"
+                echo "!! the rustfs-operator provisions them, this Job only verifies them. Missing buckets mean"
+                echo "!! the operator did not reconcile the Tenant. Diagnose with:"
+                echo "!!   kubectl describe tenant {{ include "rask.fullname" . }}-rustfs"
+                echo "!!   kubectl logs -l app.kubernetes.io/name=rustfs-operator"
+                echo "!! The usual cause is a wedged StatefulSet update ('Reconcile is blocked by user-fixable"
+                echo "!! configuration') — e.g. a storageClass the cluster does not have (rustfs.storageClass"
+                echo "!! defaults to \"\" = the cluster default) or an immutable field changed under the operator."
+                echo "!! Raise rustfs.bucketVerifyTimeoutSeconds if this store is merely slow."
+                exit 1
+              fi
+              echo "verified the operator-owned bucket set:$want"
               {{- end }}
 {{- end }}

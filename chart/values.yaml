@@ -810,6 +810,12 @@ rustfs:
   # values-driven extras — medallion.buckets zones + the observability toggle — are provisioned by
   # the bucket-init hook (templates/rustfs.yaml), which a static CR list cannot express.
   buckets: ["images-batch", "images-batch-alto", "images-batch-search", "rask-observability", "lance-catalog"]
+  # How long the bucket-init Job waits for the OPERATOR to provision that set before failing loudly.
+  # It only VERIFIES them (the operator owns them) — live-proof 2026-07-28 defect 3: a Tenant that
+  # refused to reconcile left every one of these absent and NOTHING surfaced it, so the first symptom
+  # was an HTTP 500 in the storage browser three layers away. Raise it for a slow/large store; the Job
+  # exits 1 with the diagnosis and the kubectl commands when the deadline passes.
+  bucketVerifyTimeoutSeconds: 300
   # Externalize: when set, the apps (catalog/lineage/compaction + vending STS) connect HERE instead of the
   # in-cluster RustFS — pair with rustfs.enabled=false to use a managed S3. NOTE: the greptimedb-standalone
   # subchart's S3 endpoint (under `greptimedb-standalone.objectStorage.s3.endpoint`) must be overridden too.
@@ -988,9 +994,35 @@ nats:
 # --- Dapr control plane (subchart) — injects the daprd sidecar into annotated pods ----------------
 dapr:
   enabled: true
+  # --- SUBCHART values (dapr 1.18.1) --------------------------------------------------------------
+  dapr_sidecar_injector:
+    # FAIL-CLOSED sidecar injection. Dapr ships `Ignore`, which means the API server SILENTLY admits a
+    # pod unmutated when the injector webhook is unreachable. The Dapr control plane is a subchart of
+    # THIS release, so on a fresh cluster the app pods are created in the same breath as the injector,
+    # win the race, and come up with NO daprd container — and nothing ever recreates them (a
+    # CrashLoopBackOff restarts the container inside the same sidecar-less pod). Every governed app
+    # then dies on "secret unavailable from Dapr store … failing closed" and `helm install --wait`
+    # times out. `Fail` turns that silent drop into a REJECTED create, which the ReplicaSet controller
+    # simply retries until the injector is Ready.
+    webhookFailurePolicy: Fail
+    # …and this is what makes `Fail` safe. An unscoped fail-closed POD webhook would also block the
+    # injector's OWN pod (chicken-and-egg: the webhook it must satisfy is served by the pod being
+    # created) and every infra pod in the namespace, wedging the cluster permanently. Scoped to the
+    # label `rask.daprPodLabels` stamps on exactly the sidecar-wanting pods, only they fail closed.
+    objectSelector:
+      matchLabels:
+        dapr.io/enabled: "true"
+  # --- FIRST-PARTY values -------------------------------------------------------------------------
   # Inject Dapr sidecar into every fleet + lakehouse pod. Off => plain pods; the gateway
   # falls back to httpx env-URLs. (The control-plane subchart is dapr.enabled above.)
   sidecars: true
+  # The injection-sweep Job (templates/dapr-inject-sweep.yaml) closes the window `failurePolicy: Fail`
+  # cannot: helm applies MutatingWebhookConfiguration AFTER every Deployment (it is not in helm's kind
+  # order), so a first install always creates a few app pods while no webhook exists yet. Those pods
+  # are admitted un-injected and nothing replaces them — the Job recreates exactly those. kubectl
+  # image, pinned; passes × 5s bounds how long it keeps trying before failing with the diagnosis.
+  sweepImage: registry.k8s.io/kubectl:v1.31.3
+  sweepPasses: 40
   logLevel: "info"
   # Max request body size for Dapr service invocation. Dapr defaults to 4Mi,
   # which rejects multi-image uploads proxied over the gateway's sidecar. Raise it

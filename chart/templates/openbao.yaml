@@ -109,21 +109,23 @@ spec:
 ---
 {{- if .Values.openbao.devMode }}
 # Seed a demo secret so the Dapr secret store has something to serve (proves the wiring end-to-end).
+#
+# NOT a hook — see "BOOTSTRAP JOBS" in _helpers.tpl. The medallion movers resolve their S3 credentials
+# through the Dapr secret store at boot, so an unseeded OpenBao keeps them un-Ready (secret 500 →
+# "waiting on port 8000"); as a post-install hook the seed ran only AFTER --wait had already given up
+# on exactly those pods. In the ordinary wave it races them instead, and the movers' own retry wins.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "lance.openbaoHost" . }}-seed
+  name: {{ include "lance.openbaoHost" . }}-seed-{{ include "rask.bootstrapRev" . }}
   labels: {{- include "lance.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 20
   template:
     metadata:
       # The explicit component label (the P4 landmine, see bootstrap-admin.yaml): devMode-only Job, so it
       # never meets the prod NetworkPolicy — the label is for release inventory + consistency with every
-      # other hook pod (and would be the admission handle if a dev cluster ever enforced policies).
+      # other bootstrap pod (and would be the admission handle if a dev cluster ever enforced policies).
       labels:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: openbao-seed
