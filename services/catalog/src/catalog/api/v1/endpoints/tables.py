@@ -20,6 +20,7 @@ from lance_namespace import (
     GetTableStatsResponse,
     GetTableTagVersionRequest,
     InvalidInputError,
+    ListNamespacesRequest,
     ListTablesRequest,
     ListTablesResponse,
     RegisterTableRequest,
@@ -62,6 +63,48 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/table", tags=["table"])
 
 
+#: How deep the namespace walk goes. The medallion is two levels (namespace + table) and Polaris
+#: allows 16; this bounds a pathological or cyclic tree without pretending to be a real limit.
+_MAX_NAMESPACE_DEPTH = 8
+
+
+def _collect_tables(
+    ns: object, delimiter: str, root_tables: list[str], include_declared: bool
+) -> list[str]:
+    """Every table in the tree, fully qualified — root tables plus each namespace's, depth-first.
+
+    Synchronous and run in a threadpool by the caller: the native namespace client is blocking, and
+    a walk of N namespaces is N blocking calls.
+    """
+    found = list(root_tables)
+    stack: list[list[str]] = [[]]
+    seen: set[tuple[str, ...]] = set()
+    while stack:
+        parent = stack.pop()
+        if len(parent) >= _MAX_NAMESPACE_DEPTH or tuple(parent) in seen:
+            continue
+        seen.add(tuple(parent))
+        try:
+            children = native.call(ns, "list_namespaces", ListNamespacesRequest(id=parent)).namespaces or []
+        except Exception:  # noqa: BLE001 — a namespace we cannot list must not empty the whole list
+            log.warning("could not list namespaces under %s", parent or "<root>", exc_info=True)
+            continue
+        for child in children:
+            path = [*parent, child]
+            stack.append(path)
+            try:
+                tables = native.call(
+                    ns,
+                    "list_tables",
+                    ListTablesRequest(id=path, include_declared=include_declared),
+                ).tables or []
+            except Exception:  # noqa: BLE001 — same: one bad namespace, not a blank registry
+                log.warning("could not list tables in %s", path, exc_info=True)
+                continue
+            found.extend(delimiter.join([*path, name]) for name in tables)
+    return found
+
+
 @router.get("", response_model_exclude_none=True)
 async def list_all_tables(
     ns: NamespaceDep,
@@ -77,6 +120,18 @@ async def list_all_tables(
     ``include_declared=false`` drops declared-only tables (reserved, no storage yet)."""
     req = ListTablesRequest(id=[], page_token=page_token, limit=limit, include_declared=include_declared)
     response: ListTablesResponse = await run_in_threadpool(native.call, ns, "list_all_tables", req)
+    # RECURSE INTO CHILD NAMESPACES. `list_all_tables` at the root returns only tables sitting
+    # DIRECTLY at the root — despite the name — so with the estate's own convention (tiers are
+    # namespaces: bronze$pages, silver$features, gold$catalog) this endpoint answered `{"tables":[]}`
+    # while the catalog happily reported `bronze` -> ["pages"] one call away. Both lakehouse
+    # registries (Tables and Namespaces, which derives its groups from THIS list) were therefore
+    # permanently empty the moment anyone did the right thing and put a table in a namespace.
+    #
+    # Names come back FULLY QUALIFIED (`bronze$pages`), which is what the UI already assumes — it
+    # groups on the delimiter — and what the FGA filter below matches against `table:<name>`.
+    response.tables = await run_in_threadpool(
+        _collect_tables, ns, settings.delimiter, response.tables, include_declared
+    )
     # When FGA is on and the caller is known, return only the tables they can read.
     # Each table name is the canonical id suffix, matching ``table:<name>`` from list_objects.
     if settings.fga_enabled and token is not None and client is not None:

@@ -114,7 +114,6 @@ export function fmtModified(iso: string | null): string {
 	return iso === null ? '—' : iso.slice(0, 19).replace('T', ' ');
 }
 
-
 // ── Bronze page datasets (the document viewer) ────────────────────────────────────────────────
 // A Lance dataset is a DIRECTORY of objects in a store, so the object browser walks into it and
 // shows `.lance` fragments and a `_versions` manifest — bytes, not pages. These read the dataset
@@ -133,15 +132,19 @@ export type Page = {
 
 export type PageListing = { dataset: string; pages: Page[] };
 
-/** Page metadata for a bronze dataset (never the bytes — a listing that inlined them would move
- *  hundreds of MB to draw a contact sheet). */
-export const listPages = (dataset: string): Promise<ApiResult<PageListing>> =>
-	request<PageListing>('/api', `media/pages?${q({ dataset })}`);
+/** Page metadata for a catalog TABLE (never the bytes — a listing that inlined them would move
+ *  hundreds of MB to draw a contact sheet).
+ *
+ *  Addressed by table id (`bronze$pages`), not by an s3:// URI. A URI parameter would let any caller
+ *  point the viewer at any bucket its credentials reach, and would let this page render a dataset
+ *  the catalog has never heard of — the viewer and the catalog disagreeing by construction. */
+export const listPages = (table: string): Promise<ApiResult<PageListing>> =>
+	request<PageListing>('/api', `media/pages?${q({ table })}`);
 
 /** One page's image bytes, as an `<img src>`. Selected by the `id` COLUMN, never by row position —
  *  positional indexing into a blob read is the misattribution bug the read path exists to avoid. */
-export const pageImageUrl = (dataset: string, id: number): string =>
-	bffPath(`/api/media/page?${q({ dataset, id: String(id) })}`);
+export const pageImageUrl = (table: string, id: number): string =>
+	bffPath(`/api/media/page?${q({ table, id: String(id) })}`);
 
 /** Does this browser location look like a Lance dataset rather than a folder of loose objects?
  *  Lance writes a `_versions/` manifest directory and `.lance` fragments; either is conclusive. */
@@ -150,4 +153,15 @@ export function looksLikeLanceDataset(prefixes: string[], objects: { key: string
 		prefixes.some((p) => p.endsWith('_versions/') || p.endsWith('data/')) ||
 		objects.some((o) => o.key.endsWith('.lance') || o.key.includes('/_versions/'))
 	);
+}
+
+/** The catalog table id for a browser location, or null when the path is not namespace-shaped.
+ *
+ *  TIERS ARE NAMESPACES, so a registered table sits at `<namespace>/<table>/` inside the warehouse
+ *  bucket and its catalog id is `<namespace>$<table>`. A dataset found anywhere else is real storage
+ *  but NOT a registered table — the viewer refuses it rather than reading round the catalog, which
+ *  is what "governed" has to mean if it means anything. */
+export function tableIdForPrefix(prefix: string): string | null {
+	const segs = prefix.split('/').filter(Boolean);
+	return segs.length === 2 ? `${segs[0]}$${segs[1]}` : null;
 }

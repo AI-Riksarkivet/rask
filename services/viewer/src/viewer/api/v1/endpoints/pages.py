@@ -17,13 +17,17 @@ See ``docs/architecture/lance-blob-v2-findings.md`` for the measurements behind 
 
 from __future__ import annotations
 
+from typing import Annotated
+
+import httpx
 import lance
 from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel
+
 from service_kit.exceptions import NotFoundError
 from service_kit.lakehouse.blobs import read_aligned_table
 from service_kit.media.deps import StateDep
-from typing import Annotated
+
 
 router = APIRouter(prefix="/api", tags=["pages"])
 
@@ -46,28 +50,53 @@ class Page(BaseModel):
 
 
 class PageListing(BaseModel):
+    #: The catalog table id these pages came from (e.g. bronze$pages).
     dataset: str
     pages: list[Page]
 
 
-def _open(state: StateDep, dataset: str) -> lance.LanceDataset:
-    """Open a bronze dataset by URI, or 404 naming it.
+def _resolve(state: StateDep, table: str) -> str:
+    """Resolve a catalog table id (``bronze$pages``) to its dataset location.
 
-    Addressed by URI rather than through the media registry: a bronze page dataset is a LAKEHOUSE
-    artefact the cascade wrote, not a registered media dataset with a descriptor, so there is no id
-    to resolve. Credentials still come from the service's own settings — the caller supplies a
-    location, never a credential.
+    THROUGH THE CATALOG, never a caller-supplied URI. Taking an ``s3://`` parameter would let any
+    caller point this endpoint at any bucket the viewer's credentials can reach and have it stream
+    the bytes back — the viewer would become a read primitive for the whole object store. It also
+    made the viewer disagree with the catalog by construction: it could render a dataset the catalog
+    had never heard of, which is exactly the ungoverned state this gate exists to close.
+
+    The catalog is the one that knows where a registered table lives, so it is the one asked.
     """
+    base = state.settings.catalog_uri
+    if not base:
+        raise NotFoundError(
+            "the viewer has no catalog configured (MEDIA_CATALOG_URI), so it cannot resolve a table"
+        )
     try:
-        return lance.dataset(dataset, storage_options=state.settings.storage_options)
+        with httpx.Client(base_url=base, timeout=30.0) as http:
+            r = http.post(f"/v1/table/{table}/describe", json={})
+    except httpx.RequestError as exc:
+        raise NotFoundError(f"catalog unreachable while resolving {table!r}: {exc}") from exc
+    if r.status_code >= 400:
+        raise NotFoundError(f"catalog does not know table {table!r} (HTTP {r.status_code})")
+    location = r.json().get("location")
+    if not location:
+        raise NotFoundError(f"catalog returned no location for {table!r}")
+    return str(location)
+
+
+def _open(state: StateDep, table: str) -> lance.LanceDataset:
+    """Open the dataset a catalog table points at, or 404 naming the table."""
+    location = _resolve(state, table)
+    try:
+        return lance.dataset(location, storage_options=state.settings.storage_options)
     except Exception as exc:  # noqa: BLE001 — surface the cause, never a bare 500
-        raise NotFoundError(f"no readable dataset at {dataset!r}: {exc}") from exc
+        raise NotFoundError(f"table {table!r} resolves to {location!r}, which is unreadable: {exc}") from exc
 
 
 @router.get("/pages", response_model=PageListing, summary="Pages in a bronze page dataset")
 def list_pages(
     state: StateDep,
-    dataset: Annotated[str, Query(description="Bronze page dataset URI (s3://…).")],
+    table: Annotated[str, Query(description="Catalog table id, e.g. bronze$pages.")],
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
 ) -> PageListing:
     """Page metadata, in dataset order.
@@ -76,27 +105,27 @@ def list_pages(
     megabytes to render a contact sheet; the browser fetches each page's bytes from ``/api/page``,
     which the ``<img>`` tag streams on demand.
     """
-    ds = _open(state, dataset)
-    table = read_aligned_table(ds, columns=[*_PAGE_COLUMNS, "payload"])
+    ds = _open(state, table)
+    rows = read_aligned_table(ds, columns=[*_PAGE_COLUMNS, "payload"])
     pages: list[Page] = []
-    for i in range(min(table.num_rows, limit)):
-        payload = table.column("payload")[i].as_py()
+    for i in range(min(rows.num_rows, limit)):
+        payload = rows.column("payload")[i].as_py()
         pages.append(
             Page(
-                id=table.column("id")[i].as_py(),
-                source_uri=table.column("source_uri")[i].as_py() or "",
-                stage=table.column("stage")[i].as_py() or "",
+                id=rows.column("id")[i].as_py(),
+                source_uri=rows.column("source_uri")[i].as_py() or "",
+                stage=rows.column("stage")[i].as_py() or "",
                 size=len(payload) if payload else 0,
                 has_image=payload is not None,
             )
         )
-    return PageListing(dataset=dataset, pages=pages)
+    return PageListing(dataset=table, pages=pages)
 
 
 @router.get("/page", summary="One page's image bytes")
 def get_page(
     state: StateDep,
-    dataset: Annotated[str, Query(description="Bronze page dataset URI (s3://…).")],
+    table: Annotated[str, Query(description="Catalog table id, e.g. bronze$pages.")],
     page_id: Annotated[int, Query(alias="id", ge=0, description="The page's `id` column value.")],
 ) -> Response:
     """The raw image bytes for one page.
@@ -105,12 +134,12 @@ def get_page(
     the misattribution bug this module exists to avoid, and a caller holding an id from the listing
     must get that page or a 404 — never a different one.
     """
-    ds = _open(state, dataset)
-    table = read_aligned_table(ds, columns=[*_PAGE_COLUMNS, "payload"])
-    ids = table.column("id").to_pylist()
+    ds = _open(state, table)
+    rows = read_aligned_table(ds, columns=[*_PAGE_COLUMNS, "payload"])
+    ids = rows.column("id").to_pylist()
     if page_id not in ids:
-        raise NotFoundError(f"no page with id {page_id} in {dataset!r}")
-    payload = table.column("payload")[ids.index(page_id)].as_py()
+        raise NotFoundError(f"no page with id {page_id} in {table!r}")
+    payload = rows.column("payload")[ids.index(page_id)].as_py()
     if payload is None:
         # A registered page whose harvest produced no bytes. 404 with the reason, so the UI can say
         # "this page failed to harvest" instead of rendering a broken image icon.
