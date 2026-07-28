@@ -195,3 +195,26 @@ transcript does not exist. Ruling **R28** covers the storage-registry half; the 
 at `s3://images-batch/A0060198/`, read back out of the bronze blob column in-cluster and written as
 objects — which also proves `read_blobs` works on live data when mapped by `row_address` rather than
 positional zip (the null-drop landmine in `lance-blob-v2-findings.md`).
+
+## Install-deadlock: FIXED and proven from zero (2026-07-28)
+
+`helm install --wait` died twice today on `context deadline exceeded`: the app pods could not become
+Ready until the OpenFGA migration ran, and the migration was a **post-install hook**, which cannot run
+until `--wait` finishes. `scripts/e2e_stack.sh` existed purely to sequence around it.
+
+**The fix is to stop making it a hook.** A `pre-install` hook would run before AGE Postgres exists; in
+the ordinary wave helm waits for the Job *and* the server at the same time, and the Job's own
+`wait-age` init container supplies the only ordering that was ever really needed.
+
+Proof — throwaway kind cluster `rask-dl`, default chart, `--set singleTenant.enabled=true`:
+
+```
+==> helm install --wait (THE deadlock test: migrate is an ordinary resource, not a post-install hook)
+HELM INSTALL EXIT=0
+```
+
+41 pods Running; the hook Jobs that could never fire before all Complete, including
+`rask-openfga-migrate` and `rask-openbao-seed`. Two earlier attempts failed for reasons that were
+MINE, not the chart's, and are recorded here so nobody re-reads them as evidence: the first had no
+third-party preload against a 12-minute timeout (cold pulls), and the second was killed mid-install
+when a disk cleanup deleted its cluster. `make kind-preload` exists to remove the first cause.
