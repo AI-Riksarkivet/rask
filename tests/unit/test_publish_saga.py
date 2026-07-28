@@ -343,3 +343,67 @@ async def test_the_instant_is_reused_not_re_minted_on_a_retry() -> None:
     await project.fire({"event": "publish_failed", "error": "x"})
     await project.fire({"event": "publish"})
     assert project.doc["pending_publish_at"] == before, "a retry re-minted the publish instant"
+
+
+@pytest.mark.asyncio
+async def test_a_crash_between_record_and_succeeded_does_not_strand_the_project() -> None:
+    """The wedge. `record_publish` lands, then the process dies before `publish_succeeded`. The
+    project is now `publishing` WITH a publish record — and `PROJECT_EDGES` has no edge out of
+    `publishing` except the two system ones, so a retry that returns early on "already published"
+    leaves it stuck there forever, on precisely the crash this saga exists to survive.
+
+    The retry must CONVERGE the state before reporting.
+    """
+    project, publisher = _Project(), _Publisher()
+    tasks = {"t0": _Task("t0", TaskState.ACCEPTED, 1)}
+
+    # Simulate the crash: the record landed, the transition never fired.
+    project.doc["published"] = {
+        "table_id": "silver.vasa_0123456789ab",
+        "namespace": "silver",
+        "version": 7,
+        "tag": f"publish-{PUBLISH_TOKEN}",
+        "publish_id": PUBLISH_TOKEN,
+        "published_at": MINTED_AT.isoformat(),
+        "published_by": "henry",
+    }
+    assert project.doc["state"] == ProjectState.PUBLISHING
+
+    out = await _run(project, tasks, publisher)
+
+    assert out.already_published is True
+    assert project.doc["state"] == ProjectState.PUBLISHED, "the retry left the project stranded in publishing"
+    assert publisher.creates == 0, "the retry republished"
+
+
+@pytest.mark.asyncio
+async def test_the_run_facet_is_keyed_by_its_name() -> None:
+    """`X-Lance-Run-Facets` is a {name: payload} mapping. Handing the catalog a bare payload emits a
+    facet with no name — dropped or rejected at the far end, which is provenance that silently does
+    not arrive. `PROJECT_FACET` existed and was never used to key anything."""
+    from annotator.projects.publish import PROJECT_FACET
+
+    project, publisher = _Project(), _Publisher()
+    await _run(project, {"t0": _Task("t0", TaskState.ACCEPTED, 1)}, publisher)
+
+    assert set(publisher.run_facet) == {PROJECT_FACET}
+    payload = publisher.run_facet[PROJECT_FACET]
+    assert payload["_producer"] and payload["_schemaURL"], "the payload lost its spec-legal envelope"
+    assert payload["publishId"] == PUBLISH_TOKEN
+
+
+@pytest.mark.asyncio
+async def test_a_failure_while_recording_the_failure_keeps_the_original_error() -> None:
+    """Otherwise the operator is shown the actor's error instead of the one that broke the publish,
+    and the real cause is never logged at all."""
+
+    class _Wedged(_Project):
+        async def fire(self, payload: dict[str, Any]) -> dict[str, Any]:
+            if payload["event"] == "publish_failed":
+                raise RuntimeError("actor unreachable too")
+            return await super().fire(payload)
+
+    project, publisher = _Wedged(), _Publisher(fail_on="create")
+
+    with pytest.raises(RuntimeError, match="catalog unreachable"):
+        await _run(project, {"t0": _Task("t0", TaskState.ACCEPTED, 1)}, publisher)

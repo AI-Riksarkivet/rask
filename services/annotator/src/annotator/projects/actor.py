@@ -125,8 +125,10 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
         target, _permission = task_transition(task.state, event)
 
         # `submit` is the one edge whose target depends on project config rather than the table.
+        # Read from the TASK, captured at send time from the project — never from the payload. A
+        # caller-supplied `review_required` would let an annotator self-accept.
         if event == "submit":
-            target = submit_target(bool(payload.get("review_required", True)))
+            target = submit_target(task.review_required)
 
         now = datetime.now(UTC)
         # A real Transition, not a dict: appending a raw mapping to a list[Transition] "works" but

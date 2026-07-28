@@ -34,7 +34,7 @@ class _FakeProject:
         self.raise_on_fire: Exception | None = None
 
     async def get(self) -> dict[str, Any] | None:
-        return None if self.state is None else {"state": str(self.state), "project_id": "p1"}
+        return None if self.state is None else {"state": str(self.state), "project_id": "p1", "review_required": True}
 
     async def fire(self, payload: dict[str, Any]) -> dict[str, Any]:
         if self.raise_on_fire:
@@ -76,12 +76,18 @@ def _app(project: _FakeProject, *, grant: set[str], seen: list[dict[str, Any]], 
 
 @pytest.fixture
 def wired(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """Patch both proxies once; each test picks the grant set."""
-    project, task = _FakeProject(), _FakeTask()
-    monkeypatch.setattr(ev, "_project_proxy", lambda _p: project)
-    monkeypatch.setattr(ev, "_task_proxy", lambda _t: task)
+    """Patch both proxies once; each test picks the grant set and, where it matters, the state.
 
-    def build(grant: set[str]) -> tuple[TestClient, _FakeProject, _FakeTask, list[dict[str, Any]]]:
+    The default is FROZEN because most of this file is about publish. `send` is only legal in
+    draft/labeling, so those tests pass `state=` explicitly — which is itself the contract.
+    """
+    holder: dict[str, Any] = {}
+
+    def build(grant: set[str], state: ProjectState = ProjectState.FROZEN) -> tuple[TestClient, _FakeProject, _FakeTask, list[dict[str, Any]]]:
+        project, task = _FakeProject(state=state), _FakeTask()
+        holder["project"], holder["task"] = project, task
+        monkeypatch.setattr(ev, "_project_proxy", lambda _p: project)
+        monkeypatch.setattr(ev, "_task_proxy", lambda _t: task)
         seen: list[dict[str, Any]] = []
         return TestClient(_app(project, grant=grant, seen=seen, task=task)), project, task, seen
 
@@ -99,7 +105,7 @@ ALL_PUBLISH_DOORS = {"can_publish", "can_create_table", "can_promote"}
 def test_publish_needs_every_door(wired: Any) -> None:
     client, project, _t, seen = wired(ALL_PUBLISH_DOORS)
 
-    r = client.post("/projects/p1/events", json={"event": "publish", "tenant": "acme"})
+    r = client.post("/projects/p1/events", json={"event": "publish"})
 
     assert r.status_code == 200, r.text
     relations = [c["relation"] for c in seen]
@@ -121,7 +127,7 @@ def test_holding_only_some_doors_is_403(wired: Any, held: set[str], closed: str)
     """Half the authority is not authority. Each door is load-bearing on its own."""
     client, project, _t, _seen = wired(held)
 
-    r = client.post("/projects/p1/events", json={"event": "publish", "tenant": "acme"})
+    r = client.post("/projects/p1/events", json={"event": "publish"})
 
     assert r.status_code == 403
     assert closed in r.text, "the refusal must name the door that closed"
@@ -133,7 +139,7 @@ def test_the_audit_names_the_first_door_that_closed_not_a_composite(wired: Any) 
     namespace:silver" is."""
     client, _p, _t, seen = wired(set())
 
-    r = client.post("/projects/p1/events", json={"event": "publish", "tenant": "acme"})
+    r = client.post("/projects/p1/events", json={"event": "publish"})
 
     assert r.status_code == 403
     assert len(seen) == 1, "later doors were checked after the first one closed"
@@ -155,7 +161,7 @@ def test_an_ungated_namespace_skips_the_promote_door(wired: Any) -> None:
 def test_the_default_target_is_silver(wired: Any) -> None:
     """Human labels are curated, not raw (§6.2)."""
     client, _p, _t, seen = wired(ALL_PUBLISH_DOORS)
-    client.post("/projects/p1/events", json={"event": "publish", "tenant": "acme"})
+    client.post("/projects/p1/events", json={"event": "publish"})
     assert seen[1]["obj"] == "namespace:silver"
 
 
@@ -165,7 +171,7 @@ def test_an_actor_precondition_failure_is_409_not_500(wired: Any) -> None:
     client, project, _t, _seen = wired(ALL_PUBLISH_DOORS)
     project.raise_on_fire = IllegalTransition("project", "frozen", "publish (tasks are not all terminal)")
 
-    r = client.post("/projects/p1/events", json={"event": "publish", "tenant": "acme"})
+    r = client.post("/projects/p1/events", json={"event": "publish"})
 
     assert r.status_code == 409
     assert "not all terminal" in r.text
@@ -178,15 +184,30 @@ def test_an_actor_precondition_failure_is_409_not_500(wired: Any) -> None:
 
 def test_a_non_publish_edge_checks_the_permission_the_table_declares(wired: Any) -> None:
     client, _p, _t, seen = wired({"can_manage"})
-    r = client.post("/projects/p1/events", json={"event": "open", "tenant": "acme"})
+    r = client.post("/projects/p1/events", json={"event": "open"})
     assert r.status_code == 200, r.text
-    assert seen == [{"user": SUBJECT, "relation": "can_manage", "obj": "project:acme"}]
+    assert seen == [{"user": SUBJECT, "relation": "can_manage", "obj": "annotation_project:p1"}]
 
 
 def test_an_edge_absent_from_the_table_is_409(wired: Any) -> None:
     client, _p, _t, _seen = wired({"can_manage"})
-    r = client.post("/projects/p1/events", json={"event": "publish_succeeded", "tenant": "acme"})
-    assert r.status_code == 409
+    r = client.post("/projects/p1/events", json={"event": "archive"})
+    assert r.status_code == 200, r.text  # frozen -> archived IS legal
+    r2 = client.post("/projects/p1/events", json={"event": "freeze"})
+    assert r2.status_code == 409, "archived -> freeze is not in the table"
+
+
+@pytest.mark.parametrize("event", ["publish_succeeded", "publish_failed"])
+def test_a_system_only_project_edge_is_refused_over_http(wired: Any, event: str) -> None:
+    """These are fired by the publish saga. Exposed unauthenticated — which is what "permission is
+    None" produced before — anyone could mark another operator\'s publish succeeded, or fail one
+    that was mid-flight."""
+    client, project, _t, _seen = wired({"can_manage", "can_publish", "can_create_table", "can_promote"})
+
+    r = client.post("/projects/p1/events", json={"event": event})
+
+    assert r.status_code == 403
+    assert project.fired == [], "a system-only edge reached the actor over HTTP"
 
 
 def test_an_absent_project_is_409_not_500(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -194,7 +215,7 @@ def test_an_absent_project_is_409_not_500(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(ev, "_project_proxy", lambda _p: project)
     seen: list[dict[str, Any]] = []
     client = TestClient(_app(project, grant=ALL_PUBLISH_DOORS, seen=seen))
-    assert client.post("/projects/p1/events", json={"event": "publish", "tenant": "acme"}).status_code == 409
+    assert client.post("/projects/p1/events", json={"event": "publish"}).status_code == 409
 
 
 # --------------------------------------------------------------------------------------------------
@@ -205,7 +226,6 @@ def test_an_absent_project_is_409_not_500(monkeypatch: pytest.MonkeyPatch) -> No
 def _item(task_id: str) -> dict[str, Any]:
     return {
         "task_id": task_id,
-        "project_id": "ignored",
         "source": {"kind": "chunks", "keys": [task_id]},
         "media": {"kind": "image", "image_url": f"s3://b/{task_id}.jpg"},
     }
@@ -216,9 +236,9 @@ def test_send_seeds_the_task_actor_before_indexing_it(wired: Any) -> None:
     is not indexed — invisible to the publish precondition, and repaired by an idempotent re-send.
     The reverse would index a task whose actor was never seeded, so the precondition would read a
     state for a task that cannot answer for itself."""
-    client, project, task, _seen = wired({"can_send_items"})
+    client, project, task, _seen = wired({"can_send_items"}, state=ProjectState.LABELING)
 
-    r = client.post("/projects/p1/items", json={"tenant": "acme", "items": [_item("t0")]})
+    r = client.post("/projects/p1/items", json={"items": [_item("t0")]})
 
     assert r.status_code == 201, r.text
     assert task.seeded, "the task actor was never seeded"
@@ -229,19 +249,60 @@ def test_send_seeds_the_task_actor_before_indexing_it(wired: Any) -> None:
 def test_send_forces_the_project_id_from_the_path(wired: Any) -> None:
     """A client-supplied `project_id` in the body must not be able to file a task under a project the
     caller was not authorized against."""
-    client, _p, task, _seen = wired({"can_send_items"})
-    client.post("/projects/p1/items", json={"tenant": "acme", "items": [_item("t0")]})
+    client, _p, task, _seen = wired({"can_send_items"}, state=ProjectState.LABELING)
+    client.post("/projects/p1/items", json={"items": [_item("t0")]})
     assert task.seeded[0]["project_id"] == "p1"
 
 
 def test_send_without_the_permission_writes_nothing(wired: Any) -> None:
-    client, project, task, _seen = wired(set())
-    r = client.post("/projects/p1/items", json={"tenant": "acme", "items": [_item("t0")]})
+    client, project, task, _seen = wired(set(), state=ProjectState.LABELING)
+    r = client.post("/projects/p1/items", json={"items": [_item("t0")]})
     assert r.status_code == 403
     assert task.seeded == [] and project.sent == []
 
 
 def test_listing_tasks_returns_the_precondition_from_the_same_snapshot(wired: Any) -> None:
     client, _p, _t, _seen = wired({"can_view"})
-    body = client.get("/projects/p1/tasks", params={"tenant": "acme"}).json()
+    body = client.get("/projects/p1/tasks", params={}).json()
     assert "may_publish" in body and "counts" in body, "the caller must not have to ask twice"
+
+
+# --------------------------------------------------------------------------------------------------
+# Send: the client describes WHAT to annotate, never who did what
+# --------------------------------------------------------------------------------------------------
+
+
+def test_a_sender_cannot_fabricate_state_or_provenance(wired: Any) -> None:
+    """The defect this replaces: `items` was a full `Task`, so a sender could supply
+    `state=accepted`, `submitted_by` and `reviewed_by` — manufacturing reviewed work with forged
+    provenance and walking it straight into a publish. The request model now accepts only `source`
+    and `media`; every provenance field takes its server-side default."""
+    client, _p, task, _seen = wired({"can_send_items"}, state=ProjectState.LABELING)
+
+    r = client.post(
+        "/projects/p1/items",
+        json={
+            "items": [
+                {
+                    **_item("t0"),
+                    "state": "accepted",
+                    "submitted_by": "mallory",
+                    "reviewed_by": "mallory",
+                    "review_action": "accepted",
+                }
+            ]
+        },
+    )
+
+    assert r.status_code == 201, r.text
+    seeded = task.seeded[0]
+    assert seeded["state"] == "unassigned", "a sender dictated the task state"
+    assert seeded["submitted_by"] is None and seeded["reviewed_by"] is None, "a sender forged provenance"
+
+
+def test_send_captures_review_required_from_the_project(wired: Any) -> None:
+    """It has to be captured at send time: the task actor decides `submit`\'s target from it, and
+    reading it per-request would put it back in the caller\'s hands."""
+    client, _p, task, _seen = wired({"can_send_items"}, state=ProjectState.LABELING)
+    client.post("/projects/p1/items", json={"items": [_item("t0")]})
+    assert task.seeded[0]["review_required"] is True
