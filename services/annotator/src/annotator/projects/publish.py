@@ -32,6 +32,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Final
 
+import pyarrow as pa
 from lineage_kit.schemas import custom_facet
 from pydantic import BaseModel, Field
 
@@ -50,44 +51,62 @@ NO_SHAPE: Final[str] = "none"
 #: (`lance`, `author`, `errorMessage`, `progress`, `parent`) — a collision there is rejected at emit.
 PROJECT_FACET: Final[str] = "annotationProject"
 
-#: Column order of `PUBLISHED_LABELS_SCHEMA` (§7.1). Named here so a row dict and the Arrow schema the
-#: workflow builds cannot drift: the test asserts every row carries exactly these keys.
-PUBLISHED_COLUMNS: Final[tuple[str, ...]] = (
-    "project_id",
-    "project_slug",
-    "publish_id",
-    "task_id",
-    "task_outcome",
-    "item_source_kind",
-    "item_dataset",
-    "item_key_path",
-    "annotation_id",
-    "shape_type",
-    "x",
-    "y",
-    "width",
-    "height",
-    "rotation",
-    "polygon",
-    "t_start",
-    "t_end",
-    "mask",
-    "label",
-    "text",
-    "attributes",
-    "group",
-    "difficult",
-    "source",
-    "model_version",
-    "confidence",
-    "annotated_by",
-    "annotated_at",
-    "reviewed_by",
-    "reviewed_at",
-    "review_action",
-    "lead_time_seconds",
-    "published_at",
+#: The published table's Arrow schema (§7.1) — the DATA CONTRACT, and the reason a publish can create
+#: a correctly-typed table even when a project published nothing but skip sentinels. Without an
+#: explicit schema, `pa.Table.from_pylist` infers from the rows, so an all-sentinel publish would
+#: produce null-typed columns and a consumer's `x > 0.5` would fail against a table that is supposed
+#: to have the same shape as every other publish.
+#:
+#: `polygon` is a list of float32 rather than a JSON string because it is the one repeated numeric
+#: field a training consumer reads per row. `attributes` IS a JSON string — it is arbitrary
+#: user-defined keys, which Arrow cannot type without freezing the taxonomy.
+PUBLISHED_LABELS_SCHEMA: Final[pa.Schema] = pa.schema(
+    [
+        # provenance of the project (never a join key into the corpus)
+        ("project_id", pa.string()),
+        ("project_slug", pa.string()),
+        ("publish_id", pa.string()),
+        ("task_id", pa.string()),
+        ("task_outcome", pa.string()),  # accepted | skipped
+        # the send capture — informational strings, copied at send time
+        ("item_source_kind", pa.string()),
+        ("item_dataset", pa.string()),
+        ("item_key_path", pa.string()),
+        # the label
+        ("annotation_id", pa.string()),
+        ("shape_type", pa.string()),  # bbox|polygon|mask|segment|tag|text|none
+        ("x", pa.float32()),
+        ("y", pa.float32()),
+        ("width", pa.float32()),
+        ("height", pa.float32()),
+        ("rotation", pa.float32()),
+        ("polygon", pa.list_(pa.float32())),
+        ("t_start", pa.float32()),
+        ("t_end", pa.float32()),
+        ("mask", pa.string()),
+        ("label", pa.string()),
+        ("text", pa.string()),
+        ("attributes", pa.string()),  # json
+        ("group", pa.string()),
+        ("difficult", pa.bool_()),
+        # who made it — server-stamped, never client-claimed
+        ("source", pa.string()),  # human | model | propagated
+        ("model_version", pa.string()),
+        ("confidence", pa.float32()),
+        ("annotated_by", pa.string()),
+        ("annotated_at", pa.timestamp("us", tz="UTC")),
+        ("reviewed_by", pa.string()),  # '' when review_required = False
+        ("reviewed_at", pa.timestamp("us", tz="UTC")),
+        ("review_action", pa.string()),  # accepted | fix_and_accept | none
+        ("lead_time_seconds", pa.float32()),
+        ("published_at", pa.timestamp("us", tz="UTC")),
+    ]
 )
+
+#: DERIVED from the schema, never written twice. A hand-maintained second list is a second truth, and
+#: the failure it produces — a row dict whose keys no longer match the Arrow schema — surfaces as an
+#: opaque conversion error at write time in a cluster rather than as a test failure here.
+PUBLISHED_COLUMNS: Final[tuple[str, ...]] = tuple(PUBLISHED_LABELS_SCHEMA.names)
 
 
 class PublishRefusal(ValueError):
