@@ -35,12 +35,16 @@ GATEWAY_PORT="${GATEWAY_PORT:-$((8888 + OFFSET))}"
 COMPUTE_PORT="${COMPUTE_PORT:-$((8804 + OFFSET))}"
 CONTROLPLANE_PORT="${CONTROLPLANE_PORT:-$((8820 + OFFSET))}"
 VIEWER_PORT="${VIEWER_PORT:-$((8101 + OFFSET))}"
+SEARCH_PORT="${SEARCH_PORT:-$((8102 + OFFSET))}"
+ANNOTATOR_PORT="${ANNOTATOR_PORT:-$((8103 + OFFSET))}"
 
 # Wire the gateway's upstreams to THIS fleet's per-service ports (else, when
 # offset, it would route to whatever holds the default ports). No-op at OFFSET=0.
 export RASK_COMPUTE_URL="${RASK_COMPUTE_URL:-http://127.0.0.1:${COMPUTE_PORT}}"
 export RASK_CONTROLPLANE_URL="${RASK_CONTROLPLANE_URL:-http://127.0.0.1:${CONTROLPLANE_PORT}}"
 export RASK_MEDIA_VIEWER_URL="${RASK_MEDIA_VIEWER_URL:-http://127.0.0.1:${VIEWER_PORT}}"
+export RASK_MEDIA_SEARCH_URL="${RASK_MEDIA_SEARCH_URL:-http://127.0.0.1:${SEARCH_PORT}}"
+export RASK_MEDIA_ANNOTATOR_URL="${RASK_MEDIA_ANNOTATOR_URL:-http://127.0.0.1:${ANNOTATOR_PORT}}"
 # The viewer reads its own VIEWER_PORT (media-plane settings), exported here so
 # its `run()` row and the gateway row above always agree under PORT_OFFSET.
 export VIEWER_PORT
@@ -61,6 +65,13 @@ run controlplane "$CONTROLPLANE_PORT" controlplane:app
 # /api/media/object* routes). Its DatasetRegistry is lazy, so it boots without a
 # staged corpus — dataset routes then 404 honestly while the objects browser works.
 run viewer       "$VIEWER_PORT"       viewer.main:app
+# The other two thirds of the media plane. Until 2026-07-28 the fleet started ONLY the viewer, so the
+# annotator zone's BFF (which proxies /annotator/api/annotations/* to :8103) 502'd against a fleet that
+# looked "up" — the canvas could load a page image but never read or save a single annotation. Both
+# are lazy over the same MEDIA_* registry as the viewer, so they boot without a staged corpus and
+# 404 honestly until one exists (`uv run python scripts/seed_demo_corpus.py` makes one locally).
+run search       "$SEARCH_PORT"       search.main:app
+run annotator    "$ANNOTATOR_PORT"    annotator.main:app
 
 echo "fleet up — gateway on http://127.0.0.1:${GATEWAY_PORT} (RASK_API_PREFIX=${RASK_API_PREFIX}; Ctrl-C to stop)"
 if [ "$OFFSET" != "0" ]; then
