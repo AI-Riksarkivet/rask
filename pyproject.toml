@@ -149,9 +149,16 @@ python-version = "3.13"
 exclude = [
     # A vulture whitelist is a file of BARE NAMES by design — every line is an unresolved
     # reference to a type checker. lance-ns excludes it for the same reason.
-    ".vulture-whitelist.py",
+    # Globbed, not bare: a bare name matches only the ROOT copy, and a git worktree under
+    # .claude/worktrees carries its own — which is how 199 diagnostics from a sibling branch
+    # once blocked every commit in this repo.
+    "**/.vulture-whitelist.py",
     "**/.venv",
     "**/node_modules",
+    # A worktree is a COMPLETE second checkout living inside this one. Walking it type-checks
+    # another branch's code — including its `runners/`, which the entry below only excludes at
+    # the root — and reports failures nobody on this branch can fix.
+    "**/.claude/worktrees",
     "runners",
 ]
 

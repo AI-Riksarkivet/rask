@@ -543,7 +543,7 @@ def test_defaults_are_the_zones_own_fallbacks() -> None:
 # loss wearing the costume of a missing feature.
 
 
-def _dock(workbench: str = "lineage") -> dict[str, object]:
+def _dock(workbench: str = "lineage") -> dict[str, dict[str, dict[str, object]]]:
     """A layout shaped like a real `DockviewApi.toJSON()` — grid tree, panels, and a floating group."""
     return {
         "workbenches": {
@@ -592,9 +592,9 @@ def test_a_key_dockview_adds_later_is_not_silently_dropped(app_client: TestClien
     arrangement they never chose.
     """
     sent = _dock()
-    workbench = sent["workbenches"]["lineage"]  # type: ignore[index]
-    workbench["edgeGroups"] = {"top": {"views": ["inspector"], "collapsed": False}}  # type: ignore[index]
-    workbench["someFutureDockviewKey"] = {"kept": True}  # type: ignore[index]
+    workbench = sent["workbenches"]["lineage"]
+    workbench["edgeGroups"] = {"top": {"views": ["inspector"], "collapsed": False}}
+    workbench["someFutureDockviewKey"] = {"kept": True}
 
     app_client.put("/v1/user-state/dock-layout", json=sent, headers=_as(app_client, "alice"))
     value = app_client.get("/v1/user-state/dock-layout", headers=_as(app_client, "alice")).json()["value"]
@@ -608,7 +608,7 @@ def test_one_document_holds_many_workbenches(app_client: TestClient) -> None:
     The zone chooses the key, so a new workbench needs no release of service-kit and no new enum member —
     which is what keeps the key space closed rather than caller-supplied.
     """
-    both = {"workbenches": {**_dock("lineage")["workbenches"], **_dock("tables")["workbenches"]}}  # type: ignore[dict-item]
+    both = {"workbenches": {**_dock("lineage")["workbenches"], **_dock("tables")["workbenches"]}}
     app_client.put("/v1/user-state/dock-layout", json=both, headers=_as(app_client, "alice"))
     value = app_client.get("/v1/user-state/dock-layout", headers=_as(app_client, "alice")).json()["value"]
     assert sorted(value["workbenches"]) == ["lineage", "tables"]

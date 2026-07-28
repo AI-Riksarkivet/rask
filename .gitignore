@@ -45,3 +45,6 @@ chart/charts/
 
 # superpowers SDD scratch (ledger, briefs)
 .superpowers/
+
+# git worktrees created by tooling — a second checkout, never content of this one
+.claude/worktrees/
