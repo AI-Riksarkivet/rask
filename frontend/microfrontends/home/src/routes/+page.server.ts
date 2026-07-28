@@ -25,8 +25,17 @@ export type GalleryProject = {
 // own role where they hold one. Degrade, never 500: a failed estate listing falls back to the
 // membership list.
 export const load: PageServerLoad = async ({ parent, fetch }) => {
-	const { me } = await parent();
-	if (!me) return { signedIn: false, estateAdmin: false, projects: [] as GalleryProject[] };
+	const { me, hasSession } = await parent();
+	if (!me) {
+		// A session WITHOUT a resolvable identity is not "signed out". Telling that user to sign in
+		// sends them round a loop that cannot help — they already did, and the catalog is what failed.
+		return {
+			signedIn: false,
+			identityUnavailable: hasSession,
+			estateAdmin: false,
+			projects: [] as GalleryProject[],
+		};
+	}
 
 	const memberships: GalleryProject[] = me.projects.map((p) => ({
 		project: p.project,
@@ -46,11 +55,16 @@ export const load: PageServerLoad = async ({ parent, fetch }) => {
 						warehouses: p.warehouses.length,
 					}),
 				);
-				return { signedIn: true, estateAdmin: true, projects };
+				return { signedIn: true, identityUnavailable: false, estateAdmin: true, projects };
 			}
 		} catch {
 			// fall through to the membership-derived gallery
 		}
 	}
-	return { signedIn: true, estateAdmin: me.estate_admin, projects: memberships };
+	return {
+		signedIn: true,
+		identityUnavailable: false,
+		estateAdmin: me.estate_admin,
+		projects: memberships,
+	};
 };

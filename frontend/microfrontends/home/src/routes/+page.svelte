@@ -57,6 +57,16 @@
 					<p class="text-muted-foreground">
 						You are not a member of any project yet. Ask a project admin for access.
 					</p>
+				{:else if data.identityUnavailable}
+					<!-- Signed in, but the catalog could not confirm WHO. Offering "Sign in" here sends a
+					     user who already signed in round a loop that cannot fix it — the fault is the
+					     identity lookup, not the session. -->
+					<p class="text-muted-foreground">
+						You are signed in, but the catalog could not confirm your identity, so your projects
+						cannot be listed. This is a backend fault, not a sign-in problem — retry, or check
+						that the catalog is reachable.
+					</p>
+					<Button href="/">Retry</Button>
 				{:else if data.authEnabled}
 					<p class="text-muted-foreground">Sign in to see your projects.</p>
 					<Button href="/auth/login?redirect=/">Sign in</Button>
