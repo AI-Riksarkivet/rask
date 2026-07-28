@@ -20,6 +20,7 @@
 		"fmt:check": "rsvelte-fmt --check ."
 	},
 	"dependencies": {
+		"@lucide/svelte": "^1.26.0",
 		"dockview": "^7.0.4"
 	},
 	"devDependencies": {

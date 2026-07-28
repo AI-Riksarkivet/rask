@@ -8,12 +8,15 @@
 	 * Zone-agnostic by construction: everything zone-shaped — which panels exist, where a layout is
 	 * stored, what context the panels need — arrives as a prop.
 	 */
-	import { getAllContexts, onMount } from 'svelte';
+	import { getAllContexts, onMount, untrack } from 'svelte';
 	import { DockviewComponent } from 'dockview';
 	import type { DockviewApi, DockviewOptions } from 'dockview';
 	import { MissingPanelRenderer, SveltePanelRenderer } from './renderer.svelte';
 	import { LayoutAutosave } from './persistence';
 	import { raskDockTheme } from './theme';
+	import { EDGE_DROP, resolveChrome, type DockChrome, type DockChromeOptions } from './chrome';
+	import { makeHeaderActions } from './header-actions.svelte';
+	import { makeTabContextMenu } from './context-menu';
 	import type { LayoutRead, LayoutStore, PanelRegistry } from './types';
 
 	interface Props {
@@ -50,6 +53,16 @@
 		 * live above the dock.
 		 */
 		context?: Map<unknown, unknown>;
+		/**
+		 * Which visible affordances the dock offers. Omit for all of them.
+		 *
+		 * dockview ships NO default header buttons — the per-tab close ✕ is the entire stock control
+		 * set — so a dock with no chrome has no visible controls at all. `false` gives you that bare
+		 * dock deliberately; a partial object opts out of individual pieces.
+		 */
+		chrome?: Partial<DockChrome> | boolean;
+		/** Chrome wiring a zone must supply — today just the popout window's blank document. */
+		chromeOptions?: DockChromeOptions;
 		/** Merged over the rask defaults at construction. Change options later via `api.updateOptions`. */
 		options?: Partial<DockviewOptions>;
 		/** Trailing-edge debounce for autosave. A sash drag must be one write, not two hundred. */
@@ -62,6 +75,8 @@
 		onready,
 		store,
 		initial,
+		chrome,
+		chromeOptions = {},
 		context,
 		options,
 		saveDebounceMs = 1000,
@@ -76,6 +91,13 @@
 	// `getContext`/a `createContext` getter would find an empty tree, and every zone would be forced to
 	// re-declare its state through the `context` prop with hand-rolled keys.
 	const inheritedContext = getAllContexts();
+
+	// Resolved once at init, not derived: dockview reads these at construction, and a later change
+	// would have to go through api.updateOptions rather than silently disagree with what is rendered.
+	const active = untrack(() => resolveChrome(chrome));
+	/** The close button is unconditional, so the cluster is worth rendering if ANY control is on. */
+	const hasHeaderActions =
+		active.split || active.maximize || active.float || active.popout || active.keepEmptyGroups;
 
 	onMount(() => {
 		// onMount, NOT {@attach}. An attachment re-runs whenever a value it read changes, and re-running
@@ -102,10 +124,29 @@
 			//     cannot drive HTML5 DnD. A layout engine whose central interaction is untestable in CI
 			//     is one refactor away from silently breaking.
 			//   * Touch and pen get the same behaviour as mouse instead of a second code path.
-			// The documented cost is cross-WINDOW HTML5 drag and the native drag image, both of which
-			// only matter for popout windows — explicitly out of scope for v1. Override per-dock if a
-			// consumer ever needs them.
+			// THE COST, stated precisely now that popout ships. Pointer mode loses cross-WINDOW HTML5
+			// drag and the native drag image. That does NOT disable popout: `addPopoutGroup` is an api
+			// call, so the header button and the context-menu row both work, and a popped-out group
+			// docks back the same way. What is lost is DRAGGING a tab from the main window into an
+			// already-open popout window — a gesture with no discoverable affordance anyway, against
+			// a mode that makes touch, pen and Linux mouse drags all work and the dock testable in CI.
+			// Set `options={{ dndStrategy: 'auto' }}` per dock if cross-window drag matters more.
 			dndStrategy: 'pointer',
+			// The whole-layout edge drop zone is ON in dockview by default — its live target is just
+			// TEN CSS PIXELS wide, which is why "split to any direction" and "snap" read as missing
+			// features rather than as an aiming problem. Widened so it can actually be hit.
+			...(active.edgeDrop ? { dndEdges: EDGE_DROP } : {}),
+			// Keep an emptied group alive so its header chrome survives the last tab closing. Under
+			// dockview's default the group is destroyed with its final panel, taking every button with
+			// it, and only the watermark can offer a way back.
+			...(active.keepEmptyGroups ? { noPanelsOverlay: 'emptyGroup' as const } : {}),
+			// Ctrl+] / Ctrl+[ cycle tabs, F6 / Shift+F6 walk groups, Ctrl+Shift+\ reaches the tab strip.
+			// NOT Ctrl+M docking: it is implemented in the 7.0.4 bundle but its keybindings are absent
+			// from DockviewKeybindings, so it cannot fire — see chrome.ts.
+			...(active.keyboard ? { keyboardNavigation: true } : {}),
+			...(active.contextMenu
+				? { getTabContextMenuItems: makeTabContextMenu(active, chromeOptions) }
+				: {}),
 			// Panels live in dockview's OverlayRenderContainer and are REPOSITIONED rather than
 			// re-parented. This is the difference between two kinds of state that are easy to conflate:
 			//
@@ -125,6 +166,11 @@
 			// avoid. A consumer with dozens of heavy panels can override this per-dock.
 			defaultRenderer: 'always',
 			...options,
+			// The group control cluster — split / float / popout / maximize / close. The `right` slot is
+			// the classic VS Code position and the only place persistent group chrome can live.
+			...(hasHeaderActions
+				? { createRightHeaderActionComponent: makeHeaderActions(active, chromeOptions) }
+				: {}),
 			createComponent: ({ name }) => {
 				const component = panels[name];
 				// An unknown name is a stale saved layout, not a bug to crash on — see MissingPanelRenderer.

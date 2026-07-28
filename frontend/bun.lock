@@ -246,6 +246,7 @@
       "name": "@rask/dockview",
       "version": "0.0.0",
       "dependencies": {
+        "@lucide/svelte": "^1.26.0",
         "dockview": "^7.0.4",
       },
       "devDependencies": {

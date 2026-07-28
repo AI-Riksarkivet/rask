@@ -80,7 +80,13 @@
 
 <div class="workbench">
 	{#if Dock}
-		<Dock {panels} {initial} store={layoutStore} onready={seed} />
+		<Dock
+			{panels}
+			{initial}
+			store={layoutStore}
+			onready={seed}
+			chromeOptions={{ popoutUrl: `${base}/popout.html` }}
+		/>
 	{/if}
 </div>
 

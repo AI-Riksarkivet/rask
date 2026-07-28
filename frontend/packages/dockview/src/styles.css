@@ -100,6 +100,15 @@
 	width: 100%;
 }
 
+/* The header-action host. `relative` anchors the popout-blocked note; the cluster itself sizes to
+   --dv-tabs-and-actions-container-height so enabling chrome never grows the tab strip. */
+.rask-dock-actions-host {
+	position: relative;
+	display: flex;
+	align-items: center;
+	height: 100%;
+}
+
 .rask-dock-panel {
 	height: 100%;
 	width: 100%;
