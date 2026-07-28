@@ -76,6 +76,16 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 				href: '/lakehouse/catalog/storage',
 				match: seg('/lakehouse/catalog/storage'),
 				icon: HardDrive,
+				// The tier -> store view, nested under the browser it explains: "which store backs
+				// silver?" is a question about the same registry the browser lists from.
+				children: [
+					{
+						title: 'Stores by tier',
+						href: '/lakehouse/catalog/stores',
+						match: seg('/lakehouse/catalog/stores'),
+						icon: Layers,
+					},
+				],
 			},
 		],
 	},

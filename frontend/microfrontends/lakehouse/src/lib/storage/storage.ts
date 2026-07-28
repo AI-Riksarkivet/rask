@@ -30,14 +30,16 @@ export type Store = {
  *  is config rather than a code change in both languages. */
 export type Bucket = string;
 
-/** Every store the catalog knows, with its role. */
+/** Every store the catalog knows, with its role. Reached through this zone's `/capi` proxy — the
+ *  CATALOG's row. (`/api` is the lineage service; sending a catalog call there would 404 in a way
+ *  that looks like a missing endpoint rather than a wrong upstream.) */
 export const listStores = (): Promise<ApiResult<{ stores: Store[] }>> =>
-	requestJSON<{ stores: Store[] }>('catalog/v1/stores');
+	request<{ stores: Store[] }>('/capi', 'v1/stores');
 
 /** The tier -> store view, grouped by the catalog. Derived there rather than transcribed here, so
  *  a store's tier cannot drift between the registry and the page that displays it. */
 export const listStoresByTier = (): Promise<ApiResult<Record<string, Store[]>>> =>
-	requestJSON<Record<string, Store[]>>('catalog/v1/stores/tiers');
+	request<Record<string, Store[]>>('/capi', 'v1/stores/tiers');
 
 /** One object under a prefix (mirrors `S3Object`). */
 export type S3Object = { key: string; size: number; last_modified: string | null };
