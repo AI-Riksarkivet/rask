@@ -9,8 +9,9 @@ from fastapi import APIRouter
 from annotator.annotations.router import router as annotations_router
 from annotator.api.v1.endpoints.assist import router as assist_router
 from annotator.api.v1.endpoints.jobs import router as jobs_router
+from annotator.api.v1.endpoints.projects import router as projects_router
 
 
 router = APIRouter()
-for r in (annotations_router, assist_router, jobs_router):
+for r in (annotations_router, assist_router, jobs_router, projects_router):
     router.include_router(r)
