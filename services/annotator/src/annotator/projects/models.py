@@ -224,6 +224,12 @@ class AnnotationProject(BaseModel):
     #: is the same value, copied on success; this field is what a RETRY reads, and it must therefore
     #: outlive a failure rather than being cleared with `publish_error`.
     pending_publish_id: str | None = None
+    #: The publish INSTANT, minted with the token and reused by every retry — for the same reason.
+    #: `published_at` is written into every published row and into `PublishRecord`, so stamping it
+    #: per ATTEMPT would make a retried publish produce different rows than the attempt that crashed,
+    #: and the "a replay is byte-identical" property the whole idempotency argument rests on would be
+    #: false in exactly the case it is supposed to cover.
+    pending_publish_at: datetime | None = None
 
     @property
     def fga_object(self) -> str:

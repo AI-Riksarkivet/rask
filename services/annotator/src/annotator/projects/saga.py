@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from annotator.projects.machines import IllegalTransition
@@ -161,18 +160,18 @@ async def run_publish(
     if project.state is not ProjectState.PUBLISHING:
         raise PublishRefusal(f"project {project.project_id} is {project.state}, not publishing — the saga runs only after the publish transition")
     publish_id = project.pending_publish_id
-    if not publish_id:
+    published_at = project.pending_publish_at
+    if not publish_id or published_at is None:
         # The actor mints this at the `publish` transition. Its absence means the state machine and
         # this saga disagree about what happened, and guessing a token would defeat the whole
         # idempotency argument — so this stops rather than inventing one.
-        raise PublishRefusal(f"project {project.project_id} is publishing but carries no publish token — refusing to mint one here")
+        raise PublishRefusal(f"project {project.project_id} is publishing but carries no publish token or instant — refusing to mint one here")
 
     try:
         listing = await project_handle.list_tasks()
         pairs = await collect(project_handle, task_handle, sorted(listing["tasks"]))
         _refuse_if_not_terminal(pairs)
 
-        published_at = datetime.now(UTC)
         plan = build_plan(project, pairs, publish_id=publish_id, published_at=published_at)
         table_id = table_id_for(project, publish_id, namespace)
         tag = f"publish-{publish_id}"
