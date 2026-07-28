@@ -89,7 +89,7 @@ Both gate the **same act** (promotion) and compose: a stage promotes only when *
 version, so the blocked batch is auditable.
 
 → [`MEDALLION.md` § Promotion gates](MEDALLION.md#promotion-gates--who-may-promote-and-whether-the-data-is-good-enough-to)
-· authz model: `services/common/auth/model.fga`
+· authz model: `packages/service-kit/src/service_kit/governed/auth/model.fga`
 
 ## 4. Lineage — emit → ingest → graph
 

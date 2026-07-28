@@ -62,6 +62,26 @@ clean:
 typecheck:
 	uvx ty check
 
+# ---- OpenAPI contract (docs/*-openapi.json) --------------------------------
+# The committed specs ARE the reviewable contract, generated from the live FastAPI
+# apps. CI enforces drift via `dagger call openapi` (.dagger/openapi.go, ci.yml) —
+# these targets are the same gate, reachable locally. Both scripts/gen_openapi.py
+# and .dagger/openapi.go referenced them by name for months before they existed.
+# `--all-packages` is load-bearing: the root pyproject has `dependencies = []`, so a plain
+# `uv run` installs no workspace member and `import catalog.main` fails. CI gets this via
+# .dagger/test.go's `uv sync --all-packages`; locally we do the same.
+openapi:
+	uv sync --all-packages
+	uv run --no-sync scripts/gen_openapi.py
+
+# Diffs against HEAD, not the index: `git diff` alone compares to the index, so a *staged*
+# drifted spec would pass falsely. CI's dagger function snapshots the committed files and
+# diffs the regenerated output back, which is what `git diff HEAD` reproduces.
+openapi-check: openapi
+	@git diff HEAD --exit-code -- docs/catalog-openapi.json docs/lineage-openapi.json \
+	  || { echo "!! OpenAPI drift: a route changed without refreshing the spec. Commit the diff above."; exit 1; }
+	@echo "OpenAPI specs match the committed contract"
+
 # ---- frontend dead-code + dep gate (knip, repo-wide; see knip.json) ---------
 # Cross-workspace tool — analyses the whole JS graph at once, so it stays a
 # root-level gate, not a per-package turbo task (lint/fmt ARE per-package turbo tasks).

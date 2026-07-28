@@ -7,8 +7,23 @@
     dataset, ONE bronze-write OpenLineage event carrying the external `iiif://…` input — corrected by
     R23: raw is the external world, never a governed tier; the medallion is exactly
     bronze → silver → gold) and HTR runs as event-driven cascade compute on the unified Ray cluster.
-    Sections referring to batches/chunks/orchestrator are kept as historical context until the
-    P8 doc re-draw.
+    Sections referring to batches/chunks/orchestrator are kept as historical context.
+
+!!! warning "R6/R20 + R22 (2026-07-28): the `-api` services and the old zone set are DELETED too"
+    The diagrams and tables below still show `services/core_api` (`:8801`), `services/search_api`
+    (`:8802`) and `services/volumes_api` (`:8803`). **All three are gone.** The S3 object browser is
+    now the lance media **viewer** (`/api/media/object*`, `:8101`); lines/EAD FTS re-land as
+    catalog-governed Lance tables behind `/api/media/search`; and the `ray` service was renamed
+    **`compute`** on every surface (R22) while its public paths stay `/api/ray` + `/api/serve`.
+
+    The frontend table likewise lists `{overview,compute,discover,storage,train,studio}` at
+    `/default/<domain>`. The real zones are `{home,lakehouse,media,annotator,compute,train,studio}`
+    at a bare `/<zone>`; correcting that table belongs to the frontend doc sweep
+    (`OPEN-WORK.md` §F2), which waits on the in-flight information-architecture work.
+
+    **P8 ruling (2026-07-28):** the full re-draw this page promised is **deferred, not done** — it
+    would collide with §F2. Current truth: `ARCHITECTURE.md`, `architecture/deployment.md`, and the
+    `rask-services-fleet` / `rask-frontend` skills.
 
 !!! warning "P7b / R6+R20 (2026-07-28): core-api, search-api and volumes-api are DELETED too"
     The R6/R20 media wave retired the remaining trio. The gateway now routes only the

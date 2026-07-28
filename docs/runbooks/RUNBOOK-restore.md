@@ -21,8 +21,8 @@ before trusting it in an incident.
 | **pg_dump** (gzip) | the `lineage` DB (AGE graph + events/reads tables) **and** the `openfga` DB (authz tuples) | RustFS S3 `_backups/pg/<UTC>/` | `backup-pg.yaml` (CronJob, `backups.pgDump`) |
 | **VolumeSnapshot** | the RustFS data PVC = the **Lance lakehouse** (all medallion + registry data) | cluster CSI VolumeSnapshot | `backup-snapshot.yaml` (`backups.volumeSnapshot`) |
 
-**Not backed up** (accept the loss window or externalize — see [DECISIONS.md "P4/P7"](DECISIONS.md) and
-[DURABILITY.md](DURABILITY.md)): GreptimeDB local WAL/metadata (metrics — reconstructable), OpenBao's file
+**Not backed up** (accept the loss window or externalize — see [DECISIONS.md "P4/P7"](../DECISIONS.md) and
+[DURABILITY.md](../DURABILITY.md)): GreptimeDB local WAL/metadata (metrics — reconstructable), OpenBao's file
 PVC (an open gap — back up the unseal material out-of-band), and note the pg_dump lands on RustFS, so a
 **total RustFS loss loses both the Lance data AND the DB dumps** unless you also ship the dumps
 off-cluster (the "fate-sharing" gap).

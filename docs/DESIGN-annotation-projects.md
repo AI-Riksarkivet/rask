@@ -29,7 +29,7 @@ tables, the authz doors, the publish contract, and the slice plan.
 **Built: nothing yet.** No code landed with this document, and that is deliberate rather than unfinished:
 
 * §8 slices `S1`–`S4` are implementable today — no state store, no chart change, real tests. They land in
-  `services/annotator/projects/`, `services/common/auth/`, `services/catalog/api/v1/endpoints/data.py` and
+  `services/annotator/projects/`, `packages/service-kit/src/service_kit/governed/auth/`, `services/catalog/api/v1/endpoints/data.py` and
   `tests/unit/`. The run that produced this document was scoped to `docs/**` (plus a new service under
   `services/annotations/**`, which §3 refuses), so none of those four could be written here. They are
   specified down to the file, the test and the failure message, so the next run is transcription, not design.
@@ -432,7 +432,7 @@ Rules the transition function enforces, each a test:
 
 ### 6.1 New FGA type
 
-`services/common/auth/model.fga` — one new type, parented to the estate tenant (`project`), **not** to
+`packages/service-kit/src/service_kit/governed/auth/model.fga` — one new type, parented to the estate tenant (`project`), **not** to
 warehouse/namespace, because an annotation project is not lakehouse state:
 
 ```
@@ -465,7 +465,7 @@ is `publish` earns nothing over the manager who froze the project.
 
 The repo's existing FGA-model contract test (`tests/unit/test_fga_model_contract.py`, per
 `docs/AUTHZ.md`) already fails on a `(type, relation)` the code checks but the compiled `model.json` lacks,
-so a phantom relation cannot ship. New `services/common/auth/model.fga.yaml` cases assert: a tenant member is a viewer but not an
+so a phantom relation cannot ship. New `packages/service-kit/src/service_kit/governed/auth/model.fga.yaml` cases assert: a tenant member is a viewer but not an
 annotator; an explicit annotator cannot review; a reviewer can annotate; a manager can publish.
 
 ### 6.2 Publish is a two-door operation
@@ -645,9 +645,9 @@ for the registry.
 
 ### `S2` — the FGA type (no store)
 
-**Lands.** `services/common/auth/model.fga` (the `annotation_project` type of §6.1 + `define
+**Lands.** `packages/service-kit/src/service_kit/governed/auth/model.fga` (the `annotation_project` type of §6.1 + `define
 can_create_annotation_project: member` on `project`), the regenerated `model.json`
-(`fga model transform --file services/common/auth/model.fga`), and `model.fga.yaml` — its inline model copy
+(`fga model transform --file packages/service-kit/src/service_kit/governed/auth/model.fga`), and `model.fga.yaml` — its inline model copy
 plus new check cases.
 
 **Useful alone.** The doors are gradeable before an endpoint exists: `fga model test` and the repo's

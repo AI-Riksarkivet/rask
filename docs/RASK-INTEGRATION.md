@@ -9,7 +9,7 @@ and what to drop. Grounded in rask's actual chart (`rask/chart/`) + this repo's 
 **We bring (the unit that merges):**
 - The **lakehouse catalog** (`services/catalog`, a thin REST adapter over native pylance `DirectoryNamespace`) + the in-process `dataplane`.
 - The **lineage estate** (`services/lineage` → Apache AGE graph; OpenLineage; `/reconcile`; column-level + the gold whole-history JSONB). **rask has ZERO lineage** — this is the single biggest net-new capability we add.
-- The **OpenFGA WIRING** (`services/common/auth/model.fga` + `services/catalog/api/fga_deps.py` + credential vending). **rask provisions OpenFGA but never wires it into any service** — we bring the actual ReBAC enforcement.
+- The **OpenFGA WIRING** (`packages/service-kit/src/service_kit/governed/auth/model.fga` + `services/catalog/api/fga_deps.py` + credential vending). **rask provisions OpenFGA but never wires it into any service** — we bring the actual ReBAC enforcement.
 - The **event-driven medallion estate** (`services/medallion` producer + movers, `services/compaction`) on Dapr pub/sub over NATS JetStream.
 
 **rask supplies (use, do NOT rebuild):**

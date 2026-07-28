@@ -15,6 +15,7 @@ nav = [
     { "Quick Start" = "getting-started/index.md" },
     { "Concepts" = "getting-started/concepts.md" },
     { "Configuration" = "getting-started/configuration.md" },
+    { "Zed SSH Port-Forwards" = "zed-port-forwards.md" },
   ]},
   { "Architecture" = [
     { "Overview" = "architecture/index.md" },
@@ -71,8 +72,8 @@ nav = [
       { "Durability" = "DURABILITY.md" },
       { "Resilience" = "RESILIENCE.md" },
       { "CNPG + AGE" = "CNPG-AGE.md" },
-      { "On-call Runbook" = "RUNBOOK-oncall.md" },
-      { "Backup & Restore Runbook" = "RUNBOOK-restore.md" },
+      { "On-call Runbook" = "runbooks/RUNBOOK-oncall.md" },
+      { "Backup & Restore Runbook" = "runbooks/RUNBOOK-restore.md" },
     ]},
     { "Diagrams" = [
       { "System Diagram" = "system-diagram.md" },
@@ -90,7 +91,6 @@ nav = [
       { "Coverage" = "COVERAGE.md" },
       { "Lineage Verification" = "VERIFY-LINEAGE-OPENLINEAGE.md" },
       { "Open Work" = "OPEN-WORK.md" },
-      { "Merge Handoff" = "MERGE-HANDOFF-PROMPT.md" },
     ]},
   ]},
   { "Lance Reference" = [

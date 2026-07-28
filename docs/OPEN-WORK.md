@@ -133,7 +133,7 @@ than the lance-ns one — several will have been answered by rask's operators.
 **Where the enumeration lives:** `ASSESSMENT-2026-07-15.md` §3 is the only in-tree gap-by-gap roll-up
 (kept for exactly this reason — historical banner, live enumeration). Verified still open on 2026-07-27:
 gap 1 (Dex demo-IdP prod posture — `values-prod.yaml` does not touch dex), gap 5 (OpenBao auto-unseal via
-a secrets operator — ESO / bank-vaults; `RUNBOOK-oncall.md:63` cites "ASSESSMENT gap #5", and
+a secrets operator — ESO / bank-vaults; `runbooks/RUNBOOK-oncall.md:63` cites "ASSESSMENT gap #5", and
 `OPERATORS.md` §5 row 5 says *verify whether rask already operates one* before adopting), gap 6
 (registry-qualified image repos + `imagePullSecrets` — zero hits in `chart/`). Also unnamed anywhere else:
 audit-log retention rides the observability store's TTL (`observability.retention`, 14d default) — a
@@ -270,7 +270,7 @@ decide and record it when this is picked up.
 Verified item-by-item against the code; none appear in DECISIONS §9. In priority order:
 
 - **#12 · URL-encode user IDs when serializing to OpenFGA** — subjects are raw-interpolated
-  (`f"user:{user}"`, `services/common/fga.py`); the study ruled this *mandatory before prod OIDC* if
+  (`f"user:{user}"`, `packages/service-kit/src/service_kit/governed/fga.py`); the study ruled this *mandatory before prod OIDC* if
   subjects can contain `@`/`+`/`:`. OIDC subjects here are emails. Smallest and sharpest of the set.
 - **#9 · Versioned authz-model migration** (`ACTIVE_MODEL_VERSION` + idempotent `migrate()`) — was ruled
   "mandatory before the 3-axis model"; the 3-axis model shipped without it.
@@ -302,7 +302,25 @@ the very things a third of these docs describe. Fixing those docs first means fi
 everything disjoint from that work and can start immediately; **F2 is not optional and not dropped** — it
 is the same sweep, deferred until the IA goal closes.
 
-### F1 · The collision-free sweep *(ready now)*
+### F1 · ~~The collision-free sweep~~ **CLOSED 2026-07-28, with evidence** *(branch `docs/p8-sweep`)*
+
+Executed as specified, with **two corrections to this spec** found during the work:
+
+1. **The fold half of "Folds and layout" was assessed and REJECTED — the pairs are not duplicates.**
+   `SYSTEM-SKETCH.md` carries the Lakekeeper diff, the gap register and the adoption backlog that
+   **§E3 above depends on by name** ("study wfb25lg74"); `ARCHITECTURE.md` contains none of it, and
+   SYSTEM-SKETCH already opens with a banner delegating current-state questions to `ARCHITECTURE.md`.
+   `DEPLOY.md` is a lance-ns-on-kind walkthrough (governance + observability drive-throughs);
+   `architecture/deployment.md` is rask's k3s/helm/images/CI reference. Same name, different subject.
+   Folding either would have destroyed load-bearing content — the same error the adversarial pass
+   caught in 25 of 35 proposed deletions, applied to a merge instead of a delete. **The layout half
+   shipped:** both runbooks moved to `docs/runbooks/` with all 8 inbound links rewritten.
+2. **The gate as originally written was unsatisfiable.** `grep -rn "services/common\|from common\."
+   docs/` can never return nothing, because `ARCHITECTURE.md`, `lance-ns-merge.md` and this section
+   all *name* the dead path in order to declare it dead. The meaningful gate is the one below.
+3. `API.md` claimed **two** nonexistent Makefile targets, not one — `make openapi` as well as
+   `make openapi-check`. Adding them is out of a docs-only scope, so both claims were dropped and
+   replaced with a warning admonition; the missing drift guard is now tracked as **F3** below.
 
 **Delete (verified zero live references after their nav rows go):**
 `docs/MERGE-HANDOFF-PROMPT.md` — inbound refs are exactly `zensical.toml:93` and
@@ -326,7 +344,7 @@ either add the target or drop the claim.
 
 **`ASSESSMENT-2026-07-15.md` is not a delete.** §1–§2 are discharged and describe the dead pre-merge tree,
 but §3 is the only in-tree gap-by-gap prod-readiness enumeration and **two** things depend on it —
-`OPEN-WORK.md:118` (C4) and `RUNBOOK-oncall.md:63` ("ASSESSMENT gap #5"). Cut or hard-banner §1–§2; keep
+`OPEN-WORK.md:118` (C4) and `runbooks/RUNBOOK-oncall.md:63` ("ASSESSMENT gap #5"). Cut or hard-banner §1–§2; keep
 §3 and both inbound refs intact.
 
 **Folds and layout.** The flat copy created duplicate pairs: `SYSTEM-SKETCH.md` (272L) → `ARCHITECTURE.md`
@@ -334,9 +352,105 @@ but §3 is the only in-tree gap-by-gap prod-readiness enumeration and **two** th
 `docs/*.md` while rask's site uses subdirs — `RUNBOOK-oncall.md` and `RUNBOOK-restore.md` belong in
 `docs/runbooks/` beside the `llm-cluster.md` already there.
 
-**Closes when.** Both gates shown green: every `zensical.toml` nav target resolves (it is green **today**
-— 0 missing — so this is a regression guard, and a delete without its nav row turns it red), and
-`grep -rn "services/common\|from common\." docs/` returns nothing.
+**Closed when — both gates green (they are):**
+
+1. Every `zensical.toml` nav target resolves. This is a **regression guard**, not a repair target — it
+   was green before the sweep too, so a delete that skips its nav row is what turns it red.
+2. No doc cites the dead path *as live*:
+   `grep -rn "services/common/\|from common\." docs/ --exclude=OPEN-WORK.md` returns nothing. The
+   trailing slash is what makes this meaningful — it matches a **file path**, so the three surviving
+   prose mentions (which state the path is gone) correctly do not match.
+
+### F3 · ~~The OpenAPI specs have no drift guard~~ **CLOSED 2026-07-28, with evidence**
+
+**The F1 diagnosis was wrong, and the correction matters.** F1 grepped only the `Makefile`, found no
+`openapi` / `openapi-check` targets, and concluded there was no drift guard — so it *removed* API.md's
+claim. In fact the guard was fully built and enforced: `scripts/gen_openapi.py` dumps both specs from
+the live FastAPI apps, `.dagger/openapi.go` snapshots-regenerates-diffs them, and
+`.github/workflows/ci.yml:49` runs `dagger call openapi` on every push. Both files referenced
+`make openapi` / `make openapi-check` **by name** in their own comments. Only the two Makefile targets
+were ever missing — the docs described a real guard through an entry point nobody had added.
+
+Deleting a true claim because its local entry point was absent is the same failure mode as deleting a
+stale-but-referenced doc: **verify the capability, not just the one file you grepped.**
+
+**Landed.** `make openapi` and `make openapi-check` now exist and mirror CI. `uv sync --all-packages`
+is load-bearing in both — the root `pyproject.toml` has `dependencies = []`, so a plain `uv run`
+installs no workspace member and `import catalog.main` fails with `ModuleNotFoundError`. (Note
+`scripts/gen_openapi.py:27` still inserts `services/` on `sys.path`, which predates the src-layout
+conversion and no longer resolves anything; it is inert once the packages are installed.)
+
+**It caught a real regression on its first run.** The committed `catalog-openapi.json` had 100 paths;
+the live app serves 101. `/v1/user-state/dock-layout` had landed without a spec refresh, so
+`dagger call openapi` was already failing on this branch. The spec is refreshed in the same commit.
+
+**Closed when — done:** `make openapi-check` passes locally and matches what CI enforces, and API.md
+states the guarantee rather than a warning.
+
+### F5 · ~~The annotator canvas cannot be witnessed locally~~ **CLOSED 2026-07-28, with evidence**
+
+**The blocker was the fixture, not the platform.** A first attempt concluded this was blocked on
+**A1** (the corpus lives on a node-local `hostPath`, absent on a dev box). That was the wrong
+verdict: `MEDIA_DB_ROOT` / `MEDIA_DESCRIPTOR_DIR` / `MEDIA_DB` are all env-configurable, so a corpus
+can be *synthesized* locally instead of waiting for A1 to move the real one.
+
+`scripts/seed_demo_corpus.py` now builds one — one document, one chunk, one rendered page image —
+and the full loop was driven in chromium: **a rectangle drawn on the canvas, saved to Lance
+(`POST /api/annotations/… 200`), and still present after a reload** (`annotations.lance` 3 → **4
+rows, v2**; status bar "4 annotations from Lance").
+
+Four things had to be right, none of them documented anywhere — recorded here because each cost a
+debug cycle and the next person will hit all four:
+
+1. The page-image column must be a Lance **blob-v2**, or the registry refuses the whole dataset
+   (`document.media_blob is not a lance.blob.v2 column`). Blob-v2 is a **struct**
+   `{data, uri}` — raw `large_binary` is rejected — and cannot be written at the default 2.1 file
+   format, so `data_storage_version="2.2"` is mandatory.
+2. `speech_id` / `chunk_id` must be **integers**. The viewer builds its frame filter with unquoted
+   numeric literals, so string columns fail with *"Received literal Int64(0) and could not convert
+   to literal of type Utf8"*.
+3. A **`frame_idx`** column must exist even for a single-frame chunk — the frames endpoint projects
+   it to pick the representative frame.
+4. `capabilities` is **declared, not probed**: without `{"frames": "chunks.image"}` in the descriptor
+   the dataset lists with `capabilities: []` and the annotator has no images to open.
+
+**Still true, and worth fixing separately:** `scripts/dev-micro.sh` starts `:8101`/`:8804`/`:8820`/
+`:8888` but **never `:8103`**, the annotations plane — it had to be started by hand here. And
+`/capi/v1/me` 502s without a catalog, which is cosmetic for the canvas but the one console error in
+the run.
+
+### F4 · The P7a/P7b dead-name sweep — the *other* cause *(new, 2026-07-28 — surfaced by F1)*
+
+**What.** The classification named **two** systematic causes of staleness. F1 closed the first (R19,
+the dead `common` package). This is the second: docs still describing the orchestrator, the
+`core_api`/`search_api`/`volumes_api` services, `packages/htr`, or `/default/<zone>` base paths — all
+killed by P7a/P7b/R15–R28.
+
+**Why the "82 stale docs" figure is misleading, measured 2026-07-28.** Two exclusions collapse it:
+
+- **`docs/superpowers/**` is not in the published nav** (`grep -c superpowers zensical.toml` → 0).
+  Its `plans/` and `specs/` are **dated process artifacts** — a plan written 2026-06-16 correctly
+  describes the tree of 2026-06-16, so *rewriting* them would falsify the record.
+
+    **Owner ruling, 2026-07-28: the unreferenced ones were deleted** (34 files — 26 orphans, then 8
+    specs that the first pass orphaned by removing the plans that linked them). Git history keeps
+    them; they were unpublished and described planes that no longer exist. **The 10 still linked from
+    `docs/lakehouse/index.md` are kept, and remain out of scope for content sweeps** — do not update
+    them to current state; they are records of what was decided when.
+- `lance-ns-merge.md` and this file legitimately name dead things in order to declare them dead.
+
+What remains is **11 nav-served files**, and `architecture/system-overview.md` already carries a
+P7a warning banner. Five more — `architecture/frontend-conventions.md`,
+`architecture/frontend-microfrontends.md`, `architecture/layout.md`, `components/progress.md`,
+`components/ui.md` — belong to **§F2** and wait on the IA goal.
+
+**The actual F4 work-list is six files:** `architecture/microservices.md`, `architecture/deployment.md`,
+`architecture/layout.md`, `DECISIONS.md`, `packages/htr.md`, `reference/htr.md`. Note `packages/htr`
+is not a package at all — it is the sealed `runners/htr`, outside every workspace glob.
+
+**Closes when.** `grep -rl "core_api\|search_api\|volumes_api\|packages/htr\|/default/" docs/
+--exclude-dir=superpowers --exclude=lance-ns-merge.md --exclude=OPEN-WORK.md` returns only files
+whose mention is an explicit tombstone, and the nav gate is still green.
 
 ### F2 · The deferred remainder *(blocked on the information-architecture goal)*
 

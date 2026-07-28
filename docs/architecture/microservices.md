@@ -16,8 +16,15 @@
     (`:8810`), the `batches` table + Alembic lineage, S3-sync, chunk submission, and the prefetch lane.
     Ingestion is now the medallion producer's `POST /ingest-iiif` (IIIF → raw page-image Lance dataset,
     ONE raw-write OpenLineage event) and HTR runs as event-driven cascade compute on the unified Ray
-    cluster. Sections referring to batches/chunks/orchestrator are kept as historical context until the
-    P8 doc re-draw.
+    cluster.
+
+    **P8 ruling (2026-07-28):** the re-draw this banner promised was assessed and **declined**. This
+    page is a *design-rationale* record — nav-titled "Microservices (proposed)" — and its value is the
+    reasoning for the split, which survives its subject. Rewriting it to current state would duplicate
+    `ARCHITECTURE.md` and destroy the rationale. Sections naming `batches`, `chunks`, the orchestrator,
+    `core_api`/`search_api`/`volumes_api` and the `-api` suffix are therefore **permanent historical
+    context, not pending work**. For current truth use `ARCHITECTURE.md`, `architecture/deployment.md`
+    and `.claude/skills/rask-services-fleet`.
 
 Status: **IMPLEMENTED (June 2026).** The monolithic `viewer` service was
 dissolved into a gateway + per-domain services over a shared `core` package. This

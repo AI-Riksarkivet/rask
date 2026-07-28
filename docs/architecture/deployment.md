@@ -35,7 +35,7 @@ Production-shaped image definitions live at `.docker/`, built with `docker build
 | Image | Base | Notes |
 |---|---|---|
 | `rask-runner` | `nvidia/cuda:12.4.0-runtime-ubuntu22.04` | GPU. uv-managed Python + venv; `CMD ["runner"]`. Needs `--shm-size`, `--ulimit nofile=65535`, GPU via nvidia-container-toolkit. |
-| `home` / `<domain>` (7 images) | build + serve on `oven/bun:1-debian` | All built from **one parametrized** `.docker/frontend.dockerfile` via `--build-arg APP=<dir>`. **SSR via `svelte-adapter-bun`** (no longer an nginx SPA). `APP=home` is the catch-all (home, owns `/`); the six domain apps (overview/compute/discover/storage/train/studio) each pin base `/default/<domain>` and are probed there. Pre-builds `@rask/ui`, then `bun build`; the final stage ships the Bun runtime + `node_modules` and runs `bun build/index.js` on `:3000`. tini as PID 1, non-root UID 10001. |
+| `home` / `<domain>` (7 images) | build + serve on `oven/bun:1-debian` | All built from **one parametrized** `.docker/frontend.dockerfile` via `--build-arg APP=<dir>`. **SSR via `svelte-adapter-bun`** (no longer an nginx SPA). `APP=home` is the catch-all (owns `/`); the six domain apps (lakehouse/media/annotator/compute/train/studio) each pin a bare base `/<zone>` — **not** `/default/<zone>` — and the Ingress routes there with `pathType: Prefix` and **no** `rewrite-target`, so the pod receives the based path. Probes are **TCP, not httpGet**, because a zone's `/` 404s under its own base. Images are tagged `web-<zone>:<tag>`. Pre-builds `@rask/ui`, then `bun build`; the final stage ships the Bun runtime + `node_modules` and runs `bun build/index.js` on `:3000`. tini as PID 1, non-root UID 10001. |
 | backend services (per-workload) | uv-managed Python | One dockerfile each: `gateway`, `ray` (plus `ray-cluster.dockerfile` for the Ray head/Serve image and `rest-catalog.dockerfile` for the lakehouse+media image). |
 
 The one frontend dockerfile encodes a non-obvious build contract (documented in its
@@ -85,10 +85,11 @@ flowchart LR
 
 ## Remote KubeRay
 
-The runner accepts `--address ray://…:10001`; the orchestrator submits jobs to
-the Ray dashboard REST API at `RAY_DASHBOARD_URL`. With `ray.enabled=true` the
-chart provisions an in-cluster KubeRay RayService; with `ray.enabled=false` the
-orchestrator points at an external cluster via `config.RAY_DASHBOARD_URL`.
+The runner accepts `--address ray://…:10001`. Job submission goes through the **`compute`
+service** (`:8804`, over `ray-kit`'s Job SDK wrapper) to the Ray dashboard REST API at
+`RAY_DASHBOARD_URL` — the orchestrator that used to own this loop was deleted at P7a. With
+`ray.enabled=true` the chart provisions an in-cluster KubeRay RayService; with
+`ray.enabled=false`, `compute` points at an external cluster via `RASK_RAY_DASHBOARD_URL`.
 
 ## Helm chart (`chart/`)
 

@@ -105,22 +105,23 @@ flowchart LR
   OS --- L[Lance dataset dirs: bronze/…, silver/…, gold/…]
 ```
 
-Code layout (where each concern lives). The catalog service lives under
-`services/catalog/`, layered into `api/` (routes/deps/security), `core/` (config + infra),
-and `services/` (business logic); the five cross-service modules (`secrets`, `dapr_auth`,
-`fga`, `oidc`, `exceptions`) live in `services/common/` and every service imports them as
-`from common.X`:
+Code layout (where each concern lives). The catalog service is a uv workspace member, so its
+package sits under `services/catalog/src/catalog/`, layered into `api/` (routes/deps/security),
+`core/` (config + infra), and `services/` (business logic). The cross-service modules
+(`secrets`, `dapr_auth`, `fga`, `oidc`, `audit`, `exceptions`) moved into **`service-kit`** at
+R19 — `services/common` and `packages/common` are both gone, and every service now imports
+`from service_kit.X` (the governed subset lives under `service_kit.governed`):
 
 | Path | Responsibility |
 |---|---|
-| `services/catalog/main.py` (entrypoint `catalog.main:app`) | App lifespan: build OIDC verifier + OpenFGA client into `app.state`, graceful shutdown |
-| `services/catalog/api/security.py` | **Authn** — verify the OIDC token → `CurrentToken` (or fail closed) |
-| `services/catalog/api/fga_deps.py` | **Authz** — `authorize` (router-level pre-op `can_*` check) **and** `seed_ownership` (post-create grant). The op→`can_*` map is the only policy logic in the app. |
-| `services/common/fga.py` | Shared OpenFGA client wrapper (imported as `from common import fga`): `check`/`batch_check`/`list_objects`/`write_tuples`/`grant_on_create`, id helpers, retry + fail-closed |
-| `services/common/auth/model.fga` / `model.json` / `model.fga.yaml` | The authorization **model** (DSL, the JSON the app loads, and the model tests) — the model owns the privilege math |
-| `services/catalog/api/v1/endpoints/*` | Thin HTTP handlers → `services.native`/`services.dataplane` for the backend, `fga_deps.seed_ownership` for grants |
-| `services/catalog/services/native.py`, `dataplane.py` | Call pylance (run in a threadpool — it's blocking) |
-| `services/catalog/core/config.py` | `pydantic-settings` (env-driven config) |
+| `services/catalog/src/catalog/main.py` (entrypoint `catalog.main:app`) | App lifespan: build OIDC verifier + OpenFGA client into `app.state`, graceful shutdown |
+| `services/catalog/src/catalog/api/security.py` | **Authn** — verify the OIDC token → `CurrentToken` (or fail closed) |
+| `services/catalog/src/catalog/api/fga_deps.py` | **Authz** — `authorize` (router-level pre-op `can_*` check) **and** `seed_ownership` (post-create grant). The op→`can_*` map is the only policy logic in the app. |
+| `packages/service-kit/src/service_kit/governed/fga.py` | Shared OpenFGA client wrapper (`from service_kit.governed import fga`): `check`/`batch_check`/`list_objects`/`write_tuples`/`grant_on_create`, id helpers, retry + fail-closed |
+| `packages/service-kit/src/service_kit/governed/auth/model.fga` / `model.json` / `model.fga.yaml` | The authorization **model** (DSL, the JSON the app loads, and the model tests) — the model owns the privilege math |
+| `services/catalog/src/catalog/api/v1/endpoints/*` | Thin HTTP handlers → `services.native`/`services.dataplane` for the backend, `fga_deps.seed_ownership` for grants |
+| `services/catalog/src/catalog/services/native.py`, `dataplane.py` | Call pylance (run in a threadpool — it's blocking) |
+| `services/catalog/src/catalog/core/config.py` | `pydantic-settings` (env-driven config) |
 
 ---
 

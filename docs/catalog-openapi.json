@@ -4693,6 +4693,50 @@
         "title": "DescribeTransactionResponse",
         "type": "object"
       },
+      "DockGrid": {
+        "additionalProperties": true,
+        "description": "The grid half of a serialized dock: a recursive node tree plus the size it was measured at.",
+        "properties": {
+          "height": {
+            "title": "Height",
+            "type": "number"
+          },
+          "orientation": {
+            "title": "Orientation",
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "width": {
+            "title": "Width",
+            "type": "number"
+          }
+        },
+        "required": [
+          "root",
+          "width",
+          "height",
+          "orientation"
+        ],
+        "title": "DockGrid",
+        "type": "object"
+      },
+      "DockLayouts": {
+        "additionalProperties": false,
+        "description": "Every workbench layout one subject has arranged.\n\n``extra=\"forbid\"`` here, unlike the models above: this envelope is OURS, not dockview's, so an\nunexpected top-level key is a client bug worth a 422 rather than a forward-compatibility case.",
+        "properties": {
+          "workbenches": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SerializedDock"
+            },
+            "title": "Workbenches",
+            "type": "object"
+          }
+        },
+        "title": "DockLayouts",
+        "type": "object"
+      },
       "DropNamespaceRequest": {
         "description": "DropNamespaceRequest",
         "properties": {
@@ -5812,6 +5856,7 @@
         "title": "JsonArrowSchema",
         "type": "object"
       },
+      "JsonValue": {},
       "ListNamespacesResponse": {
         "description": "ListNamespacesResponse",
         "properties": {
@@ -8163,6 +8208,28 @@
         "title": "SearchSpec",
         "type": "object"
       },
+      "SerializedDock": {
+        "additionalProperties": true,
+        "description": "One workbench's layout, exactly as ``DockviewApi.toJSON()`` produced it.\n\nOnly ``grid`` and ``panels`` are required \u2014 they are the two fields ``SerializedDockview`` declares\nas non-optional, so a document missing either is not a dock layout and must not be stored as one.\nEverything else dockview writes rides through ``extra=\"allow\"``.",
+        "properties": {
+          "grid": {
+            "$ref": "#/components/schemas/DockGrid"
+          },
+          "panels": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Panels",
+            "type": "object"
+          }
+        },
+        "required": [
+          "grid",
+          "panels"
+        ],
+        "title": "SerializedDock",
+        "type": "object"
+      },
       "StringFtsQuery": {
         "description": "StringFtsQuery",
         "properties": {
@@ -8827,10 +8894,55 @@
         "description": "The documents a user owns. A closed set: the key space is ours, not the caller's.",
         "enum": [
           "workflow-graph",
-          "saved-views"
+          "saved-views",
+          "dock-layout"
         ],
         "title": "UserStateDocument",
         "type": "string"
+      },
+      "UserStateEnvelope_DockLayouts_": {
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/UserStateDocument"
+          },
+          "exists": {
+            "title": "Exists",
+            "type": "boolean"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DockLayouts"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "subject",
+          "document",
+          "exists"
+        ],
+        "title": "UserStateEnvelope[DockLayouts]",
+        "type": "object"
       },
       "UserStateEnvelope_WorkflowGraph_": {
         "properties": {
@@ -15450,6 +15562,96 @@
         "summary": "Describe Transaction",
         "tags": [
           "transaction"
+        ]
+      }
+    },
+    "/v1/user-state/dock-layout": {
+      "delete": {
+        "description": "Discard the caller's dock layouts \u2014 the escape hatch from an unreadable document.",
+        "operationId": "delete_dock_layout_v1_user_state_dock_layout_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Dock Layout",
+        "tags": [
+          "user-state"
+        ]
+      },
+      "get": {
+        "description": "The caller's dock workbench layouts, or ``exists: false`` if they have never saved one.",
+        "operationId": "get_dock_layout_v1_user_state_dock_layout_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserStateEnvelope_DockLayouts_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Dock Layout",
+        "tags": [
+          "user-state"
+        ]
+      },
+      "put": {
+        "description": "Replace the caller's dock layouts wholesale \u2014 the client owns which workbenches it keeps.",
+        "operationId": "put_dock_layout_v1_user_state_dock_layout_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DockLayouts"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserStateEnvelope_DockLayouts_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Dock Layout",
+        "tags": [
+          "user-state"
         ]
       }
     },

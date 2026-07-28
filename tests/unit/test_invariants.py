@@ -84,8 +84,15 @@ def test_every_lineage_publish_goes_through_the_outbox() -> None:
 # Envs consumed by a THIRD-PARTY container's own binary, never by first-party code. Each entry is a
 # server we deploy but did not write (RustFS/OpenBao/Postgres/NATS/Dapr/OTel/Greptime/Vector/Ray/OpenFGA),
 # so its absence from our source proves nothing. Anything NOT matching here is OURS and must be read.
+#
+# `HF_` is the huggingface_hub/transformers family. `HF_HOME` in particular is load-bearing rather
+# than decorative: the Ray image runs with a read-only root filesystem, so HF's default
+# `~/.cache/huggingface` is unwritable and every model download would fail — the chart repoints it at
+# a writable `/cache/hf` volume (`chart/templates/rayservice.yaml`). It is read by the HF libraries,
+# never by our code, so its absence from first-party source proves nothing. Note `HOME$` above is
+# anchored and matches only a var named exactly HOME, which is why HF_HOME needed its own prefix.
 _THIRD_PARTY_ENV = re.compile(
-    r"^(DAPR_|OTEL_|PYTHON|PATH$|HOME$|BAO_|VAULT_|POSTGRES_|PG|NATS_|AWS_|RUSTFS_|RUST_|GREPTIME|"
+    r"^(DAPR_|OTEL_|PYTHON|PATH$|HOME$|HF_|BAO_|VAULT_|POSTGRES_|PG|NATS_|AWS_|RUSTFS_|RUST_|GREPTIME|"
     r"VECTOR_|OPENFGA_|RAY_|MINIO_|S3_|TZ$|LANG$|LC_|UV_|VIRTUAL_ENV)"
 )
 

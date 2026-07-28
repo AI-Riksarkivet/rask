@@ -102,7 +102,9 @@ needed for "which feature versions trained this model"), and the **multimodal re
 `discovery.py`'s tier-2 pin resolves here):
 
 - **Tier-2 content search** — Lance FTS + FLAT exact vector scan over dataset *content* (the rask
-  `index_catalog.py`/`search_api` pattern); today's `/search` is metadata-only by design. Stays behind the
+  `index_catalog.py`/`search_api` pattern — **both retired in the R6/R20 media wave**; content search
+  re-lands as catalog-governed Lance tables behind `/api/media/search`); today's `/search` is
+  metadata-only by design. Stays behind the
   measured recall gate (decision pin 2026-07-05, firnflow/lance_docs audit): default is FTS + FLAT exact
   scan with **no** ANN/IVF_PQ index on an embedding column unless recall@10 ≥ 0.95 against
   `bypass_vector_index=True` ground truth, re-measured on our stack (external BEIR data shows IVF_PQ
@@ -379,7 +381,7 @@ fga tuple delete --api-url http://localhost:8081 --store-id "$SID" user:alice me
 ```
 
 **Rationale.** The model deliberately routes team access through roles (resource rungs do not accept
-`team#member` directly — `services/common/auth/model.fga`), so identity administration is a *membership*
+`team#member` directly — `packages/service-kit/src/service_kit/governed/auth/model.fga`), so identity administration is a *membership*
 concern, which is exactly what an IdP owns. Writing it twice (manual surface now, sync later) buys a
 reconciliation problem for a capability the CLI already covers.
 
@@ -528,7 +530,7 @@ AGE-on-CNPG path is documented and proven (docs/CNPG-AGE.md; CNPG physical PITR 
 path). Adopting either = flip the value.
 
 **The open backup gaps that follow** (accepted loss windows until externalized; operational detail in
-docs/DURABILITY.md + docs/RUNBOOK-restore.md):
+docs/DURABILITY.md + docs/runbooks/RUNBOOK-restore.md):
 - the pg_dump lands on RustFS, so a total RustFS loss loses both the Lance data *and* the DB dumps
   (fate-sharing) — ship the dumps off-cluster, or externalize to CNPG PITR;
 - the OpenBao file-backend PVC has no backup path (back up the unseal material out-of-band);

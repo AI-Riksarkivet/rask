@@ -1,14 +1,22 @@
 # API surface
 
 The canonical, machine-readable contract lives in two generated OpenAPI files, refreshed from the live
-FastAPI apps by `make openapi` and drift-guarded in CI (`make openapi-check`):
+FastAPI apps by `make openapi` and drift-guarded in CI by `dagger call openapi` (`.dagger/openapi.go`,
+`.github/workflows/ci.yml`) — reachable locally as `make openapi-check`:
 
-- [`catalog-openapi.json`](./catalog-openapi.json) — the catalog service (75 paths)
-- [`lineage-openapi.json`](./lineage-openapi.json) — the lineage service (24 paths)
+- [`catalog-openapi.json`](./catalog-openapi.json) — the catalog service
+- [`lineage-openapi.json`](./lineage-openapi.json) — the lineage service
+
+!!! tip "Add a route, refresh the spec"
+
+    `make openapi` regenerates both specs; `make openapi-check` regenerates and fails on any diff, which
+    is the same contract CI enforces. Both need `uv sync --all-packages` — the root `pyproject.toml` has
+    `dependencies = []`, so a plain `uv run` installs no workspace member and the import fails. The
+    Makefile targets do this for you.
 
 This page is the human index: which capability each endpoint group serves, and which parts are **net-new to
-this project** (★) versus the upstream Lance-namespace REST contract. Regenerate both specs and this page's
-counts after adding or changing a route — CI fails if the committed JSON drifts from the code.
+this project** (★) versus the upstream Lance-namespace REST contract. Per-service path counts are
+deliberately not stated here — they went stale twice; count the `paths` keys in the JSON instead.
 
 ## Catalog service
 

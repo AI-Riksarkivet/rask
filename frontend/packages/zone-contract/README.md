@@ -27,7 +27,7 @@ gate passes — `svelte-check`, `tsgo`, `oxlint`, `rsvelte-fmt`, `vite build`, a
 (which drives each zone on its own port and so never sees the composition). The build succeeds and
 serves every asset from a path the Ingress does not route: a blank page, shipped green.
 
-This is the same move the repo already makes twice elsewhere — `services/common/auth/model.fga.yaml`
+This is the same move the repo already makes twice elsewhere — `packages/service-kit/src/service_kit/governed/auth/model.fga.yaml`
 asserts what the FGA model actually grants, and `scripts/prod_render_check.sh` asserts the prod Helm
 render really has default-deny on. Config spread across files, no compiler, silent failure, so you write
 tests. The industry name is an [architecture fitness
