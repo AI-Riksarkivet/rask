@@ -108,8 +108,17 @@ ESLint and Prettier are **deleted**. `toolchain.test.ts` enforces three things a
 | Command | Runs |
 |---|---|
 | `make check` | `fmt` (mutating) + `lint` + Python `uvx ty` + `knip` |
-| `bun --cwd=frontend run check test` | svelte-check + the ~960 vitest tests |
+| `bun --cwd=frontend run check test` | svelte-check + the vitest suites (zone-contract alone is 717) |
 | CI (`.dagger/frontend.go:53`) | `bunx turbo run check check:tsgo test lint fmt:check` |
+
+**There are two separate e2e layers — `make e2e` is not the frontend one.**
+
+| Layer | What | How it runs |
+|---|---|---|
+| Per-zone Playwright | `home`, `lakehouse`, `media`, `annotator` each ship `e2e/` + `"test:e2e": "playwright test"`. **Hermetic** — `playwright.config.ts` mocks every `/api/**` via `page.route` and starts its own vite dev server on a dedicated port | `bun --cwd=frontend run test:e2e`, and in CI as *"Playwright e2e — all zones"* with `--concurrency=1` (each zone spins a dev server + chromium; parallel first-compiles blow the startup window, and `lakehouse` runs **two** servers — auth-off and auth-on) |
+| `tests/e2e` | A standalone Playwright project with its **own lockfile**, driving a **running deploy** | `make e2e` (`RASK_E2E_BASE_URL`, default `http://localhost`) |
+
+So `make e2e` never touches the zone suites, and the zone suites never touch a real backend. Verified 2026-07-28 by running `bunx turbo run test:e2e --filter=home`: 5 tests pass in ~28 s, including `auth.spec.ts`'s cross-zone contract (every zone in the navbar, `data-sveltekit-reload` on each). A fresh worktree needs `bun install` first — `svelte-package` is not on `PATH` otherwise and `@rask/ui#build` fails with exit 127 before any test runs.
 
 `make check` reaches **neither** svelte-check nor the frontend tests, so run the second row before declaring a change done. `knip` is the inverse — local only, absent from CI.
 
