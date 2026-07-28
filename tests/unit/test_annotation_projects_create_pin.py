@@ -13,14 +13,12 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from annotator.api.v1.endpoints.projects import (
-    CREATE_RELATION,
-    get_checker,
-    get_principal,
-    router,
-)
+from annotator.api.security import current_subject, get_checker
+from annotator.api.v1.endpoints.projects import CREATE_RELATION, router
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from service_kit.exceptions import register_handlers
 
 
 def _app(*, allow: bool, record: list[dict[str, Any]] | None = None) -> FastAPI:
@@ -33,8 +31,11 @@ def _app(*, allow: bool, record: list[dict[str, Any]] | None = None) -> FastAPI:
 
     app = FastAPI()
     app.include_router(router)
+    register_handlers(app)  # ForbiddenError -> problem+json 403, as in the real service
     app.dependency_overrides[get_checker] = lambda: checker
-    app.dependency_overrides[get_principal] = lambda: "user:gina"
+    # The VERIFIED subject. Overriding current_subject (not a header) is the point: with OIDC on
+    # there is no header path to this value at all.
+    app.dependency_overrides[current_subject] = lambda: "gina"
     return app
 
 
@@ -50,7 +51,7 @@ def test_a_tenant_member_creates_the_project_201() -> None:
     assert body["slug"] == "labels-2026"
     # Born in draft: `open` is a separate can_manage transition, so creating never implies ready.
     assert body["state"] == "draft"
-    assert body["created_by"] == "user:gina"
+    assert body["created_by"] == "gina"
     assert body["project_id"]
 
 
