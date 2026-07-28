@@ -49,6 +49,11 @@
 	// tenants drawer) land pre-filtered — after that the state is the user's.
 	const initial = page.url.searchParams;
 	let outcome = $state(initial.get('outcome') ?? '');
+	// The TIME WINDOW. Server-side, unlike the text filters: it changes the SQL, because the trail is
+	// bounded to the newest 500 rows and a window applied client-side could only ever narrow what that
+	// bound already threw away. Defaults to 24h — an unbounded first read of a compliance trail is
+	// both slow and rarely the question being asked.
+	let since = $state(initial.get('since') ?? '24h');
 	let action = $state(initial.get('action') ?? '');
 	let subject = $state(initial.get('subject') ?? '');
 	let resource = $state(initial.get('resource') ?? '');
@@ -65,6 +70,7 @@
 	async function load(): Promise<void> {
 		const seq = ++inflight;
 		const q = new URLSearchParams();
+		q.set('since', since);
 		if (outcome) q.set('outcome', outcome);
 		if (action.trim()) q.set('action', action.trim());
 		if (subject.trim()) q.set('subject', subject.trim());
@@ -94,7 +100,7 @@
 	liveRead(
 		controlCursor,
 		() => load(),
-		() => outcome,
+		() => `${outcome}|${since}`,
 	);
 
 	function tone(o: string): string {
@@ -244,6 +250,18 @@
 	</header>
 
 	<div class="filters">
+		<Select
+			bind:value={since}
+			ariaLabel="Time window"
+			placeholder="last 24 hours"
+			options={[
+	{ value: '1h', label: 'last hour' },
+	{ value: '24h', label: 'last 24 hours' },
+	{ value: '7d', label: 'last 7 days' },
+	{ value: '30d', label: 'last 30 days' },
+	{ value: 'all', label: 'all time' },
+]}
+		/>
 		<Select
 			bind:value={outcome}
 			ariaLabel="Outcome filter"
