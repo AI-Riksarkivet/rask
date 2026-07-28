@@ -14,6 +14,14 @@ _LINEAGE_ENV_VARS = (
     "RASK_LINEAGE_NAMESPACE",
     "RASK_LINEAGE_TIMEOUT",
     "RASK_LINEAGE_TRANSPORT",
+    # The service-door credentials. APP_API_TOKEN especially: it is mounted on every fleet pod and is
+    # plausibly set on a dev machine, so leaving it ambient would let the environment decide whether the
+    # emitter sends auth headers — the tests would then pass or fail based on where they ran.
+    "RASK_LINEAGE_APP_TOKEN",
+    "RASK_LINEAGE_SERVICE_IDENTITY",
+    "LINEAGE_SERVICE_TOKEN",
+    "LINEAGE_SERVICE_ID",
+    "APP_API_TOKEN",
     "OPENLINEAGE_URL",
     "OPENLINEAGE_API_KEY",
     "OPENLINEAGE_ENDPOINT",
