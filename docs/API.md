@@ -1,18 +1,18 @@
 # API surface
 
-The canonical, machine-readable contract lives in two generated OpenAPI files, committed alongside this
-page:
+The canonical, machine-readable contract lives in two generated OpenAPI files, refreshed from the live
+FastAPI apps by `make openapi` and drift-guarded in CI by `dagger call openapi` (`.dagger/openapi.go`,
+`.github/workflows/ci.yml`) — reachable locally as `make openapi-check`:
 
 - [`catalog-openapi.json`](./catalog-openapi.json) — the catalog service
 - [`lineage-openapi.json`](./lineage-openapi.json) — the lineage service
 
-!!! warning "There is no drift guard yet"
+!!! tip "Add a route, refresh the spec"
 
-    This page previously claimed the specs were refreshed by `make openapi` and guarded in CI by
-    `make openapi-check`. **Neither target exists in the Makefile**, so the committed JSON can drift
-    from the code with nothing reporting it. Until a guard lands (tracked in
-    [`OPEN-WORK.md`](OPEN-WORK.md) §F1), regenerate the specs by hand when you change a route and
-    treat these files as best-effort rather than authoritative.
+    `make openapi` regenerates both specs; `make openapi-check` regenerates and fails on any diff, which
+    is the same contract CI enforces. Both need `uv sync --all-packages` — the root `pyproject.toml` has
+    `dependencies = []`, so a plain `uv run` installs no workspace member and the import fails. The
+    Makefile targets do this for you.
 
 This page is the human index: which capability each endpoint group serves, and which parts are **net-new to
 this project** (★) versus the upstream Lance-namespace REST contract. Per-service path counts are
