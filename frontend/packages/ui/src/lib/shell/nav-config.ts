@@ -235,7 +235,7 @@ const MODEL_ITEMS: TopNavItem[] = [
 const GOVERNANCE_ITEMS: TopNavItem[] = [
 	{
 		title: 'Access',
-		href: '/lakehouse/admin/access',
+		href: '/lakehouse/governance/access',
 		description: 'The FGA workbench: check, tuples, graph.',
 	},
 	{
@@ -245,7 +245,7 @@ const GOVERNANCE_ITEMS: TopNavItem[] = [
 	},
 	{
 		title: 'Audit',
-		href: '/lakehouse/admin/audit',
+		href: '/lakehouse/governance/audit',
 		description: 'The compliance trail — who did what.',
 	},
 ];
@@ -296,7 +296,7 @@ const OPERATIONS_ITEMS: TopNavItem[] = [
  * The Governance/Operations columns append ONLY for an estate admin (`me.estate_admin` from the
  * frozen `/v1/me` contract) — fail-closed: an unresolved/absent `me` renders the base entries.
  * Access is NOT a top-level entry: it lives inside the lakehouse admin area
- * (/lakehouse/admin/access), so it appears only as one row of the Governance column.
+ * (/lakehouse/governance/access), so it appears only as one row of the Governance column.
  */
 export function topNav(estateAdmin: boolean): TopNavEntry[] {
 	// LAKEHOUSE gathers everything that describes or governs the one governed estate: the catalog

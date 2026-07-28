@@ -61,7 +61,7 @@ lance-ns-frontend  proxy-read-timeout=3600
 ✓ every truncated row carries the full string in title= — 0 unrecoverable
 ✓ the media zone's bell opens a panel fed by ITS OWN transport
 ✓ the annotator zone's bell opens a panel fed by ITS OWN transport
-  alice → /lakehouse/admin/audit: 200      bob → /lakehouse/admin/audit: 403
+  alice → /lakehouse/governance/audit: 200      bob → /lakehouse/governance/audit: 403
 ✓ bob is refused, and told WHY — 403: "Admin is estate-admin only. These surfaces span every tenant."
 ✓ and alice, who holds the privilege, gets the surface itself — 200
 ```

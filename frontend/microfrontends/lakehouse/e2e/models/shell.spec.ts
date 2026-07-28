@@ -100,10 +100,10 @@ test("Access is reachable only from Lakehouse's Governance column, never as its 
 	// Access rides in Governance, alongside the rest of the estate-admin surfaces…
 	await expect(panel.getByText('Governance', { exact: true })).toBeVisible();
 	await expect(panel.getByText('Operations', { exact: true })).toBeVisible();
-	await expect(panel.locator('a[href="/lakehouse/admin/access"]')).toBeVisible();
+	await expect(panel.locator('a[href="/lakehouse/governance/access"]')).toBeVisible();
 	for (const row of [
 		'/lakehouse/admin/tenants',
-		'/lakehouse/admin/audit',
+		'/lakehouse/governance/audit',
 		'/lakehouse/admin/streams',
 		'/lakehouse/admin/dlq',
 	]) {

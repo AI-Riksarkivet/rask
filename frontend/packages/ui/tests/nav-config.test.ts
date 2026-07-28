@@ -64,14 +64,14 @@ describe('topNav', () => {
 			.find((e) => e.title === 'Lakehouse')!
 			.groups!.find((g) => g.label === 'Governance')!;
 		expect(governance.items.find((i) => i.title === 'Access')?.href).toBe(
-			'/lakehouse/admin/access',
+			'/lakehouse/governance/access',
 		);
 		// …and a non-admin gets no row carrying it at all, in any panel.
 		const nonAdminHrefs = topNav(false).flatMap((e) => [
 			...(e.items ?? []),
 			...(e.groups ?? []).flatMap((g) => g.items),
 		]);
-		expect(nonAdminHrefs.map((i) => i.href)).not.toContain('/lakehouse/admin/access');
+		expect(nonAdminHrefs.map((i) => i.href)).not.toContain('/lakehouse/governance/access');
 	});
 
 	it('active-match: Lakehouse lights across every area of its zone, lineage included', () => {
@@ -83,7 +83,7 @@ describe('topNav', () => {
 			'/lakehouse/catalog/tables/db$t',
 			'/lakehouse/models',
 			'/lakehouse/models/pipeline',
-			'/lakehouse/admin/audit',
+			'/lakehouse/governance/audit',
 		]) {
 			expect(lakehouse.match(p)).toBe(true);
 		}
