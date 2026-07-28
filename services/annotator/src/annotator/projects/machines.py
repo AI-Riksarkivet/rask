@@ -59,13 +59,31 @@ TASK_EDGES: Final[dict[tuple[TaskState, str], tuple[TaskState, str | None]]] = {
     (TaskState.IN_REVIEW, "accept"): (TaskState.ACCEPTED, "can_review"),
     (TaskState.IN_REVIEW, "fix_and_accept"): (TaskState.ACCEPTED, "can_review"),
     (TaskState.IN_REVIEW, "request_changes"): (TaskState.CHANGES_REQUESTED, "can_review"),
-    (TaskState.ACCEPTED, "reopen"): (TaskState.CHANGES_REQUESTED, "can_review"),
+    # §5.2: `reopen` is a MANAGER action, not a reviewer one — it un-finishes work that was
+    # already accepted, which is a scheduling decision rather than a review verdict.
+    (TaskState.ACCEPTED, "reopen"): (TaskState.CHANGES_REQUESTED, "can_manage"),
     (TaskState.SKIPPED, "requeue"): (TaskState.UNASSIGNED, "can_manage"),
 }
 
 #: A reviewer may not accept their own submission (§5.2). The API layer enforces it against the
 #: task's `submitted_by`; naming the events here keeps the rule discoverable from the machine.
 SELF_REVIEW_FORBIDDEN: Final[frozenset[str]] = frozenset({"accept", "fix_and_accept", "request_changes"})
+
+#: §5.2 rule 2 — "only the lease holder writes … even a manager". `skip` belongs here with
+#: `save_draft` and `submit`: it is a decision ABOUT the work someone is holding, and letting a
+#: passer-by make it discards another annotator's claim (and, with `requeue_for_others`, their turn).
+#: A manager who wants the task must `release` it and re-`assign`.
+LEASE_HOLDER_ONLY: Final[frozenset[str]] = frozenset({"save_draft", "submit", "skip"})
+
+#: §5.2 — `release` is "lease holder OR can_manage". It is the documented escape hatch for a task
+#: pinned to someone unavailable, so it is deliberately NOT in `LEASE_HOLDER_ONLY`; the API layer
+#: allows the holder, or anyone holding `can_manage`.
+HOLDER_OR_MANAGER: Final[frozenset[str]] = frozenset({"release"})
+
+#: §5.2 rule 5 — "nothing escapes a published project". Once a project reaches one of these, every
+#: task transition is rejected: provenance is frozen with the artifact, and a task that moved after
+#: the publish would describe a dataset that no longer matches it.
+FROZEN_PROJECT_STATES: Final[frozenset[ProjectState]] = frozenset({ProjectState.PUBLISHING, ProjectState.PUBLISHED, ProjectState.ARCHIVED})
 
 
 def project_transition(state: ProjectState, event: str) -> tuple[ProjectState, str | None]:

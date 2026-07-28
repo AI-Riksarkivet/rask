@@ -33,7 +33,7 @@ from typing import Any
 from dapr.actor import Actor, ActorInterface, Remindable, actormethod
 
 from annotator.projects.machines import IllegalTransition, submit_target, task_transition
-from annotator.projects.models import Draft, Shape, Task, TaskState, Transition
+from annotator.projects.models import Draft, ReviewNote, Shape, Task, TaskState, Transition
 from annotator.projects.project_actor import AnnotationProjectActorInterface
 
 
@@ -137,17 +137,23 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
         task.transitions.append(Transition(at=now, by=actor or "system", event=event, from_state=task.state, to_state=target))
         task.state = target
 
-        if event in {"claim", "assign"}:
+        if event == "claim":
+            # A self-claim: the assignee IS the actor, by definition. Taking it from the payload
+            # would let a caller claim a task on someone else's behalf.
             task.assignee = actor
-            # A manager ASSIGNING pins the task: `lease_expires_at is None` while CLAIMED means
-            # never expires (§4.2). A self-claim takes a lease and arms the reminder.
-            if event == "claim":
-                seconds = int(payload.get("lease_seconds", 1800))
-                task.lease_expires_at = now + timedelta(seconds=seconds)
-                await self._arm_lease(seconds)
-            else:
-                task.lease_expires_at = None
-                await self._disarm_lease()
+            seconds = int(payload.get("lease_seconds", 1800))
+            task.lease_expires_at = now + timedelta(seconds=seconds)
+            await self._arm_lease(seconds)
+        elif event == "assign":
+            # A manager assigns to a NAMED user — that is the entire point of the edge, and it is
+            # what makes "assign work to an annotator" possible at all. Falling back to `actor`
+            # (as this did until 2026-07-28) meant a manager could only ever assign to themselves,
+            # silently turning the one manager-driven distribution mechanism into a self-claim.
+            task.assignee = str(payload.get("assignee") or actor or "")
+            # ASSIGNING pins the task: `lease_expires_at is None` while CLAIMED means never expires
+            # (§4.2), because the assignee did not choose when to start.
+            task.lease_expires_at = None
+            await self._disarm_lease()
         elif event == "save_draft":
             seconds = int(payload.get("lease_seconds", 1800))
             task.lease_expires_at = now + timedelta(seconds=seconds)
@@ -162,6 +168,19 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
         elif event in {"accept", "fix_and_accept", "request_changes"}:
             task.reviewed_by, task.reviewed_at = actor, now
             task.review_action = "accepted" if event == "accept" else event  # type: ignore[assignment]
+            # §5.2: `request_changes` APPENDS a ReviewNote. Without it the reviewer's reason is lost
+            # and the annotator is handed the task back with no statement of what to change — which
+            # makes the whole changes_requested loop useless in practice.
+            if event == "request_changes":
+                task.review_notes.append(
+                    ReviewNote(
+                        by=actor or "system",
+                        at=now,
+                        action="request_changes",
+                        message=str(payload.get("message", "")),
+                        shape_ids=[str(s) for s in payload.get("shape_ids", [])],
+                    )
+                )
 
         await self._store(task)
         await self._report_state(task)
