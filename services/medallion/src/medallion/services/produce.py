@@ -90,6 +90,10 @@ async def produce(dapr: DaprClient, settings: MedallionSettings, *, token: str |
         schema_fields=result.fields if result else None,
         token=token,
         project=project or None,
+        # Same contract as every mover (see transform.py). Suppressing instead of marking is NOT an
+        # option here: /bronze-arrival subscribes to this very event to publish medallion.bronze, so a
+        # missing head event stops the cascade rather than merely thinning the graph.
+        synthetic=result is None,
     )
     try:
         # The cascade HEAD is this bronze-write lineage event: lance-ray's own /bronze-arrival subscription

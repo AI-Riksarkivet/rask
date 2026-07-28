@@ -29,7 +29,7 @@ from openfga_sdk import OpenFgaClient
 from opentelemetry import trace
 
 from medallion.core.config import MedallionSettings, project_namespace
-from medallion.core.metrics import record_denied, record_quality_blocked, record_transition
+from medallion.core.metrics import record_denied, record_other_lane, record_quality_blocked, record_transition
 from medallion.schemas.events import build_run_event
 from medallion.services.compute import measure_stage, read_upstream, transform_stage
 from medallion.services.derivers import UnderivableMediaError
@@ -79,6 +79,10 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
     its own service identity. Unauthorized -> ``DROP`` (redelivery won't grant the role): the cascade
     enforces the ReBAC, so a mover lacking the validator role genuinely cannot promote to gold.
 
+    ``dataset`` on the trigger names the lane that fired (P7a: bronze$events vs the IIIF page lane's
+    bronze$pages, which share the ``medallion.bronze`` topic). A name that is not this mover's input is
+    the other lane's and is DROPped; an ABSENT name makes no claim and proceeds.
+
     ``project`` on the trigger (#84 per-tenant routing, opt-in) resolves this stage's from/to URIs off
     the warehouse registry (``<project-root>/medallion/<namespace>``) and project-qualifies every lineage
     identity + the FGA object. FAIL CLOSED: an unsafe project or one arriving with resolution disabled
@@ -88,6 +92,35 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
     data = event.get("data") if isinstance(event, dict) else None
     token = data.get("token") if isinstance(data, dict) else None
     transition = f"{settings.from_namespace}->{settings.to_namespace}"
+
+    # LANE DISCRIMINATION (P7a). Two ingest lanes — bronze$events and the IIIF page lane bronze$pages —
+    # publish to the SAME medallion.bronze topic, so every mover subscribed to it sees both. The trigger
+    # already names the dataset that was actually written (ingest_trigger._bronze_write_dataset: "the
+    # trigger tells the mover which lane fired"); a name that is not THIS mover's input belongs to the
+    # other lane, and running anyway transforms the wrong dataset while emitting real-looking lineage
+    # attributed to the other lane's token.
+    #
+    # Compared against the RAW ``settings.from_dataset``, never the project-qualified ``from_dataset``
+    # computed below: the trigger carries the unqualified name for every tenant, so qualifying this side
+    # would drop every project trigger instead.
+    #
+    # Absent → no claim → proceed. The field is a discriminator, not a requirement: an external bronze
+    # writer may omit it, and triggers queued before this field existed must still drain at rollout.
+    arrived = data.get("dataset") if isinstance(data, dict) else None
+    if arrived is not None and arrived != settings.from_dataset:
+        # OBSERVABLE, at INFO and on a counter. A DROP is an ack: Dapr neither redelivers nor
+        # dead-letters, so if the app records nothing the event simply ceases to exist. Before this
+        # guard, a bronze$pages arrival drove this mover into a deterministic FAIL — and that FAIL is
+        # what live-proof-2026-07-28.md used as evidence the page lane had no consumer. A silent fix
+        # would have removed the symptom AND the only way to notice the lane is still unlanded.
+        # (INFO is not noisy: the trigger is published once per bronze WRITE by handle_bronze_arrival,
+        # not once per page — one record per ingest.)
+        record_other_lane(transition)
+        log.info(
+            "medallion_stage_other_lane",
+            extra={"transition": transition, "token": token, "arrived": arrived, "expects": settings.from_dataset},
+        )
+        return _DROP  # deterministic — redelivery cannot make this the right mover
 
     raw_project = data.get("project") if isinstance(data, dict) else None
     project = ""
@@ -268,6 +301,10 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
             token=token,
             project=project or None,
             event_time=event_time,  # the same instant the in-dataset `lineage` document names (R26)
+            # No compute ran (the chart's DEFAULT — `compute.enabled: false`), so nothing was written and
+            # the event must not describe a dataset: bare output + an explicit mark. The run is still
+            # recorded because the cascade and the audit trail both want the provenance shape.
+            synthetic=result is None,
         )
         # 1. Emit the transform's lineage DURABLY (#4): stage the full event in the object-store outbox,
         # publish, drop on ack — so a crash between the Lance commit above and this publish can't lose it
