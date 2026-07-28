@@ -766,21 +766,23 @@ rustfs:
 ray:
   enabled: true
   # --- Ray token auth (gate 7 / R3) — RAY_AUTH_MODE=token on the head + every Ray-talking client.
-  # DEFAULT OFF, and the flip is COUPLED TO THE KUBERAY >= 1.6.0 BUMP (Chart.yaml pins 1.4.2):
+  # DEFAULT OFF for dev; values-prod flips it ON (the ray-auth-token.yaml prod guard demands it).
+  # The kuberay >= 1.6.0 prerequisite is SATISFIED (Chart.yaml pins kuberay-operator 1.6.2):
   # rask deploys a RayService, and the RayService controller is itself a dashboard-REST client
-  # (it PUTs/polls /api/serve/applications to reconcile Serve apps). With auth on and a pre-1.6.0
-  # operator those controller calls 401 and the RayService wedges at WaitForServeDeploymentReady.
-  # All the token surfaces below (Secret, head env, fleet consumer env, ESO sync) are wired now;
-  # enabling is a one-line values flip at the Ray-convergence step, together with the operator bump.
-  # At that step also verify whether KubeRay's native spec.authOptions can consume a pre-existing
-  # Secret (if operator-generated-only, rask.rayAuthToken flips to consuming the operator's Secret).
+  # (it PUTs/polls /api/serve/applications to reconcile Serve apps) — 1.6+ reads the auth Secret
+  # and sends the token on those calls; pre-1.6.0 it 401-wedged at WaitForServeDeploymentReady.
+  # Wiring is KubeRay-NATIVE spec.authOptions (rayservice.yaml): authOptions.secretName hands the
+  # operator the chart's pre-existing <release>-ray-auth-token Secret (verified in the 1.6.2
+  # source — reconcileAuthSecret skips generation when secretName is set, and the operator
+  # injects RAY_AUTH_MODE/RAY_AUTH_TOKEN into every Ray container). rask.rayAuthEnv covers the
+  # fleet-consumer half (compute). Requires ray.rayVersion >= 2.52.0 (operator validation).
   auth:
     enabled: false
     # Optional explicit token. Empty => chart-generated (randAlphaNum 32), pinned across upgrades
     # via lookup. NEVER commit a real value; prod
     # supplies it out-of-band (--set / values pipeline) or via externalSecrets (OpenBao/ESO).
     token: ""
-  rayVersion: "2.55.1"
+  rayVersion: "2.56.1"
   image:
     # `ray-cluster`: names the KubeRay cluster image, distinct from the fleet's
     # Ray-plane SERVICE image (`ray` under R20, `compute` since R22)

@@ -1,9 +1,12 @@
 {{- if and .Values.ray.enabled .Values.singleTenant.enabled }}
 # Ray auth token Secret (gate 7 / R3) — the ONE credential for RAY_AUTH_MODE=token: the Ray head
 # enforces it on the dashboard HTTP (:8265, 401 missing / 403 invalid) and the gRPC surfaces
-# (GCS :6379, client :10001); every Ray-talking consumer (the compute service — the
-# services flagged `rayClient` in .Values.services) presents it via the same secretKeyRef
-# (rask.rayAuthEnv). k8s probes keep working with auth on: Ray whitelists /api/healthz,
+# (GCS :6379, client :10001). The kuberay >= 1.6.0 operator consumes THIS Secret natively via
+# rayservice.yaml's spec.authOptions.secretName (data key `auth_token` is its convention): it
+# injects the env pair into every Ray container and its RayService controller reads the same
+# Secret to authenticate its own /api/serve reconcile calls. Every fleet consumer (the compute
+# service — the services flagged `rayClient` in .Values.services) presents it via the same
+# secretKeyRef (rask.rayAuthEnv). k8s probes keep working with auth on: Ray whitelists /api/healthz,
 # /api/gcs_healthz and /api/local_raylet_healthz.
 #
 # Never a plaintext pod-spec value: consumers reference this Secret via secretKeyRef, and with
@@ -17,9 +20,10 @@
 {{- /* Prod signal (values-prod flips devMode): an unauthenticated Ray dashboard is remote code
      execution (the jobs + Serve REST APIs take arbitrary entrypoints/import_paths), so a prod
      render that deploys Ray MUST have token auth on. Keyed like the infra-credentials guards.
-     NOTE flipping ray.auth.enabled=true requires the kuberay >= 1.6.0 bump (see values.yaml). */}}
+     The kuberay >= 1.6.0 prerequisite is SATISFIED (Chart.yaml pins 1.6.2, spec.authOptions
+     wired in rayservice.yaml), so values-prod ships ray.auth.enabled=true. */}}
 {{- if not .Values.ray.auth.enabled }}
-{{- fail "ray.auth.enabled=false on a prod render (openbao.devMode=false) that deploys Ray — an open Ray dashboard is remote code execution (jobs/Serve REST take arbitrary entrypoints). Set ray.auth.enabled=true (requires the kuberay >= 1.6.0 bump) or disable ray/singleTenant." }}
+{{- fail "ray.auth.enabled=false on a prod render (openbao.devMode=false) that deploys Ray — an open Ray dashboard is remote code execution (jobs/Serve REST take arbitrary entrypoints). Set ray.auth.enabled=true (kuberay 1.6.2 + spec.authOptions are already wired) or disable ray/singleTenant." }}
 {{- end }}
 {{- if eq .Values.ray.auth.token "REPLACE-ME-with-a-real-secret" }}
 {{- fail "ray.auth.token is still the REPLACE-ME placeholder on a prod render — supply a real token (--set ray.auth.token=... from your secret manager) or leave it empty on a lookup-pinned install; do not commit it." }}

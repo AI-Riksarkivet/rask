@@ -114,6 +114,16 @@ backups:
 openbao:
   devMode: false
 
+# --- Ray token auth ON (gate 7 / R3): a prod render that deploys Ray (singleTenant.enabled) FAILS
+# CLOSED without this (ray-auth-token.yaml guard) — an unauthenticated Ray dashboard is remote code
+# execution. kuberay 1.6.2 (Chart.yaml) consumes the chart's <release>-ray-auth-token Secret via
+# spec.authOptions and its RayService controller authenticates its own reconcile calls. Supply the
+# token out-of-band (--set ray.auth.token=... / externalSecrets) or leave empty for the
+# lookup-pinned chart-generated one — never commit it. ------------------------------------------
+ray:
+  auth:
+    enabled: true
+
 # --- Dapr: the app-API token is the auth secret for the sidecar-delivered routes — MUST be overridden.
 # The placeholder below FAILS the render on purpose (dapr-app-token.yaml guard): pass a real value with
 # --set dapr.appToken=... (or your values pipeline) — never commit it to this file.

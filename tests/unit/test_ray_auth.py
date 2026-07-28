@@ -4,10 +4,13 @@ The live tokenless-rejection proof runs at the cluster gates; these tests pin wh
 `helm template` can prove offline:
 
   * auth ON  -> the token Secret renders (key `auth_token`, the KubeRay convention),
-    the Ray head carries the RAY_AUTH_MODE/RAY_AUTH_TOKEN pair, and the pair lands on
-    EXACTLY the Ray-talking fleet services (compute, R22 — the orchestrator died at
-    P7a; search-api/volumes-api/core-api died in the R6/R20 wave) — least privilege:
-    gateway/controlplane never talk to Ray and never see it.
+    the RayService hands it to the kuberay >= 1.6.0 operator NATIVELY via
+    rayClusterConfig.authOptions (mode token + secretName) — the operator injects the
+    RAY_AUTH_MODE/RAY_AUTH_TOKEN pair into every Ray container and its RayService
+    controller authenticates its own /api/serve reconcile calls from the same Secret —
+    and the pair lands on EXACTLY the Ray-talking fleet services (compute, R22 — the
+    orchestrator died at P7a; search-api/volumes-api/core-api died in the R6/R20 wave)
+    — least privilege: gateway/controlplane never talk to Ray and never see it.
   * auth OFF (default) -> zero auth manifests/env anywhere (current behavior intact).
   * externalSecrets ON -> the ESO ExternalSecret owns the same-named Secret and the
     static one is skipped (no plaintext token in the chart).
@@ -73,10 +76,13 @@ def test_auth_on_renders_secret_head_env_and_exactly_the_ray_talking_fleet() -> 
     rayservices = [d for d in docs if "kind: RayService" in d]
     assert len(rayservices) == 1
     head = rayservices[0]
-    assert "RAY_AUTH_MODE" in head and 'value: "token"' in head, "head must run RAY_AUTH_MODE=token"
-    assert re.search(r"RAY_AUTH_TOKEN\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*name: rask-ray-auth-token\s*\n\s*key: auth_token", head), (
-        "head token must come from the Secret via secretKeyRef, never a plaintext value"
+    # The kuberay >= 1.6.0 NATIVE wiring: authOptions hands the operator our pre-existing
+    # Secret (it skips generating its own when secretName is set, injects the env pair into
+    # every Ray container, and the RayService controller auths its reconcile calls with it).
+    assert re.search(r"authOptions:\s*\n\s*mode: token\s*\n\s*secretName: rask-ray-auth-token", head), (
+        "RayService must carry rayClusterConfig.authOptions (mode token + secretName -> the chart's Secret)"
     )
+    assert "RAY_AUTH_TOKEN" not in head, "no manual RAY_AUTH_* env on the Ray containers — the 1.6+ operator injects the pair from authOptions"
     assert not re.search(r"RAY_AUTH_TOKEN['\"]?\s*:\s*['\"]?\w", head), "token must never appear as a plaintext value (e.g. in serveConfigV2 runtime_env)"
 
     with_pair = {_name(d) for d in docs if "kind: Deployment" in d and "RAY_AUTH_MODE" in d}

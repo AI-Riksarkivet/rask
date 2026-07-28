@@ -42,7 +42,11 @@ dependencies:
     condition: nvdp.enabled
   - name: kuberay-operator
     alias: kuberay
-    version: "1.4.2"
+    # >= 1.6.0 is REQUIRED for ray.auth (gate 7 / R3): the RayService controller is itself a
+    # dashboard-REST client, and only 1.6+ sends the auth token on those calls; 1.6.0 also adds
+    # spec.authOptions (mode/secretName) so the operator consumes our pre-existing
+    # <release>-ray-auth-token Secret and injects the env on every Ray container itself.
+    version: "1.6.2"
     repository: https://ray-project.github.io/kuberay-helm/
     condition: kuberay.enabled
   # Shared with lance-ns at the same version — the single bus. lance-ns's values win

@@ -26,6 +26,23 @@ spec:
             {{- end }}
   rayClusterConfig:
     rayVersion: {{ .Values.ray.rayVersion | quote }}
+    {{- if .Values.ray.auth.enabled }}
+    {{- /* Token auth (gate 7 / R3), the NATIVE kuberay >= 1.6.0 wiring: authOptions.secretName
+         points the operator at the chart's pre-existing <release>-ray-auth-token Secret
+         (data key `auth_token` = the operator's RAY_AUTH_TOKEN_SECRET_KEY convention, so the
+         operator SKIPS generating its own Secret — raycluster_controller.reconcileAuthSecret
+         returns early when secretName is set). The operator then injects RAY_AUTH_MODE=token +
+         RAY_AUTH_TOKEN (secretKeyRef) into EVERY Ray container — head, workers, autoscaler —
+         and, critically, the RayService controller's dashboard client reads THIS secret to
+         authenticate its own /api/serve reconcile calls (utils.GetRayDashboardClientFunc);
+         the old manual head-env pattern never told the controller, so it 401-wedged at
+         WaitForServeDeploymentReady. Fleet consumers (compute) still get the pair via
+         rask.rayAuthEnv — that half stays chart-wired. Requires rayVersion >= 2.52.0
+         (operator validation); we pin {{ .Values.ray.rayVersion }}. */}}
+    authOptions:
+      mode: token
+      secretName: {{ include "rask.fullname" . }}-ray-auth-token
+    {{- end }}
     headGroupSpec:
       rayStartParams:
         dashboard-host: "0.0.0.0"
@@ -38,13 +55,11 @@ spec:
               image: "{{ .Values.ray.image.repository }}:{{ .Values.ray.image.tag }}"
               imagePullPolicy: {{ .Values.ray.image.pullPolicy }}
               env:
-                {{- /* Token auth (gate 7 / R3): the env pair, not `system_config` — Ray raises if
-                     auth mode is set via system_config. `ray start --head` fails closed when
-                     RAY_AUTH_MODE=token and no token resolves. Any future workerGroupSpecs entry
-                     MUST carry the same include. This is the "legacy/manual" KubeRay wiring —
-                     valid mechanically on any operator, but only OPERABLE with kuberay >= 1.6.0
-                     (the RayService controller must send the token too; see values.yaml ray.auth). */}}
-                {{- include "rask.rayAuthEnv" . | nindent 16 }}
+                {{- /* Ray-container auth env is NOT set here: spec.authOptions above makes the
+                     kuberay 1.6+ operator inject RAY_AUTH_MODE/RAY_AUTH_TOKEN into every Ray
+                     container itself (SetContainerTokenAuthEnvVars, skip-if-already-set), head
+                     AND any future workerGroupSpecs entry — one wiring, zero drift.
+                     rask.rayAuthEnv remains the FLEET-consumer half (compute). */}}
                 - name: RAY_ENABLE_UV_RUN_RUNTIME_ENV
                   value: "0"
                 - name: HF_HOME

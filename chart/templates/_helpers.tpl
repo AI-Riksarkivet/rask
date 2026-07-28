@@ -75,9 +75,10 @@ app.kubernetes.io/component: {{ $component }}
 {{- end -}}
 
 {{/* Ray auth token (gate 7 / R3): explicit value -> lookup-pinned existing Secret -> random.
-     The Secret data key is `auth_token` — the KubeRay
-     operator-Secret convention (kuberay-auth user guide), so a later move to spec.authOptions
-     needs no key rename. */}}
+     The Secret data key is `auth_token` — the KubeRay operator-Secret convention
+     (RAY_AUTH_TOKEN_SECRET_KEY), which is why rayservice.yaml's spec.authOptions.secretName can
+     hand THIS chart-owned Secret to the 1.6+ operator verbatim (no key rename, and the operator
+     skips generating its own Secret when secretName is set). */}}
 {{- define "rask.rayAuthToken" -}}
 {{- if .Values.ray.auth.token -}}
 {{- .Values.ray.auth.token -}}
@@ -91,8 +92,10 @@ app.kubernetes.io/component: {{ $component }}
 {{- end -}}
 {{- end -}}
 
-{{/* The RAY_AUTH_MODE/RAY_AUTH_TOKEN env pair for any container that talks to a token-authed
-     Ray (head, fleet consumers, future worker groups). No-op unless ray.auth.enabled — so every
+{{/* The RAY_AUTH_MODE/RAY_AUTH_TOKEN env pair for FLEET consumers that talk to a token-authed
+     Ray (the `rayClient` services — compute). Ray-cluster containers do NOT use this include:
+     spec.authOptions (rayservice.yaml, kuberay >= 1.6.0) makes the operator inject the same pair
+     into head/worker/autoscaler containers itself. No-op unless ray.auth.enabled — so every
      consumer flips with the ONE toggle and the secretKeyRef can never dangle (the Secret renders
      under the same gate in ray-auth-token.yaml; when externalSecrets.enabled the ESO-synced
      Secret carries the same name+key). Usage: {{- include "rask.rayAuthEnv" . | nindent 16 }} */}}

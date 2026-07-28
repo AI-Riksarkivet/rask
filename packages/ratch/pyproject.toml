@@ -17,7 +17,7 @@ dependencies = [
     # `ray.job_submission.JobSubmissionClient` (core/jobs.py). Per ray-kit's finding, plain `ray`
     # raises "requires the ray[default] installation" when that client is constructed.
     "lance-ray",
-    "ray[data,default]>=2.55",
+    "ray[data,default]>=2.56",
     # The `ratch` CLI (cli/_app.py + the seven command modules).
     "typer>=0.12",
     "pydantic>=2.7",
