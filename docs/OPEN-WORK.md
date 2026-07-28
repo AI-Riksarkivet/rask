@@ -372,28 +372,37 @@ the live app serves 101. `/v1/user-state/dock-layout` had landed without a spec 
 **Closed when — done:** `make openapi-check` passes locally and matches what CI enforces, and API.md
 states the guarantee rather than a warning.
 
-### F5 · The annotator canvas cannot be witnessed locally *(new, 2026-07-28)*
+### F5 · ~~The annotator canvas cannot be witnessed locally~~ **CLOSED 2026-07-28, with evidence**
 
-**What.** An attempt to prove the annotator canvas end-to-end in a browser — a real annotation drawn
-on a real page image, surviving a reload — could not be completed on a dev machine. Two independent
-reasons, both verified:
+**The blocker was the fixture, not the platform.** A first attempt concluded this was blocked on
+**A1** (the corpus lives on a node-local `hostPath`, absent on a dev box). That was the wrong
+verdict: `MEDIA_DB_ROOT` / `MEDIA_DESCRIPTOR_DIR` / `MEDIA_DB` are all env-configurable, so a corpus
+can be *synthesized* locally instead of waiting for A1 to move the real one.
 
-1. **No corpus.** `/var/media-corpus` does not exist locally. The media plane reads the corpus from a
-   node-local `hostPath` — which is exactly **A1** above, still open. Without it the viewer has no
-   datasets to serve, so there is no page image to annotate.
-2. **`scripts/dev-micro.sh` never starts the annotator service.** It binds `:8101` (viewer), `:8804`
-   (compute), `:8820` (controlplane) and `:8888` (gateway) — but **not `:8103`**, the annotations
-   plane the annotator zone's BFF proxies to. So even with a corpus, the save/load path is dark.
+`scripts/seed_demo_corpus.py` now builds one — one document, one chunk, one rendered page image —
+and the full loop was driven in chromium: **a rectangle drawn on the canvas, saved to Lance
+(`POST /api/annotations/… 200`), and still present after a reload** (`annotations.lance` 3 → **4
+rows, v2**; status bar "4 annotations from Lance").
 
-**What WAS proven**, so this is not mistaken for "the zone is broken": the zone builds, serves under
-its base, and renders the shared shell with all seven zones in the navbar; its 8 hermetic Playwright
-specs pass in chromium; and with no backend it fails **honestly** — the canvas surfaces
-`api 502: the viewer service did not respond (Bad Gateway at /annotator/api/datasets)` with a Retry,
-rather than hanging on a spinner. That fail-honest behaviour is itself asserted by
-`annotator/e2e/zone.spec.ts` ("unreachable annotations surface on the status chip").
+Four things had to be right, none of them documented anywhere — recorded here because each cost a
+debug cycle and the next person will hit all four:
 
-**Closes when.** A1 lands (the corpus leaves the hostPath), `dev-micro.sh` starts `:8103`, and a
-browser run shows an annotation drawn on a real page image and still present after reload.
+1. The page-image column must be a Lance **blob-v2**, or the registry refuses the whole dataset
+   (`document.media_blob is not a lance.blob.v2 column`). Blob-v2 is a **struct**
+   `{data, uri}` — raw `large_binary` is rejected — and cannot be written at the default 2.1 file
+   format, so `data_storage_version="2.2"` is mandatory.
+2. `speech_id` / `chunk_id` must be **integers**. The viewer builds its frame filter with unquoted
+   numeric literals, so string columns fail with *"Received literal Int64(0) and could not convert
+   to literal of type Utf8"*.
+3. A **`frame_idx`** column must exist even for a single-frame chunk — the frames endpoint projects
+   it to pick the representative frame.
+4. `capabilities` is **declared, not probed**: without `{"frames": "chunks.image"}` in the descriptor
+   the dataset lists with `capabilities: []` and the annotator has no images to open.
+
+**Still true, and worth fixing separately:** `scripts/dev-micro.sh` starts `:8101`/`:8804`/`:8820`/
+`:8888` but **never `:8103`**, the annotations plane — it had to be started by hand here. And
+`/capi/v1/me` 502s without a catalog, which is cosmetic for the canvas but the one console error in
+the run.
 
 ### F4 · The P7a/P7b dead-name sweep — the *other* cause *(new, 2026-07-28 — surfaced by F1)*
 
