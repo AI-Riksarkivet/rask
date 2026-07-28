@@ -80,6 +80,17 @@ make tilt-verify     # PROVE live_update reaches a pod (SERVICE=catalog by defau
 make k9s             # inspect the cluster (installed into .localbin by `make bootstrap`)
 ```
 
+> **STATUS 2026-07-28: `live_update` does NOT work here — tilt rebuilds the whole image
+> instead of syncing.** Nine real blockers were found and fixed (context allow-list, registry,
+> `dev.reload` wiring, reload dirs, `readOnlyRootFilesystem`, helm timeout, …) and it still
+> never synced once. Tilt's own API is the evidence: `tilt get liveupdates` shows the object
+> with correct sync paths and discovered containers, but every `lastFileTimeSynced` is `null`
+> and `kubernetesapplys/rask` reports `live-update: False`. The cause is structural —
+> `helm_resource` + `live_update` — not a config bug. Everything below is correct and ready
+> if that is ever resolved; `make tilt-verify` re-checks in ~90s. **Until then the faster
+> lever is narrowing `make k3s-build`, which rebuilds EVERY image (the ray-cluster export
+> alone measures 238 s) when usually one service changed.**
+
 **`make tilt-verify` is not optional ceremony.** This repo shipped a Tiltfile for months
 that could never have worked — it synced into a path that did not exist, against services
 whose uvicorn had no `--reload`, into containers with a read-only rootfs — and nothing
