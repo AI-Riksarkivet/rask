@@ -287,3 +287,60 @@ def test_table_properties_are_all_strings() -> None:
     assert props["annotation.skipped_count"] == "1"
     assert props["annotation.review_required"] == "true"
     assert props["annotation.label_classes"] == "person,ship"
+
+
+# --------------------------------------------------------------------------------------------------
+# The Arrow contract — §7.1
+# --------------------------------------------------------------------------------------------------
+
+
+def test_the_plan_converts_to_arrow_under_the_declared_schema() -> None:
+    """The real proof of the row contract. Asserting key NAMES only catches a renamed column; this
+    catches a wrong TYPE — a str where a float32 is declared, a naive datetime where a tz-aware one
+    is — which otherwise surfaces as an opaque conversion error at write time in a cluster."""
+    import pyarrow as pa
+    from annotator.projects.publish import PUBLISHED_LABELS_SCHEMA
+
+    plan = _plan(
+        [
+            (_task("t0", TaskState.ACCEPTED), _draft("t0", 2)),
+            (_task("t1", TaskState.SKIPPED), _draft("t1", 4)),
+            (_task("t2", TaskState.ACCEPTED, reviewed_by=None, reviewed_at=None, review_action=None), None),
+        ]
+    )
+
+    table = pa.Table.from_pylist(plan.rows, schema=PUBLISHED_LABELS_SCHEMA)
+
+    assert table.num_rows == len(plan.rows) == 4  # 2 shapes + 1 sentinel + 1 empty-accepted
+    assert table.schema == PUBLISHED_LABELS_SCHEMA
+    # t0's two shapes and t2's sentinel are annotated; t1 was SKIPPED from a claim and so has no
+    # submitter at all — '' rather than null, because "nobody submitted this" is a fact, and a null
+    # would be readable as "unknown", which is a different and false claim.
+    assert table.column("annotated_by").to_pylist() == ["gina", "gina", "", "gina"]
+    assert table.column("task_outcome").to_pylist() == ["accepted", "accepted", "skipped", "accepted"]
+    assert table.column("reviewed_by").to_pylist()[-1] == "", "a waived review must be '' in Arrow too, not null"
+
+
+def test_an_all_sentinel_publish_still_produces_a_correctly_typed_table() -> None:
+    """The reason the schema is declared rather than inferred. With inference, a project where every
+    task was skipped yields null-typed columns, and a consumer's `x > 0.5` fails against a table that
+    is supposed to have the same shape as every other publish."""
+    import pyarrow as pa
+    from annotator.projects.publish import PUBLISHED_LABELS_SCHEMA
+
+    plan = _plan([(_task("t0", TaskState.SKIPPED), None), (_task("t1", TaskState.SKIPPED), None)])
+
+    table = pa.Table.from_pylist(plan.rows, schema=PUBLISHED_LABELS_SCHEMA)
+
+    assert table.schema.field("x").type == pa.float32(), "an all-skipped publish inferred a null column"
+    assert table.schema.field("polygon").type == pa.list_(pa.float32())
+    assert table.column("shape_type").to_pylist() == [NO_SHAPE, NO_SHAPE]
+
+
+def test_the_column_tuple_is_derived_from_the_schema_not_maintained_beside_it() -> None:
+    """One source of truth. Two hand-written lists drift, and the drift shows up as a cluster-time
+    conversion error rather than a test failure."""
+    from annotator.projects.publish import PUBLISHED_LABELS_SCHEMA
+
+    assert tuple(PUBLISHED_LABELS_SCHEMA.names) == PUBLISHED_COLUMNS
+    assert len(PUBLISHED_COLUMNS) == 34, "DESIGN §7.1 specifies 34 columns"
