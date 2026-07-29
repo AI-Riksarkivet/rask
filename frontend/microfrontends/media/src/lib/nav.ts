@@ -1,13 +1,4 @@
-import {
-	BookOpen,
-	FolderTree,
-	LayoutDashboard,
-	Map,
-	Search,
-	Share2,
-	SquarePen,
-	Workflow,
-} from '@lucide/svelte';
+import { BookOpen, FolderTree, Map, Search, Share2, SquarePen, Workflow } from '@lucide/svelte';
 import { exact, seg, type ZoneNav } from '@rask/ui/shell';
 
 // The media zone's OWN sidebar routes (the shared shell renders exactly what a zone passes — the
@@ -33,13 +24,6 @@ export const MEDIA_ZONE_NAV: ZoneNav = {
 		{
 			label: 'Workspace',
 			items: [
-				{
-					title: 'Workbench',
-					href: '/workbench/',
-					match: seg('/workbench'),
-					reload: true,
-					icon: LayoutDashboard,
-				},
 				{
 					title: 'Workflow',
 					href: '/media/workflow',
