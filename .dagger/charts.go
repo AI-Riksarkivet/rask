@@ -61,6 +61,19 @@ func (m *Rask) Charts(
 	src *dagger.Directory,
 ) (string, error) {
 	return m.chartsBase(src).
+		// Fetch the subcharts FIRST. `chart/charts/` is gitignored (.gitignore: "vendored helm subcharts
+		// — rebuilt via `make k3s-deps`"), so a fresh checkout has Chart.yaml's ten dependencies declared
+		// and none of them present. Every `helm template` below then dies with "found in Chart.yaml, but
+		// missing in charts/ directory", which is what this gate did on every run — while passing on a
+		// developer box, because there `make k3s-deps` had already populated the directory. `helm lint`
+		// does NOT catch it: it exits 0 on the same tree ("1 chart(s) linted, 0 chart(s) failed") and the
+		// render one line later is what fails, so the log opens with a green lint.
+		//
+		// `build`, not `update`: build installs the exact versions pinned in the COMMITTED Chart.lock,
+		// while update re-resolves and rewrites the lock — which would let CI silently render a different
+		// subchart version than a deploy does, and make this gate's verdict depend on upstream release
+		// timing. Both the lock and third_party/rustfs-operator (the one file:// dependency) are tracked.
+		WithExec([]string{"helm", "dependency", "build", "chart"}).
 		// 'Helm lint + render': lint the chart, then prove a default render succeeds.
 		WithExec([]string{"helm", "lint", "chart"}).
 		WithExec([]string{"sh", "-c", "helm template chart >/dev/null"}).

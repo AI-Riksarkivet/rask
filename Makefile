@@ -88,7 +88,7 @@ openapi-check: openapi
 # ---- zone images -----------------------------------------------------------
 # `make frontend-images` == the ci.yml "Build every zone image" step, byte-for-byte — the same
 # contract `dagger call charts` == `make charts` holds. The step invoked this target by name while it
-# did not exist, so the web-images job died with make's exit 2 ("No rule to make target") before
+# did not exist, so the web-smoke job died with make's exit 2 ("No rule to make target") before
 # building anything: the gate's whole claim ("the dockerfile still builds") had never been tested.
 #
 # ZONES is `?=`, so ci.yml's scan of microfrontends/*/package.json wins when exported; locally the

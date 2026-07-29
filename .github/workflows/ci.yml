@@ -202,7 +202,7 @@ jobs:
   # microfrontends.json keys vs package names) — @repo/zone-contract exists because of it.
   #
   # Same fork gate as the other jobs that build images from the checkout.
-  web-images:
+  web-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
