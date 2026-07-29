@@ -18,7 +18,12 @@ from typing import Any
 
 import pytest
 from catalog.api.v1.endpoints import access_admin as ep
-from catalog.schemas import AccessTuple
+from catalog.schemas import (
+    AccessExpandRequest,
+    AccessListObjectsRequest,
+    AccessListUsersRequest,
+    AccessTuple,
+)
 from lance_namespace import (
     InvalidInputError,
     ServiceUnavailableError,
@@ -291,5 +296,291 @@ def test_check_rejects_a_phantom_relation(gate_seen: dict[str, Any], rec: _Audit
                 settings=_settings(),
                 token=None,
                 body=AccessTuple(user="alice", relation="can_fly", object="table:db1$t"),
+            )
+        )
+
+
+# ── the derivation surfaces: list-objects / list-users / expand ───────────────────────────────────────
+#
+# These three exist because the tuple browser structurally cannot answer the questions an operator
+# actually asks. Read needs an object type per call and returns only STORED tuples, so "what can alice
+# reach" meant one audited read per model type and still missed every derived grant; and nothing at all
+# could say WHY a grant resolves. Each is gated, model-validated and audited exactly like its siblings —
+# these pin that, because a surface that discloses the whole estate's ACLs without an audit row is worse
+# than one that does not exist.
+
+
+def test_list_objects_clears_the_estate_gate_and_qualifies_a_bare_subject(
+    gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, Any] = {}
+
+    async def _fake(_client: Any, **kwargs: Any) -> list[str]:
+        seen.update(kwargs)
+        return ["table:db1$t", "table:db1$u"]
+
+    monkeypatch.setattr(ep.fga, "list_objects", _fake)
+    response = asyncio.run(
+        ep.list_access_objects(
+            request=_request(client=object()),
+            settings=_settings(),
+            token=_token("root_admin"),
+            body=AccessListObjectsRequest(user="alice", relation="can_read_data", type="table"),
+        )
+    )
+    assert (gate_seen["relation"], gate_seen["obj"]) == ("can_observe_events", "warehouse:lance_catalog")
+    # qualify=False with a pre-resolved subject — the same double-prefix guard `check` carries.
+    assert seen == {"user": "user:alice", "relation": "can_read_data", "object_type": "table", "qualify": False}
+    assert response.objects == ["table:db1$t", "table:db1$u"]
+    assert (response.user, response.type) == ("user:alice", "table")
+    assert rec.calls[0][:2] == ("access_list_objects", "success")
+    assert rec.calls[0][2]["delivered"] == 2
+
+
+def test_list_objects_sends_a_userset_verbatim(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The model refuses `team#member` on resource rungs by design — a team reaches data through a role —
+    # so the userset question is the one that explains a real grant, and it must not be re-prefixed.
+    seen: dict[str, Any] = {}
+
+    async def _fake(_client: Any, **kwargs: Any) -> list[str]:
+        seen.update(kwargs)
+        return []
+
+    monkeypatch.setattr(ep.fga, "list_objects", _fake)
+    asyncio.run(
+        ep.list_access_objects(
+            request=_request(client=object()),
+            settings=_settings(),
+            token=None,
+            body=AccessListObjectsRequest(user="role:validators#assignee", relation="can_promote", type="namespace"),
+        )
+    )
+    assert seen["user"] == "role:validators#assignee"
+
+
+def test_list_objects_rejects_an_unknown_type_and_a_phantom_relation(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+    with pytest.raises(InvalidInputError, match="dragon"):
+        asyncio.run(
+            ep.list_access_objects(
+                request=_request(client=object()),
+                settings=_settings(),
+                token=None,
+                body=AccessListObjectsRequest(user="alice", relation="reader", type="dragon"),
+            )
+        )
+    with pytest.raises(InvalidInputError, match="can_fly"):
+        asyncio.run(
+            ep.list_access_objects(
+                request=_request(client=object()),
+                settings=_settings(),
+                token=None,
+                body=AccessListObjectsRequest(user="alice", relation="can_fly", type="table"),
+            )
+        )
+
+
+def test_list_objects_outage_audits_failure_and_raises(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _down(_client: Any, **_kwargs: Any) -> list[str]:
+        raise ServiceUnavailableError("openfga down")
+
+    monkeypatch.setattr(ep.fga, "list_objects", _down)
+    with pytest.raises(ServiceUnavailableError):
+        asyncio.run(
+            ep.list_access_objects(
+                request=_request(client=object()),
+                settings=_settings(),
+                token=_token("root_admin"),
+                body=AccessListObjectsRequest(user="alice", relation="can_read_data", type="table"),
+            )
+        )
+    assert rec.calls[0][:2] == ("access_list_objects", "failure")
+
+
+def test_list_users_returns_qualified_subjects_and_flags_truncation(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+
+    async def _fake(_client: Any, **kwargs: Any) -> list[str]:
+        seen.update(kwargs)
+        return [f"user:u{i}" for i in range(fga.LIST_USERS_SERVER_CAP)]
+
+    monkeypatch.setattr(ep.fga, "list_users", _fake)
+    response = asyncio.run(
+        ep.list_access_users(
+            request=_request(client=object()),
+            settings=_settings(),
+            token=_token("root_admin"),
+            body=AccessListUsersRequest(object="table:db1$t", relation="can_read_data"),
+        )
+    )
+    assert seen["qualified"] is True and seen["user_type"] == "user"
+    # ListUsers has no pagination; a result at the server ceiling is likely truncated, and an
+    # under-reported access review must never render as a complete one.
+    assert response.truncated is True
+    assert rec.calls[0][:2] == ("access_list_users", "success")
+
+
+def test_list_users_passes_a_userset_filter_through(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+
+    async def _fake(_client: Any, **kwargs: Any) -> list[str]:
+        seen.update(kwargs)
+        return ["role:validators#assignee"]
+
+    monkeypatch.setattr(ep.fga, "list_users", _fake)
+    response = asyncio.run(
+        ep.list_access_users(
+            request=_request(client=object()),
+            settings=_settings(),
+            token=None,
+            body=AccessListUsersRequest(object="namespace:bronze", relation="validator", user_type="role", user_relation="assignee"),
+        )
+    )
+    assert (seen["user_type"], seen["user_relation"]) == ("role", "assignee")
+    assert response.users == ["role:validators#assignee"]
+    assert response.truncated is False
+
+
+def test_list_users_rejects_a_phantom_subject_filter(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+    with pytest.raises(InvalidInputError, match="dragon"):
+        asyncio.run(
+            ep.list_access_users(
+                request=_request(client=object()),
+                settings=_settings(),
+                token=None,
+                body=AccessListUsersRequest(object="table:db1$t", relation="reader", user_type="dragon"),
+            )
+        )
+    with pytest.raises(InvalidInputError, match="can_fly"):
+        asyncio.run(
+            ep.list_access_users(
+                request=_request(client=object()),
+                settings=_settings(),
+                token=None,
+                body=AccessListUsersRequest(object="table:db1$t", relation="reader", user_type="role", user_relation="can_fly"),
+            )
+        )
+
+
+def test_expand_returns_the_tree_and_records_the_depth(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+
+    async def _fake(_client: Any, **kwargs: Any) -> dict[str, Any]:
+        seen.update(kwargs)
+        return {"name": "table:db1$t#reader", "leaf": {"users": ["user:alice"], "computed": None, "tuple_to_userset": None}}
+
+    monkeypatch.setattr(ep.fga, "expand_tree", _fake)
+    response = asyncio.run(
+        ep.expand_access(
+            request=_request(client=object()),
+            settings=_settings(),
+            token=_token("root_admin"),
+            body=AccessExpandRequest(object="table:db1$t", relation="reader", depth=3),
+        )
+    )
+    assert (seen["relation"], seen["obj"], seen["max_depth"]) == ("reader", "table:db1$t", 3)
+    assert response.tree is not None and response.tree.leaf is not None
+    assert response.tree.leaf.users == ["user:alice"]
+    assert response.depth == 3
+    assert rec.calls[0][:2] == ("access_expand", "success")
+
+
+def test_expand_clamps_depth_to_the_library_ceiling(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+
+    async def _fake(_client: Any, **kwargs: Any) -> dict[str, Any]:
+        seen.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(ep.fga, "expand_tree", _fake)
+    # The request model caps at 6 too, but the handler must not depend on that: a caller reaching the
+    # function directly (or a later schema loosening) still cannot ask for an unbounded fan-out.
+    response = asyncio.run(
+        ep.expand_access(
+            request=_request(client=object()),
+            settings=_settings(),
+            token=None,
+            body=AccessExpandRequest.model_construct(object="table:db1$t", relation="reader", depth=9999),
+        )
+    )
+    assert seen["max_depth"] == fga.MAX_EXPAND_TREE_DEPTH
+    assert response.depth == fga.MAX_EXPAND_TREE_DEPTH
+
+
+def test_expand_empty_tree_is_null_not_an_empty_object(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    # "resolves to nothing" and "could not ask" must stay distinguishable on the wire — the second is
+    # the 503 below, and neither may be rendered as the other.
+    async def _empty(_client: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {}
+
+    monkeypatch.setattr(ep.fga, "expand_tree", _empty)
+    response = asyncio.run(
+        ep.expand_access(
+            request=_request(client=object()),
+            settings=_settings(),
+            token=None,
+            body=AccessExpandRequest(object="table:db1$t", relation="reader"),
+        )
+    )
+    assert response.tree is None
+
+
+def test_expand_outage_audits_failure_and_raises(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _down(_client: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise ServiceUnavailableError("openfga down")
+
+    monkeypatch.setattr(ep.fga, "expand_tree", _down)
+    with pytest.raises(ServiceUnavailableError):
+        asyncio.run(
+            ep.expand_access(
+                request=_request(client=object()),
+                settings=_settings(),
+                token=_token("root_admin"),
+                body=AccessExpandRequest(object="table:db1$t", relation="reader"),
+            )
+        )
+    assert rec.calls[0][:2] == ("access_expand", "failure")
+
+
+def test_expand_rejects_a_phantom_relation(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+    with pytest.raises(InvalidInputError, match="can_fly"):
+        asyncio.run(
+            ep.expand_access(
+                request=_request(client=object()),
+                settings=_settings(),
+                token=None,
+                body=AccessExpandRequest(object="table:db1$t", relation="can_fly"),
+            )
+        )
+
+
+def test_every_derivation_surface_is_fga_gated(rec: _AuditRecorder) -> None:
+    """FGA off → 501 on all three, like every other /v1/access handler. A surface that answers "who can
+    do what" while the store is unconfigured would be inventing an answer."""
+    off = _settings(fga_enabled=False)
+    with pytest.raises(UnsupportedOperationError):
+        asyncio.run(
+            ep.list_access_objects(
+                request=_request(),
+                settings=off,
+                token=None,
+                body=AccessListObjectsRequest(user="alice", relation="can_read_data", type="table"),
+            )
+        )
+    with pytest.raises(UnsupportedOperationError):
+        asyncio.run(
+            ep.list_access_users(
+                request=_request(),
+                settings=off,
+                token=None,
+                body=AccessListUsersRequest(object="table:db1$t", relation="can_read_data"),
+            )
+        )
+    with pytest.raises(UnsupportedOperationError):
+        asyncio.run(
+            ep.expand_access(
+                request=_request(),
+                settings=off,
+                token=None,
+                body=AccessExpandRequest(object="table:db1$t", relation="reader"),
             )
         )

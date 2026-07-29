@@ -11,8 +11,8 @@ nested namespace → table / materialized_view / transaction). Every API operati
 ``services/catalog/api/fga_deps.py``). Tuples persist in the OpenFGA datastore (Postgres in the deployed
 stack; SQLite for the auth-e2e).
 
-Resilience: ``check`` / ``batch_check`` / ``list_objects`` and the post-create grant
-writes go through a bounded retry with exponential backoff + jitter (tenacity). Only
+Resilience: ``check`` / ``batch_check`` / ``list_objects`` / ``list_users`` / ``expand`` and the
+post-create grant writes go through a bounded retry with exponential backoff + jitter (tenacity). Only
 *transient* failures are retried — OpenFGA 429/5xx AND the dominant outage modes raised
 by the aiohttp transport (connection refused / DNS / read timeout, i.e.
 ``aiohttp.ClientError`` / ``TimeoutError`` / ``OSError``). A definitive ``allowed=false``
@@ -38,6 +38,7 @@ from openfga_sdk.client.models import (
     ClientBatchCheckItem,
     ClientBatchCheckRequest,
     ClientCheckRequest,
+    ClientExpandRequest,
     ClientListObjectsRequest,
     ClientTuple,
     ClientWriteRequest,
@@ -366,19 +367,28 @@ async def list_objects(
     user: str,
     relation: str,
     object_type: str,
+    qualify: bool = True,
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
 ) -> list[str]:
     """Return the objects of ``object_type`` the user has ``relation`` on (e.g. ``table:…``).
 
+    Callers pass a BARE subject id (the token's ``sub``) and this prepends ``user:``. Pass
+    ``qualify=False`` when ``user`` is ALREADY a full subject — a ``type:id`` user or a ``type:id#rel``
+    userset — exactly as :func:`check` does. Without that hatch the estate-admin explorer could only ask
+    "what can this *user* reach", never "what can ``team:eng#member`` reach", and in THIS model the
+    resource rungs deliberately refuse ``team#member`` directly (a team reaches data through a role), so
+    the userset question is the one that explains a real grant.
+
     Read-only/idempotent, so it gets the same bounded retry + fail-closed treatment as
     :func:`check`.
     """
+    subject = f"user:{user}" if qualify else user
 
     @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
     async def _do_list_objects() -> list[str]:
-        response = await client.list_objects(ClientListObjectsRequest(user=f"user:{user}", relation=relation, type=object_type))
+        response = await client.list_objects(ClientListObjectsRequest(user=subject, relation=relation, type=object_type))
         return list(response.objects)
 
     try:
@@ -394,7 +404,7 @@ async def list_objects(
 
 #: OpenFGA's default ``listUsersMaxResults`` — ListUsers has no pagination, so a result this large
 #: is likely the server's silent truncation point, not the true grantee count.
-_LIST_USERS_SERVER_CAP = 1000
+LIST_USERS_SERVER_CAP = 1000
 
 
 async def list_users(
@@ -402,12 +412,25 @@ async def list_users(
     *,
     relation: str,
     obj: str,
+    user_type: str = "user",
+    user_relation: str | None = None,
+    qualified: bool = False,
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
 ) -> list[str]:
     """The ``user:`` subjects holding ``relation`` on ``obj`` (e.g. every reader of ``table:db1$t``),
     sorted — the access-review primitive (#51), the inverse of :func:`list_objects`.
+
+    ``user_type`` (+ optional ``user_relation``) selects WHICH subject kind to enumerate — OpenFGA takes
+    exactly ONE filter per call, so ``user_type="role", user_relation="assignee"`` answers "which roles
+    hold this", a different question from "which users". The default keeps the review contract every
+    existing caller relies on: bare ``user:`` ids.
+
+    ``qualified=True`` returns FULL subjects (``user:alice``, ``team:eng#member``, ``user:*``) instead of
+    bare ids. Off by default because the access-review callers built their output around bare ids; the
+    estate explorer needs the qualified form, since a bare ``eng`` is ambiguous once the filter is not
+    ``user``.
 
     ListUsers *expands* the model (role assignees, team members, the parent cascade), so the answer is
     effective access, not just direct tuples — exactly what a reviewer needs. A public ``user:*``
@@ -428,16 +451,21 @@ async def list_users(
             ClientListUsersRequest(
                 object=FgaObject(type=obj_type, id=obj_id),
                 relation=relation,
-                user_filters=[UserTypeFilter(type="user")],
+                user_filters=[UserTypeFilter(type=user_type, relation=user_relation)],
             )
         )
         subjects: list[str] = []
         for user in response.users or []:
-            if getattr(user, "object", None) is not None:
-                subjects.append(user.object.id)
-            elif getattr(user, "wildcard", None) is not None:
-                subjects.append("*")
-        if len(subjects) >= _LIST_USERS_SERVER_CAP:
+            # The three arms of ListUsers' User union. A userset arm only ever arrives when the filter
+            # ASKS for one (user_relation set); dropping it silently — as this did before — hid exactly
+            # the subjects this model routes access through.
+            if (obj_arm := getattr(user, "object", None)) is not None:
+                subjects.append(f"{obj_arm.type}:{obj_arm.id}" if qualified else obj_arm.id)
+            elif (userset_arm := getattr(user, "userset", None)) is not None:
+                subjects.append(f"{userset_arm.type}:{userset_arm.id}#{userset_arm.relation}" if qualified else userset_arm.id)
+            elif (wildcard_arm := getattr(user, "wildcard", None)) is not None:
+                subjects.append(f"{wildcard_arm.type}:*" if qualified else "*")
+        if len(subjects) >= LIST_USERS_SERVER_CAP:
             log.warning(
                 "openfga_list_users_possibly_truncated",
                 extra={"relation": relation, "object": obj, "subjects": len(subjects)},
@@ -449,6 +477,212 @@ async def list_users(
     except _FAIL_CLOSED as exc:
         log.error("openfga_list_users_unavailable", extra={"relation": relation, "object": obj}, exc_info=True)
         raise ServiceUnavailableError("authorization service unavailable") from exc
+
+
+#: Depth ceiling for the Expand tree walk. OpenFGA expands ONE relation's rewrite expression (it does
+#: not recurse through `tuple_to_userset` into the parent's own tree), so real depth is the nesting of
+#: `or`/`and`/`but not` in the DSL — 3 in this model. The cap only stops a malformed/cyclic response
+#: from spinning the normaliser; hitting it is logged, never silently truncated into a valid-looking tree.
+_MAX_EXPAND_DEPTH = 32
+
+
+def _expand_node(node: Any, depth: int = 0) -> dict[str, Any]:
+    """Normalise one SDK ``Node`` into plain JSON-able dicts, verbatim in structure.
+
+    The SDK's tree is a graph of model objects whose ``to_dict`` drags along OpenAPI machinery, so the
+    admin API would leak SDK shape into a frozen contract. This keeps the OpenFGA vocabulary
+    (``union`` / ``intersection`` / ``difference`` / ``leaf``) intact — the caller wants the DERIVATION,
+    and flattening it here would throw away exactly the operator that explains a surprising grant.
+    """
+    if depth >= _MAX_EXPAND_DEPTH:
+        log.warning("openfga_expand_depth_capped", extra={"depth": depth, "node": getattr(node, "name", None)})
+        return {"name": getattr(node, "name", None), "truncated": True}
+
+    out: dict[str, Any] = {"name": getattr(node, "name", None)}
+
+    if (leaf := getattr(node, "leaf", None)) is not None:
+        computed = getattr(leaf, "computed", None)
+        ttu = getattr(leaf, "tuple_to_userset", None)
+        users = getattr(leaf, "users", None)
+        out["leaf"] = {
+            # `users` is the terminal set — the actual subjects, incl. a `user:*` wildcard verbatim.
+            "users": list(getattr(users, "users", None) or []) if users is not None else None,
+            "computed": getattr(computed, "userset", None) if computed is not None else None,
+            "tuple_to_userset": (
+                {
+                    "tupleset": getattr(ttu, "tupleset", None),
+                    "computed": [c.userset for c in (getattr(ttu, "computed", None) or []) if getattr(c, "userset", None)],
+                }
+                if ttu is not None
+                else None
+            ),
+        }
+    if (union := getattr(node, "union", None)) is not None:
+        out["union"] = [_expand_node(n, depth + 1) for n in (getattr(union, "nodes", None) or [])]
+    if (intersection := getattr(node, "intersection", None)) is not None:
+        out["intersection"] = [_expand_node(n, depth + 1) for n in (getattr(intersection, "nodes", None) or [])]
+    if (difference := getattr(node, "difference", None)) is not None:
+        base = getattr(difference, "base", None)
+        subtract = getattr(difference, "subtract", None)
+        out["difference"] = {
+            "base": _expand_node(base, depth + 1) if base is not None else None,
+            "subtract": _expand_node(subtract, depth + 1) if subtract is not None else None,
+        }
+    return out
+
+
+async def expand(
+    client: OpenFgaClient,
+    *,
+    relation: str,
+    obj: str,
+    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
+    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
+    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+) -> dict[str, Any]:
+    """The userset TREE for ``relation`` on ``obj`` — how the grant is composed, not whether it holds.
+
+    This is the one primitive that answers *why*. :func:`check` returns a bare boolean and
+    :func:`list_users` returns the effective subject set; neither says which rung or which parent hop
+    produced the answer, so a permission derived through three hops is indistinguishable from a direct
+    grant — and the two have very different blast radii when revoked.
+
+    Returns the tree normalised to plain dicts (see :func:`_expand_node`), rooted at the relation:
+    ``{"name": "table:db1$t#reader", "union": [{"leaf": {"users": [...]}}, {"leaf": {"computed": ...}}, …]}``.
+    An empty/absent tree comes back as ``{}`` rather than ``None``, so callers branch on emptiness, not
+    on a null that also means "unavailable".
+
+    Note Expand resolves ONE level: a ``tuple_to_userset`` leaf names the tupleset and the computed
+    relation, it does not recurse into the parent object's own tree. Walking the full chain is the
+    caller's job (one Expand per hop) — which is deliberate: the model owns the shape, not this wrapper.
+
+    Read-only/idempotent, so it gets the same bounded retry + fail-closed treatment as :func:`check`
+    (outage → ``ServiceUnavailableError`` → 503, never an empty tree that reads as "derived from nothing").
+    """
+
+    @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
+    async def _do_expand() -> dict[str, Any]:
+        response = await client.expand(ClientExpandRequest(relation=relation, object=obj))
+        tree = getattr(response, "tree", None)
+        root = getattr(tree, "root", None) if tree is not None else None
+        return _expand_node(root) if root is not None else {}
+
+    try:
+        return await _do_expand()
+    except _FAIL_CLOSED as exc:
+        log.error("openfga_expand_unavailable", extra={"relation": relation, "object": obj}, exc_info=True)
+        raise ServiceUnavailableError("authorization service unavailable") from exc
+
+
+#: How many hops :func:`expand_tree` will follow. The model's deepest real chain is
+#: team → project → warehouse → namespace → nested namespace → table, i.e. 5 hops, so this covers it with
+#: no room for a pathological store to turn one request into an unbounded fan-out.
+MAX_EXPAND_TREE_DEPTH = 6
+
+
+async def expand_tree(
+    client: OpenFgaClient,
+    *,
+    relation: str,
+    obj: str,
+    max_depth: int = 1,
+    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
+    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
+    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+) -> dict[str, Any]:
+    """:func:`expand`, followed recursively — the FULL derivation chain, not one level of it.
+
+    A single Expand stops at the edge: a ``tuple_to_userset`` leaf says "``owner`` from whatever
+    ``parent`` points at" without saying what that is or who holds it there. That is the exact hop where
+    a concentric model's answer lives, so a one-level tree cannot explain a cascaded grant — it can only
+    say that a cascade exists. This follows both continuing leaf kinds:
+
+    * ``computed`` (a same-object rung — ``owner`` implying ``writer``) → expand that rung on this object.
+    * ``tuple_to_userset`` (``X from Y``) → read the tupleset's tuples off this object to find the target
+      objects, then expand each computed relation on each target.
+
+    Each resolved child is attached to its leaf as ``expanded``, so the shape stays the OpenFGA tree with
+    the hops filled in rather than a flattened path that has already thrown the operators away.
+
+    ``max_depth`` counts hops (1 = a plain Expand, the faithful primitive), clamped to
+    :data:`MAX_EXPAND_TREE_DEPTH`. Both terminations are marked in the tree rather than silently
+    dropped, because a derivation that stopped early must never read as one that ended:
+
+    * ``leaf.continues`` — the budget ran out AT this leaf. Decided BEFORE any round trip, so a depth-1
+      call costs exactly one Expand while still telling a UI where "expand further" is offerable. This
+      is the only way the walk stops on budget; there is deliberately no half-taken hop.
+    * ``cycle`` — this ``object#relation`` was already visited. ``namespace`` self-nests under
+      ``namespace``, so a loop is reachable through misconfigured tuples, not only through a bug.
+
+    (``truncated`` may still appear, from :func:`_expand_node` — that is the *normaliser's* structural
+    depth cap on one malformed response, a different failure from this walk's hop budget.)
+
+    Read-only/idempotent throughout — every leg inherits the bounded retry + fail-closed behaviour of
+    :func:`expand` and :func:`read_object_tuples`, so a partial tree is never returned in place of a 503.
+    """
+    depth_budget = max(1, min(max_depth, MAX_EXPAND_TREE_DEPTH))
+    seen: set[str] = set()
+
+    async def _walk(rel: str, target: str, depth: int) -> dict[str, Any]:
+        key = f"{target}#{rel}"
+        if key in seen:
+            return {"name": key, "cycle": True}
+        seen.add(key)
+        node = await expand(
+            client,
+            relation=rel,
+            obj=target,
+            retry_attempts=retry_attempts,
+            retry_backoff_seconds=retry_backoff_seconds,
+            retry_max_backoff_seconds=retry_max_backoff_seconds,
+        )
+        await _resolve(node, target, depth)
+        return node
+
+    async def _resolve(node: dict[str, Any], target: str, depth: int) -> None:
+        """Walk the normalised tree in place, expanding every leaf that continues somewhere."""
+        for branch in ("union", "intersection"):
+            for child in node.get(branch) or []:
+                await _resolve(child, target, depth)
+        if (difference := node.get("difference")) is not None:
+            for side in ("base", "subtract"):
+                if (child := difference.get(side)) is not None:
+                    await _resolve(child, target, depth)
+
+        leaf = node.get("leaf")
+        if not leaf:
+            return
+        if depth >= depth_budget:
+            # Out of budget: mark that this leaf CONTINUES and stop — before spending a tuple read
+            # whose only product would be a truncation stub. The flag is what lets a UI offer "expand
+            # further" instead of drawing a dead end that is not one.
+            if leaf.get("computed") is not None or leaf.get("tuple_to_userset") is not None:
+                leaf["continues"] = True
+            return
+        if (computed := leaf.get("computed")) is not None:
+            leaf["expanded"] = [await _walk(computed, target, depth + 1)]
+            return
+        if (ttu := leaf.get("tuple_to_userset")) is not None:
+            # `tupleset` arrives as "<object>#<relation>"; the relation half is the edge to follow, and
+            # the tuples holding it name the parent objects (`table:x#parent@namespace:db1` → namespace:db1).
+            tupleset_relation = str(ttu.get("tupleset") or "").rpartition("#")[2]
+            if not tupleset_relation:
+                return
+            edges = await read_object_tuples(
+                client,
+                target,
+                retry_attempts=retry_attempts,
+                retry_backoff_seconds=retry_backoff_seconds,
+                retry_max_backoff_seconds=retry_max_backoff_seconds,
+            )
+            parents = [t.user for t in edges if t.relation == tupleset_relation]
+            expanded: list[dict[str, Any]] = []
+            for parent in parents:
+                for computed_relation in ttu.get("computed") or []:
+                    expanded.append(await _walk(computed_relation, parent, depth + 1))
+            leaf["expanded"] = expanded
+
+    return await _walk(relation, obj, 1)
 
 
 async def read_object_tuples(

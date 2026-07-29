@@ -95,3 +95,128 @@ export const fetchAccessModel = () => requestJSON<unknown>('/capi', 'v1/access/m
 
 /** The catalog registry (`<ns>$<table>` ids) — one-click graph seeds. */
 export const fetchTables = () => requestJSON<{ tables: string[] }>('/capi', 'v1/table');
+
+// ── the derivation surfaces (POST /v1/access/{list-objects,list-users,expand}) ───────────────────────
+//
+// The three questions a tuple table structurally cannot answer. Read needs an object type per call and
+// returns only STORED tuples, so "what can alice reach" used to mean one audited read per model type —
+// and still missed every derived grant, which in a concentric model is most of them.
+
+export const ListObjectsResultSchema = v.object({
+	objects: v.array(v.string()),
+	user: v.string(), // the RESOLVED subject the store saw — never the local form state
+	relation: v.string(),
+	type: v.string(),
+});
+export type ListObjectsResult = v.InferOutput<typeof ListObjectsResultSchema>;
+
+export const ListUsersResultSchema = v.object({
+	users: v.array(v.string()), // fully qualified: user:alice, role:validators#assignee, user:*
+	object: v.string(),
+	relation: v.string(),
+	user_type: v.string(),
+	user_relation: v.nullable(v.string()),
+	/** The server truncated at its listUsersMaxResults ceiling — an under-reported review must never
+	 *  render as a complete one, so this drives a visible warning rather than a silent short list. */
+	truncated: v.boolean(),
+});
+export type ListUsersResult = v.InferOutput<typeof ListUsersResultSchema>;
+
+/** One node of the OpenFGA userset tree. Recursive, and deliberately NOT flattened into a path: the
+ *  operator (`union` / `intersection` / `difference`) is frequently the whole explanation for a
+ *  surprising grant, and a flattened chain has already thrown it away. */
+export type ExpandNode = {
+	name: string | null;
+	leaf: ExpandLeaf | null;
+	union: ExpandNode[] | null;
+	intersection: ExpandNode[] | null;
+	difference: { base: ExpandNode | null; subtract: ExpandNode | null } | null;
+	truncated: boolean | null;
+	cycle: boolean | null;
+};
+
+export type ExpandLeaf = {
+	users: string[] | null;
+	computed: string | null;
+	tuple_to_userset: { tupleset: string | null; computed: string[] } | null;
+	expanded: ExpandNode[] | null;
+	/** Goes further, but the depth budget stopped here — the affordance for "expand further". */
+	continues: boolean | null;
+};
+
+// Input is `unknown` and output is the typed node — not the same type, which is the whole point of
+// parsing at the boundary. Defaulting input to the output type (a bare `GenericSchema<ExpandNode>`)
+// would claim the wire already matches, and these fields legitimately arrive absent or null.
+const nullish = <T>(schema: v.GenericSchema<unknown, T>) => v.optional(v.nullable(schema), null);
+
+export const ExpandNodeSchema: v.GenericSchema<unknown, ExpandNode> = v.lazy(() =>
+	v.object({
+		name: nullish(v.string()),
+		leaf: nullish(ExpandLeafSchema),
+		union: nullish(v.array(ExpandNodeSchema)),
+		intersection: nullish(v.array(ExpandNodeSchema)),
+		difference: nullish(
+			v.object({ base: nullish(ExpandNodeSchema), subtract: nullish(ExpandNodeSchema) }),
+		),
+		truncated: nullish(v.boolean()),
+		cycle: nullish(v.boolean()),
+	}),
+);
+
+export const ExpandLeafSchema: v.GenericSchema<unknown, ExpandLeaf> = v.lazy(() =>
+	v.object({
+		users: nullish(v.array(v.string())),
+		computed: nullish(v.string()),
+		tuple_to_userset: nullish(
+			v.object({ tupleset: nullish(v.string()), computed: v.array(v.string()) }),
+		),
+		expanded: nullish(v.array(ExpandNodeSchema)),
+		continues: nullish(v.boolean()),
+	}),
+);
+
+export const ExpandResultSchema = v.object({
+	/** `null` means the relation resolves to nothing here — a real answer. An outage is a 503, and the
+	 *  two must never render as each other. */
+	tree: v.nullable(ExpandNodeSchema),
+	object: v.string(),
+	relation: v.string(),
+	depth: v.number(),
+});
+export type ExpandResult = v.InferOutput<typeof ExpandResultSchema>;
+
+const postJSON = (path: string, body: unknown) =>
+	requestJSON<unknown>('/capi', path, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify(body),
+	});
+
+/** "What can this subject reach?" — every `type` object the subject holds `relation` on, model
+ *  expansion included. `user` may be a userset (`team:eng#member`, `role:validators#assignee`). */
+export const listObjects = (query: { user: string; relation: string; type: string }) =>
+	postJSON('v1/access/list-objects', query);
+
+/** "Who can do this?" — the effective subject set on one object. Also the blast radius a revoke needs
+ *  BEFORE it writes, since a tuple high in the hierarchy cuts access for many principals at once. */
+export const listUsers = (query: {
+	object: string;
+	relation: string;
+	userType?: string;
+	userRelation?: string | null;
+}) =>
+	postJSON('v1/access/list-users', {
+		object: query.object,
+		relation: query.relation,
+		user_type: query.userType ?? 'user',
+		user_relation: query.userRelation ?? null,
+	});
+
+/** "Why does this resolve?" — the derivation tree. `depth` follows the cascade server-side (one gate,
+ *  one audit row, one response) rather than costing a round trip per hop from the browser. */
+export const expand = (query: { object: string; relation: string; depth?: number }) =>
+	postJSON('v1/access/expand', {
+		object: query.object,
+		relation: query.relation,
+		depth: query.depth ?? 1,
+	});

@@ -104,6 +104,129 @@ class AccessCheckResult(BaseModel):
     checked: AccessTuple
 
 
+class AccessListObjectsRequest(BaseModel):
+    """ "What can this subject reach?" — every object of ``type`` on which ``user`` holds ``relation``.
+    ``user`` may be a bare id (``alice`` → ``user:alice``) or a full subject/userset, as everywhere else."""
+
+    user: str
+    relation: str
+    type: str
+
+
+class AccessListObjectsResponse(BaseModel):
+    """The objects the subject reaches, plus the RESOLVED query that produced them — echoed for the same
+    reason ``AccessCheckResult.checked`` is: a result read against a different subject than OpenFGA saw
+    is worse than no result."""
+
+    objects: list[str]
+    user: str
+    relation: str
+    type: str
+
+
+class AccessListUsersRequest(BaseModel):
+    """ "Who can do this?" — every subject holding ``relation`` on ``object``. The inverse of
+    :class:`AccessListObjectsRequest`, and the blast-radius primitive before a revoke.
+
+    ``user_type`` (+ ``user_relation``) picks WHICH subject kind to enumerate; OpenFGA takes exactly one
+    filter per call, so ``role``/``assignee`` is a different question from ``user``, not a superset.
+    """
+
+    object: str
+    relation: str
+    user_type: str = "user"
+    user_relation: str | None = None
+
+
+class AccessListUsersResponse(BaseModel):
+    """The effective subject set (ListUsers EXPANDS the model — role assignees, team members and the
+    parent cascade are included, so this is effective access, not stored tuples). ``"*"`` is a public
+    wildcard. ``truncated`` flags the server's silent ``listUsersMaxResults`` ceiling: an under-reported
+    access review must never read as a complete one."""
+
+    users: list[str]
+    object: str
+    relation: str
+    user_type: str
+    user_relation: str | None = None
+    truncated: bool
+
+
+class AccessExpandTupleToUserset(BaseModel):
+    """A ``X from Y`` edge: ``tupleset`` is the relation walked (e.g. ``namespace:db1#parent``) and
+    ``computed`` the relations read on whatever it points at."""
+
+    tupleset: str | None = None
+    computed: list[str] = Field(default_factory=list)
+
+
+class AccessExpandLeaf(BaseModel):
+    """A terminal of the userset tree — exactly one of the three is populated. ``users`` are literal
+    subjects, ``computed`` a same-object rung (``owner`` implying ``writer``), ``tuple_to_userset`` the
+    hop to a parent object."""
+
+    users: list[str] | None = None
+    computed: str | None = None
+    tuple_to_userset: AccessExpandTupleToUserset | None = None
+    expanded: list[AccessExpandNode] | None = None
+    """The leaf's continuation, resolved: the rung this one implies, or the parent objects the
+    ``X from Y`` hop lands on. ``None`` means "not followed", not "leads nowhere"."""
+    continues: bool | None = None
+    """This leaf goes further but the depth budget stopped here. The pair (``expanded`` absent,
+    ``continues`` true) is what lets a client offer "expand further" instead of drawing a dead end
+    that is not one — and it is decided before any round trip, so asking costs nothing."""
+
+
+class AccessExpandNode(BaseModel):
+    """One node of the OpenFGA userset tree, keeping the model's own vocabulary. Flattening ``union`` /
+    ``intersection`` / ``difference`` away would discard precisely the operator that explains a
+    surprising grant, so the shape is preserved verbatim. ``truncated`` marks a depth-capped branch."""
+
+    name: str | None = None
+    leaf: AccessExpandLeaf | None = None
+    union: list[AccessExpandNode] | None = None
+    intersection: list[AccessExpandNode] | None = None
+    difference: AccessExpandDifference | None = None
+    truncated: bool | None = None
+    """The walk hit the depth ceiling here — the chain continues, this response just stops."""
+    cycle: bool | None = None
+    """This ``object#relation`` was already visited on this walk (``namespace`` self-nests, so a tuple
+    misconfiguration can make one). Marked, never silently pruned — a loop IS the finding."""
+
+
+class AccessExpandDifference(BaseModel):
+    """``base but not subtract`` — the exclusion operator, the one shape a tuple table cannot show."""
+
+    base: AccessExpandNode | None = None
+    subtract: AccessExpandNode | None = None
+
+
+class AccessExpandRequest(BaseModel):
+    """ "Why does this resolve?" — the userset tree for ``relation`` on ``object``.
+
+    ``depth`` counts hops: 1 is a plain OpenFGA Expand (one level, the faithful primitive), higher
+    follows ``computed`` rungs and ``X from Y`` edges through the cascade. Clamped server-side.
+    """
+
+    object: str
+    relation: str
+    depth: int = Field(default=1, ge=1, le=6)
+
+
+class AccessExpandResponse(BaseModel):
+    """The derivation of ``relation`` on ``object``: HOW the grant is composed, not whether it holds.
+
+    ``tree`` is empty when the relation resolves to nothing on this object — an empty tree and an
+    unavailable store are different answers, and the latter is a 503, never an empty tree.
+    """
+
+    tree: AccessExpandNode | None = None
+    object: str
+    relation: str
+    depth: int
+    """Hops actually requested (clamped server-side). 1 is a plain Expand; higher follows the cascade."""
+
+
 class GraphNode(BaseModel):
     """One node in the authorization graph — an FGA object or subject. ``type`` is the FGA type
     (user/role/team/table/namespace/warehouse/project), ``label`` the id without its ``type:`` prefix."""

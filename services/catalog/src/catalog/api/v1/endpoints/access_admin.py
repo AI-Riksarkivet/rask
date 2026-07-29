@@ -36,6 +36,13 @@ from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import (
     AccessCheckResult,
+    AccessExpandNode,
+    AccessExpandRequest,
+    AccessExpandResponse,
+    AccessListObjectsRequest,
+    AccessListObjectsResponse,
+    AccessListUsersRequest,
+    AccessListUsersResponse,
     AccessModelResponse,
     AccessTuple,
     AccessTuplesPage,
@@ -254,3 +261,116 @@ async def check_access(request: Request, settings: SettingsDep, token: CurrentTo
     audit("access_simulate", SUCCESS, subject=subject, resource=obj)
     checked = AccessTuple(user=user, relation=body.relation, object=obj)
     return AccessCheckResult(allowed=allowed, checked=checked)
+
+
+def _validated_relation(obj_or_type: str, relation: str) -> str:
+    """Require ``relation`` to be one the compiled model defines on the type (base rungs included)."""
+    fga_type = obj_or_type.partition(":")[0]
+    if relation not in _defined_relations(fga_type):
+        raise InvalidInputError(f"{relation!r} is not a relation the model defines on {fga_type}")
+    return relation
+
+
+@router.post("/list-objects")
+async def list_access_objects(request: Request, settings: SettingsDep, token: CurrentToken, body: AccessListObjectsRequest) -> AccessListObjectsResponse:
+    """ "What can this subject reach?" — every ``type`` object on which ``user`` holds ``relation``.
+
+    The forward half of the explorer, and the answer ``GET /tuples`` structurally cannot give: Read needs
+    an object type per call and returns only STORED tuples, so enumerating a subject meant one audited
+    read per model type and still missed everything derived. ListObjects expands the model, so a table
+    reached through team → project → warehouse → namespace shows up here and nowhere else.
+
+    The subject may be a userset (``team:eng#member``, ``role:validators#assignee``), which matters
+    because this model deliberately refuses ``team#member`` on resource rungs — a team reaches data
+    through a role, and only the userset question shows that.
+    """
+    client = await _estate_gate(request, settings, token)
+    if body.type not in _model_types():
+        raise InvalidInputError(f"{body.type!r} is not a type the authorization model defines")
+    relation = _validated_relation(body.type, body.relation)
+    user = _qualified_subject(body.user)
+    subject = token.sub if token else "anonymous"
+    try:
+        objects = await fga.list_objects(client, user=user, relation=relation, object_type=body.type, qualify=False)
+    except ServiceUnavailableError:
+        audit("access_list_objects", FAILURE, subject=subject, resource=f"{body.type}:", reason="authz_unavailable")
+        raise
+    # Enumerating one subject's whole reach is an estate-wide ACL disclosure, same tier as access_tuples_read.
+    audit("access_list_objects", SUCCESS, subject=subject, resource=f"{body.type}:", grantee=user, relation=relation, delivered=len(objects))
+    return AccessListObjectsResponse(objects=objects, user=user, relation=relation, type=body.type)
+
+
+@router.post("/list-users")
+async def list_access_users(request: Request, settings: SettingsDep, token: CurrentToken, body: AccessListUsersRequest) -> AccessListUsersResponse:
+    """ "Who can do this?" — every subject holding ``relation`` on ``object``, effective access included.
+
+    The inverse of list-objects and the primitive a revoke needs BEFORE it writes: a tuple sitting high in
+    the hierarchy can revoke access for many principals at once, and "are you sure?" is not an answer to
+    "how many". Subjects come back fully qualified so a userset is never mistaken for a user.
+    """
+    client = await _estate_gate(request, settings, token)
+    obj = _validated_object(body.object)
+    relation = _validated_relation(obj, body.relation)
+    if body.user_type not in _model_types():
+        raise InvalidInputError(f"{body.user_type!r} is not a type the authorization model defines")
+    if body.user_relation is not None and body.user_relation not in _defined_relations(body.user_type):
+        raise InvalidInputError(f"{body.user_relation!r} is not a relation the model defines on {body.user_type}")
+    subject = token.sub if token else "anonymous"
+    try:
+        users = await fga.list_users(
+            client,
+            relation=relation,
+            obj=obj,
+            user_type=body.user_type,
+            user_relation=body.user_relation,
+            qualified=True,
+        )
+    except ServiceUnavailableError:
+        audit("access_list_users", FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
+        raise
+    audit("access_list_users", SUCCESS, subject=subject, resource=obj, relation=relation, delivered=len(users))
+    # ListUsers has no pagination and the server truncates silently at listUsersMaxResults — an
+    # under-reported access review must never render as a complete one, so the ceiling rides the wire.
+    return AccessListUsersResponse(
+        users=users,
+        object=obj,
+        relation=relation,
+        user_type=body.user_type,
+        user_relation=body.user_relation,
+        truncated=len(users) >= fga.LIST_USERS_SERVER_CAP,
+    )
+
+
+@router.post("/expand")
+async def expand_access(request: Request, settings: SettingsDep, token: CurrentToken, body: AccessExpandRequest) -> AccessExpandResponse:
+    """WHY a relation resolves — the userset tree, optionally followed through the cascade.
+
+    Check answers yes/no and list-users answers who; neither says through WHICH rung or WHICH parent hop,
+    so a permission derived over three objects is indistinguishable from a direct grant — and they have
+    very different blast radii. This returns the derivation itself, keeping OpenFGA's own operators
+    (``union`` / ``intersection`` / ``difference``) rather than flattening them away: the operator is
+    frequently the whole explanation for a surprising grant.
+
+    ``depth`` is server-side on purpose. Walking the chain client-side costs one estate-gated, audited
+    round trip per hop under the browser client's fixed timeout; here it is one gate, one audit row, and
+    one response.
+    """
+    client = await _estate_gate(request, settings, token)
+    obj = _validated_object(body.object)
+    relation = _validated_relation(obj, body.relation)
+    depth = max(1, min(body.depth, fga.MAX_EXPAND_TREE_DEPTH))
+    subject = token.sub if token else "anonymous"
+    try:
+        tree = await fga.expand_tree(client, relation=relation, obj=obj, max_depth=depth)
+    except ServiceUnavailableError:
+        audit("access_expand", FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
+        raise
+    audit("access_expand", SUCCESS, subject=subject, resource=obj, relation=relation, depth=depth)
+    # An empty tree ({}) means the relation resolves to nothing here — a real answer, distinct from the
+    # 503 an outage raises above. Keep them distinguishable on the wire: null tree, never a silent {}.
+    return AccessExpandResponse(
+        tree=AccessExpandNode.model_validate(tree) if tree else None,
+        object=obj,
+        relation=relation,
+        depth=depth,
+    )

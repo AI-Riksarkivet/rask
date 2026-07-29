@@ -184,9 +184,8 @@
 				<RefreshCw size={13} />
 				<span>
 					Lineage service unreachable (HTTP {lastStatus}) — showing the last snapshot{lastUpdated
-			? ` from ${lastUpdated}`
-			: ''},
-					retrying.
+						? ` from ${lastUpdated}`
+						: ''}, retrying.
 				</span>
 			</div>
 		{/if}

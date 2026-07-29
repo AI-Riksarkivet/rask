@@ -1,0 +1,63 @@
+/* Svelte Flow, themed onto the estate's OKLCH tokens.
+ *
+ * `@xyflow/svelte/dist/style.css` ships a light-mode default palette in raw hex (#fefefe controls,
+ * #f7f9fb edge labels, #b1b1b7 edges). On rask's dark surfaces that renders the Controls widget and
+ * every edge label as a white blob — visible today on FOUR surfaces in the lakehouse zone
+ * (governance/access, lineage/graph, lineage/columns, the table-detail access graph), because nothing
+ * in the estate had ever mapped these.
+ *
+ * Same approach as `@rask/dockview`'s `--dv-*` block, and for the same reason: the library exposes
+ * `--xy-*` custom properties, every one of them resolves through a rask token that is itself
+ * re-declared under `.dark`, so the light/dark flip needs NO JavaScript. `colorMode` on <SvelteFlow>
+ * is therefore left alone — it is a second source of truth that can only go stale.
+ *
+ * Import ONCE per zone, after the vendor sheet, both under `layer(base)` so Tailwind utilities keep
+ * winning over both (svelte-flow rule 3).
+ */
+
+:root {
+	/* Canvas + dot grid */
+	--xy-background-color: var(--background);
+	--xy-background-pattern-color: var(--border);
+
+	/* Edges. `selected` doubles as the highlighted/animated path in the access explorer, so it gets
+	   the primary accent rather than a lighter grey — a lit derivation must read as lit. */
+	--xy-edge-stroke: var(--muted-foreground);
+	--xy-edge-stroke-selected: var(--primary);
+	--xy-edge-label-background-color: var(--card);
+	--xy-edge-label-color: var(--card-foreground);
+
+	/* The Controls widget — the white blob this file exists to kill. */
+	--xy-controls-button-background-color: var(--card);
+	--xy-controls-button-background-color-hover: var(--accent);
+	--xy-controls-button-color: var(--card-foreground);
+	--xy-controls-button-color-hover: var(--accent-foreground);
+	--xy-controls-button-border-color: var(--border);
+	--xy-controls-box-shadow: 0 0 2px 1px color-mix(in oklab, var(--foreground) 12%, transparent);
+
+	/* Connection line (drag-to-connect). The explorer is read-only, but the lineage editors are not. */
+	--xy-connectionline-stroke: var(--primary);
+
+	/* The "Svelte Flow" attribution chip. Kept legible rather than hidden — the licence asks for it. */
+	--xy-attribution-background-color: color-mix(in oklab, var(--background) 70%, transparent);
+
+	/* MiniMap (lineage/graph). Mask is the area OUTSIDE the viewport, so it wants the page colour. */
+	--xy-minimap-background-color: var(--card);
+	--xy-minimap-mask-background-color: color-mix(in oklab, var(--background) 70%, transparent);
+	--xy-minimap-node-background-color: var(--muted-foreground);
+
+	/* Handles + selection box. */
+	--xy-handle-background-color: var(--primary);
+	--xy-handle-border-color: var(--background);
+	--xy-selection-background-color: color-mix(in oklab, var(--primary) 8%, transparent);
+	--xy-selection-border: 1px dotted var(--primary);
+
+	/* Node defaults. rask's nodes are custom components styled with Tailwind utilities, so these only
+	   ever show through for a built-in node type — but a built-in that renders white on a dark canvas
+	   is exactly the bug above, one component away. */
+	--xy-node-background-color: var(--card);
+	--xy-node-color: var(--card-foreground);
+	--xy-node-border: 1px solid var(--border);
+	--xy-node-boxshadow-hover: 0 0 0 1px var(--ring);
+	--xy-node-boxshadow-selected: 0 0 0 2px var(--ring);
+}
