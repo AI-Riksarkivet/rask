@@ -80,18 +80,30 @@ export const fetchObjectBytes = (bucket: Bucket, key: string): Promise<ApiResult
 	binary('/api', `media/object/download?${q({ bucket, key })}`);
 
 /** How the preview pane renders an object: inline image, decoded text, or metadata-only. */
-export type PreviewKind = 'image' | 'text' | 'binary';
+export type PreviewKind = 'image' | 'text' | 'video' | 'audio' | 'pdf' | 'binary';
 
 // Extension first (the buckets' keys are honest about their format), content-type as the fallback
 // for extension-less keys. TIFF is deliberately NOT an inline image — browsers cannot render it.
 const IMAGE_EXT = /\.(jpe?g|png|gif|webp|avif|svg)$/i;
 const TEXT_EXT = /\.(xml|alto|json|jsonl|txt|md|csv|tsv|ya?ml|log)$/i;
+// Only what a browser can actually play with no plugin and no transcode. `.mkv` and `.avi` are
+// deliberately absent: they are containers a browser will refuse or half-play, and a dead <video>
+// element is a worse answer than an honest download link.
+const VIDEO_EXT = /\.(mp4|webm|ogv|m4v|mov)$/i;
+const AUDIO_EXT = /\.(mp3|wav|ogg|oga|m4a|flac|aac)$/i;
+const PDF_EXT = /\.pdf$/i;
 
 export function previewKind(key: string, contentType: string | null): PreviewKind {
 	if (IMAGE_EXT.test(key)) return 'image';
 	if (TEXT_EXT.test(key)) return 'text';
+	if (VIDEO_EXT.test(key)) return 'video';
+	if (AUDIO_EXT.test(key)) return 'audio';
+	if (PDF_EXT.test(key)) return 'pdf';
 	const ct = contentType ?? '';
 	if (/^image\/(jpeg|png|gif|webp|avif|svg)/.test(ct)) return 'image';
+	if (ct.startsWith('video/')) return 'video';
+	if (ct.startsWith('audio/')) return 'audio';
+	if (ct === 'application/pdf') return 'pdf';
 	if (ct.startsWith('text/') || ct.includes('xml') || ct.includes('json')) return 'text';
 	return 'binary';
 }

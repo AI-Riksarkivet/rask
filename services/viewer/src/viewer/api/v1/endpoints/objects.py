@@ -21,14 +21,14 @@ only a genuine outage — unreachable endpoint, bad credentials — still reache
 500 path, which is what a 500 should mean.
 """
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
 from service_kit.exceptions import NotFoundError
-from service_kit.schemas.storage import store_by_name
+from service_kit.schemas.storage import Store, store_by_name
 from storage import BucketNotFoundError, ObjectNotFoundError, s3_client, s3_errors
 
 
@@ -41,8 +41,8 @@ router = APIRouter(prefix="/api", tags=["objects"])
 #: discipline, and neither saying what either bucket was FOR. Registering a store is now config
 #: (``LANCE_STORES``); this endpoint and the UI validate against the SAME list, so they cannot
 #: disagree about which stores exist.
-def _registered_bucket(name: str) -> str:
-    """Resolve a store NAME to its bucket, or 404 naming the store.
+def _registered_store(name: str) -> Store:
+    """Resolve a store NAME to its registry entry, or 404 naming the store.
 
     A 404 rather than a 422: an unregistered store is a missing resource, not a malformed request,
     and the distinction matters to a browser that lists stores from the registry — if it asks for
@@ -51,7 +51,27 @@ def _registered_bucket(name: str) -> str:
     store = store_by_name(name)
     if store is None:
         raise NotFoundError(f"no registered store named {name!r}")
-    return store.bucket
+    return store
+
+
+def _registered_bucket(name: str) -> str:
+    """The bucket behind a store name. Kept for call sites that need only the bucket."""
+    return _registered_store(name).bucket
+
+
+def _client_for(name: str) -> Any:  # noqa: ANN401 — boto3 client, same as storage.s3_client
+    """An S3 client pointed at the store's OWN endpoint.
+
+    Every route used a bare `s3_client()`, which resolves the endpoint from process env — so every
+    store was read from the deployment's warehouse regardless of where it actually lives. The raw
+    tier is external (a different host entirely), so `images-batch` was queried against the warehouse,
+    correctly answered "no such objects", and a bucket full of images rendered as an empty store.
+    Nothing errored; the listing was simply, silently wrong.
+
+    `store.endpoint` is `None` for the governed tiers, and `s3_client(None)` is exactly the previous
+    behaviour — so this changes nothing for them while letting an attached store name its own host.
+    """
+    return s3_client(_registered_store(name).endpoint)
 
 
 #: The dependency every route uses in place of the deleted union.
@@ -149,7 +169,7 @@ def list_objects(
 
     404s (never 500s) when the bucket itself is absent — see the module docstring.
     """
-    client = s3_client()
+    client = _client_for(bucket)
     paginator = client.get_paginator("list_objects_v2")
     prefixes: list[str] = []
     objects: list[S3Object] = []
@@ -189,7 +209,7 @@ def head_object(
     old blanket `except Exception` reported an outage as "object not found", which is
     the same lie in the other direction.
     """
-    client = s3_client()
+    client = _client_for(bucket)
     try:
         with s3_errors(bucket=bucket, key=key):
             resp = client.head_object(Bucket=_registered_bucket(bucket), Key=key)
@@ -223,7 +243,7 @@ def download_object(
     Same 404 split as the HEAD sibling (missing key vs missing bucket); outages still
     surface as outages.
     """
-    client = s3_client()
+    client = _client_for(bucket)
     try:
         with s3_errors(bucket=bucket, key=key):
             resp = client.get_object(Bucket=_registered_bucket(bucket), Key=key)
