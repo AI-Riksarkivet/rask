@@ -1,4 +1,4 @@
-"""The two state machines of `docs/DESIGN-annotation-projects.md` §5, as data.
+"""The two state machines of `OPEN-WORK.md#design--annotation-projects` §5, as data.
 
 The transition tables ARE the spec — `fire()` consults them rather than reimplementing them in
 branches, so "everything not in the table is illegal" is structural. Each edge also carries the

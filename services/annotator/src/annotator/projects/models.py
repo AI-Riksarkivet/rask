@@ -1,7 +1,7 @@
 """The annotation-project domain: four documents, two state machines, one publish record.
 
 Server-side counterpart of `frontend/packages/labeling`'s `LabelOp` model. Spec:
-`docs/DESIGN-annotation-projects.md` §4 (entities) and §5 (state machines).
+`OPEN-WORK.md#design--annotation-projects` §4 (entities) and §5 (state machines).
 
 Deliberately store-free and corpus-free. This module imports nothing from the lakehouse plane — no
 `lancekit`, no registry, no dataset handle — because an annotation project's state (tasks, claims,

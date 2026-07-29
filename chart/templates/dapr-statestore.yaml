@@ -2,7 +2,7 @@
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 # The Dapr state store — the estate's home for OPERATIONAL state.
 #
-# Why this exists at all (docs/DESIGN-interactive-state.md): Lance is a columnar, immutable, versioned
+# Why this exists at all (OPEN-WORK.md#design--interactive-state): Lance is a columnar, immutable, versioned
 # ANALYTICAL format, and every commit is a new version with a manifest and a transaction file. That is
 # exactly why the git-like history in #113 works, and exactly why it is the wrong shape for a task's
 # state. A per-task flip (assigned → in progress → submitted → reviewed) is a small, frequent,

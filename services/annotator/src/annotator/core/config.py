@@ -6,7 +6,7 @@ three), and only service-local knobs (ANNOTATOR_*) are prefixed.
 
 It also mixes in :class:`GovernedAuthSettings`, because the annotator now writes **per-subject**
 state (annotation projects, tasks, claims, drafts) rather than only serving read-plane media. Every
-entity in ``docs/DESIGN-annotation-projects.md`` is keyed on who owns or claims it, so the service
+entity in ``OPEN-WORK.md#design--annotation-projects`` is keyed on who owns or claims it, so the service
 needs a VERIFIED subject: the trusted ``X-User`` header it used to accept becomes a cross-user leak
 the moment anything is keyed on identity.
 """

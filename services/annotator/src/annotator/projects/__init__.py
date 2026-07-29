@@ -1,4 +1,4 @@
-"""Annotation projects — the domain core (slices S1/S3 of docs/DESIGN-annotation-projects.md).
+"""Annotation projects — the domain core (slices S1/S3 of OPEN-WORK.md#design--annotation-projects).
 
 Store-free by construction: nothing here touches the lakehouse plane, so the machines and the publish
 schema are testable before any actor store exists.

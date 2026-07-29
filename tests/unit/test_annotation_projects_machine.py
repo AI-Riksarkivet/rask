@@ -1,6 +1,6 @@
 """The annotation-project domain core — entities, both state machines, the publish contract.
 
-Named by `docs/DESIGN-annotation-projects.md` §S1. These tests deliberately need **no store, no
+Named by `OPEN-WORK.md#design--annotation-projects` §S1. These tests deliberately need **no store, no
 corpus mount, no OpenFGA and no running service**: the domain core is store-free, which is what makes
 slices S1/S3 buildable ahead of the actor plane.
 """

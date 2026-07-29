@@ -180,7 +180,7 @@ model: |
   # type hangs off `project` (the tenant) and not off warehouse/namespace. Rungs are concentric:
   # owner ⊇ manager ⊇ reviewer ⊇ annotator ⊇ viewer.
   #
-  # Two rung choices, owned (docs/DESIGN-annotation-projects.md §6.1): `reviewer ⊇ annotator` because a
+  # Two rung choices, owned (OPEN-WORK.md#design--annotation-projects §6.1): `reviewer ⊇ annotator` because a
   # reviewer must be able to fix_and_accept, which IS annotating; and `can_publish: manager` rather than a
   # fifth `publisher` rung, which would earn nothing over the manager who froze the project.
   #

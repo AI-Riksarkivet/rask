@@ -1,6 +1,6 @@
 """Publish → the lakehouse: which annotations land, in what shape, and whose names travel with them.
 
-The publish DECISION, implementing `docs/DESIGN-annotation-projects.md` §7. Deliberately pure — no
+The publish DECISION, implementing `OPEN-WORK.md#design--annotation-projects` §7. Deliberately pure — no
 Dapr, no Lance, no catalog client — so the rules that would be expensive to get wrong in a cluster
 are testable exhaustively here. **The annotator never writes Lance directly** (§7.1); a workflow
 takes this plan and posts it through the catalog, which is what seeds FGA ownership and emits the
