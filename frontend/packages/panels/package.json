@@ -8,6 +8,11 @@
 			"types": "./src/lineage/index.ts",
 			"svelte": "./src/lineage/index.ts",
 			"default": "./src/lineage/index.ts"
+		},
+		"./compute": {
+			"types": "./src/compute/index.ts",
+			"svelte": "./src/compute/index.ts",
+			"default": "./src/compute/index.ts"
 		}
 	},
 	"scripts": {

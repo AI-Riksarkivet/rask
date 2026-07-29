@@ -2,16 +2,15 @@
 	/**
 	 * Ray job submissions.
 	 *
-	 * Reads the zone's existing `getRayJobs` remote query directly — a panel needs no context to use a
-	 * remote function, which is the point: `query()` is already per-request server state, so a docked
-	 * panel is just another caller. Read imperatively through `.current` rather than `await`, because a
+	 * Reads through the zone-provided `ComputeReads` context — see `./context.ts` for why a remote
+	 * function cannot live in a package (SvelteKit hashes its endpoint id per app). Read imperatively through `.current` rather than `await`, because a
 	 * panel is mounted AFTER hydration and never renders on the server; a top-level await here would
 	 * suspend a subtree the server never produced.
 	 */
 	import { Badge } from '@rask/ui/badge';
-	import { getRayJobs } from '$lib/remote/compute.remote';
+	import { getComputeReads } from './context.js';
 
-	const jobs = getRayJobs();
+	const jobs = getComputeReads().getRayJobs();
 	const rows = $derived(jobs.current?.jobs ?? []);
 
 	function tone(status: string): 'success' | 'destructive' | 'secondary' {

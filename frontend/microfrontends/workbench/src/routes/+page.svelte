@@ -17,7 +17,7 @@
 	 * safe here: it is set once, to this zone's base, exactly as media and annotator each set their own.
 	 */
 	import { onMount, type Component } from 'svelte';
-	import { Activity, List, Workflow } from '@lucide/svelte';
+	import { Activity, Boxes, List, ListTree, Server, Workflow } from '@lucide/svelte';
 	import type { DockviewApi, SerializedDockview } from 'dockview';
 	import type { PanelRegistry } from '@rask/dockview';
 	import { DockViews } from '@rask/dockview';
@@ -32,6 +32,8 @@
 		RunsPanel,
 		setLineageState,
 	} from '@rask/panels/lineage';
+	import { ActorsPanel, ClusterPanel, JobsPanel, setComputeReads } from '@rask/panels/compute';
+	import { getActors, getRayCluster, getRayJobs } from '$lib/compute.remote';
 	import { base } from '$app/paths';
 	import ViewSidebar from '$lib/ViewSidebar.svelte';
 
@@ -41,6 +43,10 @@
 	 *  not have: `<Dock>` hands its context tree to every panel, so they can never be a poll apart. */
 	const lineage = new LineageState(createLineageClient(bff));
 	setLineageState(lineage);
+	// The compute panels take their Ray reads from context: SvelteKit hashes a remote function's
+	// endpoint id from its path RELATIVE TO THE APP, so a package cannot ship one. This zone declares
+	// its own three queries and hands them down.
+	setComputeReads({ getRayJobs, getRayCluster, getActors });
 
 	/** Keys are the contract between a SAVED layout and this code — see MissingPanelRenderer. */
 	const panels: PanelRegistry = {
@@ -61,6 +67,24 @@
 			label: 'Events',
 			icon: List,
 			keywords: ['feed', 'log', 'stream', 'emissions', 'lineage'],
+		},
+		jobs: {
+			component: JobsPanel,
+			label: 'Ray jobs',
+			icon: ListTree,
+			keywords: ['ray', 'compute', 'submitted', 'queue', 'raysubmit', 'lifecycle'],
+		},
+		cluster: {
+			component: ClusterPanel,
+			label: 'Cluster capacity',
+			icon: Server,
+			keywords: ['ray', 'compute', 'nodes', 'resources', 'gpu', 'load'],
+		},
+		actors: {
+			component: ActorsPanel,
+			label: 'Ray actors',
+			icon: Boxes,
+			keywords: ['ray', 'compute', 'live', 'workers', 'replicas', 'serve'],
 		},
 	};
 
