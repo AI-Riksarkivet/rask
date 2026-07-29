@@ -25,37 +25,65 @@ close, mounted into `.dv-right-actions-container`), `chrome.ts` (the `DockChrome
 working defaults), `context-menu.ts`, `split.ts`, `persistence.ts`, and `types.ts`'s `PanelRegistry` —
 the zone's panel catalogue, keyed by the `component` string dockview also resolves saved layouts by.
 
-### G1 · Add-panel with a chosen direction — *replaces* the split button
+### G1 · The group header control set — owner-specified 2026-07-29
 
-**The split button is the wrong primitive and should go.** It duplicates the ACTIVE panel into a new
-group (`split.ts:54` `containerApi.addPanel(...)`), so the only thing a user can create is a second
-copy of what they are already looking at. The owner's words: *"completely useless."*
+Four buttons, in this order, plus the two that already work. Specified by the owner; recorded verbatim
+in intent so a later session does not re-litigate it.
 
-What is wanted is the Zed/VS Code shape: a **`+` in the group header** that opens the zone's
-`PanelRegistry` minus whatever is already open, and where the *direction* is part of the choice —
-add as a tab, or split above / below / left / right. One control, one decision, no duplication.
+| # | Control | Behaviour |
+|---|---|---|
+| 1 | **Split pane** | Prompts for a DIRECTION — up / down / left / right — the way Zed does it. Not a silent duplicate. |
+| 2 | **`+` add panel** | Opens the registered-panel list and adds the chosen one. **With a search box**, because the list grows past eyeballing once G3 lands. |
+| 3 | **Fullscreen** | Expand this group to fill the dock; flips to restore while maximized. Exists today as `maximize`. |
+| 4 | **Popout** | Real second browser window. Exists today, gated on `popoutUrl`. |
+| — | **Bell / alert** | See G2. Highlights the WHOLE panel on a change or event, not just a tab dot. |
+| — | **Remove panel** | Close. Exists today (the per-tab ✕ is dockview's only stock control). |
+| — | **Snapping** | Already works — the five-way group drop and the widened `dndEdges` in `DEFAULT_CHROME`. Do not rebuild it. |
 
-- `containerApi.addPanel({ id, component, position: { referenceGroup, direction } })` already takes
-  `direction: 'above'|'below'|'left'|'right'|'within'` — the API is there; the UI is not.
-- Panel ids must stay stable and unique: `component` is the contract a serialized layout resolves by,
-  so an id scheme that collides breaks layout restore (see `types.ts:43`).
-- A registry entry needs a human label and an icon for the menu. `PanelRegistry` is currently
-  `Record<string, PanelComponent>` — it has nowhere to put either. Widening it is the first step.
+**Split and `+` are DIFFERENT controls and both are wanted.** An earlier draft of this file said add-panel
+*replaces* split; that was wrong. Split acts on the pane — divide this space in a direction. `+` acts on
+the content — put a named panel here. Conflating them is what produced today's useless button.
 
-### G2 · Panel watchers — notify on change
+What makes today's split useless is that it only ever duplicates the ACTIVE panel (`split.ts:54`
+`containerApi.addPanel(...)`), so the sole thing a user can create is a second copy of what they are
+already looking at — with no direction prompt and no choice of content.
 
-A panel should be able to declare a watcher so the dock can badge its **tab** when the data behind it
-moves while the panel is not the visible one. Today a background panel changes silently and the user
-finds out by clicking.
+**Open question for whoever takes this:** after a direction-prompted split, does the new pane get a copy
+of the current panel (Zed's behaviour, since Zed splits an *editor*), or does it open EMPTY and wait for
+a `+`? Zed's model assumes the thing being split is the thing you want twice; a workbench panel usually
+is not. Decide it deliberately — it changes whether split needs the panel picker too.
 
-- `api.onDidVisibilityChange` gives the visible/hidden signal; the tab renderer is where a badge
-  lands. `GroupActions.svelte` already derives everything from dockview events rather than polling —
-  match that.
-- Do **not** invent a transport. Every zone already opens exactly one `query.live` for the
-  notification bell (`rask-frontend` § *Fetching data*), always inside `onMount`; a watcher rides
-  that, or it is a second live connection per panel and the server holds them all.
-- Panels stay mounted while hidden (invariant 1 + `defaultRenderer: 'always'`), so a watcher can keep
-  running — which is exactly why the badge is meaningful and also why an unbounded one leaks.
+Implementation notes:
+
+- `containerApi.addPanel({ id, component, position: { referenceGroup, direction } })` already accepts
+  `direction: 'above'|'below'|'left'|'right'|'within'`. The API exists; only the UI is missing.
+- Panel ids must be stable and unique — `component` is the string a serialized layout resolves by
+  (`types.ts:43`), so a colliding id scheme breaks layout restore, not just the click.
+- `PanelRegistry` is `Record<string, PanelComponent>` today: **no label, no icon, no keywords**. The
+  picker needs all three (search matches on label and keywords), so widening that type is step one and
+  every zone's registry has to be updated with it.
+- The controls mount into `.dv-right-actions-container` via `GroupActions.svelte`, which already derives
+  its reactive state from dockview events (`onDidLocationChange`, `onDidMaximizedGroupChange`) rather
+  than polling. Match that; do not add a store.
+
+### G2 · Panel watchers — the bell, and highlighting the whole panel
+
+A panel declares a watcher; when the data behind it moves the dock raises an alert. The owner's
+specification is that the **whole panel** highlights on a change or event — not a dot on the tab.
+That is the point: a background panel changing silently is the failure, and a 6px dot on a tab the
+user is not looking at reproduces it.
+
+- `api.onDidVisibilityChange` gives visible/hidden. The bell button in the header is the persistent
+  affordance (acknowledge / mute); the panel-wide highlight is the transient one.
+- Do **not** invent a transport. Every zone already opens exactly one `query.live` for the notification
+  bell (`rask-frontend` § *Fetching data*), always inside `onMount` — a watcher rides that. One live
+  connection per panel means the server holds them all.
+- This works at all because panels stay mounted while hidden (dock invariant 1 +
+  `defaultRenderer: 'always'`), so a watcher keeps running when its panel is not visible — which is
+  exactly why the alert is meaningful, and exactly why an unbounded one leaks. Bound it.
+- The highlight is chrome, so it is `--dv-*` custom properties and rask tokens, not GSAP: dockview
+  rewrites panel transforms every frame under `defaultRenderer: 'always'` and a tween on the same
+  property is a second writer (`rask-styling` § *Theming dockview*).
 
 ### G3 · A GLOBAL workbench — any panel from any zone
 
