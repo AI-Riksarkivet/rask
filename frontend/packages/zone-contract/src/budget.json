@@ -35,6 +35,11 @@
 			"staticGzipKB": 220,
 			"deferredGzipKB": 40,
 			"note": "The train zone (R17): five dummy areas \u2014 submit form, run board, monitoring, analysis, model registry \u2014 over the shared shell, no dependency beyond it, so it should stay near studio's weight until real training surfaces land. Measured 184 / 1."
+		},
+		"workbench": {
+			"staticGzipKB": 700,
+			"deferredGzipKB": 200,
+			"note": "THE global workbench \u2014 one dock holding panels from across the estate. It carries @xyflow/svelte for the lineage graph in its ENTRY graph (the dock itself is deferred, but the panel registry the page builds is static), which is why the static ceiling sits between compute's and lakehouse's rather than near home's. Those bytes are not new: they were already paid in the lakehouse zone, which shipped the same graph. What is new is that ONE zone pays them instead of three shipping three docks. If the static number climbs toward the deferred one, a panel has been imported eagerly that should have been lazy."
 		}
 	}
 }

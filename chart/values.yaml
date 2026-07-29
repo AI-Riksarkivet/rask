@@ -379,6 +379,11 @@ frontend:
     # ANNOTATOR_API env, rendered when media.enabled). Deploy together with media.enabled=true.
     - {name: media, path: /media}
     - {name: annotator, path: /annotator}
+    # THE global workbench: one dock holding panels from across the estate, with a sidebar of saved
+    # views. Its own zone because a Svelte component only renders if it is IN the bundle, and a zone
+    # cannot import from another zone, so the panels live in a shared package this zone imports.
+    # REPLACES the three per-zone workbenches, which are deleted.
+    - {name: workbench, path: /workbench}
   # Per-user OIDC login (opt-in), shared across ALL zones — one origin, one sealed cookie, so a login on
   # any zone is a login on every zone. REQUIRED when enabled: sessionSecret (seals the cookie),
   # publicIssuer, publicOrigin (forms the home zone's /auth/callback redirect URI). The confidential Dex

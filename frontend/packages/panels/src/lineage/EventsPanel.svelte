@@ -12,7 +12,7 @@
 	 * events is the failure this readout makes visible.
 	 */
 	import { onMount } from 'svelte';
-	import { getLineageState } from '$lib/dock/lineage-context';
+	import { getLineageState } from './lineage-context.js';
 
 	const store = getLineageState();
 

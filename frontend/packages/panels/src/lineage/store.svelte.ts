@@ -1,5 +1,16 @@
-import { fetchEstateGraph, fetchEvents, fetchRuns } from '$lib/api';
+import type { createLineageClient } from '@rask/api/lineage';
 import type { EventRecord, GraphEdge, GraphNode, RunStatus } from '@rask/api/lineage';
+
+/**
+ * The lineage client this store polls through — INJECTED, not imported.
+ *
+ * It used to `import { fetchEstateGraph, … } from '$lib/api'`, which bound the store to one zone:
+ * `$lib` resolves per app, and the lakehouse binding underneath is `createLineageClient(bff)` over
+ * `createBffClient($app/paths)` — a package can import neither alias. Taking the client as a
+ * constructor argument is the same stance `@rask/ui` takes with its client props, and it is what lets
+ * ONE store back the lineage panels wherever they are mounted.
+ */
+export type LineageClient = ReturnType<typeof createLineageClient>;
 
 /** Hard cap on the nodes the DAG explorer renders — a DENSITY limit now, not a request budget:
  * the estate arrives in one bulk `/graph` read (per-node version/failed rollups included), so the
@@ -32,14 +43,20 @@ export class LineageState {
 	/** Overlap guard: a slow tick must not stack behind the poll interval (§2 perf, 2026-07-11). */
 	#polling = false;
 
+	#client: LineageClient;
+
+	constructor(client: LineageClient) {
+		this.#client = client;
+	}
+
 	async poll(): Promise<void> {
 		if (this.#polling) return;
 		this.#polling = true;
 		try {
 			const [graph, events, runs] = await Promise.all([
-				fetchEstateGraph(MAX_GRAPH),
-				fetchEvents({ limit: EVENTS_WINDOW, summary: true }),
-				fetchRuns(),
+				this.#client.fetchEstateGraph(MAX_GRAPH),
+				this.#client.fetchEvents({ limit: EVENTS_WINDOW, summary: true }),
+				this.#client.fetchRuns(),
 			]);
 
 			// HARD-FAILURE GUARD (audit B1): `getJSON` maps timeout / 4xx / 5xx / network error to

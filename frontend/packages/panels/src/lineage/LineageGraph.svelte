@@ -1,6 +1,6 @@
 <script lang="ts" module>
-	import MedallionNode, { type MedallionNodeType } from '$lib/lineage/MedallionNode.svelte';
-	import JobNode, { type JobNodeType } from '$lib/lineage/JobNode.svelte';
+	import MedallionNode, { type MedallionNodeType } from './MedallionNode.svelte';
+	import JobNode, { type JobNodeType } from './JobNode.svelte';
 	import type { NodeTypes } from '@xyflow/svelte';
 
 	// svelte-flow rule 5: register node components ONCE at module scope, not inline.
@@ -19,8 +19,6 @@
 	 * the page header that used to compute it inline.
 	 */
 	import { untrack } from 'svelte';
-	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
 	import {
 		SvelteFlow,
 		Background,
@@ -31,13 +29,31 @@
 		type FitViewOptions,
 	} from '@xyflow/svelte';
 	import { Boxes, Cpu } from '@lucide/svelte';
-	import FlowAutoFit from '$lib/lineage/FlowAutoFit.svelte';
-	import type { LineageState } from '$lib/lineage/store.svelte';
+	import FlowAutoFit from './FlowAutoFit.svelte';
+	import type { LineageState } from './store.svelte';
 	import { useColorMode } from '@rask/ui/color-mode';
 	import { LAYER } from '@rask/api/lineage';
-	import { depths, layout } from '$lib/lineage/layout';
+	import { depths, layout } from './layout.js';
 
-	let { store, buildMs = $bindable(0) }: { store: LineageState; buildMs?: number } = $props();
+	/**
+	 * `base` and `navigate` arrive as PROPS rather than from `$app/paths` and `$app/navigation`.
+	 *
+	 * A package cannot import `$app/*` — the aliases only exist inside a SvelteKit app, and `@rask/ui`
+	 * already establishes the rule (it imports none and detects the browser with
+	 * `typeof window !== 'undefined'`). Handing the two zone-shaped values in is what lets this graph
+	 * render in the lakehouse zone AND in the global workbench, which are served under different bases.
+	 */
+	let {
+		store,
+		base = '',
+		navigate,
+		buildMs = $bindable(0),
+	}: {
+		store: LineageState;
+		base?: string;
+		navigate?: (href: string) => void;
+		buildMs?: number;
+	} = $props();
 
 	// The canvas follows the estate theme LIVE (the shell's theme button toggles `.dark` on
 	// <html>). It used to be pinned to `colorMode="dark"`, which painted a black canvas inside
@@ -227,7 +243,7 @@
 		// Both targets live in THIS zone's lineage area (`/lakehouse/lineage/...`). The segment is
 		// dynamic, so it is spelled out here rather than being derivable from the literal path.
 		const kind = graphView === 'jobs' ? 'jobs' : 'datasets';
-		goto(`${base}/lineage/${kind}/${encodeURIComponent(id)}`);
+		navigate?.(`${base}/lineage/${kind}/${encodeURIComponent(id)}`);
 	}
 </script>
 
