@@ -16,7 +16,9 @@
 
 ---
 
-#### M1 · `compute` app-id has no pod — `/api/ray/*` and `/api/serve/*` are hard-500 on every shipped deploy path
+#### ~~M1 · `compute` app-id has no pod~~ **FIXED 2026-07-29** (`fleet.yaml` gate → `$svc.frontDoor`)
+
+#### M1 (original) · `compute` app-id has no pod — `/api/ray/*` and `/api/serve/*` are hard-500 on every shipped deploy path
 
 The gateway declares app-id `compute` **unconditionally** (`services/gateway/src/gateway/__init__.py:78`, consumed at `:103` `/api/ray` and `:105` `/api/serve`), but the compute Deployment renders only under `singleTenant.enabled`:
 
@@ -50,7 +52,9 @@ No shipped path sets the toggle: `make k3s-up` (`Makefile:399`) passes only `hfT
 
 ---
 
-#### M2 · Tilt runs the media plane; Helm owns a Resiliency CR that does not know it exists
+#### ~~M2 · Tilt runs the media plane~~ **FIXED 2026-07-29** (the whole Dapr plane added to `FLEET_TEMPLATES`)
+
+#### M2 (original) · Tilt runs the media plane; Helm owns a Resiliency CR that does not know it exists
 
 `chart/templates/dapr-resiliency.yaml:109-113` adds viewer/search/annotator to `targets.apps` behind `{{- if .Values.media.enabled }}`. `Tiltfile:166-190` renders a fixed `FLEET_TEMPLATES` list with `--set media.enabled=true` (`Tiltfile:207`) — and **`templates/dapr-resiliency.yaml` is not in that list**. The Resiliency CR therefore still comes from the `make k3s-up` release, rendered at the default `media.enabled: false` (`chart/values.yaml:663`).
 
@@ -87,7 +91,18 @@ Two precisions: the drop is *not* silent (`transform.py:117-121` logs `medallion
 
 ---
 
-#### M4 · The committed retry-window fix has never been deployed — the live pub/sub retry schedule is ~4s, not 450s
+#### M4 · The committed retry-window fix CANNOT be deployed — the installed CRD rejects it
+
+**Root cause found 2026-07-29, after this audit.** The audit concluded the fix simply had not been
+applied. It cannot be: `resiliencies.dapr.io` in this cluster accepts only
+`[duration, matching, maxInterval, maxRetries, policy]`, and commit 8060594 introduced
+`initialInterval`, `multiplier` and `randomizationFactor`. A direct apply fails with
+`strict decoding error: unknown field spec.policies.retries.pubsubDeliveryRetry.initialInterval`.
+So the live CR keeps its pre-fix shape by force, and the ~4s retry window stands until the Dapr
+CRDs are upgraded. **The fix is a Dapr version bump, not a redeploy** — and until then the chart
+carries a policy the cluster can never accept, so every `helm upgrade` touching it fails.
+
+#### M4 (original) · The committed retry-window fix has never been deployed — the live pub/sub retry schedule is ~4s, not 450s
 
 Surfaced while refuting a "everything byte-matches" claim; it is real and live-effective.
 
@@ -106,7 +121,7 @@ Under `policy: exponential`, Dapr ignores `duration`, so `initialInterval` falls
 
 ---
 
-#### M5 · `chart/templates/dapr-statestore.yaml` is missing the `dapr.enabled` gate — `dapr.enabled=false` breaks the whole install
+#### ~~M5~~ **FIXED 2026-07-29** · `chart/templates/dapr-statestore.yaml` was missing the `dapr.enabled` gate — `dapr.enabled=false` breaks the whole install
 
 `dapr-statestore.yaml:1` is `{{- if .Values.stateStore.enabled }}` with **no** dapr gate, while every sibling Dapr-CR template has one (`dapr-component.yaml:1`, `compaction.yaml:4`, `services.yaml:182`, `dapr-resiliency.yaml:1`, `observability.yaml:18`, `dapr-inject-sweep.yaml:1`, `dapr-dashboard.yaml:1`), and `compaction.yaml:7-8` states the rationale verbatim.
 
@@ -123,7 +138,7 @@ apply → no matches for kind "Component" in version "dapr.io/v1alpha1"
 
 ---
 
-#### M6 · `lance-statestore` references a secret store that need not exist — `openbao.enabled=false` ships a broken component today
+#### ~~M6~~ **FIXED 2026-07-29** · `lance-statestore` referenced a secret store that need not exist — `openbao.enabled=false` ships a broken component today
 
 `dapr-statestore.yaml:65` renders `secretStore: {{ .Values.stateStore.secretStore }}` (= `lance-secrets`, `chart/values.yaml:746`) and resolves the connectionString through it (`:53-56`), gated only on `stateStore.enabled` (default true). But `lance-secrets` renders only under `lance.secretsViaDapr` = `openbao.enabled or openbao.externalAddr` (`chart/templates/_helpers.tpl:572-574`, used at `dapr-component.yaml:114`).
 

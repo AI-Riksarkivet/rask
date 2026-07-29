@@ -1,4 +1,8 @@
-{{- if .Values.stateStore.enabled }}
+{{- /* The `dapr.enabled` half is not optional: this renders a dapr.io/v1alpha1 Component, and the
+     Component CRD ships only inside the gated Dapr subchart. Every sibling Dapr-CR template gates on
+     both; this one did not, so `dapr.enabled=false` rendered one Component against a CRD that was
+     never installed and the whole install failed with 'no matches for kind "Component"'. */}}
+{{- if and .Values.dapr.enabled .Values.stateStore.enabled }}
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 # The Dapr state store — the estate's home for OPERATIONAL state.
 #
@@ -62,7 +66,15 @@ spec:
     - { name: metadataTableName, value: {{ .Values.stateStore.metadataTableName | quote }} }
 auth:
   # Which component resolves the secretKeyRef above. Without this Dapr looks in Kubernetes Secrets.
+  {{- /* Only when that component actually renders. `lance-secrets` is gated on
+       lance.secretsViaDapr (openbao.enabled or an external addr), so naming it unconditionally
+       pointed the state store at a component that need not exist — daprd then logs 'references a
+       secret store that isn't loaded', the state store silently does not load, and actor hosting
+       goes with it. Without a secret store Dapr falls back to Kubernetes Secrets, which is the
+       honest behaviour for an install that has no OpenBao. */}}
+  {{- if include "lance.secretsViaDapr" . }}
   secretStore: {{ .Values.stateStore.secretStore }}
+  {{- end }}
 {{- if .Values.stateStore.scopes }}
 scopes:
 {{- range .Values.stateStore.scopes }}

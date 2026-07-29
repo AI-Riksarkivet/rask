@@ -214,12 +214,18 @@ FLEET_TEMPLATES = [
 # Raw is external (R23): the governed tiers are on the in-cluster warehouse, raw and its derived ALTO
 # output are not. Override the host for another environment with RASK_HCP_S3.
 HCP_S3 = os.getenv('RASK_HCP_S3', 'https://dev-ai.hcp.ra-dev.int')
-STORES = ('[{"name":"images-batch","bucket":"images-batch","role":"raw","endpoint":"' + HCP_S3 +
-          '","insecure":true,"secret":"hcp-s3","description":"Source page images, as harvested."},'
-          '{"name":"images-batch-alto","bucket":"images-batch-alto","role":"derived","endpoint":"' + HCP_S3 +
-          '","insecure":true,"secret":"hcp-s3","description":"ALTO XML exported from the cascade."},'
-          '{"name":"lance-catalog","bucket":"lance-catalog","role":"bronze","description":"The lakehouse warehouse."},'
-          '{"name":"rask-observability","bucket":"rask-observability","role":"observability","description":"Telemetry."}]')
+# Starlark has NO implicit string concatenation (adjacent literals are a syntax error, unlike Python),
+# so this is a real list encoded once rather than a hand-glued JSON string.
+STORES = encode_json([
+    {"name": "images-batch", "bucket": "images-batch", "role": "raw", "endpoint": HCP_S3,
+     "insecure": True, "secret": "hcp-s3", "description": "Source page images, as harvested."},
+    {"name": "images-batch-alto", "bucket": "images-batch-alto", "role": "derived", "endpoint": HCP_S3,
+     "insecure": True, "secret": "hcp-s3", "description": "ALTO XML exported from the cascade."},
+    {"name": "lance-catalog", "bucket": "lance-catalog", "role": "bronze",
+     "description": "The lakehouse warehouse — the governed medallion datasets."},
+    {"name": "rask-observability", "bucket": "rask-observability", "role": "observability",
+     "description": "Telemetry retained by GreptimeDB."},
+])
 
 PUBLIC_ORIGIN = os.getenv('RASK_PUBLIC_ORIGIN', 'http://localhost:8080')
 # 32+ chars, fixed so a tilt restart does not sign everyone out. Dev-only; see the --set below.
