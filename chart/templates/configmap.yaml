@@ -38,6 +38,13 @@ data:
   RASK_MEDIA_SEARCH_URL: {{ printf "http://%s-search:%v" (include "lance.fullname" .) .Values.media.services.search.port | quote }}
   RASK_MEDIA_ANNOTATOR_URL: {{ printf "http://%s-annotator:%v" (include "lance.fullname" .) .Values.media.services.annotator.port | quote }}
   {{- end }}
-  {{- if .Values.ray.enabled }}
+  {{- /* EXTERNAL Ray wins when set. The in-cluster head Service renders only under ray.enabled AND
+       singleTenant.enabled (rayservice.yaml), so deriving this from ray.enabled ALONE pointed compute
+       at a Service that does not exist on a default install — the dashboard call then failed on DNS
+       rather than saying "no Ray here". rask's Ray is managed outside this repo, so an external
+       address is the NORMAL case and the in-cluster head is the opt-in. */}}
+  {{- if .Values.ray.dashboardUrl }}
+  RAY_DASHBOARD_URL: {{ .Values.ray.dashboardUrl | quote }}
+  {{- else if .Values.singleTenant.enabled }}
   RAY_DASHBOARD_URL: {{ printf "http://%s-ray-head-svc:%v" (include "rask.fullname" .) .Values.ray.dashboardPort | quote }}
   {{- end }}

@@ -873,6 +873,10 @@ rustfs:
 
 ray:
   enabled: true
+  # The Ray dashboard `compute` talks to. Set => used verbatim and NO in-cluster Ray is needed;
+  # empty => fall back to the in-cluster head Service, which exists only under singleTenant.
+  # rask's Ray is managed outside this repo, so an external address is the normal case.
+  dashboardUrl: "https://dev-kuberay.ra.se"
   # --- Ray token auth (gate 7 / R3) — RAY_AUTH_MODE=token on the head + every Ray-talking client.
   # DEFAULT OFF for dev; values-prod flips it ON (the ray-auth-token.yaml prod guard demands it).
   # The kuberay >= 1.6.0 prerequisite is SATISFIED (Chart.yaml pins kuberay-operator 1.6.2):
