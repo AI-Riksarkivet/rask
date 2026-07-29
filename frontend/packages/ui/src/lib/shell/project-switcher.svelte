@@ -37,19 +37,29 @@
 
 <DropdownMenu.Root>
 	<DropdownMenu.Trigger>
-		<!-- Fills the sidebar header rather than sitting inline: this is the rail's top slot, so the
-		     trigger is a full-width row like the menu items beneath it, and it keeps its shape when the
-		     rail collapses to icons (the label truncates away, the Boxes glyph remains). -->
+		<!-- Rendered as the SIDEBAR HEADER, so it keeps that shape: the accented icon block and the
+		     two-line label are what made the header read as a header rather than a control that happened
+		     to sit at the top. A plain ghost button lost both — a bare glyph, one truncated line, and no
+		     accent — which is why the rail suddenly looked like it was missing something.
+		     `size-8` block + `text-sm leading-tight` stack matches the sidebar-07 header the estate
+		     already uses; collapsed to icon only the block survives, which is the intended silhouette. -->
 		{#snippet child({ props })}
 			<Button
 				{...props}
 				variant="ghost"
-				class="text-foreground h-12 w-full min-w-0 justify-start gap-2 px-2"
+				class="text-foreground h-auto w-full min-w-0 justify-start gap-2 px-2 py-1.5"
 				aria-label="Switch project"
 			>
-				<Boxes class="text-muted-foreground" />
-				<span class="truncate capitalize">{displayName}</span>
-				<ChevronsUpDown class="text-muted-foreground" />
+				<div
+					class="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg"
+				>
+					<Boxes class="size-4" />
+				</div>
+				<div class="grid min-w-0 flex-1 text-left text-sm leading-tight">
+					<span class="truncate font-medium capitalize">{displayName}</span>
+					<span class="text-muted-foreground truncate text-xs">{project.subtitle ?? 'Project'}</span>
+				</div>
+				<ChevronsUpDown class="text-muted-foreground size-4 shrink-0" />
 			</Button>
 		{/snippet}
 	</DropdownMenu.Trigger>
