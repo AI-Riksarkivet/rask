@@ -36,7 +36,12 @@ describe('the Makefile builds and loads exactly the zones that exist', () => {
 	// `bun run --cwd microfrontends/data build` and never reached lakehouse. Nothing type-checks a
 	// Makefile and no CI leg builds the images, so this is the only thing that can catch it.
 	const makefile = readFileSync(resolve(REPO_ROOT, 'Makefile'), 'utf8');
-	const declared = (/^ZONES\s*:?=\s*(.+)$/m.exec(makefile)?.[1] ?? '').trim().split(/\s+/);
+	// All four of make's assignment operators, not just `=` and `:=`. The Makefile declares
+	// `ZONES ?= …` (conditional, so the env can override it), which `:?=` does not match — the capture
+	// came back empty, `declared` was `['']`, and BOTH assertions below failed while the Makefile was
+	// perfectly correct. A gate that cannot parse the file it gates reports the file as broken, which
+	// is worse than not gating it: it sent this to CI as "the ZONES list is stale".
+	const declared = (/^ZONES\s*[:?+]?=\s*(.+)$/m.exec(makefile)?.[1] ?? '').trim().split(/\s+/);
 
 	it('declares a ZONES list', () => {
 		expect(declared.filter(Boolean).length).toBeGreaterThan(0);

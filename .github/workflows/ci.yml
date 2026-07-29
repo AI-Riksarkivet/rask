@@ -225,7 +225,7 @@ jobs:
       # `docker image ls`, NOT `docker image inspect --format '{{.Size}}'`. The two disagree by 4.6x
       # depending on which image store the daemon runs: under the containerd store (`docker info` ->
       # io.containerd.snapshotter.v1) inspect reports COMPRESSED content size, while `ls` reports the
-      # unpacked on-disk size; under the classic store both report unpacked. Measured on lance-home:dev
+      # unpacked on-disk size; under the classic store both report unpacked. Measured on web-home:dev
       # here: inspect 283647617 bytes vs ls 1.32GB, same image id. GitHub runners default to the classic
       # store, so inspect would have logged ~1.3GB in CI and 283MB on a developer box with containerd
       # enabled, and the "trend" this step exists for would have been a comparison between two different
@@ -233,7 +233,7 @@ jobs:
       - name: Record image sizes
         run: |
           for z in $ZONES; do
-            docker image ls "lance-$z:dev" --format '{{.Repository}}:{{.Tag}} {{.Size}} (on disk)' || true
+            docker image ls "web-$z:dev" --format '{{.Repository}}:{{.Tag}} {{.Size}} (on disk)' || true
           done
 
       # Building is NOT enough, and this is the load-bearing half of the job. Proven by mutation:
@@ -272,15 +272,23 @@ jobs:
             # the Makefile never built is the headline case this step exists to report, and reading its
             # svelte.config.js first would print a `sed: can't read …` above the diagnosis whenever the
             # stale-ZONES zone is also a half-added one — noise on top of the line that matters.
-            if ! docker image inspect "lance-$z:dev" >/dev/null 2>&1; then
-              echo "FAIL  $z  no image lance-$z:dev was built — is the Makefile ZONES list stale?"
+            #
+            # `web-$z:dev` must match what `make frontend-images` tags (Makefile: `-t
+            # web-$$a:$(FRONTEND_TAG)`, FRONTEND_TAG ?= dev). These read as one name in two files, and
+            # the lance-ns merge renamed only one of them: the Makefile moved to `web-*` while this job
+            # kept probing `lance-*`, so it reported "no image lance-lakehouse:dev was built — is the
+            # Makefile ZONES list stale?" for four zones that had in fact built perfectly. The
+            # diagnosis it offers is the wrong one for this failure, which is why it cost a detour;
+            # if the tag ever moves again, both sides change together.
+            if ! docker image inspect "web-$z:dev" >/dev/null 2>&1; then
+              echo "FAIL  $z  no image web-$z:dev was built — is the Makefile ZONES list stale?"
               fail=1
               continue
             fi
             cfg="frontend/microfrontends/$z/svelte.config.js"
             base=$(sed -n "s/.*paths:[[:space:]]*{[^}]*base:[[:space:]]*['\"]\([^'\"]*\)['\"].*/\1/p" "$cfg" | head -1)
             docker rm -f "smoke-$z" >/dev/null 2>&1 || true
-            docker run -d --name "smoke-$z" -p 3000:3000 "lance-$z:dev" >/dev/null
+            docker run -d --name "smoke-$z" -p 3000:3000 "web-$z:dev" >/dev/null
             # No `|| echo 000` fallback: curl already writes 000 to %{http_code} when it cannot connect
             # (verified: exit 7, stdout "000"), so a fallback appends a SECOND code and $code becomes
             # "000000" — or "301000" if curl exits non-zero on a request that did get a response, which
