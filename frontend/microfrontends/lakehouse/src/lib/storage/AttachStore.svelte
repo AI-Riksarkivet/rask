@@ -66,9 +66,9 @@
 				class="icon"
 				aria-label="Cancel"
 				onclick={() => {
-					open = false;
-					reset();
-				}}><X size={14} /></button
+	open = false;
+	reset();
+}}><X size={14} /></button
 			>
 		</header>
 
