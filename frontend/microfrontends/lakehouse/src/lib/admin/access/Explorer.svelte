@@ -25,7 +25,7 @@
 	import { page } from '$app/state';
 	import { MeSchema, parse } from '@rask/api';
 	import { requestJSON } from '$lib/http';
-	import { ShieldAlert } from '@lucide/svelte';
+	import { RotateCcw, ShieldAlert } from '@lucide/svelte';
 	import {
 		AccessModelSchema,
 		checkAccess,
@@ -419,16 +419,47 @@
 		applyFacets(composed, { types: selectedTypes, relations: selectedRelations }),
 	);
 
+	/**
+	 * The node the pointer is over, and everything one edge away from it.
+	 *
+	 * A dense graph is unreadable precisely because you cannot tell which lines belong to the thing
+	 * you are looking at. Hover answers that without changing any state a query depends on — it is
+	 * pure emphasis, so it never fights the highlight a query already applied.
+	 */
+	let hovered = $state<string | null>(null);
+	const neighbours = $derived.by(() => {
+		if (!hovered) return null;
+		const ids = new Set<string>([hovered]);
+		const edgeIds = new Set<string>();
+		for (const e of filtered.edges) {
+			if (e.source === hovered || e.target === hovered) {
+				ids.add(e.source);
+				ids.add(e.target);
+				edgeIds.add(e.id);
+			}
+		}
+		return { ids, edgeIds };
+	});
+
 	let nodes = $state.raw<AccessNodeType[]>([]);
 	let edges = $state.raw<Edge[]>([]);
 
 	$effect(() => {
-		const positioned = layout(filtered.nodes);
+		const positioned = layout(filtered.nodes, filtered.edges);
+		const near = neighbours;
 		nodes = positioned.map((n) => ({
 			id: n.id,
 			type: 'access' as const,
 			position: { x: n.x, y: n.y },
-			data: { fgaId: n.id, fgaType: n.fgaType, label: n.label, role: n.role, via: n.via },
+			data: {
+				fgaId: n.id,
+				fgaType: n.fgaType,
+				label: n.label,
+				// Hover DIMS the unrelated rather than brightening the related: the query's own
+				// highlight already owns "lit", and a second brightening would compete with it.
+				role: near && !near.ids.has(n.id) ? ('dim' as const) : n.role,
+				via: n.via,
+			},
 		}));
 		// Every edge gets an ARROWHEAD. A tuple is directional — `user:alice --owner--> table:x` — and an
 		// undirected line in an authorization graph is not a simplification, it is the wrong picture:
@@ -453,11 +484,55 @@
 				height: 18,
 				color: e.onPath ? 'var(--primary)' : 'var(--muted-foreground)',
 			},
-			style: e.onPath
-				? 'stroke: var(--primary); stroke-width: 2;'
-				: 'stroke: var(--muted-foreground); opacity: 0.35;',
+			style: hoverStyle(e, near),
 		}));
 	});
+
+	/** Edge chrome: the query's lit path wins, hover emphasises, everything else recedes. */
+	function hoverStyle(
+		e: { id: string; onPath: boolean },
+		near: { ids: Set<string>; edgeIds: Set<string> } | null,
+	): string {
+		const lit = e.onPath;
+		const touched = near?.edgeIds.has(e.id) ?? false;
+		if (near && !touched) return 'stroke: var(--muted-foreground); opacity: 0.08;';
+		if (touched) return 'stroke: var(--foreground); stroke-width: 2; opacity: 1;';
+		return lit
+			? 'stroke: var(--primary); stroke-width: 2;'
+			: 'stroke: var(--muted-foreground); opacity: 0.35;';
+	}
+
+	/** Is anything narrowing the view right now? Drives whether Clear is offered at all — an always-on
+	 *  reset next to Run reads as a second action rather than an escape hatch. */
+	const hasQuery = $derived(
+		answer !== null ||
+			verdict !== null ||
+			selected !== null ||
+			selectedTypes.size > 0 ||
+			selectedRelations.size > 0 ||
+			!!relation.trim() ||
+			!!object.trim(),
+	);
+
+	/** Reset EVERYTHING — query, answer, facets, selection — back to the whole graph at rest. */
+	function clearAll(): void {
+		kind = 'why';
+		user = me ? `user:${me.sub}` : '';
+		relation = '';
+		object = '';
+		objectType = 'table';
+		depth = 3;
+		seed = '';
+		selected = null;
+		selectedTypes = new Set();
+		selectedRelations = new Set();
+		answer = null;
+		verdict = null;
+		chain = [];
+		failure = null;
+		lastPushed = '';
+		void goto('?', { replaceState: true, keepFocus: true, noScroll: true });
+	}
 
 	function onNodeClick(event: { node: { id: string } }): void {
 		selected = event.node.id;
@@ -485,6 +560,15 @@
 	pushUrl({ run: '1' });
 }}
 	/>
+
+	{#if hasQuery}
+		<div class="flex items-center gap-2">
+			<Button size="sm" variant="ghost" onclick={clearAll}>
+				<RotateCcw size={12} /> Clear query
+			</Button>
+			<span class="text-xs text-muted-foreground">back to the whole graph</span>
+		</div>
+	{/if}
 
 	<!-- One-click entry points. The old tabbed view had registry chips and this one dropped them for a
 	     free-text box, which meant the only way in was to already know that a subject id is
@@ -565,7 +649,15 @@
 						Ask a question above to put the live graph on the canvas.
 					</div>
 				{:else}
-					<SvelteFlow bind:nodes bind:edges {nodeTypes} fitView onnodeclick={onNodeClick}>
+					<SvelteFlow
+						bind:nodes
+						bind:edges
+						{nodeTypes}
+						fitView
+						onnodeclick={onNodeClick}
+						onnodepointerenter={(e) => (hovered = e.node.id)}
+						onnodepointerleave={() => (hovered = null)}
+					>
 						<Background variant={BackgroundVariant.Dots} gap={16} />
 						<Controls />
 					</SvelteFlow>

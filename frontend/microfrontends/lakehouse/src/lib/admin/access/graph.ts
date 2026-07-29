@@ -7,6 +7,9 @@
 // DAG layerer, and a layout that is a pure function of the data is one that a test can assert on.
 
 import type { ExpandNode, Tuple } from '../access';
+// The zone's own layered placer — see `layout()` below for why this is reused rather than replaced
+// by a layout library.
+import { layout as placeLayered } from '$lib/lineage/layout';
 
 /** The three questions the query bar asks. Each is a different OpenFGA primitive, and they answer
  *  genuinely different things — which is why the bar offers all three rather than one "search". */
@@ -376,27 +379,36 @@ export function applyFacets(graph: BuiltGraph, facets: Facets): BuiltGraph {
 
 export type Positioned = GraphNode & { x: number; y: number };
 
-const COLUMN_WIDTH = 260;
-const ROW_HEIGHT = 78;
-
-/** Column-per-depth, rows within a column. Deterministic, so the same answer lays out the same way
- *  twice — a graph that reshuffles on refresh cannot be compared against the one before it. */
-export function layout(nodes: readonly GraphNode[]): Positioned[] {
-	const byDepth = new Map<number, GraphNode[]>();
-	for (const n of nodes) {
-		const bucket = byDepth.get(n.depth);
-		if (bucket) bucket.push(n);
-		else byDepth.set(n.depth, [n]);
-	}
-	const depths = [...byDepth.keys()].sort((a, b) => a - b);
-	const tallest = Math.max(1, ...[...byDepth.values()].map((b) => b.length));
-	const out: Positioned[] = [];
-	for (const [column, depth] of depths.entries()) {
-		const bucket = (byDepth.get(depth) ?? []).toSorted((a, b) => a.id.localeCompare(b.id));
-		const offset = ((tallest - bucket.length) * ROW_HEIGHT) / 2;
-		for (const [row, node] of bucket.entries()) {
-			out.push({ ...node, x: column * COLUMN_WIDTH, y: offset + row * ROW_HEIGHT });
-		}
-	}
-	return out;
+/**
+ * Place the graph, reusing the LINEAGE zone's layered placer.
+ *
+ * The first version here put each depth in a column and sorted rows alphabetically. That is layer
+ * ASSIGNMENT with no ordering phase, so nothing tried to put connected nodes near one another and the
+ * edges crossed arbitrarily — which is the whole of "the graph looks noisy". `$lib/lineage/layout`
+ * already solves exactly this, with the barycentre crossing-minimisation sweep that was missing, and
+ * it exists in this zone *because* dagre (1.1 MB) and elkjs (7.9 MB) do not fit its bundle budget.
+ * Adding one of those here would have re-litigated a decision this zone already made and documented.
+ *
+ * Depth stays OURS: the lineage placer derives depth from edge direction, which is right for a
+ * derivation DAG but wrong here — our depth is a semantic column (subjects left, containment spine,
+ * resources right) that survives a graph with no edges at all. So we hand it `depthOf` and let it own
+ * only the ordering.
+ */
+export function layout(
+	nodes: readonly GraphNode[],
+	edges: readonly GraphEdge[] = [],
+): Positioned[] {
+	if (nodes.length === 0) return [];
+	// The placer's depths must start at 0 — it indexes `layers[d]` directly, and ours run negative.
+	const minDepth = Math.min(...nodes.map((n) => n.depth));
+	const depthOf = new Map(nodes.map((n) => [n.id, n.depth - minDepth]));
+	const placed = placeLayered(
+		nodes.map((n) => n.id),
+		edges.map((e) => ({ source: e.source, target: e.target })),
+		(id) => depthOf.get(id) ?? 0,
+	);
+	return nodes.map((n) => {
+		const at = placed.get(n.id);
+		return { ...n, x: at?.x ?? 0, y: at?.y ?? 0 };
+	});
 }
