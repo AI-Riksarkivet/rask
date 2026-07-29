@@ -36,6 +36,11 @@ spec:
             - "controlplane:app"
             - "--host=0.0.0.0"
             - "--port={{ .Values.controlplane.port }}"
+            # The FOURTH template to be missed by dev.reload (after fleet-only, then services.yaml,
+            # then media.yaml). Found by tests/unit/test_dev_reload_contract.py rather than by
+            # anyone noticing — which is the point: a service without this looks identical, starts
+            # fine, and silently serves stale code after every Tilt sync.
+            {{- include "lance.devReloadArgs" (list . "controlplane") | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ .Values.controlplane.port }}

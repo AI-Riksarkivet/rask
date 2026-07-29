@@ -1,13 +1,16 @@
 # -*- mode: Python -*-
-# rask dev loop on k3s. One `tilt up` builds the app images, deploys the umbrella Helm chart
-# (every component — catalog, lineage, web, Dapr, NATS, Apache-AGE Postgres, OpenFGA, Dex, RustFS,
-# OpenBao), and HOT-RELOADS the FastAPI services on source change (Tilt syncs the file, uvicorn
-# --reload restarts the worker in ~1s instead of a full rebuild).
+# rask dev loop on k3s. `tilt up` builds the shared fleet image and HOT-RELOADS the FastAPI services
+# on source change: Tilt syncs the changed file into the running pod and uvicorn --reload restarts
+# the worker in ~1s, instead of a full image rebuild + re-import + rollout.
 #
-# Prereqs: `make k3s-up` (the cluster + release) and `make tilt-registry` (once).
-# Then: `make tilt-up`   (inspect with `make k9s`, or the Tilt UI at http://localhost:10350)
-
-load('ext://helm_resource', 'helm_resource', 'helm_repo')
+# It deploys the APP DEPLOYMENTS ONLY. The platform — Dapr, NATS, CloudNativePG/AGE, OpenFGA, Dex,
+# RustFS, OpenBao, KubeRay, every CRD and every helm hook — belongs to `make k3s-up`, which must
+# already have run. That split is deliberate and load-bearing; see the deploy block below for why
+# taking it over cost this Tiltfile its live_update for months.
+#
+# Prereqs: `make k3s-up` (cluster + platform) and `make tilt-registry` (once).
+# Then: `make tilt-up`      (inspect with `make k9s`, or the Tilt UI at http://localhost:10350)
+# PROVE it works: `make tilt-verify` — not optional, see the comment in that script.
 
 # Re-run the release when the CHART changes, not just the Tiltfile. helm_resource does not
 # watch its own chart directory, so editing a template or values.yaml left Tilt happily serving
@@ -31,11 +34,10 @@ allow_k8s_contexts(LOCAL_CONTEXTS + [c for c in [os.getenv('TILT_ALLOW_CONTEXT')
 # this pushes there so the cluster can actually pull what Tilt builds.
 default_registry('localhost:5000')
 
-# Subchart repos (helm_resource resolves dapr/nats/openfga from chart/charts/, vendored via
-# `helm dependency build ./chart` — these keep them refreshable).
-helm_repo('dapr-repo', 'https://dapr.github.io/helm-charts/', labels=['infra'])
-helm_repo('nats-repo', 'https://nats-io.github.io/k8s/helm/charts/', labels=['infra'])
-helm_repo('openfga-repo', 'https://openfga.github.io/helm-charts', labels=['infra'])
+# NOTE: the dapr/nats/openfga `helm_repo` resources were removed with `helm_resource` (2026-07-29).
+# They existed so that extension could resolve the SUBCHARTS. Tilt no longer deploys subcharts at all
+# — `make k3s-up` does — and rendering only `templates/*.yaml` reads the already-vendored
+# `chart/charts/`, so re-adding the repos here would just be three resources that do nothing.
 
 # Build the catalog/lineage image (shared) + the web image. `only=` keeps the build context tight so
 # unrelated edits don't trigger rebuilds; live_update syncs source for uvicorn --reload.
@@ -62,34 +64,94 @@ docker_build(
         sync('packages/lineage-kit/src/lineage_kit', SITE + '/lineage_kit'),
     ],
 )
-# Deploy the umbrella chart via real helm (post-install hooks + subchart CRDs honored — unlike Tilt's
-# bare helm() which only templates). Tilt injects the freshly built images into the chart's per-image
-# repository/tag values and side-loads them into kind.
-helm_resource(
-    'rask',
-    'chart',
-    # The P5 micro-frontend zones (frontend.enabled, default on) build from the parametrized
-    # frontend.dockerfile — NOT wired into Tilt's dev loop yet, so disable them here or `tilt ci` would wait
-    # on 5 never-built zone images. Tilt runs the BACKEND (catalog/lineage/…) for the dev loop; drive the
-    # zones with `make frontend-images && make frontend-load` + a `helm upgrade --set frontend.enabled=true`
-    # (see docs/DEPLOY.md). Zone-in-Tilt live_update is a follow-up.
-    # 300s was not enough for this chart and it failed in a way that COMPOUNDS: helm dies
-    # with "context deadline exceeded" mid-upgrade, the release is left in pending-upgrade,
-    # and every later `helm upgrade` — Tilt's or a human's — is refused until someone
-    # rolls back by hand. Observed twice (rev 3 failed, rev 5 stuck 22min). Matched to
-    # kind-deploy's 900s; k3s-up allows 20m.
-    flags=['--timeout=900s', '--set', 'frontend.enabled=false',
-           # Without this the synced files land in the pod and uvicorn never re-reads
-           # them — live_update looks like it works and changes nothing.
-           '--set', 'dev.reload=true'],
-    image_deps=['lance-rest-catalog'],
-    image_keys=[
-        ('image.catalog.repository', 'image.catalog.tag'),
-    ],
-    resource_deps=['dapr-repo', 'nats-repo', 'openfga-repo'],
-    labels=['rask'],
-)
+# ---- Deploy: ONLY the Python fleet, natively -------------------------------------------------
+#
+# This used `helm_resource` until 2026-07-29, and that was the reason live_update never worked once.
+# `helm_resource` shells out to `helm upgrade` behind `k8s_custom_deploy`, so **Tilt never owns the
+# Kubernetes objects** — which is exactly what `tilt get liveupdates` reported: the LiveUpdate object
+# existed with correct sync paths and discovered containers, every `lastFileTimeSynced` was `null`,
+# and `kubernetesapplys/rask` said `live-update: False`. Tilt knew what it would sync and had no
+# owned container to sync into. Nine config blockers were found and fixed against that setup and none
+# of them were the cause.
+#
+# The stated justification for `helm_resource` — "post-install hooks + subchart CRDs are honored,
+# unlike bare helm() which only templates" — does not survive checking:
+#
+#   * Hooks: THREE templates use them (kueue-queues, greptimedb-ttl-job, bootstrap-admin), all behind
+#     toggles that are off or irrelevant to the Python fleet loop.
+#   * CRDs: already applied. `make tilt-up` requires `make k3s-up` first, and THAT is the step that
+#     installs the umbrella chart, its subcharts, the operators and their CRDs.
+#
+# So Tilt was redundantly redeploying the entire platform — Dapr, CloudNativePG, KubeRay, RustFS,
+# OpenFGA — to iterate on a handful of FastAPI services, and doing too much is what cost it the one
+# feature it exists for. It also caused the documented two-owner landmine: Tilt and `k3s-up` both
+# claiming the `rask` release, where a hand-run `helm upgrade` silently evicts Tilt's injected image.
+#
+# Now: `k3s-up` owns the PLATFORM, Tilt owns the APP DEPLOYMENTS. Tilt applies them itself, so it can
+# associate the image it built with the container running it, which is the precondition for a sync.
+#
+# `helm()` (Tilt's builtin) cannot do `-s`, so this shells out to `helm template` and hands Tilt the
+# rendered objects. Ten of the eleven rendered Deployments run `lance-rest-catalog:dev` — the image
+# built above — so live_update covers catalog, lineage, the medallion movers, compaction and the
+# media trio. `rask-gateway` runs `gateway:dev`, which Tilt does not build, so it deploys but does
+# not hot-reload.
+FLEET_TEMPLATES = [
+    'templates/services.yaml',    # catalog, lineage
+    'templates/medallion.yaml',   # the producer + the three movers
+    'templates/media.yaml',       # viewer, search, annotator  (needs media.enabled)
+    'templates/compaction.yaml',  # compaction
+    'templates/fleet.yaml',       # gateway (own image — deployed, not hot-reloaded)
+]
 
-# kind has no host ports — port-forward manually once up (see chart NOTES / DEPLOY.md):
-#   kubectl port-forward svc/lance-ns-web 5173:3000
-#   kubectl port-forward svc/lance-ns-lineage 8000:8000
+k8s_yaml(local(
+    ['helm', 'template', 'rask', 'chart']
+    + [arg for t in FLEET_TEMPLATES for arg in ('-s', t)]
+    + [
+        # Without this the synced files land in the pod and uvicorn never re-reads them —
+        # live_update looks like it works and changes nothing.
+        '--set', 'dev.reload=true',
+        # The media trio defaults OFF in the chart, so the annotator/viewer/search had no pods at
+        # all under Tilt. They are the services most worth iterating on, so turn them on here.
+        '--set', 'media.enabled=true',
+        # The zones build from the parametrized frontend.dockerfile and are not wired into Tilt's
+        # loop — `make dev-frontends` (Vite HMR) is already sub-second and Tilt would be a downgrade.
+        '--set', 'frontend.enabled=false',
+    ],
+    quiet=True,
+    # `helm template` needs chart/charts/ vendored. `make k3s-up` depends on `k3s-deps`, which runs
+    # `helm dependency build`, and k3s-up is a prerequisite of tilt-up — so by the time this runs the
+    # dependencies are present. If they are not, helm fails loudly here rather than half-deploying.
+))
+
+# Group the fleet under one label in the UI, and give the hot-reloadable ones their own group so it
+# is obvious at a glance which resources a source edit actually moves.
+for name in ['rask-catalog', 'rask-lineage', 'rask-compaction',
+             'rask-viewer', 'rask-search', 'rask-annotator',
+             'rask-bronze-to-silver', 'rask-silver-to-gold', 'rask-media-to-silver',
+             'rask-lance-ray']:
+    k8s_resource(name, labels=['fleet'])
+
+k8s_resource('rask-gateway', labels=['fleet-no-reload'])
+
+# No host ports — port-forward manually once up (see chart NOTES / DEPLOY.md).
+#
+# These named `svc/lance-ns-web` and `svc/lance-ns-lineage` until 2026-07-29. NEITHER EXISTS: the
+# release is `rask`, so every service renders as `rask-*`, and `lance-ns-web` was ONE service where
+# there are now SEVEN zone services. Both commands failed with `services "lance-ns-web" not found`,
+# which reads as a broken cluster rather than a stale comment.
+#
+#   kubectl port-forward svc/rask-gateway 8888:8888   # /api/* — the one you usually want
+#   kubectl port-forward svc/rask-lineage 8000:8000
+#   kubectl port-forward svc/rask-catalog 2333:2333
+#
+# The zones are NOT deployed here (`frontend.enabled=false` above), so there is nothing to forward
+# for the UI and `/` on the ingress 404s under Tilt — use `make dev-frontends` (Vite HMR) instead.
+# With `--set frontend.enabled=true` each zone is its own service on :3000:
+#   kubectl port-forward svc/rask-web-home 5273:3000  # …-lakehouse | -media | -annotator |
+#                                                     # -compute | -studio | -train
+#
+# The media trio is gated behind `media.enabled` (chart default FALSE, and Tilt does not override
+# it), so rask-viewer/-search/-annotator have NO PODS unless you pass `--set media.enabled=true`:
+#   kubectl port-forward svc/rask-viewer    8101:8101
+#   kubectl port-forward svc/rask-search    8102:8102
+#   kubectl port-forward svc/rask-annotator 8103:8103
