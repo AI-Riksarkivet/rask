@@ -396,18 +396,83 @@
 	grant();
 }}
 		>
-			<Input
-				bind:value={gUser}
-				class="font-mono text-xs"
-				placeholder="subject — user:alice or team:eng#member"
-				aria-label="Grant subject"
-			/>
-			<Input
-				bind:value={gRelation}
-				class="font-mono text-xs"
-				placeholder="relation — reader"
-				aria-label="Grant relation"
-			/>
+			<div class="flex flex-col gap-1">
+				<div class="flex items-center justify-between gap-2">
+					<span class="text-xs font-medium">Subject</span>
+					{#if mySub}
+						<Button
+							size="sm"
+							variant="ghost"
+							type="button"
+							class="h-6 text-[11px]"
+							onclick={() => {
+	gUser = `user:${mySub}`;
+	preview = null;
+}}
+						>
+							use my identity
+						</Button>
+					{/if}
+				</div>
+				<Input
+					bind:value={gUser}
+					class="font-mono text-xs"
+					placeholder="user:&lt;oidc-sub&gt;"
+					aria-label="Grant subject"
+					oninput={() => {
+	preview = null;
+	previewFailed = false;
+}}
+				/>
+				<!-- The single most confusing thing about this store, stated rather than implied: a subject
+				     is TYPE-PREFIXED, and for a person it is the OIDC `sub`, not a username. Under Dex that
+				     is an opaque base64 blob, so `user:alice` is a valid-LOOKING id that matches nothing and
+				     denies — a correct answer that reads exactly like a bug. -->
+				<p class="text-[11px] text-muted-foreground">
+					<span class="font-mono">user:&lt;oidc-sub&gt;</span> — not a username. Or a userset:
+					<span class="font-mono">team:eng#member</span>,
+					<span class="font-mono">role:validators#assignee</span>.
+				</p>
+			</div>
+
+			<div class="flex flex-col gap-1">
+				<span class="text-xs font-medium">Relation</span>
+				{#if assignableRelations.length}
+					<!-- Driven by the MODEL, so an ungrantable relation is unrepresentable rather than merely
+					     discouraged. A derived `can_*` is computed and the catalog refuses to write it; a
+					     free-text box taught that rule via a 400 one round trip later. -->
+					<select
+						bind:value={gRelation}
+						class="rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs"
+						aria-label="Grant relation"
+						onchange={() => {
+	preview = null;
+	previewFailed = false;
+}}
+					>
+						<option value="" disabled>choose a relation…</option>
+						{#each assignableRelations as r (r)}
+							<option value={r}>{r}</option>
+						{/each}
+					</select>
+					<p class="text-[11px] text-muted-foreground">
+						Only directly-assignable relations on
+						<span class="font-mono">{selected?.split(':')[0]}</span>. A derived
+						<span class="font-mono">can_*</span> is computed by the model and cannot be granted.
+					</p>
+				{:else}
+					<Input
+						bind:value={gRelation}
+						class="font-mono text-xs"
+						placeholder="reader"
+						aria-label="Grant relation"
+						oninput={() => {
+	preview = null;
+	previewFailed = false;
+}}
+					/>
+				{/if}
+			</div>
 			<!-- ASSERT BEFORE YOU GRANT. Nothing is written: the store evaluates the tuple as a hypothesis
 			     and answers with the delta. Offered rather than forced, because a required round trip
 			     before every write turns a two-field dialog into a wizard. -->
