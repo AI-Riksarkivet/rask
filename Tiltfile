@@ -111,6 +111,18 @@ for zone in ZONES:
         # any member is absent, so this cannot be narrowed to one zone's directory.
         only=['.docker', 'frontend'],
         entrypoint=['bun', 'build/index.js'],
+        # NOT the default /tmp/.restart-proc. `docker_build_with_restart` bakes that file into the
+        # image and its entr-based wrapper stats it at startup — but the chart mounts an EMPTY
+        # emptyDir over /tmp (the writable scratch that makes readOnlyRootFilesystem feasible), which
+        # masks the image's /tmp entirely and takes the file with it. entr then exits immediately
+        # with "unable to stat '/tmp/.restart-proc'" and every zone CrashLoopBackOffs — which is
+        # exactly what happened to all seven on 2026-07-29 the moment they were enabled.
+        # /app/app — the symlinked app dir, which IS chowned to 10001. Not /tmp (the chart mounts an
+        # empty emptyDir over it, masking the baked-in file, so entr exits with "unable to stat" and
+        # every zone CrashLoopBackOffs — which is what happened to all seven on 2026-07-29), and not
+        # /app either: that directory is created by WORKDIR as root, so the `touch` the extension
+        # injects fails the BUILD with exit 1 as UID 10001.
+        restart_file='/app/app/.restart-proc',
         live_update=[
             sync('frontend/microfrontends/' + zone + '/src', '/app/app/src'),
             # Shared packages: an edit to @rask/ui or @rask/api must reach every zone that renders it,
@@ -159,6 +171,12 @@ FLEET_TEMPLATES = [
     'templates/fleet.yaml',       # gateway
     'templates/controlplane.yaml',
     'templates/frontends.yaml',   # the seven zones
+    # The INGRESS, and it is not optional once the zones are here. It was left to `k3s-up` at first,
+    # and that release had frontend.enabled=false — so the live ingress carried only `/api` and `/`,
+    # both to the gateway, and NO zone rules. Every zone pod was healthy and a browser still got 404
+    # on /lakehouse/, because nothing routed there. Whoever owns the zones must own the routes to
+    # them, or the two halves disagree and the symptom looks like a broken app.
+    'templates/ingress.yaml',
 ]
 
 k8s_yaml(local(
