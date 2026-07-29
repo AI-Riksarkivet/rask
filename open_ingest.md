@@ -104,3 +104,54 @@ produced no lineage edge is a bug, and the UI should make that visible rather th
 
 Neither is a prerequisite for I1–I4. Attach-a-bucket and a manual prefix→bronze sync are batch jobs on
 Ray; they need no streaming layer at all. Defer both until something concrete is blocked on them.
+
+---
+
+## The owner's ruling, 2026-07-29 — where ingest, ETL and query belong
+
+Stated directly, superseding the split sketched above:
+
+> *"iiif should not be part of the medallion. ingest should probably run by an ETL process and we
+> should [have] ETL as a thing in compute… and query in compute."*
+> *"each tier should have generic payload."*
+
+### R1 · The medallion is bronze→silver→gold and NOTHING else
+
+`services/medallion` currently carries the IIIF harvester — reaching out to an external image API,
+paging a volume, fetching bytes. That is an **acquisition** concern wearing the medallion's badge. The
+medallion owns the governed tiers: the schema of each, the transition between them, and the lineage
+those transitions emit. Where the bytes came from is not its business.
+
+Nine files hold IIIF today: `api/ingest_iiif.py`, `services/iiif_produce.py` (232 lines),
+`services/s3_harvest.py`, `services/ingest_trigger.py`, `producer.py`, `core/config.py`,
+`schemas/events.py`, `schemas/htr.py`, `services/ray_submit.py`.
+
+### R2 · Ingest is an ETL job, and ETL lives in `compute`
+
+`compute` is already the execution plane: it wraps the Ray Job SDK, submits, polls and proxies Serve.
+An ingest is a job — it has a queue, a status, retries and logs — so it belongs where jobs are, not
+beside the tier it happens to write. IIIF then becomes ONE source type among several (S3 prefix, an
+API, a local path), which is the shape the estate needs anyway and the shape a medallion-hosted
+harvester cannot grow into.
+
+`compute` gains: **ETL** (submit a transform/ingest job, watch it) and **query** (ask the lakehouse a
+question). Both are execution, both against Ray, both already have the client.
+
+### R3 · Every tier carries a GENERIC payload
+
+`schemas/htr.py` pins an HTR-shaped gold contract inside the medallion. That makes the cascade a
+transcription pipeline rather than a lakehouse: a second workload cannot use bronze→silver→gold
+without either bending its data into HTR's shape or forking the movers.
+
+A tier should carry `{id, payload, stage, lineage, source_uri}` and let the payload be opaque — the
+transform declares the shape, the tier does not. HTR's schema becomes one such declaration, owned by
+the HTR job, not by the medallion.
+
+### What this costs, honestly
+
+Three services change shape, plus the chart (`compute` grows a surface, medallion loses one), the
+gateway route table, and the tests pinning the current split. The IIIF page lane is currently the ONLY
+producer of `bronze$pages`, and the audit's M3 records that nothing consumes its trigger — so the move
+should be done WITH that gap in mind rather than preserving a lane that already goes nowhere.
+
+Not started. This is the ruling, not the implementation.
