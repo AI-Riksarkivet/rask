@@ -75,7 +75,10 @@ docker_build(
 # was written for this and is referenced by nothing — it also still `COPY components components`, a
 # directory deleted in the src-layout rewrite, so it cannot build. Left alone here; deleting it is a
 # separate call.)
-for svc in ['gateway', 'controlplane']:
+# compute joins these two: it ships its own image and the gateway invokes it for /api/ray + /api/serve.
+# It was absent because the chart never RENDERED it (fleet.yaml gated on a literal "gateway"), so Tilt
+# had no k8s object to attach an image to and silently built nothing.
+for svc in ['gateway', 'controlplane', 'compute']:
     docker_build(
         svc + ':dev', '.',
         dockerfile='.docker/' + svc + '.dockerfile',
@@ -169,6 +172,11 @@ FLEET_TEMPLATES = [
     'templates/media.yaml',       # viewer, search, annotator  (needs media.enabled)
     'templates/compaction.yaml',  # compaction
     'templates/fleet.yaml',       # gateway
+    # The fleet CONFIGMAP, for the same reason the ingress and dex are here: this list renders the
+    # services, and their configuration is not optional to them. Without it RAY_DASHBOARD_URL,
+    # RASK_*_URL and the gateway's route targets come from whatever `make k3s-up` last applied, so
+    # Tilt can deploy compute pointing at a Ray that moved. Whoever owns the pods owns their config.
+    'templates/configmap.yaml',
     'templates/controlplane.yaml',
     'templates/frontends.yaml',   # the seven zones
     # The INGRESS, and it is not optional once the zones are here. It was left to `k3s-up` at first,
@@ -187,6 +195,18 @@ FLEET_TEMPLATES = [
     #
     # Whoever turns auth ON must own the IdP that auth depends on.
     'templates/dex.yaml',
+    # The WHOLE Dapr plane. Tilt sets auth.enabled, media.enabled and storage.stores, and every one
+    # of those is expressed in a Dapr CR — components (pubsub/state/secrets), their SCOPES, the
+    # resiliency policy and the sidecar-injection sweep. Rendering the pods without them left Helm
+    # owning the config at ITS values, and the two disagreed silently three separate times in one
+    # day: dex.issuer stayed in-cluster so login died on an unresolvable host; the resiliency CR
+    # still believed media was off, so four invoked app-ids had no timeout/retry/breaker; and
+    # lance-secrets was unscoped for viewer/search, so the object browser 500'd on the first
+    # external store. Whoever renders the pods renders what configures them.
+    'templates/dapr-component.yaml',
+    'templates/dapr-statestore.yaml',
+    'templates/dapr-resiliency.yaml',
+    'templates/dapr-app-token.yaml',
 ]
 
 # The origin the BROWSER uses to reach this cluster. Default assumes the documented SSH tunnel

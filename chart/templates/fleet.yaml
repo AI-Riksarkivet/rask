@@ -110,7 +110,9 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 20
           resources:
-            {{- toYaml $root.Values.resources.fleet | nindent 12 }}
+            {{- /* A service may name its OWN tier (resources.<name>); otherwise the shared fleet one.
+                 compute needs it — see the values comment: the Ray SDK does not fit in 512Mi. */}}
+            {{- toYaml (index $root.Values.resources $name | default $root.Values.resources.fleet) | nindent 12 }}
 ---
 apiVersion: v1
 kind: Service

@@ -214,6 +214,14 @@ resources:
   fleet:
     requests: {cpu: "50m", memory: "128Mi"}
     limits: {cpu: "1", memory: "512Mi"}
+  # `compute` is the ONE fleet service that imports the Ray Job SDK (`ray.job_submission`), which pulls
+  # the whole Ray client library into the process — its siblings are thin FastAPI proxies. On the shared
+  # 512Mi fleet tier it served requests normally and was then OOMKilled (exit 137, measured 2026-07-29,
+  # 4 restarts in 7 minutes), so the symptom was not a crash but a service that answered and vanished:
+  # /api/ray/health succeeded while every heavier route hit a Dapr circuit breaker that kept re-opening.
+  compute:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { cpu: "1", memory: 1536Mi }
   # lance-ns default tier — every app container that doesn't name its own key (lance.resources helper).
   default:
     requests: { cpu: 50m, memory: 128Mi }
