@@ -1,6 +1,48 @@
 # open_fga — an in-estate OpenFGA playground
 
-Asked for on 2026-07-29. **Not started.** Written down so a separate session can take it whole.
+Asked for on 2026-07-29. **F1–F3 shipped; F4 half-shipped.** Kept rather than deleted because the
+remaining half is real work and the findings below cost a day to learn.
+
+| goal | state |
+| --- | --- |
+| F1 read the live graph | **done** — the whole tuple store on one canvas, layered and crossing-minimised |
+| F2 spotlight a subject/object | **done** — what-can (ListObjects) / who-can (ListUsers) / why (Check+Expand), derivation lit hop by hop |
+| F3 edit tuples | **done** — grant + revoke, blast radius measured before the write |
+| F4 assertions | **half** — `fga.check(contextual_tuples=…)` exists; no `/v1/access/simulate`, no `.fga.yaml` export |
+
+## What the build actually taught us
+
+- **A subject is the OIDC `sub`, not a username.** Under Dex that is a base64 protobuf
+  (`CiQwOGE4Njg0Yi1kYjg4…`). Typing `user:alice` yields a CORRECT denial that reads exactly like a
+  bug, and it is the single most confusing thing about the store. The UI seeds the field from
+  `/v1/me` and offers a "me" chip; anything new touching subjects must do the same.
+- **Expand answers QUALIFIED usersets.** `computed.userset` is `"table:x#reader"`, not `"reader"`.
+  Passing it back as a relation is a malformed request → OpenFGA 500 → a fail-closed 503, so every
+  relation resolving through a rung reported "derivation unavailable".
+- **A fresh store holds three tuples.** `bootstrap-admin.yaml` grants a first owner; nothing seeds an
+  estate. `scripts/fga_seed_demo.py` loads `model.fga.yaml`'s 27 fixtures so the graph has something
+  to show, remapping alice/bob to their real Dex subs.
+- **"Who granted this" is NOT answerable today**, and the gap is coverage, not plumbing. Audit rows
+  reach GreptimeDB and the lakehouse already has a SQL BFF over them, but only **2 of 6** tuple-write
+  sites emit a tuple-level row — `grant_on_create` (every table/namespace create) does not. A
+  provenance UI built before that is fixed would render blanks for most tuples. The fix is to move
+  `audit()` inside `fga.write_tuples`/`delete_tuples` with a **required** `actor`, so a new write site
+  cannot compile without naming a principal. Note also the 14d GreptimeDB TTL.
+- **OpenFGA's changelog carries no actor.** A `TupleChange` is `{tuple_key, operation, timestamp}`.
+  `fga.read_changes()` exposes it and deliberately returns five fields — an `actor` key, even null,
+  would invite a UI to render a timestamp as attribution.
+- **`read_changes` pagination has a trap**: OpenFGA returns the same non-empty continuation token
+  forever at end-of-stream, so `while token:` never terminates. Stop on an empty page.
+
+## Still to do
+
+1. `POST /v1/access/simulate` — assert-before-grant in the UI. Cap contextual tuples at 10; return
+   `baseline` alongside `allowed`, because the DELTA is the answer, not the verdict.
+2. F4's export half — emit a checked assertion as `.fga.yaml` so a finding becomes a CI gate.
+3. The audit `actor` fix above, before any provenance UI.
+4. `governance/+layout.server.ts` collapses 401 and 403 into one message that asserts you lack a
+   privilege — when you may simply have no session. It cost real debugging time.
+5. Decide `observability.retention` (14d today) if provenance is meant to be compliance-grade.
 
 The goal in the owner's words: a view *like the OpenFGA playground* — visualise the tuple graph so a
 human can see how authorization actually resolves today, spotlight one user or one object, edit
