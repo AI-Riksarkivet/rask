@@ -79,7 +79,15 @@ zones additionally get the media plane's upstreams, scoped per zone.
        `---` below on its own line. Right-trimming it welds the previous zone's Service onto
        this Deployment's separator (`component: web-home---`), silently merging two objects
        into one document. */ -}}
-{{- $sc := merge (deepCopy ($fe.securityContext | default dict)) (dict "runAsNonRoot" true "readOnlyRootFilesystem" $root.Values.security.readOnlyRootFilesystem "seccompProfile" (dict "type" "RuntimeDefault")) }}
+{{- /* dev.reload implies Tilt's live_update, which SYNCS FILES INTO THE RUNNING CONTAINER — impossible
+       against a read-only rootfs. The Python side has branched on this since `lance.securityContext`
+       gained it; the zones never did, so a zone sync would have silently no-opped with "Read-only file
+       system" however correct the Tilt config was. FIFTH template found missing the dev.reload branch
+       (fleet-only → services.yaml → media.yaml → controlplane.yaml → here).
+       ternary(trueVal, falseVal, cond): dev.reload ⇒ writable; otherwise the hardened default is
+       untouched, so production manifests stay byte-identical and the invariant tests still see it true. */ -}}
+{{- $ro := ternary false $root.Values.security.readOnlyRootFilesystem $root.Values.dev.reload -}}
+{{- $sc := merge (deepCopy ($fe.securityContext | default dict)) (dict "runAsNonRoot" true "readOnlyRootFilesystem" $ro "seccompProfile" (dict "type" "RuntimeDefault")) }}
 ---
 apiVersion: apps/v1
 kind: Deployment
