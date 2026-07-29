@@ -38,6 +38,11 @@ Dockerfile
 dist
 build
 **/.svelte-kit
+# Turborepo's per-package task cache. NOT excluded until 2026-07-29, and it is rewritten by every
+# `turbo run` — so the frontend build context changed after any local lint/check/test, invalidating the
+# Docker cache for all seven zone images and making every `tilt up` a full rebuild from scratch. 18
+# directories, none of them wanted in an image.
+**/.turbo
 storybook-static
 test-results
 
