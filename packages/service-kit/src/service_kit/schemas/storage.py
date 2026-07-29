@@ -66,8 +66,7 @@ class Store(BaseModel):
     secret: str | None = Field(
         default=None,
         description=(
-            "Key in the Dapr secret store holding this store's credentials as "
-            "`{access_key, secret_key}`. None = the deployment's own env credentials."
+            "Key in the Dapr secret store holding this store's credentials as `{access_key, secret_key}`. None = the deployment's own env credentials."
         ),
     )
     description: str = Field(default="", description="What a reader should expect to find here.")

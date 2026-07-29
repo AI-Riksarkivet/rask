@@ -66,6 +66,273 @@
         "title": "AccessCheckResult",
         "type": "object"
       },
+      "AccessExpandDifference": {
+        "description": "``base but not subtract`` \u2014 the exclusion operator, the one shape a tuple table cannot show.",
+        "properties": {
+          "base": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessExpandNode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "subtract": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessExpandNode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "AccessExpandDifference",
+        "type": "object"
+      },
+      "AccessExpandLeaf": {
+        "description": "A terminal of the userset tree \u2014 exactly one of the three is populated. ``users`` are literal\nsubjects, ``computed`` a same-object rung (``owner`` implying ``writer``), ``tuple_to_userset`` the\nhop to a parent object.",
+        "properties": {
+          "computed": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed"
+          },
+          "continues": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Continues"
+          },
+          "expanded": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AccessExpandNode"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expanded"
+          },
+          "tuple_to_userset": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessExpandTupleToUserset"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "users": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Users"
+          }
+        },
+        "title": "AccessExpandLeaf",
+        "type": "object"
+      },
+      "AccessExpandNode": {
+        "description": "One node of the OpenFGA userset tree, keeping the model's own vocabulary. Flattening ``union`` /\n``intersection`` / ``difference`` away would discard precisely the operator that explains a\nsurprising grant, so the shape is preserved verbatim. ``truncated`` marks a depth-capped branch.",
+        "properties": {
+          "cycle": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cycle"
+          },
+          "difference": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessExpandDifference"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "intersection": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AccessExpandNode"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intersection"
+          },
+          "leaf": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessExpandLeaf"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "truncated": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Truncated"
+          },
+          "union": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AccessExpandNode"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Union"
+          }
+        },
+        "title": "AccessExpandNode",
+        "type": "object"
+      },
+      "AccessExpandRequest": {
+        "description": "\"Why does this resolve?\" \u2014 the userset tree for ``relation`` on ``object``.\n\n``depth`` counts hops: 1 is a plain OpenFGA Expand (one level, the faithful primitive), higher\nfollows ``computed`` rungs and ``X from Y`` edges through the cascade. Clamped server-side.",
+        "properties": {
+          "depth": {
+            "default": 1,
+            "maximum": 6.0,
+            "minimum": 1.0,
+            "title": "Depth",
+            "type": "integer"
+          },
+          "object": {
+            "title": "Object",
+            "type": "string"
+          },
+          "relation": {
+            "title": "Relation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "object",
+          "relation"
+        ],
+        "title": "AccessExpandRequest",
+        "type": "object"
+      },
+      "AccessExpandResponse": {
+        "description": "The derivation of ``relation`` on ``object``: HOW the grant is composed, not whether it holds.\n\n``tree`` is empty when the relation resolves to nothing on this object \u2014 an empty tree and an\nunavailable store are different answers, and the latter is a 503, never an empty tree.",
+        "properties": {
+          "depth": {
+            "title": "Depth",
+            "type": "integer"
+          },
+          "object": {
+            "title": "Object",
+            "type": "string"
+          },
+          "relation": {
+            "title": "Relation",
+            "type": "string"
+          },
+          "tree": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessExpandNode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "object",
+          "relation",
+          "depth"
+        ],
+        "title": "AccessExpandResponse",
+        "type": "object"
+      },
+      "AccessExpandTupleToUserset": {
+        "description": "A ``X from Y`` edge: ``tupleset`` is the relation walked (e.g. ``namespace:db1#parent``) and\n``computed`` the relations read on whatever it points at.",
+        "properties": {
+          "computed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Computed",
+            "type": "array"
+          },
+          "tupleset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tupleset"
+          }
+        },
+        "title": "AccessExpandTupleToUserset",
+        "type": "object"
+      },
       "AccessGrantRequest": {
         "description": "Grant or revoke ONE base rung to a subject. ``user`` may be a bare id (``alice`` \u2192 ``user:alice``)\nor a fully-qualified userset (``role:project_admin#assignee``, ``team:acme#member``); ``relation`` must\nbe a grantable base rung the compiled model defines on the type (owner/writer/reader/validator) \u2014 never\na derived ``can_*`` action nor the structural ``parent`` edge.",
         "properties": {
@@ -142,6 +409,62 @@
         "title": "AccessGraphResponse",
         "type": "object"
       },
+      "AccessListObjectsRequest": {
+        "description": "\"What can this subject reach?\" \u2014 every object of ``type`` on which ``user`` holds ``relation``.\n``user`` may be a bare id (``alice`` \u2192 ``user:alice``) or a full subject/userset, as everywhere else.",
+        "properties": {
+          "relation": {
+            "title": "Relation",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          },
+          "user": {
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user",
+          "relation",
+          "type"
+        ],
+        "title": "AccessListObjectsRequest",
+        "type": "object"
+      },
+      "AccessListObjectsResponse": {
+        "description": "The objects the subject reaches, plus the RESOLVED query that produced them \u2014 echoed for the same\nreason ``AccessCheckResult.checked`` is: a result read against a different subject than OpenFGA saw\nis worse than no result.",
+        "properties": {
+          "objects": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Objects",
+            "type": "array"
+          },
+          "relation": {
+            "title": "Relation",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          },
+          "user": {
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "objects",
+          "user",
+          "relation",
+          "type"
+        ],
+        "title": "AccessListObjectsResponse",
+        "type": "object"
+      },
       "AccessListResponse": {
         "properties": {
           "grants": {
@@ -161,6 +484,89 @@
           "grants"
         ],
         "title": "AccessListResponse",
+        "type": "object"
+      },
+      "AccessListUsersRequest": {
+        "description": "\"Who can do this?\" \u2014 every subject holding ``relation`` on ``object``. The inverse of\n:class:`AccessListObjectsRequest`, and the blast-radius primitive before a revoke.\n\n``user_type`` (+ ``user_relation``) picks WHICH subject kind to enumerate; OpenFGA takes exactly one\nfilter per call, so ``role``/``assignee`` is a different question from ``user``, not a superset.",
+        "properties": {
+          "object": {
+            "title": "Object",
+            "type": "string"
+          },
+          "relation": {
+            "title": "Relation",
+            "type": "string"
+          },
+          "user_relation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Relation"
+          },
+          "user_type": {
+            "default": "user",
+            "title": "User Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "object",
+          "relation"
+        ],
+        "title": "AccessListUsersRequest",
+        "type": "object"
+      },
+      "AccessListUsersResponse": {
+        "description": "The effective subject set (ListUsers EXPANDS the model \u2014 role assignees, team members and the\nparent cascade are included, so this is effective access, not stored tuples). ``\"*\"`` is a public\nwildcard. ``truncated`` flags the server's silent ``listUsersMaxResults`` ceiling: an under-reported\naccess review must never read as a complete one.",
+        "properties": {
+          "object": {
+            "title": "Object",
+            "type": "string"
+          },
+          "relation": {
+            "title": "Relation",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "user_relation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Relation"
+          },
+          "user_type": {
+            "title": "User Type",
+            "type": "string"
+          },
+          "users": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Users",
+            "type": "array"
+          }
+        },
+        "required": [
+          "users",
+          "object",
+          "relation",
+          "user_type",
+          "truncated"
+        ],
+        "title": "AccessListUsersResponse",
         "type": "object"
       },
       "AccessModelResponse": {
@@ -4722,6 +5128,21 @@
         "title": "DockGrid",
         "type": "object"
       },
+      "DockLayoutLibrary": {
+        "additionalProperties": false,
+        "description": "Every NAMED dock view one subject has saved, keyed by workbench id.\n\nDeliberately a SEPARATE user-state document from :class:`DockLayouts`, never a key inside it \u2014 see\n:attr:`service_kit.governed.user_state.UserStateDocument.DOCK_LAYOUT_LIBRARY` for the three\nreasons. The consequence worth restating: the implicit autosave in :class:`DockLayouts` is\nuntouched by this model, byte for byte, so the live-arrangement path \u2014 the one whose failure\ndestroys a user's workspace \u2014 keeps working exactly as it did.",
+        "properties": {
+          "workbenches": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DockWorkbenchViews"
+            },
+            "title": "Workbenches",
+            "type": "object"
+          }
+        },
+        "title": "DockLayoutLibrary",
+        "type": "object"
+      },
       "DockLayouts": {
         "additionalProperties": false,
         "description": "Every workbench layout one subject has arranged.\n\n``extra=\"forbid\"`` here, unlike the models above: this envelope is OURS, not dockview's, so an\nunexpected top-level key is a client bug worth a 422 rather than a forward-compatibility case.",
@@ -4735,6 +5156,57 @@
           }
         },
         "title": "DockLayouts",
+        "type": "object"
+      },
+      "DockView": {
+        "additionalProperties": false,
+        "description": "One NAMED layout \u2014 a \"view\" the user saved deliberately, as opposed to the implicit draft.\n\n``extra=\"forbid\"``: this envelope is ours. The interior ``layout`` is where dockview's own\nforward-compatibility lives, since :class:`SerializedDock` is ``extra=\"allow\"``.",
+        "properties": {
+          "id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "layout": {
+            "$ref": "#/components/schemas/SerializedDock"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "updated": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Updated",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "layout",
+          "updated"
+        ],
+        "title": "DockView",
+        "type": "object"
+      },
+      "DockWorkbenchViews": {
+        "additionalProperties": false,
+        "description": "One workbench's library. A LIST, not a map \u2014 order is user-visible in the sidebar.",
+        "properties": {
+          "views": {
+            "items": {
+              "$ref": "#/components/schemas/DockView"
+            },
+            "maxItems": 50,
+            "title": "Views",
+            "type": "array"
+          }
+        },
+        "title": "DockWorkbenchViews",
         "type": "object"
       },
       "DropNamespaceRequest": {
@@ -8247,7 +8719,7 @@
         "description": "One registered object store.",
         "properties": {
           "bucket": {
-            "description": "The bucket backing it on the configured S3 endpoint.",
+            "description": "The bucket backing this store on `endpoint`.",
             "title": "Bucket",
             "type": "string"
           },
@@ -8256,6 +8728,24 @@
             "description": "What a reader should expect to find here.",
             "title": "Description",
             "type": "string"
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "S3 endpoint this bucket lives on. `None` means the deployment's configured default (RASK_S3_ENDPOINT_URL) \u2014 which is what every governed tier uses.",
+            "title": "Endpoint"
+          },
+          "insecure": {
+            "default": false,
+            "description": "Skip TLS verification for this endpoint. Needed for internal hosts with private CAs.",
+            "title": "Insecure",
+            "type": "boolean"
           },
           "name": {
             "description": "Stable identifier used by the object browser and the API.",
@@ -8271,6 +8761,18 @@
           "role": {
             "$ref": "#/components/schemas/StorageRole",
             "description": "Where this store sits in the cascade."
+          },
+          "secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Key in the Dapr secret store holding this store's credentials as `{access_key, secret_key}`. None = the deployment's own env credentials.",
+            "title": "Secret"
           }
         },
         "required": [
@@ -8963,10 +9465,56 @@
         "enum": [
           "workflow-graph",
           "saved-views",
-          "dock-layout"
+          "dock-layout",
+          "dock-layout-library",
+          "attached-stores"
         ],
         "title": "UserStateDocument",
         "type": "string"
+      },
+      "UserStateEnvelope_DockLayoutLibrary_": {
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/UserStateDocument"
+          },
+          "exists": {
+            "title": "Exists",
+            "type": "boolean"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DockLayoutLibrary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "subject",
+          "document",
+          "exists"
+        ],
+        "title": "UserStateEnvelope[DockLayoutLibrary]",
+        "type": "object"
       },
       "UserStateEnvelope_DockLayouts_": {
         "properties": {
@@ -9649,6 +10197,147 @@
           }
         ],
         "summary": "Check Access",
+        "tags": [
+          "access"
+        ]
+      }
+    },
+    "/v1/access/expand": {
+      "post": {
+        "description": "WHY a relation resolves \u2014 the userset tree, optionally followed through the cascade.\n\nCheck answers yes/no and list-users answers who; neither says through WHICH rung or WHICH parent hop,\nso a permission derived over three objects is indistinguishable from a direct grant \u2014 and they have\nvery different blast radii. This returns the derivation itself, keeping OpenFGA's own operators\n(``union`` / ``intersection`` / ``difference``) rather than flattening them away: the operator is\nfrequently the whole explanation for a surprising grant.\n\n``depth`` is server-side on purpose. Walking the chain client-side costs one estate-gated, audited\nround trip per hop under the browser client's fixed timeout; here it is one gate, one audit row, and\none response.",
+        "operationId": "expand_access_v1_access_expand_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessExpandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessExpandResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Expand Access",
+        "tags": [
+          "access"
+        ]
+      }
+    },
+    "/v1/access/list-objects": {
+      "post": {
+        "description": "\"What can this subject reach?\" \u2014 every ``type`` object on which ``user`` holds ``relation``.\n\nThe forward half of the explorer, and the answer ``GET /tuples`` structurally cannot give: Read needs\nan object type per call and returns only STORED tuples, so enumerating a subject meant one audited\nread per model type and still missed everything derived. ListObjects expands the model, so a table\nreached through team \u2192 project \u2192 warehouse \u2192 namespace shows up here and nowhere else.\n\nThe subject may be a userset (``team:eng#member``, ``role:validators#assignee``), which matters\nbecause this model deliberately refuses ``team#member`` on resource rungs \u2014 a team reaches data\nthrough a role, and only the userset question shows that.",
+        "operationId": "list_access_objects_v1_access_list_objects_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessListObjectsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessListObjectsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Access Objects",
+        "tags": [
+          "access"
+        ]
+      }
+    },
+    "/v1/access/list-users": {
+      "post": {
+        "description": "\"Who can do this?\" \u2014 every subject holding ``relation`` on ``object``, effective access included.\n\nThe inverse of list-objects and the primitive a revoke needs BEFORE it writes: a tuple sitting high in\nthe hierarchy can revoke access for many principals at once, and \"are you sure?\" is not an answer to\n\"how many\". Subjects come back fully qualified so a userset is never mistaken for a user.",
+        "operationId": "list_access_users_v1_access_list_users_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessListUsersRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessListUsersResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Access Users",
         "tags": [
           "access"
         ]
@@ -11348,6 +12037,52 @@
           }
         ],
         "summary": "Every registered object store",
+        "tags": [
+          "stores"
+        ]
+      },
+      "post": {
+        "description": "Attach a bucket so it can be BROWSED. Registers only \u2014 reads nothing, ingests nothing.\n\nEstate-admin gated on ``can_observe_events`` against the root object: attaching names a host and a\nbucket the whole estate will then see, which is estate-wide disclosure and so takes the estate-wide\nprivilege \u2014 the same gate ``/v1/projects`` and ``/v1/events`` use.\n\nNames are unique across BOTH sources, and a declared store cannot be shadowed. The object browser\nresolves a store by NAME, so a duplicate would make which bucket you get depend on list order \u2014 the\nfailure would look like the wrong data rather than a bad registration.\n\nAttached stores are forced ``read_only``. A bucket someone attached to LOOK at is not a bucket the\ncascade may write to, and nothing here can know whether the caller's credentials should carry write\nauthority on another host.",
+        "operationId": "attach_store_v1_stores_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Store",
+                "description": "The store to attach; `endpoint` may name another host."
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreRegistry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Attach an object store for browsing",
         "tags": [
           "stores"
         ]
@@ -15779,6 +16514,96 @@
           }
         ],
         "summary": "Put Dock Layout",
+        "tags": [
+          "user-state"
+        ]
+      }
+    },
+    "/v1/user-state/dock-layout-library": {
+      "delete": {
+        "description": "Discard the caller's saved views \u2014 the escape hatch from an unreadable library.",
+        "operationId": "delete_dock_layout_library_v1_user_state_dock_layout_library_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Dock Layout Library",
+        "tags": [
+          "user-state"
+        ]
+      },
+      "get": {
+        "description": "The caller's saved views, or ``exists: false`` if they have never saved one.",
+        "operationId": "get_dock_layout_library_v1_user_state_dock_layout_library_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserStateEnvelope_DockLayoutLibrary_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Dock Layout Library",
+        "tags": [
+          "user-state"
+        ]
+      },
+      "put": {
+        "description": "Replace the caller's saved views wholesale \u2014 the client owns which views it keeps.",
+        "operationId": "put_dock_layout_library_v1_user_state_dock_layout_library_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DockLayoutLibrary"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserStateEnvelope_DockLayoutLibrary_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Dock Layout Library",
         "tags": [
           "user-state"
         ]

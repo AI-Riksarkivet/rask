@@ -21,6 +21,10 @@
 			"types": "./src/dock-layout.ts",
 			"default": "./src/dock-layout.ts"
 		},
+		"./dock-views": {
+			"types": "./src/dock-views.ts",
+			"default": "./src/dock-views.ts"
+		},
 		"./generated/catalog": {
 			"types": "./src/generated/catalog.ts",
 			"default": "./src/generated/catalog.ts"
