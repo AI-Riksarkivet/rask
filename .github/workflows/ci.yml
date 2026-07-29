@@ -53,13 +53,13 @@ jobs:
           DAGGER_NO_NAG: "1"
         run: dagger call test
 
-      # The postgres proof the pure-sqlite pytest leg cannot give: alembic upgrade head from zero
-      # against a real postgres:16 service, then the core suite with DATABASE_URL pointing at it
-      # (.dagger/test.go TestPg — supersedes migrate-up, which it runs as its first step).
-      - name: Postgres migrations + core suite against pg (Dagger)
-        env:
-          DAGGER_NO_NAG: "1"
-        run: dagger call test-pg
+      # NO postgres/alembic step here by design. One stood here calling `dagger call test-pg` to run
+      # "alembic upgrade head from zero against a real postgres:16, then the core suite with
+      # DATABASE_URL" — but P7a deleted that whole plane (no app DB, no Alembic, no fleet
+      # DATABASE_URL; see CLAUDE.md), and the dagger module has no TestPg function to call. It could
+      # only ever fail, and it did: it is what turned this job red and, via `needs: test`, skipped
+      # lineage-e2e / e2e-stack / ray-e2e without them ever running. The surviving relational stores
+      # (lineage AGE, OpenFGA) are proved by the lineage-e2e and e2e-stack jobs below.
 
       # Chart gates — helm lint + a full template render, the networkPolicy / security-hardening / Dapr-
       # resiliency `--set` render-and-grep invariants, the prod-overlay HA/security render check, and the

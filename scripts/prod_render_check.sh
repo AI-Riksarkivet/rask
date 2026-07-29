@@ -8,6 +8,16 @@
 set -euo pipefail
 
 CHART="${CHART:-chart}"
+
+# values-prod sets auth.enabled AND frontend.oidc.enabled — a governed backend with a UI that can sign
+# in — so templates/{auth-consistency,frontends}.yaml demand the three OIDC values on EVERY render here.
+# One array, used by all four helm calls below: adding a fifth without them would fail the whole script
+# at that line with no message (set -e + command substitution), which is how this reached CI red.
+# Dummies on purpose: they satisfy the fail-closed guards and thereby also prove the guards do not block
+# a legitimate prod render — the same reason the appToken/age/rustfs dummies exist.
+OIDC=(--set frontend.oidc.sessionSecret=ci-dummy-session-secret-at-least-32-chars
+      --set frontend.oidc.publicIssuer=https://auth.example.com/dex
+      --set frontend.oidc.publicOrigin=https://lance.example.com)
 OUT="$(mktemp)"
 trap 'rm -f "$OUT"' EXIT
 
@@ -16,7 +26,7 @@ helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
   --set dapr.appToken=ci-dummy-token-0000000000 \
   --set age.password=ci-dummy-pw --set rustfs.secretKey=ci-dummy-key \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass \
-  --set ingress.host=lance.example.com > "$OUT"
+  --set ingress.host=lance.example.com "${OIDC[@]}" > "$OUT"
 
 fail() { echo "!! prod-render-check: $*" >&2; exit 1; }
 
@@ -143,7 +153,7 @@ atomic=$(helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
   --set age.password=ci-dummy-pw --set rustfs.secretKey=ci-dummy-key \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
   --set rustfs.enabled=false --set rustfs.externalEndpoint="$EXT_S3" \
-  --set greptimedb-standalone.objectStorage.s3.endpoint="$EXT_S3" 2>/dev/null)
+  --set greptimedb-standalone.objectStorage.s3.endpoint="$EXT_S3" "${OIDC[@]}" 2>/dev/null)
 grep -q "rask-rustfs-io" <<<"$atomic" \
   && fail "externalizing RustFS + the greptime endpoint companion still leaks in-cluster rustfs DNS"
 # Negative: rustfs externalized but the greptime companion OMITTED must still show the leak (proves the pairing
@@ -152,7 +162,7 @@ leak=$(helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 --set dapr.appToken=ci-dummy-token-0000000000 \
   --set age.password=ci-dummy-pw --set rustfs.secretKey=ci-dummy-key \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
-  --set rustfs.enabled=false --set rustfs.externalEndpoint="$EXT_S3" 2>/dev/null)
+  --set rustfs.enabled=false --set rustfs.externalEndpoint="$EXT_S3" "${OIDC[@]}" 2>/dev/null)
 grep -q "rask-rustfs-io" <<<"$leak" \
   || fail "the rustfs-externalize coherence guard is vacuous (expected the greptime leak without the companion override)"
 
@@ -162,7 +172,7 @@ grep -q "rask-rustfs-io" <<<"$leak" \
 eso=$(helm template rask "$CHART" -f "$CHART/values-prod.yaml" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 --set dapr.appToken=ci-dummy-token-0000000000 \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
-  --set externalSecrets.enabled=true 2>/dev/null) \
+  --set externalSecrets.enabled=true "${OIDC[@]}" 2>/dev/null) \
   || fail "prod render with externalSecrets.enabled=true FAILED (age.password/rustfs.secretKey should not be required)"
 grep -q "kind: SecretStore" <<<"$eso" || fail "ESO path must render a SecretStore"
 grep -q "kind: ExternalSecret" <<<"$eso" || fail "ESO path must render the ExternalSecret CRs"

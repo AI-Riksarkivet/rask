@@ -1,4 +1,4 @@
-.PHONY: help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap tilt-registry tilt-up tilt-verify tilt-down e2e
+.PHONY: help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap tilt-registry tilt-up tilt-verify tilt-down e2e frontend-images prod-render-check alert-rules-check
 
 help:
 	@echo "Targets:"
@@ -82,6 +82,47 @@ openapi-check: openapi
 	  || { echo "!! OpenAPI drift: a route changed without refreshing the spec. Commit the diff above."; exit 1; }
 	@echo "OpenAPI specs match the committed contract"
 
+# ---- zone images -----------------------------------------------------------
+# `make frontend-images` == the ci.yml "Build all four zone images" step, byte-for-byte — the same
+# contract `dagger call charts` == `make charts` holds. The step invoked this target by name while it
+# did not exist, so the zone-images job died with make's exit 2 ("No rule to make target") before
+# building anything: the gate's whole claim ("the dockerfile still builds") had never been tested.
+#
+# ZONES is `?=`, so ci.yml's scan of microfrontends/*/package.json wins when exported; locally the
+# committed list applies. The three OCI args are the provenance labels frontend.dockerfile declares
+# (BUILD_DATE / VCS_REF / VERSION); `|| exit 1` stops at the FIRST failing zone rather than reporting
+# the last one's status for all of them.
+FRONTEND_TAG ?= dev
+
+frontend-images: ## Build every zone image from the one parametrized dockerfile (web-<zone>:$(FRONTEND_TAG))
+	@for a in $(ZONES); do \
+	  echo ">> building web-$$a:$(FRONTEND_TAG) (frontend.dockerfile APP=$$a)"; \
+	  docker buildx build -f .docker/frontend.dockerfile \
+	    --build-arg APP=$$a \
+	    --build-arg BUILD_DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+	    --build-arg VCS_REF="$$(git rev-parse HEAD)" \
+	    --build-arg VERSION="$(FRONTEND_TAG)" \
+	    -t web-$$a:$(FRONTEND_TAG) --load . || exit 1; \
+	done
+
+# ---- chart gates (prod overlay + alert rules) -------------------------------
+# CI enforces both via `dagger call charts` (.dagger/charts.go), which shells out to these two
+# targets BY NAME — and neither existed, so `dagger call charts` died at the first of them and the
+# prod-overlay HA/security invariants and the alert-rule proofs had never once run. Exactly the
+# defect the OpenAPI note above records ("referenced them by name for months before they existed"),
+# repeated one section down; and both assets already specify their own commands — scripts/
+# prod_render_check.sh's header says "Run: `make prod-render-check`", and chart/alerting/
+# rules_test.yml's says this target runs check-then-test. Only the wrappers were missing.
+#
+# Bare `helm`/`promtool` on purpose: the Dagger container curls both to /usr/local/bin and
+# deliberately excludes .localbin so a host-downloaded binary cannot shadow the pinned one.
+prod-render-check: ## Render values-prod.yaml and assert its HA + security switches are ON
+	./scripts/prod_render_check.sh
+
+alert-rules-check: ## promtool: the alert rules are valid AND actually fire on synthetic series
+	promtool check rules chart/alerting/rules.yml
+	promtool test rules chart/alerting/rules_test.yml
+
 # ---- frontend dead-code + dep gate (knip, repo-wide; see knip.json) ---------
 # Cross-workspace tool — analyses the whole JS graph at once, so it stays a
 # root-level gate, not a per-package turbo task (lint/fmt ARE per-package turbo tasks).
@@ -136,7 +177,7 @@ dev-micro:
 # `make k3s-build`/`k3s-import` (one image per zone via --build-arg APP=$z) and
 # sync-favicons; the zone-contract deploy-path gate pins this list to the zone
 # directories that actually exist, so add/retire a zone HERE too.
-ZONES = home lakehouse media annotator compute studio train
+ZONES ?= home lakehouse media annotator compute studio train
 
 dev-frontends:        # build the ui + api libs once, then all zones + :3024 proxy
 	# Build the libs FIRST so the zones read a complete dist/. Running `turbo run dev`

@@ -50,6 +50,15 @@ services:
     replicas: 2
 frontend:
   replicas: 2
+  # A governed backend needs a UI that can sign in. auth.enabled is true above, and
+  # templates/auth-consistency.yaml REFUSES that combination without a sign-in flow — the prod
+  # overlay could not render at all until this landed, which nothing noticed because the render
+  # check itself was unreachable (its `make prod-render-check` target did not exist).
+  # The three secrets stay OUT of the repo, exactly like dapr.appToken / age.password /
+  # rustfs.secretKey: supply them at deploy (`--set frontend.oidc.sessionSecret=…` or a values
+  # file). frontends.yaml fails closed on each one, so a missing value cannot ship quietly.
+  oidc:
+    enabled: true
 podDisruptionBudget:
   enabled: true
   minAvailable: 1
