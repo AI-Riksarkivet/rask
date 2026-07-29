@@ -830,7 +830,10 @@ rustfs:
   # The STATIC platform bucket set, provisioned natively by the Tenant (spec.buckets). The
   # values-driven extras — medallion.buckets zones + the observability toggle — are provisioned by
   # the bucket-init hook (templates/rustfs.yaml), which a static CR list cannot express.
-  buckets: ["images-batch", "images-batch-alto", "images-batch-search", "rask-observability", "lance-catalog"]
+  # GOVERNED tiers only. The raw buckets (images-batch*) are NOT here: raw is external (R23) and lives
+  # on HCP. A local bucket sharing a name with an external one makes the browser report the empty
+  # local one instead of 404ing.
+  buckets: ["rask-observability", "lance-catalog"]
   # How long the bucket-init Job waits for the OPERATOR to provision that set before failing loudly.
   # It only VERIFIES them (the operator owns them) — live-proof 2026-07-28 defect 3: a Tenant that
   # refused to reconcile left every one of these absent and NOTHING surfaced it, so the first symptom
