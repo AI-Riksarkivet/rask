@@ -117,3 +117,50 @@ def test_dev_reload_relaxes_the_root_filesystem_where_it_must() -> None:
     docs = _render(media__enabled="true", dev__reload="true")
     still_ro = [name for name, c in _uvicorn_containers(docs) if (c.get("securityContext") or {}).get("readOnlyRootFilesystem") is True]
     assert not still_ro, f"dev.reload=true but these keep a read-only rootfs, so live_update cannot write: {sorted(still_ro)}"
+
+
+# --------------------------------------------------------------------------------------------------
+# The seven zones — same contract, different mechanism
+# --------------------------------------------------------------------------------------------------
+#
+# The zones do not run uvicorn, so every check above skips them entirely — which is how
+# `frontends.yaml` became the FIFTH template missing the dev.reload branch without anything failing.
+# They still need the writable rootfs, because Tilt's live_update writes into the container whatever
+# the process inside it happens to be.
+
+
+def _zone_containers(docs: list[dict]) -> list[tuple[str, dict]]:
+    return [
+        (d["metadata"]["name"], d["spec"]["template"]["spec"]["containers"][0])
+        for d in docs
+        if d.get("kind") == "Deployment" and d["metadata"]["name"].startswith("rask-web-")
+    ]
+
+
+def test_dev_reload_makes_every_zone_writable() -> None:
+    """Without this a zone sync fails with "Read-only file system" and silently changes nothing —
+    the same class of invisible failure as a missing `--reload`, and equally unreported."""
+    docs = _render(frontend__enabled="true", dev__reload="true")
+    zones = _zone_containers(docs)
+    assert len(zones) == 7, f"expected 7 zones, rendered {len(zones)} — Makefile ZONES and frontend.apps disagree"
+
+    still_ro = [n for n, c in zones if (c.get("securityContext") or {}).get("readOnlyRootFilesystem") is not False]
+    assert not still_ro, f"dev.reload=true but these zones keep a read-only rootfs, so live_update cannot write: {sorted(still_ro)}"
+
+
+def test_production_zones_keep_a_read_only_root_filesystem() -> None:
+    """The hardening must be untouched when dev.reload is absent — this is a public-facing pod."""
+    docs = _render(frontend__enabled="true")
+    writable = [n for n, c in _zone_containers(docs) if (c.get("securityContext") or {}).get("readOnlyRootFilesystem") is not True]
+    assert not writable, f"production zones lost their read-only rootfs: {sorted(writable)}"
+
+
+def test_zone_hardening_is_otherwise_identical_in_dev_and_prod() -> None:
+    """Only the rootfs may differ. If `dev.reload` started dropping runAsNonRoot or the seccomp
+    profile, a dev cluster would stop resembling the thing it exists to de-risk."""
+    dev = dict(_zone_containers(_render(frontend__enabled="true", dev__reload="true")))
+    prod = dict(_zone_containers(_render(frontend__enabled="true")))
+    for name, c in prod.items():
+        a = {k: v for k, v in (c.get("securityContext") or {}).items() if k != "readOnlyRootFilesystem"}
+        b = {k: v for k, v in (dev[name].get("securityContext") or {}).items() if k != "readOnlyRootFilesystem"}
+        assert a == b, f"{name}: dev.reload changed more than the rootfs — {a} vs {b}"

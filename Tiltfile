@@ -64,6 +64,62 @@ docker_build(
         sync('packages/lineage-kit/src/lineage_kit', SITE + '/lineage_kit'),
     ],
 )
+# ---- The other two Python images -------------------------------------------------------------
+# gateway and controlplane ship their OWN images (`gateway:dev`, `controlplane:dev`), so the shared
+# lance-rest-catalog build above does not cover them. They were outside Tilt's loop entirely: it
+# rebuilt neither, so they sat at whatever `make k3s-build && make k3s-import` last put on the node
+# while every other service moved — the quiet way a cluster ends up mixing versions.
+#
+# Their prod dockerfiles `uv sync --no-editable` into /opt/venv, exactly like the catalog image, so
+# syncing into site-packages works and no dev-only image is needed. (`.docker/fleet.dev.dockerfile`
+# was written for this and is referenced by nothing — it also still `COPY components components`, a
+# directory deleted in the src-layout rewrite, so it cannot build. Left alone here; deleting it is a
+# separate call.)
+for svc in ['gateway', 'controlplane']:
+    docker_build(
+        svc + ':dev', '.',
+        dockerfile='.docker/' + svc + '.dockerfile',
+        only=['.docker', 'pyproject.toml', 'uv.lock', 'packages', 'services'],
+        live_update=[
+            sync('services/' + svc + '/src/' + svc, SITE + '/' + svc),
+            sync('packages/service-kit/src/service_kit', SITE + '/service_kit'),
+        ],
+    )
+
+# ---- The seven micro-frontend zones ------------------------------------------------------------
+# These were `frontend.enabled=false` and out of the loop, so `/` on the ingress 404'd under Tilt and
+# no zone could be exercised against real in-cluster backends — which is the ONE thing
+# `make dev-frontends` cannot do (auth, FGA, Dapr, the gateway's own routing).
+#
+# A zone's prod image runs `bun build/index.js`, so syncing `src/` alone changes nothing: the server
+# serves the COMPILED build/. It does ship src/ and node_modules though, so the build can be re-run
+# in-container — sync, rebuild, restart. That is seconds rather than Vite's sub-second HMR, and it is
+# the honest trade for running against the real cluster. For pure UI work `make dev-frontends` is
+# still the faster loop; this is for when the backend is the point.
+load('ext://restart_process', 'docker_build_with_restart')
+
+# Kept in step with `Makefile:ZONES` and `frontend.apps`. R15: a zone missing from one list and
+# present in another is exactly how a zone silently stops being deployed.
+ZONES = ['home', 'lakehouse', 'media', 'annotator', 'compute', 'studio', 'train']
+
+for zone in ZONES:
+    docker_build_with_restart(
+        'web-' + zone + ':dev', '.',
+        dockerfile='.docker/frontend.dockerfile',
+        build_args={'APP': zone},
+        # The whole frontend workspace: bun's `--frozen-lockfile` fails with "Workspace not found" if
+        # any member is absent, so this cannot be narrowed to one zone's directory.
+        only=['.docker', 'frontend'],
+        entrypoint=['bun', 'build/index.js'],
+        live_update=[
+            sync('frontend/microfrontends/' + zone + '/src', '/app/app/src'),
+            # Shared packages: an edit to @rask/ui or @rask/api must reach every zone that renders it,
+            # or the one place a change is most likely to be wrong is the one place it is invisible.
+            sync('frontend/packages', '/app/packages'),
+            run('bun run build', trigger=['frontend/microfrontends/' + zone + '/src', 'frontend/packages']),
+        ],
+    )
+
 # ---- Deploy: ONLY the Python fleet, natively -------------------------------------------------
 #
 # This used `helm_resource` until 2026-07-29, and that was the reason live_update never worked once.
@@ -100,7 +156,9 @@ FLEET_TEMPLATES = [
     'templates/medallion.yaml',   # the producer + the three movers
     'templates/media.yaml',       # viewer, search, annotator  (needs media.enabled)
     'templates/compaction.yaml',  # compaction
-    'templates/fleet.yaml',       # gateway (own image — deployed, not hot-reloaded)
+    'templates/fleet.yaml',       # gateway
+    'templates/controlplane.yaml',
+    'templates/frontends.yaml',   # the seven zones
 ]
 
 k8s_yaml(local(
@@ -113,9 +171,10 @@ k8s_yaml(local(
         # The media trio defaults OFF in the chart, so the annotator/viewer/search had no pods at
         # all under Tilt. They are the services most worth iterating on, so turn them on here.
         '--set', 'media.enabled=true',
-        # The zones build from the parametrized frontend.dockerfile and are not wired into Tilt's
-        # loop — `make dev-frontends` (Vite HMR) is already sub-second and Tilt would be a downgrade.
-        '--set', 'frontend.enabled=false',
+        # The zones ARE in the loop now (see the docker_build_with_restart block above), so this is
+        # on. dev.reload also relaxes their read-only rootfs — without that every zone sync fails
+        # with "Read-only file system" and silently changes nothing.
+        '--set', 'frontend.enabled=true',
     ],
     quiet=True,
     # `helm template` needs chart/charts/ vendored. `make k3s-up` depends on `k3s-deps`, which runs
@@ -128,10 +187,11 @@ k8s_yaml(local(
 for name in ['rask-catalog', 'rask-lineage', 'rask-compaction',
              'rask-viewer', 'rask-search', 'rask-annotator',
              'rask-bronze-to-silver', 'rask-silver-to-gold', 'rask-media-to-silver',
-             'rask-lance-ray']:
+             'rask-lance-ray', 'rask-gateway', 'rask-controlplane']:
     k8s_resource(name, labels=['fleet'])
 
-k8s_resource('rask-gateway', labels=['fleet-no-reload'])
+for zone in ZONES:
+    k8s_resource('rask-web-' + zone, labels=['zones'])
 
 # No host ports — port-forward manually once up (see chart NOTES / DEPLOY.md).
 #
