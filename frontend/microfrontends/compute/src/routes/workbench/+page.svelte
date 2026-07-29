@@ -18,6 +18,8 @@
 	 * which is per-request server state a panel can call for itself.
 	 */
 	import { onMount, type Component } from 'svelte';
+	import { Boxes, ListTree, Server } from '@lucide/svelte';
+	import type { PanelRegistry } from '@rask/dockview';
 	import type { DockviewApi, SerializedDockview } from 'dockview';
 	import { makeDockLayoutStore } from '@rask/api/dock-layout';
 	import { dockLayout } from '$lib/dock/layout.remote';
@@ -26,8 +28,30 @@
 	import ClusterPanel from '$lib/dock/panels/ClusterPanel.svelte';
 	import ActorsPanel from '$lib/dock/panels/ActorsPanel.svelte';
 
-	/** Keys are the contract between a SAVED layout and this code — see MissingPanelRenderer. */
-	const panels = { jobs: JobsPanel, cluster: ClusterPanel, actors: ActorsPanel };
+	/** Keys are the contract between a SAVED layout and this code — see MissingPanelRenderer. The
+	 *  VALUES carry label/icon/keywords for the `+` picker; `label` is the default tab TITLE at add
+	 *  time, not a live binding on layouts already saved. Annotated deliberately: without the
+	 *  annotation an entry missing its required `label` type-checks clean at the `<Dock>` boundary. */
+	const panels: PanelRegistry = {
+		jobs: {
+			component: JobsPanel,
+			label: 'Jobs',
+			icon: ListTree,
+			keywords: ['ray', 'submitted', 'queue', 'lifecycle', 'raysubmit'],
+		},
+		cluster: {
+			component: ClusterPanel,
+			label: 'Cluster',
+			icon: Server,
+			keywords: ['nodes', 'capacity', 'resources', 'gpu', 'load'],
+		},
+		actors: {
+			component: ActorsPanel,
+			label: 'Actors',
+			icon: Boxes,
+			keywords: ['live', 'workers', 'replicas', 'serve'],
+		},
+	};
 
 	/** Namespaces this zone's layout inside the ONE per-subject document, so zones cannot collide. */
 	const WORKBENCH_ID = 'compute';

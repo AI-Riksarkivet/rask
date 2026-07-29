@@ -26,7 +26,7 @@ import type {
 	IContentRenderer,
 	Parameters,
 } from 'dockview';
-import type { PanelComponent } from './types';
+import type { AnyPanelComponent, PanelComponent } from './types';
 
 export class SveltePanelRenderer implements IContentRenderer {
 	readonly element: HTMLElement;
@@ -41,10 +41,13 @@ export class SveltePanelRenderer implements IContentRenderer {
 	#instance: Record<string, unknown> | null = null;
 	#paramSubscription: DockviewIDisposable | null = null;
 
-	constructor(component: PanelComponent<never>, context: Map<unknown, unknown>) {
-		// The registry stores `PanelComponent<never>` so a zone's concretely-typed panel is assignable
-		// to it (component props are contravariant and `never` is the bottom type). Mounting needs the
-		// widened form back — this is that one widening, and the only cast in the package.
+	constructor(component: AnyPanelComponent, context: Map<unknown, unknown>) {
+		// The registry stores `AnyPanelComponent` so BOTH shapes a zone might write are assignable: a
+		// panel declaring `PanelProps` (component props are contravariant, and `never` is the bottom
+		// type), and one declaring no props at all — which every panel in this repo currently does, and
+		// which `svelte2tsx` compiles to a type that REJECTS extra props. Mounting needs the widened
+		// form back; this is that one widening, and the only cast in the package. Sound at runtime
+		// either way: a component declaring no props simply ignores the ones it is handed.
 		this.#component = component as PanelComponent;
 		this.#context = context;
 		this.element = document.createElement('div');

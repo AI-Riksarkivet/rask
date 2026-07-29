@@ -97,7 +97,12 @@
 	const active = untrack(() => resolveChrome(chrome));
 	/** The close button is unconditional, so the cluster is worth rendering if ANY control is on. */
 	const hasHeaderActions =
-		active.split || active.maximize || active.float || active.popout || active.keepEmptyGroups;
+		active.split ||
+		active.addPanel ||
+		active.maximize ||
+		active.float ||
+		active.popout ||
+		active.keepEmptyGroups;
 
 	onMount(() => {
 		// onMount, NOT {@attach}. An attachment re-runs whenever a value it read changes, and re-running
@@ -166,16 +171,18 @@
 			// avoid. A consumer with dozens of heavy panels can override this per-dock.
 			defaultRenderer: 'always',
 			...options,
-			// The group control cluster — split / float / popout / maximize / close. The `right` slot is
-			// the classic VS Code position and the only place persistent group chrome can live.
+			// The group control cluster — split / add / float / popout / maximize / close. The `right`
+			// slot is the classic VS Code position and the only place persistent group chrome can live.
+			// `panels` goes through because `GroupActions` is mounted with no context map, so the picker
+			// cannot reach the catalogue any other way.
 			...(hasHeaderActions
-				? { createRightHeaderActionComponent: makeHeaderActions(active, chromeOptions) }
+				? { createRightHeaderActionComponent: makeHeaderActions(active, chromeOptions, panels) }
 				: {}),
 			createComponent: ({ name }) => {
-				const component = panels[name];
+				const entry = panels[name];
 				// An unknown name is a stale saved layout, not a bug to crash on — see MissingPanelRenderer.
-				return component
-					? new SveltePanelRenderer(component, panelContext)
+				return entry
+					? new SveltePanelRenderer(entry.component, panelContext)
 					: new MissingPanelRenderer(name);
 			},
 		});

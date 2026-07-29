@@ -33,8 +33,17 @@
 import type { DroptargetOverlayModel } from 'dockview';
 
 export interface DockChrome {
-	/** Split the active panel out of its group, up/down/left/right. Header buttons + context menu. */
+	/** Split the active panel out of its group, up/down/left/right. Header button + context menu. */
 	split: boolean;
+	/**
+	 * The `+` control: add a registered panel to this group, chosen from a searchable list.
+	 *
+	 * A DIFFERENT control from {@link split}, and both are wanted. Split acts on the PANE — divide this
+	 * space in a direction. `+` acts on the CONTENT — put a named panel here. Conflating them is what
+	 * produced a split button whose only possible outcome was a second copy of the panel you were
+	 * already looking at.
+	 */
+	addPanel: boolean;
 	/** Expand one group to fill the dock; the button flips to restore while maximized. */
 	maximize: boolean;
 	/** Lift a group into a draggable overlay card above the grid. */
@@ -91,6 +100,7 @@ export const EDGE_DROP: DroptargetOverlayModel = {
 /** Everything on. A workbench with no visible controls is the defect this package exists to avoid. */
 export const DEFAULT_CHROME: DockChrome = {
 	split: true,
+	addPanel: true,
 	maximize: true,
 	float: true,
 	popout: true,
@@ -105,6 +115,7 @@ export function resolveChrome(chrome: Partial<DockChrome> | boolean | undefined)
 	if (chrome === false) {
 		return {
 			split: false,
+			addPanel: false,
 			maximize: false,
 			float: false,
 			popout: false,
