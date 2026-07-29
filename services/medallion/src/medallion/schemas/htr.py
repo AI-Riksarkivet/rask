@@ -1,4 +1,23 @@
-"""The HTR cascade's GOLD schema contract — load-bearing, pinned at P7a (design §2.4).
+"""HTR's own PAYLOAD declaration — one workload's columns, not the medallion's contract (R3).
+
+**Reframed 2026-07-29.** This file called itself "the GOLD schema contract", and nine of its eleven
+columns describe transcribed page images: `page_key`, `page_width`, `region_polygons`,
+`line_polygons`, `reading_order`, `confidences`. A tier schema cannot be workload-specific — audio,
+tabular records and embeddings have no `page_width` — so what a tier carries now lives in
+`schemas/tier.py` (`{id, payload, stage, lineage, source_rowid}`, payload opaque), and this is HTR
+declaring the shape of ITS payload.
+
+Two of the eleven were always generic and moved: `lineage` and `source_rowid`.
+
+The "pin" was weaker than it read. `GOLD_CONTRACT_COLUMNS` is imported by NOTHING in production —
+only two unit tests, which assert it equals itself. No mover is checked against it; one that dropped
+`confidences` would fail no gate. The docstring below is preserved because the REASONING is still
+right for HTR: a field dropped here is unrecoverable downstream, since the ALTO serializer cannot
+reconstruct it.
+
+--- original ---
+
+The HTR cascade's GOLD schema contract — load-bearing, pinned at P7a (design §2.4).
 
 Gold is the terminal transcription dataset the ``exporter`` service (P7c) projects consumer formats from
 (ALTO 4.4 first). Every column here is something the serializer cannot reconstruct — **a field dropped
