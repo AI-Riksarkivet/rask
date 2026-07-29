@@ -2,7 +2,7 @@
 	"name": "@rask/e2e",
 	"private": true,
 	"devDependencies": {
-		"@playwright/test": "^1.61.1"
+		"@playwright/test": "^1.62.0"
 	},
 	"scripts": {
 		"test": "playwright test"
