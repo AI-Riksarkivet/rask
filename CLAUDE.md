@@ -75,10 +75,34 @@ That loop is what tilt exists for here.
 ```bash
 make k3s-up          # the cluster + release (one-time per session)
 make tilt-registry   # ONCE per host: registry on :5000 + point k3s at it (sudo; restarts k3s)
+make dagger-engine   # ONCE per host: a Dagger engine that may push to that (plain-HTTP) registry
 make tilt-up         # the dev loop; UI on :10350
 make tilt-verify     # PROVE live_update reaches a pod (SERVICE=catalog by default)
 make k9s             # inspect the cluster (installed into .localbin by `make bootstrap`)
 ```
+
+**Tilt builds the fleet images through Dagger** (`RASK_TILT_BUILDER=docker` falls back to Tilt's native
+`docker_build`; the two share no cache, so switching costs one cold rebuild each way). `.dagger/images.go`
+hands the same `.docker/*.dockerfile` to BuildKit — the dockerfile stays the single source of truth, only
+the driver changes. Callable directly: `dagger call image --name=gateway`, `dagger call zone-image --zone=lakehouse`.
+
+Two things bite here, and neither announces itself:
+
+- **The registry is addressed twice.** Tilt and k3s pull via `localhost:5000`; Dagger pushes to
+  `172.17.0.1:5000`. Same container — but Dagger's engine *is* a container, so `localhost` inside it is
+  the engine. Use the bridge gateway for anything Dagger does.
+- **Dagger always speaks HTTPS and `publish` has no `--insecure` flag**, so against the TLS-less dev
+  registry it dies with `http: server gave HTTP response to HTTPS client`. The only lever is the engine's
+  own BuildKit config, which the auto-provisioned engine cannot receive — hence `make dagger-engine`.
+  Re-run it after a Dagger CLI upgrade: a version mismatch makes the CLI quietly provision its own
+  config-less engine and the HTTPS failure returns.
+
+**The seven zones are eight** (`workbench`, b021499). Tilt's zone list is now *derived* from the chart's
+`frontend.apps` rather than hand-kept beside it — the hand-written list had already drifted, and
+`rask-web-workbench` sat in ImagePullBackOff running whatever `k3s-build` last pushed. The chart deploys
+the zones, so reading its list is the only version that cannot disagree with what is running. **The zone
+images themselves are still built by `docker_build_with_restart`, not Dagger** — that needs
+`custom_build_with_restart` plus a cold seven-zone Dagger rebuild, and is not done.
 
 > **STATUS 2026-07-29: `live_update` WORKS — `make tilt-verify` reports `SYNCED in 2s`.** It had
 > never synced once before this date. There were **two** independent causes, and fixing either alone

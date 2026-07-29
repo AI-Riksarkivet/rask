@@ -511,6 +511,9 @@ e2e-ray-ci: bootstrap ## Governed ray-ON kind stack + real KubeRay + both Ray su
 # cluster up (`make k3s-up`), `make tilt-up` builds editable dev images and hot-reloads
 # the fleet on .py changes. Frontends iterate faster via `make dev-frontends` (local
 # Vite HMR). See the Tiltfile header.
+dagger-engine: ## One-time: a Dagger engine that can push to the plain-HTTP dev registry
+	@bash scripts/dagger-engine.sh
+
 tilt-registry: ## One-time: local image registry + point k3s at it (sudo; restarts k3s)
 	bash scripts/k3s-registry.sh
 

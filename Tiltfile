@@ -34,6 +34,58 @@ allow_k8s_contexts(LOCAL_CONTEXTS + [c for c in [os.getenv('TILT_ALLOW_CONTEXT')
 # this pushes there so the cluster can actually pull what Tilt builds.
 default_registry('localhost:5000')
 
+# ---- WHO BUILDS THE IMAGES ---------------------------------------------------------------------
+# Dagger is this repo's build system for the CI GATES (`dagger call test|lint|charts|openapi|frontend`,
+# .dagger/*.go) but until 2026-07-29 it built no image at all — every artefact came from
+# `docker buildx`, in the Makefile, in ci.yml and here. `.dagger/images.go` closes that: it hands the
+# SAME `.docker/*.dockerfile` to BuildKit through Dagger, so the dockerfile stays the single source of
+# truth and this is a change of driver, not a second build definition.
+#
+# Set RASK_TILT_BUILDER=docker to fall back to Tilt's native docker_build — worth knowing about,
+# because the two do not share a build cache, so switching costs one cold rebuild each way.
+BUILDER = os.getenv('RASK_TILT_BUILDER', 'dagger')
+DAGGER_ENGINE = os.getenv('DAGGER_ENGINE_NAME', 'dagger-engine-rask')
+
+# THE REGISTRY IS ADDRESSED TWICE, ON PURPOSE. Tilt and k3s pull via `localhost:5000`; Dagger pushes to
+# `172.17.0.1:5000`. Same registry container — but Dagger's engine IS a container, so `localhost` inside
+# it means the engine, and a push there fails looking exactly like a broken registry. 172.17.0.1 is the
+# docker bridge gateway, i.e. the host as seen from a container.
+DAGGER_REGISTRY = os.getenv('DAGGER_REGISTRY_HOST', '172.17.0.1:5000')
+
+# Dagger speaks HTTPS to every registry and `publish` has no --insecure flag, so the plain-HTTP dev
+# registry needs an engine that has been told it is http. `make dagger-engine` provisions exactly that;
+# without it the stock auto-provisioned engine fails with "server gave HTTP response to HTTPS client".
+def dagger_publish(fn, flags):
+    """A custom_build command: build via Dagger, push to $EXPECTED_REF's registry."""
+    return ' '.join([
+        'ADDR=$(echo "$EXPECTED_REF" | sed "s|^localhost:5000|' + DAGGER_REGISTRY + '|");',
+        '_EXPERIMENTAL_DAGGER_RUNNER_HOST=docker-container://' + DAGGER_ENGINE,
+        'dagger call', fn, flags,
+        'publish --address="$ADDR"',
+    ])
+
+def build_image(ref, dockerfile, context_deps, live_update, dagger_fn, dagger_flags, build_args = {}):
+    """docker_build or custom_build(dagger), same live_update either way."""
+    if BUILDER == 'dagger':
+        custom_build(
+            ref,
+            dagger_publish(dagger_fn, dagger_flags),
+            deps=context_deps,
+            # Dagger pushed straight to the registry: the image is NOT in the local docker daemon, and
+            # Tilt must not push it a second time.
+            skips_local_docker=True,
+            disable_push=True,
+            live_update=live_update,
+        )
+    else:
+        docker_build(
+            ref, '.',
+            dockerfile=dockerfile,
+            only=context_deps,
+            build_args=build_args,
+            live_update=live_update,
+        )
+
 # NOTE: the dapr/nats/openfga `helm_repo` resources were removed with `helm_resource` (2026-07-29).
 # They existed so that extension could resolve the SUBCHARTS. Tilt no longer deploys subcharts at all
 # — `make k3s-up` does — and rendering only `templates/*.yaml` reads the already-vendored
@@ -60,10 +112,12 @@ SITE = '/opt/venv/lib/python3.13/site-packages'
 # Passed only here, so shipped images keep an immutable venv. Every Python image below takes it.
 VENV_OWNER = {'VENV_OWNER': '10001:10001'}
 
-docker_build(
-    'lance-rest-catalog', '.',
-    dockerfile='.docker/rest-catalog.dockerfile',
-    only=['.docker', 'pyproject.toml', 'uv.lock', 'packages', 'services'],
+build_image(
+    'lance-rest-catalog',
+    '.docker/rest-catalog.dockerfile',
+    ['.docker', 'pyproject.toml', 'uv.lock', 'packages', 'services'],
+    dagger_fn='image',
+    dagger_flags='--name=rest-catalog',
     build_args=VENV_OWNER,
     live_update=[
         # The src-layout rewrite (2026-07-28) made this image install its members as WHEELS into
@@ -96,10 +150,12 @@ docker_build(
 # It was absent because the chart never RENDERED it (fleet.yaml gated on a literal "gateway"), so Tilt
 # had no k8s object to attach an image to and silently built nothing.
 for svc in ['gateway', 'controlplane', 'compute']:
-    docker_build(
-        svc + ':dev', '.',
-        dockerfile='.docker/' + svc + '.dockerfile',
-        only=['.docker', 'pyproject.toml', 'uv.lock', 'packages', 'services'],
+    build_image(
+        svc + ':dev',
+        '.docker/' + svc + '.dockerfile',
+        ['.docker', 'pyproject.toml', 'uv.lock', 'packages', 'services'],
+        dagger_fn='image',
+        dagger_flags='--name=' + svc,
         build_args=VENV_OWNER,
         live_update=[
             sync('services/' + svc + '/src/' + svc, SITE + '/' + svc),
@@ -119,9 +175,15 @@ for svc in ['gateway', 'controlplane', 'compute']:
 # still the faster loop; this is for when the backend is the point.
 load('ext://restart_process', 'docker_build_with_restart')
 
-# Kept in step with `Makefile:ZONES` and `frontend.apps`. R15: a zone missing from one list and
-# present in another is exactly how a zone silently stops being deployed.
-ZONES = ['home', 'lakehouse', 'media', 'annotator', 'compute', 'studio', 'train']
+# DERIVED from the chart, not hand-kept in step with it. The comment here used to say "kept in step
+# with `Makefile:ZONES` and `frontend.apps`" and then listed seven zones by hand — and it had already
+# drifted: `workbench` landed (b021499) as an eighth, the chart deployed it, Tilt did not build it, and
+# `rask-web-workbench` sat in ImagePullBackOff running whatever `k3s-build` last pushed. That is the
+# exact failure the old comment warned about, written directly above the list that caused it.
+#
+# The chart is what DEPLOYS the zones, so reading its list is the only version that cannot disagree with
+# what is running. `read_yaml` is a Tilt builtin; a new zone joins the loop by existing.
+ZONES = [app['name'] for app in read_yaml('chart/values.yaml')['frontend']['apps']]
 
 for zone in ZONES:
     docker_build_with_restart(
