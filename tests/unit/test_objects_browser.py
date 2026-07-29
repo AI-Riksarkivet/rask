@@ -172,7 +172,7 @@ def test_a_body_less_404_still_names_the_bucket(monkeypatch: pytest.MonkeyPatch)
     # Takes the endpoint arg the real `s3_client(endpoint=None)` has always accepted. Routes now pass
     # the STORE's endpoint (raw lives off-warehouse), so a zero-arg stub is narrower than the function
     # it stands in for — and a stub narrower than its subject fails on a change the subject allows.
-    monkeypatch.setattr(objects_module, "s3_client", lambda _endpoint=None: _AwsShapedClient())
+    monkeypatch.setattr(objects_module, "s3_client", lambda _endpoint=None, **_kw: _AwsShapedClient())
     with TestClient(_app()) as c:
         resp = c.get("/api/object", params={"bucket": "images-batch-alto", "key": "k"})
     assert resp.status_code == 404
@@ -194,7 +194,7 @@ def test_a_real_outage_is_not_disguised_as_a_404(monkeypatch: pytest.MonkeyPatch
         def get_paginator(self, _name: str) -> Any:  # noqa: ANN401 — boto3 paginator has no public stub
             raise ConnectionError("Could not connect to the endpoint URL")
 
-    monkeypatch.setattr(objects_module, "s3_client", lambda _endpoint=None: _DeadClient())
+    monkeypatch.setattr(objects_module, "s3_client", lambda _endpoint=None, **_kw: _DeadClient())
     with TestClient(_app(), raise_server_exceptions=False) as c:
         for path, params in (
             ("/api/objects", {"bucket": "images-batch", "prefix": ""}),

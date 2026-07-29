@@ -35,6 +35,17 @@ serviceAccount:
 # deliberately NOT in this list: rustfs.enabled alone gates the operator Tenant
 # (lance-ns-merge P4) because the lakehouse plane resolves `rask-rustfs-io:9000`
 # regardless of singleTenant.
+# The storage registry served to the object browser. Empty => the built-in defaults (every store on
+# the deployment's own S3). Declare stores here when they do NOT all live on one backend: `endpoint`
+# names the host, `secret` is a Dapr secret-store key holding {access_key, secret_key}, `insecure`
+# skips TLS verification for hosts with a private CA.
+#
+#   stores:
+#     - { name: images-batch, bucket: images-batch, role: raw, endpoint: "https://<tenant>.<hcp-domain>",
+#         insecure: true, secret: hcp-s3, description: "Source page images, as harvested." }
+storage:
+  stores: []
+
 singleTenant:
   enabled: false
 

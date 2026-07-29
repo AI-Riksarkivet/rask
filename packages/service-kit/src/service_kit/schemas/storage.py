@@ -59,6 +59,17 @@ class Store(BaseModel):
             "(RASK_S3_ENDPOINT_URL) — which is what every governed tier uses."
         ),
     )
+    insecure: bool = Field(
+        default=False,
+        description="Skip TLS verification for this endpoint. Needed for internal hosts with private CAs.",
+    )
+    secret: str | None = Field(
+        default=None,
+        description=(
+            "Key in the Dapr secret store holding this store's credentials as "
+            "`{access_key, secret_key}`. None = the deployment's own env credentials."
+        ),
+    )
     description: str = Field(default="", description="What a reader should expect to find here.")
     read_only: bool = Field(
         default=True,

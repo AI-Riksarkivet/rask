@@ -126,6 +126,12 @@ spec:
             - { name: MEDIA_DB, value: "{{ $root.Values.media.corpusMountPath }}/transcripts_v2.lance" }
             - { name: MEDIA_DESCRIPTOR_DIR, value: "{{ $root.Values.media.corpusMountPath }}/descriptors" }
             # Catalog mode (the merge's env flip): annotations live in the catalog, nowhere else.
+            # The storage registry, when a deployment declares one. Each store may name its own endpoint,
+            # TLS posture and secret: raw lives on an EXTERNAL store while the governed tiers live on the
+            # warehouse, and one process env holds only one credential pair.
+            {{- with $root.Values.storage }}{{- if .stores }}
+            - { name: RASK_STORES, value: {{ toJson .stores | quote }} }
+            {{- end }}{{- end }}
             - { name: MEDIA_READ_BACKEND, value: {{ $root.Values.media.readBackend | quote }} }
             - { name: MEDIA_WRITE_BACKEND, value: {{ $root.Values.media.writeBackend | quote }} }
             - { name: MEDIA_CATALOG_URI, value: {{ $root.Values.media.catalogUri | default (printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port) | quote }} }

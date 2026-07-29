@@ -21,6 +21,9 @@ only a genuine outage — unreachable endpoint, bad credentials — still reache
 500 path, which is what a 500 should mean.
 """
 
+import logging
+import os
+from functools import lru_cache
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Query
@@ -28,9 +31,12 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from service_kit.exceptions import NotFoundError
+from service_kit.governed.secrets import fetch_dapr_secret
 from service_kit.schemas.storage import Store, store_by_name
 from storage import BucketNotFoundError, ObjectNotFoundError, s3_client, s3_errors
 
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["objects"])
 
@@ -59,19 +65,47 @@ def _registered_bucket(name: str) -> str:
     return _registered_store(name).bucket
 
 
-def _client_for(name: str) -> Any:  # noqa: ANN401 — boto3 client, same as storage.s3_client
-    """An S3 client pointed at the store's OWN endpoint.
+@lru_cache(maxsize=32)
+def _creds(secret: str) -> tuple[str, str] | None:
+    """This store's credentials from the Dapr secret store, or None if unavailable.
 
-    Every route used a bare `s3_client()`, which resolves the endpoint from process env — so every
-    store was read from the deployment's warehouse regardless of where it actually lives. The raw
-    tier is external (a different host entirely), so `images-batch` was queried against the warehouse,
-    correctly answered "no such objects", and a bucket full of images rendered as an empty store.
-    Nothing errored; the listing was simply, silently wrong.
+    Cached: the secret is estate config, not per-request data, and one sidecar round-trip per object
+    listing would put OpenBao on the hot path of the object browser.
 
-    `store.endpoint` is `None` for the governed tiers, and `s3_client(None)` is exactly the previous
-    behaviour — so this changes nothing for them while letting an attached store name its own host.
+    The governed tiers pass no secret and keep using the process env, so the deployment's own store is
+    untouched. A store on ANOTHER backend needs its own keys, and env holds exactly one pair — which is
+    why raw could never be read from a process configured for the warehouse.
     """
-    return s3_client(_registered_store(name).endpoint)
+    store = os.getenv("RASK_SECRET_STORE", "lance-secrets")
+    try:
+        data = fetch_dapr_secret(store, secret, retries=1)
+    except Exception:  # noqa: BLE001 — a missing secret must degrade to env, not 500 the browser
+        log.warning("store_secret_unavailable", extra={"secret": secret})
+        return None
+    ak, sk = data.get("access_key"), data.get("secret_key")
+    return (ak, sk) if ak and sk else None
+
+
+def _client_for(name: str) -> Any:  # noqa: ANN401 — boto3 client, same as storage.s3_client
+    """An S3 client for THIS store — its own endpoint, credentials and TLS posture.
+
+    Every route used a bare `s3_client()`, which resolves all three from process env, so every store
+    was read from the deployment's warehouse regardless of where it lives. The raw tier is external, so
+    `images-batch` was queried against the warehouse, correctly answered "no such objects", and a
+    bucket holding millions of objects rendered as empty. Nothing errored — the listing was silently
+    wrong, which is the least debuggable failure available.
+
+    All three fields are optional and default to the env chain, so the governed tiers behave exactly
+    as before.
+    """
+    store = _registered_store(name)
+    creds = _creds(store.secret) if store.secret else None
+    return s3_client(
+        store.endpoint,
+        access_key=creds[0] if creds else None,
+        secret_key=creds[1] if creds else None,
+        insecure=store.insecure or None,
+    )
 
 
 #: The dependency every route uses in place of the deleted union.

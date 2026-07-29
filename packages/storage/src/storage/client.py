@@ -50,12 +50,25 @@ def derive_hcp_creds() -> None:
         os.environ["AWS_SECRET_ACCESS_KEY"] = hashlib.md5(pwd.encode()).hexdigest()  # noqa: S324
 
 
-def s3_client(endpoint: str | None = None) -> Any:  # noqa: ANN401 — boto3 client has no public stub
-    """Build a boto3 S3 client for any S3-compatible backend (MinIO / rustfs / AWS).
+def s3_client(
+    endpoint: str | None = None,
+    *,
+    access_key: str | None = None,
+    secret_key: str | None = None,
+    insecure: bool | None = None,
+) -> Any:  # noqa: ANN401 — boto3 client has no public stub
+    """Build a boto3 S3 client for any S3-compatible backend (MinIO / rustfs / AWS / HCP).
 
     Endpoint/CA/insecure flags resolve from env (RASK_S3_*/S3_*, with HCP_* as the
     legacy bridge). Path-style + s3v4 are the MinIO-safe, AWS-accepted defaults;
     region comes from AWS_REGION so it isn't left solely to the boto3 env chain.
+
+    ``access_key``/``secret_key``/``insecure`` override the env for THIS client only. Env-only
+    credentials are a single global pair, so one process could address exactly one backend — and the
+    estate genuinely spans two: the governed tiers on the deployment's own store, and raw on an
+    external one with different keys. Reading a store from the wrong backend does not error, it
+    returns an empty listing, which is the least debuggable failure available. Passing them per call
+    is what lets one process serve both. Omitted → the env chain, byte-identical to before.
     """
     import boto3
     from botocore.config import Config
@@ -74,9 +87,13 @@ def s3_client(endpoint: str | None = None) -> Any:  # noqa: ANN401 — boto3 cli
         "region_name": os.getenv("AWS_REGION", "us-east-1"),
         "config": cfg,
     }
+    if access_key and secret_key:
+        kwargs["aws_access_key_id"] = access_key
+        kwargs["aws_secret_access_key"] = secret_key
+    skip_verify = insecure if insecure is not None else (_env_first(_INSECURE_ENVS) or "").lower() in ("1", "true", "yes")
     if ca := _env_first(_CA_BUNDLE_ENVS):
         kwargs["verify"] = ca
-    elif (_env_first(_INSECURE_ENVS) or "").lower() in ("1", "true", "yes"):
+    elif skip_verify:
         import urllib3
 
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
