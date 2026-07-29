@@ -16,4 +16,4 @@ The orchestrator contract: **ratch knows runner NAMES (`Stage.runner=`), nothing
 There is no `__init__.py` tree here on purpose — this directory is not a Python package, and importing
 `runners.<x>` from outside is the coupling that rule forbids. (ratch's `cli/` still carries lazy
 repo-relative imports from its lance-audio heritage; they are unwired today and get replaced by the
-Ray-native name seam when the pipeline step lands — recorded in `docs/OPEN-WORK.md`.)
+Ray-native name seam when the pipeline step lands — recorded in `OPEN-WORK.md`.)

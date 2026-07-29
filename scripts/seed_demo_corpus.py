@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Seed a minimal but REAL local media corpus, so the annotator canvas can be driven end-to-end.
 
-`docs/OPEN-WORK.md` A1 records that the media corpus lives on a node-local `hostPath`, which means a
+`OPEN-WORK.md` A1 records that the media corpus lives on a node-local `hostPath`, which means a
 dev machine has no datasets and the annotator canvas has no page image to draw on. Everything the
 registry needs is env-configurable though (`MEDIA_DB_ROOT` / `MEDIA_DESCRIPTOR_DIR`), so a corpus can
 be synthesized locally instead — one document, one chunk, one real rendered page image.

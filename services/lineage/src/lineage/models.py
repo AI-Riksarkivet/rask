@@ -294,7 +294,7 @@ class RunEvent(BaseModel):
         The consumer side of the hierarchy exists BEFORE anything emits one on purpose. A child event
         whose parent nothing reads is worse than no child event at all: it lands in the graph as an
         extra unattached root, so the estate looks like it grew a pile of orphan jobs rather than
-        gaining detail (``docs/OPEN-WORK.md`` E1 — ``parent`` is the facet that would link an actor run
+        gaining detail (``OPEN-WORK.md`` E1 — ``parent`` is the facet that would link an actor run
         to its stage run). With this in place, whatever emits first is understood on arrival.
 
         Malformed means None, never a raise — same contract as :attr:`progress`: this runs inside the

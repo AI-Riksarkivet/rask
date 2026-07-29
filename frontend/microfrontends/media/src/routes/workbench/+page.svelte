@@ -18,7 +18,7 @@
 	 *
 	 * The 1175-line `/` search page is deliberately NOT folded in here. It carries the search store,
 	 * the player and the transcript in one component, and breaking it up is its own change with its own
-	 * browser drive — the same reasoning `docs/OPEN-WORK.md` C1 records for `TableDetail.svelte`.
+	 * browser drive — the same reasoning `OPEN-WORK.md` C1 records for `TableDetail.svelte`.
 	 */
 	import { onMount, type Component } from 'svelte';
 	import type { DockviewApi, SerializedDockview } from 'dockview';

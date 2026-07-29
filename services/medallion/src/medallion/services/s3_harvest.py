@@ -10,7 +10,7 @@ OpenLineage event (``(s3://<bucket>, <prefix>)`` — the OpenLineage external-da
 the twin of ``iiif_produce.iiif_input``).
 
 A dedicated producer head route (``POST /ingest-s3`` — config, token auth, project routing, symmetric
-with ``/ingest-iiif``) is the recorded follow-up; see ``docs/OPEN-WORK.md``.
+with ``/ingest-iiif``) is the recorded follow-up; see ``OPEN-WORK.md``.
 """
 
 from __future__ import annotations
