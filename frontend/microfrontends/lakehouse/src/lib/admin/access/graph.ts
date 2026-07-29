@@ -9,7 +9,7 @@
 import type { ExpandNode, Tuple } from '../access';
 // The zone's own layered placer — see `layout()` below for why this is reused rather than replaced
 // by a layout library.
-import { layout as placeLayered } from '$lib/lineage/layout';
+import { layout as placeLayered } from '@rask/panels/lineage';
 
 /** The three questions the query bar asks. Each is a different OpenFGA primitive, and they answer
  *  genuinely different things — which is why the bar offers all three rather than one "search". */

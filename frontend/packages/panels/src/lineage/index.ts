@@ -16,3 +16,4 @@ export { default as LineageGraph } from './LineageGraph.svelte';
 export { LineageState, type LineageClient } from './store.svelte';
 export { getLineageState, setLineageState } from './lineage-context';
 export { default as FlowAutoFit } from './FlowAutoFit.svelte';
+export { depths, layout } from './layout.js';
