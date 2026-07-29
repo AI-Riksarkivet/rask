@@ -27,7 +27,16 @@ export type GraphNode = {
 	fgaType: string;
 	label: string;
 	role: NodeRole;
-	/** Column in the layout — derivation depth for `why`, side for the others. */
+	/**
+	 * Layout column, SIGNED, and the sign is the convention the whole file shares: **negative is
+	 * towards the subject, positive is towards the object, 0 is the focus.**
+	 *
+	 * It matters because it fixes reading order. A tuple reads `user:alice --owner--> table:x`, so the
+	 * subject belongs on the left and the arrows run left-to-right. An earlier version numbered a
+	 * derivation's hops positively, which put the focus OBJECT leftmost and made the whole chain read
+	 * backwards against its own arrowheads — while `buildNeighbourhood` right next to it already used
+	 * the signed form. One convention, both builders.
+	 */
 	depth: number;
 	/** The mechanism that put this node here, shown on the node so a hop is self-explaining. */
 	via: string | null;
@@ -118,9 +127,10 @@ export function walkDerivation(
 function nodeFor(id: string, depth: number, via: string, acc: Walked): void {
 	const existing = acc.nodes.get(id);
 	if (existing) {
-		// Keep the SHALLOWEST depth: the same subject reached by two paths belongs at its nearest hop,
-		// or the layout stretches to the longest explanation rather than the clearest one.
-		if (depth < existing.depth) existing.depth = depth;
+		// Keep the depth NEAREST the focus: the same subject reached by two paths belongs at its shortest
+		// hop, or the layout stretches to the longest explanation rather than the clearest one. Derivation
+		// depths run negative (see GraphNode.depth), so "nearest" is the GREATER value, not the lesser.
+		if (depth > existing.depth) existing.depth = depth;
 		return;
 	}
 	acc.nodes.set(id, {
@@ -167,7 +177,7 @@ function visit(
 	// Terminal subjects — the actual grantees, including a `user:*` public wildcard, which must never
 	// be hidden: a wildcard is the single widest grant the model can express.
 	for (const subject of leaf.users ?? []) {
-		nodeFor(subject, depth + 1, mechanismLabel(mechanism), acc);
+		nodeFor(subject, depth - 1, mechanismLabel(mechanism), acc);
 		link(subject, anchor, `${relation} · ${mechanismLabel(mechanism)}`, acc);
 	}
 
@@ -184,9 +194,9 @@ function visit(
 			const childObject = (child.name ?? '').split('#')[0] ?? '';
 			const childRelation = (child.name ?? '').split('#')[1] ?? relation;
 			if (!childObject) continue;
-			nodeFor(childObject, depth + 1, mechanismLabel('inherited-from'), acc);
+			nodeFor(childObject, depth - 1, mechanismLabel('inherited-from'), acc);
 			link(childObject, anchor, `${relation} · ${mechanismLabel('inherited-from')}`, acc);
-			visit(child, childObject, childRelation, depth + 1, 'direct', acc);
+			visit(child, childObject, childRelation, depth - 1, 'direct', acc);
 		}
 	}
 }
