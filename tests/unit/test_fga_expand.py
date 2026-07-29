@@ -351,3 +351,48 @@ def test_list_users_default_contract_is_unchanged() -> None:
             return SimpleNamespace(users=[SimpleNamespace(object=SimpleNamespace(type="user", id="bob"), userset=None, wildcard=None)])
 
     assert asyncio.run(fga.list_users(cast(OpenFgaClient, _Client()), relation="reader", obj="table:t")) == ["bob"]
+
+
+def test_expand_tree_normalises_a_qualified_computed_userset() -> None:
+    """OpenFGA answers `computed.userset` QUALIFIED — `"table:t#reader"`, not `"reader"`.
+
+    Passing that straight back as a relation is a malformed Expand, which the server answers with a
+    500 and this module fails closed into a 503 — so every relation resolving through a rung reported
+    "derivation unavailable", which is all of the interesting ones. Captured from the live store:
+    expand(can_read_data, table:bronze$pages) → {"computed": {"userset": "table:bronze$pages#reader"}}.
+    """
+    client = _ExpandClient(
+        {
+            "table:t#can_read_data": _node("table:t#can_read_data", leaf=_leaf(computed="table:t#reader")),
+            "table:t#reader": _node("table:t#reader", leaf=_leaf(users=["user:alice"])),
+        }
+    )
+    result = asyncio.run(fga.expand_tree(cast(OpenFgaClient, client), relation="can_read_data", obj="table:t", max_depth=2))
+
+    # The follow-up asks for the RELATION on the object, never the qualified string.
+    assert client.expanded == ["table:t#can_read_data", "table:t#reader"]
+    assert result["leaf"]["expanded"][0]["leaf"]["users"] == ["user:alice"]
+
+
+def test_expand_tree_normalises_qualified_tuple_to_userset_entries() -> None:
+    client = _ExpandClient(
+        trees={
+            "table:db1$t#owner": _node(
+                "table:db1$t#owner",
+                leaf=_leaf(ttu=_ttu("table:db1$t#parent", ["namespace:db1#owner"])),
+            ),
+            "namespace:db1#owner": _node("namespace:db1#owner", leaf=_leaf(users=["user:alice"])),
+        },
+        tuples={"table:db1$t": [("namespace:db1", "parent", "table:db1$t")]},
+    )
+    result = asyncio.run(fga.expand_tree(cast(OpenFgaClient, client), relation="owner", obj="table:db1$t", max_depth=3))
+
+    assert client.expanded == ["table:db1$t#owner", "namespace:db1#owner"]
+    assert result["leaf"]["expanded"][0]["leaf"]["users"] == ["user:alice"]
+
+
+def test_relation_and_object_helpers_accept_both_shapes() -> None:
+    assert fga._relation_of("table:db1$t#reader") == "reader"
+    assert fga._relation_of("reader") == "reader"  # bare passes through; the shape is not guaranteed
+    assert fga._object_of("table:db1$t#reader", "fallback:x") == "table:db1$t"
+    assert fga._object_of("reader", "table:same") == "table:same"  # a rung on the SAME object

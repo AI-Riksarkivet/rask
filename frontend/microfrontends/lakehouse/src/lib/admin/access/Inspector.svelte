@@ -26,10 +26,17 @@
 		/** The derivation, already flattened to words by the explorer — rendered here as the chain. */
 		chain: readonly string[];
 		dsl: string | null;
+		/** Relations the MODEL says are directly assignable on the selected object's type. A grant can
+		 *  only ever name one of these — a derived `can_*` is rejected by the catalog — so the dialog
+		 *  offers exactly them instead of a free-text box that learns the rule from a 400. */
+		assignableRelations: readonly string[];
+		/** The signed-in subject, so "grant to me" is one click and nobody has to know their own
+		 *  opaque OIDC sub. */
+		mySub: string | null;
 		onchanged: () => void;
 	};
 
-	let { selected, verdict, chain, dsl, onchanged }: Props = $props();
+	let { selected, verdict, chain, dsl, assignableRelations, mySub, onchanged }: Props = $props();
 
 	let tuples = $state<Tuple[] | null>(null);
 	let status = $state(0);

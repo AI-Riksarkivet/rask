@@ -19,10 +19,12 @@
 		SvelteFlow,
 	} from '@xyflow/svelte';
 	import { Badge } from '@rask/ui/badge';
+	import { Button } from '@rask/ui/button';
 	import { goto } from '$app/navigation';
 	import { onMount, untrack } from 'svelte';
 	import { page } from '$app/state';
-	import { parse } from '@rask/api';
+	import { MeSchema, parse } from '@rask/api';
+	import { requestJSON } from '$lib/http';
 	import { ShieldAlert } from '@lucide/svelte';
 	import {
 		AccessModelSchema,
@@ -48,12 +50,21 @@
 		applyFacets,
 		type BuiltGraph,
 		buildNeighbourhood,
+		buildWholeGraph,
 		idType,
+		isSubject,
 		layout,
 		overlay,
 		type QueryKind,
 		walkDerivation,
 	} from './graph';
+
+	/**
+	 * Page ceiling for the whole-store read. 100 tuples/page, so 40 pages = 4000 tuples on the canvas —
+	 * past that a node-and-edge graph is unreadable anyway, and the honest move is to say the graph is
+	 * partial and let the facets narrow it, not to keep fetching into an illegible hairball.
+	 */
+	const MAX_GRAPH_PAGES = 40;
 
 	const EMPTY: BuiltGraph = {
 		nodes: [],
@@ -148,6 +159,17 @@
 	let dsl = $state<string | null>(null);
 	let modelTypes = $state<string[]>([]);
 	let registry = $state<string[]>([]);
+	/** Every tuple in the store — the canvas's base graph, and what the facet counts are computed on. */
+	let storeTuples = $state<Tuple[]>([]);
+	/** The store is bigger than MAX_GRAPH_PAGES. Said out loud rather than silently clipped. */
+	let truncated = $state(false);
+	/**
+	 * The signed-in identity. Load-bearing, not decoration: the OIDC `sub` here is what the tuple store
+	 * actually keys on, and under Dex that is an opaque base64 blob like `CiQwOGE4Njg0Yi1kYjg4…`. Nobody
+	 * can type that, and typing the obvious `user:alice` returns a CORRECT denial that reads like a bug.
+	 * So the subject field is seeded from this, and a "me" chip puts it back one click away.
+	 */
+	let me = $state<{ sub: string; name: string | null; estate_admin: boolean } | null>(null);
 
 	// onMount, not $effect: these two fetch once and depend on nothing reactive. An $effect with no
 	// dependencies happens to run once too, which is exactly why it is the wrong tool — it states
@@ -155,7 +177,23 @@
 	onMount(() => {
 		void loadModel();
 		void loadRegistry();
+		void loadMe();
+		// The canvas is never empty: the whole store is the resting state.
+		void loadWholeGraph();
 	});
+
+	async function loadMe(): Promise<void> {
+		const res = await requestJSON<unknown>('/capi', 'v1/me');
+		if (!res.ok) return;
+		try {
+			const parsed = parse(MeSchema, res.data);
+			me = { sub: parsed.sub, name: parsed.name, estate_admin: parsed.estate_admin };
+			// Seed the subject only if the user has not already typed or linked one.
+			if (!user.trim()) user = `user:${parsed.sub}`;
+		} catch (err) {
+			console.error(`me parse failure: ${String(err)}`);
+		}
+	}
 
 	async function loadModel(): Promise<void> {
 		const res = await fetchAccessModel();
@@ -194,6 +232,37 @@
 		return out;
 	});
 
+	/**
+	 * The relations a grant on the SELECTED object may name — the model's directly-assignable ones for
+	 * that type. Parsed from the DSL: a `define x: [ ... ]` line declares direct assignment, whereas a
+	 * `define x: y or z` line is derived and the catalog refuses to write it. Without this the dialog
+	 * was a free-text box that taught the rule via a 400 one round trip later.
+	 */
+	const assignableForSelected = $derived.by(() => {
+		if (!dsl || !selected) return [];
+		const target = idType(selected);
+		const lines = dsl.split('\n');
+		const start = lines.findIndex((line) => new RegExp(`^\\s*type\\s+${target}\\s*$`).test(line));
+		if (start < 0) return [];
+		const out: string[] = [];
+		for (const line of lines.slice(start + 1)) {
+			if (/^\s*type\s+\S+\s*$/.test(line)) break;
+			const match = /^\s*define\s+([A-Za-z0-9_]+)\s*:\s*\[/.exec(line);
+			if (match?.[1]) out.push(match[1]);
+		}
+		return out;
+	});
+
+	/** The handful of ids worth offering as one-click seeds: the estate root, every namespace, every
+	 *  registered table. Derived from the LIVE store and registry, so it is never a hardcoded guess. */
+	const entryPoints = $derived.by(() => {
+		const fromStore = [...new Set(storeTuples.flatMap((t) => [t.user, t.object]))]
+			.filter((id) => !isSubject(id))
+			.sort();
+		const fromRegistry = registry.map((t) => `table:${t}`);
+		return [...new Set([...fromStore, ...fromRegistry])].slice(0, 12);
+	});
+
 	const objectOptions = $derived([
 		...registry.map((t) => `table:${t}`),
 		...[...new Set(registry.map((t) => (t.includes('$') ? t.slice(0, t.indexOf('$')) : t)))].map(
@@ -201,19 +270,53 @@
 		),
 	]);
 
+	/**
+	 * Load the WHOLE tuple store as the base graph.
+	 *
+	 * This is the view's centre of gravity, and an earlier version got it backwards: the canvas began
+	 * empty and a query ADDED a handful of nodes, so "filter down" had nothing to filter and the first
+	 * thing anyone saw was an empty box with a free-text field. The whole point is the opposite — show
+	 * every relationship, then let a query highlight within it and the facets narrow it.
+	 *
+	 * `GET /v1/access/tuples` with NO filter reads the entire store, paginated. The page loop is
+	 * bounded: a store larger than the ceiling is reported as truncated rather than silently clipped,
+	 * because a graph that quietly omits half the estate is worse than one that admits it.
+	 */
+	async function loadWholeGraph(): Promise<void> {
+		const collected: Tuple[] = [];
+		let continuation: string | null = null;
+		truncated = false;
+		for (let page = 0; page < MAX_GRAPH_PAGES; page++) {
+			const res = await fetchTuples({
+				pageSize: 100,
+				...(continuation ? { continuation } : {}),
+			});
+			if (!res.ok) {
+				denied = res.status === 401 || res.status === 403;
+				if (!denied) failure = res.detail;
+				return;
+			}
+			try {
+				const parsed = parse(TuplesPageSchema, res.data);
+				collected.push(...parsed.tuples);
+				continuation = parsed.continuation;
+			} catch (err) {
+				console.error(`tuple store parse failure: ${String(err)}`);
+				return;
+			}
+			if (!continuation) break;
+			if (page === MAX_GRAPH_PAGES - 1) truncated = true;
+		}
+		storeTuples = collected;
+		// `focus` on nothing: the whole store has no single centre, so every node is ordinary until a
+		// query names one. buildWholeGraph lays subjects left and objects right off the tuple direction.
+		neighbourhood = buildWholeGraph(collected);
+	}
+
+	/** One object's own tuples, for the inspector — the canvas already holds the whole store. */
 	async function loadNeighbourhood(target: string): Promise<void> {
 		if (!target) return;
-		const res = await fetchTuples({ object: target, pageSize: 100 });
-		if (!res.ok) {
-			denied = res.status === 401 || res.status === 403;
-			return;
-		}
-		try {
-			const tuples: Tuple[] = parse(TuplesPageSchema, res.data).tuples;
-			neighbourhood = buildNeighbourhood(target, tuples);
-		} catch (err) {
-			console.error(`neighbourhood parse failure: ${String(err)}`);
-		}
+		await loadWholeGraph();
 	}
 
 	function fail(res: { status: number; detail: string }): void {
@@ -383,6 +486,53 @@
 }}
 	/>
 
+	<!-- One-click entry points. The old tabbed view had registry chips and this one dropped them for a
+	     free-text box, which meant the only way in was to already know that a subject id is
+	     `user:CiQwOGE4Njg0Yi1kYjg4…` and an object is `table:bronze$pages`. Nobody knows that. -->
+	<div class="flex flex-wrap items-center gap-1.5 text-xs">
+		<span class="text-muted-foreground">Jump to:</span>
+		{#if me}
+			<Button
+				size="sm"
+				variant="outline"
+				title="Your own OIDC subject — what the tuple store actually keys on"
+				onclick={() => {
+	user = `user:${me?.sub}`;
+	kind = 'what';
+	pushUrl({});
+}}
+			>
+				me{me.name ? ` (${me.name})` : ''}
+			</Button>
+		{/if}
+		{#each entryPoints as entry (entry)}
+			<Button
+				size="sm"
+				variant="outline"
+				class="font-mono"
+				onclick={() => {
+	object = entry;
+	selected = entry;
+	kind = 'who';
+	pushUrl({ seed: entry });
+}}
+			>
+				{entry}
+			</Button>
+		{:else}
+			<span class="text-muted-foreground">
+				nothing registered yet — the graph below is the whole tuple store
+			</span>
+		{/each}
+	</div>
+
+	{#if truncated}
+		<p class="text-xs text-warning">
+			The store is larger than this view loads — the graph is PARTIAL. Narrow it with the facets, or
+			query for what you need.
+		</p>
+	{/if}
+
 	{#if denied}
 		<div class="flex items-center gap-2 rounded-md border border-border p-3 text-sm">
 			<ShieldAlert size={16} /> The authorization store is estate-admin only.
@@ -432,6 +582,8 @@
 				{verdict}
 				{chain}
 				{dsl}
+				assignableRelations={assignableForSelected}
+				mySub={me?.sub ?? null}
 				onchanged={() => {
 	void loadNeighbourhood(seed);
 }}

@@ -580,6 +580,28 @@ async def expand(
 MAX_EXPAND_TREE_DEPTH = 6
 
 
+def _relation_of(userset: str) -> str:
+    """The relation half of an OpenFGA userset reference.
+
+    Expand answers with QUALIFIED usersets — `"table:db1$t#reader"`, not `"reader"` — in both the
+    `computed` leaf and each `tupleToUserset.computed` entry. Everything downstream wants the bare
+    relation, and passing the qualified form on is a malformed request rather than a wrong answer, so
+    it surfaces as a 500 from the server and a fail-closed 503 here. Bare input passes through, because
+    the shape is not guaranteed across versions and a stricter reader would trade one bug for another.
+    """
+    return userset.rpartition("#")[2] or userset
+
+
+def _object_of(userset: str, fallback: str) -> str:
+    """The object half of a qualified userset, or ``fallback`` when it carries none.
+
+    A `computed` leaf is by definition a rung on the SAME object, so the fallback is the normal path;
+    the split exists so a qualified reference is never silently re-anchored to the wrong object.
+    """
+    obj = userset.rpartition("#")[0]
+    return obj or fallback
+
+
 async def expand_tree(
     client: OpenFgaClient,
     *,
@@ -660,7 +682,13 @@ async def expand_tree(
                 leaf["continues"] = True
             return
         if (computed := leaf.get("computed")) is not None:
-            leaf["expanded"] = [await _walk(computed, target, depth + 1)]
+            # `computed.userset` comes back as a FULL `object#relation` ("table:db1$t#reader"), not a
+            # bare relation name. Feeding the whole string back as a relation makes the next Expand
+            # malformed and OpenFGA answers 500 — which this module dutifully fails closed into a 503,
+            # so the symptom was "the derivation is unavailable" on every relation that resolves
+            # through a rung, i.e. all of the interesting ones. Verified against the live store:
+            # expand(can_read_data, table:bronze$pages) → {"computed":{"userset":"table:bronze$pages#reader"}}.
+            leaf["expanded"] = [await _walk(_relation_of(computed), _object_of(computed, target), depth + 1)]
             return
         if (ttu := leaf.get("tuple_to_userset")) is not None:
             # `tupleset` arrives as "<object>#<relation>"; the relation half is the edge to follow, and
@@ -679,7 +707,8 @@ async def expand_tree(
             expanded: list[dict[str, Any]] = []
             for parent in parents:
                 for computed_relation in ttu.get("computed") or []:
-                    expanded.append(await _walk(computed_relation, parent, depth + 1))
+                    # Same normalisation as the `computed` leaf above: these arrive qualified too.
+                    expanded.append(await _walk(_relation_of(computed_relation), parent, depth + 1))
             leaf["expanded"] = expanded
 
     return await _walk(relation, obj, 1)

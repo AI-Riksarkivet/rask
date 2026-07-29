@@ -74,6 +74,14 @@ const SUBJECT_TYPES = new Set(['user', 'team', 'role']);
 
 export const isSubject = (id: string): boolean => SUBJECT_TYPES.has(idType(id));
 
+/** The relation half of a userset reference. Expand answers `"table:db1$t#reader"`, not `"reader"`,
+ *  and the qualified form used as a label repeats the object on an edge that already connects it.
+ *  A bare relation passes through — the shape is not guaranteed across OpenFGA versions. */
+export const relationOf = (userset: string): string => {
+	const hash = userset.lastIndexOf('#');
+	return hash === -1 ? userset : userset.slice(hash + 1) || userset;
+};
+
 // --------------------------------------------------------------------------- //
 // The derivation tree → nodes + edges
 // --------------------------------------------------------------------------- //
@@ -183,8 +191,12 @@ function visit(
 
 	// A same-object rung: `reader` satisfied because the subject is `writer` here.
 	if (leaf.computed) {
+		// OpenFGA answers `computed` QUALIFIED — "table:bronze$pages#writer", not "writer". Used raw it
+		// becomes the edge label, and the canvas reads "table:bronze$pages#writer · inherited from" on
+		// an edge already drawn between those two nodes: the object repeated, the rung buried.
+		const rung = relationOf(leaf.computed);
 		for (const child of leaf.expanded ?? []) {
-			visit(child, anchor, leaf.computed, depth, 'implied-by', acc);
+			visit(child, anchor, rung, depth, 'implied-by', acc);
 		}
 	}
 
@@ -210,8 +222,57 @@ function finish(acc: Walked): BuiltGraph {
 // Tuples → the neighbourhood graph (what is on screen before any query)
 // --------------------------------------------------------------------------- //
 
-/** One hop of raw tuples around a seed. This is the "see ALL relationships" baseline the query then
- *  narrows — without it the canvas is empty until someone knows what to ask, which is backwards. */
+/**
+ * The ENTIRE tuple store as one graph — the canvas's resting state.
+ *
+ * There is no seed and no focus: the store has no centre, so nothing is privileged until a query
+ * names something. This is what "see all relationships, then filter down" actually requires, and its
+ * absence was the view's central defect — the canvas opened empty and a query *added* a few nodes, so
+ * the facet rail had nothing to narrow and the first thing anyone met was a blank box.
+ *
+ * Depth is assigned by ROLE rather than by hops, because a whole-store graph has no distance-from-
+ * anything to measure: subjects (`user`/`team`/`role`) sit left, the containment spine
+ * (warehouse → project → namespace) in the middle, and leaf resources (table, view, transaction) right.
+ * That is the direction tuples already read in, so arrows run left-to-right here as everywhere else.
+ */
+export function buildWholeGraph(tuples: readonly Tuple[]): BuiltGraph {
+	const CONTAINER_DEPTH: Record<string, number> = {
+		warehouse: 0,
+		project: 0,
+		namespace: 1,
+		table: 2,
+		materialized_view: 2,
+		transaction: 2,
+		model: 2,
+	};
+	const nodes = new Map<string, GraphNode>();
+	const add = (id: string) => {
+		if (nodes.has(id)) return;
+		const type = idType(id);
+		nodes.set(id, {
+			id,
+			fgaType: type,
+			label: idLabel(id),
+			role: isSubject(id) ? 'subject' : 'container',
+			depth: isSubject(id) ? -1 : (CONTAINER_DEPTH[type] ?? 1),
+			via: null,
+		});
+	};
+	const edges: GraphEdge[] = [];
+	const seen = new Set<string>();
+	for (const t of tuples) {
+		add(t.user);
+		add(t.object);
+		const id = `${t.user}->${t.object}:${t.relation}`;
+		if (seen.has(id)) continue;
+		seen.add(id);
+		edges.push({ id, source: t.user, target: t.object, label: t.relation, onPath: false });
+	}
+	const list = [...nodes.values()];
+	return { nodes: list, edges, ...countFacets(list, edges) };
+}
+
+/** One hop of raw tuples around a seed — used for a query's own answer, where a centre does exist. */
 export function buildNeighbourhood(seed: string, tuples: readonly Tuple[]): BuiltGraph {
 	const nodes = new Map<string, GraphNode>();
 	nodes.set(seed, {
