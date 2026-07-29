@@ -72,6 +72,23 @@ zones additionally get the media plane's upstreams, scoped per zone.
 {{- /* Per-zone resource tier if values(-prod) define one (resources.web-<zone>), else the
        shared frontend tier. */ -}}
 {{- $tier := (index $root.Values.resources $comp) | default $fe.resources -}}
+{{- /* dev.reload runs a REAL SvelteKit/vite build INSIDE this container — Tilt's live_update syncs
+       src/ and then re-runs `bun run build` so the compiled build/ the Bun server serves is current.
+       The shipped tier is 256Mi, which merely SERVES a prebuilt bundle; a vite build in that is
+       OOMKilled instantly. Observed exactly that: Tilt's build history reported
+
+         command "bun run build" failed with exit code: 137 (killed by container runtime)
+
+       and, because the partial build had already truncated build/, the zone then CrashLoopBackOff'd —
+       the reload not just failing but taking the running zone down with it. Pre-existing: the previous
+       docker_build_with_restart wiring ran the same in-container build and would have hit the same
+       wall, but live_update never fired, so it was never reached.
+
+       Dev only, and deliberately not folded into frontend.resources: a 2Gi limit on a process whose
+       job is to serve a compiled bundle would be wrong everywhere except here. */ -}}
+{{- if $root.Values.dev.reload -}}
+{{- $tier = $fe.devResources | default (dict "requests" (dict "cpu" "100m" "memory" "512Mi") "limits" (dict "cpu" "2" "memory" "2Gi")) -}}
+{{- end -}}
 {{- /* rask's frontend.securityContext keys WIN; lance-ns's restricted-PodSecurity
        hardening (runAsNonRoot + readOnlyRootFilesystem + RuntimeDefault seccomp) fills
        the rest. A read-only rootfs is feasible because /tmp is an emptyDir below. */ -}}
@@ -126,6 +143,24 @@ spec:
         - name: {{ .name }}
           image: "{{ $root.Values.image.repository }}{{ if $root.Values.image.repository }}/{{ end }}web-{{ .name }}:{{ required "frontend.image.tag must be set (a release tag in prod; `dev` locally), or a per-zone `tag` on the frontend.apps entry" $tag }}"
           imagePullPolicy: {{ $fe.image.pullPolicy | default $root.Values.image.pullPolicy }}
+          {{- /* dev.reload: make the zone server RESTART ITSELF after a live_update.
+
+                 A zone image runs `bun build/index.js` and serves the COMPILED build/ dir, so syncing
+                 src/ changes nothing until `bun run build` re-runs AND the process re-execs. Tilt's
+                 restart_process extension used to supply that re-exec, but it cannot be used with a
+                 Dagger-built image: custom_build_with_restart calls fail() on `skips_local_docker`
+                 ("because it needs access to the image") and layers its restart wrapper with a second
+                 docker_build — i.e. it requires the image in the local docker daemon, which a publish
+                 straight to the registry deliberately avoids.
+
+                 `bun --watch` removes the need for it: bun re-execs when the entry file or anything it
+                 imports changes, and `bun run build` rewrites build/index.js itself. Verified: a watched
+                 process printed BOOT twice when an imported module was edited under it.
+
+                 args (not command) so the image's `tini --` ENTRYPOINT still reaps PID 1. */}}
+          {{- if $root.Values.dev.reload }}
+          args: ["bun", "--watch", "build/index.js"]
+          {{- end }}
           securityContext:
             {{- toYaml $sc | nindent 12 }}
           {{- include "lance.preStop" $root | nindent 10 }}

@@ -22,6 +22,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Toolchain rules
 
+- **DAGGER BUILDS EVERY IMAGE. NOT DOCKER. This is not negotiable.** Local, CI and Tilt all reach
+  BuildKit through `dagger call` against `.dagger/images.go` — `dagger call image --name=<stem>` for
+  anything in `.docker/`, `dagger call zone-image --zone=<zone>` for a micro-frontend. **`docker build`
+  and `docker buildx build` must not appear** in the `Makefile`, `scripts/`, `.github/workflows/` or the
+  `Tiltfile`; `scripts/dagger-image.sh` is the single seam every non-Tilt build goes through.
+  The dockerfile stays the single source of truth — Dagger changes the *driver*, not the definition, so
+  a build cannot behave one way locally and another in CI.
+  **Do not add a docker fallback switch.** A `RASK_TILT_BUILDER=docker` escape hatch was added once and
+  rejected outright; it is gone. "Leave it on docker for now" is not an available answer — if a tool
+  cannot work with a Dagger-built image (Tilt's `restart_process` extension could not), solve it.
 - **JS/TS uses Bun exclusively.** Use `bun` / `bunx`. `npm`, `npx`, `pnpm`, `pnpx` are not on PATH and MCP install commands assume `bunx`.
 - **The JS/TS plane lives in `frontend/`** — its own bun + Turborepo workspace root (its own `package.json`, `bun.lock`, `turbo.json`). Every bun/turbo call is **scoped to it**: `bun --cwd=frontend run <task>`, `bunx turbo --cwd=frontend run <task>`. Use the `--cwd=` form — `bun --cwd <path>` with a space silently no-ops.
 - **JS/TS lint + format is oxlint + oxfmt**, not ESLint/Prettier (both deleted). Svelte support comes from `@rsvelte/oxlint-plugin` (lint) and `@rsvelte/fmt` (format); configs live at `frontend/.oxlintrc.json` and `frontend/.oxfmtrc.json`. `lint` / `fmt` / `fmt:check` are **per-package turbo tasks**, run from `frontend/`.

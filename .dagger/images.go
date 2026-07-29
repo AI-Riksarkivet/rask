@@ -28,6 +28,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"dagger/rask/internal/dagger"
 )
@@ -38,47 +39,110 @@ import (
 // .docker/rest-catalog.dockerfile.
 const devVenvOwner = "10001:10001"
 
-// Image builds one of the repo's Python deployables from its own dockerfile.
+// venvImages are the dockerfiles that DECLARE `ARG VENV_OWNER`. Passing a build arg a dockerfile never
+// declares is not an error, merely a warning — but it is also a lie about which images the dev-loop
+// switch reaches, so the set is explicit and grep-able rather than "whatever we happened to pass".
+var venvImages = map[string]bool{
+	"rest-catalog": true,
+	"gateway":      true,
+	"compute":      true,
+	"controlplane": true,
+}
+
+// provenance turns the OCI label args into BuildArgs, dropping empties.
 //
-// `name` is the dockerfile stem under `.docker/` — gateway, compute, controlplane, rest-catalog.
-// `dev` (default true here because the caller is the dev loop) passes VENV_OWNER so the image can accept
-// a live_update sync; leave it false for anything shipped.
+// These are NOT computed here on purpose. A Dagger Function is sandboxed and has no host access, so it
+// cannot read git — but more importantly, stamping `time.Now()` inside the module would change the build
+// args on every single invocation and defeat the layer cache the whole exercise exists to keep. The
+// caller (the Makefile, CI) supplies them; an unset value is simply omitted so the dockerfile's own
+// default applies rather than an empty label being baked in.
+func provenance(buildDate, vcsRef, version string) []dagger.BuildArg {
+	out := []dagger.BuildArg{}
+	for _, a := range []dagger.BuildArg{
+		{Name: "BUILD_DATE", Value: buildDate},
+		{Name: "VCS_REF", Value: vcsRef},
+		{Name: "VERSION", Value: version},
+	} {
+		if a.Value != "" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// extraArgs parses KEY=VALUE strings so ANY dockerfile is buildable through this one function —
+// cnpg-age-ext needs AGE_REF/CNPG_BASE, and a future image will need something else. Without this the
+// module would need a new Go function per dockerfile, which is how a build system drifts back into
+// special cases. A token with no "=" is ignored rather than silently becoming an empty-valued arg.
+func extraArgs(kv []string) []dagger.BuildArg {
+	out := []dagger.BuildArg{}
+	for _, s := range kv {
+		if i := strings.Index(s, "="); i > 0 {
+			out = append(out, dagger.BuildArg{Name: s[:i], Value: s[i+1:]})
+		}
+	}
+	return out
+}
+
+// Image builds ANY deployable from its own dockerfile under .docker/.
+//
+// `name` is the dockerfile stem: gateway, compute, controlplane, rest-catalog, ray-cluster, ray-lance,
+// runner, assist-runner, cnpg-age-ext.
+//
+// `dev` defaults to FALSE. It makes /opt/venv writable by uid 10001 so Tilt's live_update can sync into
+// site-packages, and it must never be on for a shipped image — a writable venv is a persistence surface
+// for anything that achieves code execution. The Tiltfile passes --dev=true explicitly; nothing else does.
 func (m *Rask) Image(
 	// +ignore=[".venv", ".git", "node_modules", "frontend/node_modules", "**/.svelte-kit", "**/.turbo", ".localbin"]
 	// +defaultPath="/"
 	src *dagger.Directory,
-	// Dockerfile stem under .docker/ (gateway | compute | controlplane | rest-catalog).
+	// Dockerfile stem under .docker/.
 	name string,
-	// Make /opt/venv writable by the app user so Tilt can hot-reload into it. Dev only.
+	// Make /opt/venv writable by the app user so Tilt can hot-reload into it. DEV ONLY.
 	// +optional
-	// +default=true
+	// +default=false
 	dev bool,
+	// +optional
+	buildDate string,
+	// +optional
+	vcsRef string,
+	// +optional
+	version string,
+	// Extra build args as KEY=VALUE (e.g. AGE_REF=..., CNPG_BASE=...).
+	// +optional
+	buildArg []string,
 ) *dagger.Container {
-	args := []dagger.BuildArg{}
-	if dev {
+	args := provenance(buildDate, vcsRef, version)
+	if dev && venvImages[name] {
 		args = append(args, dagger.BuildArg{Name: "VENV_OWNER", Value: devVenvOwner})
 	}
-	return src.
-		DockerBuild(dagger.DirectoryDockerBuildOpts{
-			Dockerfile: fmt.Sprintf(".docker/%s.dockerfile", name),
-			BuildArgs:  args,
-		})
+	args = append(args, extraArgs(buildArg)...)
+	return src.DockerBuild(dagger.DirectoryDockerBuildOpts{
+		Dockerfile: fmt.Sprintf(".docker/%s.dockerfile", name),
+		BuildArgs:  args,
+	})
 }
 
 // ZoneImage builds one micro-frontend zone from the single parametrized frontend dockerfile.
 //
-// `zone` is a directory under frontend/microfrontends — home, lakehouse, media, annotator, compute,
-// studio, train — and becomes the APP build arg, exactly as `make frontend-images` passes it.
+// `zone` is a directory under frontend/microfrontends and becomes the APP build arg, exactly as
+// `make frontend-images` passed it to docker buildx before this module took the build over.
 func (m *Rask) ZoneImage(
 	// +ignore=[".venv", ".git", "node_modules", "frontend/node_modules", "**/.svelte-kit", "**/.turbo", ".localbin"]
 	// +defaultPath="/"
 	src *dagger.Directory,
 	// Zone directory under frontend/microfrontends.
 	zone string,
+	// +optional
+	buildDate string,
+	// +optional
+	vcsRef string,
+	// +optional
+	version string,
 ) *dagger.Container {
-	return src.
-		DockerBuild(dagger.DirectoryDockerBuildOpts{
-			Dockerfile: ".docker/frontend.dockerfile",
-			BuildArgs:  []dagger.BuildArg{{Name: "APP", Value: zone}},
-		})
+	args := append(provenance(buildDate, vcsRef, version), dagger.BuildArg{Name: "APP", Value: zone})
+	return src.DockerBuild(dagger.DirectoryDockerBuildOpts{
+		Dockerfile: ".docker/frontend.dockerfile",
+		BuildArgs:  args,
+	})
 }

@@ -75,7 +75,7 @@ helm repo add perses  https://perses.github.io/helm-charts           >/dev/null 
 helm repo update >/dev/null && helm dependency build ./chart >/dev/null
 
 step "2/8 build + side-load the app image"
-docker build -f .docker/rest-catalog.dockerfile -t "$CATALOG_IMG" . >/dev/null
+bash scripts/dagger-image.sh --name rest-catalog --tag "$CATALOG_IMG" >/dev/null
 # EXPLICIT load + digest check: the same-":dev"-tag gotcha (a rebuilt tag does NOT update a running pod
 # under IfNotPresent) has bitten this repo repeatedly. Capture the freshly-built image id, load it, and
 # verify the kind node's containerd actually holds that digest — a silent no-op load would otherwise

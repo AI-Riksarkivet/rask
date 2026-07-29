@@ -41,9 +41,9 @@ default_registry('localhost:5000')
 # SAME `.docker/*.dockerfile` to BuildKit through Dagger, so the dockerfile stays the single source of
 # truth and this is a change of driver, not a second build definition.
 #
-# Set RASK_TILT_BUILDER=docker to fall back to Tilt's native docker_build — worth knowing about,
-# because the two do not share a build cache, so switching costs one cold rebuild each way.
-BUILDER = os.getenv('RASK_TILT_BUILDER', 'dagger')
+# There is no docker fallback. One driver, everywhere — the Makefile (`k3s-build`, `frontend-images`),
+# the e2e stack scripts, CI (which invokes those make targets) and this file all reach BuildKit through
+# `dagger call`, so a build cannot behave one way locally and another in CI.
 DAGGER_ENGINE = os.getenv('DAGGER_ENGINE_NAME', 'dagger-engine-rask')
 
 # THE REGISTRY IS ADDRESSED TWICE, ON PURPOSE. Tilt and k3s pull via `localhost:5000`; Dagger pushes to
@@ -64,27 +64,43 @@ def dagger_publish(fn, flags):
         'publish --address="$ADDR"',
     ])
 
+# Generated/derived trees that live INSIDE a watched dep and match no sync rule.
+#
+# Tilt refuses a live_update when a changed file matches no sync — "Found file(s) not matching any sync"
+# — and falls back to a full rebuild. That is correct behaviour (it cannot know the file is irrelevant),
+# and it is exactly what happened to the zones: `.svelte-kit/generated/server/internal.js` is rewritten
+# by SvelteKit under frontend/, so every zone edit was answered with a rebuild instead of a sync while
+# the LiveUpdate spec looked perfect.
+#
+# `.dockerignore` does NOT cover this. It filters what goes into a BUILD CONTEXT; `custom_build(deps=…)`
+# is a separate WATCH list that Tilt does not read it for. The two have to be stated separately.
+IGNORE = [
+    '**/.svelte-kit',
+    '**/.turbo',
+    '**/node_modules',
+    '**/__pycache__',
+    '**/*.pyc',
+]
+
 def build_image(ref, dockerfile, context_deps, live_update, dagger_fn, dagger_flags, build_args = {}):
-    """docker_build or custom_build(dagger), same live_update either way."""
-    if BUILDER == 'dagger':
-        custom_build(
-            ref,
-            dagger_publish(dagger_fn, dagger_flags),
-            deps=context_deps,
-            # Dagger pushed straight to the registry: the image is NOT in the local docker daemon, and
-            # Tilt must not push it a second time.
-            skips_local_docker=True,
-            disable_push=True,
-            live_update=live_update,
-        )
-    else:
-        docker_build(
-            ref, '.',
-            dockerfile=dockerfile,
-            only=context_deps,
-            build_args=build_args,
-            live_update=live_update,
-        )
+    """Build via Dagger and hand Tilt the pushed ref.
+
+    `dockerfile` and `build_args` are not passed to Dagger — the Dagger Function names the dockerfile
+    itself and takes typed flags. They stay in the signature because they are the honest description of
+    what this image IS, and because the zone-contract test and a reader both look here to answer "which
+    dockerfile builds this ref?" without cross-referencing .dagger/images.go.
+    """
+    custom_build(
+        ref,
+        dagger_publish(dagger_fn, dagger_flags),
+        deps=context_deps,
+        # Dagger pushed straight to the registry: the image is NOT in the local docker daemon, and
+        # Tilt must not push it a second time.
+        skips_local_docker=True,
+        disable_push=True,
+        ignore=IGNORE,
+        live_update=live_update,
+    )
 
 # NOTE: the dapr/nats/openfga `helm_repo` resources were removed with `helm_resource` (2026-07-29).
 # They existed so that extension could resolve the SUBCHARTS. Tilt no longer deploys subcharts at all
@@ -117,7 +133,7 @@ build_image(
     '.docker/rest-catalog.dockerfile',
     ['.docker', 'pyproject.toml', 'uv.lock', 'packages', 'services'],
     dagger_fn='image',
-    dagger_flags='--name=rest-catalog',
+    dagger_flags='--name=rest-catalog --dev=true',
     build_args=VENV_OWNER,
     live_update=[
         # The src-layout rewrite (2026-07-28) made this image install its members as WHEELS into
@@ -155,7 +171,7 @@ for svc in ['gateway', 'controlplane', 'compute']:
         '.docker/' + svc + '.dockerfile',
         ['.docker', 'pyproject.toml', 'uv.lock', 'packages', 'services'],
         dagger_fn='image',
-        dagger_flags='--name=' + svc,
+        dagger_flags='--name=' + svc + ' --dev=true',
         build_args=VENV_OWNER,
         live_update=[
             sync('services/' + svc + '/src/' + svc, SITE + '/' + svc),
@@ -173,8 +189,6 @@ for svc in ['gateway', 'controlplane', 'compute']:
 # in-container — sync, rebuild, restart. That is seconds rather than Vite's sub-second HMR, and it is
 # the honest trade for running against the real cluster. For pure UI work `make dev-frontends` is
 # still the faster loop; this is for when the backend is the point.
-load('ext://restart_process', 'docker_build_with_restart')
-
 # DERIVED from the chart, not hand-kept in step with it. The comment here used to say "kept in step
 # with `Makefile:ZONES` and `frontend.apps`" and then listed seven zones by hand — and it had already
 # drifted: `workbench` landed (b021499) as an eighth, the chart deployed it, Tilt did not build it, and
@@ -185,32 +199,37 @@ load('ext://restart_process', 'docker_build_with_restart')
 # what is running. `read_yaml` is a Tilt builtin; a new zone joins the loop by existing.
 ZONES = [app['name'] for app in read_yaml('chart/values.yaml')['frontend']['apps']]
 
+# The zones build through DAGGER like everything else, and the `restart_process` extension is GONE.
+#
+# It could not survive the move, and that is a fact about the extension rather than a compromise:
+# `custom_build_with_restart` calls fail() on `skips_local_docker` — its own message is "because it
+# needs access to the image" — and on `disable_push`, then layers its restart wrapper by running a
+# SECOND `docker_build` with generated dockerfile_contents FROM the base image
+# (tilt_modules/.../restart_process/Tiltfile lines 68, 110, 138-143). So it structurally requires the
+# image in the local docker daemon, which is exactly what publishing straight to the registry avoids.
+#
+# The restart it provided is now the IMAGE's own job, which is where it belonged: under `dev.reload` the
+# chart runs the zone as `bun --watch build/index.js` (chart/templates/frontends.yaml), and bun re-execs
+# whenever the entry file or anything it imports changes — which `bun run build` does to build/index.js
+# on every live_update. Verified directly: a watched process printed BOOT twice when an imported module
+# was rewritten under it. That also deletes the whole `restart_file` hazard documented here before — the
+# baked-in /tmp/.restart-proc that the chart's emptyDir masked, CrashLoopBackOff-ing all seven zones.
 for zone in ZONES:
-    docker_build_with_restart(
-        'web-' + zone + ':dev', '.',
-        dockerfile='.docker/frontend.dockerfile',
-        build_args={'APP': zone},
+    build_image(
+        'web-' + zone + ':dev',
+        '.docker/frontend.dockerfile',
         # The whole frontend workspace: bun's `--frozen-lockfile` fails with "Workspace not found" if
         # any member is absent, so this cannot be narrowed to one zone's directory.
-        only=['.docker', 'frontend'],
-        entrypoint=['bun', 'build/index.js'],
-        # NOT the default /tmp/.restart-proc. `docker_build_with_restart` bakes that file into the
-        # image and its entr-based wrapper stats it at startup — but the chart mounts an EMPTY
-        # emptyDir over /tmp (the writable scratch that makes readOnlyRootFilesystem feasible), which
-        # masks the image's /tmp entirely and takes the file with it. entr then exits immediately
-        # with "unable to stat '/tmp/.restart-proc'" and every zone CrashLoopBackOffs — which is
-        # exactly what happened to all seven on 2026-07-29 the moment they were enabled.
-        # /app/app — the symlinked app dir, which IS chowned to 10001. Not /tmp (the chart mounts an
-        # empty emptyDir over it, masking the baked-in file, so entr exits with "unable to stat" and
-        # every zone CrashLoopBackOffs — which is what happened to all seven on 2026-07-29), and not
-        # /app either: that directory is created by WORKDIR as root, so the `touch` the extension
-        # injects fails the BUILD with exit 1 as UID 10001.
-        restart_file='/app/app/.restart-proc',
+        ['.docker', 'frontend'],
+        dagger_fn='zone-image',
+        dagger_flags='--zone=' + zone,
+        build_args={'APP': zone},
         live_update=[
             sync('frontend/microfrontends/' + zone + '/src', '/app/app/src'),
             # Shared packages: an edit to @rask/ui or @rask/api must reach every zone that renders it,
             # or the one place a change is most likely to be wrong is the one place it is invisible.
             sync('frontend/packages', '/app/packages'),
+            # Rebuild only; `bun --watch` notices build/index.js was rewritten and re-execs itself.
             run('bun run build', trigger=['frontend/microfrontends/' + zone + '/src', 'frontend/packages']),
         ],
     )

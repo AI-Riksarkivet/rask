@@ -92,20 +92,19 @@ openapi-check: openapi
 # building anything: the gate's whole claim ("the dockerfile still builds") had never been tested.
 #
 # ZONES is `?=`, so ci.yml's scan of microfrontends/*/package.json wins when exported; locally the
-# committed list applies. The three OCI args are the provenance labels frontend.dockerfile declares
-# (BUILD_DATE / VCS_REF / VERSION); `|| exit 1` stops at the FIRST failing zone rather than reporting
-# the last one's status for all of them.
+# committed list applies. `|| exit 1` stops at the FIRST failing zone rather than reporting the last
+# one's status for all of them.
+#
+# The build itself goes through DAGGER (scripts/dagger-image.sh -> `dagger call zone-image`), like every
+# other image in this repo since 2026-07-29. The dockerfile is unchanged and still declares the OCI
+# provenance args (BUILD_DATE / VCS_REF / VERSION); the helper supplies them, because a Dagger Function
+# is sandboxed and cannot read git — and stamping a timestamp inside the module would change the build
+# args on every invocation and defeat the layer cache.
 FRONTEND_TAG ?= dev
 
 frontend-images: ## Build every zone image from the one parametrized dockerfile (web-<zone>:$(FRONTEND_TAG))
 	@for a in $(ZONES); do \
-	  echo ">> building web-$$a:$(FRONTEND_TAG) (frontend.dockerfile APP=$$a)"; \
-	  docker buildx build -f .docker/frontend.dockerfile \
-	    --build-arg APP=$$a \
-	    --build-arg BUILD_DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-	    --build-arg VCS_REF="$$(git rev-parse HEAD)" \
-	    --build-arg VERSION="$(FRONTEND_TAG)" \
-	    -t web-$$a:$(FRONTEND_TAG) --load . || exit 1; \
+	  VERSION="$(FRONTEND_TAG)" bash scripts/dagger-image.sh --zone $$a --tag web-$$a:$(FRONTEND_TAG) || exit 1; \
 	done
 
 # ---- chart gates (prod overlay + alert rules) -------------------------------
@@ -369,19 +368,17 @@ k3s-deps: ## Add subchart repos + vendor chart dependencies into chart/charts/
 	@helm repo update >/dev/null
 	helm dependency build ./chart
 
-k3s-build: ## Build all fleet + frontend zone + ray-cluster images as :dev (native arm64)
+k3s-build: ## Build all fleet + frontend zone + ray-cluster images as :dev (via Dagger)
 	@for s in $(COMPOSE_IMAGES); do \
-	  echo ">> building $$s:dev"; \
-	  docker buildx build -f .docker/$$s.dockerfile -t $$s:dev --load . || exit 1; \
+	  bash scripts/dagger-image.sh --name $$s --tag $$s:dev || exit 1; \
 	done
 	@for a in $(ZONES); do \
-	  echo ">> building web-$$a:dev (frontend.dockerfile APP=$$a)"; \
-	  docker buildx build -f .docker/frontend.dockerfile --build-arg APP=$$a -t web-$$a:dev --load . || exit 1; \
+	  bash scripts/dagger-image.sh --zone $$a --tag web-$$a:dev || exit 1; \
 	done
-	docker buildx build -f .docker/ray-cluster.dockerfile -t ray-cluster:dev --load .
+	bash scripts/dagger-image.sh --name ray-cluster --tag ray-cluster:dev
 	# The lakehouse fleet image — dockerfile name (rest-catalog) != image name, so it can't
 	# ride the COMPOSE_IMAGES loop. Same build scripts/e2e_stack.sh does.
-	docker buildx build -f .docker/rest-catalog.dockerfile -t lance-rest-catalog:dev --load .
+	bash scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
 
 k3s-import: ## Side-load :dev images into k3s containerd
 	@for s in $(K3S_IMAGES); do \

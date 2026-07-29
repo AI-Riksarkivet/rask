@@ -87,8 +87,8 @@ helm repo add openfga https://openfga.github.io/helm-charts        >/dev/null 2>
 helm repo add greptime https://greptimeteam.github.io/helm-charts/ >/dev/null 2>&1 || true
 helm repo add perses  https://perses.github.io/helm-charts         >/dev/null 2>&1 || true
 helm repo update >/dev/null && helm dependency build ./chart >/dev/null
-docker build -f .docker/rest-catalog.dockerfile -t "$CATALOG_IMG" . >/dev/null
-docker build -f .docker/ray-lance.dockerfile -t "$RAY_IMG" . >/dev/null
+bash scripts/dagger-image.sh --name rest-catalog --tag "$CATALOG_IMG" >/dev/null
+bash scripts/dagger-image.sh --name ray-lance --tag "$RAY_IMG" >/dev/null
 kind load docker-image "$CATALOG_IMG" "$RAY_IMG" --name "$CLUSTER"
 
 step "2/6 deploy the governed Ray-ON stack (auth+fga+compute+ray+quality ON, openbao/observability/web OFF)"
