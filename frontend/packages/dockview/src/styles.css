@@ -115,6 +115,43 @@
 	overflow: auto;
 }
 
+/* ── panel alerts ──────────────────────────────────────────────────────────────────────────────
+   The WHOLE panel highlights, not a dot on the tab. That is the owner's specification and it is the
+   point: a background panel changing silently IS the failure, and a 6px mark on a tab nobody is
+   looking at reproduces it.
+
+   An inset ring rather than a background wash — a wash would fight every panel's own surface and
+   make text unreadable at exactly the moment you want it read. `inset` so it cannot add to layout
+   and shift the content it is drawing attention to.
+
+   NO GSAP, deliberately: dockview rewrites panel transforms every frame under
+   `defaultRenderer: 'always'`, so a tween on the same property is a second writer and reads as jank
+   (see rask-styling § Theming dockview). A CSS animation on box-shadow touches nothing dockview owns.
+   ─────────────────────────────────────────────────────────────────────────────────────────────── */
+.rask-dock-panel[data-alert] {
+	box-shadow: inset 0 0 0 2px var(--ring);
+	animation: rask-dock-alert 1.4s ease-in-out infinite;
+}
+.rask-dock-panel[data-alert='warn'] {
+	--rask-alert-color: var(--warning, var(--ring));
+	box-shadow: inset 0 0 0 2px var(--rask-alert-color);
+}
+.rask-dock-panel[data-alert='error'] {
+	--rask-alert-color: var(--destructive);
+	box-shadow: inset 0 0 0 2px var(--rask-alert-color);
+}
+@keyframes rask-dock-alert {
+	50% {
+		box-shadow: inset 0 0 0 2px transparent;
+	}
+}
+/* A pulse is an accessibility hazard for some readers, and the ring alone still carries the signal. */
+@media (prefers-reduced-motion: reduce) {
+	.rask-dock-panel[data-alert] {
+		animation: none;
+	}
+}
+
 .rask-dock-missing {
 	display: grid;
 	place-items: center;

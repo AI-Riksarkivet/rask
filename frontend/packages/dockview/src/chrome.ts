@@ -33,8 +33,17 @@
 import type { DroptargetOverlayModel } from 'dockview';
 
 export interface DockChrome {
-	/** Split the active panel out of its group, up/down/left/right. Header buttons + context menu. */
+	/** Split the active panel out of its group, up/down/left/right. Header button + context menu. */
 	split: boolean;
+	/**
+	 * The `+` control: add a registered panel to this group, chosen from a searchable list.
+	 *
+	 * A DIFFERENT control from {@link split}, and both are wanted. Split acts on the PANE — divide this
+	 * space in a direction. `+` acts on the CONTENT — put a named panel here. Conflating them is what
+	 * produced a split button whose only possible outcome was a second copy of the panel you were
+	 * already looking at.
+	 */
+	addPanel: boolean;
 	/** Expand one group to fill the dock; the button flips to restore while maximized. */
 	maximize: boolean;
 	/** Lift a group into a draggable overlay card above the grid. */
@@ -58,6 +67,11 @@ export interface DockChrome {
 	keepEmptyGroups: boolean;
 	/** Widen the whole-layout edge drop zone so it is findable. See {@link EDGE_DROP}. */
 	edgeDrop: boolean;
+	/**
+	 * Panel watchers: a panel raises an alert, the WHOLE panel highlights, and a header bell offers
+	 * acknowledge/mute. Off means panels receive `NOOP_ALERT` and no bell is rendered.
+	 */
+	alerts: boolean;
 }
 
 export interface DockChromeOptions {
@@ -69,6 +83,14 @@ export interface DockChromeOptions {
 	 * utilities resolve there with no extra work — the file itself only needs an empty body.
 	 */
 	popoutUrl?: string;
+	/**
+	 * How long an alert highlight lingers once its panel is actually ON SCREEN, in ms.
+	 *
+	 * The timer only starts when the panel becomes visible — clearing while hidden would defeat the
+	 * point, since surviving until someone looks is what the alert is for. `0` never auto-clears, so
+	 * every alert waits for the bell.
+	 */
+	alertLingerMs?: number;
 }
 
 /**
@@ -91,6 +113,7 @@ export const EDGE_DROP: DroptargetOverlayModel = {
 /** Everything on. A workbench with no visible controls is the defect this package exists to avoid. */
 export const DEFAULT_CHROME: DockChrome = {
 	split: true,
+	addPanel: true,
 	maximize: true,
 	float: true,
 	popout: true,
@@ -98,6 +121,7 @@ export const DEFAULT_CHROME: DockChrome = {
 	keyboard: true,
 	keepEmptyGroups: true,
 	edgeDrop: true,
+	alerts: true,
 };
 
 /** Normalise the prop: `undefined` = all on, `false` = none, a partial = defaults with overrides. */
@@ -105,6 +129,7 @@ export function resolveChrome(chrome: Partial<DockChrome> | boolean | undefined)
 	if (chrome === false) {
 		return {
 			split: false,
+			addPanel: false,
 			maximize: false,
 			float: false,
 			popout: false,
@@ -112,6 +137,7 @@ export function resolveChrome(chrome: Partial<DockChrome> | boolean | undefined)
 			keyboard: false,
 			keepEmptyGroups: false,
 			edgeDrop: false,
+			alerts: false,
 		};
 	}
 	if (chrome === true || chrome === undefined) return DEFAULT_CHROME;

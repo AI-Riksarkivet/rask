@@ -100,9 +100,10 @@ describe('home stays reachable after leaving the zone navbar', () => {
 	);
 
 	it('the shell brand links to /', () => {
-		expect(sidebar, 'the sidebar header no longer links home — the home zone is now unreachable').toMatch(
-			/href=["']\/["']/,
-		);
+		expect(
+			sidebar,
+			'the sidebar header no longer links home — the home zone is now unreachable',
+		).toMatch(/href=["']\/["']/);
 	});
 
 	it('and hard-navigates, because every other zone is a different app', () => {

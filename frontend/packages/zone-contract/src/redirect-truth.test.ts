@@ -82,7 +82,9 @@ describe('every redirect target resolves to a real route', () => {
 	it('finds redirects to check at all (guards the scanner itself)', () => {
 		// A regex matching nothing would make every assertion below vacuously pass — the failure mode
 		// this whole file exists to prevent.
-		expect(ALL.length, 'no redirect targets were parsed — the scanner is broken').toBeGreaterThan(0);
+		expect(ALL.length, 'no redirect targets were parsed — the scanner is broken').toBeGreaterThan(
+			0,
+		);
 	});
 
 	for (const t of ALL) {

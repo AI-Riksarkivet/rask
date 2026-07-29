@@ -5,6 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"dev:proxy": "bun src/proxy.ts",
+		"weigh": "bun src/weigh.ts",
 		"check:tsgo": "tsgo --noEmit -p tsconfig.json",
 		"test": "vitest run",
 		"lint": "oxlint .",

@@ -177,8 +177,8 @@
 					{#if rt.count === 0 && (rt.scopedDocs || rt.scopedChunks)}
 						<div class="mt-1 text-amber-500">
 							Nothing matched inside the {rt.scopedChunks
-				? `${rt.scopedChunks} chunks`
-				: `${rt.scopedDocs} videos`}
+								? `${rt.scopedChunks} chunks`
+								: `${rt.scopedDocs} videos`}
 							— delete the incoming refine edge to search all.
 						</div>
 					{/if}

@@ -44,9 +44,18 @@ in intent so a later session does not re-litigate it.
 *replaces* split; that was wrong. Split acts on the pane — divide this space in a direction. `+` acts on
 the content — put a named panel here. Conflating them is what produced today's useless button.
 
-What makes today's split useless is that it only ever duplicates the ACTIVE panel (`split.ts:54`
-`containerApi.addPanel(...)`), so the sole thing a user can create is a second copy of what they are
-already looking at — with no direction prompt and no choice of content.
+**Corrected 2026-07-29 — the paragraph that stood here was wrong about the current code.** It said split
+"only ever duplicates the ACTIVE panel … so the sole thing a user can create is a second copy of what
+they are already looking at". `split.ts:43` refutes that: with **2 or more** panels in the group split
+MOVES the active panel into a new adjacent group — the real split — and duplicates *only* at exactly
+one panel, where dockview's `moveTo` onto a group's own single-panel group is a documented silent
+no-op. `context-menu.ts:37-42` already offers all **four** directions, and `GroupActions.svelte:122-139`
+already ships two direction buttons (right, down).
+
+So the gap is narrower and more specific than the doc claimed: **the direction affordance in the
+HEADER**, not the direction logic and not the split semantics. Two of four directions are unreachable
+without opening a right-click menu, and nothing announces that the menu holds the other two. Do not
+rewrite `splitPanel` — it is correct; give its four positions a discoverable control.
 
 **Open question for whoever takes this:** after a direction-prompted split, does the new pane get a copy
 of the current panel (Zed's behaviour, since Zed splits an *editor*), or does it open EMPTY and wait for
