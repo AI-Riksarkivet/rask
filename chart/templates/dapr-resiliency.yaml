@@ -1,0 +1,122 @@
+{{- if and .Values.dapr.enabled .Values.dapr.resiliency.enabled }}
+# Dapr Resiliency (opt-in, ships TOGETHER with the deadLetterTopic subscriptions + the crash-recovery
+# broker backOff — see values.yaml dapr.resiliency): the SIDECAR owns pub/sub delivery retries, so a
+# delivery that exhausts this schedule is published to the subscription's dead-letter topic (visible,
+# ERROR-logged parking) instead of silently ceasing to redeliver after the broker's maxDeliver.
+# Schedule mirrors the previous broker one: exponential 30s→300s, 5 total attempts (~7.5 min) — under
+# the component's 720s crash-recovery ack window so broker redelivery never races these retries.
+#
+# THE FIELDS MUST MATCH THE POLICY (fixed 2026-07-28). This block previously read
+# `policy: exponential` with `duration: 30s`. Dapr reads `duration` ONLY under PolicyConstant
+# (dapr/kit retry.go: Duration drives NewConstantBackOff; InitialInterval/Multiplier/MaxInterval/
+# RandomizationFactor drive NewExponentialBackOff). Under `exponential` the duration was ignored and
+# `initialInterval` fell back to its 500ms default, so the rendered schedule was
+# 0.5 + 0.75 + 1.125 + 1.7 ≈ 4 SECONDS — not the ~7.5 min stated here, and `maxInterval: 300s` was
+# unreachable dead config. Because the sidecar DLTs and ACKs the original on exhaustion, the 720s
+# broker ackWait never applies to an app-returned RETRY, so resiliency being ON (the default)
+# SHORTENED the app-failure retry window ~125x versus OFF. The whole point of this CRD was inverted.
+#
+# The arithmetic, so the next edit can check itself: 30 + 60 + 120 + 240 = 450s = 7.5 min over 4
+# retries (5 attempts). The 4th step is 240s, under `maxInterval: 300s`, so the cap is a guard rather
+# than a participant. `randomizationFactor` is pinned to 0 rather than left at Dapr's 0.5 default:
+# with jitter the worst case is 450 x 1.5 = 675s, which still fits the 720s broker window but leaves
+# only 45s of margin — and that margin is the invariant that stops the broker redelivering while the
+# sidecar is still retrying. Deterministic beats 6% headroom here.
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: {{ .Release.Name }}-pubsub-resiliency
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  policies:
+    retries:
+      pubsubDeliveryRetry:
+        policy: exponential
+        initialInterval: 30s
+        multiplier: 2
+        randomizationFactor: 0
+        maxInterval: 300s
+        maxRetries: 4
+  targets:
+    components:
+{{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId) }}
+{{- if .Values.medallion.enabled }}
+{{- $subscribers = append $subscribers (dict "appId" .Values.medallion.producer.daprAppId) }}
+{{- range .Values.medallion.movers }}
+{{- $subscribers = append $subscribers (dict "appId" .daprAppId) }}
+{{- end }}
+{{- end }}
+{{- range $subscribers }}
+      {{ include "lance.subPubsub" (list $ .appId) }}:
+        inbound:
+          retry: pubsubDeliveryRetry
+{{- end }}
+scopes:
+{{- range $subscribers }}
+  - {{ .appId }}
+{{- end }}
+---
+# Service-invocation resiliency (the DAPRIFY mesh, 2026-07-27): with dapr.sidecars every /api/* request
+# leaves the gateway through its own daprd (RASK_DAPR_ENABLED → localhost:3500/v1.0/invoke/<app-id>/method),
+# and Dapr applies invocation resiliency on the CALLING sidecar — so this policy is scoped to the gateway
+# and targets every app-id the gateway routes to (services/gateway _routes()). Deliberately modest, no
+# invented aggression: 3 constant-backoff retries (connect-level blips), an end-to-end timeout of 300s
+# matching the gateway's own httpx client (httpx.Timeout(30.0, read=300.0) in services/gateway — a shorter
+# Dapr timeout would cut long reads the gateway itself still waits for), and a circuit breaker that sheds
+# a persistently dead upstream for 30s (the gateway's connect timeout) after 5 consecutive failures
+# instead of stacking doomed retries onto it.
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: {{ .Release.Name }}-invocation-resiliency
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  policies:
+    timeouts:
+      invokeTimeout: 300s
+    retries:
+      invokeRetry:
+        policy: constant
+        duration: 2s
+        maxRetries: 3
+    circuitBreakers:
+      invokeBreaker:
+        maxRequests: 1
+        timeout: 30s
+        trip: consecutiveFailures >= 5
+  targets:
+    apps:
+{{- /* Target only app-ids whose pods can actually render — mirror the templates' own gates
+     (fleet.yaml ranges .Values.services minus the lakehouse entries, gateway always + the rest
+     under singleTenant; services.yaml renders catalog/lineage unconditionally; controlplane.yaml,
+     medallion.yaml, media.yaml carry their own toggles). Derived, not restated, so a new fleet
+     entry is picked up here automatically. */}}
+{{- $invoked := list .Values.services.catalog.daprAppId .Values.services.lineage.daprAppId }}
+{{- $lakehouse := list "catalog" "lineage" }}
+{{- if .Values.singleTenant.enabled }}
+{{- range $name, $svc := .Values.services }}
+{{- if and (not (has $name $lakehouse)) (ne $name "gateway") }}
+{{- $invoked = append $invoked $name }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if .Values.controlplane.enabled }}
+{{- $invoked = append $invoked "controlplane" }}
+{{- end }}
+{{- if .Values.medallion.enabled }}
+{{- $invoked = append $invoked .Values.medallion.producer.daprAppId }}
+{{- end }}
+{{- if .Values.media.enabled }}
+{{- range $name, $svc := .Values.media.services }}
+{{- $invoked = append $invoked $svc.daprAppId }}
+{{- end }}
+{{- end }}
+{{- range $invoked }}
+      {{ . }}:
+        timeout: invokeTimeout
+        retry: invokeRetry
+        circuitBreaker: invokeBreaker
+{{- end }}
+scopes:
+  - gateway
+{{- end }}

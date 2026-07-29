@@ -7,6 +7,24 @@ status: new
 
 # Frontend Microfrontends
 
+!!! warning "Historical — this describes the PRE-MERGE zone set (2026-07-28)"
+
+    The *reasoning* is why this page is kept: why rask splits the frontend at all, why each zone owns
+    a static base, and why dev composition and prod composition are separate layers that share only
+    that base path. All of that still holds.
+
+    **The inventory does not.** Every zone table and routing example below is superseded:
+
+    | Below | Actually |
+    |---|---|
+    | zones `overview`, `storage`, `discover` | **retired** — `/storage` and `/catalog` are routes inside `lakehouse` |
+    | base `/default/<domain>` | a bare `/<zone>`; `/default/lakehouse` is asserted *not* to be a zone path |
+    | `/<project>/<domain>` | the project comes from the request **host** (`demo.localhost` → `demo`) |
+    | 7 zones, 3 packages | 7 zones, **8** packages — `@rask/dockview`, `@rask/engine`, `@rask/labeling`, `@rask/media-api`, `@rask/config` all arrived with the merge |
+
+    For the current zone list, ports, data dialects, dock workbenches and gates, read
+    **`.claude/skills/rask-frontend`** — it is checked against the code and updated with it.
+
 This page explains **what we are building** for the rask frontend, **how it works**,
 and **where each piece lives** — so you can read a URL and know which app served it.
 
@@ -64,22 +82,22 @@ to internalise, because it explains everything else.
 
 ## Where everything lives
 
-rask is **Polylith**, so there is **no top-level `apps/`** (that's the turborepo
-`with-svelte` example). Runnable apps live under **`components/frontends/`**; shared libraries
-under **`packages/`**.
+The whole JS/TS plane lives under **`frontend/`** — its own Bun + Turborepo
+workspace root — so there is **no top-level `apps/`** (that's the turborepo
+`with-svelte` example). Runnable apps live under **`frontend/microfrontends/`**;
+shared libraries under **`frontend/packages/`**.
 
 ```mermaid
 graph TD
-  subgraph ca["components/frontends"]
-    F[frontend<br/><sub>catch-all — / home picker</sub>]
+  subgraph ca["frontend/microfrontends"]
+    F[home<br/><sub>catch-all — / home picker</sub>]
     OF[overview<br/><sub>MFE: /default/overview</sub>]
     SF[storage<br/><sub>MFE: /default/storage</sub>]
     CF[compute<br/><sub>MFE: /default/compute</sub>]
     DF[discover<br/><sub>MFE: /default/discover</sub>]
     TF[train · studio<br/><sub>MFE: /default/{train,studio}</sub>]
-    R[runner<br/><sub>Python CLI</sub>]
   end
-  subgraph pk["packages"]
+  subgraph pk["frontend/packages"]
     UI[ui — @rask/ui<br/><sub>sidebar/shell + styled components</sub>]
     API[api — @rask/api<br/><sub>API client + types</sub>]
   end
@@ -98,14 +116,14 @@ There are **7** SvelteKit apps: the catch-all plus **six** domain MFEs.
 
 | Path                                | What it is                                                                                                                                                                                                                  |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `components/frontends/home`          | **The catch-all app** (the proxy default). Owns `/` (the home / project picker, no sidebar) + the `/<project>` entry redirect. Package name `home`; no data layer.                                               |
-| `components/frontends/overview` | A carved-out microfrontend — owns `/<project>/overview` (the batch view); base `/default/overview`.                                                                                                                         |
-| `components/frontends/storage`  | A carved-out microfrontend — owns `/<project>/storage` (the S3 browser); base `/default/storage`.                                                                                                                           |
-| `components/frontends/compute`  | A carved-out microfrontend — owns `/<project>/compute` (the Ray/cluster UI: overview, cluster, jobs, actors, serve, logviewer, api-docs); base `/default/compute`.                                                          |
-| `components/frontends/discover` | A carved-out microfrontend — owns `/<project>/discover` (search, browse, viewer); base `/default/discover`.                                                                                                                 |
-| `components/frontends/{train,studio}` | Carved-out microfrontends — `/<project>/train` (model training, dummy) and `/<project>/studio` (mini-applications, dummy); bases `/default/train` · `/default/studio`.                                                  |
-| `packages/ui` (`@rask/ui`)          | The **shared design system**: styled components (`button`, `badge`, `card`, `dialog`, `sort-header`, `sidebar`, …) **plus the shell** (`@rask/ui/shell` → `AppShell`, `AppSidebar`, `nav-config`).                          |
-| `packages/api` (`@rask/api`)        | The **shared API client + types** — every app imports it (`@rask/api`) instead of copying `api.ts`. JIT package (exports `./src/index.ts` source, no build), split into `ray`/`batches`/`search`/`volumes`/`types` modules. |
+| `frontend/microfrontends/home`          | **The catch-all app** (the proxy default). Owns `/` (the home / project picker, no sidebar) + the `/<project>` entry redirect. Package name `home`; no data layer.                                               |
+| `frontend/microfrontends/overview` | A carved-out microfrontend — owns `/<project>/overview` (the batch view); base `/default/overview`.                                                                                                                         |
+| `frontend/microfrontends/storage`  | A carved-out microfrontend — owns `/<project>/storage` (the S3 browser); base `/default/storage`.                                                                                                                           |
+| `frontend/microfrontends/compute`  | A carved-out microfrontend — owns `/<project>/compute` (the Ray/cluster UI: overview, cluster, jobs, actors, serve, logviewer, api-docs); base `/default/compute`.                                                          |
+| `frontend/microfrontends/discover` | A carved-out microfrontend — owns `/<project>/discover` (search, browse, viewer); base `/default/discover`.                                                                                                                 |
+| `frontend/microfrontends/{train,studio}` | Carved-out microfrontends — `/<project>/train` (model training, dummy) and `/<project>/studio` (mini-applications, dummy); bases `/default/train` · `/default/studio`.                                                  |
+| `frontend/packages/ui` (`@rask/ui`)          | The **shared design system**: styled components (`button`, `badge`, `card`, `dialog`, `sort-header`, `sidebar`, …) **plus the shell** (`@rask/ui/shell` → `AppShell`, `AppSidebar`, `nav-config`).                          |
+| `frontend/packages/api` (`@rask/api`)        | The **shared API client + types** — every app imports it (`@rask/api`) instead of copying `api.ts`. JIT package (exports `./src/index.ts` source, no build), split into `ray`/`batches`/`search`/`volumes`/`types` modules. |
 
 ## How a request flows (frontend → services)
 
@@ -114,8 +132,8 @@ There are **two distinct layers** — keep them separate:
 1. **Page composition** — which _app_ serves a URL path (`/storage` → storage).
 2. **Data** — how an app reaches the _backend_. The frontend **never** talks to a domain
    service directly; it always hits the **gateway** (`:8888`), which path-routes `/api/*`
-   to the per-domain services (`core-api` :8801, `search-api` :8802, `volumes-api` :8803,
-   `ray-api` :8804, `orchestrator` :8810) longest-prefix-first.
+   longest-prefix-first (`ray` :8804, controlplane :8820, and the lance
+   lakehouse/media planes — `/api/catalog`, `/api/lineage`, `/api/media/*`).
 
 ```mermaid
 sequenceDiagram
@@ -128,9 +146,9 @@ sequenceDiagram
   B->>APP: GET /storage
   APP-->>B: SSR HTML (shared shell + page)
   Note over B,SVC: data — /api/* always via the one gateway
-  B->>APP: GET /api/volumes/objects
+  B->>APP: GET /api/media/objects
   APP->>GW: Vite dev proxy / same-origin forwards /api/*
-  GW->>SVC: longest-prefix route → volumes-api
+  GW->>SVC: longest-prefix route → the media viewer
   SVC-->>B: JSON
 ```
 
@@ -173,7 +191,7 @@ soft. See the cross-zone rule in [frontend-conventions.md](frontend-conventions.
 
     The **look** (Tailwind classes, variants) lives in `@rask/ui`. Each app only supplies the
     **theme token values** in its `app.css` (`--primary`, `--sidebar`, …) plus an
-    `@source '../../../../packages/ui/dist'` so Tailwind generates the lib's classes. Same
+    `@source '../../../packages/ui/dist'` so Tailwind generates the lib's classes. Same
     button, same sidebar, everywhere. You'd only style *in* an app for something unique to it.
 
 ## Project-first IA + current state
@@ -191,7 +209,7 @@ yields project-first URLs. Multi-project (a dynamic base) is deliberately deferr
 
 | Domain app                        | Routes it owns                                                       | `kit.paths.base`    | Status         |
 | --------------------------------- | -------------------------------------------------------------------- | ------------------- | -------------- |
-| `frontend` (catch-all)            | `/` home picker · `/<project>` entry redirect                        | _(none — default)_  | **done ✅**    |
+| `home` (catch-all)                | `/` home picker · `/<project>` entry redirect                        | _(none — default)_  | **done ✅**    |
 | `overview`               | overview (the batch view)                                            | `/default/overview` | **done ✅**    |
 | `compute` (the "ray" UI) | compute: overview, cluster, jobs, actors, serve, logviewer, api-docs | `/default/compute`  | **done ✅**    |
 | `storage`                | storage (the S3 browser)                                             | `/default/storage`  | **done ✅**    |
@@ -199,8 +217,9 @@ yields project-first URLs. Multi-project (a dynamic base) is deliberately deferr
 | `train`                  | model training (dummy)                                               | `/default/train`    | **done ✅**    |
 | `studio`                 | mini-applications (dummy)                                            | `/default/studio`   | **done ✅**    |
 
-Each was carved with the **same recipe** (scaffold app → move its routes in → wire `@rask/ui` +
-`@rask/api` → static base `/default/<domain>` → register in the workspace + `microfrontends.json`),
+Each was carved with the **same recipe** (scaffold app under `frontend/microfrontends/` → move its
+routes in → wire `@rask/ui` + `@rask/api` → static base `/default/<domain>` → register in
+`microfrontends.json`; the bun workspace glob picks the directory up on its own),
 so adding the next domain is not a new hard problem.
 
 ## Running the frontends locally
@@ -236,7 +255,7 @@ start that one app's port.
 
 !!! success "Single-origin composition proxy — `:3024` (built into Turborepo)"
 
-    `components/frontends/home/microfrontends.json` **declares** the path routing
+    `frontend/microfrontends/home/microfrontends.json` **declares** the path routing
     (`/storage`, `/compute`), and **Turborepo 2.9 reads it and auto-starts its own native
     microfrontends proxy** on **`http://localhost:3024`** whenever `turbo run dev` includes
     these apps — **no `@vercel/microfrontends` package is required** (that dep is only for
@@ -299,5 +318,6 @@ to the catch-all:
 !!! note "Toolchain — loyal to rask, not the with-svelte example"
 
     **Bun** workspaces (no pnpm), **svelte-adapter-bun** (SSR, not adapter-static), **valibot**
-    (not zod), **explicit** workspace membership (no globs), `kit.paths.base` per app (not raw
+    (not zod), **oxlint + oxfmt** (not eslint + prettier), workspace membership by glob over a
+    **language-pure** `frontend/` tree, `kit.paths.base` per app (not raw
     vite `base`). See `docs/components/progress.md` for the live build log.

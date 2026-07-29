@@ -1,0 +1,153 @@
+{
+  "ssh_connections": [
+    {
+      "host": "10.16.51.53",
+      "username": "blackwell",
+      "projects": [
+        {
+          "paths": [
+            "/home/blackwell/Desktop/rask"
+          ]
+        }
+      ],
+      "port_forwards": [
+        {
+          "local_port": 8080,
+          "remote_port": 80
+        },
+        {
+          "local_port": 10350,
+          "remote_port": 10350
+        },
+        {
+          "local_port": 3024,
+          "remote_port": 3024
+        },
+        {
+          "local_port": 8888,
+          "remote_port": 8888
+        },
+        {
+          "local_port": 6006,
+          "remote_port": 6006
+        },
+        {
+          "local_port": 8265,
+          "remote_port": 8265
+        },
+        {
+          "local_port": 8804,
+          "remote_port": 8804
+        },
+        {
+          "local_port": 8820,
+          "remote_port": 8820
+        },
+        {
+          "local_port": 8101,
+          "remote_port": 8101
+        },
+        {
+          "local_port": 5000,
+          "remote_port": 5000
+        },
+        {
+          "local_port": 5173,
+          "remote_port": 5173
+        },
+        {
+          "local_port": 5174,
+          "remote_port": 5174
+        },
+        {
+          "local_port": 5175,
+          "remote_port": 5175
+        },
+        {
+          "local_port": 5176,
+          "remote_port": 5176
+        },
+        {
+          "local_port": 5177,
+          "remote_port": 5177
+        },
+        {
+          "local_port": 5178,
+          "remote_port": 5178
+        },
+        {
+          "local_port": 5179,
+          "remote_port": 5179
+        },
+        {
+          "local_port": 5180,
+          "remote_port": 5180
+        },
+        {
+          "local_port": 5273,
+          "remote_port": 5273
+        },
+        {
+          "local_port": 5274,
+          "remote_port": 5274
+        },
+        {
+          "local_port": 5275,
+          "remote_port": 5275
+        },
+        {
+          "local_port": 5276,
+          "remote_port": 5276
+        },
+        {
+          "local_port": 5277,
+          "remote_port": 5277
+        },
+        {
+          "local_port": 5278,
+          "remote_port": 5278
+        },
+        {
+          "local_port": 5279,
+          "remote_port": 5279
+        },
+        {
+          "local_port": 5280,
+          "remote_port": 5280
+        },
+        {
+          "local_port": 9273,
+          "remote_port": 9273
+        },
+        {
+          "local_port": 9274,
+          "remote_port": 9274
+        },
+        {
+          "local_port": 9275,
+          "remote_port": 9275
+        },
+        {
+          "local_port": 9276,
+          "remote_port": 9276
+        },
+        {
+          "local_port": 9277,
+          "remote_port": 9277
+        },
+        {
+          "local_port": 9278,
+          "remote_port": 9278
+        },
+        {
+          "local_port": 9279,
+          "remote_port": 9279
+        },
+        {
+          "local_port": 9888,
+          "remote_port": 9888
+        }
+      ]
+    }
+  ]
+}

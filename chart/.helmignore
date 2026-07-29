@@ -1,5 +1,17 @@
+# Merged: rask (base) + lance-ns main@083b49a. lance-ns's whole file was the single line `.git`,
+# which rask's `.git/` already covers for a normal repo — the bare form is kept because a git
+# WORKTREE has `.git` as a FILE, and `.git/` (directory-anchored) would not match it.
+#
+# CAREFUL: .helmignore also removes files from `.Files`, not just from the packaged tarball.
+# chart/templates/alerting.yaml does `.Files.Get "alerting/rules.yml"`, so nothing here may match
+# `alerting/**` — an over-broad pattern would render an EMPTY alert-rules ConfigMap silently.
 .git/
+.git
 *.md
 .DS_Store
 *.tmp
 ci/
+# Merge-conflict leftovers: a stray values.yaml.orig would otherwise ship inside the chart.
+*.orig
+*.rej
+*.bak

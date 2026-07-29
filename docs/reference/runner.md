@@ -1,6 +1,6 @@
 # API Reference — runner
 
-Auto-generated from source docstrings in `components/cli/runner/src`. For a
+Auto-generated from source docstrings in `runners/htr/src`. For a
 narrative overview see [Projects → Runner](../projects/runner.md).
 
 ## CLI

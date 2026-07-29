@@ -1,0 +1,41 @@
+{{- if and .Values.observability.enabled (not .Values.externalSecrets.enabled) }}
+# GreptimeDB object-storage credentials — the greptimedb-standalone subchart reads these env-var keys
+# from `credentials.existingSecretName`. Points GreptimeDB at the in-cluster RustFS S3 (same keys).
+# Skipped when externalSecrets.enabled: the external-secrets operator then OWNS this same-named Secret,
+# syncing the RustFS root secret FROM Vault (templates/external-secrets.yaml) — same two-tier rule as
+# infra-credentials, so the "0 plaintext secrets on the prod-secure path" guarantee holds here too.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-observability-s3
+  labels: {{- include "lance.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  GREPTIMEDB_STANDALONE__STORAGE__ACCESS_KEY_ID: {{ .Values.rustfs.accessKey | quote }}
+  GREPTIMEDB_STANDALONE__STORAGE__SECRET_ACCESS_KEY: {{ .Values.rustfs.secretKey | quote }}
+{{- end }}
+---
+{{- if and .Values.dapr.enabled (include "lance.otelEnabled" .) }}
+# Dapr tracing Configuration — sidecars annotated with dapr.io/config: lance-tracing. There is NO otel
+# exporter here (mirrors rask: the apps export OTLP to the OTel Collector, which forwards to GreptimeDB;
+# Dapr's own sidecar spans can't
+# carry GreptimeDB's required db-name/pipeline headers). samplingRate "1" keeps Dapr sampling every
+# request so the W3C trace context always propagates across the pub/sub boundary — which is what makes
+# the app-level distributed trace span catalog → (Dapr/NATS) → lineage end to end. Gated on otelEnabled,
+# NOT observability.enabled: the app pods that reference this config also render when telemetry ships to an
+# external collector (externalOtlpEndpoint), so a dangling dapr.io/config reference must not happen.
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: lance-tracing
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  tracing:
+    samplingRate: {{ .Values.observability.samplingRate | quote }}
+{{- end }}
+---
+# RETIRED (gateway fold): the observability edge-auth Secret backed the nginx gateway's public
+# /perses/ + /greptime/ auth_basic locations. The nginx gateway is deleted (rask's FastAPI gateway
+# carries no telemetry routes) and no Ingress path routes them, so the telemetry UIs are
+# cluster-internal (port-forward) and the Secret guarded nothing. If a future edge (kgateway/Envoy)
+# re-exposes them, re-introduce auth THERE, wired to that edge's own auth machinery.

@@ -1,0 +1,4183 @@
+{
+  "components": {
+    "schemas": {
+      "ColumnEdge": {
+        "description": "A field-to-field derivation edge (data flows ``source`` \u2192 ``target``); the transformation kind +\nthe ``masking`` governance bit ride the edge.",
+        "properties": {
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "kind": {
+            "default": "derived_from_column",
+            "title": "Kind",
+            "type": "string"
+          },
+          "masking": {
+            "default": false,
+            "title": "Masking",
+            "type": "boolean"
+          },
+          "source_dataset": {
+            "title": "Source Dataset",
+            "type": "string"
+          },
+          "source_field": {
+            "title": "Source Field",
+            "type": "string"
+          },
+          "target_dataset": {
+            "title": "Target Dataset",
+            "type": "string"
+          },
+          "target_field": {
+            "title": "Target Field",
+            "type": "string"
+          },
+          "transformation_subtype": {
+            "default": "",
+            "title": "Transformation Subtype",
+            "type": "string"
+          },
+          "transformation_type": {
+            "default": "",
+            "title": "Transformation Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_dataset",
+          "source_field",
+          "target_dataset",
+          "target_field"
+        ],
+        "title": "ColumnEdge",
+        "type": "object"
+      },
+      "ColumnGraph": {
+        "description": "The column-level lineage subgraph around ``root`` (nodes + edges) \u2014 the column analogue of the\ndataset ``LineageGraph``, for a field-to-field DAG view.",
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/ColumnNode"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/ColumnEdge"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "root": {
+            "title": "Root",
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "ColumnGraph",
+        "type": "object"
+      },
+      "ColumnNeighbors": {
+        "description": "Columns related to ``(dataset, field)`` \u2014 its column-level provenance (upstream) or impact.",
+        "properties": {
+          "dataset": {
+            "title": "Dataset",
+            "type": "string"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "related": {
+            "items": {
+              "$ref": "#/components/schemas/ColumnRef"
+            },
+            "title": "Related",
+            "type": "array"
+          }
+        },
+        "required": [
+          "dataset",
+          "field"
+        ],
+        "title": "ColumnNeighbors",
+        "type": "object"
+      },
+      "ColumnNode": {
+        "description": "A column node in the column-lineage subgraph.",
+        "properties": {
+          "dataset": {
+            "title": "Dataset",
+            "type": "string"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          }
+        },
+        "required": [
+          "dataset",
+          "field"
+        ],
+        "title": "ColumnNode",
+        "type": "object"
+      },
+      "ColumnRef": {
+        "description": "A column identified by its owning dataset + field name (#24).\n\n``dataset`` is REQUIRED and is the governance handle: a column is visible iff the caller can read\nits owning ``table:<dataset>``, so column queries filter on it (never on the field).",
+        "properties": {
+          "dataset": {
+            "title": "Dataset",
+            "type": "string"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          }
+        },
+        "required": [
+          "dataset",
+          "field"
+        ],
+        "title": "ColumnRef",
+        "type": "object"
+      },
+      "Creator": {
+        "description": "Who created ``dataset`` \u2014 the verified catalog principal at create time (or ``None``).",
+        "properties": {
+          "creator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creator"
+          },
+          "dataset": {
+            "title": "Dataset",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dataset"
+        ],
+        "title": "Creator",
+        "type": "object"
+      },
+      "Dataset": {
+        "additionalProperties": true,
+        "description": "An OpenLineage dataset (a Lance table / source); ``name`` is the catalog id.\n\n``facets`` carries the standard OpenLineage dataset facets; we read several:\n``version`` (which Lance version a run produced), ``dataSource`` (where the table\nphysically lives \u2014 the S3-compatible location), and ``tags`` (governance labels).\n\nThe spec splits dataset metadata across THREE slots, by the facet's base type: plain\n``DatasetFacet``s ride ``facets``, ``InputDatasetFacet``s ride ``inputFacets`` on an input, and\n``OutputDatasetFacet``s ride ``outputFacets`` on an output. Two facets we consume are not plain\n``DatasetFacet``s \u2014 ``OutputStatisticsOutputDatasetFacet`` is an output facet and\n``DataQualityAssertionsDatasetFacet`` is an input facet \u2014 so the official ``openlineage-python``\nclient (and therefore Spark/Airflow/dbt/Marquez producers, and our own ``lineage.seed``) serialises\nthem into the typed slots, NOT into ``facets``. Reading only ``facets`` silently dropped them from\nevery such producer; :meth:`facet` looks in all three.",
+        "properties": {
+          "facets": {
+            "additionalProperties": true,
+            "title": "Facets",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "namespace",
+          "name"
+        ],
+        "title": "Dataset",
+        "type": "object"
+      },
+      "DatasetGovernance": {
+        "description": "A dataset's human-curated governance metadata (#49): tags + description, with last-writer\nattribution per field family (who/when persisted on the node \u2014 the auditable trail for curation).",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "description_updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description Updated At"
+          },
+          "description_updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description Updated By"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "tags_updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags Updated At"
+          },
+          "tags_updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags Updated By"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "DatasetGovernance",
+        "type": "object"
+      },
+      "DatasetRef": {
+        "description": "A dataset node returned from a graph traversal.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "DatasetRef",
+        "type": "object"
+      },
+      "DatasetSchema": {
+        "description": "The column schema recorded for ``dataset`` at ``version`` (the ``WROTE`` edge's schema). (#24)\n\n``version`` is the Lance version this schema belongs to; ``None`` with empty ``fields`` means no\nschema has been persisted for the dataset (or the requested version) yet.",
+        "properties": {
+          "dataset": {
+            "title": "Dataset",
+            "type": "string"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/SchemaField"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "dataset"
+        ],
+        "title": "DatasetSchema",
+        "type": "object"
+      },
+      "DatasetSummary": {
+        "description": "A dataset as it appears in the browse list \u2014 its id, namespace, and governance tags.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "DatasetSummary",
+        "type": "object"
+      },
+      "Datasets": {
+        "description": "A governed, paginated page of datasets the caller may see (the lineage catalog landing list).\n\n``total`` is the count of *visible* datasets before the page slice \u2014 so a UI can show \"X\u2013Y of total\".",
+        "properties": {
+          "datasets": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetSummary"
+            },
+            "title": "Datasets",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "datasets",
+          "total"
+        ],
+        "title": "Datasets",
+        "type": "object"
+      },
+      "DemoDataset": {
+        "description": "A peek at a real Lance dataset on S3 \u2014 what's actually in storage and how it evolved.",
+        "properties": {
+          "current_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Version"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "exists": {
+            "title": "Exists",
+            "type": "boolean"
+          },
+          "lineage_jsonb": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lineage Jsonb"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "row_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Count"
+          },
+          "uri": {
+            "title": "Uri",
+            "type": "string"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/DemoVersion"
+            },
+            "title": "Versions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "uri",
+          "exists"
+        ],
+        "title": "DemoDataset",
+        "type": "object"
+      },
+      "DemoDatasets": {
+        "description": "The medallion datasets as they currently exist on S3 (demo data peek).",
+        "properties": {
+          "datasets": {
+            "items": {
+              "$ref": "#/components/schemas/DemoDataset"
+            },
+            "title": "Datasets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "datasets"
+        ],
+        "title": "DemoDatasets",
+        "type": "object"
+      },
+      "DemoField": {
+        "description": "A column of a Lance dataset version (name + Arrow type).",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "DemoField",
+        "type": "object"
+      },
+      "DemoVersion": {
+        "description": "One Lance version of a dataset \u2014 its number, time, and schema at that version.",
+        "properties": {
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/DemoField"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamp"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "DemoVersion",
+        "type": "object"
+      },
+      "DescriptionUpdate": {
+        "description": "The ``PUT /datasets/{name}/description`` body. An empty string clears the description.",
+        "properties": {
+          "description": {
+            "maxLength": 2000,
+            "title": "Description",
+            "type": "string"
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "title": "DescriptionUpdate",
+        "type": "object"
+      },
+      "DlqBacklog": {
+        "description": "The outbox saturation snapshot + the visible at-risk events (#83).\n\n``depth`` / ``oldest_age_seconds`` are the RAW system-health signal (the same numbers the\n``outbox.depth`` gauge alerts on); ``events`` is the governed subset the caller may see (\u2264 depth when\nper-dataset filtering drops events for datasets outside the caller's reach), capped at ``limit``.",
+        "properties": {
+          "depth": {
+            "title": "Depth",
+            "type": "integer"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/DlqEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "oldest_age_seconds": {
+            "title": "Oldest Age Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "depth",
+          "oldest_age_seconds",
+          "events",
+          "limit"
+        ],
+        "title": "DlqBacklog",
+        "type": "object"
+      },
+      "DlqEvent": {
+        "description": "One staged-but-not-yet-drained lineage event in the transactional outbox (#83 ops view).\n\nA file's presence in the outbox means \"committed write, lineage not yet confirmed delivered\" \u2014 the\nat-risk set the reconcile relay drains. ``parseable=False`` marks a poison object (the relay would drop\nit): its run_id is the filename, the rest is unknown.",
+        "properties": {
+          "event_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Time"
+          },
+          "event_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Type"
+          },
+          "inputs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Inputs",
+            "type": "array"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job"
+          },
+          "outputs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Outputs",
+            "type": "array"
+          },
+          "parseable": {
+            "default": true,
+            "title": "Parseable",
+            "type": "boolean"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "DlqEvent",
+        "type": "object"
+      },
+      "DlqReplayResponse": {
+        "description": "The result of re-ingesting one staged event (#83): idempotent MERGE on ``run_id``, then drop.",
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "run_id"
+        ],
+        "title": "DlqReplayResponse",
+        "type": "object"
+      },
+      "EstateGraph": {
+        "description": "The whole visible lineage graph in one response \u2014 the graph page's bulk read.\n\n``total`` is the full visible node count; when it exceeds the requested limit the node list\nis truncated and ``capped`` says so, so a UI can render \"N of M\" honestly instead of\npretending the window is the estate.",
+        "properties": {
+          "capped": {
+            "default": false,
+            "title": "Capped",
+            "type": "boolean"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/GraphEdge"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/GraphNode"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "nodes",
+          "edges",
+          "total"
+        ],
+        "title": "EstateGraph",
+        "type": "object"
+      },
+      "EventRecord": {
+        "description": "One ingested OpenLineage event, Marquez-style (summary + the full event with facets).",
+        "properties": {
+          "author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author"
+          },
+          "event": {
+            "additionalProperties": true,
+            "title": "Event",
+            "type": "object"
+          },
+          "event_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Time"
+          },
+          "event_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Type"
+          },
+          "inputs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Inputs",
+            "type": "array"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job"
+          },
+          "outputs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Outputs",
+            "type": "array"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "event"
+        ],
+        "title": "EventRecord",
+        "type": "object"
+      },
+      "Events": {
+        "description": "The most-recent ingested OpenLineage events (newest first).\n\n``next_cursor`` (additive, 2026-07-11): pass back as ``?after=`` to page OLDER events (keyset\nover ``seq``). ``None`` = the feed is exhausted.",
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/EventRecord"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "title": "Events",
+        "type": "object"
+      },
+      "GraphEdge": {
+        "description": "A dataset-level lineage edge: ``source`` is derived from ``target``.",
+        "properties": {
+          "kind": {
+            "default": "derived_from",
+            "title": "Kind",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "target"
+        ],
+        "title": "GraphEdge",
+        "type": "object"
+      },
+      "GraphNode": {
+        "description": "A dataset node in the lineage graph (``id`` is the catalog table id).\n\n``source_uri`` is where the table physically lives (the S3-compatible location, from\nthe ``dataSource`` facet) and ``tags`` are its governance labels (from the ``tags`` facet).",
+        "properties": {
+          "failed": {
+            "default": false,
+            "title": "Failed",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "default": "dataset",
+            "title": "Kind",
+            "type": "string"
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace"
+          },
+          "source_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Uri"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "versions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Versions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "GraphNode",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "Job": {
+        "additionalProperties": true,
+        "description": "The compute job that produced a run \u2014 for us a Ray job (Ray is the compute engine).\n\n``facets`` carries the standard ``ownership`` (who owns the job) and ``jobType``\n(``processingType`` BATCH/STREAMING, ``integration`` = RAY, ``jobType`` = ETL /\nTRANSFORMATION) facets.",
+        "properties": {
+          "facets": {
+            "additionalProperties": true,
+            "title": "Facets",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "namespace",
+          "name"
+        ],
+        "title": "Job",
+        "type": "object"
+      },
+      "JobSummary": {
+        "description": "A job (compute identity) that has run, with the datasets it wrote \u2014 its governance handle.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace"
+          },
+          "outputs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Outputs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "JobSummary",
+        "type": "object"
+      },
+      "Jobs": {
+        "description": "The jobs the caller may see (governed by the datasets each wrote).",
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/JobSummary"
+            },
+            "title": "Jobs",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "jobs",
+          "total"
+        ],
+        "title": "Jobs",
+        "type": "object"
+      },
+      "LineageGraph": {
+        "description": "The connected lineage subgraph around ``root`` \u2014 nodes + edges for a DAG view.\n\nMirrors what Marquez's graph endpoint feeds its UI, trimmed to the dataset-level\n``DERIVED_FROM`` lineage we model.",
+        "properties": {
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/GraphEdge"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/GraphNode"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "root": {
+            "title": "Root",
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "nodes",
+          "edges"
+        ],
+        "title": "LineageGraph",
+        "type": "object"
+      },
+      "Liveness": {
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/LivenessStatus",
+            "default": "ok"
+          }
+        },
+        "title": "Liveness",
+        "type": "object"
+      },
+      "LivenessStatus": {
+        "enum": [
+          "ok"
+        ],
+        "title": "LivenessStatus",
+        "type": "string"
+      },
+      "Namespaces": {
+        "description": "The namespaces containing at least one dataset the caller may see.",
+        "properties": {
+          "namespaces": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Namespaces",
+            "type": "array"
+          }
+        },
+        "required": [
+          "namespaces"
+        ],
+        "title": "Namespaces",
+        "type": "object"
+      },
+      "Neighbors": {
+        "description": "Datasets related to ``dataset`` (upstream provenance or downstream impact).",
+        "properties": {
+          "dataset": {
+            "title": "Dataset",
+            "type": "string"
+          },
+          "related": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetRef"
+            },
+            "title": "Related",
+            "type": "array"
+          }
+        },
+        "required": [
+          "dataset",
+          "related"
+        ],
+        "title": "Neighbors",
+        "type": "object"
+      },
+      "ProducerInfo": {
+        "description": "A run that wrote (or attempted to write) a dataset \u2014 who / when / how / version / measured size.\n\nA **failed** run (``event_type`` FAIL/ABORT) appears here too, with no\n``dataset_version`` and an ``error_message`` \u2014 it tried but produced no data.\n\n``row_count`` / ``size_bytes`` are the runtime-measured output statistics the compute recorded for\nthis write (the rows + on-disk bytes it actually produced, from the standard ``outputStatistics``\nfacet); ``None`` when the run was a dummy emit (no compute) or a failure (no data produced).\n\n``quality_passed`` is the validator gate's verdict (all assertions succeeded) and ``quality_assertions``\nthe checks it ran (from the standard ``dataQualityAssertions`` facet); ``quality_passed=False`` with a\nreal ``dataset_version`` is the auditable record of a batch the gate blocked from promotion. Both are\n``None`` / empty when the quality gate did not run.",
+        "properties": {
+          "author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author"
+          },
+          "dataset_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Version"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "event_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Time"
+          },
+          "event_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Type"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation"
+          },
+          "producer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Producer"
+          },
+          "quality_assertions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Quality Assertions",
+            "type": "array"
+          },
+          "quality_passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality Passed"
+          },
+          "row_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Count"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "ProducerInfo",
+        "type": "object"
+      },
+      "Producers": {
+        "description": "The runs that produced ``dataset``.",
+        "properties": {
+          "dataset": {
+            "title": "Dataset",
+            "type": "string"
+          },
+          "producers": {
+            "items": {
+              "$ref": "#/components/schemas/ProducerInfo"
+            },
+            "title": "Producers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "dataset",
+          "producers"
+        ],
+        "title": "Producers",
+        "type": "object"
+      },
+      "ReaderInfo": {
+        "description": "One principal who READ ``dataset`` \u2014 the access-audit twin of :class:`ProducerInfo` (who WROTE it).\n\nAggregated per reader: the verified subject, when they last read it, and how many times. Sourced from\nthe append-only ``lineage_reads`` audit log (#6/#41), not the AGE graph \u2014 reads are access events, not\nprovenance edges, so they never mint a graph vertex.",
+        "properties": {
+          "last_read": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Read"
+          },
+          "reader": {
+            "title": "Reader",
+            "type": "string"
+          },
+          "reads": {
+            "default": 0,
+            "title": "Reads",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "reader"
+        ],
+        "title": "ReaderInfo",
+        "type": "object"
+      },
+      "Readers": {
+        "description": "Who has READ ``dataset`` \u2014 the access-audit surface that turns the #41 read log (capture-only until\nnow) into a query. Owner/writer-gated (stricter than reader-gated ``/producers``): an access log\nreveals who touched a dataset, so only a data owner may audit it, not any casual reader.",
+        "properties": {
+          "dataset": {
+            "title": "Dataset",
+            "type": "string"
+          },
+          "readers": {
+            "items": {
+              "$ref": "#/components/schemas/ReaderInfo"
+            },
+            "title": "Readers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "dataset"
+        ],
+        "title": "Readers",
+        "type": "object"
+      },
+      "Readiness": {
+        "properties": {
+          "components": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Components",
+            "type": "object"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReadinessStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "Readiness",
+        "type": "object"
+      },
+      "ReadinessStatus": {
+        "enum": [
+          "starting",
+          "ready",
+          "shutting_down",
+          "degraded"
+        ],
+        "title": "ReadinessStatus",
+        "type": "string"
+      },
+      "ReconcileState": {
+        "description": "Result of reconciling the lineage graph's recorded version against the on-disk Lance version.",
+        "enum": [
+          "in_sync",
+          "storage_ahead",
+          "graph_ahead",
+          "untracked",
+          "missing_on_storage",
+          "absent"
+        ],
+        "title": "ReconcileState",
+        "type": "string"
+      },
+      "ReconcileStatus": {
+        "description": "Whether a dataset's lineage-graph version matches its actual on-disk Lance version (#23).\n\n``dangling_blob_columns`` (\u00a79 P1 lifecycle, 2026-07-12) is the POINTER-health axis the version\ncomparison can't see: a blob-v2 column whose payloads no longer dereference (external object\ndeleted, bucket wiped) leaves the version untouched \u2014 a dataset can be ``in_sync`` and still\nunreadable. Non-empty = those columns failed a real 1-byte probe read.",
+        "properties": {
+          "dangling_blob_columns": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Dangling Blob Columns",
+            "type": "array"
+          },
+          "dataset": {
+            "title": "Dataset",
+            "type": "string"
+          },
+          "graph_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph Version"
+          },
+          "in_sync": {
+            "title": "In Sync",
+            "type": "boolean"
+          },
+          "missing_declared_columns": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Declared Columns",
+            "type": "array"
+          },
+          "stale": {
+            "default": false,
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReconcileState"
+          },
+          "storage_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Storage Version"
+          }
+        },
+        "required": [
+          "dataset",
+          "in_sync",
+          "status"
+        ],
+        "title": "ReconcileStatus",
+        "type": "object"
+      },
+      "Run": {
+        "additionalProperties": true,
+        "description": "A single run of a job. ``facets.author`` carries the OIDC sub when present.",
+        "properties": {
+          "facets": {
+            "additionalProperties": true,
+            "title": "Facets",
+            "type": "object"
+          },
+          "runId": {
+            "title": "Runid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "title": "Run",
+        "type": "object"
+      },
+      "RunEvent": {
+        "additionalProperties": true,
+        "description": "An OpenLineage run event (START/RUNNING/COMPLETE/FAIL/ABORT) with its inputs and outputs.",
+        "properties": {
+          "eventTime": {
+            "title": "Eventtime",
+            "type": "string"
+          },
+          "eventType": {
+            "title": "Eventtype",
+            "type": "string"
+          },
+          "inputs": {
+            "items": {
+              "$ref": "#/components/schemas/Dataset"
+            },
+            "title": "Inputs",
+            "type": "array"
+          },
+          "job": {
+            "$ref": "#/components/schemas/Job"
+          },
+          "outputs": {
+            "items": {
+              "$ref": "#/components/schemas/Dataset"
+            },
+            "title": "Outputs",
+            "type": "array"
+          },
+          "producer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Producer"
+          },
+          "run": {
+            "$ref": "#/components/schemas/Run"
+          }
+        },
+        "required": [
+          "eventType",
+          "eventTime",
+          "run",
+          "job"
+        ],
+        "title": "RunEvent",
+        "type": "object"
+      },
+      "RunInput": {
+        "description": "One dataset a run consumed, with the PINNED version it read (``None`` = read floating LATEST).\n\nThe version is the OpenLineage ``version`` facet the producer stamped on the input \u2014 the Ray TRAIN\njob pins every feature (#115 D1: training on floating LATEST is not reproducible). It rides the\ngraph's ``READ`` edge; this is the API surface for it (before, it was reachable only by Cypher).",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "RunInput",
+        "type": "object"
+      },
+      "RunInputs": {
+        "description": "The inputs a run consumed, with their pinned versions \u2014 the reproducibility answer for one run.\n\nGoverned like every other read: an input the caller can't ``can_get_metadata`` is dropped, so this\ncan't enumerate datasets outside the caller's reach. For a training run this answers exactly *which\nfeature versions produced this model*.",
+        "properties": {
+          "inputs": {
+            "items": {
+              "$ref": "#/components/schemas/RunInput"
+            },
+            "title": "Inputs",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "RunInputs",
+        "type": "object"
+      },
+      "RunStatus": {
+        "description": "The *current* status of a run, folded from its OpenLineage lifecycle events.\n\nUnlike the provenance graph (terminal-only), this is the live \"where are we now\" view:\n``state`` is the latest run state (START\u2192RUNNING\u2192COMPLETE/FAIL), with progress + error.",
+        "properties": {
+          "author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "events": {
+            "default": 0,
+            "title": "Events",
+            "type": "integer"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation"
+          },
+          "outputs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Outputs",
+            "type": "array"
+          },
+          "progress_done": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Done"
+          },
+          "progress_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Total"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "RunStatus",
+        "type": "object"
+      },
+      "Runs": {
+        "description": "Live run-status board (most-recently-active first).",
+        "properties": {
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/RunStatus"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "title": "Runs",
+        "type": "object"
+      },
+      "SchemaField": {
+        "description": "One column in a dataset's persisted per-version schema (from the standard ``schema`` facet).",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "default": "",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SchemaField",
+        "type": "object"
+      },
+      "SearchHit": {
+        "description": "One /search result: the dataset + WHY it matched (name / namespace / tag:* / column:*).",
+        "properties": {
+          "matches": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Matches",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SearchHit",
+        "type": "object"
+      },
+      "SearchResults": {
+        "description": "Governed search results (P1 Search tier 1 \u2014 substring over the discovery estate).",
+        "properties": {
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query",
+          "results",
+          "total"
+        ],
+        "title": "SearchResults",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "description": "OIDC bearer token",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "Lance Lineage Service",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/admin/dlq": {
+      "get": {
+        "description": "The outbox saturation snapshot + the visible at-risk events (oldest first, capped at ``limit``).\n\n``depth``/``oldest_age_seconds`` are the raw system-health signal; ``events`` is the per-dataset-governed\nsubset the caller may see. Requires an authenticated principal when FGA is on (else the raw depth would\nleak to an anonymous caller); the event list is then filtered by dataset visibility.",
+        "operationId": "list_dlq_admin_dlq_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DlqBacklog"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Dlq",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/dlq/{run_id}/replay": {
+      "post": {
+        "description": "Re-ingest one staged event on demand, then drop it \u2014 the manual twin of the reconcile relay's drain.\n\nA replay IS a re-ingest, so it carries the SAME authz as a fresh ingest: ``can_write_data`` on the\nevent's outputs + ``can_get_metadata`` on its inputs (:func:`enforce_output_authz`, fail-closed). The\ningest MERGEs on ``run_id`` (idempotent), the durable feed insert is ON CONFLICT DO NOTHING, and the drop\nis only reached on success \u2014 a failed re-ingest leaves the object staged for the relay to retry.\n\nNon-disclosure (audit 2026-07-20): replay must not become an oracle for events ``list_dlq`` hid. So a\nrun whose datasets the caller cannot SEE (or an unparseable poison object, which the governed list also\nhides) returns the SAME 404 as a missing run \u2014 never a distinct 422 or a 403 echoing hidden dataset\nnames. Only an event the caller could have listed reaches ``enforce_output_authz``.",
+        "operationId": "replay_dlq_admin_dlq__run_id__replay_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DlqReplayResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Replay Dlq",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/lineage": {
+      "post": {
+        "description": "Ingest one OpenLineage ``RunEvent`` into the lineage graph.\n\nThis is the OpenLineage HTTP-transport default path, so any OpenLineage producer\n(our emitter, Airflow, Spark, dbt, \u2026) configured with ``OPENLINEAGE_URL`` pointed\nhere ingests with no glue \u2014 the lightweight-Marquez contract.\n\nWhen OIDC is enabled the ``CurrentToken`` dependency requires a verified bearer token\n(401 otherwise), :func:`~lineage.api.fga_deps.enforce_author` binds the run author to that\ntoken's subject (no self-asserted identity), and :func:`~lineage.api.fga_deps.enforce_output_authz`\nrequires ``can_write_data`` on every output dataset (a producer can't record provenance for a table\nit can't write). Both are no-ops when auth is off.",
+        "operationId": "ingest_event_api_v1_lineage_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunEvent"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Ingest Event Api V1 Lineage Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Ingest Event",
+        "tags": [
+          "ingest"
+        ]
+      }
+    },
+    "/dapr/subscribe": {
+      "get": {
+        "operationId": "_get_subscriptions_dapr_subscribe_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": " Get Subscriptions",
+        "tags": [
+          "PubSub"
+        ]
+      }
+    },
+    "/datasets": {
+      "get": {
+        "description": "Browse every dataset the caller may see \u2014 the lineage catalog's landing list.\n\nGoverned (a dataset is shown only if the caller ``can_get_metadata`` on it), optionally filtered by\n``?namespace=`` / ``?tag=``, and paginated over the *visible* set. This is the entry point the graph\nreads (``/datasets/{name}/...``) needed but could not provide \u2014 you no longer must know a name first.",
+        "operationId": "list_datasets_datasets_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Namespace"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tag"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Datasets"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Datasets",
+        "tags": [
+          "discovery"
+        ]
+      }
+    },
+    "/datasets/{name}/columns": {
+      "get": {
+        "description": "The column-level lineage subgraph around ``name`` (#24) \u2014 the field-to-field analogue of\n``/graph``, for a DAG view of how each column was produced.\n\nNodes/edges touching a dataset the caller can't see are dropped (an edge needs BOTH endpoints'\ndatasets visible); ``name``'s own columns are always shown (the route gate authorized it).",
+        "operationId": "get_dataset_columns_datasets__name__columns_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ColumnGraph"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Dataset Columns",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/datasets/{name}/columns/{field}/downstream": {
+      "get": {
+        "description": "Column-level impact (#24): the columns (transitively) derived from ``name.field``. Gated +\ngoverned exactly like the column upstream view \u2014 related columns in datasets the caller can't see\nare dropped.",
+        "operationId": "get_column_downstream_datasets__name__columns__field__downstream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "field",
+            "required": true,
+            "schema": {
+              "title": "Field",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ColumnNeighbors"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Column Downstream",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/datasets/{name}/columns/{field}/upstream": {
+      "get": {
+        "description": "Column-level provenance (#24): the columns ``name.field`` was (transitively) derived from.\n\nOur deepest moat \u2014 field-to-field lineage neither Marquez nor Lakekeeper derives. Gated on\n``can_get_metadata`` for the owning ``name``; related columns whose *owning dataset* the caller can't\nsee are dropped (a column has no ACL of its own \u2014 it inherits its table's), closing the same\ntransitive-disclosure hole at column resolution. Auth off \u2192 pass-through.",
+        "operationId": "get_column_upstream_datasets__name__columns__field__upstream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "field",
+            "required": true,
+            "schema": {
+              "title": "Field",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ColumnNeighbors"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Column Upstream",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/datasets/{name}/creator": {
+      "get": {
+        "description": "Who created ``name`` (the verified catalog principal). Gated on ``can_get_metadata``.",
+        "operationId": "get_creator_datasets__name__creator_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Creator"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Creator",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/datasets/{name}/description": {
+      "put": {
+        "description": "Set the dataset's description (an empty string clears it).",
+        "operationId": "set_description_datasets__name__description_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DescriptionUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetGovernance"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Description",
+        "tags": [
+          "governance"
+        ]
+      }
+    },
+    "/datasets/{name}/downstream": {
+      "get": {
+        "description": "What derives from ``name`` (impact). Gated; non-visible related datasets are dropped.",
+        "operationId": "get_downstream_datasets__name__downstream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Neighbors"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Downstream",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/datasets/{name}/governance": {
+      "get": {
+        "description": "The dataset's curated tags + description with last-writer attribution (who/when per field).",
+        "operationId": "get_governance_datasets__name__governance_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetGovernance"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Governance",
+        "tags": [
+          "governance"
+        ]
+      }
+    },
+    "/datasets/{name}/graph": {
+      "get": {
+        "description": "The connected lineage subgraph around ``name`` (nodes + edges) for a DAG view.\n\nNodes the caller may not see (and edges touching them) are dropped; the requested ``name``\nis already authorized by the route gate.",
+        "operationId": "get_graph_datasets__name__graph_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LineageGraph"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Graph",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/datasets/{name}/producers": {
+      "get": {
+        "description": "The runs that wrote ``name`` \u2014 who / when / how. Gated on ``can_get_metadata``.",
+        "operationId": "get_producers_datasets__name__producers_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Producers"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Producers",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/datasets/{name}/readers": {
+      "get": {
+        "description": "Who has READ ``name`` \u2014 the read-audit log's query surface (#41 was capture-only until now).\n\nOwner/writer-gated (``require_write_access``, on TOP of the router's ``can_get_metadata``): an access\nlog reveals *who* touched a dataset, so only a data owner may audit it \u2014 a casual reader can trace the\ndataset's provenance but not enumerate who else viewed it. Aggregated per principal (last read + count,\nnewest first). Empty when read-auditing is/was off (the log table exists but has no rows).",
+        "operationId": "get_readers_datasets__name__readers_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readers"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Readers",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/datasets/{name}/reconcile": {
+      "get": {
+        "description": "Does the lineage graph agree with the **actual Lance file on storage**? (#23)\n\nOur moat over format-unaware catalogs (Marquez, Lakekeeper): because we own a Lance lakehouse we\nread the real on-disk version and cross-check it against the version the graph recorded on the\n``WROTE`` edge \u2014 surfacing a write that bypassed lineage (``storage_ahead``) or a lineage claim\nwith no data behind it (``missing_on_storage``). Gated on ``can_get_metadata`` for ``name``; the\nLance read runs in the threadpool so the blocking object-store I/O never stalls the event loop.",
+        "operationId": "get_reconcile_datasets__name__reconcile_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconcileStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Reconcile",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/datasets/{name}/schema": {
+      "get": {
+        "description": "The persisted column schema for ``name`` \u2014 at ``?version=N`` if given, else the latest. (#24)\n\nCaptured from the standard ``SchemaDatasetFacet`` at ingest and stored per-version on the ``WROTE``\nedge (previously the facet was received and discarded). Gated on ``can_get_metadata`` for ``name``;\nthis is the prerequisite for column-level lineage and powers schema-diffing between Lance versions.",
+        "operationId": "get_schema_datasets__name__schema_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetSchema"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Schema",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/datasets/{name}/tags/{tag}": {
+      "delete": {
+        "description": "Remove one governance tag (idempotent \u2014 removing an absent tag is a no-op re-stamp).\n\nDeliberately unvalidated: removal only filters an existing element out of storage, so any string is\nsafe \u2014 and it lets a curator purge a non-conforming tag (e.g. an old producer label) that the add\npath would refuse.",
+        "operationId": "remove_tag_datasets__name__tags__tag__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tag",
+            "required": true,
+            "schema": {
+              "title": "Tag",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetGovernance"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Remove Tag",
+        "tags": [
+          "governance"
+        ]
+      },
+      "put": {
+        "description": "Add one governance tag (idempotent \u2014 re-adding an existing tag is a no-op re-stamp).",
+        "operationId": "add_tag_datasets__name__tags__tag__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tag",
+            "required": true,
+            "schema": {
+              "title": "Tag",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetGovernance"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Add Tag",
+        "tags": [
+          "governance"
+        ]
+      }
+    },
+    "/datasets/{name}/upstream": {
+      "get": {
+        "description": "What ``name`` was derived from (provenance).\n\nGated on ``can_get_metadata`` for ``name``; related datasets the caller may not see are\ndropped so the graph can't disclose tables outside its reach.",
+        "operationId": "get_upstream_datasets__name__upstream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Neighbors"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Upstream",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/demo/datasets": {
+      "get": {
+        "description": "The medallion datasets as they currently exist on S3 \u2014 schema per Lance version + rows.\n\nGOVERNED (audit: this endpoint reads real medallion schemas/row-counts + gold's lineage JSONB from S3\nwith the SERVICE root credentials, so it must not disclose a dataset the caller cannot see). Every\nother lineage read gates on ``can_get_metadata``; this now does the same \u2014 authenticate (401 unauth /\n503 if FGA unwired, via ``require_metadata_access``) and filter to the datasets the caller may read.\nFGA off \u2192 pass-through (the dev demo).",
+        "operationId": "demo_datasets_demo_datasets_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoDatasets"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Demo Datasets",
+        "tags": [
+          "demo"
+        ]
+      }
+    },
+    "/events": {
+      "get": {
+        "description": "The most-recent ingested OpenLineage events (newest first) \u2014 the Marquez-style event feed.\n\n**Durable** (read from Postgres, survives restart / replica-shared) and **governed**: when auth is\non the feed is filtered like the per-dataset reads \u2014 an event is shown only if the caller\n``can_get_metadata`` on *every* dataset it references (and a dataset-less event is hidden), so the\naudit feed never discloses a table outside the caller's reach. Auth off \u2192 pass-through. (#22)\n\nPagination (additive, defaults = the old behavior): ``after`` = keyset cursor (the previous\npage's ``next_cursor``); ``limit`` \u2264 500 (server-capped); ``summary=true`` drops the full-JSONB\n``event`` payload at the SQL layer. The governance filter ALWAYS runs before the slice \u2014\npagination can never disclose a hidden row's CONTENT. ``next_cursor`` is a WINDOW FLOOR, not\nnecessarily a visible row's seq (on a hidden-dense page it is the fetch window's last seq \u2014\nexclusive, so the hidden row itself is never returned; bare seq numbers were already inferable\nfrom gaps in the pre-pagination feed, so this adds no new disclosure class \u2014 reviewed\n2026-07-11).",
+        "operationId": "get_events_events_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "summary",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Summary",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Events"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Events",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/graph": {
+      "get": {
+        "description": "The whole visible lineage graph in ONE response \u2014 the graph page's bulk read.\n\nBefore this the UI recomposed the estate graph client-side from the per-``{name}`` reads \u2014\none ``/datasets/{name}/graph`` (plus ``/producers``) per dataset per refresh, a 2N+-request\nstorm at N datasets. Governance is identical to ``/datasets``: a node the caller may not see\nis dropped, and an edge needs BOTH endpoints visible (the same transitive-disclosure\nguarantee as the per-dataset graph). Nodes are capped at ``limit`` deterministically (sorted\nby name) with ``total``/``capped`` reporting the truth.",
+        "operationId": "estate_graph_graph_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 300,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EstateGraph"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Estate Graph",
+        "tags": [
+          "discovery"
+        ]
+      }
+    },
+    "/jobs": {
+      "get": {
+        "description": "The jobs (compute identities) that have run \u2014 governed by the datasets each wrote.\n\nA job is shown only if the caller can see every dataset it wrote (a read-only / output-less job is\nhidden when auth is on, mirroring how ``/events`` drops a dataset-less row). Auth off \u2192 pass-through.",
+        "operationId": "list_jobs_jobs_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Jobs"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Jobs",
+        "tags": [
+          "discovery"
+        ]
+      }
+    },
+    "/livez": {
+      "get": {
+        "operationId": "livez_livez_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Liveness"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Livez",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/namespaces": {
+      "get": {
+        "description": "The namespaces containing at least one dataset the caller may see (for a namespace-tree browse).\n\nDerived from the governed dataset set, so a namespace the caller can see no dataset in never appears.",
+        "operationId": "list_namespaces_namespaces_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Namespaces"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Namespaces",
+        "tags": [
+          "discovery"
+        ]
+      }
+    },
+    "/readyz": {
+      "get": {
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Readyz",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/runs": {
+      "get": {
+        "description": "Live run-status board \u2014 each run's current state folded onto its ``(:Run)`` node in Apache AGE.\n\n**Durable** (survives restart / replica-shared) and **governed** like ``/events`` and the per-dataset\nreads: a run is shown only if the caller ``can_get_metadata`` on every dataset it wrote, so the board\ncan't enumerate dataset names / creators / errors outside the caller's reach. Auth off \u2192 pass-through.",
+        "operationId": "get_runs_runs_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Runs"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Runs",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/runs/{run_id}/inputs": {
+      "get": {
+        "description": "The inputs a run consumed, each with the version it PINNED \u2014 the per-run reproducibility answer.\n\nThe pinned version rides the graph's ``READ`` edge (the Ray TRAIN job pins every feature \u2014 #115\nD1); this endpoint is its API surface (before, Cypher-only). Kept OFF the 2s-polled ``/runs`` board\n\u2014 it's a per-run drill-in, and adding a per-run READ-edge fetch to the board would be N+1 on the hot\npath. Governed like every read: an input the caller can't ``can_get_metadata`` is dropped (an empty\nlist for a run the caller can't see into is itself non-disclosing). Auth off \u2192 pass-through.",
+        "operationId": "get_run_inputs_runs__run_id__inputs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunInputs"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Run Inputs",
+        "tags": [
+          "query"
+        ]
+      }
+    },
+    "/search": {
+      "get": {
+        "description": "Governed search over the discovery estate (P1 Search tier 1, 2026-07-11).\n\nCase-insensitive substring over dataset NAMES, NAMESPACES, governance TAGS, and the CURRENT\nCOLUMN inventory \u2014 each hit says WHY it matched (``name`` / ``namespace`` / ``tag:\u2026`` /\n``column:\u2026``), so \"which tables have an embedding column\" and \"what's in layer=gold\" are one\nquery. Governance is identical to ``/datasets``: the visibility filter runs over the FULL hit\nset BEFORE the limit, so search can never disclose (or even count) tables outside the caller's\nreach. \ud83d\udccc Tier 2 (Lance FTS + FLAT vector content search, the rask pattern) stays decision-\npinned in docs/DECISIONS.md \u00a79 behind its measured recall gate \u2014 this tier is metadata-only\nby design.",
+        "operationId": "search_search_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResults"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Search",
+        "tags": [
+          "discovery"
+        ]
+      }
+    }
+  }
+}

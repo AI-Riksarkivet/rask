@@ -1,6 +1,6 @@
 # API Reference — htr
 
-Auto-generated from source docstrings in `packages/htr/src`. For a narrative
+Auto-generated from source docstrings in `runners/htr/src`. For a narrative
 overview see [Packages → HTR](../packages/htr.md).
 
 ## Schemas

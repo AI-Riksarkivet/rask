@@ -1,44 +1,197 @@
-rask {{ .Chart.AppVersion }} deployed as release "{{ .Release.Name }}".
+rask {{ .Chart.AppVersion }} deployed as release "{{ .Release.Name }}" (namespace {{ .Release.Namespace }}).
 
-Fleet services (ClusterIP):
-{{- range $name, $svc := .Values.services }}
-  - {{ $name }}: {{ include "rask.fullname" $ }}-{{ $name }}:{{ $svc.port }}
+{{- /*
+MERGED NOTES — rask (base) + lance-ns (grafted 2026-07-27, lance-ns main@083b49a).
+
+Every lance-only value is reached through `with`, never a bare `.Values.x.y`: a missing top-level key is
+nil, and `.Values.missing.enabled` is a HARD render error — which would fail the whole install for the
+sake of a post-install banner. `with` skips instead, so this file degrades to rask's original notes if a
+lance block is ever dropped from values.yaml rather than taking the release down with it.
+
+No `| default <number>` anywhere here — chart-wide invariant (test_invariants.py): Helm's `default` fires
+on an explicit 0, so numeric fallbacks use `hasKey` + `ternary`.
+*/}}
+{{- $root := . }}
+{{- $st := false }}
+{{- with .Values.singleTenant }}{{- $st = .enabled }}{{- end }}
+{{- with .Values.nats }}
+{{- if .enabled }}
+Event-driven path:  catalog --Dapr publish--> [pubsub.jetstream over NATS] --> lineage /lineage-events --> Apache AGE
 {{- end }}
-  - frontend: {{ include "rask.fullname" . }}-home:{{ .Values.frontend.service.port }}
-{{- if .Values.cnpg.enabled }}
-  - postgres: {{ include "rask.fullname" . }}-postgres-rw:{{ .Values.cnpg.port }} (CNPG in-cluster)
+{{- end }}
+
+Services (ClusterIP):
+{{- range $name, $svc := .Values.services }}
+  - {{ $name }}: {{ include "rask.fullname" $root }}-{{ $name }}:{{ $svc.port }}
+{{- end }}
+{{- with .Values.medallion }}
+{{- if .enabled }}
+  - lance-ray: {{ include "rask.fullname" $root }}-lance-ray:{{ .port }} (medallion producer + movers)
+{{- end }}
+{{- end }}
+{{- with .Values.media }}
+{{- if .enabled }}
+  - media:     {{ include "rask.fullname" $root }}-{viewer,search,annotator} (the media plane, /api/media/*)
+{{- end }}
+{{- end }}
+{{- with .Values.age }}
+{{- if .enabled }}
+  - age:       {{ include "lance.ageHost" $root }}:5432 (Apache AGE — the lineage graph)
+{{- end }}
 {{- end }}
 {{- if .Values.rustfs.enabled }}
-  - rustfs:   {{ include "rask.fullname" . }}-rustfs-io:{{ .Values.rustfs.port }} (in-cluster, console :{{ .Values.rustfs.consolePort }} via -rustfs-console)
+  - rustfs:    {{ include "rask.fullname" $root }}-rustfs-io:{{ .Values.rustfs.port }} (in-cluster, console :{{ .Values.rustfs.consolePort }} via -rustfs-console)
 {{- end }}
 {{- if .Values.ray.enabled }}
-  - ray:      {{ include "rask.fullname" . }}-ray-head-svc:{{ .Values.ray.dashboardPort }} (KubeRay; htrflow at {{ .Values.ray.serveRoutePrefix }})
+  - ray:       {{ include "rask.fullname" $root }}-ray-head-svc:{{ .Values.ray.dashboardPort }} (KubeRay; htrflow at {{ .Values.ray.serveRoutePrefix }})
+{{- end }}
+{{- with .Values.nats }}
+{{- if .enabled }}
+  - nats:      {{ include "lance.natsHost" $root }}:4222 (JetStream; HTTP monitor on -headless:8222)
+{{- end }}
+{{- end }}
+{{- with .Values.openfga }}
+{{- if .enabled }}
+  - openfga:   {{ include "lance.openfgaHost" $root }}:8080 (authorization model; :8081 gRPC)
+{{- end }}
+{{- end }}
+{{- with .Values.openbao }}
+{{- if .enabled }}
+  - openbao:   {{ include "lance.openbaoHost" $root }}:{{ .port }} (app-tier secret store, read via Dapr)
+{{- end }}
+{{- end }}
+{{- with .Values.dex }}
+{{- if .enabled }}
+  - dex:       {{ include "lance.dexHost" $root }}:5556 (OIDC issuer; served on the app origin at /dex)
+{{- end }}
+{{- end }}
+
+{{- with .Values.frontend }}
+{{- if .enabled }}
+
+Micro-frontend zones (SvelteKit SSR; the catch-all owns "/"):
+{{- range .apps }}
+{{- if or .catchAll $st }}
+  - {{ .name }}{{ if .catchAll }} (catch-all) -> /{{ else }} -> {{ .path }}{{ end }} ({{ include "rask.fullname" $root }}-{{ .name }}:{{ $root.Values.frontend.service.port }})
+{{- end }}
+{{- end }}
+{{- if not $st }}
+  (singleTenant.enabled=false — only the catch-all is deployed; domain zones render per project)
+{{- end }}
+{{- end }}
 {{- end }}
 
 {{- if .Values.ingress.enabled }}
 {{- if .Values.ingress.host }}
+
 UI:  http://{{ .Values.ingress.host }}/      API: http://{{ .Values.ingress.host }}/api/health
 Add "127.0.0.1 {{ .Values.ingress.host }}" to /etc/hosts if it is not resolvable.
 {{- else }}
+
 UI:  http://<node-ip>/      API: http://<node-ip>/api/health   (catch-all ingress, any Host)
 Over VS Code Remote-SSH / ssh -L: forward port 80, then open the forwarded http://localhost:<port>/.
 {{- end }}
+kind has no host ports — port-forward the ingress controller instead:
+  kubectl -n ingress-nginx port-forward svc/ingress-nginx-controller 8090:80
 {{- else }}
+
 Ingress disabled — port-forward the gateway:
-  kubectl port-forward svc/{{ include "rask.fullname" . }}-gateway 8888
+{{- with (index .Values.services "gateway") }}
+  kubectl port-forward svc/{{ include "rask.fullname" $root }}-gateway {{ .port }}
+{{- else }}
+  kubectl port-forward svc/{{ include "rask.fullname" $root }}-gateway 8888
+{{- end }}
 {{- end }}
 
 {{- if .Values.observability.enabled }}
-Observability (Vector + GreptimeDB + Perses):
-  - greptimedb:  {{ include "rask.fullname" . }}-greptimedb-standalone:4000 (HTTP: OTLP, Prometheus query/write, SQL)
-  - perses:      {{ include "rask.fullname" . }}-perses:8080 (dashboards; GreptimeDB Prometheus datasource pre-configured)
-  - vector:      DaemonSet {{ include "rask.fullname" . }}-vector — ships pod logs to GreptimeDB :4000, table rask_logs
-  - storage:     RustFS bucket rask-observability (rask-rustfs-io:9000; auto-provisioned by RustFS Tenant)
-  Fleet (incl. gateway) and Ray Serve apps export OTLP/HTTP traces to GreptimeDB
-  :4000/v1/otlp (table opentelemetry_traces, pipeline greptime_trace_v1; gated by RASK_OTEL_ENABLED).
+
+Observability (OTel Collector + GreptimeDB + Perses):
+  - greptimedb: {{ include "lance.greptimeHost" $root }}:{{ (hasKey .Values.observability "greptimePort") | ternary .Values.observability.greptimePort 4000 }} (HTTP: OTLP ingest, Prometheus query/write, SQL)
+  - perses:     {{ include "rask.fullname" $root }}-perses:8080 (dashboards; GreptimeDB Prometheus datasource pre-configured)
+{{- with .Values.observability.otelCollector }}
+{{- if .enabled }}
+  - collector:  {{ include "lance.fullname" $root }}-otel-collector:4318 (OTLP/HTTP in; also tails infra pod logs)
+{{- else if .externalEndpoint }}
+  - collector:  {{ .externalEndpoint }} (EXTERNAL — no in-cluster Collector is deployed)
+{{- end }}
+{{- end }}
+  - storage:    RustFS bucket {{ .Values.observability.bucket }} ({{ include "rask.fullname" $root }}-rustfs-io:{{ .Values.rustfs.port }})
+  App OTLP target (catalog/lineage/medallion/compaction): {{ include "lance.otlpEndpoint" $root }}
+  The rask fleet (incl. gateway) and Ray Serve export OTLP/HTTP straight to GreptimeDB
+  (table opentelemetry_traces, pipeline greptime_trace_v1; gated by RASK_OTEL_ENABLED).
+{{- with .Values.observability.alerting }}
+{{- if .enabled }}
+  - alerting:   vmalert + Alertmanager evaluating chart/alerting/rules.yml against GreptimeDB PromQL
+{{- end }}
+{{- end }}
 {{- end }}
 
+{{- with .Values.dapr }}
+{{- with .dashboard }}
+{{- if .enabled }}
+
+Dapr dashboard:  kubectl port-forward svc/{{ include "lance.fullname" $root }}-dapr-dashboard 8080:8080
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- with .Values.auth }}
+
+Auth (Dex OIDC + OpenFGA): {{ if .enabled }}ENABLED{{ else }}off — set auth.enabled=true to demo governance{{ end }}
+{{- if .enabled }}
+{{- if not .bootstrapAdmin }}
+  No estate admin is seeded, so the estate-wide admin surfaces (/admin/events, /admin/streams,
+  /admin/tenants) stay closed. Install with --set auth.bootstrapAdmin=<dex-sub> to open them.
+{{- end }}
+  Admin ops pages (behind the zone BFF's admin gate): /admin/audit (compliance trail), /admin/dlq
+  (lineage DLQ replay), /admin/events (control-plane change feed), /admin/streams (JetStream health +
+  the dead-subscription detector), /admin/tenants (warehouse/tenant admin).
+{{- end }}
+{{- end }}
+
+Inspect:  kubectl get pods   (or: k9s)
+
 Reminders:
-  * The orchestrator starts only if RASK_ORCHESTRATOR_AUTOSTART=true (default false);
-    otherwise POST /api/v1/orchestrator/start.
-  * DO NOT scale the orchestrator above 1 replica (in-process singleton).
+{{- with .Values.networkPolicy }}
+{{- if .enabled }}
+  * NetworkPolicies are ENFORCING (namespace default-deny). A pod that cannot reach a dependency is a
+    missing allow, not a crash — and every Job/CronJob pod template needs its component labels or the
+    policy blocks it silently. Check the policies before you debug the app.
+{{- end }}
+{{- end }}
+{{- if and (include "rask.gpuEnabled" .) (not .Values.nvdp.enabled) }}
+  * ray.gpuCount={{ .Values.ray.gpuCount }} but nvdp.enabled=false — this chart is NOT installing a device plugin, so
+    something else must already advertise nvidia.com/gpu (the NVIDIA GPU Operator, or your cloud
+    provider's plugin). If nothing does, the Ray head stays Pending on an unschedulable
+    nvidia.com/gpu request. Check: kubectl get nodes -o jsonpath='{.items[*].status.allocatable}' | tr ' ' '\n' | grep nvidia
+{{- end }}
+{{- if not (include "rask.gpuEnabled" .) }}
+  * GPU-LESS estate (ray.gpuCount=0, the chart default): the htrflow Serve actor is derived to
+    RASK_SERVE_GPU_FRAC=0 and runs on CPU, no nvidia RuntimeClass is created, and the device-plugin +
+    GPU-Feature-Discovery DaemonSets are not installed. For a GPU node:
+      helm upgrade ... --set ray.gpuCount=<n> --set nvdp.enabled=true --set config.RASK_SERVE_GPU_FRAC=<frac>
+{{- end }}
+{{- /* The #4 durability chain is stage (outbox) -> publish -> drain (reconcile sweep). BOTH default ON
+     now, so this only fires when an operator deliberately broke the chain — and then it says exactly
+     WHICH half is missing and what is lost, instead of the old generic line that every default install
+     printed and everyone learned to scroll past (live-proof 2026-07-28, defect 7). */}}
+{{- with .Values.services.lineage }}
+{{- $reconcile := .reconcile.enabled }}
+{{- $outbox := .outbox.enabled }}
+{{- if not (and $reconcile $outbox) }}
+
+  !! DATA LOSS WINDOW OPEN — the #4 lineage durability chain is broken.
+     A lineage event is staged to the outbox, published fire-and-forget, then dropped; the reconcile
+     sweep drains whatever a crash left behind. Both halves are ON by default; this install disabled:
+{{- if not $outbox }}
+       - services.lineage.outbox.enabled=false  -> nothing is staged, so a crash between the Lance
+         commit and the publish loses the event's author, inputs and column lineage PERMANENTLY.
+         Reconcile can then only back-fill that a version exists.
+{{- end }}
+{{- if not $reconcile }}
+       - services.lineage.reconcile.enabled=false -> nothing drains the outbox and nothing back-fills.
+         A lost event stays lost, and staged events accumulate in s3://{{ $.Values.rustfs.bucket }}/_lineage_outbox forever.
+{{- end }}
+     Re-enable with: helm upgrade ... --set services.lineage.outbox.enabled=true --set services.lineage.reconcile.enabled=true
+{{- end }}
+{{- end }}

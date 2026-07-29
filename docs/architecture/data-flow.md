@@ -1,5 +1,23 @@
 # Data Flow
 
+!!! warning "P7a (2026-07-27): the batches/orchestrator plane described below is DELETED"
+    The compute-plane cutover (`lance-ns-merge.md` P7a) removed the orchestrator loop + entrypoint
+    (`:8810`), the `batches` table + Alembic lineage, S3-sync, chunk submission, and the prefetch lane.
+    Ingestion is now the medallion producer's `POST /ingest-iiif` (IIIF → BRONZE page-image Lance
+    dataset, ONE bronze-write OpenLineage event carrying the external `iiif://…` input — corrected by
+    R23: raw is the external world, never a governed tier; the medallion is exactly
+    bronze → silver → gold) and HTR runs as event-driven cascade compute on the unified Ray cluster.
+    Sections referring to batches/chunks/orchestrator are kept as historical context until the
+    P8 doc re-draw.
+
+!!! warning "P7b / R6+R20 (2026-07-28): core-api, search-api and volumes-api are DELETED too"
+    The R6/R20 media wave retired the remaining trio. The gateway now routes only the
+    `compute` service (ray-api → `ray` at R20, → `compute` at R22), controlplane, and the lance
+    lakehouse/media planes; the S3 object browser lives in the media viewer
+    (`/api/media/object*`), and lines/EAD FTS re-land as catalog-governed Lance
+    tables behind `/api/media/search`. Sections naming the deleted services are
+    historical context.
+
 How an image becomes searchable ALTO XML, and how the SvelteKit (SSR) frontend reads it back.
 
 ## Image → ALTO XML (the `htr` pipeline)
@@ -73,7 +91,7 @@ and only then submits — so ticks are idempotent.
 ## Frontend ↔ Backend ↔ Storage
 
 All API routes flow through the gateway on `:8888` which longest-prefix-routes
-to per-domain services. The Ray dashboard proxy is served by `ray-api` under
+to per-domain services. The Ray dashboard proxy is served by the `compute` service under
 `/api/serve/*` and `/api/ray/*`.
 
 ```mermaid

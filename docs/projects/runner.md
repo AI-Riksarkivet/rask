@@ -1,15 +1,19 @@
 # Runner
 
-`projects/runner` composes the runner CLI (`runner` + `htr` + `storage`, plus
-`htrflow` from git) into a single deployable. The runner is **the engine**: each
-invocation builds one Ray Data pipeline, runs it to completion, and exits.
+The runner (`runners/htr`) is **the engine**: each invocation builds one Ray Data
+pipeline, runs it to completion, and exits.
+
+It is a **sealed project**, deliberately *not* a uv workspace member: it holds both the
+pipeline (`src/runner`) and the model actors (`src/htr`), with its own `pyproject.toml`
+and its own `uv.lock`, so its model stack (torch, htrflow, ultralytics, transformers,
+opencv) never enters the fleet's resolution. `storage` comes in as a path dependency.
 
 → Symbol docs: **[API reference](../reference/runner.md)**.
 
 ## CLI
 
 ```bash
-uv run --project projects/runner runner --output s3://images-batch-alto \
+uv run --project runners/htr runner --output s3://images-batch-alto \
   --pipeline htr --batch A0060198 --cache-bucket images-batch
 ```
 
@@ -57,7 +61,7 @@ flowchart LR
 
 `runner/transcribe_service.py` (`TranscribeService`, route `/transcribe`) and
 `runner/htrflow_service.py` (`HTRFlowDeployment`, route `/htrflow`) are deployed
-separately via `components/scripts/deploy_serve.py` (`make serve-up` /
+separately via `scripts/deploy_serve.py` (`make serve-up` /
 `serve-up-both`). Replica/GPU sizing is env-driven: `RASK_SERVE_REPLICAS`
 (default 2), `RASK_SERVE_GPU_FRAC` (default 0.49), optional
 `RASK_SERVE_GPU_RESOURCE` tier pin. Both pipeline-side actors shard each task
@@ -65,8 +69,8 @@ three ways to keep all GPU replicas busy.
 
 !!! note "Submitted by the viewer, not by hand"
     In normal operation the orchestrator service builds the
-    `uv run --project projects/runner runner` entrypoint (via
+    `uv run --project runners/htr runner` entrypoint (via
     `core.services.submission.build_entrypoint`) and submits it as a Ray Job per
-    chunk. The core brick `PIPELINE_SPECS` keys (in `core.models.pipelines`) are
+    chunk. The core package `PIPELINE_SPECS` keys (in `core.models.pipelines`) are
     kept byte-identical to the runner's `PIPELINES` keys (asserted in
-    `components/services/core/tests/test_pipelines.py`).
+    `services/core/tests/test_pipelines.py`).

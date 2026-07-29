@@ -1,0 +1,18 @@
+# Demo overlay — turns ON the lineage service's demo data peek (GET /demo/datasets), which reads
+# the real Lance datasets on RustFS so the UI can show what is changing in storage (schema per
+# version, row counts, gold's JSONB). Layer on top of the base + rustfs + lineage + governance
+# overlays. DEMO ONLY — never enable LINEAGE_DEMO_DATA_ENABLED in production.
+#
+#   docker compose -f .docker/docker-compose.yml -f .docker/docker-compose.rustfs.yml \
+#     -f .docker/docker-compose.lineage.yml -f .docker/docker-compose.governance.yml \
+#     -f .docker/docker-compose.demo.yml up -d --build lineage-api
+services:
+  lineage-api:
+    environment:
+      LINEAGE_DEMO_DATA_ENABLED: "true"
+      LINEAGE_S3_ENDPOINT: http://rustfs:9000   # in-cluster RustFS endpoint (path-style)
+      LINEAGE_S3_ACCESS_KEY_ID: rustfsadmin
+      LINEAGE_S3_SECRET_ACCESS_KEY: rustfsadmin
+      LINEAGE_S3_REGION: us-east-1
+      LINEAGE_S3_BUCKET: lakehouse
+

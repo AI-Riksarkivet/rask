@@ -1,0 +1,40 @@
+{
+	"//": "Per-zone client-bundle ceilings in gzipped KB, measured in two halves from Vite's manifest. `staticGzipKB` is the closure of STATIC imports from every emitted entry (entry/start, entry/app and every route node) plus their CSS \u2014 what crossing into the zone actually costs. `deferredGzipKB` is everything reachable only through a dynamic import \u2014 real bytes, but ones the user opts into. The split exists because one number could not tell those apart: the annotator once measured 4179 KB of which 3809 was OpenCV wasm behind a lazy import, so a doubling of its entry graph would have passed unnoticed. That blob is gone (#117 \u2014 two ops reimplemented in @rask/engine/tools/corners.ts), which is why the annotator's deferred ceiling is now in line with every other zone's. Raise a number ONLY with the reason in the commit message; that edit is the review.",
+	"zones": {
+		"home": {
+			"staticGzipKB": 200,
+			"deferredGzipKB": 40,
+			"note": "The landing + the OIDC round-trip. Should stay the smallest thing in the estate; if it grows, something that belongs in a domain zone has leaked into the shell. Measured 157 / 1."
+		},
+		"lakehouse": {
+			"staticGzipKB": 600,
+			"deferredGzipKB": 120,
+			"note": "Four areas (catalog, lineage, models, admin) in one router. Carries @xyflow/svelte for the lineage graph and layerchart for the model experiments. Measured 527 / 113. Both numbers moved when the lineage WORKBENCH landed (@rask/dockview): the dock's ~290 KB of JS is behind a dynamic import in `routes/lineage/workbench`, so it lands in the deferred half (+67); its stylesheet is imported from app.css and rides the root layout's sheet (+33 static), because deferring 10 KB of gzipped CSS would buy a flash of unstyled dock. Standalone the library gzips to ~162 KB, but measured IN the bundle it costs ~100 \u2014 the gate gzips one combined stream, and rolldown drops the splitview/gridview/paneview exports nothing imports. ~4 KB of that is the `dockview` wrapper over `dockview-core`, which is NOT optional: it registers the ContextMenu, KeyboardDocking, AdvancedDnD, TabGroupChips and Accessibility modules, so importing core directly silently ships a dock with no aria-live announcements. Neither ceiling needed raising; deferred now has ~7 KB of headroom, so the NEXT lazy addition to this zone is the one that has to argue for a raise."
+		},
+		"media": {
+			"staticGzipKB": 1050,
+			"deferredGzipKB": 120,
+			"note": "embedding-atlas + d3 + elkjs for the atlas/tree/graph surfaces. The HEAVIEST zone to enter \u2014 nearly three times the annotator \u2014 which is the opposite of what the single-number budget implied. Measured 953 / 113. Both moved when the media WORKBENCH landed (@rask/dockview: Atlas + Treemap + topic results in one dock): the dock's JS is behind a dynamic import in `routes/workbench`, so it lands in the deferred half (+66); its stylesheet rides the root layout's sheet (+23 static), because deferring 10 KB of gzipped CSS would buy a flash of unstyled dock. Neither ceiling needed raising, but deferred now has only ~8 KB of headroom \u2014 the tightest in the estate, and the next lazy addition here has to argue for a raise."
+		},
+		"annotator": {
+			"staticGzipKB": 420,
+			"deferredGzipKB": 120,
+			"note": "Pixi ships in the entry graph (a canvas is the whole point of the zone) and is most of the 365 KB. The deferred ceiling was 4200 while the magnetic tool pulled a vendored OpenCV build; #117 replaced its two calls (cvtColor RGBA\u2192GRAY, cornerMinEigenVal) with ~120 lines in @rask/engine/tools/corners.ts, pinned to OpenCV's recorded output, and the deferred half fell 3854 \u2192 46 KB with the entry graph unchanged. On entry cost this is the second-lightest zone, against media's 929. Measured 365 / 46."
+		},
+		"compute": {
+			"staticGzipKB": 260,
+			"deferredGzipKB": 90,
+			"note": "The Ray surfaces (cluster, jobs, actors, serve, logviewer) over the shared shell \u2014 tables and status views, no heavy vendored runtime, so the ENTRY cost should stay near the home zone's weight. The deferred ceiling rose 40 \u2192 90 when the compute WORKBENCH landed (@rask/dockview: jobs + capacity + actors in one dock at /compute/workbench): this zone had essentially nothing lazy before (1 KB), so the dock is now almost the whole deferred half at ~67 KB. It is behind a dynamic import on ONE route of eleven, so no other page pays for it, and the static entry graph is unchanged. 90 rather than the 120 the other dock zones carry: 68 measured, so this still fails on a doubling instead of waving one through."
+		},
+		"studio": {
+			"staticGzipKB": 220,
+			"deferredGzipKB": 40,
+			"note": "The studio zone; gsap rides in the entry graph for the animation surface and is the only dependency beyond the shared shell, so this should stay light. Measured 163 / 1."
+		},
+		"train": {
+			"staticGzipKB": 220,
+			"deferredGzipKB": 40,
+			"note": "The train zone (R17): five dummy areas \u2014 submit form, run board, monitoring, analysis, model registry \u2014 over the shared shell, no dependency beyond it, so it should stay near studio's weight until real training surfaces land. Measured 184 / 1."
+		}
+	}
+}

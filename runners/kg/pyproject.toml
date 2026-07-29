@@ -1,0 +1,23 @@
+# The `kg` model service — knowledge-graph extraction (a BATCH deriver, isolated
+# by deps rather than by lifecycle).
+#
+# The heavy step (build_kg.py, LightRAG) transitively pins pandas<2.4 and pulls a
+# large NLP stack — it MUST NOT enter ratch's env. This pyproject is that step's
+# isolated env. The lighter steps (export_chunks/adapter/refine/generic_sv) run
+# in ratch's own venv (lance + `--with networkx`) — see README.
+[project]
+name = "ratch-model-kg"
+version = "0.0.0"
+description = "LightRAG knowledge-graph extraction — an isolated-env batch service ratch's KG build calls."
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "lightrag-hku",
+    "openai",
+    "tiktoken",
+    "nano-vectordb",
+    "networkx",
+    "numpy",
+]
+
+[tool.uv]
+package = false

@@ -1,0 +1,53 @@
+<script lang="ts">
+	import '../app.css';
+	import { browser } from '$app/environment';
+	import { page } from '$app/state';
+	import { ModeWatcher } from 'mode-watcher';
+	import { Toaster } from 'svelte-sonner';
+	import { AppShell } from '@rask/ui/shell';
+	import { onMount } from 'svelte';
+	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
+	import type { Snippet } from 'svelte';
+	import { HOME_ZONE_NAV } from '$lib/nav';
+	import type { LayoutData } from './$types';
+
+	let { children, data }: { children: Snippet; data: LayoutData } = $props();
+
+	// The navbar's notification bell (@rask/ui's NotificationCenter, mounted by AppShell). The shell owns
+	// the surface and never fetches — the zone owns the transport — and the transport is now shared
+	// (`@rask/api/runs-feed`), so a run that started, finished or FAILED reaches whoever is in this zone
+	// rather than only whoever happens to be on the run board. Opened ON MOUNT, never at init: a live
+	// query touched during render makes the SERVER hold the page until the feed's first value.
+	let feed = $state<{ current: LineagePulse | undefined } | null>(null);
+	onMount(() => {
+		feed = lineageFeed();
+	});
+	// `.current` is undefined until the first value lands; an empty feed and a not-yet-connected one both
+	// render as "no notifications", which is the honest reading of both.
+	const notifications = $derived({
+		runs: feed?.current?.runs ?? [],
+		allHref: '/lakehouse/lineage/runs',
+	});
+</script>
+
+<ModeWatcher defaultMode="dark" />
+{#if browser}
+	<Toaster />
+{/if}
+
+<!-- The same estate shell as every other zone (identical server-rendered chrome, so a cross-zone
+     hop into "/" paints stable navbar + sidebar immediately). `me` resolved in the layout load —
+     the navbar SSRs its final entry set, no skeleton pass on the landing. -->
+<AppShell
+	pathname={page.url.pathname}
+	user={data.user}
+	authEnabled={data.authEnabled}
+	zoneNav={HOME_ZONE_NAV}
+	me={data.me}
+	meLoading={false}
+	{notifications}
+>
+	<div class="min-h-0 flex-1 overflow-y-auto">
+		{@render children()}
+	</div>
+</AppShell>

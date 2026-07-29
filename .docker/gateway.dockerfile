@@ -27,13 +27,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=packages,target=packages \
-    --mount=type=bind,source=components,target=components \
+    --mount=type=bind,source=services,target=services \
     uv sync --frozen --no-install-workspace --package gateway --no-editable
 
 # Step 2: COPY real sources and resolve the workspace package (locked).
 COPY pyproject.toml uv.lock ./
 COPY packages    packages
-COPY components  components
+COPY services  services
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --package gateway --no-editable
 
@@ -75,8 +75,9 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
   CMD python -c "import socket,sys; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',8888))" || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-# The gateway is the external-facing service; --forwarded-allow-ips MUST be the ingress/nginx
-# CIDR at deploy time, never '*' (header-spoofing risk). --workers intentionally unset.
+# The gateway is the external-facing service; --forwarded-allow-ips MUST be the cluster
+# edge's CIDR at deploy time (the Ingress controller today; kgateway is the intended
+# future edge), never '*' (header-spoofing risk). --workers intentionally unset.
 CMD ["uvicorn", "gateway:app", \
      "--host", "0.0.0.0", "--port", "8888", \
      "--proxy-headers", \

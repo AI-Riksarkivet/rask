@@ -1,13 +1,37 @@
 # Frontend conventions (the canon)
 
+!!! warning "The zone names and base paths below are pre-merge — use `.claude/skills/rask-frontend` for those (2026-07-28)"
+
+    The *conventions* here still hold: remote `query()` + `.refresh()`, runes over stores, keyed
+    `{#each}`, `@rask/ui` over app-local components, tokens over colour literals, SSR-safe browser
+    globals. **The estate they are stated against moved**, so read the following as historical:
+
+    - Zones named `overview`, `discover` and `storage` — all three are **retired**. The seven are
+      `home`, `lakehouse`, `media`, `annotator`, `compute`, `train`, `studio`; `/storage` and
+      `/catalog` are routes *inside* `lakehouse`.
+    - Base paths written `/default/<domain>` or `/<project>/<domain>` — bases are a bare `/<zone>`,
+      and `cross-zone-reload.test.ts` asserts `/default/lakehouse` is **not** a zone path. The project
+      comes from the request **host**, not a path segment.
+    - The gates section names ESLint and Prettier; both are deleted and `toolchain.test.ts` fails the
+      build if either reappears. Lint is oxlint, format is oxfmt.
+
+    **Corrected here on 2026-07-28:** the `@source` line at §Styling shipped with **four** `../` where
+    three is correct (`:319`, `:347`). Copy-pasting the old form silently rendered every `@rask/ui`
+    class unstyled — no error, no warning.
+
+    The maintained, code-checked version of all of this is the **`rask-frontend`** skill (zones, data
+    dialects, composition, gates) and **`rask-styling`** (tokens, `@source`, component authoring).
+
 This is the **single source of truth** for how rask's frontend is written. The
 codebase is checked against it, and every future change is reconciled to it —
 so the same inconsistencies stop being rediscovered.
 
 Scope: the 7 SvelteKit microfrontends — the 6 domain apps under
-`components/frontends/*` plus the catch-all `components/frontends/home`
+`frontend/microfrontends/*` plus the catch-all `frontend/microfrontends/home`
 (package `home`) that owns `/` (the platform home) — the shared
-`@rask/ui` design system, and the `@rask/api` data client. It assumes the architecture in
+`@rask/ui` design system, and the `@rask/api` data client. All of it lives in the
+`frontend/` JS/TS plane, its own bun + Turborepo workspace root, so every task is
+scoped from the repo root (`bun --cwd=frontend run <task>`). It assumes the architecture in
 `frontend-microfrontends.md` and `frontend-monorepo.md` — read those for the
 _why_; this doc is the _rules_.
 
@@ -15,9 +39,9 @@ _why_; this doc is the _rules_.
 
 - **THE canonical pattern** — one copy-pasteable shape. There is exactly one.
 - **Reject** — anti-patterns. If you see them, fix them.
-- **Gate** — `knip` / `eslint` / `svelte-check` / `tsc(strict)` enforce it in
-  `make check` + `turbo run check`, **or** `convention` (reviewer-enforced, no
-  machine gate yet).
+- **Gate** — `knip` / `oxlint` / `oxfmt` / `svelte-check` / `tsc(strict)` /
+  `@rask/zone-contract` enforce it in `make check` + `turbo run check`, **or**
+  `convention` (reviewer-enforced, no machine gate yet).
 
 rask makes **deliberate** choices that override the generic Svelte/MFE skill
 advice (e.g. "start with a monolith", "exactOptionalPropertyTypes everywhere").
@@ -37,8 +61,8 @@ Styling is **Tailwind 4 + OKLCH `@theme` tokens** from `@rask/ui/styles/tokens.c
 
 - the `style:` directive. TypeScript is **strict + `noUncheckedIndexedAccess`**
   everywhere; **`exactOptionalPropertyTypes` is OFF on Svelte packages, ON for
-  `@rask/api`**. Gates: `knip` + `eslint-plugin-svelte` + `svelte-check` +
-  `tsc --strict`, run by `make check`.
+  `@rask/api`**. Gates: `knip` + `oxlint` (with `@rsvelte/oxlint-plugin` for the
+  Svelte rules) + `oxfmt` + `svelte-check` + `tsc --strict`, run by `make check`.
 
 ---
 
@@ -74,7 +98,8 @@ export const getRayJobs = query(async (): Promise<RayJobsPayload> => {
 });
 ```
 
-When the endpoint isn't in `@rask/api` yet (e.g. storage's volumes-api), the
+When the endpoint isn't in `@rask/api` yet (e.g. the lakehouse storage
+browser's media-viewer objects routes), the
 query still fetches **relative `/api/*` via `getRequestEvent().fetch`** — the
 same `hooks.server.ts` rewrite carries it to the gateway, so there is **no
 absolute-URL special case**. The only difference is that the response is parsed
@@ -83,8 +108,8 @@ against a **local valibot schema** instead of an imported `@rask/api` one
 with `error(502, …)` (a plain throw becomes a generic "Internal Error"):
 
 ```ts
-const res = await getRequestEvent().fetch(`/api/volumes/objects?${params}`);
-if (!res.ok) error(502, `volumes-api → HTTP ${res.status} ${res.statusText}`);
+const res = await getRequestEvent().fetch(`/api/media/objects?${params}`);
+if (!res.ok) error(502, `media viewer → HTTP ${res.status} ${res.statusText}`);
 return v.parse(S3ListingSchema, await res.json());
 ```
 
@@ -213,9 +238,13 @@ is surgically patched, never reordered in place:
 - Reading browser globals (`window`, `document`, `localStorage`) at component
   top level or in `load`; confine them to `onMount`/`$effect`/handlers (see §5).
 
-**Gate:** `eslint-plugin-svelte` — **`svelte/require-each-key` is `error`**
-(keyless each fails CI) and **`svelte/no-reactive-reassign` is `error`** (catches
-imperative reassignment of reactive state). The `$derived`-not-`$effect` choice
+**Gate:** `oxlint` + `@rsvelte/oxlint-plugin` — **`svelte/require-each-key` is
+`error`** (keyless each fails CI) and **`svelte/no-reactive-reassign` is `error`**
+(catches imperative reassignment of reactive state); both rule names carried over
+verbatim from the retired ESLint config, see `frontend/.oxlintrc.json`. Note
+oxlint reads a component's `<script>` block and **not** its markup, so
+markup-level rules cannot live there (that is why the cross-zone link guard in §6
+is a test). The `$derived`-not-`$effect` choice
 and runes-vs-`let` are **convention** + `svelte-check` (some misuse surfaces as
 type/compile errors). Always validate `.svelte` edits with the **`svelte` MCP
 autofixer**.
@@ -309,7 +338,7 @@ generated (Tailwind 4 ignores `node_modules`):
 @import '@rask/ui/styles/tokens.css';
 
 /* Tailwind 4 skips node_modules — scan @rask/ui/dist or its classes vanish. */
-@source '../../../../packages/ui/dist';
+@source '../../../packages/ui/dist';
 ```
 
 Color/spacing tokens are **OKLCH custom properties** defined once in
@@ -337,7 +366,7 @@ custom-property form:
   `@rask/ui/styles/tokens.css`. Tokens are shared, single-source.
 - Hex/RGB/HSL literals where an OKLCH token exists; off-palette one-off colors.
 - `style="width: {pct}%"` interpolation — use `style:width={...}`.
-- Forgetting the `@source '../../../../packages/ui/dist'` line (classes render
+- Forgetting the `@source '../../../packages/ui/dist'` line (classes render
   unstyled) or the `ModeWatcher`/`.dark` wiring.
 - Reaching into a `@rask/ui` component's internals with broad `:global(...)`;
   theme via custom properties instead.

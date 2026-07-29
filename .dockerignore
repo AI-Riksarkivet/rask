@@ -1,6 +1,7 @@
 # rask .dockerignore
 # Install: cp .claude/skills/dockerfile/templates/dockerignore .dockerignore
 # Single source of truth for ALL .docker/*.dockerfile builds (build context = repo root).
+# BuildKit only reads <context-root>/.dockerignore — a file under .docker/ is silently ignored.
 
 # VCS
 .git
@@ -14,9 +15,13 @@ Dockerfile
 *.dockerfile
 .dockerignore
 
+# Local k8s tooling (downloaded binaries) + cluster state
+.localbin/
+
 # Python venvs and caches
 .venv
 .venv*/
+**/.venv/
 **/__pycache__
 **/*.pyc
 **/*.pyo
@@ -26,13 +31,15 @@ Dockerfile
 .ruff_cache
 .pytest_cache
 
-# JS/TS build artefacts and caches
-node_modules
-node_modules/.cache
+# JS/TS build artefacts and caches (frontend/ is built inside the image). Use **/ so nested copies
+# like frontend/microfrontends/*/node_modules are excluded too — a bare `node_modules` only matches
+# the context root, which would let host node_modules ship and overwrite the clean `bun install`.
+**/node_modules
 dist
 build
-.svelte-kit
+**/.svelte-kit
 storybook-static
+test-results
 
 # Test/coverage outputs
 coverage/

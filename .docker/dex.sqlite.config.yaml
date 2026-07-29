@@ -1,0 +1,32 @@
+# Dex dev OIDC provider for the SQLite auth stack (static, in-memory).
+# TWO users so the e2e can prove app-side seeding grants the creator access AND
+# a second principal with no grant gets 403:
+#   alice@example.com / password   (the namespace/table creator -> seeded owner)
+#   bob@example.com   / password   (holds no grant -> denied)
+# Both share the same bcrypt hash of "password"; bcrypt verifies against the
+# plaintext only (no username binding), so reusing the hash is correct.
+# Token audience = the static client id "lance-catalog" (LANCE_OIDC_AUDIENCE).
+issuer: http://dex:5556/dex
+storage:
+  type: memory
+web:
+  http: 0.0.0.0:5556
+oauth2:
+  passwordConnector: local
+  skipApprovalScreen: true
+staticClients:
+  - id: lance-catalog
+    name: Lance Catalog
+    public: true
+    redirectURIs:
+      - http://localhost:2333/auth/callback
+enablePasswordDB: true
+staticPasswords:
+  - email: alice@example.com
+    hash: "$2b$10$BP/xHXQM78bAKb09HQLIjuryXCFo72R5DQJITLd5Nql0KCU2zib/."
+    username: alice
+    userID: alice
+  - email: bob@example.com
+    hash: "$2b$10$BP/xHXQM78bAKb09HQLIjuryXCFo72R5DQJITLd5Nql0KCU2zib/."
+    username: bob
+    userID: bob

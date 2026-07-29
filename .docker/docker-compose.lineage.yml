@@ -1,0 +1,31 @@
+# Lineage store: PostgreSQL + Apache AGE (graph) for OpenLineage event ingestion.
+#
+# This is a SEPARATE axis from the catalog and from OpenFGA's datastore (OpenFGA
+# owns its own schema — never co-mingle). OpenLineage events emitted by compute
+# jobs land here and become a queryable graph (openCypher via AGE). Opt-in overlay:
+#
+#   docker compose -f .docker/docker-compose.yml -f .docker/docker-compose.lineage.yml up -d lineage-postgres
+#   psql postgres://lineage:lineage@localhost:5433/lineage   # then: LOAD 'age'; SET search_path = ag_catalog, "$user", public;
+services:
+  lineage-postgres:
+    # PostgreSQL 16 + Apache AGE. Pinned to PG16 — the 'latest' tag tracks PG18,
+    # on which AGE crashes the backend on create_graph (verified).
+    image: apache/age:release_PG16_1.5.0
+    container_name: lance-lineage-postgres
+    environment:
+      POSTGRES_USER: lineage
+      POSTGRES_PASSWORD: lineage
+      POSTGRES_DB: lineage
+    ports:
+      - "5433:5432"   # off 5432 to avoid clashing with other local Postgres
+    volumes:
+      - lineage-postgres-data:/var/lib/postgresql/data
+      - ./lineage-init.sql:/docker-entrypoint-initdb.d/10-age.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lineage -d lineage"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  lineage-postgres-data:

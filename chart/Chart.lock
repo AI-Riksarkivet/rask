@@ -4,7 +4,7 @@ dependencies:
   version: 0.19.3
 - name: kuberay-operator
   repository: https://ray-project.github.io/kuberay-helm/
-  version: 1.4.2
+  version: 1.6.2
 - name: nats
   repository: https://nats-io.github.io/k8s/helm/charts/
   version: 2.14.2
@@ -26,11 +26,8 @@ dependencies:
 - name: greptimedb-standalone
   repository: https://greptimeteam.github.io/helm-charts/
   version: 0.4.5
-- name: vector
-  repository: https://helm.vector.dev
-  version: 0.56.0
 - name: perses
   repository: https://perses.github.io/helm-charts
   version: 0.22.0
-digest: sha256:e6b7e533db6d906968dda8c9cd3258c60c675fa324a685cd0daed8567672ea70
-generated: "2026-06-25T14:22:06.150783917+02:00"
+digest: sha256:9635ae1b342db9cf1264e6c57eea0d21e5ed7e2a48d1e9aa28b385aca806c89c
+generated: "2026-07-28T07:39:29.878689017+02:00"

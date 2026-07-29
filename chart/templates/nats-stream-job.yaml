@@ -1,0 +1,103 @@
+{{- if or .Values.nats.enabled .Values.nats.externalUrl }}
+# Create the JetStream LINEAGE stream (subjects lineage.events.>) that the Dapr pubsub.jetstream
+# component publishes to / consumes from. Dapr's jetstream component does NOT auto-create the stream,
+# so this Job does it (idempotent: skip if it already exists). Also runs against an
+# EXTERNAL NATS (nats.externalUrl + nats.enabled=false) — the component would otherwise point at a
+# server with no streams and every publish would fail.
+#
+# NOT a hook — see "BOOTSTRAP JOBS" in _helpers.tpl. A daprd sidecar subscribes at startup, so an
+# absent stream is a startup-time dependency of half the fleet; running the provisioner only after
+# `--wait` had already declared those pods hopeless is the wrong order in the same way the OpenFGA
+# migration was.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "lance.fullname" . }}-nats-stream-{{ include "rask.bootstrapRev" . }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 20
+  template:
+    metadata:
+      # The explicit component label (the P4 landmine, see bootstrap-admin.yaml): nats:4222 is pod-open
+      # under the prod NetworkPolicy so nothing blocks today, but the label keeps this pod visible to
+      # release inventory (`kubectl get pods -l app.kubernetes.io/instance=…`) and admissible the day the
+      # nats ingress gets an exclusive client list like openbao/age/rustfs.
+      labels:
+        {{- include "lance.labels" . | nindent 8 }}
+        app.kubernetes.io/component: nats-stream
+    spec:
+      restartPolicy: OnFailure
+      {{- if .Values.security.serviceAccounts.enabled }}
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
+      {{- end }}
+      containers:
+        - name: nats
+          image: natsio/nats-box:0.14.5
+          command:
+            - sh
+            - -c
+            - |
+              S="{{ include "lance.natsUrl" . }}"
+              until nats --server "$S" stream ls >/dev/null 2>&1; do echo wait-nats; sleep 3; done
+              # LINEAGE carries OpenLineage events; MEDALLION carries the stage triggers that cascade the
+              # event-driven pipeline (medallion.bronze/silver/media); TRAINING carries the train triggers
+              # (training.jobs — docs/RAY-TRAIN.md D1: its OWN stream, so the durable consumer names stay
+              # per-stream and a slow train path never shares limits with the stage cascade). Each created
+              # once (idempotent skip).
+              # streamReplicas > 1 (raft-replicated streams) needs a CLUSTERED NATS — the in-cluster
+              # single-node subchart supports 1 only; set 3 with an external/clustered NATS in prod.
+              add_if_missing() {
+                if nats --server "$S" stream info "$1" >/dev/null 2>&1; then
+                  echo "stream $1 already exists"
+                else
+                  nats --server "$S" stream add "$1" \
+                    --subjects "$2" --storage file --retention limits \
+                    --max-age=168h --max-bytes=-1 --max-msgs=-1 --max-msgs-per-subject=-1 \
+                    --max-msg-size=-1 --discard old --dupe-window=2m --replicas {{ (hasKey .Values.nats "streamReplicas") | ternary .Values.nats.streamReplicas 1 }} \
+                    --no-allow-rollup --deny-delete --deny-purge
+                fi
+              }
+              add_if_missing LINEAGE "lineage.events.>"
+              add_if_missing MEDALLION "medallion.>"
+              add_if_missing TRAINING "training.>"
+              # DLQ parks dead-lettered deliveries (dapr.resiliency — the sidecar publishes to dlq.*
+              # after retry exhaustion). Its OWN stream for two load-bearing reasons: Dapr does NOT
+              # auto-create streams (a parking publish with no stream FAILS, silently un-parking the
+              # message), and NATS scopes consumer names PER STREAM — the dlq.* subscriptions reuse
+              # each app's durableName, which only avoids clashing with the app's main consumer
+              # because the two live on different streams.
+              add_if_missing DLQ "dlq.>"
+              {{- if .Values.catalog.controlEmit }}
+              # Control-plane change-events (grants/warehouses/policies/tables) broadcast to EVERY catalog
+              # replica's ring buffer (GET /v1/events). Its own stream so a parking-free broadcast publish
+              # can't fail for want of a stream. Consumers are EPHEMERAL (no durableName) → they are NOT in
+              # the durable-drift reconcile loop below, and deliverPolicy=new means retention isn't
+              # load-bearing (a booting replica skips the backlog rather than replaying it into memory).
+              add_if_missing CATALOG_CONTROL "catalog.control.>"
+              {{- end }}
+              # Reconcile app-durable config drift (the UPGRADE path): a Dapr jetstream subscription
+              # can only BIND an existing durable whose config matches its request — after a values
+              # change that alters consumer config (e.g. the resiliency flip's maxDeliver/backOff),
+              # the pre-existing durable makes every subscribe fail forever with "consumer name
+              # already in use" while pods stay Ready: a SILENT dead subscription (hit live
+              # 2026-07-13 — the whole cascade sat idle after the Batch-18 roll). Expected values
+              # are templated from the SAME conditional the pubsub components render, so the two
+              # cannot drift apart. A drifted durable is deleted; the sidecar's subscribe-retry
+              # recreates it with the new config within seconds. deliverPolicy=new means messages
+              # published inside that delete->recreate window are skipped — accepted on upgrades:
+              # the alternative is a permanently dead subscription. Matching durables are untouched
+              # (ordinary restarts re-attach as before). Backoff values are nanoseconds in the JSON.
+              EXP_MAXD="{{ if .Values.dapr.resiliency.enabled }}3{{ else }}5{{ end }}"
+              EXP_BOFF="{{ if .Values.dapr.resiliency.enabled }}720000000000,720000000000{{ else }}30000000000,60000000000,120000000000,300000000000{{ end }}"
+              for st in LINEAGE MEDALLION TRAINING DLQ; do
+                for c in $(nats --server "$S" consumer ls "$st" --names 2>/dev/null | grep -- '-durable$'); do
+                  info=$(nats --server "$S" consumer info "$st" "$c" --json 2>/dev/null | tr -d ' \n')
+                  maxd=$(echo "$info" | sed -n 's/.*"max_deliver":\(-\{0,1\}[0-9]*\).*/\1/p')
+                  boff=$(echo "$info" | sed -n 's/.*"backoff":\[\([0-9,]*\)\].*/\1/p')
+                  if [ "$maxd" != "$EXP_MAXD" ] || [ "$boff" != "$EXP_BOFF" ]; then
+                    echo "RECONCILE $st/$c: max_deliver=$maxd backoff=[$boff] != expected $EXP_MAXD/[$EXP_BOFF] — deleting (sidecar re-creates)"
+                    nats --server "$S" consumer rm "$st" "$c" -f
+                  fi
+                done
+              done
+{{- end }}

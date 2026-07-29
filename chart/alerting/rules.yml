@@ -1,0 +1,112 @@
+# Alert rules for the Lance-lakehouse estate — evaluated by vmalert against GreptimeDB's PromQL endpoint
+# (:4000/v1/prometheus), routed by Alertmanager. Deployed by chart/templates/alerting.yaml when
+# observability.alerting.enabled. Seeded from the Perses panels already labelled "alertable" — every metric
+# below is one this estate actually emits. Proven to FIRE on synthetic series by rules_test.yml
+# (`make alert-rules-check` → promtool). The live datasource round-trip is a drill (see docs/DECISIONS.md "P3b").
+# The point: these turn SILENT failures (data quietly stops flowing) into a page. See docs/RUNBOOK-oncall.md.
+groups:
+  - name: lance-lineage
+    rules:
+      - alert: LineageOutboxNotDraining
+        expr: max(outbox_depth) > 0
+        for: 10m
+        labels:
+          severity: critical
+          service: lineage
+        annotations:
+          summary: "Lineage outbox not draining (depth > 0 for 10m)"
+          description: >-
+            Durable lineage events are staged but not published — provenance is not reaching the AGE graph.
+            The relay, lineage, or the NATS bus is unhealthy. Runbook: docs/RUNBOOK-oncall.md#outbox-not-draining
+
+      - alert: LineageOutboxBacklogAging
+        expr: max(outbox_oldest_age) > 300
+        for: 5m
+        labels:
+          severity: warning
+          service: lineage
+        annotations:
+          summary: "Lineage outbox oldest staged event > 5 min old"
+          description: >-
+            The outbox relay is lagging; the oldest undrained event exceeds 300s.
+            Runbook: docs/RUNBOOK-oncall.md#outbox-not-draining
+
+      - alert: LineageIngestDeadLettering
+        expr: sum(rate(lineage_events_processed_total{lance_lineage_outcome="dead_lettered"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: lineage
+        annotations:
+          summary: "Lineage ingest dead-lettering — provenance is being LOST"
+          description: >-
+            A lineage event exhausted its Dapr resiliency schedule and was parked (a terminal loss signal).
+            Runbook: docs/RUNBOOK-oncall.md#dlq-parking
+
+  - name: lance-catalog
+    rules:
+      - alert: CatalogWritesShedSustained
+        expr: sum(rate(catalog_writes_shed_total[5m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: catalog
+        annotations:
+          summary: "Catalog shedding writes for 15m — persistently over write-concurrency capacity"
+          description: >-
+            The catalog has been returning 429 on bulk Arrow-IPC writes (the concurrent-write cap, P5
+            load-shedding) for 15m — it is persistently over capacity, not just riding out a burst. Scale
+            catalog replicas or raise LANCE_MAX_CONCURRENT_WRITES (watch the pod memory: each write buffers
+            up to 256MiB). Runbook: docs/RUNBOOK-oncall.md
+
+  - name: lance-medallion
+    rules:
+      - alert: MedallionCascadeDeadLettering
+        expr: sum(rate(medallion_dlq_parked_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: medallion
+        annotations:
+          summary: "Medallion cascade dead-lettering — a stage delivery gave up"
+          description: >-
+            A cascade delivery exhausted its retries and was parked; a dataset has silently stopped updating.
+            Runbook: docs/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
+
+      - alert: MedallionStageDenied
+        expr: sum(rate(medallion_stage_denied_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: medallion
+        annotations:
+          summary: "Medallion stage FGA-denied — the cascade may stall at this stage"
+          description: >-
+            A mover lacked the grant to write its target stage; re-seed with scripts/seed_medallion_fga.sh.
+            Runbook: docs/RUNBOOK-oncall.md#cascade-stalled
+
+  - name: lance-infra
+    rules:
+      # The infra-tier signal — a Dapr consumer-wedge. Dapr records the OUTCOME of every inbound pub/sub
+      # delivery as dapr_component_pubsub_ingress_count{process_status=...}: a healthy consumer books
+      # `success`; a handler that returns RETRY (its work keeps failing) books `retry` on every redelivery.
+      # So a sustained rate of process_status="retry" is the wedge — the subscription is not draining.
+      # (NOT dapr_resiliency_count, which is flat regardless of outcome, nor dapr_resiliency_activations_total,
+      # which Dapr 1.18 doesn't emit — both verified live on the cluster.) A healthy transient error retries
+      # then succeeds, so the 15m `for` rides out blips. NOTE the `_total` suffix: the OTel Collector's
+      # prometheus receiver normalizes counters, so the Dapr `..._count` exposition lands in GreptimeDB as
+      # `..._count_total` (verified live — the un-suffixed name returns nothing). The Collector scrapes the
+      # sidecars into GreptimeDB, so this fires on a real wedge.
+      - alert: DaprConsumerWedge
+        expr: sum by (app_id) (rate(dapr_component_pubsub_ingress_count_total{process_status="retry"}[5m])) > 0
+        for: 15m
+        labels:
+          severity: critical
+          service: dapr
+        annotations:
+          summary: "Dapr consumer wedged — a subscriber is retrying inbound messages for 15m"
+          description: >-
+            A subscriber's handler has failed continuously: Dapr has booked process_status=retry on inbound
+            deliveries for 15m without clearing, so this consumer is not draining its subscription and the
+            cascade / lineage ingest has silently stopped. A healthy transient error clears in seconds. Check
+            the wedged app's logs and its downstream (AGE / OpenFGA / RustFS). Runbook: docs/RUNBOOK-oncall.md#cascade-stalled

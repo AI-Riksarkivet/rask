@@ -6,16 +6,15 @@ import { test, expect } from '@playwright/test';
 // project's URL, or a `singleTenant.enabled` install — NOT the front-door host (which
 // serves only `/`, the picker). See docs/superpowers/specs/2026-06-29-openable-projects-design.md.
 //
-// Catch-all `/` (picker/landing) + each domain app's real entry route (discover has no index).
+// Catch-all `/` (picker/landing) + each domain zone's real entry route (lakehouse has no index).
 const ROUTES = [
 	'/',
-	'/overview',
-	'/storage',
+	'/lakehouse/catalog',
+	'/media',
+	'/annotator',
 	'/compute',
-	'/discover/browse',
-	'/discover/search',
-	'/train',
 	'/studio',
+	'/train',
 ];
 
 for (const route of ROUTES) {
@@ -37,12 +36,14 @@ for (const route of ROUTES) {
 	});
 }
 
-// Requires the batch backend (core-api) — i.e. a full/`singleTenant` deploy, not the
-// front-door-only install where `/api/batches` has no upstream (gateway 502).
+// Requires the fleet backend (the ray service) — i.e. a full/`singleTenant` deploy, not
+// the front-door-only install where `/api/ray/health` has no upstream (gateway 502).
+// (The core-api husk and its /api/health died in the R6/R20 wave; the ray service's
+// own /health keeps the gateway round-trip probed.)
 test('api round-trip via gateway returns 2xx (no internal-URL redirect)', async ({ request }) => {
-	const res = await request.get('/api/batches/', { maxRedirects: 0 });
+	const res = await request.get('/api/ray/health', { maxRedirects: 0 });
 	// 200 with data, OR a redirect whose Location is relative (never an absolute
-	// internal address). A 3xx to http://127.0.0.1:8801/... is the bug.
+	// internal address). A 3xx to http://127.0.0.1:8804/... is the bug.
 	if (res.status() >= 300 && res.status() < 400) {
 		const loc = res.headers()['location'] ?? '';
 		expect(loc, 'redirect Location must be relative').not.toMatch(/^https?:\/\//);

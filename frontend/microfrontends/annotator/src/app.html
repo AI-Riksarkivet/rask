@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" href="data:," />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>lance — Annotate</title>
+		<!--
+      No web-font link on purpose: the estate zones resolve the token stack (Inter, then
+      ui-sans-serif/system-ui) locally. Pulling Inter + Lora off Google Fonts here — a
+      lance-audio leftover — is exactly what made this zone's type look unlike the rest.
+    -->
+		<!--
+      No-flash theme boot. The estate-shared mode-watcher (mounted in +layout.svelte) owns the
+      `dark` class at runtime, and in every OTHER zone its SSR-injected head script also handles
+      first paint. This zone can't rely on that: the canvas route is `ssr = false` (Pixi/WebGL),
+      so SvelteKit renders no component head at all and the head placeholder below comes back
+      empty — first paint would use the light `:root` block and then snap. (Do NOT spell that
+      placeholder out in this comment: SvelteKit string-replaces the token wherever it appears,
+      comments included, and the real one further down then renders as literal text on the
+      page. Found exactly that way.) So we inline the equivalent here,
+      reading the SAME origin-wide `mode-watcher-mode` key with the same system fallback (the
+      zone-private `lance-media-theme` key that pinned this zone dark is gone). Keep this in
+      lockstep with mode-watcher's setInitialMode.
+    -->
+		<script>
+			(function () {
+				try {
+					// Fall back to 'dark', NOT 'system'. This must agree with the
+					// <ModeWatcher defaultMode="dark" /> every zone mounts: with an empty
+					// localStorage this script decided the first paint on its own, so the
+					// annotator followed the OS preference and rendered LIGHT while every other
+					// zone rendered dark — the one zone that looked like a different product.
+					var mode = localStorage.getItem('mode-watcher-mode') || 'dark';
+					var light =
+						mode === 'light' ||
+						(mode === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches);
+					document.documentElement.classList.toggle('dark', !light);
+					document.documentElement.style.colorScheme = light ? 'light' : 'dark';
+				} catch (_) {
+					/* private mode / disabled storage — fall through to the CSS default */
+				}
+			})();
+		</script>
+		%sveltekit.head%
+	</head>
+	<body data-sveltekit-preload-data="hover" class="bg-background text-foreground">
+		<div style="display: contents">%sveltekit.body%</div>
+	</body>
+</html>

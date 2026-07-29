@@ -1,8 +1,8 @@
 # Topology, env knobs, and deploy
 
 The concrete shape of the pipeline + the two Serve apps, with exact symbols,
-ports, and commands. Source: `components/cli/runner/src/runner/` and
-`components/scripts/deploy_serve.py`.
+ports, and commands. Source: `runners/htr/src/runner/` and
+`scripts/deploy_serve.py`.
 
 ## The two pipeline shapes
 
@@ -47,7 +47,7 @@ per-step actor fan-out isn't worth it for the batch.
 
 ## The two Serve apps
 
-Deployed by `components/scripts/deploy_serve.py` (`APPS` dict):
+Deployed by `scripts/deploy_serve.py` (`APPS` dict):
 
 | App name | Route prefix | Deployment class | Build |
 |---|---|---|---|
@@ -97,12 +97,12 @@ avoidance as `_connect`). Defaults in the Makefile: `RASK_SERVE_REPLICAS ?= 2`,
 Direct invocation (repo root, local Ray up):
 
 ```bash
-uv run python components/scripts/deploy_serve.py up                # default: transcribe
-uv run python components/scripts/deploy_serve.py up --app htrflow
-uv run python components/scripts/deploy_serve.py down --app htrflow
-uv run python components/scripts/deploy_serve.py status
+uv run python scripts/deploy_serve.py up                # default: transcribe
+uv run python scripts/deploy_serve.py up --app htrflow
+uv run python scripts/deploy_serve.py down --app htrflow
+uv run python scripts/deploy_serve.py status
 ```
 
-Submit work through the `runner` CLI (`components/cli/runner`), which builds one
+Submit work through the `runner` CLI (`runners/htr`), which builds one
 of the `PIPELINES` and blocks on `.materialize()`. For remote KubeRay pass
 `--address ray://...:10001`.

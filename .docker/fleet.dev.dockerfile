@@ -6,7 +6,7 @@
 # NOT for production. Prod uses the per-service .docker/<svc>.dockerfile, which does
 # a two-stage `uv sync --no-editable` (wheel install) and ships only a stripped venv.
 #
-#   docker build -f .docker/fleet.dev.dockerfile --build-arg PACKAGE=core-api -t core-api:dev .
+#   docker build -f .docker/fleet.dev.dockerfile --build-arg PACKAGE=gateway -t gateway:dev .
 # hadolint ignore=DL3026
 FROM python:3.13-slim-bookworm@sha256:e4fa1f978c539608a10cdf74700ac32a3f719dfc6e8b6b6001da82deb36302a2
 
@@ -22,7 +22,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.5@sha256:7bff3c3776ec467fc1437960f2c469d8beb3
 
 WORKDIR /app
 
-# Which workspace package this image runs (gateway, core-api, search-api, ...).
+# Which workspace package this image runs (gateway, compute, controlplane, ...).
 ARG PACKAGE
 
 # Step 1: external deps only (frozen, no workspace sources yet) — cached across edits.

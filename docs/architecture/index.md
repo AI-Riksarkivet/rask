@@ -10,37 +10,29 @@ materialization; it fans HTR work across a Ray cluster with model weights kept
 resident in **Ray Serve** (TrOCR on `/transcribe` and the full HTRflow pipeline
 on `/htrflow`). Images come from **IIIF** or
 pre-staged **S3** buckets; ALTO XML output lands back in S3. The HTTP backend is
-a fleet of FastAPI services behind a **gateway** on port 8888: a **core-api**
-for batch/chunk/catalog state, an **orchestrator** service running the submission
-loop, plus stateless **volumes-api**, **search-api**, and **ray-api** services.
+a fleet of FastAPI services behind a **gateway** on port 8888: the **ray**
+service (dashboard introspection + Serve proxy), the **controlplane**, and the
+lance lakehouse/media planes (`/api/catalog`, `/api/lineage`, `/api/media/*`).
 A set of **SvelteKit 2 + Svelte 5 SSR** apps (svelte-adapter-bun, served behind the
-gateway) composed as routing-based microfrontend zones — a catch-all `frontend`
-owning `/` plus per-domain apps (overview/compute/discover/storage/train/studio) —
-consumes all of these via the
-gateway for inspection, the batch dashboard, search, and chunk submission. Batch-tracking state lives in a
-relational DB behind a backend-agnostic ORM — SQLite for dev, Postgres for prod.
-Full-text search over transcribed lines plus an archival catalog index live in
-**Lance** tables on S3.
+gateway) composed as routing-based microfrontend zones — a catch-all `home`
+owning `/` plus per-domain apps (lakehouse/media/annotator/compute/studio/train) —
+consumes all of these via the gateway. State lives in the governed Lance
+lakehouse on S3; the batches DB died at P7a and the lines/EAD Lance tables
+re-land catalog-governed behind `/api/media/search` (R6).
 
 ## Component map
 
 ```mermaid
 flowchart TB
-    browser["Browser"] --> spa["Frontend · SvelteKit SSR (Bun)<br/><sub>components/frontends/home</sub>"]
-    spa -->|"/api/*"| gw["Gateway · :8888<br/><sub>components/services/gateway</sub>"]
-    cli["Runner · Python CLI<br/><sub>components/cli/runner</sub>"] --> head
-    gw --> core["core-api · :8801<br/><sub>batches · chunks · catalog</sub>"]
-    gw --> search["search-api · :8802"]
-    gw --> volumes["volumes-api · :8803"]
-    gw --> rayapi["ray-api · :8804"]
-    gw --> orch["orchestrator · :8810"]
-    core --> db[("Batches DB<br/>SQLite / Postgres")]
-    core --> lance[("Lance · lines · archive_catalog")]
-    search --> lance
-    search --> s3[("S3")]
-    volumes --> s3
+    browser["Browser"] --> spa["Frontend · SvelteKit SSR (Bun)<br/><sub>frontend/microfrontends/home</sub>"]
+    spa -->|"/api/*"| gw["Gateway · :8888<br/><sub>services/gateway</sub>"]
+    cli["Runner · Python CLI<br/><sub>runners/htr</sub>"] --> head
+    gw --> rayapi["ray · :8804"]
+    gw --> cp["controlplane · :8820"]
+    gw --> lake["lance lakehouse<br/>catalog · lineage · medallion"]
+    gw --> media["lance media<br/>viewer · search · annotator"]
+    media --> s3[("S3")]
     rayapi -.->|proxy| head["Ray head :6379 · dashboard :8265"]
-    orch -.->|submit job| head
     head --> serve["Ray Serve<br/><sub>/transcribe · /htrflow</sub>"]
     head --> workers["Worker actors<br/><sub>PageLoader · Layout · Lines · TranscribeViaServe</sub>"]
     workers -->|read · IIIF on miss| s3
@@ -61,22 +53,18 @@ flowchart TB
 - **No auth anywhere.** Only optional CORS plus request-id/timing headers; the
   fleet assumes a trusted/localhost network. The frontend hits `/api/*` on the
   gateway (SSR `load` uses the absolute gateway URL server-side);
-  `/api/serve/*` is proxied by ray-api.
-- **The orchestrator runs as its own service** (`components/services/orchestrator`,
-  `:8810`) — a lifespan-managed `asyncio` task that reconciles S3, then submits
-  the next eligible prefetch and HTR chunks. `core-api` and `orchestrator` share
-  the same `core` brick and the same `batches` table transactionally.
-- **State** is a relational DB (SQLModel + SQLAlchemy async) plus two S3 buckets
-  and optional Lance tables. No Redis, no queue, no event bus; a Helm chart in
-  `chart/` deploys app services to Kubernetes, while the `Makefile` is the
-  local/dev runbook.
+  `/api/serve/*` is proxied by the compute service.
+- **State** lives in the governed Lance lakehouse on S3 (the batches DB and the
+  orchestrator died at P7a; core-api/search-api/volumes-api died in the R6/R20
+  wave). A Helm chart in `chart/` deploys everything to Kubernetes, while the
+  `Makefile` is the local/dev runbook.
 
 ## In this section
 
-- **[Monorepo Layout](layout.md)** — the three brick layers and what lives where.
+- **[Monorepo Layout](layout.md)** — the two language-pure workspace planes and what lives where.
 - **[Data Flow](data-flow.md)** — image → ALTO XML, the batch lifecycle, and the frontend ↔ API ↔ storage map.
 - **[Deployment](deployment.md)** — clusters, container images, CI, and how it ships.
-- **[Microservices](microservices.md)** — the service decomposition (implemented June 2026): gateway, core-api, orchestrator, volumes-api, search-api, ray-api.
+- **[Microservices](microservices.md)** — the service decomposition history (June 2026) and its R6/R20 retirement down to gateway + ray + controlplane.
 
 ## Deep-dive notes (in-repo)
 

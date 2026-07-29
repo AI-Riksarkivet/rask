@@ -1,51 +1,56 @@
-# The service fleet: ports, entrypoints, and which brick each composes
+# The service fleet: ports, entrypoints, and which package each composes
 
-The fleet (`make dev-micro`, driven by `scripts/dev-micro.sh` / `Procfile.micro`):
-gateway `:8888` + core-api `:8801` + search `:8802` + volumes `:8803` +
-ray `:8804` + orchestrator `:8810`. The frontend's Vite proxy targets `:8888`
-(the gateway). With `make viewer` instead, `:8888` is the `core.main:app`
-monolith — single-process dev convenience over the same `core` brick.
+The fleet (`make dev-micro`, driven by `scripts/dev-micro.sh`):
+gateway `:8888` + ray `:8804` + controlplane `:8820` + the media viewer `:8101`.
+The frontend's Vite proxy targets `:8888` (the gateway). The orchestrator
+process (`:8810`) died at P7a; core-api/search-api/volumes-api died in the
+R6/R20 media wave (lance-ns-merge.md P7).
 
 ## Every HTTP entrypoint is a thin shell over `make_service_app`
 
-Each `components/services/<svc>/src/<svc>/__init__.py` imports routers (+ maybe a
-lifespan) from a brick and calls `service_kit.make_service_app`. No business
+Each `services/<svc>/src/<svc>/__init__.py` imports routers (+ maybe a
+lifespan) from a domain package and calls `service_kit.make_service_app`. No business
 logic in the entrypoint.
 
-| Service | Port | Composes brick(s) | Lifespan | DB? | Notes |
+| Service | Port | Composes package(s) | Lifespan | DB? | Notes |
 |---|---|---|---|---|---|
-| `gateway` | 8888 | none (httpx proxy) | own asynccontextmanager | no | path-routes `/api/*` longest-prefix-first; **does not import `service-kit` or any domain brick** — pure forwarder. Upstreams env-overridable (`RASK_*_API_URL`). |
-| `core_api` | 8801 | `core` | `core.lifespan.make_lifespan` | yes | batches/chunks/catalog/health; orchestrator loop **OFF** |
-| `orchestrator` | 8810 | `core` (same brick) | `core.lifespan.make_lifespan` | yes | health + orchestrator endpoints; loop **ON** via `RASK_ORCHESTRATOR_AUTOSTART` |
-| `volumes_api` | 8803 | `storage` only | default (stateless) | no | S3/IIIF image+ALTO proxy; builds storage sources on demand |
-| `search_api` | 8802 | `storage` + `lancedb` | `search_api.lifespan.make_lifespan` | no | Lance `lines` FTS + S3 thumbnails (lines-only lifespan) |
-| `ray_api` | 8804 | `ray-kit` | `ray_api.lifespan.make_lifespan` | no | Ray dashboard introspection; `proxy_router` mounts at root so `/api/serve/*` reaches Serve status API |
+| `gateway` | 8888 | none (httpx proxy) | own asynccontextmanager | no | path-routes `/api/*` longest-prefix-first, **no catch-all**; upstreams env-overridable (`RASK_COMPUTE_URL`, `RASK_CONTROLPLANE_URL`, `RASK_MEDIA_*_URL`, …). |
+| `compute` | 8804 | `ray-kit` | `compute.lifespan.make_lifespan` | no | Ray dashboard introspection; `proxy_router` mounts at root so `/api/serve/*` reaches Serve status API |
+| `viewer` (media plane) | 8101 | `service-kit[lancekit]` + `storage` | own (lazy registry) | no | `/api/media/*` incl. the S3 objects browser ported from volumes-api |
 
-## The core-api / orchestrator split is config, not code
+## The batches/orchestrator plane is gone (P7a)
 
-Both compose the **same `core` brick** with the **same `make_lifespan`**. They
-differ only in (a) which routers they mount and (b) `RASK_ORCHESTRATOR_AUTOSTART`
-— the lifespan starts the reconcile→derive→submit `asyncio.Task` only when it's
-set. They run as **two processes over one brick, sharing the `batches` table
-transactionally**. The loop must run in exactly one process, so the fleet runs
-`core-api` with it OFF and `orchestrator` with it ON. Operators flip it at
-runtime via `POST /api/v1/orchestrator/{start,stop}`. (Transitional — destined
-to become a NATS JetStream consumer.)
+The reconcile→derive→submit loop, the two-lane prefetch/htr slot model, the
+`batches` table and S3-sync were deleted at the compute-plane cutover
+(lance-ns-merge.md P7a). The pipeline head is the medallion producer's
+`POST /ingest-iiif` (IIIF → BRONZE page-image Lance dataset, ONE bronze-write
+OpenLineage event with the external `iiif://…` input — R23: raw is the external
+world, bronze the first governed tier); `/bronze-arrival` fires the
+`medallion.bronze` cascade, and the
+HTR stages run as event-triggered movers on the unified Ray cluster (P7b).
 
-## Why the viewer-free services never touch `core`
+**Both ingest lanes share one topic, so movers must discriminate.** The events
+lane (`bronze$events`) and the IIIF page lane (`bronze$pages`) both publish
+`medallion.bronze`, so every mover subscribed to it sees both arrivals. The
+trigger carries the `dataset` that was actually written
+(`ingest_trigger._bronze_write_dataset`) and `handle_stage` DROPs a name that is
+not its own `from_dataset` — compared against the RAW setting, never the
+project-qualified one, since the trigger is unqualified for every tenant. An
+ABSENT `dataset` makes no claim and proceeds. Without that check a page arrival
+drove the events mover to completion: a real write plus a COMPLETE attributed to
+the other lane's token.
 
-`volumes_api` / `search_api` / `ray_api` depend only on `service-kit` + their own
-libs — **no `core`, no DB**. That's why `service-kit` must stay dependency-light
-(no `lancedb`/`ray`/`sqlmodel`): pulling a heavy dep into `service-kit` would
-force it onto these stateless services and onto every test that imports the
-factory. Heavy deps live in the brick that needs them (`core` → sqlmodel,
-`search_api` → lancedb, `ray-kit` → ray).
+## Why the fleet services never grow heavy deps
+
+`compute` depends only on `service-kit` + `ray-kit` — **no DB**. `service-kit`'s
+core stays dependency-light (no `ray`/`sqlmodel`; lance deps live behind the
+`[lancekit]` extra the media plane opts into): pulling a heavy dep into the
+core would force it onto every service and every test that imports the factory.
 
 ## Lifespan injection recap
 
 `make_service_app(lifespan=...)` takes a `LifespanFactory =
 Callable[[Settings], Callable[[FastAPI], AbstractAsyncContextManager[None]]]`.
 Omit it → `default_lifespan` (puts `settings` on `app.state`, nothing else).
-Stateful services pass a factory that opens DB/Lance/Ray/S3 on enter and tears
-down on exit. This is the seam that lets one brick (`core`) back two processes
-with different startup behavior.
+Stateful services pass a factory that opens Lance/S3/Ray clients on enter and
+tears down on exit.

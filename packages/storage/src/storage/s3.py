@@ -1,10 +1,16 @@
 """S3 source and sink — picklable for Ray actors via lazy client factory."""
 
+from __future__ import annotations
+
 from collections.abc import Callable, Iterable, Iterator
-from typing import Any
+from typing import TYPE_CHECKING
 
 
-def iter_keys(client: Any, bucket: str, prefix: str = "", suffix: str = "") -> Iterator[str]:  # noqa: ANN401 — boto3 client has no public stub
+if TYPE_CHECKING:
+    from mypy_boto3_s3.client import S3Client
+
+
+def iter_keys(client: S3Client, bucket: str, prefix: str = "", suffix: str = "") -> Iterator[str]:
     """Yield keys under `bucket`/`prefix`, optionally filtered by case-insensitive `suffix`.
 
     Sync — wrap in `anyio.to_thread.run_sync` if called from an event loop.
@@ -29,8 +35,8 @@ class S3Source:
         bucket: str,
         prefix: str = "",
         suffixes: tuple[str, ...] = (".jpg", ".jpeg", ".png", ".tif", ".tiff"),
-        client: Any | None = None,  # noqa: ANN401
-        client_factory: Callable[[], Any] | None = None,
+        client: S3Client | None = None,
+        client_factory: Callable[[], S3Client] | None = None,
     ):
         if client is None and client_factory is None:
             raise ValueError("S3Source needs either `client` or `client_factory`")
@@ -41,11 +47,11 @@ class S3Source:
         self.suffixes = tuple(s.lower() for s in suffixes)
 
     @property
-    def client(self) -> Any:  # noqa: ANN401 — boto3 client has no public stub
+    def client(self) -> S3Client:
         if self._client is None:
-            # __init__ guarantees at least one of client/factory is set, so a
-            # None client here means the factory is non-None.
-            assert self._client_factory is not None
+            if self._client_factory is None:
+                # Unreachable via __init__; only a hand-rolled __setstate__ can get here.
+                raise ValueError("S3Source has neither `client` nor `client_factory`")
             self._client = self._client_factory()
         return self._client
 
@@ -80,8 +86,8 @@ class S3Sink:
         bucket: str,
         prefix: str = "",
         content_type: str = "application/xml",
-        client: Any | None = None,  # noqa: ANN401
-        client_factory: Callable[[], Any] | None = None,
+        client: S3Client | None = None,
+        client_factory: Callable[[], S3Client] | None = None,
     ):
         if client is None and client_factory is None:
             raise ValueError("S3Sink needs either `client` or `client_factory`")
@@ -92,11 +98,11 @@ class S3Sink:
         self.content_type = content_type
 
     @property
-    def client(self) -> Any:  # noqa: ANN401 — boto3 client has no public stub
+    def client(self) -> S3Client:
         if self._client is None:
-            # __init__ guarantees at least one of client/factory is set, so a
-            # None client here means the factory is non-None.
-            assert self._client_factory is not None
+            if self._client_factory is None:
+                # Unreachable via __init__; only a hand-rolled __setstate__ can get here.
+                raise ValueError("S3Sink has neither `client` nor `client_factory`")
             self._client = self._client_factory()
         return self._client
 

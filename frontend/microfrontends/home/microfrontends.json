@@ -1,0 +1,84 @@
+{
+	"$schema": "https://turborepo.dev/microfrontends/schema.json",
+	"applications": {
+		"home": {
+			"development": {
+				"local": {
+					"port": 5273
+				}
+			}
+		},
+		"lakehouse": {
+			"development": {
+				"local": {
+					"port": 5174
+				}
+			},
+			"routing": [
+				{
+					"paths": ["/lakehouse", "/lakehouse/:path*"]
+				}
+			]
+		},
+		"media": {
+			"development": {
+				"local": {
+					"port": 5173
+				}
+			},
+			"routing": [
+				{
+					"paths": ["/media", "/media/:path*"]
+				}
+			]
+		},
+		"annotator": {
+			"development": {
+				"local": {
+					"port": 5177
+				}
+			},
+			"routing": [
+				{
+					"paths": ["/annotator", "/annotator/:path*"]
+				}
+			]
+		},
+		"compute": {
+			"development": {
+				"local": {
+					"port": 5175
+				}
+			},
+			"routing": [
+				{
+					"paths": ["/compute", "/compute/:path*"]
+				}
+			]
+		},
+		"studio": {
+			"development": {
+				"local": {
+					"port": 5176
+				}
+			},
+			"routing": [
+				{
+					"paths": ["/studio", "/studio/:path*"]
+				}
+			]
+		},
+		"train": {
+			"development": {
+				"local": {
+					"port": 5178
+				}
+			},
+			"routing": [
+				{
+					"paths": ["/train", "/train/:path*"]
+				}
+			]
+		}
+	}
+}

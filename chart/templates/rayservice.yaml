@@ -15,7 +15,14 @@ spec:
         runtime_env:
           env_vars:
             RASK_SERVE_REPLICAS: "{{ .Values.config.RASK_SERVE_REPLICAS }}"
-            RASK_SERVE_GPU_FRAC: "{{ .Values.config.RASK_SERVE_GPU_FRAC }}"
+            {{- /* DERIVED from ray.gpuCount (rask.serveGpuFrac), not passed through: an actor that asks
+                 for a GPU fraction on a cluster that advertises no nvidia.com/gpu never becomes
+                 healthy, so the RayService stays `Initializing` forever, the operator never creates
+                 the stable `<release>-ray-head-svc`, and the compute zone reports "Ray offline" beside
+                 a Running head (live-proof 2026-07-28, defect 3 — it took a manual
+                 --set config.RASK_SERVE_GPU_FRAC=0 to get past). The same helper feeds the fleet
+                 ConfigMap, so the two can never disagree. */}}
+            RASK_SERVE_GPU_FRAC: "{{ include "rask.serveGpuFrac" . }}"
             HF_HUB_DISABLE_IMPLICIT_TOKEN: "0"
             {{- if .Values.observability.enabled }}
             OTEL_EXPORTER_OTLP_ENDPOINT: "http://rask-greptimedb-standalone:4000/v1/otlp"
@@ -26,18 +33,46 @@ spec:
             {{- end }}
   rayClusterConfig:
     rayVersion: {{ .Values.ray.rayVersion | quote }}
+    {{- if .Values.ray.auth.enabled }}
+    {{- /* Token auth (gate 7 / R3), the NATIVE kuberay >= 1.6.0 wiring: authOptions.secretName
+         points the operator at the chart's pre-existing <release>-ray-auth-token Secret
+         (data key `auth_token` = the operator's RAY_AUTH_TOKEN_SECRET_KEY convention, so the
+         operator SKIPS generating its own Secret — raycluster_controller.reconcileAuthSecret
+         returns early when secretName is set). The operator then injects RAY_AUTH_MODE=token +
+         RAY_AUTH_TOKEN (secretKeyRef) into EVERY Ray container — head, workers, autoscaler —
+         and, critically, the RayService controller's dashboard client reads THIS secret to
+         authenticate its own /api/serve reconcile calls (utils.GetRayDashboardClientFunc);
+         the old manual head-env pattern never told the controller, so it 401-wedged at
+         WaitForServeDeploymentReady. Fleet consumers (compute) still get the pair via
+         rask.rayAuthEnv — that half stays chart-wired. Requires rayVersion >= 2.52.0
+         (operator validation); we pin {{ .Values.ray.rayVersion }}. */}}
+    authOptions:
+      mode: token
+      secretName: {{ include "rask.fullname" . }}-ray-auth-token
+    {{- end }}
     headGroupSpec:
       rayStartParams:
         dashboard-host: "0.0.0.0"
         num-gpus: "{{ .Values.ray.gpuCount }}"
       template:
         spec:
+          {{- /* The nvidia RuntimeClass exists only on a GPU estate (runtimeclass.yaml renders it under
+               the same rask.gpuEnabled gate), and naming a RuntimeClass whose handler containerd does
+               not register makes every head pod fail to create. GPU-less => no runtimeClassName at all,
+               so the head runs under the node's default runtime. */}}
+          {{- if include "rask.gpuEnabled" . }}
           runtimeClassName: {{ .Values.ray.runtimeClassName }}
+          {{- end }}
           containers:
             - name: ray-head
               image: "{{ .Values.ray.image.repository }}:{{ .Values.ray.image.tag }}"
               imagePullPolicy: {{ .Values.ray.image.pullPolicy }}
               env:
+                {{- /* Ray-container auth env is NOT set here: spec.authOptions above makes the
+                     kuberay 1.6+ operator inject RAY_AUTH_MODE/RAY_AUTH_TOKEN into every Ray
+                     container itself (SetContainerTokenAuthEnvVars, skip-if-already-set), head
+                     AND any future workerGroupSpecs entry — one wiring, zero drift.
+                     rask.rayAuthEnv remains the FLEET-consumer half (compute). */}}
                 - name: RAY_ENABLE_UV_RUN_RUNTIME_ENV
                   value: "0"
                 - name: HF_HOME
@@ -47,6 +82,17 @@ spec:
                     secretKeyRef:
                       name: {{ $secretName }}
                       key: HF_TOKEN
+                {{- /* PRE-STAGED for P7b, and inert today — stated plainly so nobody reads it as wiring
+                     that already works. This image is built solely from runners/htr's own lock
+                     (.docker/ray-cluster.dockerfile), and lineage-kit is deliberately NOT a dependency
+                     there, so nothing in this container can call build_emitter() at all. The env is
+                     rendered now so the transport is present the day the actor seam lands, rather than
+                     that day beginning with a silent NoopEmitter; wiring the emission itself is P7b's
+                     job. Workers inherit the raylet's environment, and workerGroupSpecs is empty today.
+                     NOTE: a P7b image that ships lineage-kit will ALSO need the service door
+                     (LINEAGE_SERVICE_TOKEN + LINEAGE_SERVICE_ID) under auth.enabled — ray_submit.py
+                     already threads both into the train job's runtime_env; follow that shape. */}}
+                {{- include "lance.lineageEmitEnv" (list .) | nindent 16 }}
               ports:
                 - {containerPort: 6379, name: gcs}
                 - {containerPort: 8265, name: dashboard}
@@ -56,7 +102,13 @@ spec:
                 requests:
                   {{- toYaml .Values.ray.resources.requests | nindent 18 }}
                 limits:
+                  {{- /* Omitted when GPU-less rather than rendered as `nvidia.com/gpu: 0`: an extended
+                       resource the cluster never advertises has no business appearing in the pod spec —
+                       it makes the manifest claim a GPU plane that does not exist, which is exactly what
+                       sent the live-proof debugging at the head pod instead of at the Serve actor. */}}
+                  {{- if include "rask.gpuEnabled" . }}
                   nvidia.com/gpu: {{ .Values.ray.gpuCount }}
+                  {{- end }}
                   {{- toYaml .Values.ray.resources.limits | nindent 18 }}
               volumeMounts:
                 - {name: dshm, mountPath: /dev/shm}
@@ -79,7 +131,14 @@ metadata:
     {{- include "rask.componentLabels" (list . "ray") | nindent 4 }}
 spec:
   accessModes: ["ReadWriteOnce"]
-  storageClassName: local-path
+  {{- /* NO hardcoded class. `local-path` is the k3s default provisioner's name and does NOT exist on
+       stock kind (`standard`) or on any managed cluster — hardcoding it wedged this PVC Pending with no
+       diagnostic, taking the Ray head down with it (live-proof 2026-07-28, defect 2's second site).
+       Empty => the key is omitted => the CLUSTER's default StorageClass provisions it, which is the only
+       portable answer. (`storageClassName: ""` would DISABLE dynamic provisioning, hence `with`.) */}}
+  {{- with .Values.ray.hfCacheStorageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
   resources:
     requests:
       storage: {{ .Values.ray.hfCacheStorage }}

@@ -1,0 +1,20 @@
+# The `voiceprint` runner — WeSpeaker 256-d speaker embeddings per diarized turn.
+[project]
+name = "ratch-runner-voiceprint"
+version = "0.0.0"
+description = "Speaker-embedding runner (WeSpeaker via pyannote) — Ray Data actor via runners/voiceprint/actor.py."
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "pyannote.audio",
+    "torch==2.11.0+cu128",
+    "torchaudio==2.11.0+cu128",
+]
+
+[tool.uv]
+package = false
+
+# The cu128 wheels live only on the pytorch index (local-version pins are not on
+# PyPI). ratch's runner_env() turns these urls into pip --extra-index-url options
+# for the per-stage runtime_env, so the env declaration stays entirely in-file.
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cu128"

@@ -1,0 +1,4 @@
+nav:
+  - index.md
+  - Catalog Specs: catalog
+  - Namespace Client Spec: namespace

@@ -1,69 +1,184 @@
 ---
 name: rask-frontend
-description: The rask frontend canon — its Svelte 5 + SvelteKit 2 + Bun/Turborepo microfrontend conventions (data via remote query()+refresh, runes, @rask/ui/Bits UI, OKLCH tokens, MFE zones, TS strictness) and the make-check gates. Use when touching any .svelte / a frontend app / @rask/ui / @rask/api / microfrontends.json, doing data-fetching/reactivity/styling/routing, adding a frontend dep or app, or deciding the idiomatic rask way to do a frontend thing.
+description: The rask `frontend/` plane — seven SvelteKit 2 + Svelte 5 zones composed by Turborepo's microfrontend proxy, three data-fetching dialects, the `@rask/dockview` workbenches, and the oxlint/oxfmt/zone-contract gates. Use when touching a zone, `@rask/api`, `@rask/dockview`, `@rask/zone-contract`, `microfrontends.json`, or any `.svelte`; when adding a route or fetching data; when working on a dock, panel, workbench or saved layout; when a panel loses its state on drag or a cross-zone link 404s or an SSR fetch hairpins; or when adding a zone or a frontend dependency.
 ---
 
-# rask frontend (the MFE canon)
+# rask frontend
 
-The rask-specific frontend rules — the layer **over** the generic skills below. The exhaustive, gate-mapped canon is **`docs/architecture/frontend-conventions.md`** (8 concerns, each with the pattern + anti-patterns); this skill is the at-a-glance bias + checklist. **Read the canon doc before any non-trivial frontend work.**
+Every JS/TS file lives under `frontend/`, its own bun 1.3.14 + Turborepo 2.9.18 workspace root (`package.json`, `bun.lock`, `turbo.json`, `knip.json`, `.oxlintrc.json`, `.oxfmtrc.json`, `patches/`, `assets/`). Invoke everything scoped: `bun --cwd=frontend run <task>`. The `--cwd=` form matters — `bun --cwd <path>` with a space silently no-ops.
 
-## Core skills — read these deeply, every time (not optional)
+Workspace membership is **globbed** (`microfrontends/*`, `packages/*`), so a directory carrying a `package.json` is enrolled automatically and one without it is **silently skipped** — bun prints "Done!" and the package is never installed, built, or linted.
 
-Frontend work in rask is built ON these. Read them in full (references included), don't skim — this skill is the rask-specific layer over them, NOT a replacement:
+Styling and component authoring live in **`rask-styling`**. Svelte 5 and SvelteKit idioms live in `svelte-skills:*` and the `svelte` MCP. This skill is the plane above them: zones, data, composition, gates.
 
-- **`svelte-skills:*`** (Svelte 5 + SvelteKit 2 idioms) — `svelte-runes`, `svelte-template-directives`, `sveltekit-structure`, `sveltekit-data-flow`, `sveltekit-remote-functions`, `svelte-components`, `svelte-styling`.
-- **the `svelte` MCP** — validate EVERY `.svelte` with the autofixer before done (mandatory), and use it to confirm a pattern against the docs.
-- **`micro-frontends`** — the zone / shell-host / resilience theory the rask MFE split is built on (generic; this skill adds the rask config).
-- **`turborepo`** — the monorepo build/task/proxy model.
-- **`writing-typescript`** — strict TS + parse-don't-validate.
+## The seven zones
 
-## When to use
+Package name equals directory name for all seven (`manifest.test.ts:53`). Base is a bare `/<zone>` — **no `/default/` segment exists**, and `cross-zone-reload.test.ts:38` asserts `/default/lakehouse` is not a zone path.
 
-- Any `.svelte` edit, a new route/page, or a new MFE app.
-- Touching `@rask/ui` (components/shell) or `@rask/api` (the valibot client).
-- A data-fetching, reactivity/state, styling, or routing/SSR decision.
-- Adding a frontend dependency or skill — bias to the stack below.
-- Deciding "what's the idiomatic rask way to do X" on the frontend.
+| zone | base | dev port | nav label | what it is |
+|---|---|---|---|---|
+| `home` | `''` catch-all | 5273 | Home | Project gallery + the **OIDC BFF** (`/auth/{login,callback,logout}`) |
+| `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one — `data`, `lineage`, `models`, `admin`, `storage`; 84 route files, **51 `+server.ts` BFF routes** |
+| `media` | `/media` | 5173 | **Search** | Corpus search workbench: FTS/vector/hybrid, WebGPU atlas, Cypher KG, Svelte-Flow editor |
+| `annotator` | `/annotator` | 5177 | **Annotate** | One page: PixiJS/WebGPU canvas over Arrow-backed rows |
+| `compute` | `/compute` | 5175 | Compute | Ray/Serve observability, 9 pages |
+| `train` | `/train` | 5178 | Train | **Placeholder data only** — every page badges it |
+| `studio` | `/studio` | 5176 | Studio | Mini-app launcher, one tenant |
 
-## The stack, one breath
+Nav labels decouple from directory names on purpose — "named for what it is FOR, not the directory it lives in" (`nav-config.ts:301-303`).
 
-Bun + Turborepo; **7 SvelteKit 2 + Svelte 5 SSR apps** (`svelte-adapter-bun`) as routing-based **MFE zones** at `/default/<domain>` behind the turbo `:3024` proxy (the catch-all `home` app owns `/`); **`@rask/ui`** = the shared design system (Bits UI headless + Tailwind 4 + OKLCH `@theme` tokens); **`@rask/api`** = the valibot fetch client. Deliberately MFE, **not** a monolith.
+## The eight packages
 
-## The canon at a glance (full detail → the doc)
+Only `@rask/ui` has a build (`svelte-package` → `dist/`); the rest are consumed JIT as raw TS.
 
-1. **Data** — server-only remote `query()` reusing `@rask/api` via `getRequestEvent().fetch`; `.refresh().catch()` to poll / after a mutation. NEVER `onMount`/`$effect` fetch waterfalls.
-2. **Reactivity** — the runes decision tree; a computed value is ALWAYS `$derived` (never effect-into-state); `{#each}` is ALWAYS keyed by a stable id.
-3. **Components** — only `@rask/ui` (Bits UI); snippets + `{@render}`, not slots; zero app-local styled duplicates.
-4. **Styling** — OKLCH `@theme` token utilities (no off-palette literals); `style:` / the component custom-property form for dynamic values; Tailwind 4 + the `@source` + `ModeWatcher` boilerplate.
-5. **Routing/SSR** — browser globals only in `onMount`/`$effect`/handlers; `+error` per app; cross-zone redirects in `+page.server.ts`; base-relative in-app links.
-6. **MFE** — keep the zones; shared `AppShell`/`AppError` (zero drift); cross-zone links project-prefixed + `data-sveltekit-reload`; a new app = two-place workspace membership + `microfrontends.json` + a static base path (bricks → `rask-architecture`).
-7. **TypeScript** — strict + `noUncheckedIndexedAccess` everywhere (`exactOptionalPropertyTypes` OFF on Svelte pkgs — Bits UI incompat); parse-don't-validate with **valibot** (not zod); `satisfies` over a needless `as`.
-8. **Gates** — `make check` = knip + eslint (`require-each-key`, `no-reactive-reassign`) + svelte-check + prettier. A repeated convention violation becomes a NEW gate, not a relaxed rule.
+| package | what it is |
+|---|---|
+| `@rask/ui` | Design system + `@rask/ui/shell`. → **`rask-styling`** |
+| `@rask/api` | Gateway client (`ray`, `ingest`, `projects`, `me`) **plus** the OIDC/BFF plane (`bff.ts`, `oidc.ts`), the lineage client, and `@rask/api/dock-layout` |
+| `@rask/dockview` | Svelte 5 binding over **dockview 7** — the docked workbenches. → **§ Workbenches** |
+| `@rask/media-api` | Arrow-backed media/viewer client |
+| `@rask/engine` | Framework-agnostic PixiJS/WebGPU annotation canvas (ra-anno lineage) |
+| `@rask/labeling` | The `LabelOp` model + annotator Arrow-IPC transport |
+| `@rask/zone-contract` | **Test-only** — 12 files / 711 tests gating the estate's shape |
+| `@rask/config` | One shared `tsconfig.base.json`, extended by 6 of 14 packages |
 
-## MFE composition — dev proxy vs prod ingress (the part that bites in deploy)
+## Workbenches — `@rask/dockview`
 
-Two DIFFERENT composition layers stitch the zones; they are NOT meant to mirror each other — they share ONLY the base paths. Confusing them is the usual "ports don't map in k3s" bug.
+Three zones ship a **dock**: an arrangeable, per-user-persisted panel layout. `lakehouse`
+(`/lineage/workbench` — graph · runs · events), `media` (`/workbench` — atlas · treemap · topic
+results), `compute` (`/workbench` — jobs · cluster · actors). It is a **thin binding, not a wrapper**:
+consumers hold the real `DockviewApi` and call its documented methods.
 
-- **DEV** = turbo's `microfrontends.json` proxy on `:3024` (`turbo dev`). Per-app dev ports (5174…); the application **key** doubles as routing id. `packageName` is OPTIONAL — only needed when a key ≠ its `package.json` `name`; rask's keys ARE the package names, so it's correctly omitted. `options.localProxyPort` just moves the `:3024` proxy (rask uses the default). **All of this is dev-only — turbo says so explicitly; `microfrontends.json` does NOT exist/apply in prod.**
-- **PROD** = each app is its own `:3000` container (`svelte-adapter-bun`, `frontend.service.port`) composed by the **k3s Ingress** (the prod reverse-proxy): `/default/<domain>` → that app's Service (pathType `Prefix`, **no strip** — the app keeps its base path), `/` → the catch-all `home`, `/api` → gateway:8888. Source: `chart/templates/{frontends,ingress}.yaml` + `values.frontend`.
-- **One parametrized `.docker/frontend.dockerfile`** (`--build-arg APP=…`), built per app in the Makefile loop. **No per-app and no per-package dockerfile** — `@rask/ui`/`@rask/api` are libraries baked into each app image at build time, never their own deployable.
-- **The shared dev↔prod contract is the base path** `/default/<domain>` (set in each `svelte.config.js`). Both proxy layers route to it unchanged; nothing else has to match.
-- **Deploy gotcha (SSR hairpin):** a `query()` whose `getRequestEvent().fetch` hits a relative `/api/*` works in dev (vite proxy) but in prod resolves against the EXTERNAL ingress host → the pod hairpins out and back. Server-side reads must use the in-cluster `RASK_GATEWAY_URL` when set. Full detail → `docs/architecture/{deployment,frontend-microfrontends}.md`.
+Depend on **`dockview`, never `dockview-core`.** Their *type* entrypoints are identical
+(`export * from 'dockview-core'`), which makes core look like the leaner honest choice — it is not.
+`dockview`'s runtime entry is a 37 KB layer that `registerModules(...)` for **ContextMenu,
+KeyboardDocking, AdvancedDnD, TabGroupChips and Accessibility**. Import core and all five are
+silently absent, including the aria-live announcements; the library logs the mistake once, at
+runtime, where nothing fails.
 
-## Pre-flight checklist (every frontend change)
+**Four invariants.** Break any and the dock is wrong:
 
-- [ ] **Validate every `.svelte` with the `svelte` MCP autofixer** before done (standing rule). And aswell look thoroughly true the svelte 5 skill and dont just skim, actually read it and understand it and check for inconsistnecy with it and the other MFEs.
-- [ ] Data via `query()`+`.refresh()` — no `onMount` fetch.
-- [ ] `{#each}` keyed; computed = `$derived`.
-- [ ] Components from `@rask/ui`; tokens not color literals; `style:` for dynamic values.
-- [ ] Browser globals guarded (SSR-safe under `svelte-adapter-bun`).
-- [ ] `make check` green (knip + lint + svelte-check) — the gates catch the mechanical rest.
+1. **Panels mount once.** `SveltePanelRenderer` calls Svelte's `mount()` in `init()` and `unmount()`
+   only in `dispose()`. Verified in dockview's shipped bundle: a panel's renderer is built once in the
+   `DockviewPanelModel` constructor and disposed only from `_doRemovePanel` when `skipDispose` is
+   falsy — every *move* path re-parents the same instance. So a running interval, an `@xyflow/svelte`
+   viewport and an open subscription all survive a drag. Anything that mounts outside `init()` breaks it.
+2. **`defaultRenderer: 'always'`.** Component state survives a move under either renderer, but
+   **DOM-held** state (scrollTop, focus, `<video>` position) does not — the default `onlyWhenVisible`
+   *removes the element from the document*. Measured: a list scrolled to 260 px returned at 0 while the
+   panel's own counter ticked straight through. `'always'` parks panels in the overlay container instead.
+3. **Layout is per-subject, not localStorage.** One `@rask/api/dock-layout` store for the estate, over
+   the catalog's `dock-layout` user-state document on the Dapr state store. Three outcomes —
+   `ok` / `absent` / **`unreadable`** — and `unreadable` must refuse to save. Treat it as empty and the
+   next autosave overwrites a workspace that is still there.
+4. **The dock is dynamically imported.** ~100 KB gzipped in-bundle, on one route of ~11–25. It must
+   land in `deferredGzipKB`, never the entry graph. Its *stylesheet* is imported statically (10 KB, and
+   deferring it buys a flash of unstyled dock).
 
-## Adding a frontend lib / dep (stay on-stack)
+Context crosses the mount boundary: `<Dock>` captures its own tree with `getAllContexts()` and hands
+it to every panel mount, so a zone uses ordinary `createContext` above the dock and panels call the
+getter. Layout is SSR-read via a remote `query()` and passed as `initial`, so the saved arrangement is
+the first paint rather than a replacement for seeded defaults.
 
-Animation → **GSAP** (via `{@attach}`) + **Lenis** (smooth scroll); charts → **LayerChart**; components → **Bits UI / `@rask/ui`** (Melt UI if needed); validation → **valibot**. A dep that duplicates the stack or breaks a canon rule is a no — extend the stack, don't fork it.
+⚠️ **The chrome is currently thin.** Only 2 of dockview's ~21 options are wired (`dndStrategy`,
+`defaultRenderer`). Split affordances, popout, floating groups, context menus, keyboard docking,
+custom tabs and the watermark are all available in the MIT core and **not yet enabled**. Note also
+that `dndStrategy: 'pointer'` — chosen for Linux reliability and Playwright testability — *disables
+cross-window drag*, which is exactly what popout needs. Resolve that trade before wiring popout.
 
-## Cross-skill
+## Fetching data — three dialects, one per zone family
 
-- The **generic foundation** is the "Core skills" section up top (`svelte-skills:*`, the `svelte` MCP, `micro-frontends`, `turborepo`, `writing-typescript`) — read those deeply; this skill is only the **rask-specific** layer + the canon pointer.
-- `rask-architecture` (bricks / two-place workspace membership), `rask-services-fleet` (the `/api/*` gateway + the per-domain services the frontend queries hit).
+`experimental.remoteFunctions: true` is set in all seven `svelte.config.js`, and used for reads in **two**. Match the zone you are in rather than converging them.
+
+**(a) Remote `query()` — `compute` and `home`.** A `.remote.ts` query calls a `@rask/api` function through `getRequestEvent().fetch`. On every polled refresh, `.refresh().catch(() => {})` is **mandatory**: one uncaught rejection evicts the query from cache and silently kills the poll loop (`compute/src/lib/remote/compute.remote.ts:25-40`).
+
+**(b) Same-origin BFF — `lakehouse`, `media`, `annotator`.** A per-zone `+server.ts` proxy plus `createBffClient(base)` called from `$effect`. Correct for these zones: they reach services the gateway does not front.
+
+**(c) None — `studio`, `train`.** Hardcoded arrays.
+
+Estate-wide: `command()` 0, `form()` 0, `query.batch()` 0, `{#await}` 0. Every zone opens exactly one `query.live` for the notification bell, always inside `onMount` — opening it at init made the server hold the page.
+
+### The SSR hairpin
+
+Under `svelte-adapter-bun` a relative `/api/*` resolves against the **incoming external origin**, so a server-side fetch leaves the cluster and comes back. `makeGatewayHandleFetch` (`packages/api/src/gateway.ts:33-44`) rewrites `origin + '/api/'` → `gatewayBase + path` during SSR.
+
+⚠️ The two wirings disagree on the env var. `compute/src/hooks.server.ts:11` reads **`RASK_GATEWAY_URL`**; `home`/`lakehouse` go through `makeZoneHooks(env, {gateway:true})`, which reads **`LANCE_GATEWAY_URL`** and defaults to `http://localhost:8001` (`bff.ts:241,267`) — the lineage port, not the gateway. Local dev sets only `RASK_GATEWAY_URL`. Treat a "works in `compute`, fails in `lakehouse`" SSR fetch as this.
+
+## Composition — dev and prod share only the base path
+
+**Dev.** `make dev-frontends` builds `@rask/ui` + `@rask/api` first, then runs `turbo run dev --filter='./microfrontends/*'`. That filter is load-bearing: an unfiltered `turbo run dev` also starts `@rask/ui`'s `svelte-package -w`, which rewrites `dist/` while zones read it, and turbo tears the run down.
+
+Turborepo 2.9.18 has a **built-in** microfrontends proxy. It reads `microfrontends/home/microfrontends.json` and binds `:3024`. `@vercel/microfrontends` is not installed and is not needed. Flow: `browser → :3024 → longest-prefix match → 127.0.0.1:517x (vite, strictPort) → SvelteKit with paths.base=/<zone>`. No path stripping.
+
+> A second, hand-rolled proxy sits at `packages/zone-contract/src/proxy.ts` (`PROXY_PORT ?? 5200`). Its `dev:proxy` turbo task is invoked by no root script and no Makefile target, and its claim that `bun run dev` starts it is false. `:3024` is the live dev origin; `:5200` survives only because `media`'s e2e defaults to it.
+
+**Prod.** One Ingress per release, rules specific-first: `/api` → `rask-gateway:8888`, `/<zone>` → `rask-web-<zone>:3000`, `/` → `rask-web-home:3000` last. `pathType: Prefix`, **no `rewrite-target`** — the pod receives `/compute/jobs` and `paths.base` consumes it. Images are tagged `web-<zone>:<tag>`.
+
+This works only because of `patches/svelte-adapter-bun@1.0.1.patch`: upstream roots sirv at `client/<base>`, but SvelteKit already emits base-prefixed assets *inside* `build/client/`, so `/compute/_app/x.js` resolved to `client/compute/compute/_app/x.js` → 404. Probes are TCP, not httpGet, because a zone's `/` 404s under its base.
+
+## Cross-zone links
+
+A link is cross-zone when `zoneOf(href) !== zoneOf(pathname)`, where `zoneOf(p) = p.split('/').filter(Boolean)[0] ?? ''`. Cross-zone anchors carry **`data-sveltekit-reload`** — without it SvelteKit soft-navigates into a route the zone does not own and 404s. The shell applies this itself (`top-navbar.svelte`); `ZoneNavLeaf.reload` is the sidebar equivalent.
+
+Hrefs are **flat and absolute** (`/lakehouse/data`, `/media/`, `/compute/`) — there is no project prefix. The project comes from the **request host**: `projectFromHost` maps `demo.localhost` → `demo` (`shell/breadcrumb.ts:5-8`).
+
+**Trailing slashes on zone-root hrefs are load-bearing.** Each zone's `paths.base` serves the trailing form, so a bare `/compute` costs a 308 per hop (`tests/nav-config.test.ts:26-29`).
+
+## Adding a zone — five places plus a budget
+
+Globbed membership means there is no list to append to, but five files must agree or the gates fail:
+
+1. `microfrontends/home/microfrontends.json` — port + routing key
+2. `svelte.config.js` — `paths.base`
+3. `vite.config.ts` — port + `strictPort: true` (and the `dev` script must not also pass `--port`; that race made `annotator` drift onto another zone's port)
+4. `chart/values.yaml` `frontend.apps`
+5. `Makefile` `ZONES`
+
+Plus a `budget.json` entry. `manifest.test.ts`, `deploy-path.test.ts`, and `budget.test.ts` pin all six. R15 is law: a zone missing from the shared navbar is a defect regardless of scaffold status.
+
+## TypeScript strictness is split
+
+`strict` is on everywhere. `noUncheckedIndexedAccess` is on for the five rask-origin zones + `@rask/ui` + `@rask/api` (hand-inlined), and **off** for `annotator`, `media`, `engine`, `labeling`, `media-api`, `zone-contract` — all six extend `@rask/config/tsconfig.base.json`, which sets neither flag. The shared base is weaker than the inlined copy, so the two lance-imported zones are the least strictly typed in the estate. That is a defect, not a design.
+
+`exactOptionalPropertyTypes` is on only for `@rask/api`; it stays off on Svelte packages for a real upstream reason (Bits UI "union too complex"). Leave that one alone. Validation is **valibot**.
+
+## Gates
+
+ESLint and Prettier are **deleted**. `toolchain.test.ts` enforces three things about every workspace package:
+
+- No `.prettierrc*` / `eslint.config.*` / `.oxlintrc.json` / `.oxfmtrc.json` inside a package — those configs live only at the frontend root.
+- No script may match `/\b(eslint|prettier)\b/` — a package spawning a removed tool looks green while checking nothing.
+- Every package **declares all three scripts verbatim**: `fmt: 'rsvelte-fmt .'`, `fmt:check: 'rsvelte-fmt --check .'`, and `lint: 'oxlint .'` — or `lint: 'oxlint --no-error-on-unmatched-pattern .'` for a package with no lintable file (`@rask/config` ships two JSON files, where plain `oxlint .` exits 1). The flag is **forbidden** where source exists, so it can never mask a zone whose paths stopped matching. Required, not optional: a package shipping *no* lint/fmt scripts leaves turbo nothing to run and sits silently outside the toolchain while every gate stays green — which is exactly what `@rask/config` did until 2026-07-25.
+
+| Command | Runs |
+|---|---|
+| `make check` | `fmt` (mutating) + `lint` + Python `uvx ty` + `knip` |
+| `bun --cwd=frontend run check test` | svelte-check + the vitest suites (zone-contract alone is 717) |
+| CI (`.dagger/frontend.go:53`) | `bunx turbo run check check:tsgo test lint fmt:check` |
+
+**There are two separate e2e layers — `make e2e` is not the frontend one.**
+
+| Layer | What | How it runs |
+|---|---|---|
+| Per-zone Playwright | `home`, `lakehouse`, `media`, `annotator` each ship `e2e/` + `"test:e2e": "playwright test"`. **Hermetic** — `playwright.config.ts` mocks every `/api/**` via `page.route` and starts its own vite dev server on a dedicated port | `bun --cwd=frontend run test:e2e`, and in CI as *"Playwright e2e — all zones"* with `--concurrency=1` (each zone spins a dev server + chromium; parallel first-compiles blow the startup window, and `lakehouse` runs **two** servers — auth-off and auth-on) |
+| `tests/e2e` | A standalone Playwright project with its **own lockfile**, driving a **running deploy** | `make e2e` (`RASK_E2E_BASE_URL`, default `http://localhost`) |
+
+So `make e2e` never touches the zone suites, and the zone suites never touch a real backend. Verified 2026-07-28 by running `bunx turbo run test:e2e --filter=home`: 5 tests pass in ~28 s, including `auth.spec.ts`'s cross-zone contract (every zone in the navbar, `data-sveltekit-reload` on each). A fresh worktree needs `bun install` first — `svelte-package` is not on `PATH` otherwise and `@rask/ui#build` fails with exit 127 before any test runs.
+
+`make check` reaches **neither** svelte-check nor the frontend tests, so run the second row before declaring a change done. `knip` is the inverse — local only, absent from CI.
+
+Lint is **oxlint** (`svelte/require-each-key: error`, `svelte/no-reactive-reassign: error`, via `@rsvelte/oxlint-plugin`); format is **oxfmt** with tabs, single quotes, `printWidth: 100`. The cross-zone link rule is a **vitest test**, not a lint rule — oxlint reads a `.svelte` `<script>` block, not its markup, so an anchor-attribute rule cannot live there.
+
+Validate `.svelte` edits with the `svelte` MCP autofixer. The standing rule that gives it teeth: **a Svelte defect class found twice becomes an oxlint `error` or a zone-contract test.** Three warnings sit unfixed in `compute` today, which is what an unenforced convention looks like.
+
+## Staying on-stack
+
+Animation → **GSAP** via `{@attach}` (+ Lenis). Charts → **LayerChart**. Graph/canvas editors → **Svelte Flow**. Components → `@rask/ui`. Validation → **valibot**. A dependency that duplicates the stack is a no; extend the stack instead.
+
+## Where to go deeper
+
+- `references/zone-map.md` — per-zone routes, endpoints, and libs; the nav/shell contract.
+- `rask-styling` — tokens, `@source`, component authoring.
+- `rask-services-fleet` — the `/api/*` gateway and the services these zones call.
+- `rask-architecture` — workspace planes and membership.
+- `docs/architecture/frontend-conventions.md` — the long-form canon. Its `@source` line (`:319`, `:347`) has four `../`; three is correct.

@@ -24,6 +24,7 @@ from anyio import to_thread
 from ray.exceptions import AuthenticationError
 from ray.job_submission import JobSubmissionClient
 
+from ray_kit.auth import auth_headers
 from ray_kit.schemas import (
     ProxyResponse,
     RayActor,
@@ -49,7 +50,8 @@ log = logging.getLogger(__name__)
 # `requests.*` subclass OSError (NOT builtin ConnectionError); the SDK only translates
 # its construct-time check to builtin ConnectionError, so live calls can still raise
 # requests exceptions directly. AuthenticationError (a RayError) surfaces on 401/403
-# from an authenticated cluster. Shared with submission.py + orchestrator/derive.py.
+# from an authenticated cluster. (Its other consumers, core's submission.py +
+# orchestrator/derive.py, died at P7a — the ray service and the medallion Ray seam remain.)
 RAY_TRANSIENT_ERRORS = (RuntimeError, ConnectionError, requests.exceptions.RequestException, AuthenticationError)
 
 _BATCH_RE = re.compile(r"--batch[\s=]+(\S+)")
@@ -90,6 +92,14 @@ _HOP_BY_HOP = {
     "x-frame-options",
     "content-security-policy",
 }
+# Proxy hardening for a token-authed Ray (gate 7 / R3). Inbound: browser credentials must never
+# reach the dashboard — stripping the incoming `authorization` also lets the httpx client's own
+# default Bearer token (auth_headers() at construction) apply instead of being shadowed by
+# request-level junk; `x-ray-authorization` is Ray's fallback auth header and `cookie` could carry
+# Ray's `ray-authentication-token` browser cookie. Outbound: Ray's /api/authenticate sets that
+# cookie — it must never reach the browser, so the token lives only in pod env + server-side calls.
+_REQUEST_STRIP = _HOP_BY_HOP | {"host", "authorization", "x-ray-authorization", "cookie"}
+_RESPONSE_STRIP = _HOP_BY_HOP | {"set-cookie"}
 _BYTE_UNITS = {
     "B": 1,
     "KB": 1000,
@@ -115,9 +125,15 @@ def build_client(dashboard_url: str) -> JobSubmissionClient | None:
     The constructor issues HTTP calls to verify the API version. Ray's SDK
     documents `RuntimeError` for protocol failures and raises `ConnectionError`
     when the dashboard isn't listening; we treat both as "offline".
+
+    Against a token-authed cluster (RAY_AUTH_MODE=token) the Bearer token from
+    RASK_RAY_AUTH_TOKEN / RAY_AUTH_TOKEN is attached as default headers — passed
+    explicitly so it works even when the calling process doesn't itself export
+    RAY_AUTH_MODE (Ray's own auto-attach requires that). No token => no headers,
+    exactly the previous behavior.
     """
     try:
-        return JobSubmissionClient(address=dashboard_url)
+        return JobSubmissionClient(address=dashboard_url, headers=auth_headers() or None)
     except RAY_TRANSIENT_ERRORS as exc:
         log.info(f"Ray dashboard unreachable at {dashboard_url}: {exc}")
         return None
@@ -502,9 +518,15 @@ async def proxy(
     headers: dict[str, str],
     body: bytes,
 ) -> ProxyResponse:
-    """Forward an arbitrary path to the Ray Dashboard, same-origin to the browser."""
+    """Forward an arbitrary path to the Ray Dashboard, same-origin to the browser.
+
+    Credential-tight in both directions (`_REQUEST_STRIP` / `_RESPONSE_STRIP`):
+    inbound browser auth/cookies never reach Ray (the httpx client's own default
+    Bearer token authenticates server-side), and Ray's auth cookie never reaches
+    the browser.
+    """
     url = f"{dashboard_url}/{path.lstrip('/')}"
-    fwd = {k: v for k, v in headers.items() if k.lower() not in _HOP_BY_HOP and k.lower() != "host"}
+    fwd = {k: v for k, v in headers.items() if k.lower() not in _REQUEST_STRIP}
     qs = query.decode() if isinstance(query, bytes) else query
     try:
         resp = await http.request(method, url, params=qs, headers=fwd, content=body or None)
@@ -517,5 +539,5 @@ async def proxy(
     return ProxyResponse(
         content=resp.content,
         status_code=resp.status_code,
-        headers={k: v for k, v in resp.headers.items() if k.lower() not in _HOP_BY_HOP},
+        headers={k: v for k, v in resp.headers.items() if k.lower() not in _RESPONSE_STRIP},
     )

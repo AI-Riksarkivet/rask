@@ -1,0 +1,23 @@
+
+
+# AddVirtualColumnEntry
+
+
+## Properties
+
+| Name | Type | Description | Notes |
+|------------ | ------------- | ------------- | -------------|
+|**inputColumns** | **List&lt;String&gt;** | List of input Lance field paths for the virtual column. Nested fields use dot-separated segments; use backtick-quoted segments for literal dots and double backticks inside quoted segments. |  |
+|**outputs** | [**List&lt;AddVirtualColumnOutputEntry&gt;**](AddVirtualColumnOutputEntry.md) | Output columns produced by the virtual column UDF |  |
+|**image** | **String** | Docker image to use for the UDF |  |
+|**udf** | **String** | Base64 encoded pickled UDF |  |
+|**udfName** | **String** | Name of the UDF |  |
+|**udfVersion** | **String** | Version of the UDF |  |
+|**udfBackend** | **String** | UDF backend type (e.g. DockerUDFSpecV1) |  [optional] |
+|**autoBackfill** | **Boolean** | Whether to automatically backfill the column after creation |  [optional] |
+|**manifest** | **String** | JSON-serialized manifest for the UDF environment |  [optional] |
+|**manifestChecksum** | **String** | SHA-256 checksum of the manifest content |  [optional] |
+|**fieldMetadata** | **Map&lt;String, String&gt;** | User-supplied field metadata (string key-value pairs) |  [optional] |
+
+
+

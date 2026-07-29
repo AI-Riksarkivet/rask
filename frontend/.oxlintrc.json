@@ -1,0 +1,91 @@
+{
+	"$schema": "./node_modules/oxlint/configuration_schema.json",
+	"plugins": ["typescript"],
+	"jsPlugins": ["@rsvelte/oxlint-plugin"],
+	"extends": ["./node_modules/@rsvelte/oxlint-plugin/recommended.json"],
+	"categories": {
+		"correctness": "error"
+	},
+	"rules": {
+		"typescript/no-explicit-any": "warn",
+		"no-unused-vars": [
+			"error",
+			{
+				"argsIgnorePattern": "^_",
+				"varsIgnorePattern": "^_",
+				"caughtErrorsIgnorePattern": "^_"
+			}
+		],
+
+		// The two Svelte gates the retired ESLint config enforced as errors — kept verbatim.
+		// Keyless {#each} silently re-renders/reorders DOM on mutation; reassigning reactive state
+		// imperatively is the "assigned but not reactive" footgun. Error, not warn, so CI fails.
+		"svelte/require-each-key": "error",
+		"svelte/no-reactive-reassign": "error",
+
+		// OFF, each with its reason. rsvelte's recommended set is generated from the live rule
+		// catalog, so it is the right thing to extend — but it is written for a
+		// components-own-their-CSS codebase, and a few of its rules are actively wrong here. Each is
+		// named rather than dodged by extending a smaller preset, so a fix upstream is a visible edit.
+
+		// Reports every Tailwind utility: it looks for a matching selector in the component's own
+		// <style> block, and a utility class has none BY DESIGN. Cannot be true in this codebase.
+		"svelte/no-unused-class-name": "off",
+		// Advises "select by ID instead of class" — the opposite of a utility-CSS convention.
+		"svelte/consistent-selector-style": "off",
+		// Flags exactly the links the MFE estate REQUIRES: a cross-zone <a> must not carry this
+		// zone's base (it targets another app) and carries data-sveltekit-reload instead. The real
+		// hazard — a cross-zone link that soft-navigates — is gated from the other side by
+		// @rask/zone-contract's cross-zone-reload test.
+		"svelte/no-navigation-without-base": "off",
+		"svelte/no-goto-without-base": "off",
+		// Every hit is a RUNTIME-COMPUTED geometry value (LayerChart marks, GSAP transforms,
+		// progress widths). A utility class cannot express a number known only at runtime.
+		"svelte/no-inline-styles": "off",
+		"svelte/require-optimized-style-attribute": "off",
+		// Prefers `{const …}`, newer than the `{@const …}` this repo's Svelte compiles.
+		"svelte/no-at-const-tags": "off",
+		// Wants the <script> lang attribute omitted; every component here is lang="ts".
+		"svelte/block-lang": "off",
+		// Carried over from the ESLint config these rules replaced — same rules, same reasons.
+		"svelte/prefer-svelte-reactivity": "off",
+		// Not using shallow routing.
+		"svelte/no-navigation-without-resolve": "off",
+
+		// A readability rule about `new Array(x)` being ambiguous between length and sole element.
+		// Every use here is a PRE-SIZED buffer in a Pixi render path (`new Array(numRows)`), where the
+		// suggested `Array.from({length: n})` both allocates and fills. The ambiguity the rule is about
+		// does not arise when the argument is plainly a count.
+		"unicorn/no-new-array": "off"
+	},
+	"overrides": [
+		{
+			"files": ["**/*.svelte", "**/*.svelte.ts", "**/*.svelte.js"],
+			"rules": {
+				// oxlint's .svelte support reads the <script> block and NOT the markup, so a variable
+				// assigned only by `bind:this={el}` looks unassigned — wrong on every element ref.
+				"no-unassigned-vars": "off",
+				// Carried from the retired ESLint config verbatim: `$effect(() => …)` is an expression
+				// statement, not an assignment — expected Svelte 5 usage, not a dead expression.
+				"no-unused-expressions": "off"
+			}
+		},
+		{
+			"files": ["**/tests/**", "**/*.test.ts", "**/*.spec.ts"],
+			"rules": {
+				// A test that asserts how a helper handles a constant/falsy argument must WRITE that
+				// constant (`cn('a', false && 'hidden', 'b')`). Flagging it reports the test's premise.
+				"no-constant-binary-expression": "off"
+			}
+		}
+	],
+	"ignorePatterns": [
+		"**/.svelte-kit/**",
+		"**/.svelte-check/**",
+		"**/build/**",
+		"**/dist/**",
+		"**/storybook-static/**",
+		"**/*.generated.ts",
+		"**/src/generated/**"
+	]
+}

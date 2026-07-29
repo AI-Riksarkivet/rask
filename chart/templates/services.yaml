@@ -1,0 +1,380 @@
+{{- $root := . }}
+{{- $age := include "lance.ageConnectHost" . }}
+{{- if and .Values.catalog.controlEmit (not .Values.dapr.sidecars) }}
+{{- fail "catalog.controlEmit=true requires dapr.sidecars=true: the /control-events broadcast ingest publishes + receives via the Dapr sidecar and is authenticated by the sidecar-injected APP_API_TOKEN — without it the catalog fails closed at boot. Enable dapr.sidecars, or set catalog.controlEmit=false." }}
+{{- end }}
+# Catalog (producer) — creates Lance tables on S3 and PUBLISHES OpenLineage events to the Dapr
+# pubsub.jetstream component. The daprd sidecar (injected by the annotations) carries the publish to NATS.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lance.fullname" . }}-catalog
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  replicas: {{ (hasKey .Values.services.catalog "replicas") | ternary .Values.services.catalog.replicas 1 }}
+  selector:
+    matchLabels: { app.kubernetes.io/component: catalog, app.kubernetes.io/instance: {{ .Release.Name }} }
+  template:
+    metadata:
+      labels:
+        {{- include "lance.labels" . | nindent 8 }}
+        app.kubernetes.io/component: catalog
+        {{- include "rask.daprPodLabels" $root | nindent 8 }}
+        lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
+      {{- if .Values.dapr.sidecars }}
+      annotations:
+        {{- include "rask.daprAnnotations" (list $root .Values.services.catalog.daprAppId .Values.services.catalog.port) | nindent 8 }}
+      {{- end }}
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
+      {{- if .Values.podDisruptionBudget.enabled }}
+      {{- include "lance.spreadConstraints" "catalog" | nindent 6 }}
+      {{- end }}
+      {{- if .Values.security.serviceAccounts.enabled }}
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-catalog
+      {{- end }}
+      containers:
+        - name: catalog
+          image: "{{ include "lance.catalogImage" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "lance.securityContext" . | nindent 10 }}
+          {{- include "lance.preStop" . | nindent 10 }}
+          {{- if include "lance.otelEnabled" $root }}
+          command: ["opentelemetry-instrument", "uvicorn"]
+          {{- else }}
+          command: ["uvicorn"]
+          {{- end }}
+          # command/args are split so the dev-only reload flags can be appended. These are the
+          # services Tilt's live_update syncs, but dev.reload was only ever wired into
+          # fleet.yaml — so a synced file landed in the pod and the worker never re-read it.
+          args:
+            - {{ .Values.services.catalog.module | quote }}
+            - "--host=0.0.0.0"
+            - "--port={{ .Values.services.catalog.port }}"
+            {{- include "lance.devReloadArgs" (list $root "catalog") | nindent 12 }}
+          ports: [{ name: http, containerPort: {{ .Values.services.catalog.port }} }]
+          env:
+            {{- if include "lance.otelEnabled" $root }}
+            {{- include "lance.otelEnv" (list $root "catalog") | nindent 12 }}
+            {{- end }}
+            {{- include "lance.lineageEmitEnv" (list $root) | nindent 12 }}
+            - { name: LANCE_REST_IMPL, value: "dir" }
+            - { name: LANCE_REST_ROOT, value: "s3://{{ .Values.rustfs.bucket }}" }
+            - { name: LANCE_NS_DELIMITER, value: "$" }
+            - { name: LANCE_ALLOW_EXTERNAL_BLOBS, value: {{ .Values.vending.allowExternalBlobs | quote }} }
+            - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ .Values.vending.externalBlobBases | default (printf "s3://%s/models/" .Values.rustfs.bucket) | quote }} }
+            - { name: LANCE_MAX_BODY_BYTES, value: {{ .Values.catalog.maxBodyBytes | int64 | quote }} }
+            # Load-shed cap on concurrent in-flight Arrow-IPC writes (each buffers up to maxBodyBytes).
+            # hasKey+ternary, not `| default`, for the same two reasons as LANCE_AUDIT_ENABLED below: a
+            # key missing under `helm upgrade --reuse-values` must render the default (not "" → pydantic
+            # int_parsing crash), and the meaningful 0 (shedding off) must stay settable — Sprig's
+            # default() treats 0 as empty.
+            - { name: LANCE_MAX_CONCURRENT_WRITES, value: {{ hasKey .Values.catalog "maxConcurrentWrites" | ternary .Values.catalog.maxConcurrentWrites 16 | int | quote }} }
+            # #3-A per-warehouse physical multi-tenancy (admin control plane). On → POST /v1/warehouses
+            # provisions a bucket per warehouse + binds namespaces; an unbound namespace still routes to
+            # LANCE_REST_ROOT (backward-compatible). The warehouse registry lives under LANCE_REST_ROOT
+            # (control_root defaults to it), so no extra bucket is needed.
+            - { name: LANCE_WAREHOUSES_ENABLED, value: {{ .Values.catalog.warehouses.enabled | default false | quote }} }
+            # Buckets no warehouse may claim (audit 2026-07-23): the medallion ZONE buckets (gold can
+            # live outside the shared bucket) — the catalog root/registry bucket is always reserved in-app.
+            {{- $reserved := list }}
+            {{- range $ns, $bkt := .Values.medallion.buckets }}{{- $reserved = append $reserved $bkt }}{{- end }}
+            - { name: LANCE_RESERVED_BUCKETS, value: {{ $reserved | uniq | join "," | quote }} }
+            # #3-B Lance multi-base DATA distribution: the ALLOWLIST of bucket URIs a create may spread its
+            # fragments across (?data_base=... per request, validated against this list). Empty = feature off.
+            - { name: LANCE_MULTIBASE_DATA_BASES, value: {{ .Values.catalog.multibase.dataBases | default (list) | join "," | quote }} }
+            - { name: LANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
+            - { name: LANCE_S3_ACCESS_KEY_ID, value: {{ .Values.rustfs.accessKey | quote }} }
+            {{- if not (include "lance.secretsViaDapr" .) }}
+            - { name: LANCE_S3_SECRET_ACCESS_KEY, value: {{ .Values.rustfs.secretKey | quote }} }
+            {{- else }}
+            # OpenBao on → the S3 secret comes ONLY from the Dapr secret store at boot; it is deliberately
+            # NOT in pod env (the audit's 'plaintext still ships' fix). The catalog fails closed if the
+            # store can't provide it. Needs the lance-secrets component (scoped to catalog).
+            - { name: LANCE_SECRETS_FROM_DAPR, value: "true" }
+            {{- end }}
+            - { name: LANCE_S3_REGION, value: "us-east-1" }
+            - { name: LANCE_S3_ALLOW_HTTP, value: "true" }
+            - { name: LANCE_S3_VIRTUAL_HOSTED, value: "false" }
+            # Data-plane credential vending (Track B). mode_b (default) = server-mediated, no creds leave the
+            # catalog; sts = AssumeRole + per-table session policy against the RustFS STS endpoint (short-TTL
+            # scoped creds the client uses for direct object I/O).
+            - { name: LANCE_VENDING_MODE, value: {{ .Values.vending.mode | quote }} }
+            {{- if or (eq .Values.vending.mode "sts") (eq .Values.vending.mode "web_identity") }}
+            - { name: LANCE_S3_STS_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
+            - { name: LANCE_S3_ASSUME_ROLE_ARN, value: {{ .Values.vending.assumeRoleArn | quote }} }
+            - { name: LANCE_VENDING_TTL_SECONDS, value: {{ .Values.vending.ttlSeconds | quote }} }
+            {{- end }}
+            - { name: LANCE_LINEAGE_EMIT_ENABLED, value: "true" }
+            - { name: LANCE_LINEAGE_TRANSPORT, value: "dapr" }
+            - { name: LANCE_DAPR_PUBSUB, value: {{ .Values.pubsub.name | quote }} }
+            - { name: LANCE_DAPR_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
+            # Control-plane change-events (opt-in, best-effort — the governance/metadata stream). ON →
+            # mutations publish a CatalogControlEvent onto a DEDICATED broadcast pubsub (no queueGroupName)
+            # under topic catalog.control.v1; every replica buffers every event for GET /v1/events. hasKey+
+            # ternary (NOT `| default`, which treats false as empty) so a key missing under
+            # `helm upgrade --reuse-values` renders the default, not "" (pydantic bool_parsing crash).
+            - { name: LANCE_CONTROL_EMIT_ENABLED, value: {{ hasKey .Values.catalog "controlEmit" | ternary .Values.catalog.controlEmit false | quote }} }
+            - { name: LANCE_CONTROL_PUBSUB, value: {{ .Values.pubsub.controlName | default "catalog-control-pubsub" | quote }} }
+            {{- if .Values.dapr.sidecars }}
+            # Explicit APP_API_TOKEN so require_dapr_token can verify the `dapr-api-token` header the sidecar
+            # stamps on /control-events delivery → a forged direct in-cluster POST is 403'd. Without it the
+            # guard silently no-ops and any pod could inject fabricated change-events into every replica's
+            # buffer. Same secret + pattern as the lineage/medallion/compaction ingest apps; the catalog
+            # lifespan also asserts it is set when control eventing is on (fail-closed, not silently open).
+            - name: APP_API_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ .Release.Name }}-dapr-app-token, key: token }
+            {{- end }}
+            # Bound the DaprClient gRPC deadline (the SDK env) — the lineage publish is awaited INLINE in
+            # every write handler, so a wedged sidecar/NATS would otherwise hang every catalog write.
+            - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
+            {{- if .Values.auth.enabled }}
+            - { name: LANCE_OIDC_ENABLED, value: "true" }
+            - { name: LANCE_OIDC_ISSUER, value: {{ .Values.dex.issuer | quote }} }
+            # Split-horizon: the issuer is the PUBLIC URL tokens carry; discovery/JWKS are fetched in-cluster.
+            - { name: LANCE_OIDC_DISCOVERY_URL, value: "http://{{ include "lance.dexHost" . }}:{{ .Values.dex.port }}/dex" }
+            - { name: LANCE_OIDC_AUDIENCE, value: {{ .Values.dex.clientId | quote }} }
+            # Scheme-derived like the vault skipVerify: the http escape hatch opens ONLY for a plain-http
+            # issuer (the in-cluster dev Dex); an https issuer (real IdP) keeps the HTTPS guard enforced.
+            - { name: LANCE_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" .Values.dex.issuer) | quote }} }
+            - { name: LANCE_FGA_ENABLED, value: "true" }
+            - { name: LANCE_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
+            {{- with .Values.auth.fgaStoreId }}
+            # Operator-pinned FGA store id (production posture) — the SAME auth.fgaStoreId the
+            # bootstrap-admin Job grants into, so the pinned store can never diverge from the store the
+            # catalog checks against. Unset = provision-by-name at boot (`lance-catalog`).
+            - { name: LANCE_FGA_STORE_ID, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.auth.fgaModelId }}
+            - { name: LANCE_FGA_MODEL_ID, value: {{ . | quote }} }
+            {{- end }}
+            # #41 compliance audit trail (who/what/outcome for authn/authz/vending) — configurable.
+            # hasKey+ternary, NOT `| default`: Sprig's default() treats boolean false as empty (making
+            # `false` un-settable), while a bare reference renders "" when the key is missing entirely —
+            # which `helm upgrade --reuse-values` from a pre-#41 release does (live crash 2026-07-15,
+            # pydantic bool_parsing on LANCE_AUDIT_ENABLED=""). hasKey defaults a MISSING key to true and
+            # still honors an explicit false.
+            - { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | quote }} }
+            # Lock top-level (root) namespace/table creation to holders of a warehouse-level create grant.
+            # Off in dev (self-serve); ON in prod (values-prod) — else any Dex-authenticated user can squat
+            # unlimited root namespaces in the shared warehouse bucket (assessment finding). hasKey+ternary
+            # like LANCE_AUDIT_ENABLED above: a missing key under --reuse-values must render the default,
+            # not "" (pydantic bool_parsing crash).
+            - { name: LANCE_FGA_LOCK_ROOT_CREATE, value: {{ hasKey .Values.auth "lockRootCreate" | ternary .Values.auth.lockRootCreate false | quote }} }
+            {{- end }}
+          {{- include "lance.appProbes" . | nindent 10 }}
+          resources: {{- include "lance.resources" (dict "root" . "comp" "catalog") | nindent 12 }}
+          volumeMounts:
+            {{- include "lance.tmpMount" . | nindent 12 }}
+      volumes:
+        {{- include "lance.tmpVolume" . | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lance.fullname" . }}-catalog
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  ports: [{ name: http, port: {{ .Values.services.catalog.port }}, targetPort: http }]
+  selector: { app.kubernetes.io/component: catalog, app.kubernetes.io/instance: {{ .Release.Name }} }
+---
+{{- if and .Values.dapr.enabled .Values.dapr.sidecars .Values.services.lineage.reconcile.enabled }}
+# Dapr cron INPUT binding — the sidecar POSTs to /<bindingName> on `schedule` to run the periodic
+# storage->graph reconciliation (B4), back-filling Lance writes whose lineage event was lost. Config lives
+# here, not in app code (no scheduler thread). Scoped to the lineage app; the route mounts only when
+# LINEAGE_RECONCILE_BINDING_NAME matches this name. Gated on dapr.enabled too: without the Dapr control
+# plane the Component CRD doesn't exist and the release would fail to apply.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.services.lineage.reconcile.bindingName }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ .Values.services.lineage.reconcile.schedule | quote }} }
+scopes:
+  - {{ .Values.services.lineage.daprAppId }}
+---
+{{- end }}
+# Lineage (consumer) — SUBSCRIBES (via its daprd sidecar) to the lineage topic and ingests into AGE.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lance.fullname" . }}-lineage
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  replicas: {{ (hasKey .Values.services.lineage "replicas") | ternary .Values.services.lineage.replicas 1 }}
+  selector:
+    matchLabels: { app.kubernetes.io/component: lineage, app.kubernetes.io/instance: {{ .Release.Name }} }
+  template:
+    metadata:
+      labels:
+        {{- include "lance.labels" . | nindent 8 }}
+        app.kubernetes.io/component: lineage
+        {{- include "rask.daprPodLabels" $root | nindent 8 }}
+        lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
+      {{- if .Values.dapr.sidecars }}
+      annotations:
+        {{- include "rask.daprAnnotations" (list $root .Values.services.lineage.daprAppId .Values.services.lineage.port) | nindent 8 }}
+      {{- end }}
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
+      {{- if .Values.podDisruptionBudget.enabled }}
+      {{- include "lance.spreadConstraints" "lineage" | nindent 6 }}
+      {{- end }}
+      initContainers:
+        - name: wait-age
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z {{ $age }} {{ .Values.age.port }}; do echo wait-age; sleep 3; done"]
+          {{- if .Values.security.infraContexts.enabled }}
+          # PSA-restricted compliance for the root busybox init (the audit's sequencing footgun:
+          # labeling the namespace restricted would REJECT this pod until the init is hardened).
+          securityContext: { runAsNonRoot: true, runAsUser: 65532, allowPrivilegeEscalation: false, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
+          {{- end }}
+      {{- if .Values.security.serviceAccounts.enabled }}
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-lineage
+      {{- end }}
+      containers:
+        - name: lineage
+          image: "{{ include "lance.catalogImage" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "lance.securityContext" . | nindent 10 }}
+          {{- include "lance.preStop" . | nindent 10 }}
+          {{- if include "lance.otelEnabled" $root }}
+          command: ["opentelemetry-instrument", "uvicorn"]
+          {{- else }}
+          command: ["uvicorn"]
+          {{- end }}
+          # command/args are split so the dev-only reload flags can be appended. These are the
+          # services Tilt's live_update syncs, but dev.reload was only ever wired into
+          # fleet.yaml — so a synced file landed in the pod and the worker never re-read it.
+          args:
+            - {{ .Values.services.lineage.module | quote }}
+            - "--host=0.0.0.0"
+            - "--port={{ .Values.services.lineage.port }}"
+            {{- include "lance.devReloadArgs" (list $root "lineage") | nindent 12 }}
+          ports: [{ name: http, containerPort: {{ .Values.services.lineage.port }} }]
+          env:
+            {{- if include "lance.otelEnabled" $root }}
+            {{- include "lance.otelEnv" (list $root "lineage") | nindent 12 }}
+            {{- end }}
+            # Explicit APP_API_TOKEN (recommended k8s approach) so require_dapr_token can verify the
+            # `dapr-api-token` header the sidecar stamps on delivery → forged direct POSTs are 403'd.
+            - name: APP_API_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ .Release.Name }}-dapr-app-token, key: token }
+            {{- if not (include "lance.secretsViaDapr" .) }}
+            - { name: LINEAGE_DATABASE_URL, value: "postgresql://{{ .Values.age.user }}:{{ .Values.age.password }}@{{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }}/{{ .Values.age.lineageDb }}" }
+            {{- else }}
+            # OpenBao on → the AGE password is NOT in the connection string in pod env; lineage fetches it
+            # from the secret store at boot and splices it into the URL (the audit's 'plaintext still ships'
+            # fix). The URL here carries the user/host/db only, no password.
+            - { name: LINEAGE_DATABASE_URL, value: "postgresql://{{ .Values.age.user }}@{{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }}/{{ .Values.age.lineageDb }}" }
+            - { name: LINEAGE_SECRETS_FROM_DAPR, value: "true" }
+            {{- end }}
+            - { name: LINEAGE_GRAPH, value: {{ .Values.age.lineageDb | quote }} }
+            # §4 reliability knobs: Run-node retention (pruned by the reconcile cron; 0 = keep all) and
+            # the AGE pool's per-statement timeout (bounds runaway traversals).
+            - { name: LINEAGE_RUN_RETENTION_DAYS, value: {{ .Values.services.lineage.runRetentionDays | quote }} }
+            - { name: LINEAGE_AGE_STATEMENT_TIMEOUT_SECONDS, value: {{ .Values.services.lineage.ageStatementTimeoutSeconds | quote }} }
+            - { name: LINEAGE_DAPR_ENABLED, value: {{ .Values.dapr.sidecars | quote }} }
+            # The lineage app's OWN subscriber component (queueGroupName=lineage, deliverPolicy=all) —
+            # must match the Component name in dapr-component.yaml (both render lance.subPubsub).
+            - { name: LINEAGE_DAPR_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.services.lineage.daprAppId) | quote }} }
+            - { name: LINEAGE_DAPR_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
+            {{- if .Values.dapr.resiliency.enabled }}
+            # Dapr-native DLQ (ships with the Resiliency CRD): ingest deliveries that exhaust the
+            # sidecar retry schedule park here (visibility only — replay-from-stream stays the recovery).
+            - { name: LINEAGE_DLQ_TOPIC, value: "dlq.lineage.events" }
+            {{- end }}
+            {{- if .Values.services.lineage.freshnessBudgetHours }}
+            # Freshness budget (data-contract gap #2): reconcile flags `stale` datasets whose newest
+            # version commit is older than this many hours. Unset/0 = the axis is off.
+            - { name: LINEAGE_FRESHNESS_BUDGET_HOURS, value: {{ .Values.services.lineage.freshnessBudgetHours | quote }} }
+            {{- end }}
+            {{- if .Values.medallion.enabled }}
+            {{- $declared := dict }}
+            {{- range .Values.medallion.movers }}
+            {{- if .requiredColumns }}
+            {{- $_ := set $declared .toDataset (splitList "," .requiredColumns) }}
+            {{- end }}
+            {{- end }}
+            {{- if $declared }}
+            # Declared-columns patrol (Batch 23): DERIVED from the movers' requiredColumns — one
+            # declaration source (values), two enforcement points (the gate at promotion, this sweep
+            # after) — so the gate and the patrol can never disagree on what consumers declared.
+            - { name: LINEAGE_DECLARED_COLUMNS, value: {{ $declared | toJson | quote }} }
+            {{- end }}
+            {{- end }}
+            # Bound the DaprClient gRPC deadline (the SDK env) — covers the boot-time secret-store fetch.
+            - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
+            # Demo peek router — values-gated (unauthenticated metadata disclosure; prod ships it off).
+            # hasKey+ternary (the LANCE_AUDIT_ENABLED convention): a key missing under --reuse-values (a
+            # stored release predating demoData) must render the default, not "" (bool_parsing boot crash).
+            - { name: LINEAGE_DEMO_DATA_ENABLED, value: {{ hasKey .Values.services.lineage "demoData" | ternary .Values.services.lineage.demoData false | quote }} }
+            {{- if .Values.services.lineage.reconcile.enabled }}
+            # Mounts the cron reconcile route at this binding name (matches the bindings.cron component above).
+            - { name: LINEAGE_RECONCILE_BINDING_NAME, value: {{ .Values.services.lineage.reconcile.bindingName | quote }} }
+            {{- end }}
+            - { name: LINEAGE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
+            - { name: LINEAGE_S3_ACCESS_KEY_ID, value: {{ .Values.rustfs.accessKey | quote }} }
+            {{- if not (include "lance.secretsViaDapr" .) }}
+            - { name: LINEAGE_S3_SECRET_ACCESS_KEY, value: {{ .Values.rustfs.secretKey | quote }} }
+            {{- end }}
+            - { name: LINEAGE_S3_BUCKET, value: {{ .Values.rustfs.bucket | quote }} }
+            {{- if .Values.services.lineage.outbox.enabled }}
+            - { name: LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.rustfs.bucket }}/_lineage_outbox" }
+            {{- end }}
+            {{- if .Values.auth.enabled }}
+            - { name: LINEAGE_OIDC_ENABLED, value: "true" }
+            - { name: LINEAGE_OIDC_ISSUER, value: {{ .Values.dex.issuer | quote }} }
+            # Split-horizon: the issuer is the PUBLIC URL tokens carry; discovery/JWKS are fetched in-cluster.
+            - { name: LINEAGE_OIDC_DISCOVERY_URL, value: "http://{{ include "lance.dexHost" . }}:{{ .Values.dex.port }}/dex" }
+            - { name: LINEAGE_OIDC_AUDIENCE, value: {{ .Values.dex.clientId | quote }} }
+            # Scheme-derived (see the catalog twin above): https issuer => HTTPS guard stays enforced.
+            - { name: LINEAGE_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" .Values.dex.issuer) | quote }} }
+            - { name: LINEAGE_FGA_ENABLED, value: "true" }
+            - { name: LINEAGE_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
+            {{- with .Values.auth.fgaStoreId }}
+            # Operator-pinned FGA store id — the same auth.fgaStoreId every consumer + the bootstrap-admin
+            # Job use (see the catalog twin above). Unset = provision-by-name at boot.
+            - { name: LINEAGE_FGA_STORE_ID, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.auth.fgaModelId }}
+            - { name: LINEAGE_FGA_MODEL_ID, value: {{ . | quote }} }
+            {{- end }}
+            # Read-side audit (services.lineage.readAudit): record every ALLOWED FGA-gated data read into
+            # lineage_reads — feeds GET /datasets/{name}/readers + the ReadersPanel. Rendered only under
+            # auth.enabled (a real subject exists), default ON like the catalog's write-side
+            # LANCE_AUDIT_ENABLED — and hasKey+ternary for the same --reuse-values reason.
+            - { name: LINEAGE_READ_AUDIT_ENABLED, value: {{ hasKey .Values.services.lineage "readAudit" | ternary .Values.services.lineage.readAudit true | quote }} }
+            # The SERVICE door on the HTTP ingest (lineage/api/security.py ServicePrincipal): bare FGA
+            # subjects that may ingest with the shared app token instead of an OIDC bearer. The Ray TRAIN
+            # job is a sidecar-less in-cluster producer (RAY-TRAIN.md D2) — before this, every training
+            # RunEvent 401'd under auth and ALL training provenance was lost (live 2026-07-13). Only the
+            # trainer is listed: the allowlist is what stops an app-token holder speaking as a human, and
+            # its outputs are still FGA-checked as `service-trainer`, so D5's rung still bounds it.
+            # The service subjects allowed to speak app-to-app to lineage: the trainer + the P5
+            # micro-frontend zones (frontend.serviceIdentity) — the zones read lineage as a SERVICE on the
+            # no-login governed path, so their identity MUST be allowlisted or every zone's read fails closed
+            # (403). (The retired web pod's identity was here too; frontend.serviceIdentity carries it now.)
+            - { name: LINEAGE_SERVICE_SUBJECTS, value: "{{ .Values.medallion.train.trainerIdentity }},{{ .Values.frontend.serviceIdentity }}" }
+            {{- end }}
+          {{- include "lance.appProbes" . | nindent 10 }}
+          resources: {{- include "lance.resources" (dict "root" . "comp" "lineage") | nindent 12 }}
+          volumeMounts:
+            {{- include "lance.tmpMount" . | nindent 12 }}
+      volumes:
+        {{- include "lance.tmpVolume" . | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lance.fullname" . }}-lineage
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  ports: [{ name: http, port: {{ .Values.services.lineage.port }}, targetPort: http }]
+  selector: { app.kubernetes.io/component: lineage, app.kubernetes.io/instance: {{ .Release.Name }} }

@@ -1,0 +1,7 @@
+{
+	"extends": "@rask/config/tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true
+	},
+	"include": ["src"]
+}

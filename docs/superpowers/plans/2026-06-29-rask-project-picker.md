@@ -293,9 +293,7 @@ class K8sProjectReader:
         self._api = client.CustomObjectsApi()
 
     def list_projects(self) -> list[dict[str, Any]]:
-        resp = self._api.list_cluster_custom_object(
-            group=PROJECT_GROUP, version=PROJECT_VERSION, plural=PROJECT_PLURAL
-        )
+        resp = self._api.list_cluster_custom_object(group=PROJECT_GROUP, version=PROJECT_VERSION, plural=PROJECT_PLURAL)
         items: list[dict[str, Any]] = resp.get("items", [])
         return items
 ```

@@ -6,9 +6,11 @@ requires-python = ">=3.13"
 license = "AGPL-3.0-only"
 dependencies = [
     "pydantic>=2.7",
+    # RayAuthSettings (auth.py) — the RASK_RAY_AUTH_TOKEN / RAY_AUTH_TOKEN env surface.
+    "pydantic-settings>=2.5",
     # [default] is required by the Job Submission SDK (JobSubmissionClient);
     # plain `ray` raises "requires the ray[default] installation" at construction.
-    "ray[default]>=2.55",
+    "ray[default]>=2.56",
     "requests>=2.31",
     "httpx>=0.27",
     "anyio>=4.0",

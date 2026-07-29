@@ -1,0 +1,7 @@
+# kind cluster for the rask platform (throwaway CI-shaped deploys — `make kind-up`; k3s is the
+# long-lived local cluster). No host port mappings; reach services with `kubectl port-forward`.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: rask
+nodes:
+  - role: control-plane

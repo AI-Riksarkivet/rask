@@ -3,9 +3,13 @@
 #
 # Brings up the gateway + per-domain backends as background processes, prefixes
 # each one's logs, and shuts the whole group down on Ctrl-C. Bring up the deps
-# first: `make ray-up`, `make pg-up` (+ `make pg-migrate`); S3/HCP comes from
-# .env. Usually invoked via `make dev-micro` (which runs `uv sync --all-packages`
-# first). Ports are overridable via *_PORT env vars.
+# first: `make ray-up`; S3/HCP comes from .env. Usually invoked via
+# `make dev-micro` (which runs `uv sync --all-packages` first). Ports are
+# overridable via *_PORT env vars. (The orchestrator process died at P7a; the
+# core-api/search-api/volumes-api trio died in the R6/R20 media wave — the S3
+# object browser now rides the media-plane VIEWER, which this fleet starts so
+# the lakehouse storage browser has a live /api/media backend in dev. See
+# docs/architecture/lance-ns-merge.md P7.)
 set -euo pipefail
 
 # NOTE: do NOT bash-source .env here. Every service loads it itself via
@@ -14,42 +18,36 @@ set -euo pipefail
 # We only export vars that are NOT in .env and that the services require.
 
 export RAY_ENABLE_UV_RUN_RUNTIME_ENV=0   # documented Ray/uv gotcha
-export RASK_VIEWER_INPUT="${RASK_VIEWER_INPUT:-s3://images-batch}"
-export RASK_VIEWER_OUTPUT="${RASK_VIEWER_OUTPUT:-s3://images-batch-alto}"
 
 # The frontend (@rask/api + remote functions) calls /api/*, so default the whole
 # fleet to RASK_API_PREFIX=/api. The gateway/services' OWN default is /api/v1; a
-# mismatch makes the gateway send /api/* to the core catch-all and you get 404s
-# (e.g. the storage browser's /api/volumes/objects). Override to /api/v1 if needed.
+# mismatch makes the gateway route /api/* rows wrong and you get 404s (e.g. the
+# compute zone's /api/ray/jobs). Override to /api/v1 if needed.
 export RASK_API_PREFIX="${RASK_API_PREFIX:-/api}"
 
 # PORT_OFFSET shifts every port so a second fleet can run on one host without
 # colliding (e.g. another user already holds the defaults): PORT_OFFSET=1000 →
-# gateway :9888, core :9801, volumes :9803, … Then point the frontend at it:
+# gateway :9888, compute :9804, viewer :9101, … Then point the frontend at it:
 #   PORT_OFFSET=1000 make dev-micro
 #   VIEWER_BACKEND=http://localhost:9888 RASK_GATEWAY_URL=http://localhost:9888 make dev-frontends
 OFFSET="${PORT_OFFSET:-0}"
 GATEWAY_PORT="${GATEWAY_PORT:-$((8888 + OFFSET))}"
-CORE_PORT="${CORE_PORT:-$((8801 + OFFSET))}"
-SEARCH_PORT="${SEARCH_PORT:-$((8802 + OFFSET))}"
-VOLUMES_PORT="${VOLUMES_PORT:-$((8803 + OFFSET))}"
-RAY_PORT="${RAY_PORT:-$((8804 + OFFSET))}"
-ORCH_PORT="${ORCH_PORT:-$((8810 + OFFSET))}"
+COMPUTE_PORT="${COMPUTE_PORT:-$((8804 + OFFSET))}"
 CONTROLPLANE_PORT="${CONTROLPLANE_PORT:-$((8820 + OFFSET))}"
+VIEWER_PORT="${VIEWER_PORT:-$((8101 + OFFSET))}"
+SEARCH_PORT="${SEARCH_PORT:-$((8102 + OFFSET))}"
+ANNOTATOR_PORT="${ANNOTATOR_PORT:-$((8103 + OFFSET))}"
 
 # Wire the gateway's upstreams to THIS fleet's per-service ports (else, when
 # offset, it would route to whatever holds the default ports). No-op at OFFSET=0.
-export RASK_CORE_API_URL="${RASK_CORE_API_URL:-http://127.0.0.1:${CORE_PORT}}"
-export RASK_SEARCH_API_URL="${RASK_SEARCH_API_URL:-http://127.0.0.1:${SEARCH_PORT}}"
-export RASK_VOLUMES_API_URL="${RASK_VOLUMES_API_URL:-http://127.0.0.1:${VOLUMES_PORT}}"
-export RASK_RAY_API_URL="${RASK_RAY_API_URL:-http://127.0.0.1:${RAY_PORT}}"
-export RASK_ORCH_API_URL="${RASK_ORCH_API_URL:-http://127.0.0.1:${ORCH_PORT}}"
+export RASK_COMPUTE_URL="${RASK_COMPUTE_URL:-http://127.0.0.1:${COMPUTE_PORT}}"
 export RASK_CONTROLPLANE_URL="${RASK_CONTROLPLANE_URL:-http://127.0.0.1:${CONTROLPLANE_PORT}}"
-
-# Only the orchestrator process runs the loop. We force it OFF for every other
-# service (regardless of what .env says) so there is exactly one orchestrator.
-# Set ORCH_AUTOSTART=false to bring the fleet up without submitting any jobs.
-ORCH_AUTOSTART="${ORCH_AUTOSTART:-true}"
+export RASK_MEDIA_VIEWER_URL="${RASK_MEDIA_VIEWER_URL:-http://127.0.0.1:${VIEWER_PORT}}"
+export RASK_MEDIA_SEARCH_URL="${RASK_MEDIA_SEARCH_URL:-http://127.0.0.1:${SEARCH_PORT}}"
+export RASK_MEDIA_ANNOTATOR_URL="${RASK_MEDIA_ANNOTATOR_URL:-http://127.0.0.1:${ANNOTATOR_PORT}}"
+# The viewer reads its own VIEWER_PORT (media-plane settings), exported here so
+# its `run()` row and the gateway row above always agree under PORT_OFFSET.
+export VIEWER_PORT
 
 # Kill the whole process group on exit so no uvicorn lingers.
 trap 'trap - INT TERM EXIT; echo; echo "stopping fleet..."; kill 0' INT TERM EXIT
@@ -60,13 +58,20 @@ run() {  # run <name> <port> <module> [extra env assignments...]
   ( "$@" uv run --no-sync uvicorn "$module" --host 127.0.0.1 --port "$port" 2>&1 | sed "s/^/[$name] /" ) &
 }
 
-run gateway     "$GATEWAY_PORT" gateway:app
-run core-api    "$CORE_PORT"    core_api:app    env RASK_ORCHESTRATOR_AUTOSTART=false
-run search-api  "$SEARCH_PORT"  search_api:app  env RASK_ORCHESTRATOR_AUTOSTART=false
-run volumes-api "$VOLUMES_PORT" volumes_api:app env RASK_ORCHESTRATOR_AUTOSTART=false
-run ray-api     "$RAY_PORT"     ray_api:app     env RASK_ORCHESTRATOR_AUTOSTART=false
-run orchestrator "$ORCH_PORT"   orchestrator:app env RASK_ORCHESTRATOR_AUTOSTART="$ORCH_AUTOSTART"
-run controlplane "$CONTROLPLANE_PORT" controlplane:app env RASK_ORCHESTRATOR_AUTOSTART=false
+run gateway      "$GATEWAY_PORT"      gateway:app
+run compute      "$COMPUTE_PORT"      compute:app
+run controlplane "$CONTROLPLANE_PORT" controlplane:app
+# The media-plane viewer: /api/media/* (incl. the lakehouse storage browser's
+# /api/media/object* routes). Its DatasetRegistry is lazy, so it boots without a
+# staged corpus — dataset routes then 404 honestly while the objects browser works.
+run viewer       "$VIEWER_PORT"       viewer.main:app
+# The other two thirds of the media plane. Until 2026-07-28 the fleet started ONLY the viewer, so the
+# annotator zone's BFF (which proxies /annotator/api/annotations/* to :8103) 502'd against a fleet that
+# looked "up" — the canvas could load a page image but never read or save a single annotation. Both
+# are lazy over the same MEDIA_* registry as the viewer, so they boot without a staged corpus and
+# 404 honestly until one exists (`uv run python scripts/seed_demo_corpus.py` makes one locally).
+run search       "$SEARCH_PORT"       search.main:app
+run annotator    "$ANNOTATOR_PORT"    annotator.main:app
 
 echo "fleet up — gateway on http://127.0.0.1:${GATEWAY_PORT} (RASK_API_PREFIX=${RASK_API_PREFIX}; Ctrl-C to stop)"
 if [ "$OFFSET" != "0" ]; then

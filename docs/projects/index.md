@@ -1,43 +1,37 @@
 # Projects
 
-`projects/<name>/pyproject.toml` is a **deployable composition** — it contains no
-code, only a pin of the workspace members that make up one shippable artifact.
+This section holds **narrative notes on rask's deployables and sub-projects**.
 
-| Project | Composes | Docs |
+!!! note "The `projects/` directory is gone (July 2026)"
+    rask used to keep a Polylith-style `projects/<name>/pyproject.toml`
+    composition stub (with its own `uv.lock`) per deployable. That layer was
+    removed: a deployable is now an **ordinary workspace member** built by its
+    `.docker/<name>.dockerfile`, which runs `uv sync --frozen --package <name>`
+    against the **root** `uv.lock` — one lock for dev, tests, and every image.
+
+| Deployable | Workspace member | Docs |
 |---|---|---|
-| `gateway` | `gateway` + `service-kit` | [Services](../components/services.md) |
-| `core-api` | `core` + `service-kit` + `storage` | [Services](../components/services.md) |
-| `orchestrator` | `core` + `service-kit` + `storage` | [Services](../components/services.md) |
-| `volumes-api` | `service-kit` + `storage` | [Services](../components/services.md) |
-| `search-api` | `service-kit` + `storage` + `lancedb` | [Services](../components/services.md) |
-| `ray-api` | `service-kit` + `ray-kit` | [Services](../components/services.md) |
-| `runner` | `runner` + `htr` + `storage` (+ `htrflow` from git) | [Runner](runner.md) |
+| `gateway` | `services/gateway` | [Services](../components/services.md) |
+| `compute` | `services/compute` | [Services](../components/services.md) |
+| `controlplane` | `services/controlplane` | [Services](../components/services.md) |
+| `runner` | `runners/htr` (+ `htr`, `storage`, `htrflow` from git) | [Runner](runner.md) |
 
-Each carries its own `uv.lock` and `.venv`, so a deployable resolves
-independently of the rest of the workspace. There is no `projects/viewer` — the
-viewer was dissolved (June 2026) into the gateway + per-domain services above.
-
-!!! warning "HCP is not a project"
-    The nav lists an [HCP](hcp.md) page, but there is **no `projects/hcp`**. "HCP"
-    is the Hitachi Content Platform — the legacy S3 backend rask is migrating
-    off. Storage is S3-agnostic (the real targets are MinIO / rustfs, swapped by
-    env only); HCP survives only as an env-alias bridge. It's documented there
-    for completeness because the codebase and older docs reference it as if it
-    were a deployable.
+There is no `viewer` deployable in the fleet — the old viewer monolith was
+dissolved (June 2026), and the R6/R20 wave (2026-07-28) retired
+core-api/search-api/volumes-api into the media plane (which builds from the
+`lance-rest-catalog` image).
 
 ## Building a deployable
 
-The container images mirror these compositions:
+One dockerfile per deployable under `.docker/`:
 
-- `rask-gateway` ← `projects/gateway` (slim Python, `:8888`).
-- `rask-core-api` ← `projects/core-api` (slim Python, `:8801`).
-- `rask-orchestrator` ← `projects/orchestrator` (slim Python, `:8810`).
-- `rask-volumes-api` ← `projects/volumes-api` (slim Python, `:8803`).
-- `rask-search-api` ← `projects/search-api` (slim Python, `:8802`).
-- `rask-ray-api` ← `projects/ray-api` (slim Python, `:8804`).
-- `rask-runner` ← `projects/runner` (CUDA base, GPU).
+- `rask-gateway` ← `.docker/gateway.dockerfile` (slim Python, `:8888`).
+- `ray` ← `.docker/ray.dockerfile` (slim Python, `:8804`).
+- `controlplane` ← `.docker/controlplane.dockerfile` (slim Python, `:8820`).
+- `ray-cluster` ← `.docker/ray-cluster.dockerfile` (CUDA base — the Ray head/Serve image).
+- `rask-runner` ← `.docker/runner.dockerfile` (CUDA base, GPU).
 
-The seven SvelteKit SSR apps under `components/frontends/` (`home` — the catch-all — plus `overview`/`compute`/`discover`/`storage`/`train`/`studio`)
+The seven SvelteKit SSR apps under `frontend/microfrontends/` (`home` — the catch-all — plus `overview`/`compute`/`discover`/`storage`/`train`/`studio`)
 all build from one parametrized `.docker/frontend.dockerfile`
 (`--build-arg APP=<dir>`, Bun server).
 

@@ -1,0 +1,53 @@
+[project]
+name = "ratch"
+version = "0.1.0"
+description = "Media pipeline library — Lance ingestion, Ray-distributed feature stages, and retrieval over the chunks table."
+requires-python = ">=3.13"
+license = "AGPL-3.0-only"
+dependencies = [
+    # The lineage seam (ratch/lineage.py) re-exports the kernel primitives from
+    # `service_kit.lancekit.openlineage` — the lancekit extra carries that subtree's deps.
+    "service-kit[lancekit]",
+    # Lance/Arrow core — `import lance`, `pyarrow`/`pyarrow.fs`, `lancedb{,.index,.rerankers}`.
+    "pylance>=9.0.0",
+    "pyarrow",
+    "lancedb>=0.34.0",
+    # The distributed plane. lance_ray is a TOP-LEVEL import in core/driver.py; ray itself is
+    # imported lazily but from BOTH extras: `ray.data` (core/driver.py) and
+    # `ray.job_submission.JobSubmissionClient` (core/jobs.py). Per ray-kit's finding, plain `ray`
+    # raises "requires the ray[default] installation" when that client is constructed.
+    "lance-ray",
+    "ray[data,default]>=2.56",
+    # The `ratch` CLI (cli/_app.py + the seven command modules).
+    "typer>=0.12",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.5",
+    "numpy",
+    "httpx>=0.27",
+    "tqdm",
+    # clients/image.py decodes/encodes frames with `from PIL import Image`.
+    "pillow>=12.3.0",
+]
+
+# The Atlas projection (features/projection.py, modalities/av/cluster.py) imports EVōC behind a
+# try/ImportError whose message names this exact extra:
+#   "The Atlas projection needs the `atlas` extra (EVōC). Install with `uv sync --extra atlas`".
+# scikit-learn rides along — `sklearn.utils.check_random_state` is only reached on that same path.
+[project.optional-dependencies]
+atlas = [
+    "evoc",
+    "scikit-learn",
+]
+
+[project.scripts]
+ratch = "ratch.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ratch"]
+
+[tool.uv.sources]
+service-kit = { workspace = true }

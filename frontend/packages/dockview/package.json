@@ -1,0 +1,36 @@
+{
+	"name": "@rask/dockview",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"svelte": "./src/index.ts",
+			"default": "./src/index.ts"
+		},
+		"./styles.css": "./src/styles.css"
+	},
+	"scripts": {
+		"check": "svelte-check --tsconfig ./tsconfig.json",
+		"check:tsgo": "tsgo --noEmit -p tsconfig.tsgo.json",
+		"test": "vitest run --passWithNoTests",
+		"lint": "oxlint .",
+		"fmt": "rsvelte-fmt .",
+		"fmt:check": "rsvelte-fmt --check ."
+	},
+	"dependencies": {
+		"@lucide/svelte": "^1.26.0",
+		"dockview": "^7.0.4"
+	},
+	"devDependencies": {
+		"@rask/config": "workspace:*",
+		"svelte": "^5.56.8",
+		"svelte-check": "^4.7.3",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.10"
+	},
+	"peerDependencies": {
+		"svelte": "^5.0.0"
+	}
+}

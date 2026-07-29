@@ -6,16 +6,38 @@ metadata:
     {{- include "rask.labels" . | nindent 4 }}
 data:
   {{- range $k, $v := .Values.config }}
+  {{- /* RASK_SERVE_GPU_FRAC is DERIVED below, never passed through — it must collapse to 0 on a
+       GPU-less estate. Emitting the raw value here too would let this ConfigMap contradict the
+       RayService's serveConfigV2, which is precisely the kind of "configured 1.0, running 0" split
+       that costs a live debugging round. */}}
+  {{- if ne $k "RASK_SERVE_GPU_FRAC" }}
   {{ $k }}: {{ $v | quote }}
   {{- end }}
+  {{- end }}
+  # The htrflow Serve actor's GPU fraction, derived from the ONE GPU signal (ray.gpuCount) by
+  # rask.serveGpuFrac — the same include the RayService uses, so the two cannot drift.
+  RASK_SERVE_GPU_FRAC: {{ include "rask.serveGpuFrac" . | quote }}
   RASK_DAPR_ENABLED: {{ .Values.dapr.sidecars | quote }}
-  # Gateway upstreams (in-cluster DNS).
-  RASK_CORE_API_URL: {{ printf "http://%s-core-api:8801" (include "rask.fullname" .) | quote }}
-  RASK_SEARCH_API_URL: {{ printf "http://%s-search-api:8802" (include "rask.fullname" .) | quote }}
-  RASK_VOLUMES_API_URL: {{ printf "http://%s-volumes-api:8803" (include "rask.fullname" .) | quote }}
-  RASK_RAY_API_URL: {{ printf "http://%s-ray-api:8804" (include "rask.fullname" .) | quote }}
-  RASK_ORCH_API_URL: {{ printf "http://%s-orchestrator:8810" (include "rask.fullname" .) | quote }}
+  # Gateway upstreams (in-cluster DNS). The core/search/volumes rows died in the
+  # R6/R20 media wave — their capabilities serve from the media plane below.
+  RASK_COMPUTE_URL: {{ printf "http://%s-compute:8804" (include "rask.fullname" .) | quote }}
   RASK_CONTROLPLANE_URL: {{ printf "http://%s-controlplane:8820" (include "rask.fullname" .) | quote }}
+  # lance-plane gateway upstreams (lance-ns-merge.md P1 gateway fold + P4): the fleet gateway carries
+  # /api/catalog, /api/lineage, /api/produce, /api/train and the /api/media/* namespace. Service names
+  # use lance.fullname — that is what services.yaml/medallion.yaml/media.yaml name their Services.
+  RASK_CATALOG_API_URL: {{ printf "http://%s-catalog:%v" (include "lance.fullname" .) .Values.services.catalog.port | quote }}
+  RASK_LINEAGE_API_URL: {{ printf "http://%s-lineage:%v" (include "lance.fullname" .) .Values.services.lineage.port | quote }}
+  # The sidecar-only lineage routes the gateway must 403 at the edge (the retired nginx blocklist,
+  # now Python middleware). ONE source: the lance.lineageSidecarOnlyRoutes helper.
+  RASK_LINEAGE_SIDECAR_ONLY_ROUTES: {{ include "lance.lineageSidecarOnlyRoutes" . | quote }}
+  {{- if .Values.medallion.enabled }}
+  RASK_MEDALLION_API_URL: {{ printf "http://%s-lance-ray:%v" (include "lance.fullname" .) .Values.medallion.port | quote }}
+  {{- end }}
+  {{- if .Values.media.enabled }}
+  RASK_MEDIA_VIEWER_URL: {{ printf "http://%s-viewer:%v" (include "lance.fullname" .) .Values.media.services.viewer.port | quote }}
+  RASK_MEDIA_SEARCH_URL: {{ printf "http://%s-search:%v" (include "lance.fullname" .) .Values.media.services.search.port | quote }}
+  RASK_MEDIA_ANNOTATOR_URL: {{ printf "http://%s-annotator:%v" (include "lance.fullname" .) .Values.media.services.annotator.port | quote }}
+  {{- end }}
   {{- if .Values.ray.enabled }}
   RAY_DASHBOARD_URL: {{ printf "http://%s-ray-head-svc:%v" (include "rask.fullname" .) .Values.ray.dashboardPort | quote }}
   {{- end }}

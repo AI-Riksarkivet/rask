@@ -1,0 +1,16 @@
+{
+	"//": "Shared TypeScript base for every app/package (@rask/config). Matches lance-ns's @rask/config. Apps extend this + their .svelte-kit/tsconfig.json.",
+	"compilerOptions": {
+		"allowJs": true,
+		"checkJs": true,
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"resolveJsonModule": true,
+		"skipLibCheck": true,
+		"sourceMap": true,
+		"strict": true,
+		"moduleResolution": "bundler",
+		"module": "esnext",
+		"target": "esnext"
+	}
+}

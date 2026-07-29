@@ -1,0 +1,96 @@
+{{- if .Values.backups.volumeSnapshot.enabled }}
+# CSI VolumeSnapshot of the RustFS lakehouse PVCs on a schedule. Needs an in-cluster CSI snapshotter +
+# a VolumeSnapshotClass. The store is the rustfs-operator Tenant (lance-ns-merge P4: "keep-PVC posture
+# via Tenant spec"), so this snapshots the Tenant's StatefulSet-owned PVCs — selected by the labels the
+# Tenant stamps on them (templates/rustfs-tenant.yaml pools[0].persistence.labels), one VolumeSnapshot
+# per volume (erasure-coded volumes only restore as a SET from the same run). With S3 external
+# (rustfs.enabled=false) there is nothing to snapshot — prefer object-store versioning there.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "lance.fullname" . }}-snapshot
+  labels: {{- include "lance.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "lance.fullname" . }}-snapshot
+  labels: {{- include "lance.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["create"]
+  # Enumerate the Tenant's PVCs by label — the operator names them, so the CronJob can't hardcode them.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "lance.fullname" . }}-snapshot
+  labels: {{- include "lance.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "lance.fullname" . }}-snapshot
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lance.fullname" . }}-snapshot
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "lance.fullname" . }}-rustfs-snapshot
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backups.volumeSnapshot.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      template:
+        metadata:
+          # The explicit component label (the P4 landmine, see backup-pg.yaml): rustfs-backup is the
+          # component the rustfs ingress rule already allowlists for this workload (network-policy.yaml 3d)
+          # and the label the created VolumeSnapshot CRs carry — one name for the whole backup surface.
+          labels:
+            {{- include "lance.labels" . | nindent 12 }}
+            app.kubernetes.io/component: rustfs-backup
+        spec:
+          # ALWAYS the dedicated RBAC-bound SA — never the zero-grant shared jobs SA the other hook Jobs
+          # take under security.serviceAccounts.enabled. This pod legitimately needs the k8s API (its
+          # kubectl creates the VolumeSnapshot CR via the Role above); the unbound jobs SA (automount off,
+          # zero grants) would silently break every scheduled backup. The old conditional second key here
+          # was a duplicate-map-key render: lenient last-wins parsing swapped the RBAC SA out (audit
+          # 2026-07-24).
+          serviceAccountName: {{ include "lance.fullname" . }}-snapshot
+          restartPolicy: OnFailure
+          containers:
+            - name: snapshot
+              image: {{ .Values.backups.volumeSnapshot.kubectlImage }}
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  stamp=$(date +%Y%m%d%H%M%S)
+                  pvcs=$(kubectl get pvc -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=rustfs -o name)
+                  [ -n "$pvcs" ] || { echo "no rustfs Tenant PVCs found — nothing to snapshot"; exit 1; }
+                  for pvc in $pvcs; do
+                    name=${pvc#persistentvolumeclaim/}
+                    cat <<EOF | kubectl create -f -
+                  apiVersion: snapshot.storage.k8s.io/v1
+                  kind: VolumeSnapshot
+                  metadata:
+                    name: ${name}-${stamp}
+                    labels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: rustfs-backup }
+                  spec:
+                    {{- with .Values.backups.volumeSnapshot.snapshotClassName }}
+                    volumeSnapshotClassName: {{ . | quote }}
+                    {{- end }}
+                    source:
+                      persistentVolumeClaimName: ${name}
+                  EOF
+                  done
+{{- end }}

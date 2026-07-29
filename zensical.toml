@@ -15,6 +15,7 @@ nav = [
     { "Quick Start" = "getting-started/index.md" },
     { "Concepts" = "getting-started/concepts.md" },
     { "Configuration" = "getting-started/configuration.md" },
+    { "Zed SSH Port-Forwards" = "zed-port-forwards.md" },
   ]},
   { "Architecture" = [
     { "Overview" = "architecture/index.md" },
@@ -24,6 +25,7 @@ nav = [
     { "Deployment" = "architecture/deployment.md" },
     { "Microservices (proposed)" = "architecture/microservices.md" },
     { "Frontend Microfrontends" = "architecture/frontend-microfrontends.md" },
+    { "Lance-NS Merge" = "architecture/lance-ns-merge.md" },
     { "Deep Dives" = [
       { "System Overview" = "architecture/system-overview.md" },
       { "Viewer Backend" = "architecture/viewer-backend.md" },
@@ -44,9 +46,61 @@ nav = [
   ]},
   { "Projects" = [
     { "Overview" = "projects/index.md" },
-    { "HCP" = "projects/hcp.md" },
     { "Runner" = "projects/runner.md" },
     { "Viewer" = "projects/viewer.md" },
+  ]},
+  { "Lakehouse Platform" = [
+    { "Overview" = "lakehouse/index.md" },
+    { "Design Records" = [
+      { "Architecture & Status" = "ARCHITECTURE.md" },
+      { "System Sketch" = "SYSTEM-SKETCH.md" },
+      { "End-to-End Flow" = "FLOW.md" },
+      { "Data Contract" = "DATA-CONTRACT.md" },
+      { "Decisions" = "DECISIONS.md" },
+      { "Medallion Pipeline" = "MEDALLION.md" },
+      { "Lineage" = "LINEAGE.md" },
+      { "Authorization" = "AUTHZ.md" },
+      { "DuckDB Access" = "DUCKDB.md" },
+      { "Ray Compute Seam" = "RAY.md" },
+      { "Ray Train" = "RAY-TRAIN.md" },
+      { "Operators & Submit Seam" = "OPERATORS.md" },
+      { "API Surface" = "API.md" },
+      { "rask Integration" = "RASK-INTEGRATION.md" },
+    ]},
+    { "Operations" = [
+      { "Deploy" = "DEPLOY.md" },
+      { "Durability" = "DURABILITY.md" },
+      { "Resilience" = "RESILIENCE.md" },
+      { "CNPG + AGE" = "CNPG-AGE.md" },
+      { "On-call Runbook" = "runbooks/RUNBOOK-oncall.md" },
+      { "Backup & Restore Runbook" = "runbooks/RUNBOOK-restore.md" },
+    ]},
+    { "Diagrams" = [
+      { "System Diagram" = "system-diagram.md" },
+      { "Event-Driven Pipeline" = "event-driven-pipeline.md" },
+      { "Image Pipeline" = "image-pipeline-event-driven.md" },
+    ]},
+    { "Design Notes" = [
+      { "Annotation Projects" = "DESIGN-annotation-projects.md" },
+      { "Interactive State" = "DESIGN-interactive-state.md" },
+      { "UX Reactive Evidence" = "GOAL-UX-REACTIVE-EVIDENCE.md" },
+    ]},
+    { "Reports" = [
+      { "Assessment 2026-07-15" = "ASSESSMENT-2026-07-15.md" },
+      { "Catalog Bench 2026-07-22" = "BENCH-2026-07-22.md" },
+      { "Coverage" = "COVERAGE.md" },
+      { "Lineage Verification" = "VERIFY-LINEAGE-OPENLINEAGE.md" },
+      { "Open Work" = "OPEN-WORK.md" },
+    ]},
+  ]},
+  { "Lance Reference" = [
+    { "Overview" = "lance/index.md" },
+    { "File Format" = "lance/file-format.md" },
+    { "Format Guide" = "lance/guide.md" },
+    { "Python SDK" = "lance/sdk.md" },
+    { "Namespace & Catalog Spec" = "lance/namespace.md" },
+    { "Partitioning Spec" = "lance/partitioning-spec.md" },
+    { "Ray Integration" = "lance/ray.md" },
   ]},
   { "Reference" = [
     { "HTR" = "reference/htr.md" },
@@ -160,10 +214,10 @@ default_handler = "python"
 
 [project.plugins.mkdocstrings.handlers.python]
 paths = [
-  "packages/htr/src",
+  "runners/htr/src",
   "packages/storage/src",
-  "components/cli/runner/src",
-  "components/services/core/src",
+
+  "services/core/src",
 ]
 
 [project.plugins.mkdocstrings.handlers.python.options]

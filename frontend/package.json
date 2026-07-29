@@ -1,0 +1,51 @@
+{
+	"name": "rask-frontend",
+	"private": true,
+	"license": "Apache-2.0",
+	"packageManager": "bun@1.3.14",
+	"workspaces": [
+		"microfrontends/*",
+		"packages/*"
+	],
+	"scripts": {
+		"build": "turbo run build",
+		"build-storybook": "turbo run build-storybook",
+		"check": "turbo run check",
+		"check:tsgo": "turbo run check:tsgo",
+		"dev": "turbo run dev",
+		"dev:annotator": "turbo run dev --filter=annotator...",
+		"dev:compute": "turbo run dev --filter=compute...",
+		"dev:home": "turbo run dev --filter=home...",
+		"dev:lakehouse": "turbo run dev --filter=lakehouse...",
+		"dev:media": "turbo run dev --filter=media...",
+		"dev:studio": "turbo run dev --filter=studio...",
+		"dev:train": "turbo run dev --filter=train...",
+		"dev:ui": "turbo run dev --filter=@rask/ui",
+		"dev:zones": "turbo run dev",
+		"fmt": "turbo run fmt",
+		"fmt:check": "turbo run fmt:check",
+		"gen:types": "bun run gen:types:lineage && bun run gen:types:catalog",
+		"gen:types:catalog": "openapi-typescript ../docs/catalog-openapi.json -o packages/api/src/generated/catalog.ts",
+		"gen:types:lineage": "openapi-typescript ../docs/lineage-openapi.json -o packages/api/src/generated/lineage.ts",
+		"knip": "knip --no-config-hints",
+		"lint": "turbo run lint",
+		"storybook": "bun --cwd=packages/ui run storybook",
+		"test": "turbo run test",
+		"test:e2e": "turbo run test:e2e"
+	},
+	"devDependencies": {
+		"@rsvelte/fmt": "^0.7.2",
+		"@rsvelte/oxlint-plugin": "^0.2.2",
+		"@typescript/native-preview": "^7.0.0-dev.20260622.1",
+		"knip": "^6.18.0",
+		"openapi-typescript": "^7.13.0",
+		"oxfmt": "^0.60.0",
+		"oxlint": "^1.75.0",
+		"svelte-check": "^4.6.0",
+		"turbo": "2.10.7",
+		"typescript": "^6.0.3"
+	},
+	"patchedDependencies": {
+		"svelte-adapter-bun@1.0.1": "patches/svelte-adapter-bun@1.0.1.patch"
+	}
+}

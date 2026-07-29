@@ -1,0 +1,65 @@
+{
+	"name": "@rask/api",
+	"version": "0.1.0",
+	"private": true,
+	"license": "Apache-2.0",
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"default": "./src/index.ts"
+		},
+		"./bff": {
+			"types": "./src/bff.ts",
+			"default": "./src/bff.ts"
+		},
+		"./client": {
+			"types": "./src/client.ts",
+			"default": "./src/client.ts"
+		},
+		"./dock-layout": {
+			"types": "./src/dock-layout.ts",
+			"default": "./src/dock-layout.ts"
+		},
+		"./generated/catalog": {
+			"types": "./src/generated/catalog.ts",
+			"default": "./src/generated/catalog.ts"
+		},
+		"./generated/lineage": {
+			"types": "./src/generated/lineage.ts",
+			"default": "./src/generated/lineage.ts"
+		},
+		"./lineage": {
+			"types": "./src/lineage/index.ts",
+			"default": "./src/lineage/index.ts"
+		},
+		"./observability": {
+			"types": "./src/observability.ts",
+			"default": "./src/observability.ts"
+		},
+		"./oidc": {
+			"types": "./src/oidc.ts",
+			"default": "./src/oidc.ts"
+		},
+		"./runs-feed": {
+			"types": "./src/runs-feed.ts",
+			"default": "./src/runs-feed.ts"
+		}
+	},
+	"scripts": {
+		"check": "tsgo --noEmit -p tsconfig.json",
+		"check:tsgo": "tsgo --noEmit -p tsconfig.json",
+		"test": "vitest run",
+		"lint": "oxlint .",
+		"fmt": "rsvelte-fmt .",
+		"fmt:check": "rsvelte-fmt --check ."
+	},
+	"dependencies": {
+		"valibot": "^1.4.2"
+	},
+	"devDependencies": {
+		"@sveltejs/kit": "^2.70.1",
+		"@types/node": "^26.1.1",
+		"vitest": "^4.1.10"
+	}
+}

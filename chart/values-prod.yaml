@@ -1,0 +1,223 @@
+# Production overlay — apply ON TOP of values.yaml:
+#   helm upgrade lance-ns ./chart -f chart/values.yaml -f chart/values-prod.yaml
+#
+# It flips the safe-by-default-OFF prod switches and is the place to externalize the durable/stateful
+# tier. See docs/DURABILITY.md for the tier model (ephemeral compute / durable data / external-in-prod).
+# Switches set here are wired today; the EXTERNALIZE stanzas at the bottom are commented because they
+# also need the matching external-endpoint chart hooks (tracked as follow-up) before they do anything.
+
+# --- App images: set a real release tag before applying (never :dev/:latest in prod). The chart's image
+# helper FAILS the render on an empty tag, so DON'T ship tag:"" here — uncomment and fill these. -------
+image:
+  pullPolicy: IfNotPresent
+  # catalog: { tag: v1.2.3 }   # the released catalog/lineage image tag
+  # web:     { tag: v1.2.3 }   # the released web image tag
+
+# --- Governance ON — Dex OIDC + OpenFGA. auth.enabled governs the catalog + lineage; medallion.fgaEnabled
+# additionally governs the bronze→silver→gold movers' WRITE path (can_create_table / can_promote).
+# PREREQUISITE: seed the mover-identity grants first (scripts/seed_medallion_fga.sh) or the movers fail
+# closed and the pipeline stalls. ------------------------------------------------------------------
+auth:
+  enabled: true
+  lockRootCreate: true # prod: a token alone can't create root namespaces — needs a warehouse create grant
+medallion:
+  fgaEnabled: true
+  # 1, NOT 2 (audit 2026-07-14 claim-drift #2): the mover single-flight lock is PROCESS-LOCAL
+  # (transform.py), so 2 replicas can race concurrent overwrites of the same stage dataset.
+  # Raise only after a cross-pod lock ships.
+  moverReplicas: 1
+  producer:
+    expose: false # /produce is the unauthenticated demo entry — the prod head fires from real bronze ingests
+
+# --- HA (P3): multi-replica stateless services + a PodDisruptionBudget. Stateful HA (AGE/RustFS) is the
+# operators' job in rask (CNPG / rustfs-operator), not here. Optionally also set autoscaling.enabled. -----
+services:
+  catalog:
+    replicas: 2
+  lineage:
+    replicas: 2
+    demoData: false # the /demo data-peek router carries no OIDC/FGA guard — never mount it in prod
+    # #4's durability ON where it matters (audit claim-drift #1: was OFF in every shipped profile
+    # while documented "live-verified" — the exact loss window it exists to close stood open).
+    outbox:
+      enabled: true
+    reconcile:
+      enabled: true
+  # The ONE gateway (the fleet's uvicorn gateway:app on :8888 — the nginx gateway is retired,
+  # lance-ns-merge.md decision 4/P4). fleet.yaml reads services.gateway; ha.yaml's PDB matches
+  # component=gateway either way.
+  gateway:
+    replicas: 2
+frontend:
+  replicas: 2
+  # A governed backend needs a UI that can sign in. auth.enabled is true above, and
+  # templates/auth-consistency.yaml REFUSES that combination without a sign-in flow — the prod
+  # overlay could not render at all until this landed, which nothing noticed because the render
+  # check itself was unreachable (its `make prod-render-check` target did not exist).
+  # The three secrets stay OUT of the repo, exactly like dapr.appToken / age.password /
+  # rustfs.secretKey: supply them at deploy (`--set frontend.oidc.sessionSecret=…` or a values
+  # file). frontends.yaml fails closed on each one, so a missing value cannot ship quietly.
+  oidc:
+    enabled: true
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# OpenFGA is the authz chokepoint — every governed catalog write, every lineage read, and all four movers'
+# WRITE path fail CLOSED through it, so a single drained/OOMed replica 503s the whole estate until it
+# reschedules. Run the subchart's supported 3 replicas (kind pinned it to 1) + size its resources. Its PDB
+# + pod anti-affinity are P2 (they need the subchart's own label selector). (prod-readiness P1)
+openfga:
+  replicaCount: 3
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+
+# Network isolation: default-deny + DNS egress + the EXCLUSIVE OpenBao-ingress lock (only secret-consuming
+# app pods may reach openbao:8200). The chart ships the full, correct impl (templates/network-policy.yaml);
+# it was simply never enabled on the documented prod overlay — the security audit's headline gap. REQUIRES a
+# policy-enforcing CNI (Calico/Cilium): kind's default kindnet SILENTLY ignores NetworkPolicy, so this can't
+# be proven on the demo — verify with the negative-isolation probe (docs/KIND-RUNBOOK.md) on the real
+# cluster as a prod acceptance step. (prod-readiness P1)
+networkPolicy:
+  enabled: true
+
+# Load-shed cap sized to the catalog memory tier below (P1): the code default (16) admits 16 × 256MiB
+# buffered Arrow-IPC bodies = 4Gi of buffers against the 1Gi limit — a write burst OOM-kills the pod even
+# though shedding "worked". Sizing formula: maxConcurrentWrites × maxBodyBytes (2 × 256MiB = 512Mi of body
+# buffers) + 512Mi baseline headroom (process + pyarrow decode) = the 1Gi catalog memory limit. Keep the
+# formula true when changing either side — prod_render_check.sh asserts it. Overflow writes get 429 +
+# Retry-After; multi-hundred-MiB payloads belong on the direct-write/vending path anyway.
+catalog:
+  maxConcurrentWrites: 2
+
+# Per-workload resource tiers (P2): the shared 1-CPU/512Mi default sizes the stateful stores + the Arrow-
+# IPC-buffering catalog like stateless request pods. Give the memory-heavy workloads a real limit (the rest
+# keep resources.default). Requests reserve scheduler headroom. Movers/lineage stay on default until load
+# data says otherwise. (prod-readiness P2)
+resources:
+  catalog:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: "2", memory: 1Gi } # sized by catalog.maxConcurrentWrites above (cap×256MiB + 512Mi)
+  age:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "2", memory: 1Gi } # dual-purpose store: the lineage graph AND OpenFGA's datastore
+  rustfs:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: "2", memory: 1Gi } # the lakehouse + observability object store under real load
+
+# --- Backups (P4): ON for the SELF-CONTAINED in-cluster-prod path (in-cluster AGE + RustFS PVC). If you
+# externalize to CloudNativePG / rustfs-operator (the rask path), set BOTH back to false — the operators do
+# PITR/scheduled backups + snapshots better. (snapshotClassName must be a real CSI VolumeSnapshotClass.) ----
+backups:
+  pgDump:
+    enabled: true
+  volumeSnapshot:
+    enabled: true
+    snapshotClassName: "" # set your cluster's CSI VolumeSnapshotClass
+
+# --- Secrets: the SEALED, file-backed OpenBao (no fixed root token; an operator must init + unseal).
+# NOTE devMode=false is the prod signal: the render now FAILS unless age.password + rustfs.secretKey are
+# overridden (or externalSecrets.enabled hands the Secrets to the external-secrets operator) — the
+# well-known dev credentials must not reach a prod cluster (infra-credentials.yaml guard). -----------
+openbao:
+  devMode: false
+
+# --- Ray token auth ON (gate 7 / R3): a prod render that deploys Ray (singleTenant.enabled) FAILS
+# CLOSED without this (ray-auth-token.yaml guard) — an unauthenticated Ray dashboard is remote code
+# execution. kuberay 1.6.2 (Chart.yaml) consumes the chart's <release>-ray-auth-token Secret via
+# spec.authOptions and its RayService controller authenticates its own reconcile calls. Supply the
+# token out-of-band (--set ray.auth.token=... / externalSecrets) or leave empty for the
+# lookup-pinned chart-generated one — never commit it. ------------------------------------------
+ray:
+  auth:
+    enabled: true
+
+# --- Dapr: the app-API token is the auth secret for the sidecar-delivered routes — MUST be overridden.
+# The placeholder below FAILS the render on purpose (dapr-app-token.yaml guard): pass a real value with
+# --set dapr.appToken=... (or your values pipeline) — never commit it to this file.
+dapr:
+  appToken: "REPLACE-ME-with-a-real-secret" # source from OpenBao / an external secret, not this file
+  # Dapr control-plane HA: multi-replica operator / placement / scheduler + Sentry (the mTLS CA that sits in
+  # the sidecar cert-renewal path). kind ran single-node; in prod a Sentry node-drain/OOM eventually breaks
+  # sidecar identity renewal → all service-invocation + pub/sub across the mesh stops. (prod-readiness P1)
+  global:
+    ha:
+      enabled: true
+  dashboard:
+    enabled: false # don't expose the Dapr control-plane UI in prod
+
+# --- Durable lakehouse storage: the rustfs-operator Tenant's volumeClaimTemplate (the ONE store,
+# lance-ns-merge P4). SIZE it for prod — per Tenant volume (4 volumes/pod), holding the lakehouse AND
+# 14d of full-sampling observability. Set a snapshot-capable storageClass for the documented
+# VolumeSnapshot backups (backups.volumeSnapshot snapshots the Tenant PVCs). --------------------------
+rustfs:
+  storage: 200Gi
+  storageClass: "" # "" = the cluster default SC; prod: a CSI class that supports VolumeSnapshot + encryption
+
+# --- Compaction/GC at a real cadence (not the 120s demo sweep) -------------------------------------
+compaction:
+  schedule: "0 */30 * * * *" # every 30 min
+  olderThanDays: 7
+
+# --- Ingress fronts the gateway in prod (kind used a port-forward). Wired in templates/ingress.yaml →
+# set your className / host / TLS. ------------------------------------------------------------------
+ingress:
+  enabled: true
+  className: nginx # match your cluster's Ingress controller (nginx / traefik / …) — this names the CLUSTER's controller class, not rask's gateway; kgateway is the intended future edge
+  host: "" # e.g. lance.example.com
+
+# RETIRED (gateway fold): observability.edgeAuth backed the nginx gateway's public /perses/ +
+# /greptime/ locations; the nginx gateway is deleted and no Ingress path routes them, so the
+# telemetry UIs are cluster-internal. GreptimeDB auth + Perses OIDC stay the follow-on if re-exposed.
+observability:
+  # Alerting engine ON (P3b): vmalert evaluates the proven rules against GreptimeDB + routes via Alertmanager.
+  # Set webhookUrl (Slack/PagerDuty) out-of-band to actually page — empty groups alerts but pages nowhere.
+  alerting:
+    enabled: true
+  # Dapr sidecar metrics (the DaprConsumerWedge signal) are scraped by the OTel Collector's prometheus
+  # receiver at operator-adoption time — not a bespoke scraper. See the OpenTelemetry-Collector EXTERNALIZE note.
+
+# ===================================================================================================
+# EXTERNALIZE the durable/managed tier (tier 3 in docs/DURABILITY.md). Disable the in-cluster component
+# AND set its external endpoint — the apps then connect to the managed service (verified: no in-cluster
+# DNS leaks into app env). Uncomment per service.
+# ---------------------------------------------------------------------------------------------------
+# rustfs (rustfs-operator / any managed S3):         # managed S3 for the lakehouse AND observability bucket
+#   enabled: false
+#   externalEndpoint: https://s3.us-east-1.amazonaws.com
+# greptimedb-standalone:                             # REQUIRED COMPANION — the subchart's object-store endpoint
+#   objectStorage:                                   # is a static subchart value that CANNOT follow the
+#     s3:                                            # rustfs.externalEndpoint helper, so it must be repointed
+#       endpoint: https://s3.us-east-1.amazonaws.com # HERE too or GreptimeDB writes to the deleted in-cluster
+#                                                    # RustFS. prod-render-check guards this pairing.
+# age (CloudNativePG):                               # managed Postgres for the AGE graph + OpenFGA datastore
+#   enabled: false
+#   externalHost: lance-pg-rw                        # the CNPG Cluster's -rw service
+#   user: lance                                      # match the CNPG Cluster's role/password/dbs
+#   password: REPLACE-ME
+#   # ⚠ AGE-EXTENSION DECISION (docs/OPERATORS.md, RASK-INTEGRATION.md): a STOCK CNPG image cannot run the
+#   # lineage graph — `LOAD 'age'` / create_graph / ag_catalog need the Apache AGE extension compiled in. Run
+#   # CNPG with a CUSTOM imageName that bundles AGE (ghcr image built from the CNPG PG16 base + AGE), matching
+#   # age.image's PG major. OpenFGA (plain SQL) is unaffected. Alternatively keep AGE as a separate operand.
+# openfga:                                           # the openfga subchart's datastore points at the same DB
+#   datastore:
+#     uri: postgres://lance:REPLACE-ME@lance-pg-rw:5432/openfga?sslmode=require
+# openbao (External Secrets Operator):               # externalSecrets.enabled syncs the infra Secrets FROM Vault
+#   enabled: false                                   # — see externalSecrets below; the static Secrets are skipped
+#   externalAddr: https://vault.internal:8200
+# externalSecrets:                                   # ESO owns infra-credentials + observability-s3 from Vault
+#   enabled: true                                    # (no plaintext secret ships; age.password/rustfs.secretKey
+#   role: lance                                      # then need NOT be set — ESO satisfies the fail-closed guard)
+# nats (managed / NACK-provisioned JetStream):       # the in-cluster single node is a SPOF: bus down = no
+#   enabled: false                                   # lineage ingest, no cascade. NACK Stream CRs are optional
+#   externalUrl: nats://nats.internal:4222           # (the in-chart provision Job stays idempotent either way).
+#   streamReplicas: 3                                # raft-replicated streams (needs the 3+ node cluster)
+# medallion (KubeRay RayCluster):                    # point the Ray submit seam at the operator-managed cluster
+#   rayAddress: http://lance-raycluster-head-svc:8265 # the RayCluster head's dashboard svc (Jobs REST is agnostic)
+# observability (OpenTelemetry Collector):           # ship telemetry to an off-cluster / OTel-operator Collector
+#   enabled: false                                   # apps + Dapr still emit OTLP (otelEnabled tracks the endpoint,
+#   externalOtlpEndpoint: http://otel-collector.observability:4318/v1/otlp # not just observability.enabled)
+# GPU metrics (NVIDIA DCGM operator): net-new, rides in with KubeRay+Kueue for GPU training — the dcgm-exporter
+# is node-level infra (a DaemonSet the DCGM operator owns), scraped by the OTel Collector's prometheus receiver
+# (the same one that takes the Dapr sidecars). Nothing to flip in this chart until GPU Ray workers land.

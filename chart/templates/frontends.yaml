@@ -1,83 +1,284 @@
 {{- /*
-SvelteKit SSR microfrontends. One Deployment + Service per .Values.frontend.apps
-entry. The catch-all (catchAll: true) serves "/"; each domain app is pinned to
-its base path /<domain> and is probed there (GET "/" is 404 under a base
-path). Service/Deployment name = rask-<app name>; image = "<app name>:<tag>".
+SvelteKit SSR micro-frontend zones. One Deployment + Service per .Values.frontend.apps
+entry, all built from the ONE parametrized .docker/frontend.dockerfile (image
+"<zone>:<tag>", `make k3s-build`). The catch-all (catchAll: true) serves "/"; every
+domain zone is pinned to its base path /<zone> in its svelte.config.js and is
+TCP-probed — a zone's "/" is a 404 under its base path, so no httpGet. The Ingress
+path-routes /<zone> -> this Service (ingress.yaml); the gateway sits BEHIND these Bun
+servers and owns /api only — it never serves the SPA shell.
+
+NAMING — the live collision class of the lance-ns merge: every frontend object is
+`<fullname>-web-<zone>`, NOT the bare zone name. The merged estate has an `annotator`
+ZONE and an `annotator` BACKEND service (media.yaml) under ONE release: bare names
+would render two Deployments/Services called `rask-annotator` (an undeployable
+release), and a shared `app.kubernetes.io/component: annotator` selector would
+cross-wire the backend Service onto the SvelteKit pods. The `web-` prefix keeps the
+frontend tier disjoint from every backend component. Since R22 the IMAGE name is
+`web-<zone>:<tag>` too (the Makefile builds `web-home:dev`, …): the fleet's Ray-plane
+service image took the bare `compute` name, which the compute ZONE image previously
+held — the web- prefix extends the same disjointness invariant to the image namespace.
+ha.yaml (zone PDBs) and network-policy.yaml (the front-door rule) already select on
+`app.kubernetes.io/component: web-<zone>` — the three must stay in step.
+
+Every zone shares ONE env block (the "auth/secret similar in every MFE" seam):
+the backend URLs the zones' BFF proxies target, the gateway URL the SSR /api rewrite
+uses, and — auth on — the service-cred read fallback + the OIDC config, so a login on
+any zone is a login on every zone (one origin, one sealed cookie). The media/annotator
+zones additionally get the media plane's upstreams, scoped per zone.
 */ -}}
+{{- if .Values.frontend.enabled }}
 {{- $root := . -}}
 {{- $fe := .Values.frontend -}}
+{{- /* The zones' gateway is the RASK FLEET gateway (services.gateway, uvicorn `gateway:app`
+       on :8888) — the process that path-routes /api/* to ray/controlplane/the lance planes,
+       and the target the zones' relative /api/* fetches resolve to through
+       the Ingress. lance-ns's own nginx gateway (top-level `gateway:`, :8080,
+       templates/gateway.yaml) is RETIRED and deleted (lance-ns-merge.md decision 4/P4),
+       so `<fullname>-gateway` names exactly one object — the fleet gateway. kgateway is
+       the intended future edge (not implemented on this branch). */ -}}
+{{- $gwPort := $root.Values.services.gateway.port -}}
+{{- /* Dead-subscription detector (the lakehouse zone's admin /streams view): the comma
+       list of "STREAM:service" consumer groups the estate EXPECTS on JetStream, rendered
+       from the SAME values (and the same medallion.enabled / catalog.controlEmit /
+       dapr.resiliency.enabled gates) that dapr-component.yaml renders the real
+       subscriptions from — so the expectation cannot drift from the topology. Gated on
+       dapr.sidecars too: components may render, but with no injected sidecar nothing
+       subscribes and every group would read as a false dead subscription. */ -}}
+{{- $expected := list (printf "LINEAGE:%s" $root.Values.services.lineage.daprAppId) -}}
+{{- if $root.Values.dapr.resiliency.enabled -}}
+{{- $expected = append $expected (printf "DLQ:%s" $root.Values.services.lineage.daprAppId) -}}
+{{- end -}}
+{{- if $root.Values.medallion.enabled -}}
+{{- $expected = append $expected (printf "LINEAGE:%s" $root.Values.medallion.producer.daprAppId) -}}
+{{- range $root.Values.medallion.movers -}}
+{{- $expected = append $expected (printf "MEDALLION:%s" .daprAppId) -}}
+{{- end -}}
+{{- $expected = append $expected (printf "TRAINING:%s" $root.Values.medallion.producer.daprAppId) -}}
+{{- if $root.Values.dapr.resiliency.enabled -}}
+{{- $expected = append $expected (printf "DLQ:%s" $root.Values.medallion.producer.daprAppId) -}}
+{{- range $root.Values.medallion.movers -}}
+{{- $expected = append $expected (printf "DLQ:%s" .daprAppId) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $root.Values.catalog.controlEmit -}}
+{{- $expected = append $expected (printf "CATALOG_CONTROL:%s" $root.Values.services.catalog.daprAppId) -}}
+{{- end -}}
 {{- range $fe.apps }}
-{{- if or .catchAll $root.Values.singleTenant.enabled }}
+{{- $comp := printf "web-%s" .name -}}
+{{- /* Per-zone tag wins over the shared default: independent deploy is the ONLY thing a
+       zone boundary buys, and one tag across every zone silently cancels it. */ -}}
+{{- $tag := .tag | default $fe.image.tag -}}
+{{- /* Per-zone resource tier if values(-prod) define one (resources.web-<zone>), else the
+       shared frontend tier. */ -}}
+{{- $tier := (index $root.Values.resources $comp) | default $fe.resources -}}
+{{- /* rask's frontend.securityContext keys WIN; lance-ns's restricted-PodSecurity
+       hardening (runAsNonRoot + readOnlyRootFilesystem + RuntimeDefault seccomp) fills
+       the rest. A read-only rootfs is feasible because /tmp is an emptyDir below. */ -}}
+{{- /* NB: this action closes with `}}`, not `-}}` — its trailing newline is what puts the
+       `---` below on its own line. Right-trimming it welds the previous zone's Service onto
+       this Deployment's separator (`component: web-home---`), silently merging two objects
+       into one document. */ -}}
+{{- /* dev.reload implies Tilt's live_update, which SYNCS FILES INTO THE RUNNING CONTAINER — impossible
+       against a read-only rootfs. The Python side has branched on this since `lance.securityContext`
+       gained it; the zones never did, so a zone sync would have silently no-opped with "Read-only file
+       system" however correct the Tilt config was. FIFTH template found missing the dev.reload branch
+       (fleet-only → services.yaml → media.yaml → controlplane.yaml → here).
+       ternary(trueVal, falseVal, cond): dev.reload ⇒ writable; otherwise the hardened default is
+       untouched, so production manifests stay byte-identical and the invariant tests still see it true. */ -}}
+{{- $ro := ternary false $root.Values.security.readOnlyRootFilesystem $root.Values.dev.reload -}}
+{{- $sc := merge (deepCopy ($fe.securityContext | default dict)) (dict "runAsNonRoot" true "readOnlyRootFilesystem" $ro "seccompProfile" (dict "type" "RuntimeDefault")) }}
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "rask.fullname" $root }}-{{ .name }}
+  name: {{ include "rask.fullname" $root }}-{{ $comp }}
   labels:
-    {{- include "rask.componentLabels" (list $root .name) | nindent 4 }}
+    {{- include "rask.componentLabels" (list $root $comp) | nindent 4 }}
 spec:
-  replicas: {{ $fe.replicas }}
+  replicas: {{ (hasKey $fe "replicas") | ternary $fe.replicas 1 }}
   selector:
     matchLabels:
       {{- include "rask.selectorLabels" $root | nindent 6 }}
-      app.kubernetes.io/component: {{ .name }}
+      app.kubernetes.io/component: {{ $comp }}
   template:
     metadata:
       labels:
         {{- include "rask.selectorLabels" $root | nindent 8 }}
-        app.kubernetes.io/component: {{ .name }}
+        app.kubernetes.io/component: {{ $comp }}
     spec:
+      terminationGracePeriodSeconds: {{ $root.Values.lifecycle.terminationGracePeriodSeconds }}
+      {{- if $root.Values.podDisruptionBudget.enabled }}
+      {{- include "lance.spreadConstraints" $comp | nindent 6 }}
+      {{- end }}
       {{- with $root.Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if $root.Values.security.serviceAccounts.enabled }}
+      serviceAccountName: {{ include "rask.fullname" $root }}-sa-web
+      {{- else }}
       serviceAccountName: {{ include "rask.serviceAccountName" $root }}
+      {{- end }}
       securityContext:
         {{- toYaml $fe.podSecurityContext | nindent 8 }}
       containers:
         - name: {{ .name }}
-          image: "{{ .name }}:{{ $fe.image.tag }}"
-          imagePullPolicy: {{ $fe.image.pullPolicy }}
+          image: "{{ $root.Values.image.repository }}{{ if $root.Values.image.repository }}/{{ end }}web-{{ .name }}:{{ required "frontend.image.tag must be set (a release tag in prod; `dev` locally), or a per-zone `tag` on the frontend.apps entry" $tag }}"
+          imagePullPolicy: {{ $fe.image.pullPolicy | default $root.Values.image.pullPolicy }}
           securityContext:
-            {{- toYaml $fe.securityContext | nindent 12 }}
+            {{- toYaml $sc | nindent 12 }}
+          {{- include "lance.preStop" $root | nindent 10 }}
           env:
-            # SSR calls the gateway server-side via an absolute base URL.
+            # --- the shared zone env (every zone gets these) ---------------------------
+            # SSR load/remote functions reach the gateway server-side via an absolute base
+            # URL; client code uses the relative /api/* Ingress route. Both names are live:
+            # the api package's gateway client reads RASK_GATEWAY_URL, the BFF reads
+            # LANCE_GATEWAY_URL — one Service, two readers, so both must be injected.
             - name: RASK_GATEWAY_URL
-              value: {{ printf "http://%s-gateway:8888" (include "rask.fullname" $root) | quote }}
-            # Behind Traefik: derive the request origin from forwarded headers so
-            # the adapter-bun CSRF/origin check matches however the cluster is reached
-            # (node IP, localhost, VS Code-forwarded port) — no fixed ORIGIN.
-            - name: PROTOCOL_HEADER
-              value: "x-forwarded-proto"
-            - name: HOST_HEADER
-              value: "x-forwarded-host"
+              value: {{ printf "http://%s-gateway:%v" (include "rask.fullname" $root) $gwPort | quote }}
+            - name: LANCE_GATEWAY_URL
+              value: {{ printf "http://%s-gateway:%v" (include "rask.fullname" $root) $gwPort | quote }}
+            # The backend planes the zones' BFF proxies target directly.
+            - name: CATALOG_API
+              value: {{ printf "http://%s-catalog:%v" (include "rask.fullname" $root) $root.Values.services.catalog.port | quote }}
+            - name: LINEAGE_API
+              value: {{ printf "http://%s-lineage:%v" (include "rask.fullname" $root) $root.Values.services.lineage.port | quote }}
+            {{- if $root.Values.medallion.enabled }}
+            - name: MEDALLION_API
+              value: {{ printf "http://%s-lance-ray:%v" (include "rask.fullname" $root) $root.Values.medallion.port | quote }}
+            {{- end }}
+            - name: GREPTIME_API
+              value: {{ printf "http://%s:%v" (include "lance.greptimeHost" $root) $root.Values.observability.greptimePort | quote }}
+            {{- if $root.Values.nats.enabled }}
+            # JetStream visibility (admin /streams): the NATS HTTP monitor port —
+            # unauthenticated by design and ClusterIP-only, consumed strictly server-side
+            # behind the zone BFF's admin gate, never by the browser. The HEADLESS Service
+            # is the one carrying :8222 (the plain Service exposes only 4222).
+            - name: NATS_MONITOR_API
+              value: {{ printf "http://%s-headless:8222" (include "lance.natsHost" $root) | quote }}
+            {{- if and $root.Values.dapr.enabled $root.Values.dapr.sidecars }}
+            - name: JETSTREAM_EXPECTED_CONSUMERS
+              value: {{ join "," $expected | quote }}
+            {{- end }}
+            {{- end }}
+            # --- the Bun server's own transport knobs ---------------------------------
             - name: PORT
               value: {{ $fe.service.port | quote }}
             - name: HOST
               value: "0.0.0.0"
+            # Behind Traefik/nginx: derive the request origin from forwarded headers so
+            # adapter-bun's CSRF/origin check matches however the cluster is reached (node
+            # IP, localhost, VS Code-forwarded port) — no fixed ORIGIN.
+            - name: PROTOCOL_HEADER
+              value: "x-forwarded-proto"
+            - name: HOST_HEADER
+              value: "x-forwarded-host"
+            # IDLE_TIMEOUT is read by svelte-adapter-bun's bootstrap (Bun.serve idleTimeout,
+            # SECONDS) and it is the FIRST thing that severs a live query, well before the
+            # edge: at the default 10 a `query.live` generator that yields only on change
+            # became a ~12s reconnect loop. Bun caps it at 255, and a stream still died at
+            # 256.8s over a 290s hold — for a streaming response it behaves as a maximum
+            # connection LIFETIME that outbound SSE writes do not refresh, so no keepalive
+            # can beat it. 0 (disabled) is the default; the wedged-client objection is
+            # answered by the app-level 20s keepalive, whose write fails on a vanished peer.
+            # `hasKey`, never `| default`: Helm treats 0 as empty, so `| default 255`
+            # rendered 255 for an explicit 0 and the change looked applied while nothing
+            # moved. Pair with ingress.annotations' proxy-read-timeout — both hops must
+            # hold, and the SMALLER one always wins.
+            - name: IDLE_TIMEOUT
+              value: {{ (hasKey $fe "idleTimeoutSeconds") | ternary $fe.idleTimeoutSeconds 255 | quote }}
+            {{- if $root.Values.auth.enabled }}
+            # Governed READ fallback: with no user session the BFF authenticates to lineage
+            # as a SERVICE (bounded by frontend.serviceIdentity's FGA READER rung), so the
+            # read-only UI works without a per-user browser login.
+            - name: LINEAGE_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $root.Release.Name }}-dapr-app-token
+                  key: token
+            - name: LINEAGE_SERVICE_ID
+              value: {{ $fe.serviceIdentity | quote }}
+            {{- if $fe.oidc.enabled }}
+            # Per-user OIDC login (opt-in; needs a browser-reachable IdP). Every zone reads
+            # the sealed session cookie (ISSUER+CLIENT_ID+REDIRECT_URI make authEnabled
+            # true; SESSION_SECRET decodes it); the home zone also presents the confidential
+            # client secret at the token exchange. Secrets ride a Secret via secretKeyRef.
+            {{- if not $fe.oidc.sessionSecret }}{{ fail "frontend.oidc.enabled requires frontend.oidc.sessionSecret (>=32 chars) to seal the session cookie" }}{{- end }}
+            {{- if not $fe.oidc.publicIssuer }}{{ fail "frontend.oidc.enabled requires frontend.oidc.publicIssuer (a browser-reachable IdP)" }}{{- end }}
+            {{- if not $fe.oidc.publicOrigin }}{{ fail "frontend.oidc.enabled requires frontend.oidc.publicOrigin (the browser-reachable origin)" }}{{- end }}
+            - name: OIDC_ISSUER
+              value: {{ $fe.oidc.publicIssuer | quote }}
+            - name: OIDC_CLIENT_ID
+              value: {{ $root.Values.dex.clientId | quote }}
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $root.Release.Name }}-frontend-session
+                  key: clientSecret
+            - name: OIDC_REDIRECT_URI
+              value: {{ printf "%s/auth/callback" ($fe.oidc.publicOrigin | trimSuffix "/") | quote }}
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $root.Release.Name }}-frontend-session
+                  key: secret
+            # Split-horizon OIDC: the zones' SERVER-side fetches (discovery doc, token POST)
+            # go to the in-cluster Dex Service — the public issuer may only resolve for
+            # browsers. The BROWSER-facing authorize URL and the `iss` expectation keep the
+            # public OIDC_ISSUER; the BFF rewrites the discovered endpoints onto this base.
+            - name: OIDC_INTERNAL_ISSUER
+              value: {{ printf "http://%s:5556/dex" (include "lance.dexHost" $root) | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if and $root.Values.media.enabled (or (eq .name "media") (eq .name "annotator")) }}
+            # --- the media plane's upstreams for these two zones' BFF proxy routes -------
+            # (/<zone>/api/* -> the media Services). Scoped PER ZONE, not handed to both: a
+            # zone should not hold a service URL it never routes to. media searches and
+            # reads the viewer, and reaches the annotator only for the workflow's tag write
+            # + batch-job submit; the annotator reads the viewer for the media it draws on
+            # the canvas and never searches.
+            - name: VIEWER_API
+              value: {{ printf "http://%s-viewer:%v" (include "rask.fullname" $root) $root.Values.media.services.viewer.port | quote }}
+            - name: ANNOTATOR_API
+              value: {{ printf "http://%s-annotator:%v" (include "rask.fullname" $root) $root.Values.media.services.annotator.port | quote }}
+            {{- if eq .name "media" }}
+            - name: SEARCH_API
+              value: {{ printf "http://%s-search:%v" (include "rask.fullname" $root) $root.Values.media.services.search.port | quote }}
+            {{- end }}
+            {{- if and (eq .name "annotator") $root.Values.runners.enabled }}
+            # Mirror of the annotator SERVICE's runner seams (media.yaml) onto the zone's
+            # web pod: its /api/config endpoint reads these to render the honest
+            # "mocked — needs runner" chip, so the chip's truth tracks the same values
+            # switch as the service env (found live 2026-07-24: runner deployed, service
+            # wired, chip still claiming mock).
+            - name: MEDIA_ASSIST_URL
+              value: {{ printf "http://%s-assist:%v/v1/assist" (include "rask.fullname" $root) $root.Values.runners.assist.port | quote }}
+            {{- if $root.Values.runners.jobsUrl }}
+            - name: MEDIA_JOBS_URL
+              value: {{ $root.Values.runners.jobsUrl | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ $fe.service.port }}
-          # TCP probe (not httpGet): some MFE apps have no index route at their
-          # base path (discover serves /browse, /search, ...), so GET "/" or the
-          # base 404s. An open port proves the adapter-bun server is alive.
-          livenessProbe:
-            tcpSocket: {port: http}
-            initialDelaySeconds: 5
-            periodSeconds: 20
-          readinessProbe:
-            tcpSocket: {port: http}
-            initialDelaySeconds: 3
-            periodSeconds: 10
+          # TCP probes (not httpGet): a zone has no index route at its base path, so GET "/"
+          # 404s. An open port proves the adapter-bun server is alive.
+          {{- include "lance.tcpProbes" "http" | nindent 10 }}
           resources:
-            {{- toYaml $fe.resources | nindent 12 }}
+            {{- toYaml $tier | nindent 12 }}
+          volumeMounts:
+            {{- include "lance.tmpMount" $root | nindent 12 }}
+      volumes:
+        {{- include "lance.tmpVolume" $root | nindent 8 }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "rask.fullname" $root }}-{{ .name }}
+  name: {{ include "rask.fullname" $root }}-{{ $comp }}
   labels:
-    {{- include "rask.componentLabels" (list $root .name) | nindent 4 }}
+    {{- include "rask.componentLabels" (list $root $comp) | nindent 4 }}
 spec:
   type: ClusterIP
   ports:
@@ -86,6 +287,24 @@ spec:
       targetPort: http
   selector:
     {{- include "rask.selectorLabels" $root | nindent 4 }}
-    app.kubernetes.io/component: {{ .name }}
+    app.kubernetes.io/component: {{ $comp }}
+{{- end }}
+{{- if and .Values.auth.enabled .Values.frontend.oidc.enabled }}
+---
+# The session-cookie sealing key (AES-256-GCM) + the confidential Dex client secret, shared
+# by every zone (they all read the origin-wide cookie; home also exchanges the code). A
+# Secret, not plaintext env, so the prod-render zero-plaintext check holds. Operator-provided
+# + stable (rotating it logs everyone out). Gated on auth.enabled too — the consuming OIDC env
+# only renders under auth.enabled, so there is no orphan Secret.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-frontend-session
+  labels:
+    {{- include "rask.labels" . | nindent 4 }}
+type: Opaque
+data:
+  secret: {{ .Values.frontend.oidc.sessionSecret | b64enc | quote }}
+  clientSecret: {{ .Values.dex.clientSecret | b64enc | quote }}
 {{- end }}
 {{- end }}

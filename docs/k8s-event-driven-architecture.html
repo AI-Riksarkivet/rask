@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>lance-ns — k8s / Dapr event-driven architecture (deployed on kind)</title>
+    <style>
+      :root {
+        --bg: #0b0f17; --panel: #131a26; --panel2: #1a2333; --line: #243245; --ink: #e6edf6;
+        --mut: #93a4bd; --faint: #5e7290; --accent: #46f9b8; --amber: #ffc14d; --blue: #6fa8ff;
+        --pink: #ff7eb6; --ok: #46f9b8; --warn: #ffb454; --bad: #ff6b81;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: radial-gradient(1200px 600px at 70% -10%, #16203200, #0b0f17), var(--bg);
+        color: var(--ink); font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; padding: 28px; }
+      h1 { font-size: 20px; margin: 0 0 2px; }
+      .sub { color: var(--mut); font-size: 13px; margin: 0 0 18px; }
+      .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+      .legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 0 0 18px; font-size: 12px; color: var(--mut); }
+      .dot { display: inline-block; width: 9px; height: 9px; border-radius: 99px; margin-right: 5px; vertical-align: 1px; }
+      .cluster { border: 1.5px solid var(--line); border-radius: 16px; padding: 18px 18px 22px;
+        background: linear-gradient(180deg, #101725, #0d1320); position: relative; }
+      .cluster > .tag { position: absolute; top: -11px; left: 18px; background: var(--bg); padding: 0 8px;
+        color: var(--faint); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
+      .row { display: flex; gap: 16px; align-items: stretch; flex-wrap: wrap; margin-bottom: 16px; }
+      .col { display: flex; flex-direction: column; gap: 12px; }
+      .node { border: 1.5px solid var(--line); border-radius: 12px; padding: 11px 13px; background: var(--panel);
+        min-width: 168px; box-shadow: 0 6px 18px #0006; }
+      .node .h { display: flex; align-items: center; gap: 7px; font-weight: 650; font-size: 13.5px; }
+      .node .d { color: var(--mut); font-size: 11.5px; margin-top: 3px; }
+      .node.svc { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+      .node.infra { border-color: color-mix(in srgb, var(--blue) 40%, var(--line)); }
+      .node.auth { border-color: color-mix(in srgb, var(--pink) 40%, var(--line)); }
+      .badge { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 99px; margin-left: auto; }
+      .b-ok { background: color-mix(in srgb, var(--ok) 22%, transparent); color: var(--ok); }
+      .b-warn { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
+      .b-sidecar { background: color-mix(in srgb, var(--blue) 20%, transparent); color: var(--blue);
+        font-size: 9.5px; margin-left: 6px; }
+      .flow { border: 1.5px dashed color-mix(in srgb, var(--accent) 55%, var(--line)); border-radius: 14px;
+        padding: 16px 18px; margin: 4px 0 20px; background: #0e1622; }
+      .flow .t { font-size: 12px; color: var(--accent); font-weight: 700; letter-spacing: .04em; margin-bottom: 12px; }
+      .pipe { display: flex; align-items: center; gap: 0; flex-wrap: wrap; }
+      .pill { border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 12px; background: var(--panel2);
+        font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+      .pill small { display: block; color: var(--mut); font-weight: 400; font-size: 10.5px; }
+      .arr { color: var(--accent); font-weight: 800; padding: 0 11px; font-size: 16px; }
+      .arr small { color: var(--faint); font-weight: 600; font-size: 9.5px; display: block; text-align: center; }
+      table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-top: 6px; }
+      th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+      th { color: var(--mut); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+      td .s-ok { color: var(--ok); } td .s-warn { color: var(--warn); } td .s-bad { color: var(--bad); }
+      .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      .card { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: var(--panel); }
+      .card h3 { margin: 0 0 8px; font-size: 13px; }
+      .foot { color: var(--faint); font-size: 11px; margin-top: 18px; }
+      @media (max-width: 880px) { .grid2 { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <h1>lance-ns — event-driven architecture <span class="mono" style="color: var(--mut); font-size: 13px">(deployed on kind, Dapr pub/sub over NATS JetStream)</span></h1>
+    <p class="sub">The catalog publishes OpenLineage events to its Dapr sidecar; the sidecar persists to NATS JetStream; the lineage service's sidecar delivers them to its subscription, which ingests into Apache AGE. Verified end-to-end on a local kind cluster.</p>
+
+    <div class="legend">
+      <span><span class="dot" style="background: var(--accent)"></span>app service</span>
+      <span><span class="dot" style="background: var(--blue)"></span>infra</span>
+      <span><span class="dot" style="background: var(--pink)"></span>auth</span>
+      <span><span class="dot" style="background: var(--ok)"></span>running &amp; verified</span>
+      <span><span class="dot" style="background: var(--warn)"></span>deployed, partial / gap</span>
+    </div>
+
+    <div class="flow">
+      <div class="t">▶ VERIFIED EVENT-DRIVEN PATH (publish → 204, AGE creator = "alice")</div>
+      <div class="pipe">
+        <div class="pill">catalog<small>producer (FastAPI)</small></div>
+        <span class="arr">→<small>publish_event</small></span>
+        <div class="pill">daprd<small>sidecar</small></div>
+        <span class="arr">→<small>pubsub.jetstream</small></span>
+        <div class="pill">NATS JetStream<small>stream LINEAGE · lineage.events.v1</small></div>
+        <span class="arr">→<small>deliver</small></span>
+        <div class="pill">daprd<small>sidecar</small></div>
+        <span class="arr">→<small>POST /lineage-events</small></span>
+        <div class="pill">lineage<small>consumer (FastAPI)</small></div>
+        <span class="arr">→<small>cypher</small></span>
+        <div class="pill">Apache AGE<small>(:User)-[:CREATED]-&gt;(:Dataset)</small></div>
+      </div>
+    </div>
+
+    <div class="cluster">
+      <span class="tag">kind cluster · namespace default · release lance-ns</span>
+      <div class="row">
+        <div class="col">
+          <div class="node svc"><div class="h">🖥️ web <span class="badge b-ok">1/1</span></div><div class="d">SvelteKit UI · proxies /api → lineage</div></div>
+          <div class="node svc"><div class="h">📚 catalog<span class="b-sidecar">+daprd</span> <span class="badge b-ok">2/2</span></div><div class="d">Lance REST catalog · producer · catalog.main:app</div></div>
+          <div class="node svc"><div class="h">🧬 lineage<span class="b-sidecar">+daprd</span> <span class="badge b-ok">2/2</span></div><div class="d">OpenLineage→AGE · consumer · lineage.main:app</div></div>
+        </div>
+        <div class="col">
+          <div class="node infra"><div class="h">📨 NATS <span class="badge b-ok">2/2</span></div><div class="d">JetStream · stream LINEAGE (file)</div></div>
+          <div class="node infra"><div class="h">🧩 Dapr control plane <span class="badge b-ok">ok</span></div><div class="d">operator · sidecar-injector · sentry · placement</div></div>
+          <div class="node infra"><div class="h">🐘 Apache AGE Postgres <span class="badge b-ok">1/1</span></div><div class="d">graph "lineage" + openfga db · StatefulSet</div></div>
+        </div>
+        <div class="col">
+          <div class="node infra"><div class="h">🪣 MinIO <span class="badge b-ok">1/1</span></div><div class="d">S3 lakehouse (bucket "lakehouse")</div></div>
+          <div class="node auth"><div class="h">🔑 Dex <span class="badge b-ok">1/1</span></div><div class="d">OIDC issuer · static demo user</div></div>
+          <div class="node auth"><div class="h">🛡️ OpenFGA <span class="badge b-warn">init</span></div><div class="d">Zanzibar authz · datastore migrated; server init races pg</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid2" style="margin-top: 20px">
+      <div class="card">
+        <h3>Status — what's verified vs. gaps</h3>
+        <table>
+          <tr><th>Concern</th><th>State</th></tr>
+          <tr><td>Event-driven catalog→lineage (Dapr/NATS)</td><td class="s-ok">✓ verified live (publish 204 → AGE)</td></tr>
+          <tr><td>Apache AGE graph (lineage)</td><td class="s-ok">✓ running, written by the event</td></tr>
+          <tr><td>NATS JetStream (events/pubsub)</td><td class="s-ok">✓ stream LINEAGE, durable</td></tr>
+          <tr><td>Frontend (web)</td><td class="s-ok">✓ running, proxies to lineage</td></tr>
+          <tr><td>Dex (OIDC) + OpenFGA (authz)</td><td class="s-warn">deployed; auth OFF, openfga server init-races pg</td></tr>
+          <tr><td>S3 storage</td><td class="s-warn">MinIO (not RustFS)</td></tr>
+          <tr><td>lance-ray producer + 3 medallion stage movers</td><td class="s-ok">✓ built — event-driven (Dapr pub/sub, FGA gates, one distributed trace); fake-Ray in-process compute writes real Lance data (gated)</td></tr>
+          <tr><td>Real Lance table-create through deployed catalog</td><td class="s-warn">catalog is real pylance; flow tested with a synthetic event</td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <h3>Microservices (3 app + infra)</h3>
+        <table>
+          <tr><th>Service</th><th>Role</th></tr>
+          <tr><td class="mono">catalog</td><td>producer — publishes OpenLineage on table ops</td></tr>
+          <tr><td class="mono">lineage</td><td>consumer — subscribes, ingests into AGE</td></tr>
+          <tr><td class="mono">web</td><td>SvelteKit UI (datasets / jobs / columns DAG)</td></tr>
+        </table>
+        <h3 style="margin-top: 14px">The medallion (now event-driven)</h3>
+        <p style="color: var(--mut); font-size: 12px; margin: 0">
+          The <b>lance-ray</b> producer + the raw→bronze / bronze→silver / silver→gold movers <b>are</b>
+          event-driven services (<span class="mono">services/medallion/</span>): each subscribes to its
+          upstream trigger over Dapr pub/sub, emits OpenLineage (the DERIVED_FROM edge), and fires the next
+          trigger — one distributed trace raw→gold, with FGA gating per hop. The <b>fake-Ray compute</b>
+          (gated, default off) gives each stage a real in-process Lance write, so the loop produces actual
+          versioned data, not just provenance. <b>Remaining</b> (live kind+Dapr stack): the S3 ObjectCreated
+          input-binding trigger + a Dapr-Workflow gold QC gate, and swapping the fake compute for real
+          distributed lance-ray at the rask merge.
+        </p>
+      </div>
+    </div>
+
+    <p class="foot mono">Deploy: helm install lance-ns ./chart → kind load images → port-forward · Inspect: k9s · See chart/templates/, deploy/kind/, todo.md #26.</p>
+  </body>
+</html>

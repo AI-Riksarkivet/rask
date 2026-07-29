@@ -1,0 +1,110 @@
+{{- if and .Values.auth.enabled .Values.auth.bootstrapAdmin }}
+# Estate-admin bootstrap (goal cond 4): the chart itself seeds the FIRST estate admin instead of an
+# out-of-band `fga tuple write`. A post-install/post-upgrade hook grants `owner` on the FGA root object
+# (warehouse:lance_catalog — LANCE_FGA_ROOT_OBJECT's default; a grant there cascades estate-wide and is
+# what can_observe_events / the admin console gate on) to the Dex subject in auth.bootstrapAdmin.
+# There is no fga CLI image, so the Job reuses the catalog image (ships httpx) and speaks the OpenFGA
+# HTTP API directly: use the PINNED store id when auth.fgaStoreId sets one (rendered as
+# LANCE_FGA_STORE_ID — the same env the catalog reads, so a pinned prod store can never diverge from
+# the store this Job grants into), else resolve the store id by name (the catalog's startup provision
+# creates/reuses the `lance-catalog` store — services/common/fga.py), CHECK the grant first (the clean
+# idempotence guard), and only then write the tuple, treating a duplicate-write 400/409 as success. On
+# the name-lookup path the store appears only once the catalog has booted with FGA on, so the resolve
+# loop waits for it (weight 5 = after the openfga-migrate hook at -5).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "lance.fullname" . }}-bootstrap-admin
+  labels: {{- include "lance.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 30
+  template:
+    metadata:
+      # The explicit component label is the P4 landmine: hook pods without one are invisible to any
+      # component-scoped NetworkPolicy `from` list. Today the openfga pods sit under the general
+      # intra-namespace ingress allow, but the label keeps this hook admissible (and greppable) the day
+      # the openfga ingress gets an exclusive client list like openbao/age/rustfs.
+      labels:
+        {{- include "lance.labels" . | nindent 8 }}
+        app.kubernetes.io/component: bootstrap-admin
+    spec:
+      restartPolicy: OnFailure
+      {{- if .Values.security.serviceAccounts.enabled }}
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
+      {{- end }}
+      containers:
+        - name: bootstrap
+          image: "{{ include "lance.catalogImage" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "lance.securityContext" . | nindent 10 }}
+          resources:
+            requests: { cpu: "10m", memory: "64Mi" }
+            limits: { cpu: "200m", memory: "256Mi" }
+          env:
+            - { name: FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
+            # Must match the catalog's LANCE_FGA_ROOT_OBJECT default (services/catalog/core/config.py).
+            - { name: FGA_ROOT_OBJECT, value: "warehouse:lance_catalog" }
+            {{- with .Values.auth.fgaStoreId }}
+            # The operator-pinned store (env parity with the catalog's LANCE_FGA_STORE_ID): the script
+            # prefers this over the name lookup, so a pinned store named anything BUT `lance-catalog`
+            # still gets the bootstrap grant in the right place.
+            - { name: LANCE_FGA_STORE_ID, value: {{ . | quote }} }
+            {{- end }}
+          command: ["python", "-c"]
+          args:
+            - |
+              import os, sys, time
+              import httpx
+
+              api = os.environ["FGA_API_URL"].rstrip("/")
+              # Render-time constants (not env: the dead-chart-env invariant only sees services/ consumers).
+              # store name must match what the catalog provisions (services/common/fga.py provision()).
+              store_name = "lance-catalog"
+              obj = os.environ["FGA_ROOT_OBJECT"]
+              subject = {{ .Values.auth.bootstrapAdmin | quote }}
+              user = subject if ":" in subject else f"user:{subject}"
+
+              # Pinned store id wins (LANCE_FGA_STORE_ID, auth.fgaStoreId) — no name lookup, no wait.
+              # Fallback: the catalog provisions the store at startup (post-install races its first
+              # boot) — wait for it by name.
+              store_id = os.environ.get("LANCE_FGA_STORE_ID") or None
+              deadline = time.monotonic() + 600
+              while store_id is None and time.monotonic() < deadline:
+                  try:
+                      r = httpx.get(f"{api}/stores", timeout=5)
+                      r.raise_for_status()
+                      stores = [s for s in r.json().get("stores", []) if s.get("name") == store_name]
+                      if stores:
+                          # Newest wins — same tie-break as fga.provision().
+                          store_id = max(stores, key=lambda s: s.get("created_at") or "")["id"]
+                          break
+                      print(f"store {store_name!r} not provisioned yet (catalog boots it); waiting", flush=True)
+                  except httpx.HTTPError as exc:
+                      print(f"openfga not ready: {exc}", flush=True)
+                  time.sleep(5)
+              if store_id is None:
+                  sys.exit(f"timed out waiting for OpenFGA store {store_name!r} at {api}")
+
+              tuple_key = {"user": user, "relation": "owner", "object": obj}
+              r = httpx.post(f"{api}/stores/{store_id}/check", json={"tuple_key": tuple_key}, timeout=10)
+              if r.status_code == 200 and r.json().get("allowed"):
+                  print(f"bootstrap-admin: {user} already owner of {obj} — nothing to do")
+                  sys.exit(0)
+
+              r = httpx.post(
+                  f"{api}/stores/{store_id}/write",
+                  json={"writes": {"tuple_keys": [tuple_key]}},
+                  timeout=10,
+              )
+              if r.status_code == 200:
+                  print(f"bootstrap-admin: granted {user} owner {obj}")
+              elif r.status_code in (400, 409) and "already exists" in r.text:
+                  # Duplicate write raced past the check — the grant is in place, which is all we want.
+                  print(f"bootstrap-admin: {user} owner {obj} already written (concurrent) — ok")
+              else:
+                  sys.exit(f"tuple write failed: HTTP {r.status_code} {r.text}")
+{{- end }}

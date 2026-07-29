@@ -1,5 +1,38 @@
 # rask — system overview (as-is)
 
+!!! warning "P7a (2026-07-27): the batches/orchestrator plane described below is DELETED"
+    The compute-plane cutover (`lance-ns-merge.md` P7a) removed the orchestrator loop + entrypoint
+    (`:8810`), the `batches` table + Alembic lineage, S3-sync, chunk submission, and the prefetch lane.
+    Ingestion is now the medallion producer's `POST /ingest-iiif` (IIIF → BRONZE page-image Lance
+    dataset, ONE bronze-write OpenLineage event carrying the external `iiif://…` input — corrected by
+    R23: raw is the external world, never a governed tier; the medallion is exactly
+    bronze → silver → gold) and HTR runs as event-driven cascade compute on the unified Ray cluster.
+    Sections referring to batches/chunks/orchestrator are kept as historical context.
+
+!!! warning "R6/R20 + R22 (2026-07-28): the `-api` services and the old zone set are DELETED too"
+    The diagrams and tables below still show `services/core_api` (`:8801`), `services/search_api`
+    (`:8802`) and `services/volumes_api` (`:8803`). **All three are gone.** The S3 object browser is
+    now the lance media **viewer** (`/api/media/object*`, `:8101`); lines/EAD FTS re-land as
+    catalog-governed Lance tables behind `/api/media/search`; and the `ray` service was renamed
+    **`compute`** on every surface (R22) while its public paths stay `/api/ray` + `/api/serve`.
+
+    The frontend table likewise lists `{overview,compute,discover,storage,train,studio}` at
+    `/default/<domain>`. The real zones are `{home,lakehouse,media,annotator,compute,train,studio}`
+    at a bare `/<zone>`; correcting that table belongs to the frontend doc sweep
+    (`OPEN-WORK.md` §F2), which waits on the in-flight information-architecture work.
+
+    **P8 ruling (2026-07-28):** the full re-draw this page promised is **deferred, not done** — it
+    would collide with §F2. Current truth: `ARCHITECTURE.md`, `architecture/deployment.md`, and the
+    `rask-services-fleet` / `rask-frontend` skills.
+
+!!! warning "P7b / R6+R20 (2026-07-28): core-api, search-api and volumes-api are DELETED too"
+    The R6/R20 media wave retired the remaining trio. The gateway now routes only the
+    `compute` service (ray-api → `ray` at R20, → `compute` at R22), controlplane, and the lance
+    lakehouse/media planes; the S3 object browser lives in the media viewer
+    (`/api/media/object*`), and lines/EAD FTS re-land as catalog-governed Lance
+    tables behind `/api/media/search`. Sections naming the deleted services are
+    historical context.
+
 Snapshot of the **current** architecture across runner, Ray, backend, frontend
 and storage. No proposals here — see siblings (`frontend-microfrontends.md`,
 `deployment.md`) for direction.
@@ -36,22 +69,22 @@ flowchart TB
     end
 
     subgraph frontend["Frontend · 7 SvelteKit SSR (Bun) microfrontends · :3024 proxy"]
-        spa["components/frontends/home<br/><sub>catch-all · platform home /</sub>"]
+        spa["frontend/microfrontends/home<br/><sub>catch-all · platform home /</sub>"]
         domainfe["6 domain apps<br/><sub>overview · compute · discover<br/>storage · train · studio</sub>"]
     end
 
     subgraph backend["Backend · FastAPI fleet"]
-        gw["components/services/gateway<br/><sub>gateway :8888</sub>"]
-        core["components/services/core_api<br/><sub>core-api :8801</sub>"]
-        orch["components/services/orchestrator<br/><sub>orchestrator :8810</sub>"]
-        vols["components/services/volumes_api<br/><sub>volumes-api :8803</sub>"]
-        srch["components/services/search_api<br/><sub>search-api :8802</sub>"]
-        rayapi["components/services/ray_api<br/><sub>ray-api :8804</sub>"]
+        gw["services/gateway<br/><sub>gateway :8888</sub>"]
+        core["services/core_api<br/><sub>core-api :8801</sub>"]
+        orch["services/orchestrator<br/><sub>orchestrator :8810</sub>"]
+        vols["services/volumes_api<br/><sub>volumes-api :8803</sub>"]
+        srch["services/search_api<br/><sub>search-api :8802</sub>"]
+        rayapi["services/ray_api<br/><sub>ray-api :8804</sub>"]
     end
 
     subgraph runner["Runner · Python CLI"]
-        cli["components/cli/runner<br/><sub>Typer CLI, Ray Data jobs</sub>"]
-        scripts["components/scripts/<br/><sub>build/sync/chunk/submit/index</sub>"]
+        cli["runners/htr<br/><sub>Typer CLI, Ray Data jobs</sub>"]
+        scripts["scripts/<br/><sub>build/sync/chunk/submit/index</sub>"]
     end
 
     subgraph ray["Local Ray cluster (Makefile-managed)"]
@@ -69,7 +102,7 @@ flowchart TB
     end
 
     subgraph libs["Library code"]
-        htr["packages/htr<br/><sub>Ray actors, schemas</sub>"]
+        htr["runners/htr<br/><sub>Ray actors, schemas</sub>"]
         storagepkg["packages/storage<br/><sub>FS/S3/IIIF abstractions</sub>"]
         servicekit["packages/service-kit<br/><sub>make_service_app, Settings, middleware</sub>"]
         raykit["packages/ray-kit<br/><sub>Ray Job SDK + dashboard wrapper</sub>"]
@@ -141,18 +174,18 @@ flowchart TB
 
 | Path                                    | Type          | Purpose                                                              |
 | --------------------------------------- | ------------- | -------------------------------------------------------------------- |
-| `components/frontends/home/`             | SvelteKit SSR (Bun) | Catch-all app: platform home `/`, project picker; package `home` |
-| `components/frontends/{overview,compute,discover,storage,train,studio}/` | SvelteKit SSR (Bun) | Six per-domain microfrontends, each pinned to `/default/<domain>`, all rendering the shared `@rask/ui/shell` sidebar |
-| `components/cli/runner/`               | Python CLI    | Submits Ray Data jobs; ships Ray Serve deployments                   |
-| `components/services/gateway/`          | FastAPI       | Reverse proxy on `:8888`; path-routes `/api/*` to per-domain services |
-| `components/services/core/`             | Python (brick)| Domain brick: DB, models, repositories, domain services, Alembic; shared by core-api + orchestrator |
-| `components/services/core_api/`         | FastAPI       | Thin entrypoint `:8801` — health + batches + chunks + catalog        |
-| `components/services/orchestrator/`     | FastAPI       | Thin entrypoint `:8810` — health + orchestrator loop (on)            |
-| `components/services/volumes_api/`      | FastAPI       | S3/IIIF image + ALTO proxy on `:8803`; no DB                         |
-| `components/services/search_api/`       | FastAPI       | Lance `lines` FTS + S3 thumbnails on `:8802`; no DB                  |
-| `components/services/ray_api/`          | FastAPI       | Ray dashboard introspection + `/api/serve/*` proxy on `:8804`; no DB |
-| `components/scripts/`                   | Python        | One-shot tools: `build_batches_db`, `harvest_ead`, `index_alto`, `index_catalog`, … |
-| `packages/htr/`                         | Python lib    | Ray actors (PageLoader, Layout, Lines, Transcribe, AltoExport)       |
+| `frontend/microfrontends/home/`             | SvelteKit SSR (Bun) | Catch-all app: platform home `/`, project picker; package `home` |
+| `frontend/microfrontends/{overview,compute,discover,storage,train,studio}/` | SvelteKit SSR (Bun) | Six per-domain microfrontends, each pinned to `/default/<domain>`, all rendering the shared `@rask/ui/shell` sidebar |
+| `runners/htr/`               | Python CLI    | Submits Ray Data jobs; ships Ray Serve deployments                   |
+| `services/gateway/`          | FastAPI       | Reverse proxy on `:8888`; path-routes `/api/*` to per-domain services |
+| `services/core/`             | Python (domain package)| Domain package: DB, models, repositories, domain services, Alembic; shared by core-api + orchestrator |
+| `services/core_api/`         | FastAPI       | Thin entrypoint `:8801` — health + batches + chunks + catalog        |
+| `services/orchestrator/`     | FastAPI       | Thin entrypoint `:8810` — health + orchestrator loop (on)            |
+| `services/volumes_api/`      | FastAPI       | S3/IIIF image + ALTO proxy on `:8803`; no DB                         |
+| `services/search_api/`       | FastAPI       | Lance `lines` FTS + S3 thumbnails on `:8802`; no DB                  |
+| `services/ray_api/`          | FastAPI       | Ray dashboard introspection + `/api/serve/*` proxy on `:8804`; no DB |
+| `scripts/`                   | Python        | One-shot tools: `build_batches_db`, `harvest_ead`, `index_alto`, `index_catalog`, … |
+| `runners/htr/`                         | Python lib    | Ray actors (PageLoader, Layout, Lines, Transcribe, AltoExport)       |
 | `packages/storage/`                     | Python lib    | `FSSource/Sink`, `S3Source/Sink`, `IIIFCachedSource`                 |
 | `packages/service-kit/`                 | Python lib    | Platform library: `make_service_app`, `Settings`, middleware, DI lifespan |
 | `packages/ray-kit/`                     | Python lib    | Ray Job SDK + dashboard wrapper; shared by ray-api and core orchestrator |
@@ -241,7 +274,7 @@ sequenceDiagram
     API->>DB: SELECT
     DB-->>UI: render dashboard
     UI->>API: POST /batches/sync
-    API->>Sync: re-run (via the core brick sync service, components/services/core)
+    API->>Sync: re-run (via the core package sync service, services/core)
     UI->>API: GET /chunks
     UI->>API: POST /chunks/{id}/submit
     API->>Sub: submit
@@ -341,7 +374,7 @@ flowchart TB
 ```
 
 **GPU sizing** is hardcoded in
-`components/cli/runner/src/runner/pipeline.py` and the two Serve modules
+`runners/htr/src/runner/pipeline.py` and the two Serve modules
 (`runner/transcribe_service.py`, `runner/htrflow_service.py`). The numbers
 target a **3-GPU node**: 3 TrOCR replicas at 0.99 GPU each fill the GPUs,
 while Layout/Lines actors hold 0.001 GPU slots just to land them on the

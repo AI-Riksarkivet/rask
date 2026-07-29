@@ -21,8 +21,9 @@ make e2e              # verify MFE hydration + API round-trip end-to-end (run af
 make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
 ```
 
-`k3s-build` builds the full fleet (gateway, core-api, search-api, volumes-api,
-ray-api, orchestrator) plus all 7 frontend images and the ray image as `:dev` tags.
+`k3s-build` builds the fleet (gateway, ray, controlplane) plus the frontend zone
+images, the `ray-cluster` image, and the `lance-rest-catalog` lakehouse image as
+`:dev` tags.
 `k3s-import` side-loads them into k3s containerd via `docker save | ctr images
 import`, so no registry is needed.
 
@@ -34,8 +35,8 @@ Production-shaped image definitions live at `.docker/`, built with `docker build
 | Image | Base | Notes |
 |---|---|---|
 | `rask-runner` | `nvidia/cuda:12.4.0-runtime-ubuntu22.04` | GPU. uv-managed Python + venv; `CMD ["runner"]`. Needs `--shm-size`, `--ulimit nofile=65535`, GPU via nvidia-container-toolkit. |
-| `home` / `<domain>` (7 images) | build + serve on `oven/bun:1-debian` | All built from **one parametrized** `.docker/frontend.dockerfile` via `--build-arg APP=<dir>`. **SSR via `svelte-adapter-bun`** (no longer an nginx SPA). `APP=home` is the catch-all (home, owns `/`); the six domain apps (overview/compute/discover/storage/train/studio) each pin base `/default/<domain>` and are probed there. Pre-builds `@rask/ui`, then `bun build`; the final stage ships the Bun runtime + `node_modules` and runs `bun build/index.js` on `:3000`. tini as PID 1, non-root UID 10001. |
-| backend services (per-workload) | uv-managed Python | One dockerfile each: `gateway`, `core-api`, `orchestrator`, `volumes-api`, `search-api`, `ray-api` (plus `ray.dockerfile` for the Serve image). |
+| `home` / `<domain>` (7 images) | build + serve on `oven/bun:1-debian` | All built from **one parametrized** `.docker/frontend.dockerfile` via `--build-arg APP=<dir>`. **SSR via `svelte-adapter-bun`** (no longer an nginx SPA). `APP=home` is the catch-all (owns `/`); the six domain apps (lakehouse/media/annotator/compute/train/studio) each pin a bare base `/<zone>` — **not** `/default/<zone>` — and the Ingress routes there with `pathType: Prefix` and **no** `rewrite-target`, so the pod receives the based path. Probes are **TCP, not httpGet**, because a zone's `/` 404s under its own base. Images are tagged `web-<zone>:<tag>`. Pre-builds `@rask/ui`, then `bun build`; the final stage ships the Bun runtime + `node_modules` and runs `bun build/index.js` on `:3000`. tini as PID 1, non-root UID 10001. |
+| backend services (per-workload) | uv-managed Python | One dockerfile each: `gateway`, `ray` (plus `ray-cluster.dockerfile` for the Ray head/Serve image and `rest-catalog.dockerfile` for the lakehouse+media image). |
 
 The one frontend dockerfile encodes a non-obvious build contract (documented in its
 header): `svelte-adapter-bun` externalizes `@sveltejs/kit`, so the final
@@ -43,7 +44,7 @@ image must ship `node_modules` — `build/` is not standalone. And bun 1.3's **i
 linker** keeps real packages in `node_modules/.bun/` with per-member symlinks, so the
 final stage copies both the root store **and** the app dir (with its symlinks) and
 runs from the app dir. The build `COPY`s the full JS workspace (all of
-`components/frontends` wholesale + `packages/{api,ui}`) so `bun install` resolves — siblings
+`frontend/microfrontends` wholesale + `packages/{api,ui}`) so `bun install` resolves — siblings
 are build-stage only, never shipped.
 
 !!! note "Frontend images aren't built by `.dagger`"
@@ -53,9 +54,9 @@ are build-stage only, never shipped.
     service) image builds into Dagger or a GitHub Actions matrix is a
     deployment-cycle follow-up.
 
-The dissolved `viewer` monolith no longer has a dockerfile; its per-service
-entrypoints each ship their own (`gateway`, `core-api`, `orchestrator`,
-`volumes-api`, `search-api`, `ray-api`).
+The dissolved `viewer` monolith no longer has a dockerfile; the surviving fleet
+services ship their own (`gateway`, `ray`) — core-api/search-api/volumes-api's
+dockerfiles died with their services in the R6/R20 wave.
 
 The frontend topology those images serve — the Turborepo vertical-microfrontend
 proxy, the shared `@rask/ui` shell, and per-app `kit.paths.base` — is documented in
@@ -75,7 +76,7 @@ flowchart LR
   --num-gpus=2`); exports `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` and uses
   `uv run --no-sync` (the documented Ray/uv gotcha).
 - `make serve-up` / `serve-down` / `serve-status` — deploy the Serve apps via
-  `components/scripts/deploy_serve.py`.
+  `scripts/deploy_serve.py`.
 - `make serve-up-both` — deploy `transcribe` + `htrflow` with fractional GPU
   reservations (`RASK_SERVE_REPLICAS=2`, `RASK_SERVE_GPU_FRAC=0.49` → ≈1.96 GPU
   on the 2-GPU pool).
@@ -84,38 +85,70 @@ flowchart LR
 
 ## Remote KubeRay
 
-The runner accepts `--address ray://…:10001`; the orchestrator submits jobs to
-the Ray dashboard REST API at `RAY_DASHBOARD_URL`. With `ray.enabled=true` the
-chart provisions an in-cluster KubeRay RayService; with `ray.enabled=false` the
-orchestrator points at an external cluster via `config.RAY_DASHBOARD_URL`.
+The runner accepts `--address ray://…:10001`. Job submission goes through the **`compute`
+service** (`:8804`, over `ray-kit`'s Job SDK wrapper) to the Ray dashboard REST API at
+`RAY_DASHBOARD_URL` — the orchestrator that used to own this loop was deleted at P7a. With
+`ray.enabled=true` the chart provisions an in-cluster KubeRay RayService; with
+`ray.enabled=false`, `compute` points at an external cluster via `RASK_RAY_DASHBOARD_URL`.
 
 ## Helm chart (`chart/`)
 
 `make k3s-up` runs `helm upgrade --install rask ./chart --wait`. The chart deploys:
 
-- **gateway** — reverse proxy on `:8888` (path-routes `/api/*` to per-domain services).
-- **core-api** — batches + chunks + catalog endpoints on `:8801`.
-- **orchestrator** — the reconcile loop on `:8810` (`replicas: 1`, `Recreate`).
-- **volumes-api** — S3/IIIF image + ALTO proxy on `:8803`.
-- **search-api** — Lance FTS + S3 thumbnails on `:8802`.
-- **ray-api** — Ray dashboard proxy + `/api/serve/*` on `:8804`.
-- **frontend** — SvelteKit SSR app on `:3000`.
-- **migration** — pre-install/pre-upgrade hook Job running `alembic upgrade head`.
-- **Ingress** (Traefik) — `/api` → gateway:8888, `/` → frontend:3000.
+- **gateway** — reverse proxy on `:8888` (path-routes `/api/*`, no catch-all).
+- **ray** — Ray dashboard proxy + `/api/serve/*` on `:8804` (singleTenant).
+- **controlplane** — project provisioning on `:8820`.
+- **the lance planes** — catalog/lineage/medallion/compaction + the media trio
+  (viewer/search/annotator; the viewer carries the S3 object browser).
+- **frontend zones** — SvelteKit SSR apps on `:3000` each.
+- **Ingress** (Traefik) — `/api` → gateway:8888, `/` → the zone services.
 - **In-cluster deps** (gated by values toggles — each gate covers both the operator subchart and its CR):
   - `cnpg.enabled` — CloudNativePG operator + `Cluster` named `rask-postgres`; app connects to `rask-postgres-rw:5432`. Values under `cnpg.*` (instances, storage, imageName, user, database).
   - `rustfs.enabled` — RustFS operator (vendored at `third_party/rustfs-operator/`, refreshed via `scripts/vendor-rustfs-operator.sh`) + `Tenant` named `rask-rustfs`; S3 at `rask-rustfs-io:9000`, console at `rask-rustfs-console:9001`. Standalone mode: 1 pod / 4 PVCs (erasure-coding minimum). Buckets provisioned natively via `spec.buckets` — no init Job. Values under `rustfs.*`.
-  - `ray.enabled` — KubeRay `RayService` (head + worker with GPU limits).
-  - `observability.enabled` — three optional subcharts (see below).
+  - `ray.enabled` — KubeRay `RayService` (head + Serve app). GPU-shaped rendering is derived, see below.
+  - `observability.enabled` — two optional subcharts + the first-party OTel Collector (see below).
+
+### GPU: one signal, `ray.gpuCount` (default 0)
+
+The chart ships a **CPU-only** estate so a fresh kind/CI/laptop cluster installs with no overrides, and
+`ray.gpuCount` is the single fact everything GPU-shaped derives from (`rask.gpuEnabled` /
+`rask.serveGpuFrac` in `chart/templates/_helpers.tpl`):
+
+| Derived from `ray.gpuCount` | At 0 (default) |
+|---|---|
+| `RASK_SERVE_GPU_FRAC` — the htrflow Serve actor's reservation, in the fleet ConfigMap **and** `serveConfigV2` | `0` (the CPU path; the raw `config.RASK_SERVE_GPU_FRAC` is never passed through) |
+| head `num-gpus` rayStartParam + `nvidia.com/gpu` limit | `0` / omitted |
+| `runtimeClassName: nvidia` on the head + the `RuntimeClass` object | not rendered |
+| Kueue ClusterQueue `nvidia.com/gpu` nominalQuota | `0` |
+
+A GPU node: `--set ray.gpuCount=<n> --set nvdp.enabled=true` (and a real
+`config.RASK_SERVE_GPU_FRAC`, e.g. `0.49` for two replicas per GPU).
+
+`nvdp.enabled` is the one thing that cannot be derived — Helm resolves a subchart `condition:` against a
+static values path — so the pair is enforced: **`nvdp.enabled=true` with `ray.gpuCount=0` fails the
+render** (`chart/templates/gpu-coherence.yaml`) rather than leaving the device-plugin and
+GPU-Feature-Discovery DaemonSets `ContainerCreating` forever. `ray.gpuCount>0` with `nvdp.enabled=false` is
+allowed (an externally-managed device plugin / the NVIDIA GPU Operator) and warns in NOTES.
+
+### StorageClasses: omit, don't guess
+
+No template names a StorageClass. `rustfs.storageClass`, `ray.hfCacheStorageClass` and
+`media.corpus.storageClass` all default to `""`, which omits `storageClassName` so the **cluster's
+default** class provisions — the only portable answer (`local-path` is k3s's provisioner name and does not
+exist on kind, whose default is `standard`). Note `storageClassName: ""` is *not* the same as omitting it:
+the empty string disables dynamic provisioning, which is why the templates use `with`. Pinned by
+`tests/unit/test_invariants.py::test_no_pvc_hardcodes_a_provisioner_specific_storage_class`.
 
 ### Observability stack (`observability.enabled`)
 
-The `observability.enabled` toggle gates three subcharts and all OTLP wiring in the
-fleet and Ray deployments.
+The `observability.enabled` toggle gates two subcharts (GreptimeDB, Perses), the
+first-party OTel Collector template, and all OTLP wiring in the fleet and Ray
+deployments. The Collector is the **single log shipper** (Vector retired, owner ruling
+2026-07-27).
 
 | Component | Version | Service | Role |
 |---|---|---|---|
-| **Vector** | 0.56.0 | `rask-vector` (Agent DaemonSet) | Collects k8s pod logs; ships to GreptimeDB `:4000` via `greptimedb_logs` sink (table `rask_logs`) |
+| **OTel Collector** | first-party template (`chart/templates/otel-collector.yaml`) | `rask-otel-collector` | Telemetry hub: receives app OTLP, tails infra-pod logs via the filelog receiver (→ table `opentelemetry_logs`), scrapes Dapr sidecar metrics; exports everything OTLP → GreptimeDB `:4000/v1/otlp` |
 | **GreptimeDB** | `greptimedb-standalone` 0.4.5 (app 1.1.1) | `rask-greptimedb-standalone` | Unified metrics/logs/traces store; `:4000` HTTP (OTLP at `/v1/otlp`, Prometheus query/write, SQL), `:4001` gRPC |
 | **Perses** | 0.22.0 | `rask-perses:8080` | Dashboard UI; a GreptimeDB Prometheus `GlobalDatasource` (`http://rask-greptimedb-standalone:4000/v1/prometheus`) is pre-configured |
 
@@ -142,7 +175,7 @@ GreptimeDB `:4000/v1/otlp`** — the chart injects `OTEL_EXPORTER_OTLP_ENDPOINT`
 `opentelemetry_traces`; metrics become PromQL-queryable series
 (`http_server_duration_milliseconds_*`, etc.) that Perses charts. When the toggle is
 off the env vars are absent and instrumentation is a no-op. Standard OTLP is used
-throughout; OTel-Arrow is not used (the Python SDK and Vector both lack OTAP support).
+throughout; OTel-Arrow is not used (the Python SDK lacks OTAP support).
 
 **Dashboards:** the chart provisions a Perses Project `rask` + a **"Fleet — RED"**
 dashboard (`chart/templates/perses-dashboards.yaml`, mounted into a

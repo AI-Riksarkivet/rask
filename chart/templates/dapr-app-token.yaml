@@ -1,0 +1,27 @@
+{{- if .Values.dapr.sidecars }}
+# Dapr app-API-token secret. A pod annotated `dapr.io/app-token-secret: <this>` gets APP_API_TOKEN
+# injected by Dapr, and Dapr stamps a `dapr-api-token` header on every request it delivers to the app.
+# The subscriber routes (/lineage-events, /medallion-event, the compaction cron route) verify it
+# (common.dapr_auth.require_dapr_token) so a forged POST that didn't come through the sidecar is 403'd.
+# GATING INVARIANT (DAPRIFY 2026-07-27): every plane that emits `dapr.io/app-token-secret` — the lance
+# apps (services/compaction/medallion/media.yaml) AND the fleet/controlplane, all via the shared
+# rask.daprAnnotations helper — is gated on exactly `.Values.dapr.sidecars`, the SAME key that gates
+# this Secret. Keep it that way: a pod annotated with app-token-secret whose Secret doesn't render
+# wedges its sidecar at injection (per-plane gates here or extra conditions there would reopen that).
+{{- /* Fail the render on a known-constant app token — it authenticates EVERY sidecar-delivered route
+     (lineage ingest, medallion triggers, the cron sweeps), so a public value makes them all forgeable.
+     TWO cases, keyed like the infra-credentials guards: the values-prod placeholder always aborts, AND
+     the base-chart dev default aborts on the prod signal (openbao.devMode=false) — so a hand-rolled prod
+     overlay that flips devMode without layering values-prod can't silently ship the dev token. */}}
+{{- if or (eq .Values.dapr.appToken "REPLACE-ME-with-a-real-secret") (and (not .Values.openbao.devMode) (eq .Values.dapr.appToken "lance-dev-dapr-app-token-override-me")) }}
+{{- fail "dapr.appToken is still a known-constant dev/placeholder value on a prod render — it authenticates EVERY sidecar-delivered route, so it must be a real secret. Set --set dapr.appToken=... (from your secret manager); do not commit it." }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-dapr-app-token
+  labels: {{- include "lance.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  token: {{ .Values.dapr.appToken | quote }}
+{{- end }}

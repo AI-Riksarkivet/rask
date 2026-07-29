@@ -13,7 +13,6 @@ echo ">> running ${img}"
 docker run -d --name "${cname}" -p "${port}:${port}" \
   -e RASK_VIEWER_INPUT=s3://images-batch \
   -e RASK_VIEWER_OUTPUT=s3://images-batch-alto \
-  -e RASK_ORCHESTRATOR_AUTOSTART=false \
   "${img}" >/dev/null
 trap 'docker rm -f "${cname}" >/dev/null 2>&1 || true' EXIT
 echo ">> waiting for health"

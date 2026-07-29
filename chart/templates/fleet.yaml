@@ -1,7 +1,15 @@
 {{- $root := . }}
 {{- $secretName := .Values.existingSecret | default (printf "%s-app" (include "rask.fullname" .)) }}
+{{- /* Plane ownership (lance-ns merge P4 — the render-time collision guard, risk 4): this template
+     owns ONLY the rask fleet entries of .Values.services. The lance-ns lakehouse entries (catalog,
+     lineage) are rendered BY NAME by templates/services.yaml under the same resolved fullname
+     (`rask-<name>` — rask.fullname and lance.fullname both resolve to "rask" at install), so they
+     are excluded here UNCONDITIONALLY: no service may render from two templates under any values
+     combination. A new lakehouse entry in the services map must be added to this list; a new rask
+     fleet entry needs nothing. */}}
+{{- $lakehouse := list "catalog" "lineage" }}
 {{- range $name, $svc := .Values.services }}
-{{- if or (eq $name "gateway") $root.Values.singleTenant.enabled }}
+{{- if and (not (has $name $lakehouse)) (or (eq $name "gateway") $root.Values.singleTenant.enabled) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -9,7 +17,10 @@ metadata:
   labels:
     {{- include "rask.componentLabels" (list $root $name) | nindent 4 }}
 spec:
-  replicas: {{ $svc.replicas | default 1 }}
+  # hasKey+ternary, never `| default` — an explicit `replicas: 0` (scale to zero) is
+  # falsy, so `| default 1` would silently resurrect the workload. Pinned by
+  # tests/unit/test_invariants.py::test_no_numeric_helm_default_can_swallow_an_explicit_zero.
+  replicas: {{ hasKey $svc "replicas" | ternary $svc.replicas 1 }}
   {{- if $svc.singleton }}
   strategy:
     type: Recreate
@@ -26,6 +37,7 @@ spec:
       labels:
         {{- include "rask.selectorLabels" $root | nindent 8 }}
         app.kubernetes.io/component: {{ $name }}
+        {{- include "rask.daprPodLabels" $root | nindent 8 }}
     spec:
       {{- with $root.Values.imagePullSecrets }}
       imagePullSecrets:
@@ -34,17 +46,11 @@ spec:
       serviceAccountName: {{ include "rask.serviceAccountName" $root }}
       {{- $waits := list -}}
       {{- range $dep := ($svc.waitFor | default list) -}}
-      {{- if and (eq $dep "postgres") $root.Values.cnpg.enabled }}{{- $waits = append $waits $dep -}}{{- end -}}
       {{- if and (eq $dep "minio") $root.Values.rustfs.enabled }}{{- $waits = append $waits $dep -}}{{- end -}}
       {{- end -}}
       {{- if $waits }}
       initContainers:
         {{- range $dep := $waits }}
-        {{- if eq $dep "postgres" }}
-        - name: wait-postgres
-          image: busybox:1.36
-          command: ["sh","-c","until nc -z {{ include "rask.fullname" $root }}-postgres-rw {{ $root.Values.cnpg.port }}; do echo waiting postgres; sleep 2; done"]
-        {{- end }}
         {{- if eq $dep "minio" }}
         - name: wait-minio
           image: busybox:1.36
@@ -64,15 +70,12 @@ spec:
             {{- range $a := ($svc.extraArgs | default list) }}
             - {{ $a | quote }}
             {{- end }}
-            {{- if $root.Values.dev.reload }}
-            # Dev only (Tilt): hot-reload uvicorn on source change. Requires an
-            # editable dev image (.docker/fleet.dev.dockerfile) whose source lives
-            # at /app/{packages,components} so Tilt's live_update sync lands where
-            # the reloader watches. Never set dev.reload in production.
-            - "--reload"
-            - "--reload-dir=/app/packages"
-            - "--reload-dir=/app/components"
-            {{- end }}
+            {{- include "lance.devReloadArgs" (list $root (splitList "." (splitList ":" $svc.module | first) | first)) | nindent 12 }}
+          # Drain delay before SIGTERM: kube-proxy can still route to a terminating pod, so
+          # without it a rolling update drops in-flight requests. Matters most on the gateway,
+          # which is the ingress. Pinned by
+          # tests/unit/test_invariants.py::test_every_first_party_deployment_is_hardened.
+          {{- include "lance.preStop" $root | nindent 10 }}
           ports:
             - name: http
               containerPort: {{ $svc.port }}
@@ -82,9 +85,15 @@ spec:
             - secretRef:
                 name: {{ $secretName }}
           env:
-            - name: RASK_ORCHESTRATOR_AUTOSTART
-              value: {{ if $svc.singleton }}{{ $root.Values.orchestrator.autostart | quote }}{{ else }}"false"{{ end }}
             {{- include "rask.otelEnv" (list $root $name) | nindent 12 }}
+            {{- if $svc.rayClient }}
+            {{- /* Ray token auth (gate 7 / R3): only the services flagged rayClient in
+                 .Values.services (compute) get the pair — least
+                 privilege; the gateway never talks to Ray. No-op unless
+                 ray.auth.enabled (the include gates itself). JobSubmissionClient +
+                 ray-kit's httpx paths read RAY_AUTH_TOKEN and attach the Bearer header. */}}
+            {{- include "rask.rayAuthEnv" $root | nindent 12 }}
+            {{- end }}
           readinessProbe:
             httpGet: {path: {{ $svc.healthPath | default "/api/health" }}, port: http}
             initialDelaySeconds: 5

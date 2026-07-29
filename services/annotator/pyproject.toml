@@ -1,0 +1,37 @@
+[project]
+name = "annotator"
+version = "0.1.0"
+description = "Media-plane annotator API — annotation save/commit/versioning and tags over Lance tables."
+requires-python = ">=3.13"
+license = "AGPL-3.0-only"
+dependencies = [
+    "service-kit[lancekit]",
+    "fastapi>=0.115",
+    "pydantic>=2.7",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "pylance[otel]>=9.0.0",
+    "pyarrow",
+    # The actor host. `dapr.actor` ships inside `dapr` (already a service-kit dep), but the FastAPI
+    # integration that mounts the /dapr/* actor routes is its own distribution — declared by lineage,
+    # medallion and catalog, and MISSING here until 2026-07-28. It imported anyway under
+    # `uv sync --all-packages`, which is what a dev venv does; `uv sync --frozen --package annotator`,
+    # which is what .docker builds, would not have installed it.
+    "dapr-ext-fastapi>=1.18.1",
+    # The publish path emits an OpenLineage run event naming who annotated and who reviewed, and
+    # authors its custom facet with `lineage_kit.schemas.custom_facet` so the `_producer` /
+    # `_schemaURL` envelope stays in step with every other emitter in the estate. Inlining that
+    # envelope instead would be the drift this dependency exists to prevent.
+    "lineage-kit",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/annotator"]
+
+[tool.uv.sources]
+service-kit = { workspace = true }
+lineage-kit = { workspace = true }

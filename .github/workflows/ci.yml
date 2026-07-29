@@ -1,0 +1,487 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Three pushes inside five minutes each start a full ~29-runner-minute workflow, so two of them were
+# already superseded before they finished (measured: runs at 13:43:33, 13:44:35 and 13:48:47 on
+# 2026-07-26 all overlapped). Superseded branch and PR runs are wasted work — cancel them.
+#
+# main is deliberately NOT cancelled. Per-commit green/red on main is the audit trail the whole
+# "evidence, not assertion" rule leans on; a cancelled run leaves a commit with no verdict. Runner
+# minutes are free on a public repo, the signal is not.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # ── THE MICROSERVICE PLANE (ms-*) ─────────────────────────────────────────────────────────────
+  # Python: packages/ + services/ + the chart that ships them. The frontend plane is `web-*` and
+  # cross-plane integration is `e2e-*`, so a red check names its plane before anyone opens it.
+  #
+  # These six gates were ONE job with six sequential steps, and that shape hid failures rather than
+  # reporting them: a failing step skips every step after it in the same job. On 2026-07-28 the ty
+  # gate failed (a bare `uv sync` in .dagger/main.go installed no workspace members) and the run read
+  #
+  #   success Lint · failure Typecheck · skipped OpenAPI · skipped Tests · skipped Charts · skipped OpenFGA
+  #
+  # — four gates that never ran, plus the four e2e jobs that hung off `needs: test`. One missing flag
+  # blinded EIGHT gates for six days and the only signal was "the test job is red". Split, each gate
+  # carries its own verdict and one failure costs exactly one gate.
+
+  # pytest stands alone because it is the only gate the e2e legs actually depend on (`needs: ms-test`
+  # below). Inside the matrix, e2e would wait on ruff and formatting to decide whether to run.
+  #
+  # Runs the whole offline suite (`-m "not e2e and not slow"`), which INCLUDES the claim-lint
+  # invariants (tests/unit/test_invariants.py) and the tests/e2e-py collection gate
+  # (tests/unit/test_e2e_collection_gate.py) — those gates are folded in here, not lost.
+  ms-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Dagger CLI (pinned to the module's engineVersion)
+        run: |
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      - name: Tests — offline pytest suite, -m "not e2e and not slow" (Dagger)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: dagger call test
+
+      # NO postgres/alembic gate anywhere in this workflow, by design. One used to stand in the old
+      # combined job calling `dagger call test-pg` ("alembic upgrade head from zero against a real
+      # postgres:16, then the core suite with DATABASE_URL") — but P7a deleted that whole plane (no app
+      # DB, no Alembic, no fleet DATABASE_URL; see CLAUDE.md) and the dagger module has no TestPg
+      # function to call. It could only ever fail, and it did. The surviving relational stores (lineage
+      # AGE, OpenFGA) are proved by the e2e-lineage and e2e-stack jobs below.
+
+  # The remaining hermetic gates, one runner each. `fail-fast: false` is the whole point of the matrix
+  # here: the default (true) cancels the siblings the moment one leg fails, which would rebuild
+  # exactly the blindness this split exists to remove.
+  #
+  # Every leg is `dagger call <name>` against the module's own functions (.dagger/checks.go, openapi.go,
+  # charts.go), so the gate a developer runs locally (`make check`, `make charts`) and the gate CI runs
+  # are the same code, not two descriptions of it.
+  #   lint      ruff check + ruff format --check
+  #   typecheck ty, with error-on-warning
+  #   openapi   committed specs vs the live apps — drift fails here
+  #   charts    helm lint + full render, the networkPolicy / security-hardening / Dapr-resiliency
+  #             `--set` render-and-grep invariants, the prod-overlay HA/security render, and the
+  #             promtool alert-rules validate-and-fire proof. `dagger call charts` == `make charts`.
+  ms-gates:
+    name: ms-${{ matrix.gate }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [lint, typecheck, openapi, charts]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Dagger CLI (pinned to the module's engineVersion)
+        run: |
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      - name: dagger call ${{ matrix.gate }}
+        env:
+          DAGGER_NO_NAG: "1"
+        run: dagger call ${{ matrix.gate }}
+
+  # NOT daggerized — it needs the `fga` CLI + jq rather than the uv/helm/promtool toolchain the Dagger
+  # functions carry, so it stays a native step. The OpenFGA authorization model is source-of-truth for
+  # who-can, so gate its tests (7 types, concentric rungs, the validator promote gate, create-on-parent)
+  # and a model edit cannot silently regress access.
+  ms-authz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: OpenFGA model test
+        run: |
+          FGA_V=0.6.4
+          curl -fsSL "https://github.com/openfga/cli/releases/download/v${FGA_V}/fga_${FGA_V}_linux_amd64.tar.gz" \
+            | tar xz -C /usr/local/bin fga
+          # R19 moved this tree: `services/common/auth/` no longer exists, and these four paths
+          # pointed at it until 2026-07-28 — so this entire step was failing on a missing file and
+          # the authz-model gate had not actually run since the merge. Paths are now the real ones.
+          AUTH=packages/service-kit/src/service_kit/governed/auth
+          fga model test --tests $AUTH/model.fga.yaml
+          # The model exists in three copies (model.fga authored, model.fga.yaml tested above,
+          # model.json the app LOADS). CI previously exercised only the yaml copy — a drift between
+          # the tested model and the shipped one passed silently. Transform the authored .fga and
+          # diff it against the committed .json so drift fails HERE. (jq normalizes key order.)
+          fga model transform --file $AUTH/model.fga > /tmp/model.transformed.json
+          jq -S . /tmp/model.transformed.json > /tmp/model.a.json
+          jq -S . $AUTH/model.json > /tmp/model.b.json
+          diff -u /tmp/model.b.json /tmp/model.a.json || { echo "model.json drifted from model.fga"; exit 1; }
+
+  # ── THE FRONTEND PLANE (web-*) ────────────────────────────────────────────────────────────────
+  # Everything under frontend/ — the seven zones and the packages they share. Named `web-*` to match
+  # what the artefacts are actually called elsewhere: `make frontend-images` tags `web-<zone>:dev` and
+  # the chart names the deployments `rask-web-<zone>`.
+
+  # §7 "not in CI" gap, closed 2026-07-11. Turborepo workspace bun gates — svelte-check (types over the
+  # runes store + generated OpenAPI types), TypeScript 7 (tsgo), unit tests, lint and fmt:check — fan out
+  # over packages/* AND microfrontends/* (the 7 zones). All five are PACKAGE tasks, so turbo parallelises
+  # and caches them instead of running lint/fmt once repo-wide over a hand-maintained path list. ONE
+  # linter and ONE formatter cover every extension: oxlint (with @rsvelte/oxlint-plugin for .svelte) and
+  # rsvelte-fmt (which delegates everything that is not .svelte to oxfmt) — see frontend/TOOLING.md.
+  # ESLint and Prettier are no longer installed. Hermetic in the pinned oven/bun image via the Dagger
+  # module (.dagger/frontend.go); `dagger call frontend` == `make frontend`.
+  web-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Dagger CLI (pinned to the module's engineVersion)
+        run: |
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      - name: Frontend bun gate — svelte-check + tsgo + unit + lint + fmt (Dagger)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: dagger call frontend
+
+  # Its own job, not a tail of web-gate. The two share no toolchain — this one is browser-bound
+  # (chromium + system deps) and needs the workspace installed on the runner, while the gate above runs
+  # hermetically in a bun container — and as sequential steps a svelte-check failure skipped the e2e
+  # entirely, which is the same failure-hiding shape the ms-* split exists to remove.
+  #
+  # Hermetic anyway: playwright.config.ts mocks every /api/** via page.route and the webServer is the
+  # real SSR dev server, so hydration + routing are exercised with zero backend.
+  web-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install (frozen lockfile)
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright chromium
+        working-directory: frontend
+        run: bunx playwright install --with-deps chromium
+
+      # e2e for the FOUR zones that define `test:e2e` — home, lakehouse, media, annotator — fanned by
+      # turbo, which discovers the task rather than reading a list here. `compute`, `studio` and `train`
+      # ship no e2e at all, so this leg is 4-of-7 coverage, not full coverage — a real gap, not a naming
+      # leftover (the "four zone" counts elsewhere in this workflow WERE leftovers; there are seven zone
+      # images, and they have been corrected).
+      #
+      # Run SERIALLY (--concurrency=1): each zone spins its own vite SSR dev server + a chromium
+      # instance, and running every first-compile at once blows the per-server startup window on a
+      # 2-core runner. (lakehouse alone runs TWO dev servers — auth-off for three areas, auth-on for
+      # admin — each with its own warmup.)
+      - name: Playwright e2e — 4 of 7 zones (hermetic — /api mocked in-page)
+        working-directory: frontend
+        run: bunx turbo run test:e2e --concurrency=1
+
+      - name: Upload Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/microfrontends/*/test-results/
+          retention-days: 7
+
+  # The seven micro-frontend zone images. Until now `.docker/frontend.dockerfile` was hand-run only, out
+  # of `make frontend-images`, so a break in it stayed invisible until somebody deployed by hand — and
+  # that has already happened once (the `eslint-rules` workspace member the COPY lines never included
+  # broke every zone build for as long as it existed). @repo/zone-contract regex-scrapes the COPY lines
+  # against `workspaces`, which catches exactly that one shape and nothing else: not a production `vite
+  # build` that fails where dev-mode svelte-check passes, not a broken runtime node_modules layout, not
+  # a yanked base-image digest. Only a real build catches those.
+  #
+  # Cost, measured on a 4 vCPU / 16 GB buildx builder (a public-repo ubuntu-latest runner) against a
+  # clean `git archive` checkout, all seven zones sequential (measured at four: 4m53s), of which ~29s per zone is a tarball
+  # export that `docker build` on the runner's own builder does not pay. The critical path of this
+  # workflow is `frontend` at 12m16s (8m11s of it the serial Playwright fan-out), so this job finishes
+  # inside the shadow of a job that was already there and adds ZERO wall clock.
+  #
+  # Every push, not just main: catching a broken dockerfile after it lands on main is the failure mode,
+  # not the fix. No paths filter and no `turbo --affected` gating either — `packages/ui` is a dependency
+  # of all seven zones, so the common frontend change affects all seven anyway, and a hand-written paths
+  # list would be a sixth hand-maintained statement about the monorepo's shape. This repo has been bitten
+  # three times by exactly that (Makefile ZONES listing seven dead zones, the dockerfile COPY lines,
+  # microfrontends.json keys vs package names) — @repo/zone-contract exists because of it.
+  #
+  # Same fork gate as the other jobs that build images from the checkout.
+  web-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+
+      # The zone list is DERIVED, not restated here. A directory under microfrontends holding a
+      # package.json is what makes a zone a bun workspace member and a turbo package — the same rule
+      # @repo/zone-contract's zoneDirs() resolves by, and the reason it does not use bare isDirectory()
+      # (a deleted zone leaves gitignored build output behind). Two things follow: a newly added zone is
+      # covered with no edit here, and the smoke step FAILS if the Makefile's ZONES list has gone stale
+      # and never built an image for a zone that exists. That precise drift is the most recent thing to
+      # break `make images` in this repo — ZONES still listed the seven pre-merge zones, the loop died
+      # on the first one that no longer existed and never reached lakehouse.
+      #
+      # `if` rather than `[ … ] && printf`: GitHub runs `run:` blocks under `bash -e`, and an AND-list
+      # whose test fails on the LAST loop iteration makes the whole command substitution non-zero, which
+      # kills the assignment and the step with no diagnostic at all. Today that is invisible because
+      # `media` sorts last and has a package.json — a leftover husk directory sorting after it (exactly
+      # what a deleted zone leaves behind) would have silently broken this step. An `if` with no else
+      # always returns 0.
+      - name: Resolve the zone list
+        run: |
+          zones=$(cd frontend/microfrontends && for d in */; do
+                    if [ -f "${d}package.json" ]; then printf '%s ' "${d%/}"; fi
+                  done)
+          echo "ZONES=${zones% }" >> "$GITHUB_ENV"
+          echo "zones: ${zones% }"
+
+      # `make frontend-images` == this step, byte-for-byte — the same contract every other gate here
+      # holds (`dagger call charts` == `make charts`). It loops the zones through the one parametrized
+      # dockerfile with the OCI provenance build-args, and exits on the first zone that fails.
+      #
+      # Deliberately NO cross-run layer cache (no `cache-from/to: type=gha`). The claim this gate makes
+      # is "the dockerfile still builds"; a cache hit means it replayed instead of building. Cold also
+      # exercises the pinned oven/bun digest and real `bun install --frozen-lockfile` resolution, both of
+      # which a warm cache hides. And `mode=max` on seven 1.3 GB images would spend well over the 10 GB
+      # repo-wide cache budget, evicting the setup-uv and setup-bun caches three other jobs depend on —
+      # slowing the rest of CI down to speed this up. The one cache that does matter is free: the
+      # `bun install` layer does not reference ${APP}, so zones 2..4 reuse it (61s for the first zone,
+      # 45s for each one after).
+      - name: Build every zone image
+        run: make frontend-images
+
+      # Image size is not gated, just recorded — the annotator carries a deferred OpenCV bundle and the
+      # trend is worth having in the log. Named explicitly rather than grepped, so an unrelated
+      # `lance-*` image in the daemon cannot pad the report.
+      #
+      # `docker image ls`, NOT `docker image inspect --format '{{.Size}}'`. The two disagree by 4.6x
+      # depending on which image store the daemon runs: under the containerd store (`docker info` ->
+      # io.containerd.snapshotter.v1) inspect reports COMPRESSED content size, while `ls` reports the
+      # unpacked on-disk size; under the classic store both report unpacked. Measured on web-home:dev
+      # here: inspect 283647617 bytes vs ls 1.32GB, same image id. GitHub runners default to the classic
+      # store, so inspect would have logged ~1.3GB in CI and 283MB on a developer box with containerd
+      # enabled, and the "trend" this step exists for would have been a comparison between two different
+      # quantities. `ls` reports the same number a human gets from `docker images`.
+      - name: Record image sizes
+        run: |
+          for z in $ZONES; do
+            docker image ls "web-$z:dev" --format '{{.Repository}}:{{.Tag}} {{.Size}} (on disk)' || true
+          done
+
+      # Building is NOT enough, and this is the load-bearing half of the job. Proven by mutation:
+      # deleting the runtime `COPY --from=builder /src/node_modules` line still builds with exit 0, and
+      # the image it produces dies on start with
+      #   error: Cannot find module '@sveltejs/kit/internal' from '/app/.../build/server/index.js'
+      # which is gotcha 1 from the dockerfile's own header (adapter-bun externalizes @sveltejs/kit, so
+      # the runtime must ship node_modules at the depth the isolated-linker symlinks expect). A
+      # build-only gate is green on that image. So run each zone and make it serve a page.
+      #
+      # No backend is needed — every zone SSRs its landing page against nothing. The base path is
+      # read out of the zone's own svelte.config.js instead of being hardcoded, so this does not become
+      # yet another place that has to agree about zone layout: home's base is empty, the domain zones
+      # pin /<zone>. Redirects are followed because a zone root may hand off to its landing area.
+      #
+      # The pattern is anchored on `paths: {` to match @repo/zone-contract's zoneBase() resolver
+      # (manifest.ts:72, /paths:\s*\{[^}]*base:\s*['"]([^'"]*)['"]/) rather than being a second, looser
+      # opinion about the same file. It has to be anchored: an unanchored `base:` match picks up prose,
+      # and these configs are full of it — media's own header says "Zone base: this zone owns /media".
+      # Verified against a config carrying a `// base: '/DECOY'` comment above the real one — unanchored
+      # returns /DECOY, anchored returns /media. If a config is ever reformatted so `paths: { … base }`
+      # spans lines, sed (line-based, unlike the JS regex) resolves '' and the zone gets probed at '/',
+      # which is a 404 for a domain zone — a loud failure, not a silent pass.
+      - name: Smoke-run each zone image
+        run: |
+          set -uo pipefail
+          # GitHub runs `run:` blocks under `bash -e`, so errexit is ON unless turned off here. It must
+          # be off: the readiness loop below depends on curl exiting non-zero (7, connection refused)
+          # while the Bun server is still starting, and under errexit the first such exit would abort
+          # the step and report a build failure instead of a smoke result. `fail` is accumulated by hand
+          # and returned at the end precisely so every zone gets reported, not just the first bad one.
+          set +e
+          fail=0
+          for z in $ZONES; do
+            # The missing-image check comes FIRST, before the config is read. A zone the tree has but
+            # the Makefile never built is the headline case this step exists to report, and reading its
+            # svelte.config.js first would print a `sed: can't read …` above the diagnosis whenever the
+            # stale-ZONES zone is also a half-added one — noise on top of the line that matters.
+            #
+            # `web-$z:dev` must match what `make frontend-images` tags (Makefile: `-t
+            # web-$$a:$(FRONTEND_TAG)`, FRONTEND_TAG ?= dev). These read as one name in two files, and
+            # the lance-ns merge renamed only one of them: the Makefile moved to `web-*` while this job
+            # kept probing `lance-*`, so it reported "no image lance-lakehouse:dev was built — is the
+            # Makefile ZONES list stale?" for four zones that had in fact built perfectly. The
+            # diagnosis it offers is the wrong one for this failure, which is why it cost a detour;
+            # if the tag ever moves again, both sides change together.
+            if ! docker image inspect "web-$z:dev" >/dev/null 2>&1; then
+              echo "FAIL  $z  no image web-$z:dev was built — is the Makefile ZONES list stale?"
+              fail=1
+              continue
+            fi
+            cfg="frontend/microfrontends/$z/svelte.config.js"
+            base=$(sed -n "s/.*paths:[[:space:]]*{[^}]*base:[[:space:]]*['\"]\([^'\"]*\)['\"].*/\1/p" "$cfg" | head -1)
+            docker rm -f "smoke-$z" >/dev/null 2>&1 || true
+            docker run -d --name "smoke-$z" -p 3000:3000 "web-$z:dev" >/dev/null
+            # No `|| echo 000` fallback: curl already writes 000 to %{http_code} when it cannot connect
+            # (verified: exit 7, stdout "000"), so a fallback appends a SECOND code and $code becomes
+            # "000000" — or "301000" if curl exits non-zero on a request that did get a response, which
+            # would then never equal 200 no matter what the server said. `set -e` is off precisely so
+            # this loop can absorb curl's non-zero exits while the server is still warming up.
+            code=000
+            for _ in $(seq 1 30); do
+              code=$(curl -sL --max-redirs 5 -o "/tmp/smoke-$z.html" -w '%{http_code}' \
+                     --max-time 10 "http://127.0.0.1:3000${base}/")
+              [ "$code" = 200 ] && break
+              sleep 2
+            done
+            state=$(docker inspect -f '{{.State.Status}}' "smoke-$z")
+            title=$(grep -o '<title>[^<]*</title>' "/tmp/smoke-$z.html" | head -1)
+            if [ "$code" = 200 ] && [ "$state" = running ] &&
+               grep -q 'data-sveltekit' "/tmp/smoke-$z.html"; then
+              echo "ok    $z  base='$base'  200  $title"
+            else
+              echo "FAIL  $z  base='$base'  http=$code  state=$state"
+              docker logs "smoke-$z" 2>&1 | tail -30
+              fail=1
+            fi
+            docker rm -f "smoke-$z" >/dev/null 2>&1 || true
+          done
+          exit $fail
+
+  # AGE-backed lineage e2e (§7): the graph repository's REAL Cypher runs against a real Apache AGE
+  # Postgres — the unit fakes can't catch AGE dialect behavior (the int-vs-string $ver at-version
+  # match, the RETURN-less DETACH DELETE prune, the functional-index DDL). Runs via the Dagger module
+  # (AGE as a hermetic service container) so `make e2e-lineage` == `dagger call test-lineage` == this
+  # job, byte-for-byte. Engine version pinned by dagger.json. Same fork-gating as e2e-auth.
+  e2e-lineage:
+    runs-on: ubuntu-latest
+    needs: ms-test
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dagger CLI (pinned to the module's engineVersion)
+        run: |
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+
+      - name: Lineage e2e (real AGE graph, hermetic via Dagger)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: dagger call test-lineage
+
+  # THE GUARDED LIVE PROOF (docs/GOAL-prove-it.md P0.1 — the gap that made every "live-verified" claim
+  # in this repo an anecdote). Until now `test` ran `-m "not e2e"`, so the outbox / warehouse-isolation /
+  # multibase / client-direct / CAS suites were NEVER guarded: they passed once in a terminal and nothing
+  # stopped a later commit from silently breaking them. This job boots a REAL governed kind stack
+  # (Dex OIDC + OpenFGA + Dapr + RustFS + AGE, with the #3-A/#3-B/#4 flags on) and runs all five.
+  #
+  # `make e2e-ci` == this job, byte-for-byte — both shell out to scripts/e2e_stack.sh, so "green in CI"
+  # and "green on my machine" cannot diverge (same contract as e2e-lineage == `dagger call test-lineage`).
+  # Fork-gated like the other live jobs (no infra guarantees / untrusted docker builds on forked PRs).
+  e2e-stack:
+    runs-on: ubuntu-latest
+    needs: ms-test
+    timeout-minutes: 45
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies (Linux-only lockfile)
+        run: uv sync --frozen --all-packages --all-groups
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      # The script drives kind/kubectl/helm/fga out of .localbin (same as every make target), so the
+      # toolchain bootstrap is the repo's own — not a CI-only fork that can drift from local behavior.
+      - name: Bootstrap the pinned toolchain into .localbin
+        run: make bootstrap
+
+      # Free disk: the default runner image is ~85% full and a kind node + our image needs headroom.
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+          df -h / | tail -1
+
+      - name: Live e2e — governed kind stack + CAS/#2/#3-A/#3-B/#4 suites
+        run: make e2e-ci
+
+  # #53 Ray-path live proof. Its OWN job (not folded into e2e-stack): the train head shares
+  # MEDALLION_RAY_ENABLED with the movers, so a ray-ON stack is a different deploy — flipping it on mid-run
+  # against the openbao-ON core stack races the OpenBao secret store and hangs the movers. This job deploys
+  # the ray-ON recipe (openbao OFF → no secret race, compute+ray+quality+auth+fga ON) from the start plus a
+  # real KubeRay head, then runs both Ray suites. `make e2e-ray-ci` == this job (scripts/ray_e2e_stack.sh).
+  # Fork-gated like the other live jobs. Observability is off to fit the runner (train's GreptimeDB-metrics
+  # leg self-skips; its pins + lineage + validator gates still run).
+  e2e-ray:
+    runs-on: ubuntu-latest
+    needs: ms-test
+    timeout-minutes: 45
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync dependencies (Linux-only lockfile)
+        run: uv sync --frozen --all-packages --all-groups
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+      - name: Bootstrap the pinned toolchain into .localbin
+        run: make bootstrap
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+          df -h / | tail -1
+      - name: Live e2e — governed ray-ON kind stack + both Ray-path suites
+        run: make e2e-ray-ci
+
+  # Gated live auth end-to-end: brings up the SQLite OpenFGA + Dex stack via
+  # docker compose and runs scripts/auth_e2e.sh, which asserts APP-SIDE SEEDING
+  # (create namespace/table -> owner + parent cascade) and a 403 for a second
+  # user with no grant. GitHub-hosted ubuntu runners ship Docker + Compose v2,
+  # so this is feasible in CI. Skipped on forked-PR runs (no infra guarantees /
+  # to avoid untrusted-code docker builds) but always runs on branch pushes.
+  e2e-auth:
+    runs-on: ubuntu-latest
+    needs: ms-test
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies (Linux-only lockfile)
+        run: uv sync --frozen --all-packages --all-groups
+
+      - name: Show docker / compose versions
+        run: |
+          docker version
+          docker compose version
+
+      # Builds the server image, starts MinIO + SQLite OpenFGA + Dex, and runs
+      # the full app-side-seeding assertion chain. The script tears the stack
+      # down on exit (trap). A non-zero exit fails the job.
+      # KEEP_STACK=1 leaves the stack up so the next step can collect logs on
+      # failure; the always() cleanup below tears it down regardless of outcome.
+      - name: Auth e2e (Dex + SQLite OpenFGA, app-side seeding)
+        env:
+          KEEP_STACK: "1"
+        run: bash scripts/auth_e2e.sh
+
+      - name: Dump stack logs on failure
+        if: failure()
+        run: |
+          docker compose -f .docker/docker-compose.yml \
+                         -f .docker/docker-compose.auth.sqlite.yml logs --no-color || true
+
+      - name: Tear down stack
+        if: always()
+        run: |
+          docker compose -f .docker/docker-compose.yml \
+                         -f .docker/docker-compose.auth.sqlite.yml down -v || true

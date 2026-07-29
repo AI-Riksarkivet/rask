@@ -1,0 +1,10 @@
+node_modules
+.turbo
+microfrontends/*/build
+microfrontends/*/.svelte-kit
+.svelte-check
+microfrontends/*/test-results
+packages/*/dist
+storybook-static/
+.svelte-kit
+test-results

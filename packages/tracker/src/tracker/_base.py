@@ -15,7 +15,7 @@ from typing import Any
 from sqlalchemy import Engine
 from sqlalchemy.dialects.postgresql import Insert as PostgresInsert
 from sqlalchemy.dialects.sqlite import Insert as SqliteInsert
-from sqlmodel import Session, SQLModel, func, select
+from sqlmodel import Session, SQLModel, col, func, select
 
 from tracker.models import Transfer, TransferStatus
 
@@ -77,7 +77,7 @@ class _BufferedSqlTracker:
         """Return all keys with status 'done'."""
         with self._lock:
             self._flush_locked()
-            rows = self._session.exec(select(Transfer.key).where(Transfer.status == TransferStatus.done)).all()
+            rows = self._session.exec(select(col(Transfer.key)).where(Transfer.status == TransferStatus.done)).all()
             return set(rows)
 
     def error_entries(self) -> list[tuple[str, int]]:

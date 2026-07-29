@@ -1,0 +1,90 @@
+# Auth stack — SQLite-backed OpenFGA (NO Postgres) + Dex dev IdP.
+#
+# Simpler than the Postgres stack in docker-compose.yml: one OpenFGA datastore
+# file on a shared volume, a one-shot `migrate`, then `run`. Use it as an
+# OVERLAY on top of the base compose (server + MinIO) and turn auth ON:
+#
+#   docker compose -f .docker/docker-compose.yml \
+#                  -f .docker/docker-compose.auth.sqlite.yml up -d
+#
+# This file replaces the base compose's Postgres-backed OpenFGA: it redefines
+# the `openfga` service to use the SQLite engine and adds a SQLite `migrate`
+# one-shot. The base `fga-postgres` / `openfga-migrate` services stay defined in
+# the base file but are left unused (nothing depends on them here). The Dex
+# service is provided by this overlay so the SQLite stack is self-contained and
+# mounts its own dex config (alice + bob — the e2e needs a second identity).
+#
+# OpenFGA's SQLite datastore engine requires image >= v1.8.0; tags are pinned
+# for reproducible CI runs (don't track :latest in security infra).
+services:
+  server:
+    environment:
+      LANCE_OIDC_ENABLED: "true"
+      LANCE_OIDC_ISSUER: http://dex:5556/dex
+      LANCE_OIDC_AUDIENCE: lance-catalog
+      # The Dex dev IdP serves discovery/JWKS over http; the verifier rejects a
+      # plaintext issuer unless this dev-only escape hatch is set.
+      LANCE_OIDC_ALLOW_INSECURE: "true"
+      LANCE_FGA_ENABLED: "true"
+      LANCE_FGA_API_URL: http://openfga:8080
+    depends_on:
+      openfga:
+        condition: service_healthy
+      dex:
+        condition: service_started
+
+  # One-shot: create the OpenFGA schema in the shared SQLite file, then exit.
+  openfga-sqlite-migrate:
+    image: openfga/openfga:v1.8.4
+    container_name: lance-openfga-sqlite-migrate
+    # Dev stack: run as root so the SQLite file can be created in the root-owned
+    # named volume (the image's non-root user otherwise hits "unable to open
+    # database file"). Fine for local/CI; production pins external store ids.
+    user: "0:0"
+    command: migrate
+    environment:
+      OPENFGA_DATASTORE_ENGINE: sqlite
+      OPENFGA_DATASTORE_URI: "file:/data/openfga.db?_journal_mode=WAL"
+    volumes:
+      - fga-sqlite-data:/data
+
+  # Override the base `openfga` service to run on the SQLite datastore. Depends
+  # on the SQLite migrate one-shot (NOT the base Postgres migrate).
+  openfga:
+    image: openfga/openfga:v1.8.4
+    container_name: lance-openfga
+    user: "0:0"  # see openfga-sqlite-migrate — same volume, same writer
+    command: run
+    depends_on:
+      openfga-sqlite-migrate:
+        condition: service_completed_successfully
+    environment:
+      OPENFGA_DATASTORE_ENGINE: sqlite
+      OPENFGA_DATASTORE_URI: "file:/data/openfga.db?_journal_mode=WAL"
+      OPENFGA_LOG_FORMAT: json
+    volumes:
+      - fga-sqlite-data:/data
+    ports:
+      - "8080:8080"   # HTTP API
+      - "3000:3000"   # Playground (dev only)
+    healthcheck:
+      # The image has no shell/curl; use its own gRPC health probe binary.
+      test: ["CMD", "/usr/local/bin/grpc_health_probe", "-addr=:8081"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  # Dex OIDC provider (static, in-memory) with TWO dev users (alice + bob) so the
+  # e2e can prove a 403 for a second principal that holds no grant.
+  dex:
+    image: dexidp/dex:latest
+    container_name: lance-dex
+    command: dex serve /etc/dex/config.yaml
+    volumes:
+      - ./dex.sqlite.config.yaml:/etc/dex/config.yaml:ro
+    ports:
+      - "5556:5556"
+
+volumes:
+  fga-sqlite-data:

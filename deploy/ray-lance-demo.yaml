@@ -1,0 +1,67 @@
+# A minimal REAL Ray cluster (head-only single node) for the medallion compute-seam demo — the
+# production-shape replacement for in-process fake-Ray. Apply with `make ray-demo`, which then
+# `ray job submit`s scripts/ray_lance_job.py (a genuine distributed lance_ray Lance write against RustFS).
+# NOT for production: production is KubeRay (RayCluster CR) via the rask merge; this proves the
+# ray-cluster + ray-job-submit + distributed-Lance-write seam works end-to-end on kind.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ray-lance-head
+  labels: { app: ray-lance-head }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: ray-lance-head } }
+  template:
+    metadata:
+      labels: { app: ray-lance-head }
+    spec:
+      containers:
+        - name: ray-head
+          image: ray-lance:dev
+          imagePullPolicy: IfNotPresent
+          # A real Ray head: GCS on 6379, dashboard + job-submission API on 8265, client on 10001.
+          command: ["ray"]
+          args:
+            - start
+            - --head
+            - --dashboard-host=0.0.0.0
+            - --port=6379
+            - --num-cpus=2
+            - --disable-usage-stats
+            - --block
+          env:
+            # In-cluster RustFS — the job reads/writes s3://lance-catalog against this endpoint.
+            - { name: S3_ENDPOINT, value: "http://lance-ns-rustfs:9000" }
+            - { name: S3_KEY, value: "rustfsadmin" }
+            - { name: S3_SECRET, value: "rustfsadmin" }
+            - { name: S3_REGION, value: "us-east-1" }
+            - { name: RAY_DEDUP_LOGS, value: "0" }
+          ports:
+            - { name: gcs, containerPort: 6379 }
+            - { name: dashboard, containerPort: 8265 }
+            - { name: client, containerPort: 10001 }
+          readinessProbe:
+            tcpSocket: { port: 8265 }
+            initialDelaySeconds: 8
+            periodSeconds: 5
+          resources:
+            requests: { cpu: "500m", memory: 1Gi }
+            limits: { cpu: "2", memory: 3Gi }
+          volumeMounts:
+            - { name: dshm, mountPath: /dev/shm }
+      volumes:
+        # Ray's plasma object store lives in /dev/shm; the k8s default (64 MiB) is too small.
+        - name: dshm
+          emptyDir: { medium: Memory, sizeLimit: 1Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ray-lance-head
+  labels: { app: ray-lance-head }
+spec:
+  selector: { app: ray-lance-head }
+  ports:
+    - { name: gcs, port: 6379, targetPort: 6379 }
+    - { name: dashboard, port: 8265, targetPort: 8265 }
+    - { name: client, port: 10001, targetPort: 10001 }

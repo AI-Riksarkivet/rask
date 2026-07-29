@@ -91,7 +91,12 @@ data:
                 - name: "memory"
                   nominalQuota: {{ .Values.kueue.queues.nominalQuota.memory | quote }}
                 - name: "nvidia.com/gpu"
-                  nominalQuota: {{ index .Values.kueue.queues.nominalQuota "nvidia.com/gpu" | quote }}
+                  {{- /* Derived from the ONE GPU signal: the values comment demands this equal the
+                       cluster's total schedulable nvidia.com/gpu ("never set it above the real GPU
+                       count — Kueue would admit a pod that can't schedule"), and on a GPU-less estate
+                       that total is 0. Hardcoding 1 there admits a GPU RayService that then sits
+                       Pending forever, which reads as a Kueue bug rather than a missing GPU. */}}
+                  nominalQuota: {{ if include "rask.gpuEnabled" . }}{{ index .Values.kueue.queues.nominalQuota "nvidia.com/gpu" | quote }}{{ else }}"0"{{ end }}
     ---
     apiVersion: kueue.x-k8s.io/v1beta1
     kind: LocalQueue

@@ -1,4 +1,12 @@
-# packages/htr
+# htr (`runners/htr`)
+
+!!! warning "This is not `packages/htr` — that path does not exist"
+
+    The HTR library lives in the **sealed runner** `runners/htr`, alongside the Ray Data
+    pipeline that drives it. `runners/*` is matched by **no workspace glob** and carries its
+    **own `pyproject.toml` and `uv.lock`**, so torch/htrflow/ultralytics/transformers never
+    enter the fleet's resolution. Run it with `uv run --project runners/htr runner`; in-cluster
+    the Ray image ships the console script on `PATH`. See `.claude/skills/rask-architecture`.
 
 The HTR library: Ray Data actors, the data schemas that flow between them, the
 ALTO 4.4 serializer, and geometry helpers. It is **hardware-agnostic** — pool

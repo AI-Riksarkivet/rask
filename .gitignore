@@ -6,7 +6,7 @@ __pycache__/
 dist/
 build/
 *.egg-info/
-# uv / virtualenvs — `.venv/` matches at ANY depth (root + any stray projects/*/.venv)
+# uv / virtualenvs — `.venv/` matches at ANY depth (root + any stray nested .venv)
 .venv/
 **/.venv/
 .uv/
@@ -22,11 +22,20 @@ storybook-static/
 # Zensical docs build output
 site/
 
-# Local SQLite catalog + manifest dump (built by components/scripts/{build,sync,count}_*.py)
+# Local SQLite catalog + manifest dump (built by scripts/{build,sync,count}_*.py)
 .cache/
 batches.db
-components/scripts/batch_ids.txt
-batches.db.20260527T105358Z
+scripts/batch_ids.txt
+
+# Demo runtime endpoints (written by scripts/medallion_demo.sh; machine-specific)
+.medallion-demo.env
+
+# Locally-downloaded cluster tooling (kind/kubectl/k9s/tilt) — not committed
+.localbin/
+
+# playwright-cli skill scratch logs (tool artifacts, not source)
+.playwright-cli/
+test-results/
 
 # Turborepo
 .turbo
@@ -36,3 +45,6 @@ chart/charts/
 
 # superpowers SDD scratch (ledger, briefs)
 .superpowers/
+
+# git worktrees created by tooling — a second checkout, never content of this one
+.claude/worktrees/

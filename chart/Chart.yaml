@@ -1,17 +1,37 @@
 apiVersion: v2
 name: rask
-description: rask HTR pipeline — microservice fleet + optional in-cluster Postgres, MinIO, KubeRay Serve, and the cluster infra foundation (NVIDIA device-plugin, KubeRay/NATS/Dapr/Kueue/OpenFGA) (Swedish National Archives)
+description: >-
+  rask — the Swedish National Archives' data platform as ONE umbrella chart (one `helm install`,
+  one release named `rask`): the HTR pipeline fleet (gateway, ray,
+  controlplane + the SvelteKit microfrontend zones), the Lance lakehouse
+  REST catalog with in-service lineage (OpenLineage → Apache AGE), the medallion + media planes,
+  governance (Dex OIDC + OpenFGA), event-driven on Dapr pub/sub over NATS JetStream, plus the
+  cluster infra foundation (NVIDIA device-plugin, KubeRay, Kueue, CloudNativePG, RustFS,
+  GreptimeDB/Perses observability).
 type: application
-version: 0.2.0
-appVersion: "0.2.0"
+# 0.2.0 (rask) + 0.1.0 (lance-ns) merged into one chart — a whole second system's templates and
+# values landed here, so this is a real minor bump, not a no-op.
+version: 0.3.0
+appVersion: "0.3.0"
 home: https://github.com/AI-Riksarkivet/rask
 maintainers:
   - name: Riksarkivet
+  - name: Gabriel Borg
 
 # Cluster infra is unified into this chart as conditional subchart dependencies
 # (one `helm install` brings up everything). Each is gated by <key>.enabled so a
 # prod install with external infra can turn them off. k3s itself + helm are the
 # only out-of-chart bootstrap (scripts/k3s-install.sh).
+#
+# lance-ns merge (P4, "one control plane each"): lance-ns declared five subcharts —
+# dapr 1.18.1, nats 2.14.2, openfga 0.3.9, greptimedb-standalone 0.4.5, perses 0.22.0 —
+# and rask already ships all five at the IDENTICAL version and repository, so the dedupe
+# is lossless: no dependency was added, dropped, re-versioned, or aliased. Everything
+# lance-ns brings beyond these five (Apache-AGE Postgres, Dex, OpenBao, external-secrets,
+# the OTel Collector, the openfga migrate Job, alerting, security-sa, ha) is a FIRST-PARTY
+# template, not a subchart — it needs no entry here. lance-ns's richer subchart *values*
+# (credentialed nats, openfga datastore.engine=postgres + the migrate hook) land in
+# values.yaml, which is where subchart config belongs; nothing about them changes this list.
 dependencies:
   # Aliases must be lowercase RFC1123 (subcharts derive container/resource names
   # from .Chart.Name = the alias); camelCase breaks them.
@@ -22,13 +42,22 @@ dependencies:
     condition: nvdp.enabled
   - name: kuberay-operator
     alias: kuberay
-    version: "1.4.2"
+    # >= 1.6.0 is REQUIRED for ray.auth (gate 7 / R3): the RayService controller is itself a
+    # dashboard-REST client, and only 1.6+ sends the auth token on those calls; 1.6.0 also adds
+    # spec.authOptions (mode/secretName) so the operator consumes our pre-existing
+    # <release>-ray-auth-token Secret and injects the env on every Ray container itself.
+    version: "1.6.2"
     repository: https://ray-project.github.io/kuberay-helm/
     condition: kuberay.enabled
+  # Shared with lance-ns at the same version — the single bus. lance-ns's values win
+  # (credentialed + netpol'd JetStream); its stream-provision Job + Dapr pubsub are the
+  # first real consumers of what rask ships streamless.
   - name: nats
     version: "2.14.2"
     repository: https://nats-io.github.io/k8s/helm/charts/
     condition: nats.enabled
+  # Shared with lance-ns at the same version — one Dapr control plane. Sidecars/components
+  # are values + templates, not extra deps.
   - name: dapr
     version: "1.18.1"
     repository: https://dapr.github.io/helm-charts/
@@ -37,10 +66,18 @@ dependencies:
     version: "0.18.1"
     repository: oci://registry.k8s.io/kueue/charts
     condition: kueue.enabled
+  # Shared with lance-ns at the same version — one authz control plane. lance-ns's values win:
+  # datastore.engine=postgres against the AGE Postgres, image tag pinned v1.8.0, and the
+  # subchart's own migrate DISABLED (applyMigrations/waitForMigrations false) in favour of the
+  # first-party templates/openfga-migrate.yaml Job. That replaces rask's `engine: memory`.
   - name: openfga
     version: "0.3.9"
     repository: https://openfga.github.io/helm-charts
     condition: openfga.enabled
+  # CNPG operator. Its CRDs stay VENDORED at chart/crds/ (installed in Helm's CRD phase, before
+  # templates) with `cloudnative-pg.crds.create: false` in values.yaml — the subchart must not
+  # also create them. lance-ns must not re-install them either; the AGE Postgres rides this
+  # existing operator rather than adding one.
   - name: cloudnative-pg
     version: "0.28.3"
     repository: https://cloudnative-pg.github.io/charts
@@ -49,14 +86,13 @@ dependencies:
     version: "0.1.0"
     repository: "file://../third_party/rustfs-operator"
     condition: rustfs.enabled
+  # Observability — GreptimeDB (unified metrics/logs/traces store) + Perses (dashboards-as-code),
+  # both shared with lance-ns at the same version.
   - name: greptimedb-standalone
     version: "0.4.5"
     repository: https://greptimeteam.github.io/helm-charts/
     condition: observability.enabled
-  - name: vector
-    version: "0.56.0"
-    repository: https://helm.vector.dev
-    condition: observability.enabled
+  # Vector RETIRED (owner ruling 2026-07-27): the OTel Collector (templates/otel-collector.yaml) is the single log shipper — its filelog receiver tails infra-pod logs into `opentelemetry_logs`.
   - name: perses
     version: "0.22.0"
     repository: https://perses.github.io/helm-charts
