@@ -54,7 +54,7 @@ _TUPLE_RE = re.compile(r"-\s*\{\s*user:\s*\"?(?P<user>[^,\"]+)\"?\s*,\s*relation
 
 
 def _post(base: str, path: str, payload: dict) -> dict:
-    req = urllib.request.Request(
+    req = urllib.request.Request(  # noqa: S310 — a fixed localhost base, not user-controlled
         f"{base}{path}",
         data=json.dumps(payload).encode(),
         headers={"content-type": "application/json"},
@@ -72,7 +72,7 @@ def _get(base: str, path: str) -> dict:
 def load_fixtures() -> list[dict[str, str]]:
     """The tuples block of ``model.fga.yaml`` — the same fixtures ``fga model test`` asserts against."""
     text = _FIXTURES.read_text()
-    block = re.search(r"^tuples:(.*?)^tests:", text, re.S | re.M)
+    block = re.search(r"^tuples:(.*?)^tests:", text, re.DOTALL | re.MULTILINE)
     if block is None:
         raise SystemExit(f"!! no `tuples:` block in {_FIXTURES}")
     # STRIP every field. The YAML is written `{ user: x, relation: y, object: z }`, so the object
