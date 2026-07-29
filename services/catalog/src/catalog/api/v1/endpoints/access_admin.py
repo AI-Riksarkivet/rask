@@ -44,6 +44,8 @@ from catalog.schemas import (
     AccessListUsersRequest,
     AccessListUsersResponse,
     AccessModelResponse,
+    AccessSimulateRequest,
+    AccessSimulateResult,
     AccessTuple,
     AccessTuplesPage,
 )
@@ -373,4 +375,53 @@ async def expand_access(request: Request, settings: SettingsDep, token: CurrentT
         object=obj,
         relation=relation,
         depth=depth,
+    )
+
+
+@router.post("/simulate")
+async def simulate_access(request: Request, settings: SettingsDep, token: CurrentToken, body: AccessSimulateRequest) -> AccessSimulateResult:
+    """ "Would this grant do what I think?" — a Check evaluated as if ``hypothetical`` existed.
+
+    Nothing is written. OpenFGA's contextual tuples are per-request, so the store is untouched and the
+    simulation owes no cleanup. This exists because the model is CONCENTRIC: a grant three levels up
+    cascades to every child, and predicting that by reading the DSL is exactly the reasoning humans get
+    wrong. The only way to find out today is to write the tuple and look — which on an authorization
+    store is a change you then have to remember to undo.
+
+    Returns the DELTA. ``allowed`` alone cannot be acted on: a grant that changes nothing and a grant
+    that unlocks access both answer true. ``baseline`` is the same Check WITHOUT the hypothesis, so the
+    caller can distinguish "this is what changes the answer" from "this grant is a no-op" — and the
+    second is the more common finding.
+
+    Every hypothetical tuple is validated exactly like a real write (``_validated_write_tuple``): a
+    derived ``can_*`` or an unknown type is a clean 400 here rather than a confusing OpenFGA rejection,
+    and — more importantly — a hypothesis this API would refuse to write must not be simulatable, or
+    the answer describes a grant that cannot exist.
+    """
+    client = await _estate_gate(request, settings, token)
+    obj = _validated_object(body.object)
+    relation = _validated_relation(obj, body.relation)
+    user = _qualified_subject(body.user)
+    # Validated, not merely parsed — same gate a real write clears.
+    hypothetical = [_validated_write_tuple(t) for t in body.hypothetical]
+    subject = token.sub if token else "anonymous"
+    try:
+        # Two checks, one round trip each. The baseline cannot be skipped when `hypothetical` is empty
+        # either: the caller still asked for a delta, and answering with allowed == baseline is the
+        # honest shape rather than a special case that returns a different meaning.
+        baseline = await fga.check(client, user=user, relation=relation, obj=obj, qualify=False)
+        allowed = (
+            baseline if not hypothetical else await fga.check(client, user=user, relation=relation, obj=obj, qualify=False, contextual_tuples=hypothetical)
+        )
+    except ServiceUnavailableError:
+        audit("access_simulate_hypothetical", FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
+        raise
+    # Probing the graph IS disclosing it, hypothetically or not — same tier as access_simulate, but a
+    # distinct action so a compliance query can tell a what-if apart from a live check.
+    audit("access_simulate_hypothetical", SUCCESS, subject=subject, resource=obj, relation=relation, hypotheticals=len(hypothetical))
+    return AccessSimulateResult(
+        allowed=allowed,
+        baseline=baseline,
+        checked=AccessTuple(user=user, relation=relation, object=obj),
+        hypothetical=[AccessTuple(user=t.user, relation=t.relation, object=t.object) for t in hypothetical],
     )

@@ -8,13 +8,25 @@
 	import { Dialog } from '@rask/ui/dialog';
 	import { Input } from '@rask/ui/input';
 	import { Skeleton } from '@rask/ui/skeleton';
-	import { CircleCheck, CircleX, Plus, ShieldAlert, Trash2, TriangleAlert } from '@lucide/svelte';
+	import {
+		Check,
+		CircleCheck,
+		CircleX,
+		ClipboardCopy,
+		Plus,
+		ShieldAlert,
+		Trash2,
+		TriangleAlert,
+	} from '@lucide/svelte';
 	import { parse } from '@rask/api';
+	import { assertionName, toFgaYaml } from './assertion';
 	import {
 		deleteTuple,
 		fetchTuples,
 		listUsers,
 		ListUsersResultSchema,
+		simulate,
+		SimulateResultSchema,
 		type Tuple,
 		TuplesPageSchema,
 		writeTuple,
@@ -78,6 +90,37 @@
 	// ── revoke, with the blast radius measured BEFORE the write ──
 	// "Are you sure?" is not an answer to "how many". A tuple high in the hierarchy can cut access for
 	// every principal below it, and the only honest confirm names that number first.
+	/**
+	 * The verdict, rendered as a committable `.fga.yaml` test.
+	 *
+	 * Distinguishing a check RUN (a fact about this cluster now) from one COMMITTED (a fact CI enforces)
+	 * is the whole point — they are not the same claim, and only the second survives the next deploy.
+	 */
+	const assertionYaml = $derived.by(() => {
+		if (!verdict) return '';
+		const a = {
+			user: verdict.user,
+			object: verdict.object,
+			relation: verdict.relation,
+			allowed: verdict.allowed,
+		};
+		return toFgaYaml(assertionName(a), [a]);
+	});
+	let copied = $state(false);
+
+	async function copyAssertion(): Promise<void> {
+		if (!assertionYaml) return;
+		try {
+			await navigator.clipboard.writeText(assertionYaml);
+			copied = true;
+			setTimeout(() => (copied = false), 2000);
+		} catch (err) {
+			// A denied clipboard permission is normal, not exceptional — the <pre> below is always
+			// present and selectable, so the export never depends on the API being available.
+			console.error(`clipboard write failed: ${String(err)}`);
+		}
+	}
+
 	let revokeTarget = $state<Tuple | null>(null);
 	let blast = $state<{ count: number; truncated: boolean } | null>(null);
 	let blastPending = $state(false);
@@ -123,6 +166,50 @@
 	let gUser = $state('');
 	let gRelation = $state('');
 
+	/**
+	 * What the proposed grant would actually change, answered by the store BEFORE anything is written.
+	 *
+	 * `allowed` on its own is unusable here: a grant that unlocks access and a grant that changes
+	 * nothing both come back true. Only the delta against `baseline` separates them, and "this grant is
+	 * a no-op" turns out to be the more common finding — a concentric model means the subject often
+	 * already holds the access by inheritance, and granting again just adds a tuple somebody must later
+	 * reason about when revoking.
+	 */
+	let preview = $state<{ allowed: boolean; baseline: boolean } | null>(null);
+	let previewing = $state(false);
+	let previewFailed = $state(false);
+
+	async function runPreview(): Promise<void> {
+		const subject = gUser.trim();
+		const rel = gRelation.trim();
+		if (!subject || !rel || !selected) return;
+		previewing = true;
+		preview = null;
+		previewFailed = false;
+		try {
+			// The question is deliberately about the RELATION BEING GRANTED, on the object in hand —
+			// "would writing this tuple make this true" — rather than some derived `can_*` the dialog
+			// would have to guess at.
+			const res = await simulate({
+				user: subject,
+				relation: rel,
+				object: selected,
+				hypothetical: [{ user: subject, relation: rel, object: selected }],
+			});
+			if (!res.ok) {
+				previewFailed = true;
+				return;
+			}
+			const parsed = parse(SimulateResultSchema, res.data);
+			preview = { allowed: parsed.allowed, baseline: parsed.baseline };
+		} catch (err) {
+			console.error(`simulate parse failure: ${String(err)}`);
+			previewFailed = true;
+		} finally {
+			previewing = false;
+		}
+	}
+
 	async function grant(): Promise<void> {
 		const t = { user: gUser.trim(), relation: gRelation.trim(), object: selected ?? '' };
 		if (busy || !t.user || !t.relation || !t.object) return;
@@ -135,6 +222,7 @@
 			if (res.ok) {
 				grantOpen = false;
 				gUser = gRelation = '';
+				preview = null;
 				await loadTuples();
 				onchanged();
 			}
@@ -170,6 +258,25 @@
 						: 'Denied, and nothing in the model derives it.'}
 				</p>
 			{/if}
+		</section>
+	{/if}
+
+	{#if verdict}
+		<section class="flex flex-col gap-1.5">
+			<div class="flex items-center justify-between gap-2">
+				<h3 class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+					Commit as a test
+				</h3>
+				<Button size="sm" variant="outline" class="h-6 text-[11px]" onclick={copyAssertion}>
+					{#if copied}<Check size={11} /> Copied{:else}<ClipboardCopy size={11} /> Copy{/if}
+				</Button>
+			</div>
+			<p class="text-[11px] text-muted-foreground">
+				This verdict is true <em>now</em>. Paste into
+				<span class="font-mono">model.fga.yaml</span> and CI enforces it on every change.
+			</p>
+			<pre
+				class="overflow-x-auto rounded border border-border bg-muted p-2 font-mono text-[10px] leading-relaxed">{assertionYaml}</pre>
 		</section>
 	{/if}
 
@@ -301,6 +408,52 @@
 				placeholder="relation — reader"
 				aria-label="Grant relation"
 			/>
+			<!-- ASSERT BEFORE YOU GRANT. Nothing is written: the store evaluates the tuple as a hypothesis
+			     and answers with the delta. Offered rather than forced, because a required round trip
+			     before every write turns a two-field dialog into a wizard. -->
+			<div class="flex flex-col gap-2 rounded-md border border-border p-2">
+				<div class="flex items-center justify-between gap-2">
+					<span class="text-xs font-medium">Effect</span>
+					<Button
+						size="sm"
+						variant="outline"
+						type="button"
+						disabled={previewing || !gUser.trim() || !gRelation.trim()}
+						onclick={runPreview}
+					>
+						{previewing ? 'Checking…' : 'Simulate'}
+					</Button>
+				</div>
+				{#if previewFailed}
+					<p class="text-[11px] text-muted-foreground">
+						Could not simulate — the store did not answer. Granting anyway is still possible; its effect
+						is simply unknown.
+					</p>
+				{:else if preview === null}
+					<p class="text-[11px] text-muted-foreground">
+						Ask the store what this would change, without writing it.
+					</p>
+				{:else if preview.baseline}
+					<!-- The finding people least expect: in a concentric model the subject often already
+					     holds the access by inheritance, so the grant adds a tuple that changes nothing and
+					     that someone must later reason about when revoking. -->
+					<p class="text-[11px] text-warning">
+						<strong>No change.</strong> This subject already holds
+						<span class="font-mono">{gRelation}</span> here — inherited, not stored. The tuple would be redundant.
+					</p>
+				{:else if preview.allowed}
+					<p class="text-[11px] text-success">
+						<strong>Grants access.</strong> Currently denied; after this write
+						<span class="font-mono">{gRelation}</span> resolves.
+					</p>
+				{:else}
+					<p class="text-[11px] text-destructive">
+						<strong>Would not take effect.</strong> Even with this tuple the relation still does not resolve
+						— the model excludes it, or something else is required.
+					</p>
+				{/if}
+			</div>
+
 			<div class="mt-1 flex justify-end gap-2">
 				<Button variant="outline" type="button" disabled={busy} onclick={() => (grantOpen = false)}>
 					Cancel

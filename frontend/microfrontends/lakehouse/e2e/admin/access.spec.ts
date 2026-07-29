@@ -77,6 +77,7 @@ let expandBody: Body | null;
 let listUsersBodies: Body[];
 let listObjectsBody: Body | null;
 let deleted: Tuple | null;
+let simulateBodies: Body[];
 
 test.beforeEach(async ({ context, page }) => {
 	await signIn(context);
@@ -85,6 +86,7 @@ test.beforeEach(async ({ context, page }) => {
 	listUsersBodies = [];
 	listObjectsBody = null;
 	deleted = null;
+	simulateBodies = [];
 
 	await page.route('**/capi/**', (route) => {
 		const req = route.request();
@@ -131,6 +133,15 @@ test.beforeEach(async ({ context, page }) => {
 				user_type: 'user',
 				user_relation: null,
 				truncated: false,
+			});
+		}
+		if (path === '/v1/access/simulate') {
+			simulateBodies.push(req.postDataJSON() as Body);
+			return json({
+				allowed: true,
+				baseline: false,
+				checked: { user: 'user:carol', relation: 'reader', object: 'table:db1$t' },
+				hypothetical: [{ user: 'user:carol', relation: 'reader', object: 'table:db1$t' }],
 			});
 		}
 		if (path === '/v1/access/list-objects') {
@@ -295,4 +306,59 @@ test('the model stays read-only beside the graph', async ({ page }) => {
 	// that could mutate it would make that gate a liar.
 	await expect(page.getByText('define can_read_data: reader')).toBeVisible();
 	await expect(page.locator('textarea')).toHaveCount(0);
+});
+
+test('a verdict exports as committable .fga.yaml', async ({ page }) => {
+	// F4's other half. A check RUN is a fact about this cluster now; the same check COMMITTED is a fact
+	// CI enforces. They are not the same claim, and only the second survives the next deploy.
+	await open(page);
+	await ask(page, 'Why…', {
+		Subject: 'user:alice',
+		Relation: 'can_read_data',
+		Object: 'table:db1$t',
+	});
+	await expect(page.getByText('ALLOWED')).toBeVisible();
+
+	await expect(page.getByText('Commit as a test')).toBeVisible();
+	const yaml = await page.locator('pre').filter({ hasText: 'tests:' }).first().innerText();
+	// The shape must paste into model.fga.yaml unedited — same keys, same nesting.
+	expect(yaml).toContain('tests:');
+	expect(yaml).toContain('check:');
+	expect(yaml).toContain('- user: "user:alice"');
+	expect(yaml).toContain('object: "table:db1$t"');
+	expect(yaml).toContain('assertions: { can_read_data: true }');
+});
+
+test('the Grant dialog simulates before it writes, and says when a grant is a no-op', async ({
+	page,
+}) => {
+	await open(page);
+	await ask(page, 'Why…', {
+		Subject: 'user:alice',
+		Relation: 'can_read_data',
+		Object: 'table:db1$t',
+	});
+	await expect(page.getByText('ALLOWED')).toBeVisible();
+
+	await page.getByRole('button', { name: 'Grant' }).click();
+	await page.getByLabel('Grant subject').fill('user:carol');
+	await page
+		.getByLabel('Grant relation')
+		.selectOption('reader')
+		.catch(async () => {
+			await page.getByLabel('Grant relation').fill('reader');
+		});
+	await page.getByRole('button', { name: 'Simulate' }).click();
+
+	// baseline=false, allowed=true → the grant genuinely unlocks access.
+	await expect(page.getByText('Grants access.')).toBeVisible();
+	expect(simulateBodies.at(-1)).toMatchObject({
+		user: 'user:carol',
+		relation: 'reader',
+		object: 'table:db1$t',
+	});
+	// The hypothesis is sent; nothing is written.
+	const sent = simulateBodies.at(-1);
+	expect(Array.isArray(sent?.hypothetical) ? sent.hypothetical.length : 0).toBe(1);
+	expect(deleted).toBeNull();
 });

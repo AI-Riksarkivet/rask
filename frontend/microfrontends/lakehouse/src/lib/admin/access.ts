@@ -212,6 +212,32 @@ export const listUsers = (query: {
 		user_relation: query.userRelation ?? null,
 	});
 
+export const SimulateResultSchema = v.object({
+	/** With the hypothesis applied. */
+	allowed: v.boolean(),
+	/** WITHOUT it — the delta is the answer. A grant that changes nothing and a grant that unlocks
+	 *  access both set `allowed`; only `baseline` tells them apart, and "this is a no-op" is the more
+	 *  common finding. */
+	baseline: v.boolean(),
+	checked: TupleSchema,
+	hypothetical: v.array(TupleSchema),
+});
+export type SimulateResult = v.InferOutput<typeof SimulateResultSchema>;
+
+/** Assert before you grant: does the proposed tuple actually change the answer? Writes nothing. */
+export const simulate = (query: {
+	user: string;
+	relation: string;
+	object: string;
+	hypothetical: readonly Tuple[];
+}) =>
+	postJSON('v1/access/simulate', {
+		user: query.user,
+		relation: query.relation,
+		object: query.object,
+		hypothetical: query.hypothetical,
+	});
+
 /** "Why does this resolve?" — the derivation tree. `depth` follows the cascade server-side (one gate,
  *  one audit row, one response) rather than costing a round trip per hop from the browser. */
 export const expand = (query: { object: string; relation: string; depth?: number }) =>

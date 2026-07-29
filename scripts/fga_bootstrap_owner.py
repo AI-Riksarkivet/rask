@@ -36,7 +36,7 @@ import urllib.request
 
 
 def _post(base: str, path: str, payload: dict) -> dict:
-    req = urllib.request.Request(
+    req = urllib.request.Request(  # noqa: S310 — a fixed localhost base, not user-controlled
         f"{base}{path}",
         data=json.dumps(payload).encode(),
         headers={"content-type": "application/json"},

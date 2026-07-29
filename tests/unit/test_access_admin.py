@@ -22,6 +22,7 @@ from catalog.schemas import (
     AccessExpandRequest,
     AccessListObjectsRequest,
     AccessListUsersRequest,
+    AccessSimulateRequest,
     AccessTuple,
 )
 from lance_namespace import (
@@ -573,5 +574,155 @@ def test_every_derivation_surface_is_fga_gated(rec: _AuditRecorder) -> None:
                 settings=off,
                 token=None,
                 body=AccessExpandRequest(object="table:db1$t", relation="reader"),
+            )
+        )
+
+
+# ── /v1/access/simulate — assert before you grant ─────────────────────────────────────────────────────
+
+
+def test_simulate_returns_the_delta_not_just_the_verdict(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`allowed` alone cannot be acted on — a no-op grant and an unlocking grant both answer true."""
+    seen: list[dict[str, Any]] = []
+
+    async def _fake_check(_client: Any, **kwargs: Any) -> bool:
+        seen.append(kwargs)
+        # Denied today; allowed once the hypothesis is in play.
+        return kwargs.get("contextual_tuples") is not None
+
+    monkeypatch.setattr(ep.fga, "check", _fake_check)
+    response = asyncio.run(
+        ep.simulate_access(
+            request=_request(client=object()),
+            settings=_settings(),
+            token=_token("root_admin"),
+            body=AccessSimulateRequest(
+                user="alice",
+                relation="can_read_data",
+                object="table:db1$t",
+                hypothetical=[AccessTuple(user="alice", relation="reader", object="table:db1$t")],
+            ),
+        )
+    )
+    assert (response.baseline, response.allowed) == (False, True)
+    assert response.checked.user == "user:alice"  # resolved, echoed — never the bare input
+    # The hypothetical is qualified the same way a real write would qualify it.
+    assert response.hypothetical[0].user == "user:alice"
+    # Baseline runs WITHOUT contextual tuples; the second call carries them.
+    assert seen[0].get("contextual_tuples") is None
+    assert seen[1]["contextual_tuples"] is not None
+    assert rec.calls[0][:2] == ("access_simulate_hypothetical", "success")
+
+
+def test_simulate_reports_a_no_op_grant_honestly(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Already allowed → the grant changes nothing. baseline == allowed is the finding, not a failure.
+    async def _always(_client: Any, **_kwargs: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(ep.fga, "check", _always)
+    response = asyncio.run(
+        ep.simulate_access(
+            request=_request(client=object()),
+            settings=_settings(),
+            token=None,
+            body=AccessSimulateRequest(
+                user="alice",
+                relation="can_read_data",
+                object="table:db1$t",
+                hypothetical=[AccessTuple(user="bob", relation="reader", object="table:db1$t")],
+            ),
+        )
+    )
+    assert response.baseline is True and response.allowed is True
+
+
+def test_simulate_writes_nothing(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The whole promise. A simulation that mutates is worse than no simulation."""
+    writes: list[Any] = []
+
+    async def _fake_check(_client: Any, **_kwargs: Any) -> bool:
+        return True
+
+    async def _explode(*_a: Any, **_k: Any) -> None:
+        writes.append(1)
+
+    monkeypatch.setattr(ep.fga, "check", _fake_check)
+    monkeypatch.setattr(ep.fga, "write_tuples", _explode)
+    monkeypatch.setattr(ep.fga, "delete_tuples", _explode)
+    asyncio.run(
+        ep.simulate_access(
+            request=_request(client=object()),
+            settings=_settings(),
+            token=None,
+            body=AccessSimulateRequest(
+                user="alice",
+                relation="reader",
+                object="table:db1$t",
+                hypothetical=[AccessTuple(user="bob", relation="reader", object="table:db1$t")],
+            ),
+        )
+    )
+    assert writes == []
+
+
+def test_simulate_caps_the_hypothesis_at_ten() -> None:
+    # A Check is not a bulk what-if engine, and an unbounded contextual set is an unbounded server-side
+    # evaluation on an estate-gated surface. Enforced by the schema, so it cannot be forgotten here.
+    import pydantic
+
+    one = {"user": "alice", "relation": "reader", "object": "table:db1$t"}
+    AccessSimulateRequest(user="a", relation="reader", object="table:db1$t", hypothetical=[one] * 10)
+    with pytest.raises(pydantic.ValidationError):
+        AccessSimulateRequest(user="a", relation="reader", object="table:db1$t", hypothetical=[one] * 11)
+
+
+def test_simulate_rejects_a_hypothesis_it_would_refuse_to_write(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+    """A hypothetical must clear the SAME validation a real write clears.
+
+    Simulating a grant this API would refuse to perform describes a world that cannot be reached — a
+    derived `can_*` is computed by the model and is not assignable, so answering "yes, that would work"
+    is worse than refusing.
+    """
+    with pytest.raises(InvalidInputError, match="can_read_data"):
+        asyncio.run(
+            ep.simulate_access(
+                request=_request(client=object()),
+                settings=_settings(),
+                token=None,
+                body=AccessSimulateRequest(
+                    user="alice",
+                    relation="reader",
+                    object="table:db1$t",
+                    hypothetical=[AccessTuple(user="alice", relation="can_read_data", object="table:db1$t")],
+                ),
+            )
+        )
+
+
+def test_simulate_outage_audits_failure_and_raises(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _down(_client: Any, **_kwargs: Any) -> bool:
+        raise ServiceUnavailableError("openfga down")
+
+    monkeypatch.setattr(ep.fga, "check", _down)
+    with pytest.raises(ServiceUnavailableError):
+        asyncio.run(
+            ep.simulate_access(
+                request=_request(client=object()),
+                settings=_settings(),
+                token=_token("root_admin"),
+                body=AccessSimulateRequest(user="alice", relation="reader", object="table:db1$t"),
+            )
+        )
+    assert rec.calls[0][:2] == ("access_simulate_hypothetical", "failure")
+
+
+def test_simulate_is_estate_gated(rec: _AuditRecorder) -> None:
+    with pytest.raises(UnsupportedOperationError):
+        asyncio.run(
+            ep.simulate_access(
+                request=_request(),
+                settings=_settings(fga_enabled=False),
+                token=None,
+                body=AccessSimulateRequest(user="alice", relation="reader", object="table:db1$t"),
             )
         )

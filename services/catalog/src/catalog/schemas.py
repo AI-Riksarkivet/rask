@@ -201,6 +201,39 @@ class AccessExpandDifference(BaseModel):
     subtract: AccessExpandNode | None = None
 
 
+class AccessSimulateRequest(BaseModel):
+    """ "Would this grant do what I think?" — a Check evaluated AS IF ``hypothetical`` existed.
+
+    Nothing is written. The model is concentric, so a grant three levels up cascades to every child;
+    predicting that by reading the DSL is exactly the reasoning people get wrong, and today the only
+    way to find out is to write the tuple and look.
+    """
+
+    user: str
+    relation: str
+    object: str
+    hypothetical: list[AccessTuple] = Field(
+        default_factory=list,
+        max_length=10,
+        description="Tuples to pretend exist. Capped — a Check is not a bulk what-if engine.",
+    )
+
+
+class AccessSimulateResult(BaseModel):
+    """The DELTA, not the verdict.
+
+    ``allowed`` alone cannot be acted on: a grant that changes nothing and a grant that unlocks access
+    both answer true. ``baseline`` is the same Check WITHOUT the hypothesis, so the caller can say
+    "this grant is what changes the answer" — or "this grant is a no-op", which is the more common and
+    more useful finding.
+    """
+
+    allowed: bool
+    baseline: bool
+    checked: AccessTuple
+    hypothetical: list[AccessTuple]
+
+
 class AccessExpandRequest(BaseModel):
     """ "Why does this resolve?" — the userset tree for ``relation`` on ``object``.
 

@@ -90,9 +90,7 @@ def _creds(secret: str) -> tuple[str, str]:
         ) from exc
     ak, sk = data.get("access_key"), data.get("secret_key")
     if not (ak and sk):
-        raise ServiceUnavailableError(
-            f"secret {secret!r} exists but carries no access_key/secret_key pair"
-        )
+        raise ServiceUnavailableError(f"secret {secret!r} exists but carries no access_key/secret_key pair")
     return (ak, sk)
 
 

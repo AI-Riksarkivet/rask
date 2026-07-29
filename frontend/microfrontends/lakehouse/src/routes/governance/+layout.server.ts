@@ -28,15 +28,31 @@ import type { LayoutServerLoad } from './$types';
  * Auth-off stacks (dev servers, the three non-admin e2e areas) keep their current behaviour: with no
  * OIDC configured there is no identity to check and the backend answers `estate_admin: true` anyway.
  */
-export const load: LayoutServerLoad = async ({ locals, fetch }) => {
+export const load: LayoutServerLoad = async ({ locals, fetch, url }) => {
 	if (!locals.authEnabled) return { estateAdmin: true };
+
+	// NO SESSION IS A 401, NOT A 403, and the distinction is not pedantry.
+	//
+	// This used to collapse both into `error(403, 'Admin is estate-admin only')`. So a signed-OUT visitor
+	// was told their identity did not hold the estate-admin privilege — an assertion about an identity
+	// they did not have. It sent a real debugging session hunting a missing FGA tuple for a user who was
+	// simply never authenticated, while OpenFGA had held the correct grant the whole time.
+	//
+	// Failing closed is right. Asserting a false REASON is not, and this is the one surface in the estate
+	// whose entire job is explaining why access resolved the way it did.
+	if (!locals.session) {
+		error(401, `Sign in to view governance. |${url.pathname}`);
+	}
 
 	const me = await fetchMe({
 		catalogUrl: env.CATALOG_API ?? 'http://localhost:2333',
-		accessToken: locals.session?.accessToken,
+		accessToken: locals.session.accessToken,
 		fetchFn: fetch,
 	});
 
+	// Still fail-closed on every ambiguity — a null `me` (expired token, an unreachable catalog, a
+	// drifted contract) is not proof of privilege. But the caller DID present a session, so the honest
+	// wording is "your identity does not hold it", which is now true when it is shown.
 	if (!me?.estate_admin) {
 		error(403, 'Admin is estate-admin only');
 	}
