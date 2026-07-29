@@ -29,7 +29,7 @@ Workspace membership is **globbed per plane**: `[tool.uv.workspace] members = ["
 ## Quick start
 
 ```bash
-make install     # bun --cwd=frontend install + uv sync
+make install     # bun --cwd=frontend install + uv sync --all-packages
 make build
 make test        # offline suites (deselects the live `e2e` + model-bound `slow` marks)
 make check       # fmt + lint + typecheck + knip

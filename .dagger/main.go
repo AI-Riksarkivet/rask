@@ -45,8 +45,17 @@ func (m *Rask) pythonBase(src *dagger.Directory) *dagger.Container {
 // base is the synced python-gate base the merged lance-ns functions (Lint,
 // Typecheck, Openapi, TestLineage) build on: the uv container + the repo
 // source with the artefact excludes (chartsBase extends this exclude set with
-// `.localbin`) + a full `uv sync` — which is why those gates run
+// `.localbin`) + `uv sync --all-packages` — which is why those gates run
 // `uv run --no-sync`. Unexported = shared helper, not a Dagger Function.
+//
+// --all-packages is LOAD-BEARING, not a flourish. A bare `uv sync` in a uv
+// workspace installs the ROOT project only and silently omits every member, so
+// `lineage_kit`, `service_kit` and the rest are absent from the environment ty
+// then checks. This comment used to claim a bare sync was "a full uv sync"; it
+// is not, and believing it kept `main` red from 2026-07-23 to 2026-07-29 with
+// `error[unresolved-import]: Cannot resolve imported module 'lineage_kit'` on
+// every run. `.dagger/test.go` always had the flag — only this base lacked it,
+// which is why the pytest lane passed while the type gate could not.
 func (m *Rask) base(src *dagger.Directory) *dagger.Container {
 	return dag.Container().
 		From(UvPythonImage).
@@ -55,5 +64,5 @@ func (m *Rask) base(src *dagger.Directory) *dagger.Container {
 			Exclude: []string{".venv", ".git", "node_modules", ".dagger", "frontend/node_modules"},
 		}).
 		WithWorkdir("/src").
-		WithExec([]string{"uv", "sync"})
+		WithExec([]string{"uv", "sync", "--all-packages"})
 }

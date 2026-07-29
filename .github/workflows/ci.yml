@@ -351,7 +351,7 @@ jobs:
           enable-cache: true
 
       - name: Sync dependencies (Linux-only lockfile)
-        run: uv sync --frozen --all-groups
+        run: uv sync --frozen --all-packages --all-groups
 
       - name: Install Helm
         uses: azure/setup-helm@v4
@@ -389,7 +389,7 @@ jobs:
         with:
           enable-cache: true
       - name: Sync dependencies (Linux-only lockfile)
-        run: uv sync --frozen --all-groups
+        run: uv sync --frozen --all-packages --all-groups
       - name: Install Helm
         uses: azure/setup-helm@v4
       - name: Bootstrap the pinned toolchain into .localbin
@@ -420,7 +420,7 @@ jobs:
           enable-cache: true
 
       - name: Sync dependencies (Linux-only lockfile)
-        run: uv sync --frozen --all-groups
+        run: uv sync --frozen --all-packages --all-groups
 
       - name: Show docker / compose versions
         run: |

@@ -32,7 +32,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | Goal                         | Command                                                                  |
 | ---------------------------- | ------------------------------------------------------------------------ |
-| First-time setup             | `make install` (= `bun --cwd=frontend install` + `uv sync`)              |
+| First-time setup             | `make install` (= `bun --cwd=frontend install` + `uv sync --all-packages`)              |
 | Build everything             | `make build`                                                             |
 | Run tests (excludes slow)    | `make test` (= `uv run pytest -m "not slow"`)                            |
 | Run all tests incl. slow     | `make test-slow` (needs real models / a GPU)                             |

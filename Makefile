@@ -14,12 +14,15 @@ help:
 	@echo "  harvest-ead"
 	@echo "  claude-bootstrap                       — install Claude Code skills & verify config"
 
+# --all-packages, not a bare `uv sync`: a bare sync installs the ROOT project only and
+# omits every workspace member, so a fresh clone gets a venv where `import service_kit`
+# fails. Same flag as .dagger and `make dev-micro` — one behaviour everywhere.
 install:
 	bun --cwd=frontend install
-	uv sync
+	uv sync --all-packages
 
 build:
-	uv sync
+	uv sync --all-packages
 	bun --cwd=frontend run build
 
 # Python tests via pytest; the frontends have no unit suite — `make frontend-check`
