@@ -1,6 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import type { DockviewApi, DockviewGroupPanel, IDockviewPanel } from 'dockview';
-import { splitPanel, splitVerb } from './split';
+import { SPLIT_DIRECTIONS, splitPanel, splitVerb } from './split';
 
 /**
  * WHAT SPLIT ACTUALLY DOES — pinned, because the backlog was wrong about it.
@@ -119,11 +120,61 @@ describe('splitPanel', () => {
 	});
 });
 
+describe('SPLIT_DIRECTIONS', () => {
+	it('covers all four sides exactly once', () => {
+		expect(SPLIT_DIRECTIONS.map((d) => d.position).sort()).toEqual([
+			'bottom',
+			'left',
+			'right',
+			'top',
+		]);
+	});
+
+	it('every direction actually reaches splitPanel and lands on a distinct grid side', () => {
+		// The point of the table is that all four are WIRED, not merely listed. Before this change the
+		// header called split() with two literals and the context menu had its own copy of the list, so
+		// "are all four reachable?" had no single answer to assert.
+		const seen = SPLIT_DIRECTIONS.map((d) => {
+			const api = apiOf();
+			splitPanel(api, groupOf(1), panelOf('runs'), d.position);
+			return api.addPanel.mock.calls[0]?.[0]?.position?.direction as string;
+		});
+		expect(new Set(seen).size).toBe(4);
+		expect(seen.sort()).toEqual(['above', 'below', 'left', 'right']);
+	});
+
+	it('the HEADER offers all four — it no longer hardcodes two', () => {
+		// The assertion that fails on the previous code. GroupActions used to render two buttons wired
+		// to split('right') and split('bottom'); up and left existed only as tab-context-menu rows,
+		// which is an interaction nobody discovers. Source containment because the header is a component
+		// and this repo has no DOM environment to mount one in — the real click-through is a Playwright
+		// proof.
+		const header = readFileSync(new URL('./GroupActions.svelte', import.meta.url), 'utf8');
+		expect(header, 'the header does not mount the direction pad').toContain('SplitMenu');
+		expect(header, 'the header still hardcodes a single split direction').not.toMatch(
+			/split\('(right|bottom|left|top)'\)/,
+		);
+	});
+});
+
 describe('splitVerb', () => {
 	it('says Split when the control will move, and Duplicate when it will copy', () => {
 		// The label must match what the click does; a control that silently does something other than
 		// its title is worse than one that is honest about a narrower behaviour.
-		expect(splitVerb(groupOf(2))).toBe('Split');
-		expect(splitVerb(groupOf(1))).toBe('Duplicate');
+		expect(splitVerb(2)).toBe('Split');
+		expect(splitVerb(1)).toBe('Duplicate');
+		expect(splitVerb(0)).toBe('Duplicate');
+	});
+
+	it('is the rule BOTH surfaces use — the header no longer keeps its own copy', () => {
+		// Guards the drift this signature change fixed: `GroupActions.svelte` derived the verb from an
+		// inline ternary while `context-menu.ts` called `splitVerb`, so the two could disagree and only
+		// a browser would show it. Asserted as source containment because the header is a component and
+		// this repo has no DOM test environment to mount one in.
+		const header = readFileSync(new URL('./GroupActions.svelte', import.meta.url), 'utf8');
+		expect(header).toContain('splitVerb');
+		expect(header, 'the header re-implemented the verb rule instead of importing it').not.toMatch(
+			/\?\s*'Split'\s*:\s*'Duplicate'/,
+		);
 	});
 });

@@ -17,7 +17,7 @@
  */
 import type { ContextMenuItem, GetTabContextMenuItemsParams } from 'dockview';
 import type { DockChrome, DockChromeOptions } from './chrome';
-import { splitPanel, splitVerb } from './split';
+import { SPLIT_DIRECTIONS, splitPanel, splitVerb } from './split';
 
 export function makeTabContextMenu(
 	chrome: DockChrome,
@@ -32,17 +32,15 @@ export function makeTabContextMenu(
 		// Mirrors the header buttons: with one panel `moveTo` is a documented no-op, so the row
 		// duplicates instead. Never disabled — every zone seeds one-panel groups.
 		if (chrome.split && inGrid) {
-			const verb = splitVerb(group);
+			const verb = splitVerb(group.panels.length);
 			items.push('separator');
-			for (const [side, position] of [
-				['right', 'right'],
-				['left', 'left'],
-				['down', 'bottom'],
-				['up', 'top'],
-			] as const) {
+			// SPLIT_DIRECTIONS, not a second hardcoded tuple list. This file used to spell the four out
+			// itself in right/left/down/up order while the header offered only right and down — two
+			// copies of one list, in different orders, that no test could compare.
+			for (const d of SPLIT_DIRECTIONS) {
 				items.push({
-					label: `${verb} ${side}`,
-					action: () => splitPanel(api, group, panel, position),
+					label: `${verb} ${d.word}`,
+					action: () => splitPanel(api, group, panel, d.position),
 				});
 			}
 		}

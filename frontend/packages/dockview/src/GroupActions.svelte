@@ -13,17 +13,17 @@
 	 */
 	import { onMount, untrack } from 'svelte';
 	import {
-		ChevronsLeftRight,
-		ChevronsUpDown,
 		Copy,
 		Maximize2,
 		Minimize2,
 		PictureInPicture2,
+		SquareSplitHorizontal,
 		X,
 	} from '@lucide/svelte';
 	import type { DockviewApi, DockviewGroupPanelApi, IDockviewGroupPanel } from 'dockview';
 	import type { DockChrome, DockChromeOptions } from './chrome';
-	import { splitPanel, type SplitPosition } from './split';
+	import SplitMenu from './SplitMenu.svelte';
+	import { splitPanel, splitVerb, type SplitPosition } from './split';
 
 	interface Props {
 		api: DockviewGroupPanelApi;
@@ -79,7 +79,19 @@
 	 * so the title says so — a button that silently does something other than its label is worse than
 	 * one that is honest about it. Reads `panelCount`, so it re-derives when tabs move in or out.
 	 */
-	const verb = $derived(panelCount > 1 ? 'Split' : 'Duplicate');
+	const verb = $derived(splitVerb(panelCount));
+
+	/**
+	 * Popover wiring ids, derived from `group.id` rather than Svelte's `$props.id()`.
+	 *
+	 * Each group's header is its own `mount()` root (`header-actions.svelte.ts`), and the `$props.id()`
+	 * counter restarts per root — so every group would mint the SAME id and every trigger would open
+	 * the first group's pad. `group.id` is dockview-generated and unique across the dock.
+	 */
+	const menuId = $derived(`rask-split-menu-${group.id}`);
+	const triggerId = $derived(`rask-split-trigger-${group.id}`);
+	/** Mirrors the popover's UA-owned open state, so `aria-expanded` is not a guess. */
+	let splitOpen = $state(false);
 
 	/** One implementation, shared with the context menu — see `split.ts` for why it has two modes. */
 	function split(position: SplitPosition): void {
@@ -120,21 +132,19 @@
 
 <div class="rask-dock-actions">
 	{#if canSplit}
+		<!-- ONE trigger where there were two direction buttons. The strip gets SMALLER (six controls to
+		     five) while going from two reachable directions to four: up and left previously existed only
+		     as tab-context-menu rows, which is an interaction nobody discovers. -->
 		<button
 			type="button"
-			title={`${verb} right`}
-			aria-label="Split right"
-			onclick={() => split('right')}
+			id={triggerId}
+			popovertarget={menuId}
+			aria-haspopup="menu"
+			aria-expanded={splitOpen}
+			title={`${verb} this pane…`}
+			aria-label="Split this pane"
 		>
-			<ChevronsLeftRight size={14} />
-		</button>
-		<button
-			type="button"
-			title={`${verb} down`}
-			aria-label="Split down"
-			onclick={() => split('bottom')}
-		>
-			<ChevronsUpDown size={14} />
+			<SquareSplitHorizontal size={14} />
 		</button>
 	{/if}
 
@@ -184,6 +194,19 @@
 		<X size={14} />
 	</button>
 </div>
+
+{#if canSplit}
+	<!-- Rendered OUTSIDE `.rask-dock-actions`: it is a top-layer popover, so its position in the DOM is
+	     irrelevant to where it paints, and keeping it out of the flex row means the closed pad
+	     (`display: none`) can never influence the strip's width. -->
+	<SplitMenu
+		id={menuId}
+		anchorId={triggerId}
+		{verb}
+		onpick={split}
+		onopenchange={(open) => (splitOpen = open)}
+	/>
+{/if}
 
 {#if popoutFailed}
 	<span class="rask-dock-actions-note" role="status">Your browser blocked the popout window.</span>
