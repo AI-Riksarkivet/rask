@@ -8,7 +8,8 @@
 
 	// sidebar-07's TeamSwitcher, adapted into a PROJECT switcher and relocated to the navbar row:
 	// it is estate chrome (which project am I in), not in-zone navigation, so it sits beside the
-	// sidebar trigger at the head of the shell header rather than inside the sidebar. Project-first
+	// sidebar HEADER, where the rail's most valuable slot used to print the zone's own name — a fact
+	// the top navbar and the breadcrumb already state. Project-first
 	// IA via HOST: the project IS the request host (e.g. demo.localhost), so "Main menu" returns to
 	// the platform picker on the FRONT-DOOR host — derived by stripping the project's subdomain
 	// label (demo.localhost -> localhost). That's how you leave a project; the picker (not this

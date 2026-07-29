@@ -132,13 +132,15 @@
 	     navigation"; it now starts icon-collapsed instead (see sidebarOpen), so the canvas keeps its
 	     width and the rail is one click away. -->
 	{#if hasNav}
-		<AppSidebar {pathname} {zoneNav} footer={sidebarFooter} />
+		<AppSidebar {pathname} {zoneNav} project={shellProject} footer={sidebarFooter} />
 	{/if}
 	<Sidebar.Inset class="flex min-w-0 flex-col overflow-hidden">
 		<header class="flex min-w-0 shrink-0 flex-col">
 			<!-- Row 1 — the estate navbar. Integrated (sidebar-07): no border, h-14 → h-12 when the
-			     sidebar is icon-collapsed. Trigger + project switcher on the left; the cross-zone
-			     TopNavbar (zone links + identity/theme) takes the rest of the row on its own. -->
+			     sidebar is icon-collapsed. Trigger on the left; the cross-zone TopNavbar (zone links +
+			     identity/theme) takes the rest. The project switcher moved to the SIDEBAR HEADER: it is
+			     project context, and the rail's top slot was spending itself on the zone name, which the
+			     navbar highlight and the breadcrumb already say. -->
 			<!-- `border-b` only in canvas mode: normally the breadcrumb row below carries `border-y` and
 			     supplies the separation, so adding one here would double it. Canvas mode drops that row —
 			     and took the divider with it, leaving the header floating against the content, which is
@@ -156,8 +158,6 @@
 					<Sidebar.Trigger class="text-muted-foreground hover:text-foreground -ml-1 shrink-0" />
 					<Separator orientation="vertical" class="data-[orientation=vertical]:h-4" />
 				{/if}
-				<ProjectSwitcher project={shellProject} />
-				<Separator orientation="vertical" class="data-[orientation=vertical]:h-4" />
 				<TopNavbar
 					{pathname}
 					{me}

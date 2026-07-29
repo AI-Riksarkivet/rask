@@ -2,8 +2,9 @@
 	import type { Snippet } from 'svelte';
 	import { House } from '@lucide/svelte';
 	import * as Sidebar from '../components/sidebar/index.js';
+	import ProjectSwitcher from './project-switcher.svelte';
 	import ZoneNav from './zone-nav.svelte';
-	import { prefetchOnIntent, type ZoneNav as ZoneNavConfig } from './nav-config.js';
+	import { prefetchOnIntent, type Project, type ZoneNav as ZoneNavConfig } from './nav-config.js';
 
 	// The zone-scoped sidebar: collapsible-to-icon, carrying ONLY the CURRENT zone's own routes
 	// (from the `zoneNav` prop each zone passes). Everything estate-wide moved up into the shell
@@ -13,21 +14,24 @@
 	let {
 		pathname = '',
 		zoneNav = null,
+		project,
 		footer,
 	}: {
 		pathname?: string;
 		zoneNav?: ZoneNavConfig | null;
+		project?: Project;
 		footer?: Snippet;
 	} = $props();
 </script>
 
 <Sidebar.Root collapsible="icon">
-	<!-- The header names the zone you are in AND is the way back to the estate root. It had no header
-	     at all, so the only route home was hunting for "Home" among the cross-zone links in the
-	     navbar — every other product puts it exactly here, at the top of the rail, and users reach
-	     for it. Cross-zone by definition (home owns '/'), so it hard-navigates and warms the target
-	     on intent, like every other cross-zone link in the shell. Collapsed to icon it stays a
-	     house, which is the one glyph nobody has to learn. -->
+	<!-- The header carries the PROJECT switcher and the way home. It used to print the zone's own name,
+	     which said nothing: the active zone is already stated twice above — highlighted in the top
+	     navbar and spelled out in the breadcrumb — so a third copy spent the most valuable slot in the
+	     rail on information the user already had. What was missing there is the thing you cannot get
+	     anywhere else: which project you are in, and how to leave it.
+	     The house stays as the estate-root link (cross-zone, so it hard-navigates and warms on intent),
+	     and collapsed to icon that glyph is what remains — nobody has to learn it. -->
 	<Sidebar.Header>
 		<Sidebar.Menu>
 			<Sidebar.MenuItem>
@@ -40,12 +44,18 @@
 								<House class="size-4" />
 							</div>
 							<div class="grid flex-1 text-left text-sm leading-tight">
-								<span class="truncate font-medium">{zoneNav?.title ?? 'rask'}</span>
-								<span class="text-muted-foreground truncate text-xs">Back to home</span>
+								<span class="truncate font-medium">Home</span>
+								<span class="text-muted-foreground truncate text-xs">Back to the estate root</span>
 							</div>
 						</a>
 					{/snippet}
 				</Sidebar.MenuButton>
+			</Sidebar.MenuItem>
+			<!-- Hidden when the rail is icon-collapsed: a dropdown trigger squeezed into a 3rem rail is a
+			     mystery button, and the switcher is a deliberate act rather than something reached for
+			     mid-scan. -->
+			<Sidebar.MenuItem class="group-data-[collapsible=icon]:hidden">
+				<ProjectSwitcher {project} />
 			</Sidebar.MenuItem>
 		</Sidebar.Menu>
 	</Sidebar.Header>
