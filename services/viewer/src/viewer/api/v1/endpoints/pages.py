@@ -12,7 +12,8 @@ reads through ``service_kit.lakehouse.blobs.read_aligned_table``
 (``blob_handling="all_binary"``), which returns the blob column and the tabular columns in ONE scan
 with nulls preserved, so alignment holds by construction and there is no mask to keep in step.
 
-See ``docs/architecture/lance-blob-v2-findings.md`` for the measurements behind that.
+See ``docs/architecture/lance-blob-v2-findings.md`` for the measurements behind that, and
+``docs/architecture/document-viewer.md`` for how this endpoint came to exist.
 """
 
 from __future__ import annotations

@@ -136,3 +136,7 @@ Two scripts, written during the 2026-07-28 investigation:
 
 Both run under `uv run python` against the root workspace's pylance. Re-run them when pylance moves —
 the cardinality bug in particular should be re-checked, and this note updated if upstream fixes it.
+
+## Who relies on this
+
+The document viewer (`services/viewer/.../pages.py`) is the read path these measurements govern — see [`document-viewer.md`](document-viewer.md).
