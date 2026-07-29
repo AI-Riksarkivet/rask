@@ -189,7 +189,12 @@ function visit(
 	// be hidden: a wildcard is the single widest grant the model can express.
 	for (const subject of leaf.users ?? []) {
 		nodeFor(subject, depth - 1, mechanismLabel(mechanism), acc);
-		link(subject, anchor, `${relation} · ${mechanismLabel(mechanism)}`, acc);
+		// The edge carries the RELATION only. The mechanism is already on the node this edge arrives at
+		// (`data.via` → "NAMESPACE · INHERITED FROM"), so repeating it here said the same thing twice and
+		// roughly doubled every label's width — Svelte Flow centres edge labels with no collision
+		// avoidance, so "can_read_data · inherited from" sat on top of the node boxes and of each other.
+		// One fact, one place: relation on the edge, mechanism on the node it explains.
+		link(subject, anchor, relation, acc);
 	}
 
 	// A same-object rung: `reader` satisfied because the subject is `writer` here.
@@ -210,7 +215,7 @@ function visit(
 			const childRelation = (child.name ?? '').split('#')[1] ?? relation;
 			if (!childObject) continue;
 			nodeFor(childObject, depth - 1, mechanismLabel('inherited-from'), acc);
-			link(childObject, anchor, `${relation} · ${mechanismLabel('inherited-from')}`, acc);
+			link(childObject, anchor, relation, acc);
 			visit(child, childObject, childRelation, depth - 1, 'direct', acc);
 		}
 	}
@@ -394,6 +399,22 @@ export type Positioned = GraphNode & { x: number; y: number };
  * resources right) that survives a graph with no edges at all. So we hand it `depthOf` and let it own
  * only the ordering.
  */
+/**
+ * Open the placer's gutters for THIS view's node size.
+ *
+ * The shared placer uses a fixed 240 px column / 110 px row, sized for the lineage zone's nodes. An
+ * access node is up to 220 px wide, which leaves a 20 px gutter — and Svelte Flow centres every edge
+ * label in exactly that gutter, with no collision avoidance. The result was `can_read_data` printed
+ * across the node box next to it. Stretching the placed coordinates (rather than forking the placer)
+ * keeps the barycentre ordering it computed and only changes the spacing it was never told about.
+ */
+// Kept SMALL on purpose. A big stretch does open the gutter, but it also makes the graph wider than the
+// canvas (which is ~760 px here — rail + inspector take the rest), and `fitView` answers that by zooming
+// OUT, so the labels stop colliding by becoming unreadable instead. The gutter is bought from the node's
+// max-width instead (see AccessGraphNode), which costs nothing in graph width.
+const COLUMN_STRETCH = 1.15;
+const ROW_STRETCH = 1.1;
+
 export function layout(
 	nodes: readonly GraphNode[],
 	edges: readonly GraphEdge[] = [],
@@ -409,6 +430,6 @@ export function layout(
 	);
 	return nodes.map((n) => {
 		const at = placed.get(n.id);
-		return { ...n, x: at?.x ?? 0, y: at?.y ?? 0 };
+		return { ...n, x: (at?.x ?? 0) * COLUMN_STRETCH, y: (at?.y ?? 0) * ROW_STRETCH };
 	});
 }

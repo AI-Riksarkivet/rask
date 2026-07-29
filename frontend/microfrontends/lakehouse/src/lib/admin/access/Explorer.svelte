@@ -427,7 +427,17 @@
 	 * pure emphasis, so it never fights the highlight a query already applied.
 	 */
 	let hovered = $state<string | null>(null);
+	/** Hovering an EDGE, not a node. A node answers "what does this touch"; an edge answers "what does
+	 *  this one grant connect" — on a dense canvas those are different questions, and only the first
+	 *  was answerable. One tuple IS an edge, so it deserves the same emphasis its endpoints get. */
+	let hoveredEdge = $state<string | null>(null);
 	const neighbours = $derived.by(() => {
+		if (hoveredEdge) {
+			const edge = filtered.edges.find((e) => e.id === hoveredEdge);
+			if (edge) {
+				return { ids: new Set([edge.source, edge.target]), edgeIds: new Set([edge.id]) };
+			}
+		}
 		if (!hovered) return null;
 		const ids = new Set<string>([hovered]);
 		const edgeIds = new Set<string>();
@@ -486,6 +496,22 @@
 			},
 			style: hoverStyle(e, near),
 		}));
+	});
+
+	/**
+	 * The stored tuples the current derivation rests on — the store's own facts, restricted to the
+	 * objects the answer actually touches.
+	 *
+	 * Both endpoints must be derivation nodes, so this is the sub-graph of the store INDUCED by the
+	 * answer rather than everything adjacent to it: the minimal set of real facts that reproduces the
+	 * verdict. Taken from `storeTuples` and never from the derivation's own edges — a derivation edge
+	 * can name a computed permission (`can_read_data`), which is not directly assignable and would be
+	 * rejected outright as a fixture tuple.
+	 */
+	const supportingTuples = $derived.by(() => {
+		if (!answer) return [];
+		const inAnswer = new Set(answer.nodes.map((n) => n.id));
+		return storeTuples.filter((t) => inAnswer.has(t.user) && inAnswer.has(t.object));
 	});
 
 	/** Edge chrome: the query's lit path wins, hover emphasises, everything else recedes. */
@@ -654,9 +680,12 @@
 						bind:edges
 						{nodeTypes}
 						fitView
+						fitViewOptions={{ maxZoom: 1, padding: 0.2 }}
 						onnodeclick={onNodeClick}
 						onnodepointerenter={(e) => (hovered = e.node.id)}
 						onnodepointerleave={() => (hovered = null)}
+						onedgepointerenter={(e) => (hoveredEdge = e.edge.id)}
+						onedgepointerleave={() => (hoveredEdge = null)}
 					>
 						<Background variant={BackgroundVariant.Dots} gap={16} />
 						<Controls />
@@ -676,6 +705,7 @@
 				{dsl}
 				assignableRelations={assignableForSelected}
 				mySub={me?.sub ?? null}
+				{supportingTuples}
 				onchanged={() => {
 	void loadNeighbourhood(seed);
 }}

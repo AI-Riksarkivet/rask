@@ -159,7 +159,20 @@ test.beforeEach(async ({ context, page }) => {
 
 const open = async (page: import('@playwright/test').Page) => {
 	await page.goto('/lakehouse/governance/access');
-	await expect(page.getByRole('heading', { name: 'Access', level: 1 })).toBeVisible();
+	// 20s, not the 5s `expect` default: this route pulls in Svelte Flow and its first paint on a dev
+	// server costs a full cold compile, which the per-test budget (30s) allows for and the per-assertion
+	// default does not.
+	//
+	// It is NOT the whole story, and the extra timeout does not make this deterministic — measured. When
+	// this line does fail, the page snapshot shows the shell rendered and `<main>` EMPTY, with the
+	// browser reporting `Failed to fetch dynamically imported module:
+	// .svelte-kit/generated/client/nodes/*.js`. That is the page node being rewritten underneath the
+	// browser mid-fetch, i.e. something else rebuilding this tree concurrently (measured: 137 writes
+	// into .svelte-kit in two minutes, 10 vite processes). No timeout fixes a module that 404s.
+	// The suite runs 11/11 on a quiet tree. See `reference-lakehouse-e2e-port-squat`.
+	await expect(page.getByRole('heading', { name: 'Access', level: 1 })).toBeVisible({
+		timeout: 20_000,
+	});
 };
 
 const ask = async (
@@ -327,6 +340,15 @@ test('a verdict exports as committable .fga.yaml', async ({ page }) => {
 	expect(yaml).toContain('- user: "user:alice"');
 	expect(yaml).toContain('object: "table:db1$t"');
 	expect(yaml).toContain('assertions: { can_read_data: true }');
+
+	// …and it must carry the FACTS, not just the claim. `fga model test` never contacts the OpenFGA
+	// server: it evaluates the model against the fixture written in the YAML. The verdict above came
+	// from the live store, so without a per-test `tuples:` block the pasted test asserts something
+	// about a subject the fixture has never heard of — and fails on paste. Measured before this was
+	// added: a real Dex `sub` exported alone gave `expected=true, got=false`, exit 1; with its tuples
+	// the same export runs 17/17, exit 0.
+	expect(yaml).toContain('tuples:');
+	expect(yaml).toContain('relation: parent');
 });
 
 test('the Grant dialog simulates before it writes, and says when a grant is a no-op', async ({

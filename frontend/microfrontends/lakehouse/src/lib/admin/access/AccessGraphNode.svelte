@@ -61,7 +61,11 @@
 
 <div
 	class={cn(
-	'flex min-w-[140px] max-w-[220px] items-center gap-2 rounded-md border px-2.5 py-1.5 shadow-sm transition-opacity',
+	// max-w is 180, not 220: the placer's column is 240 px, so a 220 px node left a 20 px gutter — and
+	// Svelte Flow centres every edge label in exactly that gutter with no collision avoidance, so
+	// `can_read_data` printed straight across the neighbouring node. Narrowing the node buys the gutter
+	// without widening the graph, which is what keeps `fitView` from zooming out to compensate.
+	'flex min-w-[130px] max-w-[180px] items-center gap-2 rounded-md border px-2.5 py-1.5 shadow-sm transition-opacity',
 	ROLE_CLASS[data.role],
 	excluded && 'border-destructive bg-destructive/10',
 )}

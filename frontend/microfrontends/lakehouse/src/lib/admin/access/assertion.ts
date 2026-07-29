@@ -16,6 +16,13 @@ export type Assertion = {
 	allowed: boolean;
 };
 
+/** One stored relationship tuple — a FACT the assertion depends on, not a claim about it. */
+export type TupleFact = {
+	user: string;
+	relation: string;
+	object: string;
+};
+
 /** A YAML double-quoted scalar. Ids here are `type:id` and relations are `[a-z_]+`, so the only
  *  characters that realistically need it are the quote and backslash — handled rather than assumed
  *  away, because an id is user-supplied text and a silently broken export is worse than none. */
@@ -28,7 +35,24 @@ const scalar = (value: string): string => `"${value.replace(/\\/g, '\\\\').repla
  * `check` entry with a combined `assertions` map. That is how the existing file is written, and it
  * reads as a statement about that subject rather than as repetition.
  */
-export function toFgaYaml(name: string, assertions: readonly Assertion[]): string {
+export function toFgaYaml(
+	name: string,
+	assertions: readonly Assertion[],
+	/**
+	 * The stored tuples the verdict rests on, emitted as a PER-TEST `tuples:` block.
+	 *
+	 * Without these the export is a trap. `fga model test` never contacts the OpenFGA server — it
+	 * evaluates the model against the fixture written in the YAML, in memory. The verdict you just saw
+	 * came from the LIVE store (Postgres), so a subject that exists there and not in the checked-in
+	 * fixture — every real OIDC `sub`, which is exactly what you would be debugging — pastes in as a
+	 * test that fails immediately. Verified: a live Dex sub exported without its tuples gives
+	 * `expected=true, got=false` and exit 1.
+	 *
+	 * A test-local `tuples:` block layers on top of the file's global fixture (verified against the
+	 * CLI), so the pasted block is self-contained and does not require editing the shared fixture.
+	 */
+	tuples: readonly TupleFact[] = [],
+): string {
 	if (assertions.length === 0) return '';
 	const grouped = new Map<string, { user: string; object: string; rels: Map<string, boolean> }>();
 	for (const a of assertions) {
@@ -38,7 +62,16 @@ export function toFgaYaml(name: string, assertions: readonly Assertion[]): strin
 		grouped.set(key, entry);
 	}
 
-	const lines = ['tests:', `  - name: ${name}`, '    check:'];
+	const lines = ['tests:', `  - name: ${name}`];
+	if (tuples.length > 0) {
+		lines.push('    tuples:');
+		for (const t of tuples) {
+			lines.push(`      - user: ${scalar(t.user)}`);
+			lines.push(`        relation: ${t.relation}`);
+			lines.push(`        object: ${scalar(t.object)}`);
+		}
+	}
+	lines.push('    check:');
 	for (const { user, object, rels } of grouped.values()) {
 		const map = [...rels].map(([r, ok]) => `${r}: ${ok}`).join(', ');
 		lines.push(`      - user: ${scalar(user)}`);

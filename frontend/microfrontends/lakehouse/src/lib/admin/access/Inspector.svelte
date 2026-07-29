@@ -45,10 +45,22 @@
 		/** The signed-in subject, so "grant to me" is one click and nobody has to know their own
 		 *  opaque OIDC sub. */
 		mySub: string | null;
+		/** The stored tuples the current verdict rests on — exported WITH the assertion so the pasted
+		 *  test is self-contained. See `toFgaYaml`: `fga model test` never reads the live store. */
+		supportingTuples: readonly Tuple[];
 		onchanged: () => void;
 	};
 
-	let { selected, verdict, chain, dsl, assignableRelations, mySub, onchanged }: Props = $props();
+	let {
+		selected,
+		verdict,
+		chain,
+		dsl,
+		assignableRelations,
+		mySub,
+		supportingTuples,
+		onchanged,
+	}: Props = $props();
 
 	let tuples = $state<Tuple[] | null>(null);
 	let status = $state(0);
@@ -104,7 +116,7 @@
 			relation: verdict.relation,
 			allowed: verdict.allowed,
 		};
-		return toFgaYaml(assertionName(a), [a]);
+		return toFgaYaml(assertionName(a), [a], supportingTuples);
 	});
 	let copied = $state(false);
 
