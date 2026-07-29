@@ -108,7 +108,7 @@ jobs:
           curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
 
       # Turborepo workspace bun gates — svelte-check, TypeScript 7 (tsgo), unit tests, lint and fmt:check
-      # fan out over the packages/* AND microfrontends/* (the 4 micro-frontend zones) workspace. All
+      # fan out over the packages/* AND microfrontends/* (the 7 micro-frontend zones) workspace. All
       # five are PACKAGE tasks now, so turbo parallelises and caches them instead of running lint/fmt once
       # repo-wide over a hand-maintained path list. ONE linter and ONE formatter cover every extension:
       # oxlint (with @rsvelte/oxlint-plugin for .svelte) and rsvelte-fmt (which delegates everything that
@@ -135,7 +135,12 @@ jobs:
         working-directory: frontend
         run: bunx playwright install --with-deps chromium
 
-      # All 4 zones' e2e (home/lakehouse/media/annotator), fanned by turbo. Run SERIALLY
+      # e2e for the FOUR zones that define `test:e2e` — home, lakehouse, media, annotator — fanned by
+      # turbo, which discovers the task rather than reading a list here. `compute`, `studio` and `train`
+      # ship no e2e at all, so this leg is 4-of-7 coverage, not full coverage. That is a real gap, not a
+      # naming leftover: the other six "four zone" counts in this job WERE leftovers (there are seven
+      # zone images) and have been corrected, which would otherwise make this accurate four read as one
+      # more of them. Run SERIALLY
       # (--concurrency=1): each zone spins its own vite SSR dev server + a chromium instance, and running
       # every first-compile at once blows the per-server startup window on a 2-core runner. (lakehouse alone
       # runs TWO dev servers — auth-off for three areas, auth-on for admin — each with its own warmup.)
@@ -151,7 +156,7 @@ jobs:
           path: frontend/microfrontends/*/test-results/
           retention-days: 7
 
-  # The four micro-frontend zone images. Until now `.docker/frontend.dockerfile` was hand-run only, out
+  # The seven micro-frontend zone images. Until now `.docker/frontend.dockerfile` was hand-run only, out
   # of `make frontend-images`, so a break in it stayed invisible until somebody deployed by hand — and
   # that has already happened once (the `eslint-rules` workspace member the COPY lines never included
   # broke every zone build for as long as it existed). @repo/zone-contract regex-scrapes the COPY lines
@@ -160,14 +165,14 @@ jobs:
   # a yanked base-image digest. Only a real build catches those.
   #
   # Cost, measured on a 4 vCPU / 16 GB buildx builder (a public-repo ubuntu-latest runner) against a
-  # clean `git archive` checkout, all four zones sequential: 4m53s, of which ~29s per zone is a tarball
+  # clean `git archive` checkout, all seven zones sequential (measured at four: 4m53s), of which ~29s per zone is a tarball
   # export that `docker build` on the runner's own builder does not pay. The critical path of this
   # workflow is `frontend` at 12m16s (8m11s of it the serial Playwright fan-out), so this job finishes
   # inside the shadow of a job that was already there and adds ZERO wall clock.
   #
   # Every push, not just main: catching a broken dockerfile after it lands on main is the failure mode,
   # not the fix. No paths filter and no `turbo --affected` gating either — `packages/ui` is a dependency
-  # of all four zones, so the common frontend change affects all four anyway, and a hand-written paths
+  # of all seven zones, so the common frontend change affects all seven anyway, and a hand-written paths
   # list would be a sixth hand-maintained statement about the monorepo's shape. This repo has been bitten
   # three times by exactly that (Makefile ZONES listing seven dead zones, the dockerfile COPY lines,
   # microfrontends.json keys vs package names) — @repo/zone-contract exists because of it.
@@ -210,12 +215,12 @@ jobs:
       # Deliberately NO cross-run layer cache (no `cache-from/to: type=gha`). The claim this gate makes
       # is "the dockerfile still builds"; a cache hit means it replayed instead of building. Cold also
       # exercises the pinned oven/bun digest and real `bun install --frozen-lockfile` resolution, both of
-      # which a warm cache hides. And `mode=max` on four 1.3 GB images would spend ~5 GB of a 10 GB
+      # which a warm cache hides. And `mode=max` on seven 1.3 GB images would spend well over the 10 GB
       # repo-wide cache budget, evicting the setup-uv and setup-bun caches three other jobs depend on —
       # slowing the rest of CI down to speed this up. The one cache that does matter is free: the
       # `bun install` layer does not reference ${APP}, so zones 2..4 reuse it (61s for the first zone,
       # 45s for each one after).
-      - name: Build all four zone images
+      - name: Build every zone image
         run: make frontend-images
 
       # Image size is not gated, just recorded — the annotator carries a deferred OpenCV bundle and the
@@ -244,7 +249,7 @@ jobs:
       # the runtime must ship node_modules at the depth the isolated-linker symlinks expect). A
       # build-only gate is green on that image. So run each zone and make it serve a page.
       #
-      # No backend is needed — all four zones SSR their landing page against nothing. The base path is
+      # No backend is needed — every zone SSRs its landing page against nothing. The base path is
       # read out of the zone's own svelte.config.js instead of being hardcoded, so this does not become
       # yet another place that has to agree about zone layout: home's base is empty, the domain zones
       # pin /<zone>. Redirects are followed because a zone root may hand off to its landing area.
