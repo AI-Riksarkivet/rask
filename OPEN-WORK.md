@@ -532,6 +532,56 @@ explicitly kept-with-a-banner or deleted-with-its-referrers-fixed.
 
 ---
 
+## G. The chart provisions RBAC and consumers for things it never installs *(new, 2026-07-29)*
+
+Two independent findings, same shape: a resource type or service is referenced by working code, granted
+RBAC, and consumed by the UI — while the chart never creates it. Each presents as an empty list or a
+500 far from the cause.
+
+### G1 · No `Project` CRD, so no project can exist
+
+`services/controlplane/src/controlplane/k8s.py:10-13` lists
+`group=platform.rask.io, version=v1alpha1, plural=projects`. That CRD is **not installed and not
+shipped**:
+
+```
+kubectl get crd projects.platform.rask.io   → NotFound
+grep -rl platform.rask.io chart/            → only templates/controlplane.yaml (the RBAC)
+/api/projects                               → {"detail":"cannot reach kubernetes api"}
+```
+
+So the chart grants a ClusterRole over a resource type it never registers. The controlplane pod is
+healthy and correctly configured; Kubernetes 404s because the type does not exist. A "Default" project
+is not missing — **no project can be created at all.**
+
+The frontend disagrees on purpose and that hides it: the sidebar switcher falls back to
+`{ name: 'Default', subtitle: 'Project' }` derived from the request host, so the UI displays a project
+the backend has never heard of. Two sources, one placeholder, and the mismatch reads as a display bug.
+
+Fix: ship the CRD (`chart/crds/` or a template) and either seed a default `Project` CR or give the UI
+a create path. Until then `/lakehouse/catalog/projects` and the home picker can only be empty.
+
+### G2 · `compute` is built and imported but never deployed
+
+`.docker/compute.dockerfile` exists, `make k3s-build`/`k3s-import` build and load `compute:dev`, and
+the gateway routes `/api/ray` + `/api/serve` to dapr app-id `compute` unconditionally
+(`gateway/__init__.py:78,103,105`). But the Deployment renders only under `singleTenant.enabled`
+(`chart/templates/fleet.yaml:12`), which defaults false and is set by no shipped path — not
+`make k3s-up`, not `values-prod.yaml`, not the Tiltfile.
+
+Result: `/api/ray/*` answers `ERR_DIRECT_INVOKE: failed to resolve compute-dapr…` on every default
+install. `Makefile:406` prints that exact route as the post-install check, and `dev-frontends-k3s`
+blocks forever polling it.
+
+`compute` is not a single-tenant concept — it is a client for a Ray dashboard URL
+(`settings.ray_dashboard_url`), and the Ray cluster is EXTERNAL (`https://dev-kuberay.ra.se`,
+reachable). Fix: render it unconditionally the way `controlplane.yaml` already does. `rayservice.yaml`
+carries the same gate but is genuinely optional — an in-cluster Ray is only wanted for exercising
+auth/OpenBao/Dapr locally.
+
+
+---
+
 ## How this survives
 
 1. **P0** of `docs/architecture/lance-ns-merge.md` copies this file to `rask/docs/OPEN-WORK.md`.
