@@ -79,6 +79,18 @@
 					"paths": ["/train", "/train/:path*"]
 				}
 			]
+		},
+		"workbench": {
+			"development": {
+				"local": {
+					"port": 5179
+				}
+			},
+			"routing": [
+				{
+					"paths": ["/workbench", "/workbench/:path*"]
+				}
+			]
 		}
 	}
 }

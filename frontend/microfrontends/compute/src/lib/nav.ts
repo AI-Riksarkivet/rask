@@ -30,8 +30,9 @@ export const COMPUTE_ZONE_NAV: ZoneNav = {
 					// Jobs + capacity + actors in one dock, so "is this job starved or stuck?" is a glance
 					// rather than two navigations.
 					title: 'Workbench',
-					href: '/compute/workbench',
-					match: seg('/compute/workbench'),
+					href: '/workbench/',
+					match: seg('/workbench'),
+					reload: true,
 					icon: LayoutDashboard,
 				},
 				{ title: 'Nodes', href: '/compute/cluster', match: seg('/compute/cluster'), icon: Server },
