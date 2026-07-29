@@ -93,11 +93,14 @@ spec:
      entry is picked up here automatically. */}}
 {{- $invoked := list .Values.services.catalog.daprAppId .Values.services.lineage.daprAppId }}
 {{- $lakehouse := list "catalog" "lineage" }}
-{{- if .Values.singleTenant.enabled }}
+{{- /* Mirrors fleet.yaml's gate EXACTLY — `frontDoor` or singleTenant — because this list claims to be
+     DERIVED from it. It was restated as `if singleTenant.enabled` alone, so the moment compute became a
+     front-door service the two drifted: compute rendered a pod the gateway invokes while this CR did not
+     target it, leaving it with no timeout, no retry and no circuit breaker — the identical call to
+     catalog had all three. gateway is excluded because it is the CALLER, not a target. */}}
 {{- range $name, $svc := .Values.services }}
-{{- if and (not (has $name $lakehouse)) (ne $name "gateway") }}
+{{- if and (not (has $name $lakehouse)) (ne $name "gateway") (or $svc.frontDoor $.Values.singleTenant.enabled) }}
 {{- $invoked = append $invoked $name }}
-{{- end }}
 {{- end }}
 {{- end }}
 {{- if .Values.controlplane.enabled }}

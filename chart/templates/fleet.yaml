@@ -9,7 +9,14 @@
      fleet entry needs nothing. */}}
 {{- $lakehouse := list "catalog" "lineage" }}
 {{- range $name, $svc := .Values.services }}
-{{- if and (not (has $name $lakehouse)) (or (eq $name "gateway") $root.Values.singleTenant.enabled) }}
+{{- /* `frontDoor: true` = part of the DEFAULT install, regardless of singleTenant. This gate used to
+       name "gateway" literally, so every other front-door service was invisible unless someone set a
+       LEGACY single-tenant flag. compute is the case that exposed it: it has an image, is built and
+       imported by k3s-build/k3s-import, and the gateway routes /api/ray + /api/serve to its app-id
+       UNCONDITIONALLY — so a default install answered ERR_DIRECT_INVOKE on the very route Makefile:406
+       prints as its post-install check, and dev-frontends-k3s blocked forever polling it. compute is
+       not a single-tenant concept; it is a client for a Ray dashboard URL, and Ray is external. */}}
+{{- if and (not (has $name $lakehouse)) (or $svc.frontDoor $root.Values.singleTenant.enabled) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

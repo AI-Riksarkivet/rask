@@ -94,12 +94,16 @@ services:
     module: "compute:app"
     port: 8804
     replicas: 1
+    # Part of the default install: the gateway routes /api/ray + /api/serve to this app-id
+    # unconditionally, so an install without it 500s on those routes.
+    frontDoor: true
     waitFor: []
     rayClient: true # dashboard introspection + /api/serve proxy => gets the RAY_AUTH_* pair when ray.auth.enabled
   gateway:
     module: "gateway:app"
     port: 8888
     replicas: 1
+    frontDoor: true
     extraArgs: ["--proxy-headers", "--forwarded-allow-ips=127.0.0.1"]
     # The gateway proxies /api/* to backends, so probing a proxied path would couple
     # its readiness to an upstream. Probe its own unproxied /healthz instead, so it

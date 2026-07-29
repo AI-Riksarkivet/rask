@@ -561,7 +561,7 @@ the backend has never heard of. Two sources, one placeholder, and the mismatch r
 Fix: ship the CRD (`chart/crds/` or a template) and either seed a default `Project` CR or give the UI
 a create path. Until then `/lakehouse/catalog/projects` and the home picker can only be empty.
 
-### G2 · `compute` is built and imported but never deployed
+### ~~G2 · `compute` is built and imported but never deployed~~ **FIXED 2026-07-29**
 
 `.docker/compute.dockerfile` exists, `make k3s-build`/`k3s-import` build and load `compute:dev`, and
 the gateway routes `/api/ray` + `/api/serve` to dapr app-id `compute` unconditionally
@@ -575,7 +575,10 @@ blocks forever polling it.
 
 `compute` is not a single-tenant concept — it is a client for a Ray dashboard URL
 (`settings.ray_dashboard_url`), and the Ray cluster is EXTERNAL (`https://dev-kuberay.ra.se`,
-reachable). Fix: render it unconditionally the way `controlplane.yaml` already does. `rayservice.yaml`
+reachable). Fix: render it unconditionally the way `controlplane.yaml` already does. **Fixed:** `fleet.yaml`'s gate named `"gateway"` literally; it now reads `$svc.frontDoor`, and both
+gateway and compute declare it. `dapr-resiliency.yaml` restated that gate as `singleTenant` alone while
+claiming to derive it — so it was corrected in the same pass, or compute would have rendered a pod the
+gateway invokes with no timeout, retry or circuit breaker. `rayservice.yaml`
 carries the same gate but is genuinely optional — an in-cluster Ray is only wanted for exercising
 auth/OpenBao/Dapr locally.
 
