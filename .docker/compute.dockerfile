@@ -63,8 +63,12 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && useradd -r --no-create-home --shell /usr/sbin/nologin --uid 10001 app
 
+# See .docker/rest-catalog.dockerfile for why: a root-owned venv makes Tilt's live_update fail with
+# exit code 2 and silently fall back to a full rebuild. Dev builds pass 10001:10001; prod stays root.
+ARG VENV_OWNER=root:root
 RUN --network=none --mount=from=builder,source=/opt/venv,target=/tmp/venv \
-    cp -a /tmp/venv /opt/venv
+    cp -a /tmp/venv /opt/venv \
+ && if [ "${VENV_OWNER}" != "root:root" ]; then chown -R "${VENV_OWNER}" /opt/venv; fi
 
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \

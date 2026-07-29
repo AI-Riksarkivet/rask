@@ -44,10 +44,27 @@ default_registry('localhost:5000')
 # Where the wheels land in the final image (see .docker/rest-catalog.dockerfile).
 SITE = '/opt/venv/lib/python3.13/site-packages'
 
+# THE reason live_update never landed a single file, found 2026-07-29 by reading Tilt's own build
+# history rather than its config: the sync fired, and the container refused the write.
+#
+#   spanID "liveupdate:rask-catalog:lance-rest-catalog"
+#   error  "Updating pod …: command terminated with exit code 2
+#           This usually means the container filesystem denied access."
+#
+# The prod dockerfiles copy the venv as root and then `USER 10001`, so site-packages is root:root 0755
+# and the account running the app cannot write into the very directory every sync targets. Tilt then
+# does what it is designed to do — falls back to a full image build — which is why an edit produced a
+# ~90 s rebuild and a new ReplicaSet instead of a reload. `dev.reload` had already cleared
+# readOnlyRootFilesystem; ownership is a SECOND, independent gate, and nothing reports it as one.
+#
+# Passed only here, so shipped images keep an immutable venv. Every Python image below takes it.
+VENV_OWNER = {'VENV_OWNER': '10001:10001'}
+
 docker_build(
     'lance-rest-catalog', '.',
     dockerfile='.docker/rest-catalog.dockerfile',
     only=['.docker', 'pyproject.toml', 'uv.lock', 'packages', 'services'],
+    build_args=VENV_OWNER,
     live_update=[
         # The src-layout rewrite (2026-07-28) made this image install its members as WHEELS into
         # /opt/venv — there is no /srv/services any more, so the old `sync('services', '/srv/services')`
@@ -83,6 +100,7 @@ for svc in ['gateway', 'controlplane', 'compute']:
         svc + ':dev', '.',
         dockerfile='.docker/' + svc + '.dockerfile',
         only=['.docker', 'pyproject.toml', 'uv.lock', 'packages', 'services'],
+        build_args=VENV_OWNER,
         live_update=[
             sync('services/' + svc + '/src/' + svc, SITE + '/' + svc),
             sync('packages/service-kit/src/service_kit', SITE + '/service_kit'),

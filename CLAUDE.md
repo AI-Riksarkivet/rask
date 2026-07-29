@@ -80,16 +80,33 @@ make tilt-verify     # PROVE live_update reaches a pod (SERVICE=catalog by defau
 make k9s             # inspect the cluster (installed into .localbin by `make bootstrap`)
 ```
 
-> **STATUS 2026-07-28: `live_update` does NOT work here — tilt rebuilds the whole image
-> instead of syncing.** Nine real blockers were found and fixed (context allow-list, registry,
-> `dev.reload` wiring, reload dirs, `readOnlyRootFilesystem`, helm timeout, …) and it still
-> never synced once. Tilt's own API is the evidence: `tilt get liveupdates` shows the object
-> with correct sync paths and discovered containers, but every `lastFileTimeSynced` is `null`
-> and `kubernetesapplys/rask` reports `live-update: False`. The cause is structural —
-> `helm_resource` + `live_update` — not a config bug. Everything below is correct and ready
-> if that is ever resolved; `make tilt-verify` re-checks in ~90s. **Until then the faster
-> lever is narrowing `make k3s-build`, which rebuilds EVERY image (the ray-cluster export
-> alone measures 238 s) when usually one service changed.**
+> **STATUS 2026-07-29: `live_update` WORKS — `make tilt-verify` reports `SYNCED in 2s`.** It had
+> never synced once before this date. There were **two** independent causes, and fixing either alone
+> changes nothing:
+>
+> 1. **`helm_resource` meant Tilt never owned the Kubernetes objects.** It shells out to
+>    `helm upgrade` behind `k8s_custom_deploy`, so Tilt knew exactly what it wanted to sync and had no
+>    container it owned to sync into — `lastFileTimeSynced: null`, `live-update: False`. The Tiltfile
+>    now renders with `helm template` + `k8s_yaml`: **`k3s-up` owns the platform, Tilt owns the app
+>    Deployments.**
+> 2. **The venv was root-owned, so the container refused the write.** The Python dockerfiles copy
+>    `/opt/venv` as root and then `USER 10001`; live_update untars into site-packages *as that user* and
+>    got exit code 2, after which Tilt correctly fell back to a full rebuild. That fallback is what made
+>    an edit cost ~90 s and a new ReplicaSet. Dev builds now pass `VENV_OWNER=10001:10001`
+>    (Tiltfile → `ARG VENV_OWNER`); shipped images keep an immutable root-owned venv.
+>
+> The lesson worth keeping: **`dev.reload` clearing `readOnlyRootFilesystem` is necessary but not
+> sufficient** — ownership is a second gate, and nothing surfaces it as one. Tilt's *build history*
+> (`tilt get uiresources <r> -o json` → `buildHistory[].error`, span `liveupdate:*`) named the cause in
+> one line; its *config* (`tilt get liveupdates`) looked perfect throughout. Read the history, not the spec.
+>
+> Nine earlier "blockers" (context allow-list, registry, `dev.reload` wiring, reload dirs,
+> `readOnlyRootFilesystem`, helm timeout, …) were all real and none of them was the cause.
+>
+> **Still slow: `make k3s-build` rebuilds EVERY image** (the ray-cluster export alone measures 238 s)
+> when usually one service changed. Separately, `.docker/frontend.dockerfile` copies **all seven zones'
+> sources** before `bun install`, so touching one zone invalidates the install layer of all seven images
+> (~90 s each). Both are open.
 
 **`make tilt-verify` is not optional ceremony.** This repo shipped a Tiltfile for months
 that could never have worked — it synced into a path that did not exist, against services
