@@ -50,8 +50,26 @@ class Store(BaseModel):
     """One registered object store."""
 
     name: str = Field(description="Stable identifier used by the object browser and the API.")
-    bucket: str = Field(description="The bucket backing it on the configured S3 endpoint.")
+    bucket: str = Field(description="The bucket backing this store on `endpoint`.")
     role: StorageRole = Field(description="Where this store sits in the cascade.")
+    endpoint: str | None = Field(
+        default=None,
+        description=(
+            "S3 endpoint this bucket lives on. `None` means the deployment's configured default "
+            "(RASK_S3_ENDPOINT_URL) — which is what every governed tier uses."
+        ),
+    )
+    insecure: bool = Field(
+        default=False,
+        description="Skip TLS verification for this endpoint. Needed for internal hosts with private CAs.",
+    )
+    secret: str | None = Field(
+        default=None,
+        description=(
+            "Key in the Dapr secret store holding this store's credentials as "
+            "`{access_key, secret_key}`. None = the deployment's own env credentials."
+        ),
+    )
     description: str = Field(default="", description="What a reader should expect to find here.")
     read_only: bool = Field(
         default=True,
@@ -62,6 +80,23 @@ class Store(BaseModel):
     )
 
 
+#: Why `endpoint` exists at all, since every governed tier shares one:
+#:
+#: RAW IS NOT ON THE WAREHOUSE. The medallion tiers live on the RustFS this chart deploys, but the raw
+#: page images live on an external store (HCP) — a different host entirely. Before this field, `Store`
+#: could only say "bucket X on THE configured endpoint", so the object browser asked the warehouse for
+#: `images-batch`, the warehouse correctly answered "no such objects", and a bucket full of images
+#: rendered as an empty store. The data was never missing; the registry could not say where it was.
+#:
+#: `None` rather than a required field: the governed tiers genuinely do share the deployment default,
+#: and forcing every entry to repeat it would invite four copies of one value that drift apart.
+#:
+#: NOT YET SOLVED, and deliberately not faked here: `storage.s3_client(endpoint)` resolves CREDENTIALS
+#: from process env, so a store on a different provider needs its own credentials and there is nowhere
+#: to put them. Attaching a bucket that shares the deployment's credentials works today; attaching one
+#: that does not needs a secret reference resolved through the Dapr secret store (OpenBao), which is a
+#: separate change. Until then such a store fails with an auth error, which is at least a loud and
+#: explicable failure rather than a silently empty listing.
 class StoreRegistry(BaseModel):
     """Every store the catalog knows, newest contract first.
 

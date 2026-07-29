@@ -21,16 +21,22 @@ only a genuine outage — unreachable endpoint, bad credentials — still reache
 500 path, which is what a 500 should mean.
 """
 
-from typing import Annotated
+import logging
+import os
+from functools import lru_cache
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
 from service_kit.exceptions import NotFoundError
-from service_kit.schemas.storage import store_by_name
+from service_kit.governed.secrets import fetch_dapr_secret
+from service_kit.schemas.storage import Store, store_by_name
 from storage import BucketNotFoundError, ObjectNotFoundError, s3_client, s3_errors
 
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["objects"])
 
@@ -41,8 +47,8 @@ router = APIRouter(prefix="/api", tags=["objects"])
 #: discipline, and neither saying what either bucket was FOR. Registering a store is now config
 #: (``LANCE_STORES``); this endpoint and the UI validate against the SAME list, so they cannot
 #: disagree about which stores exist.
-def _registered_bucket(name: str) -> str:
-    """Resolve a store NAME to its bucket, or 404 naming the store.
+def _registered_store(name: str) -> Store:
+    """Resolve a store NAME to its registry entry, or 404 naming the store.
 
     A 404 rather than a 422: an unregistered store is a missing resource, not a malformed request,
     and the distinction matters to a browser that lists stores from the registry — if it asks for
@@ -51,7 +57,55 @@ def _registered_bucket(name: str) -> str:
     store = store_by_name(name)
     if store is None:
         raise NotFoundError(f"no registered store named {name!r}")
-    return store.bucket
+    return store
+
+
+def _registered_bucket(name: str) -> str:
+    """The bucket behind a store name. Kept for call sites that need only the bucket."""
+    return _registered_store(name).bucket
+
+
+@lru_cache(maxsize=32)
+def _creds(secret: str) -> tuple[str, str] | None:
+    """This store's credentials from the Dapr secret store, or None if unavailable.
+
+    Cached: the secret is estate config, not per-request data, and one sidecar round-trip per object
+    listing would put OpenBao on the hot path of the object browser.
+
+    The governed tiers pass no secret and keep using the process env, so the deployment's own store is
+    untouched. A store on ANOTHER backend needs its own keys, and env holds exactly one pair — which is
+    why raw could never be read from a process configured for the warehouse.
+    """
+    store = os.getenv("RASK_SECRET_STORE", "lance-secrets")
+    try:
+        data = fetch_dapr_secret(store, secret, retries=1)
+    except Exception:  # noqa: BLE001 — a missing secret must degrade to env, not 500 the browser
+        log.warning("store_secret_unavailable", extra={"secret": secret})
+        return None
+    ak, sk = data.get("access_key"), data.get("secret_key")
+    return (ak, sk) if ak and sk else None
+
+
+def _client_for(name: str) -> Any:  # noqa: ANN401 — boto3 client, same as storage.s3_client
+    """An S3 client for THIS store — its own endpoint, credentials and TLS posture.
+
+    Every route used a bare `s3_client()`, which resolves all three from process env, so every store
+    was read from the deployment's warehouse regardless of where it lives. The raw tier is external, so
+    `images-batch` was queried against the warehouse, correctly answered "no such objects", and a
+    bucket holding millions of objects rendered as empty. Nothing errored — the listing was silently
+    wrong, which is the least debuggable failure available.
+
+    All three fields are optional and default to the env chain, so the governed tiers behave exactly
+    as before.
+    """
+    store = _registered_store(name)
+    creds = _creds(store.secret) if store.secret else None
+    return s3_client(
+        store.endpoint,
+        access_key=creds[0] if creds else None,
+        secret_key=creds[1] if creds else None,
+        insecure=store.insecure or None,
+    )
 
 
 #: The dependency every route uses in place of the deleted union.
@@ -149,7 +203,7 @@ def list_objects(
 
     404s (never 500s) when the bucket itself is absent — see the module docstring.
     """
-    client = s3_client()
+    client = _client_for(bucket)
     paginator = client.get_paginator("list_objects_v2")
     prefixes: list[str] = []
     objects: list[S3Object] = []
@@ -189,7 +243,7 @@ def head_object(
     old blanket `except Exception` reported an outage as "object not found", which is
     the same lie in the other direction.
     """
-    client = s3_client()
+    client = _client_for(bucket)
     try:
         with s3_errors(bucket=bucket, key=key):
             resp = client.head_object(Bucket=_registered_bucket(bucket), Key=key)
@@ -223,7 +277,7 @@ def download_object(
     Same 404 split as the HEAD sibling (missing key vs missing bucket); outages still
     surface as outages.
     """
-    client = s3_client()
+    client = _client_for(bucket)
     try:
         with s3_errors(bucket=bucket, key=key):
             resp = client.get_object(Bucket=_registered_bucket(bucket), Key=key)

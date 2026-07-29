@@ -4,6 +4,10 @@
 /* Svelte Flow's stylesheet, ONCE for the zone and under `base` so Tailwind utilities still win over
    it (svelte-flow rule 3 — importing it per component lands it in that component's layer instead). */
 @import '@xyflow/svelte/dist/style.css' layer(base);
+/* …and the rask theme for it, immediately after the vendor sheet so its `--xy-*` defaults are the ones
+   being overridden. Without this the Controls widget and every edge label render in the library's
+   light-mode hex on a dark canvas — a white blob on all four Svelte Flow surfaces in this zone. */
+@import '@rask/ui/styles/svelte-flow.css' layer(base);
 /* @rask/dockview: the vendor sheet plus the --dv-* → OKLCH token mapping, in ONE import and under
    `base` for the same reason as Svelte Flow's above — dockview ships 124 KB of unlayered CSS whose
    selectors would otherwise out-specify the Tailwind utilities a panel's own content is styled with.

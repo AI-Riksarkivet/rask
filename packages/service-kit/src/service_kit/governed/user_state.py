@@ -62,6 +62,12 @@ class UserStateDocument(StrEnum):
     #: per workbench on purpose: the enum is a closed key space precisely so a caller cannot mint keys,
     #: and a zone adding a workbench must not require a release of this package to store its layout.
     DOCK_LAYOUT = "dock-layout"
+    #: Object stores attached from the UI, as a list of `Store`. ESTATE-scoped, not per-user: it is
+    #: written under the reserved `ESTATE_SUBJECT` rather than a person, because a bucket someone
+    #: attaches must be visible to everyone the FGA layer permits — a per-user copy would make the
+    #: same bucket appear and disappear depending on who is looking, which is indistinguishable from
+    #: the store being broken. The estate-admin door on the write is what keeps that safe.
+    ATTACHED_STORES = "attached-stores"
 
 
 class UserStateUnreadable(Exception):
@@ -91,6 +97,16 @@ class StoredState(BaseModel):
     document: UserStateDocument
     updated_at: datetime
     value: JsonValue
+
+
+#: The subject that owns ESTATE-scoped documents (currently only `ATTACHED_STORES`).
+#:
+#: A reserved name rather than a person, and it cannot collide with one: every real subject here is an
+#: OIDC `sub`, and no issuer mints one shaped like this. It rides the same key space, encoder and
+#: fail-closed read semantics as user documents instead of introducing a second persistence path for
+#: three fields — the store, the 503-on-unreachable rule and the absent/unreadable distinction are all
+#: things estate config needs exactly as much as a saved layout does.
+ESTATE_SUBJECT = "__estate__"
 
 
 def encode_subject(subject: str) -> str:

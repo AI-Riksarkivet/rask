@@ -41,6 +41,30 @@ export const listStores = (): Promise<ApiResult<{ stores: Store[] }>> =>
 export const listStoresByTier = (): Promise<ApiResult<Record<string, Store[]>>> =>
 	request<Record<string, Store[]>>('/capi', 'v1/stores/tiers');
 
+/** What the attach form collects. `read_only` is absent on purpose — the catalog forces it true, so
+ *  offering the choice here would be a control that does nothing. */
+export type StoreDraft = {
+	name: string;
+	bucket: string;
+	role: StorageRole;
+	endpoint: string | null;
+	description: string;
+};
+
+/** Attach a bucket for BROWSING. Registers only — reads nothing and ingests nothing.
+ *
+ *  Estate-admin gated server-side (`can_observe_events` on the root object): a 403 here means the
+ *  caller may not attach, and the form must say so rather than disable a button and leave the reason
+ *  to guesswork. Returns the WHOLE registry so the caller re-renders from the server's answer instead
+ *  of appending its own optimistic copy — the catalog forces `read_only` and may normalise, and a
+ *  local append would show a row that differs from what was stored. */
+export const attachStore = (draft: StoreDraft): Promise<ApiResult<{ stores: Store[] }>> =>
+	request<{ stores: Store[] }>('/capi', 'v1/stores', {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ ...draft, endpoint: draft.endpoint?.trim() || null }),
+	});
+
 /** One object under a prefix (mirrors `S3Object`). */
 export type S3Object = { key: string; size: number; last_modified: string | null };
 
@@ -80,18 +104,30 @@ export const fetchObjectBytes = (bucket: Bucket, key: string): Promise<ApiResult
 	binary('/api', `media/object/download?${q({ bucket, key })}`);
 
 /** How the preview pane renders an object: inline image, decoded text, or metadata-only. */
-export type PreviewKind = 'image' | 'text' | 'binary';
+export type PreviewKind = 'image' | 'text' | 'video' | 'audio' | 'pdf' | 'binary';
 
 // Extension first (the buckets' keys are honest about their format), content-type as the fallback
 // for extension-less keys. TIFF is deliberately NOT an inline image — browsers cannot render it.
 const IMAGE_EXT = /\.(jpe?g|png|gif|webp|avif|svg)$/i;
 const TEXT_EXT = /\.(xml|alto|json|jsonl|txt|md|csv|tsv|ya?ml|log)$/i;
+// Only what a browser can actually play with no plugin and no transcode. `.mkv` and `.avi` are
+// deliberately absent: they are containers a browser will refuse or half-play, and a dead <video>
+// element is a worse answer than an honest download link.
+const VIDEO_EXT = /\.(mp4|webm|ogv|m4v|mov)$/i;
+const AUDIO_EXT = /\.(mp3|wav|ogg|oga|m4a|flac|aac)$/i;
+const PDF_EXT = /\.pdf$/i;
 
 export function previewKind(key: string, contentType: string | null): PreviewKind {
 	if (IMAGE_EXT.test(key)) return 'image';
 	if (TEXT_EXT.test(key)) return 'text';
+	if (VIDEO_EXT.test(key)) return 'video';
+	if (AUDIO_EXT.test(key)) return 'audio';
+	if (PDF_EXT.test(key)) return 'pdf';
 	const ct = contentType ?? '';
 	if (/^image\/(jpeg|png|gif|webp|avif|svg)/.test(ct)) return 'image';
+	if (ct.startsWith('video/')) return 'video';
+	if (ct.startsWith('audio/')) return 'audio';
+	if (ct === 'application/pdf') return 'pdf';
 	if (ct.startsWith('text/') || ct.includes('xml') || ct.includes('json')) return 'text';
 	return 'binary';
 }

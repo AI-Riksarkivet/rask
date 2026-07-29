@@ -136,6 +136,21 @@
 				{#if textNote}<p class="note">{textNote}</p>{/if}
 				{#if text !== null}<pre class="text">{text}</pre>{/if}
 			{/if}
+		{:else if kind === 'video'}
+			<!-- `preload="metadata"`, never `auto`: the browser then fetches only the moov atom to size
+			     the player, instead of streaming a whole file through the gateway because a row was
+			     clicked. `controls` and no autoplay — a preview must not start making noise. -->
+			<!-- svelte-ignore a11y_media_has_caption -->
+			<video class="preview" src={downloadUrl(bucket, key)} controls preload="metadata"></video>
+		{:else if kind === 'audio'}
+			<audio class="preview-audio" src={downloadUrl(bucket, key)} controls preload="metadata"
+			></audio>
+		{:else if kind === 'pdf'}
+			<!-- <object> rather than <iframe>: it degrades to its own children when the browser has no
+			     PDF viewer, so the fallback is a link rather than a blank rectangle. -->
+			<object class="preview" data={downloadUrl(bucket, key)} type="application/pdf" title={key}>
+				<p class="mut">This browser cannot display PDFs inline — use Download below.</p>
+			</object>
 		{:else}
 			<p class="mut">No inline preview for this type ({head.content_type ?? 'unknown'}).</p>
 		{/if}
@@ -195,6 +210,15 @@
 		color: var(--ink);
 		word-break: break-all;
 	}
+	/* Audio has no visual box to constrain — a full-width native player is the whole affordance. */
+	.preview-audio {
+		width: 100%;
+		margin-top: 0.5rem;
+	}
+
+	/* Shared by <img>, <video> and <object>: one box so a preview never resizes the panel around it,
+	   whatever the media is. `object-fit: contain` matters for video too — a portrait clip must
+	   letterbox rather than crop, since the point is identifying the file, not presenting it. */
 	.preview {
 		max-width: 100%;
 		max-height: 320px;
@@ -202,6 +226,12 @@
 		border: 1px solid var(--line);
 		border-radius: var(--radius-sm);
 		background: var(--panel-2);
+	}
+
+	object.preview {
+		/* <object> has no intrinsic size — without a height it renders as a 0px sliver. */
+		width: 100%;
+		height: 320px;
 		margin-bottom: 12px;
 	}
 	.text {

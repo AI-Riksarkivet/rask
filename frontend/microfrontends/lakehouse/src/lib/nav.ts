@@ -76,16 +76,12 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 				href: '/lakehouse/catalog/storage',
 				match: seg('/lakehouse/catalog/storage'),
 				icon: HardDrive,
-				// The tier -> store view, nested under the browser it explains: "which store backs
-				// silver?" is a question about the same registry the browser lists from.
-				children: [
-					{
-						title: 'Stores by tier',
-						href: '/lakehouse/catalog/stores',
-						match: seg('/lakehouse/catalog/stores'),
-						icon: Layers,
-					},
-				],
+				// "Stores by tier" used to hang here as a CHILD. It is not a separate destination — it
+				// is a second lens on the registry the browser already lists from ("which store backs
+				// silver?"), so it now lives as a TAB inside the storage view itself
+				// (`catalog/storage/+layout.svelte`, route `catalog/storage/tiers`). A nested rail entry
+				// made two views of one subject read as two areas, and hung a second-level item beside
+				// top-level ones. The old `/catalog/stores` URL 308s to the tab.
 			},
 		],
 	},
