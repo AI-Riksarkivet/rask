@@ -37,11 +37,14 @@
 
 <DropdownMenu.Root>
 	<DropdownMenu.Trigger>
+		<!-- Fills the sidebar header rather than sitting inline: this is the rail's top slot, so the
+		     trigger is a full-width row like the menu items beneath it, and it keeps its shape when the
+		     rail collapses to icons (the label truncates away, the Boxes glyph remains). -->
 		{#snippet child({ props })}
 			<Button
 				{...props}
 				variant="ghost"
-				class="text-foreground max-w-48 min-w-0 gap-1.5 px-2"
+				class="text-foreground h-12 w-full min-w-0 justify-start gap-2 px-2"
 				aria-label="Switch project"
 			>
 				<Boxes class="text-muted-foreground" />
@@ -67,7 +70,9 @@
 		</DropdownMenu.Item>
 		<DropdownMenu.Separator />
 		<DropdownMenu.Item class="p-0">
-			<a href={homeUrl} class="flex w-full items-center gap-2 px-2 py-1.5">
+			<!-- data-sveltekit-reload: cross-zone by definition (home owns '/'), so a soft nav would ask
+			     THIS zone for a route it does not own and 404. Same rule every cross-zone link follows. -->
+			<a href={homeUrl} data-sveltekit-reload class="flex w-full items-center gap-2 px-2 py-1.5">
 				<div class="flex size-6 items-center justify-center rounded-md border bg-transparent">
 					<House class="size-4" />
 				</div>

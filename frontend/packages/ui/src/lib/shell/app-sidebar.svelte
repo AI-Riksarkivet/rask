@@ -1,10 +1,9 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { House } from '@lucide/svelte';
 	import * as Sidebar from '../components/sidebar/index.js';
 	import ProjectSwitcher from './project-switcher.svelte';
 	import ZoneNav from './zone-nav.svelte';
-	import { prefetchOnIntent, type Project, type ZoneNav as ZoneNavConfig } from './nav-config.js';
+	import type { Project, ZoneNav as ZoneNavConfig } from './nav-config.js';
 
 	// The zone-scoped sidebar: collapsible-to-icon, carrying ONLY the CURRENT zone's own routes
 	// (from the `zoneNav` prop each zone passes). Everything estate-wide moved up into the shell
@@ -25,36 +24,15 @@
 </script>
 
 <Sidebar.Root collapsible="icon">
-	<!-- The header carries the PROJECT switcher and the way home. It used to print the zone's own name,
-	     which said nothing: the active zone is already stated twice above — highlighted in the top
-	     navbar and spelled out in the breadcrumb — so a third copy spent the most valuable slot in the
-	     rail on information the user already had. What was missing there is the thing you cannot get
-	     anywhere else: which project you are in, and how to leave it.
-	     The house stays as the estate-root link (cross-zone, so it hard-navigates and warms on intent),
-	     and collapsed to icon that glyph is what remains — nobody has to learn it. -->
+	<!-- The header IS the project switcher: which project you are in, the projects you can move to, and
+	     the way back to the main menu — one control, in the slot every product puts project context.
+	     It used to print the ZONE's name, which the top-navbar highlight and the breadcrumb already say
+	     twice; a third copy spent the rail's most valuable slot on information the user already had.
+	     A separate Home row sat under it for a while, which was the same mistake in miniature — the
+	     dropdown's own "Main menu" item already goes there, so the row was a second door to one room. -->
 	<Sidebar.Header>
 		<Sidebar.Menu>
 			<Sidebar.MenuItem>
-				<Sidebar.MenuButton size="lg" tooltipContent="Home">
-					{#snippet child({ props })}
-						<a href="/" data-sveltekit-reload {...props} {@attach prefetchOnIntent('/')}>
-							<div
-								class="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 items-center justify-center rounded-lg"
-							>
-								<House class="size-4" />
-							</div>
-							<div class="grid flex-1 text-left text-sm leading-tight">
-								<span class="truncate font-medium">Home</span>
-								<span class="text-muted-foreground truncate text-xs">Back to the estate root</span>
-							</div>
-						</a>
-					{/snippet}
-				</Sidebar.MenuButton>
-			</Sidebar.MenuItem>
-			<!-- Hidden when the rail is icon-collapsed: a dropdown trigger squeezed into a 3rem rail is a
-			     mystery button, and the switcher is a deliberate act rather than something reached for
-			     mid-scan. -->
-			<Sidebar.MenuItem class="group-data-[collapsible=icon]:hidden">
 				<ProjectSwitcher {project} />
 			</Sidebar.MenuItem>
 		</Sidebar.Menu>
