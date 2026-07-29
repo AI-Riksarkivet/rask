@@ -182,6 +182,8 @@ def test_write_tuples_fails_closed_on_network_error() -> None:
             fga.write_tuples(
                 _down(),
                 tuples,
+                actor="test",
+                origin="admin_api",
                 retry_attempts=1,
                 retry_backoff_seconds=0.0,
                 retry_max_backoff_seconds=0.0,
@@ -234,6 +236,8 @@ def test_write_tuples_lands_siblings_when_one_tuple_already_exists() -> None:
         fga.write_tuples(
             cast(OpenFgaClient, store),
             [owner, parent, dupe],
+            actor="test",
+            origin="admin_api",
             retry_attempts=1,
             retry_backoff_seconds=0.0,
             retry_max_backoff_seconds=0.0,
@@ -257,6 +261,8 @@ def test_write_tuples_batch_without_duplicates_stays_one_call() -> None:
         fga.write_tuples(
             cast(OpenFgaClient, store),
             tuples,
+            actor="test",
+            origin="admin_api",
             retry_attempts=1,
             retry_backoff_seconds=0.0,
             retry_max_backoff_seconds=0.0,
@@ -274,6 +280,8 @@ def test_write_tuples_single_duplicate_is_still_a_no_op() -> None:
         fga.write_tuples(
             cast(OpenFgaClient, store),
             [ClientTuple(user="user:alice", relation="owner", object="warehouse:wh-a")],
+            actor="test",
+            origin="admin_api",
             retry_attempts=1,
             retry_backoff_seconds=0.0,
             retry_max_backoff_seconds=0.0,

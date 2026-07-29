@@ -241,7 +241,9 @@ async def handle_train_trigger(settings: MedallionSettings, event: Any, *, fga_c
         try:
             await fga.write_tuples(
                 fga_client,
-                [
+                actor="system:medallion",
+                origin="train",
+                tuples=[
                     ClientTuple(
                         user=f"namespace:{settings.models_namespace}",
                         relation="parent",

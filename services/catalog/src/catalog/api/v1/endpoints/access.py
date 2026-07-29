@@ -213,12 +213,15 @@ async def _access_mutate(
     event = "access_grant" if grant else "access_revoke"
     try:
         if grant:
-            await fga.write_tuples(client, [tup])
+            await fga.write_tuples(client, [tup], actor=actor, origin="grant_api")
         else:
-            await fga.delete_tuples(client, [tup])
+            await fga.delete_tuples(client, [tup], actor=actor, origin="grant_api")
     except ServiceUnavailableError:
         audit(event, FAILURE, subject=actor, resource=obj, grantee=grantee, relation=body.relation)
         raise
+    # The per-tuple SUCCESS row is emitted by the library (one row per write site, structurally). This
+    # keeps only the surface-specific vocabulary — `access_grant`/`access_revoke` is the compliance
+    # verb for the per-object grant API, and dropping it would break the existing audit queries.
     audit(event, SUCCESS, subject=actor, resource=obj, grantee=grantee, relation=body.relation)
     await emit_control(
         get_control_emitter(request),

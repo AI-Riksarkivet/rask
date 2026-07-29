@@ -210,7 +210,7 @@ async def create_table(
     # re-seeding the overwriter. Only when we actually overwrote — a fresh create has nothing to revoke, and
     # revoking on a non-owner path is what the audit flagged as an eviction vector (now gated out).
     if overwrote_existing:
-        await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments)
+        await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments, token=token)
     # Make the caller owner + link the new table to its parent so it inherits the cascade.
     # COMPENSATION (§4 dual-write): if the grant fails here (FGA outage → 503), the table exists on
     # storage but has NO owner tuple — the client's retry would hit "already exists", stranding it
@@ -234,7 +234,7 @@ async def create_table(
         except Exception:
             if _compensation_allowed(mode, overwrote_existing):
                 try:  # compensation is best-effort; the GRANT error below stays the response either way
-                    await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments)
+                    await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments, token=token)
                     await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
                     log.warning("create_compensated", extra={"table": table_id, "reason": "grant_failed"})
                 except Exception as drop_exc:

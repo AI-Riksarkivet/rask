@@ -441,6 +441,8 @@ async def seed_ownership(
         user_sub=token.sub,
         resource=resource,
         obj_id=fga.canonical_object_id(segments, delimiter=settings.delimiter),
+        actor=token.sub,
+        origin="create",
         parent_object=fga.parent_object(resource, segments, delimiter=settings.delimiter, root_object=settings.fga_root_object),
     )
 
@@ -451,6 +453,7 @@ async def revoke_ownership(
     *,
     resource: str,
     segments: list[str],
+    token: IDToken | None,
 ) -> None:
     """Delete every FGA tuple on a just-dropped / renamed-away object (the revoke counterpart of
     :func:`seed_ownership`).
@@ -469,7 +472,11 @@ async def revoke_ownership(
     if not (settings.fga_enabled and client is not None):
         return
     obj = f"{resource}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
-    removed = await fga.revoke_object_tuples(client, obj)
+    # The actor is the caller who dropped the object. `system:catalog` is the honest fallback for an
+    # auth-off stack, where there genuinely is no principal — never a stand-in for one we simply did
+    # not thread through.
+    actor = token.sub if token is not None else "system:catalog"
+    removed = await fga.revoke_object_tuples(client, obj, actor=actor, origin="create")
     if removed:
         log.info("fga_tuples_revoked", extra={"object": obj, "removed": removed})
 
@@ -659,5 +666,5 @@ async def seed_warehouse(
     ]
     if grant_project_admin:
         tuples.append(fga.ClientTuple(user=f"user:{token.sub}", relation="admin", object=project_obj))
-    await fga.write_tuples(client, tuples)
+    await fga.write_tuples(client, tuples, actor=token.sub, origin="warehouse_bootstrap")
     return grant_project_admin

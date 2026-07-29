@@ -290,7 +290,7 @@ async def drop_table(
         authorization=authorization,
     )
     # Revoke the table's FGA tuples so a later table reusing this id can't inherit stale grants.
-    await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments)
+    await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments, token=token)
     await emit_control(
         control,
         action="table_dropped",
@@ -332,7 +332,7 @@ async def deregister_table(
         operation=DEREGISTER_TABLE,
         authorization=authorization,
     )
-    await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments)
+    await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments, token=token)
     await emit_control(
         control,
         action="table_deregistered",
@@ -442,7 +442,7 @@ async def rename_table(
     )
     # Revoke the SOURCE id's tuples (it no longer names a table) then seed the destination — so no
     # stale grant survives under the old id and the caller keeps ownership under the new one.
-    await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments)
+    await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments, token=token)
     await fga_deps.seed_ownership(client, settings, token, resource="table", segments=new_segments)
     # …then the DESTINATION's (re)attachment at its new location — AFTER its ownership is seeded, so the
     # emit's own ``can_write_data`` check passes on the http transport. Versionless: #23 reconcile back-fills

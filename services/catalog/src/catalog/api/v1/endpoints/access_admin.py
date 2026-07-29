@@ -195,15 +195,15 @@ async def _mutate_tuple(request: Request, settings: Settings, token: CurrentToke
     event = "access_tuple_write" if write else "access_tuple_delete"
     try:
         if write:
-            await fga.write_tuples(client, [tup])
+            await fga.write_tuples(client, [tup], actor=actor, origin="admin_api")
         else:
-            await fga.delete_tuples(client, [tup])
+            await fga.delete_tuples(client, [tup], actor=actor, origin="admin_api")
     except ServiceUnavailableError:
+        # Only the FAILURE row is emitted here. The SUCCESS row now comes from inside
+        # `fga.write_tuples`/`delete_tuples`, so every write site gets one — and emitting it here too
+        # would give this one surface two rows per write while the other six still had none.
         audit(event, FAILURE, subject=actor, resource=tup.object, grantee=tup.user, relation=tup.relation)
         raise
-    # #41: on top of the gate's allow — WHAT tuple the estate admin planted/removed, the access_grant
-    # pattern (grantee + relation ride the record).
-    audit(event, SUCCESS, subject=actor, resource=tup.object, grantee=tup.user, relation=tup.relation)
     return AccessTuple(user=tup.user, relation=tup.relation, object=tup.object)
 
 

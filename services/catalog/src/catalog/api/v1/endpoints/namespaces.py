@@ -151,9 +151,9 @@ async def drop_namespace(
     response: DropNamespaceResponse = await run_in_threadpool(native.call, ns, "drop_namespace", req)
     # Revoke AFTER the drop commits (so a failed/restricted drop leaves the still-valid grants in place):
     # the namespace's own tuples, then every cascaded descendant's.
-    await fga_deps.revoke_ownership(client, settings, resource="namespace", segments=segments)
+    await fga_deps.revoke_ownership(client, settings, resource="namespace", segments=segments, token=token)
     for resource, child_segments in descendants:
-        await fga_deps.revoke_ownership(client, settings, resource=resource, segments=child_segments)
+        await fga_deps.revoke_ownership(client, settings, resource=resource, segments=child_segments, token=token)
     await emit_control(
         control,
         action="namespace_dropped",

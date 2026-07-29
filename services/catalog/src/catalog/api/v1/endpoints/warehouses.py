@@ -402,6 +402,8 @@ async def create_warehouse_namespace(
             user_sub=token.sub,
             resource="namespace",
             obj_id=fga.canonical_object_id(segments, delimiter=settings.delimiter),
+            actor=token.sub,
+            origin="create",
             parent_object=f"warehouse:{warehouse_id}",
         )
     log.info("warehouse_namespace_created", extra={"warehouse": warehouse_id, "namespace": ns_name})

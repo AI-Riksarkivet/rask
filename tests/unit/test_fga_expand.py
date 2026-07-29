@@ -522,3 +522,43 @@ def test_read_changes_never_claims_an_actor() -> None:
 
     changes, _ = asyncio.run(fga.read_changes(cast(OpenFgaClient, _Client()), object_type="table"))
     assert set(changes[0]) == {"user", "relation", "object", "operation", "timestamp"}
+
+
+def test_read_changes_returns_the_token_raw_so_callers_stop_on_an_empty_page() -> None:
+    """ReadChanges hands back the SAME non-empty token forever once the stream is exhausted.
+
+    It is a resumable cursor, not an end-of-list sentinel, so `while token:` never terminates. The
+    wrapper therefore returns the token untouched and the documented stop condition is an empty page.
+    Normalising a trailing token to None would look tidier and would throw away a cursor a caller may
+    legitimately persist in order to resume later.
+    """
+    pages = [
+        (["a"], "cursor-1"),
+        ([], "cursor-1"),  # exhausted — SAME token, zero changes
+    ]
+    calls = {"n": 0}
+
+    class _Client:
+        async def read_changes(self, body: Any, options: Any = None) -> object:
+            del body, options
+            rows, token = pages[min(calls["n"], len(pages) - 1)]
+            calls["n"] += 1
+            return SimpleNamespace(
+                changes=[
+                    SimpleNamespace(
+                        tuple_key=SimpleNamespace(user=f"user:{r}", relation="owner", object="table:t"),
+                        operation="TUPLE_OPERATION_WRITE",
+                        timestamp="2026-07-29T09:37:21Z",
+                    )
+                    for r in rows
+                ],
+                continuation_token=token,
+            )
+
+    client = cast(OpenFgaClient, _Client())
+    first, token1 = asyncio.run(fga.read_changes(client, object_type="table"))
+    assert len(first) == 1 and token1 == "cursor-1"
+
+    second, token2 = asyncio.run(fga.read_changes(client, object_type="table", continuation_token=token1))
+    # The token is UNCHANGED and still truthy — which is exactly why it cannot be the stop condition.
+    assert second == [] and token2 == "cursor-1"

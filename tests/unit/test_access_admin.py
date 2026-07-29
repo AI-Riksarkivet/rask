@@ -202,26 +202,17 @@ def test_write_qualifies_bare_user_and_audits_success(gate_seen: dict[str, Any],
     stored = (written[0].user, written[0].relation, written[0].object)
     assert stored == ("user:alice", "reader", "table:db1$t")
     assert response.user == "user:alice"  # echoes the tuple as stored, not the bare input
-    # #41: the gate's allow alone would be byte-identical to a read — the write carries WHAT was planted.
-    assert rec.calls == [
-        (
-            "access_tuple_write",
-            "success",
-            {
-                "subject": "root_admin",
-                "resource": "table:db1$t",
-                "grantee": "user:alice",
-                "relation": "reader",
-            },
-        )
-    ]
+    # The SUCCESS row is now emitted by `fga.write_tuples` itself, so EVERY write site gets one — see
+    # test_fga_expand.py for the library-level proof. This handler must therefore emit none of its own,
+    # or this one surface would produce two rows per write while the other six produced none.
+    assert rec.calls == []
 
 
 def test_delete_audits_its_own_event(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     body = AccessTuple(user="team:acme#member", relation="writer", object="namespace:bronze")
     written, _ = _mutate(monkeypatch, body, write=False)
     assert written[0].user == "team:acme#member"  # userset passes verbatim
-    assert rec.calls[0][0] == "access_tuple_delete" and rec.calls[0][1] == "success"
+    assert rec.calls == []  # same as the write path: the library owns the success row
 
 
 def test_write_outage_audits_failure_and_raises(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:

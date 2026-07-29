@@ -32,12 +32,12 @@ def _run(
 ) -> tuple[access.AccessGrantResponse, list[Any]]:
     captured: list[Any] = []
 
-    async def fake_write(_client: object, tuples: list[object]) -> None:
+    async def fake_write(_client: object, tuples: list[object], **_kw: object) -> None:
         if outage:
             raise ServiceUnavailableError("fga down")
         captured.extend(tuples)
 
-    async def fake_delete(_client: object, tuples: list[object]) -> None:
+    async def fake_delete(_client: object, tuples: list[object], **_kw: object) -> None:
         if outage:
             raise ServiceUnavailableError("fga down")
         captured.extend(tuples)

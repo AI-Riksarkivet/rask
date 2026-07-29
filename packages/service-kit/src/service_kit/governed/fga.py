@@ -29,7 +29,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import aiohttp
 from lance_namespace import ServiceUnavailableError
@@ -60,6 +60,8 @@ from tenacity import (
     stop_after_delay,
     wait_exponential_jitter,
 )
+
+from service_kit.governed.audit import SUCCESS, audit
 
 
 log = logging.getLogger(__name__)
@@ -757,6 +759,15 @@ async def read_changes(
     ``object_type`` is REQUIRED by the API — the changelog is filterable by type and by nothing else,
     so "the history of THIS tuple" is a scan of its type's changes, not a query. Bounded by the caller.
 
+    **Termination is the caller's, and it is not the token.** ReadChanges returns the same non-empty
+    continuation token forever once the stream is exhausted, because it is a resumable cursor rather
+    than an end-of-list sentinel. Loop on the PAGE, never the token::
+
+        changes, token = await read_changes(client, object_type="table")
+        while changes:
+            ...
+            changes, token = await read_changes(client, object_type="table", continuation_token=token)
+
     Read-only/idempotent, so it gets the same bounded retry + fail-closed treatment as :func:`check`:
     an outage is a 503, never an empty history that reads as "nothing ever happened here".
     """
@@ -788,7 +799,12 @@ async def read_changes(
                     "timestamp": stamp.isoformat() if hasattr(stamp, "isoformat") else (str(stamp) if stamp else None),
                 }
             )
-        return changes, response.continuation_token or None
+        # The token is returned RAW, and callers must stop on an empty page rather than on a falsy
+        # token. OpenFGA's ReadChanges keeps handing back the SAME non-empty continuation token once the
+        # stream is exhausted — it is a resumable cursor, not an end-of-list sentinel — so the usual
+        # `while token:` loop never terminates. Normalising it to None here would be worse: it would
+        # discard a cursor a caller may legitimately persist to resume later.
+        return changes, response.continuation_token
 
     try:
         return await _do_read_changes()
@@ -894,10 +910,34 @@ def _is_duplicate_write(exc: ApiException) -> bool:
     return any(marker in body for marker in _DUPLICATE_WRITE_MARKERS)
 
 
+#: Where a tuple write came from, recorded on every audit row so provenance can say HOW a grant
+#: happened and not merely who. `create` dwarfs the rest in a real estate — it is the post-registration
+#: seed — and telling it apart from a deliberate admin grant is most of the value.
+TupleOrigin = Literal["admin_api", "grant_api", "create", "warehouse_bootstrap", "train", "annotator"]
+
+
+def _audit_tuples(action: str, tuples: list[ClientTuple], actor: str, origin: TupleOrigin) -> None:
+    """One audit row PER TUPLE, emitted from inside the write path.
+
+    This lives here rather than at the call sites because coverage by convention does not hold: of the
+    eight tuple-write sites in this repo, only two ever emitted a tuple-level row, and the ones that did
+    not include ``grant_on_create`` — which fires on every table and namespace registration and is
+    therefore where most tuples in a real store come from. The consequence was that "who granted this?"
+    had no answer for the majority of the graph, while looking like it did for the admin-API minority.
+
+    Emitting from the library makes the coverage structural: a new write site cannot reach OpenFGA
+    without passing through here, and ``actor`` is required, so it cannot compile without naming one.
+    """
+    for t in tuples:
+        audit(action, SUCCESS, subject=actor, resource=t.object, grantee=t.user, relation=t.relation, origin=origin)
+
+
 async def write_tuples(
     client: OpenFgaClient,
     tuples: list[ClientTuple],
     *,
+    actor: str,
+    origin: TupleOrigin,
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
@@ -954,11 +994,16 @@ async def write_tuples(
                 # One duplicate rejected the batch; the siblings are still unwritten. Land them.
                 log.info("openfga_write_batch_duplicate_retrying_singly", extra={"tuples": len(tuples)})
                 await _write_one_by_one()
+                _audit_tuples("access_tuple_write", tuples, actor, origin)
                 return
             log.debug("openfga_write_duplicate_skipped")
+            # A duplicate IS the post-condition holding, so it is audited like any other success —
+            # otherwise re-running a seed silently erases the provenance of tuples that are present.
+            _audit_tuples("access_tuple_write", tuples, actor, origin)
             return
         log.error("openfga_write_unavailable", exc_info=True)
         raise ServiceUnavailableError("authorization service unavailable") from exc
+    _audit_tuples("access_tuple_write", tuples, actor, origin)
 
 
 async def grant_on_create(
@@ -967,6 +1012,8 @@ async def grant_on_create(
     user_sub: str,
     resource: str,
     obj_id: str,
+    actor: str,
+    origin: TupleOrigin,
     parent_object: str | None = None,
     parent_relation: str = "parent",
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
@@ -1005,6 +1052,8 @@ async def grant_on_create(
     await write_tuples(
         client,
         tuples,
+        actor=actor,
+        origin=origin,
         retry_attempts=retry_attempts,
         retry_backoff_seconds=retry_backoff_seconds,
         retry_max_backoff_seconds=retry_max_backoff_seconds,
@@ -1023,6 +1072,8 @@ async def delete_tuples(
     client: OpenFgaClient,
     tuples: list[ClientTuple],
     *,
+    actor: str,
+    origin: TupleOrigin,
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
@@ -1052,12 +1103,15 @@ async def delete_tuples(
                 continue
             log.error("openfga_delete_unavailable", exc_info=True)
             raise ServiceUnavailableError("authorization service unavailable") from exc
+    _audit_tuples("access_tuple_delete", tuples, actor, origin)
 
 
 async def revoke_object_tuples(
     client: OpenFgaClient,
     obj: str,
     *,
+    actor: str,
+    origin: TupleOrigin,
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
@@ -1087,6 +1141,8 @@ async def revoke_object_tuples(
     await delete_tuples(
         client,
         tuples,
+        actor=actor,
+        origin=origin,
         retry_attempts=retry_attempts,
         retry_backoff_seconds=retry_backoff_seconds,
         retry_max_backoff_seconds=retry_max_backoff_seconds,

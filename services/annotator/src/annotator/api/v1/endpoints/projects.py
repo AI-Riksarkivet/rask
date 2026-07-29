@@ -96,6 +96,8 @@ async def create_annotation_project(payload: CreateProjectRequest, checker: Chec
             user_sub=subject,
             resource="annotation_project",
             obj_id=project.project_id,
+            actor=subject,
+            origin="annotator",
             parent_object=f"project:{payload.tenant}",
             parent_relation="tenant",
         )
