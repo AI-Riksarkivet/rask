@@ -55,7 +55,7 @@ Two lifecycles, same chart (`chart/`), same `:dev` image set, same release name 
   make kind-up kind-images kind-load kind-deploy   # up
   make kind-down                                   # gone
   make e2e-ci        # governed kind stack + the live e2e suites  (== CI e2e-stack job)
-  make e2e-ray-ci    # ray-ON stack + real KubeRay + both Ray suites (== CI ray-e2e job)
+  make e2e-ray-ci    # ray-ON stack + real KubeRay + both Ray suites (== CI e2e-ray job)
   ```
 
 - **k3s** — the long-lived local/single-node deploy (GPU-capable):

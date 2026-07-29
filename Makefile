@@ -86,9 +86,9 @@ openapi-check: openapi
 	@echo "OpenAPI specs match the committed contract"
 
 # ---- zone images -----------------------------------------------------------
-# `make frontend-images` == the ci.yml "Build all four zone images" step, byte-for-byte — the same
+# `make frontend-images` == the ci.yml "Build every zone image" step, byte-for-byte — the same
 # contract `dagger call charts` == `make charts` holds. The step invoked this target by name while it
-# did not exist, so the zone-images job died with make's exit 2 ("No rule to make target") before
+# did not exist, so the web-images job died with make's exit 2 ("No rule to make target") before
 # building anything: the gate's whole claim ("the dockerfile still builds") had never been tested.
 #
 # ZONES is `?=`, so ci.yml's scan of microfrontends/*/package.json wins when exported; locally the
@@ -421,7 +421,7 @@ k3s-purge: k3s-down ## Uninstall + delete PVCs (clean slate)
 
 # ---- kind (throwaway CI-shaped cluster; k3s above is the long-lived local deploy) ----
 # Same chart, same :dev image set, same release name (rask) as k3s — but on a disposable
-# kind cluster, which is what the CI live-proof jobs (e2e-stack / ray-e2e) boot. Toolchain
+# kind cluster, which is what the CI live-proof jobs (e2e-stack / e2e-ray) boot. Toolchain
 # is pinned into .localbin by `make bootstrap` (kind/kubectl/fga; helm + docker from PATH).
 .PHONY: bootstrap kind-up kind-images kind-load kind-deploy kind-down e2e-ci e2e-ray-ci
 
@@ -496,14 +496,14 @@ kind-deploy: k3s-deps ## helm upgrade --install release `rask` into the kind clu
 kind-down: ## Delete the rask kind cluster
 	$(KIND) delete cluster --name $(KIND_CLUSTER)
 
-# THE guarded live proofs — identical to the CI `e2e-stack` / `ray-e2e` jobs (both shell out
+# THE guarded live proofs — identical to the CI `e2e-stack` / `e2e-ray` jobs (both shell out
 # to the same scripts, so "green in CI" and "green on my machine" cannot diverge). The
 # scripts bring up their own governed kind stack, seed grants/buckets, run the suites, and
 # (in CI) tear the cluster down.
 e2e-ci: bootstrap ## Governed kind stack + the 5 live e2e suites (CAS/#2/#3-A/#3-B/#4) == CI e2e-stack
 	CLUSTER=$(KIND_CLUSTER) RELEASE=rask bash scripts/e2e_stack.sh
 
-e2e-ray-ci: bootstrap ## Governed ray-ON kind stack + real KubeRay + both Ray suites == CI ray-e2e
+e2e-ray-ci: bootstrap ## Governed ray-ON kind stack + real KubeRay + both Ray suites == CI e2e-ray
 	CLUSTER=$(KIND_CLUSTER)-ray-e2e RELEASE=rask bash scripts/ray_e2e_stack.sh
 
 # ---- Tilt dev loop (in-cluster hot-reload for the Python fleet) -------------

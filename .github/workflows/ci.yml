@@ -16,65 +16,83 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  test:
+  # ── THE MICROSERVICE PLANE (ms-*) ─────────────────────────────────────────────────────────────
+  # Python: packages/ + services/ + the chart that ships them. The frontend plane is `web-*` and
+  # cross-plane integration is `e2e-*`, so a red check names its plane before anyone opens it.
+  #
+  # These six gates were ONE job with six sequential steps, and that shape hid failures rather than
+  # reporting them: a failing step skips every step after it in the same job. On 2026-07-28 the ty
+  # gate failed (a bare `uv sync` in .dagger/main.go installed no workspace members) and the run read
+  #
+  #   success Lint · failure Typecheck · skipped OpenAPI · skipped Tests · skipped Charts · skipped OpenFGA
+  #
+  # — four gates that never ran, plus the four e2e jobs that hung off `needs: test`. One missing flag
+  # blinded EIGHT gates for six days and the only signal was "the test job is red". Split, each gate
+  # carries its own verdict and one failure costs exactly one gate.
+
+  # pytest stands alone because it is the only gate the e2e legs actually depend on (`needs: ms-test`
+  # below). Inside the matrix, e2e would wait on ruff and formatting to decide whether to run.
+  #
+  # Runs the whole offline suite (`-m "not e2e and not slow"`), which INCLUDES the claim-lint
+  # invariants (tests/unit/test_invariants.py) and the tests/e2e-py collection gate
+  # (tests/unit/test_e2e_collection_gate.py) — those gates are folded in here, not lost.
+  ms-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
           curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
-
-      # Python gates — ruff lint + ty type-check + OpenAPI-spec drift + the offline pytest suite — run
-      # hermetically in the pinned uv image via the Dagger module. The merged module has NO `ci` wrapper;
-      # the old lance-ns Ci composition (lint → typecheck → openapi → test) runs as explicit steps over
-      # the functions that exist (.dagger/checks.go, openapi.go, test.go), in the same order, so a failing
-      # gate is named in the step list instead of buried in one combined log. The pytest leg runs the whole
-      # offline suite (`-m "not e2e and not slow"`), which INCLUDES the claim-lint invariants
-      # (tests/unit/test_invariants.py) and the tests/e2e-py collection gate
-      # (tests/unit/test_e2e_collection_gate.py) — so those gates are not lost, just folded into the suite.
-      - name: Lint — ruff check + format (Dagger)
-        env:
-          DAGGER_NO_NAG: "1"
-        run: dagger call lint
-
-      - name: Typecheck — ty (Dagger)
-        env:
-          DAGGER_NO_NAG: "1"
-        run: dagger call typecheck
-
-      - name: OpenAPI drift — committed specs vs the live apps (Dagger)
-        env:
-          DAGGER_NO_NAG: "1"
-        run: dagger call openapi
-
       - name: Tests — offline pytest suite, -m "not e2e and not slow" (Dagger)
         env:
           DAGGER_NO_NAG: "1"
         run: dagger call test
 
-      # NO postgres/alembic step here by design. One stood here calling `dagger call test-pg` to run
-      # "alembic upgrade head from zero against a real postgres:16, then the core suite with
-      # DATABASE_URL" — but P7a deleted that whole plane (no app DB, no Alembic, no fleet
-      # DATABASE_URL; see CLAUDE.md), and the dagger module has no TestPg function to call. It could
-      # only ever fail, and it did: it is what turned this job red and, via `needs: test`, skipped
-      # lineage-e2e / e2e-stack / ray-e2e without them ever running. The surviving relational stores
-      # (lineage AGE, OpenFGA) are proved by the lineage-e2e and e2e-stack jobs below.
+      # NO postgres/alembic gate anywhere in this workflow, by design. One used to stand in the old
+      # combined job calling `dagger call test-pg` ("alembic upgrade head from zero against a real
+      # postgres:16, then the core suite with DATABASE_URL") — but P7a deleted that whole plane (no app
+      # DB, no Alembic, no fleet DATABASE_URL; see CLAUDE.md) and the dagger module has no TestPg
+      # function to call. It could only ever fail, and it did. The surviving relational stores (lineage
+      # AGE, OpenFGA) are proved by the e2e-lineage and e2e-stack jobs below.
 
-      # Chart gates — helm lint + a full template render, the networkPolicy / security-hardening / Dapr-
-      # resiliency `--set` render-and-grep invariants, the prod-overlay HA/security render check, and the
-      # promtool alert-rules validate-and-fire proof — run hermetically via the Dagger module
-      # (.dagger/charts.go), with helm + promtool pinned inside the container. Every invariant is
-      # byte-identical to the inline shell it replaces. `dagger call charts` == `make charts`.
-      - name: Chart CI gate — helm render invariants + prod-render + alert-rules (Dagger)
+  # The remaining hermetic gates, one runner each. `fail-fast: false` is the whole point of the matrix
+  # here: the default (true) cancels the siblings the moment one leg fails, which would rebuild
+  # exactly the blindness this split exists to remove.
+  #
+  # Every leg is `dagger call <name>` against the module's own functions (.dagger/checks.go, openapi.go,
+  # charts.go), so the gate a developer runs locally (`make check`, `make charts`) and the gate CI runs
+  # are the same code, not two descriptions of it.
+  #   lint      ruff check + ruff format --check
+  #   typecheck ty, with error-on-warning
+  #   openapi   committed specs vs the live apps — drift fails here
+  #   charts    helm lint + full render, the networkPolicy / security-hardening / Dapr-resiliency
+  #             `--set` render-and-grep invariants, the prod-overlay HA/security render, and the
+  #             promtool alert-rules validate-and-fire proof. `dagger call charts` == `make charts`.
+  ms-gates:
+    name: ms-${{ matrix.gate }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [lint, typecheck, openapi, charts]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Dagger CLI (pinned to the module's engineVersion)
+        run: |
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      - name: dagger call ${{ matrix.gate }}
         env:
           DAGGER_NO_NAG: "1"
-        run: dagger call charts
+        run: dagger call ${{ matrix.gate }}
 
-      # NOT yet daggerized — the one `test`-job gate that isn't in the Dagger steps above: it needs the
-      # `fga` CLI + jq, not the uv/helm/promtool toolchain the Dagger functions carry, so it stays a native
-      # step. The OpenFGA authorization model is source-of-truth for who-can — gate its tests (7 types,
-      # concentric rungs, the validator promote gate, create-on-parent) so a model edit can't regress access.
+  # NOT daggerized — it needs the `fga` CLI + jq rather than the uv/helm/promtool toolchain the Dagger
+  # functions carry, so it stays a native step. The OpenFGA authorization model is source-of-truth for
+  # who-can, so gate its tests (7 types, concentric rungs, the validator promote gate, create-on-parent)
+  # and a model edit cannot silently regress access.
+  ms-authz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - name: OpenFGA model test
         run: |
           FGA_V=0.6.4
@@ -94,37 +112,42 @@ jobs:
           jq -S . $AUTH/model.json > /tmp/model.b.json
           diff -u /tmp/model.b.json /tmp/model.a.json || { echo "model.json drifted from model.fga"; exit 1; }
 
-  # Frontend suites (§7 "not in CI" gap, closed 2026-07-11): svelte-check (types over the runes
-  # store + generated OpenAPI types), the bun unit tests, and the Playwright e2e — which was BUILT
-  # hermetic for CI (playwright.config.ts mocks every /api/** via page.route; the webServer is the
-  # real SSR dev server, so hydration + routing are exercised with zero backend).
-  frontend:
+  # ── THE FRONTEND PLANE (web-*) ────────────────────────────────────────────────────────────────
+  # Everything under frontend/ — the seven zones and the packages they share. Named `web-*` to match
+  # what the artefacts are actually called elsewhere: `make frontend-images` tags `web-<zone>:dev` and
+  # the chart names the deployments `rask-web-<zone>`.
+
+  # §7 "not in CI" gap, closed 2026-07-11. Turborepo workspace bun gates — svelte-check (types over the
+  # runes store + generated OpenAPI types), TypeScript 7 (tsgo), unit tests, lint and fmt:check — fan out
+  # over packages/* AND microfrontends/* (the 7 zones). All five are PACKAGE tasks, so turbo parallelises
+  # and caches them instead of running lint/fmt once repo-wide over a hand-maintained path list. ONE
+  # linter and ONE formatter cover every extension: oxlint (with @rsvelte/oxlint-plugin for .svelte) and
+  # rsvelte-fmt (which delegates everything that is not .svelte to oxfmt) — see frontend/TOOLING.md.
+  # ESLint and Prettier are no longer installed. Hermetic in the pinned oven/bun image via the Dagger
+  # module (.dagger/frontend.go); `dagger call frontend` == `make frontend`.
+  web-gate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
           curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
-
-      # Turborepo workspace bun gates — svelte-check, TypeScript 7 (tsgo), unit tests, lint and fmt:check
-      # fan out over the packages/* AND microfrontends/* (the 7 micro-frontend zones) workspace. All
-      # five are PACKAGE tasks now, so turbo parallelises and caches them instead of running lint/fmt once
-      # repo-wide over a hand-maintained path list. ONE linter and ONE formatter cover every extension:
-      # oxlint (with @rsvelte/oxlint-plugin for .svelte) and rsvelte-fmt (which delegates everything that
-      # is not .svelte to oxfmt) — see frontend/TOOLING.md. ESLint and Prettier are no longer installed.
-      # Run hermetically in the pinned oven/bun image via the Dagger
-      # module (.dagger/frontend.go). `dagger call frontend` == `make frontend`.
       - name: Frontend bun gate — svelte-check + tsgo + unit + lint + fmt (Dagger)
         env:
           DAGGER_NO_NAG: "1"
         run: dagger call frontend
 
-      # The Playwright e2e is browser-bound (chromium + system deps), so — like the kind-based e2e jobs — it
-      # stays a native runner leg rather than being folded into the hermetic bun-gate function. It was BUILT
-      # hermetic for CI anyway (playwright.config.ts mocks every /api/** via page.route; the webServer is the
-      # real SSR dev server, so hydration + routing are exercised with zero backend). It needs the workspace
-      # installed on the runner, hence its own bun setup + frozen install.
+  # Its own job, not a tail of web-gate. The two share no toolchain — this one is browser-bound
+  # (chromium + system deps) and needs the workspace installed on the runner, while the gate above runs
+  # hermetically in a bun container — and as sequential steps a svelte-check failure skipped the e2e
+  # entirely, which is the same failure-hiding shape the ms-* split exists to remove.
+  #
+  # Hermetic anyway: playwright.config.ts mocks every /api/** via page.route and the webServer is the
+  # real SSR dev server, so hydration + routing are exercised with zero backend.
+  web-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
 
       - name: Install (frozen lockfile)
@@ -137,14 +160,15 @@ jobs:
 
       # e2e for the FOUR zones that define `test:e2e` — home, lakehouse, media, annotator — fanned by
       # turbo, which discovers the task rather than reading a list here. `compute`, `studio` and `train`
-      # ship no e2e at all, so this leg is 4-of-7 coverage, not full coverage. That is a real gap, not a
-      # naming leftover: the other six "four zone" counts in this job WERE leftovers (there are seven
-      # zone images) and have been corrected, which would otherwise make this accurate four read as one
-      # more of them. Run SERIALLY
-      # (--concurrency=1): each zone spins its own vite SSR dev server + a chromium instance, and running
-      # every first-compile at once blows the per-server startup window on a 2-core runner. (lakehouse alone
-      # runs TWO dev servers — auth-off for three areas, auth-on for admin — each with its own warmup.)
-      - name: Playwright e2e — all zones (hermetic — /api mocked in-page)
+      # ship no e2e at all, so this leg is 4-of-7 coverage, not full coverage — a real gap, not a naming
+      # leftover (the "four zone" counts elsewhere in this workflow WERE leftovers; there are seven zone
+      # images, and they have been corrected).
+      #
+      # Run SERIALLY (--concurrency=1): each zone spins its own vite SSR dev server + a chromium
+      # instance, and running every first-compile at once blows the per-server startup window on a
+      # 2-core runner. (lakehouse alone runs TWO dev servers — auth-off for three areas, auth-on for
+      # admin — each with its own warmup.)
+      - name: Playwright e2e — 4 of 7 zones (hermetic — /api mocked in-page)
         working-directory: frontend
         run: bunx turbo run test:e2e --concurrency=1
 
@@ -178,7 +202,7 @@ jobs:
   # microfrontends.json keys vs package names) — @repo/zone-contract exists because of it.
   #
   # Same fork gate as the other jobs that build images from the checkout.
-  zone-images:
+  web-images:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
@@ -324,10 +348,10 @@ jobs:
   # Postgres — the unit fakes can't catch AGE dialect behavior (the int-vs-string $ver at-version
   # match, the RETURN-less DETACH DELETE prune, the functional-index DDL). Runs via the Dagger module
   # (AGE as a hermetic service container) so `make e2e-lineage` == `dagger call test-lineage` == this
-  # job, byte-for-byte. Engine version pinned by dagger.json. Same fork-gating as auth-e2e.
-  lineage-e2e:
+  # job, byte-for-byte. Engine version pinned by dagger.json. Same fork-gating as e2e-auth.
+  e2e-lineage:
     runs-on: ubuntu-latest
-    needs: test
+    needs: ms-test
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v4
@@ -352,7 +376,7 @@ jobs:
   # Fork-gated like the other live jobs (no infra guarantees / untrusted docker builds on forked PRs).
   e2e-stack:
     runs-on: ubuntu-latest
-    needs: test
+    needs: ms-test
     timeout-minutes: 45
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
@@ -390,9 +414,9 @@ jobs:
   # real KubeRay head, then runs both Ray suites. `make e2e-ray-ci` == this job (scripts/ray_e2e_stack.sh).
   # Fork-gated like the other live jobs. Observability is off to fit the runner (train's GreptimeDB-metrics
   # leg self-skips; its pins + lineage + validator gates still run).
-  ray-e2e:
+  e2e-ray:
     runs-on: ubuntu-latest
-    needs: test
+    needs: ms-test
     timeout-minutes: 45
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
@@ -420,9 +444,9 @@ jobs:
   # user with no grant. GitHub-hosted ubuntu runners ship Docker + Compose v2,
   # so this is feasible in CI. Skipped on forked-PR runs (no infra guarantees /
   # to avoid untrusted-code docker builds) but always runs on branch pushes.
-  auth-e2e:
+  e2e-auth:
     runs-on: ubuntu-latest
-    needs: test
+    needs: ms-test
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v4

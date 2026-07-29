@@ -61,7 +61,7 @@ It proves the _declarations_ agree. It does not prove anything **runs**. Three l
 what the one below cannot:
 
 1. **this package** — the seven files agree (3 s, every `turbo run test`)
-2. **the `zone-images` CI job** — the dockerfile actually builds (~5 min, every push)
+2. **the `web-images` CI job** — the dockerfile actually builds (~5 min, every push)
 3. **kind + `scripts/verify_cross_zone_oidc.sh`** — the pods serve and the session carries across zones
 
 Every gate here was written _after_ the bug it catches. If one starts failing, read its comment before
