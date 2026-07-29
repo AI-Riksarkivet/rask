@@ -140,8 +140,15 @@ describe('topNav', () => {
 		expect(compute.match('/')).toBe(false);
 		// The overview IS the zone root (like Media's Search), so the first row carries entry.href
 		// and the panel never prepends a second zone-root row.
+		// Workbench sits second, right after the zone root: it is the dock at /compute/workbench, and it
+		// is in this panel because `@rask/zone-contract`'s `dock-reachability.test.ts` now REQUIRES every
+		// route importing `@rask/dockview` to be named here. The two assertions are coupled — dropping a
+		// row from this list turns that gate red, which is the point. A dock listed only in its own
+		// zone's sidebar is reachable in two hops by someone who already knows it exists: the R28 shape,
+		// not reachability.
 		expect(compute.items!.map((i) => i.title)).toEqual([
 			'Overview',
+			'Workbench',
 			'Jobs',
 			'Cluster',
 			'Actors',
@@ -182,7 +189,25 @@ describe('topNav', () => {
 		expect(groups.Models).toEqual(['Registry', 'Experiments', 'Pipeline']);
 		expect(groups.Governance).toEqual(['Access', 'Tenants', 'Audit']);
 		expect(groups.Operations).toEqual(['Events', 'Streams', 'DLQ']);
-		expect(groups.Lineage).toEqual(['Datasets', 'Jobs', 'Runs', 'Columns', 'Graph']);
+		// Workbench closes the Lineage column for the same reason it opens Compute's panel — see the
+		// coupling note on the compute assertion above.
+		expect(groups.Lineage).toEqual(['Datasets', 'Jobs', 'Runs', 'Columns', 'Graph', 'Workbench']);
+	});
+
+	it('Media carries its rows too — the panel that was never pinned', () => {
+		// Compute's rows and all five Lakehouse columns are asserted above; MEDIA's never were, so its
+		// panel could gain or lose a row with this suite still green. That omission had teeth: media is
+		// one of the three dock zones, `dock-reachability.test.ts` requires /media/workbench to appear
+		// here, and nothing in this file would have noticed it going missing.
+		const media = topNav(false).find((e) => e.title === 'Search')!;
+		expect(media.items!.map((i) => i.title)).toEqual([
+			'Search',
+			'Atlas',
+			'Tree',
+			'Graph',
+			'Workbench',
+			'Workflow',
+		]);
 	});
 
 	it('every entry is reachable: a panel with rows, or a plain link', () => {

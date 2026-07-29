@@ -246,8 +246,8 @@
 					<p class="text-muted-foreground text-xs">
 						{#if kind === 'export' && rt.status === 'idle'}
 							Press Run to feed results. Selected columns{selectedColumns.includes('tags')
-				? ' (including tags)'
-				: ''}
+								? ' (including tags)'
+								: ''}
 							will export.
 						{:else if rt.status === 'idle'}
 							Not run yet — press Run.

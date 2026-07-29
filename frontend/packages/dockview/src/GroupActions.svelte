@@ -13,17 +13,25 @@
 	 */
 	import { onMount, untrack } from 'svelte';
 	import {
-		ChevronsLeftRight,
-		ChevronsUpDown,
+		Bell,
+		BellOff,
 		Copy,
 		Maximize2,
 		Minimize2,
 		PictureInPicture2,
+		Plus,
+		SquareSplitHorizontal,
 		X,
 	} from '@lucide/svelte';
+	import type { DockAlerts } from './alerts.svelte';
 	import type { DockviewApi, DockviewGroupPanelApi, IDockviewGroupPanel } from 'dockview';
 	import type { DockChrome, DockChromeOptions } from './chrome';
-	import { splitPanel, type SplitPosition } from './split';
+	import PanelPicker from './PanelPicker.svelte';
+	import SplitMenu from './SplitMenu.svelte';
+	import { panelChoices } from './panel-search';
+	import { uniquePanelId } from './panel-id';
+	import { splitPanel, splitVerb, type SplitPosition } from './split';
+	import type { PanelRegistry } from './types';
 
 	interface Props {
 		api: DockviewGroupPanelApi;
@@ -31,8 +39,12 @@
 		group: IDockviewGroupPanel;
 		chrome: DockChrome;
 		options: DockChromeOptions;
+		/** The zone's catalogue — what the `+` picker lists. */
+		panels: PanelRegistry;
+		/** The dock-wide alert registry, or null when `chrome.alerts` is off. */
+		alerts: DockAlerts | null;
 	}
-	let { api, containerApi, group, chrome, options }: Props = $props();
+	let { api, containerApi, group, chrome, options, panels, alerts }: Props = $props();
 
 	/**
 	 * The CONCRETE group, looked up by id.
@@ -59,8 +71,13 @@
 		const max = containerApi.onDidMaximizedGroupChange(() => (maximized = api.isMaximized()));
 		// The group's own membership changes when a tab is dragged in or out, which is what decides
 		// whether Split can do anything. Both events fire for THIS group only.
-		const added = containerApi.onDidAddPanel(() => (panelCount = group.panels.length));
-		const removed = containerApi.onDidRemovePanel(() => (panelCount = group.panels.length));
+		const sync = (): void => {
+			panelCount = group.panels.length;
+			panelIds = group.panels.map((p) => p.id);
+			openComponents = containerApi.panels.map((p) => p.api.component);
+		};
+		const added = containerApi.onDidAddPanel(sync);
+		const removed = containerApi.onDidRemovePanel(sync);
 		maximized = api.isMaximized();
 		return () => {
 			loc.dispose();
@@ -79,7 +96,74 @@
 	 * so the title says so — a button that silently does something other than its label is worse than
 	 * one that is honest about it. Reads `panelCount`, so it re-derives when tabs move in or out.
 	 */
-	const verb = $derived(panelCount > 1 ? 'Split' : 'Duplicate');
+	const verb = $derived(splitVerb(panelCount));
+
+	/**
+	 * Popover wiring ids, derived from `group.id` rather than Svelte's `$props.id()`.
+	 *
+	 * Each group's header is its own `mount()` root (`header-actions.svelte.ts`), and the `$props.id()`
+	 * counter restarts per root — so every group would mint the SAME id and every trigger would open
+	 * the first group's pad. `group.id` is dockview-generated and unique across the dock.
+	 */
+	const menuId = $derived(`rask-split-menu-${group.id}`);
+	const triggerId = $derived(`rask-split-trigger-${group.id}`);
+	const addId = $derived(`rask-add-menu-${group.id}`);
+	const addTriggerId = $derived(`rask-add-trigger-${group.id}`);
+	/** Mirrors each popover's UA-owned open state, so `aria-expanded` is not a guess. */
+	let splitOpen = $state(false);
+	let addOpen = $state(false);
+
+	/**
+	 * Which components are open anywhere in the dock, so the picker can mark a row.
+	 *
+	 * Recomputed from the same add/remove events that drive `panelCount` rather than read live in a
+	 * `$derived`: `containerApi.panels` is a plain array behind a getter, so reading it inside a
+	 * derived tracks nothing and the marks would freeze at their first value.
+	 */
+	let openComponents = $state<string[]>(
+		untrack(() => containerApi.panels.map((p) => p.api.component)),
+	);
+	/** The ids of the panels in THIS group — what the bell resolves its alert records by. */
+	let panelIds = $state<string[]>(untrack(() => group.panels.map((p) => p.id)));
+	const choices = $derived(panelChoices(panels, openComponents));
+
+	/**
+	 * The alert records for the panels in THIS group.
+	 *
+	 * Derived from `panelIds`, which the add/remove subscription below keeps current — `group.panels`
+	 * is a plain array behind a getter, so reading it inside a `$derived` would track nothing and the
+	 * bell would freeze at its first value. The records themselves ARE reactive (`$state` on each
+	 * `PanelAlert`), so `raised`/`muted` re-derive without any further wiring.
+	 */
+	const groupAlerts = $derived(
+		alerts === null ? [] : panelIds.map((id) => alerts.get(id)).filter((r) => r !== undefined),
+	);
+	/** Only panels that actually declared a watcher get a bell — otherwise every group grows one. */
+	const watched = $derived(groupAlerts.filter((r) => r.watching));
+	const raisedHere = $derived(watched.filter((r) => r.raised));
+	const allMuted = $derived(watched.length > 0 && watched.every((r) => r.muted));
+
+	function toggleBell(): void {
+		// Raised → acknowledge everything in this group. Nothing raised → mute/unmute the group, which
+		// is the only other thing the bell can usefully mean.
+		if (raisedHere.length > 0) for (const r of raisedHere) r.acknowledge();
+		else for (const r of watched) r.mute(!allMuted);
+	}
+
+	/** Add a registered panel to THIS group. `referenceGroup` without a direction means "within". */
+	function addPanel(key: string): void {
+		if (self === undefined) return;
+		const entry = panels[key];
+		if (entry === undefined) return;
+		containerApi.addPanel({
+			// `addPanel` THROWS on a duplicate id, so this is load-bearing rather than tidy — adding a
+			// second Runs panel must not blow up inside a click handler.
+			id: uniquePanelId(containerApi, key),
+			component: key,
+			title: entry.label,
+			position: { referenceGroup: self },
+		});
+	}
 
 	/** One implementation, shared with the context menu — see `split.ts` for why it has two modes. */
 	function split(position: SplitPosition): void {
@@ -120,21 +204,36 @@
 
 <div class="rask-dock-actions">
 	{#if canSplit}
+		<!-- ONE trigger where there were two direction buttons. The strip gets SMALLER (six controls to
+		     five) while going from two reachable directions to four: up and left previously existed only
+		     as tab-context-menu rows, which is an interaction nobody discovers. -->
 		<button
 			type="button"
-			title={`${verb} right`}
-			aria-label="Split right"
-			onclick={() => split('right')}
+			id={triggerId}
+			popovertarget={menuId}
+			aria-haspopup="menu"
+			aria-expanded={splitOpen}
+			title={`${verb} this pane…`}
+			aria-label="Split this pane"
 		>
-			<ChevronsLeftRight size={14} />
+			<SquareSplitHorizontal size={14} />
 		</button>
+	{/if}
+
+	{#if chrome.addPanel && inGrid}
+		<!-- SEPARATE from split, deliberately. Split divides the PANE in a direction; `+` puts named
+		     CONTENT here. The earlier draft of the backlog had add-panel replacing split, which is what
+		     produced a control that could only ever duplicate what you were already looking at. -->
 		<button
 			type="button"
-			title={`${verb} down`}
-			aria-label="Split down"
-			onclick={() => split('bottom')}
+			id={addTriggerId}
+			popovertarget={addId}
+			aria-haspopup="menu"
+			aria-expanded={addOpen}
+			title="Add a panel to this group"
+			aria-label="Add a panel"
 		>
-			<ChevronsUpDown size={14} />
+			<Plus size={14} />
 		</button>
 	{/if}
 
@@ -163,6 +262,24 @@
 		</button>
 	{/if}
 
+	{#if chrome.alerts && watched.length > 0}
+		<!-- The PERSISTENT affordance. The panel-wide highlight is the transient one — a dot on a tab
+		     the user is not looking at reproduces the very failure this feature exists to answer. -->
+		<button
+			type="button"
+			title={raisedHere.length > 0
+	? `Acknowledge ${raisedHere.length} alert${raisedHere.length === 1 ? '' : 's'}`
+	: allMuted
+		? 'Unmute alerts in this group'
+		: 'Mute alerts in this group'}
+			aria-label={raisedHere.length > 0 ? 'Acknowledge alerts' : 'Mute alerts'}
+			class:on={raisedHere.length > 0}
+			onclick={toggleBell}
+		>
+			{#if allMuted && raisedHere.length === 0}<BellOff size={14} />{:else}<Bell size={14} />{/if}
+		</button>
+	{/if}
+
 	{#if chrome.maximize && inGrid}
 		<button
 			type="button"
@@ -184,6 +301,29 @@
 		<X size={14} />
 	</button>
 </div>
+
+{#if canSplit}
+	<!-- Rendered OUTSIDE `.rask-dock-actions`: it is a top-layer popover, so its position in the DOM is
+	     irrelevant to where it paints, and keeping it out of the flex row means the closed pad
+	     (`display: none`) can never influence the strip's width. -->
+	<SplitMenu
+		id={menuId}
+		anchorId={triggerId}
+		{verb}
+		onpick={split}
+		onopenchange={(open) => (splitOpen = open)}
+	/>
+{/if}
+
+{#if chrome.addPanel && inGrid}
+	<PanelPicker
+		id={addId}
+		anchorId={addTriggerId}
+		{choices}
+		onpick={addPanel}
+		onopenchange={(open) => (addOpen = open)}
+	/>
+{/if}
 
 {#if popoutFailed}
 	<span class="rask-dock-actions-note" role="status">Your browser blocked the popout window.</span>

@@ -16,12 +16,14 @@
  * and are not in this release, so they are spelled out as custom rows instead of trusted as built-ins.
  */
 import type { ContextMenuItem, GetTabContextMenuItemsParams } from 'dockview';
+import type { DockAlerts } from './alerts.svelte';
 import type { DockChrome, DockChromeOptions } from './chrome';
-import { splitPanel, splitVerb } from './split';
+import { SPLIT_DIRECTIONS, splitPanel, splitVerb } from './split';
 
 export function makeTabContextMenu(
 	chrome: DockChrome,
 	options: DockChromeOptions,
+	alerts: DockAlerts | null = null,
 ): (params: GetTabContextMenuItemsParams) => ContextMenuItem[] {
 	return ({ panel, group, api }) => {
 		const items: ContextMenuItem[] = ['close', 'closeOthers', 'closeAll'];
@@ -32,17 +34,15 @@ export function makeTabContextMenu(
 		// Mirrors the header buttons: with one panel `moveTo` is a documented no-op, so the row
 		// duplicates instead. Never disabled — every zone seeds one-panel groups.
 		if (chrome.split && inGrid) {
-			const verb = splitVerb(group);
+			const verb = splitVerb(group.panels.length);
 			items.push('separator');
-			for (const [side, position] of [
-				['right', 'right'],
-				['left', 'left'],
-				['down', 'bottom'],
-				['up', 'top'],
-			] as const) {
+			// SPLIT_DIRECTIONS, not a second hardcoded tuple list. This file used to spell the four out
+			// itself in right/left/down/up order while the header offered only right and down — two
+			// copies of one list, in different orders, that no test could compare.
+			for (const d of SPLIT_DIRECTIONS) {
 				items.push({
-					label: `${verb} ${side}`,
-					action: () => splitPanel(api, group, panel, position),
+					label: `${verb} ${d.word}`,
+					action: () => splitPanel(api, group, panel, d.position),
 				});
 			}
 		}
@@ -74,6 +74,17 @@ export function makeTabContextMenu(
 		}
 
 		if (locationItems.length > 0) items.push('separator', ...locationItems);
+
+		// PER-PANEL mute lives here; the header bell is per-GROUP. `getTabContextMenuItems` is
+		// re-invoked on every right-click, so reading the record's state at call time is correct — no
+		// reactivity needed, and none available in a plain menu array.
+		const record = alerts?.get(panel.id);
+		if (chrome.alerts && record?.watching === true) {
+			items.push('separator', {
+				label: record.muted ? 'Unmute alerts on this panel' : 'Mute alerts on this panel',
+				action: () => record.mute(!record.muted),
+			});
+		}
 		return items;
 	};
 }

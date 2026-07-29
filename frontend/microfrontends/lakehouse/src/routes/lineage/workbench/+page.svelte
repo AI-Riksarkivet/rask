@@ -16,6 +16,8 @@
 	 * them to another machine instead of living in that browser's localStorage.
 	 */
 	import { onMount, type Component } from 'svelte';
+	import { Activity, List, Workflow } from '@lucide/svelte';
+	import type { PanelRegistry } from '@rask/dockview';
 	import type { DockviewApi, SerializedDockview } from 'dockview';
 	import { LineageState } from '$lib/lineage/store.svelte';
 	import { lineageTick, liveRead } from '$lib/live/tick.svelte';
@@ -31,8 +33,30 @@
 	liveRead(lineageTick, () => store.poll());
 
 	/** Keys are the stable contract between a SAVED layout and this code — renaming one orphans every
-	 *  stored layout that used it, which `MissingPanelRenderer` then shows rather than crashing on. */
-	const panels = { graph: GraphPanel, runs: RunsPanel, events: EventsPanel };
+	 *  stored layout that used it, which `MissingPanelRenderer` then shows rather than crashing on.
+	 *  The VALUES carry label/icon/keywords so the `+` picker can list and search them. `label` is the
+	 *  default tab TITLE at add time, not a live binding — renaming it here does not rename panels
+	 *  already sitting in someone's saved workspace. */
+	const panels: PanelRegistry = {
+		graph: {
+			component: GraphPanel,
+			label: 'Graph',
+			icon: Workflow,
+			keywords: ['dag', 'lineage', 'provenance', 'medallion', 'openlineage'],
+		},
+		runs: {
+			component: RunsPanel,
+			label: 'Runs',
+			icon: Activity,
+			keywords: ['jobs', 'executions', 'failures', 'state'],
+		},
+		events: {
+			component: EventsPanel,
+			label: 'Events',
+			icon: List,
+			keywords: ['feed', 'log', 'stream', 'emissions'],
+		},
+	};
 
 	// Ordinary Svelte context. `<Dock>` forwards this component's whole context tree into every panel
 	// mount (getAllContexts), so panels reach it with the matching getter and no key is involved.

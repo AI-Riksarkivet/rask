@@ -11,6 +11,7 @@
 	import { getAllContexts, onMount, untrack } from 'svelte';
 	import { DockviewComponent } from 'dockview';
 	import type { DockviewApi, DockviewOptions } from 'dockview';
+	import { DockAlerts } from './alerts.svelte';
 	import { MissingPanelRenderer, SveltePanelRenderer } from './renderer.svelte';
 	import { LayoutAutosave } from './persistence';
 	import { raskDockTheme } from './theme';
@@ -97,7 +98,26 @@
 	const active = untrack(() => resolveChrome(chrome));
 	/** The close button is unconditional, so the cluster is worth rendering if ANY control is on. */
 	const hasHeaderActions =
-		active.split || active.maximize || active.float || active.popout || active.keepEmptyGroups;
+		active.split ||
+		active.addPanel ||
+		active.maximize ||
+		active.float ||
+		active.popout ||
+		active.keepEmptyGroups ||
+		active.alerts;
+
+	/**
+	 * The dock-wide alert registry — created HERE, at component init, and closed over by both renderer
+	 * factories below.
+	 *
+	 * It cannot travel by context: `header-actions.svelte.ts` mounts `GroupActions` with no context map
+	 * at all, so a context getter would find an empty tree there however well it works for panel
+	 * bodies. Svelte 5 signals are global rather than tree-scoped, so one `$state` object read from two
+	 * separate `mount()` roots is sound — `renderer.svelte.ts` already relies on exactly that.
+	 */
+	const alerts = untrack(() =>
+		resolveChrome(chrome).alerts ? new DockAlerts(chromeOptions.alertLingerMs) : null,
+	);
 
 	onMount(() => {
 		// onMount, NOT {@attach}. An attachment re-runs whenever a value it read changes, and re-running
@@ -145,7 +165,7 @@
 			// from DockviewKeybindings, so it cannot fire — see chrome.ts.
 			...(active.keyboard ? { keyboardNavigation: true } : {}),
 			...(active.contextMenu
-				? { getTabContextMenuItems: makeTabContextMenu(active, chromeOptions) }
+				? { getTabContextMenuItems: makeTabContextMenu(active, chromeOptions, alerts) }
 				: {}),
 			// Panels live in dockview's OverlayRenderContainer and are REPOSITIONED rather than
 			// re-parented. This is the difference between two kinds of state that are easy to conflate:
@@ -166,16 +186,25 @@
 			// avoid. A consumer with dozens of heavy panels can override this per-dock.
 			defaultRenderer: 'always',
 			...options,
-			// The group control cluster — split / float / popout / maximize / close. The `right` slot is
-			// the classic VS Code position and the only place persistent group chrome can live.
+			// The group control cluster — split / add / float / popout / maximize / close. The `right`
+			// slot is the classic VS Code position and the only place persistent group chrome can live.
+			// `panels` goes through because `GroupActions` is mounted with no context map, so the picker
+			// cannot reach the catalogue any other way.
 			...(hasHeaderActions
-				? { createRightHeaderActionComponent: makeHeaderActions(active, chromeOptions) }
+				? {
+						createRightHeaderActionComponent: makeHeaderActions(
+							active,
+							chromeOptions,
+							panels,
+							alerts,
+						),
+					}
 				: {}),
 			createComponent: ({ name }) => {
-				const component = panels[name];
+				const entry = panels[name];
 				// An unknown name is a stale saved layout, not a bug to crash on — see MissingPanelRenderer.
-				return component
-					? new SveltePanelRenderer(component, panelContext)
+				return entry
+					? new SveltePanelRenderer(entry.component, panelContext, alerts)
 					: new MissingPanelRenderer(name);
 			},
 		});
@@ -196,6 +225,10 @@
 		return () => {
 			disposed = true;
 			autosave?.dispose();
+			// Before dock.dispose(): the belt to the renderer's braces. Every panel dispose already
+			// releases its own record, but a record whose panel dispose was skipped would otherwise keep
+			// a watcher alive past the dock itself.
+			alerts?.dispose();
 			dock.dispose();
 		};
 	});

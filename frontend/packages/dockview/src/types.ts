@@ -17,6 +17,7 @@
  */
 import type { Component } from 'svelte';
 import type { DockviewApi, DockviewPanelApi, Parameters, SerializedDockview } from 'dockview';
+import type { PanelAlertApi } from './alerts.svelte';
 
 /**
  * What every panel component receives.
@@ -34,17 +35,88 @@ export interface PanelProps<P extends object = Parameters> {
 	api: DockviewPanelApi;
 	/** The whole dock's api, for a panel that needs to open or address its siblings. */
 	containerApi: DockviewApi;
+	/**
+	 * This panel's alert channel — pre-bound, so there is no id to pass and no way to raise on the
+	 * wrong panel. `NOOP_ALERT` when the dock has `chrome.alerts === false`, so a panel never has to
+	 * branch on whether alerts exist.
+	 *
+	 * Additive and type-safe for every existing panel: component props are contravariant and the
+	 * registry stores its component as `AnyPanelComponent`, so a panel that declares no props at all
+	 * stays assignable.
+	 */
+	alert: PanelAlertApi;
 }
 
 /** A Svelte component usable as a panel body. */
 export type PanelComponent<P extends object = Parameters> = Component<PanelProps<P>>;
 
 /**
+ * What a registry entry will accept as a body — either shape.
+ *
+ * Every panel in this repo today declares NO props: all nine read their data from context or from a
+ * remote `query()`, and simply ignore what the renderer hands them. That is legitimate, but it does
+ * not type-check against {@link PanelComponent} alone, because `svelte2tsx` compiles a props-less
+ * component to `Component<Record<string, never>>` — a type that REJECTS extra props — and component
+ * props are compared contravariantly.
+ *
+ * It compiled before this type existed only because the zones left `const panels = {…}` unannotated
+ * and the check happened at the `<Dock>` prop boundary, where Svelte's generated typings are
+ * bivariant. That is not a safety net worth relying on: with the annotation removed, an entry missing
+ * its required `label` also type-checked clean, which is exactly the mistake the required field exists
+ * to prevent. So the union is stated here and the zones annotate.
+ */
+export type AnyPanelComponent = PanelComponent<never> | Component<Record<string, never>>;
+
+/**
+ * The glyph a picker row shows.
+ *
+ * Declared STRUCTURALLY rather than imported from `@lucide/svelte`, the same stance `@rask/ui` takes
+ * with its client props: this package must not acquire an icon-library dependency merely to describe
+ * one. A lucide icon satisfies it because every member of `LucideProps` is optional.
+ *
+ * The zone passes the COMPONENT, never a name string — a name would force this package to import
+ * lucide's barrel to resolve it, defeating tree-shaking over ~1500 icons for the sake of nine.
+ */
+export type PanelIcon = Component<{ size?: number | string; class?: string }>;
+
+/**
+ * One entry in the zone's panel catalogue: what to render, and what to call it.
+ *
+ * `label` is REQUIRED. The add-panel picker lists these, and the only fallback for a missing label is
+ * the registry key — a lowercase identifier where a human-readable name belongs. Required makes that
+ * state unrepresentable rather than merely discouraged.
+ *
+ * `label` is the DEFAULT tab title at add time, not a live binding: dockview writes `title` into the
+ * saved layout, so renaming a label here does not rename panels already in a stored workspace.
+ */
+export interface PanelEntry {
+	/** The body — a component declaring `PanelProps`, or none at all. See {@link AnyPanelComponent}. */
+	readonly component: AnyPanelComponent;
+	/** Human-readable name. Shown in the picker, and used as the new panel's title. */
+	readonly label: string;
+	/** Optional glyph for the picker row. */
+	readonly icon?: PanelIcon;
+	/**
+	 * Extra search terms. The picker matches over label + key + these, so someone typing "dag",
+	 * "provenance" or "lineage" finds the panel labelled "Graph".
+	 */
+	readonly keywords?: readonly string[];
+}
+
+/**
  * The zone's panel catalogue, keyed by the `component` string it passes to `api.addPanel(...)`.
  * dockview resolves a serialized layout by that same string, so these keys are the stable contract
  * between a persisted layout and the code — renaming one orphans every saved layout that used it.
+ * The VALUE shape is free to grow; the keys are not.
+ *
+ * This was `Record<string, PanelComponent<never>>`. Widening it is a BREAKING change to the value, and
+ * a deliberate one: a union that still accepted a bare component would have to fall back to the
+ * registry key for a label — rendering `topics` where "Topic results" belongs — which institutionalises
+ * the half-migration it exists to avoid, and forces `typeof entry === 'function'` narrowing at every
+ * read site forever (Svelte 5 components ARE functions). The package is private with three in-repo
+ * consumers, so the migration is atomic and was done atomically.
  */
-export type PanelRegistry = Record<string, PanelComponent<never>>;
+export type PanelRegistry = Record<string, PanelEntry>;
 
 /**
  * The three outcomes of reading a stored layout, and the reason the middle one cannot be collapsed

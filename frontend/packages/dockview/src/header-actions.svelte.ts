@@ -14,6 +14,8 @@ import { mount, unmount } from 'svelte';
 import type { DockviewGroupPanel, IGroupHeaderProps } from 'dockview';
 import GroupActions from './GroupActions.svelte';
 import type { DockChrome, DockChromeOptions } from './chrome';
+import type { DockAlerts } from './alerts.svelte';
+import type { PanelRegistry } from './types';
 
 /** dockview's own contract for a header slot; declared structurally to avoid a value import. */
 interface HeaderActionsRenderer {
@@ -25,8 +27,10 @@ interface HeaderActionsRenderer {
 export function makeHeaderActions(
 	chrome: DockChrome,
 	options: DockChromeOptions,
+	panels: PanelRegistry,
+	alerts: DockAlerts | null,
 ): (group: DockviewGroupPanel) => HeaderActionsRenderer {
-	return () => new SvelteHeaderActions(chrome, options);
+	return () => new SvelteHeaderActions(chrome, options, panels, alerts);
 }
 
 class SvelteHeaderActions implements HeaderActionsRenderer {
@@ -34,11 +38,29 @@ class SvelteHeaderActions implements HeaderActionsRenderer {
 
 	#chrome: DockChrome;
 	#options: DockChromeOptions;
+	/**
+	 * The zone's catalogue, so the `+` picker can list it.
+	 *
+	 * Handed down the constructor rather than reached for: this renderer is built by dockview outside
+	 * any Svelte tree, and `init()` below mounts `GroupActions` with NO context map at all — so a
+	 * context getter would find an empty tree here, however well it works for panel bodies.
+	 */
+	#panels: PanelRegistry;
+	/** The dock-wide alert registry — the bell reads it. Same constructor hand-off as `panels`, and
+	 *  for the same reason: this mount gets no context map. */
+	#alerts: DockAlerts | null;
 	#instance: Record<string, unknown> | null = null;
 
-	constructor(chrome: DockChrome, options: DockChromeOptions) {
+	constructor(
+		chrome: DockChrome,
+		options: DockChromeOptions,
+		panels: PanelRegistry,
+		alerts: DockAlerts | null,
+	) {
 		this.#chrome = chrome;
 		this.#options = options;
+		this.#panels = panels;
+		this.#alerts = alerts;
 		this.element = document.createElement('div');
 		// `position: relative` anchors the popout-blocked note; the class is styled in styles.css.
 		this.element.className = 'rask-dock-actions-host';
@@ -53,6 +75,8 @@ class SvelteHeaderActions implements HeaderActionsRenderer {
 				group: params.group,
 				chrome: this.#chrome,
 				options: this.#options,
+				panels: this.#panels,
+				alerts: this.#alerts,
 			},
 		}) as Record<string, unknown>;
 	}

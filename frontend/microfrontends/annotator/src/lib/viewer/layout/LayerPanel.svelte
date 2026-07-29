@@ -54,7 +54,9 @@
 							title={controller.isHidden(g.name) ? 'Show' : 'Hide'}
 							onclick={() => controller.toggleGroupVisible(g.name)}
 						>
-							{#if controller.isHidden(g.name)}<EyeOff class="size-3.5" />{:else}<Eye class="size-3.5" />{/if}
+							{#if controller.isHidden(g.name)}<EyeOff class="size-3.5" />{:else}<Eye
+									class="size-3.5"
+								/>{/if}
 						</Button>
 						<input
 							type="color"

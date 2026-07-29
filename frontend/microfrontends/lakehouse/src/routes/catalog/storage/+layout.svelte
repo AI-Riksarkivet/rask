@@ -31,10 +31,10 @@
 			href={tab.href}
 			aria-current={on ? 'page' : undefined}
 			class={cn(
-				buttonVariants({ variant: 'ghost', size: 'sm' }),
-				'gap-2',
-				on && 'bg-muted text-foreground font-medium',
-			)}
+	buttonVariants({ variant: 'ghost', size: 'sm' }),
+	'gap-2',
+	on && 'bg-muted text-foreground font-medium',
+)}
 		>
 			<tab.icon class="size-4" aria-hidden="true" />
 			{tab.label}

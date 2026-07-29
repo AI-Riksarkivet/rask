@@ -21,7 +21,9 @@
 	 * browser drive — the same reasoning `OPEN-WORK.md` C1 records for `TableDetail.svelte`.
 	 */
 	import { onMount, type Component } from 'svelte';
+	import type { PanelRegistry } from '@rask/dockview';
 	import type { DockviewApi, SerializedDockview } from 'dockview';
+	import { FolderTree, ListTree, Map } from '@lucide/svelte';
 	import { MediaWorkbench } from '$lib/dock/workbench.svelte';
 	import { setMediaWorkbench } from '$lib/dock/context';
 	import { makeDockLayoutStore } from '@rask/api/dock-layout';
@@ -33,8 +35,29 @@
 
 	const workbench = new MediaWorkbench();
 
-	/** Keys are the contract between a SAVED layout and this code — see MissingPanelRenderer. */
-	const panels = { atlas: AtlasPanel, treemap: TreemapPanel, topics: TopicsPanel };
+	/** Keys are the contract between a SAVED layout and this code — see MissingPanelRenderer. The
+	 *  VALUES carry label/icon/keywords for the `+` picker; `label` is the default tab TITLE at add
+	 *  time, not a live binding on layouts already saved. */
+	const panels: PanelRegistry = {
+		atlas: {
+			component: AtlasPanel,
+			label: 'Atlas',
+			icon: Map,
+			keywords: ['embedding', 'umap', 'scatter', 'projection'],
+		},
+		treemap: {
+			component: TreemapPanel,
+			label: 'Treemap',
+			icon: FolderTree,
+			keywords: ['topics', 'hierarchy', 'tree', 'clusters'],
+		},
+		topics: {
+			component: TopicsPanel,
+			label: 'Topic results',
+			icon: ListTree,
+			keywords: ['hits', 'documents', 'search', 'results'],
+		},
+	};
 
 	// Ordinary Svelte context. `<Dock>` forwards this component's whole context tree into every panel
 	// mount (getAllContexts), so panels reach it with the matching getter and no key is involved.

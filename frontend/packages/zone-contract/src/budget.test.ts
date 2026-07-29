@@ -1,8 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { gzipSync } from 'node:zlib';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FRONTEND_ROOT, zoneDirs } from './manifest';
+import { CLIENT, MAX_CHUNK_GZIP_KB, weigh, worstChunk } from './weigh';
 import budget from './budget.json' with { type: 'json' };
 
 /**
@@ -44,76 +44,12 @@ import budget from './budget.json' with { type: 'json' };
  * Read from Vite's own manifest rather than reconstructed by parsing import statements: the manifest
  * distinguishes `imports` from `dynamicImports` at the source of truth, and a regex over minified
  * output cannot tell `import"./x.js"` from `import("./x.js")` reliably.
+ *
+ * The measurement itself lives in `./weigh`, imported rather than defined here, so that
+ * `bun src/weigh.ts` prints THE GATE'S OWN numbers. It used to be inline, which left anyone sizing a
+ * change against the remaining headroom either re-implementing the closure walk or reading figures out
+ * of a failing assertion — and a second copy stops being the gate the moment it drifts.
  */
-const CLIENT = (zone: string) => `microfrontends/${zone}/.svelte-kit/output/client`;
-
-interface ViteChunk {
-	file: string;
-	isEntry?: boolean;
-	imports?: string[];
-	dynamicImports?: string[];
-	css?: string[];
-}
-
-interface Weighed {
-	staticKB: number;
-	deferredKB: number;
-	/** Emitted files reachable only through a dynamic import — what the deferred number is made of. */
-	deferredFiles: string[];
-	staticFiles: string[];
-}
-
-/** Gzip a set of files TOGETHER — one stream, the way a browser would receive them over one connection. */
-function gzipKB(dir: string, files: string[]): number {
-	if (files.length === 0) return 0;
-	const combined = Buffer.concat(files.map((f) => readFileSync(resolve(dir, f))));
-	return Math.round(gzipSync(combined, { level: 9 }).length / 1024);
-}
-
-/** Split a zone's client output into the static-import closure and everything only reachable lazily.
- *  `null` when there is nothing to weigh (no build in this checkout). */
-function weigh(zone: string): Weighed | null {
-	const dir = resolve(FRONTEND_ROOT, CLIENT(zone));
-	const manifestPath = resolve(dir, '.vite/manifest.json');
-	if (!existsSync(manifestPath)) return null;
-	const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, ViteChunk>;
-	const chunks = Object.values(manifest);
-	const byFile = new Map(chunks.map((c) => [c.file, c]));
-	/** A chunk's `imports` name manifest KEYS, not emitted files — resolve both spellings. */
-	const emitted = (ref: string) => manifest[ref]?.file ?? ref;
-
-	const reached = new Set<string>();
-	const css = new Set<string>();
-	const stack = chunks.filter((c) => c.isEntry).map((c) => c.file);
-	while (stack.length > 0) {
-		const file = stack.pop()!;
-		if (reached.has(file)) continue;
-		reached.add(file);
-		const chunk = byFile.get(file);
-		for (const sheet of chunk?.css ?? []) css.add(sheet);
-		// STATIC edges only. Following dynamicImports here would rebuild the very number this gate replaced.
-		for (const ref of chunk?.imports ?? []) {
-			const target = emitted(ref);
-			if (!reached.has(target)) stack.push(target);
-		}
-	}
-
-	const staticFiles = [...new Set([...reached, ...css])].sort();
-	const all = new Set<string>();
-	for (const chunk of chunks) {
-		all.add(chunk.file);
-		for (const sheet of chunk.css ?? []) all.add(sheet);
-	}
-	const deferredFiles = [...all].filter((f) => !staticFiles.includes(f)).sort();
-
-	return {
-		staticKB: gzipKB(dir, staticFiles),
-		deferredKB: gzipKB(dir, deferredFiles),
-		deferredFiles,
-		staticFiles,
-	};
-}
-
 const zones = zoneDirs();
 type Zone = { staticGzipKB: number; deferredGzipKB: number };
 const limits = budget.zones as Record<string, Zone>;
@@ -184,11 +120,6 @@ describe('no zone vendors OpenCV again', () => {
 	});
 });
 
-/** The largest single emitted chunk any zone may ship, gzipped. Media's atlas route is the estate's
- *  worst at 504 KB (embedding-atlas + d3); everything else is under 120 KB. 600 KB leaves that room
- *  and nothing like enough for a vendored runtime — the class of thing this catches is megabytes. */
-const MAX_CHUNK_GZIP_KB = 600;
-
 describe('no single chunk dominates its zone', () => {
 	// The failure mode the two-halves split exposed, generalised. One vendored monolith is what made
 	// the annotator's total meaningless, and "it's behind a dynamic import" did not make it free —
@@ -197,13 +128,7 @@ describe('no single chunk dominates its zone', () => {
 	it.each(zoneDirs())('%s', (zone) => {
 		const weighed = weigh(zone);
 		if (weighed === null) return;
-		const dir = resolve(FRONTEND_ROOT, CLIENT(zone));
-		const worst = [...weighed.staticFiles, ...weighed.deferredFiles]
-			.map((file) => ({
-				file,
-				kb: Math.round(gzipSync(readFileSync(resolve(dir, file)), { level: 9 }).length / 1024),
-			}))
-			.reduce((a, b) => (b.kb > a.kb ? b : a), { file: '(none)', kb: 0 });
+		const worst = worstChunk(zone, weighed);
 		expect(
 			worst.kb,
 			`${zone} ships ${worst.file} at ${worst.kb} KB gzipped in one chunk, over the ` +
