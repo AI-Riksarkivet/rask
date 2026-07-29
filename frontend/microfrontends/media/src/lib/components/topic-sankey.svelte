@@ -149,8 +149,8 @@
 								>
 									<title
 										>{node.name} — {fmt(node.value ?? 0)} chunks{interactive
-						? ' (click to show results)'
-						: ''}</title
+											? ' (click to show results)'
+											: ''}</title
 									>
 									<rect
 										x={node.x0}

@@ -159,9 +159,9 @@
 				{/if}
 				{#if governance.description_updated_by}
 					· description: {governance.description_updated_by} · {governance.description_updated_at?.slice(
-			0,
-			19,
-		)}
+						0,
+						19,
+					)}
 				{/if}
 			</p>
 		{/if}

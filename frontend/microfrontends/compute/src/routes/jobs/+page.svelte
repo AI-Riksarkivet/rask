@@ -186,8 +186,8 @@
 										{#if j.batches.length}
 											<span class="ml-1 text-[10px]">
 												{j.batches.slice(0, 2).join(', ')}{j.batches.length > 2
-							? ` +${j.batches.length - 2}`
-							: ''}
+													? ` +${j.batches.length - 2}`
+													: ''}
 											</span>
 										{/if}
 									</td>

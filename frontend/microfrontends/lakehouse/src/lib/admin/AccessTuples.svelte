@@ -320,8 +320,8 @@
 			{#if tuples !== null}
 				<span class="count mono"
 					>{tuples.length} tuple{tuples.length === 1 ? '' : 's'}{continuation
-			? ' · more exist'
-			: ''}</span
+						? ' · more exist'
+						: ''}</span
 				>
 			{/if}
 		</div>

@@ -216,8 +216,8 @@
 					<span class="text-muted-foreground ml-auto text-xs">
 						{#if job.start_time}started {fmtAgo(job.start_time)} ·{/if}
 						runtime {fmtDur(
-				job.start_time ? ((job.end_time ?? Date.now()) - job.start_time) / 1000 : null,
-			)}
+							job.start_time ? ((job.end_time ?? Date.now()) - job.start_time) / 1000 : null,
+						)}
 					</span>
 				</div>
 

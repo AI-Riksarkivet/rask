@@ -60,7 +60,9 @@ const gotoWorkbench = async (page: Page) => {
 	await expect(page.locator('.dv-tab').first()).toBeVisible({ timeout: 30_000 });
 };
 
-test('the workbench is reachable by CLICKING from the navbar, not only by URL', async ({ page }) => {
+test('the workbench is reachable by CLICKING from the navbar, not only by URL', async ({
+	page,
+}) => {
 	// Item 6's browser half. Loading the route directly is what let a missing navbar row ship: every
 	// earlier dock test did exactly that and passed while the feature was unreachable from any other
 	// zone. So this navigates the way a person does.
@@ -106,7 +108,10 @@ test('splitting UP actually creates a second group', async ({ page }) => {
 	await gotoWorkbench(page);
 	const before = await page.locator('.dv-groupview').count();
 	await page.getByRole('button', { name: 'Split this pane' }).first().click();
-	await page.getByRole('group', { name: 'Split direction' }).getByRole('button', { name: /up$/i }).click();
+	await page
+		.getByRole('group', { name: 'Split direction' })
+		.getByRole('button', { name: /up$/i })
+		.click();
 	await expect(page.locator('.dv-groupview')).toHaveCount(before + 1);
 });
 
