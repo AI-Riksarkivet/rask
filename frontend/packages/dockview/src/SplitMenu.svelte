@@ -132,13 +132,19 @@
 </div>
 
 <style>
+	/* `display` MUST be scoped to `:popover-open` — see the same note in PanelPicker.svelte. The UA
+	   hides a closed popover via `[popover]:not(:popover-open) { display: none }`, and an author
+	   `display` declaration overrides it by ORIGIN, not specificity. Left unscoped, the closed pad
+	   stays laid out over the tab strip and eats the click meant for its own trigger. */
+	.rask-split-menu:popover-open {
+		display: grid;
+	}
 	.rask-split-menu {
 		/* Overrides the UA's default `inset: 0; margin: auto`, which would centre the pad in the
 		   viewport. `place()` then writes left/top. */
 		position: fixed;
 		inset: auto;
 		margin: 0;
-		display: grid;
 		grid-template-areas: '. n .' 'w v e' '. s .';
 		gap: 2px;
 		padding: 4px;

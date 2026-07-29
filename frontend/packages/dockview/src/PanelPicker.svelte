@@ -124,11 +124,20 @@
 </div>
 
 <style>
+	/* `display` MUST be scoped to `:popover-open`, and this is not a style preference.
+	   The UA stylesheet hides a closed popover with `[popover]:not(:popover-open) { display: none }`,
+	   but AUTHOR rules beat user-agent rules by origin — specificity never enters into it — so a plain
+	   `.rask-panel-picker { display: flex }` silently un-hides every closed popover. Measured in
+	   Chromium: `:popover-open` false, computed display `flex`, laid out at (1034, 44), intercepting
+	   pointer events on its own trigger so the picker could never be opened. Nothing in the markup or
+	   the unit tests can see this; only a browser can. */
+	.rask-panel-picker:popover-open {
+		display: flex;
+	}
 	.rask-panel-picker {
 		position: fixed;
 		inset: auto;
 		margin: 0;
-		display: flex;
 		flex-direction: column;
 		gap: 4px;
 		width: 220px;
