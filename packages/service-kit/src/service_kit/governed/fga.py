@@ -44,6 +44,7 @@ from openfga_sdk.client.models import (
     ClientWriteRequest,
 )
 from openfga_sdk.client.models.list_users_request import ClientListUsersRequest
+from openfga_sdk.client.models.read_changes_request import ClientReadChangesRequest
 from openfga_sdk.configuration import RetryParams
 from openfga_sdk.exceptions import ApiException
 from openfga_sdk.models.create_store_request import CreateStoreRequest
@@ -301,11 +302,19 @@ async def check(
     relation: str,
     obj: str,
     qualify: bool = True,
+    contextual_tuples: list[ClientTuple] | None = None,
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
 ) -> bool:
     """Return whether ``user:<user>`` has ``relation`` on ``obj`` (e.g. ``table:db1$t``).
+
+    ``contextual_tuples`` evaluates the check AS IF those tuples existed, without writing anything.
+    That is the whole of "assert before you grant": ask whether a proposed grant would actually produce
+    the access someone wants — and, just as often, what ELSE it would unlock — while the store is
+    untouched. A concentric model makes this necessary rather than nice: a grant three levels up
+    cascades to every child, and reading the DSL to predict that is exactly the reasoning humans get
+    wrong. Contextual tuples are per-request and never persisted.
 
     Callers pass a BARE subject id (the token's ``sub``) and this prepends ``user:``. Pass
     ``qualify=False`` when ``user`` is ALREADY a full subject — a ``type:id`` user or a ``type:id#rel``
@@ -321,7 +330,14 @@ async def check(
 
     @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
     async def _do_check() -> bool:
-        response = await client.check(ClientCheckRequest(user=subject, relation=relation, object=obj))
+        response = await client.check(
+            ClientCheckRequest(
+                user=subject,
+                relation=relation,
+                object=obj,
+                contextual_tuples=contextual_tuples,
+            )
+        )
         return bool(response.allowed)
 
     try:
@@ -712,6 +728,73 @@ async def expand_tree(
             leaf["expanded"] = expanded
 
     return await _walk(relation, obj, 1)
+
+
+async def read_changes(
+    client: OpenFgaClient,
+    *,
+    object_type: str,
+    page_size: int | None = None,
+    continuation_token: str | None = None,
+    start_time: str | None = None,
+    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
+    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
+    retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """The tuple CHANGELOG for one object type — every write and delete, in order, with timestamps.
+
+    This is the only "when" the estate has. A Read shows what is true NOW; it cannot say when a grant
+    landed, and it cannot show a grant that was later revoked. The changelog shows both, which makes it
+    the difference between an access review and an access snapshot.
+
+    What it deliberately does NOT carry is WHO. An OpenFGA change record is
+    ``{tuple_key, operation, timestamp}`` and nothing else — the store has no notion of an actor, and
+    no amount of reading it will produce one. The acting principal exists only in this estate's own
+    audit stream (``access_tuple_write`` / ``access_tuple_delete``, which record ``subject``), and
+    joining the two is a correlation by (resource, relation, grantee, time) rather than a lookup.
+    Callers must not present a timestamp as attribution.
+
+    ``object_type`` is REQUIRED by the API — the changelog is filterable by type and by nothing else,
+    so "the history of THIS tuple" is a scan of its type's changes, not a query. Bounded by the caller.
+
+    Read-only/idempotent, so it gets the same bounded retry + fail-closed treatment as :func:`check`:
+    an outage is a 503, never an empty history that reads as "nothing ever happened here".
+    """
+
+    @_retrying(retry_attempts, retry_backoff_seconds, retry_max_backoff_seconds)
+    async def _do_read_changes() -> tuple[list[dict[str, Any]], str | None]:
+        # Built INSIDE the retry closure for the same reason read_tuples does it: the SDK pops
+        # pagination out of the options dict it is handed, so a shared dict loses it on attempt two.
+        options: dict[str, int | str | dict[str, int | str]] = {}
+        if page_size is not None:
+            options["page_size"] = page_size
+        if continuation_token:
+            options["continuation_token"] = continuation_token
+        response = await client.read_changes(
+            ClientReadChangesRequest(type=object_type, start_time=start_time),
+            options=options or None,
+        )
+        changes: list[dict[str, Any]] = []
+        for c in response.changes or []:
+            key = c.tuple_key
+            stamp = getattr(c, "timestamp", None)
+            changes.append(
+                {
+                    "user": key.user,
+                    "relation": key.relation,
+                    "object": key.object,
+                    # "TUPLE_OPERATION_WRITE" / "…_DELETE" → "write" / "delete".
+                    "operation": str(c.operation).rsplit("_", 1)[-1].lower(),
+                    "timestamp": stamp.isoformat() if hasattr(stamp, "isoformat") else (str(stamp) if stamp else None),
+                }
+            )
+        return changes, response.continuation_token or None
+
+    try:
+        return await _do_read_changes()
+    except _FAIL_CLOSED as exc:
+        log.error("openfga_read_changes_unavailable", extra={"object_type": object_type}, exc_info=True)
+        raise ServiceUnavailableError("authorization service unavailable") from exc
 
 
 async def read_object_tuples(

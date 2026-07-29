@@ -396,3 +396,129 @@ def test_relation_and_object_helpers_accept_both_shapes() -> None:
     assert fga._relation_of("reader") == "reader"  # bare passes through; the shape is not guaranteed
     assert fga._object_of("table:db1$t#reader", "fallback:x") == "table:db1$t"
     assert fga._object_of("reader", "table:same") == "table:same"  # a rung on the SAME object
+
+
+# --------------------------------------------------------------------------- #
+# assert-before-grant (contextual tuples) + the changelog
+# --------------------------------------------------------------------------- #
+
+
+def test_check_passes_contextual_tuples_through_without_writing() -> None:
+    """ "Would this grant work?" answered against an UNTOUCHED store.
+
+    A concentric model cascades a grant to every child, which is exactly the reasoning people get
+    wrong by reading the DSL. Contextual tuples let the store answer instead — and they are
+    per-request, so nothing is persisted and no cleanup is owed.
+    """
+    seen: dict[str, Any] = {}
+    writes: list[Any] = []
+
+    class _Client:
+        async def check(self, body: Any) -> object:
+            seen["user"] = body.user
+            seen["contextual"] = body.contextual_tuples
+            return SimpleNamespace(allowed=True)
+
+        async def write(self, *_a: object, **_k: object) -> object:
+            writes.append(1)
+            return SimpleNamespace()
+
+    hypothetical = [fga.ClientTuple(user="user:bob", relation="reader", object="warehouse:acme")]
+    allowed = asyncio.run(
+        fga.check(
+            cast(OpenFgaClient, _Client()),
+            user="user:bob",
+            relation="can_read_data",
+            obj="table:acme_gold_catalog",
+            qualify=False,
+            contextual_tuples=hypothetical,
+        )
+    )
+    assert allowed is True
+    assert seen["contextual"] is not None and len(seen["contextual"]) == 1
+    # The whole point: a simulation must not mutate the store.
+    assert writes == []
+
+
+def test_check_without_contextual_tuples_is_unchanged() -> None:
+    seen: dict[str, Any] = {}
+
+    class _Client:
+        async def check(self, body: Any) -> object:
+            seen["contextual"] = body.contextual_tuples
+            return SimpleNamespace(allowed=False)
+
+    asyncio.run(fga.check(cast(OpenFgaClient, _Client()), user="alice", relation="reader", obj="table:t"))
+    assert seen["contextual"] is None
+
+
+def test_read_changes_normalises_operation_and_timestamp() -> None:
+    class _Client:
+        async def read_changes(self, body: Any, options: Any = None) -> object:
+            del body, options
+            return SimpleNamespace(
+                changes=[
+                    SimpleNamespace(
+                        tuple_key=SimpleNamespace(user="user:alice", relation="owner", object="table:t"),
+                        operation="TUPLE_OPERATION_WRITE",
+                        timestamp="2026-07-29T09:37:21.909224Z",
+                    ),
+                    SimpleNamespace(
+                        tuple_key=SimpleNamespace(user="user:bob", relation="reader", object="table:t"),
+                        operation="TUPLE_OPERATION_DELETE",
+                        timestamp="2026-07-29T10:00:00Z",
+                    ),
+                ],
+                continuation_token="next",
+            )
+
+    changes, token = asyncio.run(fga.read_changes(cast(OpenFgaClient, _Client()), object_type="table"))
+    assert [c["operation"] for c in changes] == ["write", "delete"]
+    assert changes[0]["user"] == "user:alice"
+    # A DELETE is visible here and invisible to a Read — that asymmetry is the point of a changelog.
+    assert changes[1]["relation"] == "reader"
+    assert token == "next"
+
+
+def test_read_changes_fails_closed_on_network_error() -> None:
+    # An outage must never render as "nothing ever happened on this type", which is what an empty
+    # history would say — and it is the reading an access review would act on.
+    class _Down:
+        async def read_changes(self, *_a: object, **_k: object) -> object:
+            raise aiohttp.ClientConnectionError("connection refused")
+
+    with pytest.raises(ServiceUnavailableError):
+        asyncio.run(
+            fga.read_changes(
+                cast(OpenFgaClient, _Down()),
+                object_type="table",
+                retry_attempts=1,
+                retry_backoff_seconds=0.0,
+                retry_max_backoff_seconds=0.0,
+            )
+        )
+
+
+def test_read_changes_never_claims_an_actor() -> None:
+    """OpenFGA change records carry no principal, and this wrapper must not invent one.
+
+    The acting subject lives only in this estate's audit stream. A field named `actor`/`by`/`subject`
+    appearing here — even as None — would invite a UI to render a timestamp as attribution.
+    """
+
+    class _Client:
+        async def read_changes(self, body: Any, options: Any = None) -> object:
+            del body, options
+            return SimpleNamespace(
+                changes=[
+                    SimpleNamespace(
+                        tuple_key=SimpleNamespace(user="user:a", relation="owner", object="table:t"),
+                        operation="TUPLE_OPERATION_WRITE",
+                        timestamp="2026-07-29T09:37:21Z",
+                    )
+                ],
+                continuation_token=None,
+            )
+
+    changes, _ = asyncio.run(fga.read_changes(cast(OpenFgaClient, _Client()), object_type="table"))
+    assert set(changes[0]) == {"user", "relation", "object", "operation", "timestamp"}
