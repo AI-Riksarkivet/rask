@@ -37,6 +37,8 @@ from collections.abc import Mapping
 import httpx
 from opentelemetry import propagate
 
+from ray_kit import submit as rk
+
 from medallion.core.config import MedallionSettings
 
 
@@ -47,30 +49,6 @@ _TERMINAL_BAD = frozenset({"FAILED", "STOPPED"})
 # Tolerate a few transient poll blips (a 5xx / connect timeout) before giving up, so one bad GET doesn't
 # abandon an in-flight job and trigger a redelivery that re-attaches anyway — bounded by the job timeout.
 _MAX_POLL_ERRORS = 3
-
-
-class RayJobError(RuntimeError):
-    """A submitted Ray stage job failed, was stopped, or did not finish within the timeout."""
-
-
-def _submission_id(stage: str, token: str | None) -> str:
-    """A deterministic id per (stage, token) so redelivery re-attaches to the same job (idempotency)."""
-    raw = f"ray-{stage}-{token or 'notoken'}"
-    return re.sub(r"[^A-Za-z0-9_-]", "-", raw)[:200]
-
-
-def _trace_env() -> dict[str, str]:
-    """The current span's W3C trace context, lifted to env-var shape for the job's ``runtime_env``.
-
-    Trace continuity across the Ray boundary (prod-readiness P3): the estate's distributed trace went
-    dark at ``ray job submit`` because neither submission site propagated context — the job-side spans
-    were orphans. ``propagate.inject`` writes nothing when no valid span is active (tracing off, unit
-    tier), so this degrades to an empty dict and the job runs untraced — the trace is only ever
-    CONTINUED, never fabricated. Only the W3C keys are lifted (the global propagator also emits
-    baggage, which has no reader on the job side)."""
-    carrier: dict[str, str] = {}
-    propagate.inject(carrier)
-    return {key.upper(): value for key, value in carrier.items() if key in ("traceparent", "tracestate")}
 
 
 async def submit_stage_job(
@@ -92,7 +70,7 @@ async def submit_stage_job(
     must not produce a governed dataset the in-process path would have stamped. It is provenance, never
     a credential, so echoing it back through the jobs API (which mirrors runtime_env) is harmless.
     """
-    submission_id = _submission_id(stage, token)
+    submission_id = rk.submission_id(stage, token)
     env_vars = {
         "FROM_URI": from_uri,
         "TO_URI": to_uri,
@@ -117,7 +95,7 @@ async def submit_stage_job(
         # Trace continuity (prod-readiness P3): the mover's active span rides the runtime_env as
         # TRACEPARENT, and the job starts its root span as a child of it — the cascade's distributed
         # trace no longer goes dark at `ray job submit`. Empty when no span is active.
-        **_trace_env(),
+        **rk.trace_env(),
     }
     body = {
         "entrypoint": settings.ray_entrypoint,
@@ -126,70 +104,14 @@ async def submit_stage_job(
     }
 
     async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
-        await _submit_or_reattach(client, submission_id, body)
+        await rk.submit_or_reattach(client, submission_id, body)
         log.info("ray_stage_job_submitted", extra={"submission_id": submission_id, "stage": stage})
         try:
             async with asyncio.timeout(settings.ray_job_timeout_seconds):
-                await _await_success(client, submission_id, settings.ray_poll_interval_seconds)
+                await rk.await_success(client, submission_id, settings.ray_poll_interval_seconds)
         except TimeoutError as exc:
-            raise RayJobError(f"ray stage job {submission_id} did not finish within {settings.ray_job_timeout_seconds}s") from exc
+            raise rk.RayJobError(f"ray stage job {submission_id} did not finish within {settings.ray_job_timeout_seconds}s") from exc
     log.info("ray_stage_job_succeeded", extra={"submission_id": submission_id, "stage": stage})
-
-
-async def _submit_or_reattach(client: httpx.AsyncClient, submission_id: str, body: Mapping[str, object]) -> None:
-    """POST /api/jobs/. A 4xx when the id already exists (idempotent redelivery) re-attaches to that job —
-    UNLESS that prior job terminally FAILED/STOPPED, in which case it is deleted and resubmitted fresh so the
-    redelivery actually retries the transform on a healthy worker (instead of re-observing the same failure
-    every redelivery until maxDeliver silently drops the trigger — the deterministic-id poison)."""
-    try:
-        response = await client.post("/api/jobs/", json=dict(body))
-        if response.status_code < 400:
-            return
-        # Already-submitted (redelivery): inspect the existing job to decide re-attach vs fresh retry.
-        existing = await client.get(f"/api/jobs/{submission_id}")
-        if existing.status_code == 200:
-            status = existing.json().get("status")
-            if status in _TERMINAL_BAD:
-                # DELETE is only valid on a terminal job (FAILED/STOPPED are), then re-POST the same id.
-                await client.delete(f"/api/jobs/{submission_id}")
-                fresh = await client.post("/api/jobs/", json=dict(body))
-                fresh.raise_for_status()
-                log.info("ray_stage_job_resubmitted_after_failure", extra={"submission_id": submission_id})
-                return
-            log.info("ray_stage_job_reattach", extra={"submission_id": submission_id})
-            return
-        response.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise RayJobError(f"failed to submit ray stage job {submission_id}: {exc}") from exc
-
-
-async def _await_success(client: httpx.AsyncClient, submission_id: str, poll_interval: float) -> None:
-    """Poll GET /api/jobs/{id} until SUCCEEDED; raise on FAILED/STOPPED. Bounded by the caller's timeout."""
-    poll_errors = 0
-    while True:
-        await asyncio.sleep(poll_interval)
-        try:
-            response = await client.get(f"/api/jobs/{submission_id}")
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            poll_errors += 1
-            if poll_errors > _MAX_POLL_ERRORS:
-                raise RayJobError(f"failed to poll ray stage job {submission_id}: {exc}") from exc
-            continue
-        poll_errors = 0
-        payload = response.json()
-        status = payload.get("status")
-        if status == _TERMINAL_OK:
-            return
-        if status in _TERMINAL_BAD:
-            raise RayJobError(f"ray stage job {submission_id} {status}: {payload.get('message')}")
-
-
-def _lineage_env() -> dict[str, str]:
-    """This pod's ``RASK_LINEAGE_*`` config, forwarded into the job's ``runtime_env`` (P7a seam contract):
-    a job that grows lineage-kit actor/stage emission inherits the same endpoint/namespace the fleet uses.
-    Empty when unconfigured — the job's lineage-kit degrades to its no-op emitter."""
-    return {key: value for key, value in os.environ.items() if key.startswith("RASK_LINEAGE_")}
 
 
 async def submit_iiif_ingest_job(
@@ -208,7 +130,7 @@ async def submit_iiif_ingest_job(
     failure, a FAILED/STOPPED job, or a timeout; on success the bronze page dataset exists at
     ``bronze_uri`` and the caller measures it for the ONE bronze-write emit.
     """
-    submission_id = _submission_id(f"iiif-ingest-{volume_id}", token)
+    submission_id = rk.submission_id(f"iiif-ingest-{volume_id}", token)
     env_vars = {
         "VOLUME_ID": volume_id,
         "BRONZE_URI": bronze_uri,
@@ -225,8 +147,8 @@ async def submit_iiif_ingest_job(
         "OTEL_EXPORTER_OTLP_TRACES_HEADERS": os.environ.get("OTEL_EXPORTER_OTLP_TRACES_HEADERS", ""),
         "OTEL_SERVICE_NAME": os.environ.get("OTEL_SERVICE_NAME", ""),
         "OTEL_RESOURCE_ATTRIBUTES": os.environ.get("OTEL_RESOURCE_ATTRIBUTES", ""),
-        **_lineage_env(),
-        **_trace_env(),
+        **rk.lineage_env(),
+        **rk.trace_env(),
     }
     body = {
         "entrypoint": settings.iiif_ray_entrypoint,
@@ -234,13 +156,13 @@ async def submit_iiif_ingest_job(
         "runtime_env": {"env_vars": env_vars},
     }
     async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
-        await _submit_or_reattach(client, submission_id, body)
+        await rk.submit_or_reattach(client, submission_id, body)
         log.info("ray_iiif_ingest_submitted", extra={"submission_id": submission_id, "volume_id": volume_id})
         try:
             async with asyncio.timeout(settings.ray_job_timeout_seconds):
-                await _await_success(client, submission_id, settings.ray_poll_interval_seconds)
+                await rk.await_success(client, submission_id, settings.ray_poll_interval_seconds)
         except TimeoutError as exc:
-            raise RayJobError(f"ray iiif ingest job {submission_id} did not finish within {settings.ray_job_timeout_seconds}s") from exc
+            raise rk.RayJobError(f"ray iiif ingest job {submission_id} did not finish within {settings.ray_job_timeout_seconds}s") from exc
     log.info("ray_iiif_ingest_succeeded", extra={"submission_id": submission_id, "volume_id": volume_id})
 
 
@@ -266,7 +188,7 @@ async def submit_train_job(
     Dapr ack window. Returns ``"submitted"`` | ``"attached"`` | ``"already_failed"``; raises
     :class:`RayJobError` on transport/submit errors (the handler maps that to RETRY).
     """
-    submission_id = _submission_id("train", token)
+    submission_id = rk.submission_id("train", token)
     body = {
         "entrypoint": settings.train_entrypoint,
         "submission_id": submission_id,
@@ -314,7 +236,7 @@ async def submit_train_job(
                 # Trace continuity (prod-readiness P3): the consumer's active span rides the runtime_env
                 # as TRACEPARENT, and the job starts its root span as a child of it — the training run's
                 # spans join the submitting trace instead of orphaning. Empty when no span is active.
-                **_trace_env(),
+                **rk.trace_env(),
             }
         },
     }
@@ -333,5 +255,10 @@ async def submit_train_job(
                 return "attached"
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RayJobError(f"failed to submit ray train job {submission_id}: {exc}") from exc
+            raise rk.RayJobError(f"failed to submit ray train job {submission_id}: {exc}") from exc
     return "submitted"
+
+
+#: Re-exported. The generic submitter moved to `ray_kit.submit` (R2) so `compute` — the execution
+#: plane — can start jobs without importing the medallion. Callers keep this name.
+RayJobError = rk.RayJobError

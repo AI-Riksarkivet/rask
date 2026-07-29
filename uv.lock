@@ -1940,6 +1940,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pylance", extra = ["otel"] },
+    { name = "ray-kit" },
     { name = "service-kit", extra = ["governed", "lakehouse"] },
     { name = "storage" },
     { name = "uvicorn", extra = ["standard"] },
@@ -1965,6 +1966,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "pylance", extras = ["otel"], specifier = ">=9.0.0" },
+    { name = "ray-kit", editable = "packages/ray-kit" },
     { name = "service-kit", extras = ["governed", "lakehouse"], editable = "packages/service-kit" },
     { name = "storage", editable = "packages/storage" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
@@ -3524,6 +3526,7 @@ source = { editable = "packages/ray-kit" }
 dependencies = [
     { name = "anyio" },
     { name = "httpx" },
+    { name = "opentelemetry-api" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "ray", extra = ["default"] },
@@ -3534,6 +3537,7 @@ dependencies = [
 requires-dist = [
     { name = "anyio", specifier = ">=4.0" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "opentelemetry-api", specifier = ">=1.27" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "ray", extras = ["default"], specifier = ">=2.56" },

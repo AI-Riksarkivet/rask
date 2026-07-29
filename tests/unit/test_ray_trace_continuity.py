@@ -3,7 +3,7 @@
 The estate's distributed trace went dark at ``ray job submit``: neither submission site propagated W3C
 context, so the Ray-side spans were orphans or absent. Covers both halves + the degradation contract:
 
-- SUBMITTER (``services/medallion/services/ray_submit.py``): the current span's traceparent is injected
+- SUBMITTER (``ray_kit.submit.trace_env``, used by medallion's wrappers): the span's traceparent is injected
   into the submitted ``runtime_env`` at both sites (stage + train), and nothing is injected when no span
   is active — the trace is continued, never fabricated.
 - JOB (``scripts/ray_stage_job.py`` + ``ray_train_job.py``): the inlined ``_traced_root`` extracts the
@@ -29,6 +29,7 @@ import httpx
 import pytest
 from medallion.core.config import MedallionSettings
 from medallion.services import ray_submit
+from ray_kit import submit as ray_submit_kit
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -61,7 +62,7 @@ _PARENT = "00-" + "1" * 32 + "-" + "2" * 16 + "-01"
 def test_trace_env_injects_a_valid_traceparent_from_the_active_span() -> None:
     tracer = TracerProvider().get_tracer("test")
     with tracer.start_as_current_span("submitting") as span:
-        env = ray_submit._trace_env()
+        env = ray_submit_kit.trace_env()
     ctx = span.get_span_context()
     assert _TRACEPARENT_RE.match(env["TRACEPARENT"])
     # Exact ids from the active span; the trailing flags byte is the SDK's to choose (sampled et al).
@@ -70,7 +71,7 @@ def test_trace_env_injects_a_valid_traceparent_from_the_active_span() -> None:
 
 def test_trace_env_is_empty_without_an_active_span() -> None:
     # No active span → inject writes nothing → the job runs untraced (never a fabricated context).
-    assert ray_submit._trace_env() == {}
+    assert ray_submit_kit.trace_env() == {}
 
 
 def _capture_submits(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:

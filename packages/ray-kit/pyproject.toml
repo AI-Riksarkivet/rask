@@ -13,6 +13,10 @@ dependencies = [
     "ray[default]>=2.56",
     "requests>=2.31",
     "httpx>=0.27",
+    # `propagate` only — submit.trace_env lifts the active span into a job's runtime_env so the
+    # distributed trace survives the Ray boundary. The API package, not the SDK: ray-kit emits no
+    # telemetry of its own, it only forwards context a caller already established.
+    "opentelemetry-api>=1.27",
     "anyio>=4.0",
 ]
 
