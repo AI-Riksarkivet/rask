@@ -10,7 +10,7 @@ history. **`docs/architecture/lance-ns-merge.md` P0 copies this file into rask**
 and P8 reconciles it rather than dropping it.
 
 Status as of 2026-07-27. The twenty UX-goal conditions are met — the goal tracker is retired (git
-history); **the durable artifact is [`GOAL-UX-REACTIVE-EVIDENCE.md`](GOAL-UX-REACTIVE-EVIDENCE.md)**.
+history); **the durable artifact is [`OPEN-WORK.md#ux-reactive-evidence`](GOAL-UX-REACTIVE-EVIDENCE.md)**.
 Everything here is what remains *after* that.
 
 ---
@@ -77,7 +77,7 @@ stated in `runners/README.md`. Do not resolve this by making `runners.` importab
 
 ### B3 · Annotation projects are designed, not built *(was #122)*
 
-**What.** `docs/DESIGN-annotation-projects.md` — entities, both state machines, the authz doors, what a
+**What.** `OPEN-WORK.md#design--annotation-projects` — entities, both state machines, the authz doors, what a
 publish emits, and a slice plan.
 
 **Where it stands.** Slices `S1`–`S4` (domain core, FGA type, publish schema, catalog `create` pin) need no
@@ -107,15 +107,40 @@ below — one item, two names; close it once.)
 ### C3 · Lineage track remainder *(was #111)*
 
 Spec-fidelity and Marquez-parity reports are done; Dapr-delivery and gold-finding tests landed in `b43b8ff`.
-**What remains is the gold whole-history JSONB embed** — and note it is the *same artifact* as the merge
-plan's **P7b gold schema contract**. Do it once, there.
+
+### ~~C3 · Lineage track remainder~~ **CLOSED 2026-07-28, with evidence**
+
+C3's remaining work was "the gold whole-history JSONB embed". **It is built, and has a dedicated test
+file.** The item survived only because it was derived from `OPEN-WORK.md#lineage--openlineage-verification`, whose §1
+verdict — *"Does the product gold write embed lineage today? **No.**"* — went stale without anyone
+re-deriving the backlog entry that cited it. That page now carries a correction banner.
+
+What actually ships (`services/medallion/src/medallion/services/compute.py:43-50`):
+
+- `_LINEAGE_COLUMN = "lineage"`, written as Lance JSON.
+- **Every** mover stage stamps it, not gold alone — it is in `_RESTAMPED_COLUMNS`, so each stage
+  prepends its own hop to the chain it read off its upstream's cell rather than inheriting the
+  parent's provenance verbatim.
+- `UpstreamFacts.chain` therefore reaches **back to bronze with no graph query** — the consume-layer
+  document is complete on its own (R25b).
+- The promotion indexes the JSON path `run_id` as `lineage_run_id_idx`, so a consumer filtering
+  `json_get_string(lineage, 'run_id') = …` gets an index rather than a full scan.
+
+Pinned by `tests/unit/test_gold_lineage_column.py` — **16 tests, all passing** — including
+`test_the_documents_chain_matches_the_derived_from_edges_the_graph_gets` (the JSONB chain equals the
+`DERIVED_FROM` edges the same runs write into AGE, so storage and graph cannot disagree),
+`test_the_lineage_column_is_re_stamped_not_inherited`, and
+`test_a_run_id_filter_selects_exactly_the_rows_that_run_produced`.
+
+**The lesson worth keeping:** a backlog item that cites a document rather than the code inherits that
+document's decay. When closing any remaining item here, re-derive against the tree first.
 
 ### C4 · Prod-readiness residuals *(was #86)*
 
 Residuals from the retired `GOAL-production-readiness` tracker. Re-derive against the merged chart rather
 than the lance-ns one — several will have been answered by rask's operators.
 
-**Where the enumeration lives:** `ASSESSMENT-2026-07-15.md` §3 is the only in-tree gap-by-gap roll-up
+**Where the enumeration lives:** `OPEN-WORK.md#assessment-2026-07-15-only-3-was-still-live` §3 is the only in-tree gap-by-gap roll-up
 (kept for exactly this reason — historical banner, live enumeration). Verified still open on 2026-07-27:
 gap 1 (Dex demo-IdP prod posture — `values-prod.yaml` does not touch dex), gap 5 (OpenBao auto-unseal via
 a secrets operator — ESO / bank-vaults; `runbooks/RUNBOOK-oncall.md:63` cites "ASSESSMENT gap #5", and
@@ -315,9 +340,9 @@ a service dissolved in June) have **zero** inbound references.
 
 **R19 — `packages/common` and `services/common` are both gone.** 27 citations across 13 docs still point
 at `services/common/*` or `from common.X`: `DATA-CONTRACT.md`, `ARCHITECTURE.md`, `DECISIONS.md`,
-`COVERAGE.md`, `BENCH-2026-07-22.md`, `OPEN-WORK.md` (§E3 above), `DESIGN-annotation-projects.md`,
-`FLOW.md`, `MEDALLION.md`, `SYSTEM-SKETCH.md`, `DEPLOY.md`, `ASSESSMENT-2026-07-15.md`,
-`RASK-INTEGRATION.md`, `architecture/lance-ns-merge.md`. The real homes are
+`COVERAGE.md`, `OPEN-WORK.md#catalog-feature-bench-2026-07-22-polaris--unity--lakekeeper`, `OPEN-WORK.md` (§E3 above), `OPEN-WORK.md#design--annotation-projects`,
+`FLOW.md`, `MEDALLION.md`, `SYSTEM-SKETCH.md`, `DEPLOY.md`, `OPEN-WORK.md#assessment-2026-07-15-only-3-was-still-live`,
+`OPEN-WORK.md#rask-integration`, `architecture/lance-ns-merge.md`. The real homes are
 `packages/service-kit/src/service_kit/{dapr_publish,control_events,lakehouse/outbox}.py` and
 `service_kit/governed/`. `dapr_publish.py:19,61` cites `DATA-CONTRACT.md` back — fix the pair together;
 it is the one code file in F1's scope.
@@ -327,7 +352,7 @@ it is the one code file in F1's scope.
 `OPERATORS.md:14`. `API.md:4` claims a `make openapi-check` CI guard that is **not in the Makefile**:
 either add the target or drop the claim.
 
-**`ASSESSMENT-2026-07-15.md` is not a delete.** §1–§2 are discharged and describe the dead pre-merge tree,
+**`OPEN-WORK.md#assessment-2026-07-15-only-3-was-still-live` is not a delete.** §1–§2 are discharged and describe the dead pre-merge tree,
 but §3 is the only in-tree gap-by-gap prod-readiness enumeration and **two** things depend on it —
 `OPEN-WORK.md:118` (C4) and `runbooks/RUNBOOK-oncall.md:63` ("ASSESSMENT gap #5"). Cut or hard-banner §1–§2; keep
 §3 and both inbound refs intact.
@@ -437,7 +462,25 @@ is not a package at all — it is the sealed `runners/htr`, outside every worksp
 --exclude-dir=superpowers --exclude=lance-ns-merge.md --exclude=OPEN-WORK.md` returns only files
 whose mention is an explicit tombstone, and the nav gate is still green.
 
-### F2 · The deferred remainder *(blocked on the information-architecture goal)*
+### F2 · ~~The deferred remainder~~ **CLOSED 2026-07-28** — the IA goal landed, so this ran
+
+`678e2d5` renamed `/lakehouse/data/*` → `/lakehouse/catalog/*`, which was the thing F2 waited on.
+
+**The `@source` bug is fixed** (`frontend-conventions.md:319,347`): it shipped a copy-pasteable
+`@source` with **four** `../` where three is correct, and copying it rendered every `@rask/ui` class
+unstyled with no error and no warning. Verified against `frontend/microfrontends/home/src/app.css:7`.
+
+**`frontend-conventions.md` and `frontend-microfrontends.md` are bannered rather than rewritten.**
+Their *reasoning* is sound and worth keeping — why rask splits the frontend, why each zone owns a
+static base, why dev and prod composition are separate layers sharing only that base. Their
+*inventory* is pre-merge: three retired zones, `/default/<domain>` bases, 3 packages where there are
+now 8, and a gates section naming ESLint and Prettier. Rewriting the inventory in place would have
+produced a second, competing zone list to keep in sync; the banners point at
+`.claude/skills/rask-frontend` and `rask-styling`, which are checked against the code and updated
+with it. `frontend-conventions.md`'s self-description as "the single source of truth" is the part
+that was actively harmful, and the banner sits above it.
+
+<details><summary>Original F2 scope, for the record</summary>
 
 Not dropped — deferred because the IA goal rewrites the subject matter. Pick this up the day that goal
 closes; each item names why it waits.
@@ -472,7 +515,7 @@ explicitly kept-with-a-banner or deleted-with-its-referrers-fixed.
 
 ## How this survives
 
-1. **P0** of `docs/architecture/lance-ns-merge.md` copies this file to `rask/docs/OPEN-WORK.md`.
+1. **P0** of `docs/architecture/lance-ns-merge.md` copies this file to `rask/OPEN-WORK.md`.
 2. **P8** reconciles it — items closed *by* the merge get struck with the evidence; the rest carry forward
    into rask's own tracking, renumbered or not, but never silently dropped.
 3. `MERGE-REPIN-DELTA.md` was a diff, was applied (the plan is re-pinned, rulings R8–R10 + D7 recorded),

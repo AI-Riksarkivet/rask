@@ -7,6 +7,23 @@ is command output, and every command is named so it can be re-run.
 Re-run everything: the commands are inline. Nothing here is asserted; where a fix is claimed, the fix was
 broken deliberately and watched to fail first.
 
+!!! note "Pre-merge record — the names below are lance-ns's, not rask's (banner added 2026-07-28)"
+
+    This is a **closed goal's proof-log**, carried into rask deliberately as a comparison baseline
+    (`architecture/lance-ns-merge.md:81` — "so a merged-tree regression can be compared against what
+    was actually proven"). Its evidence stands *as evidence*; what has moved is every name around it,
+    so do not read it as a description of the current tree:
+
+    - It enumerates **four** zones (`/home · /lakehouse · /media · /annotator`); there are now **seven**.
+    - Imports read `@repo/*`; the scope is now `@rask/*` (`@repo/zone-contract/poll-reason.test.ts`
+      lives at `frontend/packages/zone-contract/src/poll-reason.test.ts`).
+    - Pod and release names are `lance-ns-*`.
+    - `make frontend-images && make frontend-load` at §7 are **not Makefile targets**, so that run is
+      not reproducible as written.
+
+    Kept rather than rewritten: rewriting a proof-log to match a tree it was never run against would
+    destroy the only thing it is good for.
+
 ---
 
 ## 1 — the history endpoint is deployed, not just written

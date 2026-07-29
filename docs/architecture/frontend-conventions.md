@@ -1,5 +1,27 @@
 # Frontend conventions (the canon)
 
+!!! warning "The zone names and base paths below are pre-merge — use `.claude/skills/rask-frontend` for those (2026-07-28)"
+
+    The *conventions* here still hold: remote `query()` + `.refresh()`, runes over stores, keyed
+    `{#each}`, `@rask/ui` over app-local components, tokens over colour literals, SSR-safe browser
+    globals. **The estate they are stated against moved**, so read the following as historical:
+
+    - Zones named `overview`, `discover` and `storage` — all three are **retired**. The seven are
+      `home`, `lakehouse`, `media`, `annotator`, `compute`, `train`, `studio`; `/storage` and
+      `/catalog` are routes *inside* `lakehouse`.
+    - Base paths written `/default/<domain>` or `/<project>/<domain>` — bases are a bare `/<zone>`,
+      and `cross-zone-reload.test.ts` asserts `/default/lakehouse` is **not** a zone path. The project
+      comes from the request **host**, not a path segment.
+    - The gates section names ESLint and Prettier; both are deleted and `toolchain.test.ts` fails the
+      build if either reappears. Lint is oxlint, format is oxfmt.
+
+    **Corrected here on 2026-07-28:** the `@source` line at §Styling shipped with **four** `../` where
+    three is correct (`:319`, `:347`). Copy-pasting the old form silently rendered every `@rask/ui`
+    class unstyled — no error, no warning.
+
+    The maintained, code-checked version of all of this is the **`rask-frontend`** skill (zones, data
+    dialects, composition, gates) and **`rask-styling`** (tokens, `@source`, component authoring).
+
 This is the **single source of truth** for how rask's frontend is written. The
 codebase is checked against it, and every future change is reconciled to it —
 so the same inconsistencies stop being rediscovered.
