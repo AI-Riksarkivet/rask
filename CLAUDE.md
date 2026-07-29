@@ -99,9 +99,14 @@ verifier writes a marker into a real source file and polls the container for it.
 
 Scope and limits:
 
-- **Python fleet services only.** Frontend zones are excluded (`frontend.enabled=false` in
-  the Tiltfile), so `/` on the ingress 404s under tilt — use `make dev-frontends` (Vite HMR)
-  for UI work; it is already sub-second and tilt would be a downgrade.
+- **All seven zones are in the loop too** (since 2026-07-29 — they were excluded via
+  `frontend.enabled=false`, which made `/` on the ingress 404 under tilt). A zone's reload is
+  NOT Vite HMR: its prod image runs `bun build/index.js` and serves the compiled `build/`, so
+  the Tiltfile syncs `src/` **and** `frontend/packages` (an `@rask/ui` edit must reach every
+  zone that renders it) and then re-runs `bun run build` in-container and restarts. Seconds,
+  not sub-second. **For pure UI work `make dev-frontends` is still the faster loop** — reach
+  for tilt when the BACKEND is the point (auth, FGA, Dapr, the gateway's own routing), which
+  is the one thing `dev-frontends` cannot exercise.
 - **Dependency changes still need a rebuild.** Only the synced package paths hot-reload.
 - **`dev.reload` is dev-only.** It relaxes `readOnlyRootFilesystem` (live_update cannot
   write into a read-only container) and appends `--reload`. Rendering the chart without it

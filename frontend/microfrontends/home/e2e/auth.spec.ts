@@ -9,8 +9,14 @@ import { zoneDirs } from '../../../packages/zone-contract/src/manifest';
 // `zoneDirs()`: scaffolding a new zone without adding its navbar entry (and its row here) FAILS this
 // suite instead of silently shipping an unreachable zone. `trigger` = a NavigationMenu button opening
 // a panel of sub-areas; `link` = a plain link (single-surface zone).
+//
+// `home` is deliberately ABSENT and is asserted separately below. It is the catch-all zone reached by
+// the shell's brand header ("Back to home", app-sidebar.svelte) from every other zone — the ordinary
+// web convention — so a navbar row for it would, on this very page, be a link to the page you are
+// already standing on. Dropping it is what `zoneDirs().filter(z => z !== 'home')` encodes; the guard
+// against an UNREACHABLE zone is not weakened, only moved: home's reachability is proved by the brand
+// assertion, and every other zone still fails here if it ships without an entry.
 const ZONE_ENTRIES: Record<string, { title: string; kind: 'trigger' | 'link' }> = {
-	home: { title: 'Home', kind: 'link' },
 	lakehouse: { title: 'Lakehouse', kind: 'trigger' },
 	media: { title: 'Search', kind: 'trigger' }, // the media read plane, named for the task
 	annotator: { title: 'Annotate', kind: 'link' },
@@ -47,9 +53,9 @@ test('GET /auth/logout clears the session and redirects home', async ({ page, ba
 test('the navbar carries one entry per zone and no governance column for an anonymous visitor', async ({
 	page,
 }) => {
-	// Ground truth first: every zone directory has exactly one row in ZONE_ENTRIES. A future zone
-	// scaffolded without a navbar entry fails HERE, before any DOM assertion.
-	expect(Object.keys(ZONE_ENTRIES).sort()).toEqual(zoneDirs());
+	// Ground truth first: every zone directory EXCEPT home has exactly one row in ZONE_ENTRIES. A
+	// future zone scaffolded without a navbar entry fails HERE, before any DOM assertion.
+	expect(Object.keys(ZONE_ENTRIES).sort()).toEqual(zoneDirs().filter((z) => z !== 'home'));
 	await page.goto('/');
 	const nav = page.getByRole('navigation', { name: 'Zones' });
 	await expect(nav).toBeVisible();
@@ -65,15 +71,13 @@ test('the navbar carries one entry per zone and no governance column for an anon
 	// the zones (panel rows live in portalled content, closed here, so they never count).
 	const triggerCount = Object.values(ZONE_ENTRIES).filter((e) => e.kind === 'trigger').length;
 	await expect(nav.getByRole('button')).toHaveCount(triggerCount);
-	await expect(nav.getByRole('link')).toHaveCount(zoneDirs().length - triggerCount);
-	// From home, every OTHER zone's plain link leaves this app's route manifest → hard nav; the Home
-	// link is same-zone and must stay soft.
+	await expect(nav.getByRole('link')).toHaveCount(Object.keys(ZONE_ENTRIES).length - triggerCount);
+	// Every zone in the bar is a DIFFERENT app, so every plain link leaves this app's route manifest
+	// and must hard-navigate. There is no same-zone exception left to carve out: the one entry that
+	// used to be soft was Home, and it is no longer in the bar.
 	await expect(nav.getByRole('link', { name: 'Train', exact: true })).toHaveAttribute(
 		'data-sveltekit-reload',
 		'',
-	);
-	await expect(nav.getByRole('link', { name: 'Home', exact: true })).not.toHaveAttribute(
-		'data-sveltekit-reload',
 	);
 	// fetchMe resolves null (no session, no catalog) → estate_admin is unknowable → fail-closed.
 	// Access has no home outside the estate-admin Governance column, so it is nowhere in this bar…

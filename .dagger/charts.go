@@ -69,11 +69,18 @@ func (m *Rask) Charts(
 		// does NOT catch it: it exits 0 on the same tree ("1 chart(s) linted, 0 chart(s) failed") and the
 		// render one line later is what fails, so the log opens with a green lint.
 		//
-		// `build`, not `update`: build installs the exact versions pinned in the COMMITTED Chart.lock,
-		// while update re-resolves and rewrites the lock — which would let CI silently render a different
-		// subchart version than a deploy does, and make this gate's verdict depend on upstream release
-		// timing. Both the lock and third_party/rustfs-operator (the one file:// dependency) are tracked.
-		WithExec([]string{"helm", "dependency", "build", "chart"}).
+		// Via `make k3s-deps`, not a bare `helm dependency build` here. The bare form fails with "no
+		// repository definition for https://nvidia.github.io/k8s-device-plugin, …": `dependency build`
+		// resolves Chart.lock against the LOCAL helm repo config, and a fresh container has none. The
+		// Makefile target already carries that list (K3S_DEP_REPOS -> `helm repo add` -> `helm repo
+		// update` -> `helm dependency build ./chart`), so calling it keeps ONE list of repositories
+		// instead of a second copy here that drifts the first time a subchart moves — and holds the
+		// same `dagger call charts` == `make charts` contract the gates below already do.
+		//
+		// The target uses `build`, not `update`: build installs the versions pinned in the COMMITTED
+		// Chart.lock, while update re-resolves and rewrites it — which would let CI render a different
+		// subchart version than a deploy does, and make this verdict depend on upstream release timing.
+		WithExec([]string{"make", "k3s-deps"}).
 		// 'Helm lint + render': lint the chart, then prove a default render succeeds.
 		WithExec([]string{"helm", "lint", "chart"}).
 		WithExec([]string{"sh", "-c", "helm template chart >/dev/null"}).

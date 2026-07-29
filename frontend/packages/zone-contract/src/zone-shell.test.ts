@@ -86,3 +86,30 @@ describe('canvas mode does not opt a zone out of navigation', () => {
 		);
 	});
 });
+
+describe('home stays reachable after leaving the zone navbar', () => {
+	// `home` used to carry a navbar entry like every other zone. It no longer does: it is the catch-all
+	// zone, and a row for it would, on home itself, link to the page you are standing on. Reachability
+	// therefore rests entirely on the shell's brand header — so it is asserted, not assumed. Without
+	// this, dropping the navbar row and later refactoring the sidebar header would strand the zone with
+	// no route to it from anywhere, and the e2e that used to catch that (home/e2e/auth.spec.ts's
+	// one-entry-per-zone check) no longer covers home by construction.
+	const sidebar = readFileSync(
+		resolve(FRONTEND_ROOT, 'packages', 'ui', 'src', 'lib', 'shell', 'app-sidebar.svelte'),
+		'utf8',
+	);
+
+	it('the shell brand links to /', () => {
+		expect(sidebar, 'the sidebar header no longer links home — the home zone is now unreachable').toMatch(
+			/href=["']\/["']/,
+		);
+	});
+
+	it('and hard-navigates, because every other zone is a different app', () => {
+		// A soft nav from e.g. /lakehouse to / asks the lakehouse app for a route it does not own → 404.
+		const brand = /<a[^>]*href=["']\/["'][^>]*>/.exec(sidebar)?.[0] ?? '';
+		expect(brand, `brand anchor lacks data-sveltekit-reload: ${brand}`).toMatch(
+			/data-sveltekit-reload/,
+		);
+	});
+});
