@@ -177,7 +177,33 @@ FLEET_TEMPLATES = [
     # on /lakehouse/, because nothing routed there. Whoever owns the zones must own the routes to
     # them, or the two halves disagree and the symptom looks like a broken app.
     'templates/ingress.yaml',
+    # DEX, for exactly the same reason the ingress is here, one rung further in. This Tiltfile sets
+    # auth.enabled=true and dex.issuer below — but `--set` only reaches templates that are RENDERED,
+    # and without this line dex.yaml is not among them. `make k3s-up` then owns the Dex ConfigMap at
+    # chart defaults, so the issuer stayed `http://rask-dex:5556/dex`: Dex advertised in-cluster URLs
+    # in its discovery document, the BFF forwarded the browser to `http://rask-dex:5556/dex/auth`,
+    # and login died on an unresolvable host — while every value here looked correct, because the
+    # setting was applied to a template nobody rendered.
+    #
+    # Whoever turns auth ON must own the IdP that auth depends on.
+    'templates/dex.yaml',
 ]
+
+# The origin the BROWSER uses to reach this cluster. Default assumes the documented SSH tunnel
+# (`ssh -L 8080:127.0.0.1:80 …`); set RASK_PUBLIC_ORIGIN when reaching the host any other way.
+# Raw is external (R23): the governed tiers are on the in-cluster warehouse, raw and its derived ALTO
+# output are not. Override the host for another environment with RASK_HCP_S3.
+HCP_S3 = os.getenv('RASK_HCP_S3', 'https://dev-ai.hcp.ra-dev.int')
+STORES = ('[{"name":"images-batch","bucket":"images-batch","role":"raw","endpoint":"' + HCP_S3 +
+          '","insecure":true,"secret":"hcp-s3","description":"Source page images, as harvested."},'
+          '{"name":"images-batch-alto","bucket":"images-batch-alto","role":"derived","endpoint":"' + HCP_S3 +
+          '","insecure":true,"secret":"hcp-s3","description":"ALTO XML exported from the cascade."},'
+          '{"name":"lance-catalog","bucket":"lance-catalog","role":"bronze","description":"The lakehouse warehouse."},'
+          '{"name":"rask-observability","bucket":"rask-observability","role":"observability","description":"Telemetry."}]')
+
+PUBLIC_ORIGIN = os.getenv('RASK_PUBLIC_ORIGIN', 'http://localhost:8080')
+# 32+ chars, fixed so a tilt restart does not sign everyone out. Dev-only; see the --set below.
+SESSION_SECRET = os.getenv('RASK_SESSION_SECRET', 'rask-tilt-dev-session-secret-0123456789')
 
 k8s_yaml(local(
     ['helm', 'template', 'rask', 'chart']
@@ -189,10 +215,56 @@ k8s_yaml(local(
         # The media trio defaults OFF in the chart, so the annotator/viewer/search had no pods at
         # all under Tilt. They are the services most worth iterating on, so turn them on here.
         '--set', 'media.enabled=true',
+        # The storage registry. Raw and derived live on the EXTERNAL store (a different host with
+        # different credentials); only the governed tiers are on the warehouse this chart deploys.
+        # Without this every store resolves to the warehouse, and a bucket holding millions of objects
+        # lists as empty — no error, no 404. `secret` names the OpenBao key holding its access/secret
+        # pair, because one process env cannot hold two backends' credentials.
+        '--set-json', 'storage.stores=' + STORES,
         # The zones ARE in the loop now (see the docker_build_with_restart block above), so this is
         # on. dev.reload also relaxes their read-only rootfs — without that every zone sync fails
         # with "Read-only file system" and silently changes nothing.
         '--set', 'frontend.enabled=true',
+        # Governance ON. The chart defaults auth.enabled=false ("open dev mode"), and nothing here
+        # turned it on — so every zone rendered signed-out with no way IN: no sign-in control at all,
+        # `/media/capi/v1/me` answering 401, and Dex running the whole time with nothing pointing at
+        # it. Auth is the single most repo-specific thing the in-cluster loop exists to exercise
+        # (FGA, the BFF, cross-zone sessions), and it is exactly what `make dev-frontends` cannot do,
+        # so leaving it off made the slower loop pointless.
+        #
+        # auth.enabled ALSO renders the `/dex` ingress path (templates/ingress.yaml:92). Without it
+        # Dex is ClusterIP-only and the browser cannot reach the issuer, so the OIDC redirect dies at
+        # the first hop — flipping frontend.oidc.enabled alone would have produced a sign-in button
+        # that goes nowhere.
+        '--set', 'auth.enabled=true',
+        '--set', 'frontend.oidc.enabled=true',
+        # Both must be what the BROWSER sees, not what the cluster sees — they form the issuer and the
+        # redirect URI, and OIDC matches redirect URIs EXACTLY. Over an SSH tunnel the browser's origin
+        # is the LOCAL forwarded port (`-L 8080:127.0.0.1:80` → http://localhost:8080), which is not
+        # the cluster's own origin; that mismatch is a redirect_uri_mismatch at the callback, after a
+        # successful login, which reads like a broken app rather than a config value. Override for any
+        # other access path:  RASK_PUBLIC_ORIGIN=http://10.16.51.53 tilt up
+        '--set', 'frontend.oidc.publicOrigin=' + PUBLIC_ORIGIN,
+        '--set', 'frontend.oidc.publicIssuer=' + PUBLIC_ORIGIN + '/dex',
+        # Dex's OWN issuer must be the public one too, and this is the step that is easy to miss:
+        # the chart defaults it to `http://rask-dex:5556/dex` (in-cluster). Dex renders its discovery
+        # document FROM that issuer, so with the default it advertises
+        # `authorization_endpoint: http://rask-dex:5556/dex/auth` — and the BFF forwards the browser
+        # to exactly what discovery returned, by design (oidc.ts keeps the discovered endpoints public
+        # and rewrites them inward only for server-side calls). The browser then tries to resolve an
+        # in-cluster Service name and the login dies at the first hop, which presents as the network
+        # blocking Dex rather than as a misconfigured issuer.
+        #
+        # Setting it public is what makes the split-horizon work as intended: Dex advertises public
+        # URLs, browsers use them, and `internalEndpoint()` swaps the prefix back to
+        # OIDC_INTERNAL_ISSUER for discovery and the token POST, which pods can reach.
+        '--set', 'dex.issuer=' + PUBLIC_ORIGIN + '/dex',
+        # Seals the session cookie (AES-256-GCM); the chart requires >=32 chars when oidc is enabled.
+        # Fixed rather than random ON PURPOSE: a fresh secret per `tilt up` invalidates every existing
+        # session cookie, so each restart silently signs you out mid-task. Dev-only by construction —
+        # it lives in a Tiltfile that refuses to run outside a local k8s context (allow_k8s_contexts
+        # above), and production takes this from the OpenBao-backed secret store, never a literal.
+        '--set', 'frontend.oidc.sessionSecret=' + SESSION_SECRET,
     ],
     quiet=True,
     # `helm template` needs chart/charts/ vendored. `make k3s-up` depends on `k3s-deps`, which runs

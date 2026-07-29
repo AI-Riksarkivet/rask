@@ -30,7 +30,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from service_kit.exceptions import NotFoundError
+from service_kit.exceptions import NotFoundError, ServiceUnavailableError
 from service_kit.governed.secrets import fetch_dapr_secret
 from service_kit.schemas.storage import Store, store_by_name
 from storage import BucketNotFoundError, ObjectNotFoundError, s3_client, s3_errors
@@ -66,24 +66,34 @@ def _registered_bucket(name: str) -> str:
 
 
 @lru_cache(maxsize=32)
-def _creds(secret: str) -> tuple[str, str] | None:
-    """This store's credentials from the Dapr secret store, or None if unavailable.
+def _creds(secret: str) -> tuple[str, str]:
+    """This store's credentials from the Dapr secret store. FAIL-CLOSED — never falls back to env.
 
-    Cached: the secret is estate config, not per-request data, and one sidecar round-trip per object
-    listing would put OpenBao on the hot path of the object browser.
+    The secret store is the SOLE source for a store that declares one. An earlier version degraded to
+    the process env when the lookup failed, and that is the cheat this docstring exists to forbid: env
+    holds the WAREHOUSE's credentials, so a failed lookup for an external store silently retried it
+    against the wrong backend — an InvalidAccessKeyId if you are lucky, and someone else's bucket if
+    you are not. A secret store that is down must look down.
 
-    The governed tiers pass no secret and keep using the process env, so the deployment's own store is
-    untouched. A store on ANOTHER backend needs its own keys, and env holds exactly one pair — which is
-    why raw could never be read from a process configured for the warehouse.
+    Cached: a secret is estate config, not per-request data, and a sidecar round-trip per listing would
+    put OpenBao on the object browser's hot path. Only SUCCESSFUL lookups cache — `lru_cache` never
+    stores a raised exception, so a transient outage cannot pin a failure for the process lifetime.
     """
     store = os.getenv("RASK_SECRET_STORE", "lance-secrets")
     try:
         data = fetch_dapr_secret(store, secret, retries=1)
-    except Exception:  # noqa: BLE001 — a missing secret must degrade to env, not 500 the browser
+    except Exception as exc:
         log.warning("store_secret_unavailable", extra={"secret": secret})
-        return None
+        raise ServiceUnavailableError(
+            f"credentials for this store are unavailable: secret {secret!r} could not be read from "
+            f"the {store!r} secret store ({exc}). The store is not readable until it resolves."
+        ) from exc
     ak, sk = data.get("access_key"), data.get("secret_key")
-    return (ak, sk) if ak and sk else None
+    if not (ak and sk):
+        raise ServiceUnavailableError(
+            f"secret {secret!r} exists but carries no access_key/secret_key pair"
+        )
+    return (ak, sk)
 
 
 def _client_for(name: str) -> Any:  # noqa: ANN401 — boto3 client, same as storage.s3_client
@@ -99,13 +109,10 @@ def _client_for(name: str) -> Any:  # noqa: ANN401 — boto3 client, same as sto
     as before.
     """
     store = _registered_store(name)
-    creds = _creds(store.secret) if store.secret else None
-    return s3_client(
-        store.endpoint,
-        access_key=creds[0] if creds else None,
-        secret_key=creds[1] if creds else None,
-        insecure=store.insecure or None,
-    )
+    # A store that declares a secret gets ONLY that secret's credentials; one that declares none uses
+    # the deployment's own env. There is no third path — no falling back from the first to the second.
+    ak, sk = _creds(store.secret) if store.secret else (None, None)
+    return s3_client(store.endpoint, access_key=ak, secret_key=sk, insecure=store.insecure or None)
 
 
 #: The dependency every route uses in place of the deleted union.

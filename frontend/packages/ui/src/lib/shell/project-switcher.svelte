@@ -8,7 +8,8 @@
 
 	// sidebar-07's TeamSwitcher, adapted into a PROJECT switcher and relocated to the navbar row:
 	// it is estate chrome (which project am I in), not in-zone navigation, so it sits beside the
-	// sidebar trigger at the head of the shell header rather than inside the sidebar. Project-first
+	// sidebar HEADER, where the rail's most valuable slot used to print the zone's own name — a fact
+	// the top navbar and the breadcrumb already state. Project-first
 	// IA via HOST: the project IS the request host (e.g. demo.localhost), so "Main menu" returns to
 	// the platform picker on the FRONT-DOOR host — derived by stripping the project's subdomain
 	// label (demo.localhost -> localhost). That's how you leave a project; the picker (not this
@@ -36,16 +37,29 @@
 
 <DropdownMenu.Root>
 	<DropdownMenu.Trigger>
+		<!-- Rendered as the SIDEBAR HEADER, so it keeps that shape: the accented icon block and the
+		     two-line label are what made the header read as a header rather than a control that happened
+		     to sit at the top. A plain ghost button lost both — a bare glyph, one truncated line, and no
+		     accent — which is why the rail suddenly looked like it was missing something.
+		     `size-8` block + `text-sm leading-tight` stack matches the sidebar-07 header the estate
+		     already uses; collapsed to icon only the block survives, which is the intended silhouette. -->
 		{#snippet child({ props })}
 			<Button
 				{...props}
 				variant="ghost"
-				class="text-foreground max-w-48 min-w-0 gap-1.5 px-2"
+				class="text-foreground h-auto w-full min-w-0 justify-start gap-2 px-2 py-1.5"
 				aria-label="Switch project"
 			>
-				<Boxes class="text-muted-foreground" />
-				<span class="truncate capitalize">{displayName}</span>
-				<ChevronsUpDown class="text-muted-foreground" />
+				<div
+					class="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg"
+				>
+					<Boxes class="size-4" />
+				</div>
+				<div class="grid min-w-0 flex-1 text-left text-sm leading-tight">
+					<span class="truncate font-medium capitalize">{displayName}</span>
+					<span class="text-muted-foreground truncate text-xs">{project.subtitle ?? 'Project'}</span>
+				</div>
+				<ChevronsUpDown class="text-muted-foreground size-4 shrink-0" />
 			</Button>
 		{/snippet}
 	</DropdownMenu.Trigger>
@@ -66,7 +80,9 @@
 		</DropdownMenu.Item>
 		<DropdownMenu.Separator />
 		<DropdownMenu.Item class="p-0">
-			<a href={homeUrl} class="flex w-full items-center gap-2 px-2 py-1.5">
+			<!-- data-sveltekit-reload: cross-zone by definition (home owns '/'), so a soft nav would ask
+			     THIS zone for a route it does not own and 404. Same rule every cross-zone link follows. -->
+			<a href={homeUrl} data-sveltekit-reload class="flex w-full items-center gap-2 px-2 py-1.5">
 				<div class="flex size-6 items-center justify-center rounded-md border bg-transparent">
 					<House class="size-4" />
 				</div>

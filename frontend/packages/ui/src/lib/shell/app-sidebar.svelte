@@ -1,9 +1,9 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { House } from '@lucide/svelte';
 	import * as Sidebar from '../components/sidebar/index.js';
+	import ProjectSwitcher from './project-switcher.svelte';
 	import ZoneNav from './zone-nav.svelte';
-	import { prefetchOnIntent, type ZoneNav as ZoneNavConfig } from './nav-config.js';
+	import type { Project, ZoneNav as ZoneNavConfig } from './nav-config.js';
 
 	// The zone-scoped sidebar: collapsible-to-icon, carrying ONLY the CURRENT zone's own routes
 	// (from the `zoneNav` prop each zone passes). Everything estate-wide moved up into the shell
@@ -13,39 +13,27 @@
 	let {
 		pathname = '',
 		zoneNav = null,
+		project,
 		footer,
 	}: {
 		pathname?: string;
 		zoneNav?: ZoneNavConfig | null;
+		project?: Project;
 		footer?: Snippet;
 	} = $props();
 </script>
 
 <Sidebar.Root collapsible="icon">
-	<!-- The header names the zone you are in AND is the way back to the estate root. It had no header
-	     at all, so the only route home was hunting for "Home" among the cross-zone links in the
-	     navbar — every other product puts it exactly here, at the top of the rail, and users reach
-	     for it. Cross-zone by definition (home owns '/'), so it hard-navigates and warms the target
-	     on intent, like every other cross-zone link in the shell. Collapsed to icon it stays a
-	     house, which is the one glyph nobody has to learn. -->
+	<!-- The header IS the project switcher: which project you are in, the projects you can move to, and
+	     the way back to the main menu — one control, in the slot every product puts project context.
+	     It used to print the ZONE's name, which the top-navbar highlight and the breadcrumb already say
+	     twice; a third copy spent the rail's most valuable slot on information the user already had.
+	     A separate Home row sat under it for a while, which was the same mistake in miniature — the
+	     dropdown's own "Main menu" item already goes there, so the row was a second door to one room. -->
 	<Sidebar.Header>
 		<Sidebar.Menu>
 			<Sidebar.MenuItem>
-				<Sidebar.MenuButton size="lg" tooltipContent="Home">
-					{#snippet child({ props })}
-						<a href="/" data-sveltekit-reload {...props} {@attach prefetchOnIntent('/')}>
-							<div
-								class="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 items-center justify-center rounded-lg"
-							>
-								<House class="size-4" />
-							</div>
-							<div class="grid flex-1 text-left text-sm leading-tight">
-								<span class="truncate font-medium">{zoneNav?.title ?? 'rask'}</span>
-								<span class="text-muted-foreground truncate text-xs">Back to home</span>
-							</div>
-						</a>
-					{/snippet}
-				</Sidebar.MenuButton>
+				<ProjectSwitcher {project} />
 			</Sidebar.MenuItem>
 		</Sidebar.Menu>
 	</Sidebar.Header>
