@@ -35,8 +35,9 @@ export const MEDIA_ZONE_NAV: ZoneNav = {
 			items: [
 				{
 					title: 'Workbench',
-					href: '/media/workbench',
-					match: seg('/media/workbench'),
+					href: '/workbench/',
+					match: seg('/workbench'),
+					reload: true,
 					icon: LayoutDashboard,
 				},
 				{

@@ -120,8 +120,9 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 			},
 			{
 				title: 'Workbench',
-				href: '/lakehouse/lineage/workbench',
-				match: seg('/lakehouse/lineage/workbench'),
+				href: '/workbench/',
+				match: seg('/workbench'),
+				reload: true,
 				icon: LayoutDashboard,
 			},
 		],

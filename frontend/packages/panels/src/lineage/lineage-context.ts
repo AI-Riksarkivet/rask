@@ -11,6 +11,6 @@
  * reading the same store it always did.
  */
 import { createContext } from 'svelte';
-import type { LineageState } from '$lib/lineage/store.svelte';
+import type { LineageState } from './store.svelte';
 
 export const [getLineageState, setLineageState] = createContext<LineageState>();

@@ -1,4 +1,12 @@
-import { Brain, Cpu, Database, FlaskConical, PenLine, Search } from '@lucide/svelte';
+import {
+	Brain,
+	Cpu,
+	Database,
+	FlaskConical,
+	LayoutDashboard,
+	PenLine,
+	Search,
+} from '@lucide/svelte';
 import type { RunStatusLike } from '../runs/run-status.js';
 
 /** All lucide icons share one component signature, so any icon's type fits. */
@@ -206,15 +214,6 @@ const LINEAGE_ITEMS: TopNavItem[] = [
 		href: '/lakehouse/lineage',
 		description: 'The whole medallion DAG on one canvas.',
 	},
-	{
-		// R28 again, one rung out. This zone's own sidebar has carried Workbench since the dock landed
-		// (`lakehouse/src/lib/nav.ts`), but the sidebar only renders the zone you are ALREADY in — so
-		// from compute or media the dock was reachable in two hops and a hunt, and the panel that exists
-		// to show the estate's shape did not know it existed. Same fix as Storage's.
-		title: 'Workbench',
-		href: '/lakehouse/lineage/workbench',
-		description: 'Graph, runs and events in one arrangeable dock.',
-	},
 ];
 
 const MEDIA_ITEMS: TopNavItem[] = [
@@ -222,11 +221,6 @@ const MEDIA_ITEMS: TopNavItem[] = [
 	{ title: 'Atlas', href: '/media/atlas', description: 'The embedding map of the corpus.' },
 	{ title: 'Tree', href: '/media/tree', description: 'The corpus by topic hierarchy.' },
 	{ title: 'Graph', href: '/media/graph', description: 'Relations between media entities.' },
-	{
-		title: 'Workbench',
-		href: '/media/workbench',
-		description: 'Atlas, treemap and topic results in one arrangeable dock.',
-	},
 	{ title: 'Workflow', href: '/media/workflow', description: 'The derivation pipeline.' },
 ];
 
@@ -269,11 +263,6 @@ const GOVERNANCE_ITEMS: TopNavItem[] = [
  *  Search at /media). */
 const COMPUTE_ITEMS: TopNavItem[] = [
 	{ title: 'Overview', href: '/compute/', description: 'The Ray plane at a glance.' },
-	{
-		title: 'Workbench',
-		href: '/compute/workbench',
-		description: 'Jobs, capacity and actors in one arrangeable dock.',
-	},
 	{ title: 'Jobs', href: '/compute/jobs', description: 'Submitted Ray jobs and their lifecycle.' },
 	{ title: 'Cluster', href: '/compute/cluster', description: 'Nodes and their resource load.' },
 	{ title: 'Actors', href: '/compute/actors', description: 'Live actors across the cluster.' },
@@ -367,6 +356,22 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			icon: Cpu,
 			match: under('/compute'),
 			items: [...COMPUTE_ITEMS],
+			tier: 'primary',
+		},
+		{
+			// THE global workbench — its own ZONE, not a route inside another one. A dock that holds
+			// panels from across the estate cannot live inside any single zone: a Svelte component only
+			// renders if it is in the bundle, and a zone cannot import from another zone. So the panels
+			// live in `@rask/panels` and this zone imports them.
+			//
+			// It REPLACES the three per-zone workbenches (/lakehouse/lineage/workbench, /media/workbench,
+			// /compute/workbench), which are deleted — one dock, one saved-views library, one place.
+			//
+			// A plain link, not a trigger: one surface, and a dropdown with one row in it is noise.
+			title: 'Workbench',
+			href: '/workbench/',
+			icon: LayoutDashboard,
+			match: under('/workbench'),
 			tier: 'primary',
 		},
 		{

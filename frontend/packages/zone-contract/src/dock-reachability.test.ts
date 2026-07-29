@@ -73,10 +73,15 @@ function dockRoutes(): { zone: string; href: string; file: string }[] {
 const DOCKS = dockRoutes();
 
 describe('dock reachability', () => {
-	it('finds the docks, so the assertions below cannot pass vacuously', () => {
+	it('finds the dock, so the assertions below cannot pass vacuously', () => {
 		// A rename of the package, or a zone that stops importing it, must fail LOUDLY here rather than
 		// silently emptying the suite — the failure mode that lets a green gate mean nothing.
-		expect(DOCKS.length).toBeGreaterThanOrEqual(3);
+		//
+		// ONE, not three. The three per-zone workbenches (/lakehouse/lineage/workbench, /media/workbench,
+		// /compute/workbench) were replaced by a single global zone at /workbench, so the estate now has
+		// exactly one dock by design. Lowering the floor is the fact changing, not the gate weakening:
+		// it still fails the moment nothing imports @rask/dockview at all.
+		expect(DOCKS.length).toBeGreaterThanOrEqual(1);
 	});
 
 	it.each(DOCKS)('$href is listed in the $zone zone sidebar', ({ zone, href }) => {
