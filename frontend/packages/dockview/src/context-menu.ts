@@ -16,12 +16,14 @@
  * and are not in this release, so they are spelled out as custom rows instead of trusted as built-ins.
  */
 import type { ContextMenuItem, GetTabContextMenuItemsParams } from 'dockview';
+import type { DockAlerts } from './alerts.svelte';
 import type { DockChrome, DockChromeOptions } from './chrome';
 import { SPLIT_DIRECTIONS, splitPanel, splitVerb } from './split';
 
 export function makeTabContextMenu(
 	chrome: DockChrome,
 	options: DockChromeOptions,
+	alerts: DockAlerts | null = null,
 ): (params: GetTabContextMenuItemsParams) => ContextMenuItem[] {
 	return ({ panel, group, api }) => {
 		const items: ContextMenuItem[] = ['close', 'closeOthers', 'closeAll'];
@@ -72,6 +74,17 @@ export function makeTabContextMenu(
 		}
 
 		if (locationItems.length > 0) items.push('separator', ...locationItems);
+
+		// PER-PANEL mute lives here; the header bell is per-GROUP. `getTabContextMenuItems` is
+		// re-invoked on every right-click, so reading the record's state at call time is correct — no
+		// reactivity needed, and none available in a plain menu array.
+		const record = alerts?.get(panel.id);
+		if (chrome.alerts && record?.watching === true) {
+			items.push('separator', {
+				label: record.muted ? 'Unmute alerts on this panel' : 'Mute alerts on this panel',
+				action: () => record.mute(!record.muted),
+			});
+		}
 		return items;
 	};
 }

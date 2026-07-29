@@ -13,6 +13,8 @@
 	 */
 	import { onMount, untrack } from 'svelte';
 	import {
+		Bell,
+		BellOff,
 		Copy,
 		Maximize2,
 		Minimize2,
@@ -21,6 +23,7 @@
 		SquareSplitHorizontal,
 		X,
 	} from '@lucide/svelte';
+	import type { DockAlerts } from './alerts.svelte';
 	import type { DockviewApi, DockviewGroupPanelApi, IDockviewGroupPanel } from 'dockview';
 	import type { DockChrome, DockChromeOptions } from './chrome';
 	import PanelPicker from './PanelPicker.svelte';
@@ -38,8 +41,10 @@
 		options: DockChromeOptions;
 		/** The zone's catalogue — what the `+` picker lists. */
 		panels: PanelRegistry;
+		/** The dock-wide alert registry, or null when `chrome.alerts` is off. */
+		alerts: DockAlerts | null;
 	}
-	let { api, containerApi, group, chrome, options, panels }: Props = $props();
+	let { api, containerApi, group, chrome, options, panels, alerts }: Props = $props();
 
 	/**
 	 * The CONCRETE group, looked up by id.
@@ -68,6 +73,7 @@
 		// whether Split can do anything. Both events fire for THIS group only.
 		const sync = (): void => {
 			panelCount = group.panels.length;
+			panelIds = group.panels.map((p) => p.id);
 			openComponents = containerApi.panels.map((p) => p.api.component);
 		};
 		const added = containerApi.onDidAddPanel(sync);
@@ -117,7 +123,32 @@
 	let openComponents = $state<string[]>(
 		untrack(() => containerApi.panels.map((p) => p.api.component)),
 	);
+	/** The ids of the panels in THIS group — what the bell resolves its alert records by. */
+	let panelIds = $state<string[]>(untrack(() => group.panels.map((p) => p.id)));
 	const choices = $derived(panelChoices(panels, openComponents));
+
+	/**
+	 * The alert records for the panels in THIS group.
+	 *
+	 * Derived from `panelIds`, which the add/remove subscription below keeps current — `group.panels`
+	 * is a plain array behind a getter, so reading it inside a `$derived` would track nothing and the
+	 * bell would freeze at its first value. The records themselves ARE reactive (`$state` on each
+	 * `PanelAlert`), so `raised`/`muted` re-derive without any further wiring.
+	 */
+	const groupAlerts = $derived(
+		alerts === null ? [] : panelIds.map((id) => alerts.get(id)).filter((r) => r !== undefined),
+	);
+	/** Only panels that actually declared a watcher get a bell — otherwise every group grows one. */
+	const watched = $derived(groupAlerts.filter((r) => r.watching));
+	const raisedHere = $derived(watched.filter((r) => r.raised));
+	const allMuted = $derived(watched.length > 0 && watched.every((r) => r.muted));
+
+	function toggleBell(): void {
+		// Raised → acknowledge everything in this group. Nothing raised → mute/unmute the group, which
+		// is the only other thing the bell can usefully mean.
+		if (raisedHere.length > 0) for (const r of raisedHere) r.acknowledge();
+		else for (const r of watched) r.mute(!allMuted);
+	}
 
 	/** Add a registered panel to THIS group. `referenceGroup` without a direction means "within". */
 	function addPanel(key: string): void {
@@ -228,6 +259,24 @@
 			onclick={togglePopout}
 		>
 			<PictureInPicture2 size={14} />
+		</button>
+	{/if}
+
+	{#if chrome.alerts && watched.length > 0}
+		<!-- The PERSISTENT affordance. The panel-wide highlight is the transient one — a dot on a tab
+		     the user is not looking at reproduces the very failure this feature exists to answer. -->
+		<button
+			type="button"
+			title={raisedHere.length > 0
+	? `Acknowledge ${raisedHere.length} alert${raisedHere.length === 1 ? '' : 's'}`
+	: allMuted
+		? 'Unmute alerts in this group'
+		: 'Mute alerts in this group'}
+			aria-label={raisedHere.length > 0 ? 'Acknowledge alerts' : 'Mute alerts'}
+			class:on={raisedHere.length > 0}
+			onclick={toggleBell}
+		>
+			{#if allMuted && raisedHere.length === 0}<BellOff size={14} />{:else}<Bell size={14} />{/if}
 		</button>
 	{/if}
 

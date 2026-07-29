@@ -26,6 +26,7 @@ import type {
 	IContentRenderer,
 	Parameters,
 } from 'dockview';
+import { NOOP_ALERT, type DockAlerts, type PanelAlert } from './alerts.svelte';
 import type { AnyPanelComponent, PanelComponent } from './types';
 
 export class SveltePanelRenderer implements IContentRenderer {
@@ -40,8 +41,17 @@ export class SveltePanelRenderer implements IContentRenderer {
 	#params: Parameters = $state<Parameters>({});
 	#instance: Record<string, unknown> | null = null;
 	#paramSubscription: DockviewIDisposable | null = null;
+	/** The dock-wide alert registry, or null when `chrome.alerts` is off. */
+	#alerts: DockAlerts | null;
+	/** This panel's record. Released FIRST in dispose(), which is what bounds every watcher. */
+	#alert: PanelAlert | null = null;
 
-	constructor(component: AnyPanelComponent, context: Map<unknown, unknown>) {
+	constructor(
+		component: AnyPanelComponent,
+		context: Map<unknown, unknown>,
+		alerts: DockAlerts | null = null,
+	) {
+		this.#alerts = alerts;
 		// The registry stores `AnyPanelComponent` so BOTH shapes a zone might write are assignable: a
 		// panel declaring `PanelProps` (component props are contravariant, and `never` is the bottom
 		// type), and one declaring no props at all — which every panel in this repo currently does, and
@@ -57,6 +67,13 @@ export class SveltePanelRenderer implements IContentRenderer {
 	init(parameters: GroupPanelPartInitParameters): void {
 		this.#sync(parameters.params);
 		this.#paramSubscription = parameters.api.onDidParametersChange((next) => this.#sync(next));
+		// The ONLY DOM the alert owns. A data-attribute rather than a class: it carries the tone as its
+		// value and cannot collide with the className set in the constructor.
+		this.#alert =
+			this.#alerts?.acquire(parameters.api, parameters.params, (view) => {
+				if (view.raised) this.element.dataset.alert = view.tone;
+				else delete this.element.dataset.alert;
+			}) ?? null;
 		this.#instance = mount(this.#component, {
 			target: this.element,
 			context: this.#context,
@@ -64,11 +81,16 @@ export class SveltePanelRenderer implements IContentRenderer {
 				params: this.#params,
 				api: parameters.api,
 				containerApi: parameters.containerApi,
+				alert: this.#alert ?? NOOP_ALERT,
 			},
 		}) as Record<string, unknown>;
 	}
 
 	dispose(): void {
+		// FIRST, before the component unmounts: this runs the watcher's teardown, which is the whole
+		// bounding story. A panel stays mounted while hidden, so nothing else would ever stop it.
+		this.#alert?.dispose();
+		this.#alert = null;
 		this.#paramSubscription?.dispose();
 		this.#paramSubscription = null;
 		if (this.#instance !== null) {

@@ -17,6 +17,7 @@
  */
 import type { Component } from 'svelte';
 import type { DockviewApi, DockviewPanelApi, Parameters, SerializedDockview } from 'dockview';
+import type { PanelAlertApi } from './alerts.svelte';
 
 /**
  * What every panel component receives.
@@ -34,6 +35,16 @@ export interface PanelProps<P extends object = Parameters> {
 	api: DockviewPanelApi;
 	/** The whole dock's api, for a panel that needs to open or address its siblings. */
 	containerApi: DockviewApi;
+	/**
+	 * This panel's alert channel — pre-bound, so there is no id to pass and no way to raise on the
+	 * wrong panel. `NOOP_ALERT` when the dock has `chrome.alerts === false`, so a panel never has to
+	 * branch on whether alerts exist.
+	 *
+	 * Additive and type-safe for every existing panel: component props are contravariant and the
+	 * registry stores its component as `AnyPanelComponent`, so a panel that declares no props at all
+	 * stays assignable.
+	 */
+	alert: PanelAlertApi;
 }
 
 /** A Svelte component usable as a panel body. */

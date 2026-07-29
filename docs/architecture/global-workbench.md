@@ -54,9 +54,12 @@ Stated plainly, because § G3 demands it:
 - **No independent deploy per panel.** Panels ship with the workbench zone's image. A panel change
   redeploys that zone. That is the price of build-time composition and it is accepted.
 
-## The measured move-set — why the media trio is not cheap
+## The measured move-set — 44 files, and why the media trio is not cheap
 
-Traced recursively over static imports, dynamic `import()` and `export … from`, resolving `$lib/*`:
+Traced recursively over static imports, dynamic `import()` and `export … from`, resolving `$lib/*`.
+**The union is 44 files plus one co-located test** — lakehouse 12, media 31, compute 1. That number is
+measured, not estimated; three earlier estimates in this work were all low, which is the reason it is
+recorded here rather than left to the next person to re-derive.
 
 | Panel group | Zone-local modules that must move | Coupling to break |
 |---|---|---|
