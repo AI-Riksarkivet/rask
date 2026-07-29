@@ -1,157 +1,89 @@
-# open_ingest — attaching buckets, and getting data into bronze
+# open_ingest — where ingest, ETL and query live
 
-Owner's questions, 2026-07-29. **Not started.** ETL-as-a-layer and a query engine are explicitly
-**deferred** — the medallion movers already cover bronze→silver→gold, and nothing today needs SQL over
-the lakehouse.
-
-## The split that answers most of it
-
-Two things kept getting tangled in conversation. They are not the same feature and they do not live in
-the same place:
-
-| | What it is | Where it belongs |
-|---|---|---|
-| **Attach a bucket** | Register an S3 location so it can be BROWSED. Reads nothing into the lakehouse. | `lakehouse` → Catalog → Storage. The catalog governs storage; this is a registry entry. |
-| **Sink → bronze** | A JOB. Decode, checksum, write blob-v2, emit lineage. | Triggered from the data (`Storage`), **observed in `compute`** — it has a queue, status, retries and logs, which is what `compute` already is. |
-
-Rule of thumb: **the verb belongs where the data is; the run belongs where the jobs are.** A third
-"Ingest" area would be the wrong answer — it splits the noun from the verb and gives the estate a
-fourth place to look for a failure.
-
-## I1 · Attach a bucket for viewing — BLOCKED on a schema gap
-
-Today `Store` cannot express this:
-
-```python
-class Store(BaseModel):
-    name: str
-    bucket: str      # "The bucket backing it on the configured S3 endpoint."   <- SINGULAR
-    role: StorageRole
-    description: str
-    read_only: bool
-```
-
-Every store resolves against **one** configured S3 endpoint. That is why `images-batch` reads as empty:
-the raw tier lives on external HCP (`https://dev-hcp.ra.se/api/v1`) while the governed tiers live on the
-RustFS this chart deploys, and the browser asks RustFS for a bucket that was never there. The data is
-fine; the registry cannot say where it is.
-
-So I1 is really two pieces:
-
-1. **`Store` gains an endpoint** (plus its own credentials reference — a secret name, resolved through
-   the Dapr secret store / OpenBao, never a literal). `packages/storage` is already endpoint-agnostic
-   by design (`RASK_S3_ENDPOINT_URL` + `AliasChoices`) — the *registry* is what hardcodes one.
-2. **An attach form** in Catalog → Storage: name, endpoint, bucket, role, credentials-secret,
-   read-only. Writes a registry entry; reads nothing.
-
-Attaching must be **read-only by default**. A bucket someone attached to look at is not a bucket the
-cascade may write to, and `read_only` already exists on the model to say so.
-
-## I2 · Trigger a sync: source → bronze
-
-The backend for this largely exists and should not be rebuilt:
-
-- `POST /produce` — the medallion producer's generic entrypoint.
-- `POST /ingest-iiif` — the IIIF page lane (external raw → bronze blob-v2, emits the one bronze-write
-  OpenLineage event).
-- `medallion.services.ingest.ingest_to_bronze(src, uri, opts, ...)` — the writer both call.
-
-What is missing is the **S3-prefix source** (today's lanes are IIIF and object-by-object) and any UI.
-
-Shape it as: pick a source (an attached store + prefix, or an API source), pick a target namespace and
-table, pick a kind (blobs / tabular), submit. The response is 202 + a job id — not a result. Ingest of a
-few thousand images is minutes of decode and checksum, which is exactly why it is a Ray job and not an
-HTTP request that blocks.
-
-**Idempotency is the hard part, not the transfer.** Re-running a sync over a prefix that is half-landed
-must converge, not duplicate. `ingest_to_bronze` is an idempotent overwrite for the IIIF lane; the same
-guarantee has to hold per-object for a prefix lane, or every retry doubles the table.
-
-## I3 · How jobs actually run — and where they run
-
-This was unclear and is worth stating plainly:
-
-- The job runs **on Ray**, not "on the platform". `packages/ray-kit` wraps `JobSubmissionClient`; the
-  `compute` service submits and polls.
-- **Which Ray is a single setting** — `settings.ray_dashboard_url`. Local KubeRay and the external
-  `https://dev-kuberay.ra.se` are the same code path with a different value. Both must stay supported:
-  local is how auth / OpenBao / Dapr get exercised end-to-end, external is where real work runs.
-- `entrypoint` on the job spec is a plain string (`ray_kit/schemas.py:33`), so what a job *does* is
-  configurable without redeploying the platform.
-
-**Blocker, and it is the reason nothing works today:** there is no `chart/templates/compute.yaml` and no
-`compute:` values block. The service has code, a dockerfile and a built image, and is never deployed —
-so `/api/ray/*` and `/api/serve/*` have no backend and the gateway's Dapr invoke fails with
-`ERR_DIRECT_INVOKE`. Nothing about ingest can be demonstrated until that template exists.
-
-## I4 · What the run should show
-
-Submitting is the easy half. The estate already has the pieces to show the other half and they should be
-wired rather than reinvented: the job's Ray status (`compute`), the lineage event the write emits
-(`lakehouse` → Lineage), and the resulting table (`lakehouse` → Tables). A sync that "succeeded" but
-produced no lineage edge is a bug, and the UI should make that visible rather than reporting green.
-
-## Deferred, deliberately
-
-- **ETL as a layer** — a general transform framework. The movers already cover bronze→silver→gold, and
-  nothing today needs more. Worth being explicit about the *scale* of what is being deferred: a real ETL
-  layer here would mean **Kafka + Flink** (or equivalents) — a streaming bus and a stateful stream
-  processor, each with its own operator, storage, checkpointing and failure modes. That is a platform
-  decision, not a feature, and it lands on top of a plane that already has a bus: **NATS JetStream via
-  Dapr pub/sub**. Anyone opening this decides first whether the estate gets a *second* messaging system
-  or grows the one it has — because two buses is the expensive mistake.
-- **A query engine** — SQL over the lakehouse. Large, separate, and not on the path to anything blocked.
-
-Neither is a prerequisite for I1–I4. Attach-a-bucket and a manual prefix→bronze sync are batch jobs on
-Ray; they need no streaming layer at all. Defer both until something concrete is blocked on them.
-
----
-
-## The owner's ruling, 2026-07-29 — where ingest, ETL and query belong
-
-Stated directly, superseding the split sketched above:
+Owner's ruling, 2026-07-29. Supersedes an earlier draft of this file that deferred ETL and query
+wholesale and put the sink beside the tier; both were wrong and the corrections are noted inline.
 
 > *"iiif should not be part of the medallion. ingest should probably run by an ETL process and we
 > should [have] ETL as a thing in compute… and query in compute."*
 > *"each tier should have generic payload."*
 
-### R1 · The medallion is bronze→silver→gold and NOTHING else
+## R1 · The medallion is bronze→silver→gold and NOTHING else
 
-`services/medallion` currently carries the IIIF harvester — reaching out to an external image API,
-paging a volume, fetching bytes. That is an **acquisition** concern wearing the medallion's badge. The
-medallion owns the governed tiers: the schema of each, the transition between them, and the lineage
-those transitions emit. Where the bytes came from is not its business.
+`services/medallion` carries the IIIF harvester — reaching an external image API, paging a volume,
+fetching bytes. That is **acquisition** wearing the medallion's badge. The medallion owns each tier's
+schema, the transitions between them, and the lineage those emit. Where the bytes came from is not its
+business.
 
 Nine files hold IIIF today: `api/ingest_iiif.py`, `services/iiif_produce.py` (232 lines),
 `services/s3_harvest.py`, `services/ingest_trigger.py`, `producer.py`, `core/config.py`,
 `schemas/events.py`, `schemas/htr.py`, `services/ray_submit.py`.
 
-### R2 · Ingest is an ETL job, and ETL lives in `compute`
+## R2 · Ingest is an ETL job, and ETL lives in `compute`
 
-`compute` is already the execution plane: it wraps the Ray Job SDK, submits, polls and proxies Serve.
-An ingest is a job — it has a queue, a status, retries and logs — so it belongs where jobs are, not
-beside the tier it happens to write. IIIF then becomes ONE source type among several (S3 prefix, an
-API, a local path), which is the shape the estate needs anyway and the shape a medallion-hosted
-harvester cannot grow into.
+`compute` is already the execution plane: it wraps the Ray Job SDK and owns submit, poll and the Serve
+proxy. An ingest is a job — queue, status, retries, logs — so it belongs where jobs are, not beside the
+tier it happens to write. IIIF then becomes ONE source type among several (S3 prefix, an API, a local
+path), which is the shape the estate needs and the shape a medallion-hosted harvester cannot grow into.
 
-`compute` gains: **ETL** (submit a transform/ingest job, watch it) and **query** (ask the lakehouse a
+`compute` gains **ETL** (submit a transform/ingest job, watch it) and **query** (ask the lakehouse a
 question). Both are execution, both against Ray, both already have the client.
 
-### R3 · Every tier carries a GENERIC payload
+> **Correction.** An earlier draft said "the verb belongs where the data is; the run belongs where the
+> jobs are", putting the trigger in the storage view. The ruling overrides it: ETL is a thing IN compute,
+> not an action scattered across the surface that happens to hold the data.
 
-`schemas/htr.py` pins an HTR-shaped gold contract inside the medallion. That makes the cascade a
-transcription pipeline rather than a lakehouse: a second workload cannot use bronze→silver→gold
-without either bending its data into HTR's shape or forking the movers.
+## R3 · Every tier carries a GENERIC payload
 
-A tier should carry `{id, payload, stage, lineage, source_uri}` and let the payload be opaque — the
-transform declares the shape, the tier does not. HTR's schema becomes one such declaration, owned by
-the HTR job, not by the medallion.
+`schemas/htr.py` pins an HTR-shaped gold contract **inside** the medallion. That makes the cascade a
+transcription pipeline rather than a lakehouse: a second workload cannot use bronze→silver→gold without
+bending its data into HTR's shape or forking the movers.
 
-### What this costs, honestly
+A tier should carry `{id, payload, stage, lineage, source_uri}` with the payload **opaque** — the
+transform declares the shape, the tier does not. HTR's schema becomes one such declaration, owned by the
+HTR job.
 
-Three services change shape, plus the chart (`compute` grows a surface, medallion loses one), the
-gateway route table, and the tests pinning the current split. The IIIF page lane is currently the ONLY
-producer of `bronze$pages`, and the audit's M3 records that nothing consumes its trigger — so the move
-should be done WITH that gap in mind rather than preserving a lane that already goes nowhere.
+This is the piece that unblocks the others: while gold is HTR-shaped, moving ingest anywhere just moves
+the same coupling to a new address.
 
-Not started. This is the ruling, not the implementation.
+---
+
+## Shipped 2026-07-29
+
+- **Per-store endpoint, credentials and TLS.** `Store` gained `endpoint`, `secret` and `insecure`; the
+  object browser resolves a client per store. Raw lives on external HCP while the governed tiers are on
+  the warehouse, and one process env holds one credential pair — which is why `images-batch` listed as
+  empty against a bucket holding 3.5M objects. Credentials resolve through the Dapr secret store,
+  **fail-closed**, no env fallback.
+- **Attach a bucket from the UI.** `POST /v1/stores`, estate-admin gated, persisted as an estate
+  document, attached stores forced read-only.
+- **`compute` deploys and reaches Ray.** It was gated behind `singleTenant.enabled` — a legacy flag no
+  install path sets — so `/api/ray/*` was `ERR_DIRECT_INVOKE` everywhere. Now `$svc.frontDoor`, pointed
+  at the external cluster via `ray.dashboardUrl`, with its own 1536Mi tier (it was OOMKilled on the
+  shared 512Mi one; it is the only fleet service importing the Ray SDK).
+
+> **Correction.** An earlier draft of this file claimed "there is no `chart/templates/compute.yaml`".
+> There never was one — `compute` renders from `fleet.yaml`, and the real defect was the gate.
+
+## Still open
+
+- **The move itself** (R1–R3). Three services, the chart, the gateway route table, and the tests pinning
+  the current split.
+- **An S3-prefix source.** Today's lanes are IIIF and object-by-object. **Idempotency is the hard part,
+  not the transfer**: a re-run over a half-landed prefix must converge, or every retry doubles the table.
+- **What the run shows.** The pieces exist and should be wired, not reinvented: Ray status (`compute`),
+  the lineage event the write emits (`lakehouse` → Lineage), and the resulting table. A sync that
+  "succeeded" with no lineage edge is a bug the UI should surface rather than report green.
+
+**One thing makes the timing good:** the IIIF lane is the only producer of `bronze$pages`, and the Dapr
+audit's M3 shows **nothing consumes its trigger** — `bronze-to-silver` expects `bronze$events` and drops
+the page lane. So the move should not preserve a lane that already goes nowhere.
+
+## Deferred — and this is narrower than it was
+
+Not "ETL and query", which R2 places in `compute`. What is deferred is a **streaming ETL platform**:
+Kafka + Flink or equivalents — a bus and a stateful stream processor, each with its own operator,
+storage, checkpointing and failure modes. That lands on a plane which **already has a bus** (NATS
+JetStream via Dapr), so whoever opens it decides first whether the estate gets a *second* messaging
+system or grows the one it has. Two buses is the expensive mistake.
+
+Batch ETL on Ray — which is what R2 describes — needs none of that.
