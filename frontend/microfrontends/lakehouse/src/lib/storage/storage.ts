@@ -41,6 +41,30 @@ export const listStores = (): Promise<ApiResult<{ stores: Store[] }>> =>
 export const listStoresByTier = (): Promise<ApiResult<Record<string, Store[]>>> =>
 	request<Record<string, Store[]>>('/capi', 'v1/stores/tiers');
 
+/** What the attach form collects. `read_only` is absent on purpose — the catalog forces it true, so
+ *  offering the choice here would be a control that does nothing. */
+export type StoreDraft = {
+	name: string;
+	bucket: string;
+	role: StorageRole;
+	endpoint: string | null;
+	description: string;
+};
+
+/** Attach a bucket for BROWSING. Registers only — reads nothing and ingests nothing.
+ *
+ *  Estate-admin gated server-side (`can_observe_events` on the root object): a 403 here means the
+ *  caller may not attach, and the form must say so rather than disable a button and leave the reason
+ *  to guesswork. Returns the WHOLE registry so the caller re-renders from the server's answer instead
+ *  of appending its own optimistic copy — the catalog forces `read_only` and may normalise, and a
+ *  local append would show a row that differs from what was stored. */
+export const attachStore = (draft: StoreDraft): Promise<ApiResult<{ stores: Store[] }>> =>
+	request<{ stores: Store[] }>('/capi', 'v1/stores', {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ ...draft, endpoint: draft.endpoint?.trim() || null }),
+	});
+
 /** One object under a prefix (mirrors `S3Object`). */
 export type S3Object = { key: string; size: number; last_modified: string | null };
 
