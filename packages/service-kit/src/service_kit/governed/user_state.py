@@ -62,6 +62,18 @@ class UserStateDocument(StrEnum):
     #: per workbench on purpose: the enum is a closed key space precisely so a caller cannot mint keys,
     #: and a zone adding a workbench must not require a release of this package to store its layout.
     DOCK_LAYOUT = "dock-layout"
+    #: The NAMED layouts ("views") a subject has saved, keyed by workbench id
+    #: (:class:`service_kit.schemas.dock_layout.DockLayoutLibrary`). A SEPARATE document from
+    #: :attr:`DOCK_LAYOUT` rather than a key inside it, and the separation is load-bearing three times:
+    #:
+    #: 1. :class:`DockLayouts` is ``extra="forbid"``, so a client that does not know a sibling key
+    #:    cannot echo it back — it must DROP it, and the first autosave from any older bundle would
+    #:    then erase every named view the user had.
+    #: 2. The byte ceiling is per DOCUMENT, so a large library would otherwise start failing the
+    #:    IMPLICIT autosave — silently, because ``save()`` only returns False.
+    #: 3. An unreadable library must not 409 the implicit layout, which the client turns into a
+    #:    permanent save lock for the session. With two documents it cannot.
+    DOCK_LAYOUT_LIBRARY = "dock-layout-library"
     #: Object stores attached from the UI, as a list of `Store`. ESTATE-scoped, not per-user: it is
     #: written under the reserved `ESTATE_SUBJECT` rather than a person, because a bucket someone
     #: attaches must be visible to everyone the FGA layer permits — a per-user copy would make the

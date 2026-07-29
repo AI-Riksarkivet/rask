@@ -80,6 +80,89 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/access/expand": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Expand Access
+         * @description WHY a relation resolves — the userset tree, optionally followed through the cascade.
+         *
+         *     Check answers yes/no and list-users answers who; neither says through WHICH rung or WHICH parent hop,
+         *     so a permission derived over three objects is indistinguishable from a direct grant — and they have
+         *     very different blast radii. This returns the derivation itself, keeping OpenFGA's own operators
+         *     (``union`` / ``intersection`` / ``difference``) rather than flattening them away: the operator is
+         *     frequently the whole explanation for a surprising grant.
+         *
+         *     ``depth`` is server-side on purpose. Walking the chain client-side costs one estate-gated, audited
+         *     round trip per hop under the browser client's fixed timeout; here it is one gate, one audit row, and
+         *     one response.
+         */
+        post: operations["expand_access_v1_access_expand_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/access/list-objects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * List Access Objects
+         * @description "What can this subject reach?" — every ``type`` object on which ``user`` holds ``relation``.
+         *
+         *     The forward half of the explorer, and the answer ``GET /tuples`` structurally cannot give: Read needs
+         *     an object type per call and returns only STORED tuples, so enumerating a subject meant one audited
+         *     read per model type and still missed everything derived. ListObjects expands the model, so a table
+         *     reached through team → project → warehouse → namespace shows up here and nowhere else.
+         *
+         *     The subject may be a userset (``team:eng#member``, ``role:validators#assignee``), which matters
+         *     because this model deliberately refuses ``team#member`` on resource rungs — a team reaches data
+         *     through a role, and only the userset question shows that.
+         */
+        post: operations["list_access_objects_v1_access_list_objects_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/access/list-users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * List Access Users
+         * @description "Who can do this?" — every subject holding ``relation`` on ``object``, effective access included.
+         *
+         *     The inverse of list-objects and the primitive a revoke needs BEFORE it writes: a tuple sitting high in
+         *     the hierarchy can revoke access for many principals at once, and "are you sure?" is not an answer to
+         *     "how many". Subjects come back fully qualified so a userset is never mistaken for a user.
+         */
+        post: operations["list_access_users_v1_access_list_users_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/access/model": {
         parameters: {
             query?: never;
@@ -711,6 +794,66 @@ export interface paths {
          * @description One derived tenant — the same shape as the list. Estate-observer gated; unknown project → 404.
          */
         get: operations["get_project_v1_projects__project_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/stores": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every registered object store
+         * @description The whole registry in one response — it is estate config, and the tier view needs all of it.
+         */
+        get: operations["list_stores_v1_stores_get"];
+        put?: never;
+        /**
+         * Attach an object store for browsing
+         * @description Attach a bucket so it can be BROWSED. Registers only — reads nothing, ingests nothing.
+         *
+         *     Estate-admin gated on ``can_observe_events`` against the root object: attaching names a host and a
+         *     bucket the whole estate will then see, which is estate-wide disclosure and so takes the estate-wide
+         *     privilege — the same gate ``/v1/projects`` and ``/v1/events`` use.
+         *
+         *     Names are unique across BOTH sources, and a declared store cannot be shadowed. The object browser
+         *     resolves a store by NAME, so a duplicate would make which bucket you get depend on list order — the
+         *     failure would look like the wrong data rather than a bad registration.
+         *
+         *     Attached stores are forced ``read_only``. A bucket someone attached to LOOK at is not a bucket the
+         *     cascade may write to, and nothing here can know whether the caller's credentials should carry write
+         *     authority on another host.
+         */
+        post: operations["attach_store_v1_stores_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/stores/tiers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stores grouped by medallion tier
+         * @description The tier -> store view, DERIVED from the registry rather than transcribed.
+         *
+         *     Every governed tier appears even when empty: a bronze row with nothing in it says "no store
+         *     backs bronze here", which is a fact worth showing. Roles outside the medallion (raw, derived,
+         *     observability) are grouped under their own names — raw is deliberately not a tier (R23).
+         */
+        get: operations["stores_by_tier_v1_stores_tiers_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2081,6 +2224,62 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/user-state/dock-layout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Dock Layout
+         * @description The caller's dock workbench layouts, or ``exists: false`` if they have never saved one.
+         */
+        get: operations["get_dock_layout_v1_user_state_dock_layout_get"];
+        /**
+         * Put Dock Layout
+         * @description Replace the caller's dock layouts wholesale — the client owns which workbenches it keeps.
+         */
+        put: operations["put_dock_layout_v1_user_state_dock_layout_put"];
+        post?: never;
+        /**
+         * Delete Dock Layout
+         * @description Discard the caller's dock layouts — the escape hatch from an unreadable document.
+         */
+        delete: operations["delete_dock_layout_v1_user_state_dock_layout_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/user-state/dock-layout-library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Dock Layout Library
+         * @description The caller's saved views, or ``exists: false`` if they have never saved one.
+         */
+        get: operations["get_dock_layout_library_v1_user_state_dock_layout_library_get"];
+        /**
+         * Put Dock Layout Library
+         * @description Replace the caller's saved views wholesale — the client owns which views it keeps.
+         */
+        put: operations["put_dock_layout_library_v1_user_state_dock_layout_library_put"];
+        post?: never;
+        /**
+         * Delete Dock Layout Library
+         * @description Discard the caller's saved views — the escape hatch from an unreadable library.
+         */
+        delete: operations["delete_dock_layout_library_v1_user_state_dock_layout_library_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/user-state/saved-views": {
         parameters: {
             query?: never;
@@ -2300,6 +2499,96 @@ export interface components {
             checked: components["schemas"]["AccessTuple"];
         };
         /**
+         * AccessExpandDifference
+         * @description ``base but not subtract`` — the exclusion operator, the one shape a tuple table cannot show.
+         */
+        AccessExpandDifference: {
+            base?: components["schemas"]["AccessExpandNode"] | null;
+            subtract?: components["schemas"]["AccessExpandNode"] | null;
+        };
+        /**
+         * AccessExpandLeaf
+         * @description A terminal of the userset tree — exactly one of the three is populated. ``users`` are literal
+         *     subjects, ``computed`` a same-object rung (``owner`` implying ``writer``), ``tuple_to_userset`` the
+         *     hop to a parent object.
+         */
+        AccessExpandLeaf: {
+            /** Computed */
+            computed?: string | null;
+            /** Continues */
+            continues?: boolean | null;
+            /** Expanded */
+            expanded?: components["schemas"]["AccessExpandNode"][] | null;
+            tuple_to_userset?: components["schemas"]["AccessExpandTupleToUserset"] | null;
+            /** Users */
+            users?: string[] | null;
+        };
+        /**
+         * AccessExpandNode
+         * @description One node of the OpenFGA userset tree, keeping the model's own vocabulary. Flattening ``union`` /
+         *     ``intersection`` / ``difference`` away would discard precisely the operator that explains a
+         *     surprising grant, so the shape is preserved verbatim. ``truncated`` marks a depth-capped branch.
+         */
+        AccessExpandNode: {
+            /** Cycle */
+            cycle?: boolean | null;
+            difference?: components["schemas"]["AccessExpandDifference"] | null;
+            /** Intersection */
+            intersection?: components["schemas"]["AccessExpandNode"][] | null;
+            leaf?: components["schemas"]["AccessExpandLeaf"] | null;
+            /** Name */
+            name?: string | null;
+            /** Truncated */
+            truncated?: boolean | null;
+            /** Union */
+            union?: components["schemas"]["AccessExpandNode"][] | null;
+        };
+        /**
+         * AccessExpandRequest
+         * @description "Why does this resolve?" — the userset tree for ``relation`` on ``object``.
+         *
+         *     ``depth`` counts hops: 1 is a plain OpenFGA Expand (one level, the faithful primitive), higher
+         *     follows ``computed`` rungs and ``X from Y`` edges through the cascade. Clamped server-side.
+         */
+        AccessExpandRequest: {
+            /**
+             * Depth
+             * @default 1
+             */
+            depth: number;
+            /** Object */
+            object: string;
+            /** Relation */
+            relation: string;
+        };
+        /**
+         * AccessExpandResponse
+         * @description The derivation of ``relation`` on ``object``: HOW the grant is composed, not whether it holds.
+         *
+         *     ``tree`` is empty when the relation resolves to nothing on this object — an empty tree and an
+         *     unavailable store are different answers, and the latter is a 503, never an empty tree.
+         */
+        AccessExpandResponse: {
+            /** Depth */
+            depth: number;
+            /** Object */
+            object: string;
+            /** Relation */
+            relation: string;
+            tree?: components["schemas"]["AccessExpandNode"] | null;
+        };
+        /**
+         * AccessExpandTupleToUserset
+         * @description A ``X from Y`` edge: ``tupleset`` is the relation walked (e.g. ``namespace:db1#parent``) and
+         *     ``computed`` the relations read on whatever it points at.
+         */
+        AccessExpandTupleToUserset: {
+            /** Computed */
+            computed?: string[];
+            /** Tupleset */
+            tupleset?: string | null;
+        };
+        /**
          * AccessGrantRequest
          * @description Grant or revoke ONE base rung to a subject. ``user`` may be a bare id (``alice`` → ``user:alice``)
          *     or a fully-qualified userset (``role:project_admin#assignee``, ``team:acme#member``); ``relation`` must
@@ -2332,12 +2621,83 @@ export interface components {
             /** Object */
             object: string;
         };
+        /**
+         * AccessListObjectsRequest
+         * @description "What can this subject reach?" — every object of ``type`` on which ``user`` holds ``relation``.
+         *     ``user`` may be a bare id (``alice`` → ``user:alice``) or a full subject/userset, as everywhere else.
+         */
+        AccessListObjectsRequest: {
+            /** Relation */
+            relation: string;
+            /** Type */
+            type: string;
+            /** User */
+            user: string;
+        };
+        /**
+         * AccessListObjectsResponse
+         * @description The objects the subject reaches, plus the RESOLVED query that produced them — echoed for the same
+         *     reason ``AccessCheckResult.checked`` is: a result read against a different subject than OpenFGA saw
+         *     is worse than no result.
+         */
+        AccessListObjectsResponse: {
+            /** Objects */
+            objects: string[];
+            /** Relation */
+            relation: string;
+            /** Type */
+            type: string;
+            /** User */
+            user: string;
+        };
         /** AccessListResponse */
         AccessListResponse: {
             /** Grants */
             grants: components["schemas"]["RelationGrants"][];
             /** Object */
             object: string;
+        };
+        /**
+         * AccessListUsersRequest
+         * @description "Who can do this?" — every subject holding ``relation`` on ``object``. The inverse of
+         *     :class:`AccessListObjectsRequest`, and the blast-radius primitive before a revoke.
+         *
+         *     ``user_type`` (+ ``user_relation``) picks WHICH subject kind to enumerate; OpenFGA takes exactly one
+         *     filter per call, so ``role``/``assignee`` is a different question from ``user``, not a superset.
+         */
+        AccessListUsersRequest: {
+            /** Object */
+            object: string;
+            /** Relation */
+            relation: string;
+            /** User Relation */
+            user_relation?: string | null;
+            /**
+             * User Type
+             * @default user
+             */
+            user_type: string;
+        };
+        /**
+         * AccessListUsersResponse
+         * @description The effective subject set (ListUsers EXPANDS the model — role assignees, team members and the
+         *     parent cascade are included, so this is effective access, not stored tuples). ``"*"`` is a public
+         *     wildcard. ``truncated`` flags the server's silent ``listUsersMaxResults`` ceiling: an under-reported
+         *     access review must never read as a complete one.
+         */
+        AccessListUsersResponse: {
+            /** Object */
+            object: string;
+            /** Relation */
+            relation: string;
+            /** Truncated */
+            truncated: boolean;
+            /** User Relation */
+            user_relation?: string | null;
+            /** User Type */
+            user_type: string;
+            /** Users */
+            users: string[];
         };
         /**
          * AccessModelResponse
@@ -4330,6 +4690,74 @@ export interface components {
             status: string;
         };
         /**
+         * DockGrid
+         * @description The grid half of a serialized dock: a recursive node tree plus the size it was measured at.
+         */
+        DockGrid: {
+            /** Height */
+            height: number;
+            /** Orientation */
+            orientation: string;
+            root: components["schemas"]["JsonValue"];
+            /** Width */
+            width: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * DockLayoutLibrary
+         * @description Every NAMED dock view one subject has saved, keyed by workbench id.
+         *
+         *     Deliberately a SEPARATE user-state document from :class:`DockLayouts`, never a key inside it — see
+         *     :attr:`service_kit.governed.user_state.UserStateDocument.DOCK_LAYOUT_LIBRARY` for the three
+         *     reasons. The consequence worth restating: the implicit autosave in :class:`DockLayouts` is
+         *     untouched by this model, byte for byte, so the live-arrangement path — the one whose failure
+         *     destroys a user's workspace — keeps working exactly as it did.
+         */
+        DockLayoutLibrary: {
+            /** Workbenches */
+            workbenches?: {
+                [key: string]: components["schemas"]["DockWorkbenchViews"];
+            };
+        };
+        /**
+         * DockLayouts
+         * @description Every workbench layout one subject has arranged.
+         *
+         *     ``extra="forbid"`` here, unlike the models above: this envelope is OURS, not dockview's, so an
+         *     unexpected top-level key is a client bug worth a 422 rather than a forward-compatibility case.
+         */
+        DockLayouts: {
+            /** Workbenches */
+            workbenches?: {
+                [key: string]: components["schemas"]["SerializedDock"];
+            };
+        };
+        /**
+         * DockView
+         * @description One NAMED layout — a "view" the user saved deliberately, as opposed to the implicit draft.
+         *
+         *     ``extra="forbid"``: this envelope is ours. The interior ``layout`` is where dockview's own
+         *     forward-compatibility lives, since :class:`SerializedDock` is ``extra="allow"``.
+         */
+        DockView: {
+            /** Id */
+            id: string;
+            layout: components["schemas"]["SerializedDock"];
+            /** Name */
+            name: string;
+            /** Updated */
+            updated: string;
+        };
+        /**
+         * DockWorkbenchViews
+         * @description One workbench's library. A LIST, not a map — order is user-visible in the sidebar.
+         */
+        DockWorkbenchViews: {
+            /** Views */
+            views?: components["schemas"]["DockView"][];
+        };
+        /**
          * DropNamespaceRequest
          * @description DropNamespaceRequest
          */
@@ -4812,6 +5240,7 @@ export interface components {
                 [key: string]: string;
             } | null;
         };
+        JsonValue: unknown;
         /**
          * ListNamespacesResponse
          * @description ListNamespacesResponse
@@ -5764,6 +6193,92 @@ export interface components {
             where?: string | null;
         };
         /**
+         * SerializedDock
+         * @description One workbench's layout, exactly as ``DockviewApi.toJSON()`` produced it.
+         *
+         *     Only ``grid`` and ``panels`` are required — they are the two fields ``SerializedDockview`` declares
+         *     as non-optional, so a document missing either is not a dock layout and must not be stored as one.
+         *     Everything else dockview writes rides through ``extra="allow"``.
+         */
+        SerializedDock: {
+            grid: components["schemas"]["DockGrid"];
+            /** Panels */
+            panels: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * StorageRole
+         * @description What a store is FOR.
+         *
+         *     The three governed tiers are exactly bronze/silver/gold (R23): the medallion is
+         *     bronze->silver->gold, and RAW is deliberately outside it — raw is the external world (a IIIF
+         *     endpoint, a drop bucket), never a governed tier. DERIVED covers artefacts produced from a tier
+         *     but not themselves governed as one (exported ALTO, thumbnails); OBSERVABILITY covers the
+         *     telemetry store, which is operational rather than archival.
+         * @enum {string}
+         */
+        StorageRole: "raw" | "bronze" | "silver" | "gold" | "derived" | "observability";
+        /**
+         * Store
+         * @description One registered object store.
+         */
+        Store: {
+            /**
+             * Bucket
+             * @description The bucket backing this store on `endpoint`.
+             */
+            bucket: string;
+            /**
+             * Description
+             * @description What a reader should expect to find here.
+             * @default
+             */
+            description: string;
+            /**
+             * Endpoint
+             * @description S3 endpoint this bucket lives on. `None` means the deployment's configured default (RASK_S3_ENDPOINT_URL) — which is what every governed tier uses.
+             */
+            endpoint?: string | null;
+            /**
+             * Insecure
+             * @description Skip TLS verification for this endpoint. Needed for internal hosts with private CAs.
+             * @default false
+             */
+            insecure: boolean;
+            /**
+             * Name
+             * @description Stable identifier used by the object browser and the API.
+             */
+            name: string;
+            /**
+             * Read Only
+             * @description Whether the estate writes here through the UI. The browser is a READER; a store the cascade owns must not be presented as editable just because S3 would allow it.
+             * @default true
+             */
+            read_only: boolean;
+            /** @description Where this store sits in the cascade. */
+            role: components["schemas"]["StorageRole"];
+            /**
+             * Secret
+             * @description Key in the Dapr secret store holding this store's credentials as `{access_key, secret_key}`. None = the deployment's own env credentials.
+             */
+            secret?: string | null;
+        };
+        /**
+         * StoreRegistry
+         * @description Every store the catalog knows, newest contract first.
+         *
+         *     Returned whole rather than paged: the registry is estate configuration, not data, and a
+         *     frontend that has to page through it cannot render a tier->store view in one pass.
+         */
+        StoreRegistry: {
+            /** Stores */
+            stores: components["schemas"]["Store"][];
+        };
+        /**
          * StringFtsQuery
          * @description StringFtsQuery
          */
@@ -6089,7 +6604,29 @@ export interface components {
          * @description The documents a user owns. A closed set: the key space is ours, not the caller's.
          * @enum {string}
          */
-        UserStateDocument: "workflow-graph" | "saved-views";
+        UserStateDocument: "workflow-graph" | "saved-views" | "dock-layout" | "dock-layout-library" | "attached-stores";
+        /** UserStateEnvelope[DockLayoutLibrary] */
+        UserStateEnvelope_DockLayoutLibrary_: {
+            document: components["schemas"]["UserStateDocument"];
+            /** Exists */
+            exists: boolean;
+            /** Subject */
+            subject: string;
+            /** Updated At */
+            updated_at?: string | null;
+            value?: components["schemas"]["DockLayoutLibrary"] | null;
+        };
+        /** UserStateEnvelope[DockLayouts] */
+        UserStateEnvelope_DockLayouts_: {
+            document: components["schemas"]["UserStateDocument"];
+            /** Exists */
+            exists: boolean;
+            /** Subject */
+            subject: string;
+            /** Updated At */
+            updated_at?: string | null;
+            value?: components["schemas"]["DockLayouts"] | null;
+        };
         /** UserStateEnvelope[WorkflowGraph] */
         UserStateEnvelope_WorkflowGraph_: {
             document: components["schemas"]["UserStateDocument"];
@@ -6414,6 +6951,105 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccessCheckResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    expand_access_v1_access_expand_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessExpandRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessExpandResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_access_objects_v1_access_list_objects_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessListObjectsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessListObjectsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_access_users_v1_access_list_users_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessListUsersRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessListUsersResponse"];
                 };
             };
             /** @description Validation Error */
@@ -7382,6 +8018,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_stores_v1_stores_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StoreRegistry"];
+                };
+            };
+        };
+    };
+    attach_store_v1_stores_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Store"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StoreRegistry"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stores_by_tier_v1_stores_tiers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: components["schemas"]["Store"][];
+                    };
                 };
             };
         };
@@ -9533,6 +10244,148 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    get_dock_layout_v1_user_state_dock_layout_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserStateEnvelope_DockLayouts_"];
+                };
+            };
+        };
+    };
+    put_dock_layout_v1_user_state_dock_layout_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DockLayouts"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserStateEnvelope_DockLayouts_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_dock_layout_v1_user_state_dock_layout_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_dock_layout_library_v1_user_state_dock_layout_library_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserStateEnvelope_DockLayoutLibrary_"];
+                };
+            };
+        };
+    };
+    put_dock_layout_library_v1_user_state_dock_layout_library_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DockLayoutLibrary"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserStateEnvelope_DockLayoutLibrary_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_dock_layout_library_v1_user_state_dock_layout_library_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

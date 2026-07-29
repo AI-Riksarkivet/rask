@@ -21,6 +21,7 @@
 	},
 	"dependencies": {
 		"@lucide/svelte": "^1.26.0",
+		"@rask/api": "workspace:*",
 		"dockview": "^7.0.4"
 	},
 	"devDependencies": {

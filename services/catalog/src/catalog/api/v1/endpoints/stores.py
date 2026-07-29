@@ -93,9 +93,7 @@ async def attach_store(
     cascade may write to, and nothing here can know whether the caller's credentials should carry write
     authority on another host.
     """
-    await fga_deps.require_relation(
-        client, settings, token, relation="can_observe_events", obj=settings.fga_root_object
-    )
+    await fga_deps.require_relation(client, settings, token, relation="can_observe_events", obj=settings.fga_root_object)
     if state is None:
         raise ServiceUnavailableError("no state store is configured, so a store cannot be attached")
     if not store.name.strip() or not store.bucket.strip():

@@ -59,7 +59,7 @@ from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from catalog.api.dependencies import SettingsDep
 from catalog.api.security import CurrentToken
 from service_kit.governed.user_state import UserStateDocument, UserStateStore, UserStateUnreadable
-from service_kit.schemas.dock_layout import DockLayouts
+from service_kit.schemas.dock_layout import DockLayoutLibrary, DockLayouts
 from service_kit.schemas.workflow import SavedView, WorkflowGraph
 
 
@@ -71,6 +71,7 @@ router = APIRouter(prefix="/v1/user-state", tags=["user-state"])
 _GRAPH = TypeAdapter(WorkflowGraph)
 _VIEWS = TypeAdapter(list[SavedView])
 _DOCK_LAYOUTS = TypeAdapter(DockLayouts)
+_DOCK_LAYOUT_LIBRARY = TypeAdapter(DockLayoutLibrary)
 
 
 def get_user_state_store(request: Request) -> UserStateStore | None:
@@ -282,3 +283,47 @@ async def put_dock_layout(layouts: DockLayouts, token: CurrentToken, store: User
 async def delete_dock_layout(token: CurrentToken, store: UserStateStoreDep) -> Response:
     """Discard the caller's dock layouts — the escape hatch from an unreadable document."""
     return await _erase(store, token, UserStateDocument.DOCK_LAYOUT)
+
+
+# ── the NAMED views library ──────────────────────────────────────────────────────────────────────────
+#
+# A SECOND document, not a key inside the one above, and the split is the whole design (see
+# `UserStateDocument.DOCK_LAYOUT_LIBRARY`). Restated where it bites: `DockLayouts` is `extra="forbid"`,
+# so a client that does not know about a sibling key MUST drop it — one autosave from an older bundle
+# would erase every named view. The byte ceiling and the 409 are per document too, so a large or
+# corrupt library cannot take the implicit autosave down with it.
+#
+# `response_model_exclude_none` stays OFF here for the same reason as the dock routes above: the
+# interior is an opaque dockview payload, and stripping nulls out of it would MUTATE a document these
+# routes exist to hand back unchanged.
+
+
+@router.get("/dock-layout-library")
+async def get_dock_layout_library(token: CurrentToken, store: UserStateStoreDep) -> UserStateEnvelope[DockLayoutLibrary]:
+    """The caller's saved views, or ``exists: false`` if they have never saved one."""
+    document = UserStateDocument.DOCK_LAYOUT_LIBRARY
+    subject, updated_at, value = await _fetch(store, token, document, _DOCK_LAYOUT_LIBRARY)
+    return UserStateEnvelope[DockLayoutLibrary](
+        subject=subject,
+        document=document,
+        exists=value is not None,
+        updated_at=updated_at,
+        value=value,
+    )
+
+
+@router.put("/dock-layout-library")
+async def put_dock_layout_library(
+    library: DockLayoutLibrary, token: CurrentToken, store: UserStateStoreDep, settings: SettingsDep
+) -> UserStateEnvelope[DockLayoutLibrary]:
+    """Replace the caller's saved views wholesale — the client owns which views it keeps."""
+    document = UserStateDocument.DOCK_LAYOUT_LIBRARY
+    payload = library.model_dump(mode="json")
+    subject, updated_at = await _store_document(store, token, settings, document, payload)
+    return UserStateEnvelope[DockLayoutLibrary](subject=subject, document=document, exists=True, updated_at=updated_at, value=library)
+
+
+@router.delete("/dock-layout-library", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_dock_layout_library(token: CurrentToken, store: UserStateStoreDep) -> Response:
+    """Discard the caller's saved views — the escape hatch from an unreadable library."""
+    return await _erase(store, token, UserStateDocument.DOCK_LAYOUT_LIBRARY)
