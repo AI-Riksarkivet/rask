@@ -10,7 +10,7 @@ dependencies = [
     # workspace so the model stack below never enters the fleet's resolution.
     "storage",
     # --- the model stack. THIS is why the runner is sealed. ---
-    "torch==2.12.0",
+    "torch==2.13.0",
     "transformers>=5.6.1",
     "ultralytics>=8.4.41",
     "accelerate>=1.13.0",
