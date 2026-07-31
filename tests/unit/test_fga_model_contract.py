@@ -17,9 +17,11 @@ closes it — so this test enumerates the pairs by DRIVING the real resolvers in
 ``catalog.api.fga_deps`` (never a hand-copied list, which would drift) and asserts each pair
 resolves in ``service_kit/governed/auth/model.json``, the file the app actually loads.
 
-Also guards the 3-copy model sync (model.fga authored / model.fga.yaml tested / model.json loaded)
-at the type+relation level, so a relation added to one copy but not the others fails here rather
-than only in CI's ``fga`` CLI job.
+Also guards the model sync (model.fga authored / model.json loaded) at the type+relation level, so a
+relation added to one but not the other fails here rather than only in CI's ``fga`` CLI job — and
+guards that ``model.fga.yaml`` keeps REFERENCING the DSL rather than re-inlining a copy of it. There
+were three copies once; the yaml's was ungated, drifted, and made `fga model test` green against a
+model that was no longer the one shipping.
 """
 
 from __future__ import annotations
@@ -71,18 +73,6 @@ def _dsl_relations(text: str) -> dict[str, set[str]]:
         elif line.startswith("define ") and current:
             types[current].add(line.removeprefix("define ").split(":", 1)[0].strip())
     return types
-
-
-def _yaml_inline_model() -> str:
-    """The DSL embedded in ``model.fga.yaml`` under the ``model: |`` block (no pyyaml dependency)."""
-    lines = (AUTH_DIR / "model.fga.yaml").read_text().splitlines()
-    start = next(i for i, line in enumerate(lines) if line.rstrip() == "model: |")
-    block: list[str] = []
-    for line in lines[start + 1 :]:
-        if line.strip() and not line.startswith((" ", "\t")):  # next top-level key ends the block
-            break
-        block.append(line)
-    return "\n".join(block)
 
 
 # --------------------------------------------------------------------------- #
@@ -295,17 +285,30 @@ def test_access_review_enumerates_exactly_the_models_can_relations() -> None:
         )
 
 
-def test_all_three_model_copies_agree() -> None:
-    """CONTRACT: ``model.fga`` (authored), ``model.fga.yaml`` (tested by ``fga model test``) and
-    ``model.json`` (LOADED by the app) define the same types + relations. A relation added to the
-    authored DSL but not regenerated into the JSON means the app checks something the deployed model
-    has never heard of — the same 503 failure mode, one file removed."""
+def test_both_model_copies_agree() -> None:
+    """CONTRACT: ``model.fga`` (authored) and ``model.json`` (LOADED by the app) define the same types
+    + relations. A relation added to the authored DSL but not regenerated into the JSON means the app
+    checks something the deployed model has never heard of — a 503 for every caller.
+
+    There used to be a THIRD copy, inlined into ``model.fga.yaml``, and this test asserted all three.
+    That was the wrong shape of guarantee: CI diffs model.fga against model.json but never against the
+    yaml, so the inlined block could drift (it did — a stale comment, then a whole missing `condition`)
+    while `fga model test` stayed green, because it was testing the stale copy against itself. The yaml
+    now says `model_file: ./model.fga`, so the copy is gone rather than policed."""
     compiled = _model_relations()
     authored = _dsl_relations((AUTH_DIR / "model.fga").read_text())
-    tested = _dsl_relations(_yaml_inline_model())
 
     assert authored == compiled, "model.json is STALE — regenerate: fga model transform --file model.fga"
-    assert tested == compiled, "model.fga.yaml's inline model drifted from model.fga/model.json"
+
+
+def test_the_test_yaml_references_the_model_rather_than_copying_it() -> None:
+    """CONTRACT: ``model.fga.yaml`` must READ the model, not restate it. An inlined `model:` block is a
+    copy no gate compares, so it can drift silently and take the entire test suite's credibility with
+    it — the tests keep passing against a model that is no longer the one being shipped."""
+    yaml_text = (AUTH_DIR / "model.fga.yaml").read_text()
+
+    assert "model_file: ./model.fga" in yaml_text, "model.fga.yaml must reference model.fga, not inline it"
+    assert not re.search(r"^model: \|", yaml_text, re.MULTILINE), "model.fga.yaml has re-inlined the model — that copy is ungated and will drift"
 
 
 def test_access_disclosure_routes_are_owner_tier() -> None:

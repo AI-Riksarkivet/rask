@@ -15,6 +15,17 @@ const TUPLES = [
 	{ user: 'user:alice', relation: 'owner', object: 'table:db1$t' },
 	{ user: 'user:bob', relation: 'reader', object: 'table:db1$t' },
 	{ user: 'namespace:db1', relation: 'parent', object: 'table:db1$t' },
+	// A TIME-BOXED grant. Present in the fixture so the canvas has a conditional edge to draw
+	// differently — a permanent-only fixture would let the dashed-edge assertion pass vacuously.
+	{
+		user: 'user:contractor',
+		relation: 'reader',
+		object: 'table:db1$t',
+		condition: {
+			name: 'non_expired_grant',
+			context: { grant_time: '2026-07-29T09:00:00Z', grant_duration: '4h' },
+		},
+	},
 ];
 
 const DSL = `model
@@ -77,6 +88,7 @@ let expandBody: Body | null;
 let listUsersBodies: Body[];
 let listObjectsBody: Body | null;
 let deleted: Tuple | null;
+let written: Body | null;
 let simulateBodies: Body[];
 
 test.beforeEach(async ({ context, page }) => {
@@ -86,6 +98,7 @@ test.beforeEach(async ({ context, page }) => {
 	listUsersBodies = [];
 	listObjectsBody = null;
 	deleted = null;
+	written = null;
 	simulateBodies = [];
 
 	await page.route('**/capi/**', (route) => {
@@ -99,13 +112,28 @@ test.beforeEach(async ({ context, page }) => {
 		// to the mockMe route instead of 404ing the door shut.
 		if (path === '/v1/me') return route.fallback();
 		if (path === '/v1/table') return json({ tables: ['db1$t'] });
-		if (path === '/v1/access/model') return json({ dsl: DSL, authorization_model_id: '01MODEL' });
+		if (path === '/v1/access/model')
+			return json({
+				dsl: DSL,
+				authorization_model_id: '01MODEL',
+				conditions: {
+					non_expired_grant: {
+						current_time: 'timestamp',
+						grant_time: 'timestamp',
+						grant_duration: 'duration',
+					},
+				},
+			});
 
 		if (path === '/v1/access/tuples' && req.method() === 'GET') {
 			const object = url.searchParams.get('object');
 			let tuples = TUPLES.filter((t) => !deleted || JSON.stringify(t) !== JSON.stringify(deleted));
 			if (object) tuples = tuples.filter((t) => t.object === object);
 			return json({ tuples, continuation: null });
+		}
+		if (path === '/v1/access/tuples' && req.method() === 'POST') {
+			written = req.postDataJSON() as Body;
+			return json(written);
 		}
 		if (path === '/v1/access/tuples' && req.method() === 'DELETE') {
 			deleted = req.postDataJSON() as Tuple;
@@ -383,4 +411,187 @@ test('the Grant dialog simulates before it writes, and says when a grant is a no
 	const sent = simulateBodies.at(-1);
 	expect(Array.isArray(sent?.hypothetical) ? sent.hypothetical.length : 0).toBe(1);
 	expect(deleted).toBeNull();
+});
+
+// ── conditional (time-boxed) grants ──────────────────────────────────────────────────────────────────
+//
+// A grant that expires on its own. What these pin is that the CONDITION survives every hop the UI owns:
+// offered from the model (never a hand-kept list), collected as typed inputs, sent on the write, and
+// drawn differently once it is on the canvas. A break in any one degrades silently to "permanent",
+// which is the failure the whole feature exists to prevent.
+
+test('the grant dialog offers time-boxing, driven by the model', async ({ page }) => {
+	await open(page);
+	await ask(page, 'Why…', {
+		Subject: 'user:alice',
+		Relation: 'can_read_data',
+		Object: 'table:db1$t',
+	});
+	await expect(page.getByText('ALLOWED')).toBeVisible();
+	await page.getByRole('button', { name: 'Grant' }).click();
+
+	await expect(page.getByText('Time-box this grant')).toBeVisible();
+	// The control appears because GET /v1/access/model SAID so. With no conditions in the model there
+	// is no checkbox at all — the option is unrepresentable rather than offered and then rejected.
+	await page.getByLabel('Time-box this grant').check();
+
+	// Parameters come from the model's declared types: a duration gets presets, a timestamp a field.
+	await expect(page.getByRole('button', { name: '4h', exact: true })).toBeVisible();
+	await expect(page.getByText('grant_duration')).toBeVisible();
+	// `current_time` is the CALLER's clock, supplied per check — it must NOT be collectable here, or the
+	// window would be evaluated against a moment frozen at grant time.
+	await expect(page.getByText('current_time')).toHaveCount(0);
+});
+
+test('a time-boxed grant sends its condition to the store', async ({ page }) => {
+	await open(page);
+	await ask(page, 'Why…', {
+		Subject: 'user:alice',
+		Relation: 'can_read_data',
+		Object: 'table:db1$t',
+	});
+	await expect(page.getByText('ALLOWED')).toBeVisible();
+	await page.getByRole('button', { name: 'Grant' }).click();
+
+	await page.getByLabel('Grant subject').fill('user:contractor');
+	await page.getByLabel('Grant relation').selectOption('reader');
+	await page.getByLabel('Time-box this grant').check();
+	await page.getByRole('button', { name: '4h', exact: true }).click();
+	await page.getByRole('button', { name: 'Write tuple' }).click();
+
+	await expect.poll(() => written).not.toBeNull();
+	expect(written).toMatchObject({
+		user: 'user:contractor',
+		relation: 'reader',
+		object: 'table:db1$t',
+		condition: { name: 'non_expired_grant' },
+	});
+	const ctx = (written as { condition: { context: Record<string, string> } }).condition.context;
+	expect(ctx.grant_duration).toBe('4h');
+	// Blank timestamp means "now" — the window opens when the grant is written, which is what
+	// "for the next 4 hours" means. Asserted as a real ISO instant, not merely present.
+	expect(Date.parse(ctx.grant_time)).not.toBeNaN();
+	expect('current_time' in ctx).toBe(false);
+});
+
+test('a conditional grant is visually distinct on the canvas', async ({ page }) => {
+	await open(page);
+	await ask(page, 'Who can…', { Relation: 'reader', Object: 'table:db1$t' });
+	// The store answers with one CONDITIONAL tuple, so the canvas must not draw it as permanent.
+	await expect(page.locator('[data-slot="access-node"]').first()).toBeVisible();
+	const dashed = page.locator('.svelte-flow__edge path[style*="stroke-dasharray"]');
+	await expect(dashed.first()).toBeVisible();
+});
+
+// ── the model/type graph ─────────────────────────────────────────────────────────────────────────────
+//
+// The SCHEMA, not the store. What makes this worth building rather than linking to the official
+// playground is the `X from Y` edge: OpenFGA's own Types Previewer emits edges for `computedUserset`
+// only and draws NO tupleToUserset at all, which in this model deletes the entire containment cascade.
+// The assertions below are about exactly that.
+
+test('the model view draws the schema, not the tuples', async ({ page }) => {
+	await open(page);
+	await page.getByRole('button', { name: 'Model schema' }).click();
+
+	// Types and their relations, straight from the DSL. `user:alice` is a TUPLE and must not appear —
+	// this view is true before a single tuple exists.
+	await expect(
+		page.locator('[data-slot="access-node"]').filter({ hasText: 'namespace' }).first(),
+	).toBeVisible();
+	await expect(page.locator('[data-slot="access-node"]').filter({ hasText: 'alice' })).toHaveCount(
+		0,
+	);
+});
+
+test('the model view renders `X from Y`, which the official previewer omits', async ({ page }) => {
+	await open(page);
+	await page.getByRole('button', { name: 'Model schema' }).click();
+	// `define owner: [...] or owner from parent` — the cascade. Its absence is the documented defect in
+	// the reference implementation, so its PRESENCE is the reason this view exists.
+	await expect(page.getByText('from', { exact: true }).first()).toBeVisible();
+});
+
+test('the model view is URL-addressable and survives a reload', async ({ page }) => {
+	await open(page);
+	await page.getByRole('button', { name: 'Model schema' }).click();
+	await expect.poll(() => new URL(page.url()).searchParams.get('view')).toBe('model');
+
+	await page.goto(page.url());
+	await expect(page.getByRole('heading', { name: 'Access', level: 1 })).toBeVisible({
+		timeout: 20_000,
+	});
+	// Still the schema after a cold load — the toggle is state, not a transient click.
+	await expect(page.getByRole('button', { name: 'Model schema' })).toHaveAttribute(
+		'aria-pressed',
+		'true',
+	);
+});
+
+// ── query history ────────────────────────────────────────────────────────────────────────────────────
+
+test('a run is remembered, re-runnable, and survives a reload', async ({ page }) => {
+	await open(page);
+	await ask(page, 'Who can…', { Relation: 'reader', Object: 'table:db1$t' });
+	await expect(page.getByText(/subject\(s\) hold reader/)).toBeVisible();
+
+	await expect(page.getByText(/^Recent queries/)).toBeVisible();
+	await page.getByText(/^Recent queries/).click();
+	const entry = page.getByRole('button', { name: /who can reader table:db1\$t/ });
+	await expect(entry).toBeVisible();
+
+	// Survives a cold load — the point of persisting rather than holding it in component state.
+	await page.reload();
+	await expect(page.getByRole('heading', { name: 'Access', level: 1 })).toBeVisible({
+		timeout: 20_000,
+	});
+	await page.getByText(/^Recent queries/).click();
+	await expect(page.getByRole('button', { name: /who can reader table:db1\$t/ })).toBeVisible();
+});
+
+test('history de-duplicates and re-runs in one click', async ({ page }) => {
+	await open(page);
+	await ask(page, 'Who can…', { Relation: 'reader', Object: 'table:db1$t' });
+	await expect(page.getByText(/subject\(s\) hold reader/)).toBeVisible();
+	// The SAME question again: one entry that got more recent, not two entries.
+	await page.getByRole('button', { name: 'Run' }).click();
+	await page.getByText(/^Recent queries/).click();
+	await expect(page.getByRole('button', { name: /who can reader table:db1\$t/ })).toHaveCount(1);
+
+	// One click replays it — through the same hydration path a pasted link takes.
+	await page.getByRole('button', { name: 'Why…' }).click();
+	await page.getByRole('button', { name: /who can reader table:db1\$t/ }).click();
+	await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('who');
+});
+
+test('history stores nothing the URL does not already carry', async ({ page }) => {
+	await open(page);
+	await ask(page, 'Who can…', { Relation: 'reader', Object: 'table:db1$t' });
+	await expect(page.getByText(/subject\(s\) hold reader/)).toBeVisible();
+
+	// This is an estate-admin surface and localStorage is readable by any script on the origin, so the
+	// stored entry must be a query string and nothing else — no verdicts, no tuples, no derivations.
+	const stored = await page.evaluate(() => localStorage.getItem('rask.access.history.v1'));
+	expect(stored).not.toBeNull();
+	const entries = JSON.parse(stored ?? '[]') as { query: string; label: string; at: number }[];
+	expect(entries.length).toBeGreaterThan(0);
+	for (const e of entries) {
+		expect(Object.keys(e).sort()).toEqual(['at', 'label', 'query']);
+		// Every key in the stored query must be one `pushUrl` writes — nothing smuggled alongside.
+		for (const key of new URLSearchParams(e.query).keys()) {
+			expect([
+				'q',
+				'user',
+				'relation',
+				'object',
+				'type',
+				'depth',
+				'seed',
+				'types',
+				'rels',
+				'view',
+				'run',
+			]).toContain(key);
+		}
+	}
 });

@@ -48,6 +48,10 @@
 		/** The stored tuples the current verdict rests on — exported WITH the assertion so the pasted
 		 *  test is self-contained. See `toFgaYaml`: `fga model test` never reads the live store. */
 		supportingTuples: readonly Tuple[];
+		/** `{condition: {parameter: type}}` from the compiled model. Drives the grant dialog's TYPED
+		 *  parameter inputs — a hand-kept copy would drift the moment the model gains a parameter, and a
+		 *  missing CEL operand is a 503, not a soft failure. */
+		modelConditions: Record<string, Record<string, string>>;
 		onchanged: () => void;
 	};
 
@@ -59,6 +63,7 @@
 		assignableRelations,
 		mySub,
 		supportingTuples,
+		modelConditions,
 		onchanged,
 	}: Props = $props();
 
@@ -177,6 +182,30 @@
 	let grantOpen = $state(false);
 	let gUser = $state('');
 	let gRelation = $state('');
+	/** The condition to attach, '' for a permanent grant. */
+	let gCondition = $state('');
+	/** Parameter values, keyed by name. Only the tuple-side parameters are collected — `current_time`
+	 *  is the CALLER's clock at check time and must never be frozen into the grant. */
+	let gParams = $state<Record<string, string>>({});
+
+	/** Conditions this (type, relation) actually accepts, per the model. Empty ⇒ permanent-only, and the
+	 *  control is not offered at all rather than offered and then rejected by the catalog. */
+	const conditionChoices = $derived(Object.keys(modelConditions));
+
+	/** The parameters the chosen condition needs FROM THE GRANT. `current_time` is excluded on purpose:
+	 *  it is supplied per check, so collecting it here would pin "now" at the moment of granting and the
+	 *  window would be evaluated against a frozen clock forever. */
+	const conditionParams = $derived(
+		Object.entries(modelConditions[gCondition] ?? {}).filter(([name]) => name !== 'current_time'),
+	);
+
+	/** A `duration` parameter is the one an operator actually thinks in, so it gets presets rather than
+	 *  a free-text box that has to be taught Go duration syntax by a 400. */
+	const DURATION_PRESETS = ['1h', '4h', '8h', '24h', '72h', '168h'];
+
+	const conditionReady = $derived(
+		!gCondition || conditionParams.every(([name]) => (gParams[name] ?? '').trim().length > 0),
+	);
 
 	/**
 	 * What the proposed grant would actually change, answered by the store BEFORE anything is written.
@@ -223,7 +252,28 @@
 	}
 
 	async function grant(): Promise<void> {
-		const t = { user: gUser.trim(), relation: gRelation.trim(), object: selected ?? '' };
+		const t = {
+			user: gUser.trim(),
+			relation: gRelation.trim(),
+			object: selected ?? '',
+			// Only the tuple-side parameters. `grant_time` defaults to NOW at the moment of writing —
+			// that is what "starting now, for 4 hours" means, and asking an operator to type an ISO
+			// timestamp for the present instant is friction with no decision in it.
+			...(gCondition
+				? {
+						condition: {
+							name: gCondition,
+							context: Object.fromEntries(
+								conditionParams.map(([name, type]) => [
+									name,
+									(gParams[name] ?? '').trim() ||
+										(type === 'timestamp' ? new Date().toISOString() : ''),
+								]),
+							),
+						},
+					}
+				: {}),
+		};
 		if (busy || !t.user || !t.relation || !t.object) return;
 		busy = true;
 		try {
@@ -233,7 +283,8 @@
 				: { ok: false, text: res.status === 403 ? 'Denied: estate-admin only.' : res.detail };
 			if (res.ok) {
 				grantOpen = false;
-				gUser = gRelation = '';
+				gUser = gRelation = gCondition = '';
+				gParams = {};
 				preview = null;
 				await loadTuples();
 				onchanged();
@@ -472,6 +523,79 @@
 						<span class="font-mono">{selected?.split(':')[0]}</span>. A derived
 						<span class="font-mono">can_*</span> is computed by the model and cannot be granted.
 					</p>
+
+					<!-- ── time-boxed grants ──────────────────────────────────────────────────────────────────
+			     A grant that expires on its own. The failure this kills is the contractor who still has
+			     `writer` on bronze eight months after the engagement ended, because revoking was a
+			     separate task nobody owned. The condition list and its parameters come from the MODEL
+			     (GET /v1/access/model), so an unsupported condition or a missing operand is
+			     unrepresentable here rather than a 400 one round trip later. -->
+					{#if conditionChoices.length}
+						<div class="flex flex-col gap-1 rounded-md border border-border p-2">
+							<label class="flex items-center gap-2 text-xs font-medium">
+								<input
+									type="checkbox"
+									checked={gCondition !== ''}
+									aria-label="Time-box this grant"
+									onchange={(e) => {
+	gCondition = e.currentTarget.checked ? (conditionChoices[0] ?? '') : '';
+	gParams = {};
+	preview = null;
+}}
+								/>
+								Time-box this grant
+							</label>
+
+							{#if gCondition}
+								<p class="text-[11px] text-muted-foreground">
+									Expires by itself — nobody has to remember to revoke it. Evaluated by
+									<span class="font-mono">{gCondition}</span> at every check.
+								</p>
+								{#each conditionParams as [name, type] (name)}
+									<div class="flex flex-col gap-1 pt-1">
+										<span class="text-[11px] font-medium">
+											{name}
+											<span class="font-normal text-muted-foreground">({type})</span>
+										</span>
+										{#if type === 'duration'}
+											<!-- Presets, because a duration is the thing an operator actually decides. A
+									     free-text box here means learning Go duration syntax from a rejection. -->
+											<div class="flex flex-wrap gap-1">
+												{#each DURATION_PRESETS as preset (preset)}
+													<Button
+														size="sm"
+														variant={gParams[name] === preset ? 'default' : 'outline'}
+														onclick={() => {
+	gParams = { ...gParams, [name]: preset };
+	preview = null;
+}}
+													>
+														{preset}
+													</Button>
+												{/each}
+											</div>
+										{:else}
+											<Input
+												value={gParams[name] ?? ''}
+												class="font-mono text-xs"
+												placeholder={type === 'timestamp' ? 'now (leave blank)' : type}
+												aria-label="Condition parameter {name}"
+												oninput={(e) => {
+	gParams = { ...gParams, [name]: e.currentTarget.value };
+	preview = null;
+}}
+											/>
+											{#if type === 'timestamp'}
+												<p class="text-[11px] text-muted-foreground">
+													Blank means <span class="font-mono">now</span> — the window opens when you grant.
+												</p>
+											{/if}
+										{/if}
+									</div>
+								{/each}
+							{/if}
+						</div>
+					{/if}
 				{:else}
 					<Input
 						bind:value={gRelation}

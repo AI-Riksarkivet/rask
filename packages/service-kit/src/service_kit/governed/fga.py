@@ -50,6 +50,13 @@ from openfga_sdk.exceptions import ApiException
 from openfga_sdk.models.create_store_request import CreateStoreRequest
 from openfga_sdk.models.fga_object import FgaObject
 from openfga_sdk.models.read_request_tuple_key import ReadRequestTupleKey
+
+# Re-exported deliberately, in the `X as X` form so ruff does not prune it as unused: a caller building
+# a CONDITIONAL tuple needs this type, and importing it straight from the SDK would spread openfga_sdk
+# imports back into the services this module exists to keep SDK-free (`ClientTuple` is re-exported for
+# the same reason). The plain `import X` form was removed by `ruff --fix` once — it cannot see that the
+# only consumer reaches it as `fga.RelationshipCondition` from another module.
+from openfga_sdk.models.relationship_condition import RelationshipCondition as RelationshipCondition
 from openfga_sdk.models.user_type_filter import UserTypeFilter
 from openfga_sdk.models.write_authorization_model_request import WriteAuthorizationModelRequest
 from tenacity import (
@@ -305,11 +312,19 @@ async def check(
     obj: str,
     qualify: bool = True,
     contextual_tuples: list[ClientTuple] | None = None,
+    context: dict[str, Any] | None = None,
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
 ) -> bool:
     """Return whether ``user:<user>`` has ``relation`` on ``obj`` (e.g. ``table:db1$t``).
+
+    ``context`` supplies the runtime values a CONDITION evaluates against — for the model's
+    ``non_expired_grant`` that is ``current_time``. The split is deliberate: the tuple carries the
+    window (``grant_time`` + ``grant_duration``, written once at grant time) and the caller carries the
+    clock. Omitting it against a conditional tuple is not "no opinion", it is a DENY — OpenFGA cannot
+    evaluate the CEL expression without its parameters — so a caller that forgets the context sees a
+    time-boxed grant as already expired.
 
     ``contextual_tuples`` evaluates the check AS IF those tuples existed, without writing anything.
     That is the whole of "assert before you grant": ask whether a proposed grant would actually produce
@@ -338,6 +353,7 @@ async def check(
                 relation=relation,
                 object=obj,
                 contextual_tuples=contextual_tuples,
+                context=context,
             )
         )
         return bool(response.allowed)
@@ -837,7 +853,7 @@ async def read_object_tuples(
             response = await client.read(ReadRequestTupleKey(object=obj), options=options)
             for t in response.tuples or []:
                 key = t.key
-                collected.append(ClientTuple(user=key.user, relation=key.relation, object=key.object))
+                collected.append(ClientTuple(user=key.user, relation=key.relation, object=key.object, condition=getattr(key, "condition", None)))
             token = response.continuation_token or None
             if not token:
                 break
@@ -887,7 +903,18 @@ async def read_tuples(
         if continuation_token:
             options["continuation_token"] = continuation_token
         response = await client.read(tuple_key, options=options or None)
-        page = [ClientTuple(user=t.key.user, relation=t.key.relation, object=t.key.object) for t in response.tuples or []]
+        # The condition rides the tuple back out. Dropping it (as this did) makes a time-boxed grant
+        # read as permanent everywhere downstream — the revoke-on-delete path would then try to delete
+        # a tuple it has mis-described, and the UI would show an expiring grant as forever.
+        page = [
+            ClientTuple(
+                user=t.key.user,
+                relation=t.key.relation,
+                object=t.key.object,
+                condition=getattr(t.key, "condition", None),
+            )
+            for t in response.tuples or []
+        ]
         return page, response.continuation_token or None
 
     try:

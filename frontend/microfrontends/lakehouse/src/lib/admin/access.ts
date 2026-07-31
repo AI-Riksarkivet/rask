@@ -9,13 +9,33 @@ import { requestJSON } from '$lib/http';
 // against the contract because the catalog OpenAPI dump has not yet caught up; swap to the generated
 // types once `bun run gen:types:catalog` carries them.
 
-/** One relationship tuple — the atom of the whole authorization model. */
+/** A CEL condition on a grant — the parameters that ride the TUPLE.
+ *
+ *  For `non_expired_grant` that is `grant_time` + `grant_duration`: the window. `current_time` is NOT
+ *  here — the clock belongs to the caller and is supplied per check, so a grant cannot pin "now" at
+ *  the instant it was written. */
+export const TupleConditionSchema = v.object({
+	name: v.string(),
+	context: v.record(v.string(), v.unknown()),
+});
+export type TupleCondition = v.InferOutput<typeof TupleConditionSchema>;
+
 export const TupleSchema = v.object({
 	user: v.string(), // e.g. user:alice, team:eng#member, namespace:db1
 	relation: v.string(), // e.g. owner, can_read_data, parent
 	object: v.string(), // e.g. table:db1$t, warehouse:acme-wh
+	/** Present when the grant is TIME-BOXED. `null` is permanent — and the distinction has to survive
+	 *  the read path, or an expiring grant renders as forever. */
+	condition: v.optional(v.nullable(TupleConditionSchema), null),
 });
 export type Tuple = v.InferOutput<typeof TupleSchema>;
+
+/** What a CALLER supplies to write/delete/check.
+ *
+ *  `condition` is optional here but required on `Tuple`, and that asymmetry is deliberate: a tuple READ
+ *  back from the store always states whether it is conditional (`null` is a real answer — "permanent"),
+ *  while a caller writing a permanent grant should not have to say `condition: null` to mean "no". */
+export type TupleInput = Omit<Tuple, 'condition'> & { condition?: TupleCondition | null };
 
 export const TuplesPageSchema = v.object({
 	tuples: v.array(TupleSchema),
@@ -25,6 +45,10 @@ export const TuplesPageSchema = v.object({
 export const AccessModelSchema = v.object({
 	dsl: v.string(), // the checked-in model.fga text
 	authorization_model_id: v.string(),
+	/** `{condition: {parameter: type}}` from the compiled model, so the Grant dialog can render TYPED
+	 *  inputs instead of a free-text box. Served rather than hand-copied: a hand-kept list drifts the
+	 *  moment a parameter changes, and a missing CEL operand is a 503, not a soft failure. */
+	conditions: v.optional(v.record(v.string(), v.record(v.string(), v.string())), {}),
 });
 export type AccessModel = v.InferOutput<typeof AccessModelSchema>;
 
@@ -67,7 +91,7 @@ export const fetchTuples = (filter: TupleFilter = {}) => {
 };
 
 /** Grant: write one tuple. Session-only at the BFF; estate-admin gated by the catalog. */
-export const writeTuple = (tuple: Tuple) =>
+export const writeTuple = (tuple: TupleInput) =>
 	requestJSON<unknown>('/capi', 'v1/access/tuples', {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
@@ -75,7 +99,7 @@ export const writeTuple = (tuple: Tuple) =>
 	});
 
 /** Revoke: delete one tuple (same body as the write — the tuple IS the identity). */
-export const deleteTuple = (tuple: Tuple) =>
+export const deleteTuple = (tuple: TupleInput) =>
 	requestJSON<unknown>('/capi', 'v1/access/tuples', {
 		method: 'DELETE',
 		headers: { 'content-type': 'application/json' },
@@ -83,11 +107,14 @@ export const deleteTuple = (tuple: Tuple) =>
 	});
 
 /** A live OpenFGA Check on any (user, relation, object) triple — the workbench's probe. */
-export const checkAccess = (tuple: Tuple) =>
+export const checkAccess = (tuple: TupleInput, context: Record<string, unknown> = {}) =>
 	requestJSON<unknown>('/capi', 'v1/access/check', {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(tuple),
+		// `context` supplies the runtime values a CONDITION evaluates against (`current_time`). Sent
+		// even when empty is wrong — OpenFGA reads an empty context as "no operands", which ERRORS any
+		// CEL expression on the path — so it is omitted entirely unless there is something to say.
+		body: JSON.stringify(Object.keys(context).length ? { ...tuple, context } : tuple),
 	});
 
 /** The authorization model itself (read-only — model changes are code migrations). */
@@ -229,7 +256,9 @@ export const simulate = (query: {
 	user: string;
 	relation: string;
 	object: string;
-	hypothetical: readonly Tuple[];
+	// Proposals, not stored facts — a caller asking "what if I granted this" has no condition to
+	// state unless it is proposing a time-boxed grant, so the input form applies here too.
+	hypothetical: readonly TupleInput[];
 }) =>
 	postJSON('v1/access/simulate', {
 		user: query.user,

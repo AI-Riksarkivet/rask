@@ -58,6 +58,8 @@
 		type QueryKind,
 		walkDerivation,
 	} from './graph';
+	import { buildModelGraph } from './model-graph';
+	import { clearHistory, type HistoryEntry, loadHistory, recordQuery } from './history';
 
 	/**
 	 * Page ceiling for the whole-store read. 100 tuples/page, so 40 pages = 4000 tuples on the canvas —
@@ -83,6 +85,13 @@
 	let seed = $state('');
 	let selectedTypes = $state(new Set<string>());
 	let selectedRelations = $state(new Set<string>());
+	/** `data` = the live store (who has what NOW). `model` = the schema (what CAN grant what, ever).
+	 *  A toggle beside the canvas, not a tab: the tabs are dead and stay dead, and switching must not
+	 *  throw away the query you were reading. */
+	let view = $state<'data' | 'model'>('data');
+	/** Recent queries. The URL makes ONE query shareable; this makes the SEQUENCE retraceable, which
+	 *  `replaceState` (used so the address bar does not fill with keystrokes) otherwise destroys. */
+	let history = $state<HistoryEntry[]>([]);
 
 	// The exact query string this component last wrote. Hydration compares against it so our own
 	// replaceState does not bounce back into the fields mid-typing, while a real history navigation
@@ -121,6 +130,7 @@
 			seed = q.get('seed') ?? '';
 			selectedTypes = new Set((q.get('types') ?? '').split(',').filter(Boolean));
 			selectedRelations = new Set((q.get('rels') ?? '').split(',').filter(Boolean));
+			view = q.get('view') === 'model' ? 'model' : 'data';
 			if (seed) void loadNeighbourhood(seed);
 			if (q.get('run') === '1') void run();
 		});
@@ -140,6 +150,7 @@
 		set('seed', seed);
 		set('types', [...selectedTypes].join(','));
 		set('rels', [...selectedRelations].join(','));
+		set('view', view === 'model' ? 'model' : '');
 		for (const [key, value] of Object.entries(extra)) set(key, value);
 		lastPushed = next.toString();
 		void goto(`?${lastPushed}`, { replaceState: true, keepFocus: true, noScroll: true });
@@ -158,6 +169,9 @@
 	let selected = $state<string | null>(null);
 	let dsl = $state<string | null>(null);
 	let modelTypes = $state<string[]>([]);
+	/** `{condition: {parameter: type}}` served by GET /v1/access/model — the grant dialog renders TYPED
+	 *  inputs from this rather than from a copy that would drift the moment the model gains a parameter. */
+	let modelConditions = $state<Record<string, Record<string, string>>>({});
 	let registry = $state<string[]>([]);
 	/** Every tuple in the store — the canvas's base graph, and what the facet counts are computed on. */
 	let storeTuples = $state<Tuple[]>([]);
@@ -175,6 +189,7 @@
 	// dependencies happens to run once too, which is exactly why it is the wrong tool — it states
 	// "re-run when something changes" about code that has nothing to re-run for.
 	onMount(() => {
+		history = loadHistory();
 		void loadModel();
 		void loadRegistry();
 		void loadMe();
@@ -205,6 +220,7 @@
 			const parsed = parse(AccessModelSchema, res.data);
 			dsl = parsed.dsl;
 			modelTypes = parseModelTypes(parsed.dsl);
+			modelConditions = parsed.conditions;
 		} catch (err) {
 			console.error(`access model parse failure: ${String(err)}`);
 		}
@@ -414,7 +430,13 @@
 	}
 
 	// ── the rendered graph ──
-	const composed = $derived(overlay(neighbourhood ?? EMPTY, answer));
+	/** The schema graph, derived from the DSL the model endpoint already serves. Rebuilt only when the
+	 *  DSL changes — it is a pure function of the model and owes nothing to the store. */
+	const modelGraph = $derived(dsl ? buildModelGraph(dsl) : EMPTY);
+
+	const composed = $derived(
+		view === 'model' ? modelGraph : overlay(neighbourhood ?? EMPTY, answer),
+	);
 	const filtered = $derived(
 		applyFacets(composed, { types: selectedTypes, relations: selectedRelations }),
 	);
@@ -486,7 +508,7 @@
 			id: e.id,
 			source: e.source,
 			target: e.target,
-			label: e.label,
+			label: e.condition ? `${e.label} ⏳` : e.label,
 			animated: e.onPath,
 			markerEnd: {
 				type: MarkerType.ArrowClosed,
@@ -516,16 +538,20 @@
 
 	/** Edge chrome: the query's lit path wins, hover emphasises, everything else recedes. */
 	function hoverStyle(
-		e: { id: string; onPath: boolean },
+		e: { id: string; onPath: boolean; condition?: string | null },
 		near: { ids: Set<string>; edgeIds: Set<string> } | null,
 	): string {
 		const lit = e.onPath;
 		const touched = near?.edgeIds.has(e.id) ?? false;
-		if (near && !touched) return 'stroke: var(--muted-foreground); opacity: 0.08;';
-		if (touched) return 'stroke: var(--foreground); stroke-width: 2; opacity: 1;';
+		// A time-boxed grant is DASHED wherever it appears. Colour alone would not survive the dimming
+		// pass (everything off-query drops to 8% opacity), and "this expires" must stay legible in the
+		// state where an operator is scanning rather than focused.
+		const dash = e.condition ? ' stroke-dasharray: 6 4;' : '';
+		if (near && !touched) return `stroke: var(--muted-foreground); opacity: 0.08;${dash}`;
+		if (touched) return `stroke: var(--foreground); stroke-width: 2; opacity: 1;${dash}`;
 		return lit
-			? 'stroke: var(--primary); stroke-width: 2;'
-			: 'stroke: var(--muted-foreground); opacity: 0.35;';
+			? `stroke: var(--primary); stroke-width: 2;${dash}`
+			: `stroke: var(--muted-foreground); opacity: 0.35;${dash}`;
 	}
 
 	/** Is anything narrowing the view right now? Drives whether Clear is offered at all — an always-on
@@ -584,6 +610,9 @@
 		onrun={() => {
 	void run();
 	pushUrl({ run: '1' });
+	// Recorded from `lastPushed` — the string pushUrl just wrote — so the history replays the exact
+	// query the address bar holds and cannot drift from it.
+	if (lastPushed) history = recordQuery(lastPushed);
 }}
 	/>
 
@@ -595,6 +624,74 @@
 			<span class="text-xs text-muted-foreground">back to the whole graph</span>
 		</div>
 	{/if}
+
+	<!-- Recent queries. The URL makes one question shareable; this makes the investigation retraceable.
+	     Nothing is stored that the URL does not already carry — see history.ts — because subject and
+	     object ids are exactly the sensitive part of this surface. -->
+	{#if history.length}
+		<details class="rounded-md border border-border px-2 py-1.5">
+			<summary class="cursor-pointer text-xs font-medium">
+				Recent queries <span class="text-muted-foreground">({history.length})</span>
+			</summary>
+			<ul class="mt-1.5 flex flex-col gap-0.5">
+				{#each history as entry (entry.query)}
+					<li>
+						<button
+							class="w-full truncate rounded px-1.5 py-1 text-left font-mono text-[11px] hover:bg-muted"
+							title={entry.label}
+							onclick={() => {
+	// Replay the stored query VERBATIM through the same hydration path a pasted link takes — so a
+	// re-run cannot diverge from what the entry says it was.
+	lastPushed = null;
+	void goto(`?${entry.query}`, { keepFocus: true, noScroll: true });
+}}
+						>
+							{entry.label}
+						</button>
+					</li>
+				{/each}
+			</ul>
+			<button
+				class="mt-1 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+				onclick={() => (history = clearHistory())}
+			>
+				Clear history
+			</button>
+		</details>
+	{/if}
+
+	<!-- DATA vs MODEL. Two different questions about the same authorization system: what is granted
+	     right now, and what the schema permits at all. A toggle rather than a tab — the canvas stays
+	     mounted and the query survives the switch. -->
+	<div class="flex items-center gap-1.5" role="group" aria-label="Graph source">
+		<Button
+			size="sm"
+			variant={view === 'data' ? 'default' : 'outline'}
+			aria-pressed={view === 'data'}
+			onclick={() => {
+	view = 'data';
+	pushUrl({});
+}}
+		>
+			Live data
+		</Button>
+		<Button
+			size="sm"
+			variant={view === 'model' ? 'default' : 'outline'}
+			aria-pressed={view === 'model'}
+			onclick={() => {
+	view = 'model';
+	pushUrl({});
+}}
+		>
+			Model schema
+		</Button>
+		<span class="text-xs text-muted-foreground">
+			{view === 'model'
+				? 'the types and relations themselves — no tuples involved'
+				: 'who holds what in the live store right now'}
+		</span>
+	</div>
 
 	<!-- One-click entry points. The old tabbed view had registry chips and this one dropped them for a
 	     free-text box, which meant the only way in was to already know that a subject id is
@@ -706,6 +803,7 @@
 				assignableRelations={assignableForSelected}
 				mySub={me?.sub ?? null}
 				{supportingTuples}
+				{modelConditions}
 				onchanged={() => {
 	void loadNeighbourhood(seed);
 }}

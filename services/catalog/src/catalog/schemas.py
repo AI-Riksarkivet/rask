@@ -69,6 +69,17 @@ class AccessGrantResponse(BaseModel):
     granted: bool  # True after a grant, False after a revoke — the resulting state of the tuple
 
 
+class TupleCondition(BaseModel):
+    """A CEL condition attached to a grant, with the parameters that ride the TUPLE.
+
+    For the model's ``non_expired_grant`` that is ``grant_time`` + ``grant_duration`` — the window.
+    ``current_time`` is deliberately NOT here: the clock belongs to the caller and is supplied per
+    check, so a grant cannot pin the present moment at the instant it was written."""
+
+    name: str
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
 class AccessTuple(BaseModel):
     """One raw relationship tuple, verbatim (``user`` is a full subject — ``user:<id>`` or a userset like
     ``team:acme#member``). The estate-admin tuple API's unit: the read page lists these, write/delete take
@@ -77,6 +88,9 @@ class AccessTuple(BaseModel):
     user: str
     relation: str
     object: str
+    condition: TupleCondition | None = None
+    """Present when the grant is TIME-BOXED (or otherwise conditional). ``None`` is a permanent grant —
+    and the distinction has to survive the read path, or an expiring grant renders as forever."""
 
 
 class AccessTuplesPage(BaseModel):
@@ -93,6 +107,24 @@ class AccessModelResponse(BaseModel):
 
     dsl: str
     authorization_model_id: str
+    conditions: dict[str, dict[str, str]] = Field(default_factory=dict)
+    """``{condition: {parameter: type}}`` — e.g. ``{"non_expired_grant": {"grant_time": "timestamp",
+    "grant_duration": "duration", "current_time": "timestamp"}}``.
+
+    Served so a client can render TYPED inputs for a conditional grant instead of a free-text box. The
+    alternative is a hand-kept copy in the frontend, which drifts from the model the moment a parameter
+    is added — and a missing operand is not a soft failure: the CEL expression errors, OpenFGA 400s, and
+    this API's fail-closed handling turns that into a 503."""
+
+
+class AccessCheckBody(AccessTuple):
+    """A check, plus the runtime ``context`` any CONDITION on the path needs (``current_time`` for
+    ``non_expired_grant``).
+
+    Separate from :class:`AccessTuple` because context is a property of the QUESTION, not of the stored
+    fact — the tuple carries the window, the caller carries the clock."""
+
+    context: dict[str, Any] = Field(default_factory=dict)
 
 
 class AccessCheckResult(BaseModel):

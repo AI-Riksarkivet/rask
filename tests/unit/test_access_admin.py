@@ -19,11 +19,13 @@ from typing import Any
 import pytest
 from catalog.api.v1.endpoints import access_admin as ep
 from catalog.schemas import (
+    AccessCheckBody,
     AccessExpandRequest,
     AccessListObjectsRequest,
     AccessListUsersRequest,
     AccessSimulateRequest,
     AccessTuple,
+    TupleCondition,
 )
 from lance_namespace import (
     InvalidInputError,
@@ -267,12 +269,21 @@ def test_check_probes_any_defined_relation_with_qualified_subject(gate_seen: dic
             request=_request(client=object()),
             settings=_settings(),
             token=_token("root_admin"),
-            body=AccessTuple(user="alice", relation="writer", object="namespace:bronze"),
+            body=AccessCheckBody(user="alice", relation="writer", object="namespace:bronze"),
         )
     )
     # qualify=False + pre-resolved subject: fga.check must see the full subject verbatim (the 2026-07-20
     # double-prefix regression), and the verdict echoes the exact tuple probed.
-    assert seen == {"user": "user:alice", "relation": "writer", "obj": "namespace:bronze", "qualify": False}
+    # `context` is None with no condition in play. Asserted rather than ignored: passing `{}` instead
+    # would be a different request — OpenFGA treats an empty context as "evaluate with no operands",
+    # which errors any CEL expression on the path instead of leaving it unevaluated.
+    assert seen == {
+        "user": "user:alice",
+        "relation": "writer",
+        "obj": "namespace:bronze",
+        "qualify": False,
+        "context": None,
+    }
     assert response.allowed is True
     assert (response.checked.user, response.checked.relation) == ("user:alice", "writer")
     assert rec.calls == [("access_simulate", "success", {"subject": "root_admin", "resource": "namespace:bronze"})]
@@ -287,7 +298,7 @@ def test_check_rejects_a_phantom_relation(gate_seen: dict[str, Any], rec: _Audit
                 request=_request(client=object()),
                 settings=_settings(),
                 token=None,
-                body=AccessTuple(user="alice", relation="can_fly", object="table:db1$t"),
+                body=AccessCheckBody(user="alice", relation="can_fly", object="table:db1$t"),
             )
         )
 
@@ -726,3 +737,173 @@ def test_simulate_is_estate_gated(rec: _AuditRecorder) -> None:
                 body=AccessSimulateRequest(user="alice", relation="reader", object="table:db1$t"),
             )
         )
+
+
+# ── conditional (time-boxed) grants ──────────────────────────────────────────────────────────────────
+#
+# The point of a condition is that access ENDS with nobody revoking it. That only works if the
+# condition survives every hop: written onto the tuple, read back off it, and evaluable at check time.
+# Each of these pins one hop, because a break in any one of them degrades silently to "permanent".
+
+
+def _write_conditional(monkeypatch: pytest.MonkeyPatch, body: AccessTuple) -> list[Any]:
+    written: list[Any] = []
+
+    # Takes **kwargs the real `write_tuples` has (actor, origin, the retry knobs) — a stub narrower
+    # than its subject fails on a signature the subject already allows, which is a fake's bug, not the
+    # code's.
+    async def _fake_write(_client: Any, tuples: list[Any], **_kw: Any) -> None:
+        written.extend(tuples)
+
+    monkeypatch.setattr(ep.fga, "write_tuples", _fake_write)
+    asyncio.run(
+        ep.write_access_tuple(
+            request=_request(client=object()),
+            settings=_settings(),
+            token=_token("root_admin"),
+            body=body,
+        )
+    )
+    return written
+
+
+def test_a_conditional_grant_reaches_openfga_with_its_condition(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    written = _write_conditional(
+        monkeypatch,
+        AccessTuple(
+            user="alice",
+            relation="writer",
+            object="namespace:bronze",
+            condition=TupleCondition(name="non_expired_grant", context={"grant_time": "2026-07-29T09:00:00Z", "grant_duration": "4h"}),
+        ),
+    )
+    assert len(written) == 1
+    assert written[0].condition is not None
+    assert written[0].condition.name == "non_expired_grant"
+    assert written[0].condition.context["grant_duration"] == "4h"
+
+
+def test_a_permanent_grant_still_carries_no_condition(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Migration safety: every pre-existing grant path must keep producing an UNconditional tuple.
+    written = _write_conditional(monkeypatch, AccessTuple(user="alice", relation="writer", object="namespace:bronze"))
+    assert written[0].condition is None
+
+
+def test_a_condition_the_rung_does_not_accept_is_a_clean_400(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+    # `owner` deliberately omits the conditional form. Naming a condition on it must be rejected HERE —
+    # reaching OpenFGA earns a 400 that this API's fail-closed handling turns into a 503 for everyone.
+    with pytest.raises(InvalidInputError, match="non_expired_grant"):
+        asyncio.run(
+            ep.write_access_tuple(
+                request=_request(client=object()),
+                settings=_settings(),
+                token=None,
+                body=AccessTuple(
+                    user="alice",
+                    relation="owner",
+                    object="namespace:bronze",
+                    condition=TupleCondition(name="non_expired_grant", context={"grant_time": "x", "grant_duration": "1h"}),
+                ),
+            )
+        )
+
+
+def test_an_unknown_condition_is_a_clean_400(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+    with pytest.raises(InvalidInputError, match="never_expires"):
+        asyncio.run(
+            ep.write_access_tuple(
+                request=_request(client=object()),
+                settings=_settings(),
+                token=None,
+                body=AccessTuple(user="alice", relation="writer", object="namespace:bronze", condition=TupleCondition(name="never_expires")),
+            )
+        )
+
+
+def test_a_condition_missing_a_parameter_is_a_clean_400(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+    # An absent CEL operand does not evaluate false — it ERRORS. Catching it at write time makes the
+    # grant fail now, instead of turning every later check on the object into a 503.
+    with pytest.raises(InvalidInputError, match="grant_duration"):
+        asyncio.run(
+            ep.write_access_tuple(
+                request=_request(client=object()),
+                settings=_settings(),
+                token=None,
+                body=AccessTuple(
+                    user="alice",
+                    relation="writer",
+                    object="namespace:bronze",
+                    condition=TupleCondition(name="non_expired_grant", context={"grant_time": "2026-07-29T09:00:00Z"}),
+                ),
+            )
+        )
+
+
+def test_current_time_is_not_accepted_on_the_tuple(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`current_time` is the CALLER's clock, supplied per check. Letting it ride the tuple would pin the
+    present moment at grant time, so the window would be evaluated against a frozen 'now' forever."""
+    written = _write_conditional(
+        monkeypatch,
+        AccessTuple(
+            user="alice",
+            relation="writer",
+            object="namespace:bronze",
+            condition=TupleCondition(name="non_expired_grant", context={"grant_time": "2026-07-29T09:00:00Z", "grant_duration": "4h"}),
+        ),
+    )
+    assert "current_time" not in written[0].condition.context
+
+
+def test_a_read_echoes_the_condition_rather_than_flattening_it(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A time-boxed grant that reads back as permanent is worse than no feature: a reviewer auditing
+    'who has writer on bronze' would see a name that is in fact about to lapse."""
+
+    async def _fake_read(_client: Any, **_kw: Any) -> tuple[list[Any], str | None]:
+        return (
+            [
+                fga.ClientTuple(
+                    user="user:alice",
+                    relation="writer",
+                    object="namespace:bronze",
+                    condition=fga.RelationshipCondition(name="non_expired_grant", context={"grant_duration": "4h"}),
+                )
+            ],
+            None,
+        )
+
+    monkeypatch.setattr(ep.fga, "read_tuples", _fake_read)
+    response = asyncio.run(
+        ep.read_access_tuples(request=_request(client=object()), settings=_settings(), token=_token("root_admin"), object="namespace:bronze")
+    )
+    assert response.tuples[0].condition is not None
+    assert response.tuples[0].condition.name == "non_expired_grant"
+    assert response.tuples[0].condition.context["grant_duration"] == "4h"
+
+
+def test_check_forwards_the_runtime_context(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+
+    async def _fake_check(_client: Any, **kwargs: Any) -> bool:
+        seen.update(kwargs)
+        return True
+
+    monkeypatch.setattr(ep.fga, "check", _fake_check)
+    asyncio.run(
+        ep.check_access(
+            request=_request(client=object()),
+            settings=_settings(),
+            token=None,
+            body=AccessCheckBody(user="alice", relation="writer", object="namespace:bronze", context={"current_time": "2026-07-29T10:30:00Z"}),
+        )
+    )
+    assert seen["context"] == {"current_time": "2026-07-29T10:30:00Z"}
+
+
+def test_the_model_endpoint_publishes_condition_parameter_types(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+    """Served so a client renders TYPED inputs from the model. A hand-kept copy in the frontend drifts
+    the moment a parameter changes, and a missing operand is a 503, not a soft failure."""
+    client = SimpleNamespace(get_authorization_model_id=lambda: "01MODEL")
+    response = asyncio.run(ep.get_access_model(request=_request(client=client), settings=_settings(), token=None))
+    assert "non_expired_grant" in response.conditions
+    assert response.conditions["non_expired_grant"]["grant_duration"] == "duration"
+    assert response.conditions["non_expired_grant"]["current_time"] == "timestamp"

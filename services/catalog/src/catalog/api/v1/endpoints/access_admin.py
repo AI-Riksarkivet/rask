@@ -35,6 +35,7 @@ from catalog.api.dependencies import SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import (
+    AccessCheckBody,
     AccessCheckResult,
     AccessExpandNode,
     AccessExpandRequest,
@@ -48,6 +49,7 @@ from catalog.schemas import (
     AccessSimulateResult,
     AccessTuple,
     AccessTuplesPage,
+    TupleCondition,
 )
 from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
@@ -88,6 +90,37 @@ def _assignable_relations(fga_type: str) -> frozenset[str]:
         if td["type"] == fga_type:
             meta = (td.get("metadata") or {}).get("relations") or {}
             return frozenset(r for r, m in meta.items() if m.get("directly_related_user_types"))
+    return frozenset()
+
+
+@lru_cache
+def _model_conditions() -> dict[str, dict[str, str]]:
+    """``{condition: {parameter: type}}`` from the compiled model, types stripped to their short form
+    (``TYPE_NAME_TIMESTAMP`` → ``timestamp``).
+
+    Read from the model rather than hand-listed for the usual reason — a UI offering a parameter the
+    condition does not take, or missing one it requires, produces an OpenFGA 400 that this API's
+    fail-closed handling turns into a 503 for everyone.
+    """
+    out: dict[str, dict[str, str]] = {}
+    for name, spec in (fga.load_model().get("conditions") or {}).items():
+        params = (spec or {}).get("parameters") or {}
+        out[name] = {p: str(v.get("type_name", "")).removeprefix("TYPE_NAME_").lower() for p, v in params.items()}
+    return out
+
+
+@lru_cache
+def _conditions_for(fga_type: str, relation: str) -> frozenset[str]:
+    """The conditions this relation may be granted WITH on this type.
+
+    A rung accepts both forms in this model (`[user, …, user with non_expired_grant, …]`), so an empty
+    set here means the rung is permanent-only — and a caller naming a condition on it is a clean 400
+    rather than an OpenFGA rejection that fails closed to 503."""
+    for td in fga.load_model()["type_definitions"]:
+        if td["type"] != fga_type:
+            continue
+        meta = ((td.get("metadata") or {}).get("relations") or {}).get(relation) or {}
+        return frozenset(t["condition"] for t in meta.get("directly_related_user_types") or [] if t.get("condition"))
     return frozenset()
 
 
@@ -175,9 +208,21 @@ async def read_access_tuples(
     # allow, exactly like access_review on the per-object surface.
     audit("access_tuples_read", SUCCESS, subject=subject, resource=resource, delivered=len(tuples))
     return AccessTuplesPage(
-        tuples=[AccessTuple(user=t.user, relation=t.relation, object=t.object) for t in tuples],
+        tuples=[_as_access_tuple(t) for t in tuples],
         continuation=next_token,
     )
+
+
+def _as_access_tuple(t: fga.ClientTuple) -> AccessTuple:
+    """Map a stored tuple out to the wire, CONDITION INCLUDED.
+
+    Dropping the condition here would make every time-boxed grant read back as permanent — the UI
+    would show no expiry, and a reviewer auditing "who has writer on bronze" would see a name that is
+    in fact about to lapse (or has already). The distinction is the entire feature."""
+    condition = None
+    if (c := getattr(t, "condition", None)) is not None and getattr(c, "name", None):
+        condition = TupleCondition(name=c.name, context=dict(getattr(c, "context", None) or {}))
+    return AccessTuple(user=t.user, relation=t.relation, object=t.object, condition=condition)
 
 
 def _validated_write_tuple(body: AccessTuple) -> fga.ClientTuple:
@@ -187,7 +232,28 @@ def _validated_write_tuple(body: AccessTuple) -> fga.ClientTuple:
     assignable = _assignable_relations(fga_type)
     if body.relation not in assignable:
         raise InvalidInputError(f"{body.relation!r} is not a directly-assignable relation on {fga_type} (one of {', '.join(sorted(assignable))})")
-    return fga.ClientTuple(user=_qualified_subject(body.user), relation=body.relation, object=obj)
+
+    condition = None
+    if body.condition is not None:
+        allowed = _conditions_for(fga_type, body.relation)
+        if body.condition.name not in allowed:
+            detail = f"one of {', '.join(sorted(allowed))}" if allowed else f"{fga_type}#{body.relation} accepts no condition"
+            raise InvalidInputError(f"{body.condition.name!r} is not a condition on {fga_type}#{body.relation} ({detail})")
+        # Every declared parameter must be supplied. A CEL expression missing an operand does not
+        # evaluate to false — it ERRORS, which OpenFGA returns as a 400 and this API fails closed to a
+        # 503. Catching it here makes an incomplete grant a clean rejection at the moment it is written,
+        # rather than an outage the first time anyone checks the object.
+        declared = _model_conditions().get(body.condition.name, {})
+        supplied = set(body.condition.context or {})
+        # `current_time` is the CALLER's clock, supplied per check — it must NOT ride the tuple.
+        required = {p for p in declared if p != "current_time"}
+        if missing := required - supplied:
+            raise InvalidInputError(f"condition {body.condition.name!r} needs {', '.join(sorted(missing))}")
+        if unknown := supplied - set(declared):
+            raise InvalidInputError(f"condition {body.condition.name!r} has no parameter {', '.join(sorted(unknown))}")
+        condition = fga.RelationshipCondition(name=body.condition.name, context=dict(body.condition.context or {}))
+
+    return fga.ClientTuple(user=_qualified_subject(body.user), relation=body.relation, object=obj, condition=condition)
 
 
 async def _mutate_tuple(request: Request, settings: Settings, token: CurrentToken, body: AccessTuple, *, write: bool) -> AccessTuple:
@@ -206,7 +272,7 @@ async def _mutate_tuple(request: Request, settings: Settings, token: CurrentToke
         # would give this one surface two rows per write while the other six still had none.
         audit(event, FAILURE, subject=actor, resource=tup.object, grantee=tup.user, relation=tup.relation)
         raise
-    return AccessTuple(user=tup.user, relation=tup.relation, object=tup.object)
+    return _as_access_tuple(tup)
 
 
 @router.post("/tuples")
@@ -235,17 +301,27 @@ async def get_access_model(request: Request, settings: SettingsDep, token: Curre
     """
     client = await _estate_gate(request, settings, token)
     model_id = client.get_authorization_model_id() or settings.fga_model_id or ""
-    return AccessModelResponse(dsl=fga.load_model_dsl(), authorization_model_id=model_id)
+    return AccessModelResponse(
+        dsl=fga.load_model_dsl(),
+        authorization_model_id=model_id,
+        conditions={name: dict(params) for name, params in _model_conditions().items()},
+    )
 
 
 @router.post("/check")
-async def check_access(request: Request, settings: SettingsDep, token: CurrentToken, body: AccessTuple) -> AccessCheckResult:
+async def check_access(request: Request, settings: SettingsDep, token: CurrentToken, body: AccessCheckBody) -> AccessCheckResult:
     """One ``(user, relation, object)`` OpenFGA Check over ANY model type — the estate-wide extension of
     the per-object ``…/access/check`` playground (#68), which stays as-is for table/namespace owners.
 
     Any relation the compiled model defines on the type may be probed (base rungs included — an admin
     debugging a cascade asks about ``writer``, not just ``can_write_data``); an unknown one is a clean 400.
     ``checked`` echoes the resolved tuple so the verdict is unambiguous.
+
+    ``context`` supplies the runtime values a CONDITION needs — ``current_time`` for the model's
+    ``non_expired_grant``. Omitting it against a time-boxed grant is a DENY, not a neutral answer:
+    OpenFGA cannot evaluate the CEL expression without its operands. The server does NOT default the
+    clock, deliberately — a check that silently substituted "now" would answer a question the caller
+    did not ask, and the whole point of the explorer is asking "was this true at 14:00?".
     """
     client = await _estate_gate(request, settings, token)
     obj = _validated_object(body.object)
@@ -255,7 +331,7 @@ async def check_access(request: Request, settings: SettingsDep, token: CurrentTo
     user = _qualified_subject(body.user)
     subject = token.sub if token else "anonymous"
     try:
-        allowed = await fga.check(client, user=user, relation=body.relation, obj=obj, qualify=False)
+        allowed = await fga.check(client, user=user, relation=body.relation, obj=obj, qualify=False, context=body.context or None)
     except ServiceUnavailableError:
         audit("access_simulate", FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
         raise
@@ -423,5 +499,5 @@ async def simulate_access(request: Request, settings: SettingsDep, token: Curren
         allowed=allowed,
         baseline=baseline,
         checked=AccessTuple(user=user, relation=relation, object=obj),
-        hypothetical=[AccessTuple(user=t.user, relation=t.relation, object=t.object) for t in hypothetical],
+        hypothetical=[_as_access_tuple(t) for t in hypothetical],
     )

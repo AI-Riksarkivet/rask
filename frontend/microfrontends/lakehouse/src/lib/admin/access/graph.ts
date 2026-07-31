@@ -6,7 +6,7 @@
 // are a TREE (a derivation), a star (one subject → many objects) and its inverse — none needs a general
 // DAG layerer, and a layout that is a pure function of the data is one that a test can assert on.
 
-import type { ExpandNode, Tuple } from '../access';
+import type { ExpandNode } from '../access';
 // The zone's own layered placer — see `layout()` below for why this is reused rather than replaced
 // by a layout library.
 import { layout as placeLayered } from '@rask/panels/lineage';
@@ -51,6 +51,21 @@ export type GraphEdge = {
 	target: string;
 	label: string;
 	onPath: boolean;
+	/** The grant behind this edge is CONDITIONAL — time-boxed, and therefore not what it looks like.
+	 *  An expiring grant drawn identically to a permanent one is the whole failure this feature exists
+	 *  to prevent, so it has to reach the canvas, not just the tuple list. */
+	condition?: string | null;
+};
+
+/** The minimum a graph builder reads off a tuple.
+ *
+ *  Looser than `Tuple` on purpose: `list-objects` / `list-users` answers are SYNTHESISED edges, not
+ *  stored tuples, and forcing them to invent a `condition` field would be a lie typed as a convenience. */
+export type TupleLike = {
+	user: string;
+	relation: string;
+	object: string;
+	condition?: { name: string } | null;
 };
 
 export type BuiltGraph = {
@@ -243,7 +258,7 @@ function finish(acc: Walked): BuiltGraph {
  * (warehouse → project → namespace) in the middle, and leaf resources (table, view, transaction) right.
  * That is the direction tuples already read in, so arrows run left-to-right here as everywhere else.
  */
-export function buildWholeGraph(tuples: readonly Tuple[]): BuiltGraph {
+export function buildWholeGraph(tuples: readonly TupleLike[]): BuiltGraph {
 	const CONTAINER_DEPTH: Record<string, number> = {
 		warehouse: 0,
 		project: 0,
@@ -274,14 +289,21 @@ export function buildWholeGraph(tuples: readonly Tuple[]): BuiltGraph {
 		const id = `${t.user}->${t.object}:${t.relation}`;
 		if (seen.has(id)) continue;
 		seen.add(id);
-		edges.push({ id, source: t.user, target: t.object, label: t.relation, onPath: false });
+		edges.push({
+			id,
+			source: t.user,
+			target: t.object,
+			label: t.relation,
+			onPath: false,
+			condition: t.condition?.name ?? null,
+		});
 	}
 	const list = [...nodes.values()];
 	return { nodes: list, edges, ...countFacets(list, edges) };
 }
 
 /** One hop of raw tuples around a seed — used for a query's own answer, where a centre does exist. */
-export function buildNeighbourhood(seed: string, tuples: readonly Tuple[]): BuiltGraph {
+export function buildNeighbourhood(seed: string, tuples: readonly TupleLike[]): BuiltGraph {
 	const nodes = new Map<string, GraphNode>();
 	nodes.set(seed, {
 		id: seed,
@@ -309,7 +331,14 @@ export function buildNeighbourhood(seed: string, tuples: readonly Tuple[]): Buil
 		}
 		const id = `${t.user}->${t.object}:${t.relation}`;
 		if (!edges.some((e) => e.id === id)) {
-			edges.push({ id, source: t.user, target: t.object, label: t.relation, onPath: false });
+			edges.push({
+				id,
+				source: t.user,
+				target: t.object,
+				label: t.relation,
+				onPath: false,
+				condition: t.condition?.name ?? null,
+			});
 		}
 	}
 	const list = [...nodes.values()];

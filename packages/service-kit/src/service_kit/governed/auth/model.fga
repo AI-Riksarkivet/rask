@@ -53,10 +53,10 @@ type warehouse
   relations
     define project: [project]
     define owner: [user, role#assignee] or admin from project
-    define writer: [user, role#assignee] or owner
-    define reader: [user, role#assignee] or writer or member from project
+    define writer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner
+    define reader: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or writer or member from project
     # A warehouse-level validator validates EVERY stage below it.
-    define validator: [user, role#assignee] or owner
+    define validator: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner
     # ---- actions ----
     define can_get_metadata: reader
     define can_create_namespace: writer
@@ -76,11 +76,11 @@ type namespace
   relations
     define parent: [warehouse, namespace]
     define owner: [user, role#assignee] or owner from parent
-    define writer: [user, role#assignee] or owner or writer from parent
-    define reader: [user, role#assignee] or writer or reader from parent
+    define writer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or writer from parent
+    define reader: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or writer or reader from parent
     # The validator rung is SEPARATE from writer — a writer is NOT a validator. Inherits from the parent
     # so a warehouse/parent validator validates this stage. This is what gates promotion INTO the stage.
-    define validator: [user, role#assignee] or owner or validator from parent
+    define validator: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or validator from parent
     # ---- actions ----
     define can_get_metadata: reader
     define can_create_namespace: writer
@@ -96,9 +96,9 @@ type table
   relations
     define parent: [namespace]
     define owner: [user, role#assignee] or owner from parent
-    define writer: [user, role#assignee] or owner or writer from parent
-    define reader: [user, role#assignee] or writer or reader from parent
-    define validator: [user, role#assignee] or owner or validator from parent
+    define writer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or writer from parent
+    define reader: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or writer or reader from parent
+    define validator: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or validator from parent
     # ---- actions ----
     define can_get_metadata: reader
     define can_read_data: reader
@@ -123,8 +123,8 @@ type materialized_view
   relations
     define parent: [namespace]
     define owner: [user, role#assignee] or owner from parent
-    define refresher: [user, role#assignee] or owner or writer from parent
-    define reader: [user, role#assignee] or refresher or reader from parent
+    define refresher: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or writer from parent
+    define reader: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or refresher or reader from parent
     # ---- actions ----
     define can_get_metadata: reader
     define can_read: reader
@@ -178,3 +178,27 @@ type annotation_project
     define can_review: reviewer
     define can_manage: manager
     define can_publish: manager
+
+# --------------------------------------------------------------------------------------------------
+# Conditions
+# --------------------------------------------------------------------------------------------------
+#
+# TIME-BOXED ACCESS. A grant that expires on its own, so nothing has to remember to revoke it — the
+# failure mode this exists to kill is the contractor who still has `writer` on bronze eight months after
+# the engagement ended, because a revoke was a separate task nobody owned.
+#
+# `grant_time` and `grant_duration` ride the TUPLE (written once, at grant time); `current_time` is
+# supplied by the CALLER in the check's context. That split is the whole design: the store holds the
+# window, the caller holds the clock, and neither can drift the other.
+#
+# Applied to the USE rungs only — reader / writer / validator / refresher. Deliberately NOT `owner`:
+# ownership is not something you lend for an hour, and a temporary owner could hand out PERMANENT access
+# to someone else before their own lapsed, which silently outlives the window. Also not the structural
+# edges (`parent`, `project`, `team`) — those are topology, not privilege, and an expiring parent would
+# detach a table from its namespace rather than de-privilege anyone.
+#
+# Both forms stay assignable on every rung (`[user, ..., user with non_expired_grant, ...]`), so every
+# existing permanent grant keeps working unchanged; the condition is an addition, never a migration.
+condition non_expired_grant(current_time: timestamp, grant_time: timestamp, grant_duration: duration) {
+  current_time < grant_time + grant_duration
+}
