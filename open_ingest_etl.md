@@ -2,9 +2,11 @@
 
 Study/audit + critique, 2026-08-01. Committed as the implementation spec; implementation
 itself has not started (§6e is the /goal-ready condition for driving it).
-Single document: audit (§1), workload analysis (§2), critique of open_ingest.md's own
-abstractions (§3), option assessment (§4), revised target architecture (§5), phase 2 (§6),
-open decisions (§7).
+Single document: audit (§1), workload analysis (§2), critique (§3), options (§4),
+architecture (§5, historical where superseded), phase 2 (§6), plus the NORMATIVE half:
+tier semantics, measured cascade + redesign deltas D1–D8, E-rules E1–E7, §6b stack,
+§6c trigger chain, package topology, job artifacts, Ray-job durability, dummy lane,
+cross-cutting concerns, §6d gate A1–A20, §6e goals + session bootstrap, §7 decisions.
 
 **Normative precedence:** this document accreted through verification passes. Where an
 earlier section conflicts with a later one, the LATER ruling wins — specifically: the
@@ -201,13 +203,15 @@ no governed input to replay from.
 
 ### 3.6 The same knife on this plan
 
-- **The control-API + task-queue + workers pattern is a hand-rolled workflow engine.**
+- **(SUPERSEDED — Dapr Workflow adopted, §"What engines are FOR"; Temporal is off the
+  table, §7.6.)** The control-API + task-queue + workers pattern is a hand-rolled workflow engine.
   Temporal / Argo Workflows / Kestra provide durable per-unit state, retries, and visibility
   off the shelf. First-party still wins here — the no-new-operators ruling, a tiny state
   machine (pending/done/error per key), and `tracker` + JetStream + Dapr already covering it —
   but at ~10× source types or multi-step per-unit workflows, the calculus flips to Temporal.
   Named so the future reader knows it was rejected, not missed.
-- **The landing zone doubles blob writes** (source → landing → bronze). The alternative —
+- **(SUPERSEDED by D6 — staging is uncommitted fragments; no double write.)** The
+  landing zone doubles blob writes (source → landing → bronze). The alternative —
   workers write Lance fragments directly, finalizer only commits — halves I/O but couples
   workers to the table format and loses the replayable staging area. Treated as a measured
   optimization behind the same finalizer seam (§7), not a rejected idea.
@@ -484,8 +488,8 @@ are a *dedicated, operator-provisioned JetStream* (the ISB Service CRD), interna
 between vertices. The estate bus stays exactly where it is; a Numaflow pipeline would
 consume from it via the JetStream source vertex and publish results back to it. So
 adopting Numaflow adds a second (internal) JetStream deployment without adding a second
-*bus* — architecturally fine, operationally not free. For rask, Arroyo (SQL lanes) +
-Pathway (Python lanes) cover the space with less machinery; Numaflow earns its place only
+*bus* — architecturally fine, operationally not free. For rask, Arroyo covers the SQL lanes (Pathway is RULED OUT on license — see the ruling above);
+Numaflow is the Python-DAG fallback and earns a deployment only
 if CRD/GitOps-managed pipelines with per-step autoscaling become an organizational
 requirement.
 
@@ -525,7 +529,7 @@ Contract per §3.5: **extract-load + validation** pre-bronze; transforms live po
  ────────────────────▶  • mint run_id, START lineage           • fetch bytes (bounded    │
   GET /v1/ingests/{id}  • enumerate units (SourceAdapter        concurrency, retry)     │
   (status, progress) │    registry)                            • validate (pkg validate)│
-                     │  • tracker: mark pending per key        • validate → write fragment │
+                     │  • tracker: mark pending per key        • write fragment (staging)  │
                      │  • publish unit tasks ──┐               • tracker: done/error    │
                      │  • finalize on drain    │                                        │
                      └───────────────┬─────────┼───────────────────────┬────────────────┘
@@ -772,7 +776,7 @@ What a "Ray job" physically is, today and in the design (previously unstated):
   mover config names a transform; a chart-rendered mapping resolves it to
   `{entrypoint, image, env-contract}`. A deploy-time test asserts every configured ref
   resolves to an entrypoint that exists in the deployed image — a dangling ref fails the
-  render, not the first event (extends gate A16's family).
+  render, not the first event (part of A10's render-gate family).
 - **The submission contract** (unchanged from ray-kit, minus the poll): deterministic
   `submission_id = ray-<transform>-<dataset>-<input_version>` (idempotent re-attach on
   redelivery), parameters via `runtime_env.env_vars` incl. the delta version range,
@@ -798,7 +802,7 @@ hop's durability is layered where each risk lives, with the ack rule explicit:
 | event arrives | durable queue-group consumer; mover death loses nothing (redelivery) |
 | before submit | E2 dedupe: output for this input version exists → **ack-skip** |
 | submit succeeds | **ACK NOW** — never hold an ack across a job's runtime (ackWait would expire and redeliver forever) |
-| submit fails | nak(delay) → maxDeliver → DLQ + FAIL run |
+| submit fails | return RETRY (Dapr subscription response) → resiliency backoff → maxDeliver → DLQ + FAIL run — movers stay on the Dapr component (I3: raw nats only in the two ingest seam modules) |
 | job runs | nothing watches it — no poll (deleted), no Dapr wrapper |
 | job succeeds | its OWN registered commit (+ run id in commit metadata) → gate → publication event = completion signal |
 | job dies | commits nothing → lane visibly not advanced (storage truth: upstream published > downstream processed) → lineage reconciler flags it → E5 replay re-rings the doorbell → deterministic submission id re-attaches; ray-kit's existing delete-and-resubmit clears terminal corpses (`ray_kit/submit.py:88-116`) |
@@ -837,8 +841,8 @@ has (the `/produce` events lane is the precedent — a dummy producer proving th
   `source_rowid` (the D2 read path, through real gateway routing). "Pod Running is not
   evidence" — the browser seeing the data is (the tilt-verify lesson, applied to the
   whole lane).
-- A11 is hereby extended: the in-cluster e2e runs the dummy lane, and the four Playwright
-  assertions above are part of its pass criteria.
+- This harness IS A11's in-cluster e2e (fixture source, dummy runner); the four
+  Playwright assertions above are owned by A20 — no duplication between the two.
 
 ### Cross-cutting concerns — the three previously-unstated details
 
@@ -958,7 +962,7 @@ toolchain-guard tests are the pattern — the seam inventory below becomes a tes
 | Sources | IIIF, S3-prefix, local, API | `SourceAdapter` registry (config-registered, one home) | new source = one adapter + lineage twin |
 | Transforms (pre-bronze) | plain Python hooks; optional DuckDB SQL (text in config, not code) | transform registry per lane; the **lander invariant** (transforms never write Lance) | SQL lane ↔ Python lane per dataset |
 | Lander | pylance writer (blob), DuckDB COPY (record, pending §7.9) | `Lander` Protocol chosen by dataset descriptor; all writes go through the catalog | DataFusion, future engines |
-| Stream processor (per-lane, Phase 2) | none until a lane exists; then Arroyo (SQL) / Pathway (Python, BSL sign-off) | **NATS subjects in/out + the lander** — the processor is sandwiched between two seams and holds no durable state | swap = redeploy one lane's compute, replay the subject |
+| Stream processor (per-lane, Phase 2) | none until a lane exists; then Arroyo (SQL) with Numaflow as the Python-DAG fallback — both Apache-2.0; Pathway RULED OUT on license (owner ruling 2026-08-01) | **NATS subjects in/out + the lander** — the processor is sandwiched between two seams and holds no durable state | swap = redeploy one lane's compute, replay the subject |
 | Lineage | OpenLineage 2-0-2 via lineage-kit → lineage svc (AGE) | the OL spec itself + lineage-kit's config-driven transport (`auto\|http\|console\|noop`) | Marquez or any OL consumer could ingest the same events |
 | AuthN / AuthZ | OIDC / OpenFGA | standard protocols; FGA model files | any OIDC IdP |
 | Secrets | OpenBao via Dapr secret store | Dapr component | Vault/cloud KMS = component swap |
@@ -980,7 +984,8 @@ imitation.
 
 **One rule: every hop is triggered by a catalog PUBLICATION event; nothing else triggers
 anything.** The catalog emits `medallion.<tier>.<dataset>` when a dataset's published ref
-advances (D7), unconditionally and with no per-dataset config. Provenance stated plainly:
+advances (D7), unconditionally and with no per-dataset config. (One name for one thing: this document's "arrival event" and "publication event" are
+the SAME event — fired on ref advance, never on raw commits.) Provenance stated plainly:
 the Lance Namespace spec defines NO event mechanism (verified across all 7,563 lines) —
 the arrival event is a rask-catalog feature layered on the spec, exactly as CloudEvents is
 Lakekeeper's feature and not Iceberg's. The event's version comes from the catalog's own
@@ -991,8 +996,9 @@ trigger nothing (I8). The cascade ends wherever no subscriber exists, and a new 
 (train, index) attaches by subscribing — no producer changes.
 
 **Completeness, state, and ephemerality — the ingest→bronze contract.** Silver never asks
-"is ingest finished?"; it asks "did a commit happen?" — and these are the same question,
-because a run makes exactly ONE atomic Lance commit. During the run (however long), bronze
+"is ingest finished?"; it asks "did a publication happen?" — and a run advances the
+published ref exactly once, off exactly one data-visibility commit (maintenance and
+metadata-only commits may follow post-publish and emit nothing). During the run (however long), bronze
 does not change: in-flight bytes live in uncommitted fragments (invisible staging, D6), readers see the
 prior version, and finalize makes v(n+1) visible all at once, complete by construction. A
 crashed run = no commit = no event = silver hears nothing; the workflow resumes later and
@@ -1036,9 +1042,11 @@ Workflow step fails or pod dies → durable replay resumes at that step (activit
 Lander fails → nothing committed, retry free (merge-on-id). Catalog refuses (contract) →
 FAIL run, stop, fix, replay (E5). Every path ends in resume or idempotent re-run.
 
-**Movers are never scheduled.** Silver/gold have exactly one trigger: the publication event.
-Scheduling exists only at run *initiation* on the ingest API (manual `POST` today;
-source-side notifications or timers may call the same API later).
+**Mover TRANSFORM work is never scheduled** — exactly one trigger: the publication
+event. Carve-out, explicit: the maintenance lanes (A15 cleanup cron, A16
+compaction/index cadence) are scheduled OPERATIONS jobs (k8s CronJobs) that transform no
+data and fire no cascade events. Run *initiation* on the ingest API may be manual,
+notified, or scheduled — that is upstream of the plane.
 
 **Run completion is event-driven too — last-worker detection, not polling.** Bronze never
 knows about the workflow; the only completion question is internal to the run. The
@@ -1128,7 +1136,7 @@ Facts, from code, so the design argues with reality and not with itself:
   edges, JSONB `lineage` column with the full inherited chain (1 hop at silver, 2 at
   gold), quality assertions on the WROTE edge. The redesign keeps this contract intact.
 
-**Redesign deltas (D1–D5), each against a measured defect:**
+**Redesign deltas (D1–D8), each against a measured defect:**
 
 - **D1 · Overwrite → change-data-feed incremental processing.** Bronze appends/merges on
   `id = hash(source_uri)` (verified §Empirical; declare `id` as Lance's *unenforced
@@ -1180,7 +1188,10 @@ Facts, from code, so the design argues with reality and not with itself:
   **Cross-dataset lifecycle guard trio** (references imply retention): silver/gold's
   `source_rowid` references require bronze rows to persist — so (i) referenced bronze
   versions are tag-pinned (cleanup-exempt, `guide.md:3987-3993`), (ii)
-  `delete_unverified` is FORBIDDEN on bronze while cross-tier references exist, (iii)
+  bronze version retention respects the tag pins (automatic — tagged versions and the
+  files they reference are cleanup-exempt), which makes the A15 orphan cron
+  (`delete_unverified` under the age floor) SAFE on bronze: files referenced by any
+  retained version are never unverified orphans, (iii)
   external bases are named BasePath registrations (`file_format.md:3079-3110`). The
   invariant stands: **no unchosen byte copies** — and no invented pointers either.
 - **D3 · The gate runs BEFORE visibility — pre-commit where possible, pre-publication
@@ -1255,9 +1266,9 @@ Facts, from code, so the design argues with reality and not with itself:
   one commit (properly killing the measured second-commit defect), and atomic promotion
   across partitioned gold tables (the Partitioned Namespace's `read_tag` columns
   generalize the published ref across partitions, `namespace.md:501-530`). A `Restore`
-  (rollback) DOES create a version and will re-fire the doorbell
-  (`file_format.md:5064-5082`) — mover idempotency (E2) explicitly covers
-  rollback-originated events.
+  alone fires nothing (it is a commit, not a publication); rollback = `Restore` + tag
+  repoint (E5), and it is the REPOINT that fires the event — mover idempotency (E2)
+  absorbs it with zero duplicate rows (`file_format.md:5064-5082`).
 - **D8 · Concurrency and atomicity, stated precisely.** Client-side: Lance transactions
   carry `read_version`; conflicts are three-valued — *rebaseable* (auto-retried in the
   commit layer), *retryable* (application re-reads and retries), *incompatible*
@@ -1302,7 +1313,8 @@ What a mover IS at runtime, and the rules every event handler obeys:
 - **E4 · Movers are subscriber + submitter.** CPU-light transforms run in the mover pod.
   Heavy lanes (P7b HTR: layout/lines/OCR) submit a job to the compute plane (KubeRay);
   **the job's registered commit through the catalog IS its completion signal; the next
-  tier is woken by the PUBLICATION event after the gate (D7)** — no completion polling ever returns (A13 holds). A died job commits
+  tier is woken by the PUBLICATION event after the gate (D7); there is no completion
+  polling (A13)**. A died job commits
   nothing and rings nothing; the lineage reconciler (storage truth) is the dead-man for
   stuck lanes, and the FAIL run is the record.
 - **E5 · Replay/backfill = native atomic operations on main, gated like any commit.**
@@ -1328,7 +1340,7 @@ What a mover IS at runtime, and the rules every event handler obeys:
 | publication event → next mover | Asset/data-aware scheduling | Airflow asset-based scheduling; Dagster Declarative Automation ("materialize when upstream updates") — the movers ARE auto-materialize policies with the catalog as asset registry; Lakekeeper CloudEvents-on-commit |
 | E2 idempotent handlers | Idempotent Consumer | microservices.io (required because an outbox relay may double-publish) |
 | lineage outbox | Transactional Outbox | microservices.io; AWS Prescriptive Guidance |
-| landing prefix + references on bus | Claim-Check | Azure Architecture Center / EIP |
+| bytes never ride the bus (staged as invisible uncommitted fragments, D6) | Claim-Check, WAP staging | Azure Architecture Center / EIP; Iceberg WAP |
 | worker queue groups | Competing Consumers | EIP / Azure patterns |
 | workflow dispatch→suspend→wake | Durable orchestration fan-out/fan-in + external event | Azure Durable Functions / Durable Task Framework (Dapr Workflow's engine lineage); the job Uber built Cadence/Temporal for |
 | run orchestrated, tiers choreographed | Orchestration-within, choreography-between | Azure choreography pattern guidance — choreograph across separately-owned domains, orchestrate inside one |
@@ -1404,37 +1416,49 @@ each must land as a **test in the same PR** as the behavior (§3.4's rule).
 - **A2** Same `Idempotency-Key` + same spec → the same run resource; **zero** new unit
   tasks published.
 - **A3** Kill the api pod mid-enumeration and a worker pod mid-fetch: the run completes
-  without operator action; no unit is fetched twice (tracker asserts).
+  without operator action; no tracker-DONE unit is ever re-fetched (interrupted units
+  redeliver and converge — at-least-once by design, idempotent by key).
 - **A4** Re-running a completed ingest of volume A, then ingesting volume B into the same
-  dataset: A's rows survive, B's rows land, total = A+B, dataset version history shows
-  exactly the expected commits (the §Empirical mechanics, as a service-level test).
+  dataset: A's rows survive, B's rows land, total = A+B; version history shows exactly
+  one data-visibility commit per run plus only declared maintenance/metadata commits
+  (the §Empirical mechanics, as a service-level test).
 - **A5** A corrupt image (validate fails) → unit `error` in tracker + DLQ entry + run
   COMPLETEs-with-errors; the error is visible in `GET /v1/ingests/{id}`.
 - **A6** A run that fails before any commit emits a FAIL lineage event with an
   `errorMessage` facet; a run that commits emits exactly one COMPLETE with version +
   rowCount facets; the outbox object is dropped after publish.
-- **A7** The arrival event fires **iff** a catalog commit happened (kill the service
-  between commit and any other step — the event still reflects truth).
+- **A7** The publication event fires **iff** the published ref advanced: gate FAIL,
+  metadata-only commits, and maintenance commits (index/compaction) emit nothing; a
+  gate-passed tag advance always emits exactly once (kill the service between commit and
+  tag-advance → no event; between tag-advance and emit → the event is recovered from the
+  ref, never lost, never duplicated downstream thanks to E2).
 - **A8** `GET /v1/ingests/{id}` shows a defect state when tracker says done but the
   lineage run is absent (the "green sync with no lineage edge" gate).
-- **A9** Adding a test-only source type in a test touches: one adapter class, one
-  registry entry, one lineage twin. A grep over the diff shows no other file changed.
-- **A10** The grep-gates (I3, I4) run in CI and fail on a seeded violation — and the
+- **A9** Adding a test-only source type touches: one adapter class, one registry entry,
+  one lineage twin, plus A9's own test file(s). A grep over the diff shows nothing else
+  changed.
+- **A10** The grep-gates (I3, I4) run in CI and fail on a seeded violation; the
   chart-render invariant tests actually run in a CI job that has helm (closing audit m5's
-  silently-skipped gate).
-- **A11** Blob-lane end-to-end on k3s (tilt): IIIF fixture → bronze via the new plane →
-  `/bronze-arrival`-successor cascade fires → blob dereferences from the media viewer.
-  "Deployed and pod Running" is not evidence (the tilt-verify lesson).
+  silently-skipped gate); and the deploy-time transform-ref resolution test is part of
+  this render-gate family.
+- **A11** The dummy lane end-to-end on k3s (tilt): fixture source (`LocalDirSource`,
+  no network) → bronze via the new plane → publication event → dummy mover → silver →
+  gate → gold; blob dereferences from the media viewer via `source_rowid`. "Deployed and
+  pod Running" is not evidence (the tilt-verify lesson). A20 owns the four Playwright UI
+  assertions over this same deployed lane.
 - **A12** The nine medallion IIIF files are deleted; `rg -l iiif services/medallion` is
   empty; the medallion's tests pass without them.
 - **A13 — no polling loops.** The run path contains zero polling loops: workers wait on
   JetStream pull fetch (server-fulfilled), the workflow is durably suspended on the
   drained event. The estate's `POLL REASON:` doctrine (enforced for the frontend by
   `zone-contract/src/poll-reason.test.ts`, 13 timers → 1–2 marked survivors) is extended
-  to the ingest plane as a Python test: any timer must carry the marker, and exactly one
-  is permitted — the per-run dead-man switch (fires only if the drained event was lost,
-  one tracker read, re-arms; the frontend gate's own "nothing publishes 'the signal you
-  lost'" category). `ray_kit.await_success` — today's only production `while True:
+  to the ingest plane as a Python test: zero in-process polling loops; any in-process
+  timer carries the marker, and exactly one such timer is permitted — the per-run
+  dead-man switch (fires only if the drained event was lost, one tracker read, re-arms).
+  NOT counted against that budget (stated so A13 is implementable): Dapr Workflow durable
+  timers (runtime-managed, not in-process code), the RUNNING-facet emission throttle
+  (piggybacks on tracker transitions, not a timer), and the A15/A16 ops CronJobs
+  (out-of-process, §6c carve-out). `ray_kit.await_success` — today's only production `while True:
   sleep()` poll (`submit.py:119`), held inside the medallion's HTTP request — does not
   survive the move in any form.
 - **A14 — creation-time flags are gated.** Every governed dataset is created with
@@ -1452,19 +1476,19 @@ each must land as a **test in the same PR** as the behavior (§3.4's rule).
   last-processed) is acked without work; a redelivered event for already-produced output
   is a no-op (deterministic run id asserted equal); two mover replicas on one dataset
   subject never transform concurrently (queue-group single-flight proven under
-  redelivery); a submission failure naks → maxDeliver → DLQ + FAIL run.
+  redelivery); a submission failure returns RETRY → resiliency backoff → maxDeliver →
+  DLQ + FAIL run (via the Dapr component — I3 holds).
 - **A18 — publication behavior (per tier).** Gate FAIL → no tag advance, no event, FAIL
   lineage run, downstream provably never woken; gate PASS → `published` advanced, the
   emitted event's version equals the commit/tag-update RESPONSE value; a consumer
-  resolving via the tag reads the gated version while `latest` may differ; a `Restore`
-  re-fires the doorbell and the mover's idempotency absorbs it with zero duplicate rows.
+  resolving via the tag reads the gated version while `latest` may differ; a rollback (`Restore` + tag repoint, E5) fires exactly one event via the repoint and
+  the mover's idempotency absorbs it with zero duplicate rows.
 - **A19 — delta correctness (per hop).** Two successive publishes of N and M new rows →
   the mover processes exactly N then exactly M (CDF-read row ids asserted, no overlap,
   no misses); a full E5 replay converges to identical row counts and content hashes.
-- **A20 — the dummy lane is green end-to-end.** The `runners/dummy` python e2e passes
-  (every hop asserted, incl. A3's kill-pod resume and A5's corrupt-fixture branch) and
-  the four Playwright assertions (lineage chain, run status + defect state, compute job
-  row, viewer blob via `source_rowid`) pass against the tilt-deployed stack.
+- **A20 — the UI proves the lane.** Over A11's deployed dummy lane, the four Playwright
+  assertions pass: lineage chain of three runs, run status incl. A8's defect state,
+  compute-zone job row by submission id, viewer blob via `source_rowid`.
 
 ## 6e · The implementation goal, /goal-ready
 
@@ -1472,34 +1496,33 @@ Paste-ready condition for `/goal` (one measurable end state, stated checks, cons
 turn bound — per the /goal condition guidance). Drive Phase 1 with:
 
 ```text
-/goal Phase 1 of open_ingest_etl.md is implemented. End state, all demonstrated in-conversation:
-(1) services/ingest exists as a uv workspace member (api + worker + lander modules) with a chart
-entry, gateway row, ETL JetStream stream, and DLQ route; (2) every acceptance condition A1–A20 in
-§6d has a named test and `uv run pytest -m "not slow"` exits 0 with all of them passing —
-including A13 as DELETION (`rg await_success` over the repo returns nothing), the mover
-ack contract implemented exactly per the §"Ray job durability" rule table with a test per
-row, and a deploy-time test that every configured transform ref resolves to an entrypoint
-in the deployed image; (3) the
-grep-gate tests for invariants I3/I4 pass (no lance.write_dataset/merge_insert/write_fragments
-outside Lander implementations; nats imports only in the two backend modules) and fail on a seeded
-violation; (4) packages/tracker has a nats:// KV backend passing the protocol suite; (5) the nine
-medallion IIIF files are deleted and `rg -l iiif services/medallion` prints nothing; (6) `make
-check` is clean. Constraints: no changes outside services/ingest, services/medallion,
-services/gateway, packages/tracker, packages/service-kit, chart/, tests/, and the skills touched
-by CLAUDE.md's drift rule; no docker build anywhere; no new operators; commits carry no co-author
-trailer and the working branch is not prefixed claude-. Process requirements: before writing code
-against a subsystem, load and follow the applicable skills — writing-python, fastapi,
-testing-python for the service; openfga for any authorization surface; the rask-* project skills
-for each plane touched; dagger/dockerfile for the image; the Svelte 5 skills + svelte MCP
-autofixer for any .svelte change; a dapr skill if installed. Do not invent APIs: before
-implementing against Dapr Workflow (dapr-ext-workflow), nats-py/JetStream, pylance, or
-lineage-kit, read the actual reference code or official docs and show the evidence
-in-conversation (file:line for estate code, URL for external docs). **For anything Lance,
-the canonical reference is the vendored `lance_docs/` (guide, file_format, lance_sdk,
-namespace, ray, ns_catalog incl. the partitioning spec) — cite it by file:line; web docs
-may describe a newer Lance than the estate runs.** Do not cheat the gate:
-acceptance tests run for real — no skip markers on A1–A20, no mocked-away assertions, no
-weakening an invariant, grep-gate or test to make it pass; if a condition is genuinely
+/goal Phase 1 of open_ingest_etl.md is implemented, on branch open-ingest-etl (inherited from
+Phase 0). End state, all demonstrated in-conversation: (1) services/ingest exists as a uv
+workspace member (api + worker + lander modules) with a chart entry, gateway row, ETL JetStream
+stream, and dlq.etl.tasks route; (2) every acceptance condition A1–A20 in §6d has a named test:
+the fast set green via `uv run pytest -m "not slow"`; the in-cluster set (A11) via the tilt/k3s
+harness and the Playwright set (A20) via `make e2e` — slow markers are permitted for A11/A20 but
+each must be demonstrated passing at least once in-conversation; (3) the grep-gate tests for
+I3/I4 pass and fail on seeded violations, including A13 as DELETION (`rg await_success` returns
+nothing — packages/ray-kit and packages/ratch are in scope for exactly this deletion); (4)
+packages/tracker has a nats:// KV backend passing the protocol suite; (5) the nine medallion
+IIIF files are deleted and `rg -l iiif services/medallion` prints nothing; (6) `make check` is
+clean. Scope: services/ingest, services/medallion, services/gateway, services/catalog (A7/A14/
+A18 event emission, creation contract, tag advance), packages/{tracker,service-kit,lineage-kit,
+ray-kit,ratch,validate,storage}, runners/dummy, the frontend surfaces A20 names (via @rask/api),
+chart/, .docker/, .dagger/, .github/workflows (the A10 helm CI job), scripts/, tests/, this doc
+and the skills CLAUDE.md's drift rule touches — nothing else. Images build ONLY through Dagger
+(`dagger call` / scripts/dagger-image.sh; `docker build` must not appear — CLAUDE.md law); no
+new operators; commits carry no co-author trailer (this overrides any harness default) and the
+branch is never claude-prefixed. Process: load the applicable skills before each subsystem —
+the rask-* project skills and openfga (present in .claude/skills), plus writing-python /
+fastapi / testing-python / dagger / dockerfile / Svelte-5 skills WHERE INSTALLED (run `make
+claude-bootstrap` if the marketplace skills are missing; proceed without only if bootstrap is
+unavailable, saying so). Do not invent APIs: before implementing against Dapr Workflow
+(dapr-ext-workflow), nats-py/JetStream, pylance, or lineage-kit, read the reference and show
+evidence in-conversation (file:line for estate code and lance_docs/ — the canonical Lance
+reference; URL only for non-Lance externals). Do not cheat the gate: no mocked-away assertions,
+no weakening an invariant, grep-gate, or test to make it pass; if a condition is genuinely
 unachievable, stop and say so instead of redefining it. Or stop after 40 turns.
 ```
 
@@ -1547,8 +1570,8 @@ retry fields; `helm upgrade` applies the committed Resiliency CR without strict-
 errors and the rendered retry schedule is shown to total 450s, with the chart-render
 invariant tests actually running in CI (closing audit m5). (2) NATS is a 3-node cluster with
 streamReplicas: 3; `nats stream info` (or the render) shows replicas=3 for every stream.
-(3) The ingest app-id is added to stateStore.scopes with the M7 pod-roll caveat documented
-in the chart values comment. (4) A verification script (scripts/, uv run) has exercised and
+(3) The `ingest` app-id (name resolved, §7.1) is added to stateStore.scopes with the M7
+pod-roll caveat documented in the chart values comment. (4) A verification script (scripts/, uv run) has exercised and
 RECORDED results as a dated table in open_ingest_etl.md §7.11 for: RustFS conditional put
 (second If-None-Match PUT fails) and server-side COPY; pylance-pinned tags
 (create/update/checkout), CDF (_row_created_at_version predicates + dataset.delta) on a
@@ -1556,7 +1579,8 @@ stable-row-ids dataset, write_fragments + Append commit, and _rowid stability ac
 compaction; each row VERIFIED or FAILED — a check that cannot run in this environment is
 recorded ENVIRONMENT-BLOCKED with the exact operator command, never guessed or faked.
 (5) `make check` is clean and `make test` passes. Constraints: changes only under chart/,
-scripts/, .dagger/, tests/, and open_ingest_etl.md — no service code; no docker build; the
+scripts/, .dagger/, .github/workflows (the helm CI job), tests/, and open_ingest_etl.md —
+no service code; no docker build; the
 working branch is open-ingest-etl (never claude-prefixed); commits carry no co-author
 trailer; load the applicable skills before touching each subsystem and cite lance_docs/ or
 estate code file:line before implementing against them. Or stop after 25 turns.
@@ -1564,11 +1588,11 @@ estate code file:line before implementing against them. Or stop after 25 turns.
 
 ## 7 · Open decisions
 
-1. Service name: `etl` vs `ingest` (given §3.5, `ingest` is the honest name; surfaces: uv
-   member, app-id, image, gateway row, chart key).
-2. Landing-zone retention: delete-after-commit vs short lifecycle window for forensics; and
-   the fragment-direct write optimization (halves blob I/O, couples workers to the table
-   format) — measure before deciding.
+1. ~~Service name~~ **Resolved: `ingest`** (uv member, app-id, image, chart key);
+   public gateway row stays `/api/etl`, stream `ETL`, DLQ `dlq.etl.tasks` — the plane is
+   EL-by-ruling, the public name says ETL.
+2. ~~Landing-zone retention / fragment-direct~~ **Resolved by D6**: fragment-direct IS
+   the design; a raw landing prefix survives per-lane only for pre-conversion staging.
 3. Tracker backend: **NATS JetStream KV** (zero new infra, watchable progress, TTL; new
    backend in `packages/tracker`) vs Postgres on CNPG (SQL-queryable history) vs
    SQLite-per-run on a PVC (simplest, worst for multi-replica workers). Leaning KV — the
