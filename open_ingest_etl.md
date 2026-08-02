@@ -843,6 +843,43 @@ quality assertions → commit) → `medallion.silver.<ds>` → silver→gold mov
 (the mechanism behind the M3 dead lane) and the producer's `/bronze-arrival`
 self-subscription, both deleted.
 
+### Runtime & event-handling rules (E1–E7) — the holes, closed
+
+What a mover IS at runtime, and the rules every event handler obeys:
+
+- **E1 · Doorbell semantics.** Events carry `{dataset, version, project}` only. A handler
+  always reads *current* dataset state, never trusts the event as data; an event whose
+  version ≤ last-processed is acked as stale. Out-of-order delivery is thereby harmless.
+- **E2 · Idempotent handlers everywhere.** Delivery is at-least-once; before acting, a
+  handler checks whether its output already exists (deterministic run id / target version
+  derived from input version) and ack-skips. Duplicates are no-ops by rule.
+- **E3 · Per-dataset single-flight.** Mover consumers are JetStream queue groups on the
+  per-dataset subject with `max_ack_pending=1` — serialization that holds across replicas,
+  replacing today's per-process `_write_lock` (which >1 replica silently breaks).
+- **E4 · Movers are subscriber + submitter.** CPU-light transforms run in the mover pod.
+  Heavy lanes (P7b HTR: layout/lines/OCR) submit a job to the compute plane (KubeRay);
+  **the job itself commits through the catalog, so the next tier's commit event doubles as
+  job completion** — no completion polling ever returns (A13 holds). A died job commits
+  nothing and rings nothing; the lineage reconciler (storage truth) is the dead-man for
+  stuck lanes, and the FAIL run is the record.
+- **E5 · Replay = ring the doorbell manually.** Rebuilding a tier after a transform fix is
+  an admin re-emit on the catalog (`re-emit commit event for dataset@version`) — same code
+  path, no bespoke replay machinery. This is also the backfill story.
+- **E6 · Drained protocol edges.** The remaining-counter is initialized before the first
+  task is published; for streaming enumeration (multi-million-object prefixes) drained
+  requires `enumeration_complete && remaining == 0`, both atomic in KV; a redelivered
+  already-done unit never decrements (first-transition rule).
+- **E7 · Contract failures stop loudly, don't retry.** Schema drift → the catalog refuses
+  the commit → the mover records a FAIL run and acks (schema will not fix itself; a retry
+  storm helps nobody). Operator fixes the contract or transform, then replays via E5.
+
+Why this shape is defensible as best practice: it is the orchestration-within,
+choreography-between hybrid (durable workflow inside the bounded run; events between
+loosely-coupled tiers) built from named patterns — transactional outbox, claim-check,
+competing consumers, idempotent consumer — and it needs **no saga/compensation layer**
+because every tier is derived, append-only, rebuildable data: failure = FAIL record +
+replay, never distributed rollback.
+
 Configuration inventory: **catalog** — nothing per-dataset (emits always). **Chart
 `medallion.movers[]`** — per mover: input subject, output dataset, transform ref, quality
 assertions; `pubTopic`/`fromDataset` filters deleted. **Ingest plane** — adapters in the
