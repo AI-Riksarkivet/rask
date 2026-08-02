@@ -1318,8 +1318,30 @@ weakening an invariant, grep-gate or test to make it pass; if a condition is gen
 unachievable, stop and say so instead of redefining it. Or stop after 40 turns.
 ```
 
-Phase 0 (M4 Dapr bump, NATS 3-node + streamReplicas 3, state-store scopes) is a separate,
-earlier goal — infrastructure changes should not share a goal with service code.
+Phase 0 is a separate, earlier goal — infrastructure changes should not share a goal with
+service code. Its paste-ready condition:
+
+```text
+/goal Phase 0 of open_ingest_etl.md is complete. End state, all demonstrated in-conversation:
+(1) M4 closed — Dapr upgraded to a version whose resiliencies CRD accepts the exponential
+retry fields; `helm upgrade` applies the committed Resiliency CR without strict-decoding
+errors and the rendered retry schedule is shown to total 450s, with the chart-render
+invariant tests actually running in CI (closing audit m5). (2) NATS is a 3-node cluster with
+streamReplicas: 3; `nats stream info` (or the render) shows replicas=3 for every stream.
+(3) The ingest app-id is added to stateStore.scopes with the M7 pod-roll caveat documented
+in the chart values comment. (4) A verification script (scripts/, uv run) has exercised and
+RECORDED results as a dated table in open_ingest_etl.md §7.11 for: RustFS conditional put
+(second If-None-Match PUT fails) and server-side COPY; pylance-pinned tags
+(create/update/checkout), CDF (_row_created_at_version predicates + dataset.delta) on a
+stable-row-ids dataset, write_fragments + Append commit, and _rowid stability across
+compaction; each row VERIFIED or FAILED — a check that cannot run in this environment is
+recorded ENVIRONMENT-BLOCKED with the exact operator command, never guessed or faked.
+(5) `make check` is clean and `make test` passes. Constraints: changes only under chart/,
+scripts/, .dagger/, tests/, and open_ingest_etl.md — no service code; no docker build; the
+working branch is open-ingest-etl (never claude-prefixed); commits carry no co-author
+trailer; load the applicable skills before touching each subsystem and cite lance_docs/ or
+estate code file:line before implementing against them. Or stop after 25 turns.
+```
 
 ## 7 · Open decisions
 
