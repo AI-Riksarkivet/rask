@@ -456,7 +456,7 @@ FROM (SELECT *, row_number() OVER (PARTITION BY etag ORDER BY event_time) rn
 ```
 
 **The multimodal division of labor:** bytes (video/audio/TIFF) never enter Arroyo or NATS —
-workers move them via claim-check into Lance blob-v2 columns (mechanics verified in
+workers write them directly as Lance blob-v2 fragments (D6; mechanics verified in
 §Empirical). Arroyo processes only *records about* the bytes (URIs, checksums, probe
 metadata). The lander joins the two into one Lance dataset — tabular + blob columns side by
 side, exactly the shape ratch already ships (`media_blob`/`thumbnail`/`frame_blob` +
@@ -951,7 +951,7 @@ toolchain-guard tests are the pattern — the seam inventory below becomes a tes
 |---|---|---|---|
 | Table format | Lance (blob v2) | **Lance Namespace REST spec** — the catalog is built on `lance-namespace` ≥0.9 (`services/catalog/pyproject.toml:16`), clients use the generated spec client | an Iceberg fork (option D) would slot a second spec catalog, not rewrite callers |
 | Object storage | RustFS | S3 wire protocol; per-store endpoint/creds already estate config (open_ingest.md "Shipped") | any S3: HCP, MinIO, AWS |
-| Catalog / governance | first-party catalog svc | the Namespace spec + OpenFGA store + (planned) contract-verification + commit events | Lakekeeper-style alternatives if ever Iceberg-world |
+| Catalog / governance | first-party catalog svc | the Namespace spec + OpenFGA store + (planned) contract-verification + publication events | Lakekeeper-style alternatives if ever Iceberg-world |
 | Bus (events) | NATS JetStream | **Dapr pub/sub component** (chart values; broker never in app code) | Kafka/Pulsar = component swap |
 | Bus (work queue) | NATS JetStream pull consumers | `WorkQueue` Protocol in the ingest service (the one documented direct-client exception, factory-dispatched like tracker) | a Kafka backend implements the same Protocol |
 | Unit state | JetStream KV | `TrackerProtocol` + scheme factory (`nats://`, `postgres://`, file) — **already exists** | Postgres for SQL-queryable history |
@@ -1301,8 +1301,8 @@ What a mover IS at runtime, and the rules every event handler obeys:
   replacing today's per-process `_write_lock` (which >1 replica silently breaks).
 - **E4 · Movers are subscriber + submitter.** CPU-light transforms run in the mover pod.
   Heavy lanes (P7b HTR: layout/lines/OCR) submit a job to the compute plane (KubeRay);
-  **the job itself commits through the catalog, so the next tier's commit event doubles as
-  job completion** — no completion polling ever returns (A13 holds). A died job commits
+  **the job's registered commit through the catalog IS its completion signal; the next
+  tier is woken by the PUBLICATION event after the gate (D7)** — no completion polling ever returns (A13 holds). A died job commits
   nothing and rings nothing; the lineage reconciler (storage truth) is the dead-man for
   stuck lanes, and the FAIL run is the record.
 - **E5 · Replay/backfill = native atomic operations on main, gated like any commit.**
@@ -1325,7 +1325,7 @@ What a mover IS at runtime, and the rules every event handler obeys:
 | Ours | Named pattern | Reference |
 |---|---|---|
 | E1 doorbell events | Event Notification (vs Event-Carried State Transfer) | Fowler, "The Many Meanings of Event-Driven Architecture" |
-| commit event → next mover | Asset/data-aware scheduling | Airflow asset-based scheduling; Dagster Declarative Automation ("materialize when upstream updates") — the movers ARE auto-materialize policies with the catalog as asset registry; Lakekeeper CloudEvents-on-commit |
+| publication event → next mover | Asset/data-aware scheduling | Airflow asset-based scheduling; Dagster Declarative Automation ("materialize when upstream updates") — the movers ARE auto-materialize policies with the catalog as asset registry; Lakekeeper CloudEvents-on-commit |
 | E2 idempotent handlers | Idempotent Consumer | microservices.io (required because an outbox relay may double-publish) |
 | lineage outbox | Transactional Outbox | microservices.io; AWS Prescriptive Guidance |
 | landing prefix + references on bus | Claim-Check | Azure Architecture Center / EIP |
@@ -1498,7 +1498,7 @@ in-conversation (file:line for estate code, URL for external docs). **For anythi
 the canonical reference is the vendored `lance_docs/` (guide, file_format, lance_sdk,
 namespace, ray, ns_catalog incl. the partitioning spec) — cite it by file:line; web docs
 may describe a newer Lance than the estate runs.** Do not cheat the gate:
-acceptance tests run for real — no skip markers on A1–A13, no mocked-away assertions, no
+acceptance tests run for real — no skip markers on A1–A20, no mocked-away assertions, no
 weakening an invariant, grep-gate or test to make it pass; if a condition is genuinely
 unachievable, stop and say so instead of redefining it. Or stop after 40 turns.
 ```
