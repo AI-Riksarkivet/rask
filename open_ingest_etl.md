@@ -694,6 +694,38 @@ invariant, the answers fall out:
    first-party from the lander, which is why the "no OpenLineage integration in
    Arroyo/Numaflow" gap costs nothing.
 
+### Job artifacts — jobs pre-exist; submission only parameterizes
+
+What a "Ray job" physically is, today and in the design (previously unstated):
+
+- **Jobs are pre-built, versioned artifacts baked into images — never code shipped at
+  submit time.** Today's three job scripts live in the ray-cluster image at
+  `/home/ray/jobs/*.py` (entrypoint `python /home/ray/jobs/ray_stage_job.py`,
+  `config.py:160`); heavy model dependencies live in **sealed runner projects**
+  (`runners/htr`, own `uv.lock`, matched by no workspace glob — the isolation that keeps
+  torch out of the fleet), entrypoint `uv run --project runners/htr runner`. This stays
+  the law: a transform change = image rebuild (Dagger) + rollout, reproducible by
+  construction; `runtime_env` ships parameters only, never `py_modules`/`working_dir`.
+- **The mover's `transform ref` resolves through a registry, validated at deploy.** The
+  mover config names a transform; a chart-rendered mapping resolves it to
+  `{entrypoint, image, env-contract}`. A deploy-time test asserts every configured ref
+  resolves to an entrypoint that exists in the deployed image — a dangling ref fails the
+  render, not the first event (extends gate A16's family).
+- **The submission contract** (unchanged from ray-kit, minus the poll): deterministic
+  `submission_id = ray-<transform>-<dataset>-<input_version>` (idempotent re-attach on
+  redelivery), parameters via `runtime_env.env_vars` incl. the delta version range,
+  `RASK_LINEAGE_CONTEXT` (lineage-kit `as_env`), `TRACEPARENT`, and vended storage
+  credentials; the job registers its commit with the run id in the commit metadata —
+  which is how the image tag / `sourceCodeLocation` (already an emitted facet,
+  `events.py:122-131`) binds the *code version* to the *data version* in lineage.
+- **Models stay warm where they already are:** P7b jobs reuse the estate's proven
+  pattern — CPU-light job actors calling Ray Serve deployments that hold the weights
+  (the `TranscribeViaServe` shape) — or load in-job from a sealed runner where a lane
+  needs exclusive GPU; per-transform choice in the registry entry.
+- **The drift trap is named:** today's `ray_stage_job.py` carries an inlined,
+  drift-pinned copy of the deriver — the registry model replaces copy-drift with one
+  transform implementation imported by both the in-pod and job paths.
+
 ### Cross-cutting concerns — the three previously-unstated details
 
 - **FGA at ingest:** `POST /v1/ingests` requires `can_create_table` (new dataset) or
