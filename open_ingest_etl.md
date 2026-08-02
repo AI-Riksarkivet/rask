@@ -6,6 +6,14 @@ Single document: audit (§1), workload analysis (§2), critique of open_ingest.m
 abstractions (§3), option assessment (§4), revised target architecture (§5), phase 2 (§6),
 open decisions (§7).
 
+**Normative precedence:** this document accreted through verification passes. Where an
+earlier section conflicts with a later one, the LATER ruling wins — specifically: the
+Redesign Deltas D1–D8, §6b–6e, and the sections from "Package topology" onward are
+normative; §4–§5's original architecture prose is historical where it disagrees (kept for
+the reasoning trail). Known supersedences: claim-check S3 landing → uncommitted-fragment
+staging (D6); commit-event doorbell → PUBLICATION event (D7); blob carry-by-reference /
+external-URI-into-bronze → key-reference via `source_rowid` (D2); id anti-join → CDF (D1).
+
 Supersedes the *placement* half of `open_ingest.md` R2 per the owner's new ruling:
 
 > ETL is **not** part of the medallion, and it does **not** run on Ray. It is a separate
@@ -517,13 +525,13 @@ Contract per §3.5: **extract-load + validation** pre-bronze; transforms live po
  ────────────────────▶  • mint run_id, START lineage           • fetch bytes (bounded    │
   GET /v1/ingests/{id}  • enumerate units (SourceAdapter        concurrency, retry)     │
   (status, progress) │    registry)                            • validate (pkg validate)│
-                     │  • tracker: mark pending per key        • claim-check → landing/ │
+                     │  • tracker: mark pending per key        • validate → write fragment │
                      │  • publish unit tasks ──┐               • tracker: done/error    │
                      │  • finalize on drain    │                                        │
                      └───────────────┬─────────┼───────────────────────┬────────────────┘
                                      │         ▼                       ▼
-                 lineage.events.v1   │   NATS JetStream          RustFS landing/
-                 (observational ONLY:│   ETL stream               s3://…/landing/<run>/…
+                 lineage.events.v1   │   NATS JetStream          uncommitted fragments
+                 (observational ONLY:│   ETL stream               (invisible until commit)
                   START, RUNNING     │   (tasks + DLQ)                  │
                   progress,          ▼                                  ▼ finalize
                   COMPLETE|FAIL)  services/lineage         fragment-parallel Lance write →
@@ -547,8 +555,9 @@ Design points, each tied to an audited defect or a §3 ruling:
    remains the choice if run history must be SQL-queryable (§7.3). Either way, re-running a
    half-landed prefix converges: `done_keys()` are skipped; only missing/errored units
    re-publish. open_ingest.md's "idempotency is the hard part, not the transfer" — answered.
-3. **Claim-check landing zone** (§2). Workers write bytes to
-   `s3://<bucket>/landing/<run_id>/<key>`, publish only references; `packages/validate` runs
+3. **Staging = uncommitted fragments (SUPERSEDED claim-check — see D6).** Workers
+   validate then write Lance fragments directly (invisible until commit); a raw landing
+   prefix survives per-lane only for pre-conversion staging; `packages/validate` runs
    at the worker before a byte is accepted (a corrupt TIFF is a tracked `error`, not a
    poisoned pipeline). Fragment-direct write is the measured optimization behind the same
    finalizer seam (§3.6, §7).
@@ -635,7 +644,7 @@ Design points, each tied to an audited defect or a §3 ruling:
 ### Making it real — runtime, UDFs, clients, lineage wiring
 
 **Definition — "lander":** a small first-party consumer whose only job is landing data in
-the lakehouse: take records from a NATS subject (or a landing prefix), batch, write into a
+the lakehouse: take records from a NATS subject (or staged fragments), batch, write into a
 Lance dataset **through the catalog**, emit lineage, let the catalog fire the arrival
 event. It is a *role*, not new infrastructure — Phase 1's finalizer IS the lander for
 batch runs; Phase 2 points the same component at a processor's output subject. It exists
@@ -885,7 +894,7 @@ row ids. Until then the lane split in §5.4 stands.
    per-app Dapr component, DLQ route. All mechanical per the audit checklists.
 3. **One `SourceAdapter` home**: collapse the service-kit/ratch duplication, add the
    registry, wire `S3PrefixSource` + `s3_input()`.
-4. **Workers + landing + finalizer** on the verified write path (fragments → single
+4. **Workers + fragment staging + lander** on the verified write path (fragments → single
    commit → merge-on-id), `packages/validate` at the worker, lineage lifecycle
    START/RUNNING/COMPLETE|FAIL via lineage-kit + outbox. Contract tests for every declared
    semantic (§3.4): async 202, Idempotency-Key dedupe, resume-from-tracker, FAIL emission.
@@ -984,15 +993,15 @@ trigger nothing (I8). The cascade ends wherever no subscriber exists, and a new 
 **Completeness, state, and ephemerality — the ingest→bronze contract.** Silver never asks
 "is ingest finished?"; it asks "did a commit happen?" — and these are the same question,
 because a run makes exactly ONE atomic Lance commit. During the run (however long), bronze
-does not change: in-flight bytes live in the ungoverned landing prefix, readers see the
+does not change: in-flight bytes live in uncommitted fragments (invisible staging, D6), readers see the
 prior version, and finalize makes v(n+1) visible all at once, complete by construction. A
 crashed run = no commit = no event = silver hears nothing; the workflow resumes later and
 commits once. **There is no observable partially-ingested bronze.** State comes in three
-kinds with different lifetimes: (1) *run-scoped recovery state* — landing prefix, tracker
+kinds with different lifetimes: (1) *run-scoped recovery state* — uncommitted fragments, tracker
 KV, workflow instance — ephemeral, deleted/TTL'd after commit; losing it costs a resume or
 at worst a full idempotent re-run (merge-on-id converges), never correctness; (2) *durable
 truth* — the datasets and their version history; "what has silver processed" is answered
-by the id anti-join against silver itself (D4), no side ledger; (3) *durable record* —
+by the change-data-feed between published versions (D1/D4), no side ledger; (3) *durable record* —
 lineage, reconcilable from storage truth. Two documented visibility edges on the completeness contract: a reader unaware of an
 external manifest store may lag exactly one commit (`file_format.md:5379-5381`), and a
 managed-mode reader that finds a staging manifest must self-heal or refuse to load
@@ -1027,7 +1036,7 @@ Workflow step fails or pod dies → durable replay resumes at that step (activit
 Lander fails → nothing committed, retry free (merge-on-id). Catalog refuses (contract) →
 FAIL run, stop, fix, replay (E5). Every path ends in resume or idempotent re-run.
 
-**Movers are never scheduled.** Silver/gold have exactly one trigger: the commit event.
+**Movers are never scheduled.** Silver/gold have exactly one trigger: the publication event.
 Scheduling exists only at run *initiation* on the ingest API (manual `POST` today;
 source-side notifications or timers may call the same API later).
 
@@ -1063,12 +1072,12 @@ state you cannot recompute from your own estate; silver is anything a model deri
 |---|---|---|---|
 | raw | other people's systems: IIIF endpoints, HCP/deposit buckets, **tabular sources too** (EAD/catalog exports, CSV/parquet/DB extracts); plus the transient landing prefix | — (external) | — |
 | **bronze** | the data as received, made governed. Blob lanes: original bytes as managed blob-v2 columns, UNrecompressed + acquisition facts (source_uri, checksums, keys, probe metadata). Tabular lanes: the records as received, as typed Lance columns. **Ingest's real work happens here**: conversion to Lance, schema validation at the lander (catalog contract), lineage emission, per-unit error handling — bronze is the archive's copy and the replay foundation | ingest plane (workers CPU; lander) | **YES — the ingest run.** Not for the transform (the lander does that regardless) but for the RUN: fan-out over units, the drained wait, error aggregation, exactly-one finalize. Bounded run + external wait = workflow (placement rule below) |
-| **silver** | **feature engineering & enrichment**, per item: layout regions, line polygons, per-line text + confidence, thumbnails/crops as derived blobs, embeddings as vector columns; keyframes/VAD/ASR for AV; derived/joined features for tabular lanes. Blob access is a per-transform choice: carry the managed blob forward **by reference**, serve single rows via `take_blobs`, scan aligned via `blob_handling="all_binary"`, or hold **external pointers** (blob v2 external URIs) where bytes should not be copied. One dataset per modality/task; schema owned by the transform (R3′). Disposable: better model ⇒ E5 replay from bronze, never re-harvest | **mover → Ray job (GPU)**; the job commits via catalog = completion (E4) | no — single-step handler |
+| **silver** | **feature engineering & enrichment**, per item: layout regions, line polygons, per-line text + confidence, thumbnails/crops as derived blobs, embeddings as vector columns; keyframes/VAD/ASR for AV; derived/joined features for tabular lanes. Blob access per D2 (normative): silver stores `id` + `source_rowid`; consumers resolve bronze bytes via `read_blobs` (batch) / `take_blobs(ids=[source_rowid])` (row) / `blob_handling="all_binary"` (scan); external-URI columns only for registered base paths; derived blobs stored managed. One dataset per modality/task; schema owned by the transform (R3′). Disposable: better model ⇒ E5 replay from bronze, never re-harvest | **mover → Ray job (GPU)**; the job commits via catalog = completion (E4) | no — single-step handler |
 | **gold** | **promoted, quality-validated features** — the dbt-tests / SQLMesh-audits / Pandera role, done for multimodal data: assertion suites over silver's features (schema + distributions + coverage + confidence thresholds + blob-resolution probes) decide promote vs hold; what passes is the trustworthy feature set consumers build on (search serving with FTS/ANN indexes, training-ready sets). **Export formats — ALTO XML, IIIF annotations — are NOT gold**: they are downstream serializations produced FROM gold by consumers/exporters (the R3 lesson, re-learned: a format contract inside a tier couples the lakehouse to one workload) | mover, assertion suite pre-commit | no while automatic; **YES when promotion gains an async wait** — e.g. annotator human review for training-gold ("reviewer approved" = external event) |
 
 Workflow placement rule: **a workflow wraps a bounded run with fan-out or external waits;
 a mover stays a single-step event handler.** Ingest qualifies today; human-gated promotion
-qualifies when it lands; bronze→silver never does (the Ray job's commit event closes it).
+qualifies when it lands; bronze→silver never does (the Ray job's registered commit + publication closes it).
 
 **Where the DAG lives — three levels, no central orchestrator.** (1) The *dataset DAG* —
 which dataset derives from which — is mover config: `{input subject → transform ref →
