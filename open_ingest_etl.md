@@ -1503,6 +1503,40 @@ weakening an invariant, grep-gate or test to make it pass; if a condition is gen
 unachievable, stop and say so instead of redefining it. Or stop after 40 turns.
 ```
 
+**Session bootstrap — what an implementation session reads, in this order:**
+
+*Both phases:* (1) this file end-to-end — the precedence note, D1–D8, §6b–6e, the E-rules,
+trigger chain, job artifacts, ack contract, dummy lane, gate A1–A20; (2) `CLAUDE.md`
+(toolchain law: Dagger, uv, bun, skills routing); (3) `lance_docs/` is the canonical Lance
+reference — cite it by file:line, never web docs.
+
+*Phase 0 specifically:* `DAPR-AUDIT.md` (M4/M7 in full); `chart/Chart.yaml` (Dapr pin),
+`chart/values.yaml`, `chart/templates/dapr-resiliency.yaml`, `dapr-component.yaml`,
+`dapr-statestore.yaml`, `nats-stream-job.yaml`; `.dagger/charts.go` +
+`tests/unit/test_invariants.py` (the render gates, incl. the silently-skipped helm gate
+m5); `Makefile` (k3s/tilt targets); `scripts/` (verification-script home; the estate's
+script conventions).
+
+*Phase 1 additionally:* the seams to build on — `packages/service-kit/src/service_kit/`
+(`lakehouse/sources.py`, `lakehouse/outbox.py`, `lakehouse/blobs.py`,
+`lancekit/writer.py`, `governed/dapr_auth.py`, `dapr_publish.py`);
+`packages/tracker/src/tracker/` (protocol + factory — the `nats://` backend lands here);
+`packages/lineage-kit/src/lineage_kit/` (`emitter.py`, `runs.py`, `context.py`,
+`consume.py`); `packages/ray-kit/src/ray_kit/` (`submit.py` keeps re-attach,
+`await_success` is deleted; `dashboard.py`). The code being replaced and the patterns to
+keep — `services/medallion/src/medallion/` (`services/ingest.py` — the verified write
+shape, `services/iiif_produce.py`, `api/ingest_iiif.py`, `services/transform.py` — the
+mover contract to re-cut, `services/quality.py`, `schemas/events.py`). The commit seams —
+`services/catalog/src/catalog/api/v1/endpoints/versions.py` and `data.py`
+(`commit_fragments`), `core/lineage_emit.py`. The route table —
+`services/gateway/src/gateway/__init__.py`. The chart surfaces —
+`chart/templates/fleet.yaml`, `medallion.yaml`, `services.yaml`, `configmap.yaml`.
+The patterns to absorb — `packages/ratch/src/ratch/core/dataset.py` (the grep-gate
+funnel), `ingest/sources.py` (the duplicate to collapse), `model/schema.py` (blob
+conventions). Behavior pins — `tests/unit/test_medallion*.py`,
+`services/gateway/tests/test_routing.py`. Project skills per CLAUDE.md's routing table
+(`rask-architecture`, `rask-services-fleet` first).
+
 Phase 0 is a separate, earlier goal — infrastructure changes should not share a goal with
 service code. Its paste-ready condition:
 
