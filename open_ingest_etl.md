@@ -801,6 +801,36 @@ index build / `optimize_indices` (never the final write — D5); pylance for
 run id lets the reconciler back-fill a died-after-commit job); `TRACEPARENT` threaded as
 today.
 
+### The dummy lane — the end-to-end proof harness (extends A11)
+
+Everything is testable without GPUs or external sources, using pieces the estate already
+has (the `/produce` events lane is the precedent — a dummy producer proving the cascade):
+
+- **Fixture source:** the `LocalDirSource` adapter over a checked-in fixture set (a few
+  tiny TIFFs + a tabular CSV) — exercising the registry exactly like IIIF does, no network.
+- **Dummy runner:** `runners/dummy` — a sealed project shaped exactly like `runners/htr`
+  (own `pyproject.toml`, baked into the ray-cluster image, registry-resolved transform
+  ref) whose transform is trivial (checksum + wordcount + a fake 8-float "embedding") but
+  whose *mechanics* are the real ones: CDF delta read, pylance merge_insert, catalog
+  registration with run-id metadata, lineage emit via env context. It proves the job
+  artifact chain (mover —ray-kit→ script-in-image —imports→ runner) with zero model deps.
+- **The python e2e** (`tests/e2e-py/test_ingest_e2e.py`): POST /v1/ingests (fixture) →
+  assert 202<1s → workflow drains → bronze committed+gated+published → dummy mover job →
+  silver → quality gate → gold; assertions at each hop = the A-conditions run against a
+  live stack (kind/k3s), including the kill-pod-mid-run resume (A3) and the FAIL branch
+  (corrupt fixture file → completes-with-errors, A5).
+- **The Playwright layer** (`tests/e2e` specs, tilt-deployed per A11): (i) lakehouse
+  lineage graph shows the three-run chain (ingest → features → promote) with the gold
+  node's assertions green; (ii) the ingest run status page shows live progress
+  (tracker-fed RUNNING facet) and the defect state when lineage is missing (A8's UI
+  face); (iii) compute zone lists the dummy job with its deterministic submission id;
+  (iv) the media viewer dereferences a fixture blob from bronze via silver's
+  `source_rowid` (the D2 read path, through real gateway routing). "Pod Running is not
+  evidence" — the browser seeing the data is (the tilt-verify lesson, applied to the
+  whole lane).
+- A11 is hereby extended: the in-cluster e2e runs the dummy lane, and the four Playwright
+  assertions above are part of its pass criteria.
+
 ### Cross-cutting concerns — the three previously-unstated details
 
 - **FGA at ingest:** `POST /v1/ingests` requires `can_create_table` (new dataset) or
