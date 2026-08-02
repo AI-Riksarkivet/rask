@@ -697,21 +697,34 @@ invariant, the answers fall out:
 ### Package topology — the kits are consistent; ratch is the AV lane
 
 **The four-layer taxonomy (they are layers, not alternatives):** **ray-kit** = the
-client for talking TO the cluster (submit/re-attach/dashboard; zero compute; its
-`await_success` poll is banned by A13). **A Ray job** = the unit of execution — a
-pre-baked entrypoint that runs read→transform→write to completion. **runners/** = sealed
-model environments (own lockfiles; the heavy ML deps and the models themselves).
-**ratch** = the AV lane's *domain* library (schemas, governed Lance access, retrieval)
-that the AV runners import — not part of ray-kit, they never touch. One AV hop reads:
-mover —ray-kit→ Ray job —contains→ runner —imports→ ratch —writes→ Lance.
+client for talking TO the cluster (submit/re-attach/dashboard; zero compute; poll
+machinery deleted per the ruling above). **A Ray job** = a SCRIPT (an entrypoint command)
+executed to completion by the cluster; the IMAGE is only the delivery vehicle that puts
+the script and its dependencies on the nodes — "jobs are scripts shipped inside images",
+never ad-hoc code at submit time. **runners/** = sealed model environments (own
+lockfiles; the heavy ML deps and the model code a job executes). **ratch** = the shared
+AV domain code that four runners (asr, diarize, voiceprint, topics) must agree on —
+and after this design absorbs its acquisition parts, ratch is exactly THREE things and
+nothing else: (1) the AV dataset schemas/descriptors, (2) the AV Lander implementations
+(its write funnel), (3) retrieval over those datasets. Why it must exist as a package:
+the kits are deliberately domain-free (service-kit carries no media schema by design),
+and four sealed runners each carrying their own copy of the chunks-table schema is
+copy-drift — the exact disease the estate keeps paying for (the inlined deriver, the
+duplicated SourceAdapter). ratch is the anti-drift home for AV domain code; anything in
+it that is not one of the three things moves or dies. One AV hop reads: mover —ray-kit→
+Ray job (script in image) —imports→ runner (models) + ratch (schemas/landers) —writes→
+Lance.
 
 - **service-kit** — the backbone: `make_service_app`, dapr auth/publish, the outbox, blob
   helpers; the single `SourceAdapter` home; its `lancekit/writer.py` merge_insert seam is
   the home of the **Lander protocol**. Drift fix in passing: retire the transitional
   `service_kit.openlineage` (R19) in favour of lineage-kit (the lineage repository still
   imports the former).
-- **ray-kit** — kept for deterministic `submit_or_reattach` + the dashboard client;
-  `await_success` retired (A13).
+- **ray-kit** — kept for deterministic `submit_or_reattach` + the dashboard client.
+  **Owner ruling 2026-08-02: the poll machinery is DELETED, not merely unused** —
+  `await_success`, `MAX_POLL_ERRORS`, and every poll-interval knob are removed from
+  ray-kit in the cutover (the estate is fully event-driven; completion = the registered
+  commit). A13 enforces deletion: `rg await_success` over the repo returns nothing.
 - **lineage-kit** — the ingest plane is the first consumer of its `ClientEmitter`
   transport; `as_env` context threads jobs; `LineageDoc` columns at the tiers.
 - **ratch — relevant, and precisely placed.** Its consumers are the four sealed AV
