@@ -725,6 +725,14 @@ Lance.
   `await_success`, `MAX_POLL_ERRORS`, and every poll-interval knob are removed from
   ray-kit in the cutover (the estate is fully event-driven; completion = the registered
   commit). A13 enforces deletion: `rg await_success` over the repo returns nothing.
+  **Ray State API role (audited):** ray-kit already speaks it over plain httpx
+  (`dashboard.py` — `list_actors`/`list_tasks`/`cluster_status` hit the state endpoints);
+  its role is ON-DEMAND diagnostics — compute's `/api/ray/*` surface, and the
+  reconciler's enrichment when a lane is flagged stuck ("what does the job state say?") —
+  never a completion watch. Implementation option recorded: the heavy `ray` SDK import
+  exists only for `JobSubmissionClient` (itself a REST wrapper over `/api/jobs/`) —
+  going httpx-only removes the fleet's sole Ray SDK dependency and the OOM-driven 1536Mi
+  compute tier it caused.
 - **lineage-kit** — the ingest plane is the first consumer of its `ClientEmitter`
   transport; `as_env` context threads jobs; `LineageDoc` columns at the tiers.
 - **ratch — relevant, and precisely placed.** Its consumers are the four sealed AV
@@ -1410,8 +1418,12 @@ turn bound — per the /goal condition guidance). Drive Phase 1 with:
 ```text
 /goal Phase 1 of open_ingest_etl.md is implemented. End state, all demonstrated in-conversation:
 (1) services/ingest exists as a uv workspace member (api + worker + lander modules) with a chart
-entry, gateway row, ETL JetStream stream, and DLQ route; (2) every acceptance condition A1–A13 in
-§6d has a named test and `uv run pytest -m "not slow"` exits 0 with all of them passing; (3) the
+entry, gateway row, ETL JetStream stream, and DLQ route; (2) every acceptance condition A1–A16 in
+§6d has a named test and `uv run pytest -m "not slow"` exits 0 with all of them passing —
+including A13 as DELETION (`rg await_success` over the repo returns nothing), the mover
+ack contract implemented exactly per the §"Ray job durability" rule table with a test per
+row, and a deploy-time test that every configured transform ref resolves to an entrypoint
+in the deployed image; (3) the
 grep-gate tests for invariants I3/I4 pass (no lance.write_dataset/merge_insert/write_fragments
 outside Lander implementations; nats imports only in the two backend modules) and fail on a seeded
 violation; (4) packages/tracker has a nats:// KV backend passing the protocol suite; (5) the nine
