@@ -901,6 +901,19 @@ Workflow placement rule: **a workflow wraps a bounded run with fan-out or extern
 a mover stays a single-step event handler.** Ingest qualifies today; human-gated promotion
 qualifies when it lands; bronze→silver never does (the Ray job's commit event closes it).
 
+**Where the DAG lives — three levels, no central orchestrator.** (1) The *dataset DAG* —
+which dataset derives from which — is mover config: `{input subject → transform ref →
+output dataset}`; the subscriptions ARE the graph (asset-graph shape, edges as config).
+silver→silver derivations (e.g. `silver$lines` → `silver$embeddings`) are just another
+entry — tiers are stages over many datasets, not a fixed 3-node chain. (2) The *transform
+DAG* — inside one hop — is Ray Data's pipeline within the job (`read_lance →
+map_batches(...) → write`; the runners/htr shape), parameterized by the mover config
+(`kind: inpod|ray`, transform ref, models/batch/GPU params). Ray expresses DAGs only
+WITHIN a job; Ray Workflows (cross-job DAGs) is deprecated — never used here. (3) *Run
+orchestration* — Dapr Workflow, only where the placement rule triggers. Hop-kind decision
+table: per-row CPU-light → `inpod`; GPU / heavy fan-out over a bounded batch → `ray`;
+unbounded + stateful → the Arroyo shelf.
+
 ### Measured: how the cascade works TODAY (audited 2026-08-02) — and the redesign deltas
 
 Facts, from code, so the design argues with reality and not with itself:
