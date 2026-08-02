@@ -694,6 +694,24 @@ invariant, the answers fall out:
    first-party from the lander, which is why the "no OpenLineage integration in
    Arroyo/Numaflow" gap costs nothing.
 
+### Cross-cutting concerns — the three previously-unstated details
+
+- **FGA at ingest:** `POST /v1/ingests` requires `can_create_table` (new dataset) or
+  `can_write_data` (existing) on the target, checked at accept AND re-enforced by the
+  catalog at registration — same relations, same choke points as the movers
+  (`transform.py:147-174` pattern: `embed_features`→`can_create_table`,
+  `aggregate_gold`→`can_promote`).
+- **Auth posture:** ingest-api adopts the catalog's posture, not the medallion's — OIDC
+  for humans with author-binding into lineage (the lineage service's `enforce_author`
+  pattern), the service door (`dapr-api-token` + `x-lance-service-identity`) for
+  service-to-service; never the bare shared Dapr token alone.
+- **Trace continuity:** unit task events carry `traceparent` so one run's trace spans
+  api → workers → lander; Ray jobs get it via `runtime_env` as today
+  (`ray_submit.py:74-104`); catalog calls carry it via namespace `header.*` passthrough
+  (`namespace.md:1143-1183`). Everything else (lineage lifecycle + outbox + commit-metadata
+  anchor, secrets scopes + vended credentials, ray-kit deterministic submission minus the
+  poll, `setup_otel` via `make_service_app`) is already specified above.
+
 ### Empirical verification (run 2026-08-01, pylance 9.0.0 — the repo's own measured version)
 
 The §5.4 write path was **tested, not assumed** (script: scratchpad `qtest` venv, duckdb
