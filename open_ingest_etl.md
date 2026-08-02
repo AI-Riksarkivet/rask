@@ -842,10 +842,15 @@ continuous lane is a sequence of micro-batch commits, each firing its own delta 
 
 **Source-agnosticism of grouping (I1 applied to semantics, not just code).** "Volume" is
 IIIF vocabulary and must never appear in the plane. Adapters emit *units* plus arbitrary
-**metadata columns**; grouping, partitioning, and completeness are **configured expressions
-over metadata columns** — a dataset may declare `group_key: <metadata column>` and a
-completeness rule `count(group) == expected(group)` with `expected` itself adapter-recorded
-metadata. The machinery knows only units, metadata, and configured group keys.
+**metadata columns**; grouping and completeness are **configured expressions over metadata
+columns** (completeness: `count(group) == expected(group)` with `expected` itself
+adapter-recorded). For true physical partitioning the estate's pinned spec already defines
+the mechanism — **the Lance Partitioned Namespace**
+(`lance_docs/ns_catalog/partitioning-spec.md`): a directory catalog of physically separate
+tables sharing one schema, with versioned `partition_spec_v<N>` metadata deriving
+partition values from record fields via stable field IDs (rename-safe by `source_ids`),
+queryable per-partition or unified. Partition decisions are therefore catalog metadata,
+never plane code — don't hand-roll a group-key mechanism where the spec exists.
 
 **Error/recovery ownership, one line each:** unit fails → redelivery + tracker skip;
 poison → DLQ + tracker error, run completes-with-errors. Worker pod dies → redelivery.
@@ -961,26 +966,34 @@ Facts, from code, so the design argues with reality and not with itself:
 - **D5 · E4 unchanged**: heavy feature engineering (the real HTR/embedding work, which
   today does not exist in the movers) runs as Ray jobs that commit through the catalog;
   the commit event is the completion signal; the in-pod blocking poll is retired.
-- **D6 · The blob lane's landing IS uncommitted Lance fragments** (from the Lance
-  distributed-write guide — parallel `write_fragments` on workers, `FragmentMetadata`
-  collected, ONE `LanceOperation` commit). Workers validate, then write fragments
-  directly; uncommitted fragments are invisible = staging. The tracker stores each unit's
-  FragmentMetadata; finalize commits the collected list. The separate S3 landing prefix
-  (and its double-write) is retired as the default — it survives per-lane only where
+- **D6 · The blob lane's landing IS uncommitted Lance fragments** — the recipe is
+  verbatim in the PINNED docs (`lance_docs/guide.md:1536-1631`): parallel
+  `lance.fragment.write_fragments` on workers → `FragmentMetadata.to_json` → collect on
+  one worker → ONE `LanceOperation.Append(all_fragments)` with `read_version` set
+  (`LanceOperation.Merge` at `guide.md:1676` for schema-adding fragments). Workers
+  validate, then write fragments directly; uncommitted fragments are invisible = staging.
+  The tracker stores each unit's FragmentMetadata JSON; finalize commits the collected
+  list. The separate S3 landing prefix is retired as the default — per-lane only where
   pre-conversion byte staging is genuinely needed. Failed runs leave unreferenced
   fragment files for dataset cleanup.
 - **D7 · Publication is a Lance ref, and the doorbell fires on PUBLICATION.** Native WAP
-  via branches/tags: either (a) delta lands on a staging *branch*, gate runs, merge to
-  main; or (b) commit to main, gate runs, advance the `published` *tag*. Per-dataset
-  choice; consumers and the catalog's arrival event key on the published ref, so
-  committed-but-unaudited data is never visible downstream. E5 replays/backfills use a
-  branch — the documented Lance use case — then merge.
-- **D8 · Concurrency is storage-safe by transaction rebase.** Lance transactions carry
-  `read_version`; concurrent appends are REBASABLE (auto-retried in the commit layer) and
-  the `ConditionalPutCommitHandler` makes commits atomic + 1-IOPS on conditional-put
-  stores. E3's single-flight remains for *semantic* serialization only, not correctness.
-  **Hard dependency surfaced: RustFS must support put-if-not-exists** (R2/MinIO do) —
-  Phase-0 verification item (§7.11).
+  via the pinned branch/tag spec (`lance_docs/file_format.md:2694-2820`): branches are
+  shallow clones with independent histories under `tree/{branch}/`, tags are refs under
+  `_refs/tags/`. Either (a) delta lands on a staging *branch*, gate runs, merge to main;
+  or (b) commit to main, gate runs, advance the `published` *tag*. Per-dataset choice;
+  consumers and the catalog's arrival event key on the published ref, so
+  committed-but-unaudited data is never visible downstream. E5 replays/backfills ride a
+  branch — the documented use — then merge.
+- **D8 · Concurrency is storage-safe by transaction rebase, and commit atomicity has TWO
+  documented routes.** Transactions carry `read_version`; concurrent conflicts rebase
+  automatically where semantics allow (`file_format.md:4761-4794`). Atomicity: (a)
+  **commits through the catalog use the Namespace spec's own `put_if_not_exists`
+  version-entry semantics** (`lance_docs/namespace.md:6181-6188`) — our primary path,
+  since every write goes through the catalog; (b) direct-store commits need
+  put-if-not-exists on the store, **with a documented fallback — the external manifest
+  store (any put-if-not-exists KV)** for stores without atomic ops
+  (`file_format.md:5377-5394`). So RustFS conditional-put (§7.11) is a verification item,
+  not a hard blocker. E3's single-flight remains for *semantic* serialization only.
 
 ### Runtime & event-handling rules (E1–E7) — the holes, closed
 
@@ -1154,7 +1167,10 @@ for each plane touched; dagger/dockerfile for the image; the Svelte 5 skills + s
 autofixer for any .svelte change; a dapr skill if installed. Do not invent APIs: before
 implementing against Dapr Workflow (dapr-ext-workflow), nats-py/JetStream, pylance, or
 lineage-kit, read the actual reference code or official docs and show the evidence
-in-conversation (file:line for estate code, URL for external docs). Do not cheat the gate:
+in-conversation (file:line for estate code, URL for external docs). **For anything Lance,
+the canonical reference is the vendored `lance_docs/` (guide, file_format, lance_sdk,
+namespace, ray, ns_catalog incl. the partitioning spec) — cite it by file:line; web docs
+may describe a newer Lance than the estate runs.** Do not cheat the gate:
 acceptance tests run for real — no skip markers on A1–A13, no mocked-away assertions, no
 weakening an invariant, grep-gate or test to make it pass; if a condition is genuinely
 unachievable, stop and say so instead of redefining it. Or stop after 40 turns.
