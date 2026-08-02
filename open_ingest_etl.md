@@ -909,7 +909,11 @@ entry — tiers are stages over many datasets, not a fixed 3-node chain. (2) The
 DAG* — inside one hop — is Ray Data's pipeline within the job (`read_lance →
 map_batches(...) → write`; the runners/htr shape), parameterized by the mover config
 (`kind: inpod|ray`, transform ref, models/batch/GPU params). Ray expresses DAGs only
-WITHIN a job; Ray Workflows (cross-job DAGs) is deprecated — never used here. (3) *Run
+WITHIN a job; Ray Workflows (cross-job DAGs) is deprecated — never used here. Ray's
+Compiled Graph (static actor DAGs, µs dispatch, GPU→GPU NCCL transfer) targets
+latency-critical repeated inference — relevant to the SERVING plane (the interactive
+runners/htr chain via Ray Serve), never to the batch movers, where per-call overhead
+vanishes into seconds-long GPU batches and Ray Data is the right layer. (3) *Run
 orchestration* — Dapr Workflow, only where the placement rule triggers. Hop-kind decision
 table: per-row CPU-light → `inpod`; GPU / heavy fan-out over a bounded batch → `ray`;
 unbounded + stateful → the Arroyo shelf.
