@@ -822,6 +822,24 @@ publishes a trigger. Lineage COMPLETE/FAIL events are emitted alongside every co
 trigger nothing (I8). The cascade ends wherever no subscriber exists, and a new consumer
 (train, index) attaches by subscribing — no producer changes.
 
+**Completeness, state, and ephemerality — the ingest→bronze contract.** Silver never asks
+"is ingest finished?"; it asks "did a commit happen?" — and these are the same question,
+because a run makes exactly ONE atomic Lance commit. During the run (however long), bronze
+does not change: in-flight bytes live in the ungoverned landing prefix, readers see the
+prior version, and finalize makes v(n+1) visible all at once, complete by construction. A
+crashed run = no commit = no event = silver hears nothing; the workflow resumes later and
+commits once. **There is no observable partially-ingested bronze.** State comes in three
+kinds with different lifetimes: (1) *run-scoped recovery state* — landing prefix, tracker
+KV, workflow instance — ephemeral, deleted/TTL'd after commit; losing it costs a resume or
+at worst a full idempotent re-run (merge-on-id converges), never correctness; (2) *durable
+truth* — the datasets and their version history; "what has silver processed" is answered
+by the id anti-join against silver itself (D4), no side ledger; (3) *durable record* —
+lineage, reconcilable from storage truth. Corollaries: a future continuous lane changes
+nothing ("finished" was never load-bearing — *committed* was; each commit fires its own
+delta); volume-level completeness ("promote only when all pages present") is a quality-gate
+assertion against the manifest count, never an event-protocol feature. Triggering: manual
+`POST` initially; schedules or source-side notifications later call the same API.
+
 **Run completion is event-driven too — last-worker detection, not polling.** Bronze never
 knows about the workflow; the only completion question is internal to the run. The
 workflow dispatches N units and **suspends durably on
