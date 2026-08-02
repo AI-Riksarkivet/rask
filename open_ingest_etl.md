@@ -834,11 +834,28 @@ KV, workflow instance — ephemeral, deleted/TTL'd after commit; losing it costs
 at worst a full idempotent re-run (merge-on-id converges), never correctness; (2) *durable
 truth* — the datasets and their version history; "what has silver processed" is answered
 by the id anti-join against silver itself (D4), no side ledger; (3) *durable record* —
-lineage, reconcilable from storage truth. Corollaries: a future continuous lane changes
-nothing ("finished" was never load-bearing — *committed* was; each commit fires its own
-delta); volume-level completeness ("promote only when all pages present") is a quality-gate
-assertion against the manifest count, never an event-protocol feature. Triggering: manual
-`POST` initially; schedules or source-side notifications later call the same API.
+lineage, reconcilable from storage truth. **This is Write-Audit-Publish (WAP)** — the Netflix/Iceberg pattern: Write to staging
+invisible to consumers (landing), Audit before visibility (worker validation + the D3
+pre-commit gate), Publish atomically (the one Lance commit). The execution model is
+**micro-batches**: the atomic commit IS the batch boundary — a bounded run is one batch, a
+continuous lane is a sequence of micro-batch commits, each firing its own delta event.
+
+**Source-agnosticism of grouping (I1 applied to semantics, not just code).** "Volume" is
+IIIF vocabulary and must never appear in the plane. Adapters emit *units* plus arbitrary
+**metadata columns**; grouping, partitioning, and completeness are **configured expressions
+over metadata columns** — a dataset may declare `group_key: <metadata column>` and a
+completeness rule `count(group) == expected(group)` with `expected` itself adapter-recorded
+metadata. The machinery knows only units, metadata, and configured group keys.
+
+**Error/recovery ownership, one line each:** unit fails → redelivery + tracker skip;
+poison → DLQ + tracker error, run completes-with-errors. Worker pod dies → redelivery.
+Workflow step fails or pod dies → durable replay resumes at that step (activity retries).
+Lander fails → nothing committed, retry free (merge-on-id). Catalog refuses (contract) →
+FAIL run, stop, fix, replay (E5). Every path ends in resume or idempotent re-run.
+
+**Movers are never scheduled.** Silver/gold have exactly one trigger: the commit event.
+Scheduling exists only at run *initiation* on the ingest API (manual `POST` today;
+source-side notifications or timers may call the same API later).
 
 **Run completion is event-driven too — last-worker detection, not polling.** Bronze never
 knows about the workflow; the only completion question is internal to the run. The
