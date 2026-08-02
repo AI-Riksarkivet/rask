@@ -870,9 +870,14 @@ Facts, from code, so the design argues with reality and not with itself:
   (`ingest.py:61-66`); every run drops and rebuilds the `lineage` JSON index as a second
   commit (`compute.py:200-212`); `source_rowid` is a per-run snapshot that "self-heals
   because the cascade re-runs whole" (`compute.py:53-57`).
-- **Blob carry-forward is a full byte copy per tier.** `_carry_forward` materialises every
-  payload into pod memory (`.to_pylist()`, `compute.py:332`) and rewrites the bytes into
-  the downstream dataset — silver and gold each hold complete copies of bronze's blobs.
+- **Blob carry-forward is a full byte copy per tier — as a CODE choice, not a format
+  constraint.** Today's `_carry_forward` materialises every payload into pod memory
+  (`.to_pylist()`, `compute.py:332`) and rewrites the bytes downstream — silver and gold
+  each hold complete copies. Lance itself never requires this: **blob v2 has four storage
+  semantics — Inline, Packed, Dedicated, External (URI reference, incl. position+size
+  slices) — mixable within one column**, with per-field thresholds
+  (`inline/dedicated/pack_file_size_threshold` on `blob_field`) and registered external
+  base paths. The copy is a defect of the current implementation, not of Lance.
 - **Quality runs AFTER the commit.** Assertions (`quality.py:37-75`: row_count_positive,
   not_null on key, column_declared per required column, blob_resolves first+last) execute
   on the just-written target; a failure leaves the commit in place, skips the next-stage
@@ -897,12 +902,19 @@ Facts, from code, so the design argues with reality and not with itself:
   and `merge_insert`s. Consequences: datasets are immutable-append in Lance's idiom,
   indexes survive (the second-commit rebuild dies), re-runs converge by id (E2 for free),
   and full-rewrite remains available as an E5 replay for schema changes.
-- **D2 · Stop copying blobs between tiers.** Bronze owns the bytes — that ruling stands
-  against *raw*. Silver/gold do **not** carry the payload column: they carry `id` (and
-  `source_rowid`) as the key back into bronze, plus only *genuinely derived* blobs (crops,
-  thumbnails). A consumer needing original bytes resolves them from bronze via `take_blobs(ids)`;
-  aligned scans use bronze directly. This deletes the per-tier byte copy and the pod-memory
-  materialisation in one move.
+- **D2 · Stop copying blobs between tiers — choose the blob semantics per lane from
+  Lance's own menu.** The raw-vs-governed distinction is the key: `ingest.py:113-118`
+  refuses `Blob.from_uri` pointers at ingest because pointing at UNgoverned external
+  storage dangles when a source lifecycle-deletes — correct, and it stands. But pointing
+  at **bronze** — governed, immutable, estate-owned — carries no such risk. So per lane,
+  deliberately: (a) **External-URI blobs into bronze's storage** as the carry-forward
+  default — silver keeps a real payload column at zero byte cost, and position+size
+  slices even represent *region crops as references* instead of derived bytes;
+  (b) key-only (`id`/`source_rowid`) with consumers resolving via `take_blobs(ids)` when
+  a tier needs no payload column at all; (c) managed copies only where a tier must be
+  physically self-contained (e.g. an export set leaving the estate); (d) genuinely
+  *derived* blobs (thumbnails) stored managed with thresholds tuned per size profile.
+  The invariant is not "no payload columns" — it is **no unchosen byte copies**.
 - **D3 · The gate moves in front of the commit.** Delta-batch validation
   (Pandera-style schema+content checks on the transformed batch) runs pre-commit — a
   failure commits nothing, emits a FAIL run, and stops the cascade at that tier (E7).
