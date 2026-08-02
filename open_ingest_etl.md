@@ -961,6 +961,26 @@ Facts, from code, so the design argues with reality and not with itself:
 - **D5 · E4 unchanged**: heavy feature engineering (the real HTR/embedding work, which
   today does not exist in the movers) runs as Ray jobs that commit through the catalog;
   the commit event is the completion signal; the in-pod blocking poll is retired.
+- **D6 · The blob lane's landing IS uncommitted Lance fragments** (from the Lance
+  distributed-write guide — parallel `write_fragments` on workers, `FragmentMetadata`
+  collected, ONE `LanceOperation` commit). Workers validate, then write fragments
+  directly; uncommitted fragments are invisible = staging. The tracker stores each unit's
+  FragmentMetadata; finalize commits the collected list. The separate S3 landing prefix
+  (and its double-write) is retired as the default — it survives per-lane only where
+  pre-conversion byte staging is genuinely needed. Failed runs leave unreferenced
+  fragment files for dataset cleanup.
+- **D7 · Publication is a Lance ref, and the doorbell fires on PUBLICATION.** Native WAP
+  via branches/tags: either (a) delta lands on a staging *branch*, gate runs, merge to
+  main; or (b) commit to main, gate runs, advance the `published` *tag*. Per-dataset
+  choice; consumers and the catalog's arrival event key on the published ref, so
+  committed-but-unaudited data is never visible downstream. E5 replays/backfills use a
+  branch — the documented Lance use case — then merge.
+- **D8 · Concurrency is storage-safe by transaction rebase.** Lance transactions carry
+  `read_version`; concurrent appends are REBASABLE (auto-retried in the commit layer) and
+  the `ConditionalPutCommitHandler` makes commits atomic + 1-IOPS on conditional-put
+  stores. E3's single-flight remains for *semantic* serialization only, not correctness.
+  **Hard dependency surfaced: RustFS must support put-if-not-exists** (R2/MinIO do) —
+  Phase-0 verification item (§7.11).
 
 ### Runtime & event-handling rules (E1–E7) — the holes, closed
 
@@ -1180,6 +1200,12 @@ earlier goal — infrastructure changes should not share a goal with service cod
     post-Cloudflare; the C fallback triggers if it stalls while a stateful-streaming need is
     live. Redpanda Connect usage note: stay within the open-core connectors (NATS/S3/HTTP)
     to avoid enterprise-license surface.
+11. **Verify RustFS conditional put** (put-if-not-exists / If-None-Match) so Lance's
+    `ConditionalPutCommitHandler` gives atomic 1-IOPS commits (D8) — Phase 0, alongside a
+    hands-on check of branch/tag operations (D7) and `write_fragments`-per-worker (D6)
+    against the pinned pylance version.
+12. D7 mechanism per dataset: staging-branch-merge vs published-tag-advance (leaning tag
+    for the cascade — simpler ref semantics; branch for backfills/migrations either way).
 
 ## Sources (external claims)
 
