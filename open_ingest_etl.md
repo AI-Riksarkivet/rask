@@ -838,7 +838,12 @@ KV, workflow instance — ephemeral, deleted/TTL'd after commit; losing it costs
 at worst a full idempotent re-run (merge-on-id converges), never correctness; (2) *durable
 truth* — the datasets and their version history; "what has silver processed" is answered
 by the id anti-join against silver itself (D4), no side ledger; (3) *durable record* —
-lineage, reconcilable from storage truth. **This is Write-Audit-Publish (WAP)** — the Netflix/Iceberg pattern: Write to staging
+lineage, reconcilable from storage truth. Two documented visibility edges on the completeness contract: a reader unaware of an
+external manifest store may lag exactly one commit (`file_format.md:5379-5381`), and a
+managed-mode reader that finds a staging manifest must self-heal or refuse to load
+(`namespace.md:6276-6281`) — both argue for consumers resolving refs through the catalog.
+
+**This is Write-Audit-Publish (WAP)** — the Netflix/Iceberg pattern: Write to staging
 invisible to consumers (landing), Audit before visibility (worker validation + the D3
 pre-commit gate), Publish atomically (the one Lance commit). The execution model is
 **micro-batches**: the atomic commit IS the batch boundary — a bounded run is one batch, a
@@ -853,8 +858,13 @@ the mechanism — **the Lance Partitioned Namespace**
 (`lance_docs/ns_catalog/partitioning-spec.md`): a directory catalog of physically separate
 tables sharing one schema, with versioned `partition_spec_v<N>` metadata deriving
 partition values from record fields via stable field IDs (rename-safe by `source_ids`),
-queryable per-partition or unified. Partition decisions are therefore catalog metadata,
-never plane code — don't hand-roll a group-key mechanism where the spec exists.
+queryable per-partition or unified. Honesty label: the Partitioned Namespace is
+**spec-only** — no SDK or lance_ray surface implements partition routing/pruning; an
+adopter implements them against the `__manifest` table, partitions are separate datasets
+(`source_rowid` becomes (partition, rowid)), and multi-partition atomicity exists only
+via the single-`__manifest`-commit pattern with caller-owned conflict resolution
+(`partitioning-spec.md:162-189, 302-336`). Partition decisions are catalog metadata,
+never plane code — but adopting the spec is an implementation project, not a toggle.
 
 **Error/recovery ownership, one line each:** unit fails → redelivery + tracker skip;
 poison → DLQ + tracker error, run completes-with-errors. Worker pod dies → redelivery.
@@ -967,7 +977,12 @@ Facts, from code, so the design argues with reality and not with itself:
   and `merge_insert`s (`guide.md:3505-3590`). **Hard precondition, creation-time-only:**
   CDF and durable row identity require `enable_stable_row_ids=True` at dataset creation —
   a silent no-op if attempted later (`file_format.md:4011-4013`) — enforced by the
-  catalog's creation contract and gate A14. Concurrency truth: `merge_insert` maps to the
+  catalog's creation contract and gate A14; the format spec labels stable row ids
+  *experimental* (`file_format.md:1264-1280`), so §7.11's Phase-0 check verifies them on
+  the deployed version, and `lance_ray` exposes no stable-row-id/version-pinning surface —
+  Ray tasks drop to core scanners (`with_row_id=True`) for pinned reads. Indexes *remain
+  valid* across merges but coverage decays (new rows unindexed) — hence the owned
+  maintenance lane below. Concurrency truth: `merge_insert` maps to the
   *Update* transaction → concurrent merge-inserts are **retryable at application level,
   not auto-rebased** (`file_format.md:5155-5159, 5261-5263`) — E3's per-dataset
   single-flight is load-bearing for silver/gold, and the mover carries an explicit retry
@@ -995,10 +1010,21 @@ Facts, from code, so the design argues with reality and not with itself:
   (c) managed copies only for physically self-contained export sets; (d) external-URI
   blobs only for lanes whose bytes legitimately live in a **registered base path**
   (`initial_bases` at creation, per-base credentials `base_<id>.<key>`,
-  `guide.md:319-321, 2350-2378`) — never pointing at another dataset's internals. The
+  `guide.md:319-321, 2350-2378`) — never pointing at another dataset's internals (crops
+  MAY reference the external source object when bronze itself uses
+  `external_blob_mode="reference"` — the one legitimate slice case, `ray.md:870`).
+  **Cross-dataset lifecycle guard trio** (references imply retention): silver/gold's
+  `source_rowid` references require bronze rows to persist — so (i) referenced bronze
+  versions are tag-pinned (cleanup-exempt, `guide.md:3987-3993`), (ii)
+  `delete_unverified` is FORBIDDEN on bronze while cross-tier references exist, (iii)
+  external bases are named BasePath registrations (`file_format.md:3079-3110`). The
   invariant stands: **no unchosen byte copies** — and no invented pointers either.
-- **D3 · The gate moves in front of PUBLICATION.** Delta-batch validation runs after
-  commit but before the `published` ref advances (see D7) — a failure publishes nothing,
+- **D3 · The gate runs BEFORE visibility — pre-commit where possible, pre-publication
+  always.** Where a hop's delta is a single transaction (every mover hop, and ingest's
+  one commit), the gate validates the transformed batch and the uncommitted fragments
+  *before the commit itself* — staging is invisible until committed
+  (`guide.md:1533-1636`), so the committed-but-unaudited window disappears entirely for
+  these hops. The `published` tag remains the consumer-visibility ref regardless — a failure publishes nothing,
   emits a FAIL run, and stops the cascade at that tier (E7, wired to namespace error
   codes: 20 TableSchemaValidationError etc. stop loudly; 14/17/21 retry —
   `namespace.md:1661-1684`). Assertion engines: pylance scanner filters for structural
@@ -1052,8 +1078,13 @@ Facts, from code, so the design argues with reality and not with itself:
   RESPONSE, never from DescribeTable, `namespace.md:1915-1918`). Strict isolation per
   lane: stage on a branch and point the root tag at `(branch, version)` — tags can
   reference branch versions (`file_format.md:2807, 2815`) — accepting that published data
-  then lives on the branch. Tag-pinning is advisory for readers (`latest` remains
-  reachable) — reader discipline is a stated rule. Tagged versions are cleanup-exempt
+  then lives on the branch. Tag-pinning is a HARD rule for consumers, not advice: every reader resolves the tag,
+  never latest; REST consumers do the two-step (`GetTableTagVersion` → query pinned,
+  since `QueryTableRequest` has no tag field — `namespace.md:1761, 2432-2453`). The
+  format layer has no tag-CAS protocol (`file_format.md:2794-2807`) — tag updates go
+  through the namespace path ONLY. Branches are permanently divergent shallow clones:
+  rehearsal, ref-flip lines, or throwaway — **deleted after use** (they block cleanup,
+  `guide.md:4049-4053`). Tagged versions are cleanup-exempt
   (`guide.md:3987-3993`): the WAP contract's storage cost, budgeted. **Multi-table
   atomicity exists when needed**: `BatchCommitTables` (`spec.yaml:875-920`) commits
   mixed operations across tables all-or-nothing — dataset version + index registration in
@@ -1082,6 +1113,14 @@ Facts, from code, so the design argues with reality and not with itself:
   `CreateTableVersionRequest.metadata` map durably carries the run id / lineage
   correlation (`namespace.md:3430`) — a spec-native transactional anchor for the arrival
   event; `header.*` context passthrough carries trace ids (`namespace.md:1143-1183`).
+  Three boundaries the synthesis pinned: **managed vs unmanaged versioning is a
+  per-catalog, all-or-nothing choice** (`namespace.md:1016-1022`), not per-run;
+  **auto-rebase exists only on Lance's native commit path** — commits driven through raw
+  `CreateTableVersion` need a caller-owned retry loop (re-read latest, rebuild manifest,
+  re-call; `TableVersion.eTag` for OCC, `namespace.md:5606`), and wiring the catalog as
+  Lance's commit handler is a §7.11 must-verify; and **Overwrite/Restore are prohibited
+  on governed tables while runs are in flight** — they kill concurrent Appends
+  non-retryably (`file_format.md:4825-4833`).
 
 ### Runtime & event-handling rules (E1–E7) — the holes, closed
 
@@ -1102,9 +1141,13 @@ What a mover IS at runtime, and the rules every event handler obeys:
   job completion** — no completion polling ever returns (A13 holds). A died job commits
   nothing and rings nothing; the lineage reconciler (storage truth) is the dead-man for
   stuck lanes, and the FAIL run is the record.
-- **E5 · Replay = ring the doorbell manually.** Rebuilding a tier after a transform fix is
-  an admin re-emit on the catalog (`re-emit commit event for dataset@version`) — same code
-  path, no bespoke replay machinery. This is also the backfill story.
+- **E5 · Replay/backfill = native atomic operations on main, gated like any commit.**
+  Rebuilds execute as `Update` / `DataReplacement` / `merge_insert` /
+  `add_columns`+`LanceOperation.Merge` on main (`file_format.md:5126-5217`,
+  `guide.md:3479-3598, 1639-1697`), pass the gate, and publish via tag-advance — the
+  same path as any hop, no bespoke machinery. Branch-as-rehearsal is the named fallback
+  (run the backfill on a branch, inspect, then re-execute on main); rollback = `Restore`
+  + tag repoint (`file_format.md:5064-5083`). Branches are deleted after use.
 - **E6 · Drained protocol edges.** The remaining-counter is initialized before the first
   task is published; for streaming enumeration (multi-million-object prefixes) drained
   requires `enumeration_complete && remaining == 0`, both atomic in KV; a redelivered
@@ -1318,7 +1361,12 @@ earlier goal — infrastructure changes should not share a goal with service cod
 11. **Verify RustFS conditional put — narrowed**: with managed versioning the
     requirement collapses to the `__manifest` table's own commits (D8); Phase 0 verifies
     that plus server-side COPY (the non-managed path), tags/CDF/`write_fragments` against
-    the pinned pylance, and RustFS `endpoint`+`region` config (`guide.md:2427-2438`).
+    the pinned pylance, RustFS `endpoint`+`region` config (`guide.md:2427-2438`),
+    stable-row-ids behavior on the deployed version (format-spec-labelled experimental),
+    and whether the catalog can be wired as Lance's commit handler (else the
+    caller-owned CreateTableVersion retry loop with `eTag` OCC is the design). OTel
+    witnesses for the A-conditions: `lance::dataset_events` (committed) and
+    `lance::file_audit` (create/delete/delete_unverified) — `guide.md:2912-2930`.
 12. ~~branch-merge vs tag-advance~~ **Resolved (D7): tag-advance — branch merge does not
     exist in the format, the Python API, or the namespace spec.** Staging-branch + root
     tag-at-branch-version remains the per-lane strict-isolation variant. Remaining
