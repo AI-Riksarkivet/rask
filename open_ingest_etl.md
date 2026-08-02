@@ -814,9 +814,13 @@ imitation.
 
 ## 6c · The trigger chain — who triggers who
 
-**One rule: every hop is triggered by a catalog commit event; nothing else triggers
-anything.** The catalog emits `medallion.<tier>.<dataset>` on every governed commit,
-unconditionally and with no per-dataset config. Movers subscribe to the subjects they care
+**One rule: every hop is triggered by a catalog PUBLICATION event; nothing else triggers
+anything.** The catalog emits `medallion.<tier>.<dataset>` when a dataset's published ref
+advances (D7), unconditionally and with no per-dataset config. Provenance stated plainly:
+the Lance Namespace spec defines NO event mechanism (verified across all 7,563 lines) —
+the arrival event is a rask-catalog feature layered on the spec, exactly as CloudEvents is
+Lakekeeper's feature and not Iceberg's. The event's version comes from the catalog's own
+commit/tag-update RESPONSE, never from DescribeTable. Movers subscribe to the subjects they care
 about; their own commit (through the catalog) is what wakes the next tier — a mover never
 publishes a trigger. Lineage COMPLETE/FAIL events are emitted alongside every commit but
 trigger nothing (I8). The cascade ends wherever no subscriber exists, and a new consumer
@@ -952,65 +956,132 @@ Facts, from code, so the design argues with reality and not with itself:
 
 **Redesign deltas (D1–D5), each against a measured defect:**
 
-- **D1 · Overwrite → merge-on-id delta processing.** Bronze appends/merges on
-  `id = hash(source_uri)` (verified §Empirical). Silver/gold become **incremental**: the
-  commit event carries the version; the mover computes the *delta* (upstream rows whose
-  ids are absent downstream — an anti-join, or version-range read), transforms only those,
-  and `merge_insert`s. Consequences: datasets are immutable-append in Lance's idiom,
-  indexes survive (the second-commit rebuild dies), re-runs converge by id (E2 for free),
-  and full-rewrite remains available as an E5 replay for schema changes.
-- **D2 · Stop copying blobs between tiers — choose the blob semantics per lane from
-  Lance's own menu.** The raw-vs-governed distinction is the key: `ingest.py:113-118`
-  refuses `Blob.from_uri` pointers at ingest because pointing at UNgoverned external
-  storage dangles when a source lifecycle-deletes — correct, and it stands. But pointing
-  at **bronze** — governed, immutable, estate-owned — carries no such risk. So per lane,
-  deliberately: (a) **External-URI blobs into bronze's storage** as the carry-forward
-  default — silver keeps a real payload column at zero byte cost, and position+size
-  slices even represent *region crops as references* instead of derived bytes;
-  (b) key-only (`id`/`source_rowid`) with consumers resolving via `take_blobs(ids)` when
-  a tier needs no payload column at all; (c) managed copies only where a tier must be
-  physically self-contained (e.g. an export set leaving the estate); (d) genuinely
-  *derived* blobs (thumbnails) stored managed with thresholds tuned per size profile.
-  The invariant is not "no payload columns" — it is **no unchosen byte copies**.
-- **D3 · The gate moves in front of the commit.** Delta-batch validation
-  (Pandera-style schema+content checks on the transformed batch) runs pre-commit — a
-  failure commits nothing, emits a FAIL run, and stops the cascade at that tier (E7).
-  Dataset-level checks (blob_resolves, counts) run post-commit as monitors, not gates.
-  Today's commit-then-block behavior is explicitly retired.
+- **D1 · Overwrite → change-data-feed incremental processing.** Bronze appends/merges on
+  `id = hash(source_uri)` (verified §Empirical; declare `id` as Lance's *unenforced
+  primary key* at creation — `file_format.md:2887-2910` — for merge-insert dedup).
+  Silver/gold become **incremental**: the arrival event carries the published version; the
+  mover reads the delta with Lance's **native change-data-feed**
+  (`_row_created_at_version` / `_row_last_updated_at_version` predicates,
+  `file_format.md:4270-4298`; `dataset.delta` → `get_inserted_rows`/`get_updated_rows`,
+  `guide.md:2290-2292`) — O(delta), no ledger, no anti-join — transforms only those rows,
+  and `merge_insert`s (`guide.md:3505-3590`). **Hard precondition, creation-time-only:**
+  CDF and durable row identity require `enable_stable_row_ids=True` at dataset creation —
+  a silent no-op if attempted later (`file_format.md:4011-4013`) — enforced by the
+  catalog's creation contract and gate A14. Concurrency truth: `merge_insert` maps to the
+  *Update* transaction → concurrent merge-inserts are **retryable at application level,
+  not auto-rebased** (`file_format.md:5155-5159, 5261-5263`) — E3's per-dataset
+  single-flight is load-bearing for silver/gold, and the mover carries an explicit retry
+  loop. Two owned follow-up lanes (new): **index maintenance** — appended rows are not
+  auto-indexed; `optimize_indices` delta-maintenance after publish (`ray.md:316-355`),
+  Fragment Reuse Index / `defer_index_remap` for continuously-ingesting indexed datasets
+  (`guide.md:3146-3170`) — and **compaction** (`compact_files`, `guide.md:3750-3776`;
+  small-fragment accumulation is the documented cost of incremental commits), compaction
+  before index rebuilds (`guide.md:3774-3776`). Full-rewrite survives only as an E5
+  replay. First commit into a new dataset is `LanceOperation.Overwrite` by recipe
+  (`guide.md:1594-1601`) — an explicit I4 carve-out for creation.
+- **D2 · Stop copying blobs between tiers — key-reference is the default; there is NO
+  cross-dataset blob pointer.** Corrected against the pinned docs: no API exposes a
+  `(uri, position, size)` for a blob stored inside another Lance dataset (payloads live
+  inline/packed/dedicated in bronze's own files; `read_blobs` returns bytes, `take_blobs`
+  returns opaque handles — `guide.md:391-408`), so "external-URI blobs into bronze's
+  storage" is unimplementable. The menu, per lane: (a) **default — key-reference**:
+  silver/gold store `id` + `source_rowid` (= bronze's stable `_rowid`); consumers resolve
+  payloads from bronze — batch via **`read_blobs`** (the docs mandate it over thread-pooled
+  take_blobs, `guide.md:396-399`), single-row via `take_blobs(ids=[source_rowid])` (ids =
+  logical row ids, exactly what `source_rowid` holds), scans via
+  `blob_handling="all_binary"`; (b) genuinely *derived* blobs (crops, thumbnails) stored
+  managed with per-field thresholds (`inline_size_threshold`/`dedicated_size_threshold`
+  on `blob_field`; `blob_pack_file_size_threshold` is a WRITE option, `guide.md:322-331`);
+  (c) managed copies only for physically self-contained export sets; (d) external-URI
+  blobs only for lanes whose bytes legitimately live in a **registered base path**
+  (`initial_bases` at creation, per-base credentials `base_<id>.<key>`,
+  `guide.md:319-321, 2350-2378`) — never pointing at another dataset's internals. The
+  invariant stands: **no unchosen byte copies** — and no invented pointers either.
+- **D3 · The gate moves in front of PUBLICATION.** Delta-batch validation runs after
+  commit but before the `published` ref advances (see D7) — a failure publishes nothing,
+  emits a FAIL run, and stops the cascade at that tier (E7, wired to namespace error
+  codes: 20 TableSchemaValidationError etc. stop loudly; 14/17/21 retry —
+  `namespace.md:1661-1684`). Assertion engines: pylance scanner filters for structural
+  checks (today's `quality.py` shape) + embedded DuckDB-Lance for SQL-expressed content
+  assertions held as per-dataset config text. Dataset-level probes run post-publish as
+  monitors, recorded via `UpdateTableSchemaMetadata` (metadata-only commits,
+  `namespace.md:1869-1870`). Today's commit-then-block behavior is retired.
 - **D4 · Delta bookkeeping is data, not state.** "What has been processed" is answered by
-  the datasets themselves (id anti-join / version ranges), not by a side ledger — the
-  mover stays stateless; E3's per-dataset single-flight makes the anti-join race-free.
-- **D5 · E4 unchanged**: heavy feature engineering (the real HTR/embedding work, which
-  today does not exist in the movers) runs as Ray jobs that commit through the catalog;
-  the commit event is the completion signal; the in-pod blocking poll is retired.
-- **D6 · The blob lane's landing IS uncommitted Lance fragments** — the recipe is
-  verbatim in the PINNED docs (`lance_docs/guide.md:1536-1631`): parallel
-  `lance.fragment.write_fragments` on workers → `FragmentMetadata.to_json` → collect on
-  one worker → ONE `LanceOperation.Append(all_fragments)` with `read_version` set
-  (`LanceOperation.Merge` at `guide.md:1676` for schema-adding fragments). Workers
-  validate, then write fragments directly; uncommitted fragments are invisible = staging.
-  The tracker stores each unit's FragmentMetadata JSON; finalize commits the collected
-  list. The separate S3 landing prefix is retired as the default — per-lane only where
-  pre-conversion byte staging is genuinely needed. Failed runs leave unreferenced
-  fragment files for dataset cleanup.
-- **D7 · Publication is a Lance ref, and the doorbell fires on PUBLICATION.** Native WAP
-  via the pinned branch/tag spec (`lance_docs/file_format.md:2694-2820`): branches are
-  shallow clones with independent histories under `tree/{branch}/`, tags are refs under
-  `_refs/tags/`. Either (a) delta lands on a staging *branch*, gate runs, merge to main;
-  or (b) commit to main, gate runs, advance the `published` *tag*. Per-dataset choice;
-  consumers and the catalog's arrival event key on the published ref, so
-  committed-but-unaudited data is never visible downstream. E5 replays/backfills ride a
-  branch — the documented use — then merge.
-- **D8 · Concurrency is storage-safe by transaction rebase, and commit atomicity has TWO
-  documented routes.** Transactions carry `read_version`; concurrent conflicts rebase
-  automatically where semantics allow (`file_format.md:4761-4794`). Atomicity: (a)
-  **commits through the catalog use the Namespace spec's own `put_if_not_exists`
-  version-entry semantics** (`lance_docs/namespace.md:6181-6188`) — our primary path,
-  since every write goes through the catalog; (b) direct-store commits need
-  put-if-not-exists on the store, **with a documented fallback — the external manifest
-  store (any put-if-not-exists KV)** for stores without atomic ops
-  (`file_format.md:5377-5394`). So RustFS conditional-put (§7.11) is a verification item,
-  not a hard blocker. E3's single-flight remains for *semantic* serialization only.
+  the datasets themselves — the change-data-feed between published versions (D1) — never
+  a side ledger; the mover stays stateless.
+- **D5 · E4 restated with the real client seams.** Heavy feature engineering runs as Ray
+  jobs; but `lance_ray.write_lance` has **no merge/upsert mode and returns no fragments**
+  (`ray.md:838-875`) — so the job's writer uses **pylance inside the job**
+  (`write_fragments`/`merge_insert`; the Lander is a library ROLE the job plays — I4
+  holds) and **registers the commit through the catalog** (`CreateTableVersion`; the
+  estate already implements this seam: `services/catalog/.../versions.py:154` and the
+  client-direct fragment commit endpoint `data.py:292 commit_fragments`). The registered
+  commit is the completion signal; the in-pod blocking poll is retired. `lance_ray`
+  remains right for distributed `add_columns` backfill (`ray.md:140-169`), distributed
+  index builds, compaction, and vector search; `@lance.batch_udf(checkpoint_file=…)`
+  (`guide.md:707-713`) is the doc-native resume for expensive GPU backfills.
+- **D6 · The blob lane's landing IS uncommitted Lance fragments** — recipe verbatim in
+  the pinned docs (`guide.md:1533-1637`): parallel `lance.fragment.write_fragments` per
+  worker → `FragmentMetadata.to_json` → collect → ONE `LanceOperation.Append` with
+  `read_version` (creation: `Overwrite`, `guide.md:1594-1601`). Binding constraints now
+  on record: **worker blob-threshold/schema metadata must be byte-identical** or appends
+  are rejected (`guide.md:327-329`); pre-commit **fragment ids collide** (both workers
+  yield id=0, `guide.md:1576-1578`) — the tracker keys FragmentMetadata by unit key,
+  never fragment id; workers write into the dataset path → they hold **vended,
+  short-lived storage credentials** (spec'd: `vend_credentials`/`expires_at_millis`,
+  `namespace.md:3796, 3822`; SDK `latest_storage_options()`); fragment sizing follows
+  `guide.md:3100-3129` (more fragments for concurrent-update-heavy datasets). There are
+  **two client seams, not one**: pylance for fragments/commits/blobs (these APIs do not
+  exist in `lance_sdk.md`, which is LanceDB's client), the namespace client for
+  registration. The separate S3 landing prefix is retired as default; failed runs leave
+  unreferenced fragments reclaimed only by `cleanup_old_versions(delete_unverified=True)`,
+  which is age-based and **unsafe while long runs are in flight** (`guide.md:3845-3855`)
+  → auto-cleanup OFF, cron cleanup with `older_than` ≥ max run duration (gate A15).
+- **D7 · Publication is a TAG advance; branch-merge does not exist.** Corrected: the
+  complete transaction-type list has no branch merge (`file_format.md:4811-5249`;
+  `LanceOperation.Merge` is ADD-COLUMNS, `file_format.md:4994-4997`), and the Python/
+  namespace surfaces offer only create/list/checkout/delete for branches
+  (`guide.md:3995-4053`, `namespace.md:1877-1879`). The mechanism: gate passes → the
+  catalog advances the root-level `published` tag (`ds.tags.update`, `guide.md:3968`;
+  namespace `UpdateTableTag` with `ConcurrentModification` protection,
+  `namespace.md:1876, 1764`) → **the catalog emits the arrival event on that tag update**
+  — a tag advance produces NO Lance commit (`guide.md:3953`), so the doorbell is
+  necessarily a catalog-layer emission. Consumers resolve the ref server-side via
+  `DescribeTable(tag=...)` (`namespace.md:3791`); movers don't need the tag at all — the
+  event carries the exact version (taken from the `CreateTableVersion`/tag-update
+  RESPONSE, never from DescribeTable, `namespace.md:1915-1918`). Strict isolation per
+  lane: stage on a branch and point the root tag at `(branch, version)` — tags can
+  reference branch versions (`file_format.md:2807, 2815`) — accepting that published data
+  then lives on the branch. Tag-pinning is advisory for readers (`latest` remains
+  reachable) — reader discipline is a stated rule. Tagged versions are cleanup-exempt
+  (`guide.md:3987-3993`): the WAP contract's storage cost, budgeted. **Multi-table
+  atomicity exists when needed**: `BatchCommitTables` (`spec.yaml:875-920`) commits
+  mixed operations across tables all-or-nothing — dataset version + index registration in
+  one commit (properly killing the measured second-commit defect), and atomic promotion
+  across partitioned gold tables (the Partitioned Namespace's `read_tag` columns
+  generalize the published ref across partitions, `namespace.md:501-530`). A `Restore`
+  (rollback) DOES create a version and will re-fire the doorbell
+  (`file_format.md:5064-5082`) — mover idempotency (E2) explicitly covers
+  rollback-originated events.
+- **D8 · Concurrency and atomicity, stated precisely.** Client-side: Lance transactions
+  carry `read_version`; conflicts are three-valued — *rebaseable* (auto-retried in the
+  commit layer), *retryable* (application re-reads and retries), *incompatible*
+  (`file_format.md:5251-5285`; per-op matrix `4825-5249`; Append∥Append fully compatible,
+  `4827-4834`). Catalog-side: the namespace has **no read_version and never rebases** —
+  `CreateTableVersion` takes a version number and 409s on conflict
+  (`spec.yaml:728-731`); retry classification by error code (`namespace.md:1661-1684`).
+  Atomicity: with `table_version_management=true` the catalog IS the external manifest
+  store — atomicity relocates to primary-key dedup on the `__manifest` table
+  (`namespace.md:6192-6203`, `ns_catalog/catalog/dir/index.md:113, 131-134`) — so
+  **RustFS conditional-put narrows to one table's commits** (§7.11, verification not
+  blocker); non-managed mode still needs store-level conditional put for the catalog's
+  copy step (`namespace.md:6188`). Wording corrected per the spec's own ruling
+  (`namespace.md:1920-1946`): **every write is REGISTERED through the catalog; bytes go
+  direct-to-store under vended credentials** — `managed_versioning=true`
+  (`namespace.md:3826`) turns that posture into a server-asserted contract. The
+  `CreateTableVersionRequest.metadata` map durably carries the run id / lineage
+  correlation (`namespace.md:3430`) — a spec-native transactional anchor for the arrival
+  event; `header.*` context passthrough carries trace ids (`namespace.md:1143-1183`).
 
 ### Runtime & event-handling rules (E1–E7) — the holes, closed
 
@@ -1159,6 +1230,17 @@ each must land as a **test in the same PR** as the behavior (§3.4's rule).
   lost'" category). `ray_kit.await_success` — today's only production `while True:
   sleep()` poll (`submit.py:119`), held inside the medallion's HTTP request — does not
   survive the move in any form.
+- **A14 — creation-time flags are gated.** Every governed dataset is created with
+  `enable_stable_row_ids=True` (silent no-op if late — `file_format.md:4011-4013`) and
+  `id` declared as the unenforced primary key (`file_format.md:2887-2910`); the catalog's
+  creation contract refuses datasets missing either; a test proves the refusal.
+- **A15 — cleanup can never eat a live run.** Auto-cleanup is off; the cron cleanup's
+  `older_than` is asserted ≥ the maximum permitted ingest-run duration
+  (`guide.md:3845-3855`); a test pins the relation between the two config values.
+- **A16 — index maintenance and compaction are owned lanes.** After publication,
+  `optimize_indices` delta-maintenance runs (and its execution is observable); a
+  compaction cadence exists for incrementally-committed datasets; a test proves indexed
+  search returns rows added by the latest published delta.
 
 ## 6e · The implementation goal, /goal-ready
 
@@ -1233,12 +1315,16 @@ earlier goal — infrastructure changes should not share a goal with service cod
     post-Cloudflare; the C fallback triggers if it stalls while a stateful-streaming need is
     live. Redpanda Connect usage note: stay within the open-core connectors (NATS/S3/HTTP)
     to avoid enterprise-license surface.
-11. **Verify RustFS conditional put** (put-if-not-exists / If-None-Match) so Lance's
-    `ConditionalPutCommitHandler` gives atomic 1-IOPS commits (D8) — Phase 0, alongside a
-    hands-on check of branch/tag operations (D7) and `write_fragments`-per-worker (D6)
-    against the pinned pylance version.
-12. D7 mechanism per dataset: staging-branch-merge vs published-tag-advance (leaning tag
-    for the cascade — simpler ref semantics; branch for backfills/migrations either way).
+11. **Verify RustFS conditional put — narrowed**: with managed versioning the
+    requirement collapses to the `__manifest` table's own commits (D8); Phase 0 verifies
+    that plus server-side COPY (the non-managed path), tags/CDF/`write_fragments` against
+    the pinned pylance, and RustFS `endpoint`+`region` config (`guide.md:2427-2438`).
+12. ~~branch-merge vs tag-advance~~ **Resolved (D7): tag-advance — branch merge does not
+    exist in the format, the Python API, or the namespace spec.** Staging-branch + root
+    tag-at-branch-version remains the per-lane strict-isolation variant. Remaining
+    sub-decision: FTS `format_version` pin for gold serving (pylance 9 defaults to v2;
+    older readers can't read it — `guide.md:2198-2217`) and ICU as the default tokenizer
+    for Swedish mixed-language text (`guide.md:4073-4085`).
 
 ## Sources (external claims)
 
