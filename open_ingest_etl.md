@@ -861,6 +861,60 @@ Workflow placement rule: **a workflow wraps a bounded run with fan-out or extern
 a mover stays a single-step event handler.** Ingest qualifies today; human-gated promotion
 qualifies when it lands; bronze→silver never does (the Ray job's commit event closes it).
 
+### Measured: how the cascade works TODAY (audited 2026-08-02) — and the redesign deltas
+
+Facts, from code, so the design argues with reality and not with itself:
+
+- **Overwrite-only, every tier.** `transform_stage` writes `mode="overwrite"`
+  (`compute.py:252`); bronze ids are positional and valid *only because* of overwrite
+  (`ingest.py:61-66`); every run drops and rebuilds the `lineage` JSON index as a second
+  commit (`compute.py:200-212`); `source_rowid` is a per-run snapshot that "self-heals
+  because the cascade re-runs whole" (`compute.py:53-57`).
+- **Blob carry-forward is a full byte copy per tier.** `_carry_forward` materialises every
+  payload into pod memory (`.to_pylist()`, `compute.py:332`) and rewrites the bytes into
+  the downstream dataset — silver and gold each hold complete copies of bronze's blobs.
+- **Quality runs AFTER the commit.** Assertions (`quality.py:37-75`: row_count_positive,
+  not_null on key, column_declared per required column, blob_resolves first+last) execute
+  on the just-written target; a failure leaves the commit in place, skips the next-stage
+  trigger, and emits COMPLETE-with-failed-assertions — no FAIL run, no DLQ
+  (`transform.py:324-337, 462-468`).
+- **`promotion.py` is lineage-doc construction only** (the name is historical); the real
+  derivers are placeholders (128px thumbnail + an 8-float luminance "embedding",
+  explicitly no ML — `media.py:5-7`); the P7b GPU movers do not exist. The mover locks
+  cluster-wide via one asyncio lock + `moverReplicas: 1`.
+- **Ray path**: in-pod blocking 2s poll (`ray_kit/submit.py:119-142`); the job writes the
+  lineage column but not the index; the mover rebuilds the index after the job returns.
+- **Lineage is the strongest part**: deterministic run ids, per-column `columnLineage`
+  edges, JSONB `lineage` column with the full inherited chain (1 hop at silver, 2 at
+  gold), quality assertions on the WROTE edge. The redesign keeps this contract intact.
+
+**Redesign deltas (D1–D5), each against a measured defect:**
+
+- **D1 · Overwrite → merge-on-id delta processing.** Bronze appends/merges on
+  `id = hash(source_uri)` (verified §Empirical). Silver/gold become **incremental**: the
+  commit event carries the version; the mover computes the *delta* (upstream rows whose
+  ids are absent downstream — an anti-join, or version-range read), transforms only those,
+  and `merge_insert`s. Consequences: datasets are immutable-append in Lance's idiom,
+  indexes survive (the second-commit rebuild dies), re-runs converge by id (E2 for free),
+  and full-rewrite remains available as an E5 replay for schema changes.
+- **D2 · Stop copying blobs between tiers.** Bronze owns the bytes — that ruling stands
+  against *raw*. Silver/gold do **not** carry the payload column: they carry `id` (and
+  `source_rowid`) as the key back into bronze, plus only *genuinely derived* blobs (crops,
+  thumbnails). A consumer needing original bytes resolves them from bronze via `take_blobs(ids)`;
+  aligned scans use bronze directly. This deletes the per-tier byte copy and the pod-memory
+  materialisation in one move.
+- **D3 · The gate moves in front of the commit.** Delta-batch validation
+  (Pandera-style schema+content checks on the transformed batch) runs pre-commit — a
+  failure commits nothing, emits a FAIL run, and stops the cascade at that tier (E7).
+  Dataset-level checks (blob_resolves, counts) run post-commit as monitors, not gates.
+  Today's commit-then-block behavior is explicitly retired.
+- **D4 · Delta bookkeeping is data, not state.** "What has been processed" is answered by
+  the datasets themselves (id anti-join / version ranges), not by a side ledger — the
+  mover stays stateless; E3's per-dataset single-flight makes the anti-join race-free.
+- **D5 · E4 unchanged**: heavy feature engineering (the real HTR/embedding work, which
+  today does not exist in the movers) runs as Ray jobs that commit through the catalog;
+  the commit event is the completion signal; the in-pod blocking poll is retired.
+
 ### Runtime & event-handling rules (E1–E7) — the holes, closed
 
 What a mover IS at runtime, and the rules every event handler obeys:
