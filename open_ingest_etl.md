@@ -696,6 +696,15 @@ invariant, the answers fall out:
 
 ### Package topology — the kits are consistent; ratch is the AV lane
 
+**The four-layer taxonomy (they are layers, not alternatives):** **ray-kit** = the
+client for talking TO the cluster (submit/re-attach/dashboard; zero compute; its
+`await_success` poll is banned by A13). **A Ray job** = the unit of execution — a
+pre-baked entrypoint that runs read→transform→write to completion. **runners/** = sealed
+model environments (own lockfiles; the heavy ML deps and the models themselves).
+**ratch** = the AV lane's *domain* library (schemas, governed Lance access, retrieval)
+that the AV runners import — not part of ray-kit, they never touch. One AV hop reads:
+mover —ray-kit→ Ray job —contains→ runner —imports→ ratch —writes→ Lance.
+
 - **service-kit** — the backbone: `make_service_app`, dapr auth/publish, the outbox, blob
   helpers; the single `SourceAdapter` home; its `lancekit/writer.py` merge_insert seam is
   the home of the **Lander protocol**. Drift fix in passing: retire the transitional
