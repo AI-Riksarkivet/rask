@@ -1448,6 +1448,23 @@ each must land as a **test in the same PR** as the behavior (§3.4's rule).
   `optimize_indices` delta-maintenance runs (and its execution is observable); a
   compaction cadence exists for incrementally-committed datasets; a test proves indexed
   search returns rows added by the latest published delta.
+- **A17 — the mover contract (per tier, E1–E3 as tests).** A stale event (version ≤
+  last-processed) is acked without work; a redelivered event for already-produced output
+  is a no-op (deterministic run id asserted equal); two mover replicas on one dataset
+  subject never transform concurrently (queue-group single-flight proven under
+  redelivery); a submission failure naks → maxDeliver → DLQ + FAIL run.
+- **A18 — publication behavior (per tier).** Gate FAIL → no tag advance, no event, FAIL
+  lineage run, downstream provably never woken; gate PASS → `published` advanced, the
+  emitted event's version equals the commit/tag-update RESPONSE value; a consumer
+  resolving via the tag reads the gated version while `latest` may differ; a `Restore`
+  re-fires the doorbell and the mover's idempotency absorbs it with zero duplicate rows.
+- **A19 — delta correctness (per hop).** Two successive publishes of N and M new rows →
+  the mover processes exactly N then exactly M (CDF-read row ids asserted, no overlap,
+  no misses); a full E5 replay converges to identical row counts and content hashes.
+- **A20 — the dummy lane is green end-to-end.** The `runners/dummy` python e2e passes
+  (every hop asserted, incl. A3's kill-pod resume and A5's corrupt-fixture branch) and
+  the four Playwright assertions (lineage chain, run status + defect state, compute job
+  row, viewer blob via `source_rowid`) pass against the tilt-deployed stack.
 
 ## 6e · The implementation goal, /goal-ready
 
@@ -1457,7 +1474,7 @@ turn bound — per the /goal condition guidance). Drive Phase 1 with:
 ```text
 /goal Phase 1 of open_ingest_etl.md is implemented. End state, all demonstrated in-conversation:
 (1) services/ingest exists as a uv workspace member (api + worker + lander modules) with a chart
-entry, gateway row, ETL JetStream stream, and DLQ route; (2) every acceptance condition A1–A16 in
+entry, gateway row, ETL JetStream stream, and DLQ route; (2) every acceptance condition A1–A20 in
 §6d has a named test and `uv run pytest -m "not slow"` exits 0 with all of them passing —
 including A13 as DELETION (`rg await_success` over the repo returns nothing), the mover
 ack contract implemented exactly per the §"Ray job durability" rule table with a test per
