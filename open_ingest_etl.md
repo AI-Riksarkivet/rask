@@ -694,6 +694,29 @@ invariant, the answers fall out:
    first-party from the lander, which is why the "no OpenLineage integration in
    Arroyo/Numaflow" gap costs nothing.
 
+### Package topology — the kits are consistent; ratch is the AV lane
+
+- **service-kit** — the backbone: `make_service_app`, dapr auth/publish, the outbox, blob
+  helpers; the single `SourceAdapter` home; its `lancekit/writer.py` merge_insert seam is
+  the home of the **Lander protocol**. Drift fix in passing: retire the transitional
+  `service_kit.openlineage` (R19) in favour of lineage-kit (the lineage repository still
+  imports the former).
+- **ray-kit** — kept for deterministic `submit_or_reattach` + the dashboard client;
+  `await_success` retired (A13).
+- **lineage-kit** — the ingest plane is the first consumer of its `ClientEmitter`
+  transport; `as_env` context threads jobs; `LineageDoc` columns at the tiers.
+- **ratch — relevant, and precisely placed.** Its consumers are the four sealed AV
+  runners (`runners/asr`, `runners/diarize`, `runners/voiceprint`, `runners/topics`):
+  ratch is the **audio/video lane's feature-engineering + retrieval library**. It is also
+  the design's prior art twice over: its `core/dataset.py` write-funnel grep gate IS the
+  I4 Lander pattern already enforced, and its `media_blob` (Blob V2 External URIs +
+  `materialize.py` external→managed conversion) IS D2's external/ingest mode split in
+  production. Absorbed by this design: its duplicated `SourceAdapter` copy (sequencing
+  step 3) and its acquisition head (AV media enters via `POST /v1/ingests`). Remaining
+  ratch's: media schema/descriptors, the Ray feature stages the AV runners consume,
+  retrieval over the chunks table — with its datasets becoming catalog-registered
+  governed datasets like every tier.
+
 ### Job artifacts — jobs pre-exist; submission only parameterizes
 
 What a "Ray job" physically is, today and in the design (previously unstated):
