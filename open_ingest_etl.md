@@ -955,7 +955,17 @@ medallion IIIF files are deleted and `rg -l iiif services/medallion` prints noth
 check` is clean. Constraints: no changes outside services/ingest, services/medallion,
 services/gateway, packages/tracker, packages/service-kit, chart/, tests/, and the skills touched
 by CLAUDE.md's drift rule; no docker build anywhere; no new operators; commits carry no co-author
-trailer and the working branch is not prefixed claude-. Or stop after 40 turns.
+trailer and the working branch is not prefixed claude-. Process requirements: before writing code
+against a subsystem, load and follow the applicable skills — writing-python, fastapi,
+testing-python for the service; openfga for any authorization surface; the rask-* project skills
+for each plane touched; dagger/dockerfile for the image; the Svelte 5 skills + svelte MCP
+autofixer for any .svelte change; a dapr skill if installed. Do not invent APIs: before
+implementing against Dapr Workflow (dapr-ext-workflow), nats-py/JetStream, pylance, or
+lineage-kit, read the actual reference code or official docs and show the evidence
+in-conversation (file:line for estate code, URL for external docs). Do not cheat the gate:
+acceptance tests run for real — no skip markers on A1–A13, no mocked-away assertions, no
+weakening an invariant, grep-gate or test to make it pass; if a condition is genuinely
+unachievable, stop and say so instead of redefining it. Or stop after 40 turns.
 ```
 
 Phase 0 (M4 Dapr bump, NATS 3-node + streamReplicas 3, state-store scopes) is a separate,
