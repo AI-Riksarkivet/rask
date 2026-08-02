@@ -843,6 +843,24 @@ quality assertions → commit) → `medallion.silver.<ds>` → silver→gold mov
 (the mechanism behind the M3 dead lane) and the producer's `/bronze-arrival`
 self-subscription, both deleted.
 
+### Tier semantics for a multimodal Lance lakehouse (not dbt tables)
+
+The decision rule that settles raw/bronze/silver/gold arguments: **bronze is the last
+state you cannot recompute from your own estate; silver is anything a model derived
+(recomputable by re-running it); gold is what a consumer contract depends on
+(quality-gated); raw is other people's systems — never governed.**
+
+| Tier | Content (Lance, multimodal) | Transform in | Workflow? |
+|---|---|---|---|
+| raw | IIIF endpoints, HCP/deposit buckets, transient landing prefix | — (external) | — |
+| **bronze** | original bytes as managed blob-v2 columns, UNrecompressed; acquisition facts (source_uri, checksums, volume/page keys, probe metadata); governance columns. Only integrity/format validation — bronze is the archive's copy and the replay foundation | ingest plane (workers, CPU) | **YES — the ingest run** (fan-out + drained wait + finalize) |
+| **silver** | model-derived, per item: layout regions, line polygons, per-line text + confidence; thumbnails/crops as derived blobs; embeddings as vector columns; keyframes/VAD/ASR for AV. Blob payloads carried forward by reference; one dataset per modality/task; schema owned by the transform (R3′). Disposable: better model ⇒ E5 replay from bronze, never re-harvest | **mover → Ray job (GPU)**; the job commits via catalog = completion (E4) | no — single-step handler |
+| **gold** | consumer contracts: ALTO/export, search serving (FTS + ANN indexes), training-ready datasets. Content quality gate decides promote vs hold (confidence thresholds, coverage, blob resolution) | mover, assertions pre-commit | no while automatic; **YES when promotion gains an async wait** — e.g. human-in-the-loop review via the annotator for training-gold ("reviewer approved" = external event, same fan-out/wait shape as ingest) |
+
+Workflow placement rule: **a workflow wraps a bounded run with fan-out or external waits;
+a mover stays a single-step event handler.** Ingest qualifies today; human-gated promotion
+qualifies when it lands; bronze→silver never does (the Ray job's commit event closes it).
+
 ### Runtime & event-handling rules (E1–E7) — the holes, closed
 
 What a mover IS at runtime, and the rules every event handler obeys:
