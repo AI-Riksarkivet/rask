@@ -771,6 +771,28 @@ What a "Ray job" physically is, today and in the design (previously unstated):
   drift-pinned copy of the deriver — the registry model replaces copy-drift with one
   transform implementation imported by both the in-pod and job paths.
 
+### Ray job durability — the ack contract (Dapr does NOT wrap jobs)
+
+Dapr Workflow wraps *runs* (ingest; future human-gated promotion) — never jobs. A mover
+hop's durability is layered where each risk lives, with the ack rule explicit:
+
+| Moment | Rule |
+|---|---|
+| event arrives | durable queue-group consumer; mover death loses nothing (redelivery) |
+| before submit | E2 dedupe: output for this input version exists → **ack-skip** |
+| submit succeeds | **ACK NOW** — never hold an ack across a job's runtime (ackWait would expire and redeliver forever) |
+| submit fails | nak(delay) → maxDeliver → DLQ + FAIL run |
+| job runs | nothing watches it — no poll (deleted), no Dapr wrapper |
+| job succeeds | its OWN registered commit (+ run id in commit metadata) → gate → publication event = completion signal |
+| job dies | commits nothing → lane visibly not advanced (storage truth: upstream published > downstream processed) → lineage reconciler flags it → E5 replay re-rings the doorbell → deterministic submission id re-attaches; ray-kit's existing delete-and-resubmit clears terminal corpses (`ray_kit/submit.py:88-116`) |
+
+In-job stack, scoped: `lance_ray` for distributed read / `add_columns` / compaction /
+index build / `optimize_indices` (never the final write — D5); pylance for
+`write_fragments`/`merge_insert` + catalog registration; lineage-kit context via
+`RASK_LINEAGE_CONTEXT` env (job emits COMPLETE/FAIL through the outbox; commit-metadata
+run id lets the reconciler back-fill a died-after-commit job); `TRACEPARENT` threaded as
+today.
+
 ### Cross-cutting concerns — the three previously-unstated details
 
 - **FGA at ingest:** `POST /v1/ingests` requires `can_create_table` (new dataset) or
