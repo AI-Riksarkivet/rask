@@ -873,12 +873,28 @@ What a mover IS at runtime, and the rules every event handler obeys:
   the commit → the mover records a FAIL run and acks (schema will not fix itself; a retry
   storm helps nobody). Operator fixes the contract or transform, then replays via E5.
 
-Why this shape is defensible as best practice: it is the orchestration-within,
-choreography-between hybrid (durable workflow inside the bounded run; events between
-loosely-coupled tiers) built from named patterns — transactional outbox, claim-check,
-competing consumers, idempotent consumer — and it needs **no saga/compensation layer**
-because every tier is derived, append-only, rebuildable data: failure = FAIL record +
-replay, never distributed rollback.
+**Precedents — every rule is a named industry pattern, not an invention:**
+
+| Ours | Named pattern | Reference |
+|---|---|---|
+| E1 doorbell events | Event Notification (vs Event-Carried State Transfer) | Fowler, "The Many Meanings of Event-Driven Architecture" |
+| commit event → next mover | Asset/data-aware scheduling | Airflow asset-based scheduling; Dagster Declarative Automation ("materialize when upstream updates") — the movers ARE auto-materialize policies with the catalog as asset registry; Lakekeeper CloudEvents-on-commit |
+| E2 idempotent handlers | Idempotent Consumer | microservices.io (required because an outbox relay may double-publish) |
+| lineage outbox | Transactional Outbox | microservices.io; AWS Prescriptive Guidance |
+| landing prefix + references on bus | Claim-Check | Azure Architecture Center / EIP |
+| worker queue groups | Competing Consumers | EIP / Azure patterns |
+| workflow dispatch→suspend→wake | Durable orchestration fan-out/fan-in + external event | Azure Durable Functions / Durable Task Framework (Dapr Workflow's engine lineage); the job Uber built Cadence/Temporal for |
+| run orchestrated, tiers choreographed | Orchestration-within, choreography-between | Azure choreography pattern guidance — choreograph across separately-owned domains, orchestrate inside one |
+| E5 replay | Backfill semantics | Airflow clear-and-rerun; Dagster backfills (re-request `asset@partition`) |
+
+The closest whole-system analogue is **Dagster's asset graph** (datasets as first-class
+assets, an authority that knows when they materialize, downstream declared as
+"when upstream updates") — achieved here with the estate's own catalog + NATS instead of
+adopting an orchestrator monolith. The deliberate deviation from the common Airflow-owns-
+everything shape: rask's tiers are owned by different services, which is the documented
+criterion for choreography at that boundary. No saga/compensation layer is needed because
+every tier is derived, append-only, rebuildable data: failure = FAIL record + replay,
+never distributed rollback.
 
 Configuration inventory: **catalog** — nothing per-dataset (emits always). **Chart
 `medallion.movers[]`** — per mover: input subject, output dataset, transform ref, quality
