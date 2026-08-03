@@ -24,7 +24,13 @@ def create_app() -> FastAPI:
     scope, so a test can substitute either without a live daprd — which is what keeps A1/A2 fast
     unit tests instead of requiring a cluster to assert a contract that is pure request handling.
     """
+    # Populates the SourceAdapter registry by import (I1). A deliberate import-time side effect —
+    # the alternative is a hand-maintained list elsewhere, which is exactly the drift the registry
+    # exists to prevent.
+    from ingest.adapters import register_builtin_sources
     from service_kit import make_service_app
+
+    register_builtin_sources()
 
     app = make_service_app(title="ingest", routers=[ingest_router])
     app.state.run_store = InMemoryRunStore()
