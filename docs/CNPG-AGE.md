@@ -29,7 +29,9 @@ as an immutable, separately-versioned volume.
 the Cluster's runtime image) and emits the `FROM scratch` artifacts-only layout CNPG expects
 (`/share/extension/age.control` + SQL, `/lib/age.so`, `/licenses/age/`):
 ```
-docker build -f .docker/cnpg-age-ext.dockerfile -t <registry>/age-cnpg-ext:1.7.0-18 .
+bash scripts/dagger-image.sh --name cnpg-age-ext --tag <registry>/age-cnpg-ext:1.7.0-18
+# or straight to a registry, skipping the local daemon:
+#   bash scripts/dagger-image.sh --name cnpg-age-ext --push <registry>/age-cnpg-ext:1.7.0-18
 docker push <registry>/age-cnpg-ext:1.7.0-18
 ```
 Pin the AGE branch to the PG major (`--build-arg AGE_REF=release/PG18/1.7.0`); a PG-major bump means rebuilding

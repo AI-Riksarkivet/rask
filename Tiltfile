@@ -172,10 +172,9 @@ build_image(
 # while every other service moved — the quiet way a cluster ends up mixing versions.
 #
 # Their prod dockerfiles `uv sync --no-editable` into /opt/venv, exactly like the catalog image, so
-# syncing into site-packages works and no dev-only image is needed. (`.docker/fleet.dev.dockerfile`
-# was written for this and is referenced by nothing — it also still `COPY components components`, a
-# directory deleted in the src-layout rewrite, so it cannot build. Left alone here; deleting it is a
-# separate call.)
+# syncing into site-packages works and no dev-only image is needed. (`.docker/fleet.dev.dockerfile` was
+# written for this, was referenced by nothing, and still `COPY components components` — a directory the
+# src-layout rewrite deleted — so it could not have built. Removed.)
 # compute joins these two: it ships its own image and the gateway invokes it for /api/ray + /api/serve.
 # It was absent because the chart never RENDERED it (fleet.yaml gated on a literal "gateway"), so Tilt
 # had no k8s object to attach an image to and silently built nothing.
