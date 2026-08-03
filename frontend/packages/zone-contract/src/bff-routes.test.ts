@@ -108,15 +108,22 @@ describe.each(zoneDirs())('%s: every BFF route has a caller', (zone) => {
 });
 
 describe('the media zone does not proxy the annotation write surface', () => {
-	// The narrow, deliberate exception: media's workflow writes tags and submits batch jobs. Anything
-	// broader than that belongs to the annotator zone.
-	const ALLOWED = ['/api/annotations/tags'];
-	it('exposes no /api/annotations route beyond the allowed ones', () => {
-		const routes = bffRoutes('media').filter((r) => r.startsWith('/api/annotations'));
-		expect(routes.sort()).toEqual(ALLOWED);
+	// This used to allow exactly one route — `/api/annotations/tags`, media's workflow tag write — as
+	// the narrow, deliberate exception. It allows NONE now, and that is a tightening rather than a
+	// relaxation: the tag write and the batch-job submit are `command()`s on the zone server
+	// (`src/lib/workflow/remote/labeling.remote.ts`, open_transport.md area 3), so the annotator's write
+	// surface is reachable from this zone only through two named functions with fixed payloads. A proxy
+	// forwards whatever a caller spells; a command cannot.
+	it('exposes no /api/annotations route at all', () => {
+		expect(bffRoutes('media').filter((r) => r.startsWith('/api/annotations'))).toEqual([]);
 	});
 	it('exposes no /api/assist route at all', () => {
 		expect(bffRoutes('media').filter((r) => r.startsWith('/api/assist'))).toEqual([]);
+	});
+	it('exposes no /api/jobs route at all', () => {
+		// `jobs/apply` became a command; `jobs/[...path]` was a status passthrough with no caller in the
+		// estate at all (`jobStatus` in @rask/labeling is exported dead code) and was deleted outright.
+		expect(bffRoutes('media').filter((r) => r.startsWith('/api/jobs'))).toEqual([]);
 	});
 });
 
@@ -127,11 +134,17 @@ describe('the chart hands a zone only the upstreams its routes use', () => {
 	// carried a search URL it has no route for.
 	const chart = readFileSync(`${FRONTEND_ROOT}/../chart/templates/frontends.yaml`, 'utf8');
 
-	/** The `*_API` names a zone's own BFF routes actually read out of $env. */
+	/** The `*_API` names a zone's own SERVER code actually reads out of $env.
+	 *
+	 *  Scoped to `src/routes` until the transport round (open_transport.md): a zone reached its upstreams
+	 *  only through `+server.ts` files then. It reaches most of them through remote functions now
+	 *  (`src/lib/**\/*.remote.ts`), which read the same `$env/dynamic/private` and are just as much a
+	 *  hole punched through to a backend — so the whole of `src` is the honest scope. Narrowing it back
+	 *  would make this gate pass by not looking. */
 	function upstreamsUsed(zone: string): Set<string> {
 		const out = execFileSync(
 			'sh',
-			['-c', `grep -rhoE 'env\\.[A-Z_]+_API' microfrontends/${zone}/src/routes || true`],
+			['-c', `grep -rhoE 'env\\.[A-Z_]+_API' microfrontends/${zone}/src || true`],
 			{ cwd: FRONTEND_ROOT, encoding: 'utf8' },
 		);
 		return new Set(
@@ -149,6 +162,14 @@ describe('the chart hands a zone only the upstreams its routes use', () => {
 			// the annotations plane while the labeling-tasks plane runs in-cluster. The chart never
 			// sets it, so in-cluster both planes resolve to ANNOTATOR_API — one service.
 			'ANNOTATOR_PROJECTS_API',
+			// CATALOG_API and LINEAGE_API were always upstreams of this zone; they were simply invisible
+			// to this grep, because a `+server.ts` reached them through `makeCatalogProxy(env)` — the
+			// `env.CATALOG_API` read living in @rask/api rather than in the zone. Now that identity and
+			// user-state are remote functions and the run feed is `feeds.remote.ts`, the zone names them
+			// itself, which is the more honest picture of what it needs. The chart already injects both
+			// (chart/templates/frontends.yaml).
+			'CATALOG_API',
+			'LINEAGE_API',
 			'SEARCH_API',
 			'VIEWER_API',
 		]);

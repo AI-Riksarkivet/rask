@@ -1,9 +1,13 @@
 import { test, expect, type Route } from '@playwright/test';
+import { MOCK_SERVICES } from './ports';
 
 // Hermetic coverage for the zone contract: SSR on at the app level, the client fetching
-// the media plane through THIS zone's base-prefixed BFF routes (/media/api/*, /media/capi/*)
-// instead of the retired root-absolute /api/*. Every backend response is mocked in the
-// browser; the dev server still runs the real SSR + hooks + BFF endpoints.
+// the media plane through THIS zone's base-prefixed BFF routes (/media/api/*) instead of
+// the retired root-absolute /api/*. The dev server runs the real SSR + hooks + BFF endpoints.
+//
+// Catch-all reads (health, descriptor) are mocked in the BROWSER. `/api/search` is not: its
+// response is Arrow IPC built by the route itself, so stubbing the browser fetch would replace
+// the code under test. It is seeded on the mock SEARCH SERVICE instead and the real route runs.
 
 const json = (route: Route, body: unknown, status = 200) =>
 	route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
@@ -69,12 +73,23 @@ const HIT = {
 
 let apiPaths: string[] = [];
 
+/** Seed the mock upstream this zone's SERVER reads (`e2e/mock-media-services.ts`). */
+async function seed(routes: Record<string, unknown>): Promise<void> {
+	await fetch(`${MOCK_SERVICES}/__mock/reset`, { method: 'POST' });
+	const res = await fetch(`${MOCK_SERVICES}/__mock/seed`, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ routes }),
+	});
+	expect(res.ok, 'the mock media services must be up').toBe(true);
+}
+
 test.beforeEach(async ({ page }) => {
 	apiPaths = [];
+	await seed({ 'GET /api/search': [HIT] });
 	// Zone-scoped globs on purpose: a bare **/api/** also matches Vite /@fs module URLs
 	// (…/packages/api/…) and would kill hydration. Registration order is LIFO — the
 	// generic 404 first, the specific mocks after so they win.
-	await page.route('**/media/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	await page.route('**/media/api/**', (route) => {
 		apiPaths.push(new URL(route.request().url()).pathname);
 		return json(route, { detail: 'unstubbed' }, 404);
@@ -87,9 +102,11 @@ test.beforeEach(async ({ page }) => {
 		apiPaths.push(new URL(route.request().url()).pathname);
 		return json(route, DESCRIPTOR);
 	});
+	// NOT stubbed — recorded and let through, so the zone's real `/api/search` route answers from the
+	// seeded mock service. That route is the Arrow encoder; a fulfilled stub would test the stub.
 	await page.route('**/media/api/search**', (route) => {
 		apiPaths.push(new URL(route.request().url()).pathname);
-		return json(route, [HIT]);
+		return route.continue();
 	});
 });
 
@@ -116,6 +133,29 @@ test('boots the descriptor + searches through the zone-based BFF paths', async (
 	await expect
 		.poll(() => apiPaths.filter((p) => p.startsWith('/media/api/search')))
 		.not.toHaveLength(0);
+});
+
+test('the search response is Arrow IPC, and the browser renders what it decoded', async ({
+	page,
+}) => {
+	// open_transport.md's second promotion. The assertion is deliberately BOTH halves: the header alone
+	// would pass on an Arrow body the client could not read, and the rendered hit alone would pass if the
+	// route quietly went back to JSON.
+	await page.goto('/media/');
+	await expect(page.getByRole('link', { name: 'Atlas' })).toBeVisible();
+
+	const response = page.waitForResponse(
+		(r) => new URL(r.url()).pathname === '/media/api/search' && r.status() === 200,
+	);
+	const input = page.getByPlaceholder(/Search transcripts/);
+	await input.fill('fox');
+	await input.press('Enter');
+
+	const headers = (await response).headers();
+	expect(headers['content-type']).toBe('application/vnd.apache.arrow.stream');
+	// The decoded row still carries its corpus columns — the title renders, and `alignments` (a nested
+	// column, carried as JSON text inside the Arrow payload) round-tripped without failing the parse.
+	await expect(page.getByText('Hello world').first()).toBeVisible();
 });
 
 // ── Encoder-aware mode selector ──────────────────────────────────────────
@@ -219,4 +259,54 @@ test.fixme('every mode stays selectable while the encoder is up', async ({ page 
 	for (const mode of ['Keyword', 'Vector', 'Hybrid', 'Scene']) {
 		await expect(options.filter({ hasText: mode }).first()).toBeEnabled();
 	}
+});
+
+// ── The caller's own saved views, through `catalog.remote.ts` ───────────────────────────────────────
+//
+// `capi/v1/user-state/[document]` is gone; the read is `readUserStateDoc`, a remote function on the zone
+// server, so it is seeded on the mock CATALOG rather than stubbed in the page. Two tests, because the
+// whole design of `$lib/user-state` is the difference between the two outcomes below — and until this
+// round nothing exercised either end to end.
+
+const SAVED_VIEWS_DOC = 'GET /v1/user-state/saved-views';
+
+test('a saved view stored on the catalog reaches the popover', async ({ page }) => {
+	await seed({
+		'GET /api/search': [HIT],
+		// `dataset: ''` is the DEFAULT DB (`DatasetView.datasetParam()` returns null for it), which is
+		// what the demo descriptor boots into — views are dataset-scoped, so this is not decoration.
+		[SAVED_VIEWS_DOC]: {
+			exists: true,
+			value: [{ name: 'fox hunt', dataset: '', spec: { q: 'fox', mode: 'fts' } }],
+		},
+	});
+
+	await page.goto('/media/');
+	await expect(page.getByRole('link', { name: 'Atlas' })).toBeVisible();
+	await page.getByTitle('Saved views').click();
+
+	await expect(page.getByText('fox hunt')).toBeVisible();
+});
+
+test('a document that EXISTS but cannot be read is named, and saving stays disabled', async ({
+	page,
+}) => {
+	// The data-loss case, and the reason the three-outcome contract exists: told "you have nothing",
+	// the popover would offer to save and the next write would land on top of a record that is still
+	// there. A 409 must therefore read as unreadable — never as empty — all the way through the new
+	// transport, which is exactly the hop this asserts.
+	await seed({
+		'GET /api/search': [HIT],
+		[SAVED_VIEWS_DOC]: {
+			status: 409,
+			body: { detail: 'your saved saved-views exists but cannot be read' },
+		},
+	});
+
+	await page.goto('/media/');
+	await expect(page.getByRole('link', { name: 'Atlas' })).toBeVisible();
+	await page.getByTitle('Saved views').click();
+
+	await expect(page.getByText('exists but cannot be read')).toBeVisible();
+	await expect(page.getByTitle('Saving is disabled until your views load')).toBeDisabled();
 });

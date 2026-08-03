@@ -6,8 +6,8 @@
  * the sibling zones) — collapsed here into one thin server for local repro.
  *
  *   make frontend-build     # produces ./build (adapter-bun output)
- *   bun run server.ts --port 5274   # defaults: viewer :8101 search :8102 annotator :8103 zone :5176
- *   # override any upstream: --viewer … --search … --annotator … --annotate-zone …
+ *   bun run server.ts --port 5274   # defaults: viewer :8101 search :8102 zone :5176
+ *   # override any upstream: --viewer … --search … --annotate-zone …
  *
  * The Python services own Lance; this process serves the viewer app + forwards
  * /api/* per domain (HTTP Range preserved) and /annotator → the annotator zone.
@@ -30,20 +30,17 @@ const args = Object.fromEntries(
 // `bun run server.ts` serves the split stack end to end. Overridable via flags.
 const VIEWER = (args.viewer ?? args.api ?? 'http://127.0.0.1:8101').replace(/\/$/, '');
 const SEARCH = (args.search ?? 'http://127.0.0.1:8102').replace(/\/$/, '');
-const ANNOTATOR = (args.annotator ?? 'http://127.0.0.1:8103').replace(/\/$/, '');
 // The annotator ZONE app (owns /annotator) — its own bun server.
 const ANNOTATE_ZONE = (args['annotate-zone'] ?? 'http://127.0.0.1:5176').replace(/\/$/, '');
 
-/** Route an /api/* path to the service that owns that domain. */
+/** Route an /api/* path to the service that owns that domain.
+ *
+ * The annotator branch is GONE, and its absence is the point: the workflow's tag write and its
+ * batch-job submit are remote functions now (`src/lib/workflow/remote/labeling.remote.ts`), so they run
+ * INSIDE the app handler below and reach `ANNOTATOR_API` from there. Nothing on `/api/*` in this zone
+ * belongs to the annotator any more — proxying it here would be a write surface with no caller, which
+ * is what the zone-contract gate exists to catch. */
 function apiUpstream(pathname: string): string {
-	if (
-		// Only the two annotator endpoints this zone actually calls: the workflow's tag write and the
-		// batch-job submit. The full /api/annotations and /api/assist surfaces belong to the annotator
-		// zone — proxying them from a SEARCH zone with no caller is a write surface for nothing.
-		pathname.startsWith('/api/annotations/tags') ||
-		pathname.startsWith('/api/jobs')
-	)
-		return ANNOTATOR;
 	if (pathname.startsWith('/api/search')) return SEARCH;
 	return VIEWER;
 }
@@ -100,7 +97,6 @@ Bun.serve({
 });
 
 console.log(`→ frontend:  http://localhost:${PORT}  (svelte-adapter-bun)`);
-console.log(`  /api/annotations/tags|jobs → ${ANNOTATOR}`);
 console.log(`  /api/search                  → ${SEARCH}`);
 console.log(`  /api/*                       → ${VIEWER}`);
 console.log(`  /annotator                   → ${ANNOTATE_ZONE}`);

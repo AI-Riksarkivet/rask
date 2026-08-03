@@ -3,13 +3,18 @@
 	// becomes tasks in an annotation project — appended to a project that is still taking items
 	// (draft/labeling), or a new project created around the selection. The annotator zone's landing
 	// is the other end; nothing is annotated in media.
-	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
 	import { Dialog } from '@rask/ui/dialog';
 	import { Input } from '@rask/ui/input';
 	import { projectFromHost } from '@rask/ui/shell';
+	import type { ProjectRow, SendItem } from '$lib/projects/projects';
+	import {
+		createProject,
+		listProjects,
+		sendProjectItems,
+	} from '$lib/projects/remote/projects.remote';
 
 	let {
 		open = $bindable(false),
@@ -31,14 +36,6 @@
 		origin?: 'search' | 'atlas';
 	} = $props();
 
-	type ProjectRow = {
-		project_id: string;
-		slug: string;
-		title: string;
-		state: string;
-		counts: Record<string, number>;
-	};
-
 	let projects = $state<ProjectRow[]>([]);
 	let loadState = $state<'loading' | 'ready' | 'error'>('loading');
 	let loadDetail = $state('');
@@ -58,11 +55,22 @@
 	async function loadProjects(): Promise<void> {
 		loadState = 'loading';
 		try {
-			const res = await fetch(`${base}/api/projects?tenant=${encodeURIComponent(tenant)}`);
-			if (!res.ok) throw new Error(`HTTP ${res.status}`);
-			projects = ((await res.json()) as { projects: ProjectRow[] }).projects;
+			// A query is CACHED per argument, and opening the dialog has always meant "read the list
+			// now" — a project created or published since the last open must not still be in the
+			// picker. `refresh()` is what makes the re-open a re-read rather than a replay.
+			const list = listProjects({ tenant });
+			await list.refresh();
+			const res = await list;
+			if (!res.ok) {
+				loadState = 'error';
+				loadDetail = res.detail;
+				return;
+			}
+			projects = res.data.projects;
 			loadState = 'ready';
 		} catch (err) {
+			// The zone server itself is unreachable (an offline tab) — the upstream's own refusals come
+			// back as `ok: false` above and never land here.
 			loadState = 'error';
 			loadDetail = String(err);
 		}
@@ -77,10 +85,15 @@
 		void loadProjects();
 	});
 
-	function items(): unknown[] {
+	function items(): SendItem[] {
 		return keys.map((key) => ({
-			source: { kind: 'chunks', keys: [key], where: dataset, dataset_version: datasetVersion },
-			media: { kind: 'image' },
+			source: {
+				kind: 'chunks' as const,
+				keys: [key],
+				where: dataset,
+				dataset_version: datasetVersion,
+			},
+			media: { kind: 'image' as const },
 		}));
 	}
 
@@ -89,16 +102,14 @@
 		sending = true;
 		error = '';
 		try {
-			const res = await fetch(`${base}/api/projects/${projectId}/items`, {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ items: items() }),
-			});
-			const body = (await res.json()) as { detail?: string; sent?: number; created?: number };
-			if (!res.ok) throw new Error(body.detail ?? `HTTP ${res.status}`);
-			done = { projectId, created: body.created ?? 0, sent: body.sent ?? keys.length };
-		} catch (err) {
+			const res = await sendProjectItems({ projectId, items: items() });
 			// The server's refusal verbatim: 403 names the missing rung, 409 names a closed project.
+			if (!res.ok) {
+				error = res.detail;
+				return;
+			}
+			done = { projectId, created: res.data.created ?? 0, sent: res.data.sent ?? keys.length };
+		} catch (err) {
 			error = String(err instanceof Error ? err.message : err);
 		} finally {
 			sending = false;
@@ -110,18 +121,20 @@
 		sending = true;
 		error = '';
 		try {
-			const created = await fetch(`${base}/api/projects`, {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ tenant, slug: newSlug.trim(), title: newTitle.trim() }),
+			const created = await createProject({
+				tenant,
+				slug: newSlug.trim(),
+				title: newTitle.trim(),
 			});
-			const project = (await created.json()) as { detail?: string; project_id?: string };
-			if (!created.ok || !project.project_id)
-				throw new Error(project.detail ?? `HTTP ${created.status}`);
+			if (!created.ok || !created.data.project_id) {
+				error = created.ok ? 'the annotator created no project' : created.detail;
+				return;
+			}
 			sending = false;
-			await appendTo(project.project_id);
+			await appendTo(created.data.project_id);
 		} catch (err) {
 			error = String(err instanceof Error ? err.message : err);
+		} finally {
 			sending = false;
 		}
 	}

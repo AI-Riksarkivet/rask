@@ -9,7 +9,7 @@
 	import { AppShell } from '@rask/ui/shell';
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
 	import type { Me } from '@rask/api';
-	import { fetchMeViaBff } from '$lib/http';
+	import { fetchMeViaBff } from '$lib/catalog/remote/catalog.remote';
 	import { MEDIA_ZONE_NAV } from '$lib/nav';
 	import { descriptor } from '$lib/descriptor-store.svelte';
 	import StatusBadge from '$lib/components/status-badge.svelte';
@@ -33,9 +33,10 @@
 		allHref: '/lakehouse/lineage/runs',
 	});
 
-	// The frozen /v1/me identity for the navbar, fetched browser-side through this zone's
-	// bearer-forwarding /capi/v1/me pass-through (skeleton pills while in flight; null = signed
-	// out / unreachable → base entries only, fail-closed on the admin surfaces).
+	// The frozen /v1/me identity for the navbar, read through this zone's bearer-forwarding
+	// `fetchMeViaBff` remote function (skeleton pills while in flight; null = signed out /
+	// unreachable → base entries only, fail-closed on the admin surfaces). ON MOUNT, never at init:
+	// the shell's identity is chrome, and a slow catalog must not hold the server-rendered page.
 	let me = $state<Me | null>(null);
 	let meLoading = $state(true);
 	onMount(async () => {

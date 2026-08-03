@@ -30,10 +30,10 @@
 	import GpuGraph from '$lib/graph/gpu-graph.svelte';
 	import GraphBreadcrumb from '$lib/graph/graph-breadcrumb.svelte';
 	import {
+		activeView,
 		getGraphStatus,
 		getGraphSubgraph,
 		getGraphEntity,
-		runGraphCypher,
 		searchGraphEntities,
 		type GraphStatus,
 		type GraphNode,
@@ -41,6 +41,7 @@
 		type GraphMatch,
 		type GraphCypherResponse,
 	} from '@rask/media-api';
+	import { runGraphCypher } from '$lib/graph/remote/graph.remote';
 
 	type View = 'graph' | 'table' | 'json';
 	type SimNode = SimulationNodeDatum & { id: string; idx: number };
@@ -328,7 +329,13 @@
 		if (!q) return;
 		cypherOpen = true;
 		view = 'table';
-		cypherResult = await runGraphCypher(q);
+		// The dataset selector is a BROWSER-side store, so it travels as an argument now — the deleted
+		// route read it off the query string the client had already appended.
+		const res = await runGraphCypher({ query: q, dataset: activeView().datasetParam() });
+		// A refused or unreachable console call lands in the response's own `error` field, which the
+		// table pane already renders. Before this, a non-2xx threw an ApiError out of an unawaited
+		// handler and the console simply showed the PREVIOUS result.
+		cypherResult = res.ok ? res.data : { built: false, columns: [], rows: [], error: res.detail };
 	}
 
 	// The Select only exposes a bound value — react to a chosen preset here, then

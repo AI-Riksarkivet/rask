@@ -7,11 +7,8 @@
 	import { activeView } from '@rask/media-api';
 	import { graph } from '$lib/workflow/graph.svelte';
 	import { exportColumns, exportHits } from '$lib/workflow/export';
-	import {
-		saveTagsAsAnnotations,
-		tagBatchFromTaggedHits,
-		tagRemovesFromEntries,
-	} from '@rask/labeling/tag-writer';
+	import { tagBatchFromTaggedHits, tagRemovesFromEntries } from '@rask/labeling/tag-writer';
+	import { saveTagsAsAnnotations } from '$lib/workflow/remote/labeling.remote';
 	import NodeShell from './NodeShell.svelte';
 
 	let { id, selected }: NodeProps = $props();
@@ -44,9 +41,18 @@
 		tagSaving = true;
 		tagMsg = 'saving…';
 		try {
-			const r = await saveTagsAsAnnotations(batch, activeView().datasetParam() ?? undefined);
+			const res = await saveTagsAsAnnotations({
+				adds: batch.adds,
+				removes: batch.removes,
+				dataset: activeView().datasetParam(),
+			});
+			if (!res.ok) {
+				// A refused save must NOT flush the removes queue — those un-tags are still unsaved.
+				tagMsg = res.detail;
+				return;
+			}
 			graph.tags.flushRemoved(sentRemoved);
-			tagMsg = `saved ${r.saved} → v${r.version}`;
+			tagMsg = `saved ${res.data.saved} → v${res.data.version}`;
 		} catch (e) {
 			tagMsg = e instanceof Error ? e.message : 'save failed';
 		} finally {

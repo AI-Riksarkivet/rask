@@ -18,7 +18,7 @@
 		type VoiceSimilarResponse,
 	} from '@rask/media-api';
 	import { voiceSearch } from '$lib/voice-search.svelte';
-	import { submitBatchJob } from '@rask/labeling/jobs';
+	import { submitBatchJob } from '$lib/workflow/remote/labeling.remote';
 	import { fmtTime, hitKey, queryTerms, makeHighlighter } from '$lib/utils';
 	import SearchBar from '$lib/components/search-bar.svelte';
 	import SavedViews from '$lib/components/saved-views.svelte';
@@ -232,12 +232,14 @@
 		if (!keys.length) return;
 		autoLabelMsg = 'submitting…';
 		try {
-			const job = await submitBatchJob({
+			const res = await submitBatchJob({
 				producer: 'grounding-dino',
 				op: 'predict',
 				scope: { level: 'chunks', keys },
 			});
-			autoLabelMsg = `${job.status} · ${job.job_id} (${keys.length} chunks)`;
+			autoLabelMsg = res.ok
+				? `${res.data.status} · ${res.data.job_id} (${keys.length} chunks)`
+				: res.detail;
 		} catch (e) {
 			autoLabelMsg = e instanceof Error ? e.message : 'submit failed';
 		}

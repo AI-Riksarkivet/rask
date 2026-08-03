@@ -3,8 +3,8 @@
  *
  * These used to live in `localStorage`, so the same signed-in person on another machine found none of
  * their saved searches. They now belong to the user rather than to the browser: `$lib/user-state` reads
- * and writes them through this zone's `capi/v1/user-state/saved-views` proxy, and `localStorage` survives
- * only as a mirror for an auth-off dev stack and an offline tab.
+ * and writes them through this zone's `readUserStateDoc`/`writeUserStateDoc` remote functions, and
+ * `localStorage` survives only as a mirror for an auth-off dev stack and an offline tab.
  *
  * The one rule that matters: a document we could not READ is never overwritten. `ready` stays false and
  * every save is refused while `unreadable` holds, because a store answering "cannot read" and a store
@@ -20,6 +20,7 @@ import {
 	type SavedView,
 } from '$lib/saved-views';
 import { readUserState, writeUserState } from '$lib/user-state';
+import { readUserStateDoc, writeUserStateDoc } from '$lib/catalog/remote/catalog.remote';
 
 class SavedViewsStore {
 	views = $state<SavedView[]>([]);
@@ -48,7 +49,7 @@ class SavedViewsStore {
 	}
 
 	async #read(): Promise<void> {
-		const got = await readUserState<SavedView[]>('saved-views');
+		const got = await readUserState<SavedView[]>('saved-views', readUserStateDoc);
 		if (got.status === 'unreadable') {
 			// Deliberately leaves `ready` false: the list stays empty AND unsaveable, so a user sees their
 			// views are missing rather than silently building a new set on top of the old one.
@@ -83,7 +84,7 @@ class SavedViewsStore {
 	async #persist(): Promise<void> {
 		// A refused write is reported, not swallowed. The previous store swallowed a full localStorage and
 		// left the user believing a view had been saved.
-		if (!(await writeUserState('saved-views', this.views))) {
+		if (!(await writeUserState('saved-views', this.views, writeUserStateDoc))) {
 			this.unreadable = 'the last change could not be saved — the store refused the write';
 		}
 	}

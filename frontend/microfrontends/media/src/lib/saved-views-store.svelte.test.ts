@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { savedViews } from '$lib/saved-views.svelte';
 
 /**
  * The store is loaded from an `$effect`, and the svelte MCP autofixer flagged exactly that: a function
@@ -10,11 +9,31 @@ import { savedViews } from '$lib/saved-views.svelte';
  *
  * This asserts the de-duplication that makes that structurally impossible, and that the second caller
  * still gets the data rather than an empty list.
+ *
+ * The transport is a REMOTE FUNCTION now, so the stub is the remote module rather than a global `fetch`.
+ * Mocking it also keeps `$app/server` out of this suite: vitest runs the plain `svelte` plugin, not
+ * `sveltekit`, and the real module would fail to resolve it at import time.
  */
+const transport = vi.hoisted(() => ({ reads: 0, value: [] as unknown }));
+
+vi.mock('$lib/catalog/remote/catalog.remote', () => ({
+	readUserStateDoc: async () => {
+		transport.reads += 1;
+		// Settle on a later microtask so concurrent callers are genuinely in flight together.
+		await Promise.resolve();
+		return { ok: true, data: { exists: true, value: transport.value } };
+	},
+	writeUserStateDoc: async () => ({ ok: true, data: {} }),
+}));
+
+const { savedViews } = await import('$lib/saved-views.svelte');
+
 const store = new Map<string, string>();
 
 beforeEach(() => {
 	store.clear();
+	transport.reads = 0;
+	transport.value = [];
 	savedViews.views = [];
 	savedViews.ready = false;
 	savedViews.unreadable = null;
@@ -27,36 +46,18 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 it('concurrent loads are one request, and both callers see the views', async () => {
-	let calls = 0;
-	vi.stubGlobal('fetch', async () => {
-		calls += 1;
-		// Settle on a later microtask so both callers are genuinely in flight together.
-		await Promise.resolve();
-		return new Response(
-			JSON.stringify({ exists: true, value: [{ name: 'a', dataset: 'd', spec: { query: 'x' } }] }),
-			{ status: 200, headers: { 'content-type': 'application/json' } },
-		);
-	});
+	transport.value = [{ name: 'a', dataset: 'd', spec: { query: 'x' } }];
 
 	await Promise.all([savedViews.load(), savedViews.load(), savedViews.load()]);
 
-	expect(calls).toBe(1);
+	expect(transport.reads).toBe(1);
 	expect(savedViews.ready).toBe(true);
 	expect(savedViews.forDataset('d').map((v) => v.name)).toEqual(['a']);
 });
 
 it('a later load is a fresh read — de-duplication is per flight, not a cache', async () => {
-	let calls = 0;
-	vi.stubGlobal('fetch', async () => {
-		calls += 1;
-		return new Response(JSON.stringify({ exists: true, value: [] }), {
-			status: 200,
-			headers: { 'content-type': 'application/json' },
-		});
-	});
-
 	await savedViews.load();
 	await savedViews.load();
 
-	expect(calls).toBe(2);
+	expect(transport.reads).toBe(2);
 });

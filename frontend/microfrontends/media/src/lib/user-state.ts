@@ -19,17 +19,39 @@
  * `localStorage` remains, but demoted to a MIRROR rather than the record: it is what an auth-off dev
  * stack and an offline tab read, and it is written after a successful server write so a reload is instant.
  * It is never the thing that decides whether the user has saved work.
+ *
+ * The TRANSPORT is injected (`$lib/catalog/remote/catalog.remote`'s `readUserStateDoc` /
+ * `writeUserStateDoc`, bound by the caller) rather than imported here. That keeps this module — the one
+ * that decides whether a user's work is safe to overwrite — a pure function of what the store answered,
+ * testable without a server, exactly as it was when the answer came from a `fetch`.
  */
+import type { ApiResult } from '@rask/api/client';
 
 /** The documents this zone owns. Matches `UserStateDocument` in `services/common/user_state.py`. */
 export type UserStateDocument = 'workflow-graph' | 'saved-views' | 'dock-layout';
+
+/** What the catalog returns for a document: `exists: false` is a genuine "never saved", and a value is
+ *  only a value when both keys agree. */
+export interface UserStateEnvelope {
+	exists?: boolean;
+	value?: unknown;
+}
 
 export type UserStateRead<T> =
 	| { readonly status: 'ok'; readonly value: T }
 	| { readonly status: 'absent' }
 	| { readonly status: 'unreadable'; readonly detail: string };
 
-const endpoint = (document: UserStateDocument): string => `/media/capi/v1/user-state/${document}`;
+/** The read half of the transport: the caller's document, or the status the store answered with. */
+export type UserStateReader = (args: {
+	document: UserStateDocument;
+}) => Promise<ApiResult<UserStateEnvelope>>;
+
+/** The write half. Only `ok` counts as a save. */
+export type UserStateWriter = (args: {
+	document: UserStateDocument;
+	value: unknown;
+}) => Promise<ApiResult<unknown>>;
 
 /** The mirror key for a document — namespaced so it cannot collide with the zone's UI preferences. */
 export const mirrorKey = (document: UserStateDocument): string => `lance-media-mirror:${document}`;
@@ -57,46 +79,50 @@ function writeMirror(document: UserStateDocument, value: unknown): void {
 /**
  * Read the caller's document.
  *
- * @param fetcher injected for tests; defaults to the ambient `fetch`.
+ * @param read the transport — `readUserStateDoc` in the app, a stub in tests.
  */
 export async function readUserState<T>(
 	document: UserStateDocument,
-	fetcher: typeof fetch = fetch,
+	read: UserStateReader,
 ): Promise<UserStateRead<T>> {
-	let response: Response;
+	// Two distinct unreachables, both of which mean "we do not know what is stored": the CATALOG is down
+	// (the transport answers status 0) and the ZONE SERVER is unreachable — an offline tab, where the
+	// remote call itself rejects. The mirror exists for exactly the second one, so it must still be
+	// caught here rather than escaping as an unhandled rejection into the saved-views effect.
+	let result: ApiResult<UserStateEnvelope>;
 	try {
-		response = await fetcher(endpoint(document));
+		result = await read({ document });
 	} catch (e) {
-		// Unreachable is NOT absent. A tab that cannot reach the store has no idea whether the user has
-		// saved work, and guessing "no" is the guess that destroys it.
-		const mirrored = readMirror<T>(document);
-		if (mirrored !== null) return { status: 'ok', value: mirrored };
-		return {
-			status: 'unreadable',
+		result = {
+			ok: false,
+			status: 0,
 			detail: e instanceof Error ? e.message : 'the store is unreachable',
 		};
 	}
 
-	if (response.status === 409) {
-		const detail = await response
-			.json()
-			.then((b: { detail?: string }) => b.detail ?? 'the stored document cannot be read')
-			.catch(() => 'the stored document cannot be read');
-		return { status: 'unreadable', detail };
+	if (result.ok) {
+		const body = result.data;
+		if (body.exists !== true || body.value === undefined) return { status: 'absent' };
+		writeMirror(document, body.value);
+		return { status: 'ok', value: body.value as T };
 	}
-	if (response.status === 401) {
+
+	if (result.status === 0) {
+		// Unreachable is NOT absent. A tab that cannot reach the store has no idea whether the user has
+		// saved work, and guessing "no" is the guess that destroys it.
+		const mirrored = readMirror<T>(document);
+		if (mirrored !== null) return { status: 'ok', value: mirrored };
+		return { status: 'unreadable', detail: result.detail || 'the store is unreachable' };
+	}
+	if (result.status === 409) {
+		return { status: 'unreadable', detail: result.detail || 'the stored document cannot be read' };
+	}
+	if (result.status === 401) {
 		// Signed out — an auth-off dev stack or an expired session. The mirror is the honest local answer.
 		const mirrored = readMirror<T>(document);
 		return mirrored === null ? { status: 'absent' } : { status: 'ok', value: mirrored };
 	}
-	if (!response.ok) {
-		return { status: 'unreadable', detail: `the store answered ${response.status}` };
-	}
-
-	const body = (await response.json()) as { exists?: boolean; value?: T };
-	if (body.exists !== true || body.value === undefined) return { status: 'absent' };
-	writeMirror(document, body.value);
-	return { status: 'ok', value: body.value };
+	return { status: 'unreadable', detail: `the store answered ${result.status}` };
 }
 
 /**
@@ -104,29 +130,29 @@ export async function readUserState<T>(
  *
  * Callers must not call this after a read returned `unreadable`: that is the overwrite this whole design
  * exists to prevent, and the server's 409 is the last line rather than the only one.
+ *
+ * @param write the transport — `writeUserStateDoc` in the app, a stub in tests.
  */
 export async function writeUserState(
 	document: UserStateDocument,
 	value: unknown,
-	fetcher: typeof fetch = fetch,
+	write: UserStateWriter,
 ): Promise<boolean> {
+	let result: ApiResult<unknown>;
 	try {
-		const response = await fetcher(endpoint(document), {
-			method: 'PUT',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify(value),
-		});
-		if (response.ok) {
-			writeMirror(document, value);
-			return true;
-		}
-		if (response.status === 401) {
-			// Auth-off dev: the mirror IS the store, and reporting failure would break that stack.
-			writeMirror(document, value);
-			return true;
-		}
-		return false;
+		result = await write({ document, value });
 	} catch {
+		// An offline tab: the write never reached the server, so it is not a save.
 		return false;
 	}
+	if (result.ok) {
+		writeMirror(document, value);
+		return true;
+	}
+	if (result.status === 401) {
+		// Auth-off dev: the mirror IS the store, and reporting failure would break that stack.
+		writeMirror(document, value);
+		return true;
+	}
+	return false;
 }

@@ -1,9 +1,16 @@
 import { test, expect, type Route } from '@playwright/test';
+import { MOCK_SERVICES } from './ports';
 
 // The send half of the annotation funnel, hermetic: a selection found HERE (search results;
 // the atlas path shares the same dialog) is sent into an annotation project as claimable
 // tasks — appended to a project still taking items, or a new project created around it.
 // The annotator zone's own suite covers the other end (claim → review → publish).
+//
+// Both halves of this flow now run on the ZONE SERVER — search builds an Arrow body in its route,
+// and the projects plane is `projects.remote.ts` — so `page.route` can reach neither. The stand-in
+// is the mock UPSTREAM (`e2e/mock-media-services.ts`): each test seeds exactly the JSON its old
+// browser stub served, and asserts on the ledger of what the zone's server actually sent. Every
+// behavioural assertion the browser-mocked version made is preserved; only the vantage point moved.
 
 const json = (route: Route, body: unknown, status = 200) =>
 	route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
@@ -62,20 +69,40 @@ const PROJECTS = {
 	total: 2,
 };
 
-let writes: { path: string; body: unknown }[] = [];
+/** What the zone's SERVER sent upstream — the ledger that replaces the `page.route` capture array. */
+type Call = { method: string; path: string; body: unknown };
+
+/** Reset the mock's world and seed this test's answers. Keyed by `"METHOD /path"`; the mock tries the
+ *  with-query key first, so a bare path answers any query string. */
+async function seed(routes: Record<string, unknown>): Promise<void> {
+	await fetch(`${MOCK_SERVICES}/__mock/reset`, { method: 'POST' });
+	const res = await fetch(`${MOCK_SERVICES}/__mock/seed`, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ routes }),
+	});
+	expect(res.ok, 'the mock media services must be up').toBe(true);
+}
+
+async function calls(): Promise<Call[]> {
+	const res = await fetch(`${MOCK_SERVICES}/__mock/calls`);
+	return ((await res.json()) as { calls: Call[] }).calls;
+}
+
+/** The world every test starts from: a searchable corpus and one open project taking items. */
+const BASE_ROUTES: Record<string, unknown> = {
+	'GET /api/search': [HIT],
+	'GET /projects': PROJECTS,
+	'POST /projects/p1/items': { sent: 1, created: 1, task_ids: ['t1'] },
+};
 
 test.beforeEach(async ({ page }) => {
-	writes = [];
-	await page.route('**/media/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	await seed(BASE_ROUTES);
 	await page.route('**/media/api/**', (route) => json(route, { detail: 'unstubbed' }, 404));
 	await page.route('**/media/api/health', (route) => json(route, HEALTH));
 	await page.route('**/media/api/datasets/demo/descriptor', (route) => json(route, DESCRIPTOR));
-	await page.route('**/media/api/search**', (route) => json(route, [HIT]));
-	await page.route('**/media/api/projects?tenant=*', (route) => json(route, PROJECTS));
-	await page.route('**/media/api/projects/p1/items', (route) => {
-		writes.push({ path: '/media/api/projects/p1/items', body: route.request().postDataJSON() });
-		return json(route, { sent: 1, created: 1, task_ids: ['t1'] });
-	});
+	// Let through to the real route (Arrow encoder) rather than stubbed — see the mock service file.
+	await page.route('**/media/api/search**', (route) => route.continue());
 });
 
 async function searchAndOpenDialog(page: import('@playwright/test').Page): Promise<void> {
@@ -98,9 +125,11 @@ test('search results send into an OPEN project as tasks, with the descriptor key
 	await expect(list.getByText('Closed')).not.toBeVisible();
 
 	await list.getByText('Vasa portraits').click();
+	await expect(page.getByTestId('send-done')).toBeVisible();
 
 	// The send carried the hit's key-path, the dataset — and the dataset's VERSION at send
 	// time (the §7.2 reproducibility capture the publish pin rests on; the descriptor says 1).
+	const writes = (await calls()).filter((c) => c.path === '/projects/p1/items');
 	expect(writes).toHaveLength(1);
 	const body = writes[0]?.body as {
 		items: {
@@ -119,14 +148,10 @@ test('search results send into an OPEN project as tasks, with the descriptor key
 });
 
 test('create-and-send makes the project, then appends the selection to it', async ({ page }) => {
-	await page.route('**/media/api/projects', (route) => {
-		if (route.request().method() !== 'POST') return json(route, PROJECTS);
-		writes.push({ path: 'POST /media/api/projects', body: route.request().postDataJSON() });
-		return json(route, { project_id: 'p9', slug: 'fresh', title: 'Fresh', state: 'draft' });
-	});
-	await page.route('**/media/api/projects/p9/items', (route) => {
-		writes.push({ path: '/media/api/projects/p9/items', body: route.request().postDataJSON() });
-		return json(route, { sent: 1, created: 1, task_ids: ['t1'] });
+	await seed({
+		...BASE_ROUTES,
+		'POST /projects': { project_id: 'p9', slug: 'fresh', title: 'Fresh', state: 'draft' },
+		'POST /projects/p9/items': { sent: 1, created: 1, task_ids: ['t1'] },
 	});
 
 	await searchAndOpenDialog(page);
@@ -134,15 +159,19 @@ test('create-and-send makes the project, then appends the selection to it', asyn
 	await page.getByRole('button', { name: /Create & send/ }).click();
 
 	await expect(page.getByTestId('send-done')).toBeVisible();
-	const paths = writes.map((w) => w.path);
-	expect(paths).toContain('POST /media/api/projects');
-	expect(paths).toContain('/media/api/projects/p9/items');
+	const sent = (await calls()).map((c) => `${c.method} ${c.path}`);
+	expect(sent).toContain('POST /projects');
+	expect(sent).toContain('POST /projects/p9/items');
 });
 
 test('a refused send surfaces the server’s reason, not a silent no-op', async ({ page }) => {
-	await page.route('**/media/api/projects/p1/items', (route) =>
-		json(route, { detail: 'gina lacks can_send_items on annotation_project:p1' }, 403),
-	);
+	await seed({
+		...BASE_ROUTES,
+		'POST /projects/p1/items': {
+			status: 403,
+			body: { detail: 'gina lacks can_send_items on annotation_project:p1' },
+		},
+	});
 
 	await searchAndOpenDialog(page);
 	await page.getByTestId('send-project-list').getByText('Vasa portraits').click();
