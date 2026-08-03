@@ -48,6 +48,9 @@ VOLUME = os.environ.get("SEED_VOLUME", "A0060198")
 PAGES = int(os.environ.get("SEED_MAX_PAGES", "3"))
 
 CATALOG = os.environ.get("SEED_CATALOG_URL", "http://127.0.0.1:2333")
+#: The catalog accepts ONLY IdP bearers when auth is on, and register() is a governed write — so a
+#: seed against an auth-enabled estate must carry one or every registration 401s. Empty = auth off.
+CATALOG_TOKEN = os.environ.get("SEED_CATALOG_TOKEN", "")
 NAMESPACE = "bronze"
 TABLE = "pages"
 DELIM = "$"
@@ -65,6 +68,21 @@ OPTS = {
 }
 
 
+def _tolerate_only_already_exists(response: httpx.Response, what: str) -> None:
+    """Converge on 409, die on everything else.
+
+    The tolerance used to be `"exist" not in r.text.lower()`, and the catalog renders NOT-FOUND as
+    prose containing that substring — "Namespace does not exist", "Table does not exist". So a
+    register into a namespace whose create had silently failed was swallowed and then reported as
+    "already registered — converged", which is exactly backwards: it is the ungoverned-data bug this
+    script exists to prevent, reintroduced by its own idempotency. The test belongs on the status
+    code (ALREADY_EXISTS is 409 across the board — see service_kit.lakehouse.ns_errors), never prose.
+    """
+    if response.status_code < 400 or response.status_code == 409:
+        return
+    sys.exit(f"!! could not {what}: HTTP {response.status_code} {response.text[:300]}")
+
+
 def register(location: str) -> None:
     """Create the namespace and register the table, so the catalog owns what storage holds.
 
@@ -77,11 +95,11 @@ def register(location: str) -> None:
     Both calls tolerate "already exists": the script is re-runnable, and a second seed of the same
     volume must not fail on the namespace the first one created.
     """
-    with httpx.Client(base_url=CATALOG, timeout=60.0) as http:
+    headers = {"Authorization": f"Bearer {CATALOG_TOKEN}"} if CATALOG_TOKEN else {}
+    with httpx.Client(base_url=CATALOG, timeout=60.0, headers=headers) as http:
         r = http.post(f"/v1/namespace/{NAMESPACE}/create", json={"id": [NAMESPACE], "mode": "EXIST_OK"})
         print(f"  namespace {NAMESPACE!r}: HTTP {r.status_code}")
-        if r.status_code >= 400 and "exist" not in r.text.lower():
-            sys.exit(f"!! could not create namespace: {r.text[:300]}")
+        _tolerate_only_already_exists(r, "create namespace")
 
         table_id = f"{NAMESPACE}{DELIM}{TABLE}"
         r = http.post(
@@ -89,8 +107,14 @@ def register(location: str) -> None:
             json={"id": [NAMESPACE, TABLE], "location": location, "mode": "OVERWRITE"},
         )
         print(f"  table {table_id!r}: HTTP {r.status_code}")
-        if r.status_code >= 400:
-            sys.exit(f"!! could not register table: {r.text[:300]}")
+        # A re-seed must CONVERGE, not fail: the table this run would register is the table a
+        # previous run already registered, pointing at the same location. `mode: OVERWRITE` does
+        # not cover an existing REGISTRATION, so an already-exists answer is success — the same
+        # tolerance the namespace create above applies, and what makes `make seed-dev` safe to run
+        # twice.
+        _tolerate_only_already_exists(r, "register table")
+        if r.status_code == 409:
+            print(f"  table {table_id!r}: already registered — converged")
 
 
 def main() -> None:

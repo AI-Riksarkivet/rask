@@ -54,6 +54,30 @@ export const LabelClassSchema = v.object({
 });
 export type LabelClass = v.InferOutput<typeof LabelClassSchema>;
 
+/** Task templates v1 — the labeling task's declarative shape (the LS-config equivalent). */
+export const TaskTemplateSchema = v.object({
+	kind: v.optional(v.string(), 'bbox-detection'),
+	modality: v.optional(v.string(), 'image'),
+	tools: v.optional(v.array(v.string()), ['bbox']),
+	required_labels: v.optional(v.array(v.string()), []),
+	attributes: v.optional(
+		v.array(
+			v.object({
+				name: v.string(),
+				type: v.optional(v.string(), 'free'),
+				choices: v.optional(v.array(v.string()), []),
+				required: v.optional(v.boolean(), false),
+			}),
+		),
+		[],
+	),
+	enforce: v.optional(v.boolean(), false),
+	/** An enforced template refuses a submission with no shapes unless this says a blank item is a
+	 *  legitimate outcome. Mirrors `TaskTemplate.allow_empty`; the server is the enforcer. */
+	allow_empty: v.optional(v.boolean(), false),
+});
+export type TaskTemplate = v.InferOutput<typeof TaskTemplateSchema>;
+
 /** Consensus v1's merge step: the manager's canonical PICK for one replica group. */
 export const AdjudicationSchema = v.object({
 	task_id: v.string(),
@@ -77,6 +101,15 @@ export const ProjectSchema = v.object({
 	consensus_n: v.optional(v.number(), 1),
 	// Replica group id → the manager's canonical pick (empty until someone adjudicates).
 	adjudications: v.optional(v.record(v.string(), AdjudicationSchema), {}),
+	// The declarative task template (v1); absent = the unconstrained default.
+	template: v.optional(TaskTemplateSchema, {
+		kind: 'bbox-detection',
+		modality: 'image',
+		tools: ['bbox'],
+		required_labels: [],
+		attributes: [],
+		enforce: false,
+	}),
 	label_schema: v.optional(
 		v.object({
 			classes: v.optional(v.array(LabelClassSchema), []),

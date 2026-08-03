@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 from annotator.api.security import CheckerDep, CurrentSubject, FgaClientDep
 from annotator.projects.machines import legal_project_events
-from annotator.projects.models import AnnotationProject, LabelSchema, ProjectState
+from annotator.projects.models import AnnotationProject, LabelSchema, ProjectState, TaskTemplate
 from service_kit.exceptions import ForbiddenError, NotFoundError
 from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
@@ -60,6 +60,9 @@ class CreateProjectRequest(BaseModel):
     #: Consensus v1 — create-only by design: `send` derives the replica count from it and the
     #: claim guard enumerates siblings with it, so changing it mid-flight would orphan replicas.
     consensus_n: int = Field(default=1, ge=1, le=5)
+    #: The declarative task template (v1) — validated by its own model; absent means today's
+    #: unconstrained default.
+    template: TaskTemplate = Field(default_factory=TaskTemplate)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=AnnotationProject)
@@ -90,6 +93,7 @@ async def create_annotation_project(payload: CreateProjectRequest, checker: Chec
         review_required=payload.review_required,
         lease_seconds=payload.lease_seconds,
         consensus_n=payload.consensus_n,
+        template=payload.template,
         state=ProjectState.DRAFT,
         created_at=now,
         updated_at=now,

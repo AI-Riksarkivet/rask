@@ -44,6 +44,46 @@
 	let classesText = $state('');
 	let shapeKind = $state('bbox');
 	const SHAPE_KINDS = ['bbox', 'polygon', 'mask', 'segment', 'tag', 'text'];
+	// Task templates v1 — the LS-config idea as PRESETS: pick a task type and the template's
+	// tools/attributes come with it, ENFORCED server-side at submit. 'free' keeps today's
+	// unconstrained behavior (enforce=false), so nothing existing changes.
+	let templateKind = $state('free');
+	const TEMPLATE_PRESETS: Record<
+		string,
+		{
+			tools: string[];
+			attributes?: { name: string; type?: string; choices?: string[]; required?: boolean }[];
+		}
+	> = {
+		'bbox-detection': { tools: ['bbox'] },
+		segmentation: { tools: ['polygon', 'mask'] },
+		classification: { tools: ['tag'] },
+		'text-span': { tools: ['text'] },
+		transcription: { tools: ['bbox', 'text'] },
+		'doc-qa': { tools: ['bbox', 'text'] },
+		'reading-order': {
+			tools: ['bbox'],
+			attributes: [{ name: 'order', type: 'int', required: true }],
+		},
+	};
+
+	// Derived, not a function: the payload is a pure projection of templateKind + classesText,
+	// which is exactly what $derived is for (svelte-runes: computed → $derived, const = read-only).
+	const templatePayload = $derived.by(() => {
+		const preset = TEMPLATE_PRESETS[templateKind];
+		if (!preset) return undefined; // 'free' — the unconstrained default
+		return {
+			kind: templateKind,
+			tools: preset.tools,
+			// The taxonomy doubles as the output contract: every listed class must appear.
+			required_labels: classesText
+				.split(',')
+				.map((c) => c.trim())
+				.filter(Boolean),
+			attributes: preset.attributes ?? [],
+			enforce: true,
+		};
+	});
 
 	function labelSchema(): { classes: { name: string; shape_types: string[] }[] } | undefined {
 		const names = classesText
@@ -97,6 +137,7 @@
 			review_required: reviewRequired,
 			consensus_n: Math.min(5, Math.max(1, Math.round(consensusN) || 1)),
 			...(schema ? { label_schema: schema } : {}),
+			...(templatePayload ? { template: templatePayload } : {}),
 		});
 		creating = false;
 		if (result.ok) {
@@ -187,7 +228,11 @@
 </div>
 
 <Dialog.Root bind:open={createOpen}>
-	<Dialog.Content class="sm:max-w-md">
+	<!-- Scrollable: the create form grew past a laptop viewport (slug → title → description →
+	     instructions → classes → shape kind → task type → consensus → review), which pushed the
+	     submit button off-screen. A dialog taller than the window is broken for a user and for a
+	     driver alike — the button is reachable only by a scroll that races every click. -->
+	<Dialog.Content class="max-h-[85vh] overflow-y-auto sm:max-w-md">
 		<Dialog.Title>New labeling task</Dialog.Title>
 		<Dialog.Description>
 			Born in <span class="font-mono">draft</span> — open it for labeling once items are sent.
@@ -235,6 +280,21 @@
 					bind:value={shapeKind}
 					ariaLabel="Shape kind"
 					options={SHAPE_KINDS.map((kind) => ({ value: kind, label: kind }))}
+				/>
+			</label>
+			<label class="flex flex-col gap-1 text-sm">
+				<span
+					>Task type <span class="text-muted-foreground"
+						>(a template — its tools and outputs are enforced at submit)</span
+					></span
+				>
+				<Select
+					bind:value={templateKind}
+					ariaLabel="Task type"
+					options={[
+	{ value: 'free', label: 'free (no template)' },
+	...Object.keys(TEMPLATE_PRESETS).map((kind) => ({ value: kind, label: kind })),
+]}
 				/>
 			</label>
 			<label class="flex flex-col gap-1 text-sm">

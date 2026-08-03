@@ -215,3 +215,16 @@ def test_instructions_travel_from_the_create_payload_to_the_persisted_doc(_actor
     assert r.status_code == 201, r.text
     assert r.json()["instructions"] == "Label every visible portrait; skip seals."
     assert _actor.created[0]["instructions"] == "Label every visible portrait; skip seals."
+
+
+def test_the_template_travels_from_the_create_payload_to_the_persisted_doc(_actor: _FakeProjectActor) -> None:
+    client = TestClient(_app(allow=True))
+    r = client.post(
+        "/projects",
+        json={**PAYLOAD, "template": {"kind": "text-span", "tools": ["text"], "required_labels": ["entity"], "enforce": True}},
+    )
+    assert r.status_code == 201, r.text
+    stored = _actor.created[0]["template"]
+    assert stored["kind"] == "text-span"
+    assert stored["required_labels"] == ["entity"]
+    assert stored["enforce"] is True

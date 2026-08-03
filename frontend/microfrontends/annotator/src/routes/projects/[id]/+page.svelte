@@ -178,6 +178,15 @@
 				<p class="mt-1 whitespace-pre-line">{project.instructions}</p>
 			</div>
 		{/if}
+		{#if project.template?.enforce}
+			<div class="flex items-center gap-1.5 text-sm" data-testid="template-chip">
+				<span class="text-muted-foreground text-xs">Task type:</span>
+				<Badge>{project.template.kind}</Badge>
+				<span class="text-muted-foreground text-xs"
+					>tools: {project.template.tools.join(', ')} — enforced at submit</span
+				>
+			</div>
+		{/if}
 		{#if project.label_schema.classes.length > 0}
 			<!-- The labeling TASK, visible where the work happens: what is being labelled, with what
 			     geometry. Publish stamps the same list into table properties + the lineage facet. -->

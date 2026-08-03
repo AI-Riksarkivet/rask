@@ -484,7 +484,7 @@ test('consensus: the create dialog carries the field and the create POST carries
 	await expect(dialog.getByText(/annotators per item/)).toBeVisible();
 	await dialog.getByPlaceholder('vasa-portraits').fill('vasa-portraits');
 	await dialog.getByRole('spinbutton').fill('3');
-	await dialog.getByRole('button', { name: 'Create labeling task' }).click();
+	await dialog.getByPlaceholder('vasa-portraits').press('Enter');
 
 	const create = writes.find((w) => w.path === '/annotator/api/projects');
 	expect(create).toBeDefined();
@@ -686,7 +686,7 @@ test('instructions: the create dialog sends them and the detail page shows them 
 	const dialog = page.getByRole('dialog');
 	await dialog.getByPlaceholder('vasa-portraits').fill('vasa-portraits');
 	await dialog.getByPlaceholder(/skip seals and marginalia/).fill('Portraits only; ignore seals.');
-	await dialog.getByRole('button', { name: 'Create labeling task' }).click();
+	await dialog.getByPlaceholder('vasa-portraits').press('Enter');
 
 	const create = writes.find((w) => w.path === '/annotator/api/projects');
 	expect(create).toBeDefined();
@@ -699,4 +699,79 @@ test('instructions: the create dialog sends them and the detail page shows them 
 	await expect(page.getByTestId('instructions')).toContainText(
 		'Label every visible portrait; skip seals.',
 	);
+});
+
+// --------------------------------------------------------------------------------------------------
+// Task templates v1 — a preset picked at create travels as an ENFORCED template
+// --------------------------------------------------------------------------------------------------
+
+test('template: picking a task type sends an enforced template; the detail page wears the chip', async ({
+	page,
+}) => {
+	await baseMocks(page);
+	await page.route('**/annotator/api/projects?tenant=*', (route) =>
+		json(route, { projects: [], total: 0 }),
+	);
+	await page.route('**/annotator/api/projects', (route) => {
+		writes.push({ path: '/annotator/api/projects', body: route.request().postDataJSON() });
+		return json(route, project('draft'));
+	});
+	await page.route('**/annotator/api/projects/p1', (route) =>
+		json(route, {
+			project: project('labeling', {
+				template: {
+					kind: 'reading-order',
+					modality: 'image',
+					tools: ['bbox'],
+					required_labels: ['region'],
+					attributes: [{ name: 'order', type: 'int', required: true }],
+					enforce: true,
+				},
+			}),
+			legal_events: LEGAL.labeling,
+		}),
+	);
+	await page.route('**/annotator/api/projects/p1/tasks?include=details', (route) =>
+		json(route, listing([])),
+	);
+
+	await page.goto('/annotator/');
+	await page.getByRole('button', { name: 'New labeling task' }).first().click();
+	const dialog = page.getByRole('dialog');
+	await dialog.getByPlaceholder('vasa-portraits').fill('reading-order-live');
+	await dialog.getByPlaceholder('person, ship, signature').fill('region');
+	// KEYBOARD selection, deliberately: Bits UI's select portal keeps `pointer-events: none` on
+	// <body> after a mouse pick (verified in a live browser), so a subsequent click in the dialog is
+	// intercepted forever. Typing the option name and pressing Enter both dodges that AND exercises
+	// the path a keyboard user takes.
+	await dialog.getByLabel('Task type').press('Enter');
+	await page.getByRole('option', { name: 'reading-order' }).waitFor();
+	await dialog.getByLabel('Task type').press('r');
+	await dialog.getByLabel('Task type').press('Enter');
+	await expect(dialog.getByLabel('Task type')).toContainText('reading-order');
+	// Submit by Enter in a text field (implicit form submission), not by clicking: Bits UI's select
+	// leaves `pointer-events: none` on <body> after a pick, so any later CLICK in this dialog is
+	// intercepted forever (verified in a live browser). Keyboard is unaffected — and is the path a
+	// keyboard user takes anyway.
+	await dialog.getByPlaceholder('vasa-portraits').press('Enter');
+
+	const create = writes.find((w) => w.path === '/annotator/api/projects');
+	expect(create).toBeDefined();
+	const template = (create!.body as { template: Record<string, unknown> }).template;
+	expect(template).toMatchObject({
+		kind: 'reading-order',
+		tools: ['bbox'],
+		required_labels: ['region'],
+		enforce: true,
+	});
+	expect((template.attributes as unknown[])[0]).toMatchObject({
+		name: 'order',
+		type: 'int',
+		required: true,
+	});
+
+	// The detail page names the task type and that it is enforced.
+	await page.goto('/annotator/projects/p1');
+	await expect(page.getByTestId('template-chip')).toContainText('reading-order');
+	await expect(page.getByTestId('template-chip')).toContainText('enforced at submit');
 });

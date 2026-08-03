@@ -523,3 +523,23 @@ def test_a_pick_naming_another_groups_member_refuses_the_publish() -> None:
 
     with pytest.raises(PublishRefusal, match="not a member"):
         build_plan(project, pairs, publish_id="tok", published_at=NOW)
+
+
+def test_the_template_is_stamped_into_properties_and_facet() -> None:
+    """§7.1: a downstream consumer must know what SHAPE of labels the table holds."""
+    from annotator.projects.models import TaskTemplate
+    from annotator.projects.publish import table_properties
+
+    project = AnnotationProject(
+        project_id="p1",
+        tenant="acme",
+        slug="vasa",
+        template=TaskTemplate(kind="reading-order", tools=["bbox"], enforce=True),
+    )
+    pairs = [(_pin_task("t0", "demo", 24), None)]
+    plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
+
+    assert table_properties(project, plan)["annotation.template_kind"] == "reading-order"
+    facet = project_facet(project, plan)
+    assert facet["template"]["kind"] == "reading-order"
+    assert facet["template"]["enforce"] is True
