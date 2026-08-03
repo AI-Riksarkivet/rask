@@ -17,11 +17,9 @@
 	"dependencies": {
 		"@lucide/svelte": "^1.21.0",
 		"@rask/api": "workspace:*",
-		"@rask/dockview": "workspace:*",
 		"@rask/ui": "workspace:*",
 		"@sveltejs/kit": "^2.67.0",
 		"@tailwindcss/vite": "^4.3.1",
-		"dockview": "^7.0.4",
 		"mode-watcher": "^1.1.0",
 		"svelte-sonner": "^1.1.1",
 		"tailwindcss": "^4.3.1",

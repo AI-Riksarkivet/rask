@@ -19,7 +19,7 @@ Package name equals directory name for all seven (`manifest.test.ts:53`). Base i
 |---|---|---|---|---|
 | `home` | `''` catch-all | 5273 | Home | Project gallery + the **OIDC BFF** (`/auth/{login,callback,logout}`) |
 | `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one — `catalog`, `lineage`, `models`, `admin`, `governance`, `storage`; 49 route files, **8 `+server.ts` routes** — 4 keep-bytes (Arrow preview/insert, blob bytes, media downloads), 1 keep-flow (`capi/v1/me`), 2 catch-alls (17 element reads — the cross-zone blocker) + the thin `/api/audit` shim for the workbench element; every JSON value surface rides one of the zone's 15 `.remote.ts` modules and `requestJSON` has ZERO call sites left |
-| `media` | `/media` | 5173 | **Search** | Corpus search workbench: FTS/vector/hybrid, WebGPU atlas, Cypher KG, Svelte-Flow editor; **6 `+server.ts` routes** (was 13) — 4 keep-bytes + `api/search`/`api/atlas/chunks`, which keep their route (multipart / rowid-list POST) but answer **Arrow IPC**; every JSON value surface rides one of 5 `.remote.ts` modules (the transport ruling area 3) |
+| `media` | `/media` | 5173 | **Search** | Corpus search workbench (and the estate's ONE dock, `/media/workbench`): FTS/vector/hybrid, WebGPU atlas, Cypher KG, Svelte-Flow editor; **6 `+server.ts` routes** (was 13) — 4 keep-bytes + `api/search`/`api/atlas/chunks`, which keep their route (multipart / rowid-list POST) but answer **Arrow IPC**; every JSON value surface rides one of 5 `.remote.ts` modules (the transport ruling area 3) |
 | `annotator` | `/annotator` | 5177 | **Annotate** | PixiJS/WebGPU canvas over Arrow-backed rows; **3 `+server.ts` routes** (was 9) — the Arrow annotations transport, `capi/v1/me`, the viewer catch-all; every JSON value surface rides one of 6 `.remote.ts` modules |
 | `compute` | `/compute` | 5175 | Compute | Ray/Serve observability, 9 pages |
 | `train` | `/train` | 5178 | Train | **Placeholder data only** — every page badges it |
@@ -46,22 +46,37 @@ Only `@rask/ui` has a build (`svelte-package` → `dist/`); the rest are consume
 **A `frontend/packages/*` entry is a LIBRARY, never a domain slice.** A zone's panels, stores and
 graphs are the zone — moving them into a shared package hollows the zone, couples releases, and
 cuts them off from their live stores and per-app remote functions (tried once, reversed:
-`docs/architecture/global-workbench.md`). Cross-zone composition is RUNTIME
-composition — custom elements, shipped in the global workbench (see § Workbenches). Extract the *mechanism* (`@rask/flow`), keep the
-*domain* in its zone.
+`docs/architecture/global-workbench.md`). Cross-zone composition was tried twice and
+retired twice — as a shared package (`@rask/panels`, hollowed the zones) and as runtime custom
+elements (the global workbench, starved the panels of remote functions and `$app`). Extract the
+*mechanism* into a library (`@rask/dockview`, `@rask/flow`); keep the *domain*, its data and its
+components in the zone that owns them.
 
 ## Workbenches — `@rask/dockview`
 
-**Docks live INSIDE their zone** (final ruling 2026-08-03 — the record is
-`docs/architecture/global-workbench.md`). A zone's dock composes THAT ZONE'S OWN components over
-one store shared through ordinary `createContext`, so panels cannot be a query apart: the media
-zone's `/media/workbench` runs `search-bar` + `hit-list` + `AtlasMap` + `player-pane` over one
-`Bench`. The cross-zone compositor zone that briefly existed is RETIRED — custom elements cannot
-import remote functions or `$app`-bound components, so its panels had to be mirrored, and the one
-capability it bought (mixing panels across zones) was a workflow nobody had.
-`dock-reachability.test.ts` pins every dock the estate ships (sidebar row AND navbar row), so a
-dock can never be unnavigable and a compositor cannot return unnoticed. It is a **thin binding,
-not a wrapper**: consumers hold the real `DockviewApi` and call its documented methods.
+**ONE dock, and it lives INSIDE its zone** (final ruling 2026-08-03 — the record is
+`docs/architecture/global-workbench.md`). `media` ships `/media/workbench`: the zone's OWN
+components (`search-bar`, `hit-list`, `AtlasMap`, `player-pane`) over ONE `Bench` store shared
+through ordinary `createContext`, so a hit picked in the results panel is the hit the atlas
+highlights and the player loads. No other zone has one — a dock is earned by a real multi-panel
+workflow ("cut and re-cut the corpus"), never by symmetry.
+
+The cross-zone compositor ZONE that briefly existed is DELETED, and with it the whole custom-element
+machinery (per-zone `src/lib/elements/**`, `vite.elements.config.ts`, element budgets, the
+`rask:select` contract). Its one capability — mixing panels from different zones — was a workflow
+nobody had, and it cost fidelity structurally: an element cannot import a remote function
+(endpoints are per-app) or a `$app`-bound component, so every panel had to be MIRRORED.
+`dock-reachability.test.ts` pins the docks the estate ships (sidebar row AND navbar row), so a dock
+can never be unnavigable and a compositor cannot return unnoticed.
+
+**A dock's persistence goes through its zone's remote functions.** The `capi/v1/user-state`
+proxies died in the transport convergence, so `makeDockLayoutStore`/`makeDockViewsStore` take a
+`fetcher` shim (`$lib/dock/user-state-fetch.ts`) that maps their two calls onto the zone's
+`readUserStateDoc`/`writeUserStateDoc` and answers with a real `Response` — the store's three
+outcomes (`ok` / `absent` / **`unreadable`**) survive because a status stays a status.
+
+It is a **thin binding, not a wrapper**: consumers hold the real `DockviewApi` and call its
+documented methods.
 
 Depend on **`dockview`, never `dockview-core`.** Their *type* entrypoints are identical
 (`export * from 'dockview-core'`), which makes core look like the leaner honest choice — it is not.
