@@ -46,19 +46,22 @@ Only `@rask/ui` has a build (`svelte-package` → `dist/`); the rest are consume
 **A `frontend/packages/*` entry is a LIBRARY, never a domain slice.** A zone's panels, stores and
 graphs are the zone — moving them into a shared package hollows the zone, couples releases, and
 cuts them off from their live stores and per-app remote functions (tried once, reversed:
-`docs/architecture/global-workbench.md`). Cross-zone composition, when wanted, is RUNTIME
-composition — custom elements, planned spike-first in
-`open_workbench.md` (repo root). Extract the *mechanism* (`@rask/flow`), keep the
+`docs/architecture/global-workbench.md`). Cross-zone composition is RUNTIME
+composition — custom elements, shipped in the global workbench (see § Workbenches). Extract the *mechanism* (`@rask/flow`), keep the
 *domain* in its zone.
 
 ## Workbenches — `@rask/dockview`
 
-**No zone ships a dock today — by decision, not omission.** The per-zone workbenches were removed
-2026-08-03: the estate ships ONE global workbench (runtime-composed from custom elements, in
-progress — `open_workbench.md` at repo root) or none. `dock-reachability.test.ts` pins the dock
-count at ZERO until it lands; a local dock reappearing is a defect. The library, its chrome and the
-invariants below are kept for that consumer. It is a **thin binding, not a wrapper**: consumers hold
-the real `DockviewApi` and call its documented methods.
+**ONE dock: the global `/workbench` zone** (shipped 2026-08-03 — the full record is
+`docs/architecture/global-workbench.md`). It composes FIFTEEN panels the other zones build and
+serve as custom elements (`rask-<zone>-<panel>`, each zone's `src/lib/elements/` + its own Vite
+lib build emitting `/​<zone>/elements/<zone>-elements.js` with its OWN compiled Tailwind
+utilities); the compositor owns ZERO panel code. The boundary contract is
+`@rask/dockview/contract`: `rask:select` CustomEvents up through a valibot relay, properties
+(`pollms`, `filtertext`) down. Per-zone workbenches remain a defect —
+`dock-reachability.test.ts` pins the dock count to exactly `['/workbench/']`. Element bundles
+have budget ceilings (`element-budget.test.ts`). It is a **thin binding, not a wrapper**:
+consumers hold the real `DockviewApi` and call its documented methods.
 
 Depend on **`dockview`, never `dockview-core`.** Their *type* entrypoints are identical
 (`export * from 'dockview-core'`), which makes core look like the leaner honest choice — it is not.
