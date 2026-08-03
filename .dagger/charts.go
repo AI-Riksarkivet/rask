@@ -20,6 +20,25 @@ const helmVersion = "3.16.4"
 // promVersion matches the CI job's promtool exactly (PV=2.55.1) — the version that authored rules_test.yml.
 const promVersion = "2.55.1"
 
+// helmBinary is the pinned helm executable on its own, so every lane that needs helm gets the SAME one.
+// Extracted 2026-08-03 when the pytest lane gained helm too (test.go): the thirteen chart-render
+// invariants in tests/unit/test_invariants.py had been calling `pytest.skip("helm not available")` on
+// every CI run because .dagger/base() is a uv image with no helm — a silent hole, since a skipped test
+// reads as a passing suite. Two independently-curled helm installs would let the render gates and the
+// pytest invariants disagree about the same chart under different Helm minors, which is exactly what
+// helmVersion exists to prevent — so both take this file.
+func helmBinary() *dagger.File {
+	return dag.Container().
+		From(chartsBaseImage).
+		WithExec([]string{"apt-get", "update"}).
+		WithExec([]string{"apt-get", "install", "-y", "--no-install-recommends", "curl", "ca-certificates"}).
+		// The official get.helm.sh archive extracts to linux-amd64/helm.
+		WithExec([]string{"sh", "-c",
+			"curl -fsSL https://get.helm.sh/helm-v" + helmVersion + "-linux-amd64.tar.gz" +
+				" | tar xz -C /tmp && install -m0755 /tmp/linux-amd64/helm /usr/local/bin/helm"}).
+		File("/usr/local/bin/helm")
+}
+
 // chartsBase builds the tool container for the non-Python hermetic gates: a small Debian base with the
 // pinned helm + promtool binaries curled from their release archives onto PATH, plus the repo source.
 // `.localbin` is excluded (on top of base()'s excludes) so the Makefile's `export PATH := $(LOCALBIN):…`
@@ -33,10 +52,8 @@ func (m *Rask) chartsBase(src *dagger.Directory) *dagger.Container {
 		// make (runs the gate targets) + curl/ca-certificates (fetch the tool archives). bash, tar, grep,
 		// awk and coreutils are already in the Debian base.
 		WithExec([]string{"apt-get", "install", "-y", "--no-install-recommends", "make", "curl", "ca-certificates"}).
-		// Pin helm — the official get.helm.sh archive extracts to linux-amd64/helm.
-		WithExec([]string{"sh", "-c",
-			"curl -fsSL https://get.helm.sh/helm-v" + helmVersion + "-linux-amd64.tar.gz" +
-				" | tar xz -C /tmp && install -m0755 /tmp/linux-amd64/helm /usr/local/bin/helm"}).
+		// Pinned helm, shared with the pytest lane so the two cannot drift onto different Helm minors.
+		WithFile("/usr/local/bin/helm", helmBinary()).
 		// Pin promtool — same URL + version the CI job uses; the archive nests promtool under its dir.
 		WithExec([]string{"sh", "-c",
 			"curl -fsSL https://github.com/prometheus/prometheus/releases/download/v" + promVersion +
