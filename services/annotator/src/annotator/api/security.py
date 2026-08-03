@@ -63,6 +63,25 @@ def authenticate(request: Request, settings: SettingsDep, credentials: _Credenti
 CurrentToken = Annotated[IDToken | None, Depends(authenticate)]
 
 
+def raw_bearer(credentials: _CredentialsDep) -> str | None:
+    """The raw bearer JWT (scheme-stripped), or ``None`` when absent — for FORWARDING, not verifying.
+
+    The annotator reads Lance through the REST catalog, and the catalog authenticates every `/v1`
+    call itself. Reading with a SERVICE token would make this a confused deputy: the catalog's
+    `authorize` checks one relation on one `table:` object and injects no row predicate, so a
+    service credential answers 200 for a caller who has no grant at all — the two users diverge,
+    not the rows. Forwarding the caller's own bearer keeps the catalog's answer about the CALLER.
+
+    Mirrors `services/catalog/api/security.py::raw_bearer` and reuses the same `HTTPBearer` seam, so
+    forwarding can never parse differently from :func:`authenticate`.
+    """
+    return credentials.credentials if credentials is not None else None
+
+
+#: The caller's raw bearer JWT (``None`` when absent) — forwarded to the catalog on reads/writes.
+RawBearerToken = Annotated[str | None, Depends(raw_bearer)]
+
+
 def current_subject(token: CurrentToken) -> str:
     """The verified principal, as the FGA subject id (no ``user:`` prefix — `fga.check` qualifies it).
 

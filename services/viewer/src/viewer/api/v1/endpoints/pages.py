@@ -25,7 +25,7 @@ import lance
 from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel
 
-from service_kit.exceptions import NotFoundError
+from service_kit.exceptions import NotFoundError, UnauthorizedError
 from service_kit.lakehouse.blobs import read_aligned_table
 from service_kit.media.deps import StateDep
 
@@ -75,6 +75,15 @@ def _resolve(state: StateDep, table: str) -> str:
             r = http.post(f"/v1/table/{table}/describe", json={})
     except httpx.RequestError as exc:
         raise NotFoundError(f"catalog unreachable while resolving {table!r}: {exc}") from exc
+    # 401/403 are NOT "unknown table". This call carries no Authorization header (the viewer has no
+    # bearer plumbing yet — see OPEN-WORK), so on an auth-enabled catalog it 401s, and reporting
+    # that as "catalog does not know table X" sends the next reader hunting for a missing
+    # registration that is not the problem. The annotator lost real debugging time to exactly this
+    # laundering. Say which failure it is.
+    if r.status_code in (401, 403):
+        raise UnauthorizedError(
+            f"the catalog rejected the viewer's credential resolving {table!r} (HTTP {r.status_code}) — the viewer sends no bearer on this call"
+        )
     if r.status_code >= 400:
         raise NotFoundError(f"catalog does not know table {table!r} (HTTP {r.status_code})")
     location = r.json().get("location")
