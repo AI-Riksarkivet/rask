@@ -5,57 +5,56 @@
 
 <script lang="ts">
 	/**
-	 * THE SEARCH WORKBENCH — a dock INSIDE the media zone.
+	 * THE LINEAGE WORKBENCH — a dock INSIDE the lakehouse zone.
 	 *
-	 * The panels are this zone's own components (`search-bar`, `hit-list`, `AtlasMap`,
-	 * `player-pane`) sharing ONE `Bench` store through context, which is the whole argument for a
-	 * per-zone dock: a result picked in the list is the hit the atlas highlights and the player
-	 * loads, with no transport between them. The global `/workbench` zone can compose panels ACROSS
-	 * zones, but pays bundles, proxies and mirroring for it and still cannot share a store. Cutting
-	 * and re-cutting ONE corpus is the workflow that actually wanted a dock.
+	 * The panels are this zone's own components over ONE `LineageState`, polled once and shared
+	 * through context: the medallion DAG, the run board and the event feed can never be a poll
+	 * apart, and the graph is the SAME `LineageGraph` the /lineage page renders — not a mirror.
 	 *
 	 * Layout + named views ride the SAME per-subject machinery (`dock-layout`,
 	 * `dock-layout-library` on this zone's user-state proxy) — the library is zone-agnostic.
 	 */
 	import { onMount, type Component } from 'svelte';
-	import { ListTree, Map, Play } from '@lucide/svelte';
+	import { Activity, List, Network } from '@lucide/svelte';
 	import type { DockviewApi, SerializedDockview } from 'dockview';
 	import type { PanelRegistry } from '@rask/dockview';
 	import { DockViews, ViewSidebar } from '@rask/dockview/views';
 	import { makeDockLayoutStore } from '@rask/api/dock-layout';
 	import { makeDockViewsStore } from '@rask/api/dock-views';
+	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { Bench, setBench } from '$lib/dock/bench.svelte';
+	import { createBench, setBench } from '$lib/dock/bench.svelte';
 	import { userStateFetcher } from '$lib/dock/user-state-fetch';
-	import AtlasPanel from '$lib/dock/panels/AtlasPanel.svelte';
-	import PlayerPanel from '$lib/dock/panels/PlayerPanel.svelte';
-	import SearchPanel from '$lib/dock/panels/SearchPanel.svelte';
+	import EventsPanel from '$lib/dock/panels/EventsPanel.svelte';
+	import GraphPanel from '$lib/dock/panels/GraphPanel.svelte';
+	import RunsPanel from '$lib/dock/panels/RunsPanel.svelte';
 
-	const bench = new Bench();
-	setBench(bench);
+	const store = createBench();
+	setBench(store);
+	onMount(() => void store.poll());
 
 	const panels: PanelRegistry = {
-		results: {
-			component: SearchPanel,
-			label: 'Search results',
-			icon: ListTree,
-			keywords: ['search', 'hits', 'results', 'query', 'fts', 'vector'],
+		graph: {
+			component: GraphPanel,
+			label: 'Lineage graph',
+			icon: Network,
+			keywords: ['dag', 'lineage', 'provenance', 'medallion', 'openlineage'],
 		},
-		atlas: {
-			component: AtlasPanel,
-			label: 'Atlas',
-			icon: Map,
-			keywords: ['embedding', 'map', 'atlas', 'cluster', 'lasso'],
+		runs: {
+			component: RunsPanel,
+			label: 'Runs',
+			icon: Activity,
+			keywords: ['runs', 'executions', 'failures', 'state', 'lineage'],
 		},
-		player: {
-			component: PlayerPanel,
-			label: 'Player',
-			icon: Play,
-			keywords: ['media', 'transcript', 'audio', 'video', 'play'],
+		events: {
+			component: EventsPanel,
+			label: 'Events',
+			icon: List,
+			keywords: ['events', 'feed', 'log', 'stream', 'emissions'],
 		},
 	};
 
-	const WORKBENCH_ID = 'media-search';
+	const WORKBENCH_ID = 'lakehouse-lineage';
 	const layoutStore = makeDockLayoutStore<SerializedDockview>({
 		workbenchId: WORKBENCH_ID,
 		endpoint: 'dock-layout',
@@ -83,18 +82,18 @@
 		api = dockApi;
 		dockApi.onDidLayoutChange(() => views.touch());
 		if (restored) return;
-		dockApi.addPanel({ id: 'results', component: 'results', title: 'Results' });
+		dockApi.addPanel({ id: 'graph', component: 'graph', title: 'Lineage graph' });
 		dockApi.addPanel({
-			id: 'atlas',
-			component: 'atlas',
-			title: 'Atlas',
-			position: { referencePanel: 'results', direction: 'right' },
+			id: 'runs',
+			component: 'runs',
+			title: 'Runs',
+			position: { referencePanel: 'graph', direction: 'right' },
 		});
 		dockApi.addPanel({
-			id: 'player',
-			component: 'player',
-			title: 'Player',
-			position: { referencePanel: 'atlas', direction: 'below' },
+			id: 'events',
+			component: 'events',
+			title: 'Events',
+			position: { referencePanel: 'runs', direction: 'below' },
 		});
 	}
 
@@ -108,7 +107,7 @@
 			api.fromJSON(read.layout as SerializedDockview, { reuseExistingPanels: true });
 			views.activate(id);
 		} catch (e) {
-			console.warn('[media workbench] saved view failed to apply — restoring', e);
+			console.warn('[lineage workbench] saved view failed to apply — restoring', e);
 			try {
 				api.fromJSON(previous, { reuseExistingPanels: true });
 			} catch {
@@ -118,7 +117,7 @@
 	}
 </script>
 
-<svelte:head><title>Search workbench — RASK</title></svelte:head>
+<svelte:head><title>Lineage workbench — RASK</title></svelte:head>
 
 <div class="wrap">
 	<ViewSidebar {views} onselect={applyView} />

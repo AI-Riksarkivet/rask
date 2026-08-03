@@ -73,13 +73,17 @@ function dockRoutes(): { zone: string; href: string; file: string }[] {
 const DOCKS = dockRoutes();
 
 describe('dock reachability', () => {
-	it('pins the docks: exactly THE global workbench — a per-zone dock reappearing is a defect', () => {
+	it('pins the docks the estate ships — one per zone that has one, all navigable', () => {
 		// 2026-08-03 (final ruling): docks belong INSIDE the zones and the global compositor is
 		// RETIRED (docs/architecture/global-workbench.md). A zone's dock composes that zone's own
 		// components over one shared store — full fidelity, no cross-zone transport. The pin stays
 		// EXACT: every dock the estate ships must be navigable, and a compositor cannot come back
-		// unnoticed. Lakehouse and compute join this list as their docks land.
-		expect(DOCKS.map((d) => d.href).sort()).toEqual(['/media/workbench']);
+		// unnoticed. Three zones ship one today: media (search), lakehouse (lineage), compute (Ray).
+		expect(DOCKS.map((d) => d.href).sort()).toEqual([
+			'/compute/workbench',
+			'/lakehouse/lineage/workbench',
+			'/media/workbench',
+		]);
 	});
 
 	it.each(DOCKS)('$href is listed in the $zone zone sidebar', ({ zone, href }) => {

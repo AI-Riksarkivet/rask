@@ -10,6 +10,7 @@ import {
 	HardDrive,
 	Inbox,
 	Layers,
+	LayoutDashboard,
 	Network,
 	Package,
 	Radio,
@@ -117,6 +118,13 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 				href: '/lakehouse/lineage/columns',
 				match: seg('/lakehouse/lineage/columns'),
 				icon: Columns3,
+			},
+			{
+				// The zone's own dock: graph + runs + events over ONE LineageState.
+				title: 'Workbench',
+				href: '/lakehouse/lineage/workbench',
+				match: seg('/lakehouse/lineage/workbench'),
+				icon: LayoutDashboard,
 			},
 		],
 	},

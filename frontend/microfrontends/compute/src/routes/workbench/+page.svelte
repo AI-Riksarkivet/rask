@@ -5,57 +5,51 @@
 
 <script lang="ts">
 	/**
-	 * THE SEARCH WORKBENCH — a dock INSIDE the media zone.
+	 * THE COMPUTE WORKBENCH — a dock INSIDE the compute zone.
 	 *
-	 * The panels are this zone's own components (`search-bar`, `hit-list`, `AtlasMap`,
-	 * `player-pane`) sharing ONE `Bench` store through context, which is the whole argument for a
-	 * per-zone dock: a result picked in the list is the hit the atlas highlights and the player
-	 * loads, with no transport between them. The global `/workbench` zone can compose panels ACROSS
-	 * zones, but pays bundles, proxies and mirroring for it and still cannot share a store. Cutting
-	 * and re-cutting ONE corpus is the workflow that actually wanted a dock.
+	 * Each panel reads the zone's OWN remote functions (`getRayJobs`, `getRayCluster`, `getActors`)
+	 * on the zone's own poll clock — the thing a cross-zone element could never do, because a
+	 * remote function's endpoint is per-app.
 	 *
 	 * Layout + named views ride the SAME per-subject machinery (`dock-layout`,
 	 * `dock-layout-library` on this zone's user-state proxy) — the library is zone-agnostic.
 	 */
 	import { onMount, type Component } from 'svelte';
-	import { ListTree, Map, Play } from '@lucide/svelte';
+	import { Boxes, ListTree, Server } from '@lucide/svelte';
 	import type { DockviewApi, SerializedDockview } from 'dockview';
 	import type { PanelRegistry } from '@rask/dockview';
 	import { DockViews, ViewSidebar } from '@rask/dockview/views';
 	import { makeDockLayoutStore } from '@rask/api/dock-layout';
 	import { makeDockViewsStore } from '@rask/api/dock-views';
+	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { Bench, setBench } from '$lib/dock/bench.svelte';
 	import { userStateFetcher } from '$lib/dock/user-state-fetch';
-	import AtlasPanel from '$lib/dock/panels/AtlasPanel.svelte';
-	import PlayerPanel from '$lib/dock/panels/PlayerPanel.svelte';
-	import SearchPanel from '$lib/dock/panels/SearchPanel.svelte';
-
-	const bench = new Bench();
-	setBench(bench);
+	import ActorsPanel from '$lib/dock/panels/ActorsPanel.svelte';
+	import ClusterPanel from '$lib/dock/panels/ClusterPanel.svelte';
+	import JobsPanel from '$lib/dock/panels/JobsPanel.svelte';
 
 	const panels: PanelRegistry = {
-		results: {
-			component: SearchPanel,
-			label: 'Search results',
+		jobs: {
+			component: JobsPanel,
+			label: 'Ray jobs',
 			icon: ListTree,
-			keywords: ['search', 'hits', 'results', 'query', 'fts', 'vector'],
+			keywords: ['ray', 'jobs', 'submitted', 'queue', 'raysubmit'],
 		},
-		atlas: {
-			component: AtlasPanel,
-			label: 'Atlas',
-			icon: Map,
-			keywords: ['embedding', 'map', 'atlas', 'cluster', 'lasso'],
+		cluster: {
+			component: ClusterPanel,
+			label: 'Cluster nodes',
+			icon: Server,
+			keywords: ['ray', 'nodes', 'capacity', 'gpu', 'resources'],
 		},
-		player: {
-			component: PlayerPanel,
-			label: 'Player',
-			icon: Play,
-			keywords: ['media', 'transcript', 'audio', 'video', 'play'],
+		actors: {
+			component: ActorsPanel,
+			label: 'Ray actors',
+			icon: Boxes,
+			keywords: ['ray', 'actors', 'workers', 'replicas', 'serve'],
 		},
 	};
 
-	const WORKBENCH_ID = 'media-search';
+	const WORKBENCH_ID = 'compute-ray';
 	const layoutStore = makeDockLayoutStore<SerializedDockview>({
 		workbenchId: WORKBENCH_ID,
 		endpoint: 'dock-layout',
@@ -83,18 +77,18 @@
 		api = dockApi;
 		dockApi.onDidLayoutChange(() => views.touch());
 		if (restored) return;
-		dockApi.addPanel({ id: 'results', component: 'results', title: 'Results' });
+		dockApi.addPanel({ id: 'jobs', component: 'jobs', title: 'Ray jobs' });
 		dockApi.addPanel({
-			id: 'atlas',
-			component: 'atlas',
-			title: 'Atlas',
-			position: { referencePanel: 'results', direction: 'right' },
+			id: 'cluster',
+			component: 'cluster',
+			title: 'Cluster',
+			position: { referencePanel: 'jobs', direction: 'right' },
 		});
 		dockApi.addPanel({
-			id: 'player',
-			component: 'player',
-			title: 'Player',
-			position: { referencePanel: 'atlas', direction: 'below' },
+			id: 'actors',
+			component: 'actors',
+			title: 'Actors',
+			position: { referencePanel: 'cluster', direction: 'below' },
 		});
 	}
 
@@ -108,7 +102,7 @@
 			api.fromJSON(read.layout as SerializedDockview, { reuseExistingPanels: true });
 			views.activate(id);
 		} catch (e) {
-			console.warn('[media workbench] saved view failed to apply — restoring', e);
+			console.warn('[compute workbench] saved view failed to apply — restoring', e);
 			try {
 				api.fromJSON(previous, { reuseExistingPanels: true });
 			} catch {
@@ -118,7 +112,7 @@
 	}
 </script>
 
-<svelte:head><title>Search workbench — RASK</title></svelte:head>
+<svelte:head><title>Compute workbench — RASK</title></svelte:head>
 
 <div class="wrap">
 	<ViewSidebar {views} onselect={applyView} />
