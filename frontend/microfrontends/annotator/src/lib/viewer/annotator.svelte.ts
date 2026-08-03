@@ -414,8 +414,13 @@ export class AnnotatorController {
 		if (i == null) return;
 		const t = this.table;
 		const id = t ? rawField(t, 'id', i) : null;
-		if (id) this._deletes = [...this._deletes, id]; // flushed on Save; sidebar drops it now
-		this.ctx?.plugins.interaction.handleKeyDown('Delete');
+		if (id) this._deletes = [...this._deletes, id]; // flushed on Save
+		// The CANVAS half. This used to be `interaction.handleKeyDown('Delete')`, which never did
+		// anything: `activeTool` is null in select mode — the only mode you can have a selection in —
+		// and no tool implements 'Delete' regardless. So the row vanished from the sidebar and stayed
+		// on the canvas until Save reloaded the table: one delete, two answers.
+		this.ctx?.plugins.arrow.setDeleted(i);
+		this.ctx?.plugins.arrow.sync();
 		this._geoDirty = true;
 		this.select(null);
 	}
@@ -498,6 +503,8 @@ export class AnnotatorController {
 			const next = t.concat(buildBatchTable(t.schema, [row as unknown as Record<string, unknown>]));
 			const arrow = this.ctx?.plugins.arrow;
 			if (arrow) {
+				// An insert APPENDS, so existing row indices are unchanged and the delete overlay stays
+				// valid across this swap — unlike _reload(), which renumbers and must clear it.
 				arrow.load(next);
 				arrow.sync();
 			}
@@ -869,6 +876,9 @@ export class AnnotatorController {
 		const ctx = this.ctx;
 		if (ctx) {
 			ctx.plugins.arrow.clearOverrides(); // drop stale geometry overrides — table is authoritative
+			// The delete overlay is positional, so a reload renumbering rows would leave it hiding an
+			// unrelated shape. The reloaded table has the deletions applied already.
+			ctx.plugins.arrow.clearDeleted();
 			ctx.plugins.arrow.load(table);
 			ctx.plugins.arrow.sync();
 		}

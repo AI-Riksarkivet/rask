@@ -118,6 +118,16 @@ export class ArrowDataPlugin {
 		}
 	>();
 
+	// Locally-deleted rows, by row INDEX — the same shape as every other overlay here.
+	//
+	// The Arrow table is immutable and only replaced on reload, so a delete cannot be expressed by
+	// mutating it. Without this overlay the deleted shape stayed on the canvas until Save triggered a
+	// reload, while the sidebar dropped it immediately — one delete, two answers. The controller's
+	// only canvas-directed call was `interaction.handleKeyDown('Delete')`, which is a guaranteed
+	// no-op: `activeTool` is null in select mode (the only mode a selection-delete happens in) and no
+	// tool implements 'Delete' anyway, so it looked like the canvas half and did nothing.
+	private deletedRows: Set<number> = new Set();
+
 	// Layer filtering
 	private hiddenGroups: Set<string> = new Set();
 	private groupByColumn: string = 'label';
@@ -202,6 +212,31 @@ export class ArrowDataPlugin {
 	/** Check if there are unsaved geometry edits */
 	hasDirtyOverrides(): boolean {
 		return this.dirtyOverrides.size > 0;
+	}
+
+	/** Hide a row locally, because it is queued for deletion.
+	 *
+	 *  Index-keyed like {@link setOverride}: the caller already holds the row index it selected, and
+	 *  keying by index means the overlay rides the same `hiddenMask` the layer filter uses, so
+	 *  hit-testing and mask sprites follow for free. */
+	setDeleted(index: number): void {
+		this.deletedRows.add(index);
+		this.dirty = true;
+	}
+
+	/** Drop the local delete overlay — the reloaded table is authoritative.
+	 *
+	 *  Must be called whenever the table is replaced, or a stale INDEX would hide an unrelated row:
+	 *  the overlay is positional, and a reload renumbers everything. */
+	clearDeleted(): void {
+		if (this.deletedRows.size === 0) return;
+		this.deletedRows.clear();
+		this.dirty = true;
+	}
+
+	/** Is this row locally deleted? Lets a caller avoid re-selecting a shape that is already gone. */
+	isDeleted(index: number): boolean {
+		return this.deletedRows.has(index);
 	}
 
 	/** Update viewport bounds for culling */
@@ -369,6 +404,13 @@ export class ArrowDataPlugin {
 					this.hiddenMask[i] = 1;
 				}
 			}
+		}
+		// Deleted rows ride the SAME mask as a hidden layer, which is what makes this cheap and
+		// complete: hit-testing, mask-sprite visibility and draw all consult `hiddenMask` already, so
+		// a deleted shape stops being clickable as well as invisible — no second code path to keep
+		// in step.
+		for (const i of this.deletedRows) {
+			if (i < numRows) this.hiddenMask[i] = 1;
 		}
 
 		// ── Phase 3.5: Compute heatmap colors ──
