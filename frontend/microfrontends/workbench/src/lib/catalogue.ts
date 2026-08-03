@@ -37,6 +37,14 @@ export const FOREIGN: Record<string, ForeignSource> = {
 		src: '/lakehouse/elements/lakehouse-elements.js',
 		tag: 'rask-lakehouse-datasets',
 	},
+	'lakehouse-storage': {
+		src: '/lakehouse/elements/lakehouse-elements.js',
+		tag: 'rask-lakehouse-storage',
+	},
+	'lakehouse-tables': {
+		src: '/lakehouse/elements/lakehouse-elements.js',
+		tag: 'rask-lakehouse-tables',
+	},
 	'lakehouse-audit': {
 		src: '/lakehouse/elements/lakehouse-elements.js',
 		tag: 'rask-lakehouse-audit',

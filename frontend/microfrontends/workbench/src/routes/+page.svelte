@@ -32,6 +32,8 @@
 		Server,
 		ServerCog,
 		ShieldCheck,
+		HardDrive,
+		Table,
 		Workflow,
 	} from '@lucide/svelte';
 	import type { DockviewApi, SerializedDockview } from 'dockview';
@@ -114,6 +116,20 @@
 			label: 'Datasets (lakehouse)',
 			icon: Database,
 			keywords: ['catalog', 'datasets', 'tables', 'governed', 'foreign'],
+		},
+		'lakehouse-storage': {
+			component: ForeignPanel,
+			group: 'Lakehouse',
+			label: 'Storage browser (lakehouse)',
+			icon: HardDrive,
+			keywords: ['storage', 's3', 'objects', 'buckets', 'browser', 'foreign'],
+		},
+		'lakehouse-tables': {
+			component: ForeignPanel,
+			group: 'Lakehouse',
+			label: 'Tables (lakehouse)',
+			icon: Table,
+			keywords: ['catalog', 'tables', 'registry', 'namespaces', 'foreign'],
 		},
 		'lakehouse-audit': {
 			component: ForeignPanel,
@@ -313,5 +329,13 @@
 		display: flex;
 		flex: 1 1 0;
 		min-height: 0;
+		/* The dock's own stacking context, pinned at z-0: dockview parks every panel in a positioned
+		   overlay box (z-index 1), which without this competes directly with the shared navbar's
+		   dropdown viewport (z-50) in the ROOT context and — being later in the document — painted
+		   over it, so the Lakehouse/Compute panels opened invisibly. `isolation` confines those
+		   overlays here; the shell's chrome keeps winning without the shell changing at all. */
+		position: relative;
+		z-index: 0;
+		isolation: isolate;
 	}
 </style>

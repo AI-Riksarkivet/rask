@@ -19,6 +19,8 @@ import EventsElement from './EventsElement.svelte';
 import GraphElement from './GraphElement.svelte';
 import OpsElement from './OpsElement.svelte';
 import RunsElement from './RunsElement.svelte';
+import StorageElement from './StorageElement.svelte';
+import TablesElement from './TablesElement.svelte';
 
 /** The elements' OWN Tailwind utilities (see elements.css) — injected RAW, not layer-wrapped:
  *  Tailwind already emits its own layer structure, and wrapping utilities in layer(base) would
@@ -52,6 +54,10 @@ const ELEMENTS: Record<string, CustomElementConstructor> = {
 	'rask-lakehouse-datasets': DatasetsElement.element,
 	// @ts-expect-error — same.
 	'rask-lakehouse-audit': AuditElement.element,
+	// @ts-expect-error — same.
+	'rask-lakehouse-storage': StorageElement.element,
+	// @ts-expect-error — same.
+	'rask-lakehouse-tables': TablesElement.element,
 	// @ts-expect-error — same.
 	'rask-lakehouse-access': AccessElement.element,
 	// @ts-expect-error — same.

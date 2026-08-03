@@ -147,13 +147,14 @@
 		/>
 	{/if}
 	<Sidebar.Inset class="flex min-w-0 flex-col overflow-hidden">
-		<!-- `relative z-30`: the header must create a stacking context ABOVE zone content. The
-		     workbench's dock parks every panel in positioned overlay boxes (z-index 1, later in the
-		     document), and without a context here the navbar's own dropdown panels PAINTED UNDER
-		     them — open but invisible, confirmed by elementFromPoint hitting a panel's table cell
-		     at the dropdown's center. Every absolutely-positioned child of the header (the
-		     NavigationMenu content) now resolves above any zone surface. -->
-		<header class="relative z-30 flex min-w-0 shrink-0 flex-col">
+		<!-- STATIC on purpose. Making this `relative` (a z-30 stacking context) looked like the fix
+		     for the workbench's dock painting over the navbar dropdowns — and instead made the header
+		     the containing block for the NavigationMenu's absolutely-positioned viewport, which then
+		     rendered nothing at all (open, height 452, opacity 1, invisible — proven by comparing the
+		     compute zone, which still worked, against the workbench, which did not). The dock is
+		     isolated on ITS side instead (a zone whose content paints over chrome must lower itself,
+		     never raise the shared shell). -->
+		<header class="flex min-w-0 shrink-0 flex-col">
 			<!-- Row 1 — the estate navbar. Integrated (sidebar-07): no border, h-14 → h-12 when the
 			     sidebar is icon-collapsed. Trigger on the left; the cross-zone TopNavbar (zone links +
 			     identity/theme) takes the rest. The project switcher moved to the SIDEBAR HEADER: it is
