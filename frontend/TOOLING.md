@@ -117,7 +117,7 @@ So TypeScript 7 cannot be the `typescript` dependency while `svelte-check` is in
 - `typescript@6.0.3` — resolved by `svelte-check`, which owns `.svelte`.
 - `@typescript/native-preview` (`tsgo` — the TS 7 engine under a second package name so both install)
   — the `check:tsgo` task, over every package whose sources are pure TypeScript: `@rask/api`,
-  `@rask/engine`, `@rask/labeling`, `@rask/media-api`, `@rask/zone-contract`, plus media's core.
+  `@rask/engine`, `@rask/labeling`, `@rask/explorer-api`, `@rask/zone-contract`, plus media's core.
 
 `tsgo` cannot resolve `*.svelte` imports either, so it could not own the component surface even if
 `svelte-check` were gone. **Every line of TypeScript that TypeScript 7 can check, it checks.** The

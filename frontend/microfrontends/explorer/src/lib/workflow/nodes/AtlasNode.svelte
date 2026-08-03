@@ -8,7 +8,7 @@
 	import { Handle, Position, type NodeProps } from '@xyflow/svelte';
 	import { Map as MapIcon } from '@lucide/svelte';
 	import { graph } from '$lib/workflow/graph.svelte';
-	import type { Hit } from '@rask/media-api';
+	import type { Hit } from '@rask/explorer-api';
 	import NodeShell from './NodeShell.svelte';
 	import AtlasModal from './AtlasModal.svelte';
 

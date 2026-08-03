@@ -6,7 +6,7 @@
 	 *  filter / upstream results) and "image" (Image node only), so the wires
 	 *  show what feeds what. */
 	import { Handle, Position, type NodeProps } from '@xyflow/svelte';
-	import type { SearchMode } from '@rask/media-api';
+	import type { SearchMode } from '@rask/explorer-api';
 	import {
 		graph,
 		SEARCH_MODES,

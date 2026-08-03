@@ -37,7 +37,7 @@ Only `@rask/ui` has a build (`svelte-package` → `dist/`); the rest are consume
 | `@rask/api` | Gateway client (`ray`, `ingest`, `projects`, `me`) **plus** the OIDC/BFF plane (`bff.ts`, `oidc.ts`), the lineage client, and `@rask/api/dock-layout` + `dock-views` |
 | `@rask/dockview` | Svelte 5 binding over **dockview 7** — the docked workbenches. → **§ Workbenches** |
 | `@rask/flow` | Generic Svelte Flow binding: `GraphCanvas`, `StaticFlow`, `FlowAutoFit`, `depths`/`layout`. **Mechanism only — domain graphs (LineageGraph, FGA) stay in their zones** |
-| `@rask/media-api` | Arrow-backed media/viewer client |
+| `@rask/explorer-api` | Arrow-backed media/viewer client |
 | `@rask/engine` | Framework-agnostic PixiJS/WebGPU annotation canvas (ra-anno lineage) |
 | `@rask/labeling` | The `LabelOp` model + annotator Arrow-IPC transport |
 | `@rask/zone-contract` | **Test-only** — 16 files / ~830 tests gating the estate's shape |

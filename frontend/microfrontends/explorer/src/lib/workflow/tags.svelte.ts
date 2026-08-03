@@ -4,7 +4,7 @@
  * Tagger node, with the tags persisting alongside the graph and flowing into
  * Export. A small focused runes class composed into the graph singleton.
  */
-import type { Hit } from '@rask/media-api';
+import type { Hit } from '@rask/explorer-api';
 import { hitKey } from '$lib/utils';
 
 /** Anything carrying the dataset's identity key fields — `hitKey` reads them

@@ -2,7 +2,7 @@
 	// `/storage` — the R18 S3 object browser over the warehouse buckets, on the shared @rask/ui
 	// DataTable: one delimiter-scoped level per view (folders + leaf objects), sortable columns, a
 	// text search, breadcrumb prefix navigation and a preview pane beside the table. Backend is
-	// the media-plane viewer's objects endpoints through this zone's /api/media BFF route
+	// the media-plane viewer's objects endpoints through this zone's /api/explorer BFF route
 	// (volumes-api retired in the R6/R20 wave); unreachable and empty states
 	// are explicit — a dead backend renders a retryable message, never a stuck spinner.
 	import {

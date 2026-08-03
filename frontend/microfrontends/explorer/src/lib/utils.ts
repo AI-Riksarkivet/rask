@@ -1,4 +1,4 @@
-import { activeView, type Row } from '@rask/media-api/descriptor';
+import { activeView, type Row } from '@rask/explorer-api/descriptor';
 
 /** shadcn-svelte's standard `cn` helper: clsx for conditionals, twMerge for conflicts. */
 export { cn } from '@rask/ui/utils';

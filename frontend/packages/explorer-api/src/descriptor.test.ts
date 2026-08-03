@@ -164,7 +164,7 @@ describe('DatasetView — transcripts corpus', () => {
 
 	it('builds identity-arity media URLs', () => {
 		const row = { doc_id: 'abc', seg_id: 2, chunk_id: 7 } as Row;
-		expect(v.mediaUrl(row)).toBe('/api/media/abc');
+		expect(v.mediaUrl(row)).toBe('/api/explorer/abc');
 		expect(v.frameUrl(row)).toBe('/api/chunk-frame/abc/2/7');
 	});
 
@@ -188,7 +188,7 @@ describe('DatasetView — structurally different corpus (acid-test shape)', () =
 
 	it('handles a single-field identity', () => {
 		expect(v.rowKey({ item_id: 'i9' } as Row)).toBe('i9');
-		expect(v.mediaUrl({ item_id: 'i9' } as Row)).toBe('/api/media/i9');
+		expect(v.mediaUrl({ item_id: 'i9' } as Row)).toBe('/api/explorer/i9');
 		expect(v.frameUrl({ item_id: 'i9' } as Row)).toBe('/api/chunk-frame/i9');
 	});
 
@@ -200,7 +200,7 @@ describe('DatasetView — structurally different corpus (acid-test shape)', () =
 
 	it('carries a dataset param for a non-default dataset', () => {
 		const nonDefault = view(IMAGES).withDatasetParam(false);
-		expect(nonDefault.mediaUrl({ item_id: 'i9' } as Row)).toBe('/api/media/i9?dataset=images');
+		expect(nonDefault.mediaUrl({ item_id: 'i9' } as Row)).toBe('/api/explorer/i9?dataset=images');
 		expect(nonDefault.datasetParam()).toBe('images');
 	});
 });

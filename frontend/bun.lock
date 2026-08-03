@@ -24,8 +24,8 @@
         "@lucide/svelte": "^1.26.0",
         "@rask/api": "workspace:*",
         "@rask/engine": "workspace:*",
+        "@rask/explorer-api": "workspace:*",
         "@rask/labeling": "workspace:*",
-        "@rask/media-api": "workspace:*",
         "@rask/ui": "workspace:*",
         "apache-arrow": "^21.2.0",
         "mode-watcher": "^1.1.0",
@@ -81,9 +81,9 @@
         "@lucide/svelte": "^1.26.0",
         "@rask/api": "workspace:*",
         "@rask/dockview": "workspace:*",
+        "@rask/explorer-api": "workspace:*",
         "@rask/flow": "workspace:*",
         "@rask/labeling": "workspace:*",
-        "@rask/media-api": "workspace:*",
         "@rask/ui": "workspace:*",
         "@xyflow/svelte": "^1.6.2",
         "@xyflow/system": "^0.0.79",
@@ -277,6 +277,19 @@
         "vitest": "^4.1.10",
       },
     },
+    "packages/explorer-api": {
+      "name": "@rask/explorer-api",
+      "version": "0.0.0",
+      "dependencies": {
+        "apache-arrow": "^21.2.0",
+        "valibot": "^1.4.2",
+      },
+      "devDependencies": {
+        "@rask/config": "workspace:*",
+        "typescript": "^6.0.3",
+        "vitest": "^4.1.10",
+      },
+    },
     "packages/flow": {
       "name": "@rask/flow",
       "version": "0.0.0",
@@ -298,21 +311,8 @@
       "name": "@rask/labeling",
       "version": "0.0.0",
       "dependencies": {
-        "@rask/media-api": "workspace:*",
+        "@rask/explorer-api": "workspace:*",
         "apache-arrow": "^21.2.0",
-      },
-      "devDependencies": {
-        "@rask/config": "workspace:*",
-        "typescript": "^6.0.3",
-        "vitest": "^4.1.10",
-      },
-    },
-    "packages/media-api": {
-      "name": "@rask/media-api",
-      "version": "0.0.0",
-      "dependencies": {
-        "apache-arrow": "^21.2.0",
-        "valibot": "^1.4.2",
       },
       "devDependencies": {
         "@rask/config": "workspace:*",
@@ -641,11 +641,11 @@
 
     "@rask/engine": ["@rask/engine@workspace:packages/engine"],
 
+    "@rask/explorer-api": ["@rask/explorer-api@workspace:packages/explorer-api"],
+
     "@rask/flow": ["@rask/flow@workspace:packages/flow"],
 
     "@rask/labeling": ["@rask/labeling@workspace:packages/labeling"],
-
-    "@rask/media-api": ["@rask/media-api@workspace:packages/media-api"],
 
     "@rask/ui": ["@rask/ui@workspace:packages/ui"],
 

@@ -24,7 +24,7 @@
 		"@rask/dockview": "workspace:*",
 		"@rask/flow": "workspace:*",
 		"@rask/labeling": "workspace:*",
-		"@rask/media-api": "workspace:*",
+		"@rask/explorer-api": "workspace:*",
 		"@rask/ui": "workspace:*",
 		"@xyflow/svelte": "^1.6.2",
 		"@xyflow/system": "^0.0.79",

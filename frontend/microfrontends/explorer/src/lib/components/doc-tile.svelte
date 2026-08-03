@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { thumbnailUrl, type Document } from '@rask/media-api';
-	import { activeView } from '@rask/media-api/descriptor';
+	import { thumbnailUrl, type Document } from '@rask/explorer-api';
+	import { activeView } from '@rask/explorer-api/descriptor';
 	import { fmtTime, cn } from '$lib/utils';
 
 	type Props = {

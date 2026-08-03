@@ -4,7 +4,7 @@
  * persistence schema can both import them without an import cycle (the graph
  * re-exports the public ones, so components keep importing from graph.svelte).
  */
-import type { Hit, SearchMode, SearchSpec } from '@rask/media-api';
+import type { Hit, SearchMode, SearchSpec } from '@rask/explorer-api';
 
 /** The pipeline stages, as a runtime list (drives the persistence schema). */
 export const NODE_KINDS = [

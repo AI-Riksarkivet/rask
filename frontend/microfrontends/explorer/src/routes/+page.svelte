@@ -16,7 +16,7 @@
 		type VoiceHit,
 		type VoiceQueryInfo,
 		type VoiceSimilarResponse,
-	} from '@rask/media-api';
+	} from '@rask/explorer-api';
 	import { voiceSearch } from '$lib/voice-search.svelte';
 	import { submitBatchJob } from '$lib/workflow/remote/labeling.remote';
 	import { fmtTime, hitKey, queryTerms, makeHighlighter } from '$lib/utils';
@@ -33,7 +33,7 @@
 	import { ResizableSplit } from '@rask/ui/resizable-split';
 	import AtlasMap from '$lib/atlas/AtlasMap.svelte';
 	import { crossFilter } from '$lib/atlas/cross-filter.svelte';
-	import { getAtlasChunks } from '@rask/media-api';
+	import { getAtlasChunks } from '@rask/explorer-api';
 	import { Button, Badge } from '@rask/ui';
 	import { Switch } from '@rask/ui/switch';
 	import {

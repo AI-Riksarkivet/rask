@@ -13,7 +13,7 @@
 	 */
 	import { browser } from '$app/environment';
 	import type { Component } from 'svelte';
-	import { activeView, getAtlasStatus } from '@rask/media-api';
+	import { activeView, getAtlasStatus } from '@rask/explorer-api';
 
 	type Phase = 'loading' | 'ready' | 'unavailable' | 'error';
 

@@ -25,7 +25,7 @@
 	import { schemeTableau10 } from 'd3-scale-chromatic';
 	import { ChevronRight, ArrowRight, Eye, EyeOff } from '@lucide/svelte';
 	import { Button } from '@rask/ui';
-	import type { TopicNode } from '@rask/media-api';
+	import type { TopicNode } from '@rask/explorer-api';
 	import TopicSankey from './topic-sankey.svelte';
 
 	// `noiseLabel` is the unclustered-bucket name, sourced from /api/topics

@@ -6,8 +6,8 @@
 	// chunk has no extracted frame yet.
 	import { onMount } from 'svelte';
 	import { ArrowLeft, ListChecks, Pencil } from '@lucide/svelte';
-	import { getDocTranscript, type DocTranscriptChunk, type Document } from '@rask/media-api';
-	import type { DatasetView } from '@rask/media-api/descriptor';
+	import { getDocTranscript, type DocTranscriptChunk, type Document } from '@rask/explorer-api';
+	import type { DatasetView } from '@rask/explorer-api/descriptor';
 	import { Button } from '@rask/ui/button';
 
 	let {

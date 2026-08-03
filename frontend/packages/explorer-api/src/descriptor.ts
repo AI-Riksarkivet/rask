@@ -468,7 +468,7 @@ export class DatasetView {
 	}
 
 	mediaUrl(row: Row): string {
-		return apiUrl(`/api/media/${encodeURIComponent(this.docId(row))}${this.datasetQuery('?')}`);
+		return apiUrl(`/api/explorer/${encodeURIComponent(this.docId(row))}${this.datasetQuery('?')}`);
 	}
 
 	thumbnailUrl(row: Row): string {

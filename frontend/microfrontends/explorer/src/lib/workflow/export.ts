@@ -8,7 +8,7 @@
  * identity keys, time span, display body/caption, and declared metadata fields
  * — plus the rank score and tags), so a flat export names no corpus column.
  */
-import { activeView, type Hit } from '@rask/media-api';
+import { activeView, type Hit } from '@rask/explorer-api';
 
 /** The exportable columns for the ACTIVE dataset, in canonical export order:
  *  identity keys, time span (+ derived duration), the display body & caption,

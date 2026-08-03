@@ -23,7 +23,7 @@ data:
   RASK_COMPUTE_URL: {{ printf "http://%s-compute:8804" (include "rask.fullname" .) | quote }}
   RASK_CONTROLPLANE_URL: {{ printf "http://%s-controlplane:8820" (include "rask.fullname" .) | quote }}
   # lance-plane gateway upstreams (lance-ns-merge.md P1 gateway fold + P4): the fleet gateway carries
-  # /api/catalog, /api/lineage, /api/produce, /api/train and the /api/media/* namespace. Service names
+  # /api/catalog, /api/lineage, /api/produce, /api/train and the /api/explorer/* namespace. Service names
   # use lance.fullname — that is what services.yaml/medallion.yaml/media.yaml name their Services.
   RASK_CATALOG_API_URL: {{ printf "http://%s-catalog:%v" (include "lance.fullname" .) .Values.services.catalog.port | quote }}
   RASK_LINEAGE_API_URL: {{ printf "http://%s-lineage:%v" (include "lance.fullname" .) .Values.services.lineage.port | quote }}
@@ -33,10 +33,10 @@ data:
   {{- if .Values.medallion.enabled }}
   RASK_MEDALLION_API_URL: {{ printf "http://%s-lance-ray:%v" (include "lance.fullname" .) .Values.medallion.port | quote }}
   {{- end }}
-  {{- if .Values.media.enabled }}
-  RASK_MEDIA_VIEWER_URL: {{ printf "http://%s-viewer:%v" (include "lance.fullname" .) .Values.media.services.viewer.port | quote }}
-  RASK_MEDIA_SEARCH_URL: {{ printf "http://%s-search:%v" (include "lance.fullname" .) .Values.media.services.search.port | quote }}
-  RASK_MEDIA_ANNOTATOR_URL: {{ printf "http://%s-annotator:%v" (include "lance.fullname" .) .Values.media.services.annotator.port | quote }}
+  {{- if .Values.explorer.enabled }}
+  RASK_EXPLORER_VIEWER_URL: {{ printf "http://%s-viewer:%v" (include "lance.fullname" .) .Values.explorer.services.viewer.port | quote }}
+  RASK_EXPLORER_SEARCH_URL: {{ printf "http://%s-search:%v" (include "lance.fullname" .) .Values.explorer.services.search.port | quote }}
+  RASK_EXPLORER_ANNOTATOR_URL: {{ printf "http://%s-annotator:%v" (include "lance.fullname" .) .Values.explorer.services.annotator.port | quote }}
   {{- end }}
   {{- /* EXTERNAL Ray wins when set. The in-cluster head Service renders only under ray.enabled AND
        singleTenant.enabled (rayservice.yaml), so deriving this from ray.enabled ALONE pointed compute

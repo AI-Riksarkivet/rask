@@ -50,7 +50,7 @@ frontend/
                     #     /generated/*       the OpenAPI output (bun run gen:types) — never hand-edited
                     #     /oidc /bff         server-only: PKCE + sealed session, and the zone wiring
                     #                        factories (hooks, layout load, catalog/lineage/viewer proxies)
-    media-api/      # @rask/media-api — the media-plane client (descriptor/DatasetView, Arrow envelopes)
+    media-api/      # @rask/explorer-api — the media-plane client (descriptor/DatasetView, Arrow envelopes)
     engine/         # @rask/engine — the Pixi canvas engine, tools and layer store
     labeling/       # @rask/labeling — annotation history, tag writer, job clients
     config/         # @rask/config — the shared tsconfig base
@@ -70,7 +70,7 @@ frontend/
 ```
 
 Note the two API packages are different layers, not duplicates: `@rask/api` is the **BFF/auth seam**
-every zone's server wiring goes through, while `@rask/media-api` is the **typed client for the media
+every zone's server wiring goes through, while `@rask/explorer-api` is the **typed client for the media
 services** (viewer/search/annotator). One is how a zone's server talks to the estate; the other is how
 the browser talks to the media plane.
 

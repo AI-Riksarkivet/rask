@@ -29,7 +29,7 @@ class HealthResponse(BaseModel):
     """Status-badge payload: both vLLM pings, plus DB facts WHEN a dataset resolves.
 
     ``db`` is optional because ``/api/health`` is the media plane's liveness probe and must answer 200
-    on a deployment with no corpus loaded (the chart's default ``media.corpus.mode=emptyDir``). It used
+    on a deployment with no corpus loaded (the chart's default ``explorer.corpus.mode=emptyDir``). It used
     to be required, which forced the endpoint to resolve a dataset before it could answer at all — so
     an empty corpus turned the probe the media + annotator zones poll on every page load into a 404
     (live-proof 2026-07-28, defect 4). ``db_error`` carries WHY, so the badge can say "no dataset"

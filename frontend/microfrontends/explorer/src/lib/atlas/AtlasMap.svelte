@@ -26,10 +26,10 @@
 		type AtlasPoints,
 		type AtlasSpace,
 		type Hit,
-	} from '@rask/media-api';
+	} from '@rask/explorer-api';
 	import { crossFilter, buildKeyIndex, hitKey, type ColorBy } from './cross-filter.svelte';
 	import { gpuUnsupportedReason } from './gpu-support';
-	import { activeView } from '@rask/media-api/descriptor';
+	import { activeView } from '@rask/explorer-api/descriptor';
 	import { buildGrid, nearestIndex, type SpatialGrid } from './atlas-grid';
 	import { hexToRgb, hueRgb, buildHuePalette, type Rgb } from './atlas-colors';
 	import { indicesInPolygon, type Pt } from './atlas-geometry';

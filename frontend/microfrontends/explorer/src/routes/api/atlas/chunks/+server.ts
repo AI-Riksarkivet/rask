@@ -7,7 +7,7 @@ import { makeArrowRowsProxy } from '$lib/server/rows-arrow';
 //
 // The RESPONSE is Arrow IPC (the transport ruling's first promotion): a lasso hands back up to 1000 full
 // corpus rows, which was the estate's clearest `list[dict]` offender. The request shape is unchanged and
-// so is every credential; only the success body is columnar now, decoded in `@rask/media-api` with the
+// so is every credential; only the success body is columnar now, decoded in `@rask/explorer-api` with the
 // same `tableFromIPC` the atlas projection beside it already uses.
 const VIEWER_API = env.VIEWER_API ?? 'http://localhost:8101';
 

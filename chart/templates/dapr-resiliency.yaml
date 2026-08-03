@@ -109,8 +109,8 @@ spec:
 {{- if .Values.medallion.enabled }}
 {{- $invoked = append $invoked .Values.medallion.producer.daprAppId }}
 {{- end }}
-{{- if .Values.media.enabled }}
-{{- range $name, $svc := .Values.media.services }}
+{{- if .Values.explorer.enabled }}
+{{- range $name, $svc := .Values.explorer.services }}
 {{- $invoked = append $invoked $svc.daprAppId }}
 {{- end }}
 {{- end }}

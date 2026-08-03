@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
-	import { type Hit, thumbnailUrl, chunkFrameUrl, isVoiceHit, voiceBandOf } from '@rask/media-api';
-	import { activeView } from '@rask/media-api/descriptor';
+	import { type Hit, thumbnailUrl, chunkFrameUrl, isVoiceHit, voiceBandOf } from '@rask/explorer-api';
+	import { activeView } from '@rask/explorer-api/descriptor';
 	import { features } from '$lib/feature-flags.svelte';
 	import { voiceSearch } from '$lib/voice-search.svelte';
 	import { audioPreview } from '$lib/audio-preview.svelte';

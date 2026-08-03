@@ -15,7 +15,7 @@
 	import { ResizableSplit } from '@rask/ui/resizable-split';
 	import PlayerPane from '$lib/components/player-pane.svelte';
 	import HitTable, { TABLE_COLUMNS } from '$lib/components/hit-table.svelte';
-	import { activeView, type Hit } from '@rask/media-api';
+	import { activeView, type Hit } from '@rask/explorer-api';
 	import { Columns3, Check } from '@lucide/svelte';
 
 	let active = $state<Hit | null>(null);

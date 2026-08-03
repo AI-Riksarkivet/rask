@@ -4,7 +4,7 @@
 	import { Input } from '@rask/ui/input';
 	import { type SelectOption } from '@rask/ui/select';
 	import { Popover } from 'bits-ui';
-	import { activeView, listColumns, type SearchSpec, type ColumnInfo } from '@rask/media-api';
+	import { activeView, listColumns, type SearchSpec, type ColumnInfo } from '@rask/explorer-api';
 	import { Filter, X, Eye, EyeOff, Plus } from '@lucide/svelte';
 
 	type Props = {

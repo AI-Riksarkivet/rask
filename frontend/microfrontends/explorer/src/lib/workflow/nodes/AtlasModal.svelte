@@ -23,7 +23,7 @@
 	import AtlasMap from '$lib/atlas/AtlasMap.svelte';
 	import { crossFilter } from '$lib/atlas/cross-filter.svelte';
 	import { Button } from '@rask/ui/button';
-	import type { Hit } from '@rask/media-api';
+	import type { Hit } from '@rask/explorer-api';
 
 	let {
 		upstreamHits,

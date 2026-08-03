@@ -11,7 +11,7 @@
  * answering "nothing saved" look identical on an empty list — and only one of them means the user's views
  * are still there. Thin runes wrapper over the pure logic in `saved-views.ts`, as before.
  */
-import type { SearchSpec } from '@rask/media-api';
+import type { SearchSpec } from '@rask/explorer-api';
 import {
 	removeView,
 	stripEphemeral,

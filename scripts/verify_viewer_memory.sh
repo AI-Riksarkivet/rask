@@ -58,10 +58,10 @@ to_mi() {
 }
 
 # ── 1. the chart contract (offline: helm only, no cluster needed) ─────────────────────────────────
-# media.enabled=true because the chart ships the media plane off by default.
+# explorer.enabled=true because the chart ships the media plane off by default.
 
 step "1/4 the chart gives the viewer a tier sized for the KG build"
-helm template "$RELEASE" "$CHART" --set media.enabled=true >"$WORK/render.yaml"
+helm template "$RELEASE" "$CHART" --set explorer.enabled=true >"$WORK/render.yaml"
 read -r rendered_limit rendered_request <<<"$(python3 - "$WORK/render.yaml" "$RELEASE-viewer" <<'PY'
 import sys
 
@@ -101,7 +101,7 @@ echo "chart renders viewer memory: requests $rendered_request (${req_mi}Mi), lim
 # missing — SILENTLY, back to the 512Mi tier that OOM-killed the pod. `helm upgrade --reuse-values`
 # produces exactly that (stored values merged over chart defaults, no new key), so this asserts leg 1
 # would catch it rather than the operator finding out from an exit 137.
-missing=$(helm template "$RELEASE" "$CHART" --set media.enabled=true --set resources.viewer=null |
+missing=$(helm template "$RELEASE" "$CHART" --set explorer.enabled=true --set resources.viewer=null |
   python3 -c 'import sys;t=sys.stdin.read();d=[x for x in t.split("\n---\n") if "kind: Deployment" in x and "\n  name: '"$RELEASE"'-viewer\n" in x][0];l=[y.strip() for y in d.splitlines()];i=l.index("resources:");print(next(y.split()[-1] for y in l[i+1:i+7] if y.startswith("memory:")))')
 [ "$(to_mi "$missing")" -lt "$MIN_LIMIT_MI" ] ||
   fail "dropping resources.viewer still renders $missing — leg 1 cannot distinguish the tier from the fallback, so it proves nothing"
@@ -121,7 +121,7 @@ echo "deployed viewer memory limit = $live_limit"
 
 step "3/4 drive the load that OOM-killed the 512Mi pod"
 pod=$(kubectl get pods -l app.kubernetes.io/component=viewer -o jsonpath='{.items[0].metadata.name}')
-[ -n "$pod" ] || fail "no viewer pod (is media.enabled set?)"
+[ -n "$pod" ] || fail "no viewer pod (is explorer.enabled set?)"
 before=$(kubectl get "pod/$pod" -o jsonpath='{.status.containerStatuses[?(@.name=="viewer")].restartCount}')
 echo "pod=$pod restarts before=$before"
 

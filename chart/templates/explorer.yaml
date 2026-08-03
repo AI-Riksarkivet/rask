@@ -1,19 +1,19 @@
-{{- if .Values.media.enabled }}
+{{- if .Values.explorer.enabled }}
 {{- $root := . }}
-{{- /* `| default dict` + a `default` per key, NOT a bare `.Values.media.corpus.mode` — the same
+{{- /* `| default dict` + a `default` per key, NOT a bare `.Values.explorer.corpus.mode` — the same
      `--reuse-values` hazard this file already documents for `encoders`, and it is not theoretical:
-     `media.corpus` is a NEW key, and a stored release whose user values carry `media: {enabled: true}`
-     makes helm 3.20 leave `media.corpus` NIL, aborting the ENTIRE render with "nil pointer evaluating
+     `explorer.corpus` is a NEW key, and a stored release whose user values carry `media: {enabled: true}`
+     makes helm 3.20 leave `explorer.corpus` NIL, aborting the ENTIRE render with "nil pointer evaluating
      interface {}.mode" (reproduced against the live rask release, 2026-07-28). Every read of the block
      goes through these variables so no site can regress independently. */}}
-{{- $corpus := .Values.media.corpus | default dict }}
+{{- $corpus := .Values.explorer.corpus | default dict }}
 {{- $corpusMode := $corpus.mode | default "emptyDir" }}
 {{- /* A typo'd mode would otherwise fall through to the emptyDir branch and quietly serve an EMPTY
      corpus — the same class of silent-wrong as the hostPath wedge this replaced, only harder to see. */}}
 {{- if not (has $corpusMode (list "emptyDir" "pvc" "hostPath")) }}
-{{- fail (printf "rask chart: media.corpus.mode=%q is not one of emptyDir|pvc|hostPath" $corpusMode) }}
+{{- fail (printf "rask chart: explorer.corpus.mode=%q is not one of emptyDir|pvc|hostPath" $corpusMode) }}
 {{- end }}
-{{- if .Values.media.catalogToken }}
+{{- if .Values.explorer.catalogToken }}
 # The media services' catalog identity (auth-on catalogs): a bearer the annotator presents on every
 # catalog read/write — FGA decides what that identity may do (the merge's writer-rung rehearsal).
 # A Secret, never a plain env value; renders only when set (prod leaves it to the real secret flow).
@@ -24,11 +24,11 @@ metadata:
   labels: {{- include "lance.labels" . | nindent 4 }}
 type: Opaque
 stringData:
-  token: {{ .Values.media.catalogToken | quote }}
+  token: {{ .Values.explorer.catalogToken | quote }}
 ---
 {{- end }}
 {{- if and (eq $corpusMode "pvc") (not $corpus.claimName) }}
-# The corpus PVC the chart owns (media.corpus.mode=pvc with no pre-existing claimName). All three
+# The corpus PVC the chart owns (explorer.corpus.mode=pvc with no pre-existing claimName). All three
 # services mount it READ-ONLY, so accessModes must admit three concurrent readers: ReadWriteMany is the
 # default and the only safe answer on a multi-node cluster. On single-node dev the default RWO-only
 # provisioners (k3s local-path, kind's `standard`) will still bind an RWX claim because every pod lands
@@ -54,13 +54,13 @@ spec:
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 # lance-media plane (merged from the lance-audio checkout per docs/LANCE_NS_HANDOFF.md): the viewer,
 # search, and annotator services. All three share the catalog image (services/ tree is COPY'd whole),
-# mount the CORPUS read-only from the volume media.corpus.mode selects (emptyDir by default — a fresh
+# mount the CORPUS read-only from the volume explorer.corpus.mode selects (emptyDir by default — a fresh
 # cluster must come up with no node preparation; `pvc` for prod; `hostPath` opt-in for a node-staged
 # corpus, see the volume block below), and run CATALOG-mode reads/writes: only the annotations table
 # lives in the catalog (MEDIA_READ/WRITE_BACKEND=catalog, MEDIA_CATALOG_URI → the in-release catalog
 # Service).
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-{{- range $name, $svc := .Values.media.services }}
+{{- range $name, $svc := .Values.explorer.services }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -122,9 +122,9 @@ spec:
             - { name: MEDIA_HOST, value: "0.0.0.0" }
             # The corpus, mounted read-only from the node (see the volume below). db_root anchors the
             # multi-dataset registry; db_path is the default dataset; descriptors ride alongside.
-            - { name: MEDIA_DB_ROOT, value: {{ $root.Values.media.corpusMountPath | quote }} }
-            - { name: MEDIA_DB, value: "{{ $root.Values.media.corpusMountPath }}/transcripts_v2.lance" }
-            - { name: MEDIA_DESCRIPTOR_DIR, value: "{{ $root.Values.media.corpusMountPath }}/descriptors" }
+            - { name: MEDIA_DB_ROOT, value: {{ $root.Values.explorer.corpusMountPath | quote }} }
+            - { name: MEDIA_DB, value: "{{ $root.Values.explorer.corpusMountPath }}/transcripts_v2.lance" }
+            - { name: MEDIA_DESCRIPTOR_DIR, value: "{{ $root.Values.explorer.corpusMountPath }}/descriptors" }
             # Catalog mode (the merge's env flip): annotations live in the catalog, nowhere else.
             # The storage registry, when a deployment declares one. Each store may name its own endpoint,
             # TLS posture and secret: raw lives on an EXTERNAL store while the governed tiers live on the
@@ -132,10 +132,10 @@ spec:
             {{- with $root.Values.storage }}{{- if .stores }}
             - { name: RASK_STORES, value: {{ toJson .stores | quote }} }
             {{- end }}{{- end }}
-            - { name: MEDIA_READ_BACKEND, value: {{ $root.Values.media.readBackend | quote }} }
-            - { name: MEDIA_WRITE_BACKEND, value: {{ $root.Values.media.writeBackend | quote }} }
-            - { name: MEDIA_CATALOG_URI, value: {{ $root.Values.media.catalogUri | default (printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port) | quote }} }
-            {{- if $root.Values.media.catalogToken }}
+            - { name: MEDIA_READ_BACKEND, value: {{ $root.Values.explorer.readBackend | quote }} }
+            - { name: MEDIA_WRITE_BACKEND, value: {{ $root.Values.explorer.writeBackend | quote }} }
+            - { name: MEDIA_CATALOG_URI, value: {{ $root.Values.explorer.catalogUri | default (printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port) | quote }} }
+            {{- if $root.Values.explorer.catalogToken }}
             - name: MEDIA_CATALOG_TOKEN
               valueFrom:
                 secretKeyRef: { name: {{ include "lance.fullname" $root }}-media-catalog-token, key: token }
@@ -212,13 +212,13 @@ spec:
           resources: {{- include "lance.resources" (dict "root" $root "comp" $name) | nindent 12 }}
           volumeMounts:
             {{- include "lance.tmpMount" $root | nindent 12 }}
-            - { name: corpus, mountPath: {{ $root.Values.media.corpusMountPath | quote }}, readOnly: true }
+            - { name: corpus, mountPath: {{ $root.Values.explorer.corpusMountPath | quote }}, readOnly: true }
       volumes:
         {{- include "lance.tmpVolume" $root | nindent 8 }}
-        {{- /* The corpus volume, by media.corpus.mode. NO hostPath ships by DEFAULT (live-proof
+        {{- /* The corpus volume, by explorer.corpus.mode. NO hostPath ships by DEFAULT (live-proof
              2026-07-28, defect 5): `hostPath` with `type: Directory` requires /var/media-corpus to
              already exist on the node, and when it doesn't all three pods wedge ContainerCreating with
-             a kubelet event as the only clue — on a fresh cluster that is the FIRST thing media.enabled
+             a kubelet event as the only clue — on a fresh cluster that is the FIRST thing explorer.enabled
              does. `emptyDir` starts every pod cleanly anywhere (the corpus datasets are then loaded into
              the pod, or read from the catalog); `pvc` is the prod posture; `hostPath` stays available for
              the node-staged corpus but is now opt-in AND DirectoryOrCreate, so it cannot wedge. */}}

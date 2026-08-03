@@ -38,7 +38,7 @@ def health(state: StateDep, dataset: DatasetParam = None) -> HealthResponse:
     ALWAYS 200 — this is the media plane's liveness/capability probe, not a dataset read.
 
     It used to resolve the dataset FIRST, so a deployment whose corpus volume is empty (now the chart
-    default: ``media.corpus.mode=emptyDir``, since the old hostPath wedged every fresh cluster) answered
+    default: ``explorer.corpus.mode=emptyDir``, since the old hostPath wedged every fresh cluster) answered
     404 "dataset 'transcripts_v2' not found" to the one endpoint the media and annotator zones poll on
     every page load. Observed live 2026-07-28 through both zones' BFF proxies: a console 404 per load,
     the sidebar dot permanently red, and — because the descriptor store derives the default dataset id

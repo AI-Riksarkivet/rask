@@ -37,7 +37,7 @@ Everything here is what remains *after* that.
 
 **What.** `services/{viewer,search,annotator}` read the corpus from a node-local `hostPath`
 (`/var/media-corpus`, `chart/templates/media.yaml:126`), staged from the lance-audio box. `MEDIA_DB_ROOT`,
-`MEDIA_DB` and `MEDIA_DESCRIPTOR_DIR` all hang off `media.corpusMountPath`; 10+ files across the three
+`MEDIA_DB` and `MEDIA_DESCRIPTOR_DIR` all hang off `explorer.corpusMountPath`; 10+ files across the three
 services read it.
 
 **Why it is open.** It was correct for a single-node kind cluster and deliberately deferred — "NO data move:
@@ -376,7 +376,7 @@ made seedable — the `open_label.md` waves, folded here as that file retires.**
   it at the one seam every actor call already goes through, so existing handlers work as written
   and future actor-side preconditions inherit it.
 - **`make seed-dev` — the estate is seedable in one command.** A fresh install serves an EMPTY
-  corpus (`media.corpus.mode` defaults to `emptyDir`), which is why `/media` found nothing,
+  corpus (`explorer.corpus.mode` defaults to `emptyDir`), which is why `/media` found nothing,
   `/annotator` had no page and `/lakehouse` listed no tables — "not seeded" was indistinguishable
   from "not built", and the two existing seed scripts were wired to no command. Now: a searchable
   multi-document corpus (10 pages / 3 documents + an FTS index), real IIIF pages into RustFS
@@ -597,7 +597,7 @@ and `services/volumes_api` are deleted; the gateway's core rows AND its `/api` c
 image-list entries are deleted; `ray-api` took the clean `ray` name everywhere external (R20),
 then became `compute` on EVERY surface — uv member and import included — at R22 (`import compute`
 shadows nothing, so R20's PyPI-shadow exception died with the rename). The S3 object browser was
-ported into the media viewer (`viewer/api/v1/endpoints/objects.py`, public `/api/media/object*`,
+ported into the media viewer (`viewer/api/v1/endpoints/objects.py`, public `/api/explorer/object*`,
 tests `tests/unit/test_objects_browser.py`) and the lakehouse storage browser re-pointed to it.
 The EAD `/catalog/search` endpoint retired with **zero frontend callers**; its re-land is D2d below.
 
@@ -609,7 +609,7 @@ now (nothing called it: `searchLines`/`searchStats` had zero zone importers). Th
 `s3://images-batch-search/lines` table is a corpse.
 **What closes it.** The P7b gold wave: a **catalog-governed lines table** (line text/geometry/
 confidence are `GOLD_CONTRACT_COLUMNS`) + a `DatasetRegistry` descriptor, served at
-`/api/media/search?dataset=lines&mode=fts`. Thumb crops ride as a blob column served by the media
+`/api/explorer/search?dataset=lines&mode=fts`. Thumb crops ride as a blob column served by the media
 blob route — no raw-S3-key proxy gets re-created.
 
 ### D2d · The EAD catalog re-lands as a catalog-governed Lance table *(new, 2026-07-28 — the second half of D2a)*
@@ -618,7 +618,7 @@ blob route — no raw-S3-key proxy gets re-created.
 survives (EAD download only). The `archive_catalog` Lance table at `s3://images-batch-search` is
 frozen and unserved.
 **What closes it.** An ingest job that writes the EAD table **through the catalog** (governed), plus
-a descriptor, so `/api/media/search?dataset=archive_catalog&mode=fts` serves it (media search's
+a descriptor, so `/api/explorer/search?dataset=archive_catalog&mode=fts` serves it (media search's
 dynamic filterable params cover `archive_code`/`date_*` natively).
 
 ### D2e · Warehouse-bucket generalization of the objects browser *(new, 2026-07-28 — the R8 follow-up)*

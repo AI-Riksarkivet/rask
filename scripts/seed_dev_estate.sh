@@ -2,7 +2,7 @@
 # Seed the dev estate so every surface SHOWS something: media corpus, RustFS + a governed
 # lakehouse table, and a labeling task with items.
 #
-# WHY THIS EXISTS. A fresh install serves an EMPTY corpus (`media.corpus.mode` defaults to
+# WHY THIS EXISTS. A fresh install serves an EMPTY corpus (`explorer.corpus.mode` defaults to
 # `emptyDir`), so `/media` finds nothing, `/annotator` has no page to draw on and `/lakehouse`
 # lists no tables — and a developer cannot tell "not built" from "not seeded". Two seed scripts
 # existed but were wired to no command and documented in no target, so nobody ran them.
@@ -47,15 +47,15 @@ echo "  dataset id from the deployment: $DATASET_ID"
 # deployment what it actually mounts, and refuse when it disagrees with where we are about to write.
 MOUNTED_HOST_PATH="$(kubectl get deployment rask-viewer -n "$NS" -o jsonpath='{range .spec.template.spec.volumes[*]}{.hostPath.path}{"\n"}{end}' | sed '/^$/d' | head -1)"
 if [ -z "$MOUNTED_HOST_PATH" ]; then
-  echo "!! rask-viewer mounts NO hostPath for its corpus (chart default is media.corpus.mode=emptyDir)." >&2
+  echo "!! rask-viewer mounts NO hostPath for its corpus (chart default is explorer.corpus.mode=emptyDir)." >&2
   echo "   Anything seeded to $CORPUS_HOST_PATH would be invisible to every service." >&2
-  echo "   Install with --set media.corpus.mode=hostPath --set media.corpus.hostPath=$CORPUS_HOST_PATH" >&2
+  echo "   Install with --set explorer.corpus.mode=hostPath --set explorer.corpus.hostPath=$CORPUS_HOST_PATH" >&2
   exit 1
 fi
 if [ "$MOUNTED_HOST_PATH" != "$CORPUS_HOST_PATH" ]; then
   echo "!! the release mounts $MOUNTED_HOST_PATH but this run would seed $CORPUS_HOST_PATH." >&2
   echo "   RASK_MEDIA_CORPUS moves the SEEDER, not the chart. Re-run with RASK_MEDIA_CORPUS=$MOUNTED_HOST_PATH" >&2
-  echo "   or reinstall the release with media.corpus.hostPath=$CORPUS_HOST_PATH." >&2
+  echo "   or reinstall the release with explorer.corpus.hostPath=$CORPUS_HOST_PATH." >&2
   exit 1
 fi
 echo "  corpus hostPath confirmed mounted by rask-viewer: $MOUNTED_HOST_PATH"

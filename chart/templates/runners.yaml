@@ -42,7 +42,7 @@ spec:
           env:
             # Frames are fetched from the viewer (the corpus reader) — the payload's image_url is
             # relative; this base is the runner's only allowed origin (no SSRF surface).
-            - { name: ASSIST_FRAME_BASE, value: "http://{{ include "lance.fullname" . }}-viewer:{{ .Values.media.services.viewer.port }}" }
+            - { name: ASSIST_FRAME_BASE, value: "http://{{ include "lance.fullname" . }}-viewer:{{ .Values.explorer.services.viewer.port }}" }
           {{- include "lance.appProbes" . | nindent 10 }}
           resources: {{- include "lance.resources" (dict "root" . "comp" "assist") | nindent 12 }}
           volumeMounts:

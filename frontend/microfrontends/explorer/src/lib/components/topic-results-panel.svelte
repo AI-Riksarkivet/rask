@@ -8,7 +8,7 @@
 	 * `topic=`), the same call the Search page makes for `/?topic=<name>`.
 	 */
 	import { ArrowLeft, ArrowUpRight, X } from '@lucide/svelte';
-	import { search, type Hit } from '@rask/media-api';
+	import { search, type Hit } from '@rask/explorer-api';
 	import { base } from '$app/paths';
 	import HitList from './hit-list.svelte';
 	import PlayerPane from './player-pane.svelte';

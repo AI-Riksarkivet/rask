@@ -14,8 +14,8 @@
     The R6/R20 media wave retired the remaining trio. The gateway now routes only the
     `compute` service (ray-api → `ray` at R20, → `compute` at R22), controlplane, and the lance
     lakehouse/media planes; the S3 object browser lives in the media viewer
-    (`/api/media/object*`), and lines/EAD FTS re-land as catalog-governed Lance
-    tables behind `/api/media/search`. Sections naming the deleted services are
+    (`/api/explorer/object*`), and lines/EAD FTS re-land as catalog-governed Lance
+    tables behind `/api/explorer/search`. Sections naming the deleted services are
     historical context.
 
 How an image becomes searchable ALTO XML, and how the SvelteKit (SSR) frontend reads it back.

@@ -9,7 +9,7 @@ import { JSON_COLUMNS_KEY, rowsToArrowIPC } from '$lib/server/rows-arrow';
  * and every other column belongs to whatever dataset is mounted. So the interesting cases are all about
  * a schema nobody declared: a key that appears only on a later row, a column that is null for some rows,
  * a nested value, and a column whose values genuinely disagree about their type. Decoding here mirrors
- * `rowsFromArrow` in `@rask/media-api` exactly, including the rule that decides whether a hit parses at
+ * `rowsFromArrow` in `@rask/explorer-api` exactly, including the rule that decides whether a hit parses at
  * all: NULL CELLS ARE OMITTED, because `RowSchema`'s optional fields admit `undefined` and reject `null`.
  */
 function decode(bytes: Uint8Array): Record<string, unknown>[] {

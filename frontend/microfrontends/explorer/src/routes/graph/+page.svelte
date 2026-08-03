@@ -40,7 +40,7 @@
 		type GraphEntityResponse,
 		type GraphMatch,
 		type GraphCypherResponse,
-	} from '@rask/media-api';
+	} from '@rask/explorer-api';
 	import { runGraphCypher } from '$lib/graph/remote/graph.remote';
 
 	type View = 'graph' | 'table' | 'json';

@@ -61,7 +61,7 @@ app = make_service_app(
 
 ## The core husk is GONE (R6/R20, 2026-07-28)
 
-`services/core` + `services/core_api` (the post-P7a transitional husk) are deleted, with `search_api` and `volumes_api`. Their capabilities live in the media plane: the S3 object browser is the viewer's `objects.py` endpoints (`/api/media/object*`); lines/EAD FTS re-land as catalog-governed Lance tables behind `/api/media/search` (docs/architecture/lance-ns-merge.md R6). Do not resurrect them.
+`services/core` + `services/core_api` (the post-P7a transitional husk) are deleted, with `search_api` and `volumes_api`. Their capabilities live in the media plane: the S3 object browser is the viewer's `objects.py` endpoints (`/api/explorer/object*`); lines/EAD FTS re-land as catalog-governed Lance tables behind `/api/explorer/search` (docs/architecture/lance-ns-merge.md R6). Do not resurrect them.
 
 ## Hard invariants (the gotchas)
 

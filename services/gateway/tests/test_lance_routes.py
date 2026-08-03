@@ -3,7 +3,7 @@
 Proves each new row proxies to the RIGHT upstream with the RIGHT rewritten path —
 the lance services serve their own internal prefixes (`/v1/...`, `/api/...`), so a
 wrong rewrite silently 404s — and that longest-prefix ordering holds (a
-/api/media/search request must never hit viewer). Proxy tests swap the gateway's
+/api/explorer/search request must never hit viewer). Proxy tests swap the gateway's
 httpx client for one on a MockTransport: no network, real ASGI path handling.
 """
 
@@ -40,13 +40,13 @@ def proxied(gw):
 
 def test_lance_rows_present_and_ordered(gw) -> None:
     prefixes = [r[0] for r in gw._routes()]
-    # the two deeper media rows outrank /api/media
-    assert prefixes.index("/api/media/search") < prefixes.index("/api/media")
-    assert prefixes.index("/api/media/annotations") < prefixes.index("/api/media")
+    # the two deeper media rows outrank /api/explorer
+    assert prefixes.index("/api/explorer/search") < prefixes.index("/api/explorer")
+    assert prefixes.index("/api/explorer/annotations") < prefixes.index("/api/explorer")
     # the /api catch-all died with core-api (R6/R20): every row is an explicit
     # prefix, an unmatched /api/* 404s at the gateway
     assert "/api" not in prefixes
-    for row in ("/api/media/search", "/api/media/annotations", "/api/media", "/api/catalog", "/api/lineage", "/api/produce", "/api/train"):
+    for row in ("/api/explorer/search", "/api/explorer/annotations", "/api/explorer", "/api/catalog", "/api/lineage", "/api/produce", "/api/train"):
         assert row in prefixes
 
 
@@ -60,9 +60,9 @@ def test_lance_rows_present_and_ordered(gw) -> None:
         ("/api/produce", "lance-ray", "http://127.0.0.1:8002/produce"),
         ("/api/train", "lance-ray", "http://127.0.0.1:8002/train"),
         # the media trio serves /api/... internally — /media is dropped, /api kept
-        ("/api/media/transcripts", "viewer", "http://127.0.0.1:8101/api/transcripts"),
-        ("/api/media/search", "search", "http://127.0.0.1:8102/api/search"),
-        ("/api/media/annotations/doc/sp/ch", "annotator", "http://127.0.0.1:8103/api/annotations/doc/sp/ch"),
+        ("/api/explorer/transcripts", "viewer", "http://127.0.0.1:8101/api/transcripts"),
+        ("/api/explorer/search", "search", "http://127.0.0.1:8102/api/search"),
+        ("/api/explorer/annotations/doc/sp/ch", "annotator", "http://127.0.0.1:8103/api/annotations/doc/sp/ch"),
     ],
 )
 def test_lance_row_rewrites(gw, proxied, public: str, app_id: str, upstream: str) -> None:
@@ -75,10 +75,10 @@ def test_lance_row_rewrites(gw, proxied, public: str, app_id: str, upstream: str
 
 
 def test_media_search_does_not_hit_viewer(gw, proxied) -> None:
-    """Longest-prefix-first: /api/media/search goes to the search service, NOT to
-    viewer's /api/media catch-all (which would 404 it as /api/search-under-viewer)."""
+    """Longest-prefix-first: /api/explorer/search goes to the search service, NOT to
+    viewer's /api/explorer catch-all (which would 404 it as /api/search-under-viewer)."""
     client, captured = proxied
-    resp = client.get("/api/media/search", params={"q": "kyrka", "mode": "fts"})
+    resp = client.get("/api/explorer/search", params={"q": "kyrka", "mode": "fts"})
     assert resp.status_code == 200
     url = captured[-1].url
     assert url.port == 8102
@@ -87,10 +87,10 @@ def test_media_search_does_not_hit_viewer(gw, proxied) -> None:
 
 
 def test_media_upstreams_env_overridable(gw, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RASK_MEDIA_VIEWER_URL", "http://viewer.test:9000")
+    monkeypatch.setenv("RASK_EXPLORER_VIEWER_URL", "http://viewer.test:9000")
     monkeypatch.setenv("RASK_CATALOG_API_URL", "http://catalog.test:9001")
     routes = gw._routes()
-    assert next(r for r in routes if r[0] == "/api/media")[3] == "http://viewer.test:9000"
+    assert next(r for r in routes if r[0] == "/api/explorer")[3] == "http://viewer.test:9000"
     assert next(r for r in routes if r[0] == "/api/catalog")[3] == "http://catalog.test:9001"
 
 

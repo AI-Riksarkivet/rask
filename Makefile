@@ -314,13 +314,13 @@ qwen-serve:
 # ---- EAD harvest -----------------------------------------------------------
 # (search-index / search-index-fresh died at P7a with scripts/index_alto.py;
 # catalog-index died in the R6/R20 wave with scripts/index_catalog.py — the EAD
-# data re-lands as a catalog-governed Lance table served at /api/media/search.
+# data re-lands as a catalog-governed Lance table served at /api/explorer/search.
 # harvest-ead survives: it only downloads the EAD source files.)
 harvest-ead:
 	uv run python scripts/harvest_ead.py
 
 # ---- dev seeding -----------------------------------------------------------
-# A fresh install serves an EMPTY corpus (media.corpus.mode defaults to emptyDir), so /explorer finds
+# A fresh install serves an EMPTY corpus (explorer.corpus.mode defaults to emptyDir), so /explorer finds
 # nothing, /annotator has no page and /lakehouse lists no tables — and "not seeded" is
 # indistinguishable from "not built". One command fixes that for the whole estate.
 seed-dev: ## Seed the dev estate: media corpus + a labeling task with items (needs a running cluster)
@@ -480,7 +480,7 @@ kind-load: ## Side-load the :dev image set into the kind cluster
 # migration and the bucket-init hook block on were the only ones this target never preloaded, which
 # is exactly backwards.
 kind-preload: bootstrap ## Pull the chart's third-party images into the host cache, then side-load them
-	@imgs=$$(helm template rask ./chart --set singleTenant.enabled=true --set media.enabled=true \
+	@imgs=$$(helm template rask ./chart --set singleTenant.enabled=true --set explorer.enabled=true \
 	    --set observability.enabled=true 2>/dev/null \
 	  | grep -oE 'image: *"?[A-Za-z0-9./:@_-]+' | sed 's/image: *"\?//' \
 	  | grep -vE "^($$(echo '$(K3S_IMAGES)' | tr ' ' '|'))(:|$$)" \

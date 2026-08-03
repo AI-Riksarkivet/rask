@@ -16,7 +16,7 @@ logic in the entrypoint.
 |---|---|---|---|---|---|
 | `gateway` | 8888 | none (httpx proxy) | own asynccontextmanager | no | path-routes `/api/*` longest-prefix-first, **no catch-all**; upstreams env-overridable (`RASK_COMPUTE_URL`, `RASK_CONTROLPLANE_URL`, `RASK_MEDIA_*_URL`, …). |
 | `compute` | 8804 | `ray-kit` | `compute.lifespan.make_lifespan` | no | Ray dashboard introspection; `proxy_router` mounts at root so `/api/serve/*` reaches Serve status API |
-| `viewer` (media plane) | 8101 | `service-kit[lancekit]` + `storage` | own (lazy registry) | no | `/api/media/*` incl. the S3 objects browser ported from volumes-api |
+| `viewer` (media plane) | 8101 | `service-kit[lancekit]` + `storage` | own (lazy registry) | no | `/api/explorer/*` incl. the S3 objects browser ported from volumes-api |
 
 ## The batches/orchestrator plane is gone (P7a)
 

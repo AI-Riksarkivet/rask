@@ -29,7 +29,7 @@ flowchart LR
 3. An indexer builds **Lance** full-text tables over the transcribed lines.
 4. A **gateway** (`:8888`) routes API traffic to the `compute` service, the
    controlplane, and the lance lakehouse/media planes (`/api/catalog`,
-   `/api/lineage`, `/api/media/*`) that the **SvelteKit** (SSR, Bun-server)
+   `/api/lineage`, `/api/explorer/*`) that the **SvelteKit** (SSR, Bun-server)
    frontend consumes.
 
 ## Where to go next

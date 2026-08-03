@@ -18,7 +18,7 @@
  * disagree about whether search works — two independent fetches would eventually show a green dot beside a
  * disabled mode.
  */
-import { getHealth, type Health } from '@rask/media-api';
+import { getHealth, type Health } from '@rask/explorer-api';
 
 // POLL REASON: liveness has no event. Every other feed in the estate moved to `query.live` on a cursor,
 // because its value changes when the estate changes and the change is something a service publishes. This

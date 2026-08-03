@@ -1,6 +1,6 @@
 <script lang="ts">
 	import HitCard from './hit-card.svelte';
-	import type { Hit } from '@rask/media-api';
+	import type { Hit } from '@rask/explorer-api';
 	import { hitKey, queryTerms, makeHighlighter } from '$lib/utils';
 
 	type Props = {

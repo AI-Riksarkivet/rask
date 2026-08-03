@@ -10,7 +10,7 @@
 		getDocTranscript,
 		getDiarization,
 		mediaUrl,
-	} from '@rask/media-api';
+	} from '@rask/explorer-api';
 	import { voiceSearch } from '$lib/voice-search.svelte';
 	import { fmtTime, hitKey } from '$lib/utils';
 	import { ChevronRight, Maximize2, Minimize2 } from '@lucide/svelte';

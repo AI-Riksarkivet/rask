@@ -134,7 +134,7 @@ worked. It was still wrong, for reasons that were on the record before it was bu
 
 The original text follows, unedited in substance. Its factual corrections stand — a component *can*
 cross a bundle boundary by import (`@rask/ui` proves it seven times), module federation is
-unavailable under Vite 8 + rolldown, `@rask/media-api`'s base guard is per-process and no blocker.
+unavailable under Vite 8 + rolldown, `@rask/explorer-api`'s base guard is per-process and no blocker.
 Its conclusion — therefore centralize the panels in one zone — is the part the reversal rejects:
 "possible" was answered, "wise" was never asked.
 

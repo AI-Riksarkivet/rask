@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { activeView, type SearchSpec } from '@rask/media-api';
+	import { activeView, type SearchSpec } from '@rask/explorer-api';
 	import { Badge, Button } from '@rask/ui';
 	import { X } from '@lucide/svelte';
 

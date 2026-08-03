@@ -2,7 +2,7 @@
 
 Regression pin for live-proof 2026-07-28 defect 4. The endpoint used to resolve the default dataset
 before it could answer anything, so a deployment with an empty corpus volume — now the chart's DEFAULT
-(``media.corpus.mode=emptyDir``, because the old unconditional hostPath wedged every fresh cluster)
+(``explorer.corpus.mode=emptyDir``, because the old unconditional hostPath wedged every fresh cluster)
 answered::
 
     404 {"detail": "dataset 'transcripts_v2' not found under /media-corpus"}

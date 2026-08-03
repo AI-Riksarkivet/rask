@@ -20,8 +20,8 @@
  * feeds `setFilteredFromHits` and reads `selectedIds`.
  */
 
-import type { Hit, AtlasPoints, AtlasSpace } from '@rask/media-api';
-import { activeView } from '@rask/media-api/descriptor';
+import type { Hit, AtlasPoints, AtlasSpace } from '@rask/explorer-api';
+import { activeView } from '@rask/explorer-api/descriptor';
 import { hitKey } from '$lib/utils';
 
 /** Colour channel for the scatter (legend + per-point recolour). `cluster` and

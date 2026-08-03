@@ -1,6 +1,6 @@
-// Typed client for the media-plane VIEWER's object browser via this zone's /api/media BFF route
+// Typed client for the media-plane VIEWER's object browser via this zone's /api/explorer BFF route
 // (the R18 storage browser's data layer). The route forwards the path unchanged to the rask
-// gateway, whose /api/media row routes it to the viewer (`/api/media/objects` → viewer
+// gateway, whose /api/explorer row routes it to the viewer (`/api/explorer/objects` → viewer
 // `/api/objects`; the R6/R20 wave retired volumes-api). Shapes are hand-mirrored from
 // services/viewer/src/viewer/api/v1/endpoints/objects.py (no OpenAPI codegen for the fleet yet).
 import {
@@ -76,7 +76,7 @@ export const headObject = (bucket: Bucket, key: string): Promise<ApiResult<S3Obj
  *  header never stops an `<img>` fetch from rendering, and it covers BOTH buckets and any key
  *  shape. */
 export const downloadUrl = (bucket: Bucket, key: string): string =>
-	bffPath(`/api/media/object/download?${q({ bucket, key })}`);
+	bffPath(`/api/explorer/object/download?${q({ bucket, key })}`);
 
 /** The object's raw bytes — the text-preview read (errors keep the 404 ≠ 0 status split). */
 export const fetchObjectBytes = (bucket: Bucket, key: string): Promise<ApiResult<ArrayBuffer>> =>
@@ -159,7 +159,7 @@ export const listPages = (table: string): Promise<ApiResult<PageListing>> =>
 /** One page's image bytes, as an `<img src>`. Selected by the `id` COLUMN, never by row position —
  *  positional indexing into a blob read is the misattribution bug the read path exists to avoid. */
 export const pageImageUrl = (table: string, id: number): string =>
-	bffPath(`/api/media/page?${q({ table, id: String(id) })}`);
+	bffPath(`/api/explorer/page?${q({ table, id: String(id) })}`);
 
 /** Does this browser location look like a Lance dataset rather than a folder of loose objects?
  *  Lance writes a `_versions/` manifest directory and `.lance` fragments; either is conclusive. */

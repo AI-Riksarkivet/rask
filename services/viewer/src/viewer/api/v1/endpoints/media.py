@@ -273,7 +273,7 @@ def media_clip(
     # ffmpeg pulls the source through the SAME origin this request arrived on, so
     # the loopback works on every launch path (direct :8101, dev proxy, prod
     # gateway) without a bind-port write-back — the split dropped the monolith's.
-    source = f"{str(request.base_url).rstrip('/')}/api/media/{doc_id}"
+    source = f"{str(request.base_url).rstrip('/')}/api/explorer/{doc_id}"
     if dataset:
         source += f"?dataset={quote(dataset, safe='')}"
     path = build_clip(source, f"{handle.id}--{doc_id}", lo, hi)

@@ -67,7 +67,7 @@ plane, and language purity is what lets both workspaces glob their members.
 | `services/compute` | FastAPI | The `compute` service: Ray dashboard introspection + `/api/serve/*` proxy on `:8804`; no DB. Deps: `service-kit` + `ray-kit` + httpx. (`compute` on every surface — R22; public paths stay `/api/ray` + `/api/serve`.) |
 | `services/controlplane` | FastAPI | Project provisioning on `:8820` (`/api/projects`). |
 | `services/{catalog,lineage,medallion,compaction}` | FastAPI | The lance lakehouse plane (governed REST catalog, OpenLineage → AGE, the medallion movers, compaction). |
-| `services/{viewer,search,annotator}` | FastAPI | The lance media plane (`:8101`–`:8103`, public `/api/media/*`). The viewer also serves the S3 object browser ported from the retired volumes-api. |
+| `services/{viewer,search,annotator}` | FastAPI | The lance media plane (`:8101`–`:8103`, public `/api/explorer/*`). The viewer also serves the S3 object browser ported from the retired volumes-api. |
 | `scripts/` | Python + shell | Every dev/ops one-shot tool in one place: `harvest_ead`, `deploy_serve`, `dev-micro.sh`, `k3s-install.sh`, the e2e stack drivers, … No production-state-changing CLIs — mutations run through the HTTP services. |
 
 ## `runners/` — sealed model environments, deliberately NOT workspace members

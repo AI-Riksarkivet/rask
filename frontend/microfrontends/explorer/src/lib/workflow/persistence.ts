@@ -5,7 +5,7 @@
  * is easy to find and evolve. `safeParseGraph` is the one entry point.
  */
 import * as v from 'valibot';
-import type { SearchMode } from '@rask/media-api';
+import type { SearchMode } from '@rask/explorer-api';
 import { DEFAULT_N, MAX_N, MIN_N, NODE_KINDS } from './types';
 
 // SearchMode is a plain union in the descriptor (no schema is exported), so

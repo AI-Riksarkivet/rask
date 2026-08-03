@@ -13,7 +13,7 @@
 	 * filter on `/api/search`.
 	 */
 	import { browser } from '$app/environment';
-	import { getTopics, type TopicNode } from '@rask/media-api';
+	import { getTopics, type TopicNode } from '@rask/explorer-api';
 	import TopicTreemap from '$lib/components/topic-treemap.svelte';
 	import TopicResultsPanel from '$lib/components/topic-results-panel.svelte';
 	import { ResizableSplit } from '@rask/ui/resizable-split';

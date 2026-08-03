@@ -4,7 +4,7 @@
 	 *  the node itself shows a summary and a one-click Download. */
 	import { Handle, Position, type NodeProps } from '@xyflow/svelte';
 	import { Download, Tags } from '@lucide/svelte';
-	import { activeView } from '@rask/media-api';
+	import { activeView } from '@rask/explorer-api';
 	import { graph } from '$lib/workflow/graph.svelte';
 	import { exportColumns, exportHits } from '$lib/workflow/export';
 	import { tagBatchFromTaggedHits, tagRemovesFromEntries } from '@rask/labeling/tag-writer';

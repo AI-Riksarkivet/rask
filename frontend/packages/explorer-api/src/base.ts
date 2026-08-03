@@ -23,7 +23,7 @@ export function setApiBase(b: string): void {
 	const next = b.replace(/\/$/, '');
 	if (apiBase && next && next !== apiBase) {
 		throw new Error(
-			`@rask/media-api: base already set to "${apiBase}", refusing to re-base to "${next}". ` +
+			`@rask/explorer-api: base already set to "${apiBase}", refusing to re-base to "${next}". ` +
 				`Two zones share this module instance — the media plane's URLs cannot be per-request state.`,
 		);
 	}

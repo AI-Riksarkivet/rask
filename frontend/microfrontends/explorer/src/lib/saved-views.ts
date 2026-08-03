@@ -6,7 +6,7 @@
  * cluster". Pure logic (no Svelte, no storage) so it's testable; the runes store
  * (saved-views.svelte.ts) wraps this over localStorage. See +page.svelte's `spec`/runSearch.
  */
-import type { SearchSpec } from '@rask/media-api';
+import type { SearchSpec } from '@rask/explorer-api';
 
 export interface SavedView {
 	name: string;

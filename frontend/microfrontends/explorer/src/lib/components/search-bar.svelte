@@ -8,7 +8,7 @@
 	import FilterPopover from './filter-popover.svelte';
 	import HelpPopover from './help-popover.svelte';
 	import SearchSettings from './search-settings.svelte';
-	import { activeView, type SearchSpec, type SearchMode } from '@rask/media-api';
+	import { activeView, type SearchSpec, type SearchMode } from '@rask/explorer-api';
 	import { untrack } from 'svelte';
 	import { voiceSearch } from '$lib/voice-search.svelte';
 	import { serviceHealth } from '$lib/service-health.svelte';
