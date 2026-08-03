@@ -3,7 +3,7 @@ name = "ray-kit"
 version = "0.1.0"
 description = "Ray Job SDK + Dashboard HTTP wrapper (schemas, dashboard service, build_client)."
 requires-python = ">=3.13"
-license = "AGPL-3.0-only"
+license = "Apache-2.0"
 dependencies = [
     "pydantic>=2.7",
     # RayAuthSettings (auth.py) — the RASK_RAY_AUTH_TOKEN / RAY_AUTH_TOKEN env surface.

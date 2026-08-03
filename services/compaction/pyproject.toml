@@ -3,7 +3,7 @@ name = "compaction"
 version = "0.1.0"
 description = "Lance maintenance sweep — a Dapr cron binding ticks compact_files + cleanup_old_versions across the lakehouse bucket."
 requires-python = ">=3.13"
-license = "AGPL-3.0-only"
+license = "Apache-2.0"
 dependencies = [
     "service-kit[governed,lakehouse]",
     "fastapi>=0.115",

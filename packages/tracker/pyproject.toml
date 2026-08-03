@@ -3,7 +3,7 @@ name = "tracker"
 version = "0.1.0"
 description = "Pluggable transfer state tracking (SQLite, Postgres)."
 requires-python = ">=3.13"
-license = "AGPL-3.0-only"
+license = "Apache-2.0"
 dependencies = ["sqlmodel>=0.0.22"]
 
 [project.optional-dependencies]

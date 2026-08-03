@@ -3,7 +3,7 @@ name = "ratch"
 version = "0.1.0"
 description = "Media pipeline library — Lance ingestion, Ray-distributed feature stages, and retrieval over the chunks table."
 requires-python = ">=3.13"
-license = "AGPL-3.0-only"
+license = "Apache-2.0"
 dependencies = [
     # The lineage seam (ratch/lineage.py) re-exports the kernel primitives from
     # `service_kit.lancekit.openlineage` — the lancekit extra carries that subtree's deps.
