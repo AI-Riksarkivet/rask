@@ -1,0 +1,10 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import '@rask/ui/styles/tokens.css';
+@import '@rask/dockview/styles.css' layer(base);
+
+/* Tailwind 4 skips node_modules, so every package whose classes must survive needs an explicit
+   @source. THREE `../` from src/ — a fourth silently matches nothing and the page renders unstyled. */
+@source '../../../packages/ui/dist';
+/* The panels ship as source (no build step), so scan src/ rather than dist/. */
+@source '../../../packages/panels/src';

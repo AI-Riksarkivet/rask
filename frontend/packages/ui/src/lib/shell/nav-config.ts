@@ -1,4 +1,12 @@
-import { Brain, Cpu, Database, FlaskConical, PenLine, Search } from '@lucide/svelte';
+import {
+	Brain,
+	Cpu,
+	Database,
+	FlaskConical,
+	LayoutDashboard,
+	PenLine,
+	Search,
+} from '@lucide/svelte';
 import type { RunStatusLike } from '../runs/run-status.js';
 
 /** All lucide icons share one component signature, so any icon's type fits. */
@@ -348,6 +356,16 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			icon: Cpu,
 			match: under('/compute'),
 			items: [...COMPUTE_ITEMS],
+			tier: 'primary',
+		},
+		{
+			// THE global workbench — its own ZONE (open_workbench.md): one dock composing panels the
+			// other zones build and serve as custom elements, plus saved views. Primary: cross-zone
+			// work happens here, beside the lakehouse it reads and the compute it watches.
+			title: 'Workbench',
+			href: '/workbench/',
+			icon: LayoutDashboard,
+			match: under('/workbench'),
 			tier: 'primary',
 		},
 		{

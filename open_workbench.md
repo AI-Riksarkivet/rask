@@ -23,12 +23,32 @@ work, deleted when it ships). The decision record lives in
 ## Status
 
 - [x] Panels reversal merged (#51); per-zone workbench routes/nav REMOVED on top of it
-- [ ] SPIKE (next): one panel end-to-end — exit criteria below
-- [ ] Wave 1: the compositor zone `/workbench` (thin — no panel code) + the element catalogue
-- [ ] Wave 2: the three zones export their panel sets; saved views over `dock-layout-library`
-- [ ] Wave 3: cross-panel filtering via the CustomEvent/property relay; Playwright the media
-      Treemap→Topics case cross-zone
+- [x] SPIKE built: `rask-compute-jobs` (compute's own Vite lib entry → `build/client/compute/
+      elements/compute-elements.js`, 21.6 KB gz self-contained) + the thin `/workbench` compositor
+      mounting it beside a native SelectionLog panel — cluster verification pending below
+- [x] Wave 1: the compositor zone (all 8 registration points, budget, navbar entry, zero panel
+      code, `ForeignPanel` host, valibot relay, `reuseExistingPanels` at BOTH fromJSON sites)
+- [ ] Cluster spike proof: styled / live data / drag-no-remount / CustomEvent relay (Playwright)
+- [ ] Wave 2 remainder: compute exports cluster+actors; lakehouse exports lineage graph/runs/events
+      (module-level store singleton in ITS elements bundle keeps the one-poller property); media
+      DEFERRED until its corpus dataset exists in-cluster
+- [ ] Wave 3: cross-panel property-down filtering (selection → filter a sibling), Playwright-proven
 - [ ] Delete this file when the global workbench is live-verified
+
+## Spike learnings (already banked)
+
+- **Elements style via scoped style blocks + `var(--color-*)` tokens, never host-page Tailwind
+  utilities** — the host's Tailwind build only generates classes ITS content uses, so a foreign
+  element's utility classes would silently not exist. Tokens are on `:root`, so they cascade in.
+- **The chrome half of `@rask/dockview` is a separate subpath (`@rask/dockview/views`)** — the
+  compositor statically imports ViewSidebar/DockViews/the contract, and doing that through the
+  barrel dragged dockview-core's ~100 KB into the entry graph (measured 257 KB vs the 220
+  ceiling). Invariant 4 requires the sidebar importable off a path the dock does not ride.
+- **`svelte-ignore` cannot silence compiler-OPTIONS warnings** — the expected
+  `options_missing_custom_element` (the app build compiles wrappers without the flag, correctly)
+  is silenced via `--compiler-warnings` in compute's check script instead.
+- **A literal `<style>` tag inside a script docblock derails the Svelte parser** ("script was left
+  open") — write "style block" in prose.
 
 ## The idea in one paragraph
 

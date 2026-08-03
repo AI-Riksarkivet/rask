@@ -9,7 +9,12 @@
 			"svelte": "./src/index.ts",
 			"default": "./src/index.ts"
 		},
-		"./styles.css": "./src/styles.css"
+		"./styles.css": "./src/styles.css",
+		"./views": {
+			"types": "./src/views-entry.ts",
+			"svelte": "./src/views-entry.ts",
+			"default": "./src/views-entry.ts"
+		}
 	},
 	"scripts": {
 		"check": "svelte-check --tsconfig ./tsconfig.json",
@@ -22,7 +27,8 @@
 	"dependencies": {
 		"@lucide/svelte": "^1.26.0",
 		"@rask/api": "workspace:*",
-		"dockview": "^7.0.4"
+		"dockview": "^7.0.4",
+		"valibot": "^1.4.1"
 	},
 	"devDependencies": {
 		"@rask/config": "workspace:*",

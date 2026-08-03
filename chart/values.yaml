@@ -387,6 +387,10 @@ frontend:
     # ANNOTATOR_API env, rendered when media.enabled). Deploy together with media.enabled=true.
     - {name: media, path: /media}
     - {name: annotator, path: /annotator}
+    # THE global workbench — its own zone so it composes ACROSS zones, but it owns NO panel code:
+    # foreign panels are custom elements built and served by their OWNING zone's deployment,
+    # loaded here by URL at runtime (open_workbench.md).
+    - {name: workbench, path: /workbench}
   # Per-user OIDC login (opt-in), shared across ALL zones — one origin, one sealed cookie, so a login on
   # any zone is a login on every zone. REQUIRED when enabled: sessionSecret (seals the cookie),
   # publicIssuer, publicOrigin (forms the home zone's /auth/callback redirect URI). The confidential Dex

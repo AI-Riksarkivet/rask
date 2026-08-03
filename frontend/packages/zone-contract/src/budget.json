@@ -35,6 +35,11 @@
 			"staticGzipKB": 220,
 			"deferredGzipKB": 40,
 			"note": "The train zone (R17): five dummy areas — submit form, run board, monitoring, analysis, model registry — over the shared shell, no dependency beyond it, so it should stay near studio's weight until real training surfaces land. Measured 184 / 1."
+		},
+		"workbench": {
+			"staticGzipKB": 220,
+			"deferredGzipKB": 140,
+			"note": "THE global workbench (open_workbench.md): the shared shell plus the dynamically-imported @rask/dockview dock and the saved-views sidebar — and NOTHING else, because it owns no panel code. Foreign panels are custom elements loaded from their OWNING zone at runtime (measured: compute-elements.js is 21.6 KB gz, paid to compute, not here). Deferred is essentially the dock (~100 KB gz + views chrome)."
 		}
 	}
 }
