@@ -585,6 +585,72 @@ auth/OpenBao/Dapr locally.
 
 ---
 
+## H. Lance performance-guide audit *(new, 2026-08-03)*
+
+The fleet was audited against the Lance performance guide (`lance_docs/guide.md`, "Lance Performance
+Guide" — lance.org/guide/performance/). Compliant and deliberately-at-defaults: the FRI
+`compact_files(defer_index_remap=True)` recommendation is implemented with a measured fallback
+(`services/compaction/src/compaction/services/optimize.py:92`, pinned by
+`tests/unit/test_compaction_optimize.py`); AIMD throttle tuning and fragment sizing are untouched
+defaults and fine at current scale. Three findings remain open. H1's two halves are **coupled** —
+fixing the first without the second converts a latency problem into an OOM-kill problem.
+
+### H1 · Per-request `lance.dataset()` opens everywhere, and Lance's default cache ceilings exceed the pod limits ~17×
+
+**What.** The guide: the metadata cache (1 GiB default) and index cache (6 GiB default) are per
+dataset instance — "create a single table and share it across your application", or share a session
+across opens. The fleet does the opposite on every path: `lance.dataset(uri)` is opened fresh per
+request/operation in the viewer's blob-serving hot path
+(`services/viewer/src/viewer/api/v1/endpoints/pages.py:90`), the medallion movers
+(`services/medallion/src/medallion/services/compute.py`), lineage reconcile
+(`services/lineage/src/lineage/core/reconcile.py`), and the catalog's own open helper
+(`services/catalog/src/catalog/core/namespace.py:48`). Every call pays cold manifest fetches and
+index loads from RustFS and discards the caches.
+
+**The coupling.** Nothing sets `index_cache_size_bytes`, `io_buffer_size`, `batch_size` or
+`LANCE_IO_THREADS` anywhere in the repo, so Lance's ceilings are the defaults: 1 GiB metadata cache
++ 6 GiB index cache + 2 GiB io buffer, 64 cloud IO threads. The Lance services run under the 512 Mi
+`resources.default` tier (viewer: 1536 Mi — `chart/values.yaml:226,248`). Today this does not OOM
+*because* per-request opens throw the caches away before they grow — the perf bug is acting as the
+memory bound. The graph service's measured 512 Mi OOM (2026-07-26, `chart/values.yaml` comment) is
+the same class: unbounded `.to_table()` materialisation, which the guide explicitly warns against.
+
+**Why it is open.** A shared dataset handle pins a version, so the fix is not a one-liner: it needs
+`checkout_latest` (or a session-scoped open) plus an explicit freshness contract per service. Nothing
+in the code marks the current shape as a deliberate freshness-over-latency choice.
+
+**What closes it.** One coupled change per Lance-serving service: a shared session/handle with an
+explicit refresh policy, **and** in the same change `index_cache_size_bytes` (+ `io_buffer_size` if
+IO threads are raised) sized to the pod's cgroup limit.
+
+### H2 · `LANCE_CPU_THREADS` unset for Lance-under-Ray
+
+**What.** The guide names this exact deployment shape: override the compute pool "when running
+multiple Lance processes on the same machine (e.g. when working with tools like Ray)". The
+medallion's Ray jobs (`scripts/ray_stage_job.py`, `scripts/ray_iiif_ingest_job.py`,
+`scripts/ray_train_job.py`) run Lance inside Ray workers; the submitted `runtime_env`
+(`services/medallion/src/medallion/services/ray_submit.py`) passes OTEL vars but no `LANCE_*`, so
+each concurrent Lance-using worker sizes its compute pool to all node cores and parallel actors
+oversubscribe CPU during decode-heavy stages.
+
+**What closes it.** Set `LANCE_CPU_THREADS` (and matching `LANCE_IO_THREADS`) in the jobs'
+`runtime_env` `env_vars`, sized to the actor's CPU allocation. Small and isolated.
+
+### H3 · Lance trace events are invisible to the observability stack
+
+**What.** `LANCE_LOG`/`LANCE_TRACING` sit at defaults (info to stderr — the log pipeline does pick
+that up, so nothing is lost). But the guide's trace-event catalogue maps directly onto the
+GreptimeDB/RED setup: `lance::events::object_store::throttle` would show RustFS throttling (AIMD
+rate drops), and `lance::execution` carries per-query `iops`/`bytes_read`/`parts_loaded` — the
+counters the guide says to use for diagnosing index-cache misses (and the measurement H1's fix would
+be judged by).
+
+**What closes it.** One env var in the chart's `lance.otelEnv` block
+(`chart/templates/_helpers.tpl:608`), e.g. `LANCE_LOG=warn,lance::events=info` — throttle +
+execution events surfaced without app-log noise. An opportunity, not a defect.
+
+---
+
 ## How this survives
 
 1. **P0** of `docs/architecture/lance-ns-merge.md` copies this file to `rask/docs/OPEN-WORK.md`.
