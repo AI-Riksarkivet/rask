@@ -1,4 +1,4 @@
-.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap tilt-registry tilt-up tilt-verify tilt-down e2e frontend-images prod-render-check alert-rules-check
+.PHONY: tilt-verify-all registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap tilt-registry tilt-up tilt-verify tilt-down e2e frontend-images prod-render-check alert-rules-check
 
 help:
 	@echo "Targets:"
@@ -551,6 +551,15 @@ tilt-up: ## Dev loop: editable fleet images + uvicorn --reload via Tilt (needs k
 
 tilt-verify: ## Prove Tilt's live_update actually reaches a running pod (SERVICE=catalog)
 	@bash scripts/tilt-verify.sh
+
+# All THREE reload paths, because they fail independently and each one was broken on its own at some
+# point: a wheel synced into site-packages, a zone's COMPILED build/, and @rask/ui's dist/ (the only
+# package with a build step — zones bundle its dist, never its source).
+tilt-verify-all: ## Prove live_update on all three paths: python service, zone, and @rask/ui
+	@bash scripts/tilt-verify.sh
+	@SERVICE=home TIMEOUT=300 bash scripts/tilt-verify.sh
+	@SERVICE=ui   TIMEOUT=300 bash scripts/tilt-verify.sh
+	@echo ">> all three live_update paths verified"
 
 tilt-down: ## Stop the Tilt session and revert the dev deploy (keeps the cluster/data)
 	@KUBECONFIG=$(KUBECONFIG) $(LOCALBIN)/tilt down

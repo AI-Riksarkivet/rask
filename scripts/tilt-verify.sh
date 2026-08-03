@@ -44,8 +44,22 @@ elif [ -d "frontend/microfrontends/${SERVICE}" ]; then
   COMPONENT="web-${SERVICE}"
   CONTAINER="${SERVICE}"
   COMMENT="<!-- "   # app.html is HTML; a bare `# marker` line would render as page text
+elif [ -d "frontend/packages/${SERVICE}" ]; then
+  # The shared-library path, and the one most able to look fine while being broken. @rask/ui is the
+  # ONLY package with a build step (svelte-package -> dist/) and every zone bundles that dist, never
+  # its source — so a sync of packages/ that does not rebuild the library changes nothing a zone can
+  # see, while reporting success. Verified against a ZONE's pod, because that is where the effect has
+  # to land; the package has no pod of its own.
+  KIND="package"
+  ZONE="${ZONE:-home}"
+  SRC="frontend/packages/${SERVICE}/src/lib/index.ts"
+  [ -f "$SRC" ] || SRC="$(ls frontend/packages/${SERVICE}/src/lib/*.ts 2>/dev/null | head -1)"
+  SITE="/app/packages/${SERVICE}/dist"
+  COMPONENT="web-${ZONE}"
+  CONTAINER="${ZONE}"
+  COMMENT="// "
 else
-  echo "!! '${SERVICE}' is neither services/<name> nor frontend/microfrontends/<name>"
+  echo "!! '${SERVICE}' is not services/<name>, frontend/microfrontends/<name> or frontend/packages/<name>"
   exit 1
 fi
 [ -f "$SRC" ] || { echo "!! no such source file: $SRC"; exit 1; }
@@ -84,6 +98,11 @@ case "$IMAGE" in
   *)        OWNED="NO" ;;
 esac
 
+# The pod BEFORE the edit. A rebuild + rollout also puts the marker in "a" pod, so without this the
+# verifier passes on exactly the outcome live_update exists to avoid — and it did: the zone loop was
+# answered by a full rebuild for months while every check here went green.
+POD_BEFORE="$POD"
+
 MARKER="TILT_VERIFY_$$_$(cksum <<<"$POD" | cut -d' ' -f1)"
 echo ">> ${KIND}=${SERVICE} pod=${POD} container=${CONTAINER}"
 echo ">> image=${IMAGE}"
@@ -103,21 +122,53 @@ fi
 CLEAN() { sed -i "/${MARKER}/d" "$SRC" 2>/dev/null || true; }
 trap CLEAN EXIT INT TERM
 
-if [ "$KIND" = "zone" ]; then
-  printf '<!-- %s -->\n' "$MARKER" >> "$SRC"
-else
-  printf '# %s\n' "$MARKER" >> "$SRC"
-fi
+case "$KIND" in
+  zone)    printf '<!-- %s -->\n' "$MARKER" >> "$SRC" ;;
+  package) printf '\nexport const _%s = true;\n' "$MARKER" >> "$SRC" ;;
+  *)       printf '# %s\n' "$MARKER" >> "$SRC" ;;
+esac
 echo ">> wrote marker into ${SRC}, watching ${SITE}"
 START=$(date +%s)
 
+# What counts as ARRIVED differs by kind, and for a zone the weaker check is the dangerous one.
+#   service — the wheel in site-packages; uvicorn --reload re-reads it.
+#   zone    — NOT src/. The Bun server serves the COMPILED build/, so a marker sitting in
+#             /app/app/src while `bun run build` failed is an edit the user cannot see. That exact
+#             state persisted for months (exit 137, the build OOM/kill) and a src-only check called
+#             it working.
+#   package — the library's dist/, which only svelte-package can produce.
+arrived() {
+  case "$KIND" in
+    zone)    "$KUBECTL" exec "$1" -c "$CONTAINER" -- grep -rq "$MARKER" /app/app/build 2>/dev/null ;;
+    package) "$KUBECTL" exec "$1" -c "$CONTAINER" -- grep -rq "$MARKER" "$SITE" 2>/dev/null ;;
+    *)       "$KUBECTL" exec "$1" -c "$CONTAINER" -- grep -q "$MARKER" "$SITE" 2>/dev/null ;;
+  esac
+}
+
 while [ $(( $(date +%s) - START )) -lt "$TIMEOUT" ]; do
-  if "$KUBECTL" exec "$POD" -c "$CONTAINER" -- grep -q "$MARKER" "$SITE" 2>/dev/null; then
-    echo ">> SYNCED in $(( $(date +%s) - START ))s"
+  # Re-resolve the pod every poll: if Tilt fell back to a rebuild the old pod is gone, and execing
+  # into a terminated pod would just time out and report the wrong cause.
+  POD_NOW="$("$KUBECTL" get pods -l "app.kubernetes.io/component=${COMPONENT}" \
+              --field-selector=status.phase=Running \
+              -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+  if [ -n "$POD_NOW" ] && arrived "$POD_NOW"; then
+    ELAPSED=$(( $(date +%s) - START ))
+    echo ">> ARRIVED in ${ELAPSED}s (${KIND}: $( [ "$KIND" = "service" ] && echo "$SITE" || echo "compiled output" ))"
     case "$RELOAD" in
       yes*) ;;
       *) echo "!! synced, but the change is INERT: ${RELOAD}"; exit 1 ;;
     esac
+    # THE claim. A rebuild + rollout delivers the change too, in minutes, via a new ReplicaSet — that
+    # is Tilt's FALLBACK, not live_update, and telling them apart is the entire point of this script.
+    if [ "$POD_NOW" != "$POD_BEFORE" ]; then
+      echo "!! but the POD CHANGED: ${POD_BEFORE} -> ${POD_NOW}"
+      echo "   that is a full image rebuild + rollout, NOT live_update. Tilt falls back to this"
+      echo "   whenever a changed file matches no sync rule (check: tilt get liveupdates -o json)"
+      echo "   or the in-container run step fails (check: tilt get uiresources <r> -o json ->"
+      echo "   buildHistory[].error, span liveupdate:*)."
+      exit 1
+    fi
+    echo ">> SAME POD — no rebuild, no rollout"
     echo ">> live_update is working"
     exit 0
   fi
