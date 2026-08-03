@@ -99,6 +99,12 @@ services:
     replicas: 1
     frontDoor: true
     waitFor: []
+    # Where the plane lands bronze. WITHOUT this the code falls back to a temp dir, and the first
+    # in-cluster run resolved a RELATIVE path ("tmp/rask-ingest/...") inside the container — data
+    # would have landed in the pod's ephemeral filesystem and vanished with it, silently, because a
+    # relative Lance path is perfectly valid. Points at the warehouse bucket like every other tier.
+    env:
+      RASK_INGEST_WAREHOUSE: "s3://rask-lakehouse/ingest"
   compute:
     module: "compute:app"
     port: 8804

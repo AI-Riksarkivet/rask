@@ -100,7 +100,13 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str]) ->
     from ingest.lander import Lander
 
     uri = dataset_uri(spec)
-    result = Lander(_catalog()).commit_fragments(uri, fragments, run_id=spec.run_id)
+    catalog = _catalog()
+    # D6 step 1, wired: the dataset is created EMPTY before any fragment is committed. The first
+    # in-cluster run failed here with "Dataset at path ... was not found" — the in-process tests call
+    # ensure_at() themselves and the WORKFLOW never did, so the creation two-step was documented and
+    # unwired. Idempotent, so a replayed finalize activity is a no-op rather than a second create.
+    catalog.ensure_at(uri)
+    result = Lander(catalog).commit_fragments(uri, fragments, run_id=spec.run_id)
     return {
         "committed_version": result.version,
         "rows": result.rows,

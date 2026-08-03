@@ -22,6 +22,16 @@ if TYPE_CHECKING:
     import pyarrow as pa
 
 
+def _is_object_store(uri: str) -> bool:
+    """True for a URI whose scheme is an object store rather than a filesystem path.
+
+    Deliberately a scheme check, not a try/except around mkdir: the failure it prevents is a
+    PermissionError on the container root, which is indistinguishable from a genuine permissions
+    problem in the logs and sent the first in-cluster run chasing the wrong cause.
+    """
+    return "://" in uri and not uri.startswith("file://")
+
+
 class LocalCatalog:
     """Filesystem catalog: creates the dataset empty with the creation-time flags, records versions."""
 
@@ -39,6 +49,19 @@ class LocalCatalog:
         never: they are silent no-ops afterwards (`lance_docs/file_format.md:4011-4013`), and CDF
         plus every silver `source_rowid` reference depends on them existing from version 1.
         """
+        if _is_object_store(uri):
+            # An object store has no directories to create, and Path("s3://b/k") collapses to the
+            # relative "s3:/b/k" — so mkdir raised [Errno 13] Permission denied: 's3:' against the
+            # container root. Observed in the first in-cluster run with a real warehouse. lance
+            # handles the scheme natively; existence is a read, not a stat.
+            try:
+                import lance
+
+                lance.dataset(uri)
+            except Exception:
+                create_empty(uri, self._schema)
+            return uri
+
         if not Path(uri).exists():
             Path(uri).parent.mkdir(parents=True, exist_ok=True)
             create_empty(uri, self._schema)
