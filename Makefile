@@ -40,6 +40,7 @@ test:
 	# runner suite silently never runs. cd first — from the repo root, pytest would read
 	# the ROOT testpaths and try to import fleet modules absent from the runner's venv.
 	cd runners/htr && uv run --frozen pytest -m "not slow"
+	cd runners/dummy && uv run --frozen pytest
 
 # Slow tests need real models / a GPU (e.g. the YOLO layout smoke test) and hang on
 # hosts without them — opt in explicitly. Runs the full suite including slow marks.

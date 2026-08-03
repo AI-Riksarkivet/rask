@@ -47,6 +47,10 @@ RUN pip install --no-cache-dir "opentelemetry-sdk==1.43.0" "opentelemetry-export
 #   ray_stage_job.py        — the per-stage cascade transform a mover submits (MEDALLION_RAY_ENABLED)
 #   ray_train_job.py        — the TRAINING job the trainer consumer submits (#115b, docs/RAY-TRAIN.md D2–D4)
 COPY scripts/ray_lance_job.py scripts/ray_stage_job.py scripts/ray_train_job.py /home/ray/jobs/
+# The DUMMY lane (A11): a sealed runner whose transform is trivial but whose mechanics are real —
+# CDF delta read, merge_insert on the stable id, catalog-registered commit. Baked like any other job
+# so the end-to-end lane is provable with no GPU and no model download.
+COPY scripts/ray_dummy_job.py /home/ray/jobs/
 
 ARG BUILD_DATE
 ARG VCS_REF
