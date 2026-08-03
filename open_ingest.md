@@ -241,6 +241,34 @@ stream, and DLQ route". A chart entry is not a deployment: the image chain is ha
 (`venvImages`). Add the image to condition (1). *Relief:* `chart/templates/fleet.yaml:11`
 ranges over `.Values.services`, so the Deployment itself is a values edit, not a template.
 
+**C16 · A11's first in-cluster run — three defects nothing else could have caught, and M7 confirmed
+verbatim.** Recorded 2026-08-03 against the live k3s release, because each one passed every earlier
+gate:
+
+1. **The service had no health route.** `make_service_app` supplies none — every fleet service mounts
+   its own (`compute/health.py`). The chart probes `/api/health`, so the probe 404'd, readiness never
+   went true, and the Service had ZERO endpoints: a Deployment that looks deployed and serves nothing.
+   It survived `dagger call image`, the app constructing inside that image, `helm template`,
+   `kubectl apply --dry-run=server`, and 1991 unit tests.
+2. **`imagePullPolicy: IfNotPresent` served a stale same-tag image** (`fleet.yaml:73`), hiding the fix:
+   running digest `a6b7a43e` while the pushed one was `513779d1`. Deploy under a content-addressed tag
+   rather than flipping to `Always` — same-tag mutation is the trap, and a unique tag makes "which
+   build is running" answerable from `kubectl get pod`.
+3. **The actor state store was not loaded**, so Dapr Workflow could not run at all: *"Actor state store
+   not configured — actor hosting disabled"* plus a `DaprBuiltInActorNotFoundRetries` loop every 6s.
+   Phase 0 had committed `ingest` into `stateStore.scopes`, but the live Component still read
+   `[annotator, catalog]` — applying a Deployment does not apply the chart's Components.
+
+**M7 is real and was observed exactly as written.** Applying the corrected Component logged
+*"Aborting to hot-reload a state store component that is used as an actor state store:
+lance-statestore"* — the CR changed and the running sidecar did not. Only the roll took effect, which
+is precisely why §7.1's comment says adding an app-id is safe ONLY while it has no pod, and why
+removing one needs a restart per scoped app.
+
+After the roll, verified from the sidecar's own logs: `Actor runtime started`, `Connected to placement
+service`, `Workflow engine started`, and zero ActorNotFound retries. The Dapr Workflow substrate is
+running, not assumed.
+
 **C15 · Work this plan in a WORKTREE, never in the shared checkout.** Learned the hard way
 2026-08-03: this document's consolidation was done in `/home/blackwell/Desktop/rask` while a
 second agent session was live in the same directory. A git branch is a label on **one**
