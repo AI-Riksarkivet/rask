@@ -33,7 +33,15 @@ from typing import Any
 from dapr.actor import Actor, ActorInterface, Remindable, actormethod
 
 from annotator.projects.machines import IllegalTransition, submit_target, task_transition
-from annotator.projects.models import Draft, ReviewNote, Shape, Task, TaskState, Transition
+from annotator.projects.models import (
+    Draft,
+    ReviewNote,
+    Shape,
+    Task,
+    TaskState,
+    Transition,
+    validate_against_template,
+)
 from annotator.projects.project_actor import AnnotationProjectActorInterface
 
 
@@ -114,6 +122,14 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
         task = await self._load()
         return task.model_dump(mode="json") if task else None
 
+    async def _template_violation(self, task: Task) -> str | None:
+        """The submit-time template check: the DRAFT's shapes against the task's captured template.
+        No draft submits as an empty shape set — required labels then refuse, which is the honest
+        reading of "this task promised those labels"."""
+        raw = await self.get_draft()
+        shapes = [Shape.model_validate(s) for s in (raw or {}).get("shapes", [])]
+        return validate_against_template(task.template, shapes)
+
     async def fire(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Apply one event from `TASK_EDGES`. The transition table is the spec — an edge absent from
         it raises `IllegalTransition`, which is the closed-world guarantee of §5.2 rather than a
@@ -129,6 +145,11 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
         # caller-supplied `review_required` would let an annotator self-accept.
         if event == "submit":
             target = submit_target(task.review_required)
+            # The template's output contract, enforced where it holds for ANY caller (the same
+            # placement argument as review_required). The draft this actor holds IS the submission.
+            violation = await self._template_violation(task)
+            if violation is not None:
+                raise IllegalTransition("task", task.state, f"submit ({violation})")
 
         now = datetime.now(UTC)
         # A real Transition, not a dict: appending a raw mapping to a list[Transition] "works" but
@@ -224,6 +245,18 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
         the same annotator cannot silently lose each other's work — the actor serialises them, and
         `revision` is the etag the caller compares.
         """
+        # A draft is writable only while the task is CLAIMED, and that check belongs HERE, not only
+        # in the endpoint. The endpoint reads the state and then invokes the actor as two separate
+        # steps, so a concurrent `submit` can win the actor's turn in between: the template
+        # validates the conforming draft, the task moves to `in_review`, and this write then lands
+        # violating shapes into an already-reviewed task — which publish carries into silver.
+        # Inside the actor's own serialised turn the state cannot change under the check.
+        task = await self._load()
+        if task is None:
+            raise IllegalTransition("draft", "absent", "save_draft")
+        if task.state is not TaskState.CLAIMED:
+            raise IllegalTransition("draft", task.state.value, "save_draft")
+
         has, raw = await self._state_manager.try_get_state(DRAFT_KEY)
         current = Draft.model_validate(json.loads(raw)) if has and raw else None
         expected = payload.get("base_revision")

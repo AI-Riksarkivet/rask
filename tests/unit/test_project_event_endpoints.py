@@ -536,3 +536,29 @@ def test_clearing_an_adjudication_is_a_manager_gated_delete(wired: Any, monkeypa
     assert r.status_code == 200, r.text
     assert picks == [{"group": "g1", "task_id": None, "actor": SUBJECT}]
     assert ("can_manage", "annotation_project:p1") in [(c["relation"], c["obj"]) for c in seen]
+
+
+def test_send_captures_the_projects_template_onto_every_item(wired: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The template rides each item like review_required/lease_seconds — enforcement reads the
+    ITEM's copy, so a mid-flight template edit cannot retroactively invalidate work in review."""
+    client, _project, task, _seen = wired({"can_send_items"}, state=ProjectState.LABELING)
+
+    async def _templated_get(self: Any) -> dict[str, Any] | None:
+        return {
+            "state": str(self.state),
+            "project_id": "p1",
+            "review_required": True,
+            "lease_seconds": 900,
+            "template": {"kind": "doc-qa", "tools": ["bbox", "text"], "enforce": True},
+        }
+
+    monkeypatch.setattr(_FakeProject, "get", _templated_get)
+
+    r = client.post(
+        "/projects/p1/items",
+        json={"items": [{"source": {"kind": "chunks", "keys": ["k1"]}, "media": {"kind": "image"}}]},
+    )
+
+    assert r.status_code == 201, r.text
+    assert task.seeded[0]["template"]["kind"] == "doc-qa"
+    assert task.seeded[0]["template"]["enforce"] is True

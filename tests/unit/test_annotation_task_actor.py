@@ -92,6 +92,14 @@ async def _seeded() -> _Actor:
     return actor
 
 
+async def _claimed() -> _Actor:
+    """A draft is writable only from CLAIMED — the actor enforces that itself, so a fixture that
+    saves a draft has to be in the state the machine allows it from."""
+    actor = await _seeded()
+    await actor.fire({"event": "claim", "actor": "gina"})
+    return actor
+
+
 # --------------------------------------------------------------------------------------------------
 # State and the machine
 # --------------------------------------------------------------------------------------------------
@@ -243,7 +251,7 @@ async def test_a_stale_reminder_for_a_moved_on_task_is_a_no_op() -> None:
 
 @pytest.mark.asyncio
 async def test_a_draft_is_one_write_for_the_whole_shape_set() -> None:
-    actor = await _seeded()
+    actor = await _claimed()
     out = await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "bbox"}, {"shape_type": "polygon"}]})
     assert out["revision"] == 1
     assert len(json.loads(actor.sm.store[DRAFT_KEY])["shapes"]) == 2
@@ -252,7 +260,7 @@ async def test_a_draft_is_one_write_for_the_whole_shape_set() -> None:
 @pytest.mark.asyncio
 async def test_a_stale_base_revision_is_refused_so_two_tabs_cannot_clobber() -> None:
     """`revision` is the etag. Saving against a revision that has moved on is the 409."""
-    actor = await _seeded()
+    actor = await _claimed()
     await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": []})
     await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [], "base_revision": 1})
     with pytest.raises(IllegalTransition):
@@ -317,7 +325,7 @@ async def test_shape_ids_are_minted_at_save_and_PERSISTED_so_a_republish_is_stab
     That dependency is invisible from the saga, which is why it is pinned here: a change to
     `save_draft` that dropped shape ids would break a crash-recovery property two modules away.
     """
-    actor = await _seeded()
+    actor = await _claimed()
     await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "bbox"}, {"shape_type": "polygon"}]})
 
     first = await actor.get_draft()
@@ -404,7 +412,7 @@ async def test_two_tabs_cannot_clobber_by_OMITTING_base_revision() -> None:
     Both tabs load revision 1. Tab A saves 30 shapes (revision 2). Tab B saves its stale 12 with no
     `base_revision` — that must be a conflict, not a silent 200 that discards A's work.
     """
-    actor = await _seeded()
+    actor = await _claimed()
     await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": [{"shape_type": "bbox"}]})
     await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "base_revision": 1, "shapes": [{"shape_type": "bbox"}] * 30})
 
@@ -419,7 +427,7 @@ async def test_two_tabs_cannot_clobber_by_OMITTING_base_revision() -> None:
 async def test_the_first_save_needs_no_base_revision() -> None:
     """There is nothing to be stale against before a draft exists, so requiring it would make the
     first save impossible rather than safe."""
-    actor = await _seeded()
+    actor = await _claimed()
     out = await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": []})
     assert out["revision"] == 1
 
@@ -459,3 +467,95 @@ async def test_an_explicit_lease_seconds_still_wins_over_the_capture() -> None:
     expires = datetime.fromisoformat(out["lease_expires_at"])
     seconds = (expires - datetime.now(UTC)).total_seconds()
     assert seconds <= 120.5
+
+
+# --------------------------------------------------------------------------------------------------
+# Task templates — the submit-time output contract, enforced in the actor for ANY caller
+# --------------------------------------------------------------------------------------------------
+
+
+async def _claimed_with_template(template: dict[str, Any], shapes: list[dict[str, Any]]) -> _Actor:
+    actor = _Actor()
+    await actor.seed(_task(template=template))
+    await actor.fire({"event": "claim", "actor": "gina"})
+    if shapes:
+        await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": shapes})
+    return actor
+
+
+@pytest.mark.asyncio
+async def test_a_submit_violating_the_template_is_refused_with_the_violation_named() -> None:
+    template = {"kind": "classification", "tools": ["tag"], "enforce": True}
+    actor = await _claimed_with_template(template, [{"shape_type": "bbox", "label": "portrait"}])
+
+    with pytest.raises(IllegalTransition, match="classification"):
+        await actor.fire({"event": "submit", "actor": "gina"})
+    assert (await _state(actor))["state"] == "claimed", "a refused submit must not move the task"
+
+
+@pytest.mark.asyncio
+async def test_a_conforming_submit_passes() -> None:
+    template = {"tools": ["bbox"], "required_labels": ["portrait"], "enforce": True}
+    actor = await _claimed_with_template(template, [{"shape_type": "bbox", "label": "portrait"}])
+
+    result = await actor.fire({"event": "submit", "actor": "gina"})
+    assert result["state"] in {"in_review", "accepted"}
+
+
+@pytest.mark.asyncio
+async def test_a_draftless_submit_is_refused() -> None:
+    """No draft = an empty shape set.
+
+    This used to assert the `required_labels` message, and that reading was the bug the audit
+    found: `required_labels` was the ONLY rule an empty set could fail, so a template that declared
+    none accepted a submission with nothing in it. The empty-set rule now catches this first — a
+    strictly earlier refusal that no longer depends on the template having declared labels."""
+    template = {"required_labels": ["portrait"], "enforce": True}
+    actor = await _claimed_with_template(template, [])
+
+    with pytest.raises(IllegalTransition, match="at least one shape"):
+        await actor.fire({"event": "submit", "actor": "gina"})
+
+
+@pytest.mark.asyncio
+async def test_an_unenforced_template_never_blocks_a_submit() -> None:
+    """Every pre-template project (default template, enforce=False) behaves exactly as before."""
+    actor = await _claimed_with_template({}, [{"shape_type": "text", "label": ""}])
+    assert (await actor.fire({"event": "submit", "actor": "gina"}))["state"] in {"in_review", "accepted"}
+
+
+# --------------------------------------------------------------------------------------------------
+# The audit's critical: the draft's state precondition must live in the ACTOR, not only in HTTP
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_draft_cannot_be_written_after_the_task_left_CLAIMED() -> None:
+    """The TOCTOU the audit proved: the endpoint reads the state and invokes the actor as two
+    steps, so a concurrent submit can land in between — the template validates the conforming
+    draft, the task moves on, and the late write puts never-validated shapes into a reviewed task
+    that publish then carries into silver. Inside the actor's own turn the state cannot move."""
+    template = {"tools": ["tag"], "required_labels": ["cat"], "enforce": True}
+    actor = await _claimed_with_template(template, [{"shape_type": "tag", "label": "cat"}])
+    assert (await actor.fire({"event": "submit", "actor": "gina"}))["state"] in {"in_review", "accepted"}
+
+    with pytest.raises(IllegalTransition, match="save_draft"):
+        await actor.save_draft(
+            {
+                "task_id": "t1",
+                "project_id": "p1",
+                "author": "gina",
+                "shapes": [{"shape_type": "bbox"}, {"shape_type": "bbox"}, {"shape_type": "bbox"}],
+                "base_revision": 1,
+            }
+        )
+    assert [s["shape_type"] for s in json.loads(actor.sm.store[DRAFT_KEY])["shapes"]] == ["tag"]
+
+
+@pytest.mark.asyncio
+async def test_an_enforced_template_refuses_a_draftless_submit_even_with_no_required_labels() -> None:
+    """The other half of the same critical: `required_labels` was the ONLY rule an empty shape set
+    could fail, and the create dialog fills it from an OPTIONAL textarea."""
+    actor = await _claimed_with_template({"kind": "reading-order", "tools": ["bbox"], "enforce": True}, [])
+    with pytest.raises(IllegalTransition, match="at least one shape"):
+        await actor.fire({"event": "submit", "actor": "gina"})

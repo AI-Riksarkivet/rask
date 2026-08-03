@@ -319,6 +319,13 @@ qwen-serve:
 harvest-ead:
 	uv run python scripts/harvest_ead.py
 
+# ---- dev seeding -----------------------------------------------------------
+# A fresh install serves an EMPTY corpus (media.corpus.mode defaults to emptyDir), so /media finds
+# nothing, /annotator has no page and /lakehouse lists no tables — and "not seeded" is
+# indistinguishable from "not built". One command fixes that for the whole estate.
+seed-dev: ## Seed the dev estate: media corpus + a labeling task with items (needs a running cluster)
+	scripts/seed_dev_estate.sh
+
 # ---- rustfs (S3-compatible object storage) smoke ---------------------------
 # Prove packages/storage + LanceDB work against a REAL rustfs backend (not moto).
 # rustfs serves the S3 API on :9000; rask is storage-agnostic, so this is env-only.

@@ -1,13 +1,20 @@
 #!/usr/bin/env python
-"""Seed a minimal but REAL local media corpus, so the annotator canvas can be driven end-to-end.
+"""Seed a REAL, SEARCHABLE dev corpus, so every media surface shows something.
 
 `OPEN-WORK.md` A1 records that the media corpus lives on a node-local `hostPath`, which means a
-dev machine has no datasets and the annotator canvas has no page image to draw on. Everything the
-registry needs is env-configurable though (`MEDIA_DB_ROOT` / `MEDIA_DESCRIPTOR_DIR`), so a corpus can
-be synthesized locally instead — one document, one chunk, one real rendered page image.
+dev machine has no datasets: the annotator canvas has no page to draw on and search has nothing to
+find. Everything the registry needs is env-configurable (`MEDIA_DB_ROOT` / `MEDIA_DESCRIPTOR_DIR`),
+so the corpus can be synthesized locally instead.
 
-This is a DEV FIXTURE, not production data. It exists so "witness the annotator in a browser" is a
-command anyone can run rather than a claim gated on cluster access.
+**Why this grew from one row to a corpus.** The first version seeded ONE document with ONE chunk
+and declared no `search` at all — so `/media` answered every query with zero hits and looked
+broken while being "correct". A fixture whose whole purpose is "witness the estate working" has to
+survive the first thing anyone does with it, which is type a word into the search box. So: several
+documents, several chunks each, distinct prose per chunk, and an FTS index — a query for a common
+word returns MANY hits across MANY documents.
+
+This is a DEV FIXTURE, not production data. Every page image is drawn here rather than shipped as
+a binary, so the fixture stays reviewable in a diff.
 
     uv run python scripts/seed_demo_corpus.py [root]
 
@@ -20,28 +27,74 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
 
 import lance
+import lancedb
+import lancedb.index
 import pyarrow as pa
 from PIL import Image, ImageDraw
 
 
-DOC_ID = "fe00cd746463ad2c"
-DATASET_ID = "demo"
+#: The dataset the fixture is written as. It must MATCH what the deployment asks for — the chart
+#: points `MEDIA_DB` at `<root>/transcripts_v2.lance`, so a fixture named anything else makes every
+#: media surface answer "dataset 'transcripts_v2' not found under /media-corpus" while the corpus
+#: sits right there. `seed_dev_estate.sh` reads the running deployment and passes the name it
+#: expects, so the fixture cannot drift from the config that reads it.
+DATASET_ID = os.environ.get("SEED_DATASET_ID", "demo")
+
+#: The fixture corpus: three volumes, each a handful of pages. The prose is deliberately
+#: OVERLAPPING — every page mentions the archive and most mention a protokoll — so a one-word
+#: query returns hits across several documents rather than a single row, and DIFFERENT enough that
+#: a narrower query (e.g. "sjöfart") narrows the result set. That is the property that makes the
+#: fixture able to demonstrate search at all.
+DOCUMENTS: list[dict] = [
+    {
+        "doc_id": "fe00cd746463ad2c",
+        "title": "Landskapshandlingar 1663",
+        "pages": [
+            "Protokoll hållet vid Riksarkivet den tredje maj, rörande jordeböcker och skatt.",
+            "Vidare antecknades att kronans uppbörd av spannmål blivit fördröjd detta år.",
+            "Domboken upptager tvist om ägogränser mellan två hemman i socknen.",
+            "Avskrift av brev från landshövdingen angående vägarnas underhåll.",
+        ],
+    },
+    {
+        "doc_id": "a7419c0b2d5e8f31",
+        "title": "Sjöfartshandlingar 1701",
+        "pages": [
+            "Protokoll rörande sjöfart och tullens uppbörd i hamnen under sommaren.",
+            "Skeppslistan upptager fjorton fartyg, därav tre från främmande land.",
+            "Anteckning om last av salt och järn, samt om besättningens rullor.",
+        ],
+    },
+    {
+        "doc_id": "b2c8e5417d90a6f4",
+        "title": "Domboksregister 1688",
+        "pages": [
+            "Domboken för häradet upptager mål om arv, skuld och olovligt skogshygge.",
+            "Protokoll från tinget: nämnden avkunnade dom i tvist om fiskevatten.",
+            "Register över parter och vittnen, med hänvisning till Riksarkivet.",
+        ],
+    },
+]
 
 
-def page_image(width: int = 900, height: int = 1200) -> bytes:
+def page_image(title: str, page_no: int, width: int = 900, height: int = 1200) -> bytes:
     """Render a page-like image: ruled lines and blocks a bbox can plausibly enclose.
 
-    Drawn rather than shipped as a binary so the fixture stays reviewable in a diff.
+    Drawn rather than shipped as a binary so the fixture stays reviewable in a diff. The title and
+    page number are stamped on so a screenshot of the canvas is self-identifying — otherwise every
+    page looks identical and a drive cannot show it opened the page it meant to.
     """
     img = Image.new("RGB", (width, height), (250, 248, 242))
     draw = ImageDraw.Draw(img)
     draw.rectangle([40, 40, width - 40, height - 40], outline=(200, 195, 185), width=2)
-    draw.text((70, 70), "Riksarkivet — demo page (synthetic fixture)", fill=(60, 55, 50))
+    draw.text((70, 70), f"{title} — page {page_no} (synthetic fixture)", fill=(60, 55, 50))
     y = 130
     for row in range(24):
         run = 760 if row % 4 != 3 else 420
@@ -52,10 +105,34 @@ def page_image(width: int = 900, height: int = 1200) -> bytes:
     return buf.getvalue()
 
 
+def _chunk_rows() -> dict[str, list]:
+    """Flatten the fixture into columns. `speech_id` is the page and `chunk_id` its ordinal —
+    the identity triple the whole media plane keys on."""
+    columns: dict[str, list] = {k: [] for k in ("doc_id", "speech_id", "chunk_id", "frame_idx", "image", "mime", "caption", "text", "title")}
+    for document in DOCUMENTS:
+        for page_no, prose in enumerate(document["pages"]):
+            columns["doc_id"].append(document["doc_id"])
+            columns["speech_id"].append(page_no)
+            columns["chunk_id"].append(page_no)
+            columns["frame_idx"].append(0)
+            columns["image"].append({"data": page_image(document["title"], page_no), "uri": None})
+            columns["mime"].append("image/png")
+            columns["caption"].append(f"{document['title']} · page {page_no}")
+            columns["text"].append(prose)
+            columns["title"].append(document["title"])
+    return columns
+
+
 def seed(root: Path) -> Path:
     db = root / f"{DATASET_ID}.lance"
+    # WIPE first. `mode="overwrite"` rewrites the data but leaves earlier `_indices/<uuid>`
+    # directories behind, and a re-index can leave the dataset pointing at an index whose files
+    # were collected — the reader then dies with `tokens.lance not found` and every query 400s
+    # while the corpus looks perfectly healthy on disk. Re-seeding must be idempotent, so the
+    # fixture is rebuilt from nothing rather than layered onto its own history.
+    if db.exists():
+        shutil.rmtree(db)
     db.mkdir(parents=True, exist_ok=True)
-    png = page_image()
 
     # The page image must be a Lance **blob-v2** column or the registry refuses the dataset
     # ("document.media_blob is not a lance.blob.v2 column"). Blob-v2 is a STRUCT — raw
@@ -77,17 +154,24 @@ def seed(root: Path) -> Path:
             image_field,
             pa.field("mime", pa.utf8()),
             pa.field("caption", pa.utf8()),
+            # The SEARCHABLE body and its document title — without these the dataset can be
+            # browsed but never found, which is the failure this fixture exists to prevent.
+            pa.field("text", pa.utf8()),
+            pa.field("title", pa.utf8()),
         ]
     )
+    columns = _chunk_rows()
     chunks = pa.table(
         {
-            "doc_id": pa.array([DOC_ID]),
-            "speech_id": pa.array([0], pa.int64()),
-            "chunk_id": pa.array([19], pa.int64()),
-            "frame_idx": pa.array([0], pa.int64()),
-            "image": pa.array([{"data": png, "uri": None}], type=blob),
-            "mime": pa.array(["image/png"]),
-            "caption": pa.array(["demo page 19"]),
+            "doc_id": pa.array(columns["doc_id"]),
+            "speech_id": pa.array(columns["speech_id"], pa.int64()),
+            "chunk_id": pa.array(columns["chunk_id"], pa.int64()),
+            "frame_idx": pa.array(columns["frame_idx"], pa.int64()),
+            "image": pa.array(columns["image"], type=blob),
+            "mime": pa.array(columns["mime"]),
+            "caption": pa.array(columns["caption"]),
+            "text": pa.array(columns["text"]),
+            "title": pa.array(columns["title"]),
         },
         schema=schema,
     )
@@ -95,26 +179,50 @@ def seed(root: Path) -> Path:
 
     documents = pa.table(
         {
-            "doc_id": pa.array([DOC_ID]),
-            "title": pa.array(["Demo volume"]),
-            "n_chunks": pa.array([1], pa.int32()),
+            "doc_id": pa.array([d["doc_id"] for d in DOCUMENTS]),
+            "title": pa.array([d["title"] for d in DOCUMENTS]),
+            "n_chunks": pa.array([len(d["pages"]) for d in DOCUMENTS], pa.int32()),
         }
     )
     lance.write_dataset(documents, str(db / "documents.lance"), mode="overwrite")
+
+    # The FTS index, through the LANCEDB api — the search service opens the row table with
+    # `lancedb` and runs `tbl.search(MatchQuery(...), query_type="fts")`, which needs an index
+    # built by that same stack. Writing the column without indexing it yields zero hits for every
+    # query, indistinguishable from an empty corpus.
+    connection = lancedb.connect(str(db))
+    connection.open_table("chunks").create_index("text", config=lancedb.index.FTS(), replace=True)
 
     descriptors = root / "descriptors"
     descriptors.mkdir(parents=True, exist_ok=True)
     # `capabilities` is DECLARED, not probed: it maps a capability name to the `table.column` it
     # needs, and `capability_available` just checks that column exists. Without the `frames` entry
     # the dataset lists with `capabilities: []` and the annotator has no page images to open.
+    # `search` is the same shape of declaration — absent, the search plane has no row table and
+    # answers every query with nothing.
     declared = {
         "identity": {"key_fields": ["doc_id", "speech_id", "chunk_id"], "doc_key": "doc_id"},
         "document": {"table": "chunks", "media_blob": "image", "mime": "image/png"},
-        "display": {"title": ["caption"], "caption": "caption"},
+        "display": {"title": ["title"], "body": "text", "caption": "caption"},
+        "search": {"row_table": "chunks", "fts": {"table": "chunks", "column": "text"}, "filterable": ["doc_id"]},
         "capabilities": {"frames": "chunks.image"},
     }
     (descriptors / f"{DATASET_ID}.json").write_text(json.dumps(declared, indent=2) + "\n")
+    _make_world_readable(root)
     return db
+
+
+def _make_world_readable(root: Path) -> None:
+    """Make the fixture readable by WHOEVER serves it — the whole point of a shared corpus.
+
+    Lance writes with the process umask (0600 files here), and the media services run as uid 10001
+    while a corpus is seeded by a developer or a Job under some other uid. The reader then gets
+    EACCES, which Lance's object-store layer surfaces as **"Object at location …/tokens.lance not
+    found"** — a not-found error for a file that is right there. That misdirection cost a long
+    debugging detour: the index looked corrupt or version-skewed when it was merely unreadable.
+    """
+    for path in [root, *root.rglob("*")]:
+        path.chmod(0o755 if path.is_dir() else 0o644)
 
 
 def main() -> None:
@@ -127,6 +235,7 @@ def main() -> None:
     for name in ("chunks", "documents"):
         ds = lance.dataset(str(db / f"{name}.lance"))
         print(f"  {name}.lance: {ds.count_rows()} rows, v{ds.version}")
+    print(f"  fts index on chunks.text (searchable: {sum(len(d['pages']) for d in DOCUMENTS)} pages across {len(DOCUMENTS)} documents)")
     print(f"seeded {db}")
     print(f"descriptor: {root / 'descriptors' / f'{DATASET_ID}.json'}")
 

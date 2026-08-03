@@ -338,11 +338,102 @@ OIDC (dex session), real OpenFGA, real Dapr actors.**
   Studio's labeling-config): a labeling task's "shape" is classes+geometry only. That template
   layer — declaring per-task input modality, tools, relations, output schema — is the real
   flexibility gap; the storage model underneath it is already generic.
-- **NOT tested, said plainly (owner asked): the label-assist runner.** `runners/assist`
-  (GroundingDINO-tiny + SAM, CPU) is chart-declared (`runners.assist`, `MEDIA_ASSIST_URL` flips the
-  annotator's mock to real) but has never been image-built, deployed, or driven — the canvas assist
-  runs against the in-repo mock today. A full slice: dagger-build the torch image (~1.1 GB weights),
-  enable + deploy, drive a canvas assist request end to end.
+- ~~**NOT tested: the label-assist runner.**~~ **DONE in the seventh wave (below).**
+
+**Seventh wave (2026-08-03): AI-assist made real and pluggable, task templates, and the dev estate
+made seedable — the `open_label.md` waves, folded here as that file retires.**
+
+- **W1 — assist is real and PLUGGABLE, proven not claimed.** The `assist-runner` image was
+  dagger-built for the first time (3.9 GB: torch + GroundingDINO-tiny + SAM), pushed, and deployed
+  (`rask-assist`); driven live it returned a genuine detection (conf 0.7476) and a real SAM polygon
+  (0.637) into the canvas Review queue as `prediction` rows. Then the seam that makes it a
+  *platform*: a producer **registry** (`MEDIA_ASSIST_BACKENDS` name→URL, longest-prefix routing,
+  `assist_url` fallback, honest mock when bare — `backend_for` + `tests/unit/test_assist_registry.py`),
+  and **INSID3 wired as a genuine SECOND backend** (`runners/insid3/`, same `/v1/assist` contract,
+  a different MODE: in-context reference propagation on one frozen DINOv3) driven end to end —
+  the canvas bar offers **Detect · Segment · insid3** from `/api/config assistProducers`, and a
+  drawn region returned a real 15-point polygon as `model:insid3`. Adding a model is now a config
+  entry, not a code change. Also landed: the previously-missing hermetic assist→review spec.
+- **INSID3 evaluated on REAL Riksarkivet IIIF pages** (A0060198, 18th-c. cursive, RTX PRO 6000):
+  0.4–0.7 s/page at ViT-S@1024 — interactive. Region-level propagation is good (a masked column
+  found the written leaf on the NEXT page); line-level is not (one line collapses to "the written
+  area"). So: text-REGION / layout pre-labeling, not line segmentation. Apache-2.0; DINOv3 weights
+  are Meta-gated, so `runners/insid3/convert_weights.py` rebuilds the original checkpoint from the
+  HF safetensors (inverse key mapping, k-bias zero-filled, verified by a STRICT load). Blackwell
+  needs the cu128 torch wheels — cu126 has no sm_120 kernels.
+- **W2 — task templates v1 (the Label-Studio-config equivalent).** A declarative `TaskTemplate`
+  (`kind`/`modality`/`tools`/`required_labels`/typed `attributes`/`enforce`) on the labeling task,
+  **captured onto every item at send** (the `review_required` pattern), **enforced at SUBMIT inside
+  the task actor** so it holds for any caller, and stamped into publish table-properties + the run
+  facet. Create-dialog presets pick it; the detail page wears the chip. Proven LIVE against the
+  real service: a violating submit is refused with the server's own words —
+  `409 "submit (template classification allows tools ['tag'] — shape … is bbox)"` — and a
+  conforming submit lands `accepted`.
+- **A real bug the live drive exposed: every actor-side precondition was answering 500, not 409.**
+  Dapr serialises an actor's exception into an HTTP 500 body, so the endpoints' `except
+  IllegalTransition` — the code that turns a refusal into a 409 *with the reason* — stopped
+  matching the moment a check moved into an actor. `projects/proxies.py::_translating` now unwraps
+  it at the one seam every actor call already goes through, so existing handlers work as written
+  and future actor-side preconditions inherit it.
+- **`make seed-dev` — the estate is seedable in one command.** A fresh install serves an EMPTY
+  corpus (`media.corpus.mode` defaults to `emptyDir`), which is why `/media` found nothing,
+  `/annotator` had no page and `/lakehouse` listed no tables — "not seeded" was indistinguishable
+  from "not built", and the two existing seed scripts were wired to no command. Now: a searchable
+  multi-document corpus (10 pages / 3 documents + an FTS index), real IIIF pages into RustFS
+  **registered** as `bronze$pages`, and a labeling task with items — idempotent, and
+  **self-configuring** (it reads the dataset name from the live deployment's `MEDIA_DB` and the
+  tenant from the catalog's `/v1/me`, so the fixture cannot drift from the config that reads it).
+  Two traps worth keeping: a host-written corpus is mode 0600 and the services run as uid 10001,
+  and **Lance reports that EACCES as "Object at location …/tokens.lance not found"** — a not-found
+  for a file that is present, which reads exactly like a corrupt or version-skewed index; and a
+  fixture named anything other than what `MEDIA_DB` asks for produces "dataset 'transcripts_v2' not
+  found" with the corpus sitting right there.
+- **Two dead P0 scaffolds removed:** `/lakehouse/catalog` and `/lakehouse/admin` rendered "The Data
+  zone (P0 scaffold). Routes move here from apps/web in P3." — a 200 that looks intentional and
+  teaches nothing. Both now redirect to their first real child, matching the `governance` group.
+- **The wave's own adversarial audit (3 lenses, 25 findings) — what it caught and what it left.**
+  Fixed in the same commit, each with the regression test that was missing: (1) **enforcement was
+  vacuous on an empty shape set** — every rule is a per-shape test, so claim+submit with no draft
+  passed any enforced template whose `required_labels` was empty, which is exactly what the create
+  dialog produces when the optional classes box is blank; `allow_empty` now makes a blank item
+  declarable rather than fallible-into. (2) **`save_draft` had no state guard in the ACTOR** — the
+  endpoint read the state and invoked the actor as two steps, so a concurrent submit could land
+  between them and a late write put never-reviewed shapes into an accepted task, which publish
+  carries into silver. (3) Optional typed attributes were never type-checked (`required` conflated
+  presence with type, so an optional `enum` accepted anything while the facet advertised its
+  `choices`). (4) `TaskTemplate`/`OutputAttr` swallowed unknown keys, so `enforced:` instead of
+  `enforce:` returned 201 with enforcement silently off. (5) The seeder **printed "seeded" after
+  its lakehouse half failed**, never checked the release actually MOUNTS the host path it writes,
+  waited 300 s on a job that had already failed and then discarded the traceback, and — the one
+  the audit rated `missing` outright — **verified nothing**; it now refuses on an unmounted or
+  mismatched corpus, dumps job logs on either terminal condition, and ends by asking `rask-search`
+  for hits, exiting non-zero if it gets none. (6) `seed_bronze_pages.py` treated any 4xx whose body
+  contained the substring "exist" as success — and the catalog renders NOT-FOUND as "… does not
+  exist", so a register into a namespace whose create had failed was swallowed and reported as
+  "converged"; the test is on the 409 status now, never prose.
+- **Recorded, not fixed** (the audit's remaining confirmed findings, all lower severity):
+  `publish.py:435` stamps the PROJECT's template rather than each task's CAPTURED one, and invents
+  a `template_kind` for projects that never declared a template; `modality`/`kind` are captured,
+  stamped and displayed but cross-checked against nothing (an `audio` template can be sent image
+  items); shape provenance (`source`/`model_version`/`confidence`) is client-supplied but published
+  under a comment asserting it is server-stamped; a client-chosen `task_id` plus `consensus_n > 1`
+  can mint replica ids longer than the task routes can address, wedging that project's publish; the
+  draft is one document per TASK, not per `(task, author)` as its own section header claims, so
+  consensus replicas of one item share a draft. Seeder residue: `_make_world_readable` chmods the
+  whole corpus root rather than what the run wrote and does nothing for the re-seed case its header
+  claims to cover; the script is still pinned to one release name, one node and fixed local ports;
+  and the labeling seed hard-codes fixture-internal doc ids with a `dataset_version` that is already
+  wrong.
+- **Still open after this wave** (the honest residue): **batch mode** (`runners.jobsUrl` — the
+  annotator's batch-labeling submit is still an honest mock); **W3 text spans** (doccano parity —
+  needs `char_start`/`char_end` on `Shape` plus a span tool; the review/consensus/publish machine
+  needs zero new work); **W4 audio through the loop** (the `AudioViewer` + waveform lane and
+  `t_start/t_end` exist, but nothing SENDS audio items); **W5 relations & reading order** (the
+  `relation`/`order` tools that make DocQA and reading-order configurations rather than code); and
+  **an insid3 image build** (the runner runs from a checkout today; weights are Meta-gated).
+  Media's table story is also unfinished: search reads ONE declared `row_table` keyed by the
+  identity triple, with no UI to choose tables, no joins on non-identity columns, and no
+  declaration for external pointers.
 
 - **Recorded, not fixed (named postures):** the Dapr `/actors/*` invocation surface on the
   annotator trusts its caller (the sidecar) and accepts a caller-supplied `actor` field — true for

@@ -76,6 +76,13 @@ export const projectsApi = {
 		review_required?: boolean;
 		lease_seconds?: number;
 		consensus_n?: number;
+		template?: {
+			kind: string;
+			tools?: string[];
+			required_labels?: string[];
+			attributes?: { name: string; type?: string; choices?: string[]; required?: boolean }[];
+			enforce?: boolean;
+		};
 		label_schema?: { classes: { name: string; shape_types?: string[] }[]; attributes?: string[] };
 	}): Promise<ApiResult<Project>> =>
 		parsed(ProjectSchema, await bff.requestJSON('/api', 'projects', writeJSON('POST', req))),

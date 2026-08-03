@@ -252,17 +252,15 @@ async def send_items(project_id: ProjectId, payload: SendItemsRequest, checker: 
         # Every provenance and state field takes its model default, so a sender cannot pre-set
         # `state=accepted` or name someone else as the annotator.
         group_id = item.task_id or new_id()
+        capture: dict[str, Any] = {
+            "review_required": bool(project.get("review_required", True)),
+            "lease_seconds": int(project.get("lease_seconds") or 1800),
+            # The template rides every item, like the two captures above: submit enforcement reads
+            # the ITEM's copy, so a mid-flight template edit cannot retroactively invalidate work.
+            "template": project.get("template") or {},
+        }
         replicas = (
-            [
-                Task(
-                    task_id=group_id,
-                    project_id=project_id,
-                    source=item.source,
-                    media=item.media,
-                    review_required=bool(project.get("review_required", True)),
-                    lease_seconds=int(project.get("lease_seconds") or 1800),
-                )
-            ]
+            [Task(task_id=group_id, project_id=project_id, source=item.source, media=item.media, **capture)]
             if consensus_n == 1
             else [
                 Task(
@@ -271,8 +269,7 @@ async def send_items(project_id: ProjectId, payload: SendItemsRequest, checker: 
                     replica_of=group_id,
                     source=item.source,
                     media=item.media,
-                    review_required=bool(project.get("review_required", True)),
-                    lease_seconds=int(project.get("lease_seconds") or 1800),
+                    **capture,
                 )
                 for k in range(1, consensus_n + 1)
             ]

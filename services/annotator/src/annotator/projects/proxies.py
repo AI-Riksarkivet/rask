@@ -14,6 +14,7 @@ mapping is declared — it cannot drift.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any, cast
 
 
@@ -33,7 +34,57 @@ class TypedActorProxy:
         if declared is None:
             raise AttributeError(f"{self._interface.__name__} declares no method {name!r}")
         wire = getattr(declared, "__actormethod__", name)
-        return getattr(self._proxy, wire)
+        return _translating(getattr(self._proxy, wire))
+
+
+def _translating(call: Any) -> Any:
+    """Re-raise an actor-side `IllegalTransition` as itself on THIS side of the sidecar.
+
+    Dapr serialises an actor's exception into an HTTP 500 body and the SDK raises `DaprHttpError`,
+    so every `except IllegalTransition` in the endpoints — the code that turns a refused transition
+    into a **409 with the reason** — silently stopped matching the moment the check moved into an
+    actor. A precondition that reads "template classification allows tools ['tag'] — shape … is
+    bbox" reached the UI as a bare `500 Internal Server Error`: the guard fired, and the user was
+    told nothing. Found by driving a template violation against the live service.
+
+    Translating HERE rather than in each endpoint is what keeps it fixed: this proxy is the single
+    seam every actor call already goes through, so the endpoints' existing handlers work as written
+    and a future actor-side precondition inherits the behaviour for free.
+    """
+
+    async def invoke(*args: Any, **kwargs: Any) -> Any:
+        from annotator.projects.machines import IllegalTransition  # noqa: PLC0415 - import cycle
+
+        try:
+            return await call(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - re-raised unless it is the one shape we own
+            message = str(exc)
+            if "IllegalTransition" not in message:
+                raise
+            # Rebuild it through its real constructor, from the message the actor formatted:
+            #   illegal {kind} transition: {event!r} is not permitted from {state!r}
+            # so `kind`/`state`/`event` survive the hop and the re-raised error is indistinguishable
+            # from a locally-raised one. Unparseable (a message shape that changed) degrades to the
+            # whole text as the event — still a 409 carrying the reason, never a silent 500.
+            #
+            # UNESCAPE first: the text arrives nested inside Dapr's JSON envelope inside the SDK's
+            # own message, so the quotes are escaped several layers deep. Parsing the raw string
+            # matched nothing and surfaced the entire envelope as the user-facing reason.
+            text = message
+            while True:
+                unescaped = text.replace("\\\\", "\\").replace('\\"', '"').replace("\\'", "'")
+                if unescaped == text:
+                    break
+                text = unescaped
+            parsed = re.search(r"illegal (\w+) transition: [\"'](.+?)[\"'] is not permitted from (.+?)(?:['\"]\)|$)", text, re.DOTALL)
+            if not parsed:
+                raise IllegalTransition("task", "unknown", text) from exc
+            # The state arrives as the enum's repr (`<TaskState.CLAIMED: 'claimed'>`) rather than a
+            # bare value, so take the quoted value when there is one.
+            state = re.search(r"'([^']+)'", parsed.group(3))
+            raise IllegalTransition(parsed.group(1), state.group(1) if state else parsed.group(3).strip(), parsed.group(2)) from exc
+
+    return invoke
 
 
 def typed_proxy(actor_type: str, actor_id: str, interface: type) -> Any:
