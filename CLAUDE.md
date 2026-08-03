@@ -137,7 +137,34 @@ images themselves are still built by `docker_build_with_restart`, not Dagger** �
 > Nine earlier "blockers" (context allow-list, registry, `dev.reload` wiring, reload dirs,
 > `readOnlyRootFilesystem`, helm timeout, …) were all real and none of them was the cause.
 >
-> **Still slow: `make k3s-build` rebuilds EVERY image** (the ray-cluster export alone measures 238 s)
+> **The ZONES hot-reload too, proven 2026-08-03** — a zone edit reaches the compiled bundle in ~15 s and a
+`@rask/ui` edit in ~105 s, both **in the same pod** (no rebuild, no rollout). Four separate defects had to
+fall, and each one alone left the loop looking broken in a different way:
+
+1. **The zone image never shipped `frontend/packages`**, so every `@rask/*` symlink in it dangled
+   (`node_modules/@rask/ui -> ../../../../packages/ui`). Invisible at runtime — the SSR bundle inlines
+   those packages — and fatal the moment anything rebuilds in-container:
+   `Can't resolve '@rask/ui/styles/tokens.css'`.
+2. **`bun --watch build/index.js` cannot work here.** It re-execs when the entry file or an import
+   changes, and the thing that changes them is the very `bun run build` the reload runs — so the server
+   restarted mid-build and, being PID 1, took the container and the half-written `build/` with it
+   (exit 137, 6 restarts). 137 reads as an OOM; raising the tier 256Mi→2Gi→6Gi changed nothing.
+   `.docker/dev-serve.sh` restarts on a **sentinel** the build touches on success instead.
+3. **Every zone watched all of `frontend/`.** An edit in ANY zone arrived in EVERY other zone's
+   live_update as a file matching no sync rule, which Tilt answers by rebuilding instead of syncing. With
+   a second agent session editing `lakehouse`, every zone sat permanently in `UpdateStopped`. `deps` is a
+   WATCH list — the "bun needs every workspace member" argument applies to the build CONTEXT, not to it.
+4. **`@rask/ui` is the only package with a build step**, and zones bundle its `dist/`, never its source.
+   Syncing `packages/` alone let the zone rebuild against a stale `dist/` — the edit vanished while the
+   sync reported success. live_update now runs `svelte-package` first, triggered only by `packages/ui`.
+
+Also load-bearing: `.dockerignore` excluded `.docker/` wholesale, so shipping `dev-serve.sh` needed an
+explicit `!.docker/dev-serve.sh`; and **Dagger snapshots the host directory**, so a file changing during
+that snapshot aborts the build (`size changed from … during sync`) — with a second editor active that is
+an intermittent `exit status 1` with no other symptom, which the `+ignore` lists in `.dagger/images.go`
+now narrow.
+
+**Still slow: `make k3s-build` rebuilds EVERY image** (the ray-cluster export alone measures 238 s)
 > when usually one service changed. Separately, `.docker/frontend.dockerfile` copies **all seven zones'
 > sources** before `bun install`, so touching one zone invalidates the install layer of all seven images
 > (~90 s each). Both are open.
