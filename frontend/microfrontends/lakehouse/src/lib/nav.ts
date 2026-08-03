@@ -7,7 +7,6 @@ import {
 	Cpu,
 	Database,
 	FlaskConical,
-	FolderKanban,
 	HardDrive,
 	Inbox,
 	Layers,
@@ -43,13 +42,13 @@ import { exact, seg, type ZoneNav } from '@rask/ui/shell';
 const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 	{
 		label: 'Catalog',
+		// NO 'Projects' LEAF, by ruling (2026-08-03) — the same one that took the tenants row out of
+		// the shared navbar's Lakehouse panel. A project is the TOP of the hierarchy (project ›
+		// warehouse › namespace › table), so listing "projects" as a leaf INSIDE one project's catalog
+		// inverted it: it described lakekeeper's tenant-list endpoint rather than this product's model.
+		// There is ONE project concept and it belongs to the main menu. `/lakehouse/catalog/projects`
+		// still resolves — provisioning has to live somewhere — it is simply not navigation any more.
 		items: [
-			{
-				title: 'Projects',
-				href: '/lakehouse/catalog/projects',
-				match: seg('/lakehouse/catalog/projects'),
-				icon: FolderKanban,
-			},
 			{
 				title: 'Namespaces',
 				href: '/lakehouse/catalog/namespaces',
