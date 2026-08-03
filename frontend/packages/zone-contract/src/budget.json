@@ -43,8 +43,8 @@
 		}
 	},
 	"elements": {
-		"compute": 70,
-		"lakehouse": 180
+		"compute": 80,
+		"lakehouse": 260
 	},
-	"//elements": "Per-zone CUSTOM-ELEMENT bundle ceilings in gzipped KB — the scripts a zone lends to the global workbench (open_workbench.md), weighed directly from build/client/<zone>/elements by element-budget.test.ts. Measured 2026-08-03 (fidelity wave): compute 51 — the panels now mirror the zone pages pixel-for-pixel (Card summary strips, GPU bars, per-app Serve cards) plus the elements own compiled Tailwind utilities; ceiling 70 keeps fail-on-doubling. lakehouse 151 (the xyflow graph is most of it). Same rule as the zone budgets: raise ONLY with the measured reason in the commit message."
+	"//elements": "Per-zone CUSTOM-ELEMENT bundle ceilings in gzipped KB — the scripts a zone lends to the global workbench (open_workbench.md), weighed directly from build/client/<zone>/elements by element-budget.test.ts. Measured 2026-08-03 (coverage wave): compute 60 (seven panels incl. the full logviewer mirror), lakehouse 201 (seven panels — two xyflow canvases, the FGA summary, ops). Ceilings 80/260 keep fail-on-doubling headroom. Raise ONLY with the measured reason in the commit message."
 }
