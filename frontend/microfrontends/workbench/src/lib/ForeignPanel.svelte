@@ -21,8 +21,12 @@
 
 	let phase = $state<'loading' | 'ready' | 'failed'>('loading');
 	let detail = $state('');
+	/** Bumped by the Retry button — read inside the effect, so a failed import (a rolling zone
+	 *  deploy's 15-second window, observed live) re-runs without remounting the whole panel. */
+	let attempt = $state(0);
 
 	$effect(() => {
+		void attempt;
 		if (source === null) {
 			phase = 'failed';
 			detail = `no catalogue entry for "${api.component}"`;
@@ -83,5 +87,19 @@
 	}
 	.dim {
 		color: var(--color-muted-foreground);
+	}
+	.retry {
+		justify-self: center;
+		margin-top: 0.25rem;
+		padding: 0.25rem 0.75rem;
+		border: 1px solid var(--color-border);
+		border-radius: 0.375rem;
+		background: transparent;
+		color: var(--color-foreground);
+		font-size: 0.8125rem;
+		cursor: pointer;
+	}
+	.retry:hover {
+		background: var(--color-muted);
 	}
 </style>
