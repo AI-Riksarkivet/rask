@@ -23,8 +23,8 @@
 		},
 		"compute": {
 			"staticGzipKB": 260,
-			"deferredGzipKB": 40,
-			"note": "The Ray surfaces (cluster, jobs, actors, serve, logviewer) over the shared shell — tables and status views, no heavy vendored runtime, so the ENTRY cost should stay near the home zone's weight. The deferred ceiling returns 90 → 40 on 2026-08-03: it was raised to 90 solely for the per-zone WORKBENCH dock, which is removed (global-workbench-only decision, see open_workbench.md)."
+			"deferredGzipKB": 110,
+			"note": "The Ray surfaces (cluster, jobs, actors, serve, logviewer) over the shared shell — tables and status views, no heavy vendored runtime, so the ENTRY cost should stay near the home zone's weight. The deferred ceiling is 110: this zone now ships its OWN dock at /compute/workbench (jobs + capacity + actors over the zone's remotes), and @rask/dockview is ~67 KB gz behind a dynamic import on that ONE route of eleven — measured 74 total. Nothing else in this zone is lazy, so the dock IS the deferred half; 110 still fails on a doubling."
 		},
 		"studio": {
 			"staticGzipKB": 220,

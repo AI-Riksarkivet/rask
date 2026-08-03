@@ -1,4 +1,13 @@
-import { Boxes, FileText, Gauge, ListTree, ScrollText, Server, ServerCog } from '@lucide/svelte';
+import {
+	Boxes,
+	FileText,
+	Gauge,
+	LayoutDashboard,
+	ListTree,
+	ScrollText,
+	Server,
+	ServerCog,
+} from '@lucide/svelte';
 import { exact, seg, type ZoneNav } from '@rask/ui/shell';
 
 // The compute zone's OWN sidebar routes (the shared shell renders exactly what a zone passes — the
@@ -20,6 +29,13 @@ export const COMPUTE_ZONE_NAV: ZoneNav = {
 		{
 			label: 'Cluster',
 			items: [
+				{
+					// The zone's own dock: jobs + capacity + actors over this zone's remotes, arranged.
+					title: 'Workbench',
+					href: '/compute/workbench',
+					match: seg('/compute/workbench'),
+					icon: LayoutDashboard,
+				},
 				{ title: 'Nodes', href: '/compute/cluster', match: seg('/compute/cluster'), icon: Server },
 				{ title: 'Actors', href: '/compute/actors', match: seg('/compute/actors'), icon: Boxes },
 			],
