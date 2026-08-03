@@ -98,13 +98,14 @@ for (const width of WIDTHS) {
 		page,
 		baseURL,
 	}) => {
-		// KNOWN #105 regression, marked expected-to-fail so it stays LOUD and self-expiring: with
-		// EIGHT zones the wide bar at exactly 1024px (the collapse boundary) genuinely collides with
-		// the account control. The fix is the shell owner's — either the bar's layout or raising
-		// SHELL_COLLAPSE_BREAKPOINT, which is `lg:`-coupled in @rask/ui (sidebar.svelte:84) and so
-		// cannot be bumped from a zone. When the shell is fixed this marker makes the test fail as
-		// "passed unexpectedly", forcing its removal. (Recorded in the transport round's final report.)
-		test.fail(width === 1024, '#105: 8-zone bar collides with the account control at 1024px');
+		// #105 IS FIXED, and this is what fixed it — not a layout change. The marker here was
+		// `test.fail(width === 1024, …)`: with EIGHT entries the wide bar genuinely collided with the
+		// account control at exactly 1024px, the collapse boundary. The two-level ruling took Projects
+		// and Settings out of the in-project bar and another session retired the workbench zone, so the
+		// bar is six entries and no longer overflows. The marker then failed as "expected to fail, but
+		// passed", which is precisely why it was written that way — a known defect that goes quiet on
+		// its own is a defect nobody removes. Deleted with its cause, and the geometry below now runs
+		// for real at every width.
 		await page.setViewportSize({ width, height: 900 });
 		await openShell(page, baseURL);
 
@@ -163,7 +164,6 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 	await expect(panel.locator('[data-slot="navbar-overflow-group"]')).toHaveText([
 		' Lakehouse',
 		' Compute',
-		' Workbench',
 		' Search',
 		' Annotate',
 		' Train',

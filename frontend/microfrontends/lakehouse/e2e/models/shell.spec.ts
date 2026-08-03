@@ -9,7 +9,7 @@ import { test, expect, type Page, type Route } from '@playwright/test';
 // the same estate. The bar grows only when a ZONE does — a new route is a row in a column.
 //
 // The bar's triggers (zones owning sub-areas) are Lakehouse, Compute and Search; its plain links
-// (single-surface zones) are Workbench, Annotate, Train and Studio. Both sets are asserted BY NAME
+// (single-surface zones) are Annotate, Train and Studio. Both sets are asserted BY NAME
 // below: a bare `toHaveCount(2)` is what let these assertions rot silently through the seven-zone IA
 // (db15ea8, which gave Compute its panel) and the workbench zone (117c8ed, the 8th zone).
 
@@ -58,10 +58,10 @@ test('an estate admin gets the zone triggers + the models sidebar leaves', async
 	// The bar's LINKS are the single-surface zones — one surface means a one-row dropdown would be
 	// noise; each panel TRIGGER must stay a button, or clicking it would navigate instead of opening
 	// the panel.
-	for (const link of ['Workbench', 'Annotate', 'Train', 'Studio']) {
+	for (const link of ['Annotate', 'Train', 'Studio']) {
 		await expect(nav.getByRole('link', { name: link, exact: true })).toBeVisible();
 	}
-	await expect(nav.getByRole('link')).toHaveCount(4);
+	await expect(nav.getByRole('link')).toHaveCount(3);
 	for (const estate of ['Home', 'Projects', 'Settings']) {
 		await expect(nav.getByRole('link', { name: estate, exact: true })).toHaveCount(0);
 		await expect(nav.getByRole('button', { name: estate, exact: true })).toHaveCount(0);

@@ -8,7 +8,7 @@ import { test, expect, type Page, type Route } from '@playwright/test';
 // The bar's IA is ONE ENTRY PER ZONE (R15), grouped by domain — never a flat list of routes. A zone
 // that owns sub-areas renders as a NavigationMenu TRIGGER (a button opening a panel): Lakehouse
 // (Catalog + Models + Lineage, plus Governance + Operations for an estate admin), Compute, Search.
-// A single-surface zone stays a plain LINK: Workbench, Annotate, Train, Studio. Home is the product
+// A single-surface zone stays a plain LINK: Annotate, Train, Studio. Home is the product
 // mark, not an entry. Both sets are asserted BY NAME below — a bare `toHaveCount(2)` is what let
 // these assertions rot silently through the seven-zone IA (db15ea8, which gave Compute its panel)
 // and the workbench zone (117c8ed, the 8th zone).
@@ -74,10 +74,10 @@ test('an estate admin gets the zone triggers + the Marquez-parity sidebar leaves
 	// The bar's LINKS are the single-surface zones — one surface means a one-row dropdown would be
 	// noise; each panel TRIGGER must stay a button, or clicking it would navigate instead of opening
 	// the panel.
-	for (const link of ['Workbench', 'Annotate', 'Train', 'Studio']) {
+	for (const link of ['Annotate', 'Train', 'Studio']) {
 		await expect(nav.getByRole('link', { name: link, exact: true })).toBeVisible();
 	}
-	await expect(nav.getByRole('link')).toHaveCount(4);
+	await expect(nav.getByRole('link')).toHaveCount(3);
 	// The three estate-level entries are ABSENT here, in either role — pinned, because their leaving
 	// this bar IS the ruling and a regression would otherwise just look like a longer bar.
 	for (const estate of ['Home', 'Projects', 'Settings']) {
