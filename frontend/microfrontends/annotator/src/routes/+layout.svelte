@@ -37,11 +37,17 @@
 		if (!page.url.searchParams.has('keys')) return [];
 		const out: { id: string; label: string; href: string }[] = [];
 		const taskId = reviewSelection.taskId;
-		if (taskId) out.push({ id: `task:${taskId}`, label: taskId, href: `${base}/projects/${taskId}` });
+		if (taskId)
+			out.push({ id: `task:${taskId}`, label: taskId, href: `${base}/projects/${taskId}` });
 		const unit = reviewSelection.active;
 		if (unit) {
-			const position = reviewSelection.total > 1 ? ` (${reviewSelection.index + 1}/${reviewSelection.total})` : '';
-			out.push({ id: `unit:${unit.key}`, label: `${unit.key}${position}`, href: page.url.pathname + page.url.search });
+			const position =
+				reviewSelection.total > 1 ? ` (${reviewSelection.index + 1}/${reviewSelection.total})` : '';
+			out.push({
+				id: `unit:${unit.key}`,
+				label: `${unit.key}${position}`,
+				href: page.url.pathname + page.url.search,
+			});
 		}
 		return out;
 	});

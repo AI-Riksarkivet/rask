@@ -74,7 +74,7 @@ export type AlertPanelApi = Pick<
 export const MUTED_PARAM = '__raskAlertMuted';
 
 /** How long the highlight lingers once the panel is actually on screen. */
-export const DEFAULT_LINGER_MS = 6000;
+const DEFAULT_LINGER_MS = 6000;
 
 /** Handed to panels when the dock has `chrome.alerts === false`, so a panel never branches on it. */
 export const NOOP_ALERT: PanelAlertApi = {

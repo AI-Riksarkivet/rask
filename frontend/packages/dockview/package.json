@@ -14,10 +14,6 @@
 			"types": "./src/views-entry.ts",
 			"svelte": "./src/views-entry.ts",
 			"default": "./src/views-entry.ts"
-		},
-		"./contract": {
-			"types": "./src/element-contract.ts",
-			"default": "./src/element-contract.ts"
 		}
 	},
 	"scripts": {
@@ -31,8 +27,7 @@
 	"dependencies": {
 		"@lucide/svelte": "^1.26.0",
 		"@rask/api": "workspace:*",
-		"dockview": "^7.0.4",
-		"valibot": "^1.4.1"
+		"dockview": "^7.0.4"
 	},
 	"devDependencies": {
 		"@rask/config": "workspace:*",

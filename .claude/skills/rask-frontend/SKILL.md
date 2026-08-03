@@ -52,16 +52,16 @@ composition — custom elements, shipped in the global workbench (see § Workben
 
 ## Workbenches — `@rask/dockview`
 
-**ONE dock: the global `/workbench` zone** (shipped 2026-08-03 — the full record is
-`docs/architecture/global-workbench.md`). It composes FIFTEEN panels the other zones build and
-serve as custom elements (`rask-<zone>-<panel>`, each zone's `src/lib/elements/` + its own Vite
-lib build emitting `/​<zone>/elements/<zone>-elements.js` with its OWN compiled Tailwind
-utilities); the compositor owns ZERO panel code. The boundary contract is
-`@rask/dockview/contract`: `rask:select` CustomEvents up through a valibot relay, properties
-(`pollms`, `filtertext`) down. Per-zone workbenches remain a defect —
-`dock-reachability.test.ts` pins the dock count to exactly `['/workbench/']`. Element bundles
-have budget ceilings (`element-budget.test.ts`). It is a **thin binding, not a wrapper**:
-consumers hold the real `DockviewApi` and call its documented methods.
+**Docks live INSIDE their zone** (final ruling 2026-08-03 — the record is
+`docs/architecture/global-workbench.md`). A zone's dock composes THAT ZONE'S OWN components over
+one store shared through ordinary `createContext`, so panels cannot be a query apart: the media
+zone's `/media/workbench` runs `search-bar` + `hit-list` + `AtlasMap` + `player-pane` over one
+`Bench`. The cross-zone compositor zone that briefly existed is RETIRED — custom elements cannot
+import remote functions or `$app`-bound components, so its panels had to be mirrored, and the one
+capability it bought (mixing panels across zones) was a workflow nobody had.
+`dock-reachability.test.ts` pins every dock the estate ships (sidebar row AND navbar row), so a
+dock can never be unnavigable and a compositor cannot return unnoticed. It is a **thin binding,
+not a wrapper**: consumers hold the real `DockviewApi` and call its documented methods.
 
 Depend on **`dockview`, never `dockview-core`.** Their *type* entrypoints are identical
 (`export * from 'dockview-core'`), which makes core look like the leaner honest choice — it is not.

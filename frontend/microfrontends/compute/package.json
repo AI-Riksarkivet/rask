@@ -6,10 +6,10 @@
 	"scripts": {
 		"prepare": "svelte-kit sync",
 		"dev": "vite dev",
-		"build": "vite build && vite build --config vite.elements.config.ts",
+		"build": "vite build",
 		"preview": "vite preview",
 		"start": "bun ./build/index.js",
-		"check": "svelte-check --tsconfig ./tsconfig.json --compiler-warnings \"options_missing_custom_element:ignore\"",
+		"check": "svelte-check --tsconfig ./tsconfig.json",
 		"lint": "oxlint .",
 		"fmt": "rsvelte-fmt .",
 		"fmt:check": "rsvelte-fmt --check ."
@@ -17,7 +17,6 @@
 	"dependencies": {
 		"@lucide/svelte": "^1.21.0",
 		"@rask/api": "workspace:*",
-		"@rask/dockview": "workspace:*",
 		"@rask/ui": "workspace:*",
 		"@sveltejs/kit": "^2.67.0",
 		"@tailwindcss/vite": "^4.3.1",

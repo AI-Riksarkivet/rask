@@ -17,7 +17,7 @@
 import { parse } from 'svelte/compiler';
 
 /** The zones with a base path. `home` is the catch-all at '/' and owns no prefix. */
-export const ZONES = ['lakehouse', 'media', 'annotator', 'compute', 'studio', 'train', 'workbench'];
+export const ZONES = ['lakehouse', 'media', 'annotator', 'compute', 'studio', 'train'];
 
 /** A cross-zone path is domain-relative and single-segment-rooted: `/<zone>` or `/<zone>/…`. */
 const ZONE_PATH = new RegExp(`^\\/(${ZONES.join('|')})(?:\\/|$)`);
@@ -32,7 +32,7 @@ const ZONE_PATH = new RegExp(`^\\/(${ZONES.join('|')})(?:\\/|$)`);
  * moved to the main menu (2026-08-03 ruling); the three lakehouse links into it were correct only
  * because a human wrote the attribute, with nothing to catch the next one that forgets.
  */
-export const HOME_ROUTES = ['projects'];
+const HOME_ROUTES = ['projects'];
 
 const HOME_PATH = new RegExp(`^\\/(${HOME_ROUTES.join('|')})(?:\\/|$)`);
 
