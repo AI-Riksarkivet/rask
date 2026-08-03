@@ -33,19 +33,27 @@ Five areas that used to be five separate apps, merged under one router: `data`, 
 
 **`lineage`** — Svelte Flow DAG explorer (depth layout with longest-path + iteration cap, theme-live via `useColorMode()`), datasets, dataset detail (governance, grants, read audit, upstream/downstream), jobs, job detail (a **two-read split**: 200 events with `summary:true` ≈46 kB, plus one raw event for facets), runs, column-level lineage.
 
-**`storage`** and **`models`** are areas here — they are not zones. `/data` itself is a scaffold stub. The model registry (list/describe/**promote**) rides `lib/models/remote/models.remote.ts` — the `capi/v1/model/[model]/promote` route is gone; `/pipeline`'s medallion triggers are still the `medallion/[action]` BFF route.
+**`storage`** and **`models`** are areas here — they are not zones. `/data` itself is a scaffold stub. The model registry (list/describe/**promote**) rides `lib/models/remote/models.remote.ts` — the `capi/v1/model/[model]/promote` route is gone; `/pipeline`'s medallion triggers ride `lib/models/remote/medallion.remote.ts` (two `command()`s with the idempotency key as an arg; the `medallion/[action]` route is gone).
 
-11 `+server.ts` routes (4 keep-bytes, 1 keep-flow, 2 catch-alls + 4 blocked ports — open_transport.md), 0 `requestJSON` calls, 11 `.remote.ts` modules. All gates green: svelte-check 0 errors, oxlint 0 errors.
+8 `+server.ts` routes (4 keep-bytes, 1 keep-flow, 2 catch-alls — the custom-element blocker — plus the thin `/api/audit` shim whose logic lives in `lib/server/audit-core.ts`, shared with `admin/remote/audit.remote.ts`), 0 `requestJSON` calls, 15 `.remote.ts` modules. All gates green: svelte-check 0 errors, oxlint 0 errors.
 
 ## `media` — base `/media`, port 5173, labelled **Search**
 
-Multimodal corpus workbench: FTS / vector / hybrid / voice search, a WebGPU embedding atlas, a Cypher knowledge-graph explorer, and a Svelte-Flow dataflow editor. Reaches `:8101`/`:8102`/`:8103` through its own BFF rather than the gateway.
+Multimodal corpus workbench: FTS / vector / hybrid / voice search, a WebGPU embedding atlas, a Cypher knowledge-graph explorer, and a Svelte-Flow dataflow editor. Reaches `:8101`/`:8102`/`:8103` (plus the catalog and lineage) through its own BFF rather than the gateway.
+
+**6 `+server.ts` routes** after open_transport.md area 3, down from 13 — 4 keep-bytes (`api/atlas/points` Arrow + its zone cache, `api/voice/similar` multipart-in, the `api/[...path]` viewer catch-all, `diagram` SSR'd SVG/HTML), plus the 2 **promote-arrow** routes that keep their `+server.ts` because their REQUEST shape pins them there: `api/search` (the POST carries a File) and `api/atlas/chunks` (a read spelled as a POST). Both now answer **Arrow IPC** built by `$lib/server/rows-arrow.ts` — a corpus row is a loose object, so the encoder derives the schema per response and names the JSON-carried columns in the schema metadata; `@rask/media-api`'s `rowsFromArrow` decodes them and OMITS null cells (`RowSchema`'s optional fields admit `undefined`, never `null`).
+
+Four `.remote.ts` modules carry every JSON value surface: `lib/catalog/remote/catalog.remote.ts` (identity + the two user-state documents), `lib/projects/remote/projects.remote.ts` (the SEND half of the annotation funnel), `lib/graph/remote/graph.remote.ts` (the Cypher console — a `command()`, because a `query` is cached per argument and Run must re-run), `lib/workflow/remote/labeling.remote.ts` (the tag write + batch-job submit), beside the pre-existing `lib/live/feeds.remote.ts`. Seven routes are gone: `capi/v1/me`, `capi/v1/user-state/[document]`, `api/graph/cypher`, `api/annotations/tags`, `api/jobs/apply`, `api/projects/[...path]`, and `api/jobs/[...path]` — the last one collapsed rather than ported, its only intended caller (`jobStatus` in `@rask/labeling`) being exported dead code with zero call sites in the estate.
+
+Its e2e suite runs a mock UPSTREAM (`e2e/mock-media-services.ts`, one Bun server standing in for the search service and the annotator's projects plane) beside the browser-side `page.route` mocks, because a read that moved to the zone server cannot be intercepted in the page. Single-worker on purpose: that mock's seed/ledger is global, since an auth-off suite has no bearer to key it by.
 
 Fourteen files import from the **root barrel** `'@rask/ui'` rather than a subpath — migration residue confined to this zone. `media` and `annotator` are also the two zones that add explicit `@source './lib' './routes' './app.html'` to `app.css`.
 
 ## `annotator` — base `/annotator`, port 5177, labelled **Annotate**
 
 One page: a PixiJS/WebGPU annotation canvas over Arrow-backed rows, built on `@rask/engine` (drawing tools, editors, a hand-written `cornerMinEigenVal` reimplementation) and `@rask/labeling` (the `LabelOp` model, Arrow-IPC transport, optimistic concurrency via `X-Annotations-Version`).
+
+**3 `+server.ts` routes** after open_transport.md area 4, down from 9 — the Arrow annotations transport (`api/annotations/[...path]`, byte-identical), `capi/v1/me` (keep-flow), and the `api/[...path]` viewer catch-all (image bytes). Six routes are gone; their surfaces ride 6 `.remote.ts` modules (`projects/remote/projects.remote.ts` + `tasks.remote.ts` — the RECEIVE half of the annotation funnel: claim/release/submit leases — `viewer/remote/{jobs,assist,config}.remote.ts`, `live/feeds.remote.ts`), which bind the shared `@rask/labeling` functions server-side rather than duplicating them. Its e2e suite runs `e2e/mock-annotator.ts` as the mock upstream on the lakehouse seed/ledger pattern, plus a `warmup.setup.ts` that pre-compiles the heavy routes on both app servers.
 
 It renders `AppShell` with **`canvas={true}`** — drops sidebar and breadcrumb, keeps the header, gives children full height. That variant exists precisely because the annotator had forked its own header and drifted: "a missing variant is why a zone forks the shell; adding the variant is the fix" (`app-shell.svelte:76-81`).
 

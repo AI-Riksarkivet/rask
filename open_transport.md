@@ -1,109 +1,69 @@
-# open-transport — every payload on its correct transport
+# open_transport — LANDED 2026-08-03
 
-Audit complete, 2026-08-03 (3-agent fan-out, all 70 `+server.ts` routes in
-lakehouse/media/annotator read with their consumers; per-route evidence in the session's
-workflow transcript `wf_904f2526-591`). Implementation has NOT started — §Goal is the
-/goal-ready condition for driving it in this session.
+One transport per payload KIND. Typed app **values** ride SvelteKit remote functions; **bytes**
+(Arrow, blobs, multipart, the OIDC redirect flow) stay on `+server.ts`. Both halves are idiomatic
+SvelteKit — devalue 5.8.1 *can* carry binary (base64, `stringify.js:308`); we don't, because it costs
++33% on the wire, triple-buffers, and loses HTTP semantics.
 
-**The rule (also in the rask-frontend skill, §Fetching data):** one transport per payload
-kind — typed app **values** → remote functions (valibot, `ApiResult` unions,
-`query.live` where a change signal exists, single-flight mutations; reference:
-`lakehouse/src/lib/admin/remote/access.remote.ts`); **tabular/bulk/binary** → Arrow
-IPC / raw bytes on `+server.ts`, streamed. Both halves are idiomatic SvelteKit. devalue
-5.8.1 *can* carry binary (base64, `stringify.js:308`) — we don't, because +33% wire,
-triple buffering, no streaming, no HTTP semantics.
+This file is the record of what the 70-route verdict table resolved to, and of what it did NOT.
 
-## Verdicts: 70 routes
+> Kept rather than deleted, against the plan-doc convention: **57 comments across 50 source files
+> cite this path** as the rationale record for a route that is now gone. Folding it into
+> `docs/architecture/frontend-conventions.md` is the right end state and is a 50-file comment sweep —
+> deferred deliberately, not forgotten.
 
-| verdict | count | meaning |
-|---|---|---|
-| `remote-fn` | 56 | JSON value surface → becomes a remote function; the route is DELETED |
-| `keep-bytes` | 10 | already Arrow/binary/multipart/href-addressed — untouched |
-| `promote-arrow` | 2 | tabular JSON → becomes Arrow IPC bytes |
-| `collapse` | 1 | dead/subsumable route — deleted without replacement |
-| `keep-flow` | 1 | identity endpoint kept for the shell's browser-side read |
+## Outcome against the verdicts
 
-**Honest performance verdict:** this round is ~85% consistency and deletion (56 routes,
-most of them the same copy-pasted ~30-line bearer-forward template, replaced by
-per-domain `.remote.ts` modules), **two** genuine Arrow wins, one live bug fixed for
-free, and `query.live` coverage wherever a cursor exists. It is not a speed round; the
-speed was mostly already right — the genuinely tabular lakehouse flows (table
-preview/query, insert) **already speak Arrow**, which this audit verified and which
-corrects an earlier guess that `table/query` needed promotion. Do not oversell it.
+| verdict | count | landed |
+| --- | --- | --- |
+| `remote-fn` | 56 | deleted; surfaces on `.remote.ts` |
+| `keep-bytes` | 10 | byte-identical, untouched |
+| `promote-arrow` | 2 | Arrow IPC, consumers read `tableFromIPC` |
+| `collapse` | 1 | media's dead `jobs/[...path]`, deleted |
+| `keep-flow` | 1 | `capi/v1/me` |
 
-## The two Arrow promotions (the only perf-motivated changes)
+| zone | `+server.ts` before → after | `.remote.ts` modules | `requestJSON` |
+| --- | --- | --- | --- |
+| `lakehouse` | 41 → **8** | 15 | 0 |
+| `media` | 13 → **6** | 5 | 0 |
+| `annotator` | 9 → **3** | 6 | 0 |
 
-- `media/api/atlas/chunks` — up to **1000 full rows as `list[dict]` JSON per lasso
-  selection**; the clearest offender in the estate. Becomes Arrow IPC.
-- `media/api/search` — the same `Row[]` payload kind at n≤100; promoted for transport
-  uniformity (its multipart-POST input pins it to `+server.ts` anyway — the *response*
-  becomes Arrow).
+Estate-wide: `command()` 59 across 17 modules, `form()` 0, `query.batch()` 0. Every remote function
+returns an `ApiResult<T>` union, parses its wire with valibot, and answers `{ok:false,status:0}` when
+the upstream is unreachable — a rejected fetch must never cross the remote boundary.
 
-## Found defects & port caveats (from the classifiers' evidence)
+**The two promote-arrow routes keep their `+server.ts` because their REQUEST shape pins them there**
+(`api/search` carries a File; `api/atlas/chunks` is a read spelled as a POST). They answer Arrow built
+by `media/src/lib/server/rows-arrow.ts`, which derives the schema per response because a corpus row is
+a loose object, and names the JSON-carried columns in the schema metadata.
 
-1. **LIVE BUG, fixed free by the migration:** `attachStore`
-   (`lakehouse/src/lib/storage/storage.ts:62`, used by `AttachStore.svelte:37`) POSTs
-   `/capi/v1/stores`, but the catch-all proxy is **GET-only** — guaranteed 405; the
-   attach-store UI is dead today. Becomes a `command()`.
-2. **Cross-zone consumers on the lakehouse catch-alls:** the workbench custom elements
-   bind `createBffClient('/lakehouse')` (`src/lib/elements/store.ts:14`) and ride the
-   catch-alls with the session cookie. Remote functions are served under the same zone
-   base, so element scripts can migrate too — **verify before collapsing the
-   catch-alls**; if elements can't consume remote endpoints, the catch-alls stay until
-   they can (listed as deferred, not silently kept).
-3. **Lineage read fallback:** `makeLineageProxy` carries a READ-only service-token
-   fallback (`packages/api/src/bff.ts:190-192`). The lineage `.remote.ts` port must
-   preserve exactly that semantic (reads fall back, writes never).
-4. **Media's `jobs/[...path]`** is dead/subsumable (`collapse`) — `jobs/apply` is the
-   only live entry.
-5. **Annotator's Arrow labeling transport is exactly one route**
-   (`api/annotations/[...path]`: Arrow IPC + `X-Annotations-Version` + 409 contract) —
-   untouchable. `draft-sync` deliberately reads Arrow but writes JSON drafts — that
-   asymmetry is a contract, not an inconsistency.
+## What did NOT land, and why
 
-## Keep-bytes list (untouched, for the record)
+- **The two lakehouse catch-alls (`capi/[...path]`, `api/[...path]`).** 17 reads reach them from the
+  workbench zone's custom-element bundles, and an element cannot import a `.remote.ts`. A blocker,
+  not an oversight — `frontend/microfrontends/lakehouse/src/lib/store.ts:16` is the entry point.
+- **`/api/audit`** — the same blocker in miniature: a thin shim over `lib/server/audit-core.ts`, which
+  the zone's own remote function also calls, so gate, SQL, flattening and filters cannot drift between
+  the two doors. Delete it the day elements gain a sanctioned way to reach a remote endpoint.
+- **`capi/v1/me` in three zones** — keep-flow by verdict.
+- **The fold of this file into the canon** (above).
 
-lakehouse: `capi/v1/table/[id]/query` (Arrow out), `…/insert` (Arrow in),
-`…/[...rest]` (blob `<img>` bytes + history), `api/media/[...rest]` (downloads/page
-images — `content-disposition` is the contract, hrefs must stay GET routes).
-media: `api/atlas/points` (Arrow already), `api/voice/similar` (multipart in),
-`api/[...path]`, `diagram` (SVG bytes). annotator: `api/annotations/[...path]` (THE
-Arrow transport), `api/[...path]`.
+## Two product defects the suite surfaced, neither transport-related
 
-## Execution order (area by area, each landing green before the next)
+Both were invisible until the zone suite was run against the finished state:
 
-1. lakehouse `lib/data` + `lib/storage` (catalog/namespace/table/warehouse/stores
-   values — the big template family; fixes the 405 bug)
-2. lakehouse `lib/lineage` + `lib/models` + admin remainder (audit, jetstream,
-   experiments, dlq-replay, medallion actions; preserves the service-token read
-   fallback)
-3. media (cypher, tags, jobs-apply, projects, user-state, me + the two Arrow
-   promotions)
-4. annotator (config, projects, tasks, assist, jobs)
-5. catch-all collapse — only after the cross-zone element verification (caveat 2)
+1. `routes/lineage/+page.svelte` mounted `LineageGraph` without `base`/`navigate`, so every node click
+   called an undefined callback — the canvas was a dead end. Those are props on purpose (the graph is
+   also compiled as a custom element, where `$app/*` does not resolve); the element passed them and
+   the page never did.
+2. `packages/flow/src/layout.ts` sized the isolated-node grid at `layers.length`, which is **0** for an
+   estate with no edges at all — collapsing it to one column and rebuilding the tower the partition
+   exists to prevent. A fresh lakehouse, before any OpenLineage event, is exactly that estate.
 
-Per area: `.remote.ts` module on the access.remote.ts template → consumers repointed →
-routes deleted → hermetic e2e reworked on the mock-upstream pattern → zone gates green.
+## The lesson worth keeping
 
-## Goal (paste when ready)
-
-> **/goal** Every route in open_transport.md's verdict table rides its verdict:
-> the 56 remote-fn routes are DELETED with their surfaces on `.remote.ts` functions
-> (valibot args, ApiResult unions, `query.live` where a cursor exists); the 2
-> promote-arrow responses serve Arrow IPC and their consumers read `tableFromIPC`; the
-> 10 keep-bytes + 1 keep-flow routes are byte-identical untouched; media's dead
-> `jobs/[...path]` is gone; the attach-store 405 is fixed and covered by a test; the
-> catch-alls are collapsed OR their cross-zone element blocker is documented in the
-> final report (no silent keeps). Prove each clause in-transcript: per-zone e2e run
-> outputs green (hermetic suites reworked on the mock-upstream pattern), `bunx turbo
-> --cwd=frontend run check lint` 0/0, zone-contract suite green, autofixer issues=[] on
-> every touched .svelte, and `git status` showing only owned paths committed. The
-> rask-frontend skill's route counts are updated in the same commits. Constraint:
-> concurrent sessions are active — commit own paths only; any deferred route is named
-> in the final report with its reason. Or stop after 30 turns and report the remainder
-> explicitly.
-
----
-
-Delete this file when the round lands (plan docs are working documents; `docs/` carries
-only settled architecture).
+`0acc8d4` shipped the media zone SERVING Arrow while the decoder that reads it sat uncommitted in the
+working tree — main served Arrow bytes to a JSON parser for two commits. "Commit own paths only" is
+correct in a shared worktree, but a path list is a manual list: **a change spanning a zone AND a
+package needs both halves named.** Verify with `git show HEAD:<file>`, never with a green local suite —
+the local suite tests the working TREE, which is exactly what a partial commit does not ship.
