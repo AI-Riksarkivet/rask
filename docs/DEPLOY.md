@@ -91,14 +91,14 @@ graph data landed in AGE, the metric incremented in PromQL, the distributed trac
 and both the app and infra log paths landed in `opentelemetry_logs`. That's the regression guard for "the
 pipeline works **and** is observable".
 
-**Lance-native IO metrics (pre-wired, activates at pylance 9):** pylance ≥ 9.0 ships
+**Lance-native IO metrics (live since the pylance 9 bump):** pylance ≥ 9.0 ships
 `lance.otel.instrument_lance_metrics()` (the `pylance[otel]` extra) — Lance's Rust object-store/IO
 metrics registered straight onto the global MeterProvider the services already run under. Every
-Lance-I/O service (catalog, lineage, compaction, medallion producer + movers) already calls the guarded
-`common.lance_metrics.instrument_lance_if_available()` at startup; at the pinned pylance 8.0.0 it logs
-`lance_metrics_unavailable` and no-ops. When 9.0 ships on PyPI (8.0.0 is the newest as of 2026-07-10),
-switch the pin to `pylance[otel]` (marked in `pyproject.toml`) and the metrics appear in GreptimeDB with
-no further code. OTel has no async histogram instrument, so Lance histograms arrive Prometheus-style as
+Lance-I/O service (catalog, lineage, compaction, medallion producer + movers) calls the guarded
+`service_kit.lakehouse.lance_metrics.instrument_lance_if_available()` at startup; the lock pins
+pylance 9.0.0, so it logs `lance_metrics_instrumented` and the metrics land in GreptimeDB (the guard
+stays: a consumer resolving pylance < 9 degrades to a logged no-op rather than failing startup). OTel
+has no async histogram instrument, so Lance histograms arrive Prometheus-style as
 `<name>_bucket`/`_count`/`_sum` counters with `le` attributes.
 
 ## Governance (Dex + OpenFGA)

@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.startup_complete = False
     app.state.shutting_down = False
     configure_audit(enabled=settings.audit_enabled)  # #41 gate the compliance audit stream (dlq_replay)
-    instrument_lance_if_available()  # Lance-native IO metrics — no-op until the pylance 9 bump
+    instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     # Fail closed if ANY sidecar-delivered route mounts — the pub/sub ingest (dapr_enabled) OR the cron
     # reconcile binding — but the app-api-token is unset: either route would otherwise be an
     # unauthenticated forgery/graph-mutation path (the audit's 'blanked token' residual + its

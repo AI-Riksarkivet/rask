@@ -1,14 +1,14 @@
-"""Bridge Lance's NATIVE IO metrics into OpenTelemetry — pre-wired for the pylance 9 bump.
+"""Bridge Lance's NATIVE IO metrics into OpenTelemetry.
 
 pylance ≥ 9.0 ships ``lance.otel.instrument_lance_metrics()`` (the ``pylance[otel]`` extra), which
 registers Lance's Rust-side object-store/IO metrics as observable instruments on the global
 ``MeterProvider`` — the one ``opentelemetry-instrument`` already installs in every deployed service,
 so the metrics flow through the existing OTLP → Vector → GreptimeDB pipeline with zero new config.
 
-At the pinned pylance 8.0.0 the module does not exist (probed 2026-07-10, lance_docs refresh), so this
-helper is a guarded no-op that logs which way it went: bumping the pylance pin is the ONLY step left to
-light the metrics up in catalog / lineage / medallion / compaction (todo_fable §9 doc-audit pin). Call
-it once per process, from the lifespan, after the auto-instrumentation wrapper has set the provider.
+The lock pins pylance 9.0.0, so the bridge is live in catalog / lineage / medallion / compaction; the
+import guard stays because a consumer resolving pylance < 9 must degrade to a logged no-op, not fail
+startup. Call it once per process, from the lifespan, after the auto-instrumentation wrapper has set
+the provider.
 """
 
 from __future__ import annotations

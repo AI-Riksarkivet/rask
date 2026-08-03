@@ -59,7 +59,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # unauthenticated: require_dapr_token silently no-ops on a blank APP_API_TOKEN, so an unset token with
     # the subscription live is a misconfiguration a forged in-cluster POST could exploit — refuse to boot.
     assert_app_token_configured(dapr_enabled=settings.control_emit_enabled)
-    instrument_lance_if_available()  # Lance-native IO metrics — no-op until the pylance 9 bump
+    instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     # Consume the sensitive S3 secret from the Dapr secret store (OpenBao) — the store is the SOLE source
     # of truth, NOT a fallback (the audit's 'wired but never read' / 'plaintext still ships' fix). With
     # secrets_from_dapr on, the chart does not put the secret in pod env, so reading the env would yield

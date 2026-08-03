@@ -59,7 +59,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Consume the S3 secret from the Dapr secret store when configured (Batch 7 — strict sole source,
     # fails closed; no-op in dev). Threadpool: the fetch blocks + retries while the store seeds.
     await run_in_threadpool(apply_dapr_secrets, get_settings())
-    instrument_lance_if_available()  # Lance-native IO metrics — no-op until the pylance 9 bump
+    instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     # The Dapr client targets the local sidecar (localhost) — cheap to build, no broker reachability
     # needed at boot. The sidecar persists publishes to NATS JetStream; a delivery that exhausts its
     # retries dead-letter-parks on the subscriber's dlq.* topic (Dapr-native DLQ, default-on via the
