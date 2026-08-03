@@ -231,7 +231,7 @@ function appendCommonSearchParams(
 }
 
 /** Run a search. POST + multipart when an image is attached; GET otherwise. The RESPONSE is Arrow IPC
- *  in both shapes (open_transport.md's second promotion) — the request surface is unchanged. */
+ *  in both shapes (the transport ruling's second promotion) — the request surface is unchanged. */
 export async function search(spec: SearchSpec, fetcher: typeof fetch = fetch): Promise<Row[]> {
 	const n = String(spec.n ?? 30);
 	const mode = spec.mode ?? 'fts';
@@ -640,7 +640,7 @@ export async function getAtlasChunk(
 }
 
 /** Full rows for a selection, addressed by stable Lance `_rowid`. Up to 1000 of them per lasso, which
- *  is why the response is Arrow IPC (open_transport.md's first promotion) rather than `list[dict]`. */
+ *  is why the response is Arrow IPC (the transport ruling's first promotion) rather than `list[dict]`. */
 export async function getAtlasChunks(
 	rowids: number[],
 	fetcher: typeof fetch = fetch,

@@ -5,7 +5,7 @@ import { fetchMe, type Me } from '@rask/api';
 import type { ApiResult } from '@rask/api/client';
 import type { UserStateEnvelope } from '$lib/user-state';
 
-// This zone's CATALOG plane, in the remote-function dialect (open_transport.md, area 3) — the two
+// This zone's CATALOG plane, in the remote-function dialect (the transport ruling, area 3) — the two
 // `makeCatalogProxy` routes (`capi/v1/me`, `capi/v1/user-state/[document]`) collapse into the three
 // named functions below. Transport only: same credential (the signed-in user's bearer and NOTHING
 // else — the catalog is OIDC-only, it has no service-token door), same upstream paths, same outcomes.

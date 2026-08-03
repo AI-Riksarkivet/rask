@@ -6,7 +6,7 @@ import type { SaveResult } from '@rask/labeling/tag-writer';
 import type { JobResult } from '@rask/labeling/jobs';
 
 // The two writes this zone makes into the ANNOTATOR service, in the zone's remote-function dialect
-// (open_transport.md, area 3) — same names, same payloads on the wire, transport only. Both deleted
+// (the transport ruling, area 3) — same names, same payloads on the wire, transport only. Both deleted
 // routes (`api/annotations/tags`, `api/jobs/apply`) were the same copy-pasted bearer-forward template
 // with `requireSession: true`; that gate is preserved verbatim below, and it is the only thing those
 // files did beyond forwarding.

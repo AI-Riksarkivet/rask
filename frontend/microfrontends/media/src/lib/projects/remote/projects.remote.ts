@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
 import type { CreatedProject, ProjectsList, SendItem, SendResult } from '../projects';
 
-// The SEND half of the annotation funnel, in the zone's remote-function dialect (open_transport.md,
+// The SEND half of the annotation funnel, in the zone's remote-function dialect (the transport ruling,
 // area 3) — same three operations, same shapes at the call site, transport only. The deleted
 // `api/projects/[...path]` route was a passthrough whose actual traffic was exactly these: list the
 // projects still taking items, create one, append a selection to it. Naming them removes the

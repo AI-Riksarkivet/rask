@@ -5,7 +5,7 @@ import type { ApiResult } from '@rask/api/client';
 import type { AssistShape } from '@rask/labeling/annotations-client';
 
 // Interactive AI-assist over ONE unit — GroundingDINO text / SAM region → predicted shapes
-// (open_transport.md, area 4). The `/api/assist/[...path]` proxy is deleted; this command is the
+// (the transport ruling, area 4). The `/api/assist/[...path]` proxy is deleted; this command is the
 // whole surface it carried, with the same bearer-forwarding and the same fail-closed stance its
 // `requireSession: true` gave it.
 //

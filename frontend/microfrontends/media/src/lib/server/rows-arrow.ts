@@ -2,7 +2,7 @@
  * Row[] → Apache Arrow IPC, for the two tabular BFF responses this zone serves.
  *
  * `api/atlas/chunks` returns up to **1000 full corpus rows per lasso selection** and `api/search` the
- * same row kind at n≤100 — the two payloads open_transport.md promotes off JSON. They are the shape
+ * same row kind at n≤100 — the two payloads the transport ruling promotes off JSON. They are the shape
  * Arrow exists for: many rows, few columns, every column homogeneous. The zone already speaks this
  * dialect on the read side (`api/atlas/points` is Arrow end to end, decoded in `@rask/media-api` with
  * `tableFromIPC`), so this is the ENCODER half of an idiom the zone already had, not a new one.

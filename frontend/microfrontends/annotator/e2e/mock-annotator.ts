@@ -1,6 +1,6 @@
 // A tiny in-memory stand-in for the ANNOTATOR service endpoints this zone reaches SERVER-side, where
 // `page.route` cannot reach: the whole projects/tasks plane and the interactive assist call, which
-// became remote functions in the transport migration (open_transport.md, area 4). Runs as a second
+// became remote functions in the transport migration (the transport ruling, area 4). Runs as a second
 // Playwright `webServer`; both dev servers' ANNOTATOR_API / ANNOTATOR_PROJECTS_API point here.
 //
 // The mechanism is the lakehouse mock catalog's GENERIC one, minus its per-bearer keying: `__mock/seed`

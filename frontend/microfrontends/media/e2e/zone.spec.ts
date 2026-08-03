@@ -138,7 +138,7 @@ test('boots the descriptor + searches through the zone-based BFF paths', async (
 test('the search response is Arrow IPC, and the browser renders what it decoded', async ({
 	page,
 }) => {
-	// open_transport.md's second promotion. The assertion is deliberately BOTH halves: the header alone
+	// the transport ruling's second promotion. The assertion is deliberately BOTH halves: the header alone
 	// would pass on an Arrow body the client could not read, and the rendered hit alone would pass if the
 	// route quietly went back to JSON.
 	await page.goto('/media/');

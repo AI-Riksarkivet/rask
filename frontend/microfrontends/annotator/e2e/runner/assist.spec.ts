@@ -6,7 +6,7 @@ import { MOCK_ANNOTATOR } from '../ports';
 // fetch a browser can restub — so these run against the config's SECOND app server, which is started
 // with it set. On the default server both tests would pass vacuously: the chip is up anyway.
 //
-// The assist call itself is a remote command since open_transport.md area 4, so it leaves from the
+// The assist call itself is a remote command since the transport ruling area 4, so it leaves from the
 // zone SERVER and is seeded on / asserted through the mock annotator's ledger. The annotations plane
 // beside it is still Arrow bytes on a `+server.ts` route, so it is still `page.route`-mocked — the
 // two halves of the transport rule, visible in one spec.

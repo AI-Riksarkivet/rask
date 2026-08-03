@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
 import { DraftSchema, TaskDetailSchema, type Draft, type TaskDetail } from '../types.js';
 
-// The TASK half of the projects plane (open_transport.md, area 4) — task reads, task events
+// The TASK half of the projects plane (the transport ruling, area 4) — task reads, task events
 // (claim / assign / submit / release / skip / accept / fix_and_accept / request_changes / …) and the
 // revision-guarded draft read+save. The `/api/tasks/[...path]` proxy is deleted; its three verbs are
 // the named functions below, same `ApiResult` shapes at every call site, transport only.

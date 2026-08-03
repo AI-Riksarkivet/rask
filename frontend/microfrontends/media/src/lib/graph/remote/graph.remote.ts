@@ -5,7 +5,7 @@ import { parse } from '@rask/api';
 import type { ApiResult } from '@rask/api/client';
 import { GraphCypherResponseSchema, type GraphCypherResponse } from '@rask/media-api';
 
-// The knowledge-graph Cypher console, in the zone's remote-function dialect (open_transport.md, area 3)
+// The knowledge-graph Cypher console, in the zone's remote-function dialect (the transport ruling, area 3)
 // — same name, same response shape at the call site, transport only. The deleted `api/graph/cypher`
 // route existed to keep ONE user-authored query surface enumerated (no blanket write proxy) and
 // session-gated; a command has its own endpoint and carries the same gate, so the enumeration is now

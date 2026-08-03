@@ -8,7 +8,7 @@ import { makeArrowRowsProxy } from '$lib/server/rows-arrow';
 //
 // That multipart POST is also why this stays a `+server.ts` at all: a remote function cannot carry a
 // File. What DID move is the response — the same `Row[]` payload kind as the atlas selection, now Arrow
-// IPC (open_transport.md's second promotion, taken for transport uniformity rather than for n≤100's
+// IPC (the transport ruling's second promotion, taken for transport uniformity rather than for n≤100's
 // bytes). Errors stay JSON: the client reads `detail` out of them.
 const SEARCH_API = env.SEARCH_API ?? 'http://localhost:8102';
 

@@ -13,7 +13,7 @@ import {
 	type TaskListing,
 } from '../types.js';
 
-// The annotation-PROJECTS plane, in the zone's remote-function dialect (open_transport.md, area 4) —
+// The annotation-PROJECTS plane, in the zone's remote-function dialect (the transport ruling, area 4) —
 // same `ApiResult` shapes at every call site, transport only. The `/api/projects/[...path]` proxy
 // (GET+POST+PUT+DELETE) is deleted: its four verbs were a routing detail, and each surface it carried
 // is a named function here.

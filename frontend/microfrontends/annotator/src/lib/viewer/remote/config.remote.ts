@@ -1,7 +1,7 @@
 import { query } from '$app/server';
 import { env } from '$env/dynamic/private';
 
-// Zone runtime config — the HONEST-MOCK signal (open_transport.md, area 4; was `/api/config`).
+// Zone runtime config — the HONEST-MOCK signal (the transport ruling, area 4; was `/api/config`).
 // The annotator service answers assist/jobs calls with a deterministic in-repo mock until real model
 // runners are deployed (the MEDIA_ASSIST_URL / MEDIA_JOBS_URL env flip, mirrored onto this web pod by
 // the same deploy). This exposes only their PRESENCE (never the URLs) so the AI surfaces can label

@@ -8,7 +8,7 @@ import { MOCK_ANNOTATOR } from './ports';
 // endpoints with the right bodies, keeps the three review actions distinct, states what a publish
 // lands before firing it, narrates a running publish, and surfaces a server 403 as the refusal it is.
 //
-// The transport is remote functions now (open_transport.md, area 4): every read and write below runs
+// The transport is remote functions now (the transport ruling, area 4): every read and write below runs
 // on the zone SERVER, which `page.route` cannot see — so the wire is seeded on, and asserted through,
 // the mock annotator's ledger (e2e/mock-annotator.ts). Same assertions as the BFF-era spec; the paths
 // are the UPSTREAM ones (`/tasks/t1/events`) rather than the proxied `/annotator/api/…`, because that

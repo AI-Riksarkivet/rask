@@ -111,7 +111,7 @@ describe('the media zone does not proxy the annotation write surface', () => {
 	// This used to allow exactly one route — `/api/annotations/tags`, media's workflow tag write — as
 	// the narrow, deliberate exception. It allows NONE now, and that is a tightening rather than a
 	// relaxation: the tag write and the batch-job submit are `command()`s on the zone server
-	// (`src/lib/workflow/remote/labeling.remote.ts`, open_transport.md area 3), so the annotator's write
+	// (`src/lib/workflow/remote/labeling.remote.ts`, the transport ruling area 3), so the annotator's write
 	// surface is reachable from this zone only through two named functions with fixed payloads. A proxy
 	// forwards whatever a caller spells; a command cannot.
 	it('exposes no /api/annotations route at all', () => {
@@ -136,7 +136,7 @@ describe('the chart hands a zone only the upstreams its routes use', () => {
 
 	/** The `*_API` names a zone's own SERVER code actually reads out of $env.
 	 *
-	 *  Scoped to `src/routes` until the transport round (open_transport.md): a zone reached its upstreams
+	 *  Scoped to `src/routes` until the transport round: a zone reached its upstreams
 	 *  only through `+server.ts` files then. It reaches most of them through remote functions now
 	 *  (`src/lib/**\/*.remote.ts`), which read the same `$env/dynamic/private` and are just as much a
 	 *  hole punched through to a backend — so the whole of `src` is the honest scope. Narrowing it back

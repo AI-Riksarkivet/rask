@@ -16,7 +16,7 @@ import {
 //  · BYTES still ride `+server.ts` (the Arrow annotations plane, the media catch-all), so those are
 //    mocked with `page.route`, scoped to the ZONE base (`**/annotator/api/**` — a bare `**/api/**`
 //    glob also catches Vite /@fs module URLs like …/packages/api/… and kills hydration).
-//  · VALUES ride remote functions since open_transport.md area 4, and those run on the zone SERVER
+//  · VALUES ride remote functions since the transport ruling area 4, and those run on the zone SERVER
 //    where `page.route` cannot see them. They are seeded on the mock ANNOTATOR service below, which
 //    both app servers point at.
 //
