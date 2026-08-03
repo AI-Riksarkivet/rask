@@ -28,6 +28,7 @@
 	import type { Edge, EdgeTypes, FitViewOptions, Node, NodeTypes } from '@xyflow/svelte';
 	import type { Snippet } from 'svelte';
 	import FlowAutoFit from './FlowAutoFit.svelte';
+	import FlowFocus from './FlowFocus.svelte';
 
 	type Props = {
 		nodes: Node[];
@@ -42,6 +43,10 @@
 		fitTrigger?: string | undefined;
 		/** Screen-space gutter for the refit — widen it when floating overlays cover the canvas edges. */
 		fitPadding?: FitViewOptions['padding'];
+		/** Auto-fit zoom ceiling (default 1 — natural size; see FlowAutoFit). */
+		fitMaxZoom?: number;
+		/** Glide the viewport to ONE node. An object so the same id can be re-focused (see FlowFocus). */
+		focus?: { id: string } | null;
 		minimap?: boolean;
 		/** Dot spacing. The default matches the lineage and access canvases. */
 		backgroundGap?: number;
@@ -57,6 +62,8 @@
 		edgeTypes,
 		fitTrigger,
 		fitPadding = 0.22,
+		fitMaxZoom = 1,
+		focus = null,
 		minimap = false,
 		backgroundGap = 16,
 		overlay,
@@ -70,8 +77,9 @@
 		<Controls />
 		{#if minimap}<MiniMap />{/if}
 		{#if fitTrigger !== undefined}
-			<FlowAutoFit trigger={fitTrigger} padding={fitPadding} />
+			<FlowAutoFit trigger={fitTrigger} padding={fitPadding} maxZoom={fitMaxZoom} />
 		{/if}
+		<FlowFocus target={focus} padding={fitPadding} />
 	</SvelteFlow>
 	{@render overlay?.()}
 </div>

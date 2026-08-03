@@ -407,36 +407,36 @@
 	);
 
 	/**
-	 * The node the pointer is over, and everything one edge away from it.
+	 * The edges the pointer's subject touches — a node hover means "its edges", an edge hover means
+	 * exactly that one.
 	 *
-	 * A dense graph is unreadable precisely because you cannot tell which lines belong to the thing
-	 * you are looking at. Hover answers that without changing any state a query depends on — it is
-	 * pure emphasis, so it never fights the highlight a query already applied.
+	 * Hover is PURE ADDITION, by ruling: the touched edges get a subtle primary tint and nothing else
+	 * on the canvas changes. An earlier version dimmed everything unrelated to 8% opacity — "highlight
+	 * by darkening the world" — which read as the UI breaking every time the pointer crossed the
+	 * graph, and a missed pointerleave (fast exits over SVG edges lose the event) left the whole
+	 * canvas stuck dark. Emphasis that only adds has nothing to get stuck: releasing the pointer just
+	 * loses a tint, and the container-level reset below clears it even when the per-element leave
+	 * event never fires.
 	 */
 	let hovered = $state<string | null>(null);
 	/** Hovering an EDGE, not a node. A node answers "what does this touch"; an edge answers "what does
 	 *  this one grant connect" — on a dense canvas those are different questions, and only the first
 	 *  was answerable. One tuple IS an edge, so it deserves the same emphasis its endpoints get. */
 	let hoveredEdge = $state<string | null>(null);
-	const neighbours = $derived.by(() => {
-		if (hoveredEdge) {
-			const edge = filtered.edges.find((e) => e.id === hoveredEdge);
-			if (edge) {
-				return { ids: new Set([edge.source, edge.target]), edgeIds: new Set([edge.id]) };
-			}
-		}
+	const touchedEdges = $derived.by(() => {
+		if (hoveredEdge) return new Set([hoveredEdge]);
 		if (!hovered) return null;
-		const ids = new Set<string>([hovered]);
 		const edgeIds = new Set<string>();
 		for (const e of filtered.edges) {
-			if (e.source === hovered || e.target === hovered) {
-				ids.add(e.source);
-				ids.add(e.target);
-				edgeIds.add(e.id);
-			}
+			if (e.source === hovered || e.target === hovered) edgeIds.add(e.id);
 		}
-		return { ids, edgeIds };
+		return edgeIds;
 	});
+
+	/** The node the last "Jump to" chip named — the canvas glides its viewport to it, so the chip has a
+	 *  visible consequence beyond prefilled form fields. A fresh object per click, so clicking the same
+	 *  chip again re-centres (see FlowFocus). */
+	let focusTarget = $state<{ id: string } | null>(null);
 
 	let nodes = $state.raw<AccessNodeType[]>([]);
 	let edges = $state.raw<Edge[]>([]);
@@ -444,15 +444,17 @@
 	/**
 	 * Layout in its OWN derivation, so it re-runs only when the graph actually changes.
 	 *
-	 * It used to live inside the node-build effect below, which also reads `neighbours` — the hover
-	 * state. That made every pointer enter/leave re-run the full barycentre pass and re-diff the whole
-	 * canvas: O(nodes+edges) work per mouse movement, on a canvas capped at 4000 tuples. Hover now costs
-	 * only the cheap re-map; the placer runs when facets, the query, or the view flip.
+	 * It used to live inside the node-build effect below, which also read the hover state. That made
+	 * every pointer enter/leave re-run the full barycentre pass and re-diff the whole canvas:
+	 * O(nodes+edges) work per mouse movement, on a canvas capped at 4000 tuples. The placer runs when
+	 * facets, the query, or the view flip — and since hover stopped touching nodes at all, pointer
+	 * movement now re-maps only the edge array.
 	 */
 	const positioned = $derived(layout(filtered.nodes, filtered.edges));
 
+	// Nodes owe NOTHING to hover: roles come from the query and the facets alone — `dim` means
+	// "filtered out or off-query", exactly what the legend says, and never "the pointer is elsewhere".
 	$effect(() => {
-		const near = neighbours;
 		nodes = positioned.map((n) => ({
 			id: n.id,
 			type: 'access' as const,
@@ -461,12 +463,14 @@
 				fgaId: n.id,
 				fgaType: n.fgaType,
 				label: n.label,
-				// Hover DIMS the unrelated rather than brightening the related: the query's own
-				// highlight already owns "lit", and a second brightening would compete with it.
-				role: near && !near.ids.has(n.id) ? ('dim' as const) : n.role,
+				role: n.role,
 				via: n.via,
 			},
 		}));
+	});
+
+	$effect(() => {
+		const touched = touchedEdges;
 		// Every edge gets an ARROWHEAD. A tuple is directional — `user:alice --owner--> table:x` — and an
 		// undirected line in an authorization graph is not a simplification, it is the wrong picture:
 		// "alice owns the table" and "the table owns alice" would render identically.
@@ -490,7 +494,7 @@
 				height: 18,
 				color: e.onPath ? 'var(--primary)' : 'var(--muted-foreground)',
 			},
-			style: hoverStyle(e, near),
+			style: edgeStyle(e, touched?.has(e.id) ?? false),
 		}));
 	});
 
@@ -510,22 +514,16 @@
 		return storeTuples.filter((t) => inAnswer.has(t.user) && inAnswer.has(t.object));
 	});
 
-	/** Edge chrome: the query's lit path wins, hover emphasises, everything else recedes. */
-	function hoverStyle(
-		e: { id: string; onPath: boolean; condition?: string | null },
-		near: { ids: Set<string>; edgeIds: Set<string> } | null,
-	): string {
-		const lit = e.onPath;
-		const touched = near?.edgeIds.has(e.id) ?? false;
-		// A time-boxed grant is DASHED wherever it appears. Colour alone would not survive the dimming
-		// pass (everything off-query drops to 8% opacity), and "this expires" must stay legible in the
-		// state where an operator is scanning rather than focused.
+	/** Edge chrome: the query's lit path owns "lit" outright; hover ADDS a subtle primary tint to the
+	 *  touched edges and takes nothing from the rest — there is no dimming pass, so releasing the
+	 *  pointer has nothing to restore and a lost leave event has nothing to leave stuck. */
+	function edgeStyle(e: { onPath: boolean; condition?: string | null }, touched: boolean): string {
+		// A time-boxed grant is DASHED wherever it appears — "this expires" must stay legible whether
+		// the edge is resting, tinted, or lit.
 		const dash = e.condition ? ' stroke-dasharray: 6 4;' : '';
-		if (near && !touched) return `stroke: var(--muted-foreground); opacity: 0.08;${dash}`;
-		if (touched) return `stroke: var(--foreground); stroke-width: 2; opacity: 1;${dash}`;
-		return lit
-			? `stroke: var(--primary); stroke-width: 2;${dash}`
-			: `stroke: var(--muted-foreground); opacity: 0.35;${dash}`;
+		if (e.onPath) return `stroke: var(--primary); stroke-width: 2;${dash}`;
+		if (touched) return `stroke: var(--primary); stroke-width: 1.75; opacity: 0.75;${dash}`;
+		return `stroke: var(--muted-foreground); opacity: 0.35;${dash}`;
 	}
 
 	/** Is anything narrowing the view right now? Drives whether Clear is offered at all — an always-on
@@ -568,7 +566,11 @@
 	}
 </script>
 
-<div class="flex h-[calc(100vh-9rem)] flex-col gap-3">
+<!-- 10.5rem, measured, not 9: navbar + breadcrumb + page padding + the page's own title row sit above
+     this component, and the old 9rem budget pushed the canvas ~1.5rem past the viewport — which CLIPPED
+     Svelte Flow's Controls and the legend at the bottom and read as "the canvas is small and things
+     overlap". The map takes all the room there actually is once nothing hangs off-screen. -->
+<div class="flex h-[calc(100vh-10.5rem)] flex-col gap-3">
 	<QueryBar
 		bind:kind
 		bind:user
@@ -695,6 +697,9 @@
 	object = entry;
 	selected = entry;
 	kind = 'who';
+	// The visible half of the jump: the canvas glides to the node and the inspector fills. Without
+	// this the click only prefilled form fields, which read as the chip doing nothing.
+	focusTarget = { id: entry };
 	pushUrl({ seed: entry });
 }}
 			>
@@ -767,7 +772,18 @@
 		</div>
 
 		<div class="flex min-h-0 flex-1 gap-4">
-			<div class="relative min-w-0 flex-1 overflow-hidden rounded-md border border-border">
+			<!-- Container-level reset: per-element pointerleave is lost on fast exits over SVG, and a
+			     hover emphasis that survives its own pointer is a bug regardless of how subtle it is.
+			     role="presentation": the handler is housekeeping on a layout wrapper, not interactivity —
+			     nothing here is focusable or announced. -->
+			<div
+				role="presentation"
+				class="relative min-w-0 flex-1 overflow-hidden rounded-md border border-border"
+				onpointerleave={() => {
+	hovered = null;
+	hoveredEdge = null;
+}}
+			>
 				{#if composed.nodes.length === 0}
 					<div
 						class="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground"
@@ -779,8 +795,10 @@
 						bind:nodes
 						bind:edges
 						{nodeTypes}
+						focus={focusTarget}
 						fitTrigger={`${view}:${filtered.nodes.length}:${filtered.edges.length}`}
 						fitPadding={0.2}
+						fitMaxZoom={1.25}
 						onnodeclick={onNodeClick}
 						onnodepointerenter={(e: { node: { id: string } }) => (hovered = e.node.id)}
 						onnodepointerleave={() => (hovered = null)}
@@ -795,10 +813,11 @@
 				{/if}
 				<!-- The encodings, named ON the canvas. Dashed-means-expiring and dimmed-means-filtered are
 				     inventions of this view; a reader should not need the source code to decode them. One
-				     line, muted, bottom-left — the cheapest form that still does the job. -->
+				     line, muted, bottom-RIGHT — bottom-left belongs to Svelte Flow's Controls, and the two
+				     overlapped there. -->
 				{#if composed.nodes.length > 0}
 					<div
-						class="pointer-events-none absolute bottom-2 left-2 rounded bg-background/80 px-2 py-0.5 text-[10px] text-muted-foreground"
+						class="pointer-events-none absolute bottom-2 right-2 rounded bg-background/80 px-2 py-0.5 text-[10px] text-muted-foreground"
 						data-slot="canvas-legend"
 					>
 						<span class="text-primary">━</span> derivation path ·

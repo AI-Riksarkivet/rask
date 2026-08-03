@@ -7,14 +7,19 @@
 
 	// `padding` is the caller's screen-space gutter (px per side) so the re-fit reserves the same
 	// room for the floating overlays — toggle Panel, Controls, MiniMap — as the initial fitView.
-	let { trigger, padding = 0.22 }: { trigger: string; padding?: FitViewOptions['padding'] } =
-		$props();
+	// `maxZoom` defaults to 1 — never scale a card ABOVE its natural size; a three-node estate used
+	// to be blown up to fill the canvas, which read as "the graph is enormous". A caller whose canvas
+	// is the page's main surface (the access explorer) may raise it a notch so a small graph does not
+	// float in a sea of empty canvas.
+	let {
+		trigger,
+		padding = 0.22,
+		maxZoom = 1,
+	}: { trigger: string; padding?: FitViewOptions['padding']; maxZoom?: number } = $props();
 	const { fitView } = useSvelteFlow();
 
 	$effect(() => {
 		void trigger; // track the signature
-		// maxZoom 1 = never scale a card ABOVE its natural size: a three-node estate used to be
-		// blown up to fill the canvas, which read as "the graph is enormous".
-		tick().then(() => fitView({ padding, duration: 400, maxZoom: 1 }));
+		tick().then(() => fitView({ padding, duration: 400, maxZoom }));
 	});
 </script>

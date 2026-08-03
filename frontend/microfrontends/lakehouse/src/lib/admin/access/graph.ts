@@ -254,14 +254,21 @@ function finish(acc: Walked): BuiltGraph {
  * That is the direction tuples already read in, so arrows run left-to-right here as everywhere else.
  */
 export function buildWholeGraph(tuples: readonly TupleLike[]): BuiltGraph {
+	// One column per RUNG of the hierarchy, so the canvas reads as the org chart it encodes:
+	// users leftmost (people), then the groupings they belong to (team/role — membership edges point
+	// rightward into them), then the containment chain root-first — project is the top of the tenancy
+	// hierarchy, and every parent sits LEFT of its children so the parent→child edges all flow with
+	// the reading direction. Before this, user/team/role shared one column and project shared
+	// warehouse's, which drew a team beside its own members and the tenancy root mid-canvas.
+	const SUBJECT_DEPTH: Record<string, number> = { user: -2, team: -1, role: -1 };
 	const CONTAINER_DEPTH: Record<string, number> = {
-		warehouse: 0,
 		project: 0,
-		namespace: 1,
-		table: 2,
-		materialized_view: 2,
-		transaction: 2,
-		model: 2,
+		warehouse: 1,
+		namespace: 2,
+		table: 3,
+		materialized_view: 3,
+		transaction: 3,
+		model: 3,
 	};
 	const nodes = new Map<string, GraphNode>();
 	const add = (id: string) => {
@@ -272,7 +279,7 @@ export function buildWholeGraph(tuples: readonly TupleLike[]): BuiltGraph {
 			fgaType: type,
 			label: idLabel(id),
 			role: isSubject(id) ? 'subject' : 'container',
-			depth: isSubject(id) ? -1 : (CONTAINER_DEPTH[type] ?? 1),
+			depth: isSubject(id) ? (SUBJECT_DEPTH[type] ?? -1) : (CONTAINER_DEPTH[type] ?? 2),
 			via: null,
 		});
 	};
