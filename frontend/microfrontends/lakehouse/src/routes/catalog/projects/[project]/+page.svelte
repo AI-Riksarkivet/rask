@@ -50,7 +50,7 @@
 
 <div class="page">
 	<header>
-		<a class="back" href={`${base}/data/projects`}>Projects</a>
+		<a class="back" href={`${base}/catalog/projects`}>Projects</a>
 		<span class="sep">/</span>
 		<FolderKanban size={15} />
 		<h1 class="mono">{project}</h1>
@@ -89,7 +89,7 @@
 						{#each detail.warehouses as w (w.id)}
 							<tr>
 								<td>
-									<a class="mono whlink" href={`${base}/data/warehouses/${encodeURIComponent(w.id)}`}
+									<a class="mono whlink" href={`${base}/catalog/warehouses/${encodeURIComponent(w.id)}`}
 										>{w.id}</a
 									>
 								</td>

@@ -205,7 +205,7 @@
 {#snippet nsCell(row: Row)}
 	<a
 		class="ns-name mono"
-		href={`${base}/data/namespaces/${encodeURIComponent(row.ns)}`}
+		href={`${base}/catalog/namespaces/${encodeURIComponent(row.ns)}`}
 		onclick={(e) => e.stopPropagation()}>{row.ns}</a
 	>
 {/snippet}
@@ -232,7 +232,7 @@
 		<span class="sub mono">grouped from the catalog registry · &lt;namespace&gt;$&lt;table&gt;</span>
 		<a
 			class="new"
-			href={`${base}/data/warehouses`}
+			href={`${base}/catalog/warehouses`}
 			title="Namespaces are created through the governed warehouse-bind flow"
 		>
 			<Plus size={12} /> New namespace
@@ -289,7 +289,7 @@
 			<dd class="mono">{drawerRow.count}</dd>
 		</dl>
 		<div class="jumps">
-			<a class="jbtn" href={`${base}/data/namespaces/${encodeURIComponent(drawerRow.ns)}`}
+			<a class="jbtn" href={`${base}/catalog/namespaces/${encodeURIComponent(drawerRow.ns)}`}
 				>Open detail</a
 			>
 		</div>

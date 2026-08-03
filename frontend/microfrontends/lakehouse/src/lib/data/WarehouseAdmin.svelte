@@ -240,7 +240,7 @@
 {#snippet idCell(w: Warehouse)}
 	<a
 		class="whlink mono"
-		href={`${base}/data/warehouses/${encodeURIComponent(w.id)}`}
+		href={`${base}/catalog/warehouses/${encodeURIComponent(w.id)}`}
 		onclick={(e) => e.stopPropagation()}>{w.id}</a
 	>
 {/snippet}
@@ -375,7 +375,7 @@
 			<dd class="mono">{drawerRow.id}</dd>
 			<dt>project</dt>
 			<dd>
-				<a class="mono jump" href={`${base}/data/projects/${encodeURIComponent(drawerRow.project)}`}
+				<a class="mono jump" href={`${base}/catalog/projects/${encodeURIComponent(drawerRow.project)}`}
 					>{drawerRow.project}</a
 				>
 			</dd>
@@ -401,10 +401,10 @@
 			<dd class="mono">{drawerRow.created_at ?? '—'}</dd>
 		</dl>
 		<div class="jumps">
-			<a class="jbtn" href={`${base}/data/warehouses/${encodeURIComponent(drawerRow.id)}`}
+			<a class="jbtn" href={`${base}/catalog/warehouses/${encodeURIComponent(drawerRow.id)}`}
 				>Open detail</a
 			>
-			<a class="jbtn" href={`${base}/data/projects/${encodeURIComponent(drawerRow.project)}`}
+			<a class="jbtn" href={`${base}/catalog/projects/${encodeURIComponent(drawerRow.project)}`}
 				>Open project</a
 			>
 		</div>

@@ -197,7 +197,7 @@
 {#snippet tableCell(row: Row)}
 	<a
 		class="rowlink mono"
-		href={`${base}/data/tables/${encodeURIComponent(row.id)}`}
+		href={`${base}/catalog/tables/${encodeURIComponent(row.id)}`}
 		onclick={(e) => e.stopPropagation()}>{row.id}</a
 	>
 {/snippet}
@@ -207,7 +207,7 @@
 {#snippet nsCell(row: Row)}
 	<a
 		class="nslink mono"
-		href={`${base}/data/namespaces/${encodeURIComponent(row.namespace)}`}
+		href={`${base}/catalog/namespaces/${encodeURIComponent(row.namespace)}`}
 		onclick={(e) => e.stopPropagation()}>{row.namespace}</a
 	>
 {/snippet}
@@ -297,7 +297,7 @@
 			<dd class="mono">{drawerRow.id}</dd>
 			<dt>namespace</dt>
 			<dd>
-				<a class="mono jump" href={`${base}/data/namespaces/${encodeURIComponent(drawerRow.namespace)}`}
+				<a class="mono jump" href={`${base}/catalog/namespaces/${encodeURIComponent(drawerRow.namespace)}`}
 					>{drawerRow.namespace}</a
 				>
 			</dd>
@@ -309,13 +309,13 @@
 			</dd>
 		</dl>
 		<div class="jumps">
-			<a class="btn" href={`${base}/data/tables/${encodeURIComponent(drawerRow.id)}`}>Open detail</a>
+			<a class="btn" href={`${base}/catalog/tables/${encodeURIComponent(drawerRow.id)}`}>Open detail</a>
 			<!-- R18 table previewer: deep-link onto the detail pane's preview tab, which drives the
 			     existing /capi query machinery (first-N rows on the shared data-table). -->
-			<a class="btn" href={`${base}/data/tables/${encodeURIComponent(drawerRow.id)}?tab=preview`}
+			<a class="btn" href={`${base}/catalog/tables/${encodeURIComponent(drawerRow.id)}?tab=preview`}
 				>Preview</a
 			>
-			<a class="btn" href={`${base}/data/tables/${encodeURIComponent(drawerRow.id)}?tab=access`}
+			<a class="btn" href={`${base}/catalog/tables/${encodeURIComponent(drawerRow.id)}?tab=access`}
 				>Access tab</a
 			>
 		</div>

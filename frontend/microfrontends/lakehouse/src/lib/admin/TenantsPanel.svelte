@@ -202,8 +202,8 @@
 		<button class="btn" onclick={load}><RefreshCw size={13} /> Refresh</button>
 		<!-- The catalog is an AREA of this zone now, not a separate one: these are soft navs, and
 		     forcing a document reload on them would throw away the merge's whole payoff. -->
-		<a class="jump" href="{base}/data/warehouses">warehouses ↗</a>
-		<a class="jump" href="{base}/data/namespaces">namespaces ↗</a>
+		<a class="jump" href="{base}/catalog/warehouses">warehouses ↗</a>
+		<a class="jump" href="{base}/catalog/namespaces">namespaces ↗</a>
 	</div>
 
 	{#if unauthorized}
@@ -278,19 +278,19 @@
 						<!-- Same-zone filtered view of the related audit events (the viewer reads ?resource=). -->
 						<a
 							class="btn jumplink"
-							href={`${base}/admin/audit?resource=${encodeURIComponent(drawerRow.warehouse)}`}
+							href={`${base}/governance/audit?resource=${encodeURIComponent(drawerRow.warehouse)}`}
 						>
 							<ScrollText size={12} /> Audit events for this warehouse
 						</a>
 					{/if}
 					<a
 						class="btn jumplink"
-						href={`${base}/admin/audit?resource=${encodeURIComponent(drawerRow.project)}`}
+						href={`${base}/governance/audit?resource=${encodeURIComponent(drawerRow.project)}`}
 					>
 						<ScrollText size={12} /> Audit events for this project
 					</a>
 					<!-- The warehouse admin page lives in the catalog AREA of this same zone — soft nav. -->
-					<a class="btn jumplink" href="{base}/data/warehouses">
+					<a class="btn jumplink" href="{base}/catalog/warehouses">
 						<ExternalLink size={12} /> Open warehouse admin ↗
 					</a>
 				</div>

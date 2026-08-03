@@ -246,7 +246,7 @@
 
 <div class="page">
 	<header>
-		<a class="back" href={`${base}/data/namespaces`}>Namespaces</a>
+		<a class="back" href={`${base}/catalog/namespaces`}>Namespaces</a>
 		<span class="sep">/</span>
 		<Boxes size={15} />
 		<h1 class="mono">{ns}</h1>
@@ -282,7 +282,7 @@
 					<ul class="list">
 						{#each members as t (t)}
 							<li>
-								<a class="row mono" href={`${base}/data/tables/${encodeURIComponent(t)}`}>{t}</a>
+								<a class="row mono" href={`${base}/catalog/tables/${encodeURIComponent(t)}`}>{t}</a>
 							</li>
 						{/each}
 					</ul>

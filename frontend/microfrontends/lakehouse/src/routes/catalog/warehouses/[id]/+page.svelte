@@ -75,7 +75,7 @@
 
 <div class="page">
 	<header>
-		<a class="back" href={`${base}/data/warehouses`}>Warehouses</a>
+		<a class="back" href={`${base}/catalog/warehouses`}>Warehouses</a>
 		<span class="sep">/</span>
 		<WarehouseIcon size={15} />
 		<h1 class="mono">{id}</h1>
@@ -110,7 +110,7 @@
 			<h2>Registry record</h2>
 			<div class="facts mono">
 				<span
-					>project <a class="plink" href={`${base}/data/projects/${encodeURIComponent(wh.project)}`}
+					>project <a class="plink" href={`${base}/catalog/projects/${encodeURIComponent(wh.project)}`}
 						>{wh.project}</a
 					></span
 				>
@@ -133,7 +133,7 @@
 				<ul class="list">
 					{#each namespaces as { ns, count, info } (ns)}
 						<li>
-							<a class="row" href={`${base}/data/namespaces/${encodeURIComponent(ns)}`}>
+							<a class="row" href={`${base}/catalog/namespaces/${encodeURIComponent(ns)}`}>
 								<span class="mono">{ns}</span>
 								{#if info}<StageBadge {info} />{/if}
 								<span class="count">{count} table{count === 1 ? '' : 's'}</span>

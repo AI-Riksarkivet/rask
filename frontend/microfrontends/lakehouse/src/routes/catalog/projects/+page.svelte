@@ -103,7 +103,7 @@
 		<ul class="list">
 			{#each rows as p (p.project)}
 				<li>
-					<a class="row" href={`${base}/data/projects/${encodeURIComponent(p.project)}`}>
+					<a class="row" href={`${base}/catalog/projects/${encodeURIComponent(p.project)}`}>
 						<span class="mono name">{p.project}</span>
 						{#if p.role}<span class="chip mono">{p.role}</span>{/if}
 						{#if p.warehouses !== null}

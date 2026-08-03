@@ -309,7 +309,7 @@
 					{/if}
 					{#each drawerEvent.outputs ?? [] as out (out)}
 						<!-- The output dataset's table page is in the catalog AREA of this zone — soft nav. -->
-						<a class="btn jumplink" href={`${base}/data/tables/${encodeURIComponent(out)}`}>
+						<a class="btn jumplink" href={`${base}/catalog/tables/${encodeURIComponent(out)}`}>
 							<ExternalLink size={12} />
 							{out} ↗
 						</a>

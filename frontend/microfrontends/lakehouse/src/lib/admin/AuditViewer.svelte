@@ -45,7 +45,7 @@
 	let inflight = 0;
 
 	// Filters (applied server-side by the BFF over the returned columns). Initialized once from the
-	// URL query so cross-page "related events" links (`/admin/audit?resource=…`, e.g. from the
+	// URL query so cross-page "related events" links (`/governance/audit?resource=…`, e.g. from the
 	// tenants drawer) land pre-filtered — after that the state is the user's.
 	const initial = page.url.searchParams;
 	let outcome = $state(initial.get('outcome') ?? '');
@@ -183,10 +183,10 @@
 	 *  this same zone, so they are base-relative soft navigations rather than cross-zone hard navs. */
 	function resourceHref(res: string): string | null {
 		if (res.startsWith('table:'))
-			return `${base}/data/tables/${encodeURIComponent(res.slice('table:'.length))}`;
+			return `${base}/catalog/tables/${encodeURIComponent(res.slice('table:'.length))}`;
 		if (res.startsWith('namespace:'))
-			return `${base}/data/namespaces/${encodeURIComponent(res.slice('namespace:'.length))}`;
-		if (res.startsWith('warehouse:')) return `${base}/data/warehouses`;
+			return `${base}/catalog/namespaces/${encodeURIComponent(res.slice('namespace:'.length))}`;
+		if (res.startsWith('warehouse:')) return `${base}/catalog/warehouses`;
 		return null;
 	}
 
