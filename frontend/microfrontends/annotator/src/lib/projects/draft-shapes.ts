@@ -4,6 +4,7 @@
  * draft-sync.ts.
  */
 import type { Table } from 'apache-arrow';
+import { canonicalShapeType } from '@rask/labeling/shape-types';
 
 /** One draft shape, in the task-draft model's wire shape (annotator.projects.models.Shape). */
 export type DraftShape = {
@@ -40,15 +41,22 @@ const NUMERIC = [
 const TEXTUAL = ['mask', 'label', 'text', 'group', 'source', 'model_version'] as const;
 
 /** Map the unit's annotation rows (the media plane's EMPTY_SCHEMA columns) onto draft shapes.
- *  The two vocabularies are deliberately aligned column-for-column; rows without a shape_type
- *  (pure tag rows etc.) are skipped rather than fabricated. */
+ *
+ *  The two vocabularies were NOT aligned, despite this comment previously claiming they were: the
+ *  engine names shapes after its tools (`rect`, `point`, `line`) and the service types the draft
+ *  against `bbox | polygon | ...`, so only polygon and mask ever survived. Rows are normalized
+ *  through the one seam on the way in as well as out, because rows already WRITTEN by the old
+ *  canvas hold `rectangle` — a name neither side accepts — and a re-open must not silently drop
+ *  them. Rows without a shape_type (pure tag rows etc.) are skipped rather than fabricated. */
 export function rowsToShapes(table: Table): DraftShape[] {
 	const shapes: DraftShape[] = [];
 	for (let i = 0; i < table.numRows; i += 1) {
 		const row = table.get(i) as Record<string, unknown> | null;
 		if (!row) continue;
-		const shapeType = row['shape_type'];
-		if (typeof shapeType !== 'string' || !shapeType) continue;
+		const raw = row['shape_type'];
+		if (typeof raw !== 'string' || !raw) continue;
+		const shapeType = canonicalShapeType(raw);
+		if (!shapeType) continue;
 		const shape: DraftShape = {
 			shape_id: String(row['id'] ?? `row-${i}`),
 			shape_type: shapeType,

@@ -40,7 +40,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 #: The drawable primitives. A class declares which of these it may be drawn with, so "allowed tools"
 #: is derived from the taxonomy rather than declared beside it where the two can disagree.
-ShapeType = Literal["bbox", "polygon", "mask", "segment", "tag", "text"]
+ShapeType = Literal["bbox", "polygon", "mask", "keypoint", "polyline", "segment", "tag", "text"]
 MediaKind = Literal["image", "audio", "video"]
 AttrType = Literal["free", "int", "enum", "bool"]
 

@@ -57,7 +57,7 @@ class TaskState(StrEnum):
 TERMINAL_TASK_STATES: frozenset[TaskState] = frozenset({TaskState.ACCEPTED, TaskState.SKIPPED})
 
 SkipPolicy = Literal["requeue_for_others", "requeue_for_me", "terminal"]
-ShapeType = Literal["bbox", "polygon", "mask", "segment", "tag", "text"]
+ShapeType = Literal["bbox", "polygon", "mask", "keypoint", "polyline", "segment", "tag", "text"]
 ReviewAction = Literal["accepted", "fix_and_accept", "request_changes"]
 DraftOrigin = Literal["human", "model", "propagated"]
 MediaKind = Literal["image", "audio", "video"]

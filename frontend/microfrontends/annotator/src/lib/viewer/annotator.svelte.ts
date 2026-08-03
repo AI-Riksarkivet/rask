@@ -22,6 +22,7 @@ import type { Table } from 'apache-arrow';
 import type { CommitShape, GeometryUpdate, PixiContext, Tool } from '@rask/engine';
 import { LayerStore, buildBatchTable } from '@rask/engine';
 import type { LabelDelta, LabelOp, LabelOutcome, Selection } from '@rask/labeling/types';
+import { canonicalShapeType } from '@rask/labeling/shape-types';
 import { isChunkSelection } from '@rask/labeling/types';
 import { PRODUCERS } from '@rask/labeling/producers';
 import { rowSignature } from '@rask/labeling/history';
@@ -541,7 +542,7 @@ export class AnnotatorController {
 			for (const s of result.shapes) {
 				this._appendInsert(
 					makeInsertRow({
-						shape_type: s.shape_type ?? 'rectangle',
+						shape_type: canonicalShapeType(s.shape_type) ?? 'bbox',
 						x: s.x,
 						y: s.y,
 						width: s.width,
@@ -566,7 +567,10 @@ export class AnnotatorController {
 	/** Map a committed engine shape → the queued insert row (backend NewAnnotation). */
 	private _buildInsert(shape: CommitShape): InsertRow {
 		return makeInsertRow({
-			shape_type: shape.type === 'rect' ? 'rectangle' : shape.type,
+			// ONE seam, and it maps into the SERVICE vocabulary. This used to say
+			// `shape.type === 'rect' ? 'rectangle' : shape.type` — a third name accepted by neither
+			// side, so five of seven tools produced a draft the service refused at submit.
+			shape_type: canonicalShapeType(shape.type) ?? shape.type,
 			x: shape.x,
 			y: shape.y,
 			width: shape.width,
