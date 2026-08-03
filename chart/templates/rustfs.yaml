@@ -21,6 +21,10 @@ metadata:
   name: {{ include "rask.fullname" . }}-rustfs-mkbucket-{{ include "rask.bootstrapRev" . }}
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
+  # Reap the finished pod. Each revision's job carries a -r<revision> name, so Helm's
+  # before-hook-creation delete policy never matches the previous one — without a TTL every
+  # `helm upgrade` left another Completed husk behind (14 were sitting in `kubectl get pods`).
+  ttlSecondsAfterFinished: 3600
   backoffLimit: 20
   template:
     metadata:
