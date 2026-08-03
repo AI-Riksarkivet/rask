@@ -6,7 +6,6 @@
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
 	import { AppShell } from '@rask/ui/shell';
-	import { ANNOTATOR_ZONE_NAV } from '$lib/nav';
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
 	import type { Me } from '@rask/api';
 	import { fetchMeViaBff } from '$lib/http';
@@ -54,19 +53,25 @@
 	<Toaster />
 {/if}
 
-<!-- The SHARED estate shell. `canvas` mode (icon-collapsed rail, no breadcrumb, full-height
-     children) applies ONLY while the drawing canvas is actually showing (`?keys=`) — when the whole
-     zone WAS one canvas page, the zone-wide `canvas` flag was right; with the projects landing and
-     detail pages it made this zone the one estate zone with a cramped icon rail and no breadcrumb
-     on ordinary pages, which read as "a different app". Pages get the same expanded, labeled
-     sidebar every other zone renders; the canvas still keeps its width. -->
+<!-- The SHARED estate shell, WITHOUT a zone rail — `zoneNav={null}` is deliberate, not an
+     oversight, and zone-shell.test.ts holds it to being declared rather than forgotten.
+
+     This zone's rail only ever held two rows (Labeling tasks, Browse corpus), and next to the
+     annotate view's OWN annotation panel that read as two sidebars competing for the same job. The
+     zone root is already reachable from the top navbar's Annotate entry, and /browse is linked
+     twice from the landing copy, so nothing here becomes unreachable — the rail was cost without
+     destination. The canvas gets the width back, which is the surface that actually needs it.
+
+     `canvas` mode (no breadcrumb, full-height children) still applies ONLY while the drawing canvas
+     is showing (`?keys=`): the projects landing and detail pages keep the ordinary chrome, because
+     making the whole zone canvas-mode is what once made this read as "a different app". -->
 <AppShell
 	pathname={page.url.pathname}
 	{me}
 	{meLoading}
 	user={data.user}
 	authEnabled={data.authEnabled}
-	zoneNav={ANNOTATOR_ZONE_NAV}
+	zoneNav={null}
 	canvas={page.url.searchParams.has('keys')}
 	{notifications}
 >

@@ -17,7 +17,23 @@ const ZONES = zoneDirs();
  * These assertions are deliberately structural (source text, not a rendered DOM): a zone that
  * forgets the wiring should fail in unit tests, long before someone notices a missing rail in a
  * browser.
+ *
+ * A zone MAY have no rail — but it must SAY SO. `NAVLESS` below is that declaration. The property
+ * this file protects has never been "every zone has a sidebar"; it is "no zone loses one by
+ * accident", and the difference between the two is exactly `zoneNav={null}` written on purpose
+ * versus a prop nobody passed.
  */
+
+/**
+ * Zones that deliberately render NO zone rail, with the reason. Adding one here is a design
+ * decision that should be argued in review, which is the point of making it a list.
+ *
+ * `annotator` — its rail held two rows (Labeling tasks, Browse corpus) beside the annotate view's
+ * own annotation panel, which read as two sidebars competing. The zone root is reachable from the
+ * top navbar and /browse is linked from the landing copy, so the rail was cost without destination,
+ * and the canvas wants the width.
+ */
+const NAVLESS = new Set(['annotator']);
 
 const zoneDir = (zone: string) => resolve(FRONTEND_ROOT, 'microfrontends', zone);
 const navPath = (zone: string) => resolve(zoneDir(zone), 'src', 'lib', 'nav.ts');
@@ -26,17 +42,33 @@ const layoutPath = (zone: string) => resolve(zoneDir(zone), 'src', 'routes', '+l
 describe('every zone ships a sidebar config', () => {
 	for (const zone of ZONES) {
 		it(`${zone} declares a ZoneNav`, () => {
+			if (NAVLESS.has(zone)) {
+				expect(
+					existsSync(navPath(zone)),
+					`${zone} renders no rail, so a nav.ts is dead code — delete it or drop the zone from NAVLESS`,
+				).toBe(false);
+				return;
+			}
 			expect(existsSync(navPath(zone)), `${zone}/src/lib/nav.ts is missing`).toBe(true);
 		});
 
 		it(`${zone} passes zoneNav to AppShell`, () => {
 			const layout = readFileSync(layoutPath(zone), 'utf8');
+			// Both branches require the prop to be PRESENT — a navless zone still has to write
+			// `zoneNav={null}`, so the opt-out is greppable and survives review.
 			expect(layout, `${zone}'s root +layout.svelte never passes zoneNav to <AppShell>`).toMatch(
 				/zoneNav[=\s]/,
 			);
+			if (NAVLESS.has(zone)) {
+				expect(
+					layout,
+					`${zone} is listed in NAVLESS, so it must opt out explicitly with zoneNav={null}`,
+				).toMatch(/zoneNav=\{null\}/);
+			}
 		});
 
 		it(`${zone}'s nav is GROUPED, not a flat leaves[] list`, () => {
+			if (NAVLESS.has(zone)) return;
 			const nav = readFileSync(navPath(zone), 'utf8');
 			expect(nav, `${zone} still declares a flat leaves[] — ZoneNav is groups[] now`).not.toMatch(
 				/^\s*leaves:/m,
@@ -66,7 +98,11 @@ describe('a zone with nothing to navigate renders no rail', () => {
 	// catches a zone that silently has NO sidebar; this one deliberately has a different one, and a
 	// one-row shell rail beside it would duplicate the page you are already on. Adding a second leaf to
 	// satisfy the count would be inventing a route to please a gate.
-	for (const zone of ZONES.filter((z) => z !== 'home' && z !== 'workbench')) {
+	//
+	// `annotator` (NAVLESS) is exempt on the same principle, one step further: it renders its own
+	// annotation panel AND has no nav.ts at all, because a two-row rail beside that panel read as two
+	// sidebars competing for one job. Its opt-out is enforced above by the zoneNav={null} assertion.
+	for (const zone of ZONES.filter((z) => z !== 'home' && z !== 'workbench' && !NAVLESS.has(z))) {
 		it(`${zone} declares more than one leaf, so its rail renders`, () => {
 			const leaves = countLeaves(readFileSync(navPath(zone), 'utf8'));
 			expect(
