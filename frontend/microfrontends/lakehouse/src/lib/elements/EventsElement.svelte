@@ -55,6 +55,9 @@
 	{:else if events.length === 0}
 		<p class="empty">No events in the window.</p>
 	{:else}
+		{#if filtertext.trim() !== '' && shownevents.length !== events.length}
+			<p class="empty">filtered: {shownevents.length}/{events.length} match “{filtertext}”</p>
+		{/if}
 		<ul>
 			{#each shownevents as ev (ev.seq)}
 				<li onclick={(e) => select(e.currentTarget, ev.seq, ev.job ?? null)}>

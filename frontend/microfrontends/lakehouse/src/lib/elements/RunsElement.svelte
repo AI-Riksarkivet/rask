@@ -69,6 +69,9 @@
 	{:else if runs.length === 0}
 		<p class="empty">No runs yet — they appear as pipelines emit OpenLineage events.</p>
 	{:else}
+		{#if filtertext.trim() !== '' && shownruns.length !== runs.length}
+			<p class="empty">filtered: {shownruns.length}/{runs.length} match “{filtertext}”</p>
+		{/if}
 		<ul>
 			{#each shownruns as run (run.run_id)}
 				<li onclick={(e) => select(e.currentTarget, run.run_id, run.job ?? null)}>
