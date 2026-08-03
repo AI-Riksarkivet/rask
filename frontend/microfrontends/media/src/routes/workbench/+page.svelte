@@ -130,9 +130,13 @@
 </div>
 
 <style>
+	/* This zone wraps every page in `min-h-0 flex-1 overflow-hidden` — a BLOCK, not a flex parent
+	   (its sibling pages use `h-full`), so `flex: 1 1 0` alone gave the dock ZERO height: the
+	   panels mounted, dockview reported three groups, and nothing painted. `height: 100%` is what
+	   this zone actually hands down. */
 	.wrap {
 		display: flex;
-		flex: 1 1 0;
+		height: 100%;
 		min-height: 0;
 		width: 100%;
 	}
