@@ -57,6 +57,11 @@ export interface DockLayoutStoreOptions {
 	fetcher?: typeof fetch;
 	/** Mirror key prefix, so one browser holding two zones cannot cross-write. Defaults per endpoint. */
 	mirrorKey?: string;
+	/** Reports whether the stack has auth ON (wire to the zone layout's `authEnabled`). With auth on,
+	 *  a 401 is an EXPIRED/REFUSED session — treating it as "auth-off dev, mirror is the store" was
+	 *  the review's silent-data-loss finding: saves claimed success while never reaching the
+	 *  per-subject document. Defaults to auth-off (the dev semantics). */
+	isAuthEnabled?: () => boolean;
 }
 
 const readMirror = <T>(key: string): T | null => {
@@ -89,6 +94,7 @@ export function makeDockLayoutStore<T>(options: DockLayoutStoreOptions): StoredL
 	const { workbenchId, endpoint } = options;
 	const fetcher = options.fetcher ?? fetch;
 	const mirror = options.mirrorKey ?? `rask-dock-layout:${endpoint}`;
+	const isAuthEnabled = options.isAuthEnabled ?? (() => false);
 
 	/** The whole document, as one of the three outcomes. Shared by load and save. */
 	async function readDocument(): Promise<StoredLayoutRead<Record<string, T>>> {
@@ -115,7 +121,13 @@ export function makeDockLayoutStore<T>(options: DockLayoutStoreOptions): StoredL
 			return { status: 'unreadable', detail };
 		}
 		if (response.status === 401) {
-			// Signed out — an auth-off dev stack or an expired session. The mirror is the honest answer.
+			if (isAuthEnabled()) {
+				// Auth is ON, so this is an expired/refused session — NOT the auth-off dev case. The
+				// mirror must not stand in for the record here: it may be stale, and a later
+				// read-modify-write sourced from it would resurrect old layouts over the server copy.
+				return { status: 'unreadable', detail: 'session expired or no access — sign in again' };
+			}
+			// Auth-off dev: the mirror IS the store.
 			const mirrored = readMirror<DockLayoutsDocument<T>>(mirror);
 			const w = workbenchesOf(mirrored ?? undefined);
 			return w === null ? { status: 'absent' } : { status: 'ok', layout: w };
@@ -161,11 +173,17 @@ export function makeDockLayoutStore<T>(options: DockLayoutStoreOptions): StoredL
 					headers: { 'content-type': 'application/json' },
 					body: JSON.stringify(next),
 				});
-				if (response.ok || response.status === 401) {
-					// 401 = auth-off dev, where the mirror IS the store; reporting failure would break it.
+				if (response.ok) {
 					writeMirror(mirror, next);
 					return true;
 				}
+				if (response.status === 401 && !isAuthEnabled()) {
+					// Auth-off dev, where the mirror IS the store; reporting failure would break it.
+					writeMirror(mirror, next);
+					return true;
+				}
+				// With auth ON a refused PUT is a REAL failure (review finding: it was reported as
+				// success, silently downgrading autosave to this-browser-only).
 				return false;
 			} catch {
 				return false;

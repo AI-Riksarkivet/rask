@@ -15,8 +15,10 @@ import { defineConfig } from 'vite';
 export default defineConfig({
 	plugins: [
 		svelte({
+			// EVERY .svelte in this build compiles in customElement mode (nested, tag-less
+			// components stay ordinary inner components; an `include` filter would leave nested
+			// imports uncompiled — review finding).
 			compilerOptions: { customElement: true },
-			include: ['src/lib/elements/**/*.svelte'],
 		}),
 	],
 	build: {

@@ -11,20 +11,39 @@
 	 * fields lazily, never destructure at init.
 	 */
 	import type { PanelProps } from '@rask/dockview';
+	import { resolveForeign } from './catalogue';
 
-	let { params }: PanelProps<{ src: string; tag: string }> = $props();
+	let { params, api }: PanelProps<{ src?: string; tag?: string }> = $props();
+
+	/** Resolved by the panel's COMPONENT key (stable through picker-adds, duplicates and layout
+	 *  restores), with the live catalogue outranking persisted params — both review findings. */
+	const source = $derived(resolveForeign(api.component, params));
 
 	let phase = $state<'loading' | 'ready' | 'failed'>('loading');
 	let detail = $state('');
 
 	$effect(() => {
-		const { src, tag } = params;
-		if (!src || !tag) return;
+		if (source === null) {
+			phase = 'failed';
+			detail = `no catalogue entry for "${api.component}"`;
+			return;
+		}
+		const { src, tag } = source;
 		let live = true;
 		(async () => {
 			try {
 				await import(/* @vite-ignore */ src);
-				await customElements.whenDefined(tag);
+				// Bounded: a script that loads but never defines the tag (zone/catalogue drift) must
+				// surface as failure, not spin forever — review finding.
+				await Promise.race([
+					customElements.whenDefined(tag),
+					new Promise((_, reject) =>
+						setTimeout(
+							() => reject(new Error(`"${tag}" never registered — zone/catalogue drift?`)),
+							8000,
+						),
+					),
+				]);
 				if (live) phase = 'ready';
 			} catch (e) {
 				if (!live) return;
@@ -38,15 +57,15 @@
 	});
 </script>
 
-{#if phase === 'ready'}
-	<svelte:element this={params.tag} class="foreign" />
+{#if phase === 'ready' && source !== null}
+	<svelte:element this={source.tag} class="foreign" />
 {:else if phase === 'failed'}
 	<div class="state">
 		<p>Could not load this panel from its zone.</p>
-		<p class="dim">{params.src} — {detail}</p>
+		<p class="dim">{source?.src ?? api.id} — {detail}</p>
 	</div>
 {:else}
-	<div class="state dim">Loading {params.tag}…</div>
+	<div class="state dim">Loading {source?.tag ?? api.id}…</div>
 {/if}
 
 <style>

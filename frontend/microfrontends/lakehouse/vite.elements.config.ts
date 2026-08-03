@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vite';
 
@@ -15,8 +16,12 @@ import { defineConfig } from 'vite';
 export default defineConfig({
 	plugins: [
 		svelte({
+			// EVERY .svelte in this build compiles in customElement mode — including nested,
+			// tag-less components (LineageGraph, its nodes) — which is what makes their scoped
+			// styles INJECT at runtime instead of being extracted to a css asset nothing loads.
+			// (The compiler leaves tag-less components as ordinary inner components; review
+			// finding: an `include` filter here would leave nested imports uncompiled.)
 			compilerOptions: { customElement: true },
-			include: ['src/lib/elements/**/*.svelte'],
 		}),
 	],
 	build: {
@@ -30,7 +35,9 @@ export default defineConfig({
 	},
 	resolve: {
 		// The wrapper imports @rask/api (JIT TS, no build) — bundle it in; the element must be
-		// self-contained on the wire.
+		// self-contained on the wire. `$lib` is SvelteKit's alias and does not exist in a plain
+		// lib build, so it is re-declared for the lineage components this bundle carries.
 		dedupe: ['svelte'],
+		alias: { $lib: fileURLToPath(new URL('./src/lib', import.meta.url)) },
 	},
 });

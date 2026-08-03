@@ -6,5 +6,10 @@
 /* Tailwind 4 skips node_modules, so every package whose classes must survive needs an explicit
    @source. THREE `../` from src/ — a fourth silently matches nothing and the page renders unstyled. */
 @source '../../../packages/ui/dist';
-/* The panels ship as source (no build step), so scan src/ rather than dist/. */
-@source '../../../packages/panels/src';
+/* Foreign panels are CUSTOM ELEMENTS served by other zones — no sources of theirs are scanned
+   here (that recoupling is the reversed @rask/panels mistake). Their scoped styles resolve
+   `var(--color-*)` tokens, and Tailwind 4 only EMITS a token variable some generated utility
+   uses — so the utilities behind every token the elements reference are safelisted, or the
+   variables would be tree-shaken out of this zone's stylesheet and the elements would render
+   unstyled (review finding). */
+@source inline("text-foreground text-muted-foreground text-destructive text-primary bg-muted bg-card border-border font-mono");

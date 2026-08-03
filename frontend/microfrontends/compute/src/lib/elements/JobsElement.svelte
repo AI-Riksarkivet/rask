@@ -20,46 +20,19 @@
 	 * The mount stamp + poll counter are the spike's no-remount proof: if a dock drag remounted the
 	 * element, both would visibly reset.
 	 */
-	import { rayJobs, type RayJob } from '@rask/api';
+	import { rayJobs, type RayJob, type RayJobsPayload } from '@rask/api';
+	import { RASK_SELECT, type SelectDetail } from '@rask/dockview/contract';
+	import { RayPoll } from './ray-poll.svelte';
 
 	let { pollms = 5000 }: { pollms?: number } = $props();
+	const poll = new RayPoll<RayJobsPayload>((f) => rayJobs(f));
+	$effect(() => poll.start(pollms));
 
-	let jobs = $state<RayJob[]>([]);
-	let error = $state<string | null>(null);
-	let polls = $state(0);
-	const mountedAt = new Date().toLocaleTimeString();
-
-	$effect(() => {
-		let live = true;
-		const read = async () => {
-			try {
-				// A timeout-armed fetch, because a dead upstream HANGS rather than erroring (observed:
-				// /api/ray/* with no Ray cluster deployed) — and a hung fetch would freeze the poll
-				// counter at 0 with the empty state showing, which reads as "no jobs" instead of the
-				// truth. Timing out turns it into the error state below.
-				const payload = await rayJobs((url) => fetch(url, { signal: AbortSignal.timeout(4000) }));
-				if (!live) return;
-				jobs = payload.jobs ?? [];
-				error = null;
-			} catch (e) {
-				if (live) error = e instanceof Error ? e.message : String(e);
-			} finally {
-				if (live) polls += 1;
-			}
-		};
-		void read();
-		// POLL REASON: job lifecycle — submissions move PENDING→RUNNING→SUCCEEDED/FAILED while the
-		// panel is on screen, and the element has no server push channel across the zone boundary.
-		const timer = setInterval(read, pollms);
-		return () => {
-			live = false;
-			clearInterval(timer);
-		};
-	});
+	const jobs = $derived(poll.data?.jobs ?? []);
 
 	function select(node: HTMLElement, job: RayJob) {
 		node.dispatchEvent(
-			new CustomEvent('rask:select', {
+			new CustomEvent(RASK_SELECT, {
 				bubbles: true,
 				composed: true,
 				detail: {
@@ -67,7 +40,7 @@
 					kind: 'ray-job',
 					id: job.submission_id,
 					label: job.entrypoint ?? job.submission_id,
-				},
+				} satisfies SelectDetail,
 			}),
 		);
 	}
@@ -75,10 +48,10 @@
 
 <div class="rask-ce-jobs">
 	<p class="meta">
-		mounted {mountedAt} · poll #{polls}
+		mounted {poll.mountedAt} · poll #{poll.polls}
 	</p>
-	{#if error}
-		<p class="error">Ray unreachable: {error}</p>
+	{#if poll.error !== null}
+		<p class="error">Ray unreachable: {poll.error}</p>
 	{:else if jobs.length === 0}
 		<p class="empty">No job submissions.</p>
 	{:else}

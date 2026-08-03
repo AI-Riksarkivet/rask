@@ -11,7 +11,11 @@ import { createBffClient } from '@rask/api/client';
 import { createLineageClient } from '@rask/api/lineage';
 import { LineageState } from '../lineage/store.svelte';
 
-export const lineage = new LineageState(createLineageClient(createBffClient('/lakehouse')));
+/** The one client, shared by the store below AND the elements that read other endpoints
+ *  (datasets); root-absolute base, so it answers from any zone's page with the session riding. */
+export const client = createLineageClient(createBffClient('/lakehouse'));
+
+export const lineage = new LineageState(client);
 
 let started = false;
 /** Called by each element on mount; the FIRST caller starts the one poll loop. Never stopped —

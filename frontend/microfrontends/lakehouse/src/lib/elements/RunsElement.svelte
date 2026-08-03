@@ -12,6 +12,7 @@
 	 * elements the page mounts.
 	 */
 	import { Badge } from '@rask/ui/badge';
+	import { RASK_SELECT, type SelectDetail } from '@rask/dockview/contract';
 	import { ensurePolling, lineage } from './store';
 
 	$effect(() => {
@@ -31,7 +32,7 @@
 
 	function select(node: HTMLElement, runId: string, job: string | null) {
 		node.dispatchEvent(
-			new CustomEvent('rask:select', {
+			new CustomEvent(RASK_SELECT, {
 				bubbles: true,
 				composed: true,
 				detail: {
@@ -39,7 +40,7 @@
 					kind: 'lineage-run',
 					id: runId,
 					label: job ?? runId,
-				},
+				} satisfies SelectDetail,
 			}),
 		);
 	}
@@ -48,6 +49,13 @@
 <div class="runs">
 	{#if !lineage.settled}
 		<p class="empty">Connecting to the lineage feed…</p>
+	{:else if !lineage.online}
+		<!-- Settled-but-offline is a REFUSED read (session expired / no access), and claiming
+		     "no runs yet" here was a lie — the bug a user reported as "nothing works". -->
+		<p class="empty">
+			Lineage feed unavailable — your session may have expired or lack access. Sign out and back in; if
+			it persists, ask an admin for lineage access.
+		</p>
 	{:else if runs.length === 0}
 		<p class="empty">No runs yet — they appear as pipelines emit OpenLineage events.</p>
 	{:else}

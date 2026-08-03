@@ -73,6 +73,7 @@ describe('the divergence marker — the decision that was missing', () => {
 		await dock.refresh();
 		live = { g: 1 };
 		dock.select('v1');
+		dock.activate('v1');
 		expect(dock.dirty).toBe(false);
 	});
 
@@ -82,6 +83,7 @@ describe('the divergence marker — the decision that was missing', () => {
 		const dock = new DockViews(store, () => live);
 		await dock.refresh();
 		dock.select('v1');
+		dock.activate('v1');
 
 		live = { g: 2 };
 		dock.touch();
@@ -97,6 +99,7 @@ describe('the divergence marker — the decision that was missing', () => {
 		const dock = new DockViews(store, () => live);
 		await dock.refresh();
 		dock.select('v1');
+		dock.activate('v1');
 
 		live = { g: 2 };
 		dock.touch();
@@ -113,6 +116,7 @@ describe('the divergence marker — the decision that was missing', () => {
 		const dock = new DockViews(store, () => live);
 		await dock.refresh();
 		dock.select('v1');
+		dock.activate('v1');
 		live = { g: 5 };
 		dock.touch();
 
@@ -132,7 +136,7 @@ describe('the list, the active view, and what the UI reads', () => {
 		]);
 	});
 
-	it('select returns the dock’s own three-outcome contract, absent for a stale click', async () => {
+	it('select is a read-only PEEK (activation is the explicit second step), absent for a stale click', async () => {
 		const { store } = fakeStore([view('v1', 'A', 1)]);
 		const dock = new DockViews(store, () => ({ g: 0 }));
 		await dock.refresh();

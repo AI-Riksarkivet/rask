@@ -14,6 +14,10 @@
 			"types": "./src/views-entry.ts",
 			"svelte": "./src/views-entry.ts",
 			"default": "./src/views-entry.ts"
+		},
+		"./contract": {
+			"types": "./src/element-contract.ts",
+			"default": "./src/element-contract.ts"
 		}
 	},
 	"scripts": {

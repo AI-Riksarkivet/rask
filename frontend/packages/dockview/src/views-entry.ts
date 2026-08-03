@@ -8,5 +8,3 @@
 export { default as ViewSidebar } from './ViewSidebar.svelte';
 export { DockViews } from './views.svelte';
 export type { ViewSummary, ViewsPhase } from './views.svelte';
-export { parseSelectDetail, RASK_SELECT, SelectDetailSchema } from './element-contract';
-export type { SelectDetail } from './element-contract';

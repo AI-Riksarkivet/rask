@@ -41,5 +41,10 @@
 			"deferredGzipKB": 140,
 			"note": "THE global workbench (open_workbench.md): the shared shell plus the dynamically-imported @rask/dockview dock and the saved-views sidebar — and NOTHING else, because it owns no panel code. Foreign panels are custom elements loaded from their OWNING zone at runtime (measured: compute-elements.js is 21.6 KB gz, paid to compute, not here). Deferred is essentially the dock (~100 KB gz + views chrome)."
 		}
-	}
+	},
+	"elements": {
+		"compute": 40,
+		"lakehouse": 180
+	},
+	"//elements": "Per-zone CUSTOM-ELEMENT bundle ceilings in gzipped KB — the scripts a zone lends to the global workbench (open_workbench.md), weighed directly from build/client/<zone>/elements by element-budget.test.ts. Measured 2026-08-03: compute 22 (four API panels + the Svelte runtime), lakehouse 154 (five panels incl. the xyflow lineage graph — the graph IS most of it). Same rule as the zone budgets: raise ONLY with the measured reason in the commit message."
 }
