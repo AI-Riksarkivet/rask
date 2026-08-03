@@ -57,6 +57,7 @@ var venvImages = map[string]bool{
 	"gateway":      true,
 	"compute":      true,
 	"controlplane": true,
+	"ingest":       true,
 }
 
 // provenance turns the OCI label args into BuildArgs, dropping empties.
