@@ -65,24 +65,67 @@ CustomEvent)", tags "namespaced with a team prefix".
 ## State and events across panels
 
 Inside one zone's dock nothing changes (shared store via context). Between *foreign* elements on the
-compositor, context does not cross — by design. The contract is the platform's:
+compositor, Svelte context does not cross — by design. The contract is the platform's, and it is
+**less lossy than "attributes and strings"**:
 
-- **Properties in**: the compositor sets typed properties (Svelte CE attribute/prop bridge) for
-  initial filter/config.
-- **`CustomEvent` out**: panels dispatch namespaced events (`rask:select`, detail typed in
-  `@rask/dockview`), the compositor relays to interested siblings. This is the *price* of runtime
-  composition and it is bounded: the Treemap→Topics filtering already works this way in-zone and is
-  the spike's cross-panel proof case.
+- **Properties in — full JS values, not attributes.** A custom element's *properties* are set by
+  assignment (`el.selection = {...}`, `el.rows = arrayOfObjects`) and Svelte's CE bridge feeds them
+  straight into `$props()`, reactively. Attributes (strings) are only the fallback for HTML-authored
+  usage. Consequence: the compositor can own ONE poll loop or one selection store and push rich
+  snapshots down into every foreign panel — so "two zones' panels sharing one live data feed" IS
+  achievable; what is not shared is memory (the element gets a copy, not the store).
+- **`CustomEvent` out**: panels dispatch namespaced events (`rask:select`, `detail` typed) with
+  `bubbles: true, composed: true`; light DOM lets them bubble to the dock container, where the
+  compositor listens ONCE by delegation and relays — by setting properties on interested siblings.
+  Down = properties, up = events; the compositor is the hub, panels never know about each other.
+- Cross-filtering is therefore the same shape the media dock already proves in-zone
+  (Treemap→Topics): selection event up, filter property down. That is the spike's proof case.
 
 ## Dock integration notes (from the fork research)
 
+**Dockview needs no changes to host custom elements.** A dock panel's body is just a DOM subtree;
+the compositor registers ONE generic Svelte panel component (`ForeignPanel`) whose job is: dynamic
+`import()` of the owning zone's element script → `await customElements.whenDefined(tag)` →
+render `<svelte:element this={tag}>` → wire properties/events. All dock-facing glue — the panel
+title, `PanelProps.alert`, params, the picker entry — lives in that wrapper, so the dock's four
+invariants and the whole G1–G4 chrome (splits, picker, alerts, named views) work identically for
+foreign and native panels. The catalogue maps panel id ↔ script URL + tag name.
+
 - `defaultRenderer: 'always'` + the fork's stable-parent architecture: element panels attach once,
-  moves are style writes — no disconnect/reconnect storm on drag.
+  moves are pure style writes — the CE's `disconnectedCallback` never even fires on a drag. (Even
+  where dockview does re-parent, Svelte's CE destroy is deferred a microtask and cancelled on
+  same-task reconnect — but 'always' means we never rely on that.)
 - Both `fromJSON` call sites (persistence load + view switch) must pass
   `{ reuseExistingPanels: true }` or a view switch recreates panels (fork feature; already proven
   necessary for iframes, same reasoning for CEs with internal state).
 - **Popout disabled** for foreign panels: popout re-parents into another document, which for a CE
   re-runs the full disconnect/connect lifecycle against a window whose stylesheets differ.
+
+## Performance discipline
+
+- **Lazy + preloaded**: element scripts load on first use (dynamic import in `ForeignPanel`), with
+  `<link rel="modulepreload">` hints for panels in the active saved view, so restoring a view does
+  not waterfall.
+- **Immutable caching**: element bundles get content-hashed filenames served with
+  `cache-control: immutable` — a returning user pays zero bytes until the owning zone redeploys.
+- **One runtime per ZONE, not per panel**: each zone emits a single `elements.js` carrying all its
+  exported panels, so the ~11–15 KB gz Svelte runtime is paid once per zone (~3 zones ≈ 35–45 KB —
+  less than one chart library). Deliberately NOT deduplicated via import maps: shared-runtime drift
+  across independently deployed zones is the failure mode import-map sharing was rejected for, and
+  per-zone isolation is the feature.
+- The compositor's own budget counts the dock + shell only; foreign bytes are the zones' budgets.
+  The spike's condition 6 pins the measured numbers.
+
+## Contract drift (the one gotcha that needs standing infrastructure)
+
+TypeScript cannot check across the network boundary, so the prop/event contract is enforced twice:
+
+1. **Types + tests**: event names, `detail` shapes and property names live in a tiny shared
+   contract module; a `@rask/zone-contract` test pins them so a zone renaming an event turns CI red
+   at build time — the same trick the estate uses for every other cross-zone shape.
+2. **valibot at the relay**: the compositor validates every inbound `CustomEvent.detail` before
+   forwarding (the estate's standard validation layer), so a drifted zone degrades to a logged,
+   dropped event instead of corrupting sibling panels.
 
 ## The spike (do this before believing any of it)
 
