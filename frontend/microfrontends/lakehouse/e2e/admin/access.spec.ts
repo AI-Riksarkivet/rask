@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
-import { mockMe, signIn } from './session';
+import { mockMe, signIn, TOKEN } from './session';
+import { MOCK_CATALOG } from '../ports';
 
 // `/lakehouse/governance/access` — the ONE query-driven FGA explorer.
 //
@@ -8,182 +9,42 @@ import { mockMe, signIn } from './session';
 // question, see the answer lit on a canvas that never unmounts, narrow it without refetching, and read
 // the selected node beside it rather than instead of it.
 //
-// Hermetic via page.route. The mock pins REQUEST shapes (method, path, JSON body) because those are the
-// frozen /v1/access contract, and it asserts the derivation is rendered from `expand`, not inferred.
+// Hermetic via the MOCK CATALOG, not page.route: the surface reads through remote functions
+// (`access.remote.ts`), so every request happens on the zone SERVER, where page.route cannot reach —
+// the same boundary the control-events feed crossed first. The fixtures live in `access-fixtures.ts`
+// (shared with `mock-catalog.ts`), and the REQUEST shapes — still the frozen /v1/access contract — are
+// recorded by the mock per bearer and asserted through `/__mock/access`. Each test signs in with a
+// per-test bearer so its ledger on the fullyParallel suite's one shared mock is its own.
 
-const TUPLES = [
-	{ user: 'user:alice', relation: 'owner', object: 'table:db1$t' },
-	{ user: 'user:bob', relation: 'reader', object: 'table:db1$t' },
-	{ user: 'namespace:db1', relation: 'parent', object: 'table:db1$t' },
-	// A TIME-BOXED grant. Present in the fixture so the canvas has a conditional edge to draw
-	// differently — a permanent-only fixture would let the dashed-edge assertion pass vacuously.
-	{
-		user: 'user:contractor',
-		relation: 'reader',
-		object: 'table:db1$t',
-		condition: {
-			name: 'non_expired_grant',
-			context: { grant_time: '2026-07-29T09:00:00Z', grant_duration: '4h' },
-		},
-	},
-];
-
-const DSL = `model
-  schema 1.1
-
-type user
-
-type namespace
-  relations
-    define parent: [warehouse, namespace]
-    define owner: [user, role#assignee] or owner from parent
-    define reader: [user, role#assignee] or owner
-
-type table
-  relations
-    define parent: [namespace]
-    define owner: [user, role#assignee] or owner from parent
-    define reader: [user, role#assignee] or owner
-    define can_read_data: reader
-`;
-
-const leaf = (over: Record<string, unknown> = {}) => ({
-	users: null,
-	computed: null,
-	tuple_to_userset: null,
-	expanded: null,
-	continues: null,
-	...over,
-});
-
-const node = (name: string, over: Record<string, unknown> = {}) => ({
-	name,
-	leaf: null,
-	union: null,
-	intersection: null,
-	difference: null,
-	truncated: null,
-	cycle: null,
-	...over,
-});
-
-// The shape `fga.expand_tree` returns at depth>1: a `tuple_to_userset` leaf whose `expanded` child is
-// the PARENT object's own tree. This is the thing a single Expand cannot give and a tuple table can
-// never show — the spec exists to prove it reaches the screen.
-const EXPAND_TREE = node('table:db1$t#can_read_data', {
-	union: [
-		node('from-parent', {
-			leaf: leaf({
-				tuple_to_userset: { tupleset: 'table:db1$t#parent', computed: ['owner'] },
-				expanded: [node('namespace:db1#owner', { leaf: leaf({ users: ['user:alice'] }) })],
-			}),
-		}),
-	],
-});
-
-type Tuple = { user: string; relation: string; object: string };
 type Body = Record<string, unknown>;
+type AccessState = {
+	extraTuples: Body[];
+	written: Body[];
+	deleted: Body[];
+	expandBody: Body | null;
+	listUsersBodies: Body[];
+	listObjectsBody: Body | null;
+	simulateBodies: Body[];
+	/** How many times this bearer's control cursor has polled `/v1/events` — the live spec's settle gate. */
+	eventProbes: number;
+};
 
-let expandBody: Body | null;
-let listUsersBodies: Body[];
-let listObjectsBody: Body | null;
-let deleted: Tuple | null;
-let written: Body | null;
-let simulateBodies: Body[];
+let token: string;
 
-test.beforeEach(async ({ context, page }) => {
-	await signIn(context);
+test.beforeEach(async ({ context, page }, testInfo) => {
+	token = `${TOKEN.admin}:${testInfo.testId}`;
+	await signIn(context, { token });
 	await mockMe(page); // estate-admin identity: the governance layout door opens
-	expandBody = null;
-	listUsersBodies = [];
-	listObjectsBody = null;
-	deleted = null;
-	written = null;
-	simulateBodies = [];
-
-	await page.route('**/capi/**', (route) => {
-		const req = route.request();
-		const url = new URL(req.url());
-		const path = url.pathname.replace(/^.*\/capi/, '');
-		const json = (body: unknown) =>
-			route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
-
-		// The layout's identity fetch shares this glob and the handler REGISTERED LAST wins — fall back
-		// to the mockMe route instead of 404ing the door shut.
-		if (path === '/v1/me') return route.fallback();
-		if (path === '/v1/table') return json({ tables: ['db1$t'] });
-		if (path === '/v1/access/model')
-			return json({
-				dsl: DSL,
-				authorization_model_id: '01MODEL',
-				conditions: {
-					non_expired_grant: {
-						current_time: 'timestamp',
-						grant_time: 'timestamp',
-						grant_duration: 'duration',
-					},
-				},
-			});
-
-		if (path === '/v1/access/tuples' && req.method() === 'GET') {
-			const object = url.searchParams.get('object');
-			let tuples = TUPLES.filter((t) => !deleted || JSON.stringify(t) !== JSON.stringify(deleted));
-			if (object) tuples = tuples.filter((t) => t.object === object);
-			return json({ tuples, continuation: null });
-		}
-		if (path === '/v1/access/tuples' && req.method() === 'POST') {
-			written = req.postDataJSON() as Body;
-			return json(written);
-		}
-		if (path === '/v1/access/tuples' && req.method() === 'DELETE') {
-			deleted = req.postDataJSON() as Tuple;
-			return json(deleted);
-		}
-		if (path === '/v1/access/check') {
-			const body = req.postDataJSON() as Tuple;
-			return json({ allowed: true, checked: { ...body, user: 'user:alice' } });
-		}
-		if (path === '/v1/access/expand') {
-			expandBody = req.postDataJSON() as Body;
-			return json({
-				tree: EXPAND_TREE,
-				object: 'table:db1$t',
-				relation: 'can_read_data',
-				depth: 3,
-			});
-		}
-		if (path === '/v1/access/list-users') {
-			listUsersBodies.push(req.postDataJSON() as Body);
-			return json({
-				users: ['user:alice', 'user:bob', 'role:validators#assignee'],
-				object: 'table:db1$t',
-				relation: 'reader',
-				user_type: 'user',
-				user_relation: null,
-				truncated: false,
-			});
-		}
-		if (path === '/v1/access/simulate') {
-			simulateBodies.push(req.postDataJSON() as Body);
-			return json({
-				allowed: true,
-				baseline: false,
-				checked: { user: 'user:carol', relation: 'reader', object: 'table:db1$t' },
-				hypothetical: [{ user: 'user:carol', relation: 'reader', object: 'table:db1$t' }],
-			});
-		}
-		if (path === '/v1/access/list-objects') {
-			listObjectsBody = req.postDataJSON() as Body;
-			return json({
-				objects: ['table:db1$t', 'table:db1$u'],
-				user: 'user:alice',
-				relation: 'can_read_data',
-				type: 'table',
-			});
-		}
-		return route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
-	});
 });
+
+/** What the mock catalog recorded for THIS test's bearer — the replacement for the capture variables
+ *  page.route used to fill while the transport was still browser-side. */
+const accessState = async (page: import('@playwright/test').Page): Promise<AccessState> => {
+	const res = await page.request.get(`${MOCK_CATALOG}/__mock/access`, {
+		headers: { authorization: `Bearer ${token}` },
+	});
+	return (await res.json()) as AccessState;
+};
 
 const open = async (page: import('@playwright/test').Page) => {
 	await page.goto('/lakehouse/governance/access');
@@ -245,7 +106,11 @@ test('"why" runs Check + Expand and lights the derivation hop by hop', async ({ 
 	await expect(page.getByText('inherited from').first()).toBeVisible();
 
 	// The request shape is the contract.
-	expect(expandBody).toMatchObject({ object: 'table:db1$t', relation: 'can_read_data', depth: 3 });
+	expect((await accessState(page)).expandBody).toMatchObject({
+		object: 'table:db1$t',
+		relation: 'can_read_data',
+		depth: 3,
+	});
 });
 
 test('"who can" answers from ListUsers, usersets included', async ({ page }) => {
@@ -257,7 +122,10 @@ test('"who can" answers from ListUsers, usersets included', async ({ page }) => 
 	await expect(
 		page.locator('[data-slot="access-node"]').filter({ hasText: 'validators' }),
 	).toBeVisible();
-	expect(listUsersBodies[0]).toMatchObject({ object: 'table:db1$t', relation: 'reader' });
+	expect((await accessState(page)).listUsersBodies[0]).toMatchObject({
+		object: 'table:db1$t',
+		relation: 'reader',
+	});
 });
 
 test('"what can" answers from ListObjects', async ({ page }) => {
@@ -269,7 +137,7 @@ test('"what can" answers from ListObjects', async ({ page }) => {
 	});
 
 	await expect(page.getByText('holds can_read_data on 2 table object(s)')).toBeVisible();
-	expect(listObjectsBody).toMatchObject({
+	expect((await accessState(page)).listObjectsBody).toMatchObject({
 		user: 'user:alice',
 		relation: 'can_read_data',
 		type: 'table',
@@ -281,7 +149,7 @@ test('the facet rail filters what is already rendered — no refetch', async ({ 
 	await ask(page, 'Who can…', { Relation: 'reader', Object: 'table:db1$t' });
 	await expect(page.getByText('3 subject(s) hold reader')).toBeVisible();
 
-	const before = listUsersBodies.length;
+	const before = (await accessState(page)).listUsersBodies.length;
 	const nodesBefore = await page.locator('[data-slot="access-node"]').count();
 
 	// Turning a type facet on narrows the canvas… (the facets live in a popover now — the resident
@@ -295,7 +163,7 @@ test('the facet rail filters what is already rendered — no refetch', async ({ 
 
 	// …and costs ZERO further requests. Filtering that refetches is a different feature, and a much
 	// slower one, than filtering what you are already looking at.
-	expect(listUsersBodies.length).toBe(before);
+	expect((await accessState(page)).listUsersBodies.length).toBe(before);
 });
 
 test('query, seed and facets live in the URL, so the view is a link', async ({ page }) => {
@@ -334,12 +202,16 @@ test('revoke states the blast radius BEFORE the write', async ({ page }) => {
 
 	// "Are you sure?" is not an answer to "how many". The dialog measures with ListUsers first.
 	await expect(page.getByText(/principals? currently hold/)).toBeVisible();
-	expect(listUsersBodies.at(-1)).toMatchObject({ object: 'table:db1$t', relation: 'owner' });
+	const measured = await accessState(page);
+	expect(measured.listUsersBodies.at(-1)).toMatchObject({
+		object: 'table:db1$t',
+		relation: 'owner',
+	});
 	// Measured, not yet written.
-	expect(deleted).toBeNull();
+	expect(measured.deleted).toHaveLength(0);
 
 	await page.getByRole('button', { name: 'Revoke', exact: true }).click();
-	await expect.poll(() => deleted).not.toBeNull();
+	await expect.poll(async () => (await accessState(page)).deleted.length).toBeGreaterThan(0);
 });
 
 test('the model stays read-only beside the graph', async ({ page }) => {
@@ -404,15 +276,16 @@ test('the Grant dialog simulates before it writes, and says when a grant is a no
 
 	// baseline=false, allowed=true → the grant genuinely unlocks access.
 	await expect(page.getByText('Grants access.')).toBeVisible();
-	expect(simulateBodies.at(-1)).toMatchObject({
+	const simulated = await accessState(page);
+	expect(simulated.simulateBodies.at(-1)).toMatchObject({
 		user: 'user:carol',
 		relation: 'reader',
 		object: 'table:db1$t',
 	});
 	// The hypothesis is sent; nothing is written.
-	const sent = simulateBodies.at(-1);
+	const sent = simulated.simulateBodies.at(-1);
 	expect(Array.isArray(sent?.hypothetical) ? sent.hypothetical.length : 0).toBe(1);
-	expect(deleted).toBeNull();
+	expect(simulated.written).toHaveLength(0);
 });
 
 // ── conditional (time-boxed) grants ──────────────────────────────────────────────────────────────────
@@ -461,7 +334,8 @@ test('a time-boxed grant sends its condition to the store', async ({ page }) => 
 	await page.getByRole('button', { name: '4h', exact: true }).click();
 	await page.getByRole('button', { name: 'Write tuple' }).click();
 
-	await expect.poll(() => written).not.toBeNull();
+	await expect.poll(async () => (await accessState(page)).written.length).toBeGreaterThan(0);
+	const written = (await accessState(page)).written.at(-1);
 	expect(written).toMatchObject({
 		user: 'user:contractor',
 		relation: 'reader',
@@ -596,4 +470,43 @@ test('history stores nothing the URL does not already carry', async ({ page }) =
 			]).toContain(key);
 		}
 	}
+});
+
+// ── live updates ─────────────────────────────────────────────────────────────────────────────────────
+
+test('a grant landing elsewhere on the estate redraws the canvas, no reload, no click', async ({
+	page,
+}) => {
+	await open(page);
+	// The resting canvas holds the fixture store; the subject about to be granted is not on it.
+	await expect(page.locator('[data-slot="access-node"]').first()).toBeVisible();
+	await expect(
+		page.locator('[data-slot="access-node"]').filter({ hasText: 'live-wire' }),
+	).toHaveCount(0);
+
+	// Wait for the control cursor to have SETTLED: its first successful probe is the baseline, not a
+	// move (feeds.remote.ts), so an event injected before that probe lands would be silently absorbed
+	// and this spec would time out flakily instead of testing the tick.
+	await expect.poll(async () => (await accessState(page)).eventProbes).toBeGreaterThan(0);
+
+	// Another admin grants somewhere else: the tuple lands in the store, and — because access_admin now
+	// emits `grant_added` on every raw-tuple write — the control cursor moves. Two mock calls model the
+	// two halves of that one real event.
+	await page.request.post(`${MOCK_CATALOG}/__mock/access/tuple`, {
+		data: {
+			bearer: token,
+			tuple: { user: 'user:live-wire', relation: 'reader', object: 'table:db1$t' },
+		},
+	});
+	// `bearer` scopes the event to THIS test's bucket: the canvas's own control cursor ticks, and no
+	// other spec's feed ever sees the event (control-events.spec.ts asserts exact feed contents).
+	await page.request.post(`${MOCK_CATALOG}/__mock/add`, {
+		data: { bearer: token, action: 'grant_added', object_type: 'grant', object_id: 'table:db1$t' },
+	});
+
+	// Within one control-cursor poll the canvas re-reads the store and the new grant simply appears.
+	// 15s: the `query.live` probe runs every 5s (POLL_MS) and the re-read follows it.
+	await expect(
+		page.locator('[data-slot="access-node"]').filter({ hasText: 'live-wire' }),
+	).toBeVisible({ timeout: 15_000 });
 });

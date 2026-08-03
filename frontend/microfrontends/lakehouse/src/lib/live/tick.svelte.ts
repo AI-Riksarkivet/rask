@@ -1,5 +1,5 @@
 import { onMount, untrack } from 'svelte';
-import { lineageFeed } from './feeds.remote';
+import { controlCursor, lineageFeed } from './feeds.remote';
 
 /** The shape of a `query.live` instance this zone consumes as a cursor — see `feeds.remote.ts`. */
 export interface LiveCursor {
@@ -83,6 +83,25 @@ export function lineageTick(): LiveCursor {
 	return {
 		get current() {
 			return feed.current?.cursor;
+		},
+		get connected() {
+			return feed.connected;
+		},
+	};
+}
+
+/**
+ * The CONTROL-plane cursor, same contract — for the surfaces whose changes are governance mutations
+ * (grants, warehouses, tenants, promotions) rather than data movement. Those never touch a dataset, so
+ * they never move the lineage cursor; the FGA workbench re-reads on this one instead. The stream is
+ * shared with the admin console's own consumers, so a grant landing anywhere on the estate advances
+ * every surface on the same number.
+ */
+export function controlTick(): LiveCursor {
+	const feed = controlCursor();
+	return {
+		get current() {
+			return feed.current;
 		},
 		get connected() {
 			return feed.connected;

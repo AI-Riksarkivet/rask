@@ -1,6 +1,6 @@
 ---
 name: rask-frontend
-description: The rask `frontend/` plane — seven SvelteKit 2 + Svelte 5 zones composed by Turborepo's microfrontend proxy, three data-fetching dialects, the `@rask/dockview` workbenches, and the oxlint/oxfmt/zone-contract gates. Use when touching a zone, `@rask/api`, `@rask/dockview`, `@rask/zone-contract`, `microfrontends.json`, or any `.svelte`; when adding a route or fetching data; when working on a dock, panel, workbench or saved layout; when a panel loses its state on drag or a cross-zone link 404s or an SSR fetch hairpins; or when adding a zone or a frontend dependency.
+description: The rask `frontend/` plane — seven SvelteKit 2 + Svelte 5 zones composed by Turborepo's microfrontend proxy, the remote-function data plane (BFF only for binary/Arrow payloads), the `@rask/dockview` workbenches, and the oxlint/oxfmt/zone-contract gates. Use when touching a zone, `@rask/api`, `@rask/dockview`, `@rask/zone-contract`, `microfrontends.json`, or any `.svelte`; when adding a route or fetching data; when working on a dock, panel, workbench or saved layout; when a panel loses its state on drag or a cross-zone link 404s or an SSR fetch hairpins; or when adding a zone or a frontend dependency.
 ---
 
 # rask frontend
@@ -18,7 +18,7 @@ Package name equals directory name for all seven (`manifest.test.ts:53`). Base i
 | zone | base | dev port | nav label | what it is |
 |---|---|---|---|---|
 | `home` | `''` catch-all | 5273 | Home | Project gallery + the **OIDC BFF** (`/auth/{login,callback,logout}`) |
-| `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one — `data`, `lineage`, `models`, `admin`, `storage`; 84 route files, **51 `+server.ts` BFF routes** |
+| `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one — `data`, `lineage`, `models`, `admin`, `storage`; 84 route files, **50 `+server.ts` BFF routes** (the FGA workbench's six JSON routes died in the remote-function migration) |
 | `media` | `/media` | 5173 | **Search** | Corpus search workbench: FTS/vector/hybrid, WebGPU atlas, Cypher KG, Svelte-Flow editor |
 | `annotator` | `/annotator` | 5177 | **Annotate** | One page: PixiJS/WebGPU canvas over Arrow-backed rows |
 | `compute` | `/compute` | 5175 | Compute | Ray/Serve observability, 9 pages |
@@ -100,17 +100,17 @@ closed popover eats clicks. No GSAP on dock chrome. Popout and floating groups r
 `dndStrategy: 'pointer'` (chosen for Linux reliability and Playwright testability) *disables
 cross-window drag*, which is exactly what popout needs; resolve that trade before wiring it.
 
-## Fetching data — three dialects, one per zone family
+## Fetching data — remote functions are the direction, BFF only where payloads demand it
 
-`experimental.remoteFunctions: true` is set in all seven `svelte.config.js`, and used for reads in **two**. Match the zone you are in rather than converging them.
+`experimental.remoteFunctions: true` + `compilerOptions.experimental.async` are set in **every** zone's `svelte.config.js`. **The standing direction (2026-08-03): JSON data planes use remote functions (`query`/`command`/`query.live`); a `+server.ts` BFF route survives only where the payload cannot ride devalue** — binary/Arrow/streaming responses (media/annotator's Arrow-IPC planes, ~38 of lakehouse's BFF routes) or path-shaped endpoints (the OIDC BFF). When you touch a JSON surface still on `createBffClient`, converge it; do not add new BFF JSON routes.
 
-**(a) Remote `query()` — `compute` and `home`.** A `.remote.ts` query calls a `@rask/api` function through `getRequestEvent().fetch`. On every polled refresh, `.refresh().catch(() => {})` is **mandatory**: one uncaught rejection evicts the query from cache and silently kills the poll loop (`compute/src/lib/remote/compute.remote.ts:25-40`).
+**(a) Remote `query()`/`command()` — `compute`, `home`, and lakehouse's admin plane.** A `.remote.ts` function runs on the zone server and reaches its upstream with the session bearer via `getRequestEvent()`. On every polled refresh, `.refresh().catch(() => {})` is **mandatory**: one uncaught rejection evicts the query from cache and silently kills the poll loop (`compute/src/lib/remote/compute.remote.ts:25-40`). The FGA workbench (`lakehouse/src/lib/admin/remote/access.remote.ts`) is the reference migration: queries + the estate's only two `command()`s (write/delete tuple, with a single-flight `fetchStore().refresh()`), `ApiResult<T>` union returns on the dock-layout precedent (status-driven UI states, not exception flow), valibot parsing at the wire boundary, contracts kept in a sibling non-remote module (a `.remote.ts` may export only remote functions).
 
-**(b) Same-origin BFF — `lakehouse`, `media`, `annotator`.** A per-zone `+server.ts` proxy plus `createBffClient(base)` called from `$effect`. Correct for these zones: they reach services the gateway does not front.
+**(b) Same-origin BFF — the not-yet-converged JSON surfaces** in lakehouse's `lib/data`/`lib/storage`/`lib/lineage` areas plus media/annotator, and permanently the binary/Arrow planes. `createBffClient(base)` from `$effect`.
 
 **(c) None — `studio`, `train`.** Hardcoded arrays.
 
-Estate-wide: `command()` 0, `form()` 0, `query.batch()` 0, `{#await}` 0. Every zone opens exactly one `query.live` for the notification bell, always inside `onMount` — opening it at init made the server hold the page.
+Estate-wide: `command()` 2 (access.remote.ts), `form()` 0, `query.batch()` 0, `{#await}` 0. `query.live` is the LIVENESS spine, not just the bell: every zone's `feeds.remote.ts` (the bell), lakehouse's `controlEvents`/`controlCursor`/`jetstreamCursor` and media's service-health. Consume cursors through `$lib/live/tick.svelte.ts` (`liveRead` + `lineageTick`/`controlTick`) — it replaced thirteen hand-rolled `$effect`+`setInterval` pollers, and its rules (open on mount, cursor arrival is not a change) each exist because breaking them broke a test. Data mutations move the LINEAGE cursor; governance mutations (grants, warehouses, tenants — including raw `/v1/access/tuples` writes, which emit `grant_added`) move the CONTROL cursor.
 
 ### The SSR hairpin
 

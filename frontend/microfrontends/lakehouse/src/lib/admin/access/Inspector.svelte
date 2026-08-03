@@ -18,19 +18,15 @@
 		Trash2,
 		TriangleAlert,
 	} from '@lucide/svelte';
-	import { parse } from '@rask/api';
 	import { assertionName, toFgaYaml } from './assertion';
+	import type { Tuple } from '../access';
 	import {
 		deleteTuple,
 		fetchTuples,
 		listUsers,
-		ListUsersResultSchema,
 		simulate,
-		SimulateResultSchema,
-		type Tuple,
-		TuplesPageSchema,
 		writeTuple,
-	} from '../access';
+	} from '../remote/access.remote';
 
 	type Props = {
 		selected: string | null;
@@ -87,14 +83,8 @@
 			status = res.status;
 			return;
 		}
-		try {
-			tuples = parse(TuplesPageSchema, res.data).tuples;
-			status = 200;
-		} catch (err) {
-			console.error(`inspector tuples parse failure: ${String(err)}`);
-			tuples = null;
-			status = -1;
-		}
+		tuples = res.data.tuples;
+		status = 200;
 	}
 
 	$effect(() => {
@@ -150,12 +140,7 @@
 		blastPending = false;
 		if (revokeTarget !== t) return;
 		if (!res.ok) return; // the dialog says "could not measure" — never a reassuring zero
-		try {
-			const parsed = parse(ListUsersResultSchema, res.data);
-			blast = { count: parsed.users.length, truncated: parsed.truncated };
-		} catch (err) {
-			console.error(`blast radius parse failure: ${String(err)}`);
-		}
+		blast = { count: res.data.users.length, truncated: res.data.truncated };
 	}
 
 	async function revoke(): Promise<void> {
@@ -241,10 +226,10 @@
 				previewFailed = true;
 				return;
 			}
-			const parsed = parse(SimulateResultSchema, res.data);
-			preview = { allowed: parsed.allowed, baseline: parsed.baseline };
+			preview = { allowed: res.data.allowed, baseline: res.data.baseline };
 		} catch (err) {
-			console.error(`simulate parse failure: ${String(err)}`);
+			// A rejected remote call is a transport failure, not a verdict — the dialog says so.
+			console.error(`simulate transport failure: ${String(err)}`);
 			previewFailed = true;
 		} finally {
 			previewing = false;

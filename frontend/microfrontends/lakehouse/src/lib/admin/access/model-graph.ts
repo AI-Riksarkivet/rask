@@ -33,7 +33,7 @@ const KIND_LABEL: Record<RelationEdgeKind, string> = {
 	excludes: 'but not',
 };
 
-export const relationEdgeLabel = (kind: RelationEdgeKind): string => KIND_LABEL[kind];
+const relationEdgeLabel = (kind: RelationEdgeKind): string => KIND_LABEL[kind];
 
 export type ParsedRelation = {
 	name: string;
@@ -75,7 +75,7 @@ const EMPTY_RELATION = (name: string): ParsedRelation => ({
  * TOLERANT — an unrecognised clause is skipped, never thrown on, because a model that gains syntax
  * should degrade to a slightly-incomplete diagram and not a blank page with an error.
  */
-export function parseModel(dsl: string): ParsedType[] {
+function parseModel(dsl: string): ParsedType[] {
 	const types: ParsedType[] = [];
 	let current: ParsedType | null = null;
 
@@ -151,8 +151,8 @@ export function parseModel(dsl: string): ParsedType[] {
 
 /** Node id for a type, and for one of its relations. Namespaced so a type named like a relation cannot
  *  collide with it. */
-export const typeNodeId = (type: string): string => `type:${type}`;
-export const relationNodeId = (type: string, relation: string): string => `rel:${type}.${relation}`;
+const typeNodeId = (type: string): string => `type:${type}`;
+const relationNodeId = (type: string, relation: string): string => `rel:${type}.${relation}`;
 
 /**
  * Lay the parsed model out as a graph.

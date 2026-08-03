@@ -15,11 +15,6 @@ import { layout as placeLayered } from '@rask/flow';
  *  genuinely different things — which is why the bar offers all three rather than one "search". */
 export type QueryKind = 'what' | 'who' | 'why';
 
-export type ExplorerQuery =
-	| { kind: 'what'; user: string; relation: string; type: string }
-	| { kind: 'who'; object: string; relation: string }
-	| { kind: 'why'; user: string; relation: string; object: string; depth: number };
-
 /** Why a node is on screen. `focus` is the seed, `path` is on the resolving derivation, `dim` is
  *  context that the current query did not touch. Dimming rather than hiding is deliberate: an
  *  operator needs to see that the rest of the graph exists, or "filtered down" reads as "gone". */
@@ -79,7 +74,7 @@ export type BuiltGraph = {
 
 export const idType = (id: string): string => id.split(':')[0] || 'unknown';
 
-export const idLabel = (id: string): string => {
+const idLabel = (id: string): string => {
 	const withoutType = id.includes(':') ? id.slice(id.indexOf(':') + 1) : id;
 	// A userset (`team:eng#member`) keeps its relation — dropping it would render a team and one of its
 	// rungs as the same node, silently merging two different subjects.
@@ -95,7 +90,7 @@ export const isSubject = (id: string): boolean => SUBJECT_TYPES.has(idType(id));
 /** The relation half of a userset reference. Expand answers `"table:db1$t#reader"`, not `"reader"`,
  *  and the qualified form used as a label repeats the object on an edge that already connects it.
  *  A bare relation passes through — the shape is not guaranteed across OpenFGA versions. */
-export const relationOf = (userset: string): string => {
+const relationOf = (userset: string): string => {
 	const hash = userset.lastIndexOf('#');
 	return hash === -1 ? userset : userset.slice(hash + 1) || userset;
 };
@@ -116,7 +111,7 @@ const MECHANISM_LABEL: Record<Mechanism, string> = {
 	requires: 'also requires',
 };
 
-export const mechanismLabel = (m: Mechanism): string => MECHANISM_LABEL[m];
+const mechanismLabel = (m: Mechanism): string => MECHANISM_LABEL[m];
 
 type Walked = {
 	nodes: Map<string, GraphNode>;

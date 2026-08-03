@@ -40,7 +40,7 @@ function storage(): Storage | null {
 
 /** A readable one-liner for a query, derived from the query itself so it can never describe a
  *  different search than the one it replays. */
-export function describeQuery(query: string): string {
+function describeQuery(query: string): string {
 	const q = new URLSearchParams(query);
 	const kind = q.get('q') ?? 'why';
 	const user = q.get('user') ?? '';

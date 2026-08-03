@@ -1,13 +1,10 @@
 import * as v from 'valibot';
 
-import { requestJSON } from '$lib/http';
-
-// Wire contracts + client for the FGA workbench (`/admin/access`) — the catalog's estate-admin-gated
-// /v1/access API, reached through this zone's narrow /capi pass-through (session bearer-forwarded,
-// never a service token). The shapes are the frozen /v1/access contract, parsed (never cast) at the
-// browser boundary per the @rask/api parse-don't-validate rule — like jetstream.ts, hand-written
-// against the contract because the catalog OpenAPI dump has not yet caught up; swap to the generated
-// types once `bun run gen:types:catalog` carries them.
+// Wire CONTRACTS for the FGA workbench (`/admin/access`) — the frozen shapes of the catalog's
+// estate-admin-gated /v1/access API. The transport lives in `remote/access.remote.ts` (the zone's
+// remote-function dialect: the calls run on the zone server with the session bearer and parse THESE
+// schemas at that boundary). Hand-written against the contract because the catalog OpenAPI dump has
+// not yet caught up; swap to the generated types once `bun run gen:types:catalog` carries them.
 
 /** A CEL condition on a grant — the parameters that ride the TUPLE.
  *
@@ -18,7 +15,6 @@ export const TupleConditionSchema = v.object({
 	name: v.string(),
 	context: v.record(v.string(), v.unknown()),
 });
-export type TupleCondition = v.InferOutput<typeof TupleConditionSchema>;
 
 export const TupleSchema = v.object({
 	user: v.string(), // e.g. user:alice, team:eng#member, namespace:db1
@@ -30,17 +26,11 @@ export const TupleSchema = v.object({
 });
 export type Tuple = v.InferOutput<typeof TupleSchema>;
 
-/** What a CALLER supplies to write/delete/check.
- *
- *  `condition` is optional here but required on `Tuple`, and that asymmetry is deliberate: a tuple READ
- *  back from the store always states whether it is conditional (`null` is a real answer — "permanent"),
- *  while a caller writing a permanent grant should not have to say `condition: null` to mean "no". */
-export type TupleInput = Omit<Tuple, 'condition'> & { condition?: TupleCondition | null };
-
 export const TuplesPageSchema = v.object({
 	tuples: v.array(TupleSchema),
 	continuation: v.nullable(v.string()),
 });
+export type TuplesPage = v.InferOutput<typeof TuplesPageSchema>;
 
 export const AccessModelSchema = v.object({
 	dsl: v.string(), // the checked-in model.fga text
@@ -69,59 +59,6 @@ export const CheckVerdictSchema = v.object({
 	checked: TupleSchema, // the exact triple the catalog evaluated — echoed so the UI can't lie
 });
 export type CheckVerdict = v.InferOutput<typeof CheckVerdictSchema>;
-
-export type TupleFilter = {
-	objectType?: string;
-	user?: string;
-	object?: string;
-	pageSize?: number;
-	continuation?: string;
-};
-
-/** One filtered page of tuples (server-side pagination via the opaque continuation token). */
-export const fetchTuples = (filter: TupleFilter = {}) => {
-	const q = new URLSearchParams();
-	if (filter.objectType) q.set('object_type', filter.objectType);
-	if (filter.user) q.set('user', filter.user);
-	if (filter.object) q.set('object', filter.object);
-	if (filter.pageSize) q.set('page_size', String(filter.pageSize));
-	if (filter.continuation) q.set('continuation', filter.continuation);
-	const qs = q.toString();
-	return requestJSON<unknown>('/capi', `v1/access/tuples${qs ? `?${qs}` : ''}`);
-};
-
-/** Grant: write one tuple. Session-only at the BFF; estate-admin gated by the catalog. */
-export const writeTuple = (tuple: TupleInput) =>
-	requestJSON<unknown>('/capi', 'v1/access/tuples', {
-		method: 'POST',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(tuple),
-	});
-
-/** Revoke: delete one tuple (same body as the write — the tuple IS the identity). */
-export const deleteTuple = (tuple: TupleInput) =>
-	requestJSON<unknown>('/capi', 'v1/access/tuples', {
-		method: 'DELETE',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(tuple),
-	});
-
-/** A live OpenFGA Check on any (user, relation, object) triple — the workbench's probe. */
-export const checkAccess = (tuple: TupleInput, context: Record<string, unknown> = {}) =>
-	requestJSON<unknown>('/capi', 'v1/access/check', {
-		method: 'POST',
-		headers: { 'content-type': 'application/json' },
-		// `context` supplies the runtime values a CONDITION evaluates against (`current_time`). Sent
-		// even when empty is wrong — OpenFGA reads an empty context as "no operands", which ERRORS any
-		// CEL expression on the path — so it is omitted entirely unless there is something to say.
-		body: JSON.stringify(Object.keys(context).length ? { ...tuple, context } : tuple),
-	});
-
-/** The authorization model itself (read-only — model changes are code migrations). */
-export const fetchAccessModel = () => requestJSON<unknown>('/capi', 'v1/access/model');
-
-/** The catalog registry (`<ns>$<table>` ids) — one-click graph seeds. */
-export const fetchTables = () => requestJSON<{ tables: string[] }>('/capi', 'v1/table');
 
 // ── the derivation surfaces (POST /v1/access/{list-objects,list-users,expand}) ───────────────────────
 //
@@ -176,7 +113,7 @@ export type ExpandLeaf = {
 // would claim the wire already matches, and these fields legitimately arrive absent or null.
 const nullish = <T>(schema: v.GenericSchema<unknown, T>) => v.optional(v.nullable(schema), null);
 
-export const ExpandNodeSchema: v.GenericSchema<unknown, ExpandNode> = v.lazy(() =>
+const ExpandNodeSchema: v.GenericSchema<unknown, ExpandNode> = v.lazy(() =>
 	v.object({
 		name: nullish(v.string()),
 		leaf: nullish(ExpandLeafSchema),
@@ -190,7 +127,7 @@ export const ExpandNodeSchema: v.GenericSchema<unknown, ExpandNode> = v.lazy(() 
 	}),
 );
 
-export const ExpandLeafSchema: v.GenericSchema<unknown, ExpandLeaf> = v.lazy(() =>
+const ExpandLeafSchema: v.GenericSchema<unknown, ExpandLeaf> = v.lazy(() =>
 	v.object({
 		users: nullish(v.array(v.string())),
 		computed: nullish(v.string()),
@@ -212,33 +149,6 @@ export const ExpandResultSchema = v.object({
 });
 export type ExpandResult = v.InferOutput<typeof ExpandResultSchema>;
 
-const postJSON = (path: string, body: unknown) =>
-	requestJSON<unknown>('/capi', path, {
-		method: 'POST',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(body),
-	});
-
-/** "What can this subject reach?" — every `type` object the subject holds `relation` on, model
- *  expansion included. `user` may be a userset (`team:eng#member`, `role:validators#assignee`). */
-export const listObjects = (query: { user: string; relation: string; type: string }) =>
-	postJSON('v1/access/list-objects', query);
-
-/** "Who can do this?" — the effective subject set on one object. Also the blast radius a revoke needs
- *  BEFORE it writes, since a tuple high in the hierarchy cuts access for many principals at once. */
-export const listUsers = (query: {
-	object: string;
-	relation: string;
-	userType?: string;
-	userRelation?: string | null;
-}) =>
-	postJSON('v1/access/list-users', {
-		object: query.object,
-		relation: query.relation,
-		user_type: query.userType ?? 'user',
-		user_relation: query.userRelation ?? null,
-	});
-
 export const SimulateResultSchema = v.object({
 	/** With the hypothesis applied. */
 	allowed: v.boolean(),
@@ -250,28 +160,3 @@ export const SimulateResultSchema = v.object({
 	hypothetical: v.array(TupleSchema),
 });
 export type SimulateResult = v.InferOutput<typeof SimulateResultSchema>;
-
-/** Assert before you grant: does the proposed tuple actually change the answer? Writes nothing. */
-export const simulate = (query: {
-	user: string;
-	relation: string;
-	object: string;
-	// Proposals, not stored facts — a caller asking "what if I granted this" has no condition to
-	// state unless it is proposing a time-boxed grant, so the input form applies here too.
-	hypothetical: readonly TupleInput[];
-}) =>
-	postJSON('v1/access/simulate', {
-		user: query.user,
-		relation: query.relation,
-		object: query.object,
-		hypothetical: query.hypothetical,
-	});
-
-/** "Why does this resolve?" — the derivation tree. `depth` follows the cascade server-side (one gate,
- *  one audit row, one response) rather than costing a round trip per hop from the browser. */
-export const expand = (query: { object: string; relation: string; depth?: number }) =>
-	postJSON('v1/access/expand', {
-		object: query.object,
-		relation: query.relation,
-		depth: query.depth ?? 1,
-	});

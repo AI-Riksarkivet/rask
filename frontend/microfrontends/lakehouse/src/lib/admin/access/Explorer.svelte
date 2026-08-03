@@ -18,26 +18,19 @@
 	import { goto } from '$app/navigation';
 	import { onMount, untrack } from 'svelte';
 	import { page } from '$app/state';
-	import { MeSchema, parse } from '@rask/api';
-	import { requestJSON } from '$lib/http';
 	import { Filter, RotateCcw, ShieldAlert } from '@lucide/svelte';
+	import { parseModelTypes, type Tuple } from '../access';
 	import {
-		AccessModelSchema,
+		accessMe,
 		checkAccess,
-		CheckVerdictSchema,
 		expand,
-		ExpandResultSchema,
 		fetchAccessModel,
+		fetchStore,
 		fetchTables,
-		fetchTuples,
 		listObjects,
-		ListObjectsResultSchema,
 		listUsers,
-		ListUsersResultSchema,
-		parseModelTypes,
-		type Tuple,
-		TuplesPageSchema,
-	} from '../access';
+	} from '../remote/access.remote';
+	import { controlTick, liveRead } from '$lib/live/tick.svelte';
 	import FacetRail from './FacetRail.svelte';
 	import Inspector from './Inspector.svelte';
 	import QueryBar from './QueryBar.svelte';
@@ -55,13 +48,6 @@
 	} from './graph';
 	import { buildModelGraph } from './model-graph';
 	import { clearHistory, type HistoryEntry, loadHistory, recordQuery } from './history';
-
-	/**
-	 * Page ceiling for the whole-store read. 100 tuples/page, so 40 pages = 4000 tuples on the canvas —
-	 * past that a node-and-edge graph is unreadable anyway, and the honest move is to say the graph is
-	 * partial and let the facets narrow it, not to keep fetching into an illegible hairball.
-	 */
-	const MAX_GRAPH_PAGES = 40;
 
 	const EMPTY: BuiltGraph = {
 		nodes: [],
@@ -188,23 +174,26 @@
 	onMount(() => {
 		history = loadHistory();
 		void loadModel();
-		void loadRegistry();
 		void loadMe();
-		// The canvas is never empty: the whole store is the resting state.
+	});
+
+	// The resting graph is LIVE: read once on mount (liveRead's unconditional first read), then again
+	// whenever the CONTROL cursor advances — a grant landing anywhere on the estate (another admin, the
+	// per-object grant API, a bootstrap job) redraws this canvas without a timer. The registry rides the
+	// same tick because table/namespace mutations move the same cursor. The model does not: model
+	// changes are code migrations, not runtime events, so no cursor can report one.
+	liveRead(controlTick, () => {
 		void loadWholeGraph();
+		void loadRegistry();
 	});
 
 	async function loadMe(): Promise<void> {
-		const res = await requestJSON<unknown>('/capi', 'v1/me');
-		if (!res.ok) return;
-		try {
-			const parsed = parse(MeSchema, res.data);
-			me = { sub: parsed.sub, name: parsed.name, estate_admin: parsed.estate_admin };
-			// Seed the subject only if the user has not already typed or linked one.
-			if (!user.trim()) user = `user:${parsed.sub}`;
-		} catch (err) {
-			console.error(`me parse failure: ${String(err)}`);
-		}
+		// Fail-soft to null (no session, catalog down): the "me" chip simply does not render.
+		const parsed = await accessMe();
+		if (!parsed) return;
+		me = { sub: parsed.sub, name: parsed.name, estate_admin: parsed.estate_admin };
+		// Seed the subject only if the user has not already typed or linked one.
+		if (!user.trim()) user = `user:${parsed.sub}`;
 	}
 
 	async function loadModel(): Promise<void> {
@@ -213,14 +202,9 @@
 			denied = res.status === 401 || res.status === 403;
 			return;
 		}
-		try {
-			const parsed = parse(AccessModelSchema, res.data);
-			dsl = parsed.dsl;
-			modelTypes = parseModelTypes(parsed.dsl);
-			modelConditions = parsed.conditions;
-		} catch (err) {
-			console.error(`access model parse failure: ${String(err)}`);
-		}
+		dsl = res.data.dsl;
+		modelTypes = parseModelTypes(res.data.dsl);
+		modelConditions = res.data.conditions;
 	}
 
 	async function loadRegistry(): Promise<void> {
@@ -291,39 +275,23 @@
 	 * thing anyone saw was an empty box with a free-text field. The whole point is the opposite — show
 	 * every relationship, then let a query highlight within it and the facets narrow it.
 	 *
-	 * `GET /v1/access/tuples` with NO filter reads the entire store, paginated. The page loop is
-	 * bounded: a store larger than the ceiling is reported as truncated rather than silently clipped,
-	 * because a graph that quietly omits half the estate is worse than one that admits it.
+	 * The page loop lives in `fetchStore` on the zone server now — one browser round trip instead of
+	 * forty — with the same bounded ceiling: a store larger than it is reported as truncated rather
+	 * than silently clipped, because a graph that quietly omits half the estate is worse than one that
+	 * admits it.
 	 */
 	async function loadWholeGraph(): Promise<void> {
-		const collected: Tuple[] = [];
-		let continuation: string | null = null;
-		truncated = false;
-		for (let page = 0; page < MAX_GRAPH_PAGES; page++) {
-			const res = await fetchTuples({
-				pageSize: 100,
-				...(continuation ? { continuation } : {}),
-			});
-			if (!res.ok) {
-				denied = res.status === 401 || res.status === 403;
-				if (!denied) failure = res.detail;
-				return;
-			}
-			try {
-				const parsed = parse(TuplesPageSchema, res.data);
-				collected.push(...parsed.tuples);
-				continuation = parsed.continuation;
-			} catch (err) {
-				console.error(`tuple store parse failure: ${String(err)}`);
-				return;
-			}
-			if (!continuation) break;
-			if (page === MAX_GRAPH_PAGES - 1) truncated = true;
+		const res = await fetchStore();
+		if (!res.ok) {
+			denied = res.status === 401 || res.status === 403;
+			if (!denied) failure = res.detail;
+			return;
 		}
-		storeTuples = collected;
+		storeTuples = res.data.tuples;
+		truncated = res.data.truncated;
 		// `focus` on nothing: the whole store has no single centre, so every node is ordinary until a
 		// query names one. buildWholeGraph lays subjects left and objects right off the tuple direction.
-		neighbourhood = buildWholeGraph(collected);
+		neighbourhood = buildWholeGraph(res.data.tuples);
 	}
 
 	/** One object's own tuples, for the inspector — the canvas already holds the whole store. */
@@ -363,7 +331,7 @@
 			fail(res);
 			return;
 		}
-		const parsed = parse(ListObjectsResultSchema, res.data);
+		const parsed = res.data;
 		answer = buildNeighbourhood(
 			parsed.user,
 			parsed.objects.map((o) => ({ user: parsed.user, relation: parsed.relation, object: o })),
@@ -381,7 +349,7 @@
 			fail(res);
 			return;
 		}
-		const parsed = parse(ListUsersResultSchema, res.data);
+		const parsed = res.data;
 		answer = buildNeighbourhood(
 			parsed.object,
 			parsed.users.map((u) => ({ user: u, relation: parsed.relation, object: parsed.object })),
@@ -406,7 +374,7 @@
 			fail(checkRes);
 			return;
 		}
-		const probed = parse(CheckVerdictSchema, checkRes.data);
+		const probed = checkRes.data;
 		verdict = {
 			allowed: probed.allowed,
 			user: probed.checked.user,
@@ -418,7 +386,7 @@
 			failure = 'The verdict is live, but the derivation could not be read.';
 			return;
 		}
-		const parsed = parse(ExpandResultSchema, expandRes.data);
+		const parsed = expandRes.data;
 		answer = walkDerivation(parsed.tree, parsed.object, parsed.relation);
 		seed = parsed.object;
 		chain = answer.edges

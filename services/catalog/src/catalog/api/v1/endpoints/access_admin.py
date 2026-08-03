@@ -31,9 +31,10 @@ from lance_namespace import (
 from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import SettingsDep
+from catalog.api.dependencies import SettingsDep, get_control_emitter
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
+from catalog.core.control_emit import emit_control
 from catalog.schemas import (
     AccessCheckBody,
     AccessCheckResult,
@@ -272,6 +273,18 @@ async def _mutate_tuple(request: Request, settings: Settings, token: CurrentToke
         # would give this one surface two rows per write while the other six still had none.
         audit(event, FAILURE, subject=actor, resource=tup.object, grantee=tup.user, relation=tup.relation)
         raise
+    # The control-plane feed documents that GRANTS tick the cursor — and the per-object grant surface
+    # emits, so a raw-tuple write that stayed silent made this the one grant path live surfaces could
+    # not see. Best-effort AFTER the store mutation (the emitter swallows bus failures), like access.py.
+    condition = getattr(tup, "condition", None)
+    await emit_control(
+        get_control_emitter(request),
+        action="grant_added" if write else "grant_revoked",
+        object_type="grant",
+        object_id=tup.object,
+        actor=f"user:{token.sub}" if token else None,
+        extra={"relation": tup.relation, "subject": tup.user} | ({"condition": condition.name} if condition is not None else {}),
+    )
     return _as_access_tuple(tup)
 
 
