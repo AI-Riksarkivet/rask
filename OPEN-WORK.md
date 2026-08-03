@@ -424,6 +424,23 @@ made seedable — the `open_label.md` waves, folded here as that file retires.**
   claims to cover; the script is still pinned to one release name, one node and fixed local ports;
   and the labeling seed hard-codes fixture-internal doc ids with a `dataset_version` that is already
   wrong.
+- **NEW, owner-reported 2026-08-03, root cause found, NOT fixed: the annotate canvas 403s on a
+  catalog-backed estate because the annotations READ has no identity.** `/annotator` renders
+  "annotate · image · load failed — annotations HTTP 403". The catalog's own log names it:
+  `POST /v1/table/transcripts_v2$annotations/describe … 401 Unauthorized` — the annotator service
+  calls the catalog with NO bearer and surfaces the 401 to the browser as a 403. So it is not a
+  grant problem and no tuple will fix it. The publish wave gave WRITES a real service identity
+  (dex password-grant, secret via OpenBao/Dapr); the `MEDIA_READ_BACKEND=catalog` path was never
+  given one. Two things to settle together: (a) which identity a read uses — the signed-in user's
+  forwarded bearer (correct for FGA, since the row filter should be the USER's) or the service
+  account; and (b) `wire.py:59` treats a MISSING annotations table as an empty stream in local mode
+  but has no equivalent guard in catalog mode, so a fresh estate — which legitimately has no
+  annotations yet — cannot open the canvas at all. Fix (a) properly; do NOT paper over it by
+  swallowing 401/403 as "empty", which would hide real permission failures.
+- **NEW, owner-reported 2026-08-03, NOT diagnosed: a `derived_inert` flood in the annotate view.**
+  Hundreds of `https://svelte.dev/e/derived_inert` from the compiled bundle — a `$derived` read
+  after its owner was destroyed, or written to. Volume suggests a per-frame path (the PixiJS canvas
+  loop). Needs a dev-build repro to name the component; the minified stack is not enough.
 - **Still open after this wave** (the honest residue): **batch mode** (`runners.jobsUrl` — the
   annotator's batch-labeling submit is still an honest mock); **W3 text spans** (doccano parity —
   needs `char_start`/`char_end` on `Shape` plus a span tool; the review/consensus/publish machine
