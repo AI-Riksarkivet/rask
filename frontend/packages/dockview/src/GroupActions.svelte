@@ -150,18 +150,22 @@
 		else for (const r of watched) r.mute(!allMuted);
 	}
 
-	/** Add a registered panel to THIS group. `referenceGroup` without a direction means "within". */
+	/** Add a registered panel NEAR this group. Into it while it has room; as a split to the right
+	 *  once it is crowded — stacking every add into one group buried each panel behind the tab
+	 *  overflow chevron three adds in, which read as "the + button is broken" (user report). Three
+	 *  visible tabs is where the bar stops scanning at panel-typical widths. */
 	function addPanel(key: string): void {
 		if (self === undefined) return;
 		const entry = panels[key];
 		if (entry === undefined) return;
+		const crowded = group.panels.length >= 3;
 		containerApi.addPanel({
 			// `addPanel` THROWS on a duplicate id, so this is load-bearing rather than tidy — adding a
 			// second Runs panel must not blow up inside a click handler.
 			id: uniquePanelId(containerApi, key),
 			component: key,
 			title: entry.label,
-			position: { referenceGroup: self },
+			position: crowded ? { referenceGroup: self, direction: 'right' } : { referenceGroup: self },
 		});
 	}
 
