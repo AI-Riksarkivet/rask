@@ -24,7 +24,7 @@
 	import { formatAbsolute, formatTimestamp } from '@rask/ui/utils';
 	import { ExternalLink, Filter, RefreshCw, ScrollText, ShieldAlert } from '@lucide/svelte';
 	import { page } from '$app/state';
-	import { requestJSON } from '$lib/http';
+	import { fetchAuditTrail } from './remote/audit.remote';
 	import { controlCursor } from '$lib/live/feeds.remote';
 	import { liveRead } from '$lib/live/tick.svelte';
 
@@ -69,13 +69,18 @@
 
 	async function load(): Promise<void> {
 		const seq = ++inflight;
-		const q = new URLSearchParams();
-		q.set('since', since);
-		if (outcome) q.set('outcome', outcome);
-		if (action.trim()) q.set('action', action.trim());
-		if (subject.trim()) q.set('subject', subject.trim());
-		if (resource.trim()) q.set('resource', resource.trim());
-		const res = await requestJSON<{ events: AuditEvent[] }>('/api', `audit?${q}`);
+		// `.refresh()` forces a server round trip — this surface re-reads on the control cursor and on
+		// every filter change, so a cached previous answer is never the right one (the streams lesson).
+		const params = {
+			since,
+			...(outcome ? { outcome } : {}),
+			...(action.trim() ? { action: action.trim() } : {}),
+			...(subject.trim() ? { subject: subject.trim() } : {}),
+			...(resource.trim() ? { resource: resource.trim() } : {}),
+		};
+		const rq = fetchAuditTrail(params);
+		await rq.refresh().catch(() => {});
+		const res = rq.current ?? ({ ok: false, status: 0, detail: 'audit unreachable' } as const);
 		if (seq !== inflight) return; // latest-wins
 		settled = true;
 		if (res.ok) {
