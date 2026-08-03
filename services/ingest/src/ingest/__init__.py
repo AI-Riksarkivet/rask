@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ingest.api import router as ingest_router
+from ingest.health import router as health_router
 from ingest.runs import InMemoryRunStore
 
 
@@ -32,7 +33,7 @@ def create_app() -> FastAPI:
 
     register_builtin_sources()
 
-    app = make_service_app(title="ingest", routers=[ingest_router])
+    app = make_service_app(title="ingest", routers=[health_router, ingest_router])
     app.state.run_store = InMemoryRunStore()
     app.state.workflow_starter = _DaprWorkflowStarter()
     return app
