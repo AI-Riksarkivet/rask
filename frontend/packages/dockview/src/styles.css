@@ -19,6 +19,13 @@
 @import 'dockview/dist/styles/dockview.css';
 
 .dockview-theme-rask {
+	/* dockview's PopupService (the tab-overflow dropdown) sets its wrapper's z-index to
+	   var(--dv-overlay-z-index) — a variable only the BUILT-IN theme classes define. This theme
+	   skipped it on the assumption the default "already sits above the grid"; with no definition
+	   the wrapper computes z-index auto, and because the popover anchor is PREPENDED to the dock
+	   root, the whole dock painted over the open dropdown — it opened invisibly (observed live:
+	   wrapper present, 207x156, z=auto, nothing on screen). 999 matches dockview's own themes. */
+	--dv-overlay-z-index: 999;
 	/* ── surfaces ─────────────────────────────────────────────────────────────────────────── */
 	--dv-group-view-background-color: var(--card);
 	--dv-tabs-and-actions-container-background-color: var(--background);

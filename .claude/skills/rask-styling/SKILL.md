@@ -71,8 +71,10 @@ Three groups are **deliberately unmapped**, and re-mapping them is a regression:
   only by their own theme classes; dead weight here.
 - `--dv-tab-group-color-*` — the nine user-pickable tab-group accents. A user's semantic choice per
   group, not a theme surface. Overriding them collapses nine distinguishable colours onto one.
-- `--dv-overlay-z-index` — dockview's default already sits above the grid and below a Bits UI portal,
-  which is the ordering the estate wants.
+- ~~`--dv-overlay-z-index`~~ — **this one IS mapped now (999)**: it is not themed by default at all —
+  only the built-in theme classes define it, so a custom theme that skips it leaves the PopupService
+  wrapper (the tab-overflow dropdown) at `z-index: auto`, painted UNDER the dock it is prepended to.
+  The dropdown opened invisibly for as long as the assumption stood (fixed 2026-08-03).
 
 The non-CSS half lives in `theme.ts` (`gap`, `dndTabIndicator`, `tabAnimation`, `dndOverlayMounting`,
 `tabGroupIndicator`) — behavioural fields CSS cannot express. **Do not add GSAP to the dock chrome:**
