@@ -22,7 +22,7 @@
 		grantTableAccess,
 		revokeTableAccess,
 	} from './catalog';
-	import { FlowAutoFit } from '@rask/panels/graph';
+	import { FlowAutoFit } from '@rask/flow';
 
 	let { dataset }: { dataset: string } = $props();
 

@@ -29,11 +29,11 @@
 		type FitViewOptions,
 	} from '@xyflow/svelte';
 	import { Boxes, Cpu } from '@lucide/svelte';
-	import { FlowAutoFit } from '../graph';
+	import { FlowAutoFit } from '@rask/flow';
 	import type { LineageState } from './store.svelte';
 	import { useColorMode } from '@rask/ui/color-mode';
 	import { LAYER } from '@rask/api/lineage';
-	import { depths, layout } from './layout.js';
+	import { depths, layout } from '@rask/flow';
 
 	/**
 	 * `base` and `navigate` arrive as PROPS rather than from `$app/paths` and `$app/navigation`.

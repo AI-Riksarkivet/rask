@@ -17,5 +17,5 @@ export { LineageState, type LineageClient } from './store.svelte';
 export { getLineageState, setLineageState } from './lineage-context';
 // Re-exported from the shared graph module rather than owned here: it is not lineage-specific, and the
 // second copy that lived in the lakehouse zone had already drifted (no `maxZoom`). One implementation.
-export { FlowAutoFit } from '../graph';
-export { depths, layout } from './layout.js';
+export { FlowAutoFit } from '@rask/flow';
+export { layout, depths } from '@rask/flow';

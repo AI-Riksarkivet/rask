@@ -107,6 +107,7 @@
         "@lucide/svelte": "^1.26.0",
         "@rask/api": "workspace:*",
         "@rask/dockview": "workspace:*",
+        "@rask/flow": "workspace:*",
         "@rask/panels": "workspace:*",
         "@rask/ui": "workspace:*",
         "@sveltejs/kit": "^2.70.1",
@@ -140,6 +141,7 @@
         "@lucide/svelte": "^1.26.0",
         "@rask/api": "workspace:*",
         "@rask/dockview": "workspace:*",
+        "@rask/flow": "workspace:*",
         "@rask/labeling": "workspace:*",
         "@rask/media-api": "workspace:*",
         "@rask/ui": "workspace:*",
@@ -306,6 +308,23 @@
         "vitest": "^4.1.10",
       },
     },
+    "packages/flow": {
+      "name": "@rask/flow",
+      "version": "0.0.0",
+      "dependencies": {
+        "@xyflow/svelte": "^1.4.2",
+      },
+      "devDependencies": {
+        "@rask/config": "workspace:*",
+        "svelte": "^5.56.8",
+        "svelte-check": "^4.7.3",
+        "typescript": "^6.0.3",
+        "vitest": "^4.1.10",
+      },
+      "peerDependencies": {
+        "svelte": "^5.0.0",
+      },
+    },
     "packages/labeling": {
       "name": "@rask/labeling",
       "version": "0.0.0",
@@ -339,6 +358,7 @@
         "@lucide/svelte": "^1.26.0",
         "@rask/api": "workspace:*",
         "@rask/dockview": "workspace:*",
+        "@rask/flow": "workspace:*",
         "@rask/ui": "workspace:*",
         "@xyflow/svelte": "^1.4.2",
         "dockview": "^7.0.4",
@@ -674,6 +694,8 @@
     "@rask/dockview": ["@rask/dockview@workspace:packages/dockview"],
 
     "@rask/engine": ["@rask/engine@workspace:packages/engine"],
+
+    "@rask/flow": ["@rask/flow@workspace:packages/flow"],
 
     "@rask/labeling": ["@rask/labeling@workspace:packages/labeling"],
 

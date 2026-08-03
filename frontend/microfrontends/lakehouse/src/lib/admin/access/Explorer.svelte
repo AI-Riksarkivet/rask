@@ -11,7 +11,7 @@
 	// narrows it, and an inspector beside it — replacing four tabs that shared no state, no URL and no
 	// question. Switching "tabs" used to throw away the graph you were looking at; nothing here does.
 	import { type Edge, MarkerType } from '@xyflow/svelte';
-	import { GraphCanvas } from '@rask/panels/graph';
+	import { GraphCanvas } from '@rask/flow';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
 	import { goto } from '$app/navigation';

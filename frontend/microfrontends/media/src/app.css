@@ -20,7 +20,7 @@
    overridden. Without this the Controls widget and every edge label render in the library's light-mode
    hex on a dark canvas — a white blob. This zone mounts THREE Svelte Flow canvases (diagram/Flow,
    workflow/FlowPane, workflow/WorkflowCanvas), all of which had it. */
-@import '@rask/ui/styles/svelte-flow.css' layer(base);
+@import '@rask/flow/styles.css' layer(base);
 /* @rask/dockview: vendor sheet + the --dv-* → OKLCH token mapping, one import, same layer
    and same reason as Svelte Flow's above. */
 @import '@rask/dockview/styles.css' layer(base);

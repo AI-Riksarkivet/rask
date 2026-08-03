@@ -1,0 +1,35 @@
+{
+	"name": "@rask/flow",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"svelte": "./src/index.ts",
+			"default": "./src/index.ts"
+		},
+		"./styles.css": "./src/styles.css"
+	},
+	"scripts": {
+		"check": "svelte-check --tsconfig ./tsconfig.json",
+		"test": "vitest run --passWithNoTests",
+		"lint": "oxlint .",
+		"fmt": "rsvelte-fmt .",
+		"fmt:check": "rsvelte-fmt --check ."
+	},
+	"dependencies": {
+		"@xyflow/svelte": "^1.4.2"
+	},
+	"devDependencies": {
+		"@rask/config": "workspace:*",
+		"svelte": "^5.56.8",
+		"svelte-check": "^4.7.3",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.10"
+	},
+	"peerDependencies": {
+		"svelte": "^5.0.0"
+	},
+	"//": "The estate's Svelte Flow layer — the @rask/dockview of @xyflow/svelte, and the same shape: this package is the BINDING (viewer shell, SSR renderer, auto-fit, the layered placer, the --xy-* theme), and the domain graphs stay with their domains. LineageGraph is a lineage PANEL and lives in @rask/panels exactly as GraphPanel does; the FGA builders are lakehouse access logic; the workflow EDITOR (media FlowPane, drag-to-connect) is media's. Folding any of them in here would make 'the flow package' secretly be a domain package with a generic name — the monolith shape this estate keeps rejecting. JIT like @rask/api: raw TS/Svelte, no build step. Nothing here may import `$lib/*` or `$app/*`, an API client, or any domain type: if a value is zone- or domain-shaped it arrives as a prop."
+}

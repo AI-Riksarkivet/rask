@@ -1,0 +1,12 @@
+{
+	"//": "Extends the shared base, then re-inlines noUncheckedIndexedAccess — rask-frontend records that packages extending @rask/config ALONE are the least strictly typed in the estate and calls that a defect; a new package must not join them. exactOptionalPropertyTypes stays OFF (the one flag Svelte packages cannot carry — Bits UI 'union too complex'). No 'node' in types: nothing here reads disk, and nothing that ships to a browser may import node:*.",
+	"extends": "@rask/config/tsconfig.base.json",
+	"compilerOptions": {
+		"noUncheckedIndexedAccess": true,
+		"noEmit": true,
+		"isolatedModules": true,
+		"verbatimModuleSyntax": true,
+		"types": ["svelte"]
+	},
+	"include": ["src/**/*.ts", "src/**/*.svelte"]
+}
