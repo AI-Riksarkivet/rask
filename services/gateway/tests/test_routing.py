@@ -58,3 +58,25 @@ def test_target_base_falls_back_when_disabled(gw, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("RASK_DAPR_ENABLED", "false")
     base = gw._target_base("compute", "http://127.0.0.1:8804")
     assert base == "http://127.0.0.1:8804"
+
+
+def test_ingest_row_reaches_the_ingest_plane_and_does_not_swallow_ingest_iiif() -> None:
+    """The /api/ingest row, and the sibling-prefix property it only LOOKS like it violates.
+
+    `_pick_route` matches on `path == prefix or path.startswith(prefix + "/")`, so "/api/ingest-iiif"
+    cannot match the "/api/ingest" row — the next character is "-", not "/". Worth a test rather than
+    a comment: the two rows coexist through a deprecation window, and "longest prefix first" is the
+    kind of rule someone reorders on instinct.
+    """
+    from gateway import _pick_route, _routes
+
+    rows = _routes()
+    ingest = _pick_route("/api/ingest", rows)
+    assert ingest is not None and ingest[2] == "ingest"
+
+    sub = _pick_route("/api/ingest/v1/ingests/abc", rows)
+    assert sub is not None and sub[2] == "ingest"
+
+    # The deprecated medallion head still resolves to the medallion, not to the new plane.
+    legacy = _pick_route("/api/ingest-iiif", rows)
+    assert legacy is not None and legacy[2] == "lance-ray"

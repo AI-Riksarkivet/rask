@@ -90,6 +90,15 @@ services:
   # Its public gateway rows stay /api/ray + /api/serve: the URL namespace names the
   # Ray cluster, not the service. The zone image namespace is web-<zone>, so the bare
   # `compute` image name is this service's.)
+  # The ingest plane (open_ingest.md Phase 1): pre-bronze acquisition — control API + workers +
+  # the lander. frontDoor because the gateway routes /api/ingest to this app-id; a bare app-id,
+  # NOT the legacy `lance-ray` shape the medallion still carries (audit m1).
+  ingest:
+    module: "ingest:create_app"
+    port: 8830
+    replicas: 1
+    frontDoor: true
+    waitFor: []
   compute:
     module: "compute:app"
     port: 8804
