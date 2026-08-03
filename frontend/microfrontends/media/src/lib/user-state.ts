@@ -28,7 +28,11 @@
 import type { ApiResult } from '@rask/api/client';
 
 /** The documents this zone owns. Matches `UserStateDocument` in `services/common/user_state.py`. */
-export type UserStateDocument = 'workflow-graph' | 'saved-views' | 'dock-layout';
+export type UserStateDocument =
+	| 'workflow-graph'
+	| 'saved-views'
+	| 'dock-layout'
+	| 'dock-layout-library';
 
 /** What the catalog returns for a document: `exists: false` is a genuine "never saved", and a value is
  *  only a value when both keys agree. */

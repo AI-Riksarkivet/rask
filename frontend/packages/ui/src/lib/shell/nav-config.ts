@@ -239,6 +239,13 @@ const MEDIA_ITEMS: TopNavItem[] = [
 	{ title: 'Atlas', href: '/media/atlas', description: 'The embedding map of the corpus.' },
 	{ title: 'Tree', href: '/media/tree', description: 'The corpus by topic hierarchy.' },
 	{ title: 'Graph', href: '/media/graph', description: 'Relations between media entities.' },
+	{
+		// The dock lives INSIDE this zone (its panels are the zone's own components sharing one
+		// search) — so it is a row of the zone's panel, exactly like every other area.
+		title: 'Workbench',
+		href: '/media/workbench',
+		description: 'Results, atlas and player in one arrangeable dock.',
+	},
 	{ title: 'Workflow', href: '/media/workflow', description: 'The derivation pipeline.' },
 ];
 

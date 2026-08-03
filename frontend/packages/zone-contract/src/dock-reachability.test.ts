@@ -74,10 +74,11 @@ const DOCKS = dockRoutes();
 
 describe('dock reachability', () => {
 	it('pins the docks: exactly THE global workbench — a per-zone dock reappearing is a defect', () => {
-		// 2026-08-03: the estate ships ONE dock, the global workbench zone (docs/architecture/global-workbench.md) —
-		// runtime-composed from custom elements the other zones serve. The per-zone workbenches are
-		// removed by decision, so the pin is exact: the global route, and nothing else.
-		expect(DOCKS.map((d) => d.href)).toEqual(['/workbench/']);
+		// 2026-08-03 (evening ruling): docks belong INSIDE the zones. The media zone's search
+		// workbench composes that zone's own components over one shared store — full fidelity, no
+		// cross-zone transport. The global `/workbench` compositor stays standing for cross-zone
+		// mixing. The pin stays EXACT so a dock can never appear unnavigable.
+		expect(DOCKS.map((d) => d.href).sort()).toEqual(['/media/workbench', '/workbench/']);
 	});
 
 	it.each(DOCKS)('$href is listed in the $zone zone sidebar', ({ zone, href }) => {
