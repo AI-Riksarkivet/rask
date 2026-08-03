@@ -424,19 +424,33 @@ made seedable — the `open_label.md` waves, folded here as that file retires.**
   claims to cover; the script is still pinned to one release name, one node and fixed local ports;
   and the labeling seed hard-codes fixture-internal doc ids with a `dataset_version` that is already
   wrong.
-- **NEW, owner-reported 2026-08-03, root cause found, NOT fixed: the annotate canvas 403s on a
-  catalog-backed estate because the annotations READ has no identity.** `/annotator` renders
-  "annotate · image · load failed — annotations HTTP 403". The catalog's own log names it:
-  `POST /v1/table/transcripts_v2$annotations/describe … 401 Unauthorized` — the annotator service
-  calls the catalog with NO bearer and surfaces the 401 to the browser as a 403. So it is not a
-  grant problem and no tuple will fix it. The publish wave gave WRITES a real service identity
-  (dex password-grant, secret via OpenBao/Dapr); the `MEDIA_READ_BACKEND=catalog` path was never
-  given one. Two things to settle together: (a) which identity a read uses — the signed-in user's
-  forwarded bearer (correct for FGA, since the row filter should be the USER's) or the service
-  account; and (b) `wire.py:59` treats a MISSING annotations table as an empty stream in local mode
-  but has no equivalent guard in catalog mode, so a fresh estate — which legitimately has no
-  annotations yet — cannot open the canvas at all. Fix (a) properly; do NOT paper over it by
-  swallowing 401/403 as "empty", which would hide real permission failures.
+- ~~**the annotate canvas 403s because the annotations READ has no identity**~~ **FIXED 2026-08-03,
+  and two claims in the original entry were WRONG — corrected here because both would have sent the
+  next reader the wrong way.**
+  - The symptom and its cause held: the catalog logged `401 Unauthorized` for
+    `POST /v1/table/transcripts_v2$annotations/describe`, the annotator sent no bearer, and the
+    browser was told 403. Root cause was deeper than a missing env var — `open_reader`/`open_writer`
+    had **no credential parameter at all**, only `settings.catalog_token`, which the chart leaves
+    empty (`values.yaml: catalogToken: ""`).
+  - **WRONG CLAIM 1 — "the row filter should be the USER's".** The catalog performs **no row
+    filtering**: `query_table` passes the body straight to the native namespace with no user
+    predicate, and `authorize` checks one relation on one `table:` object. The forwarded bearer is
+    still correct, but for a different reason — **confused deputy**: with A granted reader and B not,
+    a user bearer gives A 200 / B 403, while a service token gives A 200 / **B 200**, silently
+    over-permitting B. The principals diverge, not the rows.
+  - **WRONG CLAIM 2 — "no equivalent guard in catalog mode".** `wire.py` already guards catalog-mode
+    absence (`NotFoundError` → empty stream), and `versions.py` does the same. The 401, laundered
+    into `ForbiddenError`, simply bypassed that guard. `translate_catalog_errors` now keeps 401 as
+    `UnauthorizedError`.
+  - Still open from this thread: **`services/viewer` has the identical missing-bearer defect** on its
+    own catalog call and no bearer plumbing to fix it with (no `security.py`, no `HTTPBearer`). Its
+    error message no longer lies — a 401 used to report as "catalog does not know table X" — but the
+    credential itself is unfixed.
+  - **And the genuine absence hole is on the WRITE path, not the read**: `save.py` and `tags.py` call
+    `reader.table_version()` unguarded, and **nothing anywhere creates the annotations table** — the
+    writer seam exposes only `merge_upsert`/`merge_insert_only`/`delete`, no create. So a fresh
+    estate's FIRST save has nothing to write into. Fix by making the table exist (a create-if-absent
+    verb on the writer seam), not by widening an except clause.
 - **NEW, owner-reported 2026-08-03, NOT diagnosed: a `derived_inert` flood in the annotate view.**
   Hundreds of `https://svelte.dev/e/derived_inert` from the compiled bundle — a `$derived` read
   after its owner was destroyed, or written to. Volume suggests a per-frame path (the PixiJS canvas
