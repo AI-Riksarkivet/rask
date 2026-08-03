@@ -4,7 +4,7 @@
  * The measurement, taken 2026-07-26 through the ingress on this cluster:
  *
  *   $ curl -s -o /dev/null -w '%{http_code} %{size_download}\n' \
- *       'http://localhost:8090/media/api/atlas/points?space=text&v=6'
+ *       'http://localhost:8090/explorer/api/atlas/points?space=text&v=6'
  *   200 6678928
  *
  * `UrlMemo` in `@rask/media-api` already stops the same tab paying that twice, which is what the
@@ -20,7 +20,7 @@
  * bearer**, and it was answered with the full projection. `makeViewerProxy` forwards a bearer when there
  * is one and shrugs when there is not, and the viewer service registers no authentication at all
  * (`services/common/core/middleware.py` adds CORS and deliberately nothing else). So before this route
- * existed, `/media/api/atlas/points` was an open read for anyone who could reach the ingress — and a
+ * existed, `/explorer/api/atlas/points` was an open read for anyone who could reach the ingress — and a
  * cache in front of an unauthorized read would have made a fast open read out of a slow one.
  *
  * Two checks therefore run on EVERY call, before any cached byte is reachable:

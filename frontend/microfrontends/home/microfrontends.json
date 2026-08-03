@@ -20,7 +20,7 @@
 				}
 			]
 		},
-		"media": {
+		"explorer": {
 			"development": {
 				"local": {
 					"port": 5173
@@ -28,7 +28,7 @@
 			},
 			"routing": [
 				{
-					"paths": ["/media", "/media/:path*"]
+					"paths": ["/explorer", "/explorer/:path*"]
 				}
 			]
 		},

@@ -1,7 +1,7 @@
 /**
  * A **shared** payload cache for a zone's BFF: one stored copy serves every caller allowed to see it.
  *
- * The measurement it answers, taken 2026-07-26 through the ingress: `GET /media/api/atlas/points` is
+ * The measurement it answers, taken 2026-07-26 through the ingress: `GET /explorer/api/atlas/points` is
  * **6,678,928 bytes**, and the browser-side {@link UrlMemo} only fixes the case where the same tab asks
  * twice. A refresh, a second tab and a second user each still paid it in full, and a burst of concurrent
  * multi-megabyte reads is what OOM-killed the viewer (`exit 137` on the 512Mi tier) and took the media

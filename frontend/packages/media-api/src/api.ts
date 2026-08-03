@@ -161,7 +161,7 @@ async function asJson<T>(r: Response, schema: v.GenericSchema<T>): Promise<T> {
 const HitsArraySchema = v.array(RowSchema) as v.GenericSchema<Row[]>;
 
 /** Schema-metadata key naming the columns the encoder carried as JSON text. Mirrors
- *  `microfrontends/media/src/lib/server/rows-arrow.ts`, which is the only writer of this payload. */
+ *  `microfrontends/explorer/src/lib/server/rows-arrow.ts`, which is the only writer of this payload. */
 const JSON_COLUMNS_KEY = 'json_columns';
 
 /**

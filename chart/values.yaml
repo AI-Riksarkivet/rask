@@ -385,7 +385,7 @@ frontend:
     # The lance-media zones: full BFF zones like the rest — SSR on, the shared session handle, and
     # same-origin /<zone>/api/* proxy routes to the media Services (VIEWER_API/SEARCH_API/
     # ANNOTATOR_API env, rendered when media.enabled). Deploy together with media.enabled=true.
-    - {name: media, path: /media}
+    - {name: explorer, path: /explorer}
     - {name: annotator, path: /annotator}
   # Per-user OIDC login (opt-in), shared across ALL zones — one origin, one sealed cookie, so a login on
   # any zone is a login on every zone. REQUIRED when enabled: sessionSecret (seals the cookie),

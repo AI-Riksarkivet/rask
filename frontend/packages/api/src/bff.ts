@@ -129,7 +129,7 @@ export function makeSessionHandle(cfg: OidcConfig | null): Handle {
 /** A zero-width `stripPrefix` for backends that serve their routes UNDER `/api` (the lance-media
  *  viewer/search/annotator services): it matches at the start of the app-relative `/api/...` path —
  *  so the proxy's base-aware strip still removes the zone base when present — but strips NOTHING
- *  itself, forwarding `/media/api/health` (or dev's `/api/health`) as `/api/health` upstream. */
+ *  itself, forwarding `/explorer/api/health` (or dev's `/api/health`) as `/api/health` upstream. */
 export const KEEP_API_PREFIX = /^(?=\/api\/)/;
 
 /** Response headers never forwarded from an upstream: `fetch()` auto-decompresses the body, so the

@@ -2,13 +2,13 @@ import { defineConfig, devices } from '@playwright/test';
 import { E2E_ORIGIN, E2E_PORT, MOCK_SERVICES, MOCK_SERVICES_PORT } from './e2e/ports';
 
 // Hermetic e2e for the media zone (search · descriptor boot · the zone-based BFF paths · the send half
-// of the annotation funnel). The dev server runs the real SSR + hooks under the `/media` base (no OIDC
+// of the annotation funnel). The dev server runs the real SSR + hooks under the `/explorer` base (no OIDC
 // env → the login gate is inactive).
 //
 // TWO kinds of stand-in, and which one a read gets is decided by WHERE the read runs:
 //
 //   - reads the BROWSER makes are mocked with `page.route`, scoped to the ZONE base
-//     (`**/media/api/**` — a bare `**/api/**` glob also catches Vite /@fs module URLs like
+//     (`**/explorer/api/**` — a bare `**/api/**` glob also catches Vite /@fs module URLs like
 //     …/packages/api/… and kills hydration);
 //   - reads the ZONE SERVER makes cannot be reached that way at all. `/api/search` builds its Arrow
 //     body in the route, and the projects plane moved into `projects.remote.ts` — so those get a mock

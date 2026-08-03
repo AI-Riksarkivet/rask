@@ -146,7 +146,7 @@ describe('the annotator is not the heavy zone the budget once assumed', () => {
 		// stands on ownership and independent deploys, not bytes, and this test says so rather than
 		// asserting a size relationship that no longer holds.
 		const a = weigh('annotator');
-		const m = weigh('media');
+		const m = weigh('explorer');
 		if (a === null || m === null) return;
 		expect(a.staticKB).toBeLessThan(m.staticKB);
 		expect(

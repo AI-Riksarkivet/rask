@@ -10,7 +10,7 @@
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
 	import type { Me } from '@rask/api';
 	import { fetchMeViaBff } from '$lib/catalog/remote/catalog.remote';
-	import { MEDIA_ZONE_NAV } from '$lib/nav';
+	import { EXPLORER_ZONE_NAV } from '$lib/nav';
 	import { descriptor } from '$lib/descriptor-store.svelte';
 	import StatusBadge from '$lib/components/status-badge.svelte';
 	import type { LayoutData } from './$types';
@@ -78,7 +78,7 @@
 	pathname={page.url.pathname}
 	user={data.user}
 	authEnabled={data.authEnabled}
-	zoneNav={MEDIA_ZONE_NAV}
+	zoneNav={EXPLORER_ZONE_NAV}
 	{me}
 	{meLoading}
 	{notifications}

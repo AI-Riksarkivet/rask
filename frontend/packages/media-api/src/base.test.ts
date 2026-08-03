@@ -9,8 +9,8 @@ describe('apiUrl carries the zone base', () => {
 	});
 
 	it('prefixes the zone base', () => {
-		setApiBase('/media');
-		expect(apiUrl('/api/health')).toBe('/media/api/health');
+		setApiBase('/explorer');
+		expect(apiUrl('/api/health')).toBe('/explorer/api/health');
 	});
 
 	it('normalizes a trailing slash rather than doubling it', () => {
@@ -24,20 +24,20 @@ describe('the base is a per-PROCESS constant, not per-request state', () => {
 	// module only ever sees one base. If that ever stopped being true — two zones composed into one
 	// SSR process — every media-plane URL would silently point at the other zone's proxy routes.
 	it('refuses to re-base to a different zone', () => {
-		setApiBase('/media');
-		expect(() => setApiBase('/annotator')).toThrow(/already set to "\/media"/);
+		setApiBase('/explorer');
+		expect(() => setApiBase('/annotator')).toThrow(/already set to "\/explorer"/);
 	});
 
 	it('is idempotent for the same base', () => {
-		setApiBase('/media');
-		expect(() => setApiBase('/media')).not.toThrow();
-		expect(() => setApiBase('/media/')).not.toThrow();
-		expect(apiUrl('/api/health')).toBe('/media/api/health');
+		setApiBase('/explorer');
+		expect(() => setApiBase('/explorer')).not.toThrow();
+		expect(() => setApiBase('/explorer/')).not.toThrow();
+		expect(apiUrl('/api/health')).toBe('/explorer/api/health');
 	});
 
 	it('a later empty base is a no-op, so an unbased consumer cannot clear a zone', () => {
-		setApiBase('/media');
+		setApiBase('/explorer');
 		setApiBase('');
-		expect(apiUrl('/api/health')).toBe('/media/api/health');
+		expect(apiUrl('/api/health')).toBe('/explorer/api/health');
 	});
 });

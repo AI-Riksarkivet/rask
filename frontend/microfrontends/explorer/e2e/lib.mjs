@@ -13,7 +13,7 @@ import { chromium } from 'playwright-core';
 // root), which path-routes every zone prefix off ONE origin exactly as the Ingress does — so
 // these suites drive the real split topology rather than a single zone's port.
 export const BASE = process.env.E2E_BASE ?? 'http://127.0.0.1:5200';
-// API goes through the same origin the app uses: /media/api/* is the media zone's own BFF,
+// API goes through the same origin the app uses: /explorer/api/* is the media zone's own BFF,
 // which bearer-forwards to viewer/search/annotator.
 export const API = process.env.E2E_API ?? 'http://127.0.0.1:5200';
 export const KEY = process.env.E2E_KEY ?? 'fe00cd746463ad2c/0/19';

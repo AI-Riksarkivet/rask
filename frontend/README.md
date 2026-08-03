@@ -33,7 +33,7 @@ frontend/
                     #     /lakehouse/models   model registry, experiments, pipeline
                     #     /lakehouse/admin    access, tenants, audit, events, streams, DLQ
                     #                         (estate-admin gated, fail-closed, in the root layout)
-    media/          # /media — semantic search, the embedding atlas, the derivation workflow
+    media/          # /explorer — semantic search, the embedding atlas, the derivation workflow
     annotator/      # /annotator — the Pixi labeling canvas (split for bundle isolation, not domain)
   packages/           # ALL under one vendor-neutral scope: `rask` and `lance` are both temporary names
                     #   (rask becomes compute), and @rask/* is turborepo's own convention, so nothing

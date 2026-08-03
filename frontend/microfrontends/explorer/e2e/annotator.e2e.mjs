@@ -12,7 +12,7 @@
  *   - a chromium with WebGPU: default = the ms-playwright cache; override with E2E_CHROME.
  *   - the demo unit (E2E_KEY, default fe00cd746463ad2c/0/19) present in the dataset.
  *
- * Run: `bun run test:e2e` (from apps/media). Re-seeds the demo annotations before + after,
+ * Run: `bun run test:e2e` (from apps/explorer). Re-seeds the demo annotations before + after,
  * so the suite is deterministic and leaves the demo clean.
  */
 // NOTE: `waitUntil: 'networkidle'` is deliberately absent from this file. Every zone's shell now holds a

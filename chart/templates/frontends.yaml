@@ -273,7 +273,7 @@ spec:
               value: {{ printf "http://%s:5556/dex" (include "lance.dexHost" $root) | quote }}
             {{- end }}
             {{- end }}
-            {{- if and $root.Values.media.enabled (or (eq .name "media") (eq .name "annotator")) }}
+            {{- if and $root.Values.media.enabled (or (eq .name "explorer") (eq .name "annotator")) }}
             # --- the media plane's upstreams for these two zones' BFF proxy routes -------
             # (/<zone>/api/* -> the media Services). Scoped PER ZONE, not handed to both: a
             # zone should not hold a service URL it never routes to. media searches and
@@ -284,7 +284,7 @@ spec:
               value: {{ printf "http://%s-viewer:%v" (include "rask.fullname" $root) $root.Values.media.services.viewer.port | quote }}
             - name: ANNOTATOR_API
               value: {{ printf "http://%s-annotator:%v" (include "rask.fullname" $root) $root.Values.media.services.annotator.port | quote }}
-            {{- if eq .name "media" }}
+            {{- if eq .name "explorer" }}
             - name: SEARCH_API
               value: {{ printf "http://%s-search:%v" (include "rask.fullname" $root) $root.Values.media.services.search.port | quote }}
             {{- end }}

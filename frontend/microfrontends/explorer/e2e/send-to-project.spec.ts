@@ -98,15 +98,15 @@ const BASE_ROUTES: Record<string, unknown> = {
 
 test.beforeEach(async ({ page }) => {
 	await seed(BASE_ROUTES);
-	await page.route('**/media/api/**', (route) => json(route, { detail: 'unstubbed' }, 404));
-	await page.route('**/media/api/health', (route) => json(route, HEALTH));
-	await page.route('**/media/api/datasets/demo/descriptor', (route) => json(route, DESCRIPTOR));
+	await page.route('**/explorer/api/**', (route) => json(route, { detail: 'unstubbed' }, 404));
+	await page.route('**/explorer/api/health', (route) => json(route, HEALTH));
+	await page.route('**/explorer/api/datasets/demo/descriptor', (route) => json(route, DESCRIPTOR));
 	// Let through to the real route (Arrow encoder) rather than stubbed — see the mock service file.
-	await page.route('**/media/api/search**', (route) => route.continue());
+	await page.route('**/explorer/api/search**', (route) => route.continue());
 });
 
 async function searchAndOpenDialog(page: import('@playwright/test').Page): Promise<void> {
-	await page.goto('/media/');
+	await page.goto('/explorer/');
 	const input = page.getByPlaceholder(/Search transcripts/);
 	await input.fill('fox');
 	await input.press('Enter');

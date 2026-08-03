@@ -41,7 +41,7 @@ the Svelte compiler's own validator and a11y warnings) as oxlint rules, in oxlin
 config upward from the working directory, so no package needs `--config ../../..` or a per-depth
 relative path. Ignore globs live _inside_ each config for the same reason.
 
-This is not theoretical hygiene. `microfrontends/media` shipped its own `.oxfmtrc.json` and
+This is not theoretical hygiene. `microfrontends/explorer` shipped its own `.oxfmtrc.json` and
 `.oxlintrc.json`, inherited from the standalone lance-media repo. They sat dormant while nothing
 invoked the oxc tools — and the moment oxlint and oxfmt were switched on they silently won, because
 _nearest config wins_. That zone got 80-column double-quoted output against the root's 100-column

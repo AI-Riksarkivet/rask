@@ -3,7 +3,7 @@ import { exact, isMainMenu, mainMenuNav, norm, seg, topNav, under, zoneOf } from
 
 // The top-navbar IA + the shared matchers every zone builds its ZoneNav sidebar config with.
 // ONE ENTRY PER ZONE, and EVERY zone of the seven-zone estate is in the bar (R15) — home, lakehouse,
-// media (Search), annotator (Annotate), compute, train, studio. One column per area: Lakehouse
+// explorer (Explorer), annotator (Annotate), compute, train, studio. One column per area: Lakehouse
 // covers the whole merged /lakehouse zone — the catalog, the model registry, lineage, and
 // (estate-admin only) governance and operations. Lineage used to be its own trigger, which made the
 // bar mix a zone with an area inside that zone and forced Lakehouse to subtract the lineage subtree
@@ -23,7 +23,7 @@ describe('topNav', () => {
 		expect(topNav(false).map((e) => e.title)).toEqual([
 			'Lakehouse',
 			'Compute',
-			'Search',
+			'Explorer',
 			'Annotate',
 			'Train',
 			'Studio',
@@ -44,7 +44,7 @@ describe('topNav', () => {
 			// trailing form, so a bare '/compute' href cost a 308 redirect round-trip on EVERY
 			// cross-zone hop (measured on all five zones, 2026-07-28) — visible as flicker over a
 			// tunnel. The href must be what the zone actually serves.
-			'/media/',
+			'/explorer/',
 			'/annotator/',
 			'/train/',
 			'/studio/',
@@ -152,7 +152,7 @@ describe('topNav', () => {
 		for (const p of ['/', '/projects', '/settings', '/settings/notifications']) {
 			expect(isMainMenu(p)).toBe(true);
 		}
-		for (const p of ['/projects/acme', '/lakehouse/catalog', '/compute/', '/media/']) {
+		for (const p of ['/projects/acme', '/lakehouse/catalog', '/compute/', '/explorer/']) {
 			expect(isMainMenu(p)).toBe(false);
 		}
 		// Trailing-slash robust, because a zone base serves the trailing form.
@@ -175,7 +175,7 @@ describe('topNav', () => {
 		expect(lakehouse.match('/lakehouse/lineage')).toBe(true);
 		expect(lakehouse.match('/lakehouse/lineage/runs')).toBe(true);
 		expect(lakehouse.match('/')).toBe(false);
-		expect(lakehouse.match('/media')).toBe(false);
+		expect(lakehouse.match('/explorer')).toBe(false);
 		expect(lakehouse.match('/annotator')).toBe(false);
 		expect(lakehouse.match('/compute')).toBe(false);
 	});
@@ -189,15 +189,15 @@ describe('topNav', () => {
 		expect(lakehouse.match('/lakehouse/lineage/runs')).toBe(true);
 	});
 
-	it('Search and Annotate are separate zones, so separate triggers', () => {
+	it('Explorer and Annotate are separate zones, so separate triggers', () => {
 		// One trigger per zone: the annotator is its own microfrontend, so it gets its own entry
-		// rather than hiding as a row in Search's panel. Neither trigger claims the other's zone.
-		const search = topNav(false).find((e) => e.title === 'Search')!;
+		// rather than hiding as a row in the Explorer's panel. Neither trigger claims the other's zone.
+		const search = topNav(false).find((e) => e.title === 'Explorer')!;
 		const annotate = topNav(false).find((e) => e.title === 'Annotate')!;
-		expect(search.match('/media')).toBe(true);
+		expect(search.match('/explorer')).toBe(true);
 		expect(search.match('/annotator')).toBe(false);
 		expect(annotate.match('/annotator')).toBe(true);
-		expect(annotate.match('/media')).toBe(false);
+		expect(annotate.match('/explorer')).toBe(false);
 		// Annotate is a single surface — a plain link, not a one-row dropdown.
 		expect(annotate.items).toBeUndefined();
 		expect(annotate.groups).toBeUndefined();
@@ -240,7 +240,7 @@ describe('topNav', () => {
 		const compute = topNav(false).find((e) => e.title === 'Compute')!;
 		expect(compute.match('/compute')).toBe(true);
 		expect(compute.match('/compute/jobs/raysubmit_123')).toBe(true);
-		expect(compute.match('/media')).toBe(false);
+		expect(compute.match('/explorer')).toBe(false);
 		expect(compute.match('/')).toBe(false);
 		// The overview IS the zone root (like Media's Search), so the first row carries entry.href
 		// and the panel never prepends a second zone-root row.
@@ -298,13 +298,13 @@ describe('topNav', () => {
 		expect(groups.Lineage).toEqual(['Datasets', 'Jobs', 'Runs', 'Columns', 'Graph']);
 	});
 
-	it('Media carries its rows too — the panel that was never pinned', () => {
-		// Compute's rows and all five Lakehouse columns are asserted above; MEDIA's never were, so its
-		// panel could gain or lose a row with this suite still green. That omission had teeth: media is
-		// one of the three dock zones, `dock-reachability.test.ts` requires /media/workbench to appear
-		// here, and nothing in this file would have noticed it going missing.
-		const media = topNav(false).find((e) => e.title === 'Search')!;
-		expect(media.items!.map((i) => i.title)).toEqual([
+	it('Explorer carries its rows too — the panel that was never pinned', () => {
+		// Compute's rows and all five Lakehouse columns are asserted above; the EXPLORER's never were,
+		// so its panel could gain or lose a row with this suite still green. That omission had teeth:
+		// the explorer is the estate's ONE dock zone, `dock-reachability.test.ts` requires
+		// /explorer/workbench to appear here, and nothing in this file would have noticed it go missing.
+		const explorer = topNav(false).find((e) => e.title === 'Explorer')!;
+		expect(explorer.items!.map((i) => i.title)).toEqual([
 			'Search',
 			'Atlas',
 			'Tree',
@@ -361,7 +361,7 @@ describe('ZoneNav matchers', () => {
 		// makes a hop between them a soft nav rather than a full document load.
 		expect(zoneOf('/lakehouse/catalog/tables')).toBe('lakehouse');
 		expect(zoneOf('/lakehouse/admin')).toBe('lakehouse');
-		expect(zoneOf('/media/atlas')).toBe('media');
+		expect(zoneOf('/explorer/atlas')).toBe('explorer');
 		expect(zoneOf('/')).toBe('');
 		expect(zoneOf('')).toBe('');
 	});

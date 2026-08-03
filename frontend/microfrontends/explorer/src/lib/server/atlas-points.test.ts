@@ -12,7 +12,7 @@ import { makeAtlasPointsRoute, resourceKey } from './atlas-points';
 
 const ENV = { VIEWER_API: 'http://viewer:8101' };
 const POINTS = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
-const URL_TEXT = 'https://estate.example.com/media/api/atlas/points?space=text&v=6&dataset=demo';
+const URL_TEXT = 'https://estate.example.com/explorer/api/atlas/points?space=text&v=6&dataset=demo';
 
 /** A stub viewer that records every call and can be told how to answer the authorization probe. */
 function viewer(opts: { probeStatus?: number; pointsStatus?: number; delayMs?: number } = {}) {
@@ -160,8 +160,8 @@ describe('the atlas-points route keys on the resource, not the caller', () => {
 	});
 
 	it('canonicalises the key so parameter order cannot fork the cache', () => {
-		const a = 'https://e/media/api/atlas/points?space=text&v=6&dataset=demo';
-		const b = 'https://e/media/api/atlas/points?dataset=demo&v=6&space=text';
+		const a = 'https://e/explorer/api/atlas/points?space=text&v=6&dataset=demo';
+		const b = 'https://e/explorer/api/atlas/points?dataset=demo&v=6&space=text';
 		expect(resourceKey(new URL(a))).toBe(resourceKey(new URL(b)));
 	});
 

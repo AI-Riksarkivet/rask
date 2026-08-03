@@ -2,7 +2,7 @@ import { test, expect, type Route } from '@playwright/test';
 import { MOCK_SERVICES } from './ports';
 
 // Hermetic coverage for the zone contract: SSR on at the app level, the client fetching
-// the media plane through THIS zone's base-prefixed BFF routes (/media/api/*) instead of
+// the media plane through THIS zone's base-prefixed BFF routes (/explorer/api/*) instead of
 // the retired root-absolute /api/*. The dev server runs the real SSR + hooks + BFF endpoints.
 //
 // Catch-all reads (health, descriptor) are mocked in the BROWSER. `/api/search` is not: its
@@ -90,48 +90,48 @@ test.beforeEach(async ({ page }) => {
 	// Zone-scoped globs on purpose: a bare **/api/** also matches Vite /@fs module URLs
 	// (…/packages/api/…) and would kill hydration. Registration order is LIFO — the
 	// generic 404 first, the specific mocks after so they win.
-	await page.route('**/media/api/**', (route) => {
+	await page.route('**/explorer/api/**', (route) => {
 		apiPaths.push(new URL(route.request().url()).pathname);
 		return json(route, { detail: 'unstubbed' }, 404);
 	});
-	await page.route('**/media/api/health', (route) => {
+	await page.route('**/explorer/api/health', (route) => {
 		apiPaths.push(new URL(route.request().url()).pathname);
 		return json(route, HEALTH);
 	});
-	await page.route('**/media/api/datasets/demo/descriptor', (route) => {
+	await page.route('**/explorer/api/datasets/demo/descriptor', (route) => {
 		apiPaths.push(new URL(route.request().url()).pathname);
 		return json(route, DESCRIPTOR);
 	});
 	// NOT stubbed — recorded and let through, so the zone's real `/api/search` route answers from the
 	// seeded mock service. That route is the Arrow encoder; a fulfilled stub would test the stub.
-	await page.route('**/media/api/search**', (route) => {
+	await page.route('**/explorer/api/search**', (route) => {
 		apiPaths.push(new URL(route.request().url()).pathname);
 		return route.continue();
 	});
 });
 
-test('the app server-renders under /media (SSR on, hooks answering)', async ({ page }) => {
+test('the app server-renders under /explorer (SSR on, hooks answering)', async ({ page }) => {
 	// A raw server response (no JS runs through the request API): the layout shell must
 	// arrive server-rendered — the pre-descriptor loading state proves real SSR output.
-	const res = await page.request.get('/media/');
+	const res = await page.request.get('/explorer/');
 	expect(res.status()).toBe(200);
 	expect(await res.text()).toContain('Loading dataset');
 });
 
 test('boots the descriptor + searches through the zone-based BFF paths', async ({ page }) => {
-	await page.goto('/media/');
+	await page.goto('/explorer/');
 	// Hydrated shell: the estate sidebar renders once the (mocked) descriptor lands.
 	await expect(page.getByRole('link', { name: 'Atlas' })).toBeVisible();
-	// The boot fetches went to /media/api/* — the base-prefixed BFF, never bare /api.
-	await expect.poll(() => apiPaths).toContain('/media/api/health');
-	await expect.poll(() => apiPaths).toContain('/media/api/datasets/demo/descriptor');
+	// The boot fetches went to /explorer/api/* — the base-prefixed BFF, never bare /api.
+	await expect.poll(() => apiPaths).toContain('/explorer/api/health');
+	await expect.poll(() => apiPaths).toContain('/explorer/api/datasets/demo/descriptor');
 	// Drive a search; the mocked hit renders through the descriptor-driven view.
 	const input = page.getByPlaceholder(/Search transcripts/);
 	await input.fill('fox');
 	await input.press('Enter');
 	await expect(page.getByText('Hello world').first()).toBeVisible();
 	await expect
-		.poll(() => apiPaths.filter((p) => p.startsWith('/media/api/search')))
+		.poll(() => apiPaths.filter((p) => p.startsWith('/explorer/api/search')))
 		.not.toHaveLength(0);
 });
 
@@ -141,11 +141,11 @@ test('the search response is Arrow IPC, and the browser renders what it decoded'
 	// the transport ruling's second promotion. The assertion is deliberately BOTH halves: the header alone
 	// would pass on an Arrow body the client could not read, and the rendered hit alone would pass if the
 	// route quietly went back to JSON.
-	await page.goto('/media/');
+	await page.goto('/explorer/');
 	await expect(page.getByRole('link', { name: 'Atlas' })).toBeVisible();
 
 	const response = page.waitForResponse(
-		(r) => new URL(r.url()).pathname === '/media/api/search' && r.status() === 200,
+		(r) => new URL(r.url()).pathname === '/explorer/api/search' && r.status() === 200,
 	);
 	const input = page.getByPlaceholder(/Search transcripts/);
 	await input.fill('fox');
@@ -211,16 +211,16 @@ test.fixme('a mode that needs the encoder is disabled when health says it is dow
 }) => {
 	// The ONLY change from the healthy fixture: embed is down. Everything else — dataset, declared modes,
 	// vectors — stays exactly as the passing test has it, so a failure here can only be about health.
-	await page.route('**/media/api/datasets/demo/descriptor', (route) =>
+	await page.route('**/explorer/api/datasets/demo/descriptor', (route) =>
 		json(route, VECTOR_DESCRIPTOR),
 	);
-	await page.route('**/media/api/health', (route) =>
+	await page.route('**/explorer/api/health', (route) =>
 		json(route, {
 			...HEALTH,
 			embed: { ok: false, url: 'http://127.0.0.1:8001', error: 'ConnectError' },
 		}),
 	);
-	await page.goto('/media/');
+	await page.goto('/explorer/');
 	await expect(page.getByRole('link', { name: 'Atlas' })).toBeVisible();
 
 	await page
@@ -244,10 +244,10 @@ test.fixme('a mode that needs the encoder is disabled when health says it is dow
 test.fixme('every mode stays selectable while the encoder is up', async ({ page }) => {
 	// The other direction, so the guard cannot pass by disabling things unconditionally — which would be a
 	// worse bug than the one it fixes, and invisible to the test above.
-	await page.route('**/media/api/datasets/demo/descriptor', (route) =>
+	await page.route('**/explorer/api/datasets/demo/descriptor', (route) =>
 		json(route, VECTOR_DESCRIPTOR),
 	);
-	await page.goto('/media/');
+	await page.goto('/explorer/');
 	await expect(page.getByRole('link', { name: 'Atlas' })).toBeVisible();
 	await page
 		.locator('button')
@@ -281,7 +281,7 @@ test('a saved view stored on the catalog reaches the popover', async ({ page }) 
 		},
 	});
 
-	await page.goto('/media/');
+	await page.goto('/explorer/');
 	await expect(page.getByRole('link', { name: 'Atlas' })).toBeVisible();
 	await page.getByTitle('Saved views').click();
 
@@ -303,7 +303,7 @@ test('a document that EXISTS but cannot be read is named, and saving stays disab
 		},
 	});
 
-	await page.goto('/media/');
+	await page.goto('/explorer/');
 	await expect(page.getByRole('link', { name: 'Atlas' })).toBeVisible();
 	await page.getByTitle('Saved views').click();
 

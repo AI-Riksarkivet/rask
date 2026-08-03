@@ -174,7 +174,7 @@ dev-micro:
 # their own ports AND Turborepo auto-starts its built-in microfrontends proxy (from
 # frontend/microfrontends/home/microfrontends.json — no extra package) on :3024:
 #   single origin → http://localhost:3024   (browse THIS for cross-zone nav)
-#   home :5273 (catch-all: /) · media :5173 /media · lakehouse :5174 /lakehouse · compute :5175 /compute · studio :5176 /studio · annotator :5177 /annotator
+#   home :5273 (catch-all: /) · media :5173 /explorer · lakehouse :5174 /lakehouse · compute :5175 /compute · studio :5176 /studio · annotator :5177 /annotator
 # The shared ui-package shell + nav render with NO backend; start one
 # (`make dev-micro`) only when you need live /api data.
 
@@ -182,7 +182,7 @@ dev-micro:
 # `make k3s-build`/`k3s-import` (one image per zone via --build-arg APP=$z) and
 # sync-favicons; the zone-contract deploy-path gate pins this list to the zone
 # directories that actually exist, so add/retire a zone HERE too.
-ZONES ?= home lakehouse media annotator compute studio train
+ZONES ?= home lakehouse explorer annotator compute studio train
 
 dev-frontends:        # build the ui + api libs once, then all zones + :3024 proxy
 	# Build the libs FIRST so the zones read a complete dist/. Running `turbo run dev`
@@ -320,7 +320,7 @@ harvest-ead:
 	uv run python scripts/harvest_ead.py
 
 # ---- dev seeding -----------------------------------------------------------
-# A fresh install serves an EMPTY corpus (media.corpus.mode defaults to emptyDir), so /media finds
+# A fresh install serves an EMPTY corpus (media.corpus.mode defaults to emptyDir), so /explorer finds
 # nothing, /annotator has no page and /lakehouse lists no tables — and "not seeded" is
 # indistinguishable from "not built". One command fixes that for the whole estate.
 seed-dev: ## Seed the dev estate: media corpus + a labeling task with items (needs a running cluster)

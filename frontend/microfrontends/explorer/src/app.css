@@ -32,7 +32,7 @@
 /* @rask/dockview: the vendor sheet plus the --dv-* → OKLCH token mapping, in ONE import and under
    `base` — dockview ships 124 KB of unlayered CSS whose selectors would otherwise out-specify the
    Tailwind utilities a panel's own content is styled with. This zone mounts the estate's dock at
-   /media/workbench; without this the grid never lays out and the panels stack as bare text.
+   /explorer/workbench; without this the grid never lays out and the panels stack as bare text.
    The dock JS itself is dynamically imported by that route; this stylesheet is not, because
    deferring 10 KB of gzipped CSS buys a flash of unstyled dock. */
 @import '@rask/dockview/styles.css' layer(base);

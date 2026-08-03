@@ -28,7 +28,7 @@ test('an empty bucket renders the honest empty state, with search + bucket contr
 }) => {
 	await page.route('**/api/media/**', (route) => {
 		const url = new URL(route.request().url());
-		if (url.pathname.endsWith('/media/objects')) {
+		if (url.pathname.endsWith('/explorer/objects')) {
 			// Echo the store the page actually asked for — a stand-in that answered a DIFFERENT bucket
 			// than the one requested could never catch the page reading the wrong store.
 			const bucket = url.searchParams.get('bucket') ?? STORE;
@@ -55,7 +55,7 @@ test('prefix navigation lists one level and the preview pane decodes a text obje
 		const prefix = url.searchParams.get('prefix') ?? '';
 		// Echo the store the page asked for (see the empty-state test) — never a literal of our own.
 		const bucket = url.searchParams.get('bucket') ?? STORE;
-		if (url.pathname.endsWith('/media/objects')) {
+		if (url.pathname.endsWith('/explorer/objects')) {
 			if (prefix === 'vol1/') {
 				return json(route, {
 					bucket,
@@ -68,7 +68,7 @@ test('prefix navigation lists one level and the preview pane decodes a text obje
 			}
 			return json(route, { bucket, prefix: '', prefixes: ['vol1/'], objects: [] });
 		}
-		if (url.pathname.endsWith('/media/object')) {
+		if (url.pathname.endsWith('/explorer/object')) {
 			return json(route, {
 				key: 'vol1/readme.txt',
 				size: 24,
@@ -77,7 +77,7 @@ test('prefix navigation lists one level and the preview pane decodes a text obje
 				etag: 'abc123',
 			});
 		}
-		if (url.pathname.endsWith('/media/object/download')) {
+		if (url.pathname.endsWith('/explorer/object/download')) {
 			return route.fulfill({
 				status: 200,
 				contentType: 'text/plain',

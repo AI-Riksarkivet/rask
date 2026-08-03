@@ -47,23 +47,23 @@ describe('the path → service mapping follows the BFF routes', () => {
 	// Asserted directly because it IS the routing table: the specific domains, then the catch-all. If a BFF
 	// route moves zones or changes prefix, this is the line that should go red.
 	it.each([
-		['/media/api/search', 'search'],
-		['/media/api/annotations/tags', 'annotator'],
+		['/explorer/api/search', 'search'],
+		['/explorer/api/annotations/tags', 'annotator'],
 		['/annotator/api/annotations/abc', 'annotator'],
 		['/annotator/api/jobs/apply', 'annotator'],
 		['/annotator/api/assist/suggest', 'assist'],
 		['/annotator/api/config', 'assist'],
 		// No dedicated route → `api/[...path]`, which is makeViewerProxy in BOTH zones.
-		['/media/api/health', 'viewer'],
-		['/media/api/thumbnail/abc', 'viewer'],
+		['/explorer/api/health', 'viewer'],
+		['/explorer/api/thumbnail/abc', 'viewer'],
 		['/annotator/api/documents?page=1', 'viewer'],
-		['/media/api/atlas/chunks', 'viewer'],
+		['/explorer/api/atlas/chunks', 'viewer'],
 	])('%s → %s', (path, service) => {
 		expect(upstreamFor(path)).toBe(service);
 	});
 
 	it('attributes nothing outside /api/', () => {
-		expect(upstreamFor('/media/not-the-api')).toBeNull();
+		expect(upstreamFor('/explorer/not-the-api')).toBeNull();
 		expect(upstreamFor('/lakehouse/catalog')).toBeNull();
 	});
 });
@@ -79,7 +79,7 @@ describe('a gateway failure names the upstream that did not answer', () => {
 	});
 
 	it('covers 503 and 504, not only 502', async () => {
-		setApiBase('/media');
+		setApiBase('/explorer');
 		for (const [status, text] of [
 			[503, 'Service Unavailable'],
 			[504, 'Gateway Timeout'],
@@ -92,7 +92,7 @@ describe('a gateway failure names the upstream that did not answer', () => {
 
 describe('it does not talk over the backend when the backend DID answer', () => {
 	it('a problem+json detail wins — the service explained itself', async () => {
-		setApiBase('/media');
+		setApiBase('/explorer');
 		const message = await messageOf(() =>
 			getHealth(failWith(502, 'Bad Gateway', { detail: 'index rebuild in progress' })),
 		);
@@ -101,7 +101,7 @@ describe('it does not talk over the backend when the backend DID answer', () => 
 	});
 
 	it('a non-gateway status keeps the plain form', async () => {
-		setApiBase('/media');
+		setApiBase('/explorer');
 		const message = await messageOf(() => getHealth(failWith(500, 'Internal Server Error')));
 		// 500 means the service ANSWERED and failed inside it. Calling that "did not respond" would be a
 		// lie, and would send an operator to check a pod that is running fine.

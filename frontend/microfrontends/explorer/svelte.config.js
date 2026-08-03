@@ -17,11 +17,11 @@ const config = {
 		// session per request, and the zone's OWN BFF routes serve `${base}/api/*`
 		// (src/routes/api/**) — client-only leaf pages opt out per-page (+page.ts).
 		adapter: adapter(),
-		// Zone base: this zone owns /media behind the lance ingress (same STATIC
+		// Zone base: this zone owns /explorer behind the lance ingress (same STATIC
 		// per-app asset prefix as the other domain zones). The workspace-patched
 		// svelte-adapter-bun serves assets at the based path too, so no
 		// base-stripping proxy is needed in front of the built server.
-		paths: { base: '/media', relative: false },
+		paths: { base: '/explorer', relative: false },
 		// Remote functions: the zone's run-notification feed is a `query.live` generator
 		// (`src/lib/live/feeds.remote.ts`). Without this the build fails outright rather than silently
 		// dropping the endpoint, which is the right failure — see @rask/zone-contract's

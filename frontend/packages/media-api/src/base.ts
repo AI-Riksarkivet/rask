@@ -38,7 +38,7 @@ export function resetApiBase(): void {
 }
 
 /** A root-relative media-plane URL under the configured zone base: `apiUrl('/api/health')`
- *  → `/media/api/health` once the media zone has called `setApiBase('/media')`. */
+ *  → `/explorer/api/health` once the media zone has called `setApiBase('/explorer')`. */
 export function apiUrl(path: string): string {
 	return `${apiBase}${path}`;
 }

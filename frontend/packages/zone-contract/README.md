@@ -18,11 +18,11 @@ Splitting one app into four turns routing from **code** into an **agreement acro
 | the Ingress route and Service             | `chart/values.yaml` → `frontend.apps`      | YAML       |
 | which images to build and side-load       | `Makefile` → `ZONES`                       | Make       |
 | which workspaces the builder needs        | `.docker/frontend.dockerfile` → `COPY`     | Dockerfile |
-| where a cross-zone link points            | `<a href="/media/…">` in three other zones | Svelte     |
+| where a cross-zone link points            | `<a href="/explorer/…">` in three other zones | Svelte     |
 
 TypeScript reads one of those. Turborepo reads none of them. SvelteKit reads one.
 
-The demonstration: change `paths.base` in `svelte.config.js` from `/media` to `/search`, and every other
+The demonstration: change `paths.base` in `svelte.config.js` from `/explorer` to `/search`, and every other
 gate passes — `svelte-check`, `tsgo`, `oxlint`, `rsvelte-fmt`, `vite build`, and the Playwright suite
 (which drives each zone on its own port and so never sees the composition). The build succeeds and
 serves every asset from a path the Ingress does not route: a blank page, shipped green.
