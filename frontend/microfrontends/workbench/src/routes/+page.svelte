@@ -18,7 +18,7 @@
 	 */
 	import { onMount, type Component } from 'svelte';
 	import { on } from 'svelte/events';
-	import { List, ListTree } from '@lucide/svelte';
+	import { Activity, List, ListTree } from '@lucide/svelte';
 	import type { DockviewApi, SerializedDockview } from 'dockview';
 	import type { PanelRegistry } from '@rask/dockview';
 	import { DockViews, parseSelectDetail, RASK_SELECT, ViewSidebar } from '@rask/dockview/views';
@@ -46,16 +46,40 @@
 			icon: ListTree,
 			keywords: ['ray', 'compute', 'submitted', 'queue', 'raysubmit', 'foreign'],
 		},
+		'lakehouse-runs': {
+			component: ForeignPanel,
+			label: 'Lineage runs (lakehouse)',
+			icon: Activity,
+			keywords: ['lineage', 'runs', 'pipelines', 'openlineage', 'foreign'],
+		},
+		'lakehouse-events': {
+			component: ForeignPanel,
+			label: 'Lineage events (lakehouse)',
+			icon: List,
+			keywords: ['lineage', 'events', 'feed', 'openlineage', 'foreign'],
+		},
 	};
 
 	/** The catalogue: which element script serves each foreign panel, from ITS OWN zone's origin.
 	 *  Adding a panel here (plus ~10 lines in the owning zone) is the whole extension story. */
 	const FOREIGN: Record<string, { src: string; tag: string }> = {
 		'compute-jobs': { src: '/compute/elements/compute-elements.js', tag: 'rask-compute-jobs' },
+		'lakehouse-runs': {
+			src: '/lakehouse/elements/lakehouse-elements.js',
+			tag: 'rask-lakehouse-runs',
+		},
+		'lakehouse-events': {
+			src: '/lakehouse/elements/lakehouse-elements.js',
+			tag: 'rask-lakehouse-events',
+		},
 	};
 
-	/** ONE dock, ONE workbench id. */
-	const WORKBENCH_ID = 'global';
+	/** ONE dock, ONE workbench id — VERSIONED. The build-time workbench (reversed, see
+	 *  docs/architecture/global-workbench.md) saved layouts under 'global' whose panel keys
+	 *  (graph/runs/events/jobs/cluster/actors) no longer exist here; restoring one filled the dock
+	 *  with MissingPanelRenderer placeholders. Bumping the id orphans that state wholesale — the
+	 *  predicted one-time reset — instead of half-restoring it as tombstones. */
+	const WORKBENCH_ID = 'global-ce-v1';
 	const layoutStore = makeDockLayoutStore<SerializedDockview>({
 		workbenchId: WORKBENCH_ID,
 		endpoint: `${base}/capi/v1/user-state/dock-layout`,
@@ -107,10 +131,24 @@
 			params: FOREIGN['compute-jobs'],
 		});
 		dockApi.addPanel({
+			id: 'lakehouse-runs',
+			component: 'lakehouse-runs',
+			title: 'Lineage runs',
+			params: FOREIGN['lakehouse-runs'],
+			position: { referencePanel: 'compute-jobs', direction: 'right' },
+		});
+		dockApi.addPanel({
+			id: 'lakehouse-events',
+			component: 'lakehouse-events',
+			title: 'Lineage events',
+			params: FOREIGN['lakehouse-events'],
+			position: { referencePanel: 'lakehouse-runs', direction: 'below' },
+		});
+		dockApi.addPanel({
 			id: 'selection-log',
 			component: 'selection-log',
 			title: 'Selections',
-			position: { referencePanel: 'compute-jobs', direction: 'right' },
+			position: { referencePanel: 'compute-jobs', direction: 'below' },
 		});
 	}
 
