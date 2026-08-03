@@ -9,6 +9,13 @@
  */
 export type ForeignSource = { src: string; tag: string };
 
+/** One cache-buster per PAGE LOAD. The element bundles ship under FIXED names (the catalogue must
+ *  hold stable URLs), which lets a long-lived browser session keep serving a cached bundle across
+ *  zone deploys — the user sees last hour's panels while a fresh session sees today's, which reads
+ *  as "still broken" (observed repeatedly, live). One token per load = one fetch per zone per
+ *  visit, and a plain refresh is ALWAYS current. */
+const BUST = Date.now();
+
 export const FOREIGN: Record<string, ForeignSource> = {
 	'compute-jobs': { src: '/compute/elements/compute-elements.js', tag: 'rask-compute-jobs' },
 	'compute-cluster': { src: '/compute/elements/compute-elements.js', tag: 'rask-compute-cluster' },
@@ -67,7 +74,7 @@ export function resolveForeign(
 	params: Partial<ForeignSource>,
 ): ForeignSource | null {
 	const live = FOREIGN[componentKey];
-	if (live !== undefined) return live;
-	if (params.src && params.tag) return { src: params.src, tag: params.tag };
-	return null;
+	const found = live ?? (params.src && params.tag ? { src: params.src, tag: params.tag } : null);
+	if (found === null) return null;
+	return { src: `${found.src}?v=${BUST}`, tag: found.tag };
 }

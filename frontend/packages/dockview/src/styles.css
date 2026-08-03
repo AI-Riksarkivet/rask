@@ -114,6 +114,18 @@
 	display: flex;
 	align-items: center;
 	height: 100%;
+	/* NEVER collapses: on a narrow group the tab strip must shrink, not the controls — a panel you
+	   cannot close or add-to because its buttons were squeezed out is trapped chrome (user report:
+	   "when panels are small we can't even delete panels"). */
+	flex-shrink: 0;
+}
+
+/* The ACTIVE tab keeps its close affordance on narrow groups: dockview lets tabs shrink to
+   nothing under pressure; the active tab holding a floor keeps its label edge + close X reachable
+   while inactive tabs absorb the squeeze (they remain reachable via the overflow dropdown). */
+.dockview-theme-rask .dv-tab.dv-active-tab {
+	min-width: 100px;
+	flex-shrink: 0;
 }
 
 .rask-dock-panel {
