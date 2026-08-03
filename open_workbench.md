@@ -28,7 +28,16 @@ work, deleted when it ships). The decision record lives in
       mounting it beside a native SelectionLog panel — cluster verification pending below
 - [x] Wave 1: the compositor zone (all 8 registration points, budget, navbar entry, zero panel
       code, `ForeignPanel` host, valibot relay, `reuseExistingPanels` at BOTH fromJSON sites)
-- [ ] Cluster spike proof: styled / live data / drag-no-remount / CustomEvent relay (Playwright)
+- [x] Cluster spike proof, 2026-08-03 (Playwright vs the k3s ingress, logged in via Dex, 8/8):
+      scoped style applied (padding 12px) · token cascade in (oklch foreground resolved) · poll
+      advanced 0→1 with the fetch reaching a DEFINITE state · mount stamp survived a drag into
+      the other group · poll ran through the drag · a rask:select from inside the element landed
+      in the native Selections panel · a malformed detail was dropped at the valibot gate.
+      Independent-deploy also proven: the fetch-timeout fix (#55) shipped by rebuilding COMPUTE
+      alone (dagger zone-image, tag 91e1770); the compositor served the new element with no
+      workbench rebuild. NOTE: no Ray cluster is deployed in this k3s, so the live proof is the
+      timeout-armed error state; rows-on-screen needs ray.enabled (env gap, same class as media's
+      missing corpus).
 - [ ] Wave 2 remainder: compute exports cluster+actors; lakehouse exports lineage graph/runs/events
       (module-level store singleton in ITS elements bundle keeps the one-poller property); media
       DEFERRED until its corpus dataset exists in-cluster
