@@ -25,10 +25,11 @@ import type { UserStateEnvelope } from '$lib/user-state';
 // evidence that retires `api/jobs/[...path]` in this round. It comes back the day a caller does.
 const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
 
-/** The two documents this zone owns. `dock-layout` is declared by `UserStateDocument` but is not read
- *  here yet; the picklist follows the type so adding a reader needs no change to this file. */
+/** The documents this zone owns — the picklist follows `UserStateDocument`. `dock-layout` +
+ *  `dock-layout-library` back the zone's own search WORKBENCH (routes/workbench): its arrangement
+ *  and its named views, per subject, on the same envelopes every dock in the estate uses. */
 const DocumentArg = v.object({
-	document: v.picklist(['workflow-graph', 'saved-views', 'dock-layout']),
+	document: v.picklist(['workflow-graph', 'saved-views', 'dock-layout', 'dock-layout-library']),
 });
 
 function bearerHeaders(): Record<string, string> {

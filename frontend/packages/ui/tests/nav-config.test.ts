@@ -290,6 +290,9 @@ describe('topNav', () => {
 			'Atlas',
 			'Tree',
 			'Graph',
+			// The zone's own dock — its panels ARE this zone's components over one shared search
+			// store, so it is a row of this panel like every other area of the zone.
+			'Workbench',
 			'Workflow',
 		]);
 	});
