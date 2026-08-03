@@ -31,6 +31,41 @@ straight to services and `services/gateway` is deleted.
   sees them. Subscription-delivery endpoints (`/bronze-arrival`, sidecar-only lineage
   routes) must remain unreachable from outside (see Phase 2 §"structural allowlist").
 
+> **CORRECTION, 2026-08-03 (verified against the running cluster).** The line above is true of
+> pub/sub, state and secrets — and it omits **service invocation**, which is the gateway's entire
+> job. The north-south chain today is FOUR hops, not two:
+>
+> ```
+> browser → Traefik(Ingress) → rask-gateway:8888 → the gateway's OWN daprd :3500 → service
+> ```
+>
+> `gateway/__init__.py:155-157` builds `http://127.0.0.1:{DAPR_HTTP_PORT}/v1.0/invoke/{app_id}/method`,
+> and `chart/templates/dapr-resiliency.yaml:60-62` says so explicitly: traffic "leaves the gateway
+> through its own daprd … and Dapr applies invocation resiliency on the CALLING sidecar — so this
+> policy is scoped to the gateway and targets every app-id the gateway routes to".
+>
+> Phase 2's table ("HTTPRoute rules per service") therefore does not merely re-home routing — it
+> **removes Dapr service invocation from the north-south path**, and with it three things the table
+> does not name:
+>
+> 1. **mTLS** between caller and service, issued by dapr-sentry. An edge→Service `backendRef` is
+>    plaintext unless something replaces it.
+> 2. **Invocation resiliency** — the retries, timeouts and `invokeBreaker` circuit breakers scoped to
+>    the gateway app-id. These are not theoretical: three were found LATCHED on 2026-08-03
+>    (`compute`, `viewer`, `controlplane` — see `docs/architecture/edge-baseline.md`).
+> 3. **`dapr-api-token`** — `service_kit/governed/dapr_auth.py` rejects a sidecar-delivered request
+>    whose token does not match the app's `APP_API_TOKEN`. This is the guard Phase 2 calls "the
+>    load-bearing guard" that survives the blocklist's removal. An edge calling a Service directly
+>    sends no such header, so the guard either rejects every call or stops guarding. **Phase 2 cannot
+>    proceed until this is decided**, because the structural-allowlist argument rests on it.
+>
+> None of this affects Phase 1, which does not touch the gateway, Dapr, or any service. It is
+> recorded here so Phase 2 starts from the real topology.
+
+- **Authz stays Dapr-invisible either way** — FGA checks run INSIDE each service on the request it
+  receives, whatever transport delivered it. Removing Dapr from the path does not move an FGA check;
+  it changes who may reach the endpoint that runs one. That distinction is the whole of item 3 above.
+
 ---
 
 ## Phase 1 — nginx → kgateway at the edge (chart + Tiltfile only)
