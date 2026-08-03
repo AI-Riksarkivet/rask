@@ -13,14 +13,25 @@
 	import ReadersPanel from '$lib/ReadersPanel.svelte';
 	import RunInputs from '$lib/lineage/RunInputs.svelte';
 	import { fetchDownstream, fetchProducers, fetchUpstream } from '$lib/api';
-	import { checkAccess, fetchAccess, grantAccess, revokeAccess } from '$lib/lineage/catalog';
+	import {
+		checkAccess,
+		fetchAccess,
+		grantAccess,
+		revokeAccess,
+	} from '$lib/data/remote/access-objects.remote';
 	import type { DatasetRef, ProducerInfo } from '@rask/api/lineage';
 	import { lineageTick, liveRead } from '$lib/live/tick.svelte';
 
 	const name = $derived(decodeURIComponent(page.params.name ?? ''));
 
-	// The zone-owned catalog seam the shared @rask/ui GrantsPanel calls (the lib never owns an API client).
-	const grantsClient: GrantsClient = { fetchAccess, checkAccess, grantAccess, revokeAccess };
+	// The zone-owned catalog seam the shared @rask/ui GrantsPanel calls (the lib never owns an API
+	// client). The panel's positional signature is bound to the remote functions' single argument here.
+	const grantsClient: GrantsClient = {
+		fetchAccess: (kind, id) => fetchAccess({ kind, id }),
+		checkAccess: (kind, id, user, relation) => checkAccess({ kind, id, user, relation }),
+		grantAccess: (kind, id, user, relation) => grantAccess({ kind, id, user, relation }),
+		revokeAccess: (kind, id, user, relation) => revokeAccess({ kind, id, user, relation }),
+	};
 
 	// All three reads are keyed by the dataset they were fetched FOR (latest-wins by derivation —
 	// a stale response for a clicked-away dataset never lands).

@@ -1,44 +1,50 @@
-import { test, expect, type Route } from '@playwright/test';
-import { mockMe, signIn } from './session';
+import { test, expect } from '@playwright/test';
+import { mockMe, signIn, TOKEN } from './session';
+import { MOCK_LINEAGE } from '../ports';
 
-// Hermetic /dlq coverage (#83): the ops panel reads the transactional-outbox backlog via /api/admin/dlq and
-// replays one event through the session-only /api/admin/dlq/{run}/replay BFF. Mock both; assert the events
-// render, a replay POSTs + refreshes (the drained event leaves the list), poison is unreplayable, and the
-// nav exposes the route.
+// Hermetic /dlq coverage (#83): the ops panel reads the transactional-outbox backlog and replays one
+// staged event. Both run on the zone SERVER now (`$lib/lineage/remote/lineage.remote.ts`), so
+// `page.route` cannot see either — the outbox is seeded on the mock lineage service instead, per
+// BEARER, and the replay is asserted through that service's own ledger. Same assertions as before the
+// transport moved: the events render, a replay drains the event out of the list, poison is
+// unreplayable, and the nav exposes the route.
 
-const json = (route: Route, body: unknown, status = 200) =>
-	route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+const EVENTS = [
+	{
+		run_id: 'run-1',
+		event_type: 'COMPLETE',
+		job: 'ingest',
+		outputs: ['bronze$a'],
+		inputs: [],
+		parseable: true,
+	},
+	{ run_id: 'bad-1', event_type: null, job: null, outputs: [], inputs: [], parseable: false },
+];
 
-const replayed = new Set<string>();
+let token: string;
 
-function backlog() {
-	const events = [
-		{
-			run_id: 'run-1',
-			event_type: 'COMPLETE',
-			job: 'ingest',
-			outputs: ['bronze$a'],
-			inputs: [],
-			parseable: true,
-		},
-		{ run_id: 'bad-1', event_type: null, job: null, outputs: [], inputs: [], parseable: false },
-	].filter((e) => !replayed.has(e.run_id));
-	return { depth: events.length, oldest_age_seconds: 42, events, limit: 200 };
+/** Seed THIS test's outbox. The replay endpoint drains from the same list, exactly like the real
+ *  relay (re-ingest + drop), so the post-replay re-read shrinks on its own. */
+async function seedOutbox(
+	page: import('@playwright/test').Page,
+	events: unknown[] = EVENTS,
+): Promise<void> {
+	await page.request.post(`${MOCK_LINEAGE}/__mock/dlq`, { data: { bearer: token, events } });
 }
 
-test.beforeEach(async ({ context, page }) => {
-	await signIn(context); // auth-ON server: the login-first gate redirects signed-out page loads
-	await mockMe(page); // estate-admin identity: the admin layout door opens
-	replayed.clear();
-	await page.route('**/api/admin/dlq/*/replay', (route) => {
-		const m = route
-			.request()
-			.url()
-			.match(/\/admin\/dlq\/([^/]+)\/replay/);
-		if (m) replayed.add(decodeURIComponent(m[1]));
-		return json(route, { status: 'replayed', run_id: m ? decodeURIComponent(m[1]) : '' });
+/** What this bearer's zone server actually POSTed to the lineage plane. */
+async function calls(page: import('@playwright/test').Page): Promise<{ path: string }[]> {
+	const res = await page.request.get(`${MOCK_LINEAGE}/__mock/calls`, {
+		headers: { authorization: `Bearer ${token}` },
 	});
-	await page.route('**/api/admin/dlq?**', (route) => json(route, backlog()));
+	return ((await res.json()) as { calls: { path: string }[] }).calls;
+}
+
+test.beforeEach(async ({ context, page }, testInfo) => {
+	token = `${TOKEN.admin}:${testInfo.testId}`;
+	await signIn(context, { token }); // auth-ON server: the login-first gate redirects signed-out loads
+	await mockMe(page); // estate-admin identity: the admin layout door opens
+	await seedOutbox(page);
 });
 
 test('renders the outbox at-risk events with a depth badge', async ({ page }) => {
@@ -51,12 +57,16 @@ test('renders the outbox at-risk events with a depth badge', async ({ page }) =>
 	await expect(page.locator('.depth')).toContainText('depth 2');
 });
 
-test('replay POSTs to the BFF and the drained event leaves the list', async ({ page }) => {
+test('replay reaches the lineage plane and the drained event leaves the list', async ({ page }) => {
 	await page.goto('/lakehouse/admin/dlq');
 	await expect(page.locator('table')).toContainText('run-1');
 	// exact: the clickable ROW is also role=button and its name contains "run-1" (drawer, cond 8).
 	await page.getByRole('button', { name: 'Replay run-1', exact: true }).click();
 	await expect(page.locator('.msg')).toContainText('Replayed run-1');
+	// the command really landed upstream — asserted at the service, not at the browser boundary
+	await expect
+		.poll(async () => (await calls(page)).map((c) => c.path))
+		.toContain('/admin/dlq/run-1/replay');
 	// the reload drops the drained event; only the poison row remains
 	await expect(page.locator('table')).not.toContainText('run-1');
 	await expect(page.locator('table')).toContainText('poison');
@@ -70,8 +80,7 @@ test('a poison object is not replayable', async ({ page }) => {
 });
 
 test('shows the honest empty state when the outbox is drained', async ({ page }) => {
-	replayed.add('run-1');
-	replayed.add('bad-1');
+	await seedOutbox(page, []);
 	await page.goto('/lakehouse/admin/dlq');
 	await expect(page.getByText('The outbox is empty')).toBeVisible();
 });

@@ -39,17 +39,15 @@
 	import type { ProducerInfo } from '@rask/api/lineage';
 	import type { Me } from '@rask/api';
 	import { fetchMeViaBff } from '$lib/http';
+	import { fetchTableHistory, type CatalogResult, type HistoryRow } from './catalog';
 	import {
 		createTableBranch,
 		createTableTag,
 		deleteTableBranch,
 		deleteTableTag,
-		fetchTableHistory,
 		moveTableTag,
 		restoreTableVersion,
-		type CatalogResult,
-		type HistoryRow,
-	} from './catalog';
+	} from './remote/catalog.remote';
 	import {
 		authorFor,
 		displayAuthor,
@@ -298,7 +296,7 @@
 				restoreNote =
 					'The concurrent-write check could not run (the catalog did not serve the commit log), so this restore was not verified against the current tip.';
 			}
-			const res = await restoreTableVersion(table, version);
+			const res = await restoreTableVersion({ table, version });
 			if (res.ok) {
 				restoreArmed = null;
 				restoreTyped = '';
@@ -328,7 +326,7 @@
 		tagBusy = true;
 		tagError = null;
 		try {
-			const res = await createTableTag(table, name, version);
+			const res = await createTableTag({ table, tag: name, version });
 			if (res.ok) {
 				tagName = '';
 				onchange();
@@ -373,7 +371,7 @@
 	async function runMoveTag(): Promise<void> {
 		if (!movingTag || !moveTo) return;
 		const name = movingTag;
-		await refDo(() => moveTableTag(table, name, Number(moveTo)));
+		await refDo(() => moveTableTag({ table, tag: name, version: Number(moveTo) }));
 		movingTag = null;
 		moveTo = '';
 	}
@@ -381,7 +379,9 @@
 	async function runCreateBranch(): Promise<void> {
 		const name = newBranch.trim();
 		if (!name) return;
-		await refDo(() => createTableBranch(table, name, newBranchFrom ? Number(newBranchFrom) : null));
+		await refDo(() =>
+			createTableBranch({ table, name, fromVersion: newBranchFrom ? Number(newBranchFrom) : null }),
+		);
 		newBranch = '';
 		newBranchFrom = '';
 	}
@@ -869,7 +869,7 @@
 						class="chip-x danger"
 						aria-label="confirm delete branch {name}"
 						disabled={refBusy}
-						onclick={() => refDo(() => deleteTableBranch(table, name))}>delete?</button
+						onclick={() => refDo(() => deleteTableBranch({ table, name }))}>delete?</button
 					>
 					<button class="chip-x" aria-label="cancel" onclick={() => (refConfirm = null)}>×</button>
 				{:else}
@@ -944,7 +944,7 @@
 								class="chip-x danger"
 								aria-label="confirm delete tag {name}"
 								disabled={refBusy}
-								onclick={() => refDo(() => deleteTableTag(table, name))}>delete?</button
+								onclick={() => refDo(() => deleteTableTag({ table, tag: name }))}>delete?</button
 							>
 							<button class="chip-x" aria-label="cancel" onclick={() => (refConfirm = null)}>×</button>
 						{:else}

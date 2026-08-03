@@ -19,6 +19,18 @@ test('warm the admin dev server routes', async ({ context, page }) => {
 		'/lakehouse/admin/events',
 		'/lakehouse/admin/streams',
 		'/lakehouse/admin/dlq',
+		// The surfaces whose transport moved onto remote functions: their specs live here now, and
+		// this server had never compiled them.
+		'/lakehouse/models',
+		'/lakehouse/catalog/projects',
+		'/lakehouse/catalog/projects/acme',
+		'/lakehouse/catalog/warehouses',
+		'/lakehouse/catalog/warehouses/acme-wh',
+		'/lakehouse/catalog/namespaces/acme-silver',
+		'/lakehouse/catalog/namespaces',
+		// The heaviest route in the zone (Svelte Flow + apache-arrow): the per-object access specs
+		// drive it, and on a cold compile the first of them times out at 30s every time.
+		'/lakehouse/catalog/tables/db1%24t',
 	]) {
 		await page.goto(path).catch(() => {});
 	}

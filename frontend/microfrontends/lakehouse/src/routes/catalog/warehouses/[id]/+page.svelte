@@ -6,7 +6,9 @@
 	import { RefreshCw, ShieldAlert, Warehouse as WarehouseIcon } from '@lucide/svelte';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { fetchTables, fetchWarehouse, type Warehouse } from '$lib/data/catalog';
+	import type { Warehouse } from '$lib/data/catalog';
+	import { fetchTables } from '$lib/data/remote/catalog.remote';
+	import { fetchWarehouse } from '$lib/data/remote/warehouses.remote';
 	import { namespaceOfTable, stageOf } from '$lib/data/stage';
 	import StageBadge from '$lib/data/StageBadge.svelte';
 

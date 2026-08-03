@@ -9,7 +9,7 @@
 		fetchGovernance,
 		removeDatasetTag,
 		setDatasetDescription,
-	} from '$lib/api';
+	} from './remote/lineage.remote';
 	import type { DatasetGovernance } from '@rask/api/lineage';
 
 	let { dataset }: { dataset: string } = $props();
@@ -28,12 +28,17 @@
 		error = null;
 		unavailable = false;
 		editingDescription = false;
-		fetchGovernance(current).then((g) => {
+		// `refresh()`, not a bare call: a query instance is cached by its argument, so re-mounting the
+		// panel on the same dataset would render the record it already holds instead of re-reading.
+		void (async () => {
+			const record = fetchGovernance(current);
+			await record.refresh();
+			const g = record.current;
 			// Latest-wins: ignore a response for a dataset the user has already clicked away from.
 			if (dataset !== current) return;
 			if (g) governance = g;
 			else unavailable = true; // a swallowed fetch failure must not masquerade as "no metadata"
-		});
+		})();
 	});
 
 	function fail(status: number, detail: string): void {
@@ -48,7 +53,7 @@
 		busy = true;
 		error = null;
 		try {
-			const res = await addDatasetTag(dataset, tag);
+			const res = await addDatasetTag({ name: dataset, tag });
 			if (res.ok) {
 				governance = res.data;
 				newTag = '';
@@ -65,7 +70,7 @@
 		busy = true;
 		error = null;
 		try {
-			const res = await removeDatasetTag(dataset, tag);
+			const res = await removeDatasetTag({ name: dataset, tag });
 			if (res.ok) governance = res.data;
 			else fail(res.status, res.detail);
 		} finally {
@@ -78,7 +83,10 @@
 		busy = true;
 		error = null;
 		try {
-			const res = await setDatasetDescription(dataset, draftDescription.trim());
+			const res = await setDatasetDescription({
+				name: dataset,
+				description: draftDescription.trim(),
+			});
 			if (res.ok) {
 				governance = res.data;
 				editingDescription = false;

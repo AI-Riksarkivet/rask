@@ -23,7 +23,7 @@
 	import { Plus, RefreshCw, ShieldAlert } from '@lucide/svelte';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { declareTable, fetchTables } from './catalog';
+	import { declareTable, fetchTables } from './remote/catalog.remote';
 	import RowDrawer from './RowDrawer.svelte';
 	import { namespaceOfTable, stageOfTable, type StageInfo } from './stage';
 	import StageBadge from './StageBadge.svelte';
@@ -73,7 +73,11 @@
 		declBusy = true;
 		declMsg = null;
 		try {
-			const res = await declareTable(ns, name, declLocation.trim() || undefined);
+			const res = await declareTable({
+				namespace: ns,
+				name,
+				location: declLocation.trim() || undefined,
+			});
 			if (res.ok) {
 				declMsg = {
 					ok: true,

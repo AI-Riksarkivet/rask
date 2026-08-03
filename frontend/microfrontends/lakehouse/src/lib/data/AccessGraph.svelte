@@ -16,12 +16,8 @@
 	import { enter } from '@rask/ui/motion';
 	import { Network, ShieldAlert } from '@lucide/svelte';
 	import { Background, BackgroundVariant, Controls, type Edge, SvelteFlow } from '@xyflow/svelte';
-	import {
-		type AccessGraph,
-		fetchAccessGraph,
-		grantTableAccess,
-		revokeTableAccess,
-	} from './catalog';
+	import type { AccessGraph } from './namespace';
+	import { fetchAccessGraph, grantAccess, revokeAccess } from './remote/access-objects.remote';
 	import { FlowAutoFit } from '@rask/flow';
 
 	let { dataset }: { dataset: string } = $props();
@@ -76,7 +72,7 @@
 
 	async function load(): Promise<void> {
 		const current = dataset;
-		const res = await fetchAccessGraph(current);
+		const res = await fetchAccessGraph({ kind: 'table', id: current });
 		if (dataset !== current) return; // navigated away — drop stale
 		if (res.ok) {
 			graph = res.data;
@@ -114,9 +110,8 @@
 		mgResult = null;
 		const current = dataset;
 		try {
-			const res = grant
-				? await grantTableAccess(current, user, mgRelation)
-				: await revokeTableAccess(current, user, mgRelation);
+			const args = { kind: 'table', id: current, user, relation: mgRelation } as const;
+			const res = grant ? await grantAccess(args) : await revokeAccess(args);
 			if (dataset !== current) return;
 			if (res.ok) {
 				mgResult = {

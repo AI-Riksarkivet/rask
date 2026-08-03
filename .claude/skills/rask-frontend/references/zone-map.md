@@ -29,13 +29,13 @@ Five areas that used to be five separate apps, merged under one router: `data`, 
 
 `+layout.svelte` is the control tower: `me` fetched **on mount** via `fetchMeViaBff()`, one `lineageFeed()` live query opened in `onMount`, a client-side estate-admin gate that renders `ForbiddenPage` and nulls `zoneNav` so admin routes are not advertised, `canvasArea = area === 'lineage'` to give SvelteFlow a sized flex parent, and `onNavigate → document.startViewTransition`.
 
-**`data`** — table registry, table detail (`TableDetail.svelte`, 1711 lines, four tabs derived from `?tab=`), namespaces (derived from `<ns>$<table>` ids — there is no list endpoint), projects, warehouses. Backed by `/capi/v1/*` BFF routes plus a server-side `/detail` aggregate.
+**`data`** — table registry, table detail (`TableDetail.svelte`, 1711 lines, four tabs derived from `?tab=`), namespaces (derived from `<ns>$<table>` ids — there is no list endpoint), projects, warehouses. The **warehouse + project** registry (list/describe/create/activate/bind) rides `lib/data/remote/warehouses.remote.ts`; its three `/capi/v1/warehouses*` routes are gone. The **table lifecycle** rides `lib/data/remote/catalog.remote.ts` (open_transport.md area 1): the registry list, the `fetchTableDetail` aggregate (still a six-read server-side fan-out — just no longer a route), policy/GC/compaction, tags/branches/restore, schema evolution, indexes, drop/deregister/rename/declare and the row update/delete; 17 `/capi/v1/table*` routes are gone with it, allowlist segments and all. Tabular reads (table preview/query, insert) stay Arrow on `+server.ts`, as does the `[id]/[...rest]` GET proxy that serves blob `<img>` bytes and the #113 commit log.
 
 **`lineage`** — Svelte Flow DAG explorer (depth layout with longest-path + iteration cap, theme-live via `useColorMode()`), datasets, dataset detail (governance, grants, read audit, upstream/downstream), jobs, job detail (a **two-read split**: 200 events with `summary:true` ≈46 kB, plus one raw event for facets), runs, column-level lineage.
 
-**`storage`** and **`models`** are areas here — they are not zones. `/data` itself is a scaffold stub.
+**`storage`** and **`models`** are areas here — they are not zones. `/data` itself is a scaffold stub. The model registry (list/describe/**promote**) rides `lib/models/remote/models.remote.ts` — the `capi/v1/model/[model]/promote` route is gone; `/pipeline`'s medallion triggers are still the `medallion/[action]` BFF route.
 
-51 `+server.ts` BFF routes, 88 `requestJSON` calls. All gates green: svelte-check 0/0, oxlint 0/0 across 197 files.
+11 `+server.ts` routes (4 keep-bytes, 1 keep-flow, 2 catch-alls + 4 blocked ports — open_transport.md), 0 `requestJSON` calls, 11 `.remote.ts` modules. All gates green: svelte-check 0 errors, oxlint 0 errors.
 
 ## `media` — base `/media`, port 5173, labelled **Search**
 

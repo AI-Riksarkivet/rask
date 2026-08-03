@@ -60,8 +60,12 @@ export default defineConfig({
 			// The live cursor (`$lib/live/feeds.remote`) and the shell's run feed poll the LINEAGE service
 			// from the SERVER, so `page.route` cannot stand in for them the way it does for every other
 			// read. Point them at the mock lineage service below; without it the cursor never advances and
-			// no spec could tell a live surface from a dead one.
-			env: { LINEAGE_API: MOCK_LINEAGE },
+			// no spec could tell a live surface from a dead one. CATALOG_API likewise, since the
+			// remote-function migration: this server has NO session, so its bearer is "" — an auth-off
+			// spec seeds the mock's "" bucket (`__mock/seed` with `bearer: ""`), which only works because
+			// exactly one auth-off spec (shell-responsive) does so; anything needing per-test isolation
+			// belongs in the admin (auth-ON) project with per-test bearers.
+			env: { LINEAGE_API: MOCK_LINEAGE, CATALOG_API: `http://localhost:${MOCK_CATALOG_PORT}` },
 		},
 		{
 			command: `bun run dev --port ${AUTH_ON_PORT} --strictPort`,

@@ -1,9 +1,10 @@
 <script lang="ts">
 	// `/tables/<id>` — the catalog table-detail view (#52): schema, stats, version + tag history, the
 	// #50 maintenance policy (owner-gated set/delete), and the #51 access review. Data comes in one
-	// round-trip through the /capi detail BFF aggregate; policy writes go through their own narrow
-	// session-only routes. A dataset the catalog does not register (e.g. a storage-managed medallion
-	// zone) renders the honest not-in-catalog state instead of a broken page.
+	// round-trip through the `fetchTableDetail` remote query (the six-read fan-out still happens on the
+	// zone server); every write is a remote command carrying the signed-in user's bearer. A dataset the
+	// catalog does not register (e.g. a storage-managed medallion zone) renders the honest
+	// not-in-catalog state instead of a broken page.
 	import { AlertDialog } from '@rask/ui/alert-dialog';
 	import { GrantsPanel, type GrantsClient } from '@rask/ui/grants-panel';
 	import { Select } from '@rask/ui/select';
@@ -16,9 +17,24 @@
 	import { fetchProducers } from '$lib/api';
 	import type { ProducerInfo } from '@rask/api/lineage';
 	import { bffPath } from '$lib/http';
-	import { checkAccess, fetchAccess, grantAccess, revokeAccess } from './namespace';
+	import {
+		checkAccess,
+		fetchAccess,
+		grantAccess,
+		revokeAccess,
+	} from './remote/access-objects.remote';
 	import { deriveQuality, type QualityBadge } from '$lib/quality';
 	import ReadersPanel from '$lib/ReadersPanel.svelte';
+	import {
+		type GcPreview,
+		insertRows,
+		partErrored,
+		type Policy,
+		type PolicyRequest,
+		RETYPE_TYPES,
+		type TableStats,
+		type TableDetail,
+	} from './catalog';
 	import {
 		addColumn,
 		backfillColumn,
@@ -30,24 +46,15 @@
 		dropColumn,
 		dropTable,
 		dropTableIndex,
+		fetchTableDetail,
+		previewMaintenance,
 		renameColumn,
 		renameTable,
-		updateRows,
-		type CatalogResult,
-		fetchTableDetail,
-		type GcPreview,
-		insertRows,
-		partErrored,
-		type Policy,
-		type PolicyRequest,
-		previewMaintenance,
-		RETYPE_TYPES,
-		type TableStats,
-		type TableDetail,
 		retypeColumn,
 		runMaintenance,
 		setTablePolicy,
-	} from './catalog';
+		updateRows,
+	} from './remote/catalog.remote';
 	import DetailTabs from './DetailTabs.svelte';
 	import { fmtBytes, fmtEpoch } from './history';
 	import TableHistory from './TableHistory.svelte';
@@ -83,8 +90,14 @@
 	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte).
 	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
 
-	// The zone-owned catalog seam the shared @rask/ui GrantsPanel calls (the lib never owns an API client).
-	const grantsClient: GrantsClient = { fetchAccess, checkAccess, grantAccess, revokeAccess };
+	// The zone-owned catalog seam the shared @rask/ui GrantsPanel calls (the lib never owns an API
+	// client). The panel's positional signature is bound to the remote functions' single argument here.
+	const grantsClient: GrantsClient = {
+		fetchAccess: (kind, id) => fetchAccess({ kind, id }),
+		checkAccess: (kind, id, user, relation) => checkAccess({ kind, id, user, relation }),
+		grantAccess: (kind, id, user, relation) => grantAccess({ kind, id, user, relation }),
+		revokeAccess: (kind, id, user, relation) => revokeAccess({ kind, id, user, relation }),
+	};
 
 	let detail = $state<TableDetail | null>(null);
 	let lastStatus = $state(0);
@@ -149,7 +162,11 @@
 		rowMsg = null;
 		const requested = table; // latest-wins: don't post A's result onto B if the user navigated mid-write
 		try {
-			const res = await updateRows(requested, rowPredicate.trim() || null, sets);
+			const res = await updateRows({
+				table: requested,
+				predicate: rowPredicate.trim() || null,
+				updates: sets,
+			});
 			if (table !== requested) return;
 			if (res.ok) {
 				rowMsg = {
@@ -173,7 +190,7 @@
 		rowMsg = null;
 		const requested = table;
 		try {
-			const res = await deleteRows(requested, predicate);
+			const res = await deleteRows({ table: requested, predicate });
 			if (table !== requested) return;
 			if (res.ok) {
 				// the delete wire carries no row count — surface the new version honestly instead
@@ -205,7 +222,11 @@
 		backfillMsg = null;
 		const requested = table; // latest-wins: don't post A's job message onto B if the user navigated mid-write
 		try {
-			const res = await backfillColumn(requested, column, backfillWhere.trim() || undefined);
+			const res = await backfillColumn({
+				table: requested,
+				column,
+				where: backfillWhere.trim() || undefined,
+			});
 			if (table !== requested) return;
 			if (res.ok) {
 				backfilling = null;
@@ -252,7 +273,7 @@
 		dangerBusy = true;
 		dangerError = null;
 		try {
-			const res = action === 'drop' ? await dropTable(table) : await deregisterTable(table);
+			const res = action === 'drop' ? await dropTable({ table }) : await deregisterTable({ table });
 			if (res.ok) {
 				await goto(`${base}/catalog/tables`); // the id no longer names a table — back to the registry
 			} else {
@@ -278,7 +299,7 @@
 		const requested = table;
 		const newId = `${nsPrefix}${to}`;
 		try {
-			const res = await renameTable(requested, to);
+			const res = await renameTable({ table: requested, newName: to });
 			if (table !== requested) return;
 			if (res.ok) {
 				renameTableTo = '';
@@ -323,7 +344,7 @@
 		// Latest-wins: the user may navigate table A→B while A's request is in flight (the route reuses
 		// this instance), so drop a response for a table we have already navigated away from.
 		const requested = table;
-		const res = await fetchTableDetail(requested);
+		const res = await fetchTableDetail({ table: requested });
 		if (table !== requested) return;
 		if (res.ok) {
 			detail = res.data;
@@ -418,7 +439,7 @@
 			if (draft.retain_versions != null) body.retain_versions = draft.retain_versions;
 			if (draft.interval != null) body.compact_interval_hours = draft.interval;
 			if (draft.target != null) body.target_rows_per_fragment = draft.target;
-			const res = await setTablePolicy(table, body);
+			const res = await setTablePolicy({ table, policy: body });
 			if (res.ok) {
 				editingPolicy = false;
 				await load();
@@ -435,7 +456,7 @@
 		busy = true;
 		policyError = null;
 		try {
-			const res = await deleteTablePolicy(table);
+			const res = await deleteTablePolicy({ table });
 			if (res.ok) await load();
 			else policyFail(res.status, res.detail);
 		} finally {
@@ -467,9 +488,9 @@
 		gcResult = null;
 		gcConfirm = false;
 		try {
-			const res = await previewMaintenance(table, {
-				retention_days: gcDays,
-				retain_versions: gcKeep,
+			const res = await previewMaintenance({
+				table,
+				bounds: { retention_days: gcDays, retain_versions: gcKeep },
 			});
 			if (res.ok) gcPreview = res.data;
 			else gcFail(res.status, res.detail);
@@ -483,7 +504,10 @@
 		gcBusy = true;
 		gcError = null;
 		try {
-			const res = await runMaintenance(table, { retention_days: gcDays, retain_versions: gcKeep });
+			const res = await runMaintenance({
+				table,
+				bounds: { retention_days: gcDays, retain_versions: gcKeep },
+			});
 			if (res.ok) {
 				gcResult = `Reclaimed ${res.data.old_versions_removed} version(s) · ${fmtBytes(res.data.bytes_removed)}.`;
 				gcPreview = null;
@@ -519,7 +543,7 @@
 		colBusy = true;
 		colError = null;
 		try {
-			const res = await addColumn(table, name, expr);
+			const res = await addColumn({ table, name, expression: expr });
 			if (res.ok) {
 				addColName = '';
 				addColExpr = '';
@@ -535,7 +559,7 @@
 		colBusy = true;
 		colError = null;
 		try {
-			const res = await dropColumn(table, name);
+			const res = await dropColumn({ table, name });
 			if (res.ok) await load();
 			else colFail(res.status, res.detail);
 		} finally {
@@ -550,7 +574,7 @@
 		colBusy = true;
 		colError = null;
 		try {
-			const res = await renameColumn(table, from, to);
+			const res = await renameColumn({ table, path: from, rename: to });
 			if (res.ok) {
 				renaming = null;
 				renameTo = '';
@@ -568,7 +592,7 @@
 		colBusy = true;
 		colError = null;
 		try {
-			const res = await retypeColumn(table, path, type);
+			const res = await retypeColumn({ table, path, type });
 			if (res.ok) {
 				retyping = null;
 				retypeTo = '';
@@ -589,7 +613,10 @@
 		gcError = null;
 		compactResult = null;
 		try {
-			const res = await compactTable(table, policy?.target_rows_per_fragment ?? null);
+			const res = await compactTable({
+				table,
+				targetRowsPerFragment: policy?.target_rows_per_fragment ?? null,
+			});
 			if (res.ok) {
 				compactResult = `Compacted · ${res.data.fragments_removed} fragment(s) → ${res.data.fragments_added}.`;
 				await load(); // compaction wrote a new version — refresh
@@ -752,7 +779,7 @@
 			const body = ixScalar
 				? { column, index_type: ixType }
 				: { column, index_type: ixType, distance_type: ixDistance };
-			const res = await createTableIndex(table, body, ixScalar);
+			const res = await createTableIndex({ table, body, scalar: ixScalar });
 			if (res.ok) {
 				ixColumn = '';
 				await load(); // pull the new index into the list (the build bumps the version too)
@@ -773,7 +800,7 @@
 		ixBusy = true;
 		ixError = null;
 		try {
-			const res = await dropTableIndex(table, name);
+			const res = await dropTableIndex({ table, name });
 			if (res.ok) {
 				await load();
 			} else if (res.status === 401) {

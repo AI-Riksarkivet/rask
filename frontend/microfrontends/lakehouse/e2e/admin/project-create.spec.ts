@@ -1,15 +1,15 @@
-import { test, expect, type Route } from '@playwright/test';
+import { test, expect, type Page, type Route } from '@playwright/test';
 import { signIn, TOKEN } from './session';
 import { MOCK_CATALOG } from '../ports';
 
 // Hermetic project-creation coverage (goal cond 6): the estate-admin flow COMPOSES existing APIs —
 // warehouse create (the project comes into existence with its first warehouse), the optional
-// serving:"gold" second create, and the initial admin tuple. The warehouse/project/me reads stay
-// stubbed at the browser boundary (they are still BFF calls); the ADMIN GRANT is not — it rides the
-// shared `writeTuple` remote command, which runs on the zone SERVER, so it lands on the mock catalog
-// and is asserted through `/__mock/access` per bearer. Lives in the admin project (auth-ON server)
-// because that server is the one whose CATALOG_API points at the mock; each test signs in with a
-// per-test bearer so the fullyParallel suite shares no mutable mock state.
+// serving:"gold" second create, and the initial admin tuple. The warehouse create and the estate list
+// now ride `warehouses.remote.ts`, and the admin grant the shared `writeTuple` command, so ALL THREE
+// run on the zone SERVER and land on the mock catalog: the reads are seeded per bearer, the warehouse
+// POSTs are read back from `/__mock/calls`, and the tuple write from `/__mock/access`. Only `/v1/me`
+// still crosses the browser (the OIDC/BFF identity plane stays there), so it alone is `page.route`d.
+// Each test signs in with a per-test bearer so the fullyParallel suite shares no mutable mock state.
 
 const json = (route: Route, body: unknown, status = 200) =>
 	route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
@@ -22,14 +22,34 @@ const ME_ALICE = {
 	projects: [],
 };
 
+/** A created warehouse, in the seed's explicit {status, body} form: a bare record carrying its own
+ *  `status` key would be read AS that form, and `"active"` would become the HTTP status. */
+const created = (id: string, project: string, bucket: string) => ({
+	status: 200,
+	body: { id, project, bucket, root_uri: `s3://${bucket}`, status: 'active' },
+});
+
 let token: string;
 let me: Record<string, unknown>;
-let projects: Array<Record<string, unknown>>;
-let warehousePosts: Array<Record<string, unknown>>;
-let warehouseStatus: number;
+
+/** Pre-seed exact catalog responses for THIS test's bearer ("METHOD /path" → body). */
+const seed = async (page: Page, routes: Record<string, unknown>): Promise<void> => {
+	await page.request.post(`${MOCK_CATALOG}/__mock/seed`, { data: { bearer: token, routes } });
+};
+
+/** The warehouse creates the mock catalog recorded for THIS test's bearer, in order. */
+const warehousePosts = async (page: Page): Promise<unknown[]> => {
+	const res = await page.request.get(`${MOCK_CATALOG}/__mock/calls`, {
+		headers: { authorization: `Bearer ${token}` },
+	});
+	const { calls } = (await res.json()) as {
+		calls: Array<{ method: string; path: string; body: unknown }>;
+	};
+	return calls.filter((c) => c.method === 'POST' && c.path === '/v1/warehouses').map((c) => c.body);
+};
 
 /** The tuple writes the mock catalog recorded for THIS test's bearer. */
-const writtenTuples = async (page: import('@playwright/test').Page): Promise<unknown[]> => {
+const writtenTuples = async (page: Page): Promise<unknown[]> => {
 	const res = await page.request.get(`${MOCK_CATALOG}/__mock/access`, {
 		headers: { authorization: `Bearer ${token}` },
 	});
@@ -40,42 +60,16 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
 	await signIn(context, { token });
 	me = { ...ME_ALICE };
-	projects = [];
-	warehousePosts = [];
-	warehouseStatus = 200;
-	await page.route('**/capi/**', (route) => {
-		const req = route.request();
-		const path = new URL(req.url()).pathname.replace(/^.*\/capi/, '');
-		if (path === '/v1/me') return json(route, me);
-		if (path === '/v1/projects') return json(route, projects);
-		if (path === '/v1/warehouses' && req.method() === 'POST') {
-			const body = req.postDataJSON() as Record<string, unknown> & {
-				id: string;
-				project: string;
-				bucket: string | null;
-			};
-			warehousePosts.push(body);
-			if (warehouseStatus !== 200) return json(route, { detail: 'forbidden' }, warehouseStatus);
-			// the create makes the project visible on the next estate list — mirror that
-			const existing = projects.find((p) => p.project === body.project);
-			const wh = { id: body.id, bucket: body.bucket ?? body.id, status: 'active' };
-			if (existing) (existing.warehouses as unknown[]).push(wh);
-			else projects.push({ project: body.project, warehouses: [wh], admins: [] });
-			return json(route, {
-				id: body.id,
-				project: body.project,
-				bucket: body.bucket ?? body.id,
-				root_uri: `s3://${body.bucket ?? body.id}`,
-				status: 'active',
-			});
-		}
-		return json(route, { detail: 'unstubbed' }, 404);
-	});
+	await page.route('**/capi/v1/me', (route) => json(route, me));
+	// The estate starts empty; each test seeds the create's outcome, and the one that asserts the
+	// gallery re-seeds the list its post-create re-read lands on.
+	await seed(page, { 'GET /v1/projects': [] });
 });
 
 test('creates work + gold warehouses and grants the initial admin, with the exact wire bodies', async ({
 	page,
 }) => {
+	await seed(page, { 'POST /v1/warehouses': created('acme-wh', 'acme', 'acme-wh') });
 	await page.goto('/lakehouse/catalog/projects');
 	await page.getByRole('button', { name: 'New project' }).click();
 	const dialog = page.getByRole('dialog');
@@ -84,10 +78,24 @@ test('creates work + gold warehouses and grants the initial admin, with the exac
 	await dialog.getByLabel('Gold serving warehouse id').fill('acme-gold');
 	// the admin subject prefilled from /v1/me (user:alice) is kept
 	await expect(dialog.getByLabel('Initial admin')).toHaveValue('user:alice');
+	// The estate AFTER the creates — the create makes the project visible on the next estate list,
+	// which is what the command's single-flight refresh and the `oncreated` reload both read.
+	await seed(page, {
+		'GET /v1/projects': [
+			{
+				project: 'acme',
+				warehouses: [
+					{ id: 'acme-wh', bucket: 'acme-wh', status: 'active' },
+					{ id: 'acme-gold', bucket: 'acme-gold', status: 'active', serving: 'gold' },
+				],
+				admins: [],
+			},
+		],
+	});
 	await dialog.getByRole('button', { name: 'Create project' }).click();
 	// wire bodies pinned: the work create carries NO serving key; the gold one carries serving:"gold"
 	await expect
-		.poll(() => warehousePosts)
+		.poll(async () => warehousePosts(page))
 		.toEqual([
 			{ id: 'acme-wh', project: 'acme', bucket: null },
 			{ id: 'acme-gold', project: 'acme', bucket: null, serving: 'gold' },
@@ -107,6 +115,7 @@ test('creates work + gold warehouses and grants the initial admin, with the exac
 });
 
 test('gold warehouse and admin grant are optional — one create, no tuple', async ({ page }) => {
+	await seed(page, { 'POST /v1/warehouses': created('solo-wh', 'solo', 'solo-bucket') });
 	await page.goto('/lakehouse/catalog/projects');
 	await page.getByRole('button', { name: 'New project' }).click();
 	const dialog = page.getByRole('dialog');
@@ -116,7 +125,7 @@ test('gold warehouse and admin grant are optional — one create, no tuple', asy
 	await dialog.getByLabel('Initial admin').clear();
 	await dialog.getByRole('button', { name: 'Create project' }).click();
 	await expect
-		.poll(() => warehousePosts)
+		.poll(async () => warehousePosts(page))
 		.toEqual([{ id: 'solo-wh', project: 'solo', bucket: 'solo-bucket' }]);
 	// the toast marks the END of the flow — only then is "no tuple ever fired" a settled fact
 	await expect(page.getByText('Project solo created — warehouse solo-wh.')).toBeVisible();
@@ -126,7 +135,7 @@ test('gold warehouse and admin grant are optional — one create, no tuple', asy
 test('a denied first create toasts the failure and keeps the dialog open for a retry', async ({
 	page,
 }) => {
-	warehouseStatus = 403;
+	await seed(page, { 'POST /v1/warehouses': { status: 403, body: { detail: 'forbidden' } } });
 	await page.goto('/lakehouse/catalog/projects');
 	await page.getByRole('button', { name: 'New project' }).click();
 	const dialog = page.getByRole('dialog');
@@ -144,6 +153,7 @@ test('a denied first create toasts the failure and keeps the dialog open for a r
 test('a failed admin grant is a NAMED partial outcome, not a fake success', async ({ page }) => {
 	// The failure lever lives on the mock catalog now (the write is server-side — page.route cannot
 	// reach it): this test's bearer gets failWrites, nobody else's does.
+	await seed(page, { 'POST /v1/warehouses': created('acme-wh', 'acme', 'acme-wh') });
 	await page.request.post(`${MOCK_CATALOG}/__mock/access/config`, {
 		data: { bearer: token, failWrites: true },
 	});

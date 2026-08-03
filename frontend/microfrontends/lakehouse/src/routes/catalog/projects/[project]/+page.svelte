@@ -5,7 +5,8 @@
 	import { FolderKanban, RefreshCw, ShieldAlert } from '@lucide/svelte';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { fetchProject, type ProjectSummary } from '$lib/data/catalog';
+	import type { ProjectSummary } from '$lib/data/catalog';
+	import { fetchProject } from '$lib/data/remote/warehouses.remote';
 
 	const project = $derived(page.params.project ?? '');
 

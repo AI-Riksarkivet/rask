@@ -24,7 +24,7 @@
 	import * as Sheet from '@rask/ui/sheet';
 	import { ExternalLink, RefreshCw, RotateCcw, ShieldAlert, Inbox } from '@lucide/svelte';
 	import { page } from '$app/state';
-	import { fetchDlq, replayDlq } from '$lib/api';
+	import { fetchDlq, replayDlq } from '$lib/lineage/remote/lineage.remote';
 	import type { DlqBacklog, DlqEvent } from '@rask/api/lineage';
 	import { lineageTick, liveRead } from '$lib/live/tick.svelte';
 
@@ -45,8 +45,12 @@
 
 	async function load(): Promise<void> {
 		const seq = ++inflight;
-		const res = await fetchDlq(200);
-		if (seq !== inflight) return; // latest-wins
+		// `refresh()`, not a bare call: a query instance is cached by its argument, so re-awaiting it on
+		// a cursor tick (or after a replay) would hand back the backlog it already holds.
+		const backlogQuery = fetchDlq(200);
+		await backlogQuery.refresh();
+		const res = backlogQuery.current;
+		if (seq !== inflight || res === undefined) return; // latest-wins
 		settled = true;
 		if (res.ok) {
 			backlog = res.data;

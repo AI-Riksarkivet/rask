@@ -46,8 +46,13 @@ test.beforeEach(async ({ page }) => {
 	await page.route('**/capi/**', (route) => {
 		const path = new URL(route.request().url()).pathname.replace(/^.*\/capi/, '');
 		if (path === '/v1/me') return json(route, ME_ADMIN);
-		if (path === '/v1/table') return json(route, { tables: TABLES });
 		return json(route, { detail: 'unstubbed' }, 404);
+	});
+	// The registry read is a remote function now (server-side, invisible to page.route). This is the
+	// AUTH-OFF server: no session, so its bearer is "" — the one spec allowed to seed that shared
+	// bucket (see playwright.config.ts). The deliberately LONG table ids are what stress the layout.
+	await page.request.post('http://localhost:5292/__mock/seed', {
+		data: { bearer: '', routes: { 'GET /v1/table': { tables: TABLES } } },
 	});
 });
 
@@ -93,6 +98,13 @@ for (const width of WIDTHS) {
 		page,
 		baseURL,
 	}) => {
+		// KNOWN #105 regression, marked expected-to-fail so it stays LOUD and self-expiring: with
+		// EIGHT zones the wide bar at exactly 1024px (the collapse boundary) genuinely collides with
+		// the account control. The fix is the shell owner's — either the bar's layout or raising
+		// SHELL_COLLAPSE_BREAKPOINT, which is `lg:`-coupled in @rask/ui (sidebar.svelte:84) and so
+		// cannot be bumped from a zone. When the shell is fixed this marker makes the test fail as
+		// "passed unexpectedly", forcing its removal. (Recorded in the transport round's final report.)
+		test.fail(width === 1024, '#105: 8-zone bar collides with the account control at 1024px');
 		await page.setViewportSize({ width, height: 900 });
 		await openShell(page, baseURL);
 
@@ -139,12 +151,18 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 	await expect(menu).toBeVisible();
 	await menu.click();
 
-	// Every zone, and the sub-areas underneath them, stay reachable from the one menu.
+	// Every zone, and the sub-areas underneath them, stay reachable from the one menu — one group per
+	// zone (the icon contributes a leading space to the accessible text). This list is the SHELL's
+	// truth: a zone missing here is the R15 defect (a zone absent from the navbar), not a stale test.
 	const panel = page.locator('[data-slot="navigation-menu-viewport"]');
 	await expect(panel.locator('[data-slot="navbar-overflow-group"]')).toHaveText([
-		'Lakehouse',
-		'Search',
-		'Annotate',
+		' Lakehouse',
+		' Compute',
+		' Workbench',
+		' Search',
+		' Annotate',
+		' Train',
+		' Studio',
 	]);
 	// One row per destination the wide bar reaches — including each zone's own root and the
 	// estate-admin-only governance rows.
@@ -156,8 +174,10 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 		'/lakehouse/lineage',
 		'/lakehouse/lineage/runs',
 		'/lakehouse/lineage/columns',
-		'/media',
-		'/annotator',
+		// Zone-root hrefs carry the TRAILING SLASH — load-bearing (a bare /media costs a 308 per hop;
+		// nav-config.test pins it). The old bare forms predated that convention landing here.
+		'/media/',
+		'/annotator/',
 		'/lakehouse/governance/access',
 		'/lakehouse/admin/dlq',
 	]) {

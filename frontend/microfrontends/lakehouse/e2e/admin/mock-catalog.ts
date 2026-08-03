@@ -83,6 +83,29 @@ type AccessState = {
 	failWrites: boolean;
 };
 
+/** GENERIC per-bearer surface for the transport-migrated specs: `__mock/seed` stores exact
+ *  responses keyed by "METHOD /path" (with-query tried first, then without), `__mock/calls` returns
+ *  every mutating request this bearer's server made. A spec seeds precisely the JSON its old
+ *  page.route served — mechanical translation, no per-endpoint mock code, no shared mutable state. */
+const seededByBearer = new Map<string, Map<string, unknown>>();
+const callsByBearer = new Map<string, Body[]>();
+const seededOf = (bearer: string): Map<string, unknown> => {
+	let m = seededByBearer.get(bearer);
+	if (!m) {
+		m = new Map();
+		seededByBearer.set(bearer, m);
+	}
+	return m;
+};
+const callsOf = (bearer: string): Body[] => {
+	let list = callsByBearer.get(bearer);
+	if (!list) {
+		list = [];
+		callsByBearer.set(bearer, list);
+	}
+	return list;
+};
+
 const accessStates = new Map<string, AccessState>();
 const accessStateOf = (bearer: string): AccessState => {
 	let state = accessStates.get(bearer);
@@ -135,6 +158,24 @@ Bun.serve({
 			const since = Number(url.searchParams.get('since') ?? '0');
 			const list = eventsOf(bearer);
 			return json({ events: list.slice(since), cursor: list.length, reset: false });
+		}
+
+		// ── the generic seeded surface (takes precedence: a seeding spec owns its bearer's world) ──
+		if (!url.pathname.startsWith('/__mock/')) {
+			const seeded = seededOf(bearer);
+			const hit =
+				seeded.get(`${req.method} ${url.pathname}${url.search}`) ??
+				seeded.get(`${req.method} ${url.pathname}`);
+			if (hit !== undefined) {
+				if (req.method !== 'GET') {
+					const body = (await req.json().catch(() => null)) as Body | null;
+					callsOf(bearer).push({ method: req.method, path: url.pathname + url.search, body });
+				}
+				const h = hit as { status?: number; body?: unknown };
+				return h && typeof h === 'object' && 'status' in h
+					? json(h.body ?? {}, h.status)
+					: json(hit);
+			}
 		}
 
 		// ── the /v1/access surface + the registry (the FGA workbench's remote functions land here) ──
@@ -241,6 +282,15 @@ Bun.serve({
 		// the given bearer's reads, so a parallel test's canvas cannot inherit it. Pair with `__mock/add`
 		// to move the control cursor — landing a grant AND announcing it is exactly what the real catalog
 		// does now (access_admin emits `grant_added` on every raw-tuple write).
+		if (url.pathname === '/__mock/seed' && req.method === 'POST') {
+			const body = (await req.json()) as { bearer: string; routes: Record<string, unknown> };
+			const seeded = seededOf(body.bearer);
+			for (const [key, value] of Object.entries(body.routes)) seeded.set(key, value);
+			return json({ ok: true, seeded: seeded.size });
+		}
+		if (url.pathname === '/__mock/calls' && req.method === 'GET') {
+			return json({ calls: callsOf(bearer) });
+		}
 		if (url.pathname === '/__mock/access/config' && req.method === 'POST') {
 			const body = (await req.json()) as { bearer: string; failWrites?: boolean };
 			accessStateOf(body.bearer).failWrites = body.failWrites ?? false;

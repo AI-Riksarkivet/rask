@@ -18,7 +18,7 @@ Package name equals directory name for all seven (`manifest.test.ts:53`). Base i
 | zone | base | dev port | nav label | what it is |
 |---|---|---|---|---|
 | `home` | `''` catch-all | 5273 | Home | Project gallery + the **OIDC BFF** (`/auth/{login,callback,logout}`) |
-| `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one — `data`, `lineage`, `models`, `admin`, `storage`; 84 route files, **50 `+server.ts` BFF routes** (the FGA workbench's six JSON routes died in the remote-function migration) |
+| `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one — `catalog`, `lineage`, `models`, `admin`, `governance`, `storage`; 50 route files, **11 `+server.ts` routes** — 4 keep-bytes (Arrow preview/insert, blob bytes, media downloads), 1 keep-flow (`capi/v1/me`), 2 catch-alls + audit/jetstream/experiments/medallion pending their blockers (open_transport.md); every JSON value surface rides one of the zone's 11 `.remote.ts` modules and `requestJSON` has ZERO call sites left |
 | `media` | `/media` | 5173 | **Search** | Corpus search workbench: FTS/vector/hybrid, WebGPU atlas, Cypher KG, Svelte-Flow editor |
 | `annotator` | `/annotator` | 5177 | **Annotate** | One page: PixiJS/WebGPU canvas over Arrow-backed rows |
 | `compute` | `/compute` | 5175 | Compute | Ray/Serve observability, 9 pages |

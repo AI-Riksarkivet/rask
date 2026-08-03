@@ -5,7 +5,8 @@
 	// catalog and reach it only through the session-only /capi columns BFF (the signed-in user's bearer).
 	import { Select } from '@rask/ui/select';
 	import { untrack } from 'svelte';
-	import { setFieldMetadata, setTableProperties, type CatalogResult } from './catalog';
+	import type { CatalogResult } from './catalog';
+	import { setFieldMetadata, setTableProperties } from './remote/catalog.remote';
 
 	type Field = { name: string; metadata?: Record<string, string> };
 	let {
@@ -81,7 +82,7 @@
 			if (k) map[k] = r.value;
 		}
 		run(
-			() => setTableProperties(table, map),
+			() => setTableProperties({ table, metadata: map }),
 			() => (savedMsg = 'Saved.'),
 		);
 	}
@@ -91,7 +92,7 @@
 		const key = colKey.trim();
 		if (!path || !key) return;
 		run(
-			() => setFieldMetadata(table, path, { [key]: colValue }),
+			() => setFieldMetadata({ table, path, metadata: { [key]: colValue } }),
 			() => {
 				colKey = '';
 				colValue = '';
@@ -101,7 +102,7 @@
 
 	function deleteColKey(key: string): void {
 		if (!selectedCol) return;
-		run(() => setFieldMetadata(table, selectedCol, { [key]: null }));
+		run(() => setFieldMetadata({ table, path: selectedCol, metadata: { [key]: null } }));
 	}
 </script>
 

@@ -1,18 +1,14 @@
 <script lang="ts">
 	// `/models` — the model-registry view (#42): every registered model with its candidate (latest)
 	// and blessed versions, a per-model metrics comparison, and the candidate→blessed promote action.
-	// Data comes through the /capi BFF (catalog is OIDC-only — see routes/capi/[...path]/+server.ts):
-	// signed-out on a governed stack ⇒ 401 ⇒ the sign-in state below, never a broken table.
+	// Data comes from `remote/models.remote.ts`, which reaches the catalog with the signed-in session's
+	// bearer (the catalog is OIDC-only): signed-out on a governed stack ⇒ 401 ⇒ the sign-in state
+	// below, never a broken table.
 	import { Chip } from '@rask/ui/chip';
 	import { Award, RefreshCw, ShieldAlert } from '@lucide/svelte';
 	import { page } from '$app/state';
-	import {
-		fetchModel,
-		fetchModels,
-		type ModelDescribe,
-		type ModelSummary,
-		promoteModel,
-	} from './catalog';
+	import type { ModelDescribe, ModelSummary } from './catalog';
+	import { fetchModel, fetchModels, promoteModel } from './remote/models.remote';
 	import ModelDetail from './ModelDetail.svelte';
 	import { lineageTick, liveRead } from '$lib/live/tick.svelte';
 
@@ -81,7 +77,7 @@
 		promoting = true;
 		banner = null;
 		try {
-			const res = await promoteModel(model, version);
+			const res = await promoteModel({ model, version });
 			if (res.ok) {
 				banner = { tone: 'ok', text: `${model} v${res.data.blessed_version} is now blessed` };
 			} else if (res.status === 401) {

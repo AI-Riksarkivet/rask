@@ -1,4 +1,5 @@
 import { test, expect, type Page, type Route } from '@playwright/test';
+import { MOCK_LINEAGE } from '../ports';
 
 // Hermetic e2e for the Marquez-parity IA: first-class Datasets / Jobs / Runs / Columns views +
 // per-dataset and per-job detail pages, with the DAG explorer at the zone root. The medallion DAG
@@ -152,51 +153,17 @@ const distinct = (l: CardLayout) => ({
 const json = (route: Route, body: unknown) =>
 	route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
 
-// Stub every lineage-API call the UI makes through the SvelteKit proxy — no live backend needed.
-// Mutable per-test governance state (#49) so the write tests can assert the round-trip.
-let governance: { tags: string[]; description: string | null };
-
+// Stub every lineage-API call the UI still makes through the SvelteKit proxy — no live backend
+// needed. The governance quad (#49) is NOT among them any more: it runs on the zone server through
+// `$lib/lineage/remote/lineage.remote.ts`, so its record is seeded on the mock lineage service (keyed
+// by DATASET, which is what keeps parallel workers apart when there is no session to key on).
 test.beforeEach(async ({ page }) => {
-	governance = { tags: ['layer=silver'], description: null };
 	// Scope to the zone's BFF base (/lakehouse/api/…) — a bare **/api/** also swallows Vite's
 	// /@fs module requests for the @rask/api workspace package (its path contains /api/), which
 	// kills hydration with JSON-as-module (found 2026-07-24 when the layout began importing it).
 	await page.route('**/lakehouse/api/**', (route) => {
 		const req = route.request();
 		const path = new URL(req.url()).pathname.replace(/^.*\/api/, '');
-		const gov = path.match(/^\/datasets\/([^/]+)\/governance$/);
-		if (gov)
-			return json(route, {
-				name: decodeURIComponent(gov[1]),
-				tags: governance.tags,
-				description: governance.description,
-				tags_updated_by: 'alice',
-				tags_updated_at: '2026-07-16T00:00:00+00:00',
-			});
-		const tagWrite = path.match(/^\/datasets\/([^/]+)\/tags\/([^/]+)$/);
-		if (tagWrite) {
-			const tag = decodeURIComponent(tagWrite[2]);
-			if (req.method() === 'PUT' && !governance.tags.includes(tag)) governance.tags.push(tag);
-			if (req.method() === 'DELETE') governance.tags = governance.tags.filter((t) => t !== tag);
-			return json(route, {
-				name: decodeURIComponent(tagWrite[1]),
-				tags: governance.tags,
-				description: governance.description,
-				tags_updated_by: 'alice',
-				tags_updated_at: '2026-07-16T00:00:00+00:00',
-			});
-		}
-		const desc = path.match(/^\/datasets\/([^/]+)\/description$/);
-		if (desc && req.method() === 'PUT') {
-			governance.description = (req.postDataJSON() as { description: string }).description;
-			return json(route, {
-				name: decodeURIComponent(desc[1]),
-				tags: governance.tags,
-				description: governance.description,
-				description_updated_by: 'alice',
-				description_updated_at: '2026-07-16T00:00:00+00:00',
-			});
-		}
 		const creator = path.match(/^\/datasets\/([^/]+)\/creator$/);
 		if (creator)
 			return json(route, { dataset: decodeURIComponent(creator[1]), creator: 'user:founder' });
@@ -547,6 +514,11 @@ test('the Read by panel lazily loads the read-audit log for the dataset (#41)', 
 test('governance: tag add/remove and description edit round-trip on the detail page', async ({
 	page,
 }) => {
+	// The record lives on the mock lineage service now (the panel's reads AND writes are remote
+	// functions running on the zone server), so it is seeded there rather than with page.route.
+	await page.request.post(`${MOCK_LINEAGE}/__mock/governance`, {
+		data: { dataset: 'silver$features', tags: ['layer=silver'], description: null },
+	});
 	await page.goto('/lakehouse/lineage/datasets/silver%24features');
 	const panel = page.locator('.governance');
 	await expect(panel.locator('.tag', { hasText: 'layer=silver' })).toBeVisible({ timeout: 15_000 });

@@ -22,14 +22,13 @@
 	import { RefreshCw, ShieldAlert, Warehouse as WarehouseIcon } from '@lucide/svelte';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
+	import type { Warehouse, WarehouseRecord } from './catalog';
 	import {
 		bindWarehouseNamespace,
 		createWarehouse,
 		fetchWarehouses,
 		setWarehouseActive,
-		type Warehouse,
-		type WarehouseRecord,
-	} from './catalog';
+	} from './remote/warehouses.remote';
 	import RowDrawer from './RowDrawer.svelte';
 	import { controlCursor } from '$lib/live/feeds.remote';
 	import { liveRead } from '$lib/live/tick.svelte';
@@ -119,7 +118,7 @@
 		busy = true;
 		banner = null;
 		try {
-			const res = await setWarehouseActive(w.id, statusOf(w) !== 'active');
+			const res = await setWarehouseActive({ id: w.id, active: statusOf(w) !== 'active' });
 			if (res.ok) await load();
 			else fail(res.status, res.detail);
 		} finally {
@@ -221,7 +220,10 @@
 		busy = true;
 		banner = null;
 		try {
-			const res = await bindWarehouseNamespace(bindDraft.warehouse, bindDraft.namespace.trim());
+			const res = await bindWarehouseNamespace({
+				id: bindDraft.warehouse,
+				namespace: bindDraft.namespace.trim(),
+			});
 			if (res.ok) {
 				banner = {
 					tone: 'ok',

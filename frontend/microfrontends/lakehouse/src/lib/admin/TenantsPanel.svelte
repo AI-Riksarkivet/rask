@@ -20,11 +20,10 @@
 	} from '@rask/ui/data-table';
 	import * as Sheet from '@rask/ui/sheet';
 	import { Building2, ExternalLink, RefreshCw, ScrollText, ShieldAlert } from '@lucide/svelte';
-	import { parse } from '@rask/api';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { ProjectsResponseSchema, type Project } from './tenants';
-	import { requestJSON } from '$lib/http';
+	import type { Project } from './tenants';
+	import { fetchProjects } from './remote/tenants.remote';
 	import { controlCursor } from '$lib/live/feeds.remote';
 	import { liveRead } from '$lib/live/tick.svelte';
 
@@ -45,19 +44,19 @@
 
 	async function load(): Promise<void> {
 		const seq = ++inflight;
-		const res = await requestJSON<unknown>('/api', 'projects');
-		if (seq !== inflight) return; // latest-wins
+		// `refresh()`, not a bare call: a query instance is cached by its argument, so re-awaiting it on
+		// a cursor tick would hand back the value it already holds. The refresh is the re-read.
+		const projectsQuery = fetchProjects();
+		await projectsQuery.refresh();
+		const res = projectsQuery.current;
+		if (seq !== inflight || res === undefined) return; // latest-wins
 		settled = true;
 		if (res.ok) {
-			try {
-				projects = parse(ProjectsResponseSchema, res.data);
-				lastStatus = 200;
-			} catch (err) {
-				console.error(`tenants parse failure: ${String(err)}`);
-				projects = null;
-				lastStatus = -1;
-			}
+			projects = res.data;
+			lastStatus = 200;
 		} else {
+			// -1 is the contract-drift status the remote function returns for a payload that did not
+			// parse; every other value is the catalog's own verdict (401/403) or 502 for unreachable.
 			projects = null;
 			lastStatus = res.status;
 		}

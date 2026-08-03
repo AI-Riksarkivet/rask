@@ -9,23 +9,23 @@
 	import { Boxes, Network, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { fetchTables } from '$lib/data/catalog';
+	import { fetchTables } from '$lib/data/remote/catalog.remote';
 	import DetailTabs from '$lib/data/DetailTabs.svelte';
 	import StageBadge from '$lib/data/StageBadge.svelte';
 	import { stageOf } from '$lib/data/stage';
+	import type { AccessGraph, NamespacePolicy, PolicyRequest } from '$lib/data/namespace';
 	import {
-		type AccessGraph,
 		checkAccess,
-		deleteNamespacePolicy,
 		fetchAccess,
-		fetchNamespaceAccessGraph,
-		fetchNamespacePolicy,
+		fetchAccessGraph,
 		grantAccess,
-		type NamespacePolicy,
-		type PolicyRequest,
 		revokeAccess,
+	} from '$lib/data/remote/access-objects.remote';
+	import {
+		deleteNamespacePolicy,
+		fetchNamespacePolicy,
 		setNamespacePolicy,
-	} from '$lib/data/namespace';
+	} from '$lib/data/remote/namespace.remote';
 
 	const ns = $derived(page.params.id ?? '');
 
@@ -34,8 +34,14 @@
 	let tab = $state('overview');
 	const stageInfo = $derived(stageOf(ns));
 
-	// The zone-owned catalog seam the shared @rask/ui GrantsPanel calls (the lib never owns an API client).
-	const grantsClient: GrantsClient = { fetchAccess, checkAccess, grantAccess, revokeAccess };
+	// The zone-owned catalog seam the shared @rask/ui GrantsPanel calls (the lib never owns an API
+	// client). The panel's positional signature is bound to the remote functions' single argument here.
+	const grantsClient: GrantsClient = {
+		fetchAccess: (kind, id) => fetchAccess({ kind, id }),
+		checkAccess: (kind, id, user, relation) => checkAccess({ kind, id, user, relation }),
+		grantAccess: (kind, id, user, relation) => grantAccess({ kind, id, user, relation }),
+		revokeAccess: (kind, id, user, relation) => revokeAccess({ kind, id, user, relation }),
+	};
 
 	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte).
 	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
@@ -95,7 +101,7 @@
 	async function loadGraph(): Promise<void> {
 		const current = ns;
 		graphStatus = 'loading';
-		const res = await fetchNamespaceAccessGraph(current);
+		const res = await fetchAccessGraph({ kind: 'namespace', id: current });
 		if (ns !== current) return; // latest-wins across a namespace navigation
 		if (res.ok) {
 			graph = res.data;
@@ -127,7 +133,7 @@
 	async function loadPolicy(): Promise<void> {
 		const current = ns;
 		try {
-			const res = await fetchNamespacePolicy(current);
+			const res = await fetchNamespacePolicy({ namespace: current });
 			if (ns !== current) return;
 			if (res.ok) {
 				policy = res.data;
@@ -204,7 +210,7 @@
 			if (draft.retain_versions != null) body.retain_versions = draft.retain_versions;
 			if (draft.interval != null) body.compact_interval_hours = draft.interval;
 			if (draft.target != null) body.target_rows_per_fragment = draft.target;
-			const res = await setNamespacePolicy(current, body);
+			const res = await setNamespacePolicy({ namespace: current, policy: body });
 			if (ns !== current) return; // navigated away — drop the stale result
 			if (res.ok) {
 				policy = res.data;
@@ -226,7 +232,7 @@
 		policyError = null;
 		const current = ns;
 		try {
-			const res = await deleteNamespacePolicy(current);
+			const res = await deleteNamespacePolicy({ namespace: current });
 			if (ns !== current) return;
 			if (res.ok) {
 				policy = null;

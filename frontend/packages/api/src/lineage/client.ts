@@ -103,8 +103,16 @@ export interface LineageClient {
 	listRuns: () => Promise<ApiResult<Runs>>;
 }
 
-/** Bind the lineage client to a zone's `BffClient` (see `src/lib/api.ts` in each zone). */
-export function createLineageClient({ getJSON, requestJSON }: BffClient): LineageClient {
+/** Bind the lineage client to a zone's `BffClient` (see `src/lib/api.ts` in each zone).
+ *
+ *  Only the two JSON verbs are taken, so the SAME client can also be bound SERVER-side — a zone's
+ *  `.remote.ts` supplies a `getJSON`/`requestJSON` pair that reaches the lineage service directly with
+ *  the request's own credential, and every path, query-string and encoding below stays single-sourced
+ *  instead of being transcribed into the remote functions. */
+export function createLineageClient({
+	getJSON,
+	requestJSON,
+}: Pick<BffClient, 'getJSON' | 'requestJSON'>): LineageClient {
 	// Governance metadata (#49) — the writes need the status (401 sign-in vs 403 rung-denial vs
 	// offline), so they use the status-aware helper instead of getJSON's null-on-error.
 	const write = <T>(path: string, init: RequestInit) => requestJSON<T>('/api', path, init);

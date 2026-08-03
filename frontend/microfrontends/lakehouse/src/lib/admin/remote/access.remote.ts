@@ -52,13 +52,21 @@ function bearerHeaders(): Record<string, string> {
 /** One catalog call → `ApiResult<unknown>`; FastAPI's `{detail}` is surfaced as the failure detail. */
 async function catalogJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {
 	const { fetch } = getRequestEvent();
-	const res = await fetch(`${CATALOG_API}${path}`, {
-		...init,
-		headers: {
-			...bearerHeaders(),
-			...(init?.body ? { 'content-type': 'application/json' } : {}),
-		},
-	});
+	// An UNREACHABLE catalog is `{ok:false, status:0}`, exactly like the browser client this replaced —
+	// a rejected fetch here would throw across the remote boundary and skip every consumer's honest
+	// offline/status-0 branch.
+	let res: Response;
+	try {
+		res = await fetch(`${CATALOG_API}${path}`, {
+			...init,
+			headers: {
+				...bearerHeaders(),
+				...(init?.body ? { 'content-type': 'application/json' } : {}),
+			},
+		});
+	} catch (err) {
+		return { ok: false, status: 0, detail: String(err) };
+	}
 	if (!res.ok) {
 		let detail = `catalog answered ${res.status}`;
 		try {

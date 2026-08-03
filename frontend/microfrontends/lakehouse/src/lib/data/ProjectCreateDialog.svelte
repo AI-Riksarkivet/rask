@@ -15,7 +15,7 @@
 	// standing between the new project and being ungovernable.
 	import { Dialog } from '@rask/ui/dialog';
 	import { toast } from 'svelte-sonner';
-	import { createWarehouse } from './catalog';
+	import { createWarehouse } from './remote/warehouses.remote';
 	// The grant goes through the SAME remote command the FGA workbench writes with — one write door,
 	// so every raw tuple write is validated, audited, control-event-emitting and single-flight alike.
 	import { writeTuple } from '$lib/admin/remote/access.remote';

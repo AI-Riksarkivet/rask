@@ -24,7 +24,8 @@
 	import { Plus, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { dropNamespace, fetchTables } from './catalog';
+	import { fetchTables } from './remote/catalog.remote';
+	import { dropNamespace } from './remote/namespace.remote';
 	import RowDrawer from './RowDrawer.svelte';
 	import { namespaceOfTable, stageOf, type StageInfo } from './stage';
 	import StageBadge from './StageBadge.svelte';
@@ -101,7 +102,7 @@
 		busy = true;
 		banner = null;
 		try {
-			const res = await dropNamespace(ns, cascade);
+			const res = await dropNamespace({ namespace: ns, cascade });
 			if (res.ok) {
 				banner = { tone: 'ok', text: `namespace ${ns} dropped${cascade ? ' (cascade)' : ''}` };
 				await load();

@@ -6,7 +6,8 @@
 	import { FolderKanban, Plus, RefreshCw, ShieldAlert } from '@lucide/svelte';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { fetchProjects, type ProjectSummary } from '$lib/data/catalog';
+	import type { ProjectSummary } from '$lib/data/catalog';
+	import { fetchProjects } from '$lib/data/remote/warehouses.remote';
 	import type { Me } from '@rask/api';
 	import { fetchMeViaBff } from '$lib/http';
 	import ProjectCreateDialog from '$lib/data/ProjectCreateDialog.svelte';
