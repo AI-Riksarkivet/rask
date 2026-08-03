@@ -1,3 +1,4 @@
+import tailwindcss from '@tailwindcss/vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vite';
 
@@ -14,6 +15,7 @@ import { defineConfig } from 'vite';
  */
 export default defineConfig({
 	plugins: [
+		tailwindcss(),
 		svelte({
 			// EVERY .svelte in this build compiles in customElement mode (nested, tag-less
 			// components stay ordinary inner components; an `include` filter would leave nested
