@@ -603,11 +603,18 @@ export class AnnotatorController {
 		this.saving = true;
 		this.saveError = null;
 		try {
+			// Deferred like `_syncTaskDraft` does: `review-selection.svelte` reaches for `$app/paths`,
+			// and importing it at module scope is what would make this controller unloadable in a
+			// plain unit test.
+			const { reviewSelection } = await import('$lib/labeling/review-selection.svelte');
 			const answer = await requestAssist({
 				...target,
 				producer,
 				prompt,
 				region: region ?? null,
+				// The SERVER checks the producer's return against this task's captured template. The
+				// id is all the client sends — never the rules it is judged by.
+				taskId: reviewSelection.taskId ?? null,
 			});
 			if (!answer.ok) {
 				// The server's own words: 401 (sign in), 403 (no permission), 5xx from the runner.
@@ -615,6 +622,15 @@ export class AnnotatorController {
 				return;
 			}
 			const result = answer.data;
+			// Predictions the task refused. Said out loud, because a producer whose output the task
+			// rejects is a MISCONFIGURATION — silently filtering leaves a backend that looks wired up
+			// and returns nothing, with nowhere to see why.
+			if (result.dropped?.length) {
+				toast.warning(
+					`${result.dropped.length} prediction${result.dropped.length === 1 ? '' : 's'} outside this task’s contract`,
+					{ description: result.dropped[0] },
+				);
+			}
 			for (const s of result.shapes) {
 				this._appendInsert(
 					makeInsertRow({

@@ -38,6 +38,10 @@ function signedOut(): boolean {
 export interface AssistResult {
 	shapes: AssistShape[];
 	source: string;
+	/** Predictions the TASK's contract refused, each naming the rule. Empty for an unconstrained
+	 *  canvas. Surfaced rather than swallowed: a producer quietly returning work nobody sees is the
+	 *  failure mode where a model looks configured and does nothing. */
+	dropped?: string[];
 }
 
 export const requestAssist = command(
@@ -48,11 +52,14 @@ export const requestAssist = command(
 		dataset: v.nullable(v.string()),
 		producer: v.string(),
 		prompt: v.string(),
+		/** The labeling task, when the canvas was opened from one. The SERVER reads that task's
+		 *  captured template — the client never sends the rules it is judged by. */
+		taskId: v.nullable(v.string()),
 		region: v.nullable(
 			v.object({ x: v.number(), y: v.number(), width: v.number(), height: v.number() }),
 		),
 	}),
-	async ({ key, dataset, producer, prompt, region }): Promise<ApiResult<AssistResult>> => {
+	async ({ key, dataset, producer, prompt, region, taskId }): Promise<ApiResult<AssistResult>> => {
 		if (signedOut()) return { ok: false, status: 401, detail: 'sign in required' };
 		const { fetch } = getRequestEvent();
 		const search = dataset ? `?dataset=${encodeURIComponent(dataset)}` : '';
@@ -61,7 +68,7 @@ export const requestAssist = command(
 			res = await fetch(`${ANNOTATOR_API}/api/assist/${key}${search}`, {
 				method: 'POST',
 				headers: { ...bearerHeaders(), 'content-type': 'application/json' },
-				body: JSON.stringify({ producer, prompt, region }),
+				body: JSON.stringify({ producer, prompt, region, task_id: taskId }),
 			});
 		} catch (err) {
 			return { ok: false, status: 0, detail: String(err) };

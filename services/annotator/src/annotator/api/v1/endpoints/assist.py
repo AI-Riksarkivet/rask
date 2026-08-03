@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.lancekit.keys import validate_doc_key
@@ -44,12 +45,35 @@ class AssistRequest(BaseModel):
     producer: str = "grounding-dino"
     prompt: str | None = None
     region: Region | None = None
+    #: The labeling task this assist is for, when there is one. The SERVER reads that task's
+    #: captured template — the client does not send the rules it is judged by, same posture as
+    #: `review_required` and the submit-time template check.
+    task_id: str | None = None
+
+
+#: Producer tool-name -> the canonical vocabulary the draft, ontology and published table speak.
+#: A model server names shapes however it likes; `"rectangle"` was this endpoint's own default and
+#: is accepted by NEITHER the service (`bbox`) nor the canvas. Normalizing here means a new backend
+#: is a config entry rather than a new dialect leaking into the annotations table.
+_CANONICAL_SHAPE: dict[str, str] = {
+    "rectangle": "bbox",
+    "rect": "bbox",
+    "box": "bbox",
+    "bbox": "bbox",
+    "polygon": "polygon",
+    "mask": "mask",
+    "point": "keypoint",
+    "keypoint": "keypoint",
+    "line": "polyline",
+    "polyline": "polyline",
+    "baseline": "polyline",
+}
 
 
 class AssistShape(BaseModel):
     """One predicted shape in image coordinates (box or polygon) with confidence."""
 
-    shape_type: str = "rectangle"
+    shape_type: str = "bbox"
     x: float
     y: float
     width: float
@@ -64,10 +88,17 @@ class AssistResult(BaseModel):
 
     shapes: list[AssistShape]
     source: str
+    #: Predictions the TASK's own contract refuses, and why — reported rather than silently dropped.
+    #:
+    #: A producer that returns a polygon for a bbox-only task is a real mismatch, and the annotator
+    #: is the wrong place to discover it: before this, such a shape landed in the review queue and
+    #: was refused only at SUBMIT, after a human had already looked at it. Dropping it silently
+    #: would be worse — the operator would never learn the backend disagrees with the task.
+    dropped: list[str] = Field(default_factory=list)
 
 
 @router.post("/assist/{doc_id}/{speech_id}/{chunk_id}")
-def assist(
+async def assist(
     state: StateDep,
     doc_id: str,
     speech_id: int,
@@ -80,10 +111,56 @@ def assist(
     doc_id = validate_doc_key(handle.descriptor.declared, doc_id)
     source = f"model:{body.producer}"
     url = backend_for(state.settings, body.producer)
-    shapes = _remote(state, url, (doc_id, speech_id, chunk_id), body) if url else _mock(body)
+    # The producer call uses a SYNC httpx client, so it rides the threadpool rather than blocking
+    # the event loop — the endpoint is async only because reading the task's template is.
+    shapes = await run_in_threadpool(_remote, state, url, (doc_id, speech_id, chunk_id), body) if url else _mock(body)
+    for shape in shapes:
+        shape.shape_type = _CANONICAL_SHAPE.get(shape.shape_type, shape.shape_type)
+    shapes, dropped = await _within_contract(shapes, body.task_id)
     # Prompt CONTENT is user free-text — never logged (PII/leak surface); length only.
-    logger.info("assist %s (prompt %d chars) → %d shape(s)", body.producer, len(body.prompt or ""), len(shapes))
-    return AssistResult(shapes=shapes, source=source)
+    logger.info(
+        "assist %s (prompt %d chars) → %d shape(s), %d dropped",
+        body.producer,
+        len(body.prompt or ""),
+        len(shapes),
+        len(dropped),
+    )
+    return AssistResult(shapes=shapes, source=source, dropped=dropped)
+
+
+async def _within_contract(shapes: list[AssistShape], task_id: str | None) -> tuple[list[AssistShape], list[str]]:
+    """Keep the predictions the task's template permits; report the rest.
+
+    A producer is not obliged to know the task's rules — the whole point of the registry is that a
+    backend is a config entry. So the mismatch is resolved HERE, once, rather than by every model
+    server or (as before) by a human at submit time.
+
+    A task-less assist (the ad-hoc canvas) has no contract, so nothing is dropped. A read that fails
+    is treated the same way: the assist still returns its shapes, because refusing a prediction
+    because we could not read a rule would be a worse failure than the mismatch it guards against.
+    """
+    if not task_id:
+        return shapes, []
+    try:
+        from annotator.api.v1.endpoints.tasks import _proxy  # noqa: PLC0415 - import cycle
+
+        task = await _proxy(task_id).get()
+    except Exception:  # noqa: BLE001 - see docstring: an unreadable rule must not lose the prediction
+        logger.warning("assist could not read task %s; returning predictions unfiltered", task_id)
+        return shapes, []
+    template = (task or {}).get("template") or {}
+    if not template.get("enforce"):
+        return shapes, []
+    allowed = set(template.get("tools") or [])
+    if not allowed:
+        return shapes, []
+    kept, dropped = [], []
+    for shape in shapes:
+        if shape.shape_type in allowed:
+            kept.append(shape)
+        else:
+            dropped.append(f"{shape.shape_type} refused — task {template.get('kind') or 'template'} allows {sorted(allowed)}")
+    return kept, dropped
 
 
 def backend_for(settings: Any, producer: str) -> str | None:
