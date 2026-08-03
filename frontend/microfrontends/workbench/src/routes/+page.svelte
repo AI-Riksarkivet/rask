@@ -201,6 +201,20 @@
 		void views.refresh();
 	});
 
+	/** Wave 3, the DOWN half: push the active filter into every mounted element as a property —
+	 *  rich JS assignment, the same channel pollms rides. Elements that declare `filtertext`
+	 *  narrow their rows; the rest get a harmless expando. Re-runs on filter change; newly added
+	 *  panels pick it up on the next change (acceptable: filters are transient). */
+	$effect(() => {
+		const host = dockHost;
+		const text = selections.filter;
+		if (host === null) return;
+		for (const el of host.querySelectorAll('*')) {
+			if (el.tagName.startsWith('RASK-'))
+				(el as HTMLElement & { filtertext?: string }).filtertext = text;
+		}
+	});
+
 	/** The relay: ONE delegated listener on the dock wrapper. Foreign panels' events bubble through
 	 *  light DOM to here; a detail that fails the schema is logged and DROPPED — a drifted zone
 	 *  degrades, it never corrupts a sibling. Attached via $effect because `rask:select` is not a

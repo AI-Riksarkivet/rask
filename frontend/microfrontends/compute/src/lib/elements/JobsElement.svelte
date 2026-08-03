@@ -16,11 +16,19 @@
 	import { RASK_SELECT, type SelectDetail } from '@rask/dockview/contract';
 	import { RayPoll } from './ray-poll.svelte';
 
-	let { pollms = 5000 }: { pollms?: number } = $props();
+	let { pollms = 5000, filtertext = '' }: { pollms?: number; filtertext?: string } = $props();
 	const poll = new RayPoll<RayJobsPayload>((f) => rayJobs(f));
 	$effect(() => poll.start(pollms));
 
 	const jobs = $derived(poll.data?.jobs ?? []);
+	/** The cross-filter (wave 3): the compositor pushes the active selection's label down as a
+	 *  property; rows narrow by substring over their serialized form — generic on purpose, every
+	 *  list element filters the same way. */
+	const shownjobs = $derived(
+		filtertext.trim() === ''
+			? jobs
+			: jobs.filter((r) => JSON.stringify(r).toLowerCase().includes(filtertext.toLowerCase())),
+	);
 
 	// Mirrored from routes/jobs/+page.svelte — the same states must wear the same colours here.
 	function variantFor(s: string): BadgeVariant {
@@ -69,6 +77,11 @@
 
 <div class="bg-background block h-full overflow-auto p-3">
 	<p class="text-muted-foreground mb-2 text-[11px]">mounted {poll.mountedAt} · poll #{poll.polls}</p>
+	{#if filtertext.trim() !== '' && shownjobs.length !== jobs.length}
+		<p class="text-muted-foreground mb-1 text-[11px]">
+			filtered: {shownjobs.length}/{jobs.length} match “{filtertext}”
+		</p>
+	{/if}
 	{#if poll.error !== null}
 		<p class="text-destructive text-sm">Ray unreachable: {poll.error}</p>
 	{:else if jobs.length === 0}
@@ -87,7 +100,7 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each jobs as j (j.submission_id)}
+						{#each shownjobs as j (j.submission_id)}
 							<tr
 								class="border-border/40 hover:bg-muted/40 cursor-pointer border-b"
 								onclick={(e) => select(e.currentTarget, j)}

@@ -25,7 +25,7 @@
 		resource: string;
 	};
 
-	let { pollms = 30000 }: { pollms?: number } = $props();
+	let { pollms = 30000, filtertext = '' }: { pollms?: number; filtertext?: string } = $props();
 	const poll = new ElementPoll<AuditEvent[]>(async (f) => {
 		const res = await f('/lakehouse/api/audit?limit=100');
 		if (res.status === 401) throw new Error('session expired or no access');
@@ -36,6 +36,14 @@
 	$effect(() => poll.start(pollms));
 
 	const events = $derived(poll.data ?? []);
+	/** The cross-filter (wave 3): the compositor pushes the active selection's label down as a
+	 *  property; rows narrow by substring over their serialized form — generic on purpose, every
+	 *  list element filters the same way. */
+	const shownevents = $derived(
+		filtertext.trim() === ''
+			? events
+			: events.filter((r) => JSON.stringify(r).toLowerCase().includes(filtertext.toLowerCase())),
+	);
 
 	// Mirrored from lib/admin/AuditViewer.svelte — the same outcomes must wear the same colour here.
 	// (The zone spells the tone as a scoped class over the legacy palette; `--ok`/`--fail` bridge to
@@ -68,6 +76,11 @@
 
 <div class="bg-background block h-full overflow-auto p-3">
 	<p class="text-muted-foreground mb-2 text-[11px]">mounted {poll.mountedAt} · poll #{poll.polls}</p>
+	{#if filtertext.trim() !== '' && shownevents.length !== events.length}
+		<p class="text-muted-foreground mb-1 text-[11px]">
+			filtered: {shownevents.length}/{events.length} match “{filtertext}”
+		</p>
+	{/if}
 	{#if poll.error !== null}
 		<p class="text-destructive text-sm">Audit trail unavailable: {poll.error}</p>
 	{:else if events.length === 0}
@@ -86,7 +99,7 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each events as ev, i (i)}
+						{#each shownevents as ev, i (i)}
 							{@const when = formatTimestamp(ev.timestamp)}
 							<tr
 								class="hover:bg-muted/50 cursor-pointer border-b transition-colors"

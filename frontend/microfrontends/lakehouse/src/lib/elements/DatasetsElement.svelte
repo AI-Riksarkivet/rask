@@ -19,7 +19,7 @@
 	import { ElementPoll } from './poll.svelte';
 	import { client } from './store';
 
-	let { pollms = 30000 }: { pollms?: number } = $props();
+	let { pollms = 30000, filtertext = '' }: { pollms?: number; filtertext?: string } = $props();
 	const poll = new ElementPoll<Datasets>(async () => {
 		const res = await client.listDatasets();
 		if (!res.ok)
@@ -31,6 +31,14 @@
 	$effect(() => poll.start(pollms));
 
 	const datasets = $derived(poll.data?.datasets ?? []);
+	/** The cross-filter (wave 3): the compositor pushes the active selection's label down as a
+	 *  property; rows narrow by substring over their serialized form — generic on purpose, every
+	 *  list element filters the same way. */
+	const showndatasets = $derived(
+		filtertext.trim() === ''
+			? datasets
+			: datasets.filter((r) => JSON.stringify(r).toLowerCase().includes(filtertext.toLowerCase())),
+	);
 
 	// Mirrored from routes/lineage/datasets/+page.svelte — the same cells must read the same here.
 	function tagsOf(tags: string[] | null | undefined): string[] {
@@ -55,6 +63,11 @@
 
 <div class="bg-background block h-full overflow-auto p-3">
 	<p class="text-muted-foreground mb-2 text-[11px]">mounted {poll.mountedAt} · poll #{poll.polls}</p>
+	{#if filtertext.trim() !== '' && showndatasets.length !== datasets.length}
+		<p class="text-muted-foreground mb-1 text-[11px]">
+			filtered: {showndatasets.length}/{datasets.length} match “{filtertext}”
+		</p>
+	{/if}
 	{#if poll.error !== null}
 		<p class="text-destructive text-sm">Catalog unavailable: {poll.error}</p>
 	{:else if datasets.length === 0}
@@ -73,7 +86,7 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each datasets as ds (ds.name)}
+						{#each showndatasets as ds (ds.name)}
 							<tr
 								class="hover:bg-muted/50 cursor-pointer border-b transition-colors"
 								onclick={(e) => select(e.currentTarget, ds.name)}

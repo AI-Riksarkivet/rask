@@ -32,11 +32,19 @@
 		ChevronRight,
 	} from '@lucide/svelte';
 
-	let { pollms = 5000 }: { pollms?: number } = $props();
+	let { pollms = 5000, filtertext = '' }: { pollms?: number; filtertext?: string } = $props();
 	const poll = new RayPoll<ActorInfo[]>((f) => actorsList(f));
 	$effect(() => poll.start(pollms));
 
 	const actors = $derived(poll.data ?? []);
+	/** The cross-filter (wave 3): the compositor pushes the active selection's label down as a
+	 *  property; rows narrow by substring over their serialized form — generic on purpose, every
+	 *  list element filters the same way. */
+	const shownactors = $derived(
+		filtertext.trim() === ''
+			? actors
+			: actors.filter((r) => JSON.stringify(r).toLowerCase().includes(filtertext.toLowerCase())),
+	);
 
 	// Base-ordered by class so rows don't shuffle between polls (the page's stable tiebreak).
 	const sorted = $derived([...actors].sort((a, b) => a.class_name.localeCompare(b.class_name)));
@@ -114,6 +122,11 @@
 
 <div class="bg-background block h-full overflow-auto p-3">
 	<p class="text-muted-foreground mb-2 text-[11px]">mounted {poll.mountedAt} · poll #{poll.polls}</p>
+	{#if filtertext.trim() !== '' && shownactors.length !== actors.length}
+		<p class="text-muted-foreground mb-1 text-[11px]">
+			filtered: {shownactors.length}/{actors.length} match “{filtertext}”
+		</p>
+	{/if}
 	{#if poll.error !== null}
 		<p class="text-destructive text-sm">Ray unreachable: {poll.error}</p>
 	{:else if actors.length === 0}

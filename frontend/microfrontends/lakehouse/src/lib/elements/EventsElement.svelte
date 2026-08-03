@@ -12,11 +12,21 @@
 	import { RASK_SELECT, type SelectDetail } from '@rask/dockview/contract';
 	import { ensurePolling, lineage } from './store';
 
+	let { filtertext = '' }: { filtertext?: string } = $props();
+
 	$effect(() => {
 		ensurePolling();
 	});
 
 	const events = $derived([...lineage.events].reverse());
+	/** The cross-filter (wave 3): the compositor pushes the active selection's label down as a
+	 *  property; rows narrow by substring over their serialized form — generic on purpose, every
+	 *  list element filters the same way. */
+	const shownevents = $derived(
+		filtertext.trim() === ''
+			? events
+			: events.filter((r) => JSON.stringify(r).toLowerCase().includes(filtertext.toLowerCase())),
+	);
 
 	function select(node: HTMLElement, seq: number, job: string | null) {
 		node.dispatchEvent(
@@ -46,7 +56,7 @@
 		<p class="empty">No events in the window.</p>
 	{:else}
 		<ul>
-			{#each events as ev (ev.seq)}
+			{#each shownevents as ev (ev.seq)}
 				<li onclick={(e) => select(e.currentTarget, ev.seq, ev.job ?? null)}>
 					<span class="type">{ev.event_type ?? '—'}</span>
 					<span class="job" title={ev.job ?? ''}>{ev.job ?? ''}</span>
