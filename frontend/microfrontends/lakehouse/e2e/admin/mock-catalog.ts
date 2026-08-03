@@ -171,8 +171,10 @@ Bun.serve({
 					const body = (await req.json().catch(() => null)) as Body | null;
 					callsOf(bearer).push({ method: req.method, path: url.pathname + url.search, body });
 				}
-				const h = hit as { status?: number; body?: unknown };
-				return h && typeof h === 'object' && 'status' in h
+				const h = hit as { status?: unknown; body?: unknown };
+				// NUMERIC status only — upstream payloads may carry their own `status` field (Prometheus
+				// answers `status: "success"`) and must pass through as plain bodies.
+				return h && typeof h === 'object' && typeof h.status === 'number'
 					? json(h.body ?? {}, h.status)
 					: json(hit);
 			}

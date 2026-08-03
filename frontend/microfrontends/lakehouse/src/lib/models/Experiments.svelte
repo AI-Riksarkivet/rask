@@ -7,7 +7,7 @@
 	// (unavailable state); auth-off dev → open data. Each renders its honest state below.
 	import { BarChart3, ExternalLink, RefreshCw, ShieldAlert } from '@lucide/svelte';
 	import { page } from '$app/state';
-	import { requestJSON } from '$lib/http';
+	import { fetchExperimentsDashboard } from './remote/experiments.remote';
 
 	// POLL REASON: a decaying rate has no event. This is the one surviving timer in this zone, and it
 	// survives on purpose. Every other panel re-reads on a
@@ -37,7 +37,7 @@
 
 	async function load(): Promise<void> {
 		const seq = ++inflight;
-		const res = await requestJSON<Dashboard>('/api', 'experiments');
+		const res = await fetchExperimentsDashboard();
 		if (seq !== inflight) return; // a newer poll superseded this one
 		settled = true;
 		if (res.ok) {

@@ -6,7 +6,7 @@
 	import { LineChart } from 'layerchart';
 	import { scaleTime } from 'd3-scale';
 	import { RefreshCw, ShieldAlert } from '@lucide/svelte';
-	import { requestJSON } from '$lib/http';
+	import { fetchTrainingCurves } from './remote/experiments.remote';
 
 	let { model }: { model: string } = $props();
 
@@ -26,10 +26,7 @@
 	async function load(): Promise<void> {
 		const current = model;
 		const seq = ++inflight;
-		const res = await requestJSON<Curves>(
-			'/api',
-			`experiments?model=${encodeURIComponent(current)}`,
-		);
+		const res = await fetchTrainingCurves({ model: current });
 		if (seq !== inflight || model !== current) return; // latest-wins
 		settled = true;
 		if (res.ok) {
