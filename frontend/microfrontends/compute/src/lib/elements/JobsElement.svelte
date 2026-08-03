@@ -33,7 +33,11 @@
 		let live = true;
 		const read = async () => {
 			try {
-				const payload = await rayJobs();
+				// A timeout-armed fetch, because a dead upstream HANGS rather than erroring (observed:
+				// /api/ray/* with no Ray cluster deployed) — and a hung fetch would freeze the poll
+				// counter at 0 with the empty state showing, which reads as "no jobs" instead of the
+				// truth. Timing out turns it into the error state below.
+				const payload = await rayJobs((url) => fetch(url, { signal: AbortSignal.timeout(4000) }));
 				if (!live) return;
 				jobs = payload.jobs ?? [];
 				error = null;
