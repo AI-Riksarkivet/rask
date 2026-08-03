@@ -75,3 +75,50 @@ export const DRAWABLE: readonly ShapeType[] = [
 	'polyline',
 	'segment',
 ];
+
+/** Canonical shape type -> the ENGINE tool names that produce it.
+ *
+ *  The inverse of {@link canonicalShapeType}, and it is one-to-many: a polygon can come from the
+ *  polygon tool, the magnetic corner-snap tool, or a brush stroke vectorized on release. A task
+ *  that permits `polygon` must therefore offer all three, or the restriction reads as three broken
+ *  buttons rather than one honest constraint.
+ *
+ *  `select`, `pan` and `lasso` are deliberately absent: they navigate and select, they do not
+ *  commit a shape, so no task restriction should ever hide them.
+ */
+const TOOLS_FOR: Record<ShapeType, readonly string[]> = {
+	bbox: ['rect'],
+	polygon: ['polygon', 'magnetic', 'brush', 'pencil'],
+	mask: ['brush'],
+	keypoint: ['point'],
+	polyline: ['line', 'pencil'],
+	// Not drawn on the canvas: a segment is dragged on the waveform lane, a tag is applied from the
+	// sidebar, and no text-span editor exists yet.
+	segment: [],
+	tag: [],
+	text: [],
+};
+
+/** Every engine tool that COMMITS a shape — the union of the map above.
+ *
+ *  A task restriction may only ever hide one of these. `lasso` is the reason this exists: the tool
+ *  registry flags it `drawing: true` (it is a canvas gesture) but its own label says "Lasso
+ *  (select)" — it commits nothing. Filtering on "absent from the map" hid it, because absence there
+ *  means "produces no shape", not "produces a forbidden shape". Those are opposite meanings and the
+ *  registry's single `drawing` flag cannot tell them apart. */
+export const COMMITS_SHAPE: ReadonlySet<string> = new Set(Object.values(TOOLS_FOR).flat());
+
+/** The engine tools a task permitting `allowed` should offer.
+ *
+ *  An EMPTY `allowed` means unconstrained — return null so the caller shows everything, rather than
+ *  an empty array which would hide every drawing tool and look like a broken toolbar. */
+export function engineToolsFor(allowed: readonly string[] | null | undefined): Set<string> | null {
+	if (!allowed || allowed.length === 0) return null;
+	const out = new Set<string>();
+	for (const type of allowed) {
+		for (const tool of TOOLS_FOR[type as ShapeType] ?? []) out.add(tool);
+	}
+	// A task that permits only non-drawable types (tag-only classification, say) still must not
+	// present an empty rail as if the canvas were broken.
+	return out.size > 0 ? out : null;
+}

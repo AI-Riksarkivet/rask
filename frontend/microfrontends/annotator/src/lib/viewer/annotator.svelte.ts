@@ -22,7 +22,7 @@ import type { Table } from 'apache-arrow';
 import type { CommitShape, GeometryUpdate, PixiContext, Tool } from '@rask/engine';
 import { LayerStore, buildBatchTable } from '@rask/engine';
 import type { LabelDelta, LabelOp, LabelOutcome, Selection } from '@rask/labeling/types';
-import { canonicalShapeType } from '@rask/labeling/shape-types';
+import { canonicalShapeType, engineToolsFor } from '@rask/labeling/shape-types';
 import { isChunkSelection } from '@rask/labeling/types';
 import { PRODUCERS } from '@rask/labeling/producers';
 import { rowSignature } from '@rask/labeling/history';
@@ -252,6 +252,17 @@ export class AnnotatorController {
 		for (const r of this.rows) m.set(r.id, rowSignature(r));
 		return m;
 	});
+
+	/** The shape types the OPEN TASK permits, canonical names — empty = unconstrained.
+	 *
+	 *  Enforcement lives server-side at submit and stays there; this is the same contract read
+	 *  EARLY so the rail can decline to offer a tool the task will refuse. Discovering a violation
+	 *  after drawing is enforcement that punishes; not offering the tool is enforcement that
+	 *  teaches, and the 409 remains as the backstop for any caller that is not this canvas. */
+	allowedShapeTypes = $state<string[]>([]);
+
+	/** Engine tool names the rail may show, or null for "no restriction". */
+	readonly allowedTools = $derived(engineToolsFor(this.allowedShapeTypes));
 
 	readonly canDraw = $derived(this.mode === 'edit');
 	readonly canUndo = $derived(this._undo.length > 0);

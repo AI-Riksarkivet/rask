@@ -39,8 +39,14 @@
 	// items per item at send; one annotator may hold at most one replica of a group.
 	let consensusN = $state(1);
 	// The labeling TASK, specified at create: what is being labelled (class names) and with what
-	// geometry. This is `LabelSchema` (§4.1) — the canvas constrains its tools to it, the publish
-	// stamps it into the table properties and the lineage facet.
+	// geometry. This is `LabelSchema` (§4.1) — the publish stamps it into the table properties and
+	// the lineage facet.
+	//
+	// The claim that "the canvas constrains its tools to it" used to sit here and was FALSE: the
+	// rail showed all ten tools regardless, so a violation was discovered at submit, after the work.
+	// The canvas now honours the TEMPLATE's tools (AnnotatorToolbar's `visible`, proven by
+	// viewer/allowed-tools.test.ts) — the template, not this taxonomy, because the template is what
+	// the server enforces. That split is itself the defect LabelOntology exists to close.
 	let classesText = $state('');
 	let shapeKind = $state('bbox');
 	const SHAPE_KINDS = ['bbox', 'polygon', 'mask', 'segment', 'tag', 'text'];

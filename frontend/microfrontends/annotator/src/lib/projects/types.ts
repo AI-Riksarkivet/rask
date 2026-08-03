@@ -175,6 +175,10 @@ export const TaskDetailSchema = v.object({
 	review_action: v.nullish(v.string()),
 	review_notes: v.optional(v.array(ReviewNoteSchema), []),
 	legal_events: v.optional(v.array(LegalEventSchema), []),
+	// The template CAPTURED onto this item at send. The server has always sent it — valibot's
+	// `v.object` strips unknown keys, so declaring it here is what lets the canvas see the contract
+	// it will be judged against, instead of learning the rule from a 409 after the work.
+	template: v.optional(TaskTemplateSchema),
 });
 export type TaskDetail = v.InferOutput<typeof TaskDetailSchema>;
 

@@ -15,6 +15,7 @@
 	} from '@lucide/svelte';
 	import { Button } from '@rask/ui/button';
 	import { cn } from '@rask/ui/utils';
+	import { COMMITS_SHAPE } from '@rask/labeling/shape-types';
 	import { TOOL_DEFS } from '../tool-defs';
 	import type { AnnotatorController } from '../annotator.svelte';
 
@@ -28,10 +29,22 @@
 		onexit,
 	}: { controller: AnnotatorController; spatial?: boolean; onexit?: () => void } = $props();
 
+	// A DRAWING tool is offered only when the open task's ontology permits the shape it commits.
+	// `ProjectsLanding.svelte` claimed this already happened; it did not, so an annotator drew with
+	// a tool the task would refuse and only learned at submit — enforcement that punishes rather
+	// than teaches. `allowedTools` is null when unconstrained, so an ad-hoc canvas is unchanged.
+	//
+	// Only drawing tools are filtered: select, pan and lasso navigate rather than commit, so no task
+	// restriction should ever hide them.
 	const visible = $derived(
 		spatial
 			? TOOL_DEFS.filter(
-					(t) => (!t.drawing || controller.canDraw) && (!t.cv || controller.cvCapable),
+					(t) =>
+						(!t.drawing || controller.canDraw) &&
+						(!t.cv || controller.cvCapable) &&
+						(!COMMITS_SHAPE.has(t.tool) ||
+							controller.allowedTools === null ||
+							controller.allowedTools.has(t.tool)),
 				)
 			: [],
 	);

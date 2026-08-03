@@ -7,6 +7,7 @@
 	import type { MediaUnit } from '$lib/viewer/types';
 	import { AnnotatorController } from '$lib/viewer/annotator.svelte';
 	import { reviewSelection } from '$lib/labeling/review-selection.svelte';
+	import { fetchTask } from '$lib/projects/remote/tasks.remote';
 	import { ResizableSplit } from '@rask/ui/resizable-split';
 	import { Badge } from '@rask/ui/badge';
 	import AnnotatorToolbar from './AnnotatorToolbar.svelte';
@@ -20,6 +21,35 @@
 
 	const Viewer = $derived(viewerFor(unit.kind));
 	const controller = new AnnotatorController();
+
+	// Read the task's captured template so the RAIL can decline to offer a tool the task will
+	// refuse. Enforcement stays server-side at submit — this only moves the same contract earlier,
+	// so a violation is a tool that is not there rather than a 409 after the work. Only when opened
+	// FROM a task: an ad-hoc `?keys=` canvas has no contract and stays unconstrained.
+	$effect(() => {
+		const id = reviewSelection.taskId;
+		if (!id) {
+			controller.allowedShapeTypes = [];
+			return;
+		}
+		let alive = true;
+		void fetchTask({ taskId: id })
+			.then((result) => {
+				if (!alive) return;
+				// An unenforced template is a suggestion, not a contract — restricting the rail on one
+				// would hide tools the server would happily accept.
+				const tpl = result.ok ? result.data.template : undefined;
+				controller.allowedShapeTypes = tpl?.enforce ? tpl.tools : [];
+			})
+			.catch(() => {
+				// A failed read must not silently narrow the rail: unconstrained is the honest
+				// fallback, and the 409 still backstops it.
+				if (alive) controller.allowedShapeTypes = [];
+			});
+		return () => {
+			alive = false;
+		};
+	});
 	let status = $state('loading…');
 	// True when the unit's media/annotations failed to load — the status chip turns
 	// destructive and carries the reason (never a silent, eternal "loading…").
