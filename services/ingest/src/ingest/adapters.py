@@ -24,7 +24,9 @@ from ingest.sources import LineageInput, SourceSpec, register
 
 
 if TYPE_CHECKING:
-    from service_kit.lakehouse.sources import SourceAdapter
+    from collections.abc import Iterator
+
+    from service_kit.lakehouse.sources import SourceAdapter, SourceObject
 
 
 def _local_dir(spec: SourceSpec) -> SourceAdapter:
@@ -64,19 +66,49 @@ def _s3_prefix_lineage(spec: SourceSpec) -> LineageInput:
     return LineageInput(namespace=f"s3://{spec.options.get('bucket')}", name=str(spec.options.get("prefix") or "/"))
 
 
-def _iiif(spec: SourceSpec) -> SourceAdapter:
-    """A IIIF volume — the lane the medallion owns today and gives up at A12.
+class IIIFVolumeSource:
+    """A IIIF volume as a `SourceAdapter` — the lane the medallion owns today and gives up at A12.
 
-    Deliberately reuses `storage.iiif`'s existing fetch + retry policy rather than re-deriving it:
-    the sequential per-page fetch was the medallion's performance defect, but its RETRY policy was
-    sound and is the part worth keeping.
+    Wraps `storage.iiif`'s `get_image_ids` / `build_image_url` / `fetch_image`, which is what the
+    medallion's producer itself uses (`iiif_produce.py:41`). Deliberately NOT `IIIFCachedSource`:
+    despite the name it is a keys+read CACHE (`keys`/`read`/`cached_keys`), it has no `iter_objects`,
+    and the medallion's own docstring calls it retired. An earlier version of this file registered it
+    anyway, on a signature guessed from a grep — both the signature and the interface were wrong.
+
+    Nothing would have caught that before a live run: `SourceAdapter` is a plain Protocol, NOT
+    `runtime_checkable` (an `isinstance` against it raises TypeError), so there is no import-time or
+    startup check to fail. The registry would have happily handed back an object with no
+    `iter_objects`, and the first enumeration of a real volume would have been the error report.
+    `test_adapters.py` therefore asserts the method exists rather than trusting the annotation.
+
+    The retry policy stays `storage.iiif`'s. The medallion's defect was SEQUENTIAL fetching in the
+    request path, not its retries; the worker's bounded concurrency fixes the former, and re-deriving
+    the latter would only lose hard-won behaviour against a rate-limited endpoint.
     """
-    from storage.iiif import IIIFCachedSource
 
+    def __init__(self, volume_id: str, iiif_base: str | None = None, query_params: str | None = None) -> None:
+        self._volume = volume_id
+        self._base = iiif_base
+        self._query = query_params
+
+    def iter_objects(self) -> Iterator[SourceObject]:
+        from service_kit.lakehouse.sources import SourceObject
+        from storage.iiif import DEFAULT_IIIF_BASE, DEFAULT_QUERY_PARAMS, build_image_url, fetch_image, get_image_ids
+
+        base = self._base or DEFAULT_IIIF_BASE
+        query = self._query or DEFAULT_QUERY_PARAMS
+        for image_id in get_image_ids(self._volume):
+            url = build_image_url(image_id, iiif_base=base, query_params=query)
+            yield SourceObject(uri=url, data=fetch_image(url))
+
+
+def _iiif(spec: SourceSpec) -> SourceAdapter:
     volume = str(spec.options.get("volume_id") or "")
     if not volume:
         raise ValueError("iiif source requires options.volume_id")
-    return IIIFCachedSource(volume_id=volume, base_url=str(spec.options.get("base_url") or ""))
+    base = spec.options.get("iiif_base")
+    query = spec.options.get("query_params")
+    return IIIFVolumeSource(volume, str(base) if base else None, str(query) if query else None)
 
 
 def _iiif_lineage(spec: SourceSpec) -> LineageInput:

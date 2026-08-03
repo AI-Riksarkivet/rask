@@ -94,3 +94,28 @@ def test_a9_a_source_appears_ONLY_in_the_registry() -> None:
             offenders.append(path.name)
 
     assert offenders == [], f"source kinds leaked outside the registry: {offenders}"
+
+
+def test_every_registered_adapter_actually_implements_iter_objects() -> None:
+    """The check that would have caught the IIIF mistake — and cannot be done with isinstance.
+
+    `SourceAdapter` is a plain Protocol, not `runtime_checkable`, so `isinstance(x, SourceAdapter)`
+    raises TypeError rather than returning False. There is no import-time or startup verification:
+    the registry will hand back whatever the factory returns, and the first ENUMERATION of a real
+    source is where a missing method surfaces.
+
+    An earlier version registered `IIIFCachedSource` — a keys+read cache with no `iter_objects`, on a
+    constructor signature guessed from a grep. Both were wrong and nothing complained.
+    """
+    from ingest.sources import build_source
+
+    probes = {
+        "local-dir": {"root": "/tmp"},
+        "s3-prefix": {"bucket": "b", "prefix": "p/"},
+        "iiif": {"volume_id": "v1"},
+    }
+    for kind, options in probes.items():
+        adapter = build_source(SourceSpec(kind=kind, project="p", dataset="d", options=options))
+        assert callable(getattr(adapter, "iter_objects", None)), (
+            f"{kind} adapter has no iter_objects — it does not satisfy SourceAdapter, and no isinstance check can tell you so"
+        )
