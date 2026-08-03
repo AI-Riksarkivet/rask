@@ -8,7 +8,7 @@ merely happens to have needed one first.
 
 **What moved and what did not.** Of the eight functions in that module, five read no settings at all —
 they are the submitter. The other three (``submit_stage_job``, ``submit_iiif_ingest_job``,
-``submit_train_job``) are workload wrappers that read 9–11 fields of ``MedallionSettings`` each, and they
+``submit_train_job``) are workload wrappers that read 9-11 fields of ``MedallionSettings`` each, and they
 stay with their workloads: a wrapper's job is to know which entrypoint and which env its transform needs.
 Only the mechanics move here, and they take explicit arguments rather than a settings object, so no
 caller has to own the medallion's config shape to submit a job.
@@ -26,7 +26,6 @@ The pieces this owns are the ones that are hard to get right twice:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import re
@@ -45,7 +44,6 @@ TERMINAL_BAD = ("FAILED", "STOPPED")
 
 #: Consecutive poll failures tolerated before giving up. A poll is a dashboard round-trip, and a brief
 #: dashboard blip must not fail a job that is running fine.
-MAX_POLL_ERRORS = 5
 
 
 class RayJobError(RuntimeError):
@@ -85,9 +83,7 @@ def lineage_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k.startswith("RASK_LINEAGE_")}
 
 
-async def submit_or_reattach(
-    client: httpx.AsyncClient, sub_id: str, body: Mapping[str, object]
-) -> None:
+async def submit_or_reattach(client: httpx.AsyncClient, sub_id: str, body: Mapping[str, object]) -> None:
     """``POST /api/jobs/``, tolerating an id that already exists.
 
     A 4xx for a duplicate id re-attaches to that job — UNLESS the prior one terminally FAILED or STOPPED,
@@ -114,29 +110,3 @@ async def submit_or_reattach(
         response.raise_for_status()
     except httpx.HTTPError as exc:
         raise RayJobError(f"failed to submit ray job {sub_id}: {exc}") from exc
-
-
-async def await_success(client: httpx.AsyncClient, sub_id: str, poll_interval: float) -> None:
-    """Poll until SUCCEEDED; raise on FAILED/STOPPED. Bounded by the CALLER's timeout, not this loop.
-
-    Transient poll errors are tolerated up to :data:`MAX_POLL_ERRORS`: a dashboard blip is not a failed
-    job, and treating it as one would fail work that is running perfectly well.
-    """
-    poll_errors = 0
-    while True:
-        await asyncio.sleep(poll_interval)
-        try:
-            response = await client.get(f"/api/jobs/{sub_id}")
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            poll_errors += 1
-            if poll_errors > MAX_POLL_ERRORS:
-                raise RayJobError(f"failed to poll ray job {sub_id}: {exc}") from exc
-            continue
-        poll_errors = 0
-        payload = response.json()
-        status = payload.get("status")
-        if status == TERMINAL_OK:
-            return
-        if status in TERMINAL_BAD:
-            raise RayJobError(f"ray job {sub_id} {status}: {payload.get('message')}")

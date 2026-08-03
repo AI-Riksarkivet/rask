@@ -30,7 +30,6 @@ import logging
 import os
 import shlex
 import sys
-import time
 import uuid
 from typing import Any, Protocol
 
@@ -51,7 +50,6 @@ _SUBMISSION_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Borg9
 _TERMINAL_STATUSES = frozenset({"SUCCEEDED", "FAILED", "STOPPED"})
 #: Tolerate a few transient poll blips before giving up on an in-flight job
 #: (same rationale + bound as lance-ns ``_MAX_POLL_ERRORS``).
-_MAX_POLL_ERRORS = 3
 #: What the real client actually throws: the SDK raises RuntimeError for API
 #: errors, but transport failures surface as requests' ConnectionError (an
 #: OSError subclass) — catching RuntimeError alone lets a dead dashboard escape
@@ -132,8 +130,11 @@ def run_runner(
     client = submitter if submitter is not None else _ray_submitter(settings)
     attached = _submit_or_resubmit(client, job, submission_id)
     logger.info("runner job %s %s", submission_id, "re-attached" if attached else "submitted")
-    _await_success(client, submission_id, settings)
-    logger.info("runner job %s succeeded", submission_id)
+    # SUBMIT-AND-ACK (A13). The poll that stood here asked a question the data already answers: a
+    # job's completion signal is its own registered commit, and the publication event off that
+    # commit wakes whatever comes next. A died job commits nothing, and the lineage reconciler
+    # catches it against storage truth.
+    logger.info("runner job %s dispatched; completion is its registered commit", submission_id)
 
 
 def _ray_submitter(settings: JobsSettings) -> JobSubmitter:
@@ -190,28 +191,6 @@ def _submit_or_resubmit(client: JobSubmitter, job: RunnerJob, submission_id: str
         except _CLIENT_ERRORS as resubmit_exc:
             raise RunnerJobError(f"failed to resubmit runner job {submission_id} (prior run {status}): {resubmit_exc}") from resubmit_exc
         return False
-
-
-def _await_success(client: JobSubmitter, submission_id: str, settings: JobsSettings) -> None:
-    """Poll until SUCCEEDED; raise on FAILED/STOPPED or when the deadline passes."""
-    deadline = time.monotonic() + settings.ray_job_timeout_seconds
-    poll_errors = 0
-    while time.monotonic() < deadline:
-        time.sleep(settings.ray_poll_interval_seconds)
-        try:
-            status = client.get_job_status(submission_id)
-        except _CLIENT_ERRORS as exc:
-            poll_errors += 1
-            if poll_errors > _MAX_POLL_ERRORS:
-                raise RunnerJobError(f"failed to poll runner job {submission_id}: {exc}") from exc
-            continue
-        poll_errors = 0
-        if status == "SUCCEEDED":
-            return
-        if status in _TERMINAL_STATUSES:
-            detail = _failure_message(client, submission_id)
-            raise RunnerJobError(f"runner job {submission_id} {status}" + (f": {detail}" if detail else ""))
-    raise RunnerJobError(f"runner job {submission_id} did not finish within {settings.ray_job_timeout_seconds}s")
 
 
 def _failure_message(client: JobSubmitter, submission_id: str) -> str | None:

@@ -117,3 +117,28 @@ def test_a10_the_gates_do_not_fire_on_innocent_lines(pattern: re.Pattern[str], i
 def test_the_gate_actually_scans_something() -> None:
     """A gate over an empty file list passes vacuously — the failure mode of every path-based check."""
     assert _py_files(INGEST_SRC), f"no ingest sources found under {INGEST_SRC} — the gates are vacuous"
+
+
+def test_a13_no_completion_polling_survives() -> None:
+    """A13 as a permanent gate: the completion poll must not creep back.
+
+    It was deleted from THREE places — ray-kit, ratch/core/jobs.py, and the medallion's ray_submit —
+    and the medallion's stage path had to be re-cut to submit-and-ack, since it was the SURVIVING
+    mover rather than part of the retiring IIIF lane.
+
+    The deletion is not a performance tidy-up. Holding an ack across a job's runtime is what the ack
+    contract forbids: ackWait expires and the broker redelivers forever. And the poll asked a
+    question the data already answers — a job's completion signal is its own registered commit, and
+    the publication event off that commit wakes the next tier.
+    """
+    # Assembled from parts on purpose. A13's gate is `rg <token> -g '*.py'` returns NOTHING, so a
+    # test containing the literal would be its own only offender — the exact self-reference that made
+    # the unscoped form unsatisfiable while the plan document named the string (section 0, C3).
+    token = "await" + "_success"
+    banned = re.compile(rf"\b{token}\b")
+    offenders = [
+        str(path.relative_to(REPO))
+        for path in REPO.rglob("*.py")
+        if ".venv" not in path.parts and "__pycache__" not in path.parts and banned.search(path.read_text(encoding="utf-8"))
+    ]
+    assert offenders == [], f"completion polling reappeared in: {offenders}"
