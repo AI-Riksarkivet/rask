@@ -324,6 +324,20 @@ OIDC (dex session), real OpenFGA, real Dapr actors.**
   (cosmetic, worth a handler row); the lineage read API does not surface custom run FACETS (the
   consensus/adjudications facet is delivered to the catalog — unit-pinned — but `/runs` returns no
   facet payloads; a lineage-service read gap, not a write one).
+- **The modality / task-template matrix, audited honestly (owner asked, 2026-08-03):**
+  **Image** — full loop, live-verified (the only modality ever driven end-to-end). **Audio/video** —
+  the SURFACES exist (`viewer/registry.ts` maps `audio: AudioViewer` / `video: VideoViewer`;
+  `@rask/engine` ships the temporal waveform lane, video reuses ImagePlugin; `Shape.t_start/t_end`
+  carry spans; `MediaRef.kind` is image|audio|video) but NO audio/video item has ever been sent
+  through the labeling-task loop — untested, and the send surfaces only produce image/text items
+  today. **Text** — chunk-level tagging is the media plane's original job (tags on transcript
+  chunks, `ShapeType` has `tag`/`text`, `Shape.text`); character-offset span labeling (NER-style)
+  has NO tool. **Document tasks (DocQA, reading order)** — the DATA model can carry them
+  (`Shape.group` for linking, free-form `attributes: dict[str,str]`, `LabelSchema.attributes`) but
+  there is NO first-class relation/sequence editor and NO task-template system (nothing like Label
+  Studio's labeling-config): a labeling task's "shape" is classes+geometry only. That template
+  layer — declaring per-task input modality, tools, relations, output schema — is the real
+  flexibility gap; the storage model underneath it is already generic.
 - **NOT tested, said plainly (owner asked): the label-assist runner.** `runners/assist`
   (GroundingDINO-tiny + SAM, CPU) is chart-declared (`runners.assist`, `MEDIA_ASSIST_URL` flips the
   annotator's mock to real) but has never been image-built, deployed, or driven — the canvas assist
