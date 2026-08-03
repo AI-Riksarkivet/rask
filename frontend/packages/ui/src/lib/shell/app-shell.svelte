@@ -11,7 +11,7 @@
 	import { gsap } from 'gsap';
 	import { zoneNavLeaves } from './nav-config.js';
 	import type { Me, NotificationFeed, Project, NavUser, ZoneNav } from './nav-config.js';
-	import { collapseCrumbs, pathCrumbs, projectFromHost } from './breadcrumb.js';
+	import { collapseCrumbs, pathCrumbs, projectFromHost, type Crumb } from './breadcrumb.js';
 
 	// Subtle content settle-in. Runs once when the shell MOUNTS — i.e. on a fresh
 	// document load, which is every cross-zone microfrontend landing — so the page gently
@@ -55,6 +55,7 @@
 		sidebarFooter,
 		sidebarContent,
 		canvas = false,
+		crumbs: extraCrumbs = [],
 		children,
 	}: {
 		pathname?: string;
@@ -68,6 +69,14 @@
 		me?: Me | null;
 		/** True while the zone's fetchMe() is in flight — the navbar renders skeletons. */
 		meLoading?: boolean;
+		/** Crumbs the PATH cannot express, appended after the path-derived trail.
+		 *
+		 *  The shell derives its trail from `pathname`, which is right for a zone whose state is its
+		 *  URL path. It is not enough for one whose state is a QUERY — the annotate canvas lives at
+		 *  `/annotator/?keys=…`, so a path-derived trail says "Annotator" and cannot say WHICH page of
+		 *  which task you are on. That is why the canvas had no breadcrumb at all; the answer is to let
+		 *  the zone contribute the part it alone knows, not to hide the bar. */
+		crumbs?: Crumb[];
 		/** The zone's run feed for the navbar's notification bell (see `NotificationFeed`). The shell
 		 *  never fetches it; `null` renders no bell at all. */
 		notifications?: NotificationFeed | null;
@@ -110,7 +119,7 @@
 	});
 	const projectName = $derived(projectSlug || project.name);
 	const shellProject = $derived({ name: projectName, subtitle: project.subtitle ?? 'Project' });
-	const crumbs = $derived(pathCrumbs(pathname));
+	const crumbs = $derived([...pathCrumbs(pathname), ...extraCrumbs]);
 	// A deep path (project → domain → collection → a long resource id) does not fit a narrow row, so
 	// the MIDDLE of the trail folds behind an ellipsis menu rather than squeezing every crumb into
 	// illegibility — and the current page, the one crumb worth keeping, is never the thing that
@@ -189,8 +198,14 @@
 			</div>
 			<!-- Row 2 — the breadcrumb bar. Its own slim row, so it can never be squeezed by (or
 			     overlap) the zone links; within the row, a trail too long to fit folds its MIDDLE
-			     behind the ellipsis menu (`collapseCrumbs`) instead of shrinking the current page. -->
-			{#if !canvas}
+			     behind the ellipsis menu (`collapseCrumbs`) instead of shrinking the current page.
+
+			     It renders in CANVAS mode too. It used to be suppressed there, which left the annotate
+			     view with no way back and nothing saying where you were — and the zone rail that might
+			     have covered for that is gone. A canvas zone contributes its own `crumbs` (its state is
+			     a query, not a path), so the trail says which task and which page rather than just
+			     naming the zone. One slim row is a cheap price for not being lost. -->
+			{#if !canvas || crumbs.length > 0}
 				<nav
 					aria-label="Breadcrumb"
 					class="border-border/60 bg-muted/20 flex h-9 min-w-0 shrink-0 items-center overflow-hidden border-y px-4 text-sm"

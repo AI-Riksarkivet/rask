@@ -6,6 +6,8 @@
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
 	import { AppShell } from '@rask/ui/shell';
+	import { base } from '$app/paths';
+	import { reviewSelection } from '$lib/labeling/review-selection.svelte';
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
 	import type { Me } from '@rask/api';
 	import { fetchMeViaBff } from '$lib/http';
@@ -27,6 +29,21 @@
 	const notifications = $derived({
 		runs: feed?.current?.runs ?? [],
 		allHref: '/lakehouse/lineage/runs',
+	});
+
+	// Only while the canvas is actually showing: on the landing and detail pages the path already
+	// says everything, and appending a unit crumb there would invent a location.
+	const crumbs = $derived.by(() => {
+		if (!page.url.searchParams.has('keys')) return [];
+		const out: { id: string; label: string; href: string }[] = [];
+		const taskId = reviewSelection.taskId;
+		if (taskId) out.push({ id: `task:${taskId}`, label: taskId, href: `${base}/projects/${taskId}` });
+		const unit = reviewSelection.active;
+		if (unit) {
+			const position = reviewSelection.total > 1 ? ` (${reviewSelection.index + 1}/${reviewSelection.total})` : '';
+			out.push({ id: `unit:${unit.key}`, label: `${unit.key}${position}`, href: page.url.pathname + page.url.search });
+		}
+		return out;
 	});
 
 	// The estate-constant top navbar: cross-zone IA + identity, identical in every MFE. `me` comes
@@ -53,6 +70,11 @@
 	<Toaster />
 {/if}
 
+<!-- The canvas' own crumbs. The shell derives its trail from the PATH, and this view's state is a
+     QUERY (`?keys=…`), so without these the annotate view could only say "Annotator" — which is why
+     it had no breadcrumb at all. The zone knows the two things the path cannot: the task it was
+     opened from, and which unit of the selection is showing. The task crumb links back to its
+     detail page, so the breadcrumb is also the way OUT of the canvas. -->
 <!-- The SHARED estate shell, WITHOUT a zone rail — `zoneNav={null}` is deliberate, not an
      oversight, and zone-shell.test.ts holds it to being declared rather than forgotten.
 
@@ -73,6 +95,7 @@
 	authEnabled={data.authEnabled}
 	zoneNav={null}
 	canvas={page.url.searchParams.has('keys')}
+	{crumbs}
 	{notifications}
 >
 	{@render children()}
