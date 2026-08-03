@@ -1,5 +1,0 @@
-{
-	"//": "TypeScript 7 (@typescript/native-preview → tsgo) over the PURE-TS half of this package. tsgo has no Svelte plugin, so it cannot resolve a `.svelte` import — which is why @rask/ui declares no check:tsgo at all. Rather than inherit that gap, this project excludes exactly the two modules that touch a component (Dock.svelte, and index.ts which imports it) and type-checks the other four under TS7. svelte-check covers the remainder. `.svelte.ts` IS included: runes are ambient globals from svelte's types, so tsgo checks the renderer fine.",
-	"extends": "./tsconfig.json",
-	"include": ["src/types.ts", "src/theme.ts", "src/persistence.ts", "src/renderer.svelte.ts"]
-}

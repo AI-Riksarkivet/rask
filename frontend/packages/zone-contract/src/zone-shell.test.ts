@@ -61,12 +61,7 @@ describe('a zone with nothing to navigate renders no rail', () => {
 		expect(leaves, 'home gained leaves — it should stay the single-leaf catch-all').toBe(1);
 	});
 
-	// `workbench` is exempt for the same REASON the rule exists, not despite it: it renders its OWN
-	// sidebar — the saved-views list, which is page chrome and cannot live in a static ZoneNav. The rule
-	// catches a zone that silently has NO sidebar; this one deliberately has a different one, and a
-	// one-row shell rail beside it would duplicate the page you are already on. Adding a second leaf to
-	// satisfy the count would be inventing a route to please a gate.
-	for (const zone of ZONES.filter((z) => z !== 'home' && z !== 'workbench')) {
+	for (const zone of ZONES.filter((z) => z !== 'home')) {
 		it(`${zone} declares more than one leaf, so its rail renders`, () => {
 			const leaves = countLeaves(readFileSync(navPath(zone), 'utf8'));
 			expect(

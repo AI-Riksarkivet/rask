@@ -1,9 +1,9 @@
 <script lang="ts">
 	/** Live Ray actors — the long-lived workers the HTR pipeline packs onto the GPUs. */
 	import { Badge } from '@rask/ui/badge';
-	import { getComputeReads } from './context.js';
+	import { getActors } from '$lib/remote/compute.remote';
 
-	const actors = getComputeReads().getActors();
+	const actors = getActors();
 	const rows = $derived(actors.current ?? []);
 
 	function tone(state: string): 'success' | 'destructive' | 'secondary' {

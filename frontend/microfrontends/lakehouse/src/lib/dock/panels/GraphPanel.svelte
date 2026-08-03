@@ -7,8 +7,8 @@
 	 * If the dock remounted a panel on a layout change, all three would reset on the first drag — which
 	 * is exactly the failure `SveltePanelRenderer`'s mount-once invariant exists to prevent.
 	 */
-	import LineageGraph from './LineageGraph.svelte';
-	import { getLineageState } from './lineage-context.js';
+	import LineageGraph from '$lib/lineage/LineageGraph.svelte';
+	import { getLineageState } from '$lib/dock/lineage-context';
 
 	const store = getLineageState();
 </script>

@@ -17,7 +17,7 @@
 import { parse } from 'svelte/compiler';
 
 /** The zones with a base path. `home` is the catch-all at '/' and owns no prefix. */
-export const ZONES = ['lakehouse', 'media', 'annotator', 'compute', 'studio', 'train', 'workbench'];
+export const ZONES = ['lakehouse', 'media', 'annotator', 'compute', 'studio', 'train'];
 
 /** A cross-zone path is domain-relative and single-segment-rooted: `/<zone>` or `/<zone>/…`. */
 const ZONE_PATH = new RegExp(`^\\/(${ZONES.join('|')})(?:\\/|$)`);

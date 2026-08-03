@@ -1,6 +1,6 @@
 <script lang="ts" module>
-	import MedallionNode, { type MedallionNodeType } from './MedallionNode.svelte';
-	import JobNode, { type JobNodeType } from './JobNode.svelte';
+	import MedallionNode, { type MedallionNodeType } from '$lib/lineage/MedallionNode.svelte';
+	import JobNode, { type JobNodeType } from '$lib/lineage/JobNode.svelte';
 	import type { NodeTypes } from '@xyflow/svelte';
 
 	// svelte-flow rule 5: register node components ONCE at module scope, not inline.
@@ -30,7 +30,7 @@
 	} from '@xyflow/svelte';
 	import { Boxes, Cpu } from '@lucide/svelte';
 	import { FlowAutoFit } from '@rask/flow';
-	import type { LineageState } from './store.svelte';
+	import type { LineageState } from '$lib/lineage/store.svelte';
 	import { useColorMode } from '@rask/ui/color-mode';
 	import { LAYER } from '@rask/api/lineage';
 	import { depths, layout } from '@rask/flow';

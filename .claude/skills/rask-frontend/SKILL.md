@@ -27,20 +27,29 @@ Package name equals directory name for all seven (`manifest.test.ts:53`). Base i
 
 Nav labels decouple from directory names on purpose — "named for what it is FOR, not the directory it lives in" (`nav-config.ts:301-303`).
 
-## The eight packages
+## The nine packages
 
 Only `@rask/ui` has a build (`svelte-package` → `dist/`); the rest are consumed JIT as raw TS.
 
 | package | what it is |
 |---|---|
 | `@rask/ui` | Design system + `@rask/ui/shell`. → **`rask-styling`** |
-| `@rask/api` | Gateway client (`ray`, `ingest`, `projects`, `me`) **plus** the OIDC/BFF plane (`bff.ts`, `oidc.ts`), the lineage client, and `@rask/api/dock-layout` |
+| `@rask/api` | Gateway client (`ray`, `ingest`, `projects`, `me`) **plus** the OIDC/BFF plane (`bff.ts`, `oidc.ts`), the lineage client, and `@rask/api/dock-layout` + `dock-views` |
 | `@rask/dockview` | Svelte 5 binding over **dockview 7** — the docked workbenches. → **§ Workbenches** |
+| `@rask/flow` | Generic Svelte Flow binding: `GraphCanvas`, `StaticFlow`, `FlowAutoFit`, `depths`/`layout`. **Mechanism only — domain graphs (LineageGraph, FGA) stay in their zones** |
 | `@rask/media-api` | Arrow-backed media/viewer client |
 | `@rask/engine` | Framework-agnostic PixiJS/WebGPU annotation canvas (ra-anno lineage) |
 | `@rask/labeling` | The `LabelOp` model + annotator Arrow-IPC transport |
-| `@rask/zone-contract` | **Test-only** — 12 files / 711 tests gating the estate's shape |
-| `@rask/config` | One shared `tsconfig.base.json`, extended by 6 of 14 packages |
+| `@rask/zone-contract` | **Test-only** — 16 files / ~830 tests gating the estate's shape |
+| `@rask/config` | One shared `tsconfig.base.json`, extended by 6 of 15 packages |
+
+**A `frontend/packages/*` entry is a LIBRARY, never a domain slice.** A zone's panels, stores and
+graphs are the zone — moving them into a shared package hollows the zone, couples releases, and
+cuts them off from their live stores and per-app remote functions (tried once, reversed:
+`docs/architecture/global-workbench.md`). Cross-zone composition, when wanted, is RUNTIME
+composition — custom elements, planned spike-first in
+`docs/architecture/workbench-web-components.md`. Extract the *mechanism* (`@rask/flow`), keep the
+*domain* in its zone.
 
 ## Workbenches — `@rask/dockview`
 
@@ -80,11 +89,16 @@ it to every panel mount, so a zone uses ordinary `createContext` above the dock 
 getter. Layout is SSR-read via a remote `query()` and passed as `initial`, so the saved arrangement is
 the first paint rather than a replacement for seeded defaults.
 
-⚠️ **The chrome is currently thin.** Only 2 of dockview's ~21 options are wired (`dndStrategy`,
-`defaultRenderer`). Split affordances, popout, floating groups, context menus, keyboard docking,
-custom tabs and the watermark are all available in the MIT core and **not yet enabled**. Note also
-that `dndStrategy: 'pointer'` — chosen for Linux reliability and Playwright testability — *disables
-cross-window drag*, which is exactly what popout needs. Resolve that trade before wiring popout.
+**Chrome shipped 2026-08 (the G1–G4 wave):** direction-split menus (`SplitMenu`, `split.ts`), the
+"+" add-panel picker with search (`PanelPicker`, registries carry `label`/`icon`), whole-panel
+watcher alerts (`alerts.svelte.ts` — bounded, released on dispose, surfaced via `PanelProps.alert`),
+and **named views** (`DockViews` store + `ViewSidebar` — list/active/diverged as runes, persisted in
+the catalog's `dock-layout-library` user-state document, a SEPARATE envelope because `DockLayouts`
+is `extra="forbid"`). Dock chrome popovers use the native Popover API; scope `display` under
+`:popover-open` or the author rule beats the UA's closed-state `display:none` **by origin** and the
+closed popover eats clicks. No GSAP on dock chrome. Popout and floating groups remain unwired —
+`dndStrategy: 'pointer'` (chosen for Linux reliability and Playwright testability) *disables
+cross-window drag*, which is exactly what popout needs; resolve that trade before wiring it.
 
 ## Fetching data — three dialects, one per zone family
 
@@ -173,7 +187,7 @@ Validate `.svelte` edits with the `svelte` MCP autofixer. The standing rule that
 
 ## Staying on-stack
 
-Animation → **GSAP** via `{@attach}` (+ Lenis). Charts → **LayerChart**. Graph/canvas editors → **Svelte Flow**. Components → `@rask/ui`. Validation → **valibot**. A dependency that duplicates the stack is a no; extend the stack instead.
+Animation → **GSAP** via `{@attach}` (+ Lenis). Charts → **LayerChart**. Graph/canvas editors → **Svelte Flow** via `@rask/flow`. Components → `@rask/ui`. Validation → **valibot**. A dependency that duplicates the stack is a no; extend the stack instead.
 
 ## Where to go deeper
 

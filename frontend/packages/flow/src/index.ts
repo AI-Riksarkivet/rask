@@ -16,7 +16,7 @@
  * `@rask/dockview/styles.css` is. It lives here and not in `@rask/ui` for the same reason dockview's
  * does not: the design system carries no vendor-canvas bindings.
  *
- * What does NOT belong here: domain graphs. `LineageGraph` is a lineage panel (@rask/panels), the FGA
+ * What does NOT belong here: domain graphs. `LineageGraph` is a lineage panel (lakehouse's own lib), the FGA
  * builders are lakehouse access logic, the workflow EDITOR is media's. The binding stays domain-free.
  */
 export { default as GraphCanvas } from './GraphCanvas.svelte';
