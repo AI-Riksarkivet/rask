@@ -1036,15 +1036,36 @@ nats:
       fileStore:
         pvc:
           size: 1Gi
+    # Clustered by default since 2026-08-03 (open_ingest.md Phase 0). The single node was flagged in
+    # this file as "a prod SPOF" while `streamReplicas` was pinned to 1 because raft replication needs
+    # 3+ nodes — so the SPOF was documented and then structurally guaranteed. The ingest plane makes
+    # that untenable: its unit work queue IS a JetStream stream, so a lost node loses in-flight ingest
+    # work, not just eventing.
+    #
+    # The subchart key is `config.cluster.*` — NOT `replicaCount`, which the nats chart does not have.
+    # A `--set nats.replicaCount=3` is a silent no-op that leaves one node running while every stream
+    # asks for 3 replicas and JetStream refuses to create them (tests/unit/test_invariants.py:320
+    # `test_every_helm_set_key_in_our_scripts_exists_in_values` exists for exactly this class of bug).
+    #
+    # Cost, stated rather than discovered: 3 pods and 3 PVCs instead of 1. `replicas: 3` is the
+    # subchart's own default once cluster.enabled is true, and is the minimum for raft quorum — the
+    # subchart's comment reads "must be 2 or higher when jetstream is enabled", but 2 gives no
+    # majority, so 3 is the first honest value.
+    cluster:
+      enabled: true
+      replicas: 3
   # the headless service is <release>-nats:4222
   # First-party keys (the nats subchart ignores them):
   # Externalize: when set, the pubsub components + the stream-provision Job connect HERE instead of the
-  # in-cluster NATS — pair with nats.enabled=false to use a managed/clustered NATS (the in-cluster
-  # single node is a prod SPOF: the bus down = no lineage ingest, no cascade).
+  # in-cluster NATS — pair with nats.enabled=false to use a managed/clustered NATS. values-prod.yaml
+  # still recommends this for production: an in-chart cluster removes the single-node SPOF but leaves
+  # NATS a workload this chart operates, and a managed bus is the stronger answer where one exists.
+  # The two are alternatives, not a sequence — pick one per environment.
   externalUrl: "" # e.g. nats://nats.internal:4222
-  # Raft replication for the LINEAGE/MEDALLION streams — REQUIRES a clustered NATS (3+ nodes); the
-  # in-cluster single-node subchart only supports 1. Set 3 together with externalUrl in prod.
-  streamReplicas: 1
+  # Raft replication for every provisioned stream. REQUIRES a clustered NATS, which the block above
+  # now provides in-chart; keep the two in step, because a streamReplicas above the node count makes
+  # `nats stream add` fail outright rather than degrade.
+  streamReplicas: 3
 
 # --- Dapr control plane (subchart) — injects the daprd sidecar into annotated pods ----------------
 dapr:
