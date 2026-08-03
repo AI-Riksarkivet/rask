@@ -175,12 +175,12 @@ export type TopNavEntry = {
 	tier?: 'primary' | 'secondary';
 };
 
+// NO `Projects` row here, BY RULING (2026-08-03): there is ONE project concept and it is the TOP of
+// the hierarchy (project > warehouse > namespace > table) — a tenants list inside a project-scoped
+// zone's dropdown inverted it. The provisioning surface itself still lives at
+// /lakehouse/catalog/projects (reachable from the admin area) until the IA round re-homes it to the
+// top level beside the home gallery.
 const DATA_ITEMS: TopNavItem[] = [
-	{
-		title: 'Projects',
-		href: '/lakehouse/catalog/projects',
-		description: 'Tenants, their warehouses and their members.',
-	},
 	{
 		title: 'Tables',
 		href: '/lakehouse/catalog/tables',

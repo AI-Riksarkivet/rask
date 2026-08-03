@@ -202,35 +202,13 @@
 									class="grid gap-x-3 gap-y-1 p-2 md:w-[46rem]"
 									style="grid-template-columns: repeat({entry.groups.length}, minmax(0, 1fr))"
 								>
-									{#if !entry.groups.some((g) => g.items.some((i) => i.href === entry.href))}
-										<!-- The zone root, on the SAME terms as the `items` branch below: a panel must not
-										     be the only way in, and the trigger is a `<button>`, not a link. This branch
-										     shipped without it, which left the Lakehouse zone root reachable on a wide
-										     screen only by breadcrumb or by typing the URL — while the narrow bar's
-										     `overflowItems` comment claimed it prepends the root "exactly like the desktop
-										     panel". Skipped when a group row already IS the root, so no href appears twice.
-
-										     INSIDE the grid, spanning every column — NOT a sibling before it. As a sibling
-										     it gave Content two children, and bits-ui sizes the shared viewport from the
-										     active content: the viewport measured 69px (this row's height) and CLIPPED all
-										     five columns. Every link was still in the DOM and Playwright still called them
-										     visible, so an href-presence assertion passed while the panel showed one row.
-										     The screenshot is what caught it. -->
-										<div style="grid-column: 1 / -1">
-											<NavigationMenu.Link
-												href={entry.href}
-												active={norm(pathname) === entry.href}
-												data-sveltekit-reload={crossZone(entry.href) ? '' : undefined}
-												{@attach warm(entry.href)}
-												class="bg-muted/40 p-3"
-											>
-												<span class="text-foreground text-sm leading-none font-medium">{entry.title}</span>
-												<span class="text-muted-foreground text-xs leading-snug">
-													Open the {entry.title.toLowerCase()} zone.
-												</span>
-											</NavigationMenu.Link>
-										</div>
-									{/if}
+									<!-- No zone-root filler row here, BY RULING (2026-08-03): the groups panel's
+									     destinations are its group rows — a "Lakehouse · Open the lakehouse zone." row
+									     linking a redirect-to-tables page said nothing a real row doesn't, and only
+									     THIS zone ever rendered it (the flat-items zones all carry a real
+									     function-titled root row — Search, Overview — so their equivalent is skipped).
+									     The narrow overflow menu still prepends every zone's root uniformly; the wide
+									     panel does not. -->
 									{#each entry.groups as group (group.label)}
 										<div>
 											<p
