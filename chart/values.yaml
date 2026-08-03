@@ -783,6 +783,27 @@ stateStore:
     # catalog is the service that creates the published table, but nothing here provisions workflow
     # instances and none are expected.
     - catalog
+    # ── `ingest` is here for the SECRET store, not for state. Read this before removing it. ─────────
+    # The ingest workers resolve their S3 credentials through `lance-secrets` — fail-closed, no env
+    # fallback — and dapr-component.yaml:180 derives the secret-store scope by concat'ing THIS list.
+    # `$secretScopes`'s other members are hardcoded template branches (catalog, lineage, compaction,
+    # medallion, media), so `stateStore.scopes` is the only values-level lever that grants secret
+    # access. Unscoped, the sidecar answers ERR_SECRET_STORES_NOT_CONFIGURED and every worker
+    # fail-closes at boot — the same failure the medallion hit live 2026-07-24.
+    #
+    # The state-store grant rides along because the two lists are deliberately coupled (a state store
+    # resolves its own DSN through the secret store, so state ⊆ secrets). Ingest does NOT use it:
+    # docs/DECISIONS.md § "Ingest orchestration" ruled Dapr Workflow un-adopted — every step of the run
+    # is idempotent by a caller-chosen key — and the unit ledger is JetStream KV, not Dapr state. If a
+    # future reader is auditing for dead config, this is the entry that looks like it and is not.
+    #
+    # Declared AHEAD of the Deployment on purpose: a sidecar loads components at BOOT, and M7's
+    # hot-reload abort (dapr-statestore.yaml:62, actorStateStore: "true") means a LATER addition would
+    # not reach already-running pods without a rollout. Adding one while the app has no pod is the
+    # single safe case. Precedent: `annotator` is scoped with no pod at chart defaults
+    # (media.enabled: false) — DAPR-AUDIT.md:273. Removing an app-id from this list is NOT safe the
+    # same way; it needs `kubectl rollout restart` for every scoped app.
+    - ingest
 
 # --- Backups — a FALLBACK for the SELF-CONTAINED in-cluster path only. OFF by default. When you run the
 # managed/operator path (CloudNativePG for AGE, rustfs-operator for S3 — the rask deployment), DISABLE these
