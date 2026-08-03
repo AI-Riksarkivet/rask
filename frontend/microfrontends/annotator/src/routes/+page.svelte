@@ -1,16 +1,16 @@
 <script lang="ts">
 	// Thin annotator route. `?keys=doc/speech/chunk,…` (the read plane's review-selection
-	// bridge — atlas lasso / search — and now also this zone's own selection view) opens
-	// the annotate canvas, re-mounted per active key so navigating the selection loads
-	// each unit fresh. With no keys the DATA-SELECTION landing renders instead (datasets →
-	// documents → chunks); the old hardcoded demo unit is gone. The URL is the source of
-	// truth, so a canvas reload restores the same unit.
+	// bridge — atlas lasso / search / a claimed task's Annotate button) opens the annotate
+	// canvas, re-mounted per active key so navigating the selection loads each unit fresh.
+	// With no keys the PROJECTS LANDING renders instead (S9: "landing = your projects and
+	// their progress" — the DataSelection gallery moved to /browse). The URL is the source
+	// of truth, so a canvas reload restores the same unit.
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import type { MediaKind } from '$lib/viewer/types';
 	import { reviewSelection } from '$lib/labeling/review-selection.svelte';
-	import DataSelection from '$lib/select/DataSelection.svelte';
+	import ProjectsLanding from '$lib/projects/ProjectsLanding.svelte';
 	import AnnotatorShell from '$lib/viewer/layout/AnnotatorShell.svelte';
 
 	function openFromParams(params: URLSearchParams): void {
@@ -27,7 +27,13 @@
 		const kind: MediaKind = rawKind === 'audio' || rawKind === 'video' ? rawKind : 'image';
 		const rawMedia = params.get('media');
 		const media = rawMedia?.startsWith('/') ? rawMedia : undefined; // same-origin only
-		reviewSelection.openKeys(keys.split(','), kind, media, params.get('dataset'));
+		reviewSelection.openKeys(
+			keys.split(','),
+			kind,
+			media,
+			params.get('dataset'),
+			params.get('task'),
+		);
 	}
 
 	// Init synchronously (before first render) so a deep link never flashes the landing.
@@ -48,16 +54,8 @@
 
 	const unit = $derived(reviewSelection.active);
 
-	// A non-default dataset rides the deep link (`?dataset=…&keys=…`) so the canvas —
-	// and a reload of its URL — targets the picked dataset; the default keeps the bare
-	// `?keys=` link byte-identical. Exit keeps the dataset so the landing re-picks it.
-	function open(keys: string[], dataset: string | null): void {
-		const ds = dataset ? `dataset=${encodeURIComponent(dataset)}&` : '';
-		void goto(`?${ds}keys=${encodeURIComponent(keys.join(','))}`, {
-			keepFocus: true,
-			noScroll: true,
-		});
-	}
+	// Exit keeps the dataset (the canvas's own contract); a task-opened canvas exits back
+	// to wherever the annotator came from — the landing serves both.
 	function exit(): void {
 		const ds = reviewSelection.dataset;
 		void goto(ds ? `?dataset=${encodeURIComponent(ds)}` : '?', { keepFocus: true, noScroll: true });
@@ -69,5 +67,5 @@
 		<AnnotatorShell {unit} onexit={exit} />
 	{/key}
 {:else}
-	<DataSelection onopen={open} initialDataset={page.url.searchParams.get('dataset')} />
+	<ProjectsLanding />
 {/if}

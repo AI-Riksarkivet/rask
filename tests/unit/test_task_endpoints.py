@@ -90,9 +90,10 @@ class _FakeProjectActor:
 
     def __init__(self, state: ProjectState = ProjectState.LABELING) -> None:
         self.state = state
+        self.consensus_n = 1
 
     async def get(self) -> dict[str, Any]:
-        return {"state": str(self.state), "project_id": PROJECT_ID}
+        return {"state": str(self.state), "project_id": PROJECT_ID, "consensus_n": self.consensus_n}
 
 
 @pytest.fixture(autouse=True)
@@ -432,3 +433,63 @@ def test_a_manager_assigns_to_a_NAMED_user(monkeypatch: pytest.MonkeyPatch) -> N
     assert r.status_code == 200, r.text
     assert actor.fired[0]["assignee"] == "dave"
     assert actor.fired[0]["actor"] == SUBJECT, "the manager is still recorded as the actor"
+
+
+# --------------------------------------------------------------------------------------------------
+# Consensus v1 — one replica per annotator per group
+# --------------------------------------------------------------------------------------------------
+
+
+def test_claiming_a_second_replica_of_the_same_group_is_409(monkeypatch: pytest.MonkeyPatch, _live_project: _FakeProjectActor) -> None:
+    """Independence is the point of consensus: the same person labeling two replicas of one item is
+    one opinion counted twice. Enforced server-side at claim — sibling ids are deterministic
+    (`{gid}-r{k}`), so the guard reads the siblings' own actors and refuses with the rule NAMED."""
+    _live_project.consensus_n = 2
+    docs = {
+        "g1-r1": _task(task_id="g1-r1", state=TaskState.CLAIMED, assignee=SUBJECT, replica_of="g1"),
+        "g1-r2": _task(task_id="g1-r2", replica_of="g1"),
+    }
+
+    class _PerTask(_FakeActor):
+        def __init__(self, task_id: str) -> None:
+            super().__init__(docs.get(task_id))
+
+        async def fire(self, payload: dict[str, Any]) -> dict[str, Any]:
+            raise AssertionError("the guard must refuse BEFORE the actor fires")
+
+    monkeypatch.setattr(tasks_ep, "_proxy", _PerTask)
+
+    client = TestClient(_app(allow=True))
+    r = client.post("/tasks/g1-r2/events", json={"event": "claim"})
+
+    assert r.status_code == 409, r.text
+    assert "one replica per annotator" in r.json()["detail"]
+    assert "g1-r1" in r.json()["detail"], "the refusal must name the replica already held"
+
+
+def test_assigning_a_second_replica_to_the_same_recipient_is_409(monkeypatch: pytest.MonkeyPatch, _live_project: _FakeProjectActor) -> None:
+    """The assign edge is guarded on the RECIPIENT (payload.assignee), not the manager firing it —
+    a manager distributing two replicas of one item to the same annotator defeats independence
+    exactly like a double claim. The sibling here was already WORKED (submitted_by) with the lease
+    long released, which is precisely the state a naive assignee-only check would miss."""
+    _live_project.consensus_n = 2
+    docs = {
+        "g1-r1": _task(task_id="g1-r1", state=TaskState.IN_REVIEW, submitted_by="dave", replica_of="g1"),
+        "g1-r2": _task(task_id="g1-r2", replica_of="g1"),
+    }
+
+    class _PerTask(_FakeActor):
+        def __init__(self, task_id: str) -> None:
+            super().__init__(docs.get(task_id))
+
+        async def fire(self, payload: dict[str, Any]) -> dict[str, Any]:
+            raise AssertionError("the guard must refuse BEFORE the actor fires")
+
+    monkeypatch.setattr(tasks_ep, "_proxy", _PerTask)
+
+    client = TestClient(_app(allow=True))
+    r = client.post("/tasks/g1-r2/events", json={"event": "assign", "assignee": "dave"})
+
+    assert r.status_code == 409, r.text
+    assert "one replica per annotator" in r.json()["detail"]
+    assert "g1-r1" in r.json()["detail"], "the refusal must name the replica already worked"

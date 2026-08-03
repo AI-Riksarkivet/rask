@@ -225,6 +225,75 @@ def test_write_outage_audits_failure_and_raises(gate_seen: dict[str, Any], rec: 
     assert rec.calls[0][:2] == ("access_tuple_write", "failure")
 
 
+# ── control-plane emission: raw tuple mutations must tick the live cursor ─────────────────────────────
+#
+# The control feed documents that GRANTS move it, and the per-object grant surface (access.py) emits —
+# so the raw-tuple path staying silent made /v1/access/tuples the one grant door live surfaces could
+# not see. These pin the emission (and that an outage emits NOTHING — a change that did not happen must
+# never be announced).
+
+
+class _RecordingEmitter:
+    def __init__(self) -> None:
+        self.events: list[Any] = []
+
+    async def emit(self, event: Any) -> None:
+        self.events.append(event)
+
+
+def _mutate_recording_emission(
+    monkeypatch: pytest.MonkeyPatch, body: AccessTuple, *, write: bool, fail: bool = False, emitter: _RecordingEmitter | None = None
+) -> _RecordingEmitter:
+    emitter = emitter if emitter is not None else _RecordingEmitter()
+
+    async def _fake_mutation(_client: Any, tuples: list[Any], **_kw: Any) -> None:
+        del tuples
+        if fail:
+            raise ServiceUnavailableError("authorization service unavailable")
+
+    monkeypatch.setattr(ep.fga, "write_tuples" if write else "delete_tuples", _fake_mutation)
+    request = _request(client=object())
+    request.app.state.control_emitter = emitter
+    handler = ep.write_access_tuple if write else ep.delete_access_tuple
+    asyncio.run(handler(request=request, settings=_settings(), token=_token("root_admin"), body=body))
+    return emitter
+
+
+def test_write_emits_grant_added(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    emitter = _mutate_recording_emission(monkeypatch, AccessTuple(user="alice", relation="reader", object="table:db1$t"), write=True)
+    [event] = emitter.events
+    assert (event.action, event.object_type, event.object_id) == ("grant_added", "grant", "table:db1$t")
+    assert event.actor == "user:root_admin"
+    assert event.extra == {"relation": "reader", "subject": "user:alice"}
+
+
+def test_delete_emits_grant_revoked(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    emitter = _mutate_recording_emission(monkeypatch, AccessTuple(user="team:acme#member", relation="writer", object="namespace:bronze"), write=False)
+    [event] = emitter.events
+    assert event.action == "grant_revoked"
+    assert event.extra == {"relation": "writer", "subject": "team:acme#member"}
+
+
+def test_conditional_write_names_the_condition_in_the_event(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    body = AccessTuple(
+        user="alice",
+        relation="reader",
+        object="table:db1$t",
+        condition=TupleCondition(name="non_expired_grant", context={"grant_time": "2026-07-29T09:00:00Z", "grant_duration": "4h"}),
+    )
+    emitter = _mutate_recording_emission(monkeypatch, body, write=True)
+    [event] = emitter.events
+    # The name only — the window parameters are claim-check detail the tuple itself carries.
+    assert event.extra == {"relation": "reader", "subject": "user:alice", "condition": "non_expired_grant"}
+
+
+def test_outage_emits_no_control_event(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    emitter = _RecordingEmitter()
+    with pytest.raises(ServiceUnavailableError):
+        _mutate_recording_emission(monkeypatch, AccessTuple(user="alice", relation="reader", object="table:db1$t"), write=True, fail=True, emitter=emitter)
+    assert emitter.events == []
+
+
 def test_write_rejects_a_derived_can_relation(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
     # can_read_data is DEFINED on table but not directly assignable — OpenFGA would 400 it with the same
     # error class the idempotent-duplicate handling swallows, so it must never leave this process.

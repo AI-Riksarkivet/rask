@@ -91,13 +91,242 @@ sealed non-members of the workspace, so these imports are dead code walking.
 `pyproject.toml` as the Ray worker `runtime_env`; the actor module imports on the WORKER. The contract is
 stated in `runners/README.md`. Do not resolve this by making `runners.` importable again.
 
-### B3 · Annotation projects are designed, not built *(was #122)*
+### ~~B3 · Annotation projects are designed, not built~~ **CLOSED 2026-07-31, with evidence** *(was #122)*
 
 **What.** [Design — annotation projects](#design--annotation-projects) (below) — entities, both state machines, the authz doors, what a
 publish emits, and a slice plan.
 
-**Where it stands.** Slices `S1`–`S4` (domain core, FGA type, publish schema, catalog `create` pin) need no
-store and are the next buildable unit. `S5`–`S10` need B1's actors.
+**Closed by the open_anno build (2026-07-31).** Slices `S1`–`S9` are live end to end, driven in chromium
+against the k3s cluster with real Dapr actors, a real OpenFGA store and a real catalog: project created →
+items sent → claim (lease from the PROJECT's `lease_seconds`, captured at send) → submit → the review
+row's three distinct actions with the server's self-review 403 rendered verbatim → freeze → publish →
+**a real governed Lance table** (`silver$vasa-publish-…`, tag `publish-<token>`, catalog `describe`
+resolves `s3://lance-catalog/…`). Screenshots examined per surface; two defects found by LOOKING were
+fixed (actions-column clipping; `Reopen` rendered on a published project — the details listing now
+empties `legal_events` once the project is in a frozen state, pinned by
+`tests/unit/test_project_event_endpoints.py::test_details_on_a_frozen_project_carry_no_task_events`).
+
+What the build added beyond the S-slices as specified, each red-first:
+
+- **The publish transport existed only as a Protocol** — nothing called `run_publish`, so `publish`
+  stranded projects in `publishing` forever. Now: `projects/lakehouse.py` (`CatalogPublisher` over the
+  lance-ns SDK — `mode=exist_ok` create, tag create with catch-conflict-compare-version convergence,
+  facet payloads stripped BARE for `X-Lance-Run-Facets` because the catalog stamps and 400s `_`-keys)
+  plus the **publish watchdog reminder** on the project actor (`PUBLISH_REMINDER`, due ~1 s, period 60 s
+  until terminal) — the crash-recovery caller the saga's "safe to call again" contract never had.
+- **The target namespace is PINNED with the publish token** (`pending_target_namespace`) — the doors were
+  checked against a namespace the actor never recorded, so a crash-recovered saga would have had to guess.
+  A retry naming a different namespace is refused (a different namespace is a different table id).
+- **The saga's table id used `.` where the catalog's delimiter is `$`** — the table would have landed at
+  the catalog ROOT while FGA authorized `namespace:silver`. Fixed (`saga.py::CATALOG_DELIMITER`).
+- **S4 landed**: catalog `create` accepts `source`/`source_version`/`X-Lance-Run-Facets` (reusing
+  `_merge_source_pin`/`_parse_run_facets`, same forge-guard), so the FIRST write of a derived table
+  finally carries a reproducibility pin + producer facet (`tests/unit/test_create_lineage_pin.py`).
+- **The read surface A1 needed did not exist**: `GET /projects` (via a new `TenantProjectsActor` index,
+  registered at create), `GET /projects/{id}` + `legal_events` derived from the machine tables, and
+  `GET /projects/{id}/tasks?include=details` (bounded fan-out, per-task `legal_events`) — the UI renders
+  the transitions the backend supplies and holds no copy of the machine.
+- **Dapr's `ActorProxy` dispatches WIRE names** (`ListProjects`), not Python names (`list_projects`) —
+  every cross-actor call in the plane raised `AttributeError` in-cluster while every mocked unit test
+  stayed green. `projects/proxies.py::typed_proxy` translates from the interface's own `@actormethod`
+  metadata; a sweep test forbids raw `ActorProxy.create` outside it
+  (`tests/unit/test_actor_proxy_names.py`).
+- Frontend: the zone's landing is the projects view (S9 — `DataSelection` moved to `/browse`), the queue
+  is `@rask/ui/data-table` with the honest lease chip (wall-clock `expired` beats a stale "held"),
+  publish confirm/progress/failed-retry panels, BFF proxies + a valibot-parsed client (writes carry
+  explicit `content-type` — browser `fetch` defaults a string body to `text/plain` and FastAPI 422s),
+  the zone's vacuous `test` gate made real (`"test": "vitest run"`), 7 new hermetic e2e specs, and
+  `@rask/ui` gained a `textarea` component.
+
+**Second wave, same day (the product pass — "so much missing" was right):** the funnel and the
+labeling substance landed after the first close:
+
+- **Send-to-project from media** — search results AND the atlas selection toolbar carry
+  "Send to project…" (append to a draft/labeling project or create one around the selection),
+  via a media→annotator BFF proxy; hermetic e2e (`media/e2e/send-to-project.spec.ts`, 3 specs:
+  send with descriptor key-path + dataset provenance, create-and-send, the 403 surfaced).
+- **The labeling task is specified at create** (`LabelSchema`: class names + shape kind in the
+  create dialog; the taxonomy renders on the detail page) — the canvas constraining its tools to
+  it is still open.
+- **Canvas → task draft (S10 first half)**: a task-opened canvas (`?task=` on the queue's Annotate
+  link) snapshots the saved unit's rows into the task DRAFT (revision-guarded), so drawn shapes
+  travel into the publish; `draft-shapes.ts` pins the column-for-column mapping. The full S10
+  cutover (deleting the media-plane write) remains, deliberately last.
+- **Bulk review** (the LLM-as-judge foundation): queue row selection + "Accept N reviewed" —
+  per-task server-gated, failures reported individually (the e2e for it caught a real
+  derived-after-clear bug). The LLM-labeller import ride (`prediction_import` → drafts with
+  `origin: model`) and the embedding view need the assist runner (mock-labelled today).
+- **FGA on the annotator is chart-wired** (`media.yaml`: LANCE_FGA/OIDC under `auth.enabled`,
+  annotator only; render-pinned by `tests/unit/test_annotator_auth_env.py` both ways).
+- **The annotator sidebar is project-centric** — the Corpus group (Search/Atlas/Graph cross-zone
+  links) removed; the flow runs media→send→project, not annotator→launcher.
+- **@rask/atlas extraction (planned, not done):** the WebGPU atlas (`media/src/lib/atlas/` —
+  AtlasMap, gpu-scatter, cross-filter, legend/geometry/colors) should hoist to
+  `frontend/packages/atlas` exactly as the pixi engine did (zone-agnostic props, no `$app/*`,
+  transport injected), so the annotator's bulk-labeling view can embed the same selection surface.
+  Blocked on nothing technical; it is a day of careful extraction + zone rewiring.
+- **The publish's reproducibility pin — SHIPPED in the third wave (below).** (The 2026-07-31
+  discovery stands as history: the spec-generated `lance_namespace_urllib3_client.create_table`
+  cannot send the S4 query params, which is why the transport is a direct HTTP call.)
+- **UI-language rename SHIPPED (2026-07-31):** the annotator says "Labeling tasks" / "items"
+  everywhere user-facing; "Projects" is platform-only. The wire rename remains (below).
+- **Assignment UI SHIPPED (2026-07-31):** Assign… on assignable rows (legal_events-driven),
+  named recipient, server pins the lease; e2e proves the pinned chip. Consensus remains (below).
+- **Vocabulary: "project" is PLATFORM-level (owner ruling 2026-07-31).** The annotator's grouping
+  collides with the estate tenant. Rename to the CVAT-shaped ladder: the annotator's unit of work
+  is a **labeling TASK** (today's `AnnotationProject`) holding **items** (today's `Task`). Two
+  layers: (1) UI language — cheap, do first; (2) the wire/state rename (`annotation_project` FGA
+  type, `AnnotationProjectActor`/`AnnotationTaskActor` ids, `/projects`+`/tasks` endpoint paths,
+  `can_create_annotation_project`) — actor ids and FGA types carry live state, so this is its own
+  red-first slice with a state-migration note, not a drive-by.
+- **Assignment UI ✓ (above) + consensus v1 SHIPPED in the third wave (below).** Task settings
+  surface: description ✓, review-required ✓, lease ✓, label schema ✓, assignees ✓, consensus N ✓;
+  still missing: an instructions page, and the manager MERGE step (deliberately not built — see below).
+- **LS/CVAT parity gaps, named** (beyond the §2 design diff): export serializers (COCO/YOLO/CSV/HF
+  — owner-deferred, rides the P7c exporter), honeypot/ground-truth items, annotator analytics
+  (lead-time exists per item; no dashboard), webhooks (control events exist on pub/sub — a consumer
+  away), ML-assist beyond the mocked runner. The published-table + lineage story EXCEEDS both
+  references (neither has governed provenance).
+- **Live witness of the canvas→draft leg is PENDING**: the first live drive published real tables
+  (Dapr actors + catalog + FGA seed, all in-cluster); the second drive (canvas draw → draft →
+  publish-with-shapes, script kept at `frontend/microfrontends/annotator/drive2.tmp.mjs`) was
+  interrupted when tilt took the cluster back mid-drive with `auth.enabled` on and the in-flight
+  conditional-grant FGA model failing to provision (annotator now fail-closes 503, correctly).
+  Once the model fix lands: seed a corpus (the media pods mount an EMPTY, read-only emptyDir —
+  `scripts/seed_demo_corpus.py` + a writable corpus mount or the A1 corpus move), sign in, run
+  drive2. The hermetic halves are all green (8 annotator + 3 media specs).
+
+**Third wave (2026-07-31): the pin + consensus v1, adversarially audited.**
+
+- **The reproducibility pin is BUILT end to end.** `ItemSource.dataset_version` captured at send
+  (`models.py`; the media dialog reads it off the descriptor's row table and the e2e asserts it in
+  the POST body), `build_plan` collects per-dataset versions + an `sources_uncaptured` count,
+  `source_pin` pins ONLY when every published item shares one dataset at one captured version
+  (`publish.py`), the saga passes `source`/`source_version` to the publisher (`saga.py`), and
+  `lakehouse.py::_HttpCreateApi` carries them as the S4 query params over direct httpx (same
+  signature as the SDK seam; ≥400 → the SDK's `ApiException`, so `translate_catalog_errors` sees one
+  error surface). The facet's `sourceDatasets` entries carry their captured `version`.
+- **Consensus v1 is BUILT (replica items, no merge).** `consensus_n` (1–5) on the labeling task;
+  send seeds N independent replica items per sent item with deterministic ids (`{gid}-r{k}`,
+  `Task.replica_of`), capacity-capped at items×N ≤ 1000; the SAME annotator may hold at most ONE
+  replica of a group — enforced server-side at claim AND assign (409 naming the held replica and the
+  rule); the publish emits EVERY accepted replica's rows and the run facet reports agreement COUNTS
+  (`consensus: {n, groups, perfect_agreement_groups}` from per-group label multisets) — **no merged
+  truth is invented; the manager merge/adjudication step is deliberately not built.** UI: consensus
+  field in the create dialog, `replica k/N` chip in the queue, the 409 surfaced verbatim (3 new
+  hermetic e2e specs; screenshots examined — the chip moved under the key after the inline version
+  clipped the actions column).
+- **The adversarial audit (fresh-context) earned its keep — all findings fixed same-day:**
+  **B-1 (critical):** `CreateProjectRequest` lacked `consensus_n`, so Pydantic silently dropped the
+  field at the ONE entry point and every project persisted `consensus_n=1` — the whole replica plane
+  was dead code on the real path while every mocked layer stayed green. Fixed + pinned by
+  `test_consensus_n_travels_from_the_create_payload_to_the_persisted_doc` (asserts the PERSISTED
+  doc, not the echo). **A-1 (medium):** a plan mixing captured items with items that recorded NO
+  dataset still pinned — `sources_uncaptured` now blocks the pin (parametrized refusal case added).
+  **A-2 (medium):** `_HttpCreateApi` was only tested through an injected fake — the transport itself
+  (URL quoting of `$`, pin params, arrow content-type, error translation) now has direct tests.
+  Plus: capacity-guard and assign-path-guard tests (B-2/B-3), a stale §7.2 comment (A-3).
+  Known boundary, documented not fixed: a replica released WITHOUT submitting was neither held nor
+  worked, so the same annotator may later take a different replica of that group — matches the
+  "holds or worked" rule; tighten to "ever touched" only with a per-task touch log.
+- **The live READ-edge witness is PENDING with the same blocker as drive2**: the in-cluster
+  annotator fail-closes 503 ("Authorization is enabled but unavailable") on the in-flight
+  conditional-grant FGA model, so the pin was verified hermetically at every seam (capture → plan →
+  pin → saga → HTTP params → the catalog's own `test_create_lineage_pin.py`) but not yet observed as
+  a lineage graph edge on the cluster. Run the drive once the model lands.
+- **LS/CVAT task-management diff after this wave:** consensus/overlap now matches Label Studio's
+  N-annotations-per-item shape (LS: `maximum_annotations` + agreement; CVAT OSS has no native
+  consensus — honeypot/GT only). Still LS-ahead: adjudication/merge UI, per-annotator agreement
+  dashboards, instructions page. Still CVAT-ahead: dense video/interpolation tooling. Ours alone:
+  the two-door governed publish, the byte-identical replay, and the lineage pin — neither reference
+  has governed provenance at all.
+
+**Fourth wave (2026-08-03): adjudication v1 + instructions — the two LS-parity gaps closed, then a
+17-agent adversarial workflow audit, all confirmed findings fixed same-day.**
+
+- **Adjudication is a PICK, never a blend** (`Adjudication` in `models.py`; `adjudications:
+  {group → {task_id, by, at}}` on the project). The manager names ONE accepted replica canonical
+  (`PUT /projects/{id}/adjudications/{group}`, `can_manage` — it decides which OPINION wins, which
+  is distribution authority, not review); every replica's rows still publish and the facet carries
+  the pick WITH attribution (`consensus.adjudications[group] = {task_id, by, at}`). UI: an
+  Adjudication card on the detail page (pick/re-pick on accepted members only, stale-pick warning,
+  Withdraw) + "canonical" chips in the queue. Synthesizing a merged shape set remains deliberately
+  unbuilt — it would put words in annotators' mouths; a consumer filters canonical rows by the
+  picked ids.
+- **Instructions** (`AnnotationProject.instructions`): the annotator-facing HOW, set in the create
+  dialog, persisted at the entry point (pinned by a create-surface test — the consensus_n B-1
+  lesson applied on day one), rendered on the detail page.
+- **The audit's confirmed findings, all fixed:** (1) *membership was a string-prefix check at BOTH
+  the actor and the publish* — client-suppliable ids like `g1-r1-r2` (a member of group `g1-r1`)
+  passed every check on `g1` and the facet would canonicalize another group's work; now the actor
+  requires the exact `{group}-r{digits}` shape and `build_plan` refuses any pick not a member of
+  `plan.replica_groups[group]` (membership by `replica_of`, the authoritative grouping). (2) *no
+  removal path* — the publish refuses a stale/groupless pick (correctly), so one wrong pick wedged
+  publishing permanently; now `DELETE /adjudications/{group}` (+ Withdraw in the UI) clears it,
+  idempotently, refused once provenance freezes. (3) *a pick silently survived reopen → resubmit →
+  re-accept*, canonicalizing content the adjudicator never saw; now `task_state_changed` voids any
+  pick whose target leaves `accepted`, and the publish-side refusal stays as the backstop for the
+  report-failure window. (4) *the facet dropped by/at* — now carried. (5) the `Adjudicate` wire
+  name is pinned in `test_actor_proxy_names.py`; the 409 e2e asserts the pick did NOT land; the
+  panel has a no-Pick-on-non-accepted negative spec.
+**Fifth wave (2026-08-03): the LIVE witness — driven in chromium against the k3s cluster with real
+OIDC (dex session), real OpenFGA, real Dapr actors.**
+
+- **The fleet-wide FGA 503 is FIXED at its root**: `fga.provision` passed only `schema_version` +
+  `type_definitions` to `WriteAuthorizationModelRequest` and silently dropped `model["conditions"]`
+  — the moment the time-boxed-grants model landed (`non_expired_grant`), OpenFGA 400'd every
+  provision ("condition … is undefined for relation reader") and every FGA-enabled service
+  fail-closed 503. One-line fix + `test_fga_provision.py` pins it. The annotator now provisions,
+  checks, and answers real 403s/200s in-cluster.
+- **Witnessed live, end to end** (today's UI on the dev zone with a real sealed session → BFF →
+  in-cluster annotator): create with `consensus_n=2` + instructions (FGA-gated, persisted); ONE
+  send seeding TWO replica items from the real actor; alice claiming r1 and being refused r2 with
+  the one-replica-per-annotator 409 verbatim on screen; bob claiming+submitting r2 under HIS
+  verified dex sub; the adjudication PUT landing (canonical chips + Withdraw); freeze → publish
+  running the real saga (reading tasks → building plan → `creating table
+  silver$consensus-live-41965_…`) and failing EXACTLY at the recorded service-identity residual,
+  with the failure narrated and retry offered (A4 behaving as designed).
+- **The live leg caught what hermetic e2e structurally cannot**: the annotator zone's projects BFF
+  proxy exported only GET/POST — the adjudication PUT/DELETE 405'd against the real server while
+  every `page.route`-mocked spec stayed green. Fixed (+ the media-zone verb set audited).
+- **Found on the cluster, needing OWNER action:** (1) both kueue installs' webhooks are dangling
+  fail-closed with every controller pod dead — since 07-31 every Deployment mutation (tilt's app
+  updates included) fails on `mdeployment.kb.io`; unblock with
+  `kubectl patch (mutating|validating)webhookconfiguration <kueue…> --type=json -p '[{"op":"replace","path":"/webhooks/N/failurePolicy","value":"Ignore"}]'`
+  per hook, or revive/uninstall kueue. (2) `rask-web-home` crash-loops: tilt's in-container
+  `bun run build` dies exit 137 while the chart's 6Gi dev tier is in place — the imaged build is
+  fine; the zone images need a full rebuild once deploys are unblocked (the web pods have been
+  serving the 07-31 UI since). (3) The publish's catalog identity (`MEDIA_CATALOG_TOKEN`) is
+  absent/stale in the annotator pod — the long-recorded decision (a dex client-credentials flow vs
+  chart-set `media.catalogToken`) is now the ONLY thing between the saga and a live published
+  table + the lineage READ-edge witness.
+
+- **Recorded, not fixed (named postures):** the Dapr `/actors/*` invocation surface on the
+  annotator trusts its caller (the sidecar) and accepts a caller-supplied `actor` field — true for
+  EVERY actor method in the plane, guarded today by pod-network topology, not by the app; an
+  estate-level decision (dapr-api-token / netpol tightening / a sidecar-only guard like the
+  gateway's lineage rows), not a drive-by. And the actor's adjudicate validates against the task
+  INDEX, which can lag a task's own actor — safe direction only because the publish re-reads and
+  refuses, and the state-report voiding narrows the window; documented in the actor docstring.
+
+**Still open, named (the residue of this close):**
+
+- **S10 — the canvas draft cutover.** The canvas still saves to the media annotations Lance plane, not
+  `PUT /tasks/{id}/draft`; until it lands, shapes drawn on the canvas do not travel into a publish (an
+  accepted task with no draft lands as a sentinel row — honest, but empty). Deliberately last, per §8.
+- ~~**Send-from-search.**~~ Built in the second wave (search results + atlas toolbar → "Send to
+  labeling task…"), with the dataset VERSION captured since the third wave.
+- **The publish transport's service identity.** The catalog accepts only dex-issued OIDC bearers; the
+  fleet has no client-credentials path, so the drive hand-minted a user token into
+  `MEDIA_CATALOG_TOKEN`. Decide: a dex client for the annotator (client-credentials) vs forwarding the
+  firing user's bearer (dies with the session — the saga outlives requests). The chart's
+  `media.catalogToken` mechanism exists and is unset in the local k3s values.
+- **`table_properties` never reach the Lance dataset** — the catalog's create carries them into the
+  namespace *declare* and the response echo only, so §7.1's "stamped at create" is not readable off the
+  table. (Found by the lance-docs audit; estate-wide, not annotation-specific.)
+- **RustFS conditional-PUT is assumed, never verified** — Lance's commit atomicity on S3-compatible
+  stores requires put-if-not-exists or an external manifest store; nothing in the repo configures or
+  proves either. The shared `annotations` table's concurrent `merge_insert`s are the exposed surface.
 
 ---
 
@@ -2531,4 +2760,3 @@ Recorded rather than hidden, each with what would unblock it:
   serializer reads it. Not part of publish.
 * **Active learning** (`Draft.origin = "model"`, `confidence`, `uncertainty`). The columns and the
   `prediction_import` send path exist in this design; the ranking loop does not.
-

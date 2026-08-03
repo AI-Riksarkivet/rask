@@ -45,7 +45,7 @@ from catalog.api.dependencies import (
 from catalog.api.security import CurrentToken
 from catalog.core.control_emit import emit_control
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.core.lineage_emit import DELETE, INSERT, MERGE_INSERT, UPDATE, InputPin, shape_run_facets
+from catalog.core.lineage_emit import DELETE, INSERT, MERGE_INSERT, UPDATE, InputPin, InputRef, shape_run_facets
 from catalog.core.lineage_metadata import build_lineage_metadata, inject_into_arrow_stream
 from catalog.core.serialization import dump
 from catalog.schemas import CommitFragmentsRequest, CommitFragmentsResponse
@@ -122,6 +122,9 @@ async def create_table(
     mode: str | None = None,
     properties: str | None = None,
     data_base: Annotated[list[str], Query()] = [],  # noqa: B006 — FastAPI Query default, not mutated
+    source: str | None = None,
+    source_version: Annotated[int | None, Query(ge=1)] = None,
+    run_facets_json: Annotated[str | None, Header(alias="X-Lance-Run-Facets")] = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> CreateTableResponse:
     """Create a Lance table from an Arrow-IPC stream — ``create_table``; seeds ownership + lineage.
@@ -133,6 +136,14 @@ async def create_table(
     ``data_base`` (#3-B, repeatable) spreads the table's fragments across the named approved buckets (Lance
     multi-base). Each MUST be on the ``LANCE_MULTIBASE_DATA_BASES`` allowlist — a caller can never point a
     base at an arbitrary bucket. Omitted → a single-location table exactly as before.
+
+    Derived-write lineage (S4, optional — the same metadata ``merge_insert`` has always taken):
+    ``source`` + ``source_version`` record the version-pinned upstream this table DERIVES FROM
+    (an annotation publish from ``transcripts@N``, a Ray job's first write), surfaced as a
+    version-pinned INPUT on the CREATE RunEvent; the ``X-Lance-Run-Facets`` header carries producer
+    run metadata (e.g. the ``annotationProject`` facet) verbatim onto the same event. Before S4,
+    every FIRST write of a derived table was emitted with no pin and no facet — only later merges
+    could carry provenance.
     """
     # #3-B governance (the security crux): validate BEFORE any write. An off-allowlist base is a client
     # error (400), never a silent write to an unapproved bucket.
@@ -149,6 +160,14 @@ async def create_table(
             raise InvalidInputError(f"table properties is not valid JSON: {exc}") from exc
     # #78 format honesty: reject a client that tries to select another file format (see the helper).
     _reject_unsupported_format(parsed_properties)
+    # S4: validate the optional lineage metadata BEFORE the write — a malformed pin/facet is a 4xx,
+    # not a committed create whose provenance then silently drops. Same order, same helpers, same
+    # forge-guard as merge_insert: a caller who cannot READ the named source must not be able to
+    # stamp a cross-tenant DERIVED_FROM edge (or a phantom vertex) into trusted lineage.
+    source_pin = _merge_source_pin(source, source_version, settings.delimiter)
+    extra_run_facets = _parse_run_facets(run_facets_json)
+    if source_pin is not None:
+        await fga_deps.require_can_get_metadata(client, settings, token, segments=source_pin.segments)
     segments = parse_identifier(id, settings.delimiter)
     table_id = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     namespace = fga.parent_namespace_id(segments, delimiter=settings.delimiter) or ""
@@ -258,6 +277,19 @@ async def create_table(
         _, schema_fields = await run_in_threadpool(dataplane.read_version_and_schema, ns, so, segments, response.version)
     else:
         schema_fields = await run_in_threadpool(dataplane.payload_schema_fields, data, segments)
+    # S4: the pin resolves to a version-pinned INPUT exactly as `emit_write_event` resolves a merge's
+    # (canonical ids, so the lineage Dataset == the OpenFGA object); the facets ride verbatim.
+    input_refs = (
+        [
+            InputRef(
+                fga.parent_namespace_id(source_pin.segments, delimiter=settings.delimiter) or "",
+                fga.canonical_object_id(source_pin.segments, delimiter=settings.delimiter),
+                source_pin.version,
+            )
+        ]
+        if source_pin is not None
+        else None
+    )
     await emitter.emit_create(
         table_id=table_id,
         namespace=namespace,
@@ -267,6 +299,8 @@ async def create_table(
         authorization=authorization,
         source_uri=response.location,  # the real Lance URI → #23 reconcile can read the on-disk file
         schema_fields=schema_fields,
+        inputs=input_refs,
+        extra_run_facets=extra_run_facets,
     )
     # Only a real creation emits — an ExistOk request that KEPT a pre-existing table wrote nothing and
     # created nothing (same guard that skips ownership seeding above), so a `table_created` here would be a

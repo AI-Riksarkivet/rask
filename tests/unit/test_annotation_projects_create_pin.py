@@ -34,10 +34,20 @@ class _FakeProjectActor:
         return payload
 
 
+class _FakeTenantActor:
+    def __init__(self) -> None:
+        self.registered: list[str] = []
+
+    async def register(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.registered.append(str(payload["project_id"]))
+        return {"project_id": payload["project_id"], "created": True, "total": len(self.registered)}
+
+
 @pytest.fixture(autouse=True)
 def _actor(monkeypatch: pytest.MonkeyPatch) -> _FakeProjectActor:
     actor = _FakeProjectActor()
     monkeypatch.setattr(projects_ep, "_create_actor", lambda _p: actor)
+    monkeypatch.setattr(projects_ep, "_tenant_actor", lambda _t: _FakeTenantActor())
     return actor
 
 
@@ -172,3 +182,36 @@ def test_a_denied_create_seeds_nothing(monkeypatch: pytest.MonkeyPatch, _actor: 
 
     assert TestClient(app).post("/projects", json=PAYLOAD).status_code == 403
     assert seeded == [] and _actor.created == [], "a denied create still wrote"
+
+
+# --------------------------------------------------------------------------------------------------
+# Consensus v1 — the create surface carries `consensus_n` (the audit's B-1: the field existed
+# everywhere EXCEPT this request model, so Pydantic silently dropped it and every project persisted
+# consensus_n=1 — the whole replica plane was unreachable end-to-end)
+# --------------------------------------------------------------------------------------------------
+
+
+def test_consensus_n_travels_from_the_create_payload_to_the_persisted_doc(_actor: _FakeProjectActor) -> None:
+    client = TestClient(_app(allow=True))
+    r = client.post("/projects", json={**PAYLOAD, "consensus_n": 3})
+    assert r.status_code == 201, r.text
+    assert r.json()["consensus_n"] == 3
+    assert _actor.created[0]["consensus_n"] == 3, "the field must PERSIST, not merely echo"
+
+
+def test_consensus_n_defaults_to_one_and_out_of_range_is_422(_actor: _FakeProjectActor) -> None:
+    client = TestClient(_app(allow=True))
+    assert client.post("/projects", json=PAYLOAD).json()["consensus_n"] == 1
+    assert client.post("/projects", json={**PAYLOAD, "consensus_n": 6}).status_code == 422
+    assert client.post("/projects", json={**PAYLOAD, "consensus_n": 0}).status_code == 422
+    assert _actor.created and all(doc["consensus_n"] == 1 for doc in _actor.created), "a rejected value must never persist"
+
+
+def test_instructions_travel_from_the_create_payload_to_the_persisted_doc(_actor: _FakeProjectActor) -> None:
+    """The annotator-facing HOW (instructions) is distinct from the WHAT/WHY (description) and must
+    persist the same way consensus_n must — at the one real entry point, not just in the echo."""
+    client = TestClient(_app(allow=True))
+    r = client.post("/projects", json={**PAYLOAD, "instructions": "Label every visible portrait; skip seals."})
+    assert r.status_code == 201, r.text
+    assert r.json()["instructions"] == "Label every visible portrait; skip seals."
+    assert _actor.created[0]["instructions"] == "Label every visible portrait; skip seals."

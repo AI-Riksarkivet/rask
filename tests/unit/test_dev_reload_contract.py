@@ -26,6 +26,7 @@ relaxes `readOnlyRootFilesystem` — so a leak is a security regression, not jus
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -137,12 +138,24 @@ def _zone_containers(docs: list[dict]) -> list[tuple[str, dict]]:
     ]
 
 
+def _makefile_zones() -> set[str]:
+    """The `ZONES ?=` list from the Makefile — the OTHER copy of the zone set. Read rather than
+    hardcoded: this test's job is to catch the two copies DISAGREEING, and a literal count here was
+    itself a third copy (it sat at 7 while `workbench` made the estate 8, and the test reported a
+    phantom disagreement)."""
+    makefile = (REPO / "Makefile").read_text()
+    match = re.search(r"^ZONES \?=\s*(.+)$", makefile, re.MULTILINE)
+    assert match, "the Makefile lost its ZONES ?= line"
+    return set(match.group(1).split())
+
+
 def test_dev_reload_makes_every_zone_writable() -> None:
     """Without this a zone sync fails with "Read-only file system" and silently changes nothing —
     the same class of invisible failure as a missing `--reload`, and equally unreported."""
     docs = _render(frontend__enabled="true", dev__reload="true")
     zones = _zone_containers(docs)
-    assert len(zones) == 7, f"expected 7 zones, rendered {len(zones)} — Makefile ZONES and frontend.apps disagree"
+    rendered = {name.removeprefix("rask-web-") for name, _c in zones}
+    assert rendered == _makefile_zones(), f"Makefile ZONES and the chart's frontend.apps disagree: chart={sorted(rendered)}"
 
     still_ro = [n for n, c in zones if (c.get("securityContext") or {}).get("readOnlyRootFilesystem") is not False]
     assert not still_ro, f"dev.reload=true but these zones keep a read-only rootfs, so live_update cannot write: {sorted(still_ro)}"

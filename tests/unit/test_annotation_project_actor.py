@@ -12,12 +12,13 @@ a round-trip property, not a unit-testable one.
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from typing import Any, cast
 
 import pytest
 from annotator.projects.machines import IllegalTransition
 from annotator.projects.models import AnnotationProject, ProjectState, Task, TaskState
-from annotator.projects.project_actor import INDEX_KEY, AnnotationProjectActor
+from annotator.projects.project_actor import INDEX_KEY, PUBLISH_REMINDER, AnnotationProjectActor
 
 
 class _FakeStateManager:
@@ -37,11 +38,20 @@ class _FakeStateManager:
 
 
 class _Actor(AnnotationProjectActor):
-    """The real actor with its Dapr plumbing replaced."""
+    """The real actor with its Dapr plumbing replaced. Reminder calls are RECORDED, not executed —
+    `register_reminder` on the real base hits the sidecar's runtime, which unit tests don't have."""
 
     def __init__(self) -> None:  # noqa: D107 - deliberately bypasses Actor.__init__ (needs a runtime)
         self.sm = _FakeStateManager()
         self._state_manager = cast(Any, self.sm)
+        self.reminders_registered: list[str] = []
+        self.reminders_unregistered: list[str] = []
+
+    async def register_reminder(self, name: str, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
+        self.reminders_registered.append(name)
+
+    async def unregister_reminder(self, name: str) -> None:  # type: ignore[override]
+        self.reminders_unregistered.append(name)
 
 
 def _project(**kw: Any) -> dict[str, Any]:
@@ -212,7 +222,7 @@ async def test_the_publish_record_is_written_once_so_a_replay_cannot_contradict_
     actor = await _with_tasks(TaskState.ACCEPTED)
     await actor.fire({"event": "publish"})
     record = {
-        "table_id": "silver.annotations",
+        "table_id": "silver$annotations",
         "namespace": "silver",
         "version": 7,
         "publish_id": "pub-1",
@@ -226,3 +236,210 @@ async def test_the_publish_record_is_written_once_so_a_replay_cannot_contradict_
     assert first["version"] == 7
     assert second["version"] == 7, "a replayed activity overwrote the publish record"
     assert second["published_by"] == "gina"
+
+
+# --------------------------------------------------------------------------------------------------
+# The publish watchdog — the reminder that makes "safe to call again after any crash" have a caller
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_publish_registers_the_watchdog_reminder() -> None:
+    """`run_publish` is only crash-safe if something re-invokes it after a crash. The reminder is
+    that something: persisted in the actor state store, it survives pod restart and node drain."""
+    actor = await _with_tasks(TaskState.ACCEPTED)
+    await actor.fire({"event": "publish", "actor": "henry"})
+    assert PUBLISH_REMINDER in actor.reminders_registered
+
+
+@pytest.mark.asyncio
+async def test_publish_pins_the_target_namespace_and_trigger_with_the_token() -> None:
+    """The endpoint authorizes the TARGET namespace (§6.2 door 2). If the actor does not record it,
+    a crash-recovered saga cannot know where the publish was authorized to land — it would have to
+    guess, and a guess is an unauthorized write."""
+    actor = await _with_tasks(TaskState.ACCEPTED)
+    out = await actor.fire({"event": "publish", "actor": "henry", "target_namespace": "gold"})
+    assert out["pending_target_namespace"] == "gold"
+    assert out["pending_publish_by"] == "henry"
+
+
+@pytest.mark.asyncio
+async def test_a_retry_naming_a_different_namespace_is_refused() -> None:
+    """The table id derives from the pinned token+namespace. A retry pointed elsewhere would create
+    a SECOND table under a different id while the first may already exist — the exact orphan the
+    token exists to prevent. The retry must restate the pinned target or say nothing."""
+    actor = await _with_tasks(TaskState.ACCEPTED)
+    await actor.fire({"event": "publish", "actor": "henry", "target_namespace": "silver"})
+    await actor.fire({"event": "publish_failed", "error": "boom"})
+
+    with pytest.raises(IllegalTransition, match="pending publish targets"):
+        await actor.fire({"event": "publish", "actor": "henry", "target_namespace": "gold"})
+
+    retried = await actor.fire({"event": "publish", "actor": "maria", "target_namespace": "silver"})
+    assert retried["state"] == ProjectState.PUBLISHING
+    assert retried["pending_target_namespace"] == "silver"
+    assert retried["pending_publish_by"] == "maria", "the retry must record who drove it"
+
+
+@pytest.mark.asyncio
+async def test_the_reminder_spawns_the_saga_while_publishing_and_unregisters_when_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The tick's whole contract: PUBLISHING → run the saga; anything else → stand down."""
+    import annotator.projects.lakehouse as lakehouse
+
+    spawned: list[str] = []
+    monkeypatch.setattr(lakehouse, "spawn_publish", lambda project_id: spawned.append(project_id))
+
+    actor = await _with_tasks(TaskState.ACCEPTED)
+    await actor.fire({"event": "publish", "actor": "henry"})
+    await actor.receive_reminder(PUBLISH_REMINDER, b"", timedelta(seconds=1), timedelta(seconds=60))
+    assert spawned == [(await _state(actor))["project_id"]]
+
+    await actor.fire({"event": "publish_succeeded"})
+    await actor.receive_reminder(PUBLISH_REMINDER, b"", timedelta(seconds=1), timedelta(seconds=60))
+    assert len(spawned) == 1, "the reminder ran the saga on a project that is already published"
+    assert PUBLISH_REMINDER in actor.reminders_unregistered
+
+
+@pytest.mark.asyncio
+async def test_progress_notes_are_recorded_only_while_publishing() -> None:
+    """A4's "not just a spinner": the saga narrates its step onto the project document. A note
+    arriving after the project left PUBLISHING is from a stale run and must not scribble on a
+    terminal state."""
+    actor = await _with_tasks(TaskState.ACCEPTED)
+    await actor.fire({"event": "publish", "actor": "henry"})
+
+    noted = await actor.note_progress({"step": "creating table"})
+    assert noted["publish_progress"] == "creating table"
+
+    await actor.fire({"event": "publish_succeeded"})
+    after = await actor.note_progress({"step": "stale-step"})
+    assert after["publish_progress"] is None, "a stale saga note scribbled on a published project"
+
+
+@pytest.mark.asyncio
+async def test_a_publish_retry_clears_the_previous_progress() -> None:
+    actor = await _with_tasks(TaskState.ACCEPTED)
+    await actor.fire({"event": "publish", "actor": "henry"})
+    await actor.note_progress({"step": "tagging version"})
+    await actor.fire({"event": "publish_failed", "error": "boom"})
+
+    retried = await actor.fire({"event": "publish", "actor": "henry"})
+    assert retried["publish_progress"] is None, "the retry shows the FAILED attempt's last step as if it were running"
+
+
+# --------------------------------------------------------------------------------------------------
+# Consensus v1 — adjudication (the manager's pick, never a blend)
+# --------------------------------------------------------------------------------------------------
+
+
+async def _with_replicas(**states: TaskState) -> _Actor:
+    """A labeling project whose index holds the given replica ids at the given states."""
+    actor = _Actor()
+    await actor.create(_project())
+    actor.sm.store[INDEX_KEY] = json.dumps({tid.replace("_", "-"): str(state) for tid, state in states.items()})
+    return actor
+
+
+@pytest.mark.asyncio
+async def test_adjudicate_records_the_pick_with_attribution() -> None:
+    actor = await _with_replicas(g1_r1=TaskState.ACCEPTED, g1_r2=TaskState.ACCEPTED)
+
+    result = await actor.adjudicate({"group": "g1", "task_id": "g1-r1", "actor": "meg"})
+
+    pick = result["adjudications"]["g1"]
+    assert pick["task_id"] == "g1-r1"
+    assert pick["by"] == "meg"
+    assert pick["at"], "the pick must carry its instant — it is provenance"
+
+
+@pytest.mark.asyncio
+async def test_adjudicate_is_repickable_while_adjudicable() -> None:
+    """A manager may change their mind before the publish; the LAST pick stands, restamped."""
+    actor = await _with_replicas(g1_r1=TaskState.ACCEPTED, g1_r2=TaskState.ACCEPTED)
+    await actor.adjudicate({"group": "g1", "task_id": "g1-r1", "actor": "meg"})
+
+    result = await actor.adjudicate({"group": "g1", "task_id": "g1-r2", "actor": "ines"})
+
+    assert result["adjudications"]["g1"]["task_id"] == "g1-r2"
+    assert result["adjudications"]["g1"]["by"] == "ines"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("task_id", "why"),
+    [
+        ("g2-r1", "not a replica of the named group"),
+        ("g1-r9", "not in this project's index"),
+    ],
+)
+async def test_adjudicate_refuses_a_target_outside_the_group(task_id: str, why: str) -> None:
+    actor = await _with_replicas(g1_r1=TaskState.ACCEPTED, g2_r1=TaskState.ACCEPTED)
+
+    with pytest.raises(IllegalTransition):
+        await actor.adjudicate({"group": "g1", "task_id": task_id, "actor": "meg"})
+
+
+@pytest.mark.asyncio
+async def test_adjudicate_refuses_a_non_accepted_replica() -> None:
+    """A skipped replica carries no labels — canonicalizing one would canonicalize nothing."""
+    actor = await _with_replicas(g1_r1=TaskState.SKIPPED, g1_r2=TaskState.ACCEPTED)
+
+    with pytest.raises(IllegalTransition, match="not accepted"):
+        await actor.adjudicate({"group": "g1", "task_id": "g1-r1", "actor": "meg"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", [ProjectState.PUBLISHING, ProjectState.PUBLISHED, ProjectState.ARCHIVED])
+async def test_adjudicate_is_refused_once_provenance_is_frozen(state: ProjectState) -> None:
+    """Rule 5 extends to picks: an adjudication changed after the publish would describe a facet
+    that no longer matches the artifact."""
+    actor = await _with_replicas(g1_r1=TaskState.ACCEPTED)
+    project = await _state(actor)
+    project["state"] = str(state)
+    actor.sm.store["project"] = json.dumps(project)
+
+    with pytest.raises(IllegalTransition, match="frozen"):
+        await actor.adjudicate({"group": "g1", "task_id": "g1-r1", "actor": "meg"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookalike", ["g1-rogue", "g1-r1-r2", "g1-rA"])
+async def test_adjudicate_refuses_lookalike_ids_that_are_not_the_exact_sibling_shape(lookalike: str) -> None:
+    """The audit's bypass shapes: every one of these starts with `g1-r` and could be an indexed,
+    accepted task (ids are client-suppliable at send) — only the exact `{group}-r{digits}` shape
+    is a member."""
+    actor = await _with_replicas(**{lookalike.replace("-", "_"): TaskState.ACCEPTED, "g1_r1": TaskState.ACCEPTED})
+
+    with pytest.raises(IllegalTransition, match="not a replica"):
+        await actor.adjudicate({"group": "g1", "task_id": lookalike, "actor": "meg"})
+
+
+@pytest.mark.asyncio
+async def test_a_null_task_id_clears_the_pick_and_clearing_an_absent_pick_is_a_no_op() -> None:
+    """The un-wedge path: the publish refuses a stale or groupless pick, so without removal one
+    wrong pick would block publishing permanently."""
+    actor = await _with_replicas(g1_r1=TaskState.ACCEPTED)
+    await actor.adjudicate({"group": "g1", "task_id": "g1-r1", "actor": "meg"})
+
+    cleared = await actor.adjudicate({"group": "g1", "task_id": None, "actor": "meg"})
+    assert cleared["adjudications"] == {}
+
+    again = await actor.adjudicate({"group": "g1", "task_id": None, "actor": "meg"})
+    assert again["adjudications"] == {}
+
+
+@pytest.mark.asyncio
+async def test_a_pick_is_voided_when_its_target_leaves_accepted() -> None:
+    """Reopen → resubmit → re-accept must NOT resurrect a pick made about the earlier content:
+    the pick dies the moment the target leaves `accepted`, forcing a fresh, informed pick."""
+    actor = await _with_replicas(g1_r1=TaskState.ACCEPTED, g1_r2=TaskState.ACCEPTED)
+    await actor.adjudicate({"group": "g1", "task_id": "g1-r1", "actor": "meg"})
+
+    await actor.task_state_changed({"task_id": "g1-r1", "state": "changes_requested"})
+
+    project = await _state(actor)
+    assert project["adjudications"] == {}, "the pick survived its target's reopen"
+
+    # …and a later re-accept does not bring it back.
+    await actor.task_state_changed({"task_id": "g1-r1", "state": "accepted"})
+    assert (await _state(actor))["adjudications"] == {}

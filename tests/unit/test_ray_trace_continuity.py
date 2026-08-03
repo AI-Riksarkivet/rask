@@ -29,10 +29,11 @@ import httpx
 import pytest
 from medallion.core.config import MedallionSettings
 from medallion.services import ray_submit
-from ray_kit import submit as ray_submit_kit
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+from ray_kit import submit as ray_submit_kit
 
 
 _SCRIPTS = Path(__file__).parents[2] / "scripts"

@@ -764,11 +764,30 @@ export class AnnotatorController {
 			}
 			await this._reload();
 			this._resetOverlays();
+			await this._syncTaskDraft();
 		} catch (e) {
 			this.saveError = e instanceof Error ? e.message : String(e);
 			toast.error(`Save failed: ${this.saveError}`);
 		} finally {
 			this.saving = false;
+		}
+	}
+
+	/** S10 first half: a TASK-opened canvas snapshots the saved unit into the task's draft — the
+	 *  document the publish reads — so canvas work travels into the published table. Guarded to the
+	 *  single-unit task deep-link shape (a task carries ONE key; a multi-unit ad-hoc selection must
+	 *  not snapshot someone else's unit into this task). A failure is LOUD: work that looks saved
+	 *  but never publishes is the dishonesty this exists to prevent. */
+	private async _syncTaskDraft(): Promise<void> {
+		const { reviewSelection } = await import('$lib/labeling/review-selection.svelte');
+		const taskId = reviewSelection.taskId;
+		if (!taskId || reviewSelection.total !== 1 || !this.table) return;
+		const { syncTaskDraft } = await import('$lib/projects/draft-sync');
+		const detail = await syncTaskDraft(taskId, this.table);
+		if (detail !== null) {
+			toast.error(
+				`Saved to the corpus, but the task draft did not update — the publish will not carry these shapes (${detail})`,
+			);
 		}
 	}
 

@@ -41,6 +41,7 @@ class _Project:
         ).model_dump(mode="json")
         self.index: dict[str, str] = {}
         self.fired: list[str] = []
+        self.progress_steps: list[str] = []
 
     async def get(self) -> dict[str, Any] | None:
         return dict(self.doc)
@@ -72,6 +73,14 @@ class _Project:
             return dict(self.doc["published"])
         self.doc["published"] = dict(payload)
         return dict(payload)
+
+    async def note_progress(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Mirrors the real actor: recorded only while PUBLISHING, so a stale run cannot scribble
+        on a terminal state."""
+        if self.doc["state"] == str(ProjectState.PUBLISHING):
+            self.doc["publish_progress"] = str(payload.get("step") or "")
+            self.progress_steps.append(str(payload.get("step") or ""))
+        return dict(self.doc)
 
 
 class _Task:
@@ -113,10 +122,21 @@ class _Publisher:
     def __init__(self, fail_on: str | None = None) -> None:
         self.tables: dict[str, int] = {}
         self.creates = 0
+        self.pin: tuple[str, int | None] | None = None
         self.tags: list[tuple[str, str]] = []
         self.fail_on = fail_on
 
-    async def create_table(self, table_id: str, plan: Any, *, properties: dict[str, str], run_facet: dict[str, Any]) -> int:
+    async def create_table(
+        self,
+        table_id: str,
+        plan: Any,
+        *,
+        properties: dict[str, str],
+        run_facet: dict[str, Any],
+        source: str | None = None,
+        source_version: int | None = None,
+    ) -> int:
+        self.pin = (source, source_version) if source is not None else None
         if self.fail_on == "create":
             raise RuntimeError("catalog unreachable")
         self.creates += 1
@@ -169,6 +189,40 @@ async def test_a_publish_creates_one_table_tags_it_and_records_it() -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_saga_narrates_its_steps_so_a_publish_is_not_just_a_spinner() -> None:
+    """A4: a watching human sees WHERE the publish is. The narration is best-effort — but when it
+    works, the steps must arrive in execution order and name the real work."""
+    project, publisher = _Project(), _Publisher()
+    tasks = {"t0": _Task("t0", TaskState.ACCEPTED, 1)}
+
+    await _run(project, tasks, publisher)
+
+    assert project.progress_steps[0] == "reading tasks"
+    assert project.progress_steps[1] == "building plan"
+    assert project.progress_steps[2].startswith("creating table silver$vasa_")
+    assert project.progress_steps[3].startswith("tagging version")
+    assert project.progress_steps[4] == "recording publish"
+
+
+@pytest.mark.asyncio
+async def test_a_narration_failure_does_not_fail_the_publish() -> None:
+    """Progress is telemetry, not a step. A project actor that refuses the note must not turn a
+    working publish into a failed one."""
+
+    class _Mute(_Project):
+        async def note_progress(self, payload: dict[str, Any]) -> dict[str, Any]:
+            raise RuntimeError("note refused")
+
+    project, publisher = _Mute(), _Publisher()
+    tasks = {"t0": _Task("t0", TaskState.ACCEPTED, 1)}
+
+    out = await _run(project, tasks, publisher)
+
+    assert out.rows == 1
+    assert project.doc["state"] == ProjectState.PUBLISHED
+
+
+@pytest.mark.asyncio
 async def test_the_table_id_is_derived_from_the_token_not_the_slug_alone() -> None:
     """Two publishes of one project (a republish after `reopen`) are two datasets. A slug-only id
     would collide and silently overwrite the first."""
@@ -177,8 +231,24 @@ async def test_the_table_id_is_derived_from_the_token_not_the_slug_alone() -> No
     b = table_id_for(p, "bbbbbbbbbbbbbbbb", "silver")
 
     assert a != b
-    assert a.startswith("silver.vasa_")
+    assert a.startswith("silver$vasa_")
     assert table_id_for(p, "aaaaaaaaaaaaaaaa", "silver") == a, "the id must be deterministic in the token"
+
+
+@pytest.mark.asyncio
+async def test_the_table_id_uses_the_catalog_delimiter_so_authz_and_creation_name_the_same_object() -> None:
+    """The catalog's identifier delimiter is `$` (`LANCE_NS_DELIMITER`, catalog/core/config.py) —
+    estate ids are `bronze$events`, `silver$features`. A dot-joined id posted to
+    `/v1/table/{id}/...` parses as ONE root-level segment, so the table would land at the catalog
+    ROOT while FGA authorized creation in `namespace:silver`: the authorization object and the
+    created object diverge. The delimiter in the id is what keeps them the same object."""
+    p = AnnotationProject(project_id="p1", tenant="acme", slug="vasa")
+    tid = table_id_for(p, "aaaaaaaaaaaaaaaa", "silver")
+
+    namespace, _, name = tid.partition("$")
+    assert namespace == "silver", f"the id must be namespace-qualified with '$', got {tid!r}"
+    assert name == "vasa_aaaaaaaaaaaa"
+    assert "." not in tid, "a '.' in the id is not a namespace separator to the catalog"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -359,7 +429,7 @@ async def test_a_crash_between_record_and_succeeded_does_not_strand_the_project(
 
     # Simulate the crash: the record landed, the transition never fired.
     project.doc["published"] = {
-        "table_id": "silver.vasa_0123456789ab",
+        "table_id": "silver$vasa_0123456789ab",
         "namespace": "silver",
         "version": 7,
         "tag": f"publish-{PUBLISH_TOKEN}",
@@ -407,3 +477,31 @@ async def test_a_failure_while_recording_the_failure_keeps_the_original_error() 
 
     with pytest.raises(RuntimeError, match="catalog unreachable"):
         await _run(project, {"t0": _Task("t0", TaskState.ACCEPTED, 1)}, publisher)
+
+
+@pytest.mark.asyncio
+async def test_the_pin_reaches_the_publisher_when_the_plan_pins() -> None:
+    """§7.2: single dataset, single captured version → the create carries the pin (the lineage
+    READ edge). The saga computes it from the plan — the publisher never guesses."""
+    project, publisher = _Project(), _Publisher()
+    tasks = {"t0": _Task("t0", TaskState.ACCEPTED, 1), "t1": _Task("t1", TaskState.ACCEPTED, 1)}
+    for t in tasks.values():
+        t.doc["source"]["where"] = "demo"
+        t.doc["source"]["dataset_version"] = 24
+
+    await _run(project, tasks, publisher)
+
+    assert publisher.pin == ("demo", 24)
+
+
+@pytest.mark.asyncio
+async def test_no_pin_travels_when_the_capture_is_ambiguous() -> None:
+    project, publisher = _Project(), _Publisher()
+    tasks = {"t0": _Task("t0", TaskState.ACCEPTED, 1), "t1": _Task("t1", TaskState.ACCEPTED, 1)}
+    tasks["t0"].doc["source"]["where"] = "demo"
+    tasks["t0"].doc["source"]["dataset_version"] = 24
+    tasks["t1"].doc["source"]["where"] = "other"
+
+    await _run(project, tasks, publisher)
+
+    assert publisher.pin is None

@@ -58,7 +58,9 @@ class FireRequest(BaseModel):
     """
 
     event: str = Field(min_length=1)
-    lease_seconds: int = Field(default=1800, gt=0, le=86_400)
+    #: Optional override; absent means "the project's lease", captured on the task at send. A
+    #: hardcoded default HERE would silently outvote the project's configuration on every claim.
+    lease_seconds: int | None = Field(default=None, gt=0, le=86_400)
     #: `assign` only. The user a MANAGER is assigning the task to — this is what makes the edge a
     #: distribution mechanism rather than a self-claim. Safe as a request field because it names the
     #: RECIPIENT, not the caller: the caller's own authority is still `can_manage`, checked against
@@ -83,10 +85,9 @@ def _proxy(task_id: str) -> AnnotationTaskActorInterface:
     the interface structurally but cannot declare it. Naming the interface as the return type is what
     keeps a typo in a method name a type error here rather than a 404 from the sidecar.
     """
-    from dapr.actor import ActorId, ActorProxy  # noqa: PLC0415 - deliberate, see docstring
+    from annotator.projects.proxies import typed_proxy  # noqa: PLC0415 - deliberate, see docstring
 
-    proxy = ActorProxy.create("AnnotationTaskActor", ActorId(task_id), AnnotationTaskActorInterface)
-    return cast(AnnotationTaskActorInterface, proxy)
+    return cast(AnnotationTaskActorInterface, typed_proxy("AnnotationTaskActor", task_id, AnnotationTaskActorInterface))
 
 
 async def _authorize(checker: Any, subject: str, permission: str, project_id: str, what: str) -> None:
@@ -126,6 +127,29 @@ async def _refuse_if_project_frozen(project_id: str, event: str) -> None:
         raise ConflictError(f"project {project_id} is {state} — {event} is rejected; provenance is frozen with the published artifact")
 
 
+async def _refuse_second_replica(task_id: str, current: dict[str, Any], recipient: str) -> None:
+    """Consensus v1's independence rule, enforced where claims happen.
+
+    Sibling ids are DETERMINISTIC (`{group}-r{k}`, k ≤ the project's `consensus_n`), so the guard
+    reads each sibling's own actor — no index, ≤4 extra reads — and refuses when the recipient
+    already holds or has already worked any sibling. The refusal NAMES the replica, so the 409 is
+    actionable rather than a mystery."""
+    from annotator.api.v1.endpoints.project_events import _project_proxy  # noqa: PLC0415 - import cycle
+
+    group = str(current["replica_of"])
+    project = await _project_proxy(str(current["project_id"])).get()
+    consensus_n = int((project or {}).get("consensus_n") or 1)
+    for k in range(1, consensus_n + 1):
+        sibling_id = f"{group}-r{k}"
+        if sibling_id == task_id:
+            continue
+        sibling = await _proxy(sibling_id).get()
+        if sibling is None:
+            continue
+        if recipient in (sibling.get("assignee"), sibling.get("submitted_by")):
+            raise ConflictError(f"one replica per annotator per group: {recipient} already holds or worked replica {sibling_id} of group {group}")
+
+
 @router.post("/{task_id}/events", status_code=status.HTTP_200_OK)
 async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
     """Drive one task transition.
@@ -153,6 +177,12 @@ async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: Checke
     await _authorize(checker, subject, permission, project_id, f"task.{payload.event}")
 
     await _refuse_if_project_frozen(project_id, payload.event)
+
+    # Consensus v1: one replica per annotator per group — the same person labeling two replicas of
+    # one item is one opinion counted twice, which defeats the point of independent replicas.
+    if payload.event in ("claim", "assign") and current.get("replica_of"):
+        recipient = str(payload.assignee or subject) if payload.event == "assign" else subject
+        await _refuse_second_replica(task_id, current, recipient)
 
     # Rules the table cannot express, because they depend on the task's own rows.
     if payload.event in SELF_REVIEW_FORBIDDEN and current.get("submitted_by") == subject:

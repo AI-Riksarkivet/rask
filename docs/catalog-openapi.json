@@ -1,6 +1,45 @@
 {
   "components": {
     "schemas": {
+      "AccessCheckBody": {
+        "description": "A check, plus the runtime ``context`` any CONDITION on the path needs (``current_time`` for\n``non_expired_grant``).\n\nSeparate from :class:`AccessTuple` because context is a property of the QUESTION, not of the stored\nfact \u2014 the tuple carries the window, the caller carries the clock.",
+        "properties": {
+          "condition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TupleCondition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          },
+          "object": {
+            "title": "Object",
+            "type": "string"
+          },
+          "relation": {
+            "title": "Relation",
+            "type": "string"
+          },
+          "user": {
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user",
+          "relation",
+          "object"
+        ],
+        "title": "AccessCheckBody",
+        "type": "object"
+      },
       "AccessCheckRequest": {
         "description": "A simulated authorization question \u2014 does ``user`` hold ``relation`` on this object? The\n``user`` may be a bare subject (``alice``, taken as ``user:alice``) or a fully-qualified userset\n(``role:project_admin``, ``team:acme#member``).",
         "properties": {
@@ -576,6 +615,16 @@
             "title": "Authorization Model Id",
             "type": "string"
           },
+          "conditions": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Conditions",
+            "type": "object"
+          },
           "dsl": {
             "title": "Dsl",
             "type": "string"
@@ -588,9 +637,83 @@
         "title": "AccessModelResponse",
         "type": "object"
       },
+      "AccessSimulateRequest": {
+        "description": "\"Would this grant do what I think?\" \u2014 a Check evaluated AS IF ``hypothetical`` existed.\n\nNothing is written. The model is concentric, so a grant three levels up cascades to every child;\npredicting that by reading the DSL is exactly the reasoning people get wrong, and today the only\nway to find out is to write the tuple and look.",
+        "properties": {
+          "hypothetical": {
+            "description": "Tuples to pretend exist. Capped \u2014 a Check is not a bulk what-if engine.",
+            "items": {
+              "$ref": "#/components/schemas/AccessTuple"
+            },
+            "maxItems": 10,
+            "title": "Hypothetical",
+            "type": "array"
+          },
+          "object": {
+            "title": "Object",
+            "type": "string"
+          },
+          "relation": {
+            "title": "Relation",
+            "type": "string"
+          },
+          "user": {
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user",
+          "relation",
+          "object"
+        ],
+        "title": "AccessSimulateRequest",
+        "type": "object"
+      },
+      "AccessSimulateResult": {
+        "description": "The DELTA, not the verdict.\n\n``allowed`` alone cannot be acted on: a grant that changes nothing and a grant that unlocks access\nboth answer true. ``baseline`` is the same Check WITHOUT the hypothesis, so the caller can say\n\"this grant is what changes the answer\" \u2014 or \"this grant is a no-op\", which is the more common and\nmore useful finding.",
+        "properties": {
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "baseline": {
+            "title": "Baseline",
+            "type": "boolean"
+          },
+          "checked": {
+            "$ref": "#/components/schemas/AccessTuple"
+          },
+          "hypothetical": {
+            "items": {
+              "$ref": "#/components/schemas/AccessTuple"
+            },
+            "title": "Hypothetical",
+            "type": "array"
+          }
+        },
+        "required": [
+          "allowed",
+          "baseline",
+          "checked",
+          "hypothetical"
+        ],
+        "title": "AccessSimulateResult",
+        "type": "object"
+      },
       "AccessTuple": {
         "description": "One raw relationship tuple, verbatim (``user`` is a full subject \u2014 ``user:<id>`` or a userset like\n``team:acme#member``). The estate-admin tuple API's unit: the read page lists these, write/delete take\none as the body and echo it back, and a check verdict carries the exact tuple it probed.",
         "properties": {
+          "condition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TupleCondition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "object": {
             "title": "Object",
             "type": "string"
@@ -8975,6 +9098,25 @@
         "title": "TagContents",
         "type": "object"
       },
+      "TupleCondition": {
+        "description": "A CEL condition attached to a grant, with the parameters that ride the TUPLE.\n\nFor the model's ``non_expired_grant`` that is ``grant_time`` + ``grant_duration`` \u2014 the window.\n``current_time`` is deliberately NOT here: the clock belongs to the caller and is supplied per\ncheck, so a grant cannot pin the present moment at the instant it was written.",
+        "properties": {
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "TupleCondition",
+        "type": "object"
+      },
       "UpdateFieldMetadataEntry": {
         "description": "UpdateFieldMetadataEntry",
         "properties": {
@@ -10157,13 +10299,13 @@
     },
     "/v1/access/check": {
       "post": {
-        "description": "One ``(user, relation, object)`` OpenFGA Check over ANY model type \u2014 the estate-wide extension of\nthe per-object ``\u2026/access/check`` playground (#68), which stays as-is for table/namespace owners.\n\nAny relation the compiled model defines on the type may be probed (base rungs included \u2014 an admin\ndebugging a cascade asks about ``writer``, not just ``can_write_data``); an unknown one is a clean 400.\n``checked`` echoes the resolved tuple so the verdict is unambiguous.",
+        "description": "One ``(user, relation, object)`` OpenFGA Check over ANY model type \u2014 the estate-wide extension of\nthe per-object ``\u2026/access/check`` playground (#68), which stays as-is for table/namespace owners.\n\nAny relation the compiled model defines on the type may be probed (base rungs included \u2014 an admin\ndebugging a cascade asks about ``writer``, not just ``can_write_data``); an unknown one is a clean 400.\n``checked`` echoes the resolved tuple so the verdict is unambiguous.\n\n``context`` supplies the runtime values a CONDITION needs \u2014 ``current_time`` for the model's\n``non_expired_grant``. Omitting it against a time-boxed grant is a DENY, not a neutral answer:\nOpenFGA cannot evaluate the CEL expression without its operands. The server does NOT default the\nclock, deliberately \u2014 a check that silently substituted \"now\" would answer a question the caller\ndid not ask, and the whole point of the explorer is asking \"was this true at 14:00?\".",
         "operationId": "check_access_v1_access_check_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AccessTuple"
+                "$ref": "#/components/schemas/AccessCheckBody"
               }
             }
           },
@@ -10365,6 +10507,53 @@
           }
         ],
         "summary": "Get Access Model",
+        "tags": [
+          "access"
+        ]
+      }
+    },
+    "/v1/access/simulate": {
+      "post": {
+        "description": "\"Would this grant do what I think?\" \u2014 a Check evaluated as if ``hypothetical`` existed.\n\nNothing is written. OpenFGA's contextual tuples are per-request, so the store is untouched and the\nsimulation owes no cleanup. This exists because the model is CONCENTRIC: a grant three levels up\ncascades to every child, and predicting that by reading the DSL is exactly the reasoning humans get\nwrong. The only way to find out today is to write the tuple and look \u2014 which on an authorization\nstore is a change you then have to remember to undo.\n\nReturns the DELTA. ``allowed`` alone cannot be acted on: a grant that changes nothing and a grant\nthat unlocks access both answer true. ``baseline`` is the same Check WITHOUT the hypothesis, so the\ncaller can distinguish \"this is what changes the answer\" from \"this grant is a no-op\" \u2014 and the\nsecond is the more common finding.\n\nEvery hypothetical tuple is validated exactly like a real write (``_validated_write_tuple``): a\nderived ``can_*`` or an unknown type is a clean 400 here rather than a confusing OpenFGA rejection,\nand \u2014 more importantly \u2014 a hypothesis this API would refuse to write must not be simulatable, or\nthe answer describes a grant that cannot exist.",
+        "operationId": "simulate_access_v1_access_simulate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessSimulateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessSimulateResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Simulate Access",
         "tags": [
           "access"
         ]
@@ -13279,7 +13468,7 @@
     },
     "/v1/table/{id}/create": {
       "post": {
-        "description": "Create a Lance table from an Arrow-IPC stream \u2014 ``create_table``; seeds ownership + lineage.\n\n``properties`` is the spec-0.9 JSON-encoded query parameter. Client-supplied ``storage_options``\nare deliberately NOT accepted: storage access is the catalog's to vend (two-tier secret model),\nso callers can't redirect writes or splice credentials.\n\n``data_base`` (#3-B, repeatable) spreads the table's fragments across the named approved buckets (Lance\nmulti-base). Each MUST be on the ``LANCE_MULTIBASE_DATA_BASES`` allowlist \u2014 a caller can never point a\nbase at an arbitrary bucket. Omitted \u2192 a single-location table exactly as before.",
+        "description": "Create a Lance table from an Arrow-IPC stream \u2014 ``create_table``; seeds ownership + lineage.\n\n``properties`` is the spec-0.9 JSON-encoded query parameter. Client-supplied ``storage_options``\nare deliberately NOT accepted: storage access is the catalog's to vend (two-tier secret model),\nso callers can't redirect writes or splice credentials.\n\n``data_base`` (#3-B, repeatable) spreads the table's fragments across the named approved buckets (Lance\nmulti-base). Each MUST be on the ``LANCE_MULTIBASE_DATA_BASES`` allowlist \u2014 a caller can never point a\nbase at an arbitrary bucket. Omitted \u2192 a single-location table exactly as before.\n\nDerived-write lineage (S4, optional \u2014 the same metadata ``merge_insert`` has always taken):\n``source`` + ``source_version`` record the version-pinned upstream this table DERIVES FROM\n(an annotation publish from ``transcripts@N``, a Ray job's first write), surfaced as a\nversion-pinned INPUT on the CREATE RunEvent; the ``X-Lance-Run-Facets`` header carries producer\nrun metadata (e.g. the ``annotationProject`` facet) verbatim onto the same event. Before S4,\nevery FIRST write of a derived table was emitted with no pin and no facet \u2014 only later merges\ncould carry provenance.",
         "operationId": "create_table_v1_table__id__create_post",
         "parameters": [
           {
@@ -13334,6 +13523,55 @@
               },
               "title": "Data Base",
               "type": "array"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source_version",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Lance-Run-Facets",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Run-Facets"
             }
           },
           {

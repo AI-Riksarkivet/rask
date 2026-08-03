@@ -48,3 +48,6 @@ chart/charts/
 
 # git worktrees created by tooling — a second checkout, never content of this one
 .claude/worktrees/
+
+# Tilt editor stubs (`tilt dump api-docs`) — dropped at the repo root by the Tilt VS Code extension
+/api/

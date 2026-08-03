@@ -1,4 +1,4 @@
-import { Map, PenLine, Search, Share2 } from '@lucide/svelte';
+import { FolderKanban, Library } from '@lucide/svelte';
 import { exact, seg, type ZoneNav } from '@rask/ui/shell';
 
 // The annotator's OWN sidebar. This zone had NO zoneNav at all — it was the single zone in the
@@ -16,27 +16,27 @@ export const ANNOTATOR_ZONE_NAV: ZoneNav = {
 	groups: [
 		{
 			label: 'Annotate',
-			items: [{ title: 'Canvas', href: '/annotator', match: exact('/annotator'), icon: PenLine }],
-		},
-		{
-			label: 'Corpus',
 			items: [
-				{ title: 'Search', href: '/media/', match: seg('/media'), icon: Search, reload: true },
+				// The landing IS the project list (S9); the canvas opens from a claimed task (or a
+				// `?keys=` deep link), so it needs no leaf of its own.
 				{
-					title: 'Atlas',
-					href: '/media/atlas',
-					match: seg('/media/atlas'),
-					icon: Map,
-					reload: true,
+					title: 'Labeling tasks',
+					href: '/annotator',
+					match: exact('/annotator'),
+					icon: FolderKanban,
 				},
 				{
-					title: 'Graph',
-					href: '/media/graph',
-					match: seg('/media/graph'),
-					icon: Share2,
-					reload: true,
+					title: 'Browse corpus',
+					href: '/annotator/browse',
+					match: seg('/annotator/browse'),
+					icon: Library,
 				},
 			],
 		},
 	],
 };
+
+// The Corpus group (Search / Atlas / Graph cross-zone links) is GONE on purpose: the flow runs the
+// other way — you select data points IN media (search results, an atlas lasso) and SEND them into a
+// project; the annotator's rail is the project workspace, not a launcher for the corpus tools.
+// The top navbar still reaches every zone.

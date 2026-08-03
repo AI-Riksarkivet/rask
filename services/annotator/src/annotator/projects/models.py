@@ -94,6 +94,12 @@ class ItemSource(BaseModel):
     kind: Literal["chunks", "scope", "corpus"]
     keys: list[str] = Field(default_factory=list)
     where: str | None = None
+    #: The source dataset's version AT SEND TIME — §4.5's reproducibility capture, informational
+    #: for lineage only, never load-bearing for correctness. When every published item shares one
+    #: dataset at one captured version, the publish pins it (`publish.source_pin`) and the CREATE
+    #: RunEvent gains its READ edge; anything mixed or uncaptured pins nothing — a fabricated pin
+    #: is a lie (§7.2).
+    dataset_version: int | None = None
 
 
 class Transition(BaseModel):
@@ -163,6 +169,19 @@ class Draft(BaseModel):
     origin: DraftOrigin = "human"
 
 
+class Adjudication(BaseModel):
+    """Consensus v1's manager merge — a PICK, never a blend.
+
+    The manager names ONE accepted replica of a group as canonical; every replica's rows still
+    publish, and the facet carries this pick with its attribution. Synthesizing a merged shape set
+    would put words in annotators' mouths — a downstream consumer that wants the canonical rows
+    filters by the picked `task_id`."""
+
+    task_id: str
+    by: str
+    at: datetime
+
+
 class PublishRecord(BaseModel):
     """Set ONCE, only by the publish workflow (§4.1)."""
 
@@ -190,6 +209,14 @@ class Task(BaseModel):
     #: would self-accept and walk straight past review — the one guarantee this whole plane exists
     #: to provide.
     review_required: bool = True
+    #: Also captured from the project at send time (§4.1 `lease_seconds`). The claim path reads THIS
+    #: when the request names no duration — before the capture existed the project setting was
+    #: stored and never read, and every claim ran on the client's default.
+    lease_seconds: int = 1800
+    #: Consensus v1: the replica GROUP this item belongs to (the group id shared by its siblings),
+    #: or None for an ordinary item. Sibling ids are deterministic (`{group}-r{k}`), which is what
+    #: lets the one-replica-per-annotator guard find them without an index.
+    replica_of: str | None = None
     submitted_by: str | None = None
     submitted_at: datetime | None = None
     reviewed_by: str | None = None
@@ -210,11 +237,23 @@ class AnnotationProject(BaseModel):
     slug: str
     title: str = ""
     description: str = ""
+    #: Annotator-facing labeling instructions (how to label), distinct from `description` (what and
+    #: why). Rendered on the detail page and the canvas handoff — the LS-parity "instructions page".
+    instructions: str = ""
     state: ProjectState = ProjectState.DRAFT
     label_schema: LabelSchema = Field(default_factory=LabelSchema)
     review_required: bool = True
     lease_seconds: int = 1800
+    #: Consensus v1: how many INDEPENDENT annotators label each sent item. N>1 makes `send` seed N
+    #: replica items per source item (`Task.replica_of` groups them); one annotator may hold at
+    #: most one replica of a group. The publish emits every accepted replica's rows and reports
+    #: agreement COUNTS in the run facet — merging is a manager step, deliberately not built yet.
+    consensus_n: int = Field(default=1, ge=1, le=5)
     skip_policy: SkipPolicy = "requeue_for_others"
+    #: Consensus v1's merge step: replica group id → the manager's canonical pick. Pre-publish
+    #: metadata (re-pickable while the project is adjudicable); the publish validates every pick
+    #: still names an ACCEPTED replica and stamps the map into the run facet.
+    adjudications: dict[str, Adjudication] = Field(default_factory=dict)
     counts: dict[TaskState, int] = Field(default_factory=dict)
     lead_time_seconds_total: float = 0.0
     created_at: datetime | None = None
@@ -235,6 +274,20 @@ class AnnotationProject(BaseModel):
     #: and the "a replay is byte-identical" property the whole idempotency argument rests on would be
     #: false in exactly the case it is supposed to cover.
     pending_publish_at: datetime | None = None
+    #: The TARGET namespace, pinned with the token. The endpoint authorized the publish against this
+    #: namespace (§6.2 door 2), and the table id derives from it — so a crash-recovered saga reads it
+    #: here rather than guessing, and a retry naming a different namespace is refused (a different
+    #: namespace means a different table id, i.e. a second table for one logical publish).
+    pending_target_namespace: str | None = None
+    #: Who is driving the publish — re-stated on every `publish` fire (a retry may be driven by
+    #: someone else, and `PublishRecord.published_by` should name the person whose action produced
+    #: the publish that succeeded). Rows are unaffected: no published column carries this value, so
+    #: updating it per retry does not break the byte-identical-replay property.
+    pending_publish_by: str | None = None
+    #: The saga's current step while PUBLISHING — A4's "surface where a publish is, not just a
+    #: spinner". Written by `note_progress`, cleared when a publish starts (retry) or succeeds; on
+    #: `publish_failed` it is KEPT: it names the step that was running when the attempt died.
+    publish_progress: str | None = None
 
     @property
     def fga_object(self) -> str:

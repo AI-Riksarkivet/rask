@@ -242,3 +242,55 @@ def test_task_defaults_to_unassigned_with_no_assignee_and_no_lease() -> None:
     assert task.assignee is None
     assert task.lease_expires_at is None
     assert task.transitions == []
+
+
+# --------------------------------------------------------------------------------------------------
+# Legal-event derivation — what A1's "the UI renders the transitions the backend supplies" reads
+# --------------------------------------------------------------------------------------------------
+
+
+def test_legal_project_events_come_from_the_table_with_their_permissions() -> None:
+    """FROZEN is the busy state: open, publish, archive — and NOT send. The permission travels with
+    each event so the API can gate and the UI can explain, from ONE source."""
+    from annotator.projects.machines import legal_project_events
+
+    events = legal_project_events(ProjectState.FROZEN)
+
+    assert {(e["event"], e["permission"]) for e in events} == {
+        ("open", "can_manage"),
+        ("publish", "can_publish"),
+        ("archive", "can_manage"),
+    }
+    assert all(set(e) == {"event", "to", "permission"} for e in events)
+
+
+def test_legal_project_events_include_send_only_where_send_is_legal() -> None:
+    from annotator.projects.machines import legal_project_events
+
+    labeling = {e["event"] for e in legal_project_events(ProjectState.LABELING)}
+    frozen = {e["event"] for e in legal_project_events(ProjectState.FROZEN)}
+    assert "send" in labeling
+    assert "send" not in frozen
+
+
+def test_legal_events_exclude_system_edges_so_no_ui_renders_a_button_for_them() -> None:
+    """`publish_succeeded`/`publish_failed`/`lease_expired` are fired by the saga and the reminder —
+    a rendered control for one would be a button that can only 403."""
+    from annotator.projects.machines import legal_project_events, legal_task_events
+
+    assert {e["event"] for e in legal_project_events(ProjectState.PUBLISHING)} == set()
+    assert "lease_expired" not in {e["event"] for e in legal_task_events(TaskState.CLAIMED)}
+
+
+def test_legal_task_events_for_the_working_loop() -> None:
+    from annotator.projects.machines import legal_task_events
+
+    claimed = {(e["event"], e["permission"]) for e in legal_task_events(TaskState.CLAIMED)}
+    assert claimed == {
+        ("save_draft", "can_annotate"),
+        ("submit", "can_annotate"),
+        ("release", "can_annotate"),
+        ("skip", "can_annotate"),
+    }
+    in_review = {e["event"] for e in legal_task_events(TaskState.IN_REVIEW)}
+    assert in_review == {"accept", "fix_and_accept", "request_changes"}

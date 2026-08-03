@@ -76,20 +76,24 @@ WORKDIR /app
 COPY --from=builder --chown=10001:10001 /src/node_modules ./node_modules
 COPY --from=builder --chown=10001:10001 /src/microfrontends/${APP} ./microfrontends/${APP}
 # The workspace packages, and they are NOT optional. Bun's isolated linker gives the app
-# `node_modules/@rask/ui -> ../../../../packages/ui`, i.e. /app/packages/ui — a directory this image did
-# not ship, so every @rask/* link in the shipped image DANGLED. It went unnoticed because the SSR bundle
+# `node_modules/<scope>/ui -> ../../../../packages/ui`, i.e. /app/packages/ui — a directory this image did
+# not ship, so every scoped-package link in the shipped image DANGLED. It went unnoticed because the SSR bundle
 # inlines those packages at build time, so nothing resolves the link at runtime.
 #
 # It stops being invisible the moment anything re-runs the build inside the container, which is exactly
 # what Tilt's live_update does under dev.reload:
 #
 #   [plugin @tailwindcss/vite:generate:build] /app/microfrontends/home/src/app.css
-#   Error: Can't resolve '@rask/ui/styles/tokens.css'
+#   Error: Can't resolve '<scope>/ui/styles/tokens.css'
 #
 # Copying them also gives the live_update `sync('frontend/packages', '/app/packages')` a tree to overlay
 # onto — one that already carries packages/ui/dist, which only the builder can produce (svelte-package).
 # Sources only: .dockerignore strips node_modules, and dist/ is built above.
 COPY --from=builder --chown=10001:10001 /src/packages ./packages
+
+# The dev entrypoint. Shipped in every image but only USED when the chart selects it under dev.reload,
+# so a production zone still runs the plain `bun build/index.js` CMD below. A few hundred bytes.
+COPY --chown=10001:10001 .docker/dev-serve.sh /usr/local/bin/dev-serve.sh
 
 # Re-anchor the workdir at the app via a stable symlink so CMD is APP-agnostic.
 RUN ln -s "microfrontends/${APP}" /app/app

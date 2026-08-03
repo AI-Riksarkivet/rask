@@ -42,6 +42,10 @@ class ReviewSelection {
 	index = $state(0);
 	/** Dataset the open units belong to — null for the backend default (no `?dataset=`). */
 	dataset = $state<string | null>(null);
+	/** The annotation TASK this canvas was opened from (`?task=` on the queue's Annotate link) —
+	 *  null for ad-hoc viewing. When set, a save also snapshots the unit's shapes into the task's
+	 *  draft, so the work travels into the publish. */
+	taskId = $state<string | null>(null);
 
 	get active(): MediaUnit | null {
 		return this.units[this.index] ?? null;
@@ -58,8 +62,10 @@ class ReviewSelection {
 		kind: MediaKind = 'image',
 		mediaUrl?: string,
 		dataset?: string | null,
+		taskId?: string | null,
 	): void {
 		this.dataset = dataset ?? null;
+		this.taskId = taskId ?? null;
 		this.units = keys.filter(Boolean).map((k) => unitFromKey(k, kind, mediaUrl, dataset));
 		this.index = 0;
 	}
@@ -70,6 +76,7 @@ class ReviewSelection {
 		this.units = [];
 		this.index = 0;
 		this.dataset = null;
+		this.taskId = null;
 	}
 }
 

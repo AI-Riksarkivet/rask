@@ -19,6 +19,7 @@ from annotator.api.v1.router import router as api_router
 from annotator.core.config import get_annotator_settings
 from annotator.projects.actor import AnnotationTaskActor
 from annotator.projects.project_actor import AnnotationProjectActor
+from annotator.projects.tenant_actor import TenantProjectsActor
 from service_kit.exceptions import register_handlers
 from service_kit.governed import fga
 from service_kit.governed.oidc import OIDCVerifier
@@ -88,8 +89,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
             await actor_ext.register_actor(AnnotationTaskActor)
             await actor_ext.register_actor(AnnotationProjectActor)
+            await actor_ext.register_actor(TenantProjectsActor)
             app.state.actors_registered = True
-            logger.info("annotator: AnnotationTaskActor + AnnotationProjectActor registered with the sidecar")
+            logger.info("annotator: AnnotationTaskActor + AnnotationProjectActor + TenantProjectsActor registered with the sidecar")
         except Exception:
             app.state.actors_registered = False
             logger.exception("annotator: actor registration failed — the task plane will 503")

@@ -26,6 +26,7 @@
 	import HitList from '$lib/components/hit-list.svelte';
 	import HitCard from '$lib/components/hit-card.svelte';
 	import HitTable, { TABLE_COLUMNS } from '$lib/components/hit-table.svelte';
+	import SendToProjectDialog from '$lib/components/SendToProjectDialog.svelte';
 	import { loadCols, persistCols, loadTablePrefs, persistTablePrefs } from '$lib/table-columns';
 	import DocTile from '$lib/components/doc-tile.svelte';
 	import PlayerPane from '$lib/components/player-pane.svelte';
@@ -191,6 +192,22 @@
 		const dv = activeView();
 		const keys = reviewHits.map((h) => dv.keyPath(h).join('/')).filter(Boolean);
 		if (keys.length) location.assign(`/annotator?keys=${keys.join(',')}`);
+	}
+
+	// Read→PROJECT handoff (the funnel's send half): the selection becomes TASKS in an
+	// annotation project — appended to one still taking items, or a new project created
+	// around it. Distinct from `annotateHits` (ad-hoc canvas viewing) on purpose: a send
+	// creates claimable, reviewable, publishable work with provenance.
+	let sendOpen = $state(false);
+	let sendKeys = $state<string[]>([]);
+	let sendOrigin = $state<'search' | 'atlas'>('search');
+	function sendHits(reviewHits: Hit[], origin: 'search' | 'atlas') {
+		const dv = activeView();
+		const keys = reviewHits.map((h) => dv.keyPath(h).join('/')).filter(Boolean);
+		if (!keys.length) return;
+		sendKeys = keys;
+		sendOrigin = origin;
+		sendOpen = true;
 	}
 
 	// Applying a saved view replaces `spec` wholesale, but SearchBar snapshots spec into
@@ -782,6 +799,15 @@
 					</span>
 
 					<div class="ml-auto flex items-center gap-2">
+						{#if !isBrowsing && hits.length > 0}
+							<Button
+								size="xs"
+								title="Send these results into a labeling task as claimable items"
+								onclick={() => sendHits(hits, 'search')}
+							>
+								Send to labeling task…
+							</Button>
+						{/if}
 						{#if view === 'grid'}
 							<div class="border-border mr-1 flex items-center gap-1 border-r pr-2">
 								<span class="text-muted-foreground/70 mr-1">cols</span>
@@ -907,11 +933,26 @@
 											>
 												Annotate {mapHits.length}
 											</Button>
+											<Button
+												size="xs"
+												title="Send this selection into a labeling task as claimable items"
+												onclick={() => sendHits(mapHits, 'atlas')}
+											>
+												Send to labeling task…
+											</Button>
 										{:else if hits.length > 0}
 											<span class="text-foreground font-medium">Search results</span>
 											<span class="text-muted-foreground">
 												{hits.length.toLocaleString()} hits · highlighted on the map
 											</span>
+											<Button
+												size="xs"
+												class="ml-auto"
+												title="Send these results into a labeling task as claimable items"
+												onclick={() => sendHits(hits, 'search')}
+											>
+												Send to labeling task…
+											</Button>
 										{:else}
 											<span class="text-foreground font-medium">Selection</span>
 											<span class="text-muted-foreground"
@@ -1173,3 +1214,12 @@
 		{/snippet}
 	</ResizableSplit>
 </div>
+
+<SendToProjectDialog
+	bind:open={sendOpen}
+	keys={sendKeys}
+	dataset={ds.id}
+	datasetVersion={ds.descriptor.tables[ds.descriptor.declared.search?.row_table ?? '']?.version ??
+	null}
+	origin={sendOrigin}
+/>

@@ -145,6 +145,10 @@ describe('the chart hands a zone only the upstreams its routes use', () => {
 	it('media routes to the viewer, search and annotator services', () => {
 		expect([...upstreamsUsed('media')].sort()).toEqual([
 			'ANNOTATOR_API',
+			// The dev-only split seam (`?? ANNOTATOR_API`): the local dev trio's annotator serves
+			// the annotations plane while the labeling-tasks plane runs in-cluster. The chart never
+			// sets it, so in-cluster both planes resolve to ANNOTATOR_API — one service.
+			'ANNOTATOR_PROJECTS_API',
 			'SEARCH_API',
 			'VIEWER_API',
 		]);

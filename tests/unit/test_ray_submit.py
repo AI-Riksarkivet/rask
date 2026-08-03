@@ -12,14 +12,22 @@ import httpx
 import pytest
 from medallion.core.config import MedallionSettings
 from medallion.services import ray_submit
+
 # The generic submitter moved to `ray_kit.submit` (R2): five helpers that read no settings, so
 # `compute` can start jobs without importing the medallion. Same functions, now public — the private
 # names were only private because they had nowhere else to live.
 from medallion.services.ray_submit import submit_stage_job
+
 from ray_kit.submit import (
     RayJobError,
+)
+from ray_kit.submit import (
     await_success as _await_success,
+)
+from ray_kit.submit import (
     submission_id as _submission_id,
+)
+from ray_kit.submit import (
     submit_or_reattach as _submit_or_reattach,
 )
 

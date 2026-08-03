@@ -29,6 +29,7 @@ totals so the graph answers "what produced this dataset".
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, Final
 
@@ -138,6 +139,16 @@ class PublishPlan(BaseModel):
     publish_id: str
     rows: list[dict[str, Any]] = Field(default_factory=list)
     attributions: list[Attribution] = Field(default_factory=list)
+    #: Per source dataset, the DISTINCT captured versions (sorted, `None` = uncaptured). Collected
+    #: at plan time from the tasks' send captures, so the facet and the pin read one truth.
+    dataset_versions: dict[str, list[int | None]] = Field(default_factory=dict)
+    #: Items whose send recorded NO dataset at all. They appear nowhere in `dataset_versions`, so
+    #: without this count a plan mixing captured and uncaptured items would still pin — stamping a
+    #: READ edge that claims provenance for items that never recorded any (the A-1 audit finding).
+    sources_uncaptured: int = 0
+    #: Consensus v1: replica group id → its member task ids (sorted). Only groups that reached the
+    #: publish appear; ordinary items are absent.
+    replica_groups: dict[str, list[str]] = Field(default_factory=dict)
 
     @property
     def accepted_count(self) -> int:
@@ -240,7 +251,7 @@ def _json_attributes(shape: Shape | None) -> str:
 
 def build_plan(
     project: AnnotationProject,
-    pairs: list[tuple[Task, Draft | None]],
+    pairs: Sequence[tuple[Task, Draft | None]],
     *,
     publish_id: str,
     published_at: datetime,
@@ -252,6 +263,38 @@ def build_plan(
     so it is refused loudly rather than skipped quietly.
     """
     plan = PublishPlan(project_id=project.project_id, publish_id=publish_id)
+    for task, _draft in pairs:
+        if task.replica_of:
+            group = plan.replica_groups.setdefault(task.replica_of, [])
+            if task.task_id not in group:
+                group.append(task.task_id)
+                group.sort()
+        # Version capture per dataset, from the SEND capture — one truth for the facet + the pin.
+        if task.source.where:
+            versions = plan.dataset_versions.setdefault(task.source.where, [])
+            if task.source.dataset_version not in versions:
+                versions.append(task.source.dataset_version)
+                versions.sort(key=lambda v: (v is not None, v if v is not None else 0))
+        else:
+            plan.sources_uncaptured += 1
+
+    # A pick that no longer names an ACCEPTED replica is refused, not silently dropped: the group
+    # was adjudicated, then someone reopened the winner — publishing would stamp a facet whose
+    # canonical pick points at work that is not in the accepted set, and provenance must not lie.
+    states = {task.task_id: task.state for task, _ in pairs}
+    for group, adjudication in sorted(project.adjudications.items()):
+        if group not in plan.replica_groups:
+            raise PublishRefusal(f"adjudication for group {group} names {adjudication.task_id}, but no replica of that group reached this publish")
+        if adjudication.task_id not in plan.replica_groups[group]:
+            # Membership by `replica_of` — the authoritative grouping — not by id shape: a
+            # client-chosen id like `g1-r1-r2` (a member of group `g1-r1`) passes any string check
+            # on `g1` (audit finding), and a facet naming another group's work as canonical lies.
+            raise PublishRefusal(f"adjudication for group {group} names {adjudication.task_id}, which is not a member of that group — re-adjudicate")
+        picked_state = states.get(adjudication.task_id)
+        if picked_state is not TaskState.ACCEPTED:
+            raise PublishRefusal(
+                f"adjudication for group {group} names {adjudication.task_id}, which is {picked_state} rather than accepted — re-adjudicate the group"
+            )
     for task, draft in pairs:
         if task.state is TaskState.ACCEPTED:
             attribution = _attribution(task, draft, "accepted")
@@ -306,17 +349,73 @@ def project_facet(project: AnnotationProject, plan: PublishPlan, *, frozen_at: d
         labelClasses=sorted(c.name for c in project.label_schema.classes),
         shapeCount=plan.shape_count,
         sendOrigins=dict(sorted(origins.items())),
-        # §7.2 specifies a per-dataset `version` alongside these counts, as the reproducibility pin.
-        # `ItemSource` carries no version field today, so emitting one would mean inventing it — and
-        # §7.2 is explicit that a single fabricated pin is a lie. Counts now; the pin lands when the
-        # send capture records the version it read.
-        sourceDatasets=[{"dataset": name, "items": n} for name, n in sorted(datasets.items())],
+        # §7.2's per-dataset `version`, from the SEND capture (`ItemSource.dataset_version`). A
+        # dataset whose captured versions are mixed reports None — "unknown" is a fact, an invented
+        # number is not.
+        sourceDatasets=[
+            {
+                "dataset": name,
+                "items": n,
+                # The captured version when it is UNAMBIGUOUS for this dataset; None otherwise —
+                # "unknown" is a fact, an invented number is not (§7.2).
+                "version": (plan.dataset_versions.get(name) or [None])[0] if len(plan.dataset_versions.get(name, [])) == 1 else None,
+            }
+            for name, n in sorted(datasets.items())
+        ],
         leadTimeSecondsTotal=project.lead_time_seconds_total,
         frozenAt=frozen_at.isoformat() if frozen_at else None,
         # An accepted task with no reviewer is legal (the project can waive review), so it is
         # REPORTED rather than refused — and it is the number a governance reader most wants.
         tasksWithoutReview=sum(1 for a in plan.attributions if a.outcome == "accepted" and not a.reviewed_by),
+        # Consensus v1 (only when replica groups exist): agreement COUNTS from label multisets per
+        # group — every replica's rows still land, and no merged truth is invented here.
+        **({"consensus": _consensus_counts(project, plan)} if plan.replica_groups else {}),
     )
+
+
+def _consensus_counts(project: AnnotationProject, plan: PublishPlan) -> dict[str, Any]:
+    """Agreement counts per replica group: a group agrees when every member's LABEL MULTISET is
+    identical (order-free). Counts plus the manager's PICKS — never a fabricated merge, which would
+    put words in annotators' mouths; a consumer wanting canonical rows filters by the picked ids."""
+    labels_by_task: dict[str, list[str]] = {}
+    for row in plan.rows:
+        if row["shape_type"] == NO_SHAPE:
+            continue
+        labels_by_task.setdefault(row["task_id"], []).append(row["label"] or "")
+    perfect = 0
+    for members in plan.replica_groups.values():
+        multisets = [sorted(labels_by_task.get(tid, [])) for tid in members]
+        if len(set(map(tuple, multisets))) == 1:
+            perfect += 1
+    # The pick WITH its attribution (task_id, by, at) — a facet naming only the winner would drop
+    # exactly the "who decided, when" half that makes an adjudication provenance (audit finding).
+    picks = {
+        group: {"task_id": adj.task_id, "by": adj.by, "at": adj.at.isoformat()}
+        for group, adj in sorted(project.adjudications.items())
+        if group in plan.replica_groups
+    }
+    return {
+        "n": project.consensus_n,
+        "groups": len(plan.replica_groups),
+        "perfect_agreement_groups": perfect,
+        **({"adjudications": picks} if picks else {}),
+    }
+
+
+def source_pin(plan: PublishPlan) -> tuple[str, int] | None:
+    """The reproducibility pin (§7.2): the ONE (dataset, version) every published item came from.
+
+    Pins only when EVERY published item names the same one dataset with the same one CAPTURED
+    version. Two datasets, two versions of one dataset, any uncaptured version, or any item that
+    recorded no dataset at all → None: the run facet still reports the per-dataset truth, but a
+    single fabricated pin would be a lie — and the pin surfaces as the lineage READ edge, which
+    downstream reproduction trusts."""
+    if plan.sources_uncaptured or len(plan.dataset_versions) != 1:
+        return None
+    dataset, versions = next(iter(plan.dataset_versions.items()))
+    if len(versions) != 1 or versions[0] is None:
+        return None
+    return dataset, versions[0]
 
 
 def table_properties(project: AnnotationProject, plan: PublishPlan) -> dict[str, str]:

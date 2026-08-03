@@ -24,14 +24,17 @@ are two truths that disagree the first time one write lands and the other does n
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+import logging
+from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from dapr.actor import Actor, ActorInterface, actormethod
+from dapr.actor import Actor, ActorInterface, Remindable, actormethod
 
 from annotator.projects.machines import IllegalTransition, may_publish, project_transition
 from annotator.projects.models import (
     TERMINAL_TASK_STATES,
+    Adjudication,
     AnnotationProject,
     ProjectState,
     PublishRecord,
@@ -41,10 +44,26 @@ from annotator.projects.models import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 #: State keys in this actor's partition. Split for the same reason the task actor splits its two:
 #: the project document is small and read on every call, the index grows with the corpus.
 PROJECT_KEY = "project"
 INDEX_KEY = "index"
+
+#: The publish watchdog's name. Registered at the `publish` transition and kept armed (repeating)
+#: until the project reaches a terminal state. It is what gives the saga's "safe to call again after
+#: any crash" contract a CALLER: the reminder persists in `lance-statestore`, so a pod that dies
+#: mid-saga is re-driven on the next tick rather than stranding the project in `publishing` —
+#: the state `PROJECT_EDGES` has no principal edge out of.
+PUBLISH_REMINDER = "publish-run"
+
+#: First tick ~immediately (the reminder IS the primary trigger, not just crash recovery), then a
+#: re-drive each minute until terminal. Every step of the saga is convergent, so an extra tick that
+#: races a live run costs a pure read and stands down.
+_PUBLISH_DUE = timedelta(seconds=1)
+_PUBLISH_PERIOD = timedelta(seconds=60)
 
 
 class AnnotationProjectActorInterface(ActorInterface):
@@ -79,8 +98,16 @@ class AnnotationProjectActorInterface(ActorInterface):
     async def record_publish(self, payload: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
 
+    @actormethod(name="NoteProgress")
+    async def note_progress(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
 
-class AnnotationProjectActor(Actor, AnnotationProjectActorInterface):
+    @actormethod(name="Adjudicate")
+    async def adjudicate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+
+class AnnotationProjectActor(Actor, AnnotationProjectActorInterface, Remindable):
     """Holds one project's document and its task index."""
 
     async def _load(self) -> AnnotationProject | None:
@@ -165,8 +192,12 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface):
         project.state = target
         if event == "publish_failed":
             project.publish_error = str(payload.get("error", "publish failed"))
+            # `publish_progress` is KEPT: it names the step that was running when the attempt died.
+        elif event == "publish_succeeded":
+            project.publish_progress = None
         elif event == "publish":
             project.publish_error = None  # a retry clears the previous failure
+            project.publish_progress = None  # ...and the failed attempt's last step
             # Mint the idempotency token ONCE, here, and reuse it on every retry. This is what makes
             # the saga's only non-idempotent step — creating the table — idempotent BY KEY: the table
             # id is derived from this token, so a retry after a crash finds the table it already
@@ -179,9 +210,28 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface):
             # The INSTANT is minted with the token and for the same reason: it is written into
             # every published row, so a per-attempt timestamp would make a retry rewrite the dataset
             # with different values than the attempt it is resuming.
+            requested_ns = str(payload.get("target_namespace") or "silver")
             if project.pending_publish_id is None:
                 project.pending_publish_id = new_id()
                 project.pending_publish_at = datetime.now(UTC)
+                # The namespace is PINNED with the token: the table id derives from both, so a retry
+                # pointed elsewhere would create a second table for one logical publish.
+                project.pending_target_namespace = requested_ns
+            elif project.pending_target_namespace and requested_ns != project.pending_target_namespace:
+                raise IllegalTransition(
+                    "project",
+                    project.state,
+                    f"publish (pending publish targets {project.pending_target_namespace!r}, not {requested_ns!r} — the retry must restate the pinned target)",
+                )
+            # Re-stated per attempt: a retry may be driven by someone else, and the record should
+            # name the person whose action produced the publish that succeeded.
+            project.pending_publish_by = str(payload.get("actor") or "") or project.pending_publish_by
+            # Arm the watchdog BEFORE persisting the transition. If registration fails, the fire
+            # fails and the project stays frozen — retryable. The reverse order could persist
+            # `publishing` with no watchdog, the exact stranding this reminder exists to prevent.
+            # (A reminder armed for a store that then fails is benign: the tick sees a non-publishing
+            # project and stands down.)
+            await self.register_reminder(PUBLISH_REMINDER, b"", _PUBLISH_DUE, _PUBLISH_PERIOD)
 
         await self._store(project)
         return project.model_dump(mode="json")
@@ -218,6 +268,13 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface):
         project = await self._require()
         index = await self._load_index()
         index[task_id] = str(state)
+        # A canonical pick is void the moment its target leaves `accepted` (audit finding: a pick
+        # silently surviving reopen → resubmit → re-accept would canonicalize content the
+        # adjudicator never saw). Dropping it forces a fresh, informed pick; the publish-side
+        # refusal remains the backstop for the report-failure window this cannot see.
+        for group, adjudication in list(project.adjudications.items()):
+            if adjudication.task_id == task_id and state is not TaskState.ACCEPTED:
+                del project.adjudications[group]
         await self._store(project, index=index)
         return {"task_id": task_id, "state": str(state), "counts": project.counts}
 
@@ -233,6 +290,94 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface):
         project.published = PublishRecord.model_validate(payload)
         await self._store(project)
         return project.published.model_dump(mode="json")
+
+    async def note_progress(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Record the saga's current step (A4's "not just a spinner").
+
+        Accepted only while PUBLISHING: a note arriving after the project reached a terminal state
+        is from a stale run and must not scribble on it. No-op rather than error — the saga's
+        progress narration is best-effort by design and must never fail a publish.
+        """
+        project = await self._require()
+        if project.state is ProjectState.PUBLISHING:
+            project.publish_progress = str(payload.get("step") or "")
+            await self._store(project)
+        return project.model_dump(mode="json")
+
+    async def adjudicate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Record — or, with a null `task_id`, CLEAR — the manager's canonical pick for one replica
+        group (consensus v1's merge step).
+
+        A pick, never a blend — see `Adjudication`. Re-pickable while the project is still
+        adjudicable (labeling/frozen); refused once provenance is frozen with the artifact
+        (publishing/published/archived), for the same reason every task edge is. The target must
+        match the EXACT deterministic sibling shape (`{group}-r{k}`) — a bare prefix check let a
+        client-chosen id like `g1-r1-r2` or `g1-rogue` pass as a member of `g1` (audit finding) —
+        and be an indexed, ACCEPTED task: a skipped replica carries no labels, so canonicalizing
+        one would canonicalize nothing.
+
+        Clearing exists because a pick is the ONLY project field with no other exit: `publish`
+        refuses a stale or groupless pick (correctly), so without removal one wrong pick would
+        wedge the publish permanently. Clearing an absent pick is a no-op, not an error.
+
+        The index this validates against can lag a task's own actor (the report is best-effort) —
+        the safe direction: the publish re-reads every task and refuses a pick that is no longer
+        accepted, and `task_state_changed` voids a pick the moment its target leaves `accepted`.
+        """
+        import re  # noqa: PLC0415 - only this method needs it
+
+        from annotator.projects.machines import FROZEN_PROJECT_STATES  # noqa: PLC0415 - avoids widening the module import surface
+
+        group = str(payload["group"])
+        project = await self._require()
+        if project.state in FROZEN_PROJECT_STATES:
+            raise IllegalTransition("project", project.state, "adjudicate (provenance is frozen with the published artifact)")
+
+        raw_task_id = payload.get("task_id")
+        if raw_task_id is None or raw_task_id == "":
+            project.adjudications.pop(group, None)
+            await self._store(project)
+            return project.model_dump(mode="json")
+
+        task_id = str(raw_task_id)
+        if re.fullmatch(rf"{re.escape(group)}-r\d+", task_id) is None:
+            raise IllegalTransition("project", project.state, f"adjudicate ({task_id} is not a replica of group {group})")
+        index = await self._load_index()
+        state = index.get(task_id)
+        if state is None:
+            raise IllegalTransition("project", project.state, f"adjudicate ({task_id} is not in this project)")
+        if TaskState(state) is not TaskState.ACCEPTED:
+            raise IllegalTransition("project", project.state, f"adjudicate ({task_id} is {state}, not accepted — only accepted work can be canonical)")
+
+        project.adjudications[group] = Adjudication(task_id=task_id, by=str(payload.get("actor") or ""), at=datetime.now(UTC))
+        await self._store(project)
+        return project.model_dump(mode="json")
+
+    # ---------------------------------------------------------------------------------------------
+    # The publish watchdog
+    # ---------------------------------------------------------------------------------------------
+
+    async def receive_reminder(self, name: str, state: bytes, due_time: timedelta, period: timedelta, ttl: timedelta | None = None) -> None:
+        """One watchdog tick: PUBLISHING → drive the saga; anything else → stand down.
+
+        The saga is NOT awaited here. Actor turns are serialised, and `run_publish` calls back into
+        this very actor through its proxy surface (`get`/`list_tasks`/`fire`/`record_publish`) — an
+        in-turn await would deadlock on our own mailbox. `spawn_publish` schedules it on the event
+        loop and the turn ends; the spawned task then proxies a free actor.
+        """
+        if name != PUBLISH_REMINDER:
+            return
+        project = await self._load()
+        if project is None or project.state is not ProjectState.PUBLISHING:
+            # Terminal (or gone): the watchdog has nothing left to guard. An absent reminder is
+            # possible here (a previous tick already unregistered), so suppression is of an
+            # expected condition, not a swallow.
+            with suppress(Exception):
+                await self.unregister_reminder(PUBLISH_REMINDER)
+            return
+        from annotator.projects import lakehouse  # noqa: PLC0415 - the actor module must import without the SDK
+
+        lakehouse.spawn_publish(project.project_id)
 
 
 def _counts(index: dict[str, str]) -> dict[TaskState, int]:

@@ -54,12 +54,12 @@
 	<Toaster />
 {/if}
 
-<!-- The SHARED estate shell in canvas mode: no sidebar, no breadcrumb, `children` gets the full height —
-     but the header is the same component every other zone renders, so the project switcher and the identity
-     cluster sit in the same place at the same size. This zone used to hand-roll its own <header> around a
-     bare TopNavbar, which is how its account avatar came to sit on the LEFT (the hand-rolled version omitted
-     the `min-w-0 flex-1` AppShell passes) and why it had no project switcher and no breadcrumb while the
-     other three did. Two implementations of one header, free to drift. -->
+<!-- The SHARED estate shell. `canvas` mode (icon-collapsed rail, no breadcrumb, full-height
+     children) applies ONLY while the drawing canvas is actually showing (`?keys=`) — when the whole
+     zone WAS one canvas page, the zone-wide `canvas` flag was right; with the projects landing and
+     detail pages it made this zone the one estate zone with a cramped icon rail and no breadcrumb
+     on ordinary pages, which read as "a different app". Pages get the same expanded, labeled
+     sidebar every other zone renders; the canvas still keeps its width. -->
 <AppShell
 	pathname={page.url.pathname}
 	{me}
@@ -67,7 +67,7 @@
 	user={data.user}
 	authEnabled={data.authEnabled}
 	zoneNav={ANNOTATOR_ZONE_NAV}
-	canvas
+	canvas={page.url.searchParams.has('keys')}
 	{notifications}
 >
 	{@render children()}

@@ -3,8 +3,9 @@ import { test, expect, type Route } from '@playwright/test';
 // Hermetic coverage for the zone contract: the app is server-aware (hooks + BFF routes
 // answer under /annotator; only the Pixi canvas page itself opts out of SSR per-page),
 // the client fetches the media plane through THIS zone's base-prefixed BFF routes
-// (/annotator/api/*), and the landing is the DATA-SELECTION view (datasets → documents
-// → chunks → canvas) with `?keys=` deep links opening the canvas directly.
+// (/annotator/api/*). Since S9 the LANDING is the PROJECTS view (e2e/projects.spec.ts);
+// the data-selection browser lives at /annotator/browse, and `?keys=` deep links still
+// open the canvas directly.
 
 const json = (route: Route, body: unknown, status = 200) =>
 	route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
@@ -128,14 +129,19 @@ test('the zone follows the ESTATE theme, not a zone-private one', async ({ page 
 	await expect(page.locator('html')).toHaveClass(/dark/);
 });
 
-test('landing = data selection: dataset → document → chunk → the annotate canvas', async ({
+test('S9: the landing is PROJECTS; /browse hosts the data selection → canvas flow', async ({
 	page,
 }) => {
+	// The landing is the projects view now (its own flows live in projects.spec.ts — here it
+	// only has to BE the landing, in any load state).
 	await page.goto('/annotator/');
-	// No hardcoded demo unit: the selection view renders (single dataset auto-picked).
+	await expect(page.getByRole('heading', { name: 'Labeling tasks' })).toBeVisible();
+	await expect(page.getByTestId('data-selection')).not.toBeVisible();
+
+	// The selection flow moved to /browse, intact: dataset → document → chunk → canvas.
+	await page.goto('/annotator/browse');
 	await expect(page.getByTestId('data-selection')).toBeVisible();
 	await expect(page.getByTestId('dataset-id')).toHaveText('demo');
-	// Documents grid (thumbnails via the zone BFF) → drill into the chunk picker.
 	await page.getByTestId('doc-tile').click();
 	await expect(page.getByTestId('chunk-picker')).toBeVisible();
 	// Open one chunk in the canvas: the URL carries the ?keys= deep link and the shell
@@ -147,9 +153,9 @@ test('landing = data selection: dataset → document → chunk → the annotate 
 	await expect(page.getByTitle('Redo (Ctrl+Shift+Z)')).toBeVisible();
 	await expect.poll(() => apiPaths).toContain(`/annotator/api/annotations/${KEY}`);
 	expect(apiWrites).toHaveLength(0);
-	// The rail's back button returns to the selection view.
+	// Exiting the canvas lands on the zone's landing — the projects view.
 	await page.getByTestId('exit-annotate').click();
-	await expect(page.getByTestId('data-selection')).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Labeling tasks' })).toBeVisible();
 });
 
 test('?keys= deep link opens the canvas directly (the read-plane bridge)', async ({ page }) => {

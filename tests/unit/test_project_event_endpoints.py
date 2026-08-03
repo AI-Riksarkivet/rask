@@ -32,9 +32,10 @@ class _FakeProject:
         self.fired: list[dict[str, Any]] = []
         self.sent: list[dict[str, Any]] = []
         self.raise_on_fire: Exception | None = None
+        self.tasks: dict[str, str] = {}
 
     async def get(self) -> dict[str, Any] | None:
-        return None if self.state is None else {"state": str(self.state), "project_id": "p1", "review_required": True}
+        return None if self.state is None else {"state": str(self.state), "project_id": "p1", "review_required": True, "lease_seconds": 900}
 
     async def fire(self, payload: dict[str, Any]) -> dict[str, Any]:
         if self.raise_on_fire:
@@ -47,7 +48,7 @@ class _FakeProject:
         return {"task_id": payload["task_id"], "created": True, "counts": {}}
 
     async def list_tasks(self) -> dict[str, Any]:
-        return {"tasks": {}, "counts": {}, "total": 0, "terminal": 0, "may_publish": True}
+        return {"tasks": dict(self.tasks), "counts": {}, "total": len(self.tasks), "terminal": 0, "may_publish": True}
 
 
 class _FakeTask:
@@ -62,6 +63,11 @@ class _FakeTask:
     async def seed(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.seeded.append(payload)
         return {**payload, "project_id": self.owner or payload["project_id"]}
+
+    async def get(self) -> dict[str, Any] | None:
+        """The details fan-out reads each task's own actor. `docs` is set by the tests that use it;
+        None (the default) models a task the index knows and the actor does not."""
+        return getattr(self, "docs", {}).get("current")
 
 
 def _app(project: _FakeProject, *, grant: set[str], seen: list[dict[str, Any]], task: _FakeTask | None = None) -> FastAPI:
@@ -329,3 +335,204 @@ def test_a_task_owned_by_another_project_is_refused_not_indexed(monkeypatch: pyt
     assert r.status_code == 409, r.text
     assert "already belongs to project" in r.text
     assert project.sent == [], "a foreign task was written into this project's index"
+
+
+# --------------------------------------------------------------------------------------------------
+# The details listing — what A2's queue actually renders
+# --------------------------------------------------------------------------------------------------
+
+
+def test_details_listing_fans_out_and_carries_legal_events(wired: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The index is task_id→state by design; the queue needs assignee/lease/media and the ACTIONS.
+    `legal_events` per task comes from the machine tables — A2/A3 render what the backend supplies."""
+    client, project, _t, _seen = wired({"can_view"})
+    project.tasks = {"t1": "claimed", "t2": "in_review", "ghost": "claimed"}
+    docs: dict[str, dict[str, Any]] = {
+        "t1": {"task_id": "t1", "project_id": "p1", "state": "claimed", "assignee": "gina", "lease_expires_at": "2026-07-31T12:00:00+00:00"},
+        "t2": {"task_id": "t2", "project_id": "p1", "state": "in_review", "assignee": None, "submitted_by": "gina"},
+    }
+
+    class _PerTask:
+        def __init__(self, task_id: str) -> None:
+            self.task_id = task_id
+
+        async def get(self) -> dict[str, Any] | None:
+            return docs.get(self.task_id)
+
+    monkeypatch.setattr(ev, "_task_proxy", _PerTask)
+
+    r = client.get("/projects/p1/tasks", params={"include": "details"})
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [d["task_id"] for d in body["details"]] == ["t1", "t2"]
+    assert body["missing"] == ["ghost"], "a task the index knows but no actor holds must be NAMED, not dropped"
+    by_id = {d["task_id"]: d for d in body["details"]}
+    assert {e["event"] for e in by_id["t1"]["legal_events"]} == {"save_draft", "submit", "release", "skip"}
+    assert {e["event"] for e in by_id["t2"]["legal_events"]} == {"accept", "fix_and_accept", "request_changes"}
+    assert "lease_expired" not in {e["event"] for d in body["details"] for e in d["legal_events"]}
+
+
+def test_the_plain_listing_is_unchanged_by_the_details_option(wired: Any) -> None:
+    client, project, _t, _seen = wired({"can_view"})
+    project.tasks = {"t1": "claimed"}
+    r = client.get("/projects/p1/tasks")
+    assert r.status_code == 200
+    assert "details" not in r.json()
+
+
+# --------------------------------------------------------------------------------------------------
+# Send captures the project's lease
+# --------------------------------------------------------------------------------------------------
+
+
+def test_send_captures_the_projects_lease_seconds_onto_the_task(wired: Any) -> None:
+    """Like `review_required`: project config the claim path reads off the TASK. Without the
+    capture, the project's lease setting is stored and never read."""
+    client, _p, task, _seen = wired({"can_send_items"}, state=ProjectState.LABELING)
+
+    r = client.post(
+        "/projects/p1/items",
+        json={"items": [{"source": {"kind": "chunks", "keys": ["k1"]}, "media": {"kind": "image", "image_url": "s3://b/x.jpg"}}]},
+    )
+
+    assert r.status_code == 201, r.text
+    assert task.seeded[0]["lease_seconds"] == 900, "the task did not capture the project's lease"
+
+
+def test_details_on_a_frozen_project_carry_no_task_events(wired: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rule 5: nothing escapes a published project. The tasks' own states still admit edges
+    (accepted → reopen), but the PROJECT gate refuses them all — so the listing must not hand the
+    UI actions that can only 409. Found by LOOKING at the published screenshot: Reopen buttons on
+    a published project."""
+    client, project, _t, _seen = wired({"can_view"}, state=ProjectState.PUBLISHED)
+    project.tasks = {"t1": "accepted"}
+    docs = {"t1": {"task_id": "t1", "project_id": "p1", "state": "accepted"}}
+
+    class _PerTask:
+        def __init__(self, task_id: str) -> None:
+            self.task_id = task_id
+
+        async def get(self) -> dict[str, Any] | None:
+            return docs.get(self.task_id)
+
+    monkeypatch.setattr(ev, "_task_proxy", _PerTask)
+
+    r = client.get("/projects/p1/tasks", params={"include": "details"})
+
+    assert r.status_code == 200, r.text
+    assert r.json()["details"][0]["legal_events"] == [], "a published project handed the UI a Reopen that can only 409"
+
+
+# --------------------------------------------------------------------------------------------------
+# Consensus v1 — send seeds N independent replicas per item
+# --------------------------------------------------------------------------------------------------
+
+
+def test_send_with_consensus_seeds_n_replicas_per_item(wired: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """consensus_n=3 → each sent item becomes THREE independent items sharing one replica group,
+    with deterministic sibling ids (`{gid}-r{k}`) — determinism is what lets the one-replica-per-
+    annotator guard find the siblings without an index."""
+    client, _project, task, _seen = wired({"can_send_items"}, state=ProjectState.LABELING)
+    monkeypatch.setattr(
+        _FakeProject,
+        "get",
+        lambda self: _consensus_get(self),
+    )
+
+    r = client.post(
+        "/projects/p1/items",
+        json={"items": [{"task_id": "item1", "source": {"kind": "chunks", "keys": ["k1"]}, "media": {"kind": "image"}}]},
+    )
+
+    assert r.status_code == 201, r.text
+    seeded = task.seeded
+    assert [s["task_id"] for s in seeded] == ["item1-r1", "item1-r2", "item1-r3"]
+    assert all(s["replica_of"] == "item1" for s in seeded)
+    assert {s["source"]["keys"][0] for s in seeded} == {"k1"}, "replicas must share the source"
+    assert r.json()["sent"] == 1 and r.json()["created"] == 3
+
+
+def test_send_refuses_when_items_times_consensus_would_exceed_the_cap(wired: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """334 items × consensus_n=3 = 1002 tasks — over the 1000-task cap the request schema enforces
+    for plain sends. Replica expansion must not become a backdoor around it."""
+    client, _project, task, _seen = wired({"can_send_items"}, state=ProjectState.LABELING)
+    monkeypatch.setattr(_FakeProject, "get", lambda self: _consensus_get(self))
+
+    items = [{"source": {"kind": "chunks", "keys": [f"k{i}"]}, "media": {"kind": "image"}} for i in range(334)]
+    r = client.post("/projects/p1/items", json={"items": items})
+
+    assert r.status_code == 409, r.text
+    assert "exceeds the 1000-task send cap" in r.json()["detail"]
+    assert task.seeded == [], "a refused send must seed NOTHING"
+
+
+async def _consensus_get(self: Any) -> dict[str, Any] | None:
+    if self.state is None:
+        return None
+    return {"state": str(self.state), "project_id": "p1", "review_required": True, "lease_seconds": 900, "consensus_n": 3}
+
+
+# --------------------------------------------------------------------------------------------------
+# Consensus v1 — the adjudication endpoint (manager-gated pick)
+# --------------------------------------------------------------------------------------------------
+
+
+def test_adjudicate_is_gated_on_can_manage_and_reaches_the_actor(wired: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Adjudication decides which OPINION wins — the manager's authority, not a review action."""
+    client, _project, _task, seen = wired({"can_manage"}, state=ProjectState.LABELING)
+    picks: list[dict[str, Any]] = []
+
+    async def _adjudicate(self: Any, payload: dict[str, Any]) -> dict[str, Any]:
+        picks.append(payload)
+        return {"project_id": "p1", "adjudications": {payload["group"]: {"task_id": payload["task_id"]}}}
+
+    monkeypatch.setattr(_FakeProject, "adjudicate", _adjudicate, raising=False)
+
+    r = client.put("/projects/p1/adjudications/g1", json={"task_id": "g1-r2"})
+
+    assert r.status_code == 200, r.text
+    assert picks == [{"group": "g1", "task_id": "g1-r2", "actor": SUBJECT}]
+    assert ("can_manage", "annotation_project:p1") in [(c["relation"], c["obj"]) for c in seen]
+
+
+def test_adjudicate_without_can_manage_is_403(wired: Any) -> None:
+    client, _project, _task, _seen = wired({"can_review"}, state=ProjectState.LABELING)
+
+    r = client.put("/projects/p1/adjudications/g1", json={"task_id": "g1-r1"})
+
+    assert r.status_code == 403, r.text
+    assert "can_manage" in r.json()["detail"]
+
+
+def test_adjudicate_surfaces_the_actors_refusal_as_409(wired: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from annotator.projects.machines import IllegalTransition
+
+    client, _project, _task, _seen = wired({"can_manage"}, state=ProjectState.LABELING)
+
+    async def _refuse(self: Any, payload: dict[str, Any]) -> dict[str, Any]:
+        raise IllegalTransition("project", "labeling", "adjudicate (g1-r1 is skipped, not accepted)")
+
+    monkeypatch.setattr(_FakeProject, "adjudicate", _refuse, raising=False)
+
+    r = client.put("/projects/p1/adjudications/g1", json={"task_id": "g1-r1"})
+
+    assert r.status_code == 409, r.text
+    assert "not accepted" in r.json()["detail"]
+
+
+def test_clearing_an_adjudication_is_a_manager_gated_delete(wired: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _project, _task, seen = wired({"can_manage"}, state=ProjectState.LABELING)
+    picks: list[dict[str, Any]] = []
+
+    async def _adjudicate(self: Any, payload: dict[str, Any]) -> dict[str, Any]:
+        picks.append(payload)
+        return {"project_id": "p1", "adjudications": {}}
+
+    monkeypatch.setattr(_FakeProject, "adjudicate", _adjudicate, raising=False)
+
+    r = client.delete("/projects/p1/adjudications/g1")
+
+    assert r.status_code == 200, r.text
+    assert picks == [{"group": "g1", "task_id": None, "actor": SUBJECT}]
+    assert ("can_manage", "annotation_project:p1") in [(c["relation"], c["obj"]) for c in seen]

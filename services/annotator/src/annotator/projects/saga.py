@@ -40,7 +40,7 @@ from typing import Any, Protocol
 
 from annotator.projects.machines import IllegalTransition
 from annotator.projects.models import AnnotationProject, Draft, ProjectState, Task, TaskState
-from annotator.projects.publish import PROJECT_FACET, PublishPlan, PublishRefusal, build_plan, project_facet, table_properties
+from annotator.projects.publish import PROJECT_FACET, PublishPlan, PublishRefusal, build_plan, project_facet, source_pin, table_properties
 
 
 logger = logging.getLogger(__name__)
@@ -54,9 +54,20 @@ class Publisher(Protocol):
     the `CREATE` RunEvent with the caller's verified identity.
     """
 
-    async def create_table(self, table_id: str, plan: PublishPlan, *, properties: dict[str, str], run_facet: dict[str, Any]) -> int:
+    async def create_table(
+        self,
+        table_id: str,
+        plan: PublishPlan,
+        *,
+        properties: dict[str, str],
+        run_facet: dict[str, Any],
+        source: str | None = None,
+        source_version: int | None = None,
+    ) -> int:
         """Create the table from the plan's rows; return its version. MUST treat an existing table
-        with this id as success — the saga relies on that for retry safety."""
+        with this id as success — the saga relies on that for retry safety. ``source`` +
+        ``source_version`` are the §7.2 reproducibility pin (the lineage READ edge) — present only
+        when the plan pins unambiguously, and the transport passes them through verbatim."""
         ...
 
     async def tag_version(self, table_id: str, version: int, tag: str) -> None:
@@ -71,6 +82,7 @@ class ProjectHandle(Protocol):
     async def list_tasks(self) -> dict[str, Any]: ...
     async def fire(self, payload: dict[str, Any]) -> dict[str, Any]: ...
     async def record_publish(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+    async def note_progress(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
 
 class TaskHandle(Protocol):
@@ -94,6 +106,14 @@ class PublishOutcome:
     already_published: bool = False
 
 
+#: The catalog's identifier delimiter (`LANCE_NS_DELIMITER`, catalog/core/config.py) — estate ids
+#: are `bronze$events`, `silver$features`. A `.` here is NOT a separator to the catalog: the id
+#: would parse as one root-level segment, landing the table at the catalog ROOT while FGA
+#: authorized creation in `namespace:<target>` — the authorization object and the created object
+#: would diverge.
+CATALOG_DELIMITER = "$"
+
+
 def table_id_for(project: AnnotationProject, publish_id: str, namespace: str) -> str:
     """The published table's id — DETERMINISTIC in the publish token, which is what makes `create`
     idempotent on retry.
@@ -101,7 +121,7 @@ def table_id_for(project: AnnotationProject, publish_id: str, namespace: str) ->
     The token, not the slug alone: two publishes of the same project (a republish after `reopen`)
     are two datasets and must not collide. The slug is carried for human legibility only.
     """
-    return f"{namespace}.{project.slug}_{publish_id[:12]}"
+    return f"{namespace}{CATALOG_DELIMITER}{project.slug}_{publish_id[:12]}"
 
 
 async def collect(project_handle: ProjectHandle, task_handle: Any, task_ids: list[str]) -> list[tuple[Task, Draft | None]]:
@@ -176,26 +196,36 @@ async def run_publish(
         raise PublishRefusal(f"project {project.project_id} is publishing but carries no publish token or instant — refusing to mint one here")
 
     try:
+        await _note(project_handle, "reading tasks")
         listing = await project_handle.list_tasks()
         pairs = await collect(project_handle, task_handle, sorted(listing["tasks"]))
         _refuse_if_not_terminal(pairs)
 
+        await _note(project_handle, "building plan")
         plan = build_plan(project, pairs, publish_id=publish_id, published_at=published_at)
         table_id = table_id_for(project, publish_id, namespace)
         tag = f"publish-{publish_id}"
 
+        await _note(project_handle, f"creating table {table_id}")
+        pin = source_pin(plan)
         version = await publisher.create_table(
             table_id,
             plan,
             properties=table_properties(project, plan),
+            # The §7.2 pin — (dataset, version) when every item shares one captured source,
+            # else nothing: `source_pin` never fabricates, so neither does the wire.
+            source=pin[0] if pin else None,
+            source_version=pin[1] if pin else None,
             # KEYED by the facet name. `project_facet` returns the spec-legal PAYLOAD; the catalog's
             # `X-Lance-Run-Facets` is a {name: payload} mapping, so handing it the bare payload would
             # emit a facet with no name — dropped or rejected at the far end, which is provenance
             # that silently does not arrive.
             run_facet={PROJECT_FACET: project_facet(project, plan)},
         )
+        await _note(project_handle, f"tagging version {version}")
         await publisher.tag_version(table_id, version, tag)
 
+        await _note(project_handle, "recording publish")
         record = await project_handle.record_publish(
             {
                 "table_id": table_id,
@@ -243,6 +273,18 @@ def _refuse_if_not_terminal(pairs: list[tuple[Task, Draft | None]]) -> None:
     stragglers = [t.task_id for t, _ in pairs if t.state not in {TaskState.ACCEPTED, TaskState.SKIPPED}]
     if stragglers:
         raise PublishRefusal(f"tasks {sorted(stragglers)} are not terminal — the project index was stale and the publish is refused")
+
+
+async def _note(handle: ProjectHandle, step: str) -> None:
+    """Narrate the saga's current step onto the project document — A4's "not just a spinner".
+
+    Best-effort by contract: progress is telemetry for a watching human, and a narration failure
+    must never fail a publish. The actor ignores notes once the project has left PUBLISHING, so a
+    stale run cannot scribble on a terminal state."""
+    try:
+        await handle.note_progress({"step": step})
+    except Exception:
+        logger.debug("could not record publish progress %r", step, exc_info=True)
 
 
 async def _converge(handle: ProjectHandle, payload: dict[str, Any]) -> None:

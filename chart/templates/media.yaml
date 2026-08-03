@@ -140,6 +140,25 @@ spec:
               valueFrom:
                 secretKeyRef: { name: {{ include "lance.fullname" $root }}-media-catalog-token, key: token }
             {{- end }}
+            {{- if and (eq $name "annotator") $root.Values.auth.enabled }}
+            # The annotation TASK plane is FGA-gated (can_claim/can_review/can_publish on
+            # annotation_project:<id>, §6) — with these unset the checker is deliberately permissive
+            # (dev parity), so an auth-enabled estate that skipped them would ship real doors on the
+            # catalog and an open side-gate here. Mirrors the catalog's block in services.yaml.
+            - { name: LANCE_OIDC_ENABLED, value: "true" }
+            - { name: LANCE_OIDC_ISSUER, value: {{ $root.Values.dex.issuer | quote }} }
+            - { name: LANCE_OIDC_DISCOVERY_URL, value: "http://{{ include "lance.dexHost" $root }}:{{ $root.Values.dex.port }}/dex" }
+            - { name: LANCE_OIDC_AUDIENCE, value: {{ $root.Values.dex.clientId | quote }} }
+            - { name: LANCE_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" $root.Values.dex.issuer) | quote }} }
+            - { name: LANCE_FGA_ENABLED, value: "true" }
+            - { name: LANCE_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" $root }}:8080" }
+            {{- with $root.Values.auth.fgaStoreId }}
+            - { name: LANCE_FGA_STORE_ID, value: {{ . | quote }} }
+            {{- end }}
+            {{- with $root.Values.auth.fgaModelId }}
+            - { name: LANCE_FGA_MODEL_ID, value: {{ . | quote }} }
+            {{- end }}
+            {{- end }}
             {{- if eq $name "viewer" }}
             # The S3 object browser (ported from the retired volumes-api, R6/R20): the viewer's
             # objects endpoints read s3://images-batch* via storage.s3_client, which resolves

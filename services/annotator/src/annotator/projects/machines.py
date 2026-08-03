@@ -109,6 +109,36 @@ def task_transition(state: TaskState, event: str) -> tuple[TaskState, str | None
         raise IllegalTransition("task", state, event) from None
 
 
+def legal_project_events(state: ProjectState) -> list[dict[str, str]]:
+    """The PRINCIPAL-fireable edges out of `state`, each with the permission that gates it.
+
+    This is what the API returns so the UI renders the transitions the backend supplies rather than
+    hardcoding a second copy of the table that drifts. System edges (permission `None` — fired by
+    the saga, never a principal) are excluded: a rendered control for one is a button that can only
+    403. `send` is included where legal — it is an edge in every sense but the state change.
+    """
+    events = [
+        {"event": event, "to": str(target), "permission": permission}
+        for (from_state, event), (target, permission) in PROJECT_EDGES.items()
+        if from_state is state and permission is not None
+    ]
+    if state in PROJECT_SEND_STATES:
+        events.append({"event": "send", "to": str(state), "permission": "can_send_items"})
+    return sorted(events, key=lambda e: e["event"])
+
+
+def legal_task_events(state: TaskState) -> list[dict[str, str]]:
+    """The principal-fireable edges out of `state` — the task half of `legal_project_events`."""
+    return sorted(
+        (
+            {"event": event, "to": str(target), "permission": permission}
+            for (from_state, event), (target, permission) in TASK_EDGES.items()
+            if from_state is state and permission is not None
+        ),
+        key=lambda e: e["event"],
+    )
+
+
 def submit_target(review_required: bool) -> TaskState:
     """`submit` lands in `in_review`, or straight in `accepted` when the project waives review."""
     return TaskState.IN_REVIEW if review_required else TaskState.ACCEPTED

@@ -270,7 +270,9 @@ async def test_a_transition_reports_its_new_state_to_the_project(monkeypatch: py
     reported: list[dict[str, Any]] = []
 
     class _ProjectProxy:
-        async def task_state_changed(self, payload: dict[str, Any]) -> dict[str, Any]:
+        # WIRE name, as the real ActorProxy dispatches — the typed adapter translates to this,
+        # so a pythonic method here would prove a call path that does not exist in-cluster.
+        async def TaskStateChanged(self, payload: dict[str, Any]) -> dict[str, Any]:  # noqa: N802 - Dapr wire name
             reported.append(payload)
             return {}
 
@@ -291,7 +293,7 @@ async def test_an_unreachable_project_does_not_fail_the_annotator_s_transition(m
     index — which BLOCKS a publish rather than allowing one, and the workflow re-reads besides."""
 
     class _Broken:
-        async def task_state_changed(self, payload: dict[str, Any]) -> dict[str, Any]:
+        async def TaskStateChanged(self, payload: dict[str, Any]) -> dict[str, Any]:  # noqa: N802 - Dapr wire name
             raise RuntimeError("sidecar unreachable")
 
     import dapr.actor
@@ -420,3 +422,40 @@ async def test_the_first_save_needs_no_base_revision() -> None:
     actor = await _seeded()
     out = await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": []})
     assert out["revision"] == 1
+
+
+# --------------------------------------------------------------------------------------------------
+# The lease duration comes from the PROJECT, captured at send — not from whoever clicks Claim
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_claim_defaults_to_the_lease_captured_from_the_project() -> None:
+    """`AnnotationProject.lease_seconds` is project config (§4.1). Until this test it was stored and
+    never read: every claim ran on the CLIENT's default, so the setting was dead. The task captures
+    it at send (like `review_required`) and the claim path reads the capture."""
+    from datetime import UTC, datetime
+
+    actor = _Actor()
+    await actor.seed(_task(lease_seconds=600))
+
+    out = await actor.fire({"event": "claim", "actor": "gina"})
+
+    expires = datetime.fromisoformat(out["lease_expires_at"])
+    seconds = (expires - datetime.now(UTC)).total_seconds()
+    assert 540 <= seconds <= 600, f"claim ignored the captured lease ({seconds:.0f}s left, expected ~600)"
+    assert actor.reminders[-1] == (LEASE_REMINDER, 600.0), "the expiry reminder must match the captured lease"
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_lease_seconds_still_wins_over_the_capture() -> None:
+    from datetime import UTC, datetime
+
+    actor = _Actor()
+    await actor.seed(_task(lease_seconds=600))
+
+    out = await actor.fire({"event": "claim", "actor": "gina", "lease_seconds": 120})
+
+    expires = datetime.fromisoformat(out["lease_expires_at"])
+    seconds = (expires - datetime.now(UTC)).total_seconds()
+    assert seconds <= 120.5

@@ -139,9 +139,11 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
 
         if event == "claim":
             # A self-claim: the assignee IS the actor, by definition. Taking it from the payload
-            # would let a caller claim a task on someone else's behalf.
+            # would let a caller claim a task on someone else's behalf. The duration falls back to
+            # the PROJECT's lease, captured on the task at send — that is what makes
+            # `AnnotationProject.lease_seconds` config rather than dead weight.
             task.assignee = actor
-            seconds = int(payload.get("lease_seconds", 1800))
+            seconds = int(payload.get("lease_seconds") or task.lease_seconds)
             task.lease_expires_at = now + timedelta(seconds=seconds)
             await self._arm_lease(seconds)
         elif event == "assign":
@@ -155,7 +157,7 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
             task.lease_expires_at = None
             await self._disarm_lease()
         elif event == "save_draft":
-            seconds = int(payload.get("lease_seconds", 1800))
+            seconds = int(payload.get("lease_seconds") or task.lease_seconds)
             task.lease_expires_at = now + timedelta(seconds=seconds)
             await self._arm_lease(seconds)  # a save RENEWS the lease
         elif event == "submit":
@@ -199,13 +201,9 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
         tasks it is about to commit, so a stale index cannot let unreviewed work into silver.
         """
         try:
-            from dapr.actor import ActorId, ActorProxy  # noqa: PLC0415 - opens a sidecar channel
+            from annotator.projects.proxies import typed_proxy  # noqa: PLC0415 - opens a sidecar channel
 
-            proxy = ActorProxy.create(
-                "AnnotationProjectActor",
-                ActorId(task.project_id),
-                AnnotationProjectActorInterface,
-            )
+            proxy = typed_proxy("AnnotationProjectActor", task.project_id, AnnotationProjectActorInterface)
             await proxy.task_state_changed({"task_id": task.task_id, "state": str(task.state)})
         except Exception:
             logger.warning(

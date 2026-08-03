@@ -286,6 +286,8 @@ class LineageEmitter(Protocol):
         authorization: str | None = None,
         source_uri: str | None = None,
         schema_fields: SchemaFields | None = None,
+        inputs: list[InputRef] | None = None,
+        extra_run_facets: dict[str, Any] | None = None,
     ) -> None: ...
 
     async def emit_write(
@@ -319,6 +321,8 @@ class NoopEmitter:
         authorization: str | None = None,
         source_uri: str | None = None,
         schema_fields: SchemaFields | None = None,
+        inputs: list[InputRef] | None = None,
+        extra_run_facets: dict[str, Any] | None = None,
     ) -> None:
         return None
 
@@ -360,6 +364,8 @@ class _BaseLineageEmitter:
         authorization: str | None = None,
         source_uri: str | None = None,
         schema_fields: SchemaFields | None = None,
+        inputs: list[InputRef] | None = None,
+        extra_run_facets: dict[str, Any] | None = None,
     ) -> None:
         await self.emit_write(
             table_id=table_id,
@@ -371,6 +377,11 @@ class _BaseLineageEmitter:
             authorization=authorization,
             source_uri=source_uri,
             schema_fields=schema_fields,
+            # S4: a create can DERIVE FROM a version-pinned source (an annotation publish, a Ray
+            # job's first write) and carry producer run facets — the same optional metadata
+            # merge_insert has always accepted, threaded verbatim.
+            inputs=inputs,
+            extra_run_facets=extra_run_facets,
         )
 
     async def emit_write(

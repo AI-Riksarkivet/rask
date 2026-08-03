@@ -227,7 +227,7 @@ def test_send_origins_are_counted_per_task_not_per_row() -> None:
     facet = project_facet(_project(), plan)
 
     assert facet["sendOrigins"] == {"chunks": 2}
-    assert facet["sourceDatasets"] == [{"dataset": "transcripts_v2", "items": 2}]
+    assert facet["sourceDatasets"] == [{"dataset": "transcripts_v2", "items": 2, "version": None}]
 
 
 def test_the_facet_is_spec_legal_and_does_not_collide_with_a_reserved_name() -> None:
@@ -344,3 +344,182 @@ def test_the_column_tuple_is_derived_from_the_schema_not_maintained_beside_it() 
 
     assert tuple(PUBLISHED_LABELS_SCHEMA.names) == PUBLISHED_COLUMNS
     assert len(PUBLISHED_COLUMNS) == 34, "DESIGN §7.1 specifies 34 columns"
+
+
+# --------------------------------------------------------------------------------------------------
+# The reproducibility pin (the lineage READ edge) — captured at send, never fabricated
+# --------------------------------------------------------------------------------------------------
+
+
+def _pin_task(task_id: str, dataset: str | None, version: int | None) -> Task:
+    return Task(
+        task_id=task_id,
+        project_id="p1",
+        state=TaskState.ACCEPTED,
+        submitted_by="gina",
+        source={"kind": "chunks", "keys": [task_id], "where": dataset, "dataset_version": version},  # type: ignore[arg-type]
+        media={"kind": "image"},  # type: ignore[arg-type]
+    )
+
+
+def test_source_pin_pins_exactly_one_dataset_at_one_version() -> None:
+    from annotator.projects.publish import source_pin
+
+    project = AnnotationProject(project_id="p1", tenant="acme", slug="vasa")
+    pairs = [(_pin_task("t0", "demo", 24), None), (_pin_task("t1", "demo", 24), None)]
+    plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
+
+    assert source_pin(plan) == ("demo", 24)
+
+
+@pytest.mark.parametrize(
+    ("specs", "why"),
+    [
+        ([("demo", 24), ("other", 3)], "two datasets — a single pin would lie about one of them"),
+        ([("demo", 24), ("demo", 25)], "two VERSIONS of one dataset — same lie"),
+        ([("demo", None), ("demo", 24)], "a missing capture poisons the pin — never fabricate"),
+        ([("demo", None)], "no version captured at all"),
+        ([(None, None)], "no dataset recorded"),
+        ([(None, None), ("demo", 24)], "an item with NO recorded dataset mixed with a captured one — a pin would claim provenance some items never had"),
+    ],
+)
+def test_source_pin_refuses_anything_ambiguous(specs: list, why: str) -> None:
+    from annotator.projects.publish import source_pin
+
+    project = AnnotationProject(project_id="p1", tenant="acme", slug="vasa")
+    pairs = [(_pin_task(f"t{i}", ds, v), None) for i, (ds, v) in enumerate(specs)]
+    plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
+
+    assert source_pin(plan) is None, why
+
+
+def test_the_facet_source_datasets_carry_their_captured_versions() -> None:
+    project = AnnotationProject(project_id="p1", tenant="acme", slug="vasa")
+    pairs = [(_pin_task("t0", "demo", 24), None), (_pin_task("t1", "other", None), None)]
+    plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
+
+    facet = project_facet(project, plan)
+    by_name = {d["dataset"]: d for d in facet["sourceDatasets"]}
+    assert by_name["demo"]["version"] == 24
+    assert by_name["other"]["version"] is None, "an uncaptured version must read as unknown, not invented"
+
+
+# --------------------------------------------------------------------------------------------------
+# Consensus v1 — replica groups in the facet (counts only; the merge is a named follow-up)
+# --------------------------------------------------------------------------------------------------
+
+
+def _replica_task(task_id: str, replica_of: str, labels: list[str]) -> tuple[Task, Draft]:
+    task = Task(
+        task_id=task_id,
+        project_id="p1",
+        state=TaskState.ACCEPTED,
+        submitted_by=f"annotator-{task_id}",
+        replica_of=replica_of,
+        source={"kind": "chunks", "keys": ["k1"]},  # type: ignore[arg-type]
+        media={"kind": "image"},  # type: ignore[arg-type]
+    )
+    draft = Draft(
+        task_id=task_id,
+        project_id="p1",
+        author=f"annotator-{task_id}",
+        shapes=[Shape(shape_type="bbox", x=1, y=1, width=2, height=2, label=lbl) for lbl in labels],
+    )
+    return task, draft
+
+
+def test_the_facet_reports_consensus_counts_never_a_fabricated_merge() -> None:
+    """Two groups of two replicas: one agrees (equal label multisets), one does not. The facet
+    counts; every replica's rows still land (annotated_by distinguishes) — no invented merge."""
+    project = AnnotationProject(project_id="p1", tenant="acme", slug="vasa", consensus_n=2)
+    pairs = [
+        _replica_task("g1-r1", "g1", ["person", "ship"]),
+        _replica_task("g1-r2", "g1", ["ship", "person"]),  # same multiset, different order → agrees
+        _replica_task("g2-r1", "g2", ["person"]),
+        _replica_task("g2-r2", "g2", ["signature"]),  # disagrees
+    ]
+    plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
+    facet = project_facet(project, plan)
+
+    assert facet["consensus"] == {"n": 2, "groups": 2, "perfect_agreement_groups": 1}
+    # All four replicas' shapes are rows — 2+2+1+1.
+    assert len(plan.rows) == 6
+
+
+def test_no_consensus_facet_when_the_task_has_no_replicas() -> None:
+    project = AnnotationProject(project_id="p1", tenant="acme", slug="vasa")
+    pairs = [(_pin_task("t0", "demo", 24), None)]
+    plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
+
+    assert "consensus" not in project_facet(project, plan)
+
+
+# --------------------------------------------------------------------------------------------------
+# Consensus v1 — adjudication in the publish (the facet carries the pick; a stale pick refuses)
+# --------------------------------------------------------------------------------------------------
+
+
+def _adjudicated_project(**picks: str) -> AnnotationProject:
+    return AnnotationProject(
+        project_id="p1",
+        tenant="acme",
+        slug="vasa",
+        consensus_n=2,
+        adjudications={g: {"task_id": t, "by": "meg", "at": NOW} for g, t in picks.items()},  # type: ignore[arg-type]
+    )
+
+
+def test_the_facet_carries_the_managers_picks() -> None:
+    project = _adjudicated_project(g1="g1-r2")
+    pairs = [_replica_task("g1-r1", "g1", ["ship"]), _replica_task("g1-r2", "g1", ["boat"])]
+    plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
+
+    facet = project_facet(project, plan)
+
+    pick = facet["consensus"]["adjudications"]["g1"]
+    assert pick["task_id"] == "g1-r2"
+    assert pick["by"] == "meg", "the facet must carry WHO decided — a pick without attribution is not provenance"
+    assert pick["at"], "…and WHEN"
+
+
+def test_no_adjudications_key_when_nothing_was_picked() -> None:
+    project = AnnotationProject(project_id="p1", tenant="acme", slug="vasa", consensus_n=2)
+    pairs = [_replica_task("g1-r1", "g1", ["ship"]), _replica_task("g1-r2", "g1", ["ship"])]
+    plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
+
+    assert "adjudications" not in project_facet(project, plan)["consensus"], "an absent pick must stay absent — not an empty map pretending to be a decision"
+
+
+def test_a_pick_naming_a_no_longer_accepted_replica_refuses_the_publish() -> None:
+    """The group was adjudicated, then the winner was reopened and skipped. Publishing anyway would
+    stamp a facet whose canonical pick points outside the accepted set — refused, never dropped."""
+    project = _adjudicated_project(g1="g1-r1")
+    skipped_task, _ = _replica_task("g1-r1", "g1", [])
+    skipped_task = skipped_task.model_copy(update={"state": TaskState.SKIPPED})
+    pairs = [(skipped_task, None), _replica_task("g1-r2", "g1", ["ship"])]
+
+    with pytest.raises(PublishRefusal, match="g1-r1"):
+        build_plan(project, pairs, publish_id="tok", published_at=NOW)
+
+
+def test_a_pick_for_a_group_absent_from_the_publish_refuses() -> None:
+    project = _adjudicated_project(g9="g9-r1")
+    pairs = [_replica_task("g1-r1", "g1", ["ship"]), _replica_task("g1-r2", "g1", ["ship"])]
+
+    with pytest.raises(PublishRefusal, match="g9"):
+        build_plan(project, pairs, publish_id="tok", published_at=NOW)
+
+
+def test_a_pick_naming_another_groups_member_refuses_the_publish() -> None:
+    """The audit's membership hole: `g1-r1-r2` is a member of group `g1-r1`, but every string
+    check on `g1` passes it. Membership is judged by `replica_of` — the authoritative grouping."""
+    project = _adjudicated_project(g1="g1-r1-r2")
+    pairs = [
+        _replica_task("g1-r1", "g1", ["ship"]),
+        _replica_task("g1-r2", "g1", ["ship"]),
+        _replica_task("g1-r1-r1", "g1-r1", ["boat"]),
+        _replica_task("g1-r1-r2", "g1-r1", ["boat"]),
+    ]
+
+    with pytest.raises(PublishRefusal, match="not a member"):
+        build_plan(project, pairs, publish_id="tok", published_at=NOW)

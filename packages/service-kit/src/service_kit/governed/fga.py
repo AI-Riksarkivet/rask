@@ -265,6 +265,11 @@ async def provision(api_url: str, *, store_name: str = "lance-catalog") -> tuple
             WriteAuthorizationModelRequest(
                 schema_version=model["schema_version"],
                 type_definitions=model["type_definitions"],
+                # The WHOLE model, conditions included. Dropping this key while relations reference
+                # a condition makes OpenFGA 400 the write ("condition … is undefined"), the client
+                # never builds, and every FGA-enabled service fail-closes 503 — the entire plane
+                # down from one silently omitted field (found live, 2026-08-03).
+                conditions=model.get("conditions"),
             )
         )
     return store_id, written.authorization_model_id

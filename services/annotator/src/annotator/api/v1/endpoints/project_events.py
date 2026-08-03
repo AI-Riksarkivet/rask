@@ -29,8 +29,8 @@ from fastapi import APIRouter, Path, status
 from pydantic import BaseModel, Field
 
 from annotator.api.security import CheckerDep, CurrentSubject
-from annotator.projects.machines import PROJECT_EDGES, IllegalTransition, project_transition
-from annotator.projects.models import ItemSource, MediaRef, ProjectState, Task
+from annotator.projects.machines import FROZEN_PROJECT_STATES, PROJECT_EDGES, IllegalTransition, legal_task_events, project_transition
+from annotator.projects.models import ItemSource, MediaRef, ProjectState, Task, TaskState, new_id
 from annotator.projects.project_actor import AnnotationProjectActorInterface
 from service_kit.exceptions import ConflictError, ForbiddenError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
@@ -92,20 +92,20 @@ class SendItemsRequest(BaseModel):
 
 
 def _project_proxy(project_id: str) -> AnnotationProjectActorInterface:
-    """A typed proxy to one project's actor. Imported lazily — `ActorProxy` opens a sidecar channel,
-    so importing it at module scope would make this module require daprd just to be read."""
-    from dapr.actor import ActorId, ActorProxy  # noqa: PLC0415 - deliberate, see docstring
+    """A typed proxy to one project's actor. Imported lazily — the proxy opens a sidecar channel,
+    so importing it at module scope would make this module require daprd just to be read.
+    `typed_proxy` maps Python names onto the interface's wire names (a raw `ActorProxy` dispatches
+    only the wire names — the mismatch the first live drive found)."""
+    from annotator.projects.proxies import typed_proxy  # noqa: PLC0415 - deliberate, see docstring
 
-    proxy = ActorProxy.create("AnnotationProjectActor", ActorId(project_id), AnnotationProjectActorInterface)
-    return cast(AnnotationProjectActorInterface, proxy)
+    return cast(AnnotationProjectActorInterface, typed_proxy("AnnotationProjectActor", project_id, AnnotationProjectActorInterface))
 
 
 def _task_proxy(task_id: str) -> Any:
-    from dapr.actor import ActorId, ActorProxy  # noqa: PLC0415 - deliberate, see above
+    from annotator.projects.actor import AnnotationTaskActorInterface  # noqa: PLC0415 - deliberate, see above
+    from annotator.projects.proxies import typed_proxy  # noqa: PLC0415 - same reason
 
-    from annotator.projects.actor import AnnotationTaskActorInterface  # noqa: PLC0415 - same reason
-
-    return ActorProxy.create("AnnotationTaskActor", ActorId(task_id), AnnotationTaskActorInterface)
+    return typed_proxy("AnnotationTaskActor", task_id, AnnotationTaskActorInterface)
 
 
 async def _check(checker: Any, subject: str, relation: str, obj: str, what: str) -> None:
@@ -156,12 +156,67 @@ async def fire_project_event(project_id: ProjectId, payload: ProjectEventRequest
         await _check(checker, subject, permission, f"annotation_project:{project_id}", f"project.{payload.event}")
 
     try:
-        updated = await actor.fire({"event": payload.event, "actor": subject})
+        # `target_namespace` rides along so the actor can PIN it with the publish token — the saga
+        # (which may run after a crash, with no request in sight) reads the authorized target off
+        # the project document rather than guessing one. Ignored by every other event.
+        updated = await actor.fire({"event": payload.event, "actor": subject, "target_namespace": payload.target_namespace})
     except IllegalTransition as exc:
         # The actor's own preconditions — every task terminal, and a non-empty project.
         raise ConflictError(str(exc)) from exc
 
     audit(f"project.{payload.event}", SUCCESS, subject=subject, resource=project_id)
+    return updated
+
+
+class AdjudicationRequest(BaseModel):
+    """The manager's pick for one replica group — just the winning replica's id. The group comes
+    from the path and the picker from the verified subject, so neither can be forged in the body."""
+
+    task_id: str = Field(min_length=1, max_length=80)
+
+
+@router.put("/{project_id}/adjudications/{group_id}", status_code=status.HTTP_200_OK)
+async def adjudicate_group(
+    project_id: ProjectId,
+    group_id: Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")],
+    payload: AdjudicationRequest,
+    checker: CheckerDep,
+    subject: CurrentSubject,
+) -> dict[str, Any]:
+    """Consensus v1's merge step: name ONE accepted replica of the group canonical (a pick, never a
+    blend — every replica's rows still publish; the facet carries the pick with attribution).
+
+    `can_manage`, not `can_review`: adjudication decides which OPINION wins, which is the manager's
+    distribution authority, not a review of any single submission. PUT because re-picking while the
+    project is adjudicable is the intended idempotent shape; the actor refuses once provenance is
+    frozen, and refuses a target that is not an accepted member of the group.
+    """
+    await _check(checker, subject, "can_manage", f"annotation_project:{project_id}", "project.adjudicate")
+    try:
+        updated = await _project_proxy(project_id).adjudicate({"group": group_id, "task_id": payload.task_id, "actor": subject})
+    except IllegalTransition as exc:
+        raise ConflictError(str(exc)) from exc
+    audit("project.adjudicate", SUCCESS, subject=subject, resource=project_id)
+    return updated
+
+
+@router.delete("/{project_id}/adjudications/{group_id}", status_code=status.HTTP_200_OK)
+async def clear_adjudication(
+    project_id: ProjectId,
+    group_id: Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")],
+    checker: CheckerDep,
+    subject: CurrentSubject,
+) -> dict[str, Any]:
+    """Withdraw the pick for one group. Exists because a pick has no other exit: the publish
+    refuses a stale or groupless pick (correctly), so without removal one wrong pick would wedge
+    the publish permanently (audit finding). Idempotent — clearing an absent pick is a no-op —
+    and refused once provenance is frozen, exactly like setting one."""
+    await _check(checker, subject, "can_manage", f"annotation_project:{project_id}", "project.adjudicate")
+    try:
+        updated = await _project_proxy(project_id).adjudicate({"group": group_id, "task_id": None, "actor": subject})
+    except IllegalTransition as exc:
+        raise ConflictError(str(exc)) from exc
+    audit("project.adjudicate", SUCCESS, subject=subject, resource=project_id)
     return updated
 
 
@@ -185,41 +240,106 @@ async def send_items(project_id: ProjectId, payload: SendItemsRequest, checker: 
         raise ConflictError(f"project {project_id} is {project['state']} — items may only be sent while it is draft or labeling")
     await _check(checker, subject, "can_send_items", f"annotation_project:{project_id}", "project.send")
 
+    # Consensus v1: N>1 seeds N independent replica items per source item, deterministic sibling
+    # ids (`{gid}-r{k}`) — determinism is what lets the one-replica-per-annotator guard find them.
+    consensus_n = int(project.get("consensus_n") or 1)
+    if len(payload.items) * consensus_n > 1000:
+        raise ConflictError(f"{len(payload.items)} items × consensus_n={consensus_n} exceeds the 1000-task send cap — split the send")
+
     created: list[str] = []
     for item in payload.items:
         # Built HERE from the two client-supplied descriptive fields plus the project's own config.
         # Every provenance and state field takes its model default, so a sender cannot pre-set
         # `state=accepted` or name someone else as the annotator.
-        task = Task(
-            project_id=project_id,
-            source=item.source,
-            media=item.media,
-            review_required=bool(project.get("review_required", True)),
-            **({"task_id": item.task_id} if item.task_id else {}),
+        group_id = item.task_id or new_id()
+        replicas = (
+            [
+                Task(
+                    task_id=group_id,
+                    project_id=project_id,
+                    source=item.source,
+                    media=item.media,
+                    review_required=bool(project.get("review_required", True)),
+                    lease_seconds=int(project.get("lease_seconds") or 1800),
+                )
+            ]
+            if consensus_n == 1
+            else [
+                Task(
+                    task_id=f"{group_id}-r{k}",
+                    project_id=project_id,
+                    replica_of=group_id,
+                    source=item.source,
+                    media=item.media,
+                    review_required=bool(project.get("review_required", True)),
+                    lease_seconds=int(project.get("lease_seconds") or 1800),
+                )
+                for k in range(1, consensus_n + 1)
+            ]
         )
-        body = task.model_dump(mode="json")
-        # `seed` is idempotent and returns what is ALREADY there. Checking its return is what stops
-        # a client-chosen `task_id` that already belongs to another project from being indexed here:
-        # the index entry would be written from the payload, the task's own `_report_state` would
-        # only ever address its real owner, and this project's entry would freeze at its seeded value
-        # — permanently non-terminal, so `may_publish` is false forever with no way to clear it.
-        seeded = await _task_proxy(task.task_id).seed(body)
-        if str(seeded.get("project_id")) != project_id:
-            raise ConflictError(f"task {task.task_id} already belongs to project {seeded.get('project_id')} — refusing to index it into {project_id}")
-        result = await _project_proxy(project_id).send(body)
-        if result.get("created"):
-            created.append(task.task_id)
+        for task in replicas:
+            body = task.model_dump(mode="json")
+            # `seed` is idempotent and returns what is ALREADY there. Checking its return is what
+            # stops a client-chosen `task_id` that already belongs to another project from being
+            # indexed here: the index entry would be written from the payload, the task's own
+            # `_report_state` would only ever address its real owner, and this project's entry would
+            # freeze at its seeded value — permanently non-terminal, `may_publish` false forever.
+            seeded = await _task_proxy(task.task_id).seed(body)
+            if str(seeded.get("project_id")) != project_id:
+                raise ConflictError(f"task {task.task_id} already belongs to project {seeded.get('project_id')} — refusing to index it into {project_id}")
+            result = await _project_proxy(project_id).send(body)
+            if result.get("created"):
+                created.append(task.task_id)
 
     audit("project.send", SUCCESS, subject=subject, resource=project_id)
     return {"sent": len(payload.items), "created": len(created), "task_ids": created}
 
 
 @router.get("/{project_id}/tasks")
-async def list_project_tasks(project_id: ProjectId, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
+async def list_project_tasks(
+    project_id: ProjectId,
+    checker: CheckerDep,
+    subject: CurrentSubject,
+    include: str | None = None,
+) -> dict[str, Any]:
     """The task index plus the publish precondition, computed from ONE snapshot.
 
     Returned together deliberately: a caller that read the index and then asked "may I publish?"
     separately could compute the answer from a different snapshot than the one it is showing.
+
+    ``include=details`` additionally fans out to each task's OWN actor (bounded concurrency) for
+    the full document — assignee, lease, media, review notes — plus its ``legal_events`` from
+    `machines.legal_task_events`, the single source A2/A3 render their actions from. The index
+    carries only ``task_id → state`` by design (the publish precondition needs no more); the
+    queue UI needs the rest. A task whose actor holds no state is reported in ``missing`` rather
+    than silently dropped or a 500 — the index can lead its actors after a half-completed send.
     """
     await _check(checker, subject, "can_view", f"annotation_project:{project_id}", "project.list_tasks")
-    return await _project_proxy(project_id).list_tasks()
+    listing = await _project_proxy(project_id).list_tasks()
+    if include != "details":
+        return listing
+
+    import asyncio  # noqa: PLC0415 - stdlib, endpoint-local
+
+    # Rule 5 (§5.2): once the project is publishing/published/archived, EVERY task transition is
+    # refused — so the details must not hand the UI actions that can only 409. The tasks' own
+    # states still admit edges (accepted → reopen); the PROJECT is the gate.
+    project = await _project_proxy(project_id).get()
+    project_frozen = project is not None and ProjectState(project["state"]) in FROZEN_PROJECT_STATES
+
+    gate = asyncio.Semaphore(16)
+
+    async def _detail(task_id: str) -> tuple[str, dict[str, Any] | None]:
+        async with gate:
+            return task_id, await _task_proxy(task_id).get()
+
+    pairs = await asyncio.gather(*(_detail(tid) for tid in sorted(listing["tasks"])))
+    details: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for task_id, doc in pairs:
+        if doc is None:
+            missing.append(task_id)
+            continue
+        events = [] if project_frozen else legal_task_events(TaskState(doc["state"]))
+        details.append({**doc, "legal_events": events})
+    return {**listing, "details": details, "missing": missing}
