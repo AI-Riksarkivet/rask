@@ -66,11 +66,11 @@ const q = (params: Record<string, string>): string => new URLSearchParams(params
 
 /** One delimiter-scoped level of `bucket`/`prefix` for the object browser. */
 export const listObjects = (bucket: Bucket, prefix: string): Promise<ApiResult<S3Listing>> =>
-	requestJSON<S3Listing>(`media/objects?${q({ bucket, prefix })}`);
+	requestJSON<S3Listing>(`explorer/objects?${q({ bucket, prefix })}`);
 
 /** Size / content-type / modified / etag for a single object (404 when it vanished). */
 export const headObject = (bucket: Bucket, key: string): Promise<ApiResult<S3ObjectHead>> =>
-	requestJSON<S3ObjectHead>(`media/object?${q({ bucket, key })}`);
+	requestJSON<S3ObjectHead>(`explorer/object?${q({ bucket, key })}`);
 
 /** The object byte proxy (download disposition). Doubles as the inline `<img src>`: a disposition
  *  header never stops an `<img>` fetch from rendering, and it covers BOTH buckets and any key
@@ -80,7 +80,7 @@ export const downloadUrl = (bucket: Bucket, key: string): string =>
 
 /** The object's raw bytes — the text-preview read (errors keep the 404 ≠ 0 status split). */
 export const fetchObjectBytes = (bucket: Bucket, key: string): Promise<ApiResult<ArrayBuffer>> =>
-	binary('/api', `media/object/download?${q({ bucket, key })}`);
+	binary('/api', `explorer/object/download?${q({ bucket, key })}`);
 
 /** How the preview pane renders an object: inline image, decoded text, or metadata-only. */
 export type PreviewKind = 'image' | 'text' | 'video' | 'audio' | 'pdf' | 'binary';
@@ -154,7 +154,7 @@ export type PageListing = { dataset: string; pages: Page[] };
  *  point the viewer at any bucket its credentials reach, and would let this page render a dataset
  *  the catalog has never heard of — the viewer and the catalog disagreeing by construction. */
 export const listPages = (table: string): Promise<ApiResult<PageListing>> =>
-	request<PageListing>('/api', `media/pages?${q({ table })}`);
+	request<PageListing>('/api', `explorer/pages?${q({ table })}`);
 
 /** One page's image bytes, as an `<img src>`. Selected by the `id` COLUMN, never by row position —
  *  positional indexing into a blob read is the misattribution bug the read path exists to avoid. */
