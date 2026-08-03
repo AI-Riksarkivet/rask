@@ -59,32 +59,34 @@ test('an estate admin gets the zone triggers + the Marquez-parity sidebar leaves
 	);
 	await page.goto('/lakehouse/lineage');
 	const nav = page.getByRole('navigation', { name: 'Zones' });
-	// The TRIGGERS are the zones that own sub-areas, PLUS Settings for an estate admin. Settings is not
-	// a zone: it is estate-wide configuration (access, tenants, audit) that used to be a Governance
-	// COLUMN of the Lakehouse panel, until the 2026-08-03 ruling moved it out — authorization is not a
-	// lakehouse feature; the lakehouse is merely the first thing it governs. Named AND counted: the
-	// name list catches a zone silently leaving the bar (the R15 defect), the count catches one
-	// silently joining it.
-	for (const trigger of ['Lakehouse', 'Compute', 'Search', 'Settings']) {
+	// THIS IS THE IN-PROJECT BAR — one entry per ZONE and nothing else. The two-level ruling took
+	// Home, Projects and Settings out of it: they are the ESTATE level, and you meet them at `/`,
+	// `/projects` and `/settings`, where the shell swaps in the main-menu bar instead. Inside a
+	// project the bar's only job is moving between zones, and it is identity-independent again —
+	// an admin earns panel COLUMNS here, never a new destination.
+	//
+	// Named AND counted: the name list catches a zone silently leaving the bar (the R15 defect), the
+	// count catches one silently joining it.
+	for (const trigger of ['Lakehouse', 'Compute', 'Search']) {
 		await expect(nav.getByRole('button', { name: trigger, exact: true })).toBeVisible();
 	}
-	await expect(nav.getByRole('button')).toHaveCount(4);
-	// Home is the product mark, not a nav entry. With every panel closed the bar's LINKS are the
-	// single-surface zones — a zone with one surface gets a plain link because a one-row dropdown
-	// would be noise; each panel TRIGGER must stay a button, or clicking it would navigate instead of
-	// opening the panel. Workbench joined this set with the 8th zone (117c8ed), and Projects with the
-	// IA round (2026-08-03): it is NOT a zone but a home-zone route, and it leads the bar because a
-	// project is the top of the hierarchy the zones below it are scoped by.
-	for (const link of ['Projects', 'Workbench', 'Annotate', 'Train', 'Studio']) {
+	await expect(nav.getByRole('button')).toHaveCount(3);
+	// The bar's LINKS are the single-surface zones — one surface means a one-row dropdown would be
+	// noise; each panel TRIGGER must stay a button, or clicking it would navigate instead of opening
+	// the panel.
+	for (const link of ['Workbench', 'Annotate', 'Train', 'Studio']) {
 		await expect(nav.getByRole('link', { name: link, exact: true })).toBeVisible();
 	}
-	await expect(nav.getByRole('link')).toHaveCount(5);
-	// Pinned by href too, because "Projects" could be satisfied by a link to anywhere: the estate's
-	// project list is `/projects` in the HOME zone, not this zone's deleted `/lakehouse/catalog/projects`.
-	await expect(nav.getByRole('link', { name: 'Projects', exact: true })).toHaveAttribute(
-		'href',
-		'/projects',
-	);
+	await expect(nav.getByRole('link')).toHaveCount(4);
+	// The three estate-level entries are ABSENT here, in either role — pinned, because their leaving
+	// this bar IS the ruling and a regression would otherwise just look like a longer bar.
+	for (const estate of ['Home', 'Projects', 'Settings']) {
+		await expect(nav.getByRole('link', { name: estate, exact: true })).toHaveCount(0);
+		await expect(nav.getByRole('button', { name: estate, exact: true })).toHaveCount(0);
+	}
+	// THE TIER GAP: Lakehouse and Compute lead, then a spacer, then the task destinations. Rendered
+	// from the `tier` data rather than a hardcoded index, so re-tiering an entry moves it.
+	await expect(nav.locator('[data-slot="navbar-tier-gap"]')).toHaveCount(1);
 	// The zone sidebar lists exactly the four first-class views + the Graph (active at the root).
 	// Scoped to the sidebar: page content may legitimately link to the same views (e.g. the graph
 	// header's capped hint links to Datasets), which would trip strict mode on a page-wide query.
@@ -167,23 +169,16 @@ test('an estate admin gets Operations in the Lakehouse panel and Governance unde
 			href,
 		);
 	}
-	// …and the governance rows are exactly one panel away, under Settings.
+	// The governance half is NOT assertable from here any more, and that is the point: Settings is an
+	// ESTATE-level entry, so it is not in this bar at all. Its rows are pinned where a user can
+	// actually reach them — `home/e2e/projects/settings.spec.ts`, which drives `/settings` itself and
+	// checks each row's href AND its data-sveltekit-reload (those pages are still served by THIS zone,
+	// so the link crosses zones). What this test still owns is the absence:
+	await expect(nav.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(0);
+	await expect(nav.getByRole('link', { name: 'Settings', exact: true })).toHaveCount(0);
+	// …and with the panel closed the bar itself still carries no Access entry of any shape.
 	await page.keyboard.press('Escape');
 	await expect(panel).toBeHidden();
-	const settings = await openPanel(page, 'Settings');
-	for (const [row, href] of [
-		['Access', '/lakehouse/governance/access'],
-		['Tenants', '/lakehouse/admin/tenants'],
-		['Audit', '/lakehouse/governance/audit'],
-	] as const) {
-		await expect(settings.getByRole('link', { name: new RegExp(`^${row}`) })).toHaveAttribute(
-			'href',
-			href,
-		);
-	}
-	// …and with every panel closed the bar itself still carries no Access entry of any shape.
-	await page.keyboard.press('Escape');
-	await expect(settings).toBeHidden();
 	await expect(nav.getByText('Access')).toHaveCount(0);
 });
 
@@ -294,15 +289,15 @@ test('the loading skeleton reserves the resolved entry widths — no shift when 
 	// must reserve the resolved entries' exact box, chevrons included, so the navbar does not jump
 	// when the identity resolves. Held open until the loading geometry has been measured.
 	//
-	// Resolved as a NON-ADMIN. It used to resolve as an estate admin, on the reasoning that the admin
-	// was the strongest probe because its extra surfaces had to land as panel COLUMNS and never as a
-	// top-level entry. The 2026-08-03 ruling changed that premise deliberately: an estate admin now
-	// earns exactly one entry, Settings, so an admin's bar DOES grow by one trigger when /v1/me lands
-	// and cannot be measured for zero shift. That growth is asserted as an intended consequence in
-	// 'an estate admin gets Operations in the Lakehouse panel and Governance under Settings'; what is
-	// measured HERE is the no-CLS contract for the identity that has one — everyone else, which is
-	// every anonymous first paint. Reserving a Settings-width slot for them instead would both leak
-	// the shape of a privilege they do not hold and reserve chrome that never arrives.
+	// Resolved as a NON-ADMIN, and the contract is whole again for BOTH identities. It briefly could
+	// not be: while Settings rode the zone bar, an admin's row genuinely grew by one trigger when
+	// /v1/me landed. The two-level ruling moved Settings to the main menu, so the in-project bar is
+	// identity-independent once more and nothing is earned by privilege here at all.
+	//
+	// The shift this now catches is the TIER GAP: the skeleton must reserve it exactly as the resolved
+	// bar renders it. It did not, at first — the row measured 26px narrower while /v1/me was in flight
+	// and snapped wider the instant it resolved. Chrome is chrome whether or not the identity has
+	// landed.
 	let release = () => {};
 	const gate = new Promise<void>((resolve) => (release = resolve));
 	await page.route('**/capi/v1/me', async (route) => {

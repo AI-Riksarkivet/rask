@@ -155,13 +155,12 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 	// zone (the icon contributes a leading space to the accessible text). This list is the SHELL's
 	// truth: a zone missing here is the R15 defect (a zone absent from the navbar), not a stale test.
 	// Projects LEADS it and Settings CLOSES it — the two groups that are not zones, both from the IA
-	// round (2026-08-03). Projects is first because a project is the top of the hierarchy every zone
-	// below it is scoped by; Settings is last because it is where you go deliberately, not where work
-	// happens, so the menu reads from "what you are working on" to "how the estate is configured".
-	// Settings is estate-admin only, and this page resolves one, which is why it appears here.
+	// ZONES ONLY. This page is inside a project, so the collapsed bar folds the IN-PROJECT bar — the
+	// same seven zones the wide bar carries. Home, Projects and Settings are the estate level and are
+	// not in this bar at either width; collapsing must not smuggle them back in, which is what pinning
+	// the exact list here catches. Their overflow behaviour belongs to the main menu, where they live.
 	const panel = page.locator('[data-slot="navigation-menu-viewport"]');
 	await expect(panel.locator('[data-slot="navbar-overflow-group"]')).toHaveText([
-		' Projects',
 		' Lakehouse',
 		' Compute',
 		' Workbench',
@@ -169,14 +168,12 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 		' Annotate',
 		' Train',
 		' Studio',
-		' Settings',
 	]);
 	// One row per destination the wide bar reaches — including each zone's own root and the
 	// estate-admin-only governance rows.
 	for (const href of [
-		// The one destination outside this zone's own base that is not a zone root: the home zone's
-		// project list, which the deleted `/lakehouse/catalog/projects` used to answer for.
-		'/projects',
+		// NO '/projects' HERE. The estate's project list is a MAIN-MENU destination, and this page is
+		// inside a project — the collapsed bar folds the in-project bar, which carries zones only.
 		'/lakehouse/catalog',
 		'/lakehouse/catalog/tables',
 		'/lakehouse/catalog/warehouses',
@@ -188,7 +185,10 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 		// nav-config.test pins it). The old bare forms predated that convention landing here.
 		'/media/',
 		'/annotator/',
-		'/lakehouse/governance/access',
+		// GOVERNANCE is not in this bar at either width any more — it moved to the main menu's Settings
+		// entry with the two-level ruling, so `/lakehouse/governance/access` is unreachable from inside
+		// a zone by design. Operations DID stay (running the estate is an operation on the lakehouse),
+		// which is why its DLQ row is still expected right below.
 		'/lakehouse/admin/dlq',
 	]) {
 		await expect(panel.locator(`a[href="${href}"]`)).toHaveCount(1);

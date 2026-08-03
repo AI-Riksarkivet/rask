@@ -4,14 +4,17 @@
 	// duplication the 2026-08-03 ruling deletes: there is one project concept and it is the TOP of the
 	// hierarchy (project › warehouse › namespace › table), so the estate's list of projects lives in
 	// the main menu, never inside a project-scoped zone's catalog.
-	import { Plus } from '@lucide/svelte';
+	import { untrack } from 'svelte';
+	import { LayoutGrid, List, Plus } from '@lucide/svelte';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
 	import { Card } from '@rask/ui/card';
+	import * as Table from '@rask/ui/table';
 	import { invalidateAll } from '$app/navigation';
 	import { page } from '$app/state';
 	import ProjectCreateDialog from '$lib/ProjectCreateDialog.svelte';
 	import type { GalleryData } from '$lib/gallery';
+	import { writeProjectsView, type ProjectsView } from '$lib/remote/view-prefs.remote';
 
 	let {
 		heading,
@@ -21,16 +24,40 @@
 		estateAdmin,
 		meSubject,
 		projects,
+		initialView = 'gallery',
 	}: GalleryData & {
-		/** The h1 for the surface this is mounted on — the estate brand on `/`, "Projects" on
-		 *  `/projects`. The only thing that differs between the two mounts. */
+		/** The h1 for the surface this is mounted on. */
 		heading: string;
 		/** Whether the stack has OIDC configured at all (from the shared layout load) — an ungoverned
 		 *  stack must not offer a dead sign-in link. */
 		authEnabled: boolean;
+		/** The caller's SAVED view, resolved server-side so the first paint is already the right one.
+		 *  Defaults to gallery: cards read well at the handful of projects most people can see, and the
+		 *  table earns its place past that. A null preference (never chosen) arrives as this default. */
+		initialView?: ProjectsView;
 	} = $props();
 
 	let creating = $state(false);
+
+	// The view, SEEDED from the SSR'd preference so a reload never flashes the other one, then owned
+	// by this component. `untrack` says that deliberately: the prop is the initial value, not a live
+	// binding, and without it Svelte warns (`state_referenced_locally`) — correctly, because the
+	// difference matters. A later load (the create flow calls `invalidateAll`) must NOT yank the view
+	// back from under someone who just toggled it.
+	//
+	// Optimistic: the UI switches immediately and the write follows, because a view toggle that waits
+	// on a round trip feels broken, and a failed write costs nothing but the next reload.
+	let view = $state<ProjectsView>(untrack(() => initialView));
+
+	function choose(next: ProjectsView): void {
+		if (next === view) return;
+		view = next;
+		// Deliberately not awaited and deliberately not surfaced: this is a preference, not data. A
+		// refused write means the next reload shows the old view — an annoyance, not a lost edit, and
+		// nowhere near worth a toast on top of a working page. `.catch` because an unhandled rejection
+		// from a remote command is what kills every later call in the same client.
+		void writeProjectsView(next).catch(() => {});
+	}
 
 	// Come back HERE after the OIDC round-trip, whichever of the two routes is mounted (the shell's
 	// ?redirect= contract, navbar-user.svelte).
@@ -43,20 +70,88 @@
 		<header class="flex flex-col gap-1">
 			<div class="flex items-center justify-between gap-3">
 				<h1 class="text-3xl font-semibold">{heading}</h1>
-				{#if estateAdmin}
-					<!-- Estate-admin only (the /v1/me gate). The create MINTS a project by provisioning its
-					     first warehouse; the gallery reflects it via the invalidate `oncreated` triggers. -->
-					<Button variant="outline" size="sm" onclick={() => (creating = true)}>
-						<Plus /> New project
-					</Button>
-				{/if}
+				<div class="flex items-center gap-2">
+					{#if projects.length > 0}
+						<!-- VIEW TOGGLE. A radiogroup, not two toggle buttons: exactly one view is active and
+						     picking one deselects the other, which is what `radio` means and what a screen
+						     reader then announces. Hidden when there is nothing to view — offering a way to
+						     re-arrange an empty list is noise. -->
+						<div
+							role="radiogroup"
+							aria-label="Project list view"
+							class="border-border flex items-center gap-0.5 rounded-md border p-0.5"
+						>
+							{#each [{ id: 'gallery', label: 'Gallery', icon: LayoutGrid }, { id: 'table', label: 'Table', icon: List }] as const as option (option.id)}
+								<button
+									type="button"
+									role="radio"
+									aria-checked={view === option.id}
+									aria-label={option.label}
+									title={option.label}
+									data-slot="projects-view-{option.id}"
+									class={[
+										'text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded-sm p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2',
+										view === option.id && 'bg-accent text-foreground',
+									]}
+									onclick={() => choose(option.id)}
+								>
+									<option.icon class="size-4" aria-hidden="true" />
+								</button>
+							{/each}
+						</div>
+					{/if}
+					{#if estateAdmin}
+						<!-- Estate-admin only (the /v1/me gate). The create MINTS a project by provisioning its
+						     first warehouse; the gallery reflects it via the invalidate `oncreated` triggers. -->
+						<Button variant="outline" size="sm" onclick={() => (creating = true)}>
+							<Plus /> New project
+						</Button>
+					{/if}
+				</div>
 			</div>
 			<p class="text-muted-foreground">
 				Governed Lance lakehouse — {estateAdmin ? 'every project in the estate' : 'your projects'}.
 			</p>
 		</header>
 
-		{#if projects.length > 0}
+		{#if projects.length > 0 && view === 'table'}
+			<!-- THE TABLE VIEW. Same rows, same links, same destinations as the cards — only denser.
+			     It reads the SAME `projects` array rather than a second query: two views of one list,
+			     not two lists. The whole row is not a link (an <a> cannot wrap <tr>), so the project
+			     cell carries it and the rest of the row is plain text. -->
+			<Table.Root>
+				<Table.Header>
+					<Table.Row>
+						<Table.Head>Project</Table.Head>
+						<Table.Head>Role</Table.Head>
+						<Table.Head class="text-right">Warehouses</Table.Head>
+					</Table.Row>
+				</Table.Header>
+				<Table.Body>
+					{#each projects as p (p.project)}
+						<Table.Row>
+							<Table.Cell class="font-medium">
+								<!-- SAME-ZONE: the overview moved here with the list, so this soft-navigates and
+								     must NOT carry data-sveltekit-reload. -->
+								<a href={`/projects/${encodeURIComponent(p.project)}`} class="hover:underline">
+									{p.project}
+								</a>
+							</Table.Cell>
+							<Table.Cell>
+								{#if p.role}
+									<Badge variant={p.role === 'admin' ? 'default' : 'secondary'}>{p.role}</Badge>
+								{:else}
+									<span class="text-muted-foreground">—</span>
+								{/if}
+							</Table.Cell>
+							<Table.Cell class="text-muted-foreground text-right">
+								{p.warehouses ?? '—'}
+							</Table.Cell>
+						</Table.Row>
+					{/each}
+				</Table.Body>
+			</Table.Root>
+		{:else if projects.length > 0}
 			<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 				{#each projects as p (p.project)}
 					<!-- SAME-ZONE now: the project overview moved here with the list (2026-08-03), so this

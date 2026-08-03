@@ -4,6 +4,7 @@ import {
 	Database,
 	FlaskConical,
 	FolderKanban,
+	House,
 	PenLine,
 	Search,
 	Settings,
@@ -346,8 +347,41 @@ const OPERATIONS_ITEMS: TopNavItem[] = [
  * the estate has one thing for them to choose at that level.
  */
 export function mainMenuNav(estateAdmin: boolean): TopNavEntry[] {
-	const all = topNav(estateAdmin);
-	return all.filter((e) => e.title === 'Projects' || e.title === 'Settings');
+	// HOME leads the main menu — and appears ONLY here. The zone bar carries no Home entry (see
+	// `topNav`): inside a project the way back up is the project switcher and the sidebar header, and
+	// a third control to the same place is noise in a bar whose job is moving BETWEEN zones. At the
+	// estate root the opposite holds — Home is not "a way back", it IS one of the three places you
+	// can be, so it has to be nameable.
+	return [
+		{
+			title: 'Home',
+			href: '/',
+			icon: House,
+			// EXACT: '/' must not light up while you are on /projects or /settings — they are its
+			// SIBLINGS at this level, not routes underneath it.
+			match: exact('/'),
+			tier: 'primary',
+		},
+		PROJECTS_ENTRY,
+		...(estateAdmin ? [SETTINGS_ENTRY] : []),
+	];
+}
+
+/**
+ * Is this path the ESTATE level (the main menu) rather than the inside of a project?
+ *
+ * The two-level rule, in one predicate: `/`, `/projects` and `/settings` are where you choose what to
+ * work on; everything else — every zone route, and `/projects/<id>` itself — is somewhere you have
+ * already chosen. Opening a project is what puts you inside one, which is why the per-project page
+ * gets the ZONE bar and the list above it does not.
+ *
+ * Deliberately a PATH test, not a stored "active project": scoping is by context, and this is the
+ * context. A host-scoped deployment (`acme.localhost`, `projectFromHost`) simply arrives with a zone
+ * path already, so it lands on the same answer without a second mechanism to keep in sync.
+ */
+export function isMainMenu(pathname: string): boolean {
+	const p = norm(pathname);
+	return p === '' || p === '/' || p === '/projects' || p === '/settings' || p.startsWith('/settings/');
 }
 
 export function topNav(estateAdmin: boolean): TopNavEntry[] {
@@ -380,28 +414,18 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 	if (estateAdmin) {
 		lakehouse.push({ label: 'Operations', items: OPERATIONS_ITEMS });
 	}
+	// THIS IS THE IN-PROJECT BAR — one entry per ZONE, and nothing else.
+	//
+	// NO "Home", NO "Projects", NO "Settings". Those three are the ESTATE level and live in
+	// `mainMenuNav()`; putting them here too would make every zone's bar eleven entries long and blur
+	// the one distinction this IA rests on — the estate root is where you choose what to work on, a
+	// zone is where you do it. The way back up from inside a project is the project switcher and the
+	// sidebar header, both of which sit in this same chrome.
+	//
+	// TIERS are a rendering signal, not a grouping: Lakehouse and Compute are where the work happens
+	// — the lakehouse you govern and the compute that fills it — so they lead and the shell sets them
+	// off with a gap. Everything after the gap is a task destination.
 	return [
-		// NO "Home" ENTRY. The origin root is reachable two better ways already — the project
-		// switcher at the head of this same row, and the sidebar header, which names the zone you are
-		// in and links home. A third control to the same destination is noise in a bar whose job is
-		// to move you BETWEEN zones, and it made the estate's landing surface look like a peer of
-		// Lakehouse and Compute rather than the thing containing them.
-		//
-		// PROJECTS is the one exception to "one entry per zone", and it earns it by RULING
-		// (2026-08-03: "projects and settings in topnavbar in main menu"). A project is the TOP of the
-		// hierarchy — project > warehouse > namespace > table — so it is not a peer of the zones below
-		// it, it is what they are scoped BY, and it leads the bar for the same reason. It is a route in
-		// the home zone rather than a zone of its own (`/projects` + `/projects/<p>`), so it is a plain
-		// link: the list, the per-project overview and the create flow are one surface, and a
-		// one-row dropdown would be noise. NOT the origin root, so this is not "Home" by another name —
-		// `/` is the landing, `/projects` is the addressable list.
-		{
-			title: 'Projects',
-			href: '/projects',
-			icon: FolderKanban,
-			match: under('/projects'),
-			tier: 'primary',
-		},
 		{
 			title: 'Lakehouse',
 			href: '/lakehouse/catalog',
@@ -459,35 +483,37 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			icon: FlaskConical,
 			match: under('/studio'),
 		},
-		// SETTINGS closes the ruling's other half ("projects and settings in topnavbar in main menu"),
-		// and it is the second entry that is not a zone. It carries what configures the ESTATE rather
-		// than what any one zone does: access (who may do what), tenants (who exists), and the audit
-		// trail (what was done). Those rows used to be a Governance column inside the Lakehouse panel,
-		// which read as though authorization were a lakehouse feature — it is not; the lakehouse is
-		// merely the first thing it governs.
-		//
-		// It comes LAST on purpose. Settings is where you go deliberately, not where work happens, and
-		// the bar reads left-to-right from "what you are working on" to "how the estate is configured".
-		// Estate-admin only, and ABSENT rather than disabled for everyone else — the same fail-closed
-		// rule the Governance column had: a non-admin's bar must not even name a surface they are
-		// barred from, or the IA leaks the shape of the privilege.
-		...(estateAdmin
-			? [
-					{
-						title: 'Settings',
-						href: '/lakehouse/governance/access',
-						icon: Settings,
-						// Lights across every governance surface, wherever those routes physically live
-						// today. They are still served by the lakehouse app; the ROUTES have not moved,
-						// only where the IA says they belong. Moving them behind a `/settings` base is a
-						// separate change with a redirect to keep old links alive.
-						match: under('/lakehouse/governance'),
-						items: [...GOVERNANCE_ITEMS],
-					},
-				]
-			: []),
 	];
 }
+
+/** PROJECTS — the estate's list. Not a zone: a route in the home zone (`/projects`,
+ *  `/projects/<p>`), and a plain link because the list, the per-project overview and the create flow
+ *  are one surface. `under` so it stays lit on a project page. */
+const PROJECTS_ENTRY: TopNavEntry = {
+	title: 'Projects',
+	href: '/projects',
+	icon: FolderKanban,
+	match: under('/projects'),
+	tier: 'primary',
+};
+
+/** SETTINGS — estate configuration: notifications, the defaults a NEW project is created with, and
+ *  auth/authz. A real home-zone route (`/settings`), which is why this no longer points at
+ *  `/lakehouse/governance/access` — that was a placeholder for a page that did not exist.
+ *
+ *  Estate-admin only, and ABSENT rather than disabled for everyone else — the fail-closed rule the
+ *  Governance column had before it moved here: a non-admin's bar must not even NAME a surface they
+ *  are barred from, or the IA leaks the shape of the privilege. */
+const SETTINGS_ENTRY: TopNavEntry = {
+	title: 'Settings',
+	href: '/settings',
+	icon: Settings,
+	// Also lights on the governance routes the lakehouse still SERVES, so the bar agrees with itself
+	// while those pages live at their old addresses. Moving them behind `/settings/` is a separate
+	// change and needs redirects for anything already linking them.
+	match: under('/settings', '/lakehouse/governance'),
+	items: [...GOVERNANCE_ITEMS],
+};
 
 /** The first path segment = the owning zone ('' = the home zone at the origin root). A link whose
  *  zone differs from the current pathname's leaves this app's route manifest, so it must hard-nav

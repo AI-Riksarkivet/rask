@@ -51,7 +51,7 @@ test('GET /auth/logout clears the session and redirects home', async ({ page, ba
 	expect(page.url()).toBe(`${baseURL}/`);
 });
 
-test('the MAIN MENU navbar carries Projects and nothing else for an anonymous visitor', async ({
+test('the MAIN MENU navbar carries Home and Projects for an anonymous visitor — no zone, no Settings', async ({
 	page,
 }) => {
 	// REWRITTEN BY RULING (2026-08-03): "we should only see 2 items in topnavbar — projects and
@@ -70,7 +70,10 @@ test('the MAIN MENU navbar carries Projects and nothing else for an anonymous vi
 	await page.goto('/');
 	const nav = page.getByRole('navigation', { name: 'Zones' });
 	await expect(nav).toBeVisible();
-	// THE main-menu contract: Projects, as a link to this zone's own route.
+	// THE main-menu contract: Home and Projects, both plain links to this zone's own routes. Home is
+	// the estate landing — one of the three places you can be at this level, not a "back" affordance,
+	// which is why it is nameable here and absent from the in-project bar.
+	await expect(nav.getByRole('link', { name: 'Home', exact: true })).toHaveAttribute('href', '/');
 	await expect(nav.getByRole('link', { name: 'Projects', exact: true })).toHaveAttribute(
 		'href',
 		'/projects',
@@ -83,10 +86,10 @@ test('the MAIN MENU navbar carries Projects and nothing else for an anonymous vi
 		await expect(nav.getByRole('link', { name: title, exact: true })).toHaveCount(0);
 	}
 	await expect(nav.getByRole('button')).toHaveCount(0);
-	await expect(nav.getByRole('link')).toHaveCount(1);
-	// SETTINGS is the second main-menu entry and it is estate-admin ONLY. fetchMe resolves null here
+	await expect(nav.getByRole('link')).toHaveCount(2);
+	// SETTINGS is the third main-menu entry and it is estate-admin ONLY. fetchMe resolves null here
 	// (no session, no catalog) → estate_admin unknowable → fail-closed, so an anonymous visitor's main
-	// menu is one entry, and the bar never names a surface this viewer is barred from.
+	// menu is two entries, and the bar never names a surface this viewer is barred from.
 	await expect(nav.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(0);
 	await expect(nav.getByRole('link', { name: 'Settings', exact: true })).toHaveCount(0);
 	// Access lives in the Settings panel now; nowhere in an anonymous bar, panel open or closed.
@@ -101,15 +104,27 @@ test('the MAIN MENU navbar carries Projects and nothing else for an anonymous vi
 	await expect(nav.locator('a[href^="/lakehouse"]')).toHaveCount(0);
 });
 
-test('the landing shows the gallery empty state and NO auth control when auth is off', async ({
-	page,
-}) => {
+test('the landing is HOME — an honest scaffold, not the project gallery', async ({ page }) => {
 	await page.goto('/');
 	await expect(page.getByRole('heading', { name: 'lance', exact: true })).toBeVisible();
-	// Auth-off + no catalog → signed out, no projects → the empty state names the unconfigured sign-in.
-	await expect(page.getByText('sign-in is not configured on this stack')).toBeVisible();
+	// IT SAYS WHAT IT IS. The insights are not wired, and a landing page that implied otherwise — or
+	// showed invented numbers — would be worse than one that admits it. The badge is the claim.
+	await expect(page.getByText('Scaffold — no insights wired yet')).toBeVisible();
+	await expect(page.getByRole('region', { name: 'Estate insights' })).toBeVisible();
+	// …and it is NOT the gallery any more. That surface, and the membership empty state that used to
+	// greet a project-less visitor as their entire product, live on /projects — asserted as an
+	// ABSENCE here so the two cannot quietly both render the list again.
+	await expect(page.getByText('You are not a member of any project yet')).toHaveCount(0);
+	await expect(page.getByText('sign-in is not configured on this stack')).toHaveCount(0);
+	// The one destination this PAGE offers every visitor. Addressed by its own data-slot rather than by
+	// role+name: the navbar carries a Projects link too, so a name-based locator matches both (a strict
+	// mode violation) and would happily pass on a page whose only Projects link lived in the chrome.
+	await expect(page.locator('[data-slot="home-projects-card"]')).toHaveAttribute(
+		'href',
+		'/projects',
+	);
 	// authEnabled is false → the sign-in affordance is gated off entirely (no dead login link on an
-	// ungoverned stack) — neither the gallery prompt nor a navbar menu entry.
+	// ungoverned stack) — neither a page prompt nor a navbar menu entry.
 	await expect(page.getByRole('link', { name: 'Sign out' })).toHaveCount(0);
 	await expect(page.getByRole('button', { name: 'Sign in' })).toHaveCount(0);
 	await expect(page.getByRole('link', { name: 'Sign in' })).toHaveCount(0);

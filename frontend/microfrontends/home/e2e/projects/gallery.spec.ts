@@ -8,9 +8,10 @@ import { seed as seedFor } from './mock-client';
 // fails, the caller still sees their own projects. "Degrade, never 500" is only a claim until a run
 // proves the page still answers 200 with the right rows on the failing path.
 //
-// Both routes mount the SAME load and the SAME component (the ruling's one-implementation rule), so
-// the mount pinned here is `/` for the fallback and `/projects` for the identical read — a copy that
-// drifted would show up as the two disagreeing.
+// EVERY mount here is `/projects`. `/` used to render this same gallery, which is why some of these
+// read the landing; the two-level ruling made `/` the estate's HOME (an insights scaffold) and left
+// `/projects` as the list's only surface — so the membership empty state and the degrade paths
+// belong here, where someone actually asks "where are my projects".
 
 let token: string;
 
@@ -41,10 +42,10 @@ test('a 403 on the estate listing degrades to the caller’s own memberships —
 		// can hold the first and be refused the second. That is the fallback's real trigger.
 		'GET /v1/projects': { status: 403, body: { detail: 'forbidden' } },
 	});
-	const res = await page.goto('/');
+	const res = await page.goto('/projects');
 	// The failing upstream must not reach the user as a 500 or an error boundary…
 	expect(res?.status()).toBe(200);
-	await expect(page.getByRole('heading', { name: 'lance', exact: true })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible();
 	// …and the rows are the membership-derived ones: role badges present, warehouse counts absent
 	// (the listing is the only thing that knows them, and it refused).
 	const acme = page.locator('a[href="/projects/acme"]');
@@ -63,7 +64,7 @@ test('an unreachable catalog degrades the same way — the memberships /v1/me al
 	// The load's `res.ok` branch and its `catch` are the same fallback, and both must reach the user as
 	// their projects rather than as an error.
 	await seed(page, { 'GET /v1/me': ME_ADMIN_WITH_MEMBERSHIPS });
-	const res = await page.goto('/');
+	const res = await page.goto('/projects');
 	expect(res?.status()).toBe(200);
 	await expect(page.locator('a[href="/projects/acme"]')).toContainText('admin');
 	await expect(page.locator('a[href="/projects/beta"]')).toContainText('member');
@@ -76,7 +77,7 @@ test('a non-estate-admin never reads the estate listing at all', async ({ page }
 		'GET /v1/me': ME_MEMBER,
 		'GET /v1/projects': [{ project: 'tenant-b', warehouses: [{ id: 'tenant-b-wh' }] }],
 	});
-	await page.goto('/');
+	await page.goto('/projects');
 	await expect(page.locator('a[href="/projects/acme"]')).toContainText('member');
 	await expect(page.locator('a[href="/projects/tenant-b"]')).toHaveCount(0);
 });

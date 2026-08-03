@@ -1,7 +1,17 @@
 import { loadGallery } from '$lib/gallery';
+import { readProjectsView } from '$lib/remote/view-prefs.remote';
 import type { PageServerLoad } from './$types';
 
-// `/projects` — the navbar-addressable project surface. The SAME load as `/`: one implementation,
-// two mounts (2026-08-03 ruling — a project is the top of the hierarchy, so the estate's project
-// list belongs to the main menu; a second copy of the listing is what this move deletes).
-export const load: PageServerLoad = (event) => loadGallery(event);
+// `/projects` — the estate's project list, and the ONLY mount of the gallery since `/` became Home
+// (the two-level ruling: Home · Projects · Settings at the estate root). The membership empty state
+// lives here with it, because "you are not a member of any project yet" answers "where are my
+// projects", not "what is this product".
+//
+// The saved VIEW is resolved HERE rather than on mount, so the first paint is already the view the
+// caller chose. Reading it client-side would render the gallery and then swap to the table a beat
+// later, on every single load. `readProjectsView` answers null both for "never chosen" and for every
+// failure, so the default lives in exactly one place: the component's `initialView` default.
+export const load: PageServerLoad = async (event) => {
+	const [gallery, view] = await Promise.all([loadGallery(event), readProjectsView()]);
+	return { ...gallery, initialView: view ?? undefined };
+};

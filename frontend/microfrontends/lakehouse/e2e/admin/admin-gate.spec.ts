@@ -103,26 +103,22 @@ test("an estate admin passes the door and gets Lakehouse's governance columns", 
 	// is still a panel COLUMN. That is the whole shape of this pair of tests, and it only bites while
 	// both sides assert their number: the non-admin above asserts 3 and this asserts 4, so a bar that
 	// rendered Settings for everyone, or for no one, fails on one side or the other.
-	await expect(nav.getByRole('button')).toHaveCount(4);
-	await expect(nav.getByRole('button', { name: 'Settings', exact: true })).toBeVisible();
+	// THREE, the same as the non-admin above: the two-level ruling moved Settings to the MAIN MENU, so
+	// the in-project bar is identity-independent again. Privilege shows up one level in, as the
+	// Lakehouse panel's Operations column — never as a new destination in this row.
+	await expect(nav.getByRole('button')).toHaveCount(3);
+	await expect(nav.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(0);
 	await expect(nav.getByRole('button', { name: 'Admin', exact: true })).toHaveCount(0);
 	// Access is NOT a top-level navbar entry, in either shape…
 	await expect(nav.getByRole('link', { name: 'Access', exact: true })).toHaveCount(0);
 	await expect(nav.getByRole('button', { name: 'Access', exact: true })).toHaveCount(0);
-	// …it is a ROW of the Settings panel, which this identity DOES get. Asserted with the panel open —
-	// the positive half of the non-admin guarantee above, so the two tests cannot both pass on a navbar
+	// …it is a ROW of the Settings panel, which is a MAIN-MENU surface and therefore not reachable
+	// from inside a zone at all. Its rows are asserted where a user meets them —
+	// `home/e2e/projects/settings.spec.ts`, which drives `/settings` and checks each href AND its
+	// data-sveltekit-reload (those pages are still served by THIS zone, so the link crosses zones).
+	// What remains here is the positive half of the guarantee: this identity DOES get the privileged
+	// surfaces, as the zone panel's Operations column, so the two tests cannot both pass on a navbar
 	// that simply renders nothing.
-	const settings = await openPanel(page, 'Settings');
-	for (const href of [
-		'/lakehouse/governance/access',
-		'/lakehouse/admin/tenants',
-		'/lakehouse/governance/audit',
-	]) {
-		await expect(settings.locator(`a[href="${href}"]`)).toBeVisible();
-	}
-	await page.keyboard.press('Escape');
-	await expect(settings).toBeHidden();
-	// …while OPERATIONS — running the estate rather than governing it — stays in the zone's own panel.
 	const panel = await openPanel(page, 'Lakehouse');
 	await expect(panel.getByText('Operations', { exact: true })).toBeVisible();
 	await expect(panel.getByText('Governance', { exact: true })).toHaveCount(0);

@@ -47,27 +47,25 @@ test('an estate admin gets the zone triggers + the models sidebar leaves', async
 	await page.route('**/capi/v1/me', (route) => json(route, ADMIN));
 	await page.goto('/lakehouse/models');
 	const nav = page.getByRole('navigation', { name: 'Zones' });
-	// The zone triggers, plus SETTINGS for an estate admin — the one entry privilege earns, because
-	// estate-wide configuration is not any zone's feature (2026-08-03 ruling). Everything else an
-	// admin gains is still a panel COLUMN, not a top-level entry. Named AND counted: the names catch a
-	// zone silently leaving the bar (the R15 defect), the count catches one silently joining it.
-	for (const trigger of ['Lakehouse', 'Compute', 'Search', 'Settings']) {
+	// THE IN-PROJECT BAR — one entry per zone, and identity-independent: an estate admin earns panel
+	// COLUMNS, never a top-level entry. Home, Projects and Settings are the ESTATE level and are not
+	// in this bar at all (the two-level ruling). Named AND counted: the names catch a zone silently
+	// leaving the bar (the R15 defect), the count catches one silently joining it.
+	for (const trigger of ['Lakehouse', 'Compute', 'Search']) {
 		await expect(nav.getByRole('button', { name: trigger, exact: true })).toBeVisible();
 	}
-	await expect(nav.getByRole('button')).toHaveCount(4);
-	// Home is the product mark, not a nav entry. With every panel closed the bar's LINKS are the
-	// single-surface zones — one surface means a one-row dropdown would be noise; each panel
-	// TRIGGER must stay a button, or clicking it would navigate instead of opening the panel. Projects
-	// joined them in the IA round (2026-08-03): not a zone but a home-zone route, leading the bar
-	// because a project is the top of the hierarchy the zones below it are scoped by.
-	for (const link of ['Projects', 'Workbench', 'Annotate', 'Train', 'Studio']) {
+	await expect(nav.getByRole('button')).toHaveCount(3);
+	// The bar's LINKS are the single-surface zones — one surface means a one-row dropdown would be
+	// noise; each panel TRIGGER must stay a button, or clicking it would navigate instead of opening
+	// the panel.
+	for (const link of ['Workbench', 'Annotate', 'Train', 'Studio']) {
 		await expect(nav.getByRole('link', { name: link, exact: true })).toBeVisible();
 	}
-	await expect(nav.getByRole('link')).toHaveCount(5);
-	await expect(nav.getByRole('link', { name: 'Projects', exact: true })).toHaveAttribute(
-		'href',
-		'/projects',
-	);
+	await expect(nav.getByRole('link')).toHaveCount(4);
+	for (const estate of ['Home', 'Projects', 'Settings']) {
+		await expect(nav.getByRole('link', { name: estate, exact: true })).toHaveCount(0);
+		await expect(nav.getByRole('button', { name: estate, exact: true })).toHaveCount(0);
+	}
 	// This zone is NOT its own entry any more, and Access is not one either (in any shape).
 	await expect(nav.getByRole('link', { name: 'Models', exact: true })).toHaveCount(0);
 	await expect(nav.getByRole('link', { name: 'Access', exact: true })).toHaveCount(0);
@@ -108,18 +106,14 @@ test('Access is reachable only from the Settings panel, never as its own navbar 
 	await page.route('**/capi/v1/me', (route) => json(route, ADMIN));
 	await page.goto('/lakehouse/models');
 	const nav = page.getByRole('navigation', { name: 'Zones' });
-	// Access moved with the rest of governance (2026-08-03 ruling): it rides the SETTINGS panel now,
-	// not a Governance column of the Lakehouse panel. The invariant this test has always been about is
-	// unchanged — Access is a ROW, never a top-level entry — only the panel holding it moved.
-	const settings = await openPanel(page, 'Settings');
-	await expect(settings.locator('a[href="/lakehouse/governance/access"]')).toBeVisible();
-	for (const row of ['/lakehouse/admin/tenants', '/lakehouse/governance/audit']) {
-		await expect(settings.locator(`a[href="${row}"]`)).toBeVisible();
-	}
-	await page.keyboard.press('Escape');
-	await expect(settings).toBeHidden();
+	// Access moved with the rest of governance (2026-08-03), and then moved OUT of this bar entirely
+	// with the two-level ruling: it is a row of the main menu's Settings panel, which does not render
+	// inside a zone. Its rows are pinned in `home/e2e/projects/settings.spec.ts`, on the page a user
+	// actually reaches them from. The invariant this test has always been about is unchanged and is
+	// asserted here as an absence — Access is a ROW somewhere, never a top-level entry here.
+	await expect(nav.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(0);
 	// Operations stays with the lakehouse — running the estate is an operation ON it — so the split is
-	// asserted from both sides: these rows are in the zone's panel and NOT in Settings.
+	// asserted from both sides: these rows are in the zone's panel and the governance ones are not.
 	const panel = await openPanel(page, 'Lakehouse');
 	await expect(panel.getByText('Operations', { exact: true })).toBeVisible();
 	await expect(panel.getByText('Governance', { exact: true })).toHaveCount(0);
