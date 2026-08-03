@@ -50,7 +50,12 @@ class CommitResult(BaseModel):
 
     dataset_uri: str
     version: int
+    #: Rows in the DATASET after the commit. A tier total, not a run's work.
     rows: int
+    #: Rows THIS run added. Reported separately because the two diverge the moment a dataset takes a
+    #: second run, and conflating them made the second in-cluster lane report 8 units done for a run
+    #: that ingested 4 files — a run's progress must describe the run, not the tier it landed in.
+    rows_added: int = 0
     fragments_committed: int = 0
 
 
@@ -98,10 +103,15 @@ class Lander:
         base = lance.dataset(dataset_uri)
         committed = lance.LanceDataset.commit(dataset_uri, LanceOperation.Append(fragments), read_version=base.version)
         self._catalog.register_version(dataset_uri, committed.version, run_id)
+        # Counted from the FRAGMENTS, not as a before/after difference against the dataset. A
+        # difference would be wrong the moment two runs commit concurrently — each would see the
+        # other's rows and claim them — and this is exactly the plane where that is normal.
+        added = sum(int(getattr(f, "physical_rows", 0) or 0) for f in fragments)
         return CommitResult(
             dataset_uri=dataset_uri,
             version=committed.version,
             rows=committed.count_rows(),
+            rows_added=added,
             fragments_committed=len(fragments),
         )
 

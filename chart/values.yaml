@@ -107,7 +107,15 @@ services:
     # files cannot carry Helm templates — a `{{ include ... }}` here renders as a LITERAL string — so
     # the endpoint is a template concern and this is only the flag that asks for it.
     lanceWriter: true
-    env: {}
+    env:
+      # Lineage is both WRITTEN and READ here, and the two need different halves of one service.
+      # RASK_LINEAGE_ENDPOINT is lineage-kit's emitter target: unset, its transport degrades to a
+      # logged no-op, so every run would land its data and leave no provenance record while still
+      # reporting success — exactly the hole A8 exists to catch. RASK_LINEAGE_URL is the read side,
+      # which the status endpoint joins against so A8's verdict comes from the graph rather than from
+      # a flag nothing sets. Both point at the release's lineage Service.
+      RASK_LINEAGE_ENDPOINT: http://rask-lineage:8000
+      RASK_LINEAGE_URL: http://rask-lineage:8000
   compute:
     module: "compute:app"
     port: 8804

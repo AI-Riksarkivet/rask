@@ -157,7 +157,11 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str]) ->
     purge_staged(uri, spec.run_id)
     return {
         "committed_version": result.version,
-        "rows": result.rows,
+        # THIS run's rows. `result.rows` is the dataset total, which is the same number only for a
+        # tier's first run — the second in-cluster lane reported 8 units done for 4 ingested files
+        # because the two were conflated.
+        "rows": result.rows_added,
+        "dataset_rows": result.rows,
         "errors": errors,
         "status": "COMPLETE_WITH_ERRORS" if errors else "COMPLETE",
     }

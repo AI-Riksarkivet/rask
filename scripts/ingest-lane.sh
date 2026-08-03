@@ -186,8 +186,34 @@ cmd_run() {
 	pod="$(ingest_pod)"
 	[ -n "$pod" ] || die "no ingest pod in namespace $NS"
 
-	local key="a11-$(date +%s)"
-	log "POST /v1/ingests (Idempotency-Key: $key)"
+	# A FRESH dataset per run. Bronze is append-only and a run's rows accumulate into the tier, so
+	# re-running against a fixed name makes "4 fixtures in" and "N rows in the dataset" diverge — the
+	# second run of the previous lane reported 8 units done for 4 files. Row-count assertions have to
+	# be about THIS run, and the cheapest way to guarantee that is to give each run its own dataset.
+	# PRE-FLIGHT: the fixtures must be in THIS pod. They live on the pod's ephemeral filesystem, so a
+	# rollout between seeding and running silently empties them — and an empty source is not an error
+	# anywhere in the plane. Enumeration finds no keys, no chunks are dispatched, `finalize` takes its
+	# legitimate no-op path, and the run reports COMPLETE at the empty-create version. Every assertion
+	# except the row count passes. Checked here rather than trusted, and re-seeded if absent.
+	local present
+	present="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
+import os
+print(len([f for f in os.listdir('$POD_FIXTURE_DIR') if f.endswith('.tif')]) if os.path.isdir('$POD_FIXTURE_DIR') else 0)
+" 2>/dev/null || echo 0)"
+	if [ "${present:-0}" -eq 0 ]; then
+		log "fixtures absent in $pod (rolled since seeding) — re-seeding"
+		cmd_fixtures
+	fi
+
+	# A FRESH dataset per run. Bronze is append-only and a run's rows accumulate into the tier, so
+	# re-running against a fixed name makes "4 fixtures in" and "N rows in the dataset" diverge — an
+	# earlier lane reported 8 units done for 4 ingested files. A row-count assertion has to be about
+	# THIS run, and the cheapest way to guarantee that is to give each run its own dataset.
+	local stamp
+	stamp="$(date +%s)"
+	local key="a11-$stamp"
+	local dataset="a11-$stamp"
+	log "POST /api/ingests (Idempotency-Key: $key, dataset: $dataset)"
 
 	# Timed, because A1 is a CONTRACT: 202 in under a second. Measured inside the cluster so the
 	# number is the handler's, not the port-forward's.
@@ -197,7 +223,7 @@ import json, time, urllib.request
 body = json.dumps({
     'kind': 'local-dir',
     'project': 'demo',
-    'dataset': 'a11pages',
+    'dataset': '$dataset',
     'options': {'root': '$POD_FIXTURE_DIR', 'pattern': '*.tif'},
 }).encode()
 req = urllib.request.Request('http://127.0.0.1:8830/api/ingests', data=body,
@@ -262,7 +288,7 @@ with urllib.request.urlopen('http://127.0.0.1:8830/api/ingests/$run_id', timeout
 	local repeat
 	repeat="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
 import json, urllib.request
-body = json.dumps({'kind':'local-dir','project':'demo','dataset':'a11pages',
+body = json.dumps({'kind':'local-dir','project':'demo','dataset':'$dataset',
                    'options':{'root':'$POD_FIXTURE_DIR','pattern':'*.tif'}}).encode()
 req = urllib.request.Request('http://127.0.0.1:8830/api/ingests', data=body,
                              headers={'Content-Type':'application/json','Idempotency-Key':'$key'})

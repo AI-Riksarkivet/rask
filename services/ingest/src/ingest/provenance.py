@@ -50,7 +50,13 @@ class LineageProvenanceReader:
 
         target = lineage_run_id(run_id)
         try:
-            response = httpx.get(f"{lineage_base_url()}/v1/runs", timeout=TIMEOUT_SECONDS)
+            # `/runs`, at the service ROOT. The lineage service mounts its v1 routers without a
+            # version prefix — the gateway supplies `/api/lineage` and the pod serves `/runs`
+            # (confirmed against the live pod's own openapi.json, which also puts OpenLineage
+            # ingestion at `/api/v1/lineage`). Guessing `/v1/runs` from the module layout returns a
+            # 404, which this method's except-branch would have reported as "graph unreachable" —
+            # a wrong path and a down service would have been indistinguishable.
+            response = httpx.get(f"{lineage_base_url()}/runs", timeout=TIMEOUT_SECONDS)
             response.raise_for_status()
             runs = response.json().get("runs") or []
         except Exception:

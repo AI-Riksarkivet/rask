@@ -73,9 +73,17 @@ def lineage_run_id(run_id: str) -> str:
 
 
 def _run(run_id: str) -> Any:  # noqa: ANN401 — LineageRun, imported lazily to keep this module light
+    """Reconstruct this ingest run's graph run. Same inputs -> same run, in any activity.
+
+    `namespace` is keyword-only AND has no default — `job_run()` fills it from `LineageSettings`, and
+    constructing `LineageRun` directly does not. Omitting it raises TypeError at emission time, which
+    I8's never-raise guard then swallows into a log line: the run completes, its data lands, and the
+    graph stays empty. A8 is what surfaces that, and it did.
+    """
+    from lineage_kit.config import LineageSettings
     from lineage_kit.runs import LineageRun
 
-    return LineageRun(job_name=JOB_NAME, run_id=lineage_run_id(run_id))
+    return LineageRun(job_name=JOB_NAME, namespace=LineageSettings().namespace, run_id=lineage_run_id(run_id))
 
 
 class LineageRecorder:
