@@ -1087,6 +1087,81 @@ execution events surfaced without app-log noise. An opportunity, not a defect.
    it is reconciled at P8, never dropped.
 
 
+## The ingest plane — what Phase 1 did NOT close *(folded from `open_ingest.md`, 2026-08-04)*
+
+`open_ingest.md` and `open_ingest_etl.md` are retired per the repo's fold-then-delete convention
+(root `open_*.md` is a WORKING plan; when the work lands, what is still live moves here and the file
+goes). The plan's own record of what shipped is the branch's commit history — 37 commits on
+`ingest-plane`, each one naming the defect it closed. What follows is only what is still OPEN.
+
+**What DID land, so nobody re-does it:** the `services/ingest` plane (source-agnostic control API,
+Dapr Workflow orchestration, JetStream unit queue, the single-writer lander, fragment staging);
+gates A1 A2 A3 A5 A6 A7 A8 A9 A10 A11 A12 A13 A14 A19 A20 and I1–I4; `runners/dummy` and its quality
+gate; the compute zone's run-status page. A11 runs in-cluster from `scripts/ingest-lane.sh` and
+asserts on outcomes — 202 in 46 ms, a COMPLETE run, a committed bronze version, one row per fixture,
+no provenance defect, and idempotent replay.
+
+### 1. The cascade above bronze is not deployed *(the largest gap)*
+
+`runners/dummy` proves bronze→silver→gold **as tests**, not as a running lane: nothing in-cluster
+subscribes to the catalog's publication event and moves a bronze commit into silver, and no quality
+gate decides promote-vs-hold into gold on a deployed dataset. The mover's mechanics are real and
+covered (CDF delta read, merge-on-write convergence, `source_rowid` carried not copied, an E5 replay
+that reproduces silver byte for byte); what is missing is the subscription, the Ray job submission,
+and the gate wired to `medallion.services.quality.assert_quality_on_batch` on a live tier.
+
+**Why it is not "nearly done":** the publication event that should wake a mover is the catalog's, and
+the ingest plane currently registers commits through `ingest.catalog.LocalCatalog` — see 2.
+
+### 2. `LocalCatalog` still stands in for the catalog service
+
+`ingest/catalog.py` creates datasets and records versions on the local filesystem / object store
+directly. The real catalog owns creation server-side (its client-direct fragment door hardcodes
+`LanceOperation.Append` and rules that "CREATE and OVERWRITE stay server-side"), and it is the
+catalog's commit that should emit the publication event the cascade rides. Until that swap happens,
+a run's commit is registered nowhere anything else can see, which is precisely why 1 cannot proceed.
+
+A14's creation contract is already enforced on both `ensure_at` branches, so the swap inherits a
+gate rather than needing one.
+
+### 3. A15–A18 are unwritten
+
+- **A15** — cleanup can never eat a live run: assert the cron cleanup's `older_than` ≥ the maximum
+  permitted ingest-run duration, as a relation between two config values rather than two constants
+  that happen to agree today.
+- **A16** — index maintenance and compaction as owned lanes: `optimize_indices` delta-maintenance
+  runs and is observable; indexed search returns rows added by the latest published delta.
+- **A17** — the mover contract (E1–E3): a stale event is acked without work; a redelivered event for
+  already-produced output is a no-op with a deterministic run id; two replicas on one dataset never
+  transform concurrently; a submission failure returns RETRY → backoff → maxDeliver → DLQ + FAIL run.
+- **A18** — publication behaviour: gate FAIL → no tag advance, no event, FAIL lineage run, downstream
+  provably never woken; gate PASS → the emitted event's version equals the commit RESPONSE value; a
+  rollback fires exactly one event and idempotency absorbs it.
+
+A17 and A18 both need 1, since they are assertions about a mover and a publication that do not run.
+
+### 4. `packages/tracker` has zero consumers and should probably die
+
+Adopting Dapr Workflow dissolved the reason it existed (`docs/DECISIONS.md`): the workflow's own
+durable history is the run ledger, so nothing needs a side table of unit states. It is not deleted
+here because that is an owner call, not a cleanup — but it is dead weight, and leaving it invites
+someone to wire it back in and re-create the two-ledger problem.
+
+### 5. Known operational sharp edges, recorded rather than fixed
+
+- **helm cannot reach k3s 1.36 on this host** — `Kubernetes cluster unreachable: the server could
+  not find the requested resource`, on helm 3.16.4 and 3.20.0 alike, while kubectl against the same
+  kubeconfig works. `scripts/ingest-lane.sh` deploys with `helm template | kubectl apply` as a
+  result. The chart stays the single source of truth; only the delivery changed.
+- **`IfNotPresent` + a mutable `:dev` tag never re-pulls.** A rebuilt, re-pushed, rolled-out
+  Deployment keeps serving arbitrarily old code, and `kubectl rollout restart` does not help. Deploy
+  by DIGEST. This cost an hour on a health route that was present in the image and absent from the
+  pod.
+- **`tests/e2e` specs must contain no TS type syntax.** The project has no tsconfig, and playwright's
+  transform answers a type assertion by failing the whole file with "2 errors building" — no line, no
+  cause — which also zeroes every other spec's listing.
+
+
 ---
 
 # Folded-in trackers
