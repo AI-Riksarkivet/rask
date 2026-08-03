@@ -437,6 +437,32 @@ export class DatasetView {
 		return this.declared.document !== null;
 	}
 
+	/** What KIND of media the corpus holds, from its own declaration.
+	 *
+	 *  `hasMedia` only answers "is there a document binding", which is true for a page-image corpus
+	 *  as much as for video — so a consumer that branches on it alone hands a PNG to a `<video>` and
+	 *  gets `MEDIA_ERR_SRC_NOT_SUPPORTED`. The descriptor already carries the answer in
+	 *  `document.mime`; this reads it instead of assuming.
+	 *
+	 *  `time` (start/end columns) is the secondary tell: only a TIMED corpus declares it, so an
+	 *  untyped mime plus a time binding still resolves to playable rather than falling back to a
+	 *  still. Order matters — mime is explicit, time is inferred. */
+	get mediaKind(): 'video' | 'audio' | 'image' | 'none' {
+		const doc = this.declared.document;
+		if (doc === null) return 'none';
+		const mime = doc.mime ?? '';
+		if (mime.startsWith('video/')) return 'video';
+		if (mime.startsWith('audio/')) return 'audio';
+		if (mime.startsWith('image/')) return 'image';
+		return this.declared.time !== null ? 'video' : 'image';
+	}
+
+	/** True when the corpus is time-based, i.e. a transport/timeline is meaningful. */
+	get isPlayable(): boolean {
+		const kind = this.mediaKind;
+		return kind === 'video' || kind === 'audio';
+	}
+
 	get hasThumbnail(): boolean {
 		return this.declared.document?.thumbnail != null;
 	}

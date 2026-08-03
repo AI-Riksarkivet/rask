@@ -31,7 +31,12 @@
 	const WINDOW_BEFORE = 1;
 	const WINDOW_AFTER = 1;
 
-	let mediaEl = $state<HTMLVideoElement | null>(null);
+	// Which element this corpus actually needs — read from the dataset's own declaration, so a
+	// page-image corpus never gets a <video>. Derived, not constant: the dataset can be switched
+	// under the pane.
+	const mediaKind = $derived(activeView().mediaKind);
+
+	let mediaEl = $state<HTMLVideoElement | HTMLAudioElement | null>(null);
 	let mediaError = $state<string | null>(null);
 
 	// Whole-doc time + chunk envelope drive the timeline under the video. Svelte
@@ -350,23 +355,50 @@
 				)}
 			{/if}
 
-			<!-- 16:9 box sized from the pane WIDTH (not height) so the video stays
-           visible even when the pane is dragged short. In fullscreen it fills
-           the screen height instead. -->
-			<video
-				bind:this={mediaEl}
-				bind:currentTime
-				bind:duration
-				controls
-				controlslist="nofullscreen"
-				preload="metadata"
-				src={mediaUrl(hit)}
-				class={isFullscreen
+			<!-- The element comes from the corpus's OWN declaration, not from an assumption. A page-
+           image corpus declares `document.mime: image/png` and no `time` binding; handing that
+           to a <video> is how "Video failed to load: MEDIA_ERR_SRC_NOT_SUPPORTED" happened on a
+           dataset that has no video at all. See DescriptorView.mediaKind. -->
+			{#if mediaKind === 'image'}
+				<!-- The per-row FRAME, not the doc blob: on a paged corpus the row IS the page, so
+             /api/chunk-frame/<identity> is the thing the hit points at. -->
+				<img
+					src={activeView().frameUrl(hit)}
+					alt={activeView().title(hit)}
+					class={isFullscreen
+	? 'min-h-0 w-full flex-1 bg-black object-contain'
+	: 'max-h-[45vh] w-full shrink-0 bg-black object-contain'}
+				/>
+			{:else if mediaKind === 'audio'}
+				<!-- Audio keeps the transport (the timeline below is meaningful) but not a 16:9 box. -->
+				<audio
+					bind:this={mediaEl}
+					bind:currentTime
+					bind:duration
+					controls
+					preload="metadata"
+					src={mediaUrl(hit)}
+					class="w-full shrink-0 bg-black"
+				></audio>
+			{:else}
+				<!-- 16:9 box sized from the pane WIDTH (not height) so the video stays
+             visible even when the pane is dragged short. In fullscreen it fills
+             the screen height instead. -->
+				<video
+					bind:this={mediaEl}
+					bind:currentTime
+					bind:duration
+					controls
+					controlslist="nofullscreen"
+					preload="metadata"
+					src={mediaUrl(hit)}
+					class={isFullscreen
 	? 'min-h-0 w-full flex-1 bg-black object-contain'
 	: 'aspect-video max-h-[45vh] w-full shrink-0 bg-black object-contain'}
-			>
-				<track kind="captions" />
-			</video>
+				>
+					<track kind="captions" />
+				</video>
+			{/if}
 
 			{#if !isFullscreen}
 				<ChunkTimeline
