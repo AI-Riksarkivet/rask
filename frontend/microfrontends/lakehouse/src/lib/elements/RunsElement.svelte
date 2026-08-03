@@ -15,12 +15,22 @@
 	import { RASK_SELECT, type SelectDetail } from '@rask/dockview/contract';
 	import { ensurePolling, lineage } from './store';
 
+	let { filtertext = '' }: { filtertext?: string } = $props();
+
 	$effect(() => {
 		ensurePolling();
 	});
 
 	const runs = $derived(
 		[...lineage.runs].sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? '')),
+	);
+	/** The cross-filter (wave 3): the compositor pushes the active selection's label down as a
+	 *  property; rows narrow by substring over their serialized form — generic on purpose, every
+	 *  list element filters the same way. */
+	const shownruns = $derived(
+		filtertext.trim() === ''
+			? runs
+			: runs.filter((r) => JSON.stringify(r).toLowerCase().includes(filtertext.toLowerCase())),
 	);
 
 	function tone(state: string | null | undefined): 'success' | 'destructive' | 'secondary' {
@@ -60,7 +70,7 @@
 		<p class="empty">No runs yet — they appear as pipelines emit OpenLineage events.</p>
 	{:else}
 		<ul>
-			{#each runs as run (run.run_id)}
+			{#each shownruns as run (run.run_id)}
 				<li onclick={(e) => select(e.currentTarget, run.run_id, run.job ?? null)}>
 					<Badge variant={tone(run.state)}>{run.state ?? 'unknown'}</Badge>
 					<span class="job" title={run.job ?? ''}>{run.job ?? run.run_id}</span>

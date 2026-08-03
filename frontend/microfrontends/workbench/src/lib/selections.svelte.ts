@@ -8,6 +8,9 @@ import type { SelectDetail } from '@rask/dockview/contract';
 
 export class Selections {
 	rows = $state<SelectDetail[]>([]);
+	/** Wave 3: the label being pushed DOWN into every list element as its `filtertext` property —
+	 *  set by clicking a logged selection, cleared by the chip beside it. */
+	filter = $state('');
 
 	push(detail: SelectDetail): void {
 		// Newest first, bounded — a relay log, not a database.
