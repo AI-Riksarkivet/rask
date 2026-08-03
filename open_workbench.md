@@ -44,7 +44,18 @@ work, deleted when it ships). The decision record lives in
       (@xyflow + @rask/flow) bundle `?inline` and inject ONCE under `@layer base` (the zones' own
       layer discipline), and the elements build compiles EVERY .svelte in customElement mode so
       nested components' scoped styles inject at runtime instead of being extracted to a css asset
-      nothing loads. Cluster verification pending below.
+      nothing loads.
+- [x] CLUSTER-VERIFIED, 2026-08-03 (Playwright vs the k3s ingress as alice; screenshots in the
+      session record): all NINE tier-1 panels mount to a definite state — lineage runs/events/
+      datasets stream REAL silver$ rows, the GRAPH element renders 4 real dataset nodes on the
+      xyflow canvas (the ?inline @layer base injection holds; a process.env.NODE_ENV define was
+      the last blocker, #60), audit answers with an honest empty window, and the four compute
+      panels poll live and report the truth: the external Ray (dev-kuberay.ra.se, the chart's
+      normal case) is UNREACHABLE from this cluster — a network/VPN matter outside this repo;
+      in-cluster Ray needs singleTenant.enabled + the ray-cluster image. Picker-add works for
+      every panel; a saved view applies with mount stamps INTACT (drag + view-apply, jobs
+      element witness) and marks itself active only after applying; duplicate views delete
+      cleanly; an anonymous visit fail-closes to sign-in.
 - [ ] Wave 3: cross-panel property-down filtering (selection → filter a sibling), Playwright-proven
 - [ ] Delete this file when the global workbench is live-verified
 
