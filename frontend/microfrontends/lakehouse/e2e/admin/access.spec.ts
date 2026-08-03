@@ -365,7 +365,12 @@ test('a conditional grant is visually distinct on the canvas', async ({ page }) 
 	await expect(dashed).toHaveCount(1);
 	// The half that makes it non-vacuous: the dash marks THIS grant, it is not painted on every edge.
 	// (`TUPLES` carries three permanent grants beside the one time-boxed one — access-fixtures.ts:14.)
-	expect(await edges.count()).toBeGreaterThan(1);
+	//
+	// `expect.poll`, NOT `expect(await edges.count())`. A bare `.count()` is a one-shot read with no
+	// auto-waiting, so it samples whatever the canvas happens to have drawn at that instant and
+	// reported 0 on a cold run — the assertion above passes because `toHaveCount` retries and this one
+	// did not. Any count read outside an `expect` locator assertion needs the poll.
+	await expect.poll(async () => edges.count()).toBeGreaterThan(1);
 });
 
 // ── the model/type graph ─────────────────────────────────────────────────────────────────────────────
