@@ -21,6 +21,7 @@
 	"dependencies": {
 		"@lucide/svelte": "^1.26.0",
 		"@rask/api": "workspace:*",
+		"@rask/dockview": "workspace:*",
 		"@rask/flow": "workspace:*",
 		"@rask/labeling": "workspace:*",
 		"@rask/media-api": "workspace:*",
