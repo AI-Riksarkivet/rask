@@ -140,15 +140,8 @@ describe('topNav', () => {
 		expect(compute.match('/')).toBe(false);
 		// The overview IS the zone root (like Media's Search), so the first row carries entry.href
 		// and the panel never prepends a second zone-root row.
-		// Workbench sits second, right after the zone root: it is the dock at /compute/workbench, and it
-		// is in this panel because `@rask/zone-contract`'s `dock-reachability.test.ts` now REQUIRES every
-		// route importing `@rask/dockview` to be named here. The two assertions are coupled — dropping a
-		// row from this list turns that gate red, which is the point. A dock listed only in its own
-		// zone's sidebar is reachable in two hops by someone who already knows it exists: the R28 shape,
-		// not reachability.
 		expect(compute.items!.map((i) => i.title)).toEqual([
 			'Overview',
-			'Workbench',
 			'Jobs',
 			'Cluster',
 			'Actors',
@@ -189,9 +182,7 @@ describe('topNav', () => {
 		expect(groups.Models).toEqual(['Registry', 'Experiments', 'Pipeline']);
 		expect(groups.Governance).toEqual(['Access', 'Tenants', 'Audit']);
 		expect(groups.Operations).toEqual(['Events', 'Streams', 'DLQ']);
-		// Workbench closes the Lineage column for the same reason it opens Compute's panel — see the
-		// coupling note on the compute assertion above.
-		expect(groups.Lineage).toEqual(['Datasets', 'Jobs', 'Runs', 'Columns', 'Graph', 'Workbench']);
+		expect(groups.Lineage).toEqual(['Datasets', 'Jobs', 'Runs', 'Columns', 'Graph']);
 	});
 
 	it('Media carries its rows too — the panel that was never pinned', () => {
@@ -205,7 +196,6 @@ describe('topNav', () => {
 			'Atlas',
 			'Tree',
 			'Graph',
-			'Workbench',
 			'Workflow',
 		]);
 	});

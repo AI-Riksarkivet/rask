@@ -14,7 +14,7 @@
 	 * full page AND a dock panel without either copying the layout maths.
 	 *
 	 * It takes its `LineageState` as a prop rather than constructing one: the page owns a store it
-	 * polls itself, and the workbench owns ONE store shared across its panels, so the graph, the run
+	 * polls itself, and a page owns ONE store shared across everything it renders, so the graph, the run
 	 * list and the event feed can never be a poll apart. `buildMs` is exposed as a bindable readout for
 	 * the page header that used to compute it inline.
 	 */
@@ -41,7 +41,7 @@
 	 * A package cannot import `$app/*` — the aliases only exist inside a SvelteKit app, and `@rask/ui`
 	 * already establishes the rule (it imports none and detects the browser with
 	 * `typeof window !== 'undefined'`). Handing the two zone-shaped values in is what lets this graph
-	 * render in the lakehouse zone AND in the global workbench, which are served under different bases.
+	 * render under different bases (standalone dev vs behind the ingress).
 	 */
 	let {
 		store,

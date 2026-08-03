@@ -8,7 +8,7 @@
 	import { lineageTick, liveRead } from '$lib/live/tick.svelte';
 
 	// The canvas itself — layout maths, node building, the SvelteFlow chrome — lives in
-	// `$lib/lineage/LineageGraph.svelte`, so the dock workbench can mount the same graph as a panel
+	// `$lib/lineage/LineageGraph.svelte`, so any surface in this zone can mount the same graph
 	// without either copy drifting. This page keeps what is page-shaped: the header and the store.
 	// The zone binds the client; the store takes it injected rather than importing $lib/api itself.
 	const store = new LineageState(createLineageClient(bff));

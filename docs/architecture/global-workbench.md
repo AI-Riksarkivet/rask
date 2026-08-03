@@ -2,7 +2,7 @@
 
 *Status: **the build-time design below was built, shipped, and REVERSED**. 2026-08-03. The reversal
 restores the three per-zone workbenches; the cross-zone ambition continues in
-`workbench-web-components.md` as a runtime-composition plan. The original decision text is kept at
+`open_workbench.md` (repo root) as a runtime-composition plan. The original decision text is kept at
 the bottom because its measurements (the 44-file move-set) and its corrected claims are still true —
 only the conclusion drawn from them was wrong.*
 
@@ -54,17 +54,20 @@ worked. It was still wrong, for reasons that were on the record before it was bu
   `ViewSidebar`, the `dock-layout-library` backend envelope, and the dock-reachability gate
   (floor: the three in-zone docks).
 
-## The standing decision
+## The standing decision (corrected 2026-08-03, same day)
 
-- **Per-zone workbenches are the durable shape.** Each zone's dock composes that zone's panels over
-  that zone's live stores, in-process. This is not a compromise; for same-zone panels it is strictly
-  better than any cross-boundary design.
-- **Cross-zone composition, if rask wants it, is RUNTIME composition with custom elements** — each
-  zone builds and serves its own panels as `rask-<zone>-<panel>` elements; a compositor page loads
-  them from the owning zone's deployment. That keeps zone ownership, independent deploys, and the
-  bundle boundary honest. The plan, the styling constraints (light DOM so the token cascade
-  reaches in), the verified Svelte 5 wrapper pattern, and the event-bus contract live in
-  **`workbench-web-components.md`** — spike-first, one panel, before any commitment.
+- **ONE global workbench, or none — NO per-zone workbenches.** The first version of this reversal
+  restored the three local workbench routes; that over-shot. The user's decision predating the
+  reversal stands: the workbench is a single cross-zone surface. The local routes, their `lib/dock`
+  wrappers, nav rows and per-zone user-state proxies were removed the same day;
+  `dock-reachability.test.ts` pins the dock count at zero until the global one ships.
+- **Panels' domain code stays in its zone** (the actual lesson of the reversal). The global
+  workbench composes it at RUNTIME via custom elements — each zone builds and serves
+  `rask-<zone>-<panel>` elements; a thin compositor zone loads them from the owning zone's
+  deployment. Zone ownership, independent deploys, and the bundle boundary stay honest.
+- **The in-progress plan lives at `open_workbench.md` (repo root)** — the open-work convention;
+  this file records only what is decided. Spike-first: one panel proves light-DOM styling and
+  move-without-remount before anything else is built.
 - **Iframes remain rejected** for first-party panels (they are the *untrusted-code* tool — VS Code
   webviews, Grafana plugins) — though the dockview fork's never-re-parent guarantee makes them
   viable if an untrusted-plugin surface ever appears.

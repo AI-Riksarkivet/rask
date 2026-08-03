@@ -73,10 +73,13 @@ function dockRoutes(): { zone: string; href: string; file: string }[] {
 const DOCKS = dockRoutes();
 
 describe('dock reachability', () => {
-	it('finds the docks, so the assertions below cannot pass vacuously', () => {
-		// A rename of the package, or a zone that stops importing it, must fail LOUDLY here rather than
-		// silently emptying the suite — the failure mode that lets a green gate mean nothing.
-		expect(DOCKS.length).toBeGreaterThanOrEqual(3);
+	it('pins the dock count: ZERO until the global workbench lands, then every dock must be navigable', () => {
+		// 2026-08-03: the per-zone workbenches are REMOVED by decision — the estate ships ONE global
+		// workbench (runtime-composed, see open_workbench.md) or none. Zero is therefore the correct
+		// count today, pinned so a local dock cannot quietly come back. When the global workbench
+		// lands, this becomes an exact pin on ITS route and the reachability assertions below get
+		// their teeth back — they are kept, not deleted, for that day.
+		expect(DOCKS.length).toBe(0);
 	});
 
 	it.each(DOCKS)('$href is listed in the $zone zone sidebar', ({ zone, href }) => {

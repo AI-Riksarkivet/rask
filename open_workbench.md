@@ -1,7 +1,34 @@
-# Cross-zone workbench via custom elements — the runtime-composition plan
+# open: THE global workbench — one dock, runtime-composed from custom elements
 
-*Status: **proposed, spike-first, not started**. 2026-08-03. Successor to the reversed build-time
-design in `global-workbench.md`. Nothing here is committed until the spike's exit criteria pass.*
+*The open-work file for the global workbench (root-level `open_*.md` convention: this is IN-PROGRESS
+work, deleted when it ships). The decision record lives in
+`docs/architecture/global-workbench.md`.*
+
+## Standing decisions (do not re-litigate)
+
+1. **NO per-zone workbenches.** Removed 2026-08-03 (again — restoring them during the panels
+   reversal was a mistake). The estate ships ONE global workbench or none. `dock-reachability.test.ts`
+   pins the dock count at ZERO until the global one lands.
+2. **Panels' domain code lives in its zone, forever.** The `@rask/panels` package was the wrong
+   mechanism and is reversed; the panel WRAPPERS (`lib/dock/` in the three zones) were deleted with
+   the local routes — the WC wave recreates their thin bodies as element exports over the still-living
+   domain code (LineageGraph + store, the atlas/treemap components, compute's remote functions).
+3. **Composition is RUNTIME, via custom elements** (`rask-<zone>-<panel>`), each built and served by
+   its owning zone. Not iframes (untrusted-code tool), not module federation (unavailable on
+   Vite 8 + rolldown), not import-map sharing (drift), not a shared source package (reversed).
+4. **Kept and waiting**: `@rask/dockview` (Dock + G1–G4 chrome + DockViews/ViewSidebar),
+   `@rask/api/dock-layout` + `dock-views` transports, the catalog's `dock-layout` +
+   `dock-layout-library` user-state documents. The global workbench is their consumer.
+
+## Status
+
+- [x] Panels reversal merged (#51); per-zone workbench routes/nav REMOVED on top of it
+- [ ] SPIKE (next): one panel end-to-end — exit criteria below
+- [ ] Wave 1: the compositor zone `/workbench` (thin — no panel code) + the element catalogue
+- [ ] Wave 2: the three zones export their panel sets; saved views over `dock-layout-library`
+- [ ] Wave 3: cross-panel filtering via the CustomEvent/property relay; Playwright the media
+      Treemap→Topics case cross-zone
+- [ ] Delete this file when the global workbench is live-verified
 
 ## The idea in one paragraph
 
@@ -178,5 +205,5 @@ CONDITIONS (each proven by pasted terminal/browser output, not summary):
 6. The four dock invariants hold (panels mount ONCE, defaultRenderer 'always', layout per-subject
    never localStorage, dock dynamically imported); no GSAP on dock chrome.
 STOP RULE: if styling (1) or move-without-remount (2) fails, halt and record why in
-docs/architecture/workbench-web-components.md instead of working around it.
+open_workbench.md instead of working around it.
 ```

@@ -48,15 +48,17 @@ graphs are the zone — moving them into a shared package hollows the zone, coup
 cuts them off from their live stores and per-app remote functions (tried once, reversed:
 `docs/architecture/global-workbench.md`). Cross-zone composition, when wanted, is RUNTIME
 composition — custom elements, planned spike-first in
-`docs/architecture/workbench-web-components.md`. Extract the *mechanism* (`@rask/flow`), keep the
+`open_workbench.md` (repo root). Extract the *mechanism* (`@rask/flow`), keep the
 *domain* in its zone.
 
 ## Workbenches — `@rask/dockview`
 
-Three zones ship a **dock**: an arrangeable, per-user-persisted panel layout. `lakehouse`
-(`/lineage/workbench` — graph · runs · events), `media` (`/workbench` — atlas · treemap · topic
-results), `compute` (`/workbench` — jobs · cluster · actors). It is a **thin binding, not a wrapper**:
-consumers hold the real `DockviewApi` and call its documented methods.
+**No zone ships a dock today — by decision, not omission.** The per-zone workbenches were removed
+2026-08-03: the estate ships ONE global workbench (runtime-composed from custom elements, in
+progress — `open_workbench.md` at repo root) or none. `dock-reachability.test.ts` pins the dock
+count at ZERO until it lands; a local dock reappearing is a defect. The library, its chrome and the
+invariants below are kept for that consumer. It is a **thin binding, not a wrapper**: consumers hold
+the real `DockviewApi` and call its documented methods.
 
 Depend on **`dockview`, never `dockview-core`.** Their *type* entrypoints are identical
 (`export * from 'dockview-core'`), which makes core look like the leaner honest choice — it is not.
