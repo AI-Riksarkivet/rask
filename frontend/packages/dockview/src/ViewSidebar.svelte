@@ -8,7 +8,7 @@
 	 * open a saved arrangement to LOOK at it without destroying it.
 	 */
 	import { Check, Plus, Save, Trash2 } from '@lucide/svelte';
-	import type { DockViews } from '@rask/dockview';
+	import type { DockViews } from './views.svelte';
 	import type { SerializedDockview } from 'dockview';
 
 	interface Props {

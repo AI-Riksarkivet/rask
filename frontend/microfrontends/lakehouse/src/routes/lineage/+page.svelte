@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Radio } from '@lucide/svelte';
-	import { LineageGraph, LineageState } from '@rask/panels/lineage';
+	import LineageGraph from '$lib/lineage/LineageGraph.svelte';
+	import { LineageState } from '$lib/lineage/store.svelte';
 	import { createLineageClient } from '@rask/api/lineage';
 	import { bff } from '$lib/http';
 	import { countUp, stagger } from '@rask/ui/motion';
@@ -9,7 +10,7 @@
 	// The canvas itself — layout maths, node building, the SvelteFlow chrome — lives in
 	// `$lib/lineage/LineageGraph.svelte`, so the dock workbench can mount the same graph as a panel
 	// without either copy drifting. This page keeps what is page-shaped: the header and the store.
-	// The zone binds the client; the store is zone-agnostic — see @rask/panels/lineage.
+	// The zone binds the client; the store takes it injected rather than importing $lib/api itself.
 	const store = new LineageState(createLineageClient(bff));
 
 	// One tick = /graph + /events + /runs, so a blind 5s timer here re-read the whole estate graph

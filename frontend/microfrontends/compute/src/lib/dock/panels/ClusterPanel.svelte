@@ -1,8 +1,8 @@
 <script lang="ts">
 	/** Cluster capacity — nodes alive and the CPU/GPU/memory triplet, used against total. */
-	import { getComputeReads } from './context.js';
+	import { getRayCluster } from '$lib/remote/compute.remote';
 
-	const cluster = getComputeReads().getRayCluster();
+	const cluster = getRayCluster();
 	const c = $derived(cluster.current ?? null);
 
 	const rows = $derived.by(() => {

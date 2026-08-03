@@ -20,7 +20,6 @@ describe('topNav', () => {
 		expect(topNav(false).map((e) => e.title)).toEqual([
 			'Lakehouse',
 			'Compute',
-			'Workbench',
 			'Search',
 			'Annotate',
 			'Train',
@@ -30,11 +29,10 @@ describe('topNav', () => {
 			topNav(false)
 				.filter((e) => e.tier === 'primary')
 				.map((e) => e.title),
-		).toEqual(['Lakehouse', 'Compute', 'Workbench']);
+		).toEqual(['Lakehouse', 'Compute']);
 		expect(topNav(false).map((e) => e.href)).toEqual([
 			'/lakehouse/catalog',
 			'/compute/',
-			'/workbench/',
 			// Trailing slashes are LOAD-BEARING, not cosmetic: each zone's `paths.base` serves the
 			// trailing form, so a bare '/compute' href cost a 308 redirect round-trip on EVERY
 			// cross-zone hop (measured on all five zones, 2026-07-28) — visible as flicker over a
@@ -142,11 +140,15 @@ describe('topNav', () => {
 		expect(compute.match('/')).toBe(false);
 		// The overview IS the zone root (like Media's Search), so the first row carries entry.href
 		// and the panel never prepends a second zone-root row.
-		// NO Workbench row here any more: the dock is its own ZONE now (/workbench), a top-level entry
-		// rather than a row in three panels. A dock holding panels from across the estate cannot live
-		// inside any one zone — a component only renders if it is in that zone's bundle.
+		// Workbench sits second, right after the zone root: it is the dock at /compute/workbench, and it
+		// is in this panel because `@rask/zone-contract`'s `dock-reachability.test.ts` now REQUIRES every
+		// route importing `@rask/dockview` to be named here. The two assertions are coupled — dropping a
+		// row from this list turns that gate red, which is the point. A dock listed only in its own
+		// zone's sidebar is reachable in two hops by someone who already knows it exists: the R28 shape,
+		// not reachability.
 		expect(compute.items!.map((i) => i.title)).toEqual([
 			'Overview',
+			'Workbench',
 			'Jobs',
 			'Cluster',
 			'Actors',
@@ -187,7 +189,9 @@ describe('topNav', () => {
 		expect(groups.Models).toEqual(['Registry', 'Experiments', 'Pipeline']);
 		expect(groups.Governance).toEqual(['Access', 'Tenants', 'Audit']);
 		expect(groups.Operations).toEqual(['Events', 'Streams', 'DLQ']);
-		expect(groups.Lineage).toEqual(['Datasets', 'Jobs', 'Runs', 'Columns', 'Graph']);
+		// Workbench closes the Lineage column for the same reason it opens Compute's panel — see the
+		// coupling note on the compute assertion above.
+		expect(groups.Lineage).toEqual(['Datasets', 'Jobs', 'Runs', 'Columns', 'Graph', 'Workbench']);
 	});
 
 	it('Media carries its rows too — the panel that was never pinned', () => {
@@ -201,6 +205,7 @@ describe('topNav', () => {
 			'Atlas',
 			'Tree',
 			'Graph',
+			'Workbench',
 			'Workflow',
 		]);
 	});

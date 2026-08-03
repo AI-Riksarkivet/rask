@@ -20,7 +20,6 @@
 		"@rask/api": "workspace:*",
 		"@rask/dockview": "workspace:*",
 		"@rask/flow": "workspace:*",
-		"@rask/panels": "workspace:*",
 		"@rask/ui": "workspace:*",
 		"@sveltejs/kit": "^2.70.1",
 		"@tailwindcss/vite": "^4.3.3",

@@ -6,7 +6,7 @@
 	 * to the top, which is the least dramatic of the four failures and the easiest to miss in review.
 	 */
 	import { Badge } from '@rask/ui/badge';
-	import { getLineageState } from './lineage-context.js';
+	import { getLineageState } from '$lib/dock/lineage-context';
 
 	const store = getLineageState();
 
