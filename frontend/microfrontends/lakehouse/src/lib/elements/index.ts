@@ -11,10 +11,13 @@
 import elementsCss from './elements.css?inline';
 import xyflowCss from '@xyflow/svelte/dist/style.css?inline';
 import flowCss from '@rask/flow/styles.css?inline';
+import AccessElement from './AccessElement.svelte';
 import AuditElement from './AuditElement.svelte';
+import ColumnsElement from './ColumnsElement.svelte';
 import DatasetsElement from './DatasetsElement.svelte';
 import EventsElement from './EventsElement.svelte';
 import GraphElement from './GraphElement.svelte';
+import OpsElement from './OpsElement.svelte';
 import RunsElement from './RunsElement.svelte';
 
 /** The elements' OWN Tailwind utilities (see elements.css) — injected RAW, not layer-wrapped:
@@ -49,6 +52,12 @@ const ELEMENTS: Record<string, CustomElementConstructor> = {
 	'rask-lakehouse-datasets': DatasetsElement.element,
 	// @ts-expect-error — same.
 	'rask-lakehouse-audit': AuditElement.element,
+	// @ts-expect-error — same.
+	'rask-lakehouse-access': AccessElement.element,
+	// @ts-expect-error — same.
+	'rask-lakehouse-ops': OpsElement.element,
+	// @ts-expect-error — same.
+	'rask-lakehouse-columns': ColumnsElement.element,
 };
 
 for (const [tag, ctor] of Object.entries(ELEMENTS)) {

@@ -10,6 +10,8 @@ import elementsCss from './elements.css?inline';
 import ActorsElement from './ActorsElement.svelte';
 import ClusterElement from './ClusterElement.svelte';
 import JobsElement from './JobsElement.svelte';
+import LogsElement from './LogsElement.svelte';
+import OverviewElement from './OverviewElement.svelte';
 import ServeElement from './ServeElement.svelte';
 
 /** The elements' OWN Tailwind utilities (see elements.css), injected once. */
@@ -29,6 +31,10 @@ const ELEMENTS: Record<string, CustomElementConstructor> = {
 	'rask-compute-actors': ActorsElement.element,
 	// @ts-expect-error — same.
 	'rask-compute-serve': ServeElement.element,
+	// @ts-expect-error — same.
+	'rask-compute-overview': OverviewElement.element,
+	// @ts-expect-error — same.
+	'rask-compute-logs': LogsElement.element,
 };
 
 for (const [tag, ctor] of Object.entries(ELEMENTS)) {

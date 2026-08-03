@@ -21,12 +21,17 @@
 	import {
 		Activity,
 		Boxes,
+		Columns3,
 		Database,
+		FileText,
+		Gauge,
+		Inbox,
 		List,
 		ListTree,
 		ScrollText,
 		Server,
 		ServerCog,
+		ShieldCheck,
 		Workflow,
 	} from '@lucide/svelte';
 	import type { DockviewApi, SerializedDockview } from 'dockview';
@@ -116,6 +121,41 @@
 			label: 'Audit trail (lakehouse)',
 			icon: ScrollText,
 			keywords: ['governance', 'audit', 'compliance', 'trail', 'foreign'],
+		},
+		'compute-overview': {
+			component: ForeignPanel,
+			group: 'Compute',
+			label: 'Cluster overview (compute)',
+			icon: Gauge,
+			keywords: ['ray', 'compute', 'overview', 'dashboard', 'summary', 'events', 'foreign'],
+		},
+		'compute-logs': {
+			component: ForeignPanel,
+			group: 'Compute',
+			label: 'Log viewer (compute)',
+			icon: FileText,
+			keywords: ['ray', 'compute', 'logs', 'logviewer', 'tail', 'stderr', 'stdout', 'foreign'],
+		},
+		'lakehouse-ops': {
+			component: ForeignPanel,
+			group: 'Lakehouse',
+			label: 'Ops — DLQ & control plane (lakehouse)',
+			icon: Inbox,
+			keywords: ['ops', 'admin', 'dlq', 'outbox', 'backlog', 'control', 'events', 'foreign'],
+		},
+		'lakehouse-access': {
+			component: ForeignPanel,
+			group: 'Lakehouse',
+			label: 'Access summary (lakehouse)',
+			icon: ShieldCheck,
+			keywords: ['governance', 'access', 'fga', 'openfga', 'tuples', 'grants', 'authz', 'foreign'],
+		},
+		'lakehouse-columns': {
+			component: ForeignPanel,
+			group: 'Lakehouse',
+			label: 'Column lineage (lakehouse)',
+			icon: Columns3,
+			keywords: ['lineage', 'columns', 'fields', 'provenance', 'impact', 'masking', 'foreign'],
 		},
 	};
 

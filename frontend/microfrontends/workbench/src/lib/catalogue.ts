@@ -34,6 +34,26 @@ export const FOREIGN: Record<string, ForeignSource> = {
 		src: '/lakehouse/elements/lakehouse-elements.js',
 		tag: 'rask-lakehouse-audit',
 	},
+	'compute-overview': {
+		src: '/compute/elements/compute-elements.js',
+		tag: 'rask-compute-overview',
+	},
+	'compute-logs': {
+		src: '/compute/elements/compute-elements.js',
+		tag: 'rask-compute-logs',
+	},
+	'lakehouse-access': {
+		src: '/lakehouse/elements/lakehouse-elements.js',
+		tag: 'rask-lakehouse-access',
+	},
+	'lakehouse-ops': {
+		src: '/lakehouse/elements/lakehouse-elements.js',
+		tag: 'rask-lakehouse-ops',
+	},
+	'lakehouse-columns': {
+		src: '/lakehouse/elements/lakehouse-elements.js',
+		tag: 'rask-lakehouse-columns',
+	},
 };
 
 /** Resolve a live panel's source by its REGISTRY COMPONENT KEY — `api.component`, which dockview
