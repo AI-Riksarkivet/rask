@@ -109,9 +109,17 @@ describe('every sidebar href resolves to a real route', () => {
 });
 
 describe('a leaf that leaves its zone declares reload', () => {
-	for (const leaf of ALL) {
+	const crossZone = ALL.filter((leaf) => ownerOf(leaf.href) !== leaf.zone);
+	// The set can legitimately be empty (it is, since media's Annotate row left the sidebar — the
+	// top navbar owns cross-zone hops and applies reload itself) — vitest fails an empty describe,
+	// so pin the emptiness as the passing case instead.
+	if (crossZone.length === 0) {
+		it('no sidebar leaf leaves its zone — the top navbar owns every cross-zone hop', () => {
+			expect(crossZone).toEqual([]);
+		});
+	}
+	for (const leaf of crossZone) {
 		const owner = ownerOf(leaf.href);
-		if (owner === leaf.zone) continue;
 		it(`${leaf.zone}: "${leaf.title}" -> ${leaf.href} (owned by ${owner})`, () => {
 			expect(
 				leaf.reload,
