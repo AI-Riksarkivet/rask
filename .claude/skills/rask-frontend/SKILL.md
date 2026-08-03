@@ -17,7 +17,7 @@ Package name equals directory name for all seven (`manifest.test.ts:53`). Base i
 
 | zone | base | dev port | nav label | what it is |
 |---|---|---|---|---|
-| `home` | `''` catch-all | 5273 | Home | Project gallery + the **OIDC BFF** (`/auth/{login,callback,logout}`) |
+| `home` | `''` catch-all | 5273 | Home | The ESTATE LEVEL: `/` (an insights landing, scaffold-badged), `/projects` (+ `/projects/<id>`, the gallery/table list, create, and one project's overview) and `/settings` (estate config, admin-gated SERVER-side) — plus the **OIDC BFF** (`/auth/{login,callback,logout}`) |
 | `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one — `catalog`, `lineage`, `models`, `admin`, `governance`, `storage`; 49 route files, **8 `+server.ts` routes** — 4 keep-bytes (Arrow preview/insert, blob bytes, media downloads), 1 keep-flow (`capi/v1/me`), 2 catch-alls (17 element reads — the cross-zone blocker) + the thin `/api/audit` shim for the workbench element; every JSON value surface rides one of the zone's 15 `.remote.ts` modules and `requestJSON` has ZERO call sites left |
 | `media` | `/media` | 5173 | **Search** | Corpus search workbench (and the estate's ONE dock, `/media/workbench`): FTS/vector/hybrid, WebGPU atlas, Cypher KG, Svelte-Flow editor; **6 `+server.ts` routes** (was 13) — 4 keep-bytes + `api/search`/`api/atlas/chunks`, which keep their route (multipart / rowid-list POST) but answer **Arrow IPC**; every JSON value surface rides one of 5 `.remote.ts` modules (the transport ruling area 3) |
 | `annotator` | `/annotator` | 5177 | **Annotate** | PixiJS/WebGPU canvas over Arrow-backed rows; **3 `+server.ts` routes** (was 9) — the Arrow annotations transport, `capi/v1/me`, the viewer catch-all; every JSON value surface rides one of 6 `.remote.ts` modules |
@@ -166,9 +166,39 @@ Turborepo 2.9.18 has a **built-in** microfrontends proxy. It reads `microfronten
 
 This works only because of `patches/svelte-adapter-bun@1.0.1.patch`: upstream roots sirv at `client/<base>`, but SvelteKit already emits base-prefixed assets *inside* `build/client/`, so `/compute/_app/x.js` resolved to `client/compute/compute/_app/x.js` → 404. Probes are TCP, not httpGet, because a zone's `/` 404s under its base.
 
+## The estate has TWO levels, and the navbar says which one you are on
+
+Ruled 2026-08-03. `isMainMenu(pathname)` in `nav-config.ts` decides which bar renders, and the two
+are different functions, not one filtered list:
+
+| Level | Where | Bar |
+|---|---|---|
+| **estate** | `/`, `/projects`, `/settings` | `mainMenuNav()` → Home · Projects · Settings |
+| **inside a project** | every zone route, and `/projects/<id>` | `topNav()` → Lakehouse · Compute ⟵gap⟶ Search · Annotate · Train · Studio |
+
+The boundary that trips people: **`/projects` is the estate level, `/projects/<id>` is not** — opening
+a project is what puts you inside one, so its page gets the zone bar. Scoping is by CONTEXT, never
+URL: no zone's `paths.base`, ingress rule or `microfrontends.json` key encodes a project. (Rejected on
+cost, not taste — prefixing zone paths with `/projects/<id>/` rewrites eight zones and ~50 links to
+express what the switcher already carries. `projectFromHost` still parses a host-scoped project.)
+
+- **`tier: 'primary'`** (Lakehouse, Compute) renders a visible **gap** before the rest — one spacer
+  derived from the data, so re-tiering moves it. The skeleton must reserve that gap too: it did not
+  at first, and the bar jumped 26px when `/v1/me` landed.
+- **Settings is estate-admin only and ABSENT otherwise** — fail-closed on both surfaces. Its page gate
+  is SERVER-side (`/settings/+page.server.ts`): 404 for a resolvable non-admin (do not advertise that
+  estate config lives there), 403 for an UNRESOLVED identity (a broken lookup is not a missing page).
+  Hiding a navbar entry is presentation, not authorization.
+- The in-project bar is **identity-independent**: an admin earns panel COLUMNS (Lakehouse's
+  Operations), never a top-level entry.
+- **The shared panel follows its trigger.** Upstream shadcn-svelte pins the viewport at `left-0` of
+  the bar; with eight entries that put a right-hand trigger's panel ~400px from its button, and
+  crossing the gap dropped the hover. `navigation-menu.svelte` measures the open trigger and centres
+  under it, clamped into the window.
+
 ## Cross-zone links
 
-A link is cross-zone when `zoneOf(href) !== zoneOf(pathname)`, where `zoneOf(p) = p.split('/').filter(Boolean)[0] ?? ''`. Cross-zone anchors carry **`data-sveltekit-reload`** — without it SvelteKit soft-navigates into a route the zone does not own and 404s. The shell applies this itself (`top-navbar.svelte`); `ZoneNavLeaf.reload` is the sidebar equivalent.
+A link is cross-zone when `zoneOf(href) !== zoneOf(pathname)`. `zoneOf` is the first path segment — **except for `HOME_ROUTES` (`projects`, `settings`), which map to the home zone**, because `home` is the catch-all and its own routes would otherwise read as zones of their own (`/projects` looked like a `projects` zone, so the navbar's own link to it cost a document load from `/`). Cross-zone anchors carry **`data-sveltekit-reload`** — without it SvelteKit soft-navigates into a route the zone does not own and 404s. The shell applies this itself (`top-navbar.svelte`); `ZoneNavLeaf.reload` is the sidebar equivalent. `@rask/zone-contract`'s gate keeps its own copy of `HOME_ROUTES` (it cannot import the shell) and takes the OWNING zone from each component's path, so a lakehouse link into `/projects` without the attribute now fails the suite instead of 404-ing at runtime.
 
 Hrefs are **flat and absolute** (`/lakehouse/data`, `/media/`, `/compute/`) — there is no project prefix. The project comes from the **request host**: `projectFromHost` maps `demo.localhost` → `demo` (`shell/breadcrumb.ts:5-8`).
 
