@@ -102,7 +102,7 @@ test('a signed-out / unresolved identity gets no governance column (fail-closed)
 	await expect(panel.locator('a[href^="/lakehouse/admin"]')).toHaveCount(0);
 });
 
-test("Access is reachable only from the Settings panel, never as its own navbar entry", async ({
+test('Access is reachable only from the Settings panel, never as its own navbar entry', async ({
 	page,
 }) => {
 	await page.route('**/capi/v1/me', (route) => json(route, ADMIN));

@@ -4,7 +4,7 @@ import type { ApiResult } from '@rask/api/client';
 import { readAuditTrail, type AuditEvent } from '$lib/server/audit-core';
 
 // The zone UI's door to the audit trail (the transport ruling blocked-port #1 — the last one). The
-// implementation lives in `$lib/server/audit-core.ts`, shared with the thin `/api/audit` route that
+// implementation lives in `$lib/server/audit-core.ts` (once shared with an `/api/audit` route that
 // stays alive for the workbench zone's <rask-lakehouse-audit> element; this file is only the
 // remote-function binding.
 

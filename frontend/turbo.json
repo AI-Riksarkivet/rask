@@ -34,7 +34,7 @@
 		// depends on @rask/zone-contract (it is a gate, not a runtime dep), so this raced the zone builds
 		// and measured a half-written output/client. manifest.test.ts fails if this list drifts.
 		"@rask/zone-contract#test": {
-			"dependsOn": ["annotator#build", "compute#build", "home#build", "lakehouse#build", "media#build", "studio#build", "train#build", "workbench#build"],
+			"dependsOn": ["annotator#build", "compute#build", "home#build", "lakehouse#build", "media#build", "studio#build", "train#build"],
 			"outputs": []
 		},
 		"test:e2e": {

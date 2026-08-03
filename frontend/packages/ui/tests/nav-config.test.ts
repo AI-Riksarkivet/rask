@@ -26,7 +26,6 @@ describe('topNav', () => {
 			'Projects',
 			'Lakehouse',
 			'Compute',
-			'Workbench',
 			'Search',
 			'Annotate',
 			'Train',
@@ -36,7 +35,7 @@ describe('topNav', () => {
 			topNav(false)
 				.filter((e) => e.tier === 'primary')
 				.map((e) => e.title),
-		).toEqual(['Projects', 'Lakehouse', 'Compute', 'Workbench']);
+		).toEqual(['Projects', 'Lakehouse', 'Compute']);
 		expect(topNav(false).map((e) => e.href)).toEqual([
 			// `/projects` is a ROUTE in the home zone, not a zone base, so it carries NO trailing slash
 			// — SvelteKit's default trailingSlash is 'never' and '/projects/' would cost the 308 the
@@ -44,7 +43,6 @@ describe('topNav', () => {
 			'/projects',
 			'/lakehouse/catalog',
 			'/compute/',
-			'/workbench/',
 			// Trailing slashes are LOAD-BEARING, not cosmetic: each zone's `paths.base` serves the
 			// trailing form, so a bare '/compute' href cost a 308 redirect round-trip on EVERY
 			// cross-zone hop (measured on all five zones, 2026-07-28) — visible as flicker over a
@@ -107,7 +105,15 @@ describe('topNav', () => {
 		// `topNav` and silently appearing at the estate root as well.
 		for (const admin of [false, true]) {
 			const titles = mainMenuNav(admin).map((e) => e.title);
-			for (const zone of ['Lakehouse', 'Compute', 'Workbench', 'Search', 'Annotate', 'Train', 'Studio']) {
+			for (const zone of [
+				'Lakehouse',
+				'Compute',
+				'Workbench',
+				'Search',
+				'Annotate',
+				'Train',
+				'Studio',
+			]) {
 				expect(titles).not.toContain(zone);
 			}
 		}

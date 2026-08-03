@@ -1,7 +1,7 @@
 import { env } from '$env/dynamic/private';
 
 // #77 the audit-trail read, ONE implementation for its two doors: the zone UI's remote function
-// (`admin/remote/audit.remote.ts`) and the thin `/api/audit` route kept alive for the workbench
+// (`admin/remote/audit.remote.ts`). The thin `/api/audit` route that shared it died with the
 // zone's <rask-lakehouse-audit> element (a custom-element bundle cannot import a .remote.ts — the
 // cross-zone blocker the transport ruling records). Everything here moved VERBATIM from the route:
 // the estate-admin gate, the allow-listed time windows, the proven SQL shape, the log_attributes

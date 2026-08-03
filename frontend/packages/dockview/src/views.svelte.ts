@@ -28,7 +28,7 @@ import type { LayoutRead } from './types';
 /** JSON with SORTED object keys, recursively — the divergence baseline's serializer. dockview's
  *  toJSON/fromJSON round-trip reorders the `panels` record's keys, so plain JSON.stringify marked an
  *  untouched, freshly-applied view as modified (review finding). Key order is not layout. */
-export function stableStringify(value: unknown): string {
+function stableStringify(value: unknown): string {
 	return JSON.stringify(value, (_key, v: unknown) => {
 		if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
 			const rec = v as Record<string, unknown>;
