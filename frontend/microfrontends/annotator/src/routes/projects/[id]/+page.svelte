@@ -15,7 +15,7 @@
 	import PublishPanel from '$lib/projects/PublishPanel.svelte';
 	import SendItemsDialog from '$lib/projects/SendItemsDialog.svelte';
 	import TaskQueue from '$lib/projects/TaskQueue.svelte';
-	import { projectsApi } from '$lib/projects/client.js';
+	import { fetchProject, fireProjectEvent, listTasks } from '$lib/projects/remote/projects.remote';
 	import { EVENT_LABELS, projectStateVariant } from '$lib/projects/presentation.js';
 	import type { LegalEvent, ProjectDetail, TaskListing } from '$lib/projects/types.js';
 
@@ -32,14 +32,35 @@
 
 	async function load(): Promise<void> {
 		const seq = ++inflight;
-		const [projectResult, tasksResult] = await Promise.all([
-			projectsApi.get(projectId),
-			projectsApi.listTasks(projectId, { details: true }),
-		]);
+		// `refresh()`, not bare calls: a query instance is cached by its argument, so the publish
+		// poll below — and every post-action refetch — would re-read the snapshot it already holds.
+		const projectQuery = fetchProject({ projectId });
+		const tasksQuery = listTasks({ projectId, details: true });
+		try {
+			await Promise.all([projectQuery.refresh(), tasksQuery.refresh()]);
+		} catch (err) {
+			// The ZONE SERVER is unreachable (the remote call itself failed, not the annotation service
+			// behind it). Still the offline state — never a permanent "Loading project…".
+			if (seq !== inflight) return;
+			detail = null;
+			listing = null;
+			status = 'offline';
+			statusDetail = String(err);
+			return;
+		}
 		if (seq !== inflight) return; // latest-wins
+		const projectResult = projectQuery.current;
+		const tasksResult = tasksQuery.current;
+		if (projectResult === undefined) {
+			detail = null;
+			listing = null;
+			status = 'offline';
+			statusDetail = 'the project read returned nothing';
+			return;
+		}
 		if (projectResult.ok) {
 			detail = projectResult.data;
-			listing = tasksResult.ok ? tasksResult.data : null;
+			listing = tasksResult?.ok ? tasksResult.data : null;
 			status = 'ready';
 		} else {
 			detail = null;
@@ -95,7 +116,7 @@
 		if (firing) return;
 		firing = true;
 		notice = '';
-		const result = await projectsApi.fireEvent(projectId, event);
+		const result = await fireProjectEvent({ projectId, event });
 		firing = false;
 		if (result.ok) {
 			await load();

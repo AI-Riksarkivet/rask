@@ -189,6 +189,13 @@ export const TaskListingSchema = v.object({
 });
 export type TaskListing = v.InferOutput<typeof TaskListingSchema>;
 
+/** One item sent into a labeling task: where it comes from (chunk keys / a scope) and how it is
+ *  displayed. The send command validates the same shape at the wire boundary. */
+export type SendItem = {
+	source: { kind: string; keys: string[]; where?: string | null };
+	media: { kind: string; image_url?: string | null; media_url?: string | null };
+};
+
 export const DraftSchema = v.object({
 	task_id: v.string(),
 	project_id: v.string(),

@@ -6,7 +6,7 @@
 	import { Dialog } from '@rask/ui/dialog';
 	import { Textarea } from '@rask/ui/textarea';
 
-	import { projectsApi } from './client.js';
+	import { sendItems } from './remote/projects.remote';
 
 	let {
 		projectId,
@@ -28,13 +28,13 @@
 		if (keys.length === 0 || sending) return;
 		sending = true;
 		error = '';
-		const result = await projectsApi.sendItems(
+		const result = await sendItems({
 			projectId,
-			keys.map((key) => ({
+			items: keys.map((key) => ({
 				source: { kind: 'chunks', keys: [key] },
 				media: { kind: 'image' },
 			})),
-		);
+		});
 		sending = false;
 		if (result.ok) {
 			open = false;

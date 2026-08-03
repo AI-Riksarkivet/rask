@@ -18,7 +18,7 @@
 	import { FolderPlus, RefreshCw } from '@lucide/svelte';
 
 	import { fetchMeViaBff } from '$lib/http';
-	import { projectsApi } from './client.js';
+	import { createProject, listProjects } from './remote/projects.remote';
 	import type { Project } from './types.js';
 	import { projectStateVariant, taskProgress } from './presentation.js';
 
@@ -100,7 +100,24 @@
 	}
 
 	async function load(): Promise<void> {
-		const result = await projectsApi.list(tenant);
+		// `refresh()`, not a bare call: a query instance is cached by its argument, so re-awaiting it
+		// for the Refresh button (or after a create) would hand back the list it already holds.
+		const projectsQuery = listProjects({ tenant });
+		try {
+			await projectsQuery.refresh();
+		} catch (err) {
+			// The ZONE SERVER is unreachable (the remote call itself failed, not the annotation
+			// service behind it). Still the offline card — never a permanent "Loading projects…".
+			status = 'offline';
+			detail = String(err);
+			return;
+		}
+		const result = projectsQuery.current;
+		if (result === undefined) {
+			status = 'offline';
+			detail = 'the projects read returned nothing';
+			return;
+		}
 		if (result.ok) {
 			projects = result.data.projects;
 			status = 'ready';
@@ -128,7 +145,7 @@
 		creating = true;
 		createError = '';
 		const schema = labelSchema();
-		const result = await projectsApi.create({
+		const result = await createProject({
 			tenant,
 			slug: slug.trim(),
 			title: title.trim(),

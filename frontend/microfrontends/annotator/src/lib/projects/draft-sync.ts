@@ -10,22 +10,36 @@
  */
 import type { Table } from 'apache-arrow';
 
-import { tasksApi } from './client.js';
+import { fetchDraft, saveDraft } from './remote/tasks.remote';
 import { rowsToShapes } from './draft-shapes.js';
 
 /** Snapshot the table into the task's draft. Returns null on success, or the failure detail —
  *  the caller surfaces it; a silent miss here means work that LOOKS saved but never publishes. */
 export async function syncTaskDraft(taskId: string, table: Table): Promise<string | null> {
 	const shapes = rowsToShapes(table);
-	const current = await tasksApi.getDraft(taskId);
-	const baseRevision = current.ok
-		? current.data.revision
-		: current.status === 404
-			? null
-			: undefined;
+	// `refresh()`, not a bare call: a query instance is cached by its argument, so the SECOND save of
+	// a session would guard against the revision the first one started from and 409 forever.
+	const draftQuery = fetchDraft({ taskId });
+	try {
+		await draftQuery.refresh();
+	} catch (err) {
+		// The zone server itself is unreachable — report it rather than saving a draft with no
+		// revision guard, which would clobber whatever is there.
+		return `could not read the task draft: ${String(err)}`;
+	}
+	const current = draftQuery.current;
+	const baseRevision =
+		current === undefined
+			? undefined
+			: current.ok
+				? current.data.revision
+				: current.status === 404
+					? null
+					: undefined;
 	if (baseRevision === undefined)
-		return `could not read the task draft: ${current.ok ? '' : current.detail}`;
-	const saved = await tasksApi.saveDraft(taskId, {
+		return `could not read the task draft: ${current?.ok === false ? current.detail : ''}`;
+	const saved = await saveDraft({
+		taskId,
 		shapes,
 		...(baseRevision === null ? {} : { base_revision: baseRevision }),
 	});

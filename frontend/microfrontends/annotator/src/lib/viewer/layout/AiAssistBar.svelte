@@ -5,11 +5,11 @@
 	// accepts/rejects like any prediction. (ra-atr AI-labeling parity.)
 	import { onDestroy, onMount } from 'svelte';
 	import { FlaskConical, MousePointerClick, Sparkles } from '@lucide/svelte';
-	import { base } from '$app/paths';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
 	import { cn } from '@rask/ui/utils';
 	import TextInput from '$lib/ui/TextInput.svelte';
+	import { zoneConfig } from '../remote/config.remote';
 	import type { AnnotatorController } from '../annotator.svelte';
 
 	let { controller }: { controller: AnnotatorController } = $props();
@@ -23,19 +23,16 @@
 	// HONEST MOCK: until a real model runner is deployed (MEDIA_ASSIST_URL set), the
 	// backend answers assist calls with a deterministic mock — the shapes LOOK real, so
 	// without this chip a reviewer could mistake them for model output. Presence comes
-	// from the zone's own /api/config (BFF env, never the URL itself). FAIL-HONEST:
-	// mock is the stack's default state, so the chip shows until the config CONFIRMS a
-	// real runner — a failed/unreachable config fetch keeps the warning up rather than
-	// silently passing mock shapes off as model output.
+	// from the zone's own `zoneConfig` remote query (server env, never the URL itself).
+	// FAIL-HONEST: mock is the stack's default state, so the chip shows until the config
+	// CONFIRMS a real runner — a failed/unreachable config read keeps the warning up
+	// rather than silently passing mock shapes off as model output.
 	let assistMocked = $state(true);
 	onMount(async () => {
 		try {
-			const res = await fetch(`${base}/api/config`);
-			if (res.ok) {
-				const cfg = (await res.json()) as { assistRunner?: boolean; assistProducers?: string[] };
-				assistMocked = cfg.assistRunner !== true;
-				extraProducers = cfg.assistProducers ?? [];
-			}
+			const cfg = await zoneConfig();
+			assistMocked = cfg.assistRunner !== true;
+			extraProducers = cfg.assistProducers;
 		} catch {
 			// config unreachable — keep the fail-honest mock chip
 		}

@@ -1,17 +1,45 @@
 import { test, expect, type Page, type Route } from '@playwright/test';
+import { MOCK_ANNOTATOR } from './ports';
 
-// Hermetic coverage for the annotation task-management surfaces (OPEN-WORK.md § Design — annotation projects; the A1–A4 surfaces).
-// Every backend response is mocked at the zone-scoped BFF boundary; the backend's OWN
-// contracts (FGA doors, machine tables, saga idempotency) are pinned by tests/unit/*.
-// What THIS layer proves: the UI renders the transitions the backend supplies, drives
-// the right endpoints with the right bodies, keeps the three review actions distinct,
-// states what a publish lands before firing it, narrates a running publish, and
-// surfaces a server 403 as the refusal it is.
+// Hermetic coverage for the annotation task-management surfaces (OPEN-WORK.md § Design — annotation
+// projects; the A1–A4 surfaces). The backend's OWN contracts (FGA doors, machine tables, saga
+// idempotency, template enforcement at submit) are pinned by tests/unit/*.
+// What THIS layer proves: the UI renders the transitions the backend supplies, drives the right
+// endpoints with the right bodies, keeps the three review actions distinct, states what a publish
+// lands before firing it, narrates a running publish, and surfaces a server 403 as the refusal it is.
+//
+// The transport is remote functions now (open_transport.md, area 4): every read and write below runs
+// on the zone SERVER, which `page.route` cannot see — so the wire is seeded on, and asserted through,
+// the mock annotator's ledger (e2e/mock-annotator.ts). Same assertions as the BFF-era spec; the paths
+// are the UPSTREAM ones (`/tasks/t1/events`) rather than the proxied `/annotator/api/…`, because that
+// is now where the request actually goes.
+
+type Body = Record<string, unknown>;
 
 const json = (route: Route, body: unknown, status = 200) =>
 	route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
 const KEY = 'fe00cd746463ad2c/0/19';
+
+/** Seed exact upstream responses, keyed "METHOD /path" — a key WITHOUT a query string answers any
+ *  query, which is the old `?tenant=*` glob's replacement. */
+const seed = async (page: Page, routes: Record<string, unknown>): Promise<void> => {
+	await page.request.post(`${MOCK_ANNOTATOR}/__mock/seed`, { data: { routes } });
+};
+
+/** Every mutating request the zone server made, in order. */
+const calls = async (page: Page): Promise<Body[]> => {
+	const res = await page.request.get(`${MOCK_ANNOTATOR}/__mock/calls`);
+	return ((await res.json()) as { calls: Body[] }).calls;
+};
+
+const bodies = async (page: Page): Promise<unknown[]> => (await calls(page)).map((c) => c.body);
+
+/** The create POST, once it has landed — polled, so an assertion never races the request. */
+async function createCall(page: Page): Promise<Body> {
+	await expect.poll(async () => (await calls(page)).some((c) => c.path === '/projects')).toBe(true);
+	return (await calls(page)).find((c) => c.path === '/projects')!;
+}
 
 const LEGAL = {
 	labeling: [
@@ -41,7 +69,7 @@ const TASK_EVENTS = {
 };
 
 function project(
-	state: keyof typeof LEGAL | 'publishing' | 'publish_failed',
+	state: keyof typeof LEGAL | 'draft' | 'publishing' | 'publish_failed',
 	extra: Record<string, unknown> = {},
 ) {
 	return {
@@ -110,29 +138,34 @@ function listing(details: Record<string, unknown>[], extra: Record<string, unkno
 	};
 }
 
-let writes: { path: string; body: unknown }[] = [];
-
-async function baseMocks(page: Page): Promise<void> {
-	writes = [];
-	await page.route('**/annotator/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
-	await page.route('**/annotator/api/**', (route) => {
-		const req = route.request();
-		if (req.method() !== 'GET') {
-			writes.push({ path: new URL(req.url()).pathname, body: req.postDataJSON() });
-		}
-		return json(route, { detail: 'unstubbed' }, 404);
+/** The detail page's ONE snapshot: the project read and the task listing, seeded together — which is
+ *  exactly the invariant the page is built on (a reviewer never sees a queue from one snapshot beside
+ *  a publish precondition from another). */
+const snapshot = (
+	page: Page,
+	detail: Record<string, unknown>,
+	tasks: Record<string, unknown>,
+): Promise<void> =>
+	seed(page, {
+		'GET /projects/p1': detail,
+		'GET /projects/p1/tasks?include=details': tasks,
 	});
-}
+
+test.beforeEach(async ({ page }) => {
+	await page.request.post(`${MOCK_ANNOTATOR}/__mock/reset`);
+	// Identity stays a BFF pass-through (keep-flow), so it is still mocked at the browser boundary.
+	await page.route('**/annotator/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
+	// The media plane still rides `+server.ts` bytes routes; nothing on these pages should reach one.
+	// Zone-scoped glob on purpose: a bare **/api/** also matches Vite /@fs module URLs.
+	await page.route('**/annotator/api/**', (route) => json(route, { detail: 'unstubbed' }, 404));
+});
 
 // --------------------------------------------------------------------------------------------------
 // A1 · the landing
 // --------------------------------------------------------------------------------------------------
 
 test('A1: the landing lists the tenant’s projects with state and progress', async ({ page }) => {
-	await baseMocks(page);
-	await page.route('**/annotator/api/projects?tenant=*', (route) =>
-		json(route, { projects: [project('labeling')], total: 1 }),
-	);
+	await seed(page, { 'GET /projects': { projects: [project('labeling')], total: 1 } });
 
 	await page.goto('/annotator/');
 
@@ -144,10 +177,9 @@ test('A1: the landing lists the tenant’s projects with state and progress', as
 });
 
 test('A1: a refused list is a REFUSAL, not an empty state', async ({ page }) => {
-	await baseMocks(page);
-	await page.route('**/annotator/api/projects?tenant=*', (route) =>
-		json(route, { detail: 'gina lacks member on project:default' }, 403),
-	);
+	await seed(page, {
+		'GET /projects': { status: 403, body: { detail: 'gina lacks member on project:default' } },
+	});
 
 	await page.goto('/annotator/');
 
@@ -163,41 +195,36 @@ test('A1: a refused list is a REFUSAL, not an empty state', async ({ page }) => 
 test('A2: claim takes the lease, Annotate routes into the EXISTING canvas, submit hands off to review', async ({
 	page,
 }) => {
-	await baseMocks(page);
-	// Signed in as `anon` (LIFO: this registration wins over baseMocks' 401) — the lease chip's
+	// Signed in as `anon` (LIFO: this registration wins over the beforeEach 401) — the lease chip's
 	// "yours" reads ME against the assignee, and a signed-out UI honestly can't say "yours".
 	await page.route('**/annotator/capi/v1/me', (route) =>
 		json(route, { sub: 'anon', name: null, email: null, estate_admin: true, projects: [] }),
 	);
-	// Stateful double: the claim/submit POSTs move t1 through the machine, and the page's
-	// refetch reads the moved state — the UI never invents a transition itself.
-	let t1 = task('t1', 'unassigned');
-	await page.route('**/annotator/api/projects/p1', (route) =>
-		json(route, { project: project('labeling'), legal_events: LEGAL.labeling }),
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([task('t1', 'unassigned')]),
 	);
-	await page.route('**/annotator/api/projects/p1/tasks?include=details', (route) =>
-		json(route, listing([t1])),
-	);
-	await page.route('**/annotator/api/tasks/t1/events', (route) => {
-		const body = route.request().postDataJSON() as { event: string };
-		writes.push({ path: '/annotator/api/tasks/t1/events', body });
-		if (body.event === 'claim') {
-			t1 = task('t1', 'claimed', {
-				assignee: 'anon',
-				lease_expires_at: new Date(Date.now() + 600_000).toISOString(),
-			});
-		} else if (body.event === 'submit') {
-			t1 = task('t1', 'in_review', { submitted_by: 'anon' });
-		}
-		return json(route, t1);
-	});
 
 	await page.goto('/annotator/projects/p1');
 	await expect(page.getByRole('heading', { name: /Vasa portraits/ })).toBeVisible();
 
+	// The post-claim world, seeded before the click: the event answers with the moved task and the
+	// page's refetch reads the moved listing — the UI never invents a transition itself.
+	const claimed = task('t1', 'claimed', {
+		assignee: 'anon',
+		lease_expires_at: new Date(Date.now() + 600_000).toISOString(),
+	});
+	await seed(page, { 'POST /tasks/t1/events': claimed });
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([claimed]),
+	);
+
 	// Claim: the button comes from the task's OWN legal_events.
 	await page.getByRole('button', { name: 'Claim' }).click();
-	expect(writes.map((w) => w.body)).toContainEqual({ event: 'claim' });
+	await expect.poll(() => bodies(page)).toContainEqual({ event: 'claim' });
 
 	// The refetched row is claimed with a live lease — and Annotate routes into the canvas
 	// with the task's OWN keys (`?keys=`), not a second viewer. (By title: the estate navbar
@@ -207,22 +234,27 @@ test('A2: claim takes the lease, Annotate routes into the EXISTING canvas, submi
 	await expect(annotate).toHaveAttribute('href', new RegExp(`keys=${encodeURIComponent(KEY)}`));
 
 	// Submit for review — the working loop's handoff.
+	const submitted = task('t1', 'in_review', { submitted_by: 'anon' });
+	await seed(page, { 'POST /tasks/t1/events': submitted });
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([submitted]),
+	);
 	await page.getByRole('button', { name: 'Submit for review' }).click();
-	expect(writes.map((w) => w.body)).toContainEqual({ event: 'submit' });
+	await expect.poll(() => bodies(page)).toContainEqual({ event: 'submit' });
 	await expect(page.getByText('in review')).toBeVisible();
 });
 
 test('A2: an expired lease is shown EXPIRED, never as held', async ({ page }) => {
-	await baseMocks(page);
 	const stale = task('t1', 'claimed', {
 		assignee: 'dave',
 		lease_expires_at: new Date(Date.now() - 60_000).toISOString(),
 	});
-	await page.route('**/annotator/api/projects/p1', (route) =>
-		json(route, { project: project('labeling'), legal_events: LEGAL.labeling }),
-	);
-	await page.route('**/annotator/api/projects/p1/tasks?include=details', (route) =>
-		json(route, listing([stale])),
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([stale]),
 	);
 
 	await page.goto('/annotator/projects/p1');
@@ -238,17 +270,13 @@ test('A2: an expired lease is shown EXPIRED, never as held', async ({ page }) =>
 test('A3: accept, fix & accept and request changes are three distinct actions; the note travels', async ({
 	page,
 }) => {
-	await baseMocks(page);
-	const inReview = task('t2', 'in_review', { submitted_by: 'gina' });
-	await page.route('**/annotator/api/projects/p1', (route) =>
-		json(route, { project: project('labeling'), legal_events: LEGAL.labeling }),
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([task('t2', 'in_review', { submitted_by: 'gina' })]),
 	);
-	await page.route('**/annotator/api/projects/p1/tasks?include=details', (route) =>
-		json(route, listing([inReview])),
-	);
-	await page.route('**/annotator/api/tasks/t2/events', (route) => {
-		writes.push({ path: '/annotator/api/tasks/t2/events', body: route.request().postDataJSON() });
-		return json(route, task('t2', 'changes_requested', { submitted_by: 'gina' }));
+	await seed(page, {
+		'POST /tasks/t2/events': task('t2', 'changes_requested', { submitted_by: 'gina' }),
 	});
 
 	await page.goto('/annotator/projects/p1');
@@ -262,13 +290,16 @@ test('A3: accept, fix & accept and request changes are three distinct actions; t
 	await page.getByPlaceholder(/stamp in the corner/).fill('The stamp in the corner is unlabelled');
 	await page.getByRole('button', { name: 'Request changes', exact: true }).click();
 
-	expect(writes.map((w) => w.body)).toContainEqual({
-		event: 'request_changes',
-		message: 'The stamp in the corner is unlabelled',
-	});
+	await expect
+		.poll(() => bodies(page))
+		.toContainEqual({
+			event: 'request_changes',
+			message: 'The stamp in the corner is unlabelled',
+		});
 	// The distinct-edges guarantee: nothing here fired accept or fix_and_accept.
-	expect(writes.map((w) => (w.body as { event: string }).event)).not.toContain('accept');
-	expect(writes.map((w) => (w.body as { event: string }).event)).not.toContain('fix_and_accept');
+	const fired = (await bodies(page)).map((b) => (b as { event: string }).event);
+	expect(fired).not.toContain('accept');
+	expect(fired).not.toContain('fix_and_accept');
 });
 
 // --------------------------------------------------------------------------------------------------
@@ -278,52 +309,15 @@ test('A3: accept, fix & accept and request changes are three distinct actions; t
 test('A4: the confirm step states what lands and whose names travel; a running publish narrates; failure offers retry', async ({
 	page,
 }) => {
-	await baseMocks(page);
-	const done = [
+	const done = listing([
 		task('t1', 'accepted', {
 			submitted_by: 'gina',
 			reviewed_by: 'carol',
 			review_action: 'accepted',
 		}),
 		task('t2', 'skipped'),
-	];
-	// Phases: frozen → (publish POST) → publishing (narrating) → publish_failed (with reason).
-	let phase: 'frozen' | 'publishing' | 'failed' = 'frozen';
-	let publishingReads = 0;
-	await page.route('**/annotator/api/projects/p1', (route) => {
-		if (phase === 'frozen') {
-			return json(route, { project: project('frozen'), legal_events: LEGAL.frozen });
-		}
-		if (phase === 'publishing') {
-			publishingReads += 1;
-			if (publishingReads >= 2) phase = 'failed';
-			return json(route, {
-				project: project('publishing', {
-					publish_progress: 'creating table silver$vasa-portraits_0123456789ab',
-				}),
-				legal_events: [],
-			});
-		}
-		return json(route, {
-			project: project('publish_failed', {
-				publish_error: 'catalog unreachable: connection refused',
-				publish_progress: 'creating table silver$vasa-portraits_0123456789ab',
-				pending_target_namespace: 'silver',
-			}),
-			legal_events: [{ event: 'publish', to: 'publishing', permission: 'can_publish' }],
-		});
-	});
-	await page.route('**/annotator/api/projects/p1/tasks?include=details', (route) =>
-		json(route, listing(done)),
-	);
-	await page.route('**/annotator/api/projects/p1/events', (route) => {
-		writes.push({
-			path: '/annotator/api/projects/p1/events',
-			body: route.request().postDataJSON(),
-		});
-		phase = 'publishing';
-		return json(route, project('publishing'));
-	});
+	]);
+	await snapshot(page, { project: project('frozen'), legal_events: LEGAL.frozen }, done);
 
 	await page.goto('/annotator/projects/p1');
 
@@ -336,17 +330,47 @@ test('A4: the confirm step states what lands and whose names travel; a running p
 	await expect(dialog.getByText(/gina/)).toBeVisible();
 	await expect(dialog.getByText(/carol/)).toBeVisible();
 
+	// Phase 2, seeded before the click: the event is accepted and the refetch reads a RUNNING publish.
+	await seed(page, { 'POST /projects/p1/events': project('publishing') });
+	await snapshot(
+		page,
+		{
+			project: project('publishing', {
+				publish_progress: 'creating table silver$vasa-portraits_0123456789ab',
+			}),
+			legal_events: [],
+		},
+		done,
+	);
+
 	await page.getByRole('button', { name: 'Publish to silver' }).click();
-	expect(writes.map((w) => w.body)).toContainEqual({
-		event: 'publish',
-		target_namespace: 'silver',
-	});
+	await expect
+		.poll(() => bodies(page))
+		.toContainEqual({
+			event: 'publish',
+			target_namespace: 'silver',
+		});
 
 	// The RUNNING publish narrates the saga's actual step — not a spinner.
 	await expect(page.getByText('creating table silver$vasa-portraits_0123456789ab')).toBeVisible();
 
+	// Phase 3: the saga dies. Nothing below clicks — the page's own 2 s poll carries the transition,
+	// which is the property under test.
+	await snapshot(
+		page,
+		{
+			project: project('publish_failed', {
+				publish_error: 'catalog unreachable: connection refused',
+				publish_progress: 'creating table silver$vasa-portraits_0123456789ab',
+				pending_target_namespace: 'silver',
+			}),
+			legal_events: [{ event: 'publish', to: 'publishing', permission: 'can_publish' }],
+		},
+		done,
+	);
+
 	// The failure shows the recorded error, the step it died at, and a retry that restates
-	// the pinned target namespace. (The page's 2s poll carries the phase transitions.)
+	// the pinned target namespace.
 	await expect(page.getByText('catalog unreachable: connection refused')).toBeVisible({
 		timeout: 10_000,
 	});
@@ -361,16 +385,17 @@ test('A4: the confirm step states what lands and whose names travel; a running p
 test('a server 403 surfaces as the refusal it is — named door, no silent no-op', async ({
 	page,
 }) => {
-	await baseMocks(page);
-	await page.route('**/annotator/api/projects/p1', (route) =>
-		json(route, { project: project('labeling'), legal_events: LEGAL.labeling }),
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([task('t1', 'unassigned')]),
 	);
-	await page.route('**/annotator/api/projects/p1/tasks?include=details', (route) =>
-		json(route, listing([task('t1', 'unassigned')])),
-	);
-	await page.route('**/annotator/api/tasks/t1/events', (route) =>
-		json(route, { detail: 'gina lacks can_claim on annotation_project:p1' }, 403),
-	);
+	await seed(page, {
+		'POST /tasks/t1/events': {
+			status: 403,
+			body: { detail: 'gina lacks can_claim on annotation_project:p1' },
+		},
+	});
 
 	await page.goto('/annotator/projects/p1');
 	await page.getByRole('button', { name: 'Claim' }).click();
@@ -385,27 +410,25 @@ test('a server 403 surfaces as the refusal it is — named door, no silent no-op
 // --------------------------------------------------------------------------------------------------
 
 test('bulk accept fires one gated event per selected reviewable task', async ({ page }) => {
-	await baseMocks(page);
-	const reviewables = [
-		task('t1', 'in_review', { submitted_by: 'gina' }),
-		task('t2', 'in_review', { submitted_by: 'gina' }),
-		task('t3', 'unassigned'),
-	];
-	await page.route('**/annotator/api/projects/p1', (route) =>
-		json(route, { project: project('labeling'), legal_events: LEGAL.labeling }),
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([
+			task('t1', 'in_review', { submitted_by: 'gina' }),
+			task('t2', 'in_review', { submitted_by: 'gina' }),
+			task('t3', 'unassigned'),
+		]),
 	);
-	await page.route('**/annotator/api/projects/p1/tasks?include=details', (route) =>
-		json(route, listing(reviewables)),
-	);
-	for (const id of ['t1', 't2']) {
-		await page.route(`**/annotator/api/tasks/${id}/events`, (route) => {
-			writes.push({
-				path: `/annotator/api/tasks/${id}/events`,
-				body: route.request().postDataJSON(),
-			});
-			return json(route, task(id, 'accepted', { submitted_by: 'gina', reviewed_by: 'carol' }));
-		});
-	}
+	await seed(page, {
+		'POST /tasks/t1/events': task('t1', 'accepted', {
+			submitted_by: 'gina',
+			reviewed_by: 'carol',
+		}),
+		'POST /tasks/t2/events': task('t2', 'accepted', {
+			submitted_by: 'gina',
+			reviewed_by: 'carol',
+		}),
+	});
 
 	await page.goto('/annotator/projects/p1');
 	await page.getByRole('checkbox', { name: 'Select all' }).check();
@@ -414,11 +437,10 @@ test('bulk accept fires one gated event per selected reviewable task', async ({ 
 	await expect(page.getByText('Accepted 2 items.')).toBeVisible();
 
 	// Exactly the two in_review tasks were accepted — the unassigned one was never fired at.
-	const accepted = writes.filter((w) => (w.body as { event: string }).event === 'accept');
-	expect(accepted.map((w) => w.path).sort()).toEqual([
-		'/annotator/api/tasks/t1/events',
-		'/annotator/api/tasks/t2/events',
-	]);
+	const accepted = (await calls(page)).filter(
+		(c) => (c.body as { event: string }).event === 'accept',
+	);
+	expect(accepted.map((c) => c.path).sort()).toEqual(['/tasks/t1/events', '/tasks/t2/events']);
 });
 
 // --------------------------------------------------------------------------------------------------
@@ -426,36 +448,34 @@ test('bulk accept fires one gated event per selected reviewable task', async ({ 
 // --------------------------------------------------------------------------------------------------
 
 test('assign names a recipient and the row comes back pinned', async ({ page }) => {
-	await baseMocks(page);
-	let t1 = task('t1', 'unassigned', {});
-	t1 = {
-		...t1,
+	const assignable = {
+		...task('t1', 'unassigned'),
 		legal_events: [
 			{ event: 'claim', to: 'claimed', permission: 'can_claim' },
 			{ event: 'assign', to: 'claimed', permission: 'can_manage' },
 		],
 	};
-	let current = t1;
-	await page.route('**/annotator/api/projects/p1', (route) =>
-		json(route, { project: project('labeling'), legal_events: LEGAL.labeling }),
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([assignable]),
 	);
-	await page.route('**/annotator/api/projects/p1/tasks?include=details', (route) =>
-		json(route, listing([current])),
-	);
-	await page.route('**/annotator/api/tasks/t1/events', (route) => {
-		const body = route.request().postDataJSON() as { event: string; assignee?: string };
-		writes.push({ path: '/annotator/api/tasks/t1/events', body });
-		// The server pins an assigned item: claimed, named assignee, NO lease expiry (§5.2).
-		current = task('t1', 'claimed', { assignee: body.assignee, lease_expires_at: null });
-		return json(route, current);
-	});
 
 	await page.goto('/annotator/projects/p1');
 	await page.getByRole('button', { name: 'Assign…' }).click();
 	await page.getByPlaceholder(/annotator \(OIDC subject/).fill('dave');
+
+	// The server pins an assigned item: claimed, named assignee, NO lease expiry (§5.2).
+	const pinned = task('t1', 'claimed', { assignee: 'dave', lease_expires_at: null });
+	await seed(page, { 'POST /tasks/t1/events': pinned });
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([pinned]),
+	);
 	await page.getByRole('button', { name: 'Assign', exact: true }).click();
 
-	expect(writes.map((w) => w.body)).toContainEqual({ event: 'assign', assignee: 'dave' });
+	await expect.poll(() => bodies(page)).toContainEqual({ event: 'assign', assignee: 'dave' });
 	// The pinned chip: held by dave, no countdown — an assignment never expires.
 	await expect(page.getByText('dave · pinned')).toBeVisible();
 });
@@ -467,14 +487,9 @@ test('assign names a recipient and the row comes back pinned', async ({ page }) 
 test('consensus: the create dialog carries the field and the create POST carries consensus_n', async ({
 	page,
 }) => {
-	await baseMocks(page);
-	await page.route('**/annotator/api/projects?tenant=*', (route) =>
-		json(route, { projects: [], total: 0 }),
-	);
-	// The create POST carries no query string, so it needs its own route registration.
-	await page.route('**/annotator/api/projects', (route) => {
-		writes.push({ path: '/annotator/api/projects', body: route.request().postDataJSON() });
-		return json(route, project('draft', { consensus_n: 3 }));
+	await seed(page, {
+		'GET /projects': { projects: [], total: 0 },
+		'POST /projects': project('draft', { consensus_n: 3 }),
 	});
 
 	await page.goto('/annotator/');
@@ -484,30 +499,27 @@ test('consensus: the create dialog carries the field and the create POST carries
 	await expect(dialog.getByText(/annotators per item/)).toBeVisible();
 	await dialog.getByPlaceholder('vasa-portraits').fill('vasa-portraits');
 	await dialog.getByRole('spinbutton').fill('3');
+	// Assert the binding landed BEFORE submitting: `fill` returns once the input event is dispatched,
+	// not once Svelte has re-run the binding, and an Enter that beats it submits the default value —
+	// which reads as "the dialog dropped the field" rather than as the race it is.
+	await expect(dialog.getByRole('spinbutton')).toHaveValue('3');
 	await dialog.getByPlaceholder('vasa-portraits').press('Enter');
 
-	const create = writes.find((w) => w.path === '/annotator/api/projects');
-	expect(create).toBeDefined();
-	expect((create!.body as { consensus_n: number }).consensus_n).toBe(3);
+	const create = await createCall(page);
+	expect((create.body as { consensus_n: number }).consensus_n).toBe(3);
 });
 
 test('consensus: replica items wear a replica k/N chip from their deterministic ids', async ({
 	page,
 }) => {
-	await baseMocks(page);
-	const replicas = [
-		task('g1-r1', 'unassigned', { replica_of: 'g1' }),
-		task('g1-r2', 'claimed', { replica_of: 'g1', assignee: 'dave' }),
-		task('t9', 'unassigned'), // an ordinary item — no chip
-	];
-	await page.route('**/annotator/api/projects/p1', (route) =>
-		json(route, {
-			project: project('labeling', { consensus_n: 2 }),
-			legal_events: LEGAL.labeling,
-		}),
-	);
-	await page.route('**/annotator/api/projects/p1/tasks?include=details', (route) =>
-		json(route, listing(replicas)),
+	await snapshot(
+		page,
+		{ project: project('labeling', { consensus_n: 2 }), legal_events: LEGAL.labeling },
+		listing([
+			task('g1-r1', 'unassigned', { replica_of: 'g1' }),
+			task('g1-r2', 'claimed', { replica_of: 'g1', assignee: 'dave' }),
+			task('t9', 'unassigned'), // an ordinary item — no chip
+		]),
 	);
 
 	await page.goto('/annotator/projects/p1');
@@ -521,26 +533,20 @@ test('consensus: replica items wear a replica k/N chip from their deterministic 
 test('consensus: the one-replica-per-annotator 409 surfaces verbatim, and the row does not move', async ({
 	page,
 }) => {
-	await baseMocks(page);
-	await page.route('**/annotator/api/projects/p1', (route) =>
-		json(route, {
-			project: project('labeling', { consensus_n: 2 }),
-			legal_events: LEGAL.labeling,
-		}),
+	await snapshot(
+		page,
+		{ project: project('labeling', { consensus_n: 2 }), legal_events: LEGAL.labeling },
+		listing([task('g1-r2', 'unassigned', { replica_of: 'g1' })]),
 	);
-	await page.route('**/annotator/api/projects/p1/tasks?include=details', (route) =>
-		json(route, listing([task('g1-r2', 'unassigned', { replica_of: 'g1' })])),
-	);
-	await page.route('**/annotator/api/tasks/g1-r2/events', (route) =>
-		json(
-			route,
-			{
+	await seed(page, {
+		'POST /tasks/g1-r2/events': {
+			status: 409,
+			body: {
 				detail:
 					'one replica per annotator per group: gina already holds or worked replica g1-r1 of group g1',
 			},
-			409,
-		),
-	);
+		},
+	});
 
 	await page.goto('/annotator/projects/p1');
 	await page.getByRole('button', { name: 'Claim' }).click();
@@ -561,33 +567,15 @@ test('consensus: the one-replica-per-annotator 409 surfaces verbatim, and the ro
 test('adjudication: the manager picks a canonical replica; the pick PUTs and the chips mark it', async ({
 	page,
 }) => {
-	await baseMocks(page);
-	// Stateful double: the PUT records the pick, and the refetched project carries it — the UI
-	// never marks a replica canonical on its own.
-	let adjudications: Record<string, { task_id: string; by: string; at: string }> = {};
-	const replicas = [
+	const replicas = listing([
 		task('g1-r1', 'accepted', { replica_of: 'g1', submitted_by: 'gina' }),
 		task('g1-r2', 'accepted', { replica_of: 'g1', submitted_by: 'dave' }),
-	];
-	await page.route('**/annotator/api/projects/p1', (route) =>
-		json(route, {
-			project: project('labeling', { consensus_n: 2, adjudications }),
-			legal_events: LEGAL.labeling,
-		}),
-	);
-	await page.route('**/annotator/api/projects/p1/tasks?include=details', (route) =>
-		json(route, listing(replicas)),
-	);
-	await page.route('**/annotator/api/projects/p1/adjudications/g1', (route) => {
-		if (route.request().method() === 'DELETE') {
-			adjudications = {};
-			return json(route, project('labeling', { consensus_n: 2, adjudications }));
-		}
-		const body = route.request().postDataJSON() as { task_id: string };
-		writes.push({ path: '/annotator/api/projects/p1/adjudications/g1', body });
-		adjudications = { g1: { task_id: body.task_id, by: 'anon', at: new Date().toISOString() } };
-		return json(route, project('labeling', { consensus_n: 2, adjudications }));
+	]);
+	const detail = (adjudications: Record<string, unknown>) => ({
+		project: project('labeling', { consensus_n: 2, adjudications }),
+		legal_events: LEGAL.labeling,
 	});
+	await snapshot(page, detail({}), replicas);
 
 	await page.goto('/annotator/projects/p1');
 
@@ -596,9 +584,20 @@ test('adjudication: the manager picks a canonical replica; the pick PUTs and the
 	await expect(panel.getByText('gina')).toBeVisible();
 	await expect(panel.getByText('dave')).toBeVisible();
 
+	// The picked world, seeded before the click: the PUT records the pick and the refetched project
+	// carries it — the UI never marks a replica canonical on its own.
+	const picked = { g1: { task_id: 'g1-r1', by: 'anon', at: new Date().toISOString() } };
+	await seed(page, {
+		'PUT /projects/p1/adjudications/g1': project('labeling', {
+			consensus_n: 2,
+			adjudications: picked,
+		}),
+	});
+	await snapshot(page, detail(picked), replicas);
+
 	await panel.getByRole('button', { name: 'Pick', exact: true }).first().click();
 
-	expect(writes.map((w) => w.body)).toContainEqual({ task_id: 'g1-r1' });
+	await expect.poll(() => bodies(page)).toContainEqual({ task_id: 'g1-r1' });
 	// The refetched pick marks the replica in BOTH surfaces: the panel and the queue row.
 	await expect(panel.getByText('canonical', { exact: true })).toBeVisible();
 	await expect(page.getByRole('table').getByText('canonical')).toBeVisible();
@@ -606,24 +605,26 @@ test('adjudication: the manager picks a canonical replica; the pick PUTs and the
 	await expect(panel.getByRole('button', { name: 'Re-pick' })).toBeVisible();
 
 	// Withdraw (the un-wedge path): DELETE clears the pick and the chips go with it.
+	await seed(page, {
+		'DELETE /projects/p1/adjudications/g1': project('labeling', {
+			consensus_n: 2,
+			adjudications: {},
+		}),
+	});
+	await snapshot(page, detail({}), replicas);
 	await panel.getByRole('button', { name: 'Withdraw' }).click();
 	await expect(panel.getByText('canonical', { exact: true })).not.toBeVisible();
 	await expect(panel.getByRole('button', { name: 'Pick', exact: true })).toHaveCount(2);
 });
 
 test('adjudication: non-accepted replicas offer no Pick at all', async ({ page }) => {
-	await baseMocks(page);
-	await page.route('**/annotator/api/projects/p1', (route) =>
-		json(route, { project: project('labeling', { consensus_n: 2 }), legal_events: LEGAL.labeling }),
-	);
-	await page.route('**/annotator/api/projects/p1/tasks?include=details', (route) =>
-		json(
-			route,
-			listing([
-				task('g1-r1', 'claimed', { replica_of: 'g1', assignee: 'dave' }),
-				task('g1-r2', 'in_review', { replica_of: 'g1', submitted_by: 'gina' }),
-			]),
-		),
+	await snapshot(
+		page,
+		{ project: project('labeling', { consensus_n: 2 }), legal_events: LEGAL.labeling },
+		listing([
+			task('g1-r1', 'claimed', { replica_of: 'g1', assignee: 'dave' }),
+			task('g1-r2', 'in_review', { replica_of: 'g1', submitted_by: 'gina' }),
+		]),
 	);
 
 	await page.goto('/annotator/projects/p1');
@@ -634,22 +635,19 @@ test('adjudication: non-accepted replicas offer no Pick at all', async ({ page }
 });
 
 test('adjudication: a stale-pick 409 from the server surfaces verbatim', async ({ page }) => {
-	await baseMocks(page);
-	await page.route('**/annotator/api/projects/p1', (route) =>
-		json(route, { project: project('labeling', { consensus_n: 2 }), legal_events: LEGAL.labeling }),
+	await snapshot(
+		page,
+		{ project: project('labeling', { consensus_n: 2 }), legal_events: LEGAL.labeling },
+		listing([task('g1-r1', 'accepted', { replica_of: 'g1' })]),
 	);
-	await page.route('**/annotator/api/projects/p1/tasks?include=details', (route) =>
-		json(route, listing([task('g1-r1', 'accepted', { replica_of: 'g1' })])),
-	);
-	await page.route('**/annotator/api/projects/p1/adjudications/g1', (route) =>
-		json(
-			route,
-			{
+	await seed(page, {
+		'PUT /projects/p1/adjudications/g1': {
+			status: 409,
+			body: {
 				detail: 'adjudicate (g1-r1 is skipped, not accepted — only accepted work can be canonical)',
 			},
-			409,
-		),
-	);
+		},
+	});
 
 	await page.goto('/annotator/projects/p1');
 	await page
@@ -663,22 +661,17 @@ test('adjudication: a stale-pick 409 from the server surfaces verbatim', async (
 test('instructions: the create dialog sends them and the detail page shows them to annotators', async ({
 	page,
 }) => {
-	await baseMocks(page);
-	await page.route('**/annotator/api/projects?tenant=*', (route) =>
-		json(route, { projects: [], total: 0 }),
-	);
-	await page.route('**/annotator/api/projects', (route) => {
-		writes.push({ path: '/annotator/api/projects', body: route.request().postDataJSON() });
-		return json(route, project('draft'));
+	await seed(page, {
+		'GET /projects': { projects: [], total: 0 },
+		'POST /projects': project('draft'),
 	});
-	await page.route('**/annotator/api/projects/p1', (route) =>
-		json(route, {
+	await snapshot(
+		page,
+		{
 			project: project('labeling', { instructions: 'Label every visible portrait; skip seals.' }),
 			legal_events: LEGAL.labeling,
-		}),
-	);
-	await page.route('**/annotator/api/projects/p1/tasks?include=details', (route) =>
-		json(route, listing([])),
+		},
+		listing([]),
 	);
 
 	await page.goto('/annotator/');
@@ -686,11 +679,14 @@ test('instructions: the create dialog sends them and the detail page shows them 
 	const dialog = page.getByRole('dialog');
 	await dialog.getByPlaceholder('vasa-portraits').fill('vasa-portraits');
 	await dialog.getByPlaceholder(/skip seals and marginalia/).fill('Portraits only; ignore seals.');
+	// See the consensus test: the binding must have landed before Enter submits the form.
+	await expect(dialog.getByPlaceholder(/skip seals and marginalia/)).toHaveValue(
+		'Portraits only; ignore seals.',
+	);
 	await dialog.getByPlaceholder('vasa-portraits').press('Enter');
 
-	const create = writes.find((w) => w.path === '/annotator/api/projects');
-	expect(create).toBeDefined();
-	expect((create!.body as { instructions: string }).instructions).toBe(
+	const create = await createCall(page);
+	expect((create.body as { instructions: string }).instructions).toBe(
 		'Portraits only; ignore seals.',
 	);
 
@@ -708,16 +704,13 @@ test('instructions: the create dialog sends them and the detail page shows them 
 test('template: picking a task type sends an enforced template; the detail page wears the chip', async ({
 	page,
 }) => {
-	await baseMocks(page);
-	await page.route('**/annotator/api/projects?tenant=*', (route) =>
-		json(route, { projects: [], total: 0 }),
-	);
-	await page.route('**/annotator/api/projects', (route) => {
-		writes.push({ path: '/annotator/api/projects', body: route.request().postDataJSON() });
-		return json(route, project('draft'));
+	await seed(page, {
+		'GET /projects': { projects: [], total: 0 },
+		'POST /projects': project('draft'),
 	});
-	await page.route('**/annotator/api/projects/p1', (route) =>
-		json(route, {
+	await snapshot(
+		page,
+		{
 			project: project('labeling', {
 				template: {
 					kind: 'reading-order',
@@ -729,10 +722,8 @@ test('template: picking a task type sends an enforced template; the detail page 
 				},
 			}),
 			legal_events: LEGAL.labeling,
-		}),
-	);
-	await page.route('**/annotator/api/projects/p1/tasks?include=details', (route) =>
-		json(route, listing([])),
+		},
+		listing([]),
 	);
 
 	await page.goto('/annotator/');
@@ -740,6 +731,8 @@ test('template: picking a task type sends an enforced template; the detail page 
 	const dialog = page.getByRole('dialog');
 	await dialog.getByPlaceholder('vasa-portraits').fill('reading-order-live');
 	await dialog.getByPlaceholder('person, ship, signature').fill('region');
+	// See the consensus test: the binding must have landed before Enter submits the form.
+	await expect(dialog.getByPlaceholder('person, ship, signature')).toHaveValue('region');
 	// KEYBOARD selection, deliberately: Bits UI's select portal keeps `pointer-events: none` on
 	// <body> after a mouse pick (verified in a live browser), so a subsequent click in the dialog is
 	// intercepted forever. Typing the option name and pressing Enter both dodges that AND exercises
@@ -755,9 +748,8 @@ test('template: picking a task type sends an enforced template; the detail page 
 	// keyboard user takes anyway.
 	await dialog.getByPlaceholder('vasa-portraits').press('Enter');
 
-	const create = writes.find((w) => w.path === '/annotator/api/projects');
-	expect(create).toBeDefined();
-	const template = (create!.body as { template: Record<string, unknown> }).template;
+	const create = await createCall(page);
+	const template = (create.body as { template: Record<string, unknown> }).template;
 	expect(template).toMatchObject({
 		kind: 'reading-order',
 		tools: ['bbox'],

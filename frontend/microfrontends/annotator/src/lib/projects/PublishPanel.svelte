@@ -14,7 +14,7 @@
 	import { Input } from '@rask/ui/input';
 	import { Rocket, RotateCcw } from '@lucide/svelte';
 
-	import { projectsApi } from './client.js';
+	import { fireProjectEvent } from './remote/projects.remote';
 	import type { Project, TaskListing } from './types.js';
 
 	let {
@@ -56,11 +56,11 @@
 		if (firing) return;
 		firing = true;
 		error = '';
-		const result = await projectsApi.fireEvent(
-			project.project_id,
-			'publish',
-			namespace.trim() || 'silver',
-		);
+		const result = await fireProjectEvent({
+			projectId: project.project_id,
+			event: 'publish',
+			targetNamespace: namespace.trim() || 'silver',
+		});
 		firing = false;
 		if (result.ok) {
 			confirmOpen = false;

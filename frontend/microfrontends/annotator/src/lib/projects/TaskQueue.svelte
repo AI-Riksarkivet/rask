@@ -27,7 +27,7 @@
 	import { ExternalLink } from '@lucide/svelte';
 
 	import LeaseChip from './LeaseChip.svelte';
-	import { tasksApi } from './client.js';
+	import { fireTaskEvent } from './remote/tasks.remote';
 	import { EVENT_LABELS, taskStateVariant } from './presentation.js';
 	import type { Adjudication, TaskDetail } from './types.js';
 
@@ -69,7 +69,7 @@
 		if (busy) return;
 		busy = `${task.task_id}:${event}`;
 		notice = null;
-		const result = await tasksApi.fireEvent(task.task_id, event, opts);
+		const result = await fireTaskEvent({ taskId: task.task_id, event, ...opts });
 		busy = null;
 		if (result.ok) {
 			onchanged();
@@ -102,7 +102,7 @@
 		notice = null;
 		const failures: string[] = [];
 		for (const task of targets) {
-			const result = await tasksApi.fireEvent(task.task_id, 'accept');
+			const result = await fireTaskEvent({ taskId: task.task_id, event: 'accept' });
 			if (!result.ok) failures.push(`${task.source.keys[0] ?? task.task_id}: ${result.detail}`);
 		}
 		bulkBusy = false;

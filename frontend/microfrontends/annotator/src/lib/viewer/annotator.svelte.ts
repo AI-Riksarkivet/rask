@@ -24,26 +24,39 @@ import { LayerStore, buildBatchTable } from '@rask/engine';
 import type { LabelDelta, LabelOp, LabelOutcome, Selection } from '@rask/labeling/types';
 import { isChunkSelection } from '@rask/labeling/types';
 import { PRODUCERS } from '@rask/labeling/producers';
-import { submitBatchJob } from '@rask/labeling/jobs';
 import { rowSignature } from '@rask/labeling/history';
 import {
 	AnnotationsHttpError,
 	type InsertRow,
-	assistUrlFor,
 	buildSavePayload,
 	loadAnnotations,
 	makeInsertRow,
 	payloadIsEmpty,
 	postSave,
-	requestAssist,
 } from '@rask/labeling/annotations-client';
 import { type AnnoRow, effectiveField, projectRows, rawField } from './annotation-rows';
+import { requestAssist } from './remote/assist.remote';
+import { submitBatchJob } from './remote/jobs.remote';
 
 // Re-exported so the layout components keep their existing import site.
 export type { AnnoRow } from './annotation-rows';
 export type { InsertRow } from '@rask/labeling/annotations-client';
 
 export type Mode = 'view' | 'edit';
+
+/** The unit behind an annotations URL — the assist command's arguments.
+ *
+ *  `assistUrlFor` used to do this string surgery to build a SECOND url (`/api/annotations/…` →
+ *  `/api/assist/…`) for a browser fetch. The assist transport is a remote command now, so the same
+ *  surgery yields its args and the server builds the upstream path itself. Returns null when the
+ *  controller holds no annotations URL shape — assist has nothing to run against. */
+function assistTargetFor(url: string): { key: string; dataset: string | null } | null {
+	const marker = '/api/annotations/';
+	const at = url.indexOf(marker);
+	if (at < 0) return null;
+	const [key = '', search = ''] = url.slice(at + marker.length).split('?');
+	return key === '' ? null : { key, dataset: new URLSearchParams(search).get('dataset') };
+}
 
 export interface BrushOptions {
 	radius: number;
@@ -491,14 +504,23 @@ export class AnnotatorController {
 		// GroundingDINO detects from a TEXT prompt; SAM segments from the REGION alone.
 		const needsPrompt = producer === 'grounding-dino';
 		if (!url || this.saving || (needsPrompt && !prompt.trim())) return;
+		const target = assistTargetFor(url);
+		if (!target) return;
 		this.saving = true;
 		this.saveError = null;
 		try {
-			const result = await requestAssist(assistUrlFor(url), {
+			const answer = await requestAssist({
+				...target,
 				producer,
 				prompt,
 				region: region ?? null,
 			});
+			if (!answer.ok) {
+				// The server's own words: 401 (sign in), 403 (no permission), 5xx from the runner.
+				this.saveError = answer.detail;
+				return;
+			}
+			const result = answer.data;
 			for (const s of result.shapes) {
 				this._appendInsert(
 					makeInsertRow({
@@ -641,12 +663,14 @@ export class AnnotatorController {
 					// the open unit — resolve to stable ids the deriver can fetch masks/features by.
 					exemplars: this._exemplarIds(op.payload.exemplars),
 				})
-					.then((job) =>
-						job.backend === 'mock'
-							? toast.warning(
-									`Batch job mocked (${op.producer} · ${job.job_id}) — no jobs runner deployed, nothing will run`,
-								)
-							: toast.success(`Batch job queued (${op.producer} · ${job.job_id})`),
+					.then((res) =>
+						!res.ok
+							? toast.error(`Job submit failed: ${res.detail}`)
+							: res.data.backend === 'mock'
+								? toast.warning(
+										`Batch job mocked (${op.producer} · ${res.data.job_id}) — no jobs runner deployed, nothing will run`,
+									)
+								: toast.success(`Batch job queued (${op.producer} · ${res.data.job_id})`),
 					)
 					.catch((e: unknown) =>
 						toast.error(`Job submit failed: ${e instanceof Error ? e.message : String(e)}`),

@@ -7,7 +7,7 @@
 	import { Button } from '@rask/ui/button';
 	import { Card } from '@rask/ui/card';
 
-	import { projectsApi } from './client.js';
+	import { adjudicate, clearAdjudication } from './remote/projects.remote';
 	import { taskStateVariant } from './presentation.js';
 	import type { Adjudication, TaskDetail } from './types.js';
 
@@ -47,7 +47,7 @@
 		if (busy) return;
 		busy = group;
 		notice = '';
-		const result = await projectsApi.adjudicate(projectId, group, taskId);
+		const result = await adjudicate({ projectId, groupId: group, taskId });
 		busy = null;
 		if (result.ok) {
 			onchanged();
@@ -60,7 +60,7 @@
 		if (busy) return;
 		busy = group;
 		notice = '';
-		const result = await projectsApi.clearAdjudication(projectId, group);
+		const result = await clearAdjudication({ projectId, groupId: group });
 		busy = null;
 		if (result.ok) {
 			onchanged();
