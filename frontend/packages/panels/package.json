@@ -4,6 +4,11 @@
 	"private": true,
 	"type": "module",
 	"exports": {
+		"./graph": {
+			"types": "./src/graph/index.ts",
+			"svelte": "./src/graph/index.ts",
+			"default": "./src/graph/index.ts"
+		},
 		"./lineage": {
 			"types": "./src/lineage/index.ts",
 			"svelte": "./src/lineage/index.ts",

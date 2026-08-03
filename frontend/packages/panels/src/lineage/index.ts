@@ -15,5 +15,7 @@ export { default as EventsPanel } from './EventsPanel.svelte';
 export { default as LineageGraph } from './LineageGraph.svelte';
 export { LineageState, type LineageClient } from './store.svelte';
 export { getLineageState, setLineageState } from './lineage-context';
-export { default as FlowAutoFit } from './FlowAutoFit.svelte';
+// Re-exported from the shared graph module rather than owned here: it is not lineage-specific, and the
+// second copy that lived in the lakehouse zone had already drifted (no `maxZoom`). One implementation.
+export { FlowAutoFit } from '../graph';
 export { depths, layout } from './layout.js';

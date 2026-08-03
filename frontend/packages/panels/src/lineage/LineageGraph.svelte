@@ -29,7 +29,7 @@
 		type FitViewOptions,
 	} from '@xyflow/svelte';
 	import { Boxes, Cpu } from '@lucide/svelte';
-	import FlowAutoFit from './FlowAutoFit.svelte';
+	import { FlowAutoFit } from '../graph';
 	import type { LineageState } from './store.svelte';
 	import { useColorMode } from '@rask/ui/color-mode';
 	import { LAYER } from '@rask/api/lineage';

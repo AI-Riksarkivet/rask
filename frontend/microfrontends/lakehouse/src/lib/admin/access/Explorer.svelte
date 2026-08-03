@@ -10,14 +10,8 @@
 	// The whole view. One canvas that stays mounted, a query bar that highlights it, a facet rail that
 	// narrows it, and an inspector beside it — replacing four tabs that shared no state, no URL and no
 	// question. Switching "tabs" used to throw away the graph you were looking at; nothing here does.
-	import {
-		Background,
-		BackgroundVariant,
-		Controls,
-		type Edge,
-		MarkerType,
-		SvelteFlow,
-	} from '@xyflow/svelte';
+	import { type Edge, MarkerType } from '@xyflow/svelte';
+	import { GraphCanvas } from '@rask/panels/graph';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
 	import { goto } from '$app/navigation';
@@ -772,21 +766,18 @@
 						Ask a question above to put the live graph on the canvas.
 					</div>
 				{:else}
-					<SvelteFlow
+					<GraphCanvas
 						bind:nodes
 						bind:edges
 						{nodeTypes}
-						fitView
-						fitViewOptions={{ maxZoom: 1, padding: 0.2 }}
+						fitTrigger={`${view}:${filtered.nodes.length}:${filtered.edges.length}`}
+						fitPadding={0.2}
 						onnodeclick={onNodeClick}
-						onnodepointerenter={(e) => (hovered = e.node.id)}
+						onnodepointerenter={(e: { node: { id: string } }) => (hovered = e.node.id)}
 						onnodepointerleave={() => (hovered = null)}
-						onedgepointerenter={(e) => (hoveredEdge = e.edge.id)}
+						onedgepointerenter={(e: { edge: { id: string } }) => (hoveredEdge = e.edge.id)}
 						onedgepointerleave={() => (hoveredEdge = null)}
-					>
-						<Background variant={BackgroundVariant.Dots} gap={16} />
-						<Controls />
-					</SvelteFlow>
+					/>
 				{/if}
 				{#if answer}
 					<Badge variant="secondary" class="absolute right-2 top-2 font-mono text-[10px]">

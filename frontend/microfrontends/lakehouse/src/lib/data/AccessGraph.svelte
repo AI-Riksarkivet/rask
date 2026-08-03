@@ -22,7 +22,7 @@
 		grantTableAccess,
 		revokeTableAccess,
 	} from './catalog';
-	import FlowAutoFit from './FlowAutoFit.svelte';
+	import { FlowAutoFit } from '@rask/panels/graph';
 
 	let { dataset }: { dataset: string } = $props();
 

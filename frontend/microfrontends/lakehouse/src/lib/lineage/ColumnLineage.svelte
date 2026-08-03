@@ -10,7 +10,7 @@
 	import { untrack } from 'svelte';
 	import { SvelteFlow, Background, BackgroundVariant, Controls } from '@xyflow/svelte';
 	import { Columns3, ShieldAlert } from '@lucide/svelte';
-	import { FlowAutoFit } from '@rask/panels/lineage';
+	import { FlowAutoFit } from '@rask/panels/graph';
 	import { enter } from '@rask/ui/motion';
 	import { useColorMode } from '@rask/ui/color-mode';
 	import { ColumnLineageState } from '$lib/lineage/columns.svelte';
