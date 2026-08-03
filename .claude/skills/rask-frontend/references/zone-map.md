@@ -37,9 +37,9 @@ Five areas that used to be five separate apps, merged under one router: `data`, 
 
 8 `+server.ts` routes (4 keep-bytes, 1 keep-flow, 2 catch-alls — the custom-element blocker — plus the thin `/api/audit` shim whose logic lives in `lib/server/audit-core.ts`, shared with `admin/remote/audit.remote.ts`), 0 `requestJSON` calls, 15 `.remote.ts` modules. All gates green: svelte-check 0 errors, oxlint 0 errors.
 
-## `media` — base `/media`, port 5173, labelled **Search**
+## `explorer` — base `/explorer`, port 5173, labelled **Search**
 
-Multimodal corpus search: FTS / vector / hybrid / voice search, a WebGPU embedding atlas, a Cypher knowledge-graph explorer, and a Svelte-Flow dataflow editor — plus the estate ONE dock at `/media/workbench` (results + atlas + player over one shared search store, this zone own components). Reaches `:8101`/`:8102`/`:8103` (plus the catalog and lineage) through its own BFF rather than the gateway.
+Multimodal corpus search: FTS / vector / hybrid / voice search, a WebGPU embedding atlas, a Cypher knowledge-graph explorer, and a Svelte-Flow dataflow editor — plus the estate ONE dock at `/explorer/workbench` (results + atlas + player over one shared search store, this zone own components). Reaches `:8101`/`:8102`/`:8103` (plus the catalog and lineage) through its own BFF rather than the gateway.
 
 **6 `+server.ts` routes** after the transport ruling area 3, down from 13 — 4 keep-bytes (`api/atlas/points` Arrow + its zone cache, `api/voice/similar` multipart-in, the `api/[...path]` viewer catch-all, `diagram` SSR'd SVG/HTML), plus the 2 **promote-arrow** routes that keep their `+server.ts` because their REQUEST shape pins them there: `api/search` (the POST carries a File) and `api/atlas/chunks` (a read spelled as a POST). Both now answer **Arrow IPC** built by `$lib/server/rows-arrow.ts` — a corpus row is a loose object, so the encoder derives the schema per response and names the JSON-carried columns in the schema metadata; `@rask/explorer-api`'s `rowsFromArrow` decodes them and OMITS null cells (`RowSchema`'s optional fields admit `undefined`, never `null`).
 
@@ -47,7 +47,7 @@ Four `.remote.ts` modules carry every JSON value surface: `lib/catalog/remote/ca
 
 Its e2e suite runs a mock UPSTREAM (`e2e/mock-media-services.ts`, one Bun server standing in for the search service and the annotator's projects plane) beside the browser-side `page.route` mocks, because a read that moved to the zone server cannot be intercepted in the page. Single-worker on purpose: that mock's seed/ledger is global, since an auth-off suite has no bearer to key it by.
 
-Fourteen files import from the **root barrel** `'@rask/ui'` rather than a subpath — migration residue confined to this zone. `media` and `annotator` are also the two zones that add explicit `@source './lib' './routes' './app.html'` to `app.css`.
+Fourteen files import from the **root barrel** `'@rask/ui'` rather than a subpath — migration residue confined to this zone. `explorer` and `annotator` are also the two zones that add explicit `@source './lib' './routes' './app.html'` to `app.css`.
 
 ## `annotator` — base `/annotator`, port 5177, labelled **Annotate**
 
@@ -81,7 +81,7 @@ Mini-app launcher with exactly one tenant: a GSAP vs `svelte/transition` A/B.
 |---|---|---|
 | Home | `/` | plain link |
 | Lakehouse | `/lakehouse/data` | groups: Catalog, Models, Lineage (+ Governance, Operations for admins) |
-| Search | `/media/` | items: Search, Atlas, Tree, Graph, Workflow |
+| Search | `/explorer/` | items: Search, Atlas, Tree, Graph, Workflow |
 | Annotate | `/annotator/` | plain link |
 | Compute | `/compute/` | items: Overview, Jobs, Cluster, Actors, Serve, Logs, API docs |
 | Train | `/train/` | plain link |

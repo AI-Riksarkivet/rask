@@ -394,7 +394,7 @@ k8s_yaml(local(
         '--set', 'frontend.enabled=true',
         # Governance ON. The chart defaults auth.enabled=false ("open dev mode"), and nothing here
         # turned it on — so every zone rendered signed-out with no way IN: no sign-in control at all,
-        # `/media/capi/v1/me` answering 401, and Dex running the whole time with nothing pointing at
+        # `/explorer/capi/v1/me` answering 401, and Dex running the whole time with nothing pointing at
         # it. Auth is the single most repo-specific thing the in-cluster loop exists to exercise
         # (FGA, the BFF, cross-zone sessions), and it is exactly what `make dev-frontends` cannot do,
         # so leaving it off made the slower loop pointless.

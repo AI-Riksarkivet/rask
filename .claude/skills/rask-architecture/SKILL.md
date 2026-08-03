@@ -34,9 +34,9 @@ The tree is split by **language first**, then by layer. Each globbed directory i
 Current Python packages: `lineage-kit`, `ratch`, `ray-kit`, `service-kit`, `storage`, `tracker`, `validate`. (`htr` is **not** a package — it is `runners/htr`, sealed and outside every glob.)
 Current Python services (10): `gateway`, `compute`, `controlplane` — plus the lance plane (`catalog`, `lineage`, `medallion`, `compaction`, `viewer`, `search`, `annotator`). (`core`/`core_api`/`search_api`/`volumes_api` died in the R6/R20 media wave.)
 Current sealed runners (7): `asr`, `assist`, `diarize`, `htr`, `kg`, `topics`, `voiceprint`.
-Current JS packages: `api`, `config`, `engine`, `labeling`, `media-api`, `ui`, `zone-contract` — see `rask-frontend`.
-Current zones: `home` (catch-all, base `''`), `annotator`, `compute`, `lakehouse`, `media`, `studio`, `train` — each based at a bare `/<zone>`. `overview`/`discover`/`storage` are **retired**; `/storage` and `/data` are routes *inside* `lakehouse`.
-Current deployables (each = a workspace member + a `.docker/<name>.dockerfile`): `gateway`, `compute` (R22 — `compute` on every surface), `controlplane`, `runner`, `assist-runner` — plus the one parametrized `frontend.dockerfile` built per zone (images tagged `web-<zone>:<tag>`), `ray-cluster.dockerfile` (the Ray head/Serve image) and `rest-catalog.dockerfile` (the lakehouse+media image).
+Current JS packages: `api`, `config`, `engine`, `labeling`, `explorer-api`, `ui`, `zone-contract` — see `rask-frontend`.
+Current zones: `home` (catch-all, base `''`), `annotator`, `compute`, `lakehouse`, `explorer`, `studio`, `train` — each based at a bare `/<zone>`. `overview`/`discover`/`storage` are **retired**; `/storage` and `/data` are routes *inside* `lakehouse`.
+Current deployables (each = a workspace member + a `.docker/<name>.dockerfile`): `gateway`, `compute` (R22 — `compute` on every surface), `controlplane`, `runner`, `assist-runner` — plus the one parametrized `frontend.dockerfile` built per zone (images tagged `web-<zone>:<tag>`), `ray-cluster.dockerfile` (the Ray head/Serve image) and `rest-catalog.dockerfile` (the lakehouse+explorer image).
 
 ## The composition seam: `make_service_app` + injectable lifespan
 
@@ -61,7 +61,7 @@ app = make_service_app(
 
 ## The core husk is GONE (R6/R20, 2026-07-28)
 
-`services/core` + `services/core_api` (the post-P7a transitional husk) are deleted, with `search_api` and `volumes_api`. Their capabilities live in the media plane: the S3 object browser is the viewer's `objects.py` endpoints (`/api/explorer/object*`); lines/EAD FTS re-land as catalog-governed Lance tables behind `/api/explorer/search` (docs/architecture/lance-ns-merge.md R6). Do not resurrect them.
+`services/core` + `services/core_api` (the post-P7a transitional husk) are deleted, with `search_api` and `volumes_api`. Their capabilities live in the explorer plane: the S3 object browser is the viewer's `objects.py` endpoints (`/api/explorer/object*`); lines/EAD FTS re-land as catalog-governed Lance tables behind `/api/explorer/search` (docs/architecture/lance-ns-merge.md R6). Do not resurrect them.
 
 ## Hard invariants (the gotchas)
 

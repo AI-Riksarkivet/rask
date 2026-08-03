@@ -7,7 +7,7 @@ find. Everything the registry needs is env-configurable (`MEDIA_DB_ROOT` / `MEDI
 so the corpus can be synthesized locally instead.
 
 **Why this grew from one row to a corpus.** The first version seeded ONE document with ONE chunk
-and declared no `search` at all — so `/media` answered every query with zero hits and looked
+and declared no `search` at all — so `/explorer` answered every query with zero hits and looked
 broken while being "correct". A fixture whose whole purpose is "witness the estate working" has to
 survive the first thing anyone does with it, which is type a word into the search box. So: several
 documents, several chunks each, distinct prose per chunk, and an FTS index — a query for a common

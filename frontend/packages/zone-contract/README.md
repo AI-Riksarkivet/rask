@@ -10,14 +10,14 @@ Run: `bunx turbo run test --filter=@rask/zone-contract` — 591 assertions, ~3 s
 
 Splitting one app into four turns routing from **code** into an **agreement across seven files**:
 
-| Declares                                  | Where                                      | Language   |
-| ----------------------------------------- | ------------------------------------------ | ---------- |
-| which paths a zone owns, and its dev port | `microfrontends/home/microfrontends.json`  | JSON       |
-| the base path it serves its assets under  | `microfrontends/<zone>/svelte.config.js`   | JS         |
-| the dev port it actually binds            | `microfrontends/<zone>/vite.config.ts`     | TS         |
-| the Ingress route and Service             | `chart/values.yaml` → `frontend.apps`      | YAML       |
-| which images to build and side-load       | `Makefile` → `ZONES`                       | Make       |
-| which workspaces the builder needs        | `.docker/frontend.dockerfile` → `COPY`     | Dockerfile |
+| Declares                                  | Where                                         | Language   |
+| ----------------------------------------- | --------------------------------------------- | ---------- |
+| which paths a zone owns, and its dev port | `microfrontends/home/microfrontends.json`     | JSON       |
+| the base path it serves its assets under  | `microfrontends/<zone>/svelte.config.js`      | JS         |
+| the dev port it actually binds            | `microfrontends/<zone>/vite.config.ts`        | TS         |
+| the Ingress route and Service             | `chart/values.yaml` → `frontend.apps`         | YAML       |
+| which images to build and side-load       | `Makefile` → `ZONES`                          | Make       |
+| which workspaces the builder needs        | `.docker/frontend.dockerfile` → `COPY`        | Dockerfile |
 | where a cross-zone link points            | `<a href="/explorer/…">` in three other zones | Svelte     |
 
 TypeScript reads one of those. Turborepo reads none of them. SvelteKit reads one.

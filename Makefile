@@ -7,7 +7,7 @@ help:
 	@echo "  dev-micro                              — backend fleet (gateway :8888 + per-domain services)"
 	@echo "  dev-frontends                          — all 6 zones behind the :3024 proxy (browse http://localhost:3024)"
 	@echo "  dev-frontends-k3s                      — same, but /api → the IN-CLUSTER gateway (port-forwarded)"
-	@echo "  home frontend-<zone>                   — run one zone each (e.g. frontend-media)"
+	@echo "  home frontend-<zone>                   — run one zone each (e.g. frontend-explorer)"
 	@echo "  tilt-up                                — THE in-cluster dev loop: hot-reload on k3s (needs k3s-up; once: tilt-registry + dagger-engine)"
 	@echo "  tilt-verify-all                        — PROVE live_update on all 3 paths (service / zone / packages-ui)"
 	@echo "  dev-gc                                 — reclaim the dev registry + the Dagger cache"
@@ -211,7 +211,7 @@ dev-frontends-k3s:    # frontend HMR (Path A) against the IN-CLUSTER backend
 home:      # catch-all zone only, :5273 (serves /)
 	bun --cwd=frontend run dev:home
 
-frontend-%:           # run one domain zone on its own port, e.g. `make frontend-media`
+frontend-%:           # run one domain zone on its own port, e.g. `make frontend-explorer`
 	bun --cwd=frontend run dev:$*
 
 frontend-build:       # production-build every zone + the ui library (turbo, cached)

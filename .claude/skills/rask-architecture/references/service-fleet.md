@@ -1,7 +1,7 @@
 # The service fleet: ports, entrypoints, and which package each composes
 
 The fleet (`make dev-micro`, driven by `scripts/dev-micro.sh`):
-gateway `:8888` + ray `:8804` + controlplane `:8820` + the media viewer `:8101`.
+gateway `:8888` + ray `:8804` + controlplane `:8820` + the explorer viewer `:8101`.
 The frontend's Vite proxy targets `:8888` (the gateway). The orchestrator
 process (`:8810`) died at P7a; core-api/search-api/volumes-api died in the
 R6/R20 media wave (lance-ns-merge.md P7).
@@ -16,7 +16,7 @@ logic in the entrypoint.
 |---|---|---|---|---|---|
 | `gateway` | 8888 | none (httpx proxy) | own asynccontextmanager | no | path-routes `/api/*` longest-prefix-first, **no catch-all**; upstreams env-overridable (`RASK_COMPUTE_URL`, `RASK_CONTROLPLANE_URL`, `RASK_MEDIA_*_URL`, …). |
 | `compute` | 8804 | `ray-kit` | `compute.lifespan.make_lifespan` | no | Ray dashboard introspection; `proxy_router` mounts at root so `/api/serve/*` reaches Serve status API |
-| `viewer` (media plane) | 8101 | `service-kit[lancekit]` + `storage` | own (lazy registry) | no | `/api/explorer/*` incl. the S3 objects browser ported from volumes-api |
+| `viewer` (explorer plane) | 8101 | `service-kit[lancekit]` + `storage` | own (lazy registry) | no | `/api/explorer/*` incl. the S3 objects browser ported from volumes-api |
 
 ## The batches/orchestrator plane is gone (P7a)
 
@@ -44,7 +44,7 @@ the other lane's token.
 
 `compute` depends only on `service-kit` + `ray-kit` — **no DB**. `service-kit`'s
 core stays dependency-light (no `ray`/`sqlmodel`; lance deps live behind the
-`[lancekit]` extra the media plane opts into): pulling a heavy dep into the
+`[lancekit]` extra the explorer plane opts into): pulling a heavy dep into the
 core would force it onto every service and every test that imports the factory.
 
 ## Lifespan injection recap

@@ -114,7 +114,7 @@ const ProblemSchema = v.object({ detail: v.optional(v.string()), title: v.option
  *  the path is already on the Response and the mapping is a property of the BFF routes, not of callers.
  *  Kept in sync with `microfrontends/{media,annotator}/src/routes/api/**`. */
 export function upstreamFor(path: string): string | null {
-	const api = path.replace(/^\/(media|annotator)/, '');
+	const api = path.replace(/^\/(explorer|annotator)/, '');
 	if (!api.startsWith('/api/')) return null;
 	// Mirrors the BFF's own route shape: a few specific domains, and a catch-all. The catch-all
 	// (`api/[...path]/+server.ts`) is `makeViewerProxy(env)` in BOTH zones, so defaulting to the viewer is

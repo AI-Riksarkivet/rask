@@ -48,7 +48,9 @@ export const EXPLORER_ZONE_NAV: ZoneNav = {
 		},
 		{
 			label: 'Help',
-			items: [{ title: 'Guide', href: '/explorer/guide', match: seg('/explorer/guide'), icon: BookOpen }],
+			items: [
+				{ title: 'Guide', href: '/explorer/guide', match: seg('/explorer/guide'), icon: BookOpen },
+			],
 		},
 	],
 };

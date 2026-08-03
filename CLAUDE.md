@@ -60,10 +60,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make ray-up            # local Ray head on :6379, dashboard :8265
 make serve-up          # deploy /transcribe + /htrflow on Ray Serve
 make dev-micro         # the fleet: gateway :8888 + compute :8804 + controlplane :8820 +
-                       #   the media viewer :8101 (via scripts/dev-micro.sh)
+                       #   the explorer viewer :8101 (via scripts/dev-micro.sh)
 make dev-frontends     # ALL 7 zones + the :3024 composition proxy (builds @rask/ui first)
 make home              # the catch-all zone alone, :5273
-make frontend-media    # one zone alone (frontend-<zone>: lakehouse|media|annotator|compute|studio|train)
+make frontend-explorer # one zone alone (frontend-<zone>: lakehouse|explorer|annotator|compute|studio|train)
 ```
 
 **Open `:3024`, not a zone's own port** — that is the composition proxy that routes
@@ -238,10 +238,10 @@ Two **language-pure planes** — **don't blur them**. Python lives at the repo r
   - `services/compute` — the **`compute` service** (`:8804`): Ray dashboard introspection (`/api/ray/*`) + the `/api/serve/*` proxy (thin shell over `ray-kit`); no DB. `compute` on every surface — uv member, import, k8s/dapr/image/gateway (R22, supersedes R20's `ray` + its ray-api PyPI-shadow exception); the public paths stay `/api/ray` + `/api/serve`. (`core`/`core_api`/`search_api`/`volumes_api` died in the R6/R20 media wave — the S3 object browser now lives in the lance `viewer` at `/api/explorer/object*`; lines/EAD FTS re-land as catalog-governed Lance tables behind `/api/explorer/search`.)
   - `services/medallion` — the lakehouse cascade (producer + movers). Its producer owns the **P7a IIIF→bronze page head** (R23: raw is the external world, never a governed tier — the medallion is exactly bronze→silver→gold): `POST /ingest-iiif` harvests a volume from the IIIF Image API straight into the BRONZE blob-v2 page-image Lance dataset (stage-stamped at ingest) and emits the ONE bronze-write OpenLineage event through `packages/lineage-kit` with the external `iiif://…` source as input; `/bronze-arrival` fires the `medallion.bronze` cascade (the P7b HTR movers).
 - `frontend/` — the **JS/TS plane** and its own workspace root: `package.json`, `bun.lock`, `turbo.json`, `knip.json`, `.oxlintrc.json`, `.oxfmtrc.json`, `patches/`, `assets/` (the shared favicon source). The only JS outside it is `tests/e2e`, a standalone Playwright project with its own lockfile (`make e2e`).
-  - **The 7 zones** (`frontend/microfrontends/<zone>`), SvelteKit 2 + Svelte 5, **SSR** via `svelte-adapter-bun` (a real Bun server: `bun ./build/index.js`), composed by Turborepo's built-in microfrontends proxy on `:3024` in dev and the k3s Ingress in prod: `home` (catch-all, base `''`, owns `/` + the OIDC BFF), `lakehouse` (`/lakehouse` — data/lineage/models/admin/storage areas), `media` (`/media`, labelled **Search**), `annotator` (`/annotator`, labelled **Annotate**), `compute` (`/compute`), `train` (`/train`, placeholder data), `studio` (`/studio`). Bases are a bare `/<zone>` — **there is no `/default/` segment**. Every zone renders the shared `@rask/ui/shell` AppShell. See `.claude/skills/rask-frontend`.
+  - **The 7 zones** (`frontend/microfrontends/<zone>`), SvelteKit 2 + Svelte 5, **SSR** via `svelte-adapter-bun` (a real Bun server: `bun ./build/index.js`), composed by Turborepo's built-in microfrontends proxy on `:3024` in dev and the k3s Ingress in prod: `home` (catch-all, base `''`, owns `/` + the OIDC BFF), `lakehouse` (`/lakehouse` — data/lineage/models/admin/storage areas), `explorer` (`/explorer`, labelled **Search**), `annotator` (`/annotator`, labelled **Annotate**), `compute` (`/compute`), `train` (`/train`, placeholder data), `studio` (`/studio`). Bases are a bare `/<zone>` — **there is no `/default/` segment**. Every zone renders the shared `@rask/ui/shell` AppShell. See `.claude/skills/rask-frontend`.
   - `frontend/packages/ui` — Svelte 5 + Bits UI + Tailwind 4 design system (`@rask/ui`) w/ Storybook 10 (`@storybook/svelte-vite`). The only frontend package with a build step (`svelte-package` → `dist/`). **Styled components live here, not in the zones** (zones supply `app.css` with an `@source '../../../packages/ui/dist'` — three `../`). 39 subpath exports incl. **`@rask/ui/shell`**. See `.claude/skills/rask-styling`.
   - `frontend/packages/api` — `@rask/api`, the shared data layer: typed gateway client **plus** the OIDC/BFF plane (`bff.ts`, `oidc.ts`) and the lineage client. valibot. JIT TS, no build step.
-  - `frontend/packages/media-api` — `@rask/explorer-api`, the Arrow-backed media/viewer client.
+  - `frontend/packages/explorer-api` — `@rask/explorer-api`, the Arrow-backed explorer/viewer client.
   - `frontend/packages/engine` — `@rask/engine`, a framework-agnostic PixiJS/WebGPU annotation canvas (ra-anno lineage).
   - `frontend/packages/labeling` — `@rask/labeling`, the `LabelOp` model + the annotator's Arrow-IPC transport.
   - `frontend/packages/config` — `@rask/config`, one shared `tsconfig.base.json` (extended by 6 of 14 packages).
@@ -278,7 +278,7 @@ Deployables are just workspace members with a dockerfile: `.docker/<name>.docker
 
 ## Conventions
 
-- **Gateway port is 8888 — but the zones' dev proxies disagree on who to call.** `compute`/`studio`/`train` proxy `/api` → `VIEWER_BACKEND` (`:8888`, the gateway); `home`/`lakehouse` proxy → `LANCE_BACKEND` (**`:8001`**, the lineage service — which `dev-micro.sh` does not start); `media`/`annotator` have no `/api` proxy and reach `:8101`/`:8102`/`:8103` via their own BFF. The same split exists server-side: `compute` reads `RASK_GATEWAY_URL`, `home`/`lakehouse` read `LANCE_GATEWAY_URL`. A `/api/*` call that works in one zone can fail in another — see `.claude/skills/rask-frontend`.
+- **Gateway port is 8888 — but the zones' dev proxies disagree on who to call.** `compute`/`studio`/`train` proxy `/api` → `VIEWER_BACKEND` (`:8888`, the gateway); `home`/`lakehouse` proxy → `LANCE_BACKEND` (**`:8001`**, the lineage service — which `dev-micro.sh` does not start); `explorer`/`annotator` have no `/api` proxy and reach `:8101`/`:8102`/`:8103` via their own BFF. The same split exists server-side: `compute` reads `RASK_GATEWAY_URL`, `home`/`lakehouse` read `LANCE_GATEWAY_URL`. A `/api/*` call that works in one zone can fail in another — see `.claude/skills/rask-frontend`.
 - **Pytest import mode is `importlib`** (`--import-mode=importlib` in `pyproject.toml`). Test paths are explicit (`testpaths = [...]`), not discovered.
 - **Ruff line length is 160**, not 100. Selected rule families include `ANN` (annotations); tests are exempted via `per-file-ignores`.
 - **oxfmt uses tabs**, single quotes, `printWidth: 100` — defined in `frontend/.oxfmtrc.json`, applied across every JS/TS workspace (zones, `@rask/ui`, `@rask/api`, `@rask/zone-contract`). Prettier is gone.

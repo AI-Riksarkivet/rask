@@ -48,7 +48,7 @@ cat > "$PROXY" <<'TS'
 // The Ingress path table, longest-prefix-first. Everything else falls through to home.
 const ZONES: [string, number][] = [
 	['/lakehouse', 9274], ['/annotator', 9277], ['/compute', 9275],
-	['/studio', 9276], ['/train', 9278], ['/media', 9279],
+	['/studio', 9276], ['/train', 9278], ['/explorer', 9279],
 ];
 const GATEWAY = 9888, HOME = 9273;
 const port = Number(process.env.PORT ?? 3024);

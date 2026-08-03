@@ -13,7 +13,7 @@ The day-to-day backend map. The **gateway** on `:8888` is a stateless reverse pr
 |---|---|
 | `compute`, `studio`, `train` | `VIEWER_BACKEND` → `:8888`, the gateway |
 | `home`, `lakehouse` | `LANCE_BACKEND` → **`:8001`**, the lineage service — and nothing in `dev-micro.sh` serves `:8001` |
-| `media`, `annotator` | no `/api` proxy at all; they reach `:8101`/`:8102`/`:8103` through their own BFF |
+| `explorer`, `annotator` | no `/api` proxy at all; they reach `:8101`/`:8102`/`:8103` through their own BFF |
 
 So a `/api/*` call that works in `compute` can 404 or hang in `lakehouse`. See `rask-frontend` for the matching SSR base-URL split.
 

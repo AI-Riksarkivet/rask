@@ -3,7 +3,7 @@
 # lakehouse table, and a labeling task with items.
 #
 # WHY THIS EXISTS. A fresh install serves an EMPTY corpus (`explorer.corpus.mode` defaults to
-# `emptyDir`), so `/media` finds nothing, `/annotator` has no page to draw on and `/lakehouse`
+# `emptyDir`), so `/explorer` finds nothing, `/annotator` has no page to draw on and `/lakehouse`
 # lists no tables — and a developer cannot tell "not built" from "not seeded". Two seed scripts
 # existed but were wired to no command and documented in no target, so nobody ran them.
 #
@@ -260,4 +260,4 @@ fi
 say "seeded"
 echo "corpus:    $CORPUS_HOST_PATH  (mount confirmed on rask-viewer)"
 echo "verified:  rask-search returns $HITS hits from '$DATASET_ID' (q=protokoll)"
-echo "next:      open the ingress and look at /media, /annotator, /lakehouse"
+echo "next:      open the ingress and look at /explorer, /annotator, /lakehouse"
