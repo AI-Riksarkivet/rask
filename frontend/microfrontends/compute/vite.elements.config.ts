@@ -21,6 +21,10 @@ export default defineConfig({
 			compilerOptions: { customElement: true },
 		}),
 	],
+	// The graph chain (@xyflow/svelte's dev-tooling guards) reads process.env.NODE_ENV; a lib build
+	// defines no `process`, so the whole element bundle died at module scope with
+	// "ReferenceError: process is not defined" (observed in the cluster). Define it away.
+	define: { 'process.env.NODE_ENV': JSON.stringify('production') },
 	build: {
 		lib: {
 			entry: 'src/lib/elements/index.ts',
