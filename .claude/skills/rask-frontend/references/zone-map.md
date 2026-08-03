@@ -37,7 +37,7 @@ Five areas that used to be five separate apps, merged under one router: `data`, 
 
 8 `+server.ts` routes (4 keep-bytes, 1 keep-flow, 2 catch-alls — the custom-element blocker — plus the thin `/api/audit` shim whose logic lives in `lib/server/audit-core.ts`, shared with `admin/remote/audit.remote.ts`), 0 `requestJSON` calls, 15 `.remote.ts` modules. All gates green: svelte-check 0 errors, oxlint 0 errors.
 
-## `explorer` — base `/explorer`, port 5173, labelled **Search**
+## `explorer` — base `/explorer`, port 5173, labelled **Explorer**
 
 Multimodal corpus search: FTS / vector / hybrid / voice search, a WebGPU embedding atlas, a Cypher knowledge-graph explorer, and a Svelte-Flow dataflow editor — plus the estate ONE dock at `/explorer/workbench` (results + atlas + player over one shared search store, this zone own components). Reaches `:8101`/`:8102`/`:8103` (plus the catalog and lineage) through its own BFF rather than the gateway.
 
