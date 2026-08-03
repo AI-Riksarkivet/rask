@@ -10,8 +10,8 @@
 	import { Layers, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/svelte';
 	import { parse } from '@rask/api';
 	import { page } from '$app/state';
-	import { JetStreamOverviewSchema, type JetStreamOverview } from './jetstream';
-	import { requestJSON } from '$lib/http';
+	import type { JetStreamOverview } from './jetstream';
+	import { fetchJetstreamOverview } from './remote/jetstream.remote';
 	import StreamConsumers from './StreamConsumers.svelte';
 	import { jetstreamCursor } from '$lib/live/feeds.remote';
 	import { liveRead } from '$lib/live/tick.svelte';
@@ -40,32 +40,30 @@
 
 	async function load(): Promise<void> {
 		const seq = ++inflight;
-		const res = await requestJSON<unknown>('/api', 'jetstream');
+		// `.refresh()` FORCES a server round trip: a bare `await query()` may serve the cached previous
+		// answer while an instance is live, and this panel's whole point (Refresh button, delta chips,
+		// the live cursor) is that every load is a fresh poll — the old BFF fetch's semantics.
+		const q = fetchJetstreamOverview();
+		await q.refresh().catch(() => {});
+		const res = q.current ?? ({ ok: false, status: 0, detail: 'jetstream unreachable' } as const);
 		if (seq !== inflight) return; // latest-wins
 		settled = true;
 		if (res.ok) {
-			try {
-				// Wire boundary: parse (don't cast) the trimmed shape, so a BFF/schema drift surfaces as an
-				// honest unreachable state instead of a UI built from values that lie about their type.
-				const next = parse(JetStreamOverviewSchema, res.data);
-				// Snapshot the OUTGOING poll's counts before replacing it — the delta baseline. A failed
-				// interim read keeps the last good baseline (the delta is always against what is on screen).
-				if (overview !== null) {
-					prev = {
-						messages: overview.totals.messages,
-						streamMessages: Object.fromEntries(
-							overview.streams.map((s) => [s.name, s.state.messages]),
-						),
-					};
-				}
-				overview = next;
-				lastStatus = 200;
-			} catch (err) {
-				// -1 = contract drift (the drifted state), distinct from a monitor outage's 502 (audit nit).
-				console.error(`jetstream overview parse failure: ${String(err)}`);
-				overview = null;
-				lastStatus = -1;
+			// The wire boundary lives in the remote function now (RawJszSchema parses THERE, and a drift
+			// answers {ok:false,status:502}); what arrives here is the already-typed overview.
+			const next = res.data;
+			// Snapshot the OUTGOING poll's counts before replacing it — the delta baseline. A failed
+			// interim read keeps the last good baseline (the delta is always against what is on screen).
+			if (overview !== null) {
+				prev = {
+					messages: overview.totals.messages,
+					streamMessages: Object.fromEntries(
+						overview.streams.map((s) => [s.name, s.state.messages]),
+					),
+				};
 			}
+			overview = next;
+			lastStatus = 200;
 		} else {
 			// Clear the stale view on failure so the auth/forbidden/offline state reflects reality — else a
 			// session that expires mid-view would keep showing the old (privileged) topology.

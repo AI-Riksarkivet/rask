@@ -1,78 +1,159 @@
-import { test, expect, type Route } from '@playwright/test';
-import { mockMe, signIn } from './session';
+import { test, expect, type Page } from '@playwright/test';
+import { mockMe, signIn, TOKEN } from './session';
+import { MOCK_CATALOG, MOCK_OBS } from '../ports';
 
-// Hermetic /streams coverage: the panel reads the trimmed JetStream overview via the /api/jetstream BFF.
-// Mock it; assert the stream cards + consumer lag rows render (service column first, DLQ flagged,
-// redelivery highlighted, stale consumers dimmed+chipped), the missing-consumer banner (the
-// dead-subscription detector), the "+N since the last change" delta chips, and that a 403 renders the
-// forbidden state.
+// Hermetic /streams coverage. The panel's read is a remote function now (`jetstream.remote.ts`), so
+// the RAW `/jsz` payload is seeded on the mock-observability server per bearer and the TRIM runs for
+// real on the zone server — which upgrades these tests: they exercise the account flattening, the
+// boundness split and the expected-vs-bound diff instead of asserting on a pre-trimmed fixture. The
+// dead-subscription expectation list is server env (playwright.config.ts pins
+// MEDALLION:raw-to-bronze,TRAINING:lance-ray), so the BASE fixture carries BOUND consumers for both —
+// no banner — and the banner tests seed topologies that omit or unbind them. Every behavioural
+// assertion of the page.route era is kept.
 
-const json = (route: Route, body: unknown, status = 200) =>
-	route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+type RawConsumer = {
+	name: string;
+	config?: { deliver_group?: string; durable_name?: string };
+	push_bound?: boolean;
+	num_waiting: number;
+	num_pending: number;
+	num_ack_pending: number;
+	num_redelivered: number;
+	delivered?: { last_active?: string };
+};
 
-// Trimmed form of the REAL live /jsz sample (kind cluster, 2026-07-23): LINEAGE with its durable push
-// consumer, plus the DLQ stream carrying an ephemeral consumer with backlog + redeliveries. `now` is
-// within 10 min of every last_active so no consumer renders stale in the base fixture.
-const OVERVIEW = {
+type RawStream = {
+	name: string;
+	config: {
+		subjects: string[];
+		retention: string;
+		storage: string;
+		max_age: number;
+		max_msgs: number;
+		max_bytes: number;
+		num_replicas: number;
+	};
+	state: {
+		messages: number;
+		bytes: number;
+		first_seq: number;
+		last_seq: number;
+		consumer_count: number;
+	};
+	consumer_detail: RawConsumer[];
+};
+
+const stream = (
+	name: string,
+	subjects: string[],
+	messages: number,
+	consumers: RawConsumer[],
+	over: Partial<RawStream['config']> = {},
+): RawStream => ({
+	name,
+	config: {
+		subjects,
+		retention: 'limits',
+		storage: 'file',
+		max_age: 0,
+		max_msgs: -1,
+		max_bytes: -1,
+		num_replicas: 1,
+		...over,
+	},
+	state: {
+		messages,
+		bytes: messages * 400,
+		first_seq: 1,
+		last_seq: messages,
+		consumer_count: consumers.length,
+	},
+	consumer_detail: consumers,
+});
+
+const FRESH = '2026-07-23T16:19:33.986839443Z'; // ~6 min before `now` — never stale
+
+/** A live bound push consumer for `group` — satisfies an expectation. */
+const boundConsumer = (
+	name: string,
+	group: string,
+	over: Partial<RawConsumer> = {},
+): RawConsumer => ({
+	name,
+	config: { deliver_group: group, durable_name: name },
+	push_bound: true,
+	num_waiting: 0,
+	num_pending: 0,
+	num_ack_pending: 0,
+	num_redelivered: 0,
+	delivered: { last_active: FRESH },
+	...over,
+});
+
+/** The two streams the server's expectation list demands, both satisfied — present in every fixture
+ *  that must NOT show the banner. */
+const EXPECTED_SATISFIED: RawStream[] = [
+	stream('MEDALLION', ['medallion.>'], 1, [boundConsumer('raw-to-bronze-d', 'raw-to-bronze')]),
+	stream('TRAINING', ['training.>'], 1, [boundConsumer('lance-ray-t', 'lance-ray')]),
+];
+
+/** The base topology: the REAL live /jsz sample's DLQ (ephemeral with backlog + redeliveries) and
+ *  LINEAGE (durable push), plus the two expectation-satisfying streams. */
+const rawBase = (): {
+	now: string;
+	streams: number;
+	consumers: number;
+	messages: number;
+	bytes: number;
+	account_details: { name: string; stream_detail: RawStream[] }[];
+} => ({
 	now: '2026-07-23T16:25:29.893843405Z',
-	totals: { streams: 2, consumers: 3, messages: 141, bytes: 365657 },
-	streams: [
+	streams: 4,
+	consumers: 5,
+	messages: 141,
+	bytes: 365657,
+	account_details: [
 		{
-			name: 'DLQ',
-			subjects: ['dlq.lineage.>'],
-			retention: 'limits',
-			storage: 'file',
-			max_age_ns: 0,
-			max_msgs: -1,
-			max_bytes: -1,
-			num_replicas: 1,
-			state: { messages: 5, bytes: 2000, first_seq: 1, last_seq: 5, consumer_count: 1 },
-			consumers: [
-				{
-					name: 'fR9hEVt8',
-					service: '(ephemeral)',
-					durable: false,
-					num_pending: 4,
-					num_ack_pending: 1,
-					num_redelivered: 2,
-					last_active: '2026-07-23T16:19:33.986839443Z',
-				},
-			],
-		},
-		{
-			name: 'LINEAGE',
-			subjects: ['lineage.events.>'],
-			retention: 'limits',
-			storage: 'file',
-			max_age_ns: 604800000000000,
-			max_msgs: -1,
-			max_bytes: -1,
-			num_replicas: 1,
-			state: { messages: 136, bytes: 363657, first_seq: 10496, last_seq: 10631, consumer_count: 2 },
-			consumers: [
-				{
-					name: 'lance-ray-durable',
-					service: 'lance-ray',
-					durable: true,
-					deliver_group: 'lance-ray',
-					num_pending: 0,
-					num_ack_pending: 0,
-					num_redelivered: 0,
-					last_active: '2026-07-23T16:19:33.986839443Z',
-				},
+			name: '$G',
+			stream_detail: [
+				stream('DLQ', ['dlq.lineage.>'], 5, [
+					{
+						name: 'fR9hEVt8',
+						num_waiting: 1,
+						num_pending: 4,
+						num_ack_pending: 1,
+						num_redelivered: 2,
+						delivered: { last_active: FRESH },
+					},
+				]),
+				stream(
+					'LINEAGE',
+					['lineage.events.>'],
+					136,
+					[boundConsumer('lance-ray-durable', 'lance-ray')],
+					{ max_age: 604800000000000 },
+				),
+				...EXPECTED_SATISFIED,
 			],
 		},
 	],
-	missing: [],
-};
+});
 
-test.beforeEach(async ({ context, page }) => {
-	await signIn(context); // auth-ON server: the login-first gate redirects signed-out page loads
+let token: string;
+
+test.beforeEach(async ({ context, page }, testInfo) => {
+	token = `${TOKEN.admin}:${testInfo.testId}`;
+	await signIn(context, { token });
 	await mockMe(page); // estate-admin identity: the admin layout door opens
 });
 
+const seedJsz = (page: Page, raw: unknown) =>
+	page.request.post(`${MOCK_OBS}/__mock/seed`, {
+		data: { bearer: token, routes: { 'GET /jsz?streams=true&consumers=true&config=true': raw } },
+	});
+
 test('renders stream cards with consumer lag rows', async ({ page }) => {
-	await page.route('**/api/jetstream*', (route) => json(route, OVERVIEW));
+	await seedJsz(page, rawBase());
 	await page.goto('/lakehouse/admin/streams');
 	await expect(page.getByRole('heading', { name: 'Streams' })).toBeVisible();
 
@@ -81,7 +162,7 @@ test('renders stream cards with consumer lag rows', async ({ page }) => {
 	await expect(lineage).toContainText('lineage.events.>');
 	await expect(lineage).toContainText('136 msgs');
 	await expect(lineage).toContainText('limits');
-	// Consumer lag rows: SERVICE first (the BFF-derived estate service), then the consumer name.
+	// Consumer lag rows: SERVICE first (the deliver-group-derived estate service), then the name.
 	await expect(lineage.locator('th').first()).toHaveText('service');
 	await expect(lineage.locator('.service')).toHaveText('lance-ray');
 	await expect(lineage.locator('table')).toContainText('lance-ray-durable');
@@ -95,24 +176,20 @@ test('renders stream cards with consumer lag rows', async ({ page }) => {
 	await expect(dlq.locator('table')).toContainText('fR9hEVt8 (ephemeral)');
 	await expect(dlq.locator('.warn')).toHaveText('2'); // redelivered > 0 highlighted
 
-	// No expected consumer is missing and nothing is stale in the base fixture.
+	// Both expected consumers are BOUND in this fixture and nothing is stale.
 	await expect(page.locator('.missingbanner')).toHaveCount(0);
 	await expect(page.locator('.stalechip')).toHaveCount(0);
 });
 
 test('missing expected consumers render the dead-subscription warn banner', async ({ page }) => {
-	// The dead-subscription detector: the BFF diffed JETSTREAM_EXPECTED_CONSUMERS against the live
-	// topology and found two expected groups absent — the panel must shout, because an ABSENT consumer
-	// is invisible in the raw stream cards themselves.
-	await page.route('**/api/jetstream*', (route) =>
-		json(route, {
-			...OVERVIEW,
-			missing: [
-				{ stream: 'MEDALLION', service: 'raw-to-bronze' },
-				{ stream: 'TRAINING', service: 'lance-ray' },
-			],
-		}),
+	// The dead-subscription detector, exercised FOR REAL now: the server diffs the env expectation
+	// list against this topology, which omits the MEDALLION and TRAINING streams entirely — an ABSENT
+	// consumer is invisible in the raw stream cards, so the panel must shout.
+	const raw = rawBase();
+	raw.account_details[0].stream_detail = raw.account_details[0].stream_detail.filter(
+		(s) => s.name === 'DLQ' || s.name === 'LINEAGE',
 	);
+	await seedJsz(page, raw);
 	await page.goto('/lakehouse/admin/streams');
 	const banner = page.locator('.missingbanner');
 	await expect(banner).toContainText('2 expected consumers MISSING');
@@ -125,15 +202,19 @@ test('missing expected consumers render the dead-subscription warn banner', asyn
 test('an existing-but-unbound durable fires the banner as "present but unbound"', async ({
 	page,
 }) => {
-	// The false-negative flavor (audit 2026-07-23): a durable consumer OUTLIVES its subscriber, so the
-	// raw topology looks populated while nothing is attached. The BFF (push_bound false / num_waiting 0)
-	// flags the expected group `unbound: true`; the panel must still shout, and name the flavor.
-	await page.route('**/api/jetstream*', (route) =>
-		json(route, {
-			...OVERVIEW,
-			missing: [{ stream: 'MEDALLION', service: 'raw-to-bronze', unbound: true }],
-		}),
-	);
+	// The false-negative flavor (audit 2026-07-23): a durable consumer OUTLIVES its subscriber, so
+	// the raw topology looks populated while nothing is attached. push_bound=false + num_waiting=0
+	// on MEDALLION's durable makes the server flag it `unbound: true`; TRAINING stays bound so the
+	// count is exactly one.
+	const raw = rawBase();
+	for (const s of raw.account_details[0].stream_detail) {
+		if (s.name !== 'MEDALLION') continue;
+		for (const c of s.consumer_detail) {
+			c.push_bound = false;
+			c.num_waiting = 0;
+		}
+	}
+	await seedJsz(page, raw);
 	await page.goto('/lakehouse/admin/streams');
 	const banner = page.locator('.missingbanner');
 	await expect(banner).toContainText('1 expected consumer MISSING');
@@ -143,13 +224,14 @@ test('an existing-but-unbound durable fires the banner as "present but unbound"'
 test('a consumer inactive for over 10 minutes renders dimmed with a stale chip', async ({
 	page,
 }) => {
-	const stale = structuredClone(OVERVIEW);
+	const raw = rawBase();
 	// LINEAGE's consumer last delivered ~66 min before the monitor clock — well past the 10 min bar.
-	for (const s of stale.streams) {
+	for (const s of raw.account_details[0].stream_detail) {
 		if (s.name !== 'LINEAGE') continue;
-		for (const c of s.consumers) c.last_active = '2026-07-23T15:19:33.986839443Z';
+		for (const c of s.consumer_detail)
+			c.delivered = { last_active: '2026-07-23T15:19:33.986839443Z' };
 	}
-	await page.route('**/api/jetstream*', (route) => json(route, stale));
+	await seedJsz(page, raw);
 	await page.goto('/lakehouse/admin/streams');
 
 	const lineage = page.getByLabel('Stream LINEAGE');
@@ -160,24 +242,20 @@ test('a consumer inactive for over 10 minutes renders dimmed with a stale chip',
 	await expect(page.getByLabel('Stream DLQ').locator('.stalechip')).toHaveCount(0);
 });
 
-test('Refresh re-queries the BFF and shows +N delta chips', async ({ page }) => {
-	let calls = 0;
-	await page.route('**/api/jetstream*', (route) => {
-		calls += 1;
-		if (calls === 1) return json(route, OVERVIEW);
-		// Second poll: +9 total, +9 on LINEAGE — the chips compare against the previous rendered poll.
-		const grown = structuredClone(OVERVIEW);
-		grown.totals.messages = 150;
-		for (const s of grown.streams) if (s.name === 'LINEAGE') s.state.messages = 145;
-		return json(route, grown);
-	});
+test('Refresh re-queries and shows +N delta chips', async ({ page }) => {
+	await seedJsz(page, rawBase());
 	await page.goto('/lakehouse/admin/streams');
 	await expect(page.getByLabel('Stream LINEAGE')).toBeVisible();
 	// First render: no baseline yet, so no delta chips.
 	await expect(page.locator('.delta')).toHaveCount(0);
-	const before = calls;
+	// Second poll: +9 total, +9 on LINEAGE — the chips compare against the previous rendered poll.
+	const grown = rawBase();
+	grown.messages = 150;
+	for (const s of grown.account_details[0].stream_detail) {
+		if (s.name === 'LINEAGE') s.state.messages = 145;
+	}
+	await seedJsz(page, grown);
 	await page.getByRole('button', { name: 'Refresh' }).click();
-	await expect.poll(() => calls).toBeGreaterThan(before);
 	// Totals chip + the LINEAGE stream chip (DLQ is unchanged → no chip).
 	await expect(page.locator('.bar .delta')).toHaveText('+9');
 	await expect(page.getByLabel('Stream LINEAGE').locator('.delta')).toHaveText('+9');
@@ -187,21 +265,17 @@ test('Refresh re-queries the BFF and shows +N delta chips', async ({ page }) => 
 test('a shrinking stream renders a neutral negative delta with an accurate tooltip', async ({
 	page,
 }) => {
-	let calls = 0;
-	await page.route('**/api/jetstream*', (route) => {
-		calls += 1;
-		if (calls === 1) return json(route, OVERVIEW);
-		// Second poll: DLQ drained 5 → 2 (e.g. a replay) — shrinkage, not growth.
-		const drained = structuredClone(OVERVIEW);
-		drained.totals.messages = 138;
-		for (const s of drained.streams) if (s.name === 'DLQ') s.state.messages = 2;
-		return json(route, drained);
-	});
+	await seedJsz(page, rawBase());
 	await page.goto('/lakehouse/admin/streams');
 	await expect(page.getByLabel('Stream DLQ')).toBeVisible();
-	const before = calls;
+	// Second poll: DLQ drained 5 → 2 (e.g. a replay) — shrinkage, not growth.
+	const drained = rawBase();
+	drained.messages = 138;
+	for (const s of drained.account_details[0].stream_detail) {
+		if (s.name === 'DLQ') s.state.messages = 2;
+	}
+	await seedJsz(page, drained);
 	await page.getByRole('button', { name: 'Refresh' }).click();
-	await expect.poll(() => calls).toBeGreaterThan(before);
 	// Negative chips carry the neutral `neg` styling and say REMOVED, never the growth-green "+N".
 	const dlqDelta = page.getByLabel('Stream DLQ').locator('.delta');
 	await expect(dlqDelta).toHaveText('-3');
@@ -215,7 +289,7 @@ test('a shrinking stream renders a neutral negative delta with an accurate toolt
 test('a consumer row click opens the drawer with the full record and diagnosis', async ({
 	page,
 }) => {
-	await page.route('**/api/jetstream*', (route) => json(route, OVERVIEW));
+	await seedJsz(page, rawBase());
 	await page.goto('/lakehouse/admin/streams');
 	await page.getByLabel('Stream DLQ').locator('tbody tr', { hasText: 'fR9hEVt8' }).click();
 	const drawer = page.locator('[data-slot="sheet-content"]');
@@ -233,10 +307,13 @@ test('a consumer row click opens the drawer with the full record and diagnosis',
 	);
 });
 
-test('a 403 from the BFF renders the forbidden state', async ({ page }) => {
-	await page.route('**/api/jetstream*', (route) =>
-		json(route, { detail: 'the stream view is estate-admin only' }, 403),
-	);
+test('an estate-admin denial renders the forbidden state', async ({ page }) => {
+	// The gate is the server-side estate-admin probe against the catalog now — flip THIS bearer's
+	// /v1/events to 403 on the mock catalog and the remote function answers the denial.
+	await page.request.post(`${MOCK_CATALOG}/__mock/mode`, {
+		data: { bearer: token, mode: 'forbidden' },
+	});
+	await seedJsz(page, rawBase());
 	await page.goto('/lakehouse/admin/streams');
 	await expect(page.getByText('The stream view is estate-admin only')).toBeVisible();
 	await expect(page.locator('table')).toHaveCount(0);

@@ -84,6 +84,10 @@ export default defineConfig({
 				GREPTIME_API: MOCK_OBS,
 				NATS_MONITOR_API: MOCK_OBS,
 				MEDALLION_API: MOCK_OBS,
+				// The dead-subscription detector's expectation list is SERVER env now (the jetstream port
+				// computes missing = expected − bound). Fixed here; the streams spec's fixtures either
+				// satisfy it (bound consumers present) or violate it per test.
+				JETSTREAM_EXPECTED_CONSUMERS: 'MEDALLION:raw-to-bronze,TRAINING:lance-ray',
 				// The DLQ panel's live cursor is the LINEAGE one, not the control feed (an outbox drains when
 				// lineage advances), so the admin server needs the mock lineage service too.
 				LINEAGE_API: MOCK_LINEAGE,
