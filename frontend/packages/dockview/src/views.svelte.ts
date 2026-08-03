@@ -25,6 +25,23 @@
 import type { DockView, DockViewsStore } from '@rask/api/dock-views';
 import type { LayoutRead } from './types';
 
+/** JSON with SORTED object keys, recursively — the divergence baseline's serializer. dockview's
+ *  toJSON/fromJSON round-trip reorders the `panels` record's keys, so plain JSON.stringify marked an
+ *  untouched, freshly-applied view as modified (review finding). Key order is not layout. */
+export function stableStringify(value: unknown): string {
+	return JSON.stringify(value, (_key, v: unknown) => {
+		if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+			const rec = v as Record<string, unknown>;
+			return Object.fromEntries(
+				Object.keys(rec)
+					.sort()
+					.map((k) => [k, rec[k]]),
+			);
+		}
+		return v;
+	});
+}
+
 /** What the UI needs from a view row, without exposing the layout payload to it. */
 export interface ViewSummary {
 	readonly id: string;
@@ -48,6 +65,8 @@ export class DockViews<T> {
 	#phase = $state<ViewsPhase>('loading');
 	#detail = $state<string | null>(null);
 	#busy = $state(false);
+	/** The last refused write, or null — the sidebar renders it instead of failing silently. */
+	#lastError = $state<string | null>(null);
 
 	constructor(store: DockViewsStore<T>, snapshot: () => T | null) {
 		this.#store = store;
@@ -82,6 +101,12 @@ export class DockViews<T> {
 		return this.#busy;
 	}
 
+	/** The last refused write's description, cleared by the next success. Review finding: every
+	 *  refused save/rename/delete was a silent no-op — the name input just sat there. */
+	get lastError(): string | null {
+		return this.#lastError;
+	}
+
 	/**
 	 * Has the live arrangement moved away from the active view?
 	 *
@@ -92,7 +117,7 @@ export class DockViews<T> {
 		// `#revision` is read so this re-derives when `touch()` fires; the comparison is the answer.
 		void this.#revision;
 		const live = this.#snapshot();
-		return live !== null && JSON.stringify(live) !== this.#baseline;
+		return live !== null && stableStringify(live) !== this.#baseline;
 	}
 
 	/**
@@ -130,12 +155,21 @@ export class DockViews<T> {
 	 * error — a stale sidebar click is an ordinary thing, not a crash.
 	 */
 	select(id: string): LayoutRead {
+		// READ-ONLY on purpose: marking the view active here meant a click while the dock was still
+		// loading — or an apply that threw — left a checked, never-applied view (review finding).
+		// The caller applies the layout first, then commits with `activate(id)`.
 		const view = this.#views.find((v) => v.id === id);
 		if (view === undefined) return { status: 'absent' };
-		this.#activeId = id;
-		this.#baseline = JSON.stringify(view.layout);
-		this.#revision += 1;
 		return { status: 'ok', layout: view.layout as never };
+	}
+
+	/** Commit a view as ACTIVE — call after its layout was actually applied to the dock. */
+	activate(id: string): void {
+		const view = this.#views.find((v) => v.id === id);
+		if (view === undefined) return;
+		this.#activeId = id;
+		this.#baseline = stableStringify(view.layout);
+		this.#revision += 1;
 	}
 
 	/** Stop tracking a view — the arrangement stays exactly as it is, it just stops being "the view". */
@@ -148,12 +182,12 @@ export class DockViews<T> {
 	async saveAs(name: string): Promise<boolean> {
 		const layout = this.#snapshot();
 		if (layout === null || name.trim() === '') return false;
-		return this.#write(async () => {
+		return this.#write('Save view', async () => {
 			const created = await this.#store.create(name.trim(), layout);
 			if (created === null) return false;
 			this.#views = [created, ...this.#views];
 			this.#activeId = created.id;
-			this.#baseline = JSON.stringify(layout);
+			this.#baseline = stableStringify(layout);
 			return true;
 		});
 	}
@@ -163,17 +197,17 @@ export class DockViews<T> {
 		const id = this.#activeId;
 		const layout = this.#snapshot();
 		if (id === null || layout === null) return false;
-		return this.#write(async () => {
+		return this.#write('Save', async () => {
 			if (!(await this.#store.update(id, layout))) return false;
 			this.#views = this.#views.map((v) => (v.id === id ? { ...v, layout } : v));
-			this.#baseline = JSON.stringify(layout);
+			this.#baseline = stableStringify(layout);
 			return true;
 		});
 	}
 
 	async rename(id: string, name: string): Promise<boolean> {
 		if (name.trim() === '') return false;
-		return this.#write(async () => {
+		return this.#write('Rename', async () => {
 			if (!(await this.#store.rename(id, name.trim()))) return false;
 			this.#views = this.#views.map((v) => (v.id === id ? { ...v, name: name.trim() } : v));
 			return true;
@@ -181,7 +215,7 @@ export class DockViews<T> {
 	}
 
 	async remove(id: string): Promise<boolean> {
-		return this.#write(async () => {
+		return this.#write('Delete', async () => {
 			if (!(await this.#store.remove(id))) return false;
 			this.#views = this.#views.filter((v) => v.id !== id);
 			// Deleting the active view leaves the arrangement on screen untouched — it is now the draft
@@ -192,11 +226,17 @@ export class DockViews<T> {
 	}
 
 	/** One busy flag, one refusal rule: nothing writes while the library is unreadable. */
-	async #write(fn: () => Promise<boolean>): Promise<boolean> {
-		if (this.#phase === 'unreadable' || this.#busy) return false;
+	async #write(op: string, fn: () => Promise<boolean>): Promise<boolean> {
+		if (this.#phase === 'unreadable') {
+			this.#lastError = `${op} refused — the library is unreadable`;
+			return false;
+		}
+		if (this.#busy) return false;
 		this.#busy = true;
 		try {
-			return await fn();
+			const ok = await fn();
+			this.#lastError = ok ? null : `${op} failed — not saved (offline or session expired?)`;
+			return ok;
 		} finally {
 			this.#busy = false;
 		}

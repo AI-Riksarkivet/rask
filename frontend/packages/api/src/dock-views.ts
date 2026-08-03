@@ -62,6 +62,9 @@ export interface DockViewsStoreOptions {
 	/** Injected for tests — ids and timestamps are the only non-determinism here. */
 	now?: () => string;
 	newId?: () => string;
+	/** Auth-on stacks pass this so a 401 reads as "session expired" instead of "no saved views" —
+	 *  the review's sidebar-lie finding. Defaults to auth-off dev semantics. */
+	isAuthEnabled?: () => boolean;
 }
 
 /** Crypto-random where available, falling back to something still collision-safe in practice. */
@@ -71,6 +74,7 @@ const defaultId = (): string =>
 		: `v-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
 export function makeDockViewsStore<T>(options: DockViewsStoreOptions): DockViewsStore<T> {
+	const isAuthEnabled = options.isAuthEnabled ?? (() => false);
 	const { workbenchId, endpoint } = options;
 	const fetcher = options.fetcher ?? fetch;
 	const now = options.now ?? (() => new Date().toISOString());
@@ -96,7 +100,12 @@ export function makeDockViewsStore<T>(options: DockViewsStoreOptions): DockViews
 				.catch(() => 'the stored view library cannot be read');
 			return { status: 'unreadable', detail };
 		}
-		// 401 is an auth-off dev stack or an expired session. Unlike the draft, there is no localStorage
+		if (response.status === 401 && isAuthEnabled()) {
+			// Auth ON: an expired/refused session must not render as an empty library — "No saved
+			// views yet" invites recreating work that is still there (review finding).
+			return { status: 'unreadable', detail: 'session expired or no access — sign in again' };
+		}
+		// Auth-off dev: 401 with no library is genuinely absent. Unlike the draft, there is no localStorage
 		// mirror here on purpose: a named view is a deliberate act and must live where it can be shared
 		// with the user's other machines, or it is not saved at all.
 		if (response.status === 401) return { status: 'absent' };

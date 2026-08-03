@@ -63,6 +63,10 @@
 		</form>
 	{/if}
 
+	{#if views.lastError !== null}
+		<p class="problem">{views.lastError}</p>
+	{/if}
+
 	{#if views.phase === 'unreadable'}
 		<!-- Never rendered as "no saved views": that reads as empty and invites the user to recreate
 		     work that is still there. -->

@@ -1,13 +1,12 @@
-import type { HandleFetch } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
-import { makeGatewayHandleFetch } from '@rask/api';
+import { makeZoneHooks } from '@rask/api/bff';
+import { makeZoneServerErrorHandler } from '@rask/api/observability';
 
-// SSR reads (remote query() via getRequestEvent().fetch) issue relative /api/*,
-// which in prod resolves against the external ingress origin and hairpins back
-// through the ingress. Route them straight to the in-cluster gateway instead.
-// Dev defaults to the local gateway; the chart sets RASK_GATEWAY_URL in-cluster.
-// Client-side fetches are untouched. The rewrite is single-sourced in @rask/api
-// so every app + every future endpoint inherits it — no per-call wiring.
-export const handleFetch: HandleFetch = makeGatewayHandleFetch(
-	env.RASK_GATEWAY_URL ?? 'http://localhost:8888',
-);
+// Per-request session hydration from the sealed OIDC cookie + the SSR `/api/*` → in-cluster gateway
+// rewrite, both single-sourced in @rask/api/bff — the SAME wiring as every other BFF zone. This was
+// the review's critical finding: the first cut copied compute's handleFetch-only shape, so
+// locals.session was never set and the capi user-state proxy forwarded every layout/view write to
+// the OIDC-only catalog WITHOUT a bearer — per-user persistence silently 401'd for signed-in users.
+export const { handle, handleFetch } = makeZoneHooks(env, { gateway: true });
+
+export const handleError = makeZoneServerErrorHandler('workbench');

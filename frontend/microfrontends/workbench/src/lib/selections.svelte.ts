@@ -4,7 +4,7 @@
  * side of the boundary); foreign panels never see it — they get properties, not stores.
  */
 import { createContext } from 'svelte';
-import type { SelectDetail } from '@rask/dockview';
+import type { SelectDetail } from '@rask/dockview/contract';
 
 export class Selections {
 	rows = $state<SelectDetail[]>([]);

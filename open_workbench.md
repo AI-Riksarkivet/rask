@@ -38,11 +38,73 @@ work, deleted when it ships). The decision record lives in
       workbench rebuild. NOTE: no Ray cluster is deployed in this k3s, so the live proof is the
       timeout-armed error state; rows-on-screen needs ray.enabled (env gap, same class as media's
       missing corpus).
-- [ ] Wave 2 remainder: compute exports cluster+actors; lakehouse exports lineage graph/runs/events
-      (module-level store singleton in ITS elements bundle keeps the one-poller property); media
-      DEFERRED until its corpus dataset exists in-cluster
+- [x] TIER-1 CATALOGUE BUILT (2026-08-03): compute jobs+cluster+actors+serve (22 KB gz, shared
+      RayPoll scaffold, timeout-armed) and lakehouse runs+events+graph+datasets+audit (154 KB gz —
+      the xyflow graph is most of it). The graph element ANSWERED the CSS question: vendor sheets
+      (@xyflow + @rask/flow) bundle `?inline` and inject ONCE under `@layer base` (the zones' own
+      layer discipline), and the elements build compiles EVERY .svelte in customElement mode so
+      nested components' scoped styles inject at runtime instead of being extracted to a css asset
+      nothing loads. Cluster verification pending below.
 - [ ] Wave 3: cross-panel property-down filtering (selection → filter a sibling), Playwright-proven
 - [ ] Delete this file when the global workbench is live-verified
+
+## Adversarial review disposition (2026-08-03 — 45 agents, 40 findings: 36 confirmed, 4 refuted)
+
+**Fixed the same day** (each named in the review, each in the tree):
+- CRITICAL: the zone never wired the OIDC session (copied compute's handleFetch-only hooks) — every
+  per-user layout/view write was forwarded bearer-less and 401'd. Fixed: makeZoneHooks + app.d.ts +
+  +layout.server.ts (zoneLayoutLoad) + identity into the AppShell (signed-out chrome included).
+- Foreign panels resolve by `api.component` (stable through picker-adds, duplicates, restores);
+  the LIVE catalogue outranks persisted params; seeds stamp no params — kills the dead-duplicate
+  and relocated-script-bricks-the-panel classes.
+- 401 semantics are auth-aware in BOTH stores (dock-layout, dock-views): with auth on, 401 =
+  unreadable ("session expired"), never absent/success — no silent this-browser-only downgrades,
+  no "No saved views yet" lie, no stale-mirror resurrection through read-modify-write.
+- Views: select() is a read-only peek, activate() commits AFTER a successful apply; applyView
+  guards api-null first, restores the previous arrangement when a saved view fails to apply;
+  refused writes surface via views.lastError in the sidebar; the divergence baseline uses
+  stable (sorted-key) stringify so dockview's key reordering cannot fake a modified marker.
+- ForeignPanel bounds whenDefined (8s) — tag drift fails loudly instead of loading forever.
+- popout is EXPLICITLY off on the compositor dock (chrome={{popout:false}}), not off-by-accident.
+- The element contract is a build-time reality: `@rask/dockview/contract` (pure TS subpath),
+  imported by every dispatching element (`satisfies SelectDetail`), pinned by
+  zone-contract/element-contract.test.ts.
+- Element bundles have BUDGETS: budget.json `elements` ceilings (compute 40, lakehouse 180),
+  weighed directly by element-budget.test.ts.
+- Both poll scaffolds use the feature-detected timeoutSignal helper; lakehouse outage copy no
+  longer overclaims ("service down, or session expired/lacks access").
+- The workbench app.css lost its dead `@source` (deleted @rask/panels) and gained a token-utility
+  safelist — Tailwind 4 only emits `--color-*` variables some utility uses, so without it the
+  elements' var() references could tree-shake away.
+
+**Accepted debt (recorded, not hidden):**
+- `make dev-frontends` (vite dev servers) serves no element bundles — foreign panels fail with the
+  honest ForeignPanel message there. The tilt loop and the cluster are unaffected (zone builds run
+  both vite builds). Fix would be a vite dev middleware per zone; not worth it until it hurts.
+- The lakehouse singleton poller fetches the graph slice even when only runs/events are mounted
+  (one spare request/15s), and never stops while the page lives. Bounded, simple, shared.
+- persistence.restore() on `unreadable` shows seeded defaults (display-only) while REFUSING saves —
+  the workspace on the server is never overwritten, but the screen does not say why it shows
+  defaults. A dock-level banner surface would fix it; none exists yet.
+- The workbench zone has no hermetic Playwright e2e (the other data zones have one); cluster
+  Playwright covers it today.
+
+**Refuted (listed per the goal):** the PUT-401-as-success claim in its auth-off framing (that IS
+the intended dev semantics — the auth-ON half was the real bug and is fixed); the popout relay-gap
+(latent only — popout now explicitly off); the :3024 dev-proxy /api mislabel claim; a duplicate of
+the dock-layout 401 finding under a different lens.
+
+## Tier-2 backlog (per-panel, recorded per goal condition 4)
+
+| Panel | Zone | Blocker / effort |
+|---|---|---|
+| media atlas | media | BLOCKED: no corpus dataset in-cluster; atlas descriptor bootstrap throws unloaded. After data: the WebGPU canvas is the hardest element in the estate (~days). |
+| media treemap / topics | media | BLOCKED on the same corpus; mechanically the runs/events recipe afterwards (~hours each). |
+| storage object browser | lakehouse | Table-recipe over the object BFF; needs paging properties on the element (~half day). |
+| FGA/access graph | lakehouse | xyflow again — the graph element's CSS answer applies; needs the access client injected (~day). |
+| models registry/experiments | lakehouse | layerchart inside an element is unproven (chart CSS + resize observers) — spike first (~day). |
+| tables list | lakehouse | Straight table recipe (~hours). |
+| annotator canvas | annotator | Pixi/WebGPU in an element is a project, not a panel; also pointless without per-page routing. Not planned. |
 
 ## Spike learnings (already banked)
 

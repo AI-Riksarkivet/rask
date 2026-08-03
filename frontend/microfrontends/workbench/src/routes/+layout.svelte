@@ -8,8 +8,9 @@
 	import { onMount, type Snippet } from 'svelte';
 	import { WORKBENCH_ZONE_NAV } from '$lib/nav';
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
+	import type { LayoutData } from './$types';
 
-	let { children }: { children: Snippet } = $props();
+	let { children, data }: { children: Snippet; data: LayoutData } = $props();
 
 	// The navbar bell. Opened ON MOUNT, never at init: a live query touched during render makes the
 	// SERVER hold the page until the feed's first value.
@@ -28,6 +29,12 @@
 	<Toaster />
 {/if}
 
-<AppShell pathname={page.url.pathname} zoneNav={WORKBENCH_ZONE_NAV} {notifications}>
+<AppShell
+	pathname={page.url.pathname}
+	zoneNav={WORKBENCH_ZONE_NAV}
+	{notifications}
+	user={data.user}
+	authEnabled={data.authEnabled}
+>
 	{@render children()}
 </AppShell>

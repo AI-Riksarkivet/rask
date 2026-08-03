@@ -18,13 +18,25 @@
 	 */
 	import { onMount, type Component } from 'svelte';
 	import { on } from 'svelte/events';
-	import { Activity, List, ListTree } from '@lucide/svelte';
+	import {
+		Activity,
+		Boxes,
+		Database,
+		List,
+		ListTree,
+		ScrollText,
+		Server,
+		ServerCog,
+		Workflow,
+	} from '@lucide/svelte';
 	import type { DockviewApi, SerializedDockview } from 'dockview';
 	import type { PanelRegistry } from '@rask/dockview';
-	import { DockViews, parseSelectDetail, RASK_SELECT, ViewSidebar } from '@rask/dockview/views';
+	import { DockViews, ViewSidebar } from '@rask/dockview/views';
+	import { parseSelectDetail, RASK_SELECT } from '@rask/dockview/contract';
 	import { makeDockLayoutStore } from '@rask/api/dock-layout';
 	import { makeDockViewsStore } from '@rask/api/dock-views';
 	import { base } from '$app/paths';
+	import { page } from '$app/state';
 	import ForeignPanel from '$lib/ForeignPanel.svelte';
 	import SelectionLog from '$lib/SelectionLog.svelte';
 	import { Selections, setSelections } from '$lib/selections.svelte';
@@ -46,6 +58,24 @@
 			icon: ListTree,
 			keywords: ['ray', 'compute', 'submitted', 'queue', 'raysubmit', 'foreign'],
 		},
+		'compute-cluster': {
+			component: ForeignPanel,
+			label: 'Cluster nodes (compute)',
+			icon: Server,
+			keywords: ['ray', 'compute', 'nodes', 'capacity', 'gpu', 'foreign'],
+		},
+		'compute-actors': {
+			component: ForeignPanel,
+			label: 'Ray actors (compute)',
+			icon: Boxes,
+			keywords: ['ray', 'compute', 'actors', 'workers', 'replicas', 'foreign'],
+		},
+		'compute-serve': {
+			component: ForeignPanel,
+			label: 'Serve apps (compute)',
+			icon: ServerCog,
+			keywords: ['ray', 'compute', 'serve', 'deployments', 'endpoints', 'foreign'],
+		},
 		'lakehouse-runs': {
 			component: ForeignPanel,
 			label: 'Lineage runs (lakehouse)',
@@ -58,19 +88,23 @@
 			icon: List,
 			keywords: ['lineage', 'events', 'feed', 'openlineage', 'foreign'],
 		},
-	};
-
-	/** The catalogue: which element script serves each foreign panel, from ITS OWN zone's origin.
-	 *  Adding a panel here (plus ~10 lines in the owning zone) is the whole extension story. */
-	const FOREIGN: Record<string, { src: string; tag: string }> = {
-		'compute-jobs': { src: '/compute/elements/compute-elements.js', tag: 'rask-compute-jobs' },
-		'lakehouse-runs': {
-			src: '/lakehouse/elements/lakehouse-elements.js',
-			tag: 'rask-lakehouse-runs',
+		'lakehouse-graph': {
+			component: ForeignPanel,
+			label: 'Lineage graph (lakehouse)',
+			icon: Workflow,
+			keywords: ['lineage', 'graph', 'dag', 'medallion', 'provenance', 'foreign'],
 		},
-		'lakehouse-events': {
-			src: '/lakehouse/elements/lakehouse-elements.js',
-			tag: 'rask-lakehouse-events',
+		'lakehouse-datasets': {
+			component: ForeignPanel,
+			label: 'Datasets (lakehouse)',
+			icon: Database,
+			keywords: ['catalog', 'datasets', 'tables', 'governed', 'foreign'],
+		},
+		'lakehouse-audit': {
+			component: ForeignPanel,
+			label: 'Audit trail (lakehouse)',
+			icon: ScrollText,
+			keywords: ['governance', 'audit', 'compliance', 'trail', 'foreign'],
 		},
 	};
 
@@ -83,10 +117,14 @@
 	const layoutStore = makeDockLayoutStore<SerializedDockview>({
 		workbenchId: WORKBENCH_ID,
 		endpoint: `${base}/capi/v1/user-state/dock-layout`,
+		// With auth ON a 401 is an expired session, not the auth-off dev case — the stores change
+		// their 401 semantics on this flag (review finding: silent this-browser-only downgrades).
+		isAuthEnabled: () => page.data.authEnabled === true,
 	});
 	const viewsStore = makeDockViewsStore<SerializedDockview>({
 		workbenchId: WORKBENCH_ID,
 		endpoint: `${base}/capi/v1/user-state/dock-layout-library`,
+		isAuthEnabled: () => page.data.authEnabled === true,
 	});
 
 	let api = $state<DockviewApi | null>(null);
@@ -124,24 +162,17 @@
 		api = dockApi;
 		dockApi.onDidLayoutChange(() => views.touch());
 		if (restored) return;
-		dockApi.addPanel({
-			id: 'compute-jobs',
-			component: 'compute-jobs',
-			title: 'Ray jobs',
-			params: FOREIGN['compute-jobs'],
-		});
+		dockApi.addPanel({ id: 'compute-jobs', component: 'compute-jobs', title: 'Ray jobs' });
 		dockApi.addPanel({
 			id: 'lakehouse-runs',
 			component: 'lakehouse-runs',
 			title: 'Lineage runs',
-			params: FOREIGN['lakehouse-runs'],
 			position: { referencePanel: 'compute-jobs', direction: 'right' },
 		});
 		dockApi.addPanel({
 			id: 'lakehouse-events',
 			component: 'lakehouse-events',
 			title: 'Lineage events',
-			params: FOREIGN['lakehouse-events'],
 			position: { referencePanel: 'lakehouse-runs', direction: 'below' },
 		});
 		dockApi.addPanel({
@@ -154,11 +185,27 @@
 
 	/** Applying a view replaces the arrangement; the dock stays fully rearrangeable afterwards.
 	 *  `reuseExistingPanels` is LOAD-BEARING for foreign panels: without it a view switch recreates
-	 *  every panel, and a recreated custom element loses its state and refetches. */
+	 *  every panel, and a recreated custom element loses its state and refetches. The ordering is
+	 *  the review's: apply FIRST, `activate` only on success (no checked-but-never-applied view),
+	 *  and a bad saved view restores the previous arrangement instead of leaving an empty dock for
+	 *  autosave to persist. */
 	function applyView(id: string): void {
+		if (api === null) return;
 		const read = views.select(id);
-		if (read.status === 'ok' && api !== null)
+		if (read.status !== 'ok') return;
+		const previous = api.toJSON();
+		try {
 			api.fromJSON(read.layout as SerializedDockview, { reuseExistingPanels: true });
+			views.activate(id);
+		} catch (e) {
+			console.warn('[workbench] saved view failed to apply — restoring the draft', e);
+			try {
+				api.fromJSON(previous, { reuseExistingPanels: true });
+			} catch {
+				// The previous layout came from this same dock a moment ago; if even it refuses,
+				// the seeded default is the only safe ground left.
+			}
+		}
 	}
 </script>
 
@@ -168,7 +215,11 @@
 	<ViewSidebar {views} onselect={applyView} />
 	<div class="dock" bind:this={dockHost}>
 		{#if Dock}
-			<Dock {panels} store={layoutStore} onready={ready} />
+			<!-- popout: EXPLICITLY off (not just "no popoutUrl configured"): popout re-parents a panel
+			     into a second document, where a custom element re-runs its full lifecycle against a
+			     window that has neither the token stylesheet nor the element scripts — every foreign
+			     panel here is one. The design doc requires this gate (review finding). -->
+			<Dock {panels} store={layoutStore} onready={ready} chrome={{ popout: false }} />
 		{/if}
 	</div>
 </div>

@@ -21,6 +21,11 @@
 <div class="events">
 	{#if !lineage.settled}
 		<p class="empty">Connecting to the lineage feed…</p>
+	{:else if !lineage.online}
+		<p class="empty">
+			Lineage feed unavailable — your session may have expired or lack access. Sign out and back in; if
+			it persists, ask an admin for lineage access.
+		</p>
 	{:else if events.length === 0}
 		<p class="empty">No events in the window.</p>
 	{:else}
