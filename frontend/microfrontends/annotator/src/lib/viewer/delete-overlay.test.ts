@@ -44,9 +44,6 @@ vi.mock('./remote/jobs.remote', () => ({
 	submitJob: async () => ({ status: 'unsupported' }),
 	jobStatus: async () => null,
 }));
-vi.mock('./remote/config.remote', () => ({
-	zoneConfig: async () => ({ assistProducers: [], assistMocked: true }),
-}));
 
 import { AnnotatorController } from './annotator.svelte.js';
 

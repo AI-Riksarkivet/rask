@@ -70,6 +70,53 @@ _CANONICAL_SHAPE: dict[str, str] = {
 }
 
 
+#: What each known producer FAMILY emits, longest-prefix like the backend registry itself.
+#: Absent ⇒ unknown, and every surface must say "unknown" rather than guess — a wrong claim here
+#: would present a producer as task-compatible when it is not, which is the failure this whole
+#: endpoint exists to prevent.
+_RETURNS: dict[str, tuple[str, ...]] = {
+    "grounding-dino": ("bbox",),
+    "sam": ("polygon",),
+}
+
+
+def returns_for(producer: str) -> tuple[str, ...]:
+    """The shape types `producer` is known to emit; empty tuple when nothing is known."""
+    best = max((p for p in _RETURNS if producer.startswith(p)), key=len, default=None)
+    return _RETURNS[best] if best is not None else ()
+
+
+class ProducerInfo(BaseModel):
+    """One row of the assist registry, as the SERVICE sees it.
+
+    The zone used to derive this list by parsing `MEDIA_ASSIST_BACKENDS` out of the WEB pod's own
+    env — a second copy of the registry that the config comment itself admitted could "drift from
+    the service's". The service is the process that actually resolves and calls a backend, so it is
+    the only source that cannot be wrong.
+    """
+
+    name: str
+    #: False ⇒ this name answers from the in-repo mock (no endpoint resolves for it).
+    configured: bool
+    #: The shape types it emits; EMPTY means unknown, not "none".
+    returns: list[str] = Field(default_factory=list)
+    #: Whether those shapes satisfy the task named in `?task_id=`. None when there is no task, when
+    #: the task does not enforce, or when `returns` is unknown — three genuinely different reasons
+    #: not to make a claim, all of which the UI renders as "unknown" rather than as a pass.
+    compatible: bool | None = None
+
+
+class ProducerListing(BaseModel):
+    """The registry plus the fallback, so a surface can explain WHY a producer is mocked."""
+
+    producers: list[ProducerInfo]
+    #: True when `MEDIA_ASSIST_URL` is set: unregistered producer names reach a real backend.
+    default_configured: bool
+    #: Endpoints are never returned. Any authenticated annotator can call this, and an internal
+    #: model-server URL is not theirs to have; presence is the whole of what a surface needs.
+    urls_redacted: bool = True
+
+
 class AssistShape(BaseModel):
     """One predicted shape in image coordinates (box or polygon) with confidence."""
 
@@ -95,6 +142,62 @@ class AssistResult(BaseModel):
     #: was refused only at SUBMIT, after a human had already looked at it. Dropping it silently
     #: would be worse — the operator would never learn the backend disagrees with the task.
     dropped: list[str] = Field(default_factory=list)
+
+
+@router.get("/assist/producers")
+async def producers(state: StateDep, task_id: str | None = None) -> ProducerListing:
+    """Which producers exist, whether each is real or mocked, and what it returns.
+
+    The owner's question, verbatim: "why is there no settings menu for which endpoints or runner is
+    configured.. and what they return". There was none, and worse, the one list that DID exist was
+    the zone re-parsing the registry out of its own pod's env — so a service configured with a real
+    backend could still be presented as mocked, and vice versa.
+
+    With `?task_id=`, each row also carries whether its output can satisfy that task. That is the
+    other half of "schemas must align from the ml backend": a producer emitting polygons for a
+    bbox-only task is answerable BEFORE anyone runs it, and this is where you can see it.
+    """
+    return producer_listing(state.settings, await enforced_shape_types(task_id))
+
+
+async def enforced_shape_types(task_id: str | None) -> set[str] | None:
+    """The shape types a task will ACCEPT, canonicalised. `None` = no constraint to speak of.
+
+    The three ways to get `None` are deliberately indistinguishable to callers — no task, an
+    unenforced template, or a task that could not be read. All three mean the same thing: there is
+    no rule here that anyone may be judged against, so make no claim.
+    """
+    if not task_id:
+        return None
+    template = await _task_template(task_id)
+    if not template.get("enforce"):
+        return None
+    return {_CANONICAL_SHAPE.get(t, t) for t in (template.get("tools") or [])} or None
+
+
+def producer_listing(settings: Any, allowed: set[str] | None = None) -> ProducerListing:
+    """Build the registry report. Takes `settings` structurally, like `backend_for` — the routing
+    rules are the interesting part and they should be testable without standing up an `AppState`."""
+    registry: dict[str, str] = getattr(settings, "assist_backends", None) or {}
+    default_url = getattr(settings, "assist_url", None)
+
+    rows: list[ProducerInfo] = []
+    # The registry, plus the two families the in-repo mock answers for — otherwise an unconfigured
+    # service reports an EMPTY settings surface, which reads as "assist is unavailable" when in fact
+    # both interactive loops work against the mock.
+    for name in sorted(set(registry) | set(_RETURNS)):
+        emits = returns_for(name)
+        rows.append(
+            ProducerInfo(
+                name=name,
+                configured=backend_for(settings, name) is not None,
+                returns=list(emits),
+                # No task, no enforcement, or nothing known about what it emits ⇒ NO CLAIM. Only the
+                # case where both sides are actually known produces a true/false.
+                compatible=bool(set(emits) & allowed) if (allowed and emits) else None,
+            )
+        )
+    return ProducerListing(producers=rows, default_configured=bool(default_url))
 
 
 @router.post("/assist/{doc_id}/{speech_id}/{chunk_id}")
@@ -141,14 +244,7 @@ async def _within_contract(shapes: list[AssistShape], task_id: str | None) -> tu
     """
     if not task_id:
         return shapes, []
-    try:
-        from annotator.api.v1.endpoints.tasks import _proxy  # noqa: PLC0415 - import cycle
-
-        task = await _proxy(task_id).get()
-    except Exception:  # noqa: BLE001 - see docstring: an unreadable rule must not lose the prediction
-        logger.warning("assist could not read task %s; returning predictions unfiltered", task_id)
-        return shapes, []
-    template = (task or {}).get("template") or {}
+    template = await _task_template(task_id)
     if not template.get("enforce"):
         return shapes, []
     allowed = set(template.get("tools") or [])
@@ -161,6 +257,24 @@ async def _within_contract(shapes: list[AssistShape], task_id: str | None) -> tu
         else:
             dropped.append(f"{shape.shape_type} refused — task {template.get('kind') or 'template'} allows {sorted(allowed)}")
     return kept, dropped
+
+
+async def _task_template(task_id: str) -> dict[str, Any]:
+    """The template CAPTURED onto a task, read server-side. `{}` when it cannot be read.
+
+    Read here rather than accepted from the caller on purpose: the client would otherwise be
+    supplying the rules it is judged by. An empty dict means "no claim" everywhere it is used —
+    nothing filters, nothing is reported compatible — so a transport failure degrades to the
+    unconstrained behaviour rather than to a wrong answer.
+    """
+    try:
+        from annotator.api.v1.endpoints.tasks import _proxy  # noqa: PLC0415 - import cycle
+
+        task = await _proxy(task_id).get()
+    except Exception:  # noqa: BLE001 - an unreadable rule must not lose a prediction; see callers
+        logger.warning("assist could not read task %s; proceeding without its contract", task_id)
+        return {}
+    return (task or {}).get("template") or {}
 
 
 def backend_for(settings: Any, producer: str) -> str | None:

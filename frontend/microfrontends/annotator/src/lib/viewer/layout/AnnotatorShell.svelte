@@ -181,7 +181,7 @@
 }}
 					/>
 					{#if spatial && controller.canDraw}
-						<AiAssistBar {controller} />
+						<AiAssistBar {controller} taskId={reviewSelection.taskId} />
 					{/if}
 					<PageNav {pages} current={pageIndex} onNavigate={navigate} />
 					{#if spatial}

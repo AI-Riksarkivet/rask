@@ -1,12 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
-import {
-	E2E,
-	E2E_PORT,
-	MOCK_ANNOTATOR,
-	MOCK_ANNOTATOR_PORT,
-	RUNNER_APP,
-	RUNNER_PORT,
-} from './e2e/ports';
+import { E2E, E2E_PORT, MOCK_ANNOTATOR, MOCK_ANNOTATOR_PORT } from './e2e/ports';
 
 // Hermetic e2e for the annotator zone (canvas-shell boot · the zone-based BFF paths · the projects
 // plane). The dev server runs the real hooks under the `/annotator` base (no OIDC env → the login gate
@@ -20,11 +13,13 @@ import {
 //    where `page.route` cannot see them. They are seeded on the mock ANNOTATOR service below, which
 //    both app servers point at.
 //
-// TWO app servers, because the one thing the browser can no longer restub is the PRESENCE of a model
-// runner: `zoneConfig` reads this pod's private env. The default server has no runner (the stack's
-// honest-mock state, which most specs assert); the second has `MEDIA_ASSIST_URL` set, which is the
-// only way to drive the real-runner assist path — and the only place the fail-honest chip test means
-// anything, since with a runner deployed the chip is hidden unless the config read actually fails.
+// ONE app server. There used to be two: runner PRESENCE was read from the web pod's own env
+// (`MEDIA_ASSIST_URL` → the deleted `zoneConfig` query), and no browser can restub server env, so
+// driving the real-runner path meant standing up a whole second dev server with it set. Presence now
+// comes from the annotator SERVICE — `GET /api/assist/producers` — which is seedable on the mock
+// below like every other server-side value. The fact under test moved from deploy config to a
+// per-test seed, and the second server, its own Vite cache dir, and the compile race between them
+// all went with it.
 
 export default defineConfig({
 	testDir: './e2e',
@@ -50,26 +45,10 @@ export default defineConfig({
 			port: E2E_PORT,
 			reuseExistingServer: !process.env.CI,
 			timeout: 120_000,
-			// The projects/tasks upstream the ported remote functions reach. No MEDIA_ASSIST_URL and no
-			// MEDIA_JOBS_URL: this server IS the no-runner stack every honest-mock spec asserts.
+			// The projects/tasks/assist upstream every ported remote function reaches. Whether a model
+			// runner is deployed is no longer this server's env — it is whatever a spec seeds on the
+			// mock, and unseeded means unreachable, which keeps the honest-mock chip up.
 			env: { ANNOTATOR_API: MOCK_ANNOTATOR, ANNOTATOR_PROJECTS_API: MOCK_ANNOTATOR },
-		},
-		{
-			command: `bun run dev --port ${RUNNER_PORT} --strictPort`,
-			port: RUNNER_PORT,
-			reuseExistingServer: !process.env.CI,
-			timeout: 120_000,
-			env: {
-				ANNOTATOR_API: MOCK_ANNOTATOR,
-				ANNOTATOR_PROJECTS_API: MOCK_ANNOTATOR,
-				// PRESENCE only — the web pod never calls this URL (the assist request goes to
-				// ANNOTATOR_API). Setting it is exactly what "a model runner is deployed" means to
-				// `zoneConfig`, which is the fact these specs need to be true.
-				MEDIA_ASSIST_URL: 'http://runner.test',
-				// Its OWN dependency-optimizer cache — see the note in vite.config.ts. Without this the
-				// two servers fight over `node_modules/.vite` on a cold run.
-				RASK_VITE_CACHE_DIR: 'node_modules/.vite-runner',
-			},
 		},
 		{
 			command: 'bun e2e/mock-annotator.ts',
@@ -79,8 +58,8 @@ export default defineConfig({
 		},
 	],
 	projects: [
-		// Compiles BOTH servers' heavy routes, sequentially, before anything else runs — the cold-start
-		// serialisation half of the two-server fix (see e2e/warmup.setup.ts and vite.config.ts).
+		// Compiles the heavy routes before anything else runs, so no spec pays a ~20 s cold Vite
+		// compile out of its own timeout (see e2e/warmup.setup.ts).
 		{
 			name: 'warmup',
 			testMatch: /e2e\/warmup\.setup\.ts/,
@@ -89,14 +68,7 @@ export default defineConfig({
 		},
 		{
 			name: 'chromium',
-			testIgnore: /e2e\/runner\//,
 			use: { ...devices['Desktop Chrome'], baseURL: E2E },
-			dependencies: ['warmup'],
-		},
-		{
-			name: 'chromium-runner',
-			testMatch: /e2e\/runner\/.*\.spec\.ts/,
-			use: { ...devices['Desktop Chrome'], baseURL: RUNNER_APP },
 			dependencies: ['warmup'],
 		},
 	],

@@ -1,10 +1,15 @@
 import { test, expect, type Page, type Route } from '@playwright/test';
-import { MOCK_ANNOTATOR } from '../ports';
+import { MOCK_ANNOTATOR } from './ports';
 
-// The two AI-assist behaviours that only mean anything when a model runner IS deployed. Runner
-// presence is this app server's own env (`MEDIA_ASSIST_URL` → the `zoneConfig` remote query), not a
-// fetch a browser can restub — so these run against the config's SECOND app server, which is started
-// with it set. On the default server both tests would pass vacuously: the chip is up anyway.
+// The AI-assist behaviours that only mean anything when a model runner IS deployed, plus the
+// settings surface that says which runners exist at all.
+//
+// Runner presence used to be the APP SERVER's own env (`MEDIA_ASSIST_URL` → the `zoneConfig` remote
+// query). No browser can restub server env, so exercising the deployed path meant a whole second dev
+// server started with it set. It now comes from the annotator SERVICE — `GET /api/assist/producers`
+// — which is why these run on the ordinary server and simply SEED the fact they need. That is also
+// the honest topology: the service is what resolves and calls a backend, so it is what should be
+// asked whether one is deployed.
 //
 // The assist call itself is a remote command since the transport ruling area 4, so it leaves from the
 // zone SERVER and is seeded on / asserted through the mock annotator's ledger. The annotations plane
@@ -38,6 +43,22 @@ const calls = async (page: Page): Promise<Body[]> => {
 const assistCalls = async (page: Page): Promise<Body[]> =>
 	(await calls(page)).filter((c) => String(c.path).startsWith('/api/assist/'));
 
+/** Seed the SERVICE's registry — what "a model runner is deployed" now means to this zone. */
+const seedProducers = (page: Page, producers: unknown[], defaultConfigured = false) =>
+	page.request.post(`${MOCK_ANNOTATOR}/__mock/seed`, {
+		data: {
+			routes: {
+				'GET /api/assist/producers': {
+					producers,
+					default_configured: defaultConfigured,
+					urls_redacted: true,
+				},
+			},
+		},
+	});
+
+const LIVE_DINO = { name: 'grounding-dino', configured: true, returns: ['bbox'], compatible: null };
+
 test.beforeEach(async ({ page }) => {
 	await page.request.post(`${MOCK_ANNOTATOR}/__mock/reset`);
 	await page.route('**/annotator/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
@@ -60,11 +81,21 @@ test.beforeEach(async ({ page }) => {
 	});
 });
 
-test('assist chip stays up (fail-honest) when the config read fails', async ({ page }) => {
-	// A runner IS deployed here, so a WORKING config hides the chip — which is what makes this test
-	// meaningful: break the config read and the warning must survive, because mock is the stack's
-	// default state and passing mock shapes off as model output is the failure this guards.
+test('assist chip stays up (fail-honest) when the registry read fails', async ({ page }) => {
+	// A runner IS deployed here, so a WORKING read hides the chip — which is what makes this test
+	// meaningful: break the read and the warning must survive, because mock is the stack's default
+	// state and passing mock shapes off as model output is the failure this guards.
+	await seedProducers(page, [LIVE_DINO]);
 	await page.route('**/_app/remote/**', (route) => json(route, { detail: 'boom' }, 500));
+	await page.goto(`/annotator/?keys=${KEY}`);
+	await expect(page.getByTestId('assist-mock-chip')).toBeVisible();
+});
+
+test('an UNREACHABLE registry keeps the chip up too — not just a broken transport', async ({
+	page,
+}) => {
+	// Nothing seeded ⇒ the mock service 404s the registry. That is the ordinary state of a stack with
+	// no runner, and it must read as "mocked", never as "we could not tell, so assume it is real".
 	await page.goto(`/annotator/?keys=${KEY}`);
 	await expect(page.getByTestId('assist-mock-chip')).toBeVisible();
 });
@@ -72,6 +103,7 @@ test('assist chip stays up (fail-honest) when the config read fails', async ({ p
 test('a real-runner Detect drops a prediction the reviewer can Accept — never an auto-annotation', async ({
 	page,
 }) => {
+	await seedProducers(page, [LIVE_DINO]);
 	// The model answers one detected box, exactly the runner contract's shape. Seeded WITHOUT the
 	// query string so the dataset selector rides the wire without pinning the key here.
 	await page.request.post(`${MOCK_ANNOTATOR}/__mock/seed`, {
@@ -118,4 +150,71 @@ test('a real-runner Detect drops a prediction the reviewer can Accept — never 
 	await page.getByRole('button', { name: /Accept/ }).click();
 	await expect(page.getByText(/accepted\s*1/)).toBeVisible();
 	await expect(page.getByText(/prediction\s*1/)).not.toBeVisible();
+});
+
+test('the settings panel names every backend, what it returns, and which are mocked', async ({
+	page,
+}) => {
+	// The owner's question — "why is there no settings menu for which endpoints or runner is
+	// configured.. and what they return" — answered in the UI. Three rows covering the three states
+	// that matter, because a panel that renders only the happy one teaches nothing:
+	//  · a LIVE backend whose output is known,
+	//  · a MOCKED one (no endpoint resolves), which must be labelled as such here too,
+	//  · a live one nobody knows anything about — the registry is open by design, so this happens,
+	//    and "returns unknown" is the only honest thing to print.
+	await seedProducers(page, [
+		LIVE_DINO,
+		{ name: 'sam', configured: false, returns: ['polygon'], compatible: null },
+		{ name: 'yolo-world', configured: true, returns: [], compatible: null },
+	]);
+	await page.goto(`/annotator/?keys=${KEY}`);
+
+	await page.getByTestId('assist-registry-trigger').click();
+	const panel = page.getByTestId('assist-registry');
+	await expect(panel).toBeVisible();
+
+	await expect(panel.getByText('grounding-dino')).toBeVisible();
+	await expect(panel.getByText('returns bbox')).toBeVisible();
+	await expect(panel.getByText('returns polygon')).toBeVisible();
+	// The endpoint is never printed — the service redacts it, and the panel must not reconstruct one.
+	await expect(panel).not.toContainText('http');
+	// A registered producer nobody knows must not be presented as if its output were understood.
+	await expect(panel.getByText('returns unknown')).toBeVisible();
+	// Per-producer mock state, which the single coarse chip cannot express.
+	await expect(panel.getByText('mock', { exact: true })).toHaveCount(1);
+});
+
+test('a producer whose output the TASK refuses is flagged before anyone runs it', async ({
+	page,
+}) => {
+	// "schemas must align right.. from the ml backend" — the whole point. A segmenter offered inside
+	// a bbox-only task is answerable from config alone; the alternative is running the model,
+	// reviewing its output, and being refused at submit.
+	await seedProducers(page, [
+		{ ...LIVE_DINO, compatible: true },
+		{ name: 'sam', configured: true, returns: ['polygon'], compatible: false },
+	]);
+	await page.goto(`/annotator/?keys=${KEY}`);
+
+	await page.getByTestId('assist-registry-trigger').click();
+	const panel = page.getByTestId('assist-registry');
+
+	await expect(panel.getByText('off-contract')).toBeVisible();
+	await expect(panel.getByText('fits task')).toBeVisible();
+});
+
+test('a registry the service refuses to answer is NAMED, not rendered as an empty list', async ({
+	page,
+}) => {
+	// "Nothing is configured" and "we could not ask" are different facts. A panel that shows an empty
+	// list for both would report a working, empty registry on a broken transport.
+	await page.request.post(`${MOCK_ANNOTATOR}/__mock/seed`, {
+		data: {
+			routes: { 'GET /api/assist/producers': { status: 503, body: { detail: 'upstream down' } } },
+		},
+	});
+	await page.goto(`/annotator/?keys=${KEY}`);
+
+	await page.getByTestId('assist-registry-trigger').click();
+	await expect(page.getByTestId('assist-registry-error')).toContainText('upstream down');
 });
