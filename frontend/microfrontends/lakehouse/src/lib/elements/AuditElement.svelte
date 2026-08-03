@@ -7,6 +7,7 @@
 	/** `<rask-lakehouse-audit>` — the governance audit trail, served by the lakehouse zone to the
 	 *  global workbench. Reads the zone's own /lakehouse/api/audit BFF (root-absolute, session
 	 *  riding); the shape mirrors AuditViewer's structural type. */
+	import { RASK_SELECT, type SelectDetail } from '@rask/dockview/contract';
 	import { ElementPoll } from './poll.svelte';
 
 	type AuditEvent = {
@@ -28,6 +29,21 @@
 	$effect(() => poll.start(pollms));
 
 	const events = $derived(poll.data ?? []);
+
+	function select(node: HTMLElement, ev: AuditEvent) {
+		node.dispatchEvent(
+			new CustomEvent(RASK_SELECT, {
+				bubbles: true,
+				composed: true,
+				detail: {
+					source: 'rask-lakehouse-audit',
+					kind: 'audit-event',
+					id: `${ev.timestamp}:${ev.action}`,
+					label: `${ev.action} ${ev.resource}`,
+				} satisfies SelectDetail,
+			}),
+		);
+	}
 </script>
 
 <div class="ce-panel">
@@ -43,7 +59,7 @@
 			</thead>
 			<tbody>
 				{#each events as ev, i (i)}
-					<tr>
+					<tr onclick={(e) => select(e.currentTarget, ev)}>
 						<td class="dim">{ev.timestamp}</td>
 						<td class="mono">{ev.action}</td>
 						<td
@@ -94,6 +110,12 @@
 	td {
 		border-bottom: 1px solid var(--color-border);
 		padding: 0.375rem 0.5rem;
+	}
+	tbody tr {
+		cursor: pointer;
+	}
+	tbody tr:hover {
+		background: var(--color-muted);
 	}
 	.mono {
 		font-family: var(--font-mono, monospace);

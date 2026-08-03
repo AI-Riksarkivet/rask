@@ -9,6 +9,7 @@
 	 * global workbench. Shares the module-singleton store with every other lakehouse element on
 	 * the page (one poller). Keyed on `seq`, the feed's own monotonic id.
 	 */
+	import { RASK_SELECT, type SelectDetail } from '@rask/dockview/contract';
 	import { ensurePolling, lineage } from './store';
 
 	$effect(() => {
@@ -16,6 +17,21 @@
 	});
 
 	const events = $derived([...lineage.events].reverse());
+
+	function select(node: HTMLElement, seq: number, job: string | null) {
+		node.dispatchEvent(
+			new CustomEvent(RASK_SELECT, {
+				bubbles: true,
+				composed: true,
+				detail: {
+					source: 'rask-lakehouse-events',
+					kind: 'lineage-event',
+					id: String(seq),
+					label: job ?? `event #${seq}`,
+				} satisfies SelectDetail,
+			}),
+		);
+	}
 </script>
 
 <div class="events">
@@ -31,7 +47,7 @@
 	{:else}
 		<ul>
 			{#each events as ev (ev.seq)}
-				<li>
+				<li onclick={(e) => select(e.currentTarget, ev.seq, ev.job ?? null)}>
 					<span class="type">{ev.event_type ?? '—'}</span>
 					<span class="job" title={ev.job ?? ''}>{ev.job ?? ''}</span>
 					<span class="ts">{ev.event_time ?? ''}</span>
@@ -65,6 +81,10 @@
 		padding: 0.375rem 0.75rem;
 		border-bottom: 1px solid var(--color-border);
 		font-size: 0.8125rem;
+		cursor: pointer;
+	}
+	li:hover {
+		background: var(--color-muted);
 	}
 	.type {
 		border: 1px solid var(--color-border);

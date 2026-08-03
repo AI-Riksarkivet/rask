@@ -6,7 +6,8 @@
 <script lang="ts">
 	/** `<rask-compute-cluster>` — Ray nodes + capacity, served by the compute zone to the global
 	 *  workbench. Light DOM; scoped styles over tokens (see JobsElement for the contract). */
-	import { rayCluster, type RayClusterPayload } from '@rask/api';
+	import { rayCluster, type RayClusterPayload, type RayNode } from '@rask/api';
+	import { RASK_SELECT, type SelectDetail } from '@rask/dockview/contract';
 	import { RayPoll } from './ray-poll.svelte';
 
 	let { pollms = 5000 }: { pollms?: number } = $props();
@@ -14,6 +15,21 @@
 	$effect(() => poll.start(pollms));
 
 	const nodes = $derived(poll.data?.nodes ?? []);
+
+	function select(node: HTMLElement, n: RayNode) {
+		node.dispatchEvent(
+			new CustomEvent(RASK_SELECT, {
+				bubbles: true,
+				composed: true,
+				detail: {
+					source: 'rask-compute-cluster',
+					kind: 'ray-node',
+					id: n.node_id ?? n.hostname ?? 'node',
+					label: n.hostname ?? n.node_ip ?? 'node',
+				} satisfies SelectDetail,
+			}),
+		);
+	}
 
 	function pct(used: number | null, total: number | null): string {
 		if (used === null || total === null || total === 0) return '—';
@@ -34,7 +50,7 @@
 			</thead>
 			<tbody>
 				{#each nodes as node (node.node_id)}
-					<tr>
+					<tr onclick={(e) => select(e.currentTarget, node)}>
 						<td class="mono">{node.hostname ?? node.node_ip ?? '—'}</td>
 						<td>{node.is_head ? 'head' : 'worker'}</td>
 						<td><span class="pill" data-ok={node.alive}>{node.alive ? 'alive' : 'dead'}</span></td>
@@ -82,6 +98,12 @@
 	td {
 		border-bottom: 1px solid var(--color-border);
 		padding: 0.375rem 0.5rem;
+	}
+	tbody tr {
+		cursor: pointer;
+	}
+	tbody tr:hover {
+		background: var(--color-muted);
 	}
 	.mono {
 		font-family: var(--font-mono, monospace);

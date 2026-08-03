@@ -7,6 +7,7 @@
 	/** `<rask-compute-serve>` — Ray Serve applications, served by the compute zone to the global
 	 *  workbench. */
 	import { serveApplications, type ServePayload } from '@rask/api';
+	import { RASK_SELECT, type SelectDetail } from '@rask/dockview/contract';
 	import { RayPoll } from './ray-poll.svelte';
 
 	let { pollms = 5000 }: { pollms?: number } = $props();
@@ -14,6 +15,21 @@
 	$effect(() => poll.start(pollms));
 
 	const apps = $derived(Object.values(poll.data?.applications ?? {}));
+
+	function select(node: HTMLElement, name: string, route: string | null) {
+		node.dispatchEvent(
+			new CustomEvent(RASK_SELECT, {
+				bubbles: true,
+				composed: true,
+				detail: {
+					source: 'rask-compute-serve',
+					kind: 'serve-app',
+					id: name,
+					label: route ?? name,
+				} satisfies SelectDetail,
+			}),
+		);
+	}
 </script>
 
 <div class="ce-panel">
@@ -29,7 +45,7 @@
 			</thead>
 			<tbody>
 				{#each apps as app (app.name)}
-					<tr>
+					<tr onclick={(e) => select(e.currentTarget, app.name, app.route_prefix ?? null)}>
 						<td class="mono">{app.name}</td>
 						<td class="mono">{app.route_prefix ?? '—'}</td>
 						<td><span class="pill" data-ok={app.status === 'RUNNING'}>{app.status}</span></td>
@@ -75,6 +91,12 @@
 	td {
 		border-bottom: 1px solid var(--color-border);
 		padding: 0.375rem 0.5rem;
+	}
+	tbody tr {
+		cursor: pointer;
+	}
+	tbody tr:hover {
+		background: var(--color-muted);
 	}
 	.mono {
 		font-family: var(--font-mono, monospace);
