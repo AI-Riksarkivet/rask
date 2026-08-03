@@ -263,9 +263,16 @@ for zone in ZONES:
             # Shared packages: an edit to @rask/ui or @rask/api must reach every zone that renders it,
             # or the one place a change is most likely to be wrong is the one place it is invisible.
             sync('frontend/packages', '/app/packages'),
-            # Rebuild only; `bun --watch` notices build/index.js was rewritten and re-execs itself.
-            # `&& touch` — the sentinel moves only on a SUCCESSFUL build, so a broken edit leaves the
-            # previous working bundle being served instead of restarting into a truncated one.
+            # @rask/ui is the ONE package with a build step (svelte-package -> dist/), and every zone
+            # bundles from that dist, never from its source. Syncing packages/ alone therefore changed
+            # nothing a zone could see: the zone rebuilt against a STALE dist and the edit vanished,
+            # while the sync itself looked perfectly successful. Rebuild the library first — and only
+            # when it actually changed, or svelte-package would run on every zone-source keystroke.
+            run('bun --cwd=/app/packages/ui run build', trigger=['frontend/packages/ui']),
+            # Then the zone, then the sentinel. `&& touch` so the sentinel moves only on a SUCCESSFUL
+            # build: a broken edit leaves the previous working bundle being served rather than
+            # restarting into a truncated one. dev-serve.sh polls that file — see .docker/dev-serve.sh
+            # for why the restart cannot key off build/ itself.
             run('bun run build && touch /app/app/.restart', trigger=['frontend/microfrontends/' + zone + '/src', 'frontend/packages']),
         ],
     )
