@@ -6,10 +6,10 @@
 	"scripts": {
 		"prepare": "svelte-kit sync",
 		"dev": "vite dev",
-		"build": "vite build",
+		"build": "vite build && vite build --config vite.elements.config.ts",
 		"preview": "vite preview",
 		"start": "bun ./build/index.js",
-		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --compiler-warnings \"options_missing_custom_element:ignore\"",
 		"test:e2e": "playwright test",
 		"lint": "oxlint .",
 		"fmt": "rsvelte-fmt .",

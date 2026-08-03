@@ -297,7 +297,9 @@
 			<dd class="mono">{drawerRow.id}</dd>
 			<dt>namespace</dt>
 			<dd>
-				<a class="mono jump" href={`${base}/catalog/namespaces/${encodeURIComponent(drawerRow.namespace)}`}
+				<a
+					class="mono jump"
+					href={`${base}/catalog/namespaces/${encodeURIComponent(drawerRow.namespace)}`}
 					>{drawerRow.namespace}</a
 				>
 			</dd>
@@ -309,7 +311,8 @@
 			</dd>
 		</dl>
 		<div class="jumps">
-			<a class="btn" href={`${base}/catalog/tables/${encodeURIComponent(drawerRow.id)}`}>Open detail</a>
+			<a class="btn" href={`${base}/catalog/tables/${encodeURIComponent(drawerRow.id)}`}>Open detail</a
+			>
 			<!-- R18 table previewer: deep-link onto the detail pane's preview tab, which drives the
 			     existing /capi query machinery (first-N rows on the shared data-table). -->
 			<a class="btn" href={`${base}/catalog/tables/${encodeURIComponent(drawerRow.id)}?tab=preview`}
