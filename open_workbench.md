@@ -50,9 +50,16 @@ work, deleted when it ships). The decision record lives in
       datasets stream REAL silver$ rows, the GRAPH element renders 4 real dataset nodes on the
       xyflow canvas (the ?inline @layer base injection holds; a process.env.NODE_ENV define was
       the last blocker, #60), audit answers with an honest empty window, and the four compute
-      panels poll live and report the truth: the external Ray (dev-kuberay.ra.se, the chart's
-      normal case) is UNREACHABLE from this cluster — a network/VPN matter outside this repo;
-      in-cluster Ray needs singleTenant.enabled + the ray-cluster image. Picker-add works for
+      panels poll live and report the truth.
+- [x] IN-CLUSTER RAY DEPLOYED (2026-08-03, superseding the note above): the external
+      dev-kuberay.ra.se stays unreachable from this box, so the ray-cluster image was built
+      (dagger, localhost:5000/ray-cluster:main) and the chart's RayService applied with
+      ray.enabled + singleTenant.enabled, dashboardUrl="", RASK_SERVE_GPU_FRAC=0, auth off —
+      a MANUAL `helm template -s templates/rayservice.yaml | kubectl apply` on top of the
+      release (fold into `make k3s-up` values for the durable path). rask-compute's
+      RAY_DASHBOARD_URL points at the stable rask-ray-head-svc:8265. VERIFIED: all four
+      compute panels show real rows — the head node alive, the Serve controller/proxy actors,
+      the htrflow application RUNNING, and an honest "No job submissions" on a fresh cluster. Picker-add works for
       every panel; a saved view applies with mount stamps INTACT (drag + view-apply, jobs
       element witness) and marks itself active only after applying; duplicate views delete
       cleanly; an anonymous visit fail-closes to sign-in.
