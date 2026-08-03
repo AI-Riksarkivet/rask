@@ -478,6 +478,28 @@ made seedable — the `open_label.md` waves, folded here as that file retires.**
 - **RustFS conditional-PUT is assumed, never verified** — Lance's commit atomicity on S3-compatible
   stores requires put-if-not-exists or an external manifest store; nothing in the repo configures or
   proves either. The shared `annotations` table's concurrent `merge_insert`s are the exposed surface.
+  *(Narrowed 2026-08-03: with managed versioning the requirement collapses to the `__manifest` table's
+  own commits — `open_ingest.md` D8/§7.11, where Phase 0 records the verification.)*
+
+**Eighth wave (2026-08-03): the store registry became multi-endpoint and attachable — the
+`open_ingest.md` shipped ledger, folded here as that file's first generation retires.**
+
+The ingest wave's own authority is the root plan doc `open_ingest.md` (the merged study/spec — audit,
+options, D1–D8, E1–E7, the §6d gate A1–A20, and both `/goal` blocks). Two items shipped ahead of it and
+are recorded here because the register, not a plan doc, is where shipped work lives:
+
+- **Per-store endpoint, credentials and TLS.** `Store` gained `endpoint`, `secret` and `insecure`
+  (`packages/service-kit/src/service_kit/schemas/storage.py:55-71`); the object browser resolves a
+  client **per store** (`services/viewer/src/viewer/api/v1/endpoints/objects.py:112-113`). Raw lives on
+  external HCP while the governed tiers are on the warehouse, and one process env holding one credential
+  pair is precisely why `images-batch` listed as empty against a bucket holding 3.5M objects.
+  Credentials resolve through the Dapr secret store, **fail-closed, no env fallback** (`objects.py:69-70`
+  — "never falls back to env").
+- **Attach a bucket from the UI.** `POST /v1/stores`
+  (`services/catalog/src/catalog/api/v1/endpoints/stores.py:69-74`), estate-admin gated via
+  `require_relation(..., "can_observe_events")` (`:96`), persisted as an estate document
+  (`UserStateDocument.ATTACHED_STORES` at `ESTATE_SUBJECT`, `:57`), and attached stores forced
+  **read-only** (`:107`).
 
 ---
 
@@ -615,7 +637,16 @@ run as `medallion.bronze`/`medallion.silver` movers; the HTR-cascade e2e (IIIF �
 gold with lineage populated) goes green. *(R23 re-tiered the head: the IIIF harvest lands bronze
 directly — there is no raw tier.)*
 
-### D2f · The `/ingest-s3` head route for the second external-raw source family *(new, 2026-07-28 — R23)*
+### ~~D2f · The `/ingest-s3` head route for the second external-raw source family~~ *(new, 2026-07-28 — R23; **SUPERSEDED 2026-08-03 by `open_ingest.md`**)*
+
+> **Superseded — do not build this shape.** The plan below adds a second per-source head route to the
+> medallion, which is exactly the coupling `open_ingest.md` R1 removes: acquisition leaves the
+> medallion entirely for the `ingest` service plane, and a new source becomes one `SourceAdapter`
+> registry entry + one lineage-input twin — **zero** new endpoints (invariant I1). The
+> `/bronze-arrival` self-subscription this plan reuses is itself deleted by that move (lineage stops
+> being a control plane); the cascade trigger becomes the catalog's publication event. The landed
+> adapter seam (`s3_harvest.py`) is kept and rehomed, not rebuilt. Retained verbatim below for the
+> reasoning trail.
 
 **What.** R23 names TWO external-raw source families: the IIIF Image API (shipped: `/ingest-iiif`) and
 external object storage (the ra-hcp pattern). The **adapter seam is landed**:
@@ -626,8 +657,10 @@ against moto incl. the bronze blob-v2 landing (`tests/unit/test_s3_harvest.py`).
 allowlists, token/admin auth, #84 project routing — symmetric with `/ingest-iiif`) is scaffolding-only:
 wiring it properly needs the same auth/ceiling/project design pass the IIIF head got, out of the R23
 corrective wave's scope.
-**What closes it.** The route + settings (`MEDALLION_S3_SOURCE_*`), emitting input=`s3://…` /
-output=bronze through the same `/bronze-arrival` seam, with the double-fire pin extended to it.
+**What closes it.** ~~The route + settings (`MEDALLION_S3_SOURCE_*`), emitting input=`s3://…` /
+output=bronze through the same `/bronze-arrival` seam, with the double-fire pin extended to it.~~
+**Now closed by:** the S3-prefix adapter getting its registry entry in the `ingest` plane
+(`open_ingest.md` §5 point 6, sequencing step 3) — no route, no settings block, no `/bronze-arrival`.
 
 ### D2g · The bronze ingest head's own FGA write gate *(new, 2026-07-28 — R23 collapse residue)*
 
@@ -961,6 +994,15 @@ claiming to derive it — so it was corrected in the same pass, or compute would
 gateway invokes with no timeout, retry or circuit breaker. `rayservice.yaml`
 carries the same gate but is genuinely optional — an in-cluster Ray is only wanted for exercising
 auth/OpenBao/Dapr locally.
+
+**Its own memory tier, and why (folded from `open_ingest.md`'s shipped ledger, 2026-08-03).** Once it
+actually rendered, `compute` was **OOMKilled on the shared 512Mi tier** — it is the only fleet service
+importing the Ray SDK — so it carries its own 1536Mi limit (`chart/values.yaml:222-224`) and is pointed
+at the external cluster via `ray.dashboardUrl` (`chart/values.yaml:891` →
+`chart/templates/configmap.yaml:46-47`). Worth keeping because it is load-bearing elsewhere: it is the
+argument for going httpx-only in `ray-kit` (the heavy `ray` SDK import exists only for
+`JobSubmissionClient`, itself a REST wrapper over `/api/jobs/`), which would remove the fleet's sole Ray
+SDK dependency **and** this 1536Mi tier — see `open_ingest.md` § "Package topology".
 
 
 ---
