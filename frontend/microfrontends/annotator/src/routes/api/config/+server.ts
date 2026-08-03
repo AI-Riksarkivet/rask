@@ -9,8 +9,18 @@ import { env } from '$env/dynamic/private';
 // Batch-job submits additionally get a per-run signal — JobResult.backend === "mock",
 // stamped by the service itself — which the submit toast consumes; that field is
 // authoritative even when this web pod's env drifts from the service's.
+const assistProducers = (): string[] => {
+	// The registry's producer NAMES (never the URLs — same presence-only stance as above).
+	try {
+		return Object.keys(JSON.parse(env.MEDIA_ASSIST_BACKENDS ?? '{}'));
+	} catch {
+		return [];
+	}
+};
+
 export const GET = () =>
 	json({
-		assistRunner: Boolean(env.MEDIA_ASSIST_URL),
+		assistRunner: Boolean(env.MEDIA_ASSIST_URL) || assistProducers().length > 0,
 		jobsRunner: Boolean(env.MEDIA_JOBS_URL),
+		assistProducers: assistProducers(),
 	});

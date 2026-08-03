@@ -1,0 +1,27 @@
+[project]
+name = "insid3-runner"
+version = "0.1.0"
+description = "INSID3 in-context segmentation as an assist producer (sealed runner; see server.py)"
+requires-python = "==3.10.*"
+dependencies = [
+    "torch==2.7.1",
+    "torchvision==0.22.1",
+    "fastapi",
+    "uvicorn",
+    "httpx",
+    "pillow",
+    "opencv-python-headless",
+    "numpy",
+    "safetensors",
+    "scikit-learn",
+    "tqdm",
+]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128" }]
+torchvision = [{ index = "pytorch-cu128" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

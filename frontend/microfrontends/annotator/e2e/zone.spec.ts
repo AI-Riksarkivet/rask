@@ -200,3 +200,73 @@ test('assist chip stays up (fail-honest) when the config fetch fails', async ({ 
 	await page.goto(`/annotator/?keys=${KEY}`);
 	await expect(page.getByTestId('assist-mock-chip')).toBeVisible();
 });
+
+// --------------------------------------------------------------------------------------------------
+// AI assist — the model's shapes ride the review path (the coverage the live drive proved manually)
+// --------------------------------------------------------------------------------------------------
+
+test('a real-runner Detect drops a prediction the reviewer can Accept — never an auto-annotation', async ({
+	page,
+}) => {
+	// A runner IS deployed (LIFO beats the beforeEach mock)…
+	await page.route('**/annotator/api/config', (route) =>
+		json(route, { assistRunner: true, jobsRunner: false }),
+	);
+	// The unit LOADS (an empty Arrow table + version): assist requires a loaded unit — a
+	// prediction that could never be saved would be a lie, so the guard is the app's, not ours.
+	const EMPTY_ARROW = Buffer.from(
+		'/////5ADAAAQAAAAAAAKABAADgAHAAgACgAAAAAAAAEQAAAAAAAEAAgACAAAAAQACAAAAAQAAAARAAAANAMAAOwCAAC8AgAAkAIAAGQCAAA0AgAABAIAAKgBAAB4AQAASAEAABwBAADwAAAAxAAAAJgAAABsAAAAOAAAAAQAAAAg/f//EAAAABwAAAAAAAADGAAAAAsAAAB1bmNlcnRhaW50eQAAAAAAVv3//wAAAgBQ/f//EAAAABwAAAAAAAADGAAAAAoAAABjb25maWRlbmNlAAAAAAAAhv3//wAAAgCA/f//EAAAABgAAAAAAAAFFAAAAAUAAABncm91cAAAAAAAAAB0/f//qP3//xAAAAAYAAAAAAAABRQAAAAGAAAAc291cmNlAAAAAAAAnP3//9D9//8QAAAAGAAAAAAAAAUUAAAABgAAAHN0YXR1cwAAAAAAAMT9///4/f//EAAAABgAAAAAAAAFFAAAAAQAAAB0ZXh0AAAAAAAAAADs/f//IP7//xAAAAAYAAAAAAAABRQAAAAFAAAAbGFiZWwAAAAAAAAAFP7//0j+//8QAAAAGAAAAAAAAAMUAAAABQAAAHRfZW5kAAAAAAAAAHr+//8AAAIAdP7//xAAAAAYAAAAAAAAAxQAAAAHAAAAdF9zdGFydAAAAAAApv7//wAAAgCg/v//EAAAABgAAAAAAAAMRAAAAAcAAABwb2x5Z29uAAEAAAAEAAAAyP7//xAAAAAYAAAAAAAAAxQAAAAEAAAAaXRlbQAAAAAAAAAA+v7//wAAAgDE/v//+P7//xAAAAAYAAAAAAAAAxQAAAAGAAAAaGVpZ2h0AAAAAAAAKv///wAAAgAk////EAAAABgAAAAAAAADFAAAAAUAAAB3aWR0aAAAAAAAAABW////AAACAFD///8QAAAAFAAAAAAAAAMQAAAAAQAAAHkAAAAAAAAAfv///wAAAgB4////EAAAABQAAAAAAAADEAAAAAEAAAB4AAAAAAAAAKb///8AAAIAoP///xAAAAAcAAAAAAAABRgAAAAKAAAAc2hhcGVfdHlwZQAAAAAAAJj////M////EAAAABgAAAAAAAADHAAAAAYAAABudW1iZXIAAAAAAAAAAAYACAAGAAYAAAAAAAIAEAAUAAQAAAAPABAAAAAIABAAAAAQAAAAFAAAAAAAAAUUAAAAAgAAAGlkAAAAAAAABAAEAAQAAAD/////AAAAAA==',
+		'base64',
+	);
+	await page.route('**/annotator/api/annotations/**', (route) => {
+		const path = new URL(route.request().url()).pathname;
+		if (route.request().method() !== 'GET') return json(route, { detail: 'unstubbed write' }, 404);
+		if (path.endsWith('/versions')) return json(route, { versions: [] });
+		return route.fulfill({
+			status: 200,
+			contentType: 'application/vnd.apache.arrow.stream',
+			headers: { 'X-Annotations-Version': '1' },
+			body: EMPTY_ARROW,
+		});
+	});
+	// …and the model answers one detected box, exactly the runner contract's shape.
+	const assistCalls: unknown[] = [];
+	await page.route('**/annotator/api/assist/**', (route) => {
+		assistCalls.push(route.request().postDataJSON());
+		return json(route, {
+			shapes: [
+				{
+					shape_type: 'rectangle',
+					x: 60,
+					y: 90,
+					width: 780,
+					height: 1020,
+					label: 'text',
+					confidence: 0.75,
+				},
+			],
+			source: 'model:grounding-dino',
+		});
+	});
+
+	await page.goto(`/annotator/?dataset=demo&keys=${encodeURIComponent(KEY)}`);
+	await expect(page.getByTestId('assist-mock-chip')).not.toBeVisible();
+
+	await page.getByPlaceholder(/AI detect/).fill('text');
+	await page.getByRole('button', { name: 'Run', exact: true }).click();
+
+	// The POST carried the producer + the prompt — the contract, not a lookalike.
+	await expect.poll(() => assistCalls.length, { timeout: 10_000 }).toBeGreaterThan(0);
+	expect(assistCalls[0]).toMatchObject({ producer: 'grounding-dino', prompt: 'text' });
+
+	// The shape arrives as a PREDICTION status chip — model output is never auto-accepted.
+	await expect(page.getByText(/prediction\s*1/)).toBeVisible();
+	const row = page.getByTestId('annotation-list').getByRole('button').last();
+	await expect(row).toBeVisible();
+
+	// The reviewer selects it and accepts; the pending count drains.
+	await row.click();
+	await page.getByRole('button', { name: /Accept/ }).click();
+	await expect(page.getByText(/accepted\s*1/)).toBeVisible();
+	await expect(page.getByText(/prediction\s*1/)).not.toBeVisible();
+});

@@ -92,6 +92,11 @@ class Settings(BaseSettings):
     # the draw/prompt→shapes round-trip is testable in-repo (drop-in for the Ray Serve
     # HTTP endpoint, like the catalog transport).
     assist_url: str | None = Field(default=None, alias="MEDIA_ASSIST_URL")
+    # The producer REGISTRY (the CVAT-Nuclio-shaped seam): producer name/prefix → backend URL, as a
+    # JSON object. Routing is longest-prefix, so `"sam": …` covers `sam-click`/`sam-box`;
+    # `assist_url` stays the fallback for anything unmapped. One flat env var, because a registry
+    # that needs a config FILE would be a second deployment surface for what is one map.
+    assist_backends: dict[str, str] = Field(default_factory=dict, alias="MEDIA_ASSIST_BACKENDS")
 
     # Batch labeling job runner — a lance-ns RayJob submit endpoint (the silver-deriver
     # enqueue for bulk/auto-labeling over a read-plane selection). Unset ⇒ a deterministic

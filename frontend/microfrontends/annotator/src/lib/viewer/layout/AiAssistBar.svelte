@@ -15,7 +15,10 @@
 	let { controller }: { controller: AnnotatorController } = $props();
 
 	let prompt = $state('');
-	let mode = $state<'detect' | 'segment'>('detect');
+	let mode = $state<string>('detect');
+	// Registry producers beyond the two built-ins (the swap-a-model-without-code seam): the zone's
+	// config mirrors MEDIA_ASSIST_BACKENDS' names, and each renders as its own region-driven mode.
+	let extraProducers = $state<string[]>([]);
 
 	// HONEST MOCK: until a real model runner is deployed (MEDIA_ASSIST_URL set), the
 	// backend answers assist calls with a deterministic mock — the shapes LOOK real, so
@@ -29,19 +32,25 @@
 		try {
 			const res = await fetch(`${base}/api/config`);
 			if (res.ok) {
-				const cfg = (await res.json()) as { assistRunner?: boolean };
+				const cfg = (await res.json()) as { assistRunner?: boolean; assistProducers?: string[] };
 				assistMocked = cfg.assistRunner !== true;
+				extraProducers = cfg.assistProducers ?? [];
 			}
 		} catch {
 			// config unreachable — keep the fail-honest mock chip
 		}
 	});
 
-	function setMode(m: 'detect' | 'segment'): void {
+	function setMode(m: string): void {
 		mode = m;
 		if (m === 'segment') {
 			controller.setAssistProducer('sam-click'); // route the next draw to SAM
 			controller.setTool('rect'); // click or drag a box to segment
+		} else if (m !== 'detect') {
+			// A registry producer: region-driven exactly like Segment, routed by NAME — the
+			// backend's registry (longest-prefix) decides which model answers.
+			controller.setAssistProducer(m);
+			controller.setTool('rect');
 		} else {
 			controller.setAssistProducer(null);
 		}
@@ -77,6 +86,18 @@
 		>
 			<MousePointerClick class="size-3.5" /> Segment
 		</Button>
+		{#each extraProducers as producer (producer)}
+			<Button
+				variant={mode === producer ? 'secondary' : 'ghost'}
+				size="sm"
+				aria-pressed={mode === producer}
+				title="draw a region — the {producer} backend finds everything similar"
+				onclick={() => setMode(producer)}
+			>
+				<MousePointerClick class="size-3.5" />
+				{producer}
+			</Button>
+		{/each}
 	</div>
 
 	{#if mode === 'detect'}

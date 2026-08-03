@@ -12,6 +12,7 @@ catalog transport). Shapes are in IMAGE coordinates — the annotator's own spac
 """
 
 import logging
+from typing import Any
 
 import httpx
 from fastapi import APIRouter
@@ -78,11 +79,23 @@ def assist(
     handle = dataset_handle(state, dataset)
     doc_id = validate_doc_key(handle.descriptor.declared, doc_id)
     source = f"model:{body.producer}"
-    url = state.settings.assist_url
+    url = backend_for(state.settings, body.producer)
     shapes = _remote(state, url, (doc_id, speech_id, chunk_id), body) if url else _mock(body)
     # Prompt CONTENT is user free-text — never logged (PII/leak surface); length only.
     logger.info("assist %s (prompt %d chars) → %d shape(s)", body.producer, len(body.prompt or ""), len(shapes))
     return AssistResult(shapes=shapes, source=source)
+
+
+def backend_for(settings: Any, producer: str) -> str | None:
+    """Resolve the producer's backend: LONGEST matching prefix in the registry wins (so `"sam"`
+    covers `sam-click` while `"sam-hq"` can still override it), else the default `assist_url`,
+    else None (→ the honest in-repo mock). The registry is what makes a new model a CONFIG entry
+    rather than a code change — the CVAT-functions shape without the function orchestrator."""
+    backends = getattr(settings, "assist_backends", None) or {}
+    best = max((p for p in backends if producer.startswith(p)), key=len, default=None)
+    if best is not None:
+        return backends[best]
+    return settings.assist_url
 
 
 _SAM_CLICK_PATCH = 120.0  # default box side for a bare click (a zero-size region)

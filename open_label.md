@@ -37,9 +37,19 @@ weights loaded) and driven for real: GroundingDINO returned a genuine "text" box
 SAM a real polygon mask (conf 0.637) over the actual corpus page — via the canvas, the mock chip
 gone, the prediction landing in the Review queue like any human work (screenshot kept). The
 in-cluster runner cannot fetch frames until the cluster corpus mount is seeded (`ASSIST_FRAME_BASE`
-→ viewer), so inference was driven through the local corpus against the same image. REMAINING W1
-tail: a second backend behind the same contract + the contract test (the pluggability proof), and
-the producer→backend registry (the CVAT-Nuclio-shaped gap).
+→ viewer), so inference was driven through the local corpus against the same image. **W1 tail LANDED
+2026-08-03 — pluggability PROVEN, not claimed:** (1) the producer REGISTRY
+(`MEDIA_ASSIST_BACKENDS` name→URL, longest-prefix routing, `assist_url` fallback, mock when bare —
+`backend_for` + `test_assist_registry.py`); (2) **INSID3 wired as the SECOND backend**
+(`runners/insid3/` — same `/v1/assist` contract, reference-propagation mode: the drawn region
+becomes the reference and the frozen DINOv3 finds everything similar) and driven END TO END: the
+canvas bar now offers **Detect · Segment · insid3** (registry producers surface via `/api/config
+assistProducers`), a drawn region returned a real 15-point polygon as `model:insid3`, landing as a
+`prediction` in the review queue (screenshot kept) — the annotator's routing path unchanged;
+(3) the previously-missing hermetic Playwright spec for assist→review (contract POST asserted,
+prediction chip, Accept drains to accepted — required a full-schema empty Arrow fixture). Still
+open in W1: the batch mode (`jobsUrl`), the in-cluster corpus seed (frames for `rask-assist`),
+an insid3 image build (the runner runs from a checkout; weights are Meta-gated per its README).
 
 **INSID3 evaluated as a candidate backend (2026-08-03, owner-requested —
 github.com/visinf/insid3, CVPR'26 oral: training-free in-context segmentation on one frozen
