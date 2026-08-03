@@ -39,7 +39,7 @@ def _bronze_write_dataset(event: dict[str, Any], settings: MedallionSettings, pr
     Filters on ``eventType == COMPLETE``: a START or FAIL bronze event announces intent / failure, not a
     landed batch, so firing the cascade off one would kick the pipeline over data that isn't there (yet).
     Only a terminal-success bronze write is a real arrival. TWO ingest lanes share the head: the events
-    lane (``bronze_dataset``) and the IIIF page lane (``iiif_bronze_dataset``, P7a) — the returned name is
+    lane (``bronze_dataset``) — the returned name is
     the one actually written, so the trigger tells the mover which lane fired.
 
     With a ``project`` (#84, from the event's ``lance.project`` facet) the expected pair is the
@@ -51,7 +51,7 @@ def _bronze_write_dataset(event: dict[str, Any], settings: MedallionSettings, pr
     if str(event.get("eventType", "")).upper() != "COMPLETE":
         return None
     expected_namespace = project_namespace(project, settings.bronze_namespace)
-    expected = {project_namespace(project, name): name for name in (settings.bronze_dataset, settings.iiif_bronze_dataset)}
+    expected = {project_namespace(project, settings.bronze_dataset): settings.bronze_dataset}
     outputs = event.get("outputs") or []
     for output in outputs:
         if isinstance(output, dict) and output.get("namespace") == expected_namespace and output.get("name") in expected:
@@ -98,7 +98,7 @@ async def handle_bronze_arrival(dapr: DaprClient, settings: MedallionSettings, e
 
     ``event`` is the untrusted Dapr CloudEvent envelope (hence ``Any`` + the ``isinstance`` guards); its
     ``data`` is the OpenLineage run event. Only a write to ``bronze_namespace``/``bronze_dataset`` (or the
-    IIIF page lane's ``iiif_bronze_dataset``) publishes the ``medallion.bronze`` trigger — a downstream
+    page lane) publishes the ``medallion.bronze`` trigger — a downstream
     mover's event (silver/gold) is acked and skipped, so the head never self-triggers (loop guard). A
     publish outage returns ``RETRY`` for redelivery.
     """

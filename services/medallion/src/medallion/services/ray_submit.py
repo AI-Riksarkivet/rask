@@ -9,7 +9,7 @@ Idempotent under at-least-once redelivery: the submission id is DETERMINISTIC pe
 redelivered trigger RE-ATTACHES to the same job rather than starting a second concurrent job that would
 race the write. A submit failure raises so the mover returns RETRY and the sidecar redelivers.
 
-EVERY path is submit-and-ack since A13 (2026-08-03). The stage and IIIF paths used to block until the
+EVERY path is submit-and-ack since A13 (2026-08-03). The stage path used to block until the
 job finished, which made the ack contract a race — a job outliving the redelivery window exhausted it —
 and, more to the point, asked a question the data already answers: a job's completion signal is its own
 registered commit through the catalog, and the publication event off that commit wakes the next tier.
@@ -107,55 +107,6 @@ async def submit_stage_job(
     async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
         await rk.submit_or_reattach(client, submission_id, body)
     log.info("ray_stage_job_submitted", extra={"submission_id": submission_id, "stage": stage})
-
-
-async def submit_iiif_ingest_job(
-    settings: MedallionSettings,
-    *,
-    bronze_uri: str,
-    volume_id: str,
-    max_pages: int | None,
-    token: str | None,
-) -> None:
-    """Submit (or re-attach to) the IIIF→bronze harvest job (``scripts/ray_iiif_ingest_job.py``) and block
-    until it succeeds — the P7a producer's Ray branch, on the same Jobs-REST seam as the stage movers.
-
-    Deterministic ``ray-iiif-ingest-<volume>-<token>`` submission id → an at-least-once retry re-attaches
-    instead of racing a second harvest of the same volume. Raises :class:`RayJobError` on a submit
-    failure, a FAILED/STOPPED job, or a timeout; on success the bronze page dataset exists at
-    ``bronze_uri`` and the caller measures it for the ONE bronze-write emit.
-    """
-    submission_id = rk.submission_id(f"iiif-ingest-{volume_id}", token)
-    env_vars = {
-        "VOLUME_ID": volume_id,
-        "BRONZE_URI": bronze_uri,
-        "IIIF_BASE_URL": settings.iiif_base_url,
-        "IIIF_QUERY_PARAMS": settings.iiif_query_params,
-        "MAX_PAGES": "" if max_pages is None else str(max_pages),
-        "S3_ENDPOINT": settings.s3_endpoint,
-        "S3_KEY": settings.s3_access_key_id,
-        "S3_SECRET": settings.s3_secret_access_key.get_secret_value(),
-        "S3_REGION": settings.s3_region,
-        "OTEL_EXPORTER_OTLP_ENDPOINT": os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-        "OTEL_EXPORTER_OTLP_PROTOCOL": os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", ""),
-        "OTEL_EXPORTER_OTLP_HEADERS": os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", ""),
-        "OTEL_EXPORTER_OTLP_TRACES_HEADERS": os.environ.get("OTEL_EXPORTER_OTLP_TRACES_HEADERS", ""),
-        "OTEL_SERVICE_NAME": os.environ.get("OTEL_SERVICE_NAME", ""),
-        "OTEL_RESOURCE_ATTRIBUTES": os.environ.get("OTEL_RESOURCE_ATTRIBUTES", ""),
-        **rk.lineage_env(),
-        **rk.trace_env(),
-    }
-    body = {
-        "entrypoint": settings.iiif_ray_entrypoint,
-        "submission_id": submission_id,
-        "runtime_env": {"env_vars": env_vars},
-    }
-    # Submit-and-ack, same as the stage path (A13). This lane retires entirely at A12 when the
-    # medallion sheds acquisition to services/ingest; until then it must not be the last holder of
-    # the completion-poll machinery, or A13's deletion gate cannot come back empty.
-    async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
-        await rk.submit_or_reattach(client, submission_id, body)
-    log.info("ray_iiif_ingest_submitted", extra={"submission_id": submission_id, "volume_id": volume_id})
 
 
 async def submit_train_job(

@@ -79,7 +79,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
     its own service identity. Unauthorized -> ``DROP`` (redelivery won't grant the role): the cascade
     enforces the ReBAC, so a mover lacking the validator role genuinely cannot promote to gold.
 
-    ``dataset`` on the trigger names the lane that fired (P7a: bronze$events vs the IIIF page lane's
+    ``dataset`` on the trigger names the lane that fired (bronze$events vs a page lane's
     bronze$pages, which share the ``medallion.bronze`` topic). A name that is not this mover's input is
     the other lane's and is DROPped; an ABSENT name makes no claim and proceeds.
 
@@ -93,7 +93,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
     token = data.get("token") if isinstance(data, dict) else None
     transition = f"{settings.from_namespace}->{settings.to_namespace}"
 
-    # LANE DISCRIMINATION (P7a). Two ingest lanes — bronze$events and the IIIF page lane bronze$pages —
+    # LANE DISCRIMINATION. Two ingest lanes — bronze$events and the page lane bronze$pages —
     # publish to the SAME medallion.bronze topic, so every mover subscribed to it sees both. The trigger
     # already names the dataset that was actually written (ingest_trigger._bronze_write_dataset: "the
     # trigger tells the mover which lane fired"); a name that is not THIS mover's input belongs to the

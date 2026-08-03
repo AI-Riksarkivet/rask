@@ -30,7 +30,7 @@ The P7b movers on the unified cluster fill the lanes:
 =============  ==================  ============================================  =====================
 Edge           Trigger             Compute (mover stage job)                     Output
 =============  ==================  ============================================  =====================
-iiif→bronze    (ingest head)       ``ray_iiif_ingest_job.py`` (P7a producer)     bronze page-images
+source→bronze  (ingest plane)      services/ingest (acquisition left the medallion)  bronze page-images
 bronze→silver  ``medallion.bronze``  HTR layout+lines stage job (sealed runner)  region/line geometry
 silver→gold    ``medallion.silver``  transcribe stage job (warm Serve handle)    THIS contract
 =============  ==================  ============================================  =====================

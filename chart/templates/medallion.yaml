@@ -72,7 +72,6 @@ spec:
             - { name: MEDALLION_BRONZE_DATASET, value: {{ .Values.medallion.producer.bronzeDataset | quote }} }
             # The IIIF page lane's bronze dataset name (P7a, re-tiered by R23) — a values knob beside
             # bronzeDataset; /bronze-arrival fires the cascade for either name.
-            - { name: MEDALLION_IIIF_BRONZE_DATASET, value: {{ .Values.medallion.producer.iiifBronzeDataset | quote }} }
             - { name: MEDALLION_BRONZE_NAMESPACE, value: {{ .Values.medallion.producer.bronzeNamespace | quote }} }
             - { name: MEDALLION_PRODUCER_OPERATION, value: {{ .Values.medallion.producer.operation | quote }} }
             - { name: MEDALLION_PRODUCER_AUTHOR, value: {{ .Values.medallion.producer.author | quote }} }
@@ -164,22 +163,18 @@ spec:
             - { name: MEDALLION_MEDIA_BRONZE_URI, value: "s3://{{ include "lance.stageBucket" (list . "bronze-media") }}/medallion/bronze-media" }
             # The IIIF page head (P7a): /ingest-iiif lands the BRONZE page-image blob dataset beside the
             # events lane's bronze URI (same namespace root, its own dataset directory).
-            - { name: MEDALLION_IIIF_BRONZE_URI, value: "s3://{{ include "lance.stageBucket" (list . .Values.medallion.producer.bronzeNamespace) }}/medallion/{{ .Values.medallion.producer.bronzeNamespace }}-pages" }
             # Which IIIF Image API the head harvests from. WIRED, not left to the code default: that
             # default is RA-INTERNAL and resolves only inside the archives' network, so every deploy
             # elsewhere needed a `kubectl set env` to ingest a single page (live-proof 2026-07-28,
             # defect 1). One knob feeds both harvest paths — the in-process httpx client AND the
-            # IIIF_BASE_URL the Ray branch passes into scripts/ray_iiif_ingest_job.py.
             {{- /* `| default` on both, for the same `--reuse-values` reason the `encoders` block above
                  documents: these are NEW keys, and a stored release whose user values carry
                  `medallion: {compute: true}` leaves `medallion.producer` sub-keys nil. The fallbacks are
                  the code defaults (services/medallion/core/config.py), so an un-migrated release renders
                  exactly what it ran before rather than an empty base URL. */}}
-            - { name: MEDALLION_IIIF_BASE_URL, value: {{ .Values.medallion.producer.iiifBaseUrl | default "https://iiifintern-ai.ra.se" | quote }} }
             # The IIIF Image API derivative path appended per page. Travels with baseUrl: a different
             # server may not serve `full/max` (some cap at `full/2000,`), and a wrong derivative is a
             # per-page 404 rather than a boot failure.
-            - { name: MEDALLION_IIIF_QUERY_PARAMS, value: {{ .Values.medallion.producer.iiifQueryParams | default "full/max/0/default.jpg" | quote }} }
             - { name: MEDALLION_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
             - { name: MEDALLION_S3_ACCESS_KEY_ID, value: {{ .Values.rustfs.accessKey | quote }} }
             {{- if not (include "lance.secretsViaDapr" .) }}

@@ -841,29 +841,6 @@ def test_no_workload_mounts_a_hostpath_that_must_pre_exist() -> None:
     )
 
 
-def test_the_iiif_ingest_head_takes_its_endpoint_from_values() -> None:
-    """A code-only default that is reachable from ONE network is a deploy-time `kubectl set env`.
-
-    live-proof defect 1: `MEDALLION_IIIF_BASE_URL` had no chart knob at all, and its code default
-    (https://iiifintern-ai.ra.se) resolves only inside the Riksarkivet network — so every deploy outside
-    it patched a running Deployment, a fix that dies with the pod.
-    """
-    rendered = _helm_template("singleTenant.enabled=true", "medallion.compute=true")
-    assert "MEDALLION_IIIF_BASE_URL" in rendered, "the IIIF ingest head's endpoint is not wired through the chart"
-    override = _helm_template(
-        "singleTenant.enabled=true",
-        "medallion.compute=true",
-        "medallion.producer.iiifBaseUrl=https://lbiiif.riksarkivet.se",
-    )
-    assert 'MEDALLION_IIIF_BASE_URL, value: "https://lbiiif.riksarkivet.se"' in override, (
-        "medallion.producer.iiifBaseUrl does not reach MEDALLION_IIIF_BASE_URL — the knob is decorative"
-    )
-    values = (CHART / "values.yaml").read_text()
-    assert "lbiiif.riksarkivet.se" in values, (
-        "values.yaml must document the PUBLIC IIIF endpoint beside the RA-internal default, or an outside operator has a knob and no idea what to put in it"
-    )
-
-
 def test_the_lineage_durability_chain_is_on_by_default() -> None:
     """The #4 chain (stage -> publish -> drain) shipped OFF while NOTES warned about it on every install.
 

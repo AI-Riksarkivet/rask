@@ -626,24 +626,6 @@ medallion:
     operation: lance_ray_ingest
     author: ray
     bronzeTopic: medallion.bronze
-    # The IIIF page lane (P7a, re-tiered by R23): /ingest-iiif harvests a volume's pages into THIS
-    # bronze dataset (beside bronzeDataset — /bronze-arrival fires the cascade for either name). The
-    # bronze page dataset replaced the prefetch lane + the IIIFCachedSource cache; HTR then runs as
-    # cascade compute (the P7b layout/lines + transcribe movers).
-    iiifBronzeDataset: bronze$pages
-    # The IIIF Image API the page lane harvests from (MEDALLION_IIIF_BASE_URL). This value used to live
-    # ONLY as a code default in services/medallion/core/config.py with no chart knob at all, so any
-    # deploy outside the Riksarkivet network could not ingest a page without `kubectl set env` on a
-    # running Deployment (live-proof 2026-07-28, defect 1 — a fix that dies with the pod).
-    #   * https://iiifintern-ai.ra.se     — RA-INTERNAL (the default below); resolves only on RA's network.
-    #   * https://lbiiif.riksarkivet.se   — the PUBLIC Riksarkivet IIIF endpoint; same `arkis!<image-id>`
-    #                                       path shape, reachable from anywhere. Use this for any deploy
-    #                                       (or CI/demo cluster) that is not inside RA.
-    iiifBaseUrl: "https://iiifintern-ai.ra.se"
-    # The IIIF Image API derivative requested per page, appended to `{base}/arkis!{image-id}/`.
-    # `full/max/0/default.jpg` is the full-resolution default; a server that caps derivative size wants
-    # e.g. `full/2000,/0/default.jpg`.
-    iiifQueryParams: "full/max/0/default.jpg"
   # The 3 stage movers run medallion.mover:app, differing only by env. order = the DAG. (R23: there is
   # no raw→bronze mover — its stage stamp/provenance logic merged into the producer's bronze ingest.)
   # requiredAction/serviceIdentity gate each hop when fgaEnabled: silver→gold needs `can_promote`
