@@ -1976,15 +1976,29 @@ estate code file:line before implementing against them. Or stop after 25 turns.
     post-Cloudflare; the C fallback triggers if it stalls while a stateful-streaming need is
     live. Redpanda Connect usage note: stay within the open-core connectors (NATS/S3/HTTP)
     to avoid enterprise-license surface.
-11. **Verify RustFS conditional put — narrowed**: with managed versioning the
-    requirement collapses to the `__manifest` table's own commits (D8); Phase 0 verifies
-    that plus server-side COPY (the non-managed path), tags/CDF/`write_fragments` against
-    the pinned pylance, RustFS `endpoint`+`region` config (`guide.md:2427-2438`),
-    stable-row-ids behavior on the deployed version (format-spec-labelled experimental),
-    and whether the catalog can be wired as Lance's commit handler (else the
-    caller-owned CreateTableVersion retry loop with `eTag` OCC is the design). OTel
-    witnesses for the A-conditions: `lance::dataset_events` (committed) and
-    `lance::file_audit` (create/delete/delete_unverified) — `guide.md:2912-2930`.
+11. ~~**Verify RustFS conditional put — narrowed**~~ **RESOLVED 2026-08-03 — all six rows RUN, none
+    guessed** (`scripts/verify_lance_storage.py`; pylance 9.0.0, pyarrow 25.0.0, RustFS via
+    `svc/rask-rustfs-io`). This is the §7.11 results table Phase 0 owes:
+
+    | # | Mechanic | Result | Evidence |
+    |---|---|---|---|
+    | 1 | pylance tags (create / update / checkout) | **VERIFIED** | `create@v1` → `update@v2`; `lance.dataset(uri, version="published")` resolves v2 (5 rows); `tags.list()` = `['published']`. D7's publication ref is real. |
+    | 2 | CDF — `_row_created_at_version` predicate + `dataset.delta` | **VERIFIED** | `_row_created_at_version > 1` returned exactly the delta `[4, 5]`, not the full 5 rows; `delta(1).get_inserted_rows()` → `[4, 5]`. D1's O(delta) read holds. **Pin:** `get_inserted_rows()` returns a pyarrow `RecordBatchReader`, NOT a Table — `.read_all()` materialises it. |
+    | 3 | `write_fragments` + single `Append` commit | **VERIFIED** | 3 workers wrote 3 fragments independently; ONE `LanceOperation.Append(read_version=1)` → v2, 8 rows. D6's distributed-workers-single-commit seam, re-confirmed against §Empirical. |
+    | 4 | `_rowid` stability across compaction | **VERIFIED** | `compact_files()` 4 → 1 fragments; all 8 `_rowid` values unchanged. D2's `source_rowid` references survive maintenance — the guard trio's core assumption. |
+    | 5 | **RustFS conditional put (`If-None-Match: *`)** | **VERIFIED** | The second `If-None-Match: *` PUT on the same key was **REJECTED** (`PreconditionFailed`). Put-if-not-exists IS enforced, so Lance commit atomicity holds on this store **without** an external manifest store. Closes the estate-wide unknown `OPEN-WORK.md` carried as "assumed, never verified". |
+    | 6 | RustFS server-side COPY | **VERIFIED** | `CopyObject` round-tripped 136 bytes server-side, byte-identical. The catalog's non-managed commit copy step is supported. |
+
+    **6 verified, 0 failed, 0 environment-blocked.** Re-run with
+    `uv run python scripts/verify_lance_storage.py` (add `--skip-s3` for the Lance rows alone). A row
+    that cannot run reports ENVIRONMENT-BLOCKED with the operator command rather than a guess.
+
+    Still open from the original item, and NOT covered by the six rows above: RustFS `endpoint`+`region`
+    config (`guide.md:2427-2438`), whether the catalog can be wired as Lance's commit handler (else the
+    caller-owned `CreateTableVersion` retry loop with `eTag` OCC is the design), and the OTel witnesses
+    `lance::dataset_events` / `lance::file_audit` (`guide.md:2912-2930`). Note row 5 makes the managed-
+    versioning narrowing (D8) an optimisation rather than a necessity on this store.
+
 12. ~~branch-merge vs tag-advance~~ **Resolved (D7): tag-advance — branch merge does not
     exist in the format, the Python API, or the namespace spec.** Staging-branch + root
     tag-at-branch-version remains the per-lane strict-isolation variant. Remaining

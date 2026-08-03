@@ -475,11 +475,15 @@ made seedable — the `open_label.md` waves, folded here as that file retires.**
 - **`table_properties` never reach the Lance dataset** — the catalog's create carries them into the
   namespace *declare* and the response echo only, so §7.1's "stamped at create" is not readable off the
   table. (Found by the lance-docs audit; estate-wide, not annotation-specific.)
-- **RustFS conditional-PUT is assumed, never verified** — Lance's commit atomicity on S3-compatible
-  stores requires put-if-not-exists or an external manifest store; nothing in the repo configures or
-  proves either. The shared `annotations` table's concurrent `merge_insert`s are the exposed surface.
-  *(Narrowed 2026-08-03: with managed versioning the requirement collapses to the `__manifest` table's
-  own commits — `open_ingest.md` D8/§7.11, where Phase 0 records the verification.)*
+- ~~**RustFS conditional-PUT is assumed, never verified**~~ **VERIFIED 2026-08-03 — it IS enforced.**
+  Lance's commit atomicity on S3-compatible stores requires put-if-not-exists or an external manifest
+  store, and nothing in the repo configured or proved either; the shared `annotations` table's
+  concurrent `merge_insert`s were the exposed surface. Run against the live `svc/rask-rustfs-io`
+  (`scripts/verify_lance_storage.py` row 5): a second `If-None-Match: *` PUT on the same key is
+  **rejected with `PreconditionFailed`**. Put-if-not-exists holds on this store, so Lance commit
+  atomicity needs no external manifest store — which also demotes `open_ingest.md` D8's
+  managed-versioning narrowing from a necessity to an optimisation here. Full table: `open_ingest.md`
+  §7.11 (6 verified, 0 failed, 0 blocked).
 
 **Eighth wave (2026-08-03): the store registry became multi-endpoint and attachable — the
 `open_ingest.md` shipped ledger, folded here as that file's first generation retires.**
