@@ -8,13 +8,13 @@
 		},
 		"lakehouse": {
 			"staticGzipKB": 600,
-			"deferredGzipKB": 130,
-			"note": "Four areas (catalog, lineage, models, admin) in one router. Carries @xyflow/svelte for the lineage graph and layerchart for the model experiments. Measured 527 / 113. Both numbers moved when the lineage WORKBENCH landed (@rask/dockview): the dock's ~290 KB of JS is behind a dynamic import in `routes/lineage/workbench`, so it lands in the deferred half (+67); its stylesheet is imported from app.css and rides the root layout's sheet (+33 static), because deferring 10 KB of gzipped CSS would buy a flash of unstyled dock. Standalone the library gzips to ~162 KB, but measured IN the bundle it costs ~100 — the gate gzips one combined stream, and rolldown drops the splitview/gridview/paneview exports nothing imports. ~4 KB of that is the `dockview` wrapper over `dockview-core`, which is NOT optional: it registers the ContextMenu, KeyboardDocking, AdvancedDnD, TabGroupChips and Accessibility modules, so importing core directly silently ships a dock with no aria-live announcements. Deferred rose 120 → 130 on 2026-08-03: the workbench reversal restored the dock's +67 while the FGA explorer's popover/legend work (af6f019) had independently grown the lazy half — measured 121 together, 1 over the old line. 130 keeps the fail-on-doubling property with ~9 KB of headroom."
+			"deferredGzipKB": 120,
+			"note": "Four areas (catalog, lineage, models, admin) in one router. Carries @xyflow/svelte for the lineage graph and layerchart for the model experiments. 2026-08-03: the per-zone lineage WORKBENCH was removed (global-workbench-only decision, see open_workbench.md), taking @rask/dockview's ~67 KB out of the deferred half and its ~33 KB stylesheet out of the static half; the ceilings return to their pre-dock values. When the GLOBAL workbench lands it pays these costs in its own zone, not here."
 		},
 		"media": {
 			"staticGzipKB": 1050,
 			"deferredGzipKB": 120,
-			"note": "embedding-atlas + d3 + elkjs for the atlas/tree/graph surfaces. The HEAVIEST zone to enter — nearly three times the annotator — which is the opposite of what the single-number budget implied. Measured 953 / 113. Both moved when the media WORKBENCH landed (@rask/dockview: Atlas + Treemap + topic results in one dock): the dock's JS is behind a dynamic import in `routes/workbench`, so it lands in the deferred half (+66); its stylesheet rides the root layout's sheet (+23 static), because deferring 10 KB of gzipped CSS would buy a flash of unstyled dock. Neither ceiling needed raising, but deferred now has only ~8 KB of headroom — the tightest in the estate, and the next lazy addition here has to argue for a raise."
+			"note": "embedding-atlas + d3 + elkjs for the atlas/tree/graph surfaces. The HEAVIEST zone to enter — nearly three times the annotator. 2026-08-03: the per-zone WORKBENCH was removed (global-workbench-only decision, see open_workbench.md) — the dock's ~66 KB left the deferred half and its stylesheet left the static half; ceilings unchanged (they were never raised for the dock here)."
 		},
 		"annotator": {
 			"staticGzipKB": 420,
@@ -23,8 +23,8 @@
 		},
 		"compute": {
 			"staticGzipKB": 260,
-			"deferredGzipKB": 90,
-			"note": "The Ray surfaces (cluster, jobs, actors, serve, logviewer) over the shared shell — tables and status views, no heavy vendored runtime, so the ENTRY cost should stay near the home zone's weight. The deferred ceiling rose 40 → 90 when the compute WORKBENCH landed (@rask/dockview: jobs + capacity + actors in one dock at /compute/workbench): this zone had essentially nothing lazy before (1 KB), so the dock is now almost the whole deferred half at ~67 KB. It is behind a dynamic import on ONE route of eleven, so no other page pays for it, and the static entry graph is unchanged. 90 rather than the 120 the other dock zones carry: 68 measured, so this still fails on a doubling instead of waving one through."
+			"deferredGzipKB": 40,
+			"note": "The Ray surfaces (cluster, jobs, actors, serve, logviewer) over the shared shell — tables and status views, no heavy vendored runtime, so the ENTRY cost should stay near the home zone's weight. The deferred ceiling returns 90 → 40 on 2026-08-03: it was raised to 90 solely for the per-zone WORKBENCH dock, which is removed (global-workbench-only decision, see open_workbench.md)."
 		},
 		"studio": {
 			"staticGzipKB": 220,

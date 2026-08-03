@@ -206,12 +206,6 @@ const LINEAGE_ITEMS: TopNavItem[] = [
 		href: '/lakehouse/lineage',
 		description: 'The whole medallion DAG on one canvas.',
 	},
-	{
-		// R28's lesson, held: the dock is an area surface of THIS zone, so it rides the zone's panel.
-		title: 'Workbench',
-		href: '/lakehouse/lineage/workbench',
-		description: 'Graph, runs and events in one arrangeable dock.',
-	},
 ];
 
 const MEDIA_ITEMS: TopNavItem[] = [
@@ -219,11 +213,6 @@ const MEDIA_ITEMS: TopNavItem[] = [
 	{ title: 'Atlas', href: '/media/atlas', description: 'The embedding map of the corpus.' },
 	{ title: 'Tree', href: '/media/tree', description: 'The corpus by topic hierarchy.' },
 	{ title: 'Graph', href: '/media/graph', description: 'Relations between media entities.' },
-	{
-		title: 'Workbench',
-		href: '/media/workbench',
-		description: 'Atlas, treemap and topic results in one arrangeable dock.',
-	},
 	{ title: 'Workflow', href: '/media/workflow', description: 'The derivation pipeline.' },
 ];
 
@@ -266,11 +255,6 @@ const GOVERNANCE_ITEMS: TopNavItem[] = [
  *  Search at /media). */
 const COMPUTE_ITEMS: TopNavItem[] = [
 	{ title: 'Overview', href: '/compute/', description: 'The Ray plane at a glance.' },
-	{
-		title: 'Workbench',
-		href: '/compute/workbench',
-		description: 'Jobs, capacity and actors in one arrangeable dock.',
-	},
 	{ title: 'Jobs', href: '/compute/jobs', description: 'Submitted Ray jobs and their lifecycle.' },
 	{ title: 'Cluster', href: '/compute/cluster', description: 'Nodes and their resource load.' },
 	{ title: 'Actors', href: '/compute/actors', description: 'Live actors across the cluster.' },

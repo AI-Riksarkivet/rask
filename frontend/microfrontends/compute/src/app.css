@@ -1,9 +1,6 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import '@rask/ui/styles/tokens.css';
-/* @rask/dockview: vendor sheet + the --dv-* → OKLCH token mapping, in ONE import and under
-   `base` so Tailwind utilities on panel content still out-specify dockview's own selectors. */
-@import '@rask/dockview/styles.css' layer(base);
 
 /* Scan the shared @rask/ui component library so its Tailwind classes (badge, etc.)
    are generated — Tailwind 4 ignores node_modules by default. */

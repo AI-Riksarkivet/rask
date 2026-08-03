@@ -21,9 +21,6 @@
    hex on a dark canvas — a white blob. This zone mounts THREE Svelte Flow canvases (diagram/Flow,
    workflow/FlowPane, workflow/WorkflowCanvas), all of which had it. */
 @import '@rask/flow/styles.css' layer(base);
-/* @rask/dockview: vendor sheet + the --dv-* → OKLCH token mapping, one import, same layer
-   and same reason as Svelte Flow's above. */
-@import '@rask/dockview/styles.css' layer(base);
 
 /* Tailwind 4 + Vite auto-discovery isn't reliable for .svelte under Bun;
  * point it at the source roots explicitly (paths relative to this file). */
