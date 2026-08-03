@@ -1,7 +1,8 @@
 """Load a REALISTIC estate into the live OpenFGA store — the demo seed that does not exist.
 
-Why this is separate from ``fga_bootstrap_owner.py``: that script grants a first admin and nothing
-else. It writes three tuples (one ``owner`` on the root plus two structural ``parent`` edges) because
+Why this is separate from the bootstrap (the ``bootstrap-admin`` Helm Job, which superseded the old
+``fga_bootstrap_owner.py`` script): bootstrap grants a first admin and nothing else — three tuples
+(one ``owner`` on the root plus two structural ``parent`` edges), because
 its job is to make a locked-out cluster usable, not to populate it. The consequence is that a fresh
 cluster's authorization graph has **four nodes** — one user, one warehouse, one namespace, one table —
 and every surface built to explore relationships has essentially nothing to show. The governance

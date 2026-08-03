@@ -2,8 +2,9 @@
 	// Project creation (goal cond 6) — an estate-admin flow that COMPOSES existing APIs: creating the
 	// first (work) warehouse under a new project name creates the project implicitly; an optional
 	// second create with serving:"gold" provisions the per-tenant gold serving warehouse (DECISIONS
-	// "Medallion tiers"); the initial admin grant is one raw FGA tuple on /v1/access/tuples
-	// (estate-admin gated, like /v1/events). Every step toasts success/failure honestly — a partial
+	// "Medallion tiers"); the initial admin grant is one raw FGA tuple written through the shared
+	// `writeTuple` remote command (estate-admin gated at the catalog, like /v1/events). Every step
+	// toasts success/failure honestly — a partial
 	// outcome (work warehouse up, gold or grant failed) is NAMED, never rolled into a fake success.
 	//
 	// The first create is what MINTS the tenant, and the catalog seeds the caller as the new project's
@@ -14,7 +15,10 @@
 	// standing between the new project and being ungovernable.
 	import { Dialog } from '@rask/ui/dialog';
 	import { toast } from 'svelte-sonner';
-	import { createWarehouse, writeAccessTuple } from './catalog';
+	import { createWarehouse } from './catalog';
+	// The grant goes through the SAME remote command the FGA workbench writes with — one write door,
+	// so every raw tuple write is validated, audited, control-event-emitting and single-flight alike.
+	import { writeTuple } from '$lib/admin/remote/access.remote';
 
 	let {
 		open = $bindable(false),
@@ -107,7 +111,7 @@
 			// governable (by its creator); filled, it hands a co-admin (or a successor) the same rung.
 			const adminUser = admin.trim();
 			if (adminUser) {
-				const res = await writeAccessTuple({
+				const res = await writeTuple({
 					user: adminUser,
 					relation: 'admin',
 					object: `project:${project}`,

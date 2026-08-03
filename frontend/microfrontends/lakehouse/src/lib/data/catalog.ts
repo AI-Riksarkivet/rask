@@ -345,20 +345,6 @@ export const createWarehouse = (body: CreateWarehouseBody) =>
 		body: JSON.stringify(body),
 	});
 
-/** One raw FGA tuple on the catalog's estate-admin access surface (`/v1/access/tuples`) — `user` in
- * OpenFGA subject form (`user:alice`, or a userset like `team:x#member`), `object` fully typed
- * (`project:acme`). */
-export type AccessTuple = { user: string; relation: string; object: string };
-
-/** Write one FGA tuple through this zone's explicit session-only BFF route. Estate-admin gated by
- * the catalog (the same bar as /v1/events); the project-creation flow uses it for the initial
- * `admin` grant on the new `project:<name>` object. */
-export const writeAccessTuple = (tuple: AccessTuple) =>
-	requestJSON<unknown>('v1/access/tuples', {
-		method: 'POST',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(tuple),
-	});
 export const setWarehouseActive = (id: string, active: boolean) =>
 	requestJSON<Warehouse>(`v1/warehouses/${enc(id)}/${active ? 'activate' : 'deactivate'}`, {
 		method: 'POST',

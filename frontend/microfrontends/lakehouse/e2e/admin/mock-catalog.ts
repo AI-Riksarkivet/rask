@@ -69,6 +69,9 @@ type AccessState = {
 	listUsersBodies: Body[];
 	listObjectsBody: Body | null;
 	simulateBodies: Body[];
+	/** Set via `__mock/access/config`: the next tuple writes 403 — the partial-outcome lever the
+	 *  project-create spec pulls (a failed grant must be NAMED, never rolled into a fake success). */
+	failWrites: boolean;
 };
 
 const accessStates = new Map<string, AccessState>();
@@ -83,6 +86,7 @@ const accessStateOf = (bearer: string): AccessState => {
 			listUsersBodies: [],
 			listObjectsBody: null,
 			simulateBodies: [],
+			failWrites: false,
 		};
 		accessStates.set(bearer, state);
 	}
@@ -138,6 +142,7 @@ Bun.serve({
 				if (object) tuples = tuples.filter((t) => t.object === object);
 				return json({ tuples, continuation: null });
 			}
+			if (state.failWrites) return json({ detail: 'forbidden' }, 403);
 			const body = (await req.json()) as FixtureTuple;
 			if (req.method === 'POST') state.written.push(body as unknown as Body);
 			if (req.method === 'DELETE') state.deleted.push(body);
@@ -204,6 +209,11 @@ Bun.serve({
 		// the given bearer's reads, so a parallel test's canvas cannot inherit it. Pair with `__mock/add`
 		// to move the control cursor — landing a grant AND announcing it is exactly what the real catalog
 		// does now (access_admin emits `grant_added` on every raw-tuple write).
+		if (url.pathname === '/__mock/access/config' && req.method === 'POST') {
+			const body = (await req.json()) as { bearer: string; failWrites?: boolean };
+			accessStateOf(body.bearer).failWrites = body.failWrites ?? false;
+			return json({ ok: true });
+		}
 		if (url.pathname === '/__mock/access/tuple' && req.method === 'POST') {
 			const body = (await req.json()) as { bearer: string; tuple: FixtureTuple };
 			accessStateOf(body.bearer).extraTuples.push(body.tuple);

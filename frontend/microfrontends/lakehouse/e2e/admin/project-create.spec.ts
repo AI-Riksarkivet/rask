@@ -1,9 +1,15 @@
 import { test, expect, type Route } from '@playwright/test';
+import { signIn, TOKEN } from './session';
+import { MOCK_CATALOG } from '../ports';
 
 // Hermetic project-creation coverage (goal cond 6): the estate-admin flow COMPOSES existing APIs —
 // warehouse create (the project comes into existence with its first warehouse), the optional
-// serving:"gold" second create, and the initial admin tuple on /v1/access/tuples. The /capi BFF is
-// stubbed at the browser boundary; the wire bodies are pinned exactly.
+// serving:"gold" second create, and the initial admin tuple. The warehouse/project/me reads stay
+// stubbed at the browser boundary (they are still BFF calls); the ADMIN GRANT is not — it rides the
+// shared `writeTuple` remote command, which runs on the zone SERVER, so it lands on the mock catalog
+// and is asserted through `/__mock/access` per bearer. Lives in the admin project (auth-ON server)
+// because that server is the one whose CATALOG_API points at the mock; each test signs in with a
+// per-test bearer so the fullyParallel suite shares no mutable mock state.
 
 const json = (route: Route, body: unknown, status = 200) =>
 	route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
@@ -16,17 +22,26 @@ const ME_ALICE = {
 	projects: [],
 };
 
+let token: string;
 let me: Record<string, unknown>;
 let projects: Array<Record<string, unknown>>;
 let warehousePosts: Array<Record<string, unknown>>;
-let tuplePosts: Array<Record<string, unknown>>;
 let warehouseStatus: number;
 
-test.beforeEach(async ({ page }) => {
+/** The tuple writes the mock catalog recorded for THIS test's bearer. */
+const writtenTuples = async (page: import('@playwright/test').Page): Promise<unknown[]> => {
+	const res = await page.request.get(`${MOCK_CATALOG}/__mock/access`, {
+		headers: { authorization: `Bearer ${token}` },
+	});
+	return ((await res.json()) as { written: unknown[] }).written;
+};
+
+test.beforeEach(async ({ context, page }, testInfo) => {
+	token = `${TOKEN.admin}:${testInfo.testId}`;
+	await signIn(context, { token });
 	me = { ...ME_ALICE };
 	projects = [];
 	warehousePosts = [];
-	tuplePosts = [];
 	warehouseStatus = 200;
 	await page.route('**/capi/**', (route) => {
 		const req = route.request();
@@ -54,10 +69,6 @@ test.beforeEach(async ({ page }) => {
 				status: 'active',
 			});
 		}
-		if (path === '/v1/access/tuples' && req.method() === 'POST') {
-			tuplePosts.push(req.postDataJSON() as Record<string, unknown>);
-			return json(route, { status: 'written' });
-		}
 		return json(route, { detail: 'unstubbed' }, 404);
 	});
 });
@@ -81,9 +92,10 @@ test('creates work + gold warehouses and grants the initial admin, with the exac
 			{ id: 'acme-wh', project: 'acme', bucket: null },
 			{ id: 'acme-gold', project: 'acme', bucket: null, serving: 'gold' },
 		]);
-	// the initial admin grant is one raw FGA tuple on the new project object
+	// the initial admin grant is one raw FGA tuple on the new project object — recorded by the mock
+	// catalog, because the write runs server-side through the shared remote command
 	await expect
-		.poll(() => tuplePosts)
+		.poll(async () => writtenTuples(page))
 		.toEqual([{ user: 'user:alice', relation: 'admin', object: 'project:acme' }]);
 	// success toast + the gallery reflects the new project on the reload oncreated triggered
 	await expect(
@@ -108,7 +120,7 @@ test('gold warehouse and admin grant are optional — one create, no tuple', asy
 		.toEqual([{ id: 'solo-wh', project: 'solo', bucket: 'solo-bucket' }]);
 	// the toast marks the END of the flow — only then is "no tuple ever fired" a settled fact
 	await expect(page.getByText('Project solo created — warehouse solo-wh.')).toBeVisible();
-	expect(tuplePosts).toEqual([]);
+	expect(await writtenTuples(page)).toEqual([]);
 });
 
 test('a denied first create toasts the failure and keeps the dialog open for a retry', async ({
@@ -125,14 +137,16 @@ test('a denied first create toasts the failure and keeps the dialog open for a r
 	await expect(dialog).toContainText(
 		'Denied: provisioning warehouse acme-wh needs the estate/project-admin rung.',
 	);
-	expect(tuplePosts).toEqual([]);
+	expect(await writtenTuples(page)).toEqual([]);
 	await expect(page.getByRole('dialog')).toBeVisible();
 });
 
 test('a failed admin grant is a NAMED partial outcome, not a fake success', async ({ page }) => {
-	await page.route('**/capi/v1/access/tuples', (route) =>
-		json(route, { detail: 'forbidden' }, 403),
-	);
+	// The failure lever lives on the mock catalog now (the write is server-side — page.route cannot
+	// reach it): this test's bearer gets failWrites, nobody else's does.
+	await page.request.post(`${MOCK_CATALOG}/__mock/access/config`, {
+		data: { bearer: token, failWrites: true },
+	});
 	await page.goto('/lakehouse/catalog/projects');
 	await page.getByRole('button', { name: 'New project' }).click();
 	const dialog = page.getByRole('dialog');
