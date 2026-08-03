@@ -465,6 +465,43 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
             "medallion_quality_blocked",
             extra={"transition": transition, "token": token, "to": settings.to_dataset},
         )
+        # A18: a HOLD must be visible IN THE GRAPH, not only in a metric and a log line.
+        #
+        # Without this the only lineage a held batch leaves is the measured-write event emitted just
+        # before the gate ran — which says the hop wrote its output and says nothing about the
+        # promotion being refused. Anyone reading the graph sees a successful hop whose downstream
+        # simply never fired, and the two explanations for that ("the gate held it" and "the trigger
+        # was lost") are the ones an operator most needs told apart: one is data quality, the other
+        # is an outage.
+        #
+        # A separate FAIL run rather than a mutation of the write event, because both facts are true:
+        # the hop DID write, and the promotion WAS refused. Idempotent on the token-derived run id,
+        # so redelivery MERGEs rather than accumulating holds. Suppressed and best-effort for the
+        # same reason every other lineage emit here is (I8): a graph outage must not convert a
+        # correct refusal into a retry storm.
+        with suppress(Exception):
+            held_event = build_run_event(
+                operation=settings.operation,
+                author=settings.author,
+                job_namespace=settings.job_namespace,
+                inputs=[(from_namespace, from_dataset)],
+                output_namespace=to_namespace,
+                output_name=to_dataset,
+                token=f"{token}:quality-hold",
+                project=project or None,
+                event_type="FAIL",
+                error_message=f"quality gate HELD the promotion into {settings.to_dataset} — downstream was not triggered",
+            )
+            await outbox.publish_lineage_with_outbox(
+                dapr,
+                outbox_uri=settings.lineage_outbox_uri,
+                storage_options=settings.storage_options(),
+                run_id=held_event["run"]["runId"],
+                event_json=json.dumps(held_event),
+                pubsub_name=settings.pubsub,
+                topic_name=settings.lineage_topic,
+                timeout_seconds=settings.publish_timeout_seconds,
+            )
         return _QUALITY_BLOCKED
     record_transition(transition)
     log.info("medallion_stage_moved", extra={"transition": transition, "token": token, "to": settings.to_dataset})

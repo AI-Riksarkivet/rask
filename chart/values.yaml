@@ -123,6 +123,13 @@ services:
       # about, because the event a mover rides is the catalog's publication of a new version.
       RASK_INGEST_USE_CATALOG: "true"
       RASK_CATALOG_URL: http://rask-catalog:2333
+      # A15's other side of the relation. A run holds a read_version from enumeration until commit,
+      # so version GC's retention window (compaction.olderThanDays) must be at least this long — GC
+      # is otherwise free to delete the version a live run is about to commit against, and the run
+      # that hits it is the longest, most expensive harvest. Declared HERE, in the chart, so the two
+      # numbers can be compared before a deploy rather than discovered to disagree at 3am;
+      # tests/unit/test_gates_a15_a18.py asserts the relation, not either constant.
+      RASK_INGEST_MAX_RUN_HOURS: "24"
   compute:
     module: "compute:app"
     port: 8804
