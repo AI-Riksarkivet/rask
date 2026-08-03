@@ -112,9 +112,19 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, A
     # creation-time flags. The first in-cluster run fetched, validated and wrote every fixture and
     # then died at commit with "added files with version 2.1. However, the data storage version is
     # 2.2." The dataset must exist before the first WRITE, so the writers inherit its format.
-    yield ctx.call_activity(ensure_dataset, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+    # The location the CATALOG vends, captured once and threaded into every chunk. Deriving it a
+    # second time inside `enumerate_chunks` is what broke the first catalog-backed run: workers wrote
+    # fragments to the env-composed warehouse path while the catalog's table lived somewhere else, and
+    # the commit was refused with "commit references 4 data file(s) not present under the table
+    # location (did the direct write target the wrong prefix?)" — after every unit had been fetched.
+    # One resolution, carried; never two derivations of one location.
+    dataset_location: str = yield ctx.call_activity(ensure_dataset, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
 
-    chunks: list[dict[str, Any]] = yield ctx.call_activity(enumerate_chunks, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+    chunks: list[dict[str, Any]] = yield ctx.call_activity(
+        enumerate_chunks,
+        input={"spec": spec.model_dump(), "dataset_uri": dataset_location},
+        retry_policy=ACTIVITY_RETRY,
+    )
     ctx.set_custom_status(f"dispatching {len(chunks)} chunks")
 
     # Fan out. when_all is fan-in: the parent suspends until every child has drained, and survives
@@ -213,16 +223,14 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> l
     """
     from ingest.sources import SourceSpec, build_source, iter_unit_keys
 
-    spec = RunSpec.model_validate(payload)
+    spec = RunSpec.model_validate(payload["spec"])
     source_spec = SourceSpec(kind=spec.kind, project=spec.project, dataset=spec.dataset, options=spec.options)
     # KEYS, not objects. `iter_units` reads every object's bytes to hand back its uri — so
     # enumerating a IIIF volume through it downloaded the whole volume here and the workers then
     # downloaded it again. Two full transfers of the source, the first with no backpressure at all.
     keys = list(iter_unit_keys(build_source(source_spec)))
 
-    from ingest.runtime import dataset_uri
-
-    uri = dataset_uri(spec)
+    uri = str(payload["dataset_uri"])
     chunks: list[dict[str, Any]] = []
     for index in range(0, len(keys), CHUNK_SIZE):
         window = keys[index : index + CHUNK_SIZE]

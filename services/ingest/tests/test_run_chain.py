@@ -59,7 +59,7 @@ def test_enumerate_produces_chunks_not_units(tmp_path: Path) -> None:
     _fixtures(tmp_path, 5)
     spec = RunSpec(run_id="r1", kind="local-dir", project="p", dataset="pages", options={"root": str(tmp_path)})
 
-    chunks = enumerate_chunks(None, spec.model_dump())  # type: ignore[arg-type]
+    chunks = enumerate_chunks(None, {"spec": spec.model_dump(), "dataset_uri": str(tmp_path / "bronze.lance")})  # type: ignore[arg-type]
 
     assert len(chunks) == 1, "5 units must be ONE chunk, not five activity results"
     parsed = ChunkSpec.model_validate(chunks[0])
@@ -75,7 +75,7 @@ def test_enumeration_slices_at_the_chunk_boundary(tmp_path: Path) -> None:
     wf_mod.CHUNK_SIZE = 3
     try:
         spec = RunSpec(run_id="r2", kind="local-dir", project="p", dataset="d", options={"root": str(tmp_path)})
-        chunks = enumerate_chunks(None, spec.model_dump())  # type: ignore[arg-type]
+        chunks = enumerate_chunks(None, {"spec": spec.model_dump(), "dataset_uri": str(tmp_path / "bronze.lance")})  # type: ignore[arg-type]
     finally:
         wf_mod.CHUNK_SIZE = original
 
@@ -137,7 +137,7 @@ async def test_a4_a7_the_full_chain_lands_rows_and_commits_once(tmp_path: Path, 
     LocalCatalog(BRONZE_SCHEMA).ensure_at(uri)
     monkeypatch.setenv("RASK_INGEST_ACTIVE_DATASET", uri)
 
-    chunks = enumerate_chunks(None, spec.model_dump())  # type: ignore[arg-type]
+    chunks = enumerate_chunks(None, {"spec": spec.model_dump(), "dataset_uri": str(tmp_path / "bronze.lance")})  # type: ignore[arg-type]
     chunk = ChunkSpec.model_validate(chunks[0])
     assert await publish_chunk_units(chunk) == 4
 

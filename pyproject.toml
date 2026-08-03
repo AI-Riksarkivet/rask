@@ -42,6 +42,12 @@ dev = [
     # RunEvents against the vendored 2-0-2 core schema. jsonschema resolves as a moto
     # transitive today — declared because the gate depends on it directly.
     "openlineage-python>=1.50.0",
+    # respx — the prescribed way to test an outbound HTTPX boundary (writing-python's testing
+    # reference). It intercepts at the TRANSPORT, so an assertion is about the request that would
+    # actually reach the upstream, not about whether our own function was called with the arguments
+    # we then assert it was called with. First consumer: the ingest plane's catalog service client,
+    # whose whole contract is the shape of three POSTs.
+    "respx>=0.21",
     "jsonschema>=4.26",
     "duckdb>=1.4",
     "requests>=2.32",

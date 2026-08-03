@@ -116,6 +116,13 @@ services:
       # a flag nothing sets. Both point at the release's lineage Service.
       RASK_LINEAGE_ENDPOINT: http://rask-lineage:8000
       RASK_LINEAGE_URL: http://rask-lineage:8000
+      # Route creation and commits through the CATALOG rather than writing the object store
+      # directly. Opt-in by an explicit flag, never inferred from a reachable URL: a catalog that is
+      # merely down must fail the run loudly, not silently downgrade to a local write that produces
+      # governed data the catalog has never heard of — and that nothing downstream will ever be told
+      # about, because the event a mover rides is the catalog's publication of a new version.
+      RASK_INGEST_USE_CATALOG: "true"
+      RASK_CATALOG_URL: http://rask-catalog:2333
   compute:
     module: "compute:app"
     port: 8804

@@ -42,6 +42,18 @@ class LocalCatalog:
     def ensure_dataset(self, project: str, dataset: str, schema: pa.Schema | None = None) -> str:
         raise NotImplementedError("resolved through dataset_uri(); ensure_at() is the path-based form")
 
+    def ensure(self, project: str, dataset: str) -> str:
+        """The ID-based form, so the local and service catalogs present ONE seam.
+
+        The service vends a location; this composes the dev fallback from env and then creates
+        through the same path-based code. The caller never learns which it has, which is the whole
+        point of the seam — and is what lets the in-cluster swap be a config change rather than a
+        code change at every call site.
+        """
+        from ingest.runtime import warehouse_root
+
+        return self.ensure_at(f"{warehouse_root().rstrip('/')}/{project}/{dataset}.lance")
+
     def ensure_at(self, uri: str) -> str:
         """Create the dataset EMPTY if absent.
 

@@ -55,10 +55,14 @@ def dataset_uri(spec: RunSpec) -> str:
 
 
 def ensure_dataset_at(spec: RunSpec) -> str:
-    """Create the run's dataset empty if absent, and return its URI. D6 step 1, before any write."""
-    uri = dataset_uri(spec)
-    _catalog().ensure_at(uri)
-    return uri
+    """Create the run's dataset empty if absent, and return the URI to write into. D6 step 1.
+
+    The URI is whatever the CATALOG says it is. In-cluster that is a location the catalog vends;
+    locally it is composed from the warehouse env. Either way the caller never names a path — I2's
+    "no hardcoded dataset paths", which exists because two callers composing the same logical table
+    from different env is how volume B overwrote volume A.
+    """
+    return _catalog().ensure(spec.project, spec.dataset)
 
 
 async def publish_chunk_units(chunk: ChunkSpec) -> int:
@@ -131,17 +135,11 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str]) ->
     were corrupt DID deliver 9,997 pages, and calling that FAILED would either discard good data or
     train operators to ignore the status field.
     """
-    from ingest.lander import Lander
+    from ingest.lander import CommitResult, Lander
     from ingest.staging import discover_staged, purge_staged
 
-    uri = dataset_uri(spec)
     catalog = _catalog()
-    # D6 step 1, wired: the dataset is created EMPTY before any fragment is committed. The first
-    # in-cluster run failed here with "Dataset at path ... was not found" — the in-process tests call
-    # ensure_at() themselves and the WORKFLOW never did, so the creation two-step was documented and
-    # unwired. Idempotent, so a replayed finalize activity is a no-op rather than a second create.
-    catalog.ensure_at(uri)
-
+    uri = catalog.ensure(spec.project, spec.dataset)
     # STORAGE TRUTH, not the workflow's carried value. Fragments staged by a drain attempt that died
     # before returning are still on the store and still uncommitted — invisible to `fragments`, which
     # only holds what the surviving attempts handed back. Reading the staging prefix is what turns a
@@ -151,7 +149,20 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str]) ->
     seen: set[str] = set()
     all_fragments = [f for f in [*staged, *fragments] if not (f in seen or seen.add(f))]
 
-    result = Lander(catalog).commit_fragments(uri, all_fragments, run_id=spec.run_id)
+    if hasattr(catalog, "commit"):
+        # THE CATALOG COMMITS. A commit registered only in this process is one the cascade cannot
+        # ride: the event that wakes a mover is the catalog's publication of a new version, so a
+        # locally-recorded commit lands the data and tells nothing downstream it happened.
+        version, rows = catalog.commit(
+            spec.project,
+            spec.dataset,
+            all_fragments,
+            read_version=catalog.describe_version(spec.project, spec.dataset),
+            run_id=spec.run_id,
+        )
+        result = CommitResult(dataset_uri=uri, version=version, rows=rows, rows_added=rows, fragments_committed=len(all_fragments))
+    else:
+        result = Lander(catalog).commit_fragments(uri, all_fragments, run_id=spec.run_id)
     # Only after the commit lands. Purging earlier would delete the record a retried finalize needs,
     # turning a recoverable failure into exactly the data loss staging exists to prevent.
     purge_staged(uri, spec.run_id)
@@ -167,10 +178,10 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str]) ->
     }
 
 
-def _catalog() -> Any:  # noqa: ANN401 — the real client lands with the catalog commit-through step
-    from ingest.catalog import LocalCatalog
+def _catalog() -> Any:  # noqa: ANN401 — LocalCatalog or CatalogServiceClient, one seam
+    from ingest.catalog_service import build_catalog
 
-    return LocalCatalog(BRONZE_SCHEMA)
+    return build_catalog(BRONZE_SCHEMA)
 
 
 def lineage_emitter() -> Any:  # noqa: ANN401
