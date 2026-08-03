@@ -124,7 +124,9 @@ trap CLEAN EXIT INT TERM
 
 case "$KIND" in
   zone)    printf '<!-- %s -->\n' "$MARKER" >> "$SRC" ;;
-  package) printf '\nexport const _%s = true;\n' "$MARKER" >> "$SRC" ;;
+  # No leading newline: CLEAN deletes the MARKER LINE, so a blank line prepended here survives it
+  # and leaves the tracked file dirty — which is how a verifier stops being run.
+  package) printf 'export const _%s = true;\n' "$MARKER" >> "$SRC" ;;
   *)       printf '# %s\n' "$MARKER" >> "$SRC" ;;
 esac
 echo ">> wrote marker into ${SRC}, watching ${SITE}"
