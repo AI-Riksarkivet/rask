@@ -355,8 +355,17 @@ test('a conditional grant is visually distinct on the canvas', async ({ page }) 
 	await ask(page, 'Who can…', { Relation: 'reader', Object: 'table:db1$t' });
 	// The store answers with one CONDITIONAL tuple, so the canvas must not draw it as permanent.
 	await expect(page.locator('[data-slot="access-node"]').first()).toBeVisible();
+	const edges = page.locator('.svelte-flow__edge path.svelte-flow__edge-path');
 	const dashed = page.locator('.svelte-flow__edge path[style*="stroke-dasharray"]');
-	await expect(dashed.first()).toBeVisible();
+	// EXISTENCE, not `toBeVisible()`. An edge between two nodes the placer put on the same row is a
+	// perfectly horizontal path, whose bounding box has zero HEIGHT — and a zero-area box is exactly
+	// what Playwright reports as "hidden". So the old assertion passed or failed on how many rows the
+	// answer happened to have, which is why it survived until the suite's other failures stopped
+	// reshuffling the parallel schedule. Nothing about the product changed; the probe was wrong.
+	await expect(dashed).toHaveCount(1);
+	// The half that makes it non-vacuous: the dash marks THIS grant, it is not painted on every edge.
+	// (`TUPLES` carries three permanent grants beside the one time-boxed one — access-fixtures.ts:14.)
+	expect(await edges.count()).toBeGreaterThan(1);
 });
 
 // ── the model/type graph ─────────────────────────────────────────────────────────────────────────────

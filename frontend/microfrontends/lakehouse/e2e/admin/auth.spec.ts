@@ -14,12 +14,22 @@ test('signed-out: a page navigation redirects to /auth/login?redirect=<original 
 }) => {
 	// The gate answers 302 → /auth/login, which the home zone owns; in this isolated admin server the
 	// follow-up 404s, so pin the CONTRACT on the un-followed redirect response itself.
-	const res = await page.request.get('/lakehouse/governance/audit', {
+	//
+	// The expectation is DERIVED from the requested path, not spelled out as a literal. It used to be
+	// the literal '/auth/login?redirect=%2Flakehouse%2Fadmin%2Faudit', which 857e9d5 (Access + Audit
+	// move to /lakehouse/governance/*) silently invalidated: the request line was renamed and the
+	// expectation was not, so this pinned a route that no longer exists. Deriving it asserts the actual
+	// contract — makeSessionHandle echoes `url.pathname + url.search` percent-encoded (bff.ts:121) —
+	// and a future route rename cannot make the two halves disagree again.
+	const gated = '/lakehouse/governance/audit';
+	const res = await page.request.get(gated, {
 		maxRedirects: 0,
 		headers: { accept: 'text/html' },
 	});
 	expect(res.status()).toBe(302);
-	expect(res.headers()['location']).toBe('/auth/login?redirect=%2Flakehouse%2Fadmin%2Faudit');
+	expect(res.headers()['location']).toBe(`/auth/login?redirect=${encodeURIComponent(gated)}`);
+	// …and concretely, so the encoding itself is visible and not just re-computed by the assertion.
+	expect(res.headers()['location']).toBe('/auth/login?redirect=%2Flakehouse%2Fgovernance%2Faudit');
 });
 
 test('signed-out: API routes are EXEMPT — fetch clients get their status/JSON, never a redirect', async ({

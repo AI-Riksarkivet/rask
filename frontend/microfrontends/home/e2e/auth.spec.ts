@@ -21,6 +21,7 @@ const ZONE_ENTRIES: Record<string, { title: string; kind: 'trigger' | 'link' }> 
 	media: { title: 'Search', kind: 'trigger' }, // the media read plane, named for the task
 	annotator: { title: 'Annotate', kind: 'link' },
 	compute: { title: 'Compute', kind: 'trigger' }, // the merged rask zone (R16)
+	workbench: { title: 'Workbench', kind: 'link' }, // the global dock — one surface, so a plain link
 	train: { title: 'Train', kind: 'link' }, // resurrected zone (R17), plain link while scaffolded
 	studio: { title: 'Studio', kind: 'link' }, // the sandbox/PoC zone (R17)
 };

@@ -180,9 +180,12 @@ describe('topNav', () => {
 		);
 		// R28: Storage joins the panel — the object browser was previously reachable ONLY by typing
 		// the URL, because the lakehouse sidebar is area-scoped and no other area linked to it.
-		// Projects left this column by ruling (f5dd1f0: the dropdown loses its filler self-row and the
-		// tenants list) — the project is the TOP of the hierarchy, reached from the switcher, not a row
-		// inside one zone's panel. The test follows the ruling.
+		//
+		// NO 'Projects' ROW, by ruling (2026-08-03, f5dd1f0 — the dropdown loses its filler self-row
+		// and the tenants list): a project is the TOP of the hierarchy — project › warehouse ›
+		// namespace › table — so listing "projects" as a row INSIDE one project's catalog described the
+		// lakekeeper API's tenant list, not this product's model. The estate has one project concept,
+		// reached from the switcher, never from a row under one zone's catalog column.
 		expect(groups.Catalog).toEqual(['Tables', 'Namespaces', 'Warehouses', 'Storage']);
 		expect(groups.Models).toEqual(['Registry', 'Experiments', 'Pipeline']);
 		expect(groups.Governance).toEqual(['Access', 'Tenants', 'Audit']);

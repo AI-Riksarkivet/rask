@@ -204,31 +204,53 @@ test('above the breakpoint the zone links stay on the bar (no overflow menu) (#1
 	await expect(page.getByRole('link', { name: 'Annotate', exact: true })).toBeVisible();
 });
 
-test('the wide Lakehouse panel offers a way into the zone ROOT, not only its sub-areas', async ({
+test('the wide Lakehouse panel carries NO filler self-row — its sub-area rows are the way in', async ({
 	page,
 	baseURL,
 }) => {
-	// The `groups` branch shipped without the zone-root row that the `items` branch renders and its own
-	// comment declares mandatory ("a panel must not be the only way in, and the trigger is a button, not a
-	// link"). Consequence, on every wide screen: /lakehouse/catalog was reachable by breadcrumb or by typing
-	// the URL, and by nothing you could click. The narrow bar asserted this all along (the overflow test
-	// above lists /lakehouse/catalog); the wide bar only asserted that the trigger was VISIBLE, so opening the
-	// panel — the thing a user actually does — was never checked.
+	// INVERTED BY RULING (2026-08-03, f5dd1f0 — pinned in top-navbar.svelte's `groups` branch). This
+	// test used to demand the opposite: a synthesized "Lakehouse · Open the lakehouse zone." row inside
+	// the wide panel. The ruling deleted it, and the reasoning is what this assertion now guards:
+	//   - the row linked /lakehouse/catalog, a redirect-to-tables page, so it said nothing a real row
+	//     (Tables, Namespaces, Warehouses, …) does not already say;
+	//   - it rendered for THIS zone alone — every flat-`items` zone carries a real, function-titled root
+	//     row (Search at /media/, Overview at /compute/), so their equivalent is skipped as a duplicate;
+	//   - the zone root is NOT unreachable: the narrow overflow menu still prepends every zone's root
+	//     uniformly, which the "below the breakpoint …" test above pins by asserting /lakehouse/catalog.
 	await page.setViewportSize({ width: 1440, height: 900 });
 	await openShell(page, baseURL);
 	await page.getByRole('button', { name: 'Lakehouse' }).click();
 	const panel = page.locator('[data-slot="navigation-menu-viewport"]');
-	await expect(panel.locator('a[href="/lakehouse/catalog"]')).toHaveCount(1);
-	// The trigger stays a button (that is the whole reason the row is needed), so this is not a regression
-	// to a link-trigger — the panel row is the way in.
+	await expect(panel.locator('a[href="/lakehouse/catalog"]')).toHaveCount(0);
+	// The trigger stays a BUTTON either way — this ruling removed a row, it did not turn the trigger
+	// into a link (which would navigate instead of opening the panel and hide every column behind a
+	// page load).
 	await expect(page.getByRole('button', { name: 'Lakehouse' })).toBeVisible();
+	const nav = page.getByRole('navigation', { name: 'Zones' });
+	await expect(nav.getByRole('link', { name: 'Lakehouse', exact: true })).toHaveCount(0);
+	// What a user clicks instead: the real rows, one per area, each resolving to a page that exists.
+	for (const href of [
+		'/lakehouse/catalog/tables',
+		'/lakehouse/catalog/namespaces',
+		'/lakehouse/catalog/warehouses',
+		'/lakehouse/models',
+		'/lakehouse/lineage',
+	]) {
+		await expect(panel.locator(`a[href="${href}"]`)).toHaveCount(1);
+	}
+	// The tenants list is gone from this panel too, by the SAME ruling: there is ONE project concept
+	// and it is the TOP of the hierarchy (project > warehouse > namespace > table), so a tenants row
+	// inside a project-scoped zone's dropdown inverted it. The provisioning page keeps its URL — it is
+	// simply not reachable from here.
+	await expect(panel.locator('a[href="/lakehouse/catalog/projects"]')).toHaveCount(0);
 
-	// …and the row must not COST the columns. The first attempt at this fix added the row as a sibling
-	// before the grid, which gave NavigationMenu.Content two children; bits-ui sizes the shared viewport
-	// from the active content, so it measured 69px — the row's own height — and clipped all five columns.
-	// The href assertion above passed anyway (every link was still in the DOM, and Playwright reported
-	// them visible: the clip is on an ancestor). A screenshot is what caught it. So assert the rendered
-	// GEOMETRY, which is the thing that was wrong.
+	// …and the panel must still RENDER its columns. Kept from the version this test replaced, because
+	// it is the assertion that earned its keep: when the self-row briefly existed it was a sibling
+	// before the grid, giving NavigationMenu.Content two children — bits-ui sizes the shared viewport
+	// from the active content, measured 69px (the row's own height) and clipped all five columns. Every
+	// href assertion above passed anyway (the links were in the DOM and Playwright called them visible;
+	// the clip is on an ancestor). Only a screenshot caught it. So assert the rendered GEOMETRY too —
+	// now guarding the grid-only panel against the same class of collapse.
 	const box = await panel.boundingBox();
 	expect(box!.height, 'the panel is clipped — the group columns are not showing').toBeGreaterThan(
 		200,
