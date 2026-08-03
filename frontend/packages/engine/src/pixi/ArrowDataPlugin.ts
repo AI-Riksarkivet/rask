@@ -415,9 +415,10 @@ export class ArrowDataPlugin {
 			}
 		}
 		// Deleted rows ride the SAME mask as a hidden layer, which is what makes this cheap and
-		// complete: hit-testing, mask-sprite visibility and draw all consult `hiddenMask` already, so
-		// a deleted shape stops being clickable as well as invisible — no second code path to keep
-		// in step.
+		// complete: the draw loop, hit-testing and mask-sprite visibility all consult `hiddenMask`, so
+		// a deleted shape stops being drawn AND clickable. (The draw loop did not, until a pixel-level
+		// test proved the shape was still on screen — it hid whole GROUPS at the container and had no
+		// per-row gate at all.)
 		for (const i of this.deletedRows) {
 			if (i < numRows) this.hiddenMask[i] = 1;
 		}
@@ -475,6 +476,13 @@ export class ArrowDataPlugin {
 		const grouped = new Map<string, Map<number, number[]>>();
 
 		for (let i = 0; i < numRows; i++) {
+			// Row-level visibility. Group hiding happens at the CONTAINER (`gc.visible` below), which
+			// is cheap and right for a layer toggle — but it cannot express "this ONE row is gone",
+			// which is what a local delete is. Without this skip a deleted shape stayed drawn while
+			// hit-testing and mask sprites already treated it as hidden: three consumers of the same
+			// mask, one of which never read it.
+			if (this.hiddenMask[i]) continue;
+
 			// Viewport culling
 			if (vp) {
 				const ovr = this.dirtyOverrides.get(i);
