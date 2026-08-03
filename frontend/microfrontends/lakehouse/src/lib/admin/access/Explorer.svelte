@@ -492,7 +492,9 @@
 				type: MarkerType.ArrowClosed,
 				width: 18,
 				height: 18,
-				color: e.onPath ? 'var(--primary)' : 'var(--muted-foreground)',
+				// The arrowhead wears the same colour as its line — a green grant ending in a grey
+				// arrow reads as two different edges meeting.
+				color: e.onPath ? 'var(--primary)' : restingStroke(e.kind),
 			},
 			style: edgeStyle(e, touched?.has(e.id) ?? false),
 		}));
@@ -514,16 +516,31 @@
 		return storeTuples.filter((t) => inAnswer.has(t.user) && inAnswer.has(t.object));
 	});
 
+	/** Resting stroke per edge KIND — colour is the code (the legend names it): grants green,
+	 *  role/team membership amber, `parent` scaffolding muted. Uncoded edges (the model view) keep
+	 *  the muted look. */
+	const KIND_STROKE: Record<string, string> = {
+		grant: 'var(--success)',
+		membership: 'var(--warning)',
+		structural: 'var(--muted-foreground)',
+	};
+	const restingStroke = (kind: string | undefined): string =>
+		KIND_STROKE[kind ?? 'structural'] ?? 'var(--muted-foreground)';
+
 	/** Edge chrome: the query's lit path owns "lit" outright; hover ADDS a subtle primary tint to the
 	 *  touched edges and takes nothing from the rest — there is no dimming pass, so releasing the
 	 *  pointer has nothing to restore and a lost leave event has nothing to leave stuck. */
-	function edgeStyle(e: { onPath: boolean; condition?: string | null }, touched: boolean): string {
+	function edgeStyle(
+		e: { onPath: boolean; kind?: string; condition?: string | null },
+		touched: boolean,
+	): string {
 		// A time-boxed grant is DASHED wherever it appears — "this expires" must stay legible whether
 		// the edge is resting, tinted, or lit.
 		const dash = e.condition ? ' stroke-dasharray: 6 4;' : '';
 		if (e.onPath) return `stroke: var(--primary); stroke-width: 2;${dash}`;
 		if (touched) return `stroke: var(--primary); stroke-width: 1.75; opacity: 0.75;${dash}`;
-		return `stroke: var(--muted-foreground); opacity: 0.35;${dash}`;
+		const faint = e.kind === 'structural' || e.kind === undefined ? 0.35 : 0.5;
+		return `stroke: ${restingStroke(e.kind)}; opacity: ${faint};${dash}`;
 	}
 
 	/** Is anything narrowing the view right now? Drives whether Clear is offered at all — an always-on
@@ -821,6 +838,9 @@
 						data-slot="canvas-legend"
 					>
 						<span class="text-primary">━</span> derivation path ·
+						<span class="text-success">━</span> grant ·
+						<span class="text-warning">━</span> role/team ·
+						<span>─</span> parent ·
 						<span>┅ ⏳</span> time-boxed ·
 						<span class="opacity-50">▢</span> dimmed = filtered out or off-query
 					</div>

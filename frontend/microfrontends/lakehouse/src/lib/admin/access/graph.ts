@@ -40,16 +40,39 @@ export type GraphNode = {
 	via: string | null;
 };
 
+/** What KIND of fact an edge is — the canvas colour-codes these, because on a dense store the three
+ *  read very differently: a `parent` edge is scaffolding, a role/team edge is indirection, and only
+ *  the rest are grants somebody chose to write. */
+export type EdgeKind = 'grant' | 'membership' | 'structural';
+
 export type GraphEdge = {
 	id: string;
 	source: string;
 	target: string;
 	label: string;
 	onPath: boolean;
+	/** Absent = uncoded (the model view keeps its single-colour schema look). */
+	kind?: EdgeKind;
 	/** The grant behind this edge is CONDITIONAL — time-boxed, and therefore not what it looks like.
 	 *  An expiring grant drawn identically to a permanent one is the whole failure this feature exists
 	 *  to prevent, so it has to reach the canvas, not just the tuple list. */
 	condition?: string | null;
+};
+
+/** A tuple subject may be a USERSET — `role:validators#assignee`, "everyone assigned the role". The
+ *  canvas draws that as the ROLE's own node (one card per role, never one per rung) with the rung
+ *  kept as the node's `via` — a separate `validators#assignee` card beside `validators` drew the
+ *  same thing twice and read as a bug. */
+const subjectRef = (id: string): { node: string; rung: string | null } => {
+	const hash = id.indexOf('#');
+	return hash === -1 ? { node: id, rung: null } : { node: id.slice(0, hash), rung: id.slice(hash) };
+};
+
+const edgeKind = (subject: string, label: string): EdgeKind => {
+	if (label === 'parent') return 'structural';
+	const type = idType(subject);
+	if (subject.includes('#') || type === 'role' || type === 'team') return 'membership';
+	return 'grant';
 };
 
 /** The minimum a graph builder reads off a tuple.
@@ -198,13 +221,15 @@ function visit(
 	// Terminal subjects — the actual grantees, including a `user:*` public wildcard, which must never
 	// be hidden: a wildcard is the single widest grant the model can express.
 	for (const subject of leaf.users ?? []) {
-		nodeFor(subject, depth - 1, mechanismLabel(mechanism), acc);
+		// Usersets fold into their role/team node here exactly as on the store canvas — see subjectRef.
+		const ref = subjectRef(subject);
+		nodeFor(ref.node, depth - 1, mechanismLabel(mechanism), acc);
 		// The edge carries the RELATION only. The mechanism is already on the node this edge arrives at
 		// (`data.via` → "NAMESPACE · INHERITED FROM"), so repeating it here said the same thing twice and
 		// roughly doubled every label's width — Svelte Flow centres edge labels with no collision
 		// avoidance, so "can_read_data · inherited from" sat on top of the node boxes and of each other.
 		// One fact, one place: relation on the edge, mechanism on the node it explains.
-		link(subject, anchor, relation, acc);
+		link(ref.node, anchor, relation, acc);
 	}
 
 	// A same-object rung: `reader` satisfied because the subject is `writer` here.
@@ -271,7 +296,7 @@ export function buildWholeGraph(tuples: readonly TupleLike[]): BuiltGraph {
 		model: 3,
 	};
 	const nodes = new Map<string, GraphNode>();
-	const add = (id: string) => {
+	const add = (id: string, rung: string | null = null) => {
 		if (nodes.has(id)) return;
 		const type = idType(id);
 		nodes.set(id, {
@@ -280,23 +305,25 @@ export function buildWholeGraph(tuples: readonly TupleLike[]): BuiltGraph {
 			label: idLabel(id),
 			role: isSubject(id) ? 'subject' : 'container',
 			depth: isSubject(id) ? (SUBJECT_DEPTH[type] ?? -1) : (CONTAINER_DEPTH[type] ?? 2),
-			via: null,
+			via: rung,
 		});
 	};
 	const edges: GraphEdge[] = [];
 	const seen = new Set<string>();
 	for (const t of tuples) {
-		add(t.user);
+		const subject = subjectRef(t.user);
+		add(subject.node, subject.rung);
 		add(t.object);
-		const id = `${t.user}->${t.object}:${t.relation}`;
+		const id = `${subject.node}->${t.object}:${t.relation}`;
 		if (seen.has(id)) continue;
 		seen.add(id);
 		edges.push({
 			id,
-			source: t.user,
+			source: subject.node,
 			target: t.object,
 			label: t.relation,
 			onPath: false,
+			kind: edgeKind(t.user, t.relation),
 			condition: t.condition?.name ?? null,
 		});
 	}
@@ -317,9 +344,10 @@ export function buildNeighbourhood(seed: string, tuples: readonly TupleLike[]): 
 	});
 	const edges: GraphEdge[] = [];
 	for (const t of tuples) {
-		for (const [id, depth] of [
-			[t.user, -1],
-			[t.object, 1],
+		const subject = subjectRef(t.user);
+		for (const [id, depth, rung] of [
+			[subject.node, -1, subject.rung],
+			[t.object, 1, null],
 		] as const) {
 			if (id === seed || nodes.has(id)) continue;
 			nodes.set(id, {
@@ -328,17 +356,18 @@ export function buildNeighbourhood(seed: string, tuples: readonly TupleLike[]): 
 				label: idLabel(id),
 				role: isSubject(id) ? 'subject' : 'container',
 				depth,
-				via: null,
+				via: rung,
 			});
 		}
-		const id = `${t.user}->${t.object}:${t.relation}`;
+		const id = `${subject.node}->${t.object}:${t.relation}`;
 		if (!edges.some((e) => e.id === id)) {
 			edges.push({
 				id,
-				source: t.user,
+				source: subject.node,
 				target: t.object,
 				label: t.relation,
 				onPath: false,
+				kind: edgeKind(t.user, t.relation),
 				condition: t.condition?.name ?? null,
 			});
 		}
