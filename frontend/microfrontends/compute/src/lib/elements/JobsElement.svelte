@@ -5,21 +5,13 @@
 
 <script lang="ts">
 	/**
-	 * `<rask-compute-jobs>` — the Ray jobs panel as a CUSTOM ELEMENT, built and served by the
-	 * compute zone, mounted by the global workbench compositor (open_workbench.md).
-	 *
-	 * Three contracts this file must hold:
-	 *  - Light DOM (`shadow: 'none'`): the host page's token cascade reaches in, and the element's
-	 *    OWN styling is the scoped style block below over `var(--color-*)` tokens — never host-page
-	 *    Tailwind utilities, which the host's build has no reason to have generated.
-	 *  - Props are EXPLICIT (the CE bridge exposes only declared props as element properties) and
-	 *    none start with `on` (the bridge would parse that as an event-listener attachment).
-	 *  - Data goes out ONLY as a bubbling composed CustomEvent (`rask:select`); nothing in here may
-	 *    import from another zone or from the compositor.
-	 *
-	 * The mount stamp + poll counter are the spike's no-remount proof: if a dock drag remounted the
-	 * element, both would visibly reset.
+	 * `<rask-compute-jobs>` — the Ray jobs panel, VISUALLY IDENTICAL to the zone's /compute/jobs
+	 * table: same Card, same Badge variants, same utility classes (compiled into this bundle by
+	 * elements.css — the host cannot generate them). The mount stamp + poll counter stay as the
+	 * no-remount witness; rows dispatch the rask:select contract event.
 	 */
+	import { Badge, type BadgeVariant } from '@rask/ui/badge';
+	import { Card } from '@rask/ui/card';
 	import { rayJobs, type RayJob, type RayJobsPayload } from '@rask/api';
 	import { RASK_SELECT, type SelectDetail } from '@rask/dockview/contract';
 	import { RayPoll } from './ray-poll.svelte';
@@ -29,6 +21,35 @@
 	$effect(() => poll.start(pollms));
 
 	const jobs = $derived(poll.data?.jobs ?? []);
+
+	// Mirrored from routes/jobs/+page.svelte — the same states must wear the same colours here.
+	function variantFor(s: string): BadgeVariant {
+		switch (s) {
+			case 'SUCCEEDED':
+				return 'success';
+			case 'RUNNING':
+			case 'PENDING':
+				return 'warning';
+			case 'FAILED':
+				return 'destructive';
+			default:
+				return 'secondary';
+		}
+	}
+
+	function fmtRuntime(start: number | null, end: number | null): string {
+		if (!start) return '—';
+		const endMs = end ?? Date.now();
+		const secs = Math.max(0, (endMs - start) / 1000);
+		if (secs < 90) return `${secs.toFixed(0)}s`;
+		if (secs < 5400) return `${(secs / 60).toFixed(1)}m`;
+		return `${(secs / 3600).toFixed(1)}h`;
+	}
+
+	function fmtTime(ts: number | null): string {
+		if (!ts) return '—';
+		return new Date(ts).toISOString().replace('T', ' ').slice(0, 19);
+	}
 
 	function select(node: HTMLElement, job: RayJob) {
 		node.dispatchEvent(
@@ -46,89 +67,45 @@
 	}
 </script>
 
-<div class="rask-ce-jobs">
-	<p class="meta">
-		mounted {poll.mountedAt} · poll #{poll.polls}
-	</p>
+<div class="bg-background block h-full overflow-auto p-3">
+	<p class="text-muted-foreground mb-2 text-[11px]">mounted {poll.mountedAt} · poll #{poll.polls}</p>
 	{#if poll.error !== null}
-		<p class="error">Ray unreachable: {poll.error}</p>
+		<p class="text-destructive text-sm">Ray unreachable: {poll.error}</p>
 	{:else if jobs.length === 0}
-		<p class="empty">No job submissions.</p>
+		<p class="text-muted-foreground text-sm">No job submissions.</p>
 	{:else}
-		<table>
-			<thead>
-				<tr><th>Submission</th><th>Status</th><th>Entrypoint</th></tr>
-			</thead>
-			<tbody>
-				{#each jobs as job (job.submission_id)}
-					<tr onclick={(e) => select(e.currentTarget, job)}>
-						<td class="mono">{job.submission_id.slice(0, 18)}</td>
-						<td><span class="status" data-status={job.status}>{job.status}</span></td>
-						<td class="mono dim">{job.entrypoint ?? '—'}</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
+		<Card class="overflow-hidden">
+			<div class="max-h-full overflow-auto">
+				<table class="w-full border-collapse text-xs">
+					<thead class="bg-card sticky top-0 z-10 text-left">
+						<tr class="border-b">
+							<th class="px-3 py-2">status</th>
+							<th class="px-3 py-2">submission_id</th>
+							<th class="px-3 py-2">started</th>
+							<th class="px-3 py-2">runtime</th>
+							<th class="px-3 py-2">entrypoint</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each jobs as j (j.submission_id)}
+							<tr
+								class="border-border/40 hover:bg-muted/40 cursor-pointer border-b"
+								onclick={(e) => select(e.currentTarget, j)}
+							>
+								<td class="px-3 py-1.5">
+									<Badge variant={variantFor(j.status)} class={j.status === 'RUNNING' ? 'animate-pulse' : ''}
+										>{j.status}</Badge
+									>
+								</td>
+								<td class="px-3 py-1.5 font-mono">{j.submission_id}</td>
+								<td class="text-muted-foreground px-3 py-1.5 font-mono">{fmtTime(j.start_time)}</td>
+								<td class="px-3 py-1.5 font-mono tabular-nums">{fmtRuntime(j.start_time, j.end_time)}</td>
+								<td class="text-muted-foreground px-3 py-1.5 font-mono">{j.entrypoint ?? '—'}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		</Card>
 	{/if}
 </div>
-
-<style>
-	.rask-ce-jobs {
-		display: block;
-		height: 100%;
-		overflow: auto;
-		padding: 0.75rem;
-		color: var(--color-foreground);
-		font-size: 0.8125rem;
-	}
-	.meta {
-		margin: 0 0 0.5rem;
-		color: var(--color-muted-foreground);
-		font-size: 0.6875rem;
-	}
-	.error {
-		color: var(--color-destructive);
-	}
-	.empty {
-		color: var(--color-muted-foreground);
-	}
-	table {
-		width: 100%;
-		border-collapse: collapse;
-	}
-	th {
-		text-align: left;
-		font-weight: 500;
-		color: var(--color-muted-foreground);
-		border-bottom: 1px solid var(--color-border);
-		padding: 0.25rem 0.5rem;
-	}
-	td {
-		border-bottom: 1px solid var(--color-border);
-		padding: 0.375rem 0.5rem;
-	}
-	tbody tr {
-		cursor: pointer;
-	}
-	tbody tr:hover {
-		background: var(--color-muted);
-	}
-	.mono {
-		font-family: var(--font-mono, monospace);
-	}
-	.dim {
-		color: var(--color-muted-foreground);
-	}
-	.status {
-		border: 1px solid var(--color-border);
-		border-radius: 0.25rem;
-		padding: 0 0.375rem;
-		font-size: 0.6875rem;
-	}
-	.status[data-status='SUCCEEDED'] {
-		color: var(--color-primary);
-	}
-	.status[data-status='FAILED'] {
-		color: var(--color-destructive);
-	}
-</style>

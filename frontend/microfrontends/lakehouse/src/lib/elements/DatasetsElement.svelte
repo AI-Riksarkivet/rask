@@ -4,8 +4,16 @@
 <svelte:options customElement={{ shadow: 'none' }} />
 
 <script lang="ts">
-	/** `<rask-lakehouse-datasets>` — the governed datasets, served by the lakehouse zone to the
-	 *  global workbench. Reads through the shared client; rows dispatch rask:select. */
+	/**
+	 * `<rask-lakehouse-datasets>` — the governed datasets, VISUALLY IDENTICAL to the zone's
+	 * /lineage/datasets list: the same Card-bounded table, the same namespace pill and tag chips
+	 * (@rask/ui Badge), the same utility classes — compiled into this bundle by elements.css, since
+	 * the host page's Tailwind build cannot generate them. Reads through the shared client; the mount
+	 * stamp + poll counter stay as the no-remount witness; rows dispatch the rask:select contract
+	 * event instead of navigating (a panel has no router).
+	 */
+	import { Badge } from '@rask/ui/badge';
+	import { Card } from '@rask/ui/card';
 	import type { Datasets } from '@rask/api/lineage';
 	import { RASK_SELECT, type SelectDetail } from '@rask/dockview/contract';
 	import { ElementPoll } from './poll.svelte';
@@ -24,6 +32,11 @@
 
 	const datasets = $derived(poll.data?.datasets ?? []);
 
+	// Mirrored from routes/lineage/datasets/+page.svelte — the same cells must read the same here.
+	function tagsOf(tags: string[] | null | undefined): string[] {
+		return tags ?? [];
+	}
+
 	function select(node: HTMLElement, name: string) {
 		node.dispatchEvent(
 			new CustomEvent(RASK_SELECT, {
@@ -40,75 +53,55 @@
 	}
 </script>
 
-<div class="ce-panel">
-	<p class="meta">mounted {poll.mountedAt} · poll #{poll.polls}</p>
+<div class="bg-background block h-full overflow-auto p-3">
+	<p class="text-muted-foreground mb-2 text-[11px]">mounted {poll.mountedAt} · poll #{poll.polls}</p>
 	{#if poll.error !== null}
-		<p class="error">Catalog unavailable: {poll.error}</p>
+		<p class="text-destructive text-sm">Catalog unavailable: {poll.error}</p>
 	{:else if datasets.length === 0}
-		<p class="empty">No datasets yet.</p>
+		<p class="text-muted-foreground text-sm">
+			No datasets yet — they appear as pipelines emit OpenLineage events.
+		</p>
 	{:else}
-		<table>
-			<thead>
-				<tr><th>Dataset</th><th>Namespace</th><th>Tags</th></tr>
-			</thead>
-			<tbody>
-				{#each datasets as ds (ds.name)}
-					<tr onclick={(e) => select(e.currentTarget, ds.name)}>
-						<td class="mono">{ds.name}</td>
-						<td>{ds.namespace ?? '—'}</td>
-						<td class="dim">{(ds.tags ?? []).join(', ') || '—'}</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
+		<Card class="overflow-hidden">
+			<div class="max-h-full overflow-auto">
+				<table class="w-full border-collapse text-xs">
+					<thead class="bg-muted/50 sticky top-0 z-10 text-left">
+						<tr class="border-b">
+							<th class="text-muted-foreground px-3 py-2 font-medium">dataset</th>
+							<th class="text-muted-foreground w-44 px-3 py-2 font-medium">namespace</th>
+							<th class="text-muted-foreground px-3 py-2 font-medium">tags</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each datasets as ds (ds.name)}
+							<tr
+								class="hover:bg-muted/50 cursor-pointer border-b transition-colors"
+								onclick={(e) => select(e.currentTarget, ds.name)}
+							>
+								<td class="px-3 py-2 align-middle font-mono whitespace-nowrap">{ds.name}</td>
+								<td class="px-3 py-2 align-middle whitespace-nowrap">
+									{#if ds.namespace}
+										<Badge variant="secondary" class="bg-accent/20 text-foreground px-2 py-px text-[11px]"
+											>{ds.namespace}</Badge
+										>
+									{:else}<span class="text-muted-foreground">—</span>{/if}
+								</td>
+								<td class="px-3 py-2 align-middle whitespace-nowrap">
+									{#if tagsOf(ds.tags).length}
+										<span class="inline-flex flex-wrap items-center gap-1">
+											{#each tagsOf(ds.tags) as t (t)}
+												<Badge variant="outline" class="text-muted-foreground px-1.5 py-px text-[10px]"
+													>{t}</Badge
+												>
+											{/each}
+										</span>
+									{:else}<span class="text-muted-foreground">—</span>{/if}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		</Card>
 	{/if}
 </div>
-
-<style>
-	.ce-panel {
-		display: block;
-		height: 100%;
-		overflow: auto;
-		padding: 0.75rem;
-		color: var(--color-foreground);
-		font-size: 0.8125rem;
-	}
-	.meta {
-		margin: 0 0 0.5rem;
-		color: var(--color-muted-foreground);
-		font-size: 0.6875rem;
-	}
-	.error {
-		color: var(--color-destructive);
-	}
-	.empty {
-		color: var(--color-muted-foreground);
-	}
-	table {
-		width: 100%;
-		border-collapse: collapse;
-	}
-	th {
-		text-align: left;
-		font-weight: 500;
-		color: var(--color-muted-foreground);
-		border-bottom: 1px solid var(--color-border);
-		padding: 0.25rem 0.5rem;
-	}
-	td {
-		border-bottom: 1px solid var(--color-border);
-		padding: 0.375rem 0.5rem;
-	}
-	tbody tr {
-		cursor: pointer;
-	}
-	tbody tr:hover {
-		background: var(--color-muted);
-	}
-	.mono {
-		font-family: var(--font-mono, monospace);
-	}
-	.dim {
-		color: var(--color-muted-foreground);
-	}
-</style>

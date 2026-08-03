@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import tailwindcss from '@tailwindcss/vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vite';
 
@@ -15,6 +16,7 @@ import { defineConfig } from 'vite';
  */
 export default defineConfig({
 	plugins: [
+		tailwindcss(),
 		svelte({
 			// EVERY .svelte in this build compiles in customElement mode — including nested,
 			// tag-less components (LineageGraph, its nodes) — which is what makes their scoped

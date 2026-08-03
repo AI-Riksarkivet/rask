@@ -6,10 +6,19 @@
  * Registration is manual and GUARDED: the wrappers compile with no `tag` option, so importing
  * this entry twice (compositor reload, HMR) can never hit the "already defined" throw.
  */
+import elementsCss from './elements.css?inline';
 import ActorsElement from './ActorsElement.svelte';
 import ClusterElement from './ClusterElement.svelte';
 import JobsElement from './JobsElement.svelte';
 import ServeElement from './ServeElement.svelte';
+
+/** The elements' OWN Tailwind utilities (see elements.css), injected once. */
+if (document.getElementById('rask-compute-elements-utilities') === null) {
+	const style = document.createElement('style');
+	style.id = 'rask-compute-elements-utilities';
+	style.textContent = elementsCss;
+	document.head.append(style);
+}
 
 const ELEMENTS: Record<string, CustomElementConstructor> = {
 	// @ts-expect-error — `element` exists on CE-compiled components; Svelte's types don't carry it.
