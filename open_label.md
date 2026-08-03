@@ -41,6 +41,22 @@ in-cluster runner cannot fetch frames until the cluster corpus mount is seeded (
 tail: a second backend behind the same contract + the contract test (the pluggability proof), and
 the producer→backend registry (the CVAT-Nuclio-shaped gap).
 
+**INSID3 evaluated as a candidate backend (2026-08-03, owner-requested —
+github.com/visinf/insid3, CVPR'26 oral: training-free in-context segmentation on one frozen
+DINOv3).** Tested for real on REAL Riksarkivet IIIF pages (A0060198, 18th-c. cursive), GPU
+(RTX PRO 6000): **0.4–0.7 s/page with ViT-S @1024 — interactive-grade.** Verdict: it is a THIRD
+assist MODE — reference-based propagation ("label one item, prelabel the rest") — which neither
+grounding-dino (text prompt) nor SAM (geometry prompt) covers, and which LS/CVAT lack natively.
+Quality on archival cursive: region-level concepts propagate well (a masked column found the
+written leaf on the NEXT page with a clean boundary); line-level instances do NOT (one masked
+line collapses to "the written area" — coarse, paper bleed). So: promising for text-REGION /
+layout pre-labeling, not line segmentation. Untested upside: 5-shot, tau/merge tuning, ViT-L,
+CRF. Integration facts: Apache-2.0 code; DINOv3 weights are Meta-gated — the HF safetensors were
+converted back to the original checkpoint format (inverse of transformers' key mapping, k-bias
+zero-filled, init-constant buffers merged, STRICT-load verified); torch needs cu128 on Blackwell
+(cu126 wheels lack sm_120 — bit once). Wiring it as a producer needs a `reference` field
+(item + mask) on the assist contract — fold into the W1 registry design.
+
 **W2 — task templates v1 (the LS-config equivalent).** Declarative `template` on the labeling
 task: `kind` (bbox-detection | segmentation | classification | text-span | transcription | doc-qa |
 reading-order), `modality`, `tools`, `output` (required labels + typed attributes). Create-dialog
