@@ -614,7 +614,44 @@ serving we don't run; deploying those as CPU stand-ins would be the speculative-
 (claiming a capability the estate cannot exercise). The subset boundary is therefore *honest by
 construction*: real half deployed and live-proven, GPU half recorded here as the merge-time backlog.
 
-## Ingest orchestration — Dapr Workflow stays un-adopted; the run is idempotent by caller key (2026-08-03)
+## Ingest orchestration — Dapr Workflow IS adopted; the estate is event-driven now (2026-08-03, owner ruling)
+
+**Superseded the same day by the owner, and the reason is not a flaw in the analysis below — it is
+that the analysis answered the wrong question.** The entry that follows argued the `OPERATORS.md` §4
+reopen criterion (*"a step that cannot be made idempotent by any caller-chosen key"*) and concluded
+correctly that the ingest run has no such step. The owner's ruling: that criterion belongs to the
+orchestrator-and-polling era it was written in. The estate has since gone event-driven with Dapr
+Workflow, so "can we avoid an engine?" is no longer the question being asked — the engine is the
+estate's chosen shape for durable multi-step work, and ingest is multi-step durable work.
+
+**Ruling: Dapr Workflow orchestrates the ingest run.** `dapr-ext-workflow` is added; the workflow
+owns run lifecycle (enumerate → dispatch chunks → await drain → finalize → emit), executing in the
+daprd sidecars the estate already runs, on the actor state store that already exists
+(`dapr-statestore.yaml:62`, `actorStateStore: "true"`) with `ingest` already scoped to it.
+
+**And it dissolves the tracker.** The design below leaned on `packages/tracker` as a per-unit ledger.
+With Dapr Workflow adopted, three existing mechanisms cover what it was for, and none of them is a
+side ledger:
+
+| question | answered by |
+|---|---|
+| delta *between tiers* (bronze→silver→gold) | **Lance CDF** — `_row_created_at_version` / `dataset.delta`, verified working in `open_ingest.md` §7.11 row 2. This is D4's own ruling: *"Delta bookkeeping is data, not state… never a side ledger"* |
+| which units are still outstanding *during* a run | **JetStream `WorkQueuePolicy`** — a consumed-and-acked message is gone; un-acked redelivers. The stream IS the outstanding-work set |
+| the fragment list to commit at finalize | **Dapr Workflow fan-out/fan-in** — chunk activities return their `FragmentMetadata` durably, replayed after a crash |
+
+The plan's objection to activities ("millions of persisted+replayed activity results would melt the
+state store") is answered by CHUNKING, which it already prescribed: a child workflow per ~1–10k keys
+returns one compact result, not a million. Once chunked, the workflow's own durable state is the
+ledger. `packages/tracker` therefore gains no NATS-KV backend and acquires no consumer — it stays at
+zero consumers, and whether it survives at all is a separate cleanup call.
+
+Residual to place when the run is built: a POISON unit is acked (so gone from the stream) yet must
+still surface as `error` in run status. It rides on the chunk activity's returned result plus the
+DLQ entry — not on a reinstated ledger.
+
+---
+
+### Superseded reasoning, kept for the trail — "Dapr Workflow stays un-adopted" (2026-08-03)
 
 `open_ingest.md` proposed Dapr Workflow as the ingest run's orchestrator ("estate-native, zero new
 infrastructure") and recorded it as a resolved open decision. It was not resolved: it contradicted

@@ -123,7 +123,16 @@ dependency for crash-recovery semantics we already get from idempotency keys.
 > the argument above stops applying and a workflow engine earns its dependency. That is a real
 > possibility for silver→gold quality promotion, whose assertions may need per-attempt run identity.
 >
-> **Tested against the ingest run 2026-08-03, and UPHELD a second time.** `open_ingest.md` proposed
+> **SUPERSEDED for the ingest lane 2026-08-03 (owner ruling) — Dapr Workflow IS adopted there.**
+> The criterion below was written in the orchestrator-and-polling era; the estate has since gone
+> event-driven with Dapr Workflow, so "can we avoid an engine?" is no longer the question asked of a
+> durable multi-step path. The ingest run is orchestrated by Dapr Workflow — see docs/DECISIONS.md
+> § "Ingest orchestration — Dapr Workflow IS adopted". This pin still describes the ANNOTATION publish
+> saga accurately (it is token-keyed idempotent and needs no engine); it is no longer an estate-wide
+> prohibition. The analysis that follows is kept because its idempotency reasoning remains true and
+> useful — it simply is not the deciding question any more.
+>
+> **Superseded — tested against the ingest run 2026-08-03 and upheld, then overridden:** `open_ingest.md` proposed
 > Dapr Workflow as the pre-bronze ingest run's orchestrator and recorded it as a settled decision; it
 > was not settled, and the criterion above is what decided it. Every step of that run is idempotent by
 > a key the caller chose or the source supplied — the run id from the caller's `Idempotency-Key`, the

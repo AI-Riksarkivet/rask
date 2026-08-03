@@ -217,8 +217,12 @@ path — but `:111` is inside `submit_stage_job` (`:54`), whose only caller is
 pattern to copy lives in the same file: `submit_train_job` (`:169`) does not await, and
 `:16-21` documents that as the intended async shape. A13 owns this re-cut.
 
-**C13 · Dapr Workflow contradicted a standing pin — SETTLED 2026-08-03: the pin holds, and this
-document's adoption is overturned (see §7.6).** `docs/OPERATORS.md:95-99` pins *"Dapr Workflow stays
+**C13 · Dapr Workflow contradicted a standing pin — SETTLED 2026-08-03 by owner ruling: the pin is
+STALE for this lane and Dapr Workflow IS adopted.** The `OPERATORS.md` criterion belongs to the
+orchestrator-and-polling era; the estate is event-driven now. **Knock-on: the per-unit tracker is
+dissolved** — CDF answers tier deltas (D4, verified §7.11 row 2), JetStream `WorkQueuePolicy`
+answers outstanding work, and chunked fan-out/fan-in answers the fragment list. `packages/tracker`
+gains no backend and stays at zero consumers; §6e's condition (4) is void. `docs/OPERATORS.md:95-99` pins *"Dapr Workflow stays
 un-adopted"* — re-examined and **upheld 2026-07-28** (`:100-123`) with an explicit reopen
 criterion at `:121-123`: *"If a multi-step path appears whose steps cannot be made idempotent
 by any caller-chosen key … a workflow engine earns its dependency."* `chart/values.yaml:1142`
@@ -1927,7 +1931,7 @@ estate code file:line before implementing against them. Or stop after 25 turns.
    estate on 1.18, `dapr-ext-workflow`) is the run orchestrator — estate-native, zero new
    infrastructure. Units stay on the JetStream work queue; the workflow orchestrates
    phases/chunks only. Temporal is off the table unless Dapr Workflow proves inadequate in
-   practice. **OVERTURNED 2026-08-03 — the pin held on re-test; Dapr Workflow is NOT adopted.**
+   practice. **CONFIRMED 2026-08-03 (owner ruling) — Dapr Workflow IS the run orchestrator.**
    Ruled in `docs/DECISIONS.md` § "Ingest orchestration — Dapr Workflow stays un-adopted" and recorded
    at `docs/OPERATORS.md` §4. The criterion is whether any step resists a caller-chosen idempotency
    key; every step of the ingest run has one (run id from the caller's `Idempotency-Key`, unit and
