@@ -20,6 +20,7 @@ describe('topNav', () => {
 		expect(topNav(false).map((e) => e.title)).toEqual([
 			'Lakehouse',
 			'Compute',
+			'Workbench',
 			'Search',
 			'Annotate',
 			'Train',
@@ -29,10 +30,11 @@ describe('topNav', () => {
 			topNav(false)
 				.filter((e) => e.tier === 'primary')
 				.map((e) => e.title),
-		).toEqual(['Lakehouse', 'Compute']);
+		).toEqual(['Lakehouse', 'Compute', 'Workbench']);
 		expect(topNav(false).map((e) => e.href)).toEqual([
 			'/lakehouse/catalog',
 			'/compute/',
+			'/workbench/',
 			// Trailing slashes are LOAD-BEARING, not cosmetic: each zone's `paths.base` serves the
 			// trailing form, so a bare '/compute' href cost a 308 redirect round-trip on EVERY
 			// cross-zone hop (measured on all five zones, 2026-07-28) — visible as flicker over a

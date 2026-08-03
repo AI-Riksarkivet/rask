@@ -18,3 +18,5 @@ export type {
 	PanelProps,
 	PanelRegistry,
 } from './types';
+export { parseSelectDetail, RASK_SELECT, SelectDetailSchema } from './element-contract';
+export type { SelectDetail } from './element-contract';

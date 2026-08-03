@@ -55,7 +55,11 @@ export class LayoutAutosave implements DockviewIDisposable {
 		}
 		if (read.status === 'absent') return false;
 		try {
-			this.#api.fromJSON(read.layout);
+			// `reuseExistingPanels` (fork feature): panels present in both the current dock and the
+			// incoming layout keep their INSTANCES — the difference between a restore that repositions
+			// panels and one that recreates them. For a foreign custom-element panel recreation means
+			// losing state and refetching, so this flag is load-bearing on the global workbench.
+			this.#api.fromJSON(read.layout, { reuseExistingPanels: true });
 			return true;
 		} catch {
 			this.#refuseToSave = true;
