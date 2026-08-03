@@ -160,6 +160,50 @@ async function asJson<T>(r: Response, schema: v.GenericSchema<T>): Promise<T> {
 
 const HitsArraySchema = v.array(RowSchema) as v.GenericSchema<Row[]>;
 
+/** Schema-metadata key naming the columns the encoder carried as JSON text. Mirrors
+ *  `microfrontends/media/src/lib/server/rows-arrow.ts`, which is the only writer of this payload. */
+const JSON_COLUMNS_KEY = 'json_columns';
+
+/**
+ * Decode an Arrow IPC row payload — the `api/search` and `api/atlas/chunks` responses.
+ *
+ * Both used to be `list[dict]` JSON; a lasso selection alone is up to 1000 full corpus rows, which is
+ * what motivated the promotion. The zone encodes a column per field and records in the schema metadata
+ * which columns hold JSON text (nested/structured/mixed values — `alignments`, `tags`, a struct column
+ * a corpus declares); everything else is a native Arrow column.
+ *
+ * NULL CELLS ARE OMITTED, not set to null. A column is rectangular, so a key that was simply absent from
+ * one row arrives as that row's null — and `RowSchema` spells its envelope fields `v.optional(...)`,
+ * which admits `undefined` and rejects `null`. Materialising them would fail the parse on the first hit
+ * that carries no `_score`.
+ *
+ * The valibot parse is unchanged and still happens here: same schema, same boundary, different bytes.
+ */
+async function rowsFromArrow(r: Response): Promise<Row[]> {
+	if (!r.ok) throw await apiErrorFrom(r);
+	const table = tableFromIPC(new Uint8Array(await r.arrayBuffer()));
+	let jsonColumns: Set<string>;
+	try {
+		jsonColumns = new Set(
+			v.parse(v.array(v.string()), JSON.parse(table.schema.metadata.get(JSON_COLUMNS_KEY) ?? '[]')),
+		);
+	} catch {
+		throw new ApiError(500, 'malformed row payload (no json_columns metadata)');
+	}
+	const names = table.schema.fields.map((f) => f.name);
+	const rows: Record<string, unknown>[] = [];
+	for (const record of table) {
+		const row: Record<string, unknown> = {};
+		for (const name of names) {
+			const value: unknown = record[name];
+			if (value === null || value === undefined) continue;
+			row[name] = jsonColumns.has(name) ? JSON.parse(String(value)) : value;
+		}
+		rows.push(row);
+	}
+	return v.parse(HitsArraySchema, rows);
+}
+
 /** Append the `dataset` selector to a params bag when a non-default dataset is
  *  active or the spec names one. */
 function datasetParam(spec?: SearchSpec): string | null {
@@ -186,7 +230,8 @@ function appendCommonSearchParams(
 	if (ds) out.append('dataset', ds);
 }
 
-/** Run a search. POST + multipart when an image is attached; GET otherwise. */
+/** Run a search. POST + multipart when an image is attached; GET otherwise. The RESPONSE is Arrow IPC
+ *  in both shapes (open_transport.md's second promotion) — the request surface is unchanged. */
 export async function search(spec: SearchSpec, fetcher: typeof fetch = fetch): Promise<Row[]> {
 	const n = String(spec.n ?? 30);
 	const mode = spec.mode ?? 'fts';
@@ -199,7 +244,7 @@ export async function search(spec: SearchSpec, fetcher: typeof fetch = fetch): P
 		fd.append('mode', mode);
 		appendCommonSearchParams(fd, spec);
 		const r = await fetcher(apiUrl('/api/search'), { method: 'POST', body: fd });
-		return asJson(r, HitsArraySchema);
+		return rowsFromArrow(r);
 	}
 
 	const params = new URLSearchParams({ q: spec.q, n, mode });
@@ -207,7 +252,7 @@ export async function search(spec: SearchSpec, fetcher: typeof fetch = fetch): P
 	if (spec.phrase) params.append('phrase', 'true');
 	appendCommonSearchParams(params, spec);
 	const r = await fetcher(apiUrl(`/api/search?${params}`));
-	return asJson(r, HitsArraySchema);
+	return rowsFromArrow(r);
 }
 
 /** `?dataset=` suffix for a bare GET URL (empty for the default dataset). */
@@ -594,7 +639,8 @@ export async function getAtlasChunk(
 	return asJson(r, RowSchema);
 }
 
-/** Full rows for a selection, addressed by stable Lance `_rowid`. */
+/** Full rows for a selection, addressed by stable Lance `_rowid`. Up to 1000 of them per lasso, which
+ *  is why the response is Arrow IPC (open_transport.md's first promotion) rather than `list[dict]`. */
 export async function getAtlasChunks(
 	rowids: number[],
 	fetcher: typeof fetch = fetch,
@@ -606,7 +652,7 @@ export async function getAtlasChunks(
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ rowids }),
 	});
-	return asJson(r, HitsArraySchema);
+	return rowsFromArrow(r);
 }
 
 // ── Topics (Tree page, capability-gated) ────────────────────────────────────
@@ -668,20 +714,11 @@ export const GraphCypherResponseSchema = v.object({
 });
 export type GraphCypherResponse = v.InferOutput<typeof GraphCypherResponseSchema>;
 
-export async function runGraphCypher(
-	query: string,
-	limit = 200,
-	fetcher: typeof fetch = fetch,
-): Promise<GraphCypherResponse> {
-	const ds = activeView().datasetParam();
-	const url = ds ? `/api/graph/cypher?dataset=${encodeURIComponent(ds)}` : '/api/graph/cypher';
-	const r = await fetcher(apiUrl(url), {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ query, limit }),
-	});
-	return asJson(r, GraphCypherResponseSchema);
-}
+// The Cypher console's own client is GONE, and the schema above is what is left of it. It POSTed to
+// `/api/graph/cypher`, a route that no longer exists: the console is a `command()` in the media zone
+// (`src/lib/graph/remote/graph.remote.ts`), which is where a user-authored query surface belongs — one
+// enumerated function on the zone server rather than a hole through to the viewer. The schema stays
+// here, with the rest of the graph contracts, because that is where both halves read it from.
 
 export const GraphMatchSchema = v.object({
 	entity_id: v.string(),
