@@ -1,7 +1,14 @@
 <script lang="ts">
 	import { Badge } from '@rask/ui/badge';
 	import { Card } from '@rask/ui/card';
-	import { Bell, KeyRound, ScrollText, ShieldCheck, SlidersHorizontal, Building2 } from '@lucide/svelte';
+	import {
+		Bell,
+		KeyRound,
+		ScrollText,
+		ShieldCheck,
+		SlidersHorizontal,
+		Building2,
+	} from '@lucide/svelte';
 	import type { PageData } from './$types';
 
 	// SETTINGS — what configures the ESTATE, as opposed to what any one zone does. The third place in
@@ -75,8 +82,7 @@
 	<header class="flex flex-col gap-1">
 		<h1 class="text-2xl font-semibold">Settings</h1>
 		<p class="text-muted-foreground text-sm">
-			Estate-wide configuration. Signed in as an estate admin — everything here affects every
-			project.
+			Estate-wide configuration. Signed in as an estate admin — everything here affects every project.
 		</p>
 	</header>
 

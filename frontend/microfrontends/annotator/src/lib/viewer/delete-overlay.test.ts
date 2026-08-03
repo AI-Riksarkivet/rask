@@ -21,7 +21,13 @@ import { describe, expect, it, vi } from 'vitest';
 // dependency chain that has no business in a logic test. Stub it at the module boundary rather than
 // installing a DOM: what is under test here is which calls the controller makes, not what it renders.
 vi.mock('svelte-sonner', () => ({
-	toast: { success: () => {}, error: () => {}, message: () => {}, warning: () => {}, info: () => {} },
+	toast: {
+		success: () => {},
+		error: () => {},
+		message: () => {},
+		warning: () => {},
+		info: () => {},
+	},
 }));
 
 // The controller imports the assist REMOTE function, and a `.remote.ts` module pulls in the whole

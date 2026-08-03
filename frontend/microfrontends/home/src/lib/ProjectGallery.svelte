@@ -90,9 +90,9 @@
 									title={option.label}
 									data-slot="projects-view-{option.id}"
 									class={[
-										'text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded-sm p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2',
-										view === option.id && 'bg-accent text-foreground',
-									]}
+	'text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded-sm p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2',
+	view === option.id && 'bg-accent text-foreground',
+]}
 									onclick={() => choose(option.id)}
 								>
 									<option.icon class="size-4" aria-hidden="true" />

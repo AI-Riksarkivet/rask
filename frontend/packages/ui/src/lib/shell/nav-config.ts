@@ -381,7 +381,9 @@ export function mainMenuNav(estateAdmin: boolean): TopNavEntry[] {
  */
 export function isMainMenu(pathname: string): boolean {
 	const p = norm(pathname);
-	return p === '' || p === '/' || p === '/projects' || p === '/settings' || p.startsWith('/settings/');
+	return (
+		p === '' || p === '/' || p === '/projects' || p === '/settings' || p.startsWith('/settings/')
+	);
 }
 
 export function topNav(estateAdmin: boolean): TopNavEntry[] {

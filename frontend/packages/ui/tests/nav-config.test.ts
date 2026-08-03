@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { exact, isMainMenu, mainMenuNav, norm, seg, topNav, under, zoneOf } from '../src/lib/shell/nav-config';
+import {
+	exact,
+	isMainMenu,
+	mainMenuNav,
+	norm,
+	seg,
+	topNav,
+	under,
+	zoneOf,
+} from '../src/lib/shell/nav-config';
 
 // The top-navbar IA + the shared matchers every zone builds its ZoneNav sidebar config with.
 // ONE ENTRY PER ZONE, and EVERY zone of the seven-zone estate is in the bar (R15) — home, lakehouse,

@@ -349,7 +349,12 @@ export class AnnotatorController {
 			// drag-end geometry of an existing shape → queue for Save (canvas already updated)
 			// `before` is what a redo/undo must restore: the PENDING edit if one exists, else null
 			// meaning "the row's own geometry from the table".
-			this._pushUndo({ kind: 'geometry', index, before: this._geoEdits.get(index) ?? null, after: geo });
+			this._pushUndo({
+				kind: 'geometry',
+				index,
+				before: this._geoEdits.get(index) ?? null,
+				after: geo,
+			});
 			this._geoEdits.set(index, geo);
 			this._geoDirty = true;
 		};
@@ -871,7 +876,13 @@ export class AnnotatorController {
 					this._geoEdits.delete(op.index);
 				} else {
 					this._geoEdits.set(op.index, geo);
-					arrow?.setOverride(op.index, { x: geo.x, y: geo.y, w: geo.w, h: geo.h, polygon: geo.polygon ?? [] });
+					arrow?.setOverride(op.index, {
+						x: geo.x,
+						y: geo.y,
+						w: geo.w,
+						h: geo.h,
+						polygon: geo.polygon ?? [],
+					});
 				}
 				arrow?.sync();
 				this._geoDirty = true;

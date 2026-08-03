@@ -97,7 +97,10 @@ test('a deleted annotation disappears from the canvas without a save or reload',
 
 	// The canvas click above already selected it, so delete straight away. (Clicking the row in the
 	// list first is redundant and flaky — the detail panel opening shifts the list under the cursor.)
-	await page.getByTitle(/Delete/i).first().click();
+	await page
+		.getByTitle(/Delete/i)
+		.first()
+		.click();
 	await expect(list, 'the sidebar half regressed').not.toContainText('seal');
 
 	// No save, no reload — the canvas must already be correct. Deselect first, so the comparison

@@ -104,16 +104,13 @@ export const readProjectsView = query(async (): Promise<ProjectsView | null> => 
  * Answers `ApiResult` rather than swallowing failure: the toggle is optimistic, but a refused write
  * is a real outcome and the caller decides whether to say so.
  */
-export const writeProjectsView = command(
-	ViewSchema,
-	async (view): Promise<ApiResult<unknown>> => {
-		const current = await catalogJSON('/v1/user-state/dock-layout');
-		const existing = current.ok ? v.safeParse(EnvelopeSchema, current.data) : null;
-		const workbenches = { ...(existing?.success ? (existing.output.value?.workbenches ?? {}) : {}) };
-		workbenches[VIEW_KEY] = view;
-		return catalogJSON('/v1/user-state/dock-layout', {
-			method: 'PUT',
-			body: JSON.stringify({ workbenches }),
-		});
-	},
-);
+export const writeProjectsView = command(ViewSchema, async (view): Promise<ApiResult<unknown>> => {
+	const current = await catalogJSON('/v1/user-state/dock-layout');
+	const existing = current.ok ? v.safeParse(EnvelopeSchema, current.data) : null;
+	const workbenches = { ...(existing?.success ? (existing.output.value?.workbenches ?? {}) : {}) };
+	workbenches[VIEW_KEY] = view;
+	return catalogJSON('/v1/user-state/dock-layout', {
+		method: 'PUT',
+		body: JSON.stringify({ workbenches }),
+	});
+});
