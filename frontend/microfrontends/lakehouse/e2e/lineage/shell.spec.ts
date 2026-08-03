@@ -67,14 +67,22 @@ test('an estate admin gets the zone triggers + the Marquez-parity sidebar leaves
 		await expect(nav.getByRole('button', { name: trigger, exact: true })).toBeVisible();
 	}
 	await expect(nav.getByRole('button')).toHaveCount(3);
-	// Home is the product mark, not a nav entry. With every panel closed the bar's LINKS are exactly
-	// the single-surface zones — a zone with one surface gets a plain link because a one-row dropdown
+	// Home is the product mark, not a nav entry. With every panel closed the bar's LINKS are the
+	// single-surface zones — a zone with one surface gets a plain link because a one-row dropdown
 	// would be noise; each panel TRIGGER must stay a button, or clicking it would navigate instead of
-	// opening the panel. Workbench joined this set with the 8th zone (117c8ed).
-	for (const link of ['Workbench', 'Annotate', 'Train', 'Studio']) {
+	// opening the panel. Workbench joined this set with the 8th zone (117c8ed), and Projects with the
+	// IA round (2026-08-03): it is NOT a zone but a home-zone route, and it leads the bar because a
+	// project is the top of the hierarchy the zones below it are scoped by.
+	for (const link of ['Projects', 'Workbench', 'Annotate', 'Train', 'Studio']) {
 		await expect(nav.getByRole('link', { name: link, exact: true })).toBeVisible();
 	}
-	await expect(nav.getByRole('link')).toHaveCount(4);
+	await expect(nav.getByRole('link')).toHaveCount(5);
+	// Pinned by href too, because "Projects" could be satisfied by a link to anywhere: the estate's
+	// project list is `/projects` in the HOME zone, not this zone's deleted `/lakehouse/catalog/projects`.
+	await expect(nav.getByRole('link', { name: 'Projects', exact: true })).toHaveAttribute(
+		'href',
+		'/projects',
+	);
 	// The zone sidebar lists exactly the four first-class views + the Graph (active at the root).
 	// Scoped to the sidebar: page content may legitimately link to the same views (e.g. the graph
 	// header's capped hint links to Datasets), which would trip strict mode on a page-wide query.
@@ -192,9 +200,9 @@ test('a domain trigger opens a panel of its rows — pointer and keyboard, same-
 	// NO `Projects` row — INVERTED BY RULING (2026-08-03, f5dd1f0). This list used to lead with
 	// Projects → /lakehouse/catalog/projects. There is ONE project concept and it is the TOP of the
 	// hierarchy (project > warehouse > namespace > table); a tenants list nested inside a
-	// project-scoped zone's own dropdown inverted that hierarchy. The provisioning page keeps its URL
-	// (reachable from the admin area) until the IA round re-homes it beside the home gallery — it is
-	// simply not a row of this panel any more.
+	// project-scoped zone's own dropdown inverted that hierarchy. The IA round then FINISHED the move:
+	// the route itself is deleted and the surface is the home zone's `/projects`, so this href
+	// resolves nowhere at all. The assertion stays as the guard against the dead row returning.
 	await expect(panel.locator('a[href="/lakehouse/catalog/projects"]')).toHaveCount(0);
 	// These rows used to leave this zone's route manifest and had to hard-navigate. Since the catalog,
 	// lineage, models and admin areas merged into ONE zone they are same-zone soft navigations, and the

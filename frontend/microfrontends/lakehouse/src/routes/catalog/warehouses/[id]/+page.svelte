@@ -111,9 +111,14 @@
 		<section>
 			<h2>Registry record</h2>
 			<div class="facts mono">
+				<!-- The rung ABOVE this one left the zone: a project is the top of the hierarchy and its
+				     page is the home zone's `/projects/<p>` (2026-08-03 ruling). Absolute href, and
+				     `data-sveltekit-reload` because the router here owns no such route. -->
 				<span
-					>project <a class="plink" href={`${base}/catalog/projects/${encodeURIComponent(wh.project)}`}
-						>{wh.project}</a
+					>project <a
+						class="plink"
+						href={`/projects/${encodeURIComponent(wh.project)}`}
+						data-sveltekit-reload>{wh.project}</a
 					></span
 				>
 				<span>bucket {wh.bucket}</span>

@@ -154,8 +154,11 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 	// Every zone, and the sub-areas underneath them, stay reachable from the one menu — one group per
 	// zone (the icon contributes a leading space to the accessible text). This list is the SHELL's
 	// truth: a zone missing here is the R15 defect (a zone absent from the navbar), not a stale test.
+	// Projects LEADS it and is the one group that is not a zone: the IA round (2026-08-03) put the
+	// estate's project list at the top level in the home zone, above every zone scoped by it.
 	const panel = page.locator('[data-slot="navigation-menu-viewport"]');
 	await expect(panel.locator('[data-slot="navbar-overflow-group"]')).toHaveText([
+		' Projects',
 		' Lakehouse',
 		' Compute',
 		' Workbench',
@@ -167,6 +170,9 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 	// One row per destination the wide bar reaches — including each zone's own root and the
 	// estate-admin-only governance rows.
 	for (const href of [
+		// The one destination outside this zone's own base that is not a zone root: the home zone's
+		// project list, which the deleted `/lakehouse/catalog/projects` used to answer for.
+		'/projects',
 		'/lakehouse/catalog',
 		'/lakehouse/catalog/tables',
 		'/lakehouse/catalog/warehouses',
@@ -240,8 +246,9 @@ test('the wide Lakehouse panel carries NO filler self-row — its sub-area rows 
 	}
 	// The tenants list is gone from this panel too, by the SAME ruling: there is ONE project concept
 	// and it is the TOP of the hierarchy (project > warehouse > namespace > table), so a tenants row
-	// inside a project-scoped zone's dropdown inverted it. The provisioning page keeps its URL — it is
-	// simply not reachable from here.
+	// inside a project-scoped zone's dropdown inverted it. The IA round then deleted the route
+	// outright — the surface is the home zone's `/projects` — so this href resolves nowhere; the
+	// assertion stays as the guard against the dead row returning.
 	await expect(panel.locator('a[href="/lakehouse/catalog/projects"]')).toHaveCount(0);
 
 	// …and the panel must still RENDER its columns. Kept from the version this test replaced, because

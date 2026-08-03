@@ -11,8 +11,8 @@ test('warm the dev server routes', async ({ page }) => {
 		'/lakehouse/catalog/namespaces/gold',
 		'/lakehouse/catalog/warehouses',
 		'/lakehouse/catalog/warehouses/acme-wh',
-		'/lakehouse/catalog/projects',
-		'/lakehouse/catalog/projects/acme',
+		// No `/lakehouse/catalog/projects*` rows: both routes are DELETED (2026-08-03 ruling — a
+		// project is the top of the hierarchy, so its list and its overview are the home zone's).
 	]) {
 		await page.goto(path).catch(() => {});
 	}

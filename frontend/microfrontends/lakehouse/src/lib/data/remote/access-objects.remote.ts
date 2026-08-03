@@ -16,7 +16,7 @@ import {
 } from '../namespace';
 
 // PER-OBJECT access (a table or a namespace), in the zone's remote-function dialect
-// (open_transport.md, area 1) — same names, same ApiResult shapes as the /capi client this replaces,
+// (the transport ruling, area 1) — same names, same ApiResult shapes as the /capi client this replaces,
 // transport only. This is the OBJECT-scoped surface the catalog mounts under
 // `/v1/{table|namespace}/{id}/access/*`; the estate-wide FGA workbench (`lib/admin/access*`) is a
 // different surface with its own module.

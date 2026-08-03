@@ -5,7 +5,7 @@ import { parse } from '@rask/api';
 import type { ApiResult } from '@rask/api/client';
 import type { CreateWarehouseBody, ProjectSummary, WarehouseRecord } from '../catalog';
 
-// The warehouse + project registry, in the zone's remote-function dialect (open_transport.md) — same
+// The warehouse + project registry, in the zone's remote-function dialect — same
 // names, same `ApiResult` shapes as the /capi client this replaces, transport only. The three narrow
 // BFF routes it retires (`capi/v1/warehouses`, `capi/v1/warehouses/[id]/[action]`) existed to keep the
 // catalog's project-admin gate enforced against a REAL user rather than a service credential; that

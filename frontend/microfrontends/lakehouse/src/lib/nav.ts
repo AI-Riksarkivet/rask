@@ -151,6 +151,12 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 				icon: ShieldCheck,
 			},
 			{
+				title: 'Tenants',
+				href: '/lakehouse/admin/tenants',
+				match: seg('/lakehouse/admin/tenants'),
+				icon: Building2,
+			},
+			{
 				title: 'Audit',
 				href: '/lakehouse/governance/audit',
 				match: seg('/lakehouse/governance/audit'),
@@ -159,17 +165,17 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 		],
 	},
 	{
-		label: 'Admin',
+		// OPERATIONS, not "Admin", and without Tenants — by ruling (2026-08-03). The shared navbar's
+		// panel has said Governance = [Access, Tenants, Audit] and Operations = [Events, Streams, DLQ]
+		// for some time; this sidebar still said "Admin" and kept Tenants inside it, so the same estate
+		// answered the same question two different ways depending on which control you opened. Who may
+		// do what — access, TENANTS, audit — is governance; running the estate — events, streams, dead
+		// letters — is operations. The navbar was right, so the sidebar moves to it.
+		label: 'Operations',
 		// The operational drawer — real, but not what anyone opens the lakehouse for. Collapsed until
 		// you are actually inside it (the shell auto-expands whichever group holds the active route).
 		defaultCollapsed: true,
 		items: [
-			{
-				title: 'Tenants',
-				href: '/lakehouse/admin/tenants',
-				match: seg('/lakehouse/admin/tenants'),
-				icon: Building2,
-			},
 			{
 				title: 'Streams',
 				href: '/lakehouse/admin/streams',

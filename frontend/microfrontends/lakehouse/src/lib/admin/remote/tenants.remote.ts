@@ -5,7 +5,7 @@ import type { ApiResult } from '@rask/api/client';
 import { ProjectsResponseSchema, type Project } from '$lib/admin/tenants';
 
 // The tenants panel's seam to the catalog's first-class projects API, in the zone's remote-function
-// dialect (open_transport.md, area 2) — same `ApiResult` shape at the call site as the `/api/projects`
+// dialect (the transport ruling, area 2) — same `ApiResult` shape at the call site as the `/api/projects`
 // BFF route it replaces, transport only.
 //
 // Unlike the audit/jetstream seams (whose upstreams have no auth of their own) `/v1/projects` is

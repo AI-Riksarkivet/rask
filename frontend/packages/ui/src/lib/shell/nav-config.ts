@@ -3,9 +3,11 @@ import {
 	Cpu,
 	Database,
 	FlaskConical,
+	FolderKanban,
 	LayoutDashboard,
 	PenLine,
 	Search,
+	Settings,
 } from '@lucide/svelte';
 import type { RunStatusLike } from '../runs/run-status.js';
 
@@ -177,9 +179,9 @@ export type TopNavEntry = {
 
 // NO `Projects` row here, BY RULING (2026-08-03): there is ONE project concept and it is the TOP of
 // the hierarchy (project > warehouse > namespace > table) — a tenants list inside a project-scoped
-// zone's dropdown inverted it. The provisioning surface itself still lives at
-// /lakehouse/catalog/projects (reachable from the admin area) until the IA round re-homes it to the
-// top level beside the home gallery.
+// zone's dropdown inverted it. The list, the per-project overview and the provisioning flow now live
+// at the TOP level in the home zone (`/projects`), carried by this bar's own `Projects` entry below;
+// `/lakehouse/catalog/projects` no longer exists.
 const DATA_ITEMS: TopNavItem[] = [
 	{
 		title: 'Tables',
@@ -324,6 +326,24 @@ const OPERATIONS_ITEMS: TopNavItem[] = [
  * Access is NOT a top-level entry: it lives inside the lakehouse admin area
  * (/lakehouse/governance/access), so it appears only as one row of the Governance column.
  */
+/**
+ * The MAIN MENU's bar, by ruling (2026-08-03): "we should only see 2 items in topnavbar — projects
+ * and settings, nothing else".
+ *
+ * Standing at the estate root you are not moving between zones, you are choosing what to work on;
+ * a full zone list there answers a question nobody asked yet and buries the two things that ARE the
+ * main menu. The zone bar returns the moment you are inside a zone, which is where "move me to
+ * another zone" is a real question.
+ *
+ * Settings is estate-admin only here for the same fail-closed reason it is everywhere else, which
+ * means a non-admin's main menu carries exactly ONE entry. That is correct, not a degenerate case:
+ * the estate has one thing for them to choose at that level.
+ */
+export function mainMenuNav(estateAdmin: boolean): TopNavEntry[] {
+	const all = topNav(estateAdmin);
+	return all.filter((e) => e.title === 'Projects' || e.title === 'Settings');
+}
+
 export function topNav(estateAdmin: boolean): TopNavEntry[] {
 	// LAKEHOUSE gathers everything that describes or governs the one governed estate: the catalog
 	// (projects → warehouses → namespaces → tables), the model registry (models are catalog objects
@@ -344,11 +364,15 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 		// Lakehouse + Media, and a new route is a row in a column.
 		{ label: 'Lineage', items: LINEAGE_ITEMS },
 	];
+	// OPERATIONS stays with the lakehouse; GOVERNANCE does not — by ruling (2026-08-03): "governance
+	// and other setting stuff, more in terms of auth, should be part of the topnavbar when in main
+	// menu, but under settings". Running THIS estate — its streams, its events, its dead letters — is
+	// an operation on the lakehouse and belongs to the lakehouse. Who may do what — access, tenants,
+	// the audit trail — is not a lakehouse feature at all; it is estate-wide configuration, and it now
+	// lives under `Settings` below. It is in ONE place, not two: a Governance column here AND a
+	// Settings entry there would be the same duplication the projects ruling deleted.
 	if (estateAdmin) {
-		lakehouse.push(
-			{ label: 'Governance', items: GOVERNANCE_ITEMS },
-			{ label: 'Operations', items: OPERATIONS_ITEMS },
-		);
+		lakehouse.push({ label: 'Operations', items: OPERATIONS_ITEMS });
 	}
 	return [
 		// NO "Home" ENTRY. The origin root is reachable two better ways already — the project
@@ -356,6 +380,22 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 		// in and links home. A third control to the same destination is noise in a bar whose job is
 		// to move you BETWEEN zones, and it made the estate's landing surface look like a peer of
 		// Lakehouse and Compute rather than the thing containing them.
+		//
+		// PROJECTS is the one exception to "one entry per zone", and it earns it by RULING
+		// (2026-08-03: "projects and settings in topnavbar in main menu"). A project is the TOP of the
+		// hierarchy — project > warehouse > namespace > table — so it is not a peer of the zones below
+		// it, it is what they are scoped BY, and it leads the bar for the same reason. It is a route in
+		// the home zone rather than a zone of its own (`/projects` + `/projects/<p>`), so it is a plain
+		// link: the list, the per-project overview and the create flow are one surface, and a
+		// one-row dropdown would be noise. NOT the origin root, so this is not "Home" by another name —
+		// `/` is the landing, `/projects` is the addressable list.
+		{
+			title: 'Projects',
+			href: '/projects',
+			icon: FolderKanban,
+			match: under('/projects'),
+			tier: 'primary',
+		},
 		{
 			title: 'Lakehouse',
 			href: '/lakehouse/catalog',
@@ -423,6 +463,33 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			icon: FlaskConical,
 			match: under('/studio'),
 		},
+		// SETTINGS closes the ruling's other half ("projects and settings in topnavbar in main menu"),
+		// and it is the second entry that is not a zone. It carries what configures the ESTATE rather
+		// than what any one zone does: access (who may do what), tenants (who exists), and the audit
+		// trail (what was done). Those rows used to be a Governance column inside the Lakehouse panel,
+		// which read as though authorization were a lakehouse feature — it is not; the lakehouse is
+		// merely the first thing it governs.
+		//
+		// It comes LAST on purpose. Settings is where you go deliberately, not where work happens, and
+		// the bar reads left-to-right from "what you are working on" to "how the estate is configured".
+		// Estate-admin only, and ABSENT rather than disabled for everyone else — the same fail-closed
+		// rule the Governance column had: a non-admin's bar must not even name a surface they are
+		// barred from, or the IA leaks the shape of the privilege.
+		...(estateAdmin
+			? [
+					{
+						title: 'Settings',
+						href: '/lakehouse/governance/access',
+						icon: Settings,
+						// Lights across every governance surface, wherever those routes physically live
+						// today. They are still served by the lakehouse app; the ROUTES have not moved,
+						// only where the IA says they belong. Moving them behind a `/settings` base is a
+						// separate change with a redirect to keep old links alive.
+						match: under('/lakehouse/governance'),
+						items: [...GOVERNANCE_ITEMS],
+					},
+				]
+			: []),
 	];
 }
 

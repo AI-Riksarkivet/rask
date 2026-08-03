@@ -5,7 +5,7 @@ import type { ApiResult } from '@rask/api/client';
 import type { ProduceResult, TrainResult } from '../medallion';
 
 // The medallion (lance-ray) trigger door, in the zone's remote-function dialect — the last blocked
-// port of open_transport.md area 2, unblocked by the mock-observability harness. Same contract as the
+// port of the transport ruling area 2, unblocked by the mock-observability harness. Same contract as the
 // deleted /medallion/[action] route: ONLY the signed-in user's bearer is forwarded (the service token
 // never leaves the web pod, so lance-ray's admin gate is enforced against a real user), an anonymous
 // visitor on an OIDC tier is refused locally with 401, and an unreachable medallion is 502 — the

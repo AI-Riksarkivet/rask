@@ -53,7 +53,8 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	await page.route('**/capi/v1/me', (route) => json(route, ME_ALICE));
 	await seed(page, {
 		'GET /v1/projects': PROJECTS,
-		'GET /v1/projects/acme': PROJECTS[0],
+		// No `GET /v1/projects/acme` seed: the only page that read it was `/catalog/projects/<p>`,
+		// which is deleted (see the drill test below).
 		// Wrapped in the seed's explicit {status, body} form ON PURPOSE: a bare object carrying its own
 		// `status` key — which every warehouse record does — is otherwise read as that form, and the
 		// record's `"active"` becomes the HTTP status.
@@ -62,24 +63,26 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	});
 });
 
-test('drills project → warehouse → namespace with tier badges along the way', async ({ page }) => {
-	// The projects rung: the estate list renders acme with its role + warehouse count.
-	await page.goto('/lakehouse/catalog/projects');
-	const acmeRow = page.locator('a.row', { hasText: 'acme' });
-	await expect(acmeRow).toContainText('admin');
-	await expect(acmeRow).toContainText('1 warehouse');
-	await acmeRow.click();
-
-	// The project rung: warehouses table links into the warehouse page.
-	await expect(page).toHaveURL(/\/catalog\/projects\/acme$/);
-	await expect(page.getByRole('heading', { name: 'acme' })).toBeVisible();
-	await expect(page.getByText('acme-bucket')).toBeVisible();
-	await page.getByRole('link', { name: 'acme-wh' }).click();
+test('drills warehouse → namespace with tier badges along the way', async ({ page }) => {
+	// STARTS AT THE WAREHOUSE, because the rung above it LEFT THE ZONE. By the 2026-08-03 ruling a
+	// project is the TOP of the hierarchy (project › warehouse › namespace › table), so both the
+	// estate's list of projects and a single project's overview are the HOME zone's surfaces:
+	// `/lakehouse/catalog/projects` and `/lakehouse/catalog/projects/<p>` are DELETED. The lakehouse
+	// keeps everything below a project, which is what the rungs this test drives always were.
+	//
+	// The project → warehouse hop is now cross-zone and cannot be driven from this suite at all. Its
+	// lakehouse half — the up-links back to `/projects/<p>` — is pinned below and in
+	// warehouses-drawers.spec.ts; the home half is home's to cover.
+	await page.goto('/lakehouse/catalog/warehouses/acme-wh');
 
 	// The warehouse rung: registry facts + namespaces derived by the <project>-<stage> convention,
 	// each carrying its tier badge; the foreign project's bare `bronze` zone must NOT appear.
 	await expect(page).toHaveURL(/\/catalog\/warehouses\/acme-wh$/);
 	await expect(page.getByText('s3://acme-bucket')).toBeVisible();
+	// The way back UP is a hard navigation to another zone — absolute href, `data-sveltekit-reload`.
+	const up = page.getByRole('link', { name: 'acme', exact: true });
+	await expect(up).toHaveAttribute('href', '/projects/acme');
+	await expect(up).toHaveAttribute('data-sveltekit-reload', '');
 	const silverRow = page.locator('a.row', { hasText: 'acme-silver' });
 	await expect(silverRow).toBeVisible();
 	await expect(silverRow.locator('.stage')).toHaveText('silver');
@@ -94,20 +97,14 @@ test('drills project → warehouse → namespace with tier badges along the way'
 	await expect(page.getByRole('link', { name: 'acme-silver$features' })).toBeVisible();
 });
 
-test('a member without the estate privilege still gets their membership gallery', async ({
-	page,
-}) => {
-	await page.route('**/capi/v1/me', (route) =>
-		json(route, {
-			...ME_ALICE,
-			sub: 'user:bob',
-			name: 'Bob',
-			estate_admin: false,
-			projects: [{ project: 'acme', role: 'member' }],
-		}),
-	);
-	await seed(page, { 'GET /v1/projects': { status: 403, body: { detail: 'forbidden' } } });
-	await page.goto('/lakehouse/catalog/projects');
-	await expect(page.getByText('your memberships')).toBeVisible();
-	await expect(page.locator('a.row', { hasText: 'acme' })).toContainText('member');
-});
+// DELETED WITH ITS SURFACE, and the gap is named rather than quietly closed: this file used to end
+// with 'a member without the estate privilege still gets their membership gallery', which drove the
+// projects LIST page — a 403 from /v1/projects had to degrade to the caller's own memberships from
+// /v1/me rather than 500. That page is gone by the ruling above, and the estate's project gallery is
+// the HOME zone's landing (`home/src/routes/+page.svelte`, which already branches on
+// `data.estateAdmin` for exactly this reason).
+//
+// The BEHAVIOUR still matters and is currently UNTESTED: home's e2e suite runs auth-off with no
+// catalog stand-in, so there is nowhere in it to seed a 403 today. Covering it needs home to gain the
+// mock-upstream pattern the lakehouse and media suites use. Named here so the deletion reads as a
+// move with a debt, not as coverage that silently evaporated.

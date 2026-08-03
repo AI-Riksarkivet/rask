@@ -1,16 +1,19 @@
 <script lang="ts">
-	// `/projects/<p>` — the project rung of the hierarchy (goal cond 3): the tenant's warehouses
-	// (from the first-class projects API through the /capi pass-through) linking down into the
-	// warehouse page, plus its effective admins. Gated by the catalog; degrade states are honest.
+	// `/projects/<p>` — ONE project: its metadata and overview (the warehouses claiming it, its
+	// effective admins). Top of the hierarchy by the 2026-08-03 ruling — project › warehouse ›
+	// namespace › table — so the page describing one project is a top-level page in the main menu,
+	// and the lakehouse keeps every rung BELOW it. The drill-down therefore crosses zones exactly
+	// once, at the project→warehouse rung.
+	//
+	// Gated by the catalog; every degrade state is named honestly rather than collapsed into "empty".
 	import { FolderKanban, RefreshCw, ShieldAlert } from '@lucide/svelte';
-	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import type { ProjectSummary } from '$lib/data/catalog';
-	import { fetchProject } from '$lib/data/remote/warehouses.remote';
+	import type { ProjectSummary } from '$lib/catalog';
+	import { fetchProject } from '$lib/remote/warehouses.remote';
 
 	const project = $derived(page.params.project ?? '');
 
-	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte).
+	// Return here after the OIDC round-trip (the shell's ?redirect= contract, navbar-user.svelte).
 	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
 
 	let detail = $state<ProjectSummary | null>(null);
@@ -51,7 +54,7 @@
 
 <div class="page">
 	<header>
-		<a class="back" href={`${base}/catalog/projects`}>Projects</a>
+		<a class="back" href="/projects">Projects</a>
 		<span class="sep">/</span>
 		<FolderKanban size={15} />
 		<h1 class="mono">{project}</h1>
@@ -61,7 +64,7 @@
 		<div class="empty">
 			<ShieldAlert size={16} />
 			<p>
-				This stack is governed — <a href={loginHref} data-sveltekit-reload>sign in</a> to view this project.
+				This stack is governed — <a href={loginHref}>sign in</a> to view this project.
 			</p>
 		</div>
 	{:else if denied}
@@ -74,7 +77,9 @@
 	{:else if offline}
 		<div class="empty">
 			<RefreshCw size={16} />
-			<p>Catalog unreachable (HTTP {lastStatus}).</p>
+			<!-- status 0 is an unreachable catalog (§1.0), where no server answered at all — printing
+			     "HTTP 0" would name a status nothing sent. -->
+			<p>Catalog unreachable{lastStatus === 0 ? '' : ` (HTTP ${lastStatus})`}.</p>
 		</div>
 	{:else if detail === null}
 		<div class="empty"><p>Loading…</p></div>
@@ -90,8 +95,13 @@
 						{#each detail.warehouses as w (w.id)}
 							<tr>
 								<td>
-									<a class="mono whlink" href={`${base}/catalog/warehouses/${encodeURIComponent(w.id)}`}
-										>{w.id}</a
+									<!-- DOWN a rung and ACROSS the zone seam: warehouses belong to the lakehouse.
+									     data-sveltekit-reload is mandatory — a soft nav would resolve against this
+									     zone's route manifest, which owns no /lakehouse route, and 404. -->
+									<a
+										class="mono whlink"
+										href={`/lakehouse/catalog/warehouses/${encodeURIComponent(w.id)}`}
+										data-sveltekit-reload>{w.id}</a
 									>
 								</td>
 								<td class="mono">{w.bucket}</td>

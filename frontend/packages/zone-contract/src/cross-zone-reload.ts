@@ -22,12 +22,37 @@ export const ZONES = ['lakehouse', 'media', 'annotator', 'compute', 'studio', 't
 /** A cross-zone path is domain-relative and single-segment-rooted: `/<zone>` or `/<zone>/…`. */
 const ZONE_PATH = new RegExp(`^\\/(${ZONES.join('|')})(?:\\/|$)`);
 
+/**
+ * First segments the CATCH-ALL `home` zone owns as real routes.
+ *
+ * These are the blind spot this list exists to close: `home` has no base path, so a link from another
+ * zone to one of its routes looks like an ordinary same-zone absolute href to a gate that only knows
+ * zone DIRECTORIES. It is not — `home` is a separate SvelteKit app, so the hop is cross-app and 404s
+ * on a soft nav exactly like any zone hop. `/projects` became such a route when the projects surface
+ * moved to the main menu (2026-08-03 ruling); the three lakehouse links into it were correct only
+ * because a human wrote the attribute, with nothing to catch the next one that forgets.
+ */
+export const HOME_ROUTES = ['projects'];
+
+const HOME_PATH = new RegExp(`^\\/(${HOME_ROUTES.join('|')})(?:\\/|$)`);
+
 /** Opaque-expression placeholder. Cannot contain '/', so it never completes a zone prefix. */
 export const EXPR = '￿';
 
-/** True when an href targets another zone and so must hard-navigate. */
-export function isCrossZonePath(path: string | null): boolean {
-	return typeof path === 'string' && ZONE_PATH.test(path);
+/**
+ * True when an href leaves the app it is written in, and so must hard-navigate.
+ *
+ * `owner` is the zone directory the component lives in. Passing it makes the answer exact in both
+ * directions — a `home` component linking to `/projects` is a SAME-app soft nav and must NOT be
+ * forced to reload, while any other zone's link to it must. Omit it and the check stays as it was:
+ * zone paths only, which is the conservative answer for callers holding a bare source string.
+ */
+export function isCrossZonePath(path: string | null, owner?: string): boolean {
+	if (typeof path !== 'string') return false;
+	const zone = path.match(ZONE_PATH)?.[1];
+	if (zone !== undefined) return zone !== owner;
+	// A home-owned route is cross-app from every zone EXCEPT home — and unknowable without an owner.
+	return owner !== undefined && owner !== 'home' && HOME_PATH.test(path);
 }
 
 /**
@@ -122,13 +147,13 @@ export function walkAnchors(source: string): Anchor[] {
 }
 
 /** Every cross-zone `<a>` in one component that does not hard-navigate. */
-export function findViolations(source: string): Violation[] {
+export function findViolations(source: string, owner?: string): Violation[] {
 	const out: Violation[] = [];
 	for (const { attributes, line } of walkAnchors(source)) {
 		const href = attributes.find((a) => a.type === 'Attribute' && a.name === 'href');
 		if (!href) continue;
 		const path = hrefToPath(href.value);
-		if (isCrossZonePath(path) && !hasReloadEnabled(attributes)) {
+		if (isCrossZonePath(path, owner) && !hasReloadEnabled(attributes)) {
 			out.push({ href: path!.replaceAll(EXPR, '${…}'), line });
 		}
 	}

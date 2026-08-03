@@ -4,7 +4,7 @@ import type { RequestHandler } from './$types';
 
 // THIN shim over `$lib/server/audit-core.ts`, kept alive for exactly one consumer: the workbench
 // zone's <rask-lakehouse-audit> element fetches `/lakehouse/api/audit` directly — a custom-element
-// bundle cannot import a .remote.ts (the cross-zone blocker open_transport.md records). The zone's
+// bundle cannot import a .remote.ts (the cross-zone blocker the transport ruling records). The zone's
 // OWN UI reads through `admin/remote/audit.remote.ts`; both doors run the same core, so gate, SQL,
 // flattening and filters cannot drift between them. Delete this the day the elements gain a
 // sanctioned way to call remote endpoints.

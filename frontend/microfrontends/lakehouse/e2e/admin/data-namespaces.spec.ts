@@ -4,7 +4,7 @@ import { MOCK_CATALOG } from '../ports';
 
 // Hermetic /namespaces coverage (#64 + the #85 drop lifecycle): the page derives namespaces from the
 // catalog table list (there is no root-list endpoint), grouped by the `<namespace>$<table>` prefix.
-// Both the list and the drop are remote functions now (open_transport.md, area 1) — they run on the
+// Both the list and the drop are remote functions now (the transport ruling, area 1) — they run on the
 // zone SERVER with the signed-in session's bearer — so the registry is seeded on the mock catalog and
 // the drop asserted through its per-bearer ledger.
 //

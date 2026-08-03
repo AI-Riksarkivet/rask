@@ -68,14 +68,26 @@ test('the navbar carries one entry per zone and no governance column for an anon
 			nav.getByRole(kind === 'trigger' ? 'button' : 'link', { name: title, exact: true }),
 		).toBeVisible();
 	}
+	// PLUS exactly one non-zone entry, by ruling (2026-08-03, "projects and settings in topnavbar in
+	// main menu"): `Projects` is a route in THIS zone, not a zone — a project is the top of the
+	// hierarchy (project › warehouse › namespace › table), so it leads the bar rather than sitting
+	// inside one of the zones it scopes. Named here so a second non-zone entry cannot slip into the
+	// counts below unremarked.
+	await expect(nav.getByRole('link', { name: 'Projects', exact: true })).toHaveAttribute(
+		'href',
+		'/projects',
+	);
 	// …and nothing beyond those entries: the bar carries the zones, the whole zones, and nothing but
-	// the zones (panel rows live in portalled content, closed here, so they never count).
+	// the zones + Projects (panel rows live in portalled content, closed here, so they never count).
 	const triggerCount = Object.values(ZONE_ENTRIES).filter((e) => e.kind === 'trigger').length;
 	await expect(nav.getByRole('button')).toHaveCount(triggerCount);
-	await expect(nav.getByRole('link')).toHaveCount(Object.keys(ZONE_ENTRIES).length - triggerCount);
+	await expect(nav.getByRole('link')).toHaveCount(
+		Object.keys(ZONE_ENTRIES).length - triggerCount + 1,
+	);
 	// Every zone in the bar is a DIFFERENT app, so every plain link leaves this app's route manifest
-	// and must hard-navigate. There is no same-zone exception left to carve out: the one entry that
-	// used to be soft was Home, and it is no longer in the bar.
+	// and must hard-navigate. (`Projects` is the one bar entry this zone actually owns, so a reload on
+	// it is a wasted document load rather than a 404 — `zoneOf` reads the first path segment, and
+	// '/projects' has one. Correct-but-pessimistic; see nav-config.ts's Projects note.)
 	await expect(nav.getByRole('link', { name: 'Train', exact: true })).toHaveAttribute(
 		'data-sveltekit-reload',
 		'',

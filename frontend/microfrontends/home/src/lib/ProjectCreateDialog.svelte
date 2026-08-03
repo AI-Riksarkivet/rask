@@ -1,11 +1,11 @@
 <script lang="ts">
-	// Project creation (goal cond 6) — an estate-admin flow that COMPOSES existing APIs: creating the
-	// first (work) warehouse under a new project name creates the project implicitly; an optional
-	// second create with serving:"gold" provisions the per-tenant gold serving warehouse (DECISIONS
-	// "Medallion tiers"); the initial admin grant is one raw FGA tuple written through the shared
-	// `writeTuple` remote command (estate-admin gated at the catalog, like /v1/events). Every step
-	// toasts success/failure honestly — a partial
-	// outcome (work warehouse up, gold or grant failed) is NAMED, never rolled into a fake success.
+	// Project creation — an estate-admin flow that COMPOSES existing APIs: creating the first (work)
+	// warehouse under a new project name creates the project implicitly; an optional second create with
+	// serving:"gold" provisions the per-tenant gold serving warehouse (DECISIONS "Medallion tiers"); the
+	// initial admin grant is one raw FGA tuple written through the shared `writeTuple` remote command
+	// (estate-admin gated at the catalog, like /v1/events). Every step toasts success/failure honestly —
+	// a partial outcome (work warehouse up, gold or grant failed) is NAMED, never rolled into a fake
+	// success.
 	//
 	// The first create is what MINTS the tenant, and the catalog seeds the caller as the new project's
 	// `admin` on that very call (endpoints/warehouses.py — a brand-new project has no tuples, so the
@@ -13,12 +13,16 @@
 	// every later project-scoped op run on the creator's OWN project rung, and the admin field below is
 	// for granting a SECOND admin (or handing the tenant to someone else) — never the only thing
 	// standing between the new project and being ungovernable.
+	//
+	// Moved here from the lakehouse zone unchanged in behaviour (2026-08-03 ruling): a project is the
+	// TOP of the hierarchy, so the surface that MINTS one belongs beside the estate's project list in
+	// the main menu, not inside one project's catalog.
 	import { Dialog } from '@rask/ui/dialog';
 	import { toast } from 'svelte-sonner';
-	import { createWarehouse } from './remote/warehouses.remote';
+	import { createWarehouse } from '$lib/remote/warehouses.remote';
 	// The grant goes through the SAME remote command the FGA workbench writes with — one write door,
 	// so every raw tuple write is validated, audited, control-event-emitting and single-flight alike.
-	import { writeTuple } from '$lib/admin/remote/access.remote';
+	import { writeTuple } from '$lib/remote/access.remote';
 
 	let {
 		open = $bindable(false),
@@ -64,9 +68,10 @@
 		if (status === 403) return `Denied: ${what} needs the estate/project-admin rung.`;
 		if (status === 409) return `Conflict: ${what} — the id already exists.`;
 		if (status === 0) {
-			// Status 0 conflates two different failures (http.ts maps both to 0): the client's 8s
-			// timeout — where the catalog may still commit the write after we gave up — vs a true
-			// network refusal where nothing reached it. Only the latter can honestly claim "not applied".
+			// Status 0 conflates two different failures (an unreachable catalog is status 0 by the §1.0
+			// transport rule): the fetch's own timeout — where the catalog may still commit the write
+			// after we gave up — vs a true network refusal where nothing reached it. Only the latter can
+			// honestly claim "not applied".
 			return /TimeoutError|AbortError/.test(detail)
 				? `Timed out waiting on the catalog — ${what} may or may not have been applied; check the projects list before retrying.`
 				: `Catalog unreachable — ${what} was not applied.`;

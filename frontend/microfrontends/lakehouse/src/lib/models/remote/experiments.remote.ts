@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
 
 // Embedded experiment tracking (#53), in the zone's remote-function dialect — the /api/experiments
-// route moved here VERBATIM (open_transport.md blocked-port #4): the deployed Perses "Model Training"
+// route moved here VERBATIM (the transport ruling blocked-port #4): the deployed Perses "Model Training"
 // dashboard's exact PromQL against GreptimeDB's Prometheus endpoint, run server-side so no credential
 // or in-cluster URL ever reaches the browser. Session-gated on a governed stack exactly as before
 // (model identity is FGA-gated everywhere else, so the metric store must not leak it to anonymous

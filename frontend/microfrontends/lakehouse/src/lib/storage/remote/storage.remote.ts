@@ -5,7 +5,7 @@ import { parse } from '@rask/api';
 import type { ApiResult } from '@rask/api/client';
 import type { Store, StoreDraft } from '../storage';
 
-// The stores registry, in the zone's remote-function dialect (open_transport.md, area 1) — same
+// The stores registry, in the zone's remote-function dialect (the transport ruling, area 1) — same
 // names, same ApiResult shapes as the /capi client this replaces, transport only. Fixing one live
 // defect for free: `attachStore` used to POST through the GET-only /capi catch-all, a guaranteed 405
 // that left the attach form dead; a command() has its own endpoint.

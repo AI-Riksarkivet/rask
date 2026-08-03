@@ -11,7 +11,7 @@ import {
 import { lineageAuthHeaders } from '@rask/api/runs-feed';
 
 // The lineage plane's WRITE surface plus the two reads that belong to it, in the zone's
-// remote-function dialect (open_transport.md, area 2) — same names, same `ApiResult` shapes as the
+// remote-function dialect (the transport ruling, area 2) — same names, same `ApiResult` shapes as the
 // `$lib/api` client they replace, transport only.
 //
 // It wraps the SHARED `createLineageClient` rather than re-typing its paths: the client only ever

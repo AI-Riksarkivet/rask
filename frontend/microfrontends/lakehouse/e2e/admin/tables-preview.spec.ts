@@ -8,7 +8,7 @@ import { MOCK_CATALOG } from '../ports';
 // The fixture bytes here are REAL Arrow (built with the same library), so the parse path — schema
 // extraction, typed headers, BigInt/blob cells — is exercised, not mocked around.
 //
-// The query route is KEEP-BYTES by verdict (open_transport.md) and stays exactly where it was: a
+// The query route is KEEP-BYTES by verdict and stays exactly where it was: a
 // browser POST this file still intercepts. What moved is the detail aggregate the tab hangs off —
 // a remote query now, so its six upstream reads are seeded on the mock catalog instead.
 

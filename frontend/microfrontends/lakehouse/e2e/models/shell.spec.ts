@@ -54,13 +54,19 @@ test('an estate admin gets the zone triggers + the models sidebar leaves', async
 		await expect(nav.getByRole('button', { name: trigger, exact: true })).toBeVisible();
 	}
 	await expect(nav.getByRole('button')).toHaveCount(3);
-	// Home is the product mark, not a nav entry. With every panel closed the bar's LINKS are exactly
-	// the single-surface zones — one surface means a one-row dropdown would be noise; each panel
-	// TRIGGER must stay a button, or clicking it would navigate instead of opening the panel.
-	for (const link of ['Workbench', 'Annotate', 'Train', 'Studio']) {
+	// Home is the product mark, not a nav entry. With every panel closed the bar's LINKS are the
+	// single-surface zones — one surface means a one-row dropdown would be noise; each panel
+	// TRIGGER must stay a button, or clicking it would navigate instead of opening the panel. Projects
+	// joined them in the IA round (2026-08-03): not a zone but a home-zone route, leading the bar
+	// because a project is the top of the hierarchy the zones below it are scoped by.
+	for (const link of ['Projects', 'Workbench', 'Annotate', 'Train', 'Studio']) {
 		await expect(nav.getByRole('link', { name: link, exact: true })).toBeVisible();
 	}
-	await expect(nav.getByRole('link')).toHaveCount(4);
+	await expect(nav.getByRole('link')).toHaveCount(5);
+	await expect(nav.getByRole('link', { name: 'Projects', exact: true })).toHaveAttribute(
+		'href',
+		'/projects',
+	);
 	// This zone is NOT its own entry any more, and Access is not one either (in any shape).
 	await expect(nav.getByRole('link', { name: 'Models', exact: true })).toHaveCount(0);
 	await expect(nav.getByRole('link', { name: 'Access', exact: true })).toHaveCount(0);

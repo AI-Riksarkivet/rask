@@ -39,6 +39,27 @@ describe('isCrossZonePath', () => {
 		expect(isCrossZonePath('/default/lakehouse')).toBe(false);
 	});
 
+	it("treats the HOME zone's own routes as cross-app from every other zone", () => {
+		// The blind spot HOME_ROUTES closes. `home` is the catch-all, so its routes carry no zone
+		// prefix and read like same-zone absolute hrefs — but it is a separate SvelteKit app, so a soft
+		// nav into it 404s exactly like any zone hop. Only reachable with an owner: without one the
+		// gate cannot tell "/projects/x" written IN home from the same href written in the lakehouse.
+		expect(isCrossZonePath('/projects', 'lakehouse')).toBe(true);
+		expect(isCrossZonePath('/projects/acme', 'media')).toBe(true);
+		expect(isCrossZonePath('/projects/acme', 'home')).toBe(false);
+		expect(isCrossZonePath('/projects/acme')).toBe(false);
+		// …and it must not swallow a same-prefix path that is nobody's route.
+		expect(isCrossZonePath('/projectsomething', 'lakehouse')).toBe(false);
+	});
+
+	it('stops flagging a zone link written INSIDE that same zone, once the owner is known', () => {
+		// The other half of knowing the owner, and the reason it is opt-in: a lakehouse component
+		// linking to an absolute `/lakehouse/…` path is a same-app soft nav. Forcing a reload there
+		// costs a document load on an in-zone hop.
+		expect(isCrossZonePath('/lakehouse/catalog', 'lakehouse')).toBe(false);
+		expect(isCrossZonePath('/lakehouse/catalog', 'media')).toBe(true);
+	});
+
 	it('names every zone that has a base path, and only those', () => {
 		// The predicate is a hardcoded list; if a zone is added or renamed and this is not, the gate
 		// stops protecting the new zone without saying so.
@@ -91,7 +112,11 @@ describe('every cross-zone link in the estate hard-navigates', () => {
 	});
 
 	it.each(components)('%s', (rel) => {
-		const found = findViolations(readFileSync(resolve(FRONTEND_ROOT, rel), 'utf8'));
+		// The OWNING zone comes from the path (`microfrontends/<zone>/src/…`). Passing it is what lets
+		// the gate see the home zone's own routes: `/projects` is cross-app from every zone but home,
+		// and indistinguishable from a same-zone href without knowing who is asking.
+		const owner = rel.split('/')[1];
+		const found = findViolations(readFileSync(resolve(FRONTEND_ROOT, rel), 'utf8'), owner);
 		expect(
 			found,
 			found

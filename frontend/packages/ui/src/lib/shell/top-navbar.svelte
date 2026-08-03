@@ -10,6 +10,7 @@
 	import {
 		norm,
 		prefetchOnIntent,
+		mainMenuNav,
 		topNav,
 		under,
 		zoneOf,
@@ -58,10 +59,19 @@
 		class?: string;
 	} = $props();
 
-	const entries = $derived(topNav(me?.estate_admin ?? false));
+	// THE MAIN MENU CARRIES TWO ENTRIES, NOT EIGHT (2026-08-03 ruling). `zoneOf('') === ''` is the home
+	// zone — the estate root — and there the bar is Projects + Settings and nothing else: at that level
+	// you are choosing what to work on, not moving between zones. Step into any zone and the full bar
+	// returns, because that is where "take me to another zone" becomes a real question.
+	const inMainMenu = $derived(zoneOf(pathname) === '');
+	const entries = $derived(
+		inMainMenu ? mainMenuNav(me?.estate_admin ?? false) : topNav(me?.estate_admin ?? false),
+	);
 	// The identity-free base set: what the skeleton reserves space for while /v1/me is in flight
 	// (an admin's extra panel columns append on resolve — earned content, not reserved chrome).
-	const placeholders = topNav(false);
+	// Skeletons must reserve the bar you are ACTUALLY about to get, or the main menu flashes eight
+	// placeholder chips and settles into two.
+	const placeholders = $derived(inMainMenu ? mainMenuNav(false) : topNav(false));
 	// Cross-zone links leave THIS app's route manifest → hard nav (data-sveltekit-reload); the home
 	// zone owns the origin root, so its zone key is ''. A plain function over the `pathname` prop, not
 	// a `$derived`: the panel rows render inside bits-ui's portalled Content, and a derived read from

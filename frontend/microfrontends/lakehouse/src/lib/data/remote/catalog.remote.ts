@@ -25,7 +25,7 @@ import {
 	type UpdateRowsResult,
 } from '../catalog';
 
-// The catalog TABLE-LIFECYCLE plane, in the zone's remote-function dialect (open_transport.md, area 1)
+// The catalog TABLE-LIFECYCLE plane, in the zone's remote-function dialect (the transport ruling, area 1)
 // — same function names, same `ApiResult` shapes at every call site, transport only. Seventeen `/capi`
 // routes (the copy-pasted bearer-forward template, three of them with an action allowlist) collapse
 // into the named functions below: the allowlists dissolve into function identity, and the columns

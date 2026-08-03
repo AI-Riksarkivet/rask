@@ -5,7 +5,7 @@ import { parse } from '@rask/api';
 import type { ApiResult } from '@rask/api/client';
 import type { ModelDescribe, ModelsList, PromoteResponse } from '../catalog';
 
-// The model registry, in the zone's remote-function dialect (open_transport.md) — same names, same
+// The model registry, in the zone's remote-function dialect — same names, same
 // `ApiResult` shapes as the /capi client this replaces, transport only. The registry reads used to
 // ride the generic GET-only /capi catch-all and the promote had a narrow route of its own; both now
 // run on the zone server with the signed-in session's bearer, which keeps the promote's

@@ -12,7 +12,7 @@ import { MOCK_CATALOG } from '../ports';
 // What this suite guards is the honesty of the rendering: never claim a 0, never invent an actor, never
 // reinterpret the offset-less timestamp, and never list a version the format does not report.
 //
-// TRANSPORT (open_transport.md, area 1): the detail aggregate and the restore are remote functions and
+// TRANSPORT (the transport ruling, area 1): the detail aggregate and the restore are remote functions and
 // run on the zone SERVER, so they are seeded on — and asserted through — the mock catalog. The commit
 // log itself is unchanged: `/history` is a GET on the keep-bytes `[id]/[...rest]` proxy, still a
 // browser call, so its per-test knobs (status, payload, the `?limit=` it asked for) stay on page.route.

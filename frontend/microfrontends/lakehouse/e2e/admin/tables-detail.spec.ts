@@ -7,7 +7,7 @@ import { MOCK_CATALOG } from '../ports';
 // branches row, the tag-a-version form, and the two-click restore control — plus the maintenance,
 // schema-evolution, index, row-op and danger-zone writes.
 //
-// The transport is remote functions now (open_transport.md, area 1): the detail aggregate and every
+// The transport is remote functions now (the transport ruling, area 1): the detail aggregate and every
 // write run on the zone SERVER, which `page.route` cannot see. So the catalog wire is seeded on, and
 // asserted through, the mock catalog's per-bearer ledger — and the assertions get SHARPER, because
 // the upstream path is now the operation's own name (`add_columns`, `create_index`, `tags/create`)

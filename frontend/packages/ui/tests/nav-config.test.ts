@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { exact, norm, seg, topNav, under, zoneOf } from '../src/lib/shell/nav-config';
+import { exact, mainMenuNav, norm, seg, topNav, under, zoneOf } from '../src/lib/shell/nav-config';
 
 // The top-navbar IA + the shared matchers every zone builds its ZoneNav sidebar config with.
 // ONE ENTRY PER ZONE, and EVERY zone of the seven-zone estate is in the bar (R15) — home, lakehouse,
@@ -9,6 +9,11 @@ import { exact, norm, seg, topNav, under, zoneOf } from '../src/lib/shell/nav-co
 // bar mix a zone with an area inside that zone and forced Lakehouse to subtract the lineage subtree
 // from its own match; it is a column now. A new route becomes a row in a column — only a new ZONE
 // earns a new top-level entry.
+//
+// ONE exception, by ruling (2026-08-03, "projects and settings in topnavbar in main menu"):
+// `Projects` is a route in the HOME zone, not a zone. It earns an entry because a project is the TOP
+// of the hierarchy (project › warehouse › namespace › table) — not a peer of the zones in this bar
+// but the thing they are scoped by — so it leads it.
 describe('topNav', () => {
 	it('carries every zone of the estate, in order, for a non-admin (fail-closed)', () => {
 		// No 'Home': the origin root is reached by the project switcher and the sidebar header, not
@@ -18,6 +23,7 @@ describe('topNav', () => {
 		// destinations, so they follow and read one step quieter — six equally-weighted entries told a
 		// newcomer nothing about where to start.
 		expect(topNav(false).map((e) => e.title)).toEqual([
+			'Projects',
 			'Lakehouse',
 			'Compute',
 			'Workbench',
@@ -30,8 +36,12 @@ describe('topNav', () => {
 			topNav(false)
 				.filter((e) => e.tier === 'primary')
 				.map((e) => e.title),
-		).toEqual(['Lakehouse', 'Compute', 'Workbench']);
+		).toEqual(['Projects', 'Lakehouse', 'Compute', 'Workbench']);
 		expect(topNav(false).map((e) => e.href)).toEqual([
+			// `/projects` is a ROUTE in the home zone, not a zone base, so it carries NO trailing slash
+			// — SvelteKit's default trailingSlash is 'never' and '/projects/' would cost the 308 the
+			// zone-root slashes below exist to avoid. Opposite rule, same reason: match what is served.
+			'/projects',
 			'/lakehouse/catalog',
 			'/compute/',
 			'/workbench/',
@@ -46,27 +56,35 @@ describe('topNav', () => {
 		]);
 	});
 
-	it('keeps the same entries for an estate admin — admin earns COLUMNS, not an entry', () => {
-		expect(topNav(true).map((e) => e.title)).toEqual(topNav(false).map((e) => e.title));
+	it('gives an estate admin exactly ONE extra entry — Settings — and it comes last', () => {
+		// This used to assert the two bars were IDENTICAL ("admin earns COLUMNS, not an entry"), which
+		// was the right rule while governance was a column of the Lakehouse panel. The 2026-08-03
+		// ruling moved it out ("governance … under settings, in the topnavbar in main menu"), so the
+		// admin bar legitimately carries one more entry. The invariant that actually mattered is kept
+		// and made explicit: the extra entry is Settings and NOTHING else differs.
+		const base = topNav(false).map((e) => e.title);
+		expect(topNav(true).map((e) => e.title)).toEqual([...base, 'Settings']);
 	});
 
-	it('gates governance + operations behind estate-admin, inside the Lakehouse panel', () => {
+	it('gates OPERATIONS behind estate-admin inside the Lakehouse panel — governance is not there', () => {
 		const labels = (admin: boolean) =>
 			topNav(admin)
 				.find((e) => e.title === 'Lakehouse')!
 				.groups!.map((g) => g.label);
 		// The governance guarantee, both polarities: a non-admin's panel cannot even name them.
 		expect(labels(false)).toEqual(['Catalog', 'Models', 'Lineage']);
-		expect(labels(true)).toEqual(['Catalog', 'Models', 'Lineage', 'Governance', 'Operations']);
+		// Operations — streams, events, dead letters — is an operation ON the lakehouse, so it stays a
+		// column here. Governance is not a lakehouse feature and no longer appears in this panel at
+		// all; asserted as an ABSENCE so it cannot quietly return and exist in two places.
+		expect(labels(true)).toEqual(['Catalog', 'Models', 'Lineage', 'Operations']);
+		expect(labels(true)).not.toContain('Governance');
 	});
 
-	it('never exposes Access as a navbar entry — it is one row of the Governance column', () => {
+	it('never exposes Access as a navbar entry — it is one row of the Settings panel', () => {
 		expect(topNav(false).map((e) => e.title)).not.toContain('Access');
 		expect(topNav(true).map((e) => e.title)).not.toContain('Access');
-		const governance = topNav(true)
-			.find((e) => e.title === 'Lakehouse')!
-			.groups!.find((g) => g.label === 'Governance')!;
-		expect(governance.items.find((i) => i.title === 'Access')?.href).toBe(
+		const settings = topNav(true).find((e) => e.title === 'Settings')!;
+		expect(settings.items!.find((i) => i.title === 'Access')?.href).toBe(
 			'/lakehouse/governance/access',
 		);
 		// …and a non-admin gets no row carrying it at all, in any panel.
@@ -75,6 +93,52 @@ describe('topNav', () => {
 			...(e.groups ?? []).flatMap((g) => g.items),
 		]);
 		expect(nonAdminHrefs.map((i) => i.href)).not.toContain('/lakehouse/governance/access');
+	});
+
+	it('the MAIN MENU carries two entries — Projects and Settings — and nothing else', () => {
+		// By ruling (2026-08-03): "we should only see 2 items in topnavbar — projects and settings,
+		// nothing else". Standing at the estate root you are choosing what to work on, not moving
+		// between zones; the full zone bar there answers a question nobody has asked yet. The shell
+		// swaps on `zoneOf(pathname) === ''`, so this is the whole contract of that swap.
+		expect(mainMenuNav(true).map((e) => e.title)).toEqual(['Projects', 'Settings']);
+		// A non-admin gets ONE entry, not a disabled second one — Settings is absent, fail-closed.
+		expect(mainMenuNav(false).map((e) => e.title)).toEqual(['Projects']);
+		// No zone leaks in, in either identity — the assertion that catches a new zone being added to
+		// `topNav` and silently appearing at the estate root as well.
+		for (const admin of [false, true]) {
+			const titles = mainMenuNav(admin).map((e) => e.title);
+			for (const zone of ['Lakehouse', 'Compute', 'Workbench', 'Search', 'Annotate', 'Train', 'Studio']) {
+				expect(titles).not.toContain(zone);
+			}
+		}
+		// …and each entry is the zone bar's entry, not a second declaration of it: same href, same
+		// active-matching. `topNav` rebuilds its array per call, so identity is not the test — drift
+		// between two hand-written copies is what this catches.
+		for (const title of ['Projects', 'Settings']) {
+			const fromMain = mainMenuNav(true).find((e) => e.title === title)!;
+			const fromZoneBar = topNav(true).find((e) => e.title === title)!;
+			expect(fromMain.href).toBe(fromZoneBar.href);
+			for (const p of ['/projects', '/projects/acme', '/lakehouse/governance/access', '/media/']) {
+				expect(fromMain.match(p)).toBe(fromZoneBar.match(p));
+			}
+		}
+	});
+
+	it('closes the ruling: Settings carries governance, is estate-admin ONLY, and comes last', () => {
+		// The other half of "projects and settings in topnavbar in main menu". Fail-closed like the
+		// column it replaced: ABSENT for a non-admin rather than present-and-disabled, so the bar never
+		// names a surface the viewer is barred from.
+		expect(topNav(false).some((e) => e.title === 'Settings')).toBe(false);
+		const admin = topNav(true);
+		expect(admin.at(-1)!.title).toBe('Settings');
+		const settings = admin.find((e) => e.title === 'Settings')!;
+		expect(settings.items!.map((i) => i.title)).toEqual(['Access', 'Tenants', 'Audit']);
+		// It lights across the governance surfaces wherever they are served from today…
+		expect(settings.match('/lakehouse/governance/access')).toBe(true);
+		expect(settings.match('/lakehouse/governance/audit')).toBe(true);
+		// …and never steals the highlight from the zone that still hosts those routes' neighbours.
+		expect(settings.match('/lakehouse/catalog')).toBe(false);
+		expect(settings.match('/projects')).toBe(false);
 	});
 
 	it('active-match: Lakehouse lights across every area of its zone, lineage included', () => {
@@ -121,6 +185,25 @@ describe('topNav', () => {
 		expect(annotate.groups).toBeUndefined();
 		// …and Annotate is no longer buried inside Search's panel.
 		expect(search.items?.some((i) => i.href === '/annotator')).toBe(false);
+	});
+
+	it('leads with Projects — the top of the hierarchy, and NOT a second Home', () => {
+		// The 2026-08-03 ruling: there is one project concept, it is the top of the hierarchy, and its
+		// list/overview/create surfaces are main-menu pages in the home zone. It is a plain link (one
+		// surface plus its per-project detail — a one-row dropdown would be noise) and it matches the
+		// whole subtree so `/projects/<p>` keeps it lit.
+		for (const admin of [false, true]) {
+			const projects = topNav(admin).find((e) => e.title === 'Projects')!;
+			expect(projects.href).toBe('/projects');
+			expect(projects.items).toBeUndefined();
+			expect(projects.groups).toBeUndefined();
+			expect(projects.match('/projects')).toBe(true);
+			expect(projects.match('/projects/acme')).toBe(true);
+			// The origin root is the LANDING, a different page — this entry must never claim it, or the
+			// bar has grown the Home entry the assertion below forbids, spelled differently.
+			expect(projects.match('/')).toBe(false);
+			expect(projects.match('/lakehouse/catalog')).toBe(false);
+		}
 	});
 
 	it('carries NO Home entry — the origin root is not a peer zone', () => {
@@ -188,7 +271,10 @@ describe('topNav', () => {
 		// reached from the switcher, never from a row under one zone's catalog column.
 		expect(groups.Catalog).toEqual(['Tables', 'Namespaces', 'Warehouses', 'Storage']);
 		expect(groups.Models).toEqual(['Registry', 'Experiments', 'Pipeline']);
-		expect(groups.Governance).toEqual(['Access', 'Tenants', 'Audit']);
+		// No Governance column here any more — it is the Settings entry's panel (2026-08-03 ruling),
+		// asserted in full by 'closes the ruling: Settings carries governance…' above. Pinned as an
+		// absence so the rows cannot come to exist in both places.
+		expect(groups.Governance).toBeUndefined();
 		expect(groups.Operations).toEqual(['Events', 'Streams', 'DLQ']);
 		expect(groups.Lineage).toEqual(['Datasets', 'Jobs', 'Runs', 'Columns', 'Graph']);
 	});
