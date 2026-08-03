@@ -122,6 +122,17 @@ dependency for crash-recovery semantics we already get from idempotency keys.
 > caller-chosen key — the honest signal is finding yourself wanting to *generate* an id mid-saga —
 > the argument above stops applying and a workflow engine earns its dependency. That is a real
 > possibility for silver→gold quality promotion, whose assertions may need per-attempt run identity.
+>
+> **Tested against the ingest run 2026-08-03, and UPHELD a second time.** `open_ingest.md` proposed
+> Dapr Workflow as the pre-bronze ingest run's orchestrator and recorded it as a settled decision; it
+> was not settled, and the criterion above is what decided it. Every step of that run is idempotent by
+> a key the caller chose or the source supplied — the run id from the caller's `Idempotency-Key`, the
+> unit and fragment writes from the unit key, the commit from `id = hash(source_uri)`, publication
+> from a tag advance — so nothing is minted mid-run and the honest signal never fires. The one real
+> gap, a run whose enumeration dies half-published, is closed by making enumeration itself chunked
+> work-queue messages rather than by adopting an engine. Full reasoning, including the strongest
+> argument for adopting anyway and why it loses: `docs/DECISIONS.md` § "Ingest orchestration — Dapr
+> Workflow stays un-adopted".
 
 **Lance — no operator exists, none is missing.** Lance is a format + libraries; its "control
 plane" is the manifest on S3, and CAS commits are the reconciler. The operator-shaped concerns it

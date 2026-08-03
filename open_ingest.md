@@ -217,8 +217,8 @@ path — but `:111` is inside `submit_stage_job` (`:54`), whose only caller is
 pattern to copy lives in the same file: `submit_train_job` (`:169`) does not await, and
 `:16-21` documents that as the intended async shape. A13 owns this re-cut.
 
-**C13 · Adopting Dapr Workflow contradicts a standing, recently-upheld ruling — settle it in
-`DECISIONS.md` before building on it.** `docs/OPERATORS.md:95-99` pins *"Dapr Workflow stays
+**C13 · Dapr Workflow contradicted a standing pin — SETTLED 2026-08-03: the pin holds, and this
+document's adoption is overturned (see §7.6).** `docs/OPERATORS.md:95-99` pins *"Dapr Workflow stays
 un-adopted"* — re-examined and **upheld 2026-07-28** (`:100-123`) with an explicit reopen
 criterion at `:121-123`: *"If a multi-step path appears whose steps cannot be made idempotent
 by any caller-chosen key … a workflow engine earns its dependency."* `chart/values.yaml:1142`
@@ -1927,8 +1927,17 @@ estate code file:line before implementing against them. Or stop after 25 turns.
    estate on 1.18, `dapr-ext-workflow`) is the run orchestrator — estate-native, zero new
    infrastructure. Units stay on the JetStream work queue; the workflow orchestrates
    phases/chunks only. Temporal is off the table unless Dapr Workflow proves inadequate in
-   practice. **REOPENED 2026-08-03 (§0 C13) — this resolution contradicts a standing,
-   recently-upheld estate pin and cannot stand on this document's authority alone.**
+   practice. **OVERTURNED 2026-08-03 — the pin held on re-test; Dapr Workflow is NOT adopted.**
+   Ruled in `docs/DECISIONS.md` § "Ingest orchestration — Dapr Workflow stays un-adopted" and recorded
+   at `docs/OPERATORS.md` §4. The criterion is whether any step resists a caller-chosen idempotency
+   key; every step of the ingest run has one (run id from the caller's `Idempotency-Key`, unit and
+   fragment writes from the unit key, commit from `id = hash(source_uri)`, publication from a tag
+   advance), so nothing is minted mid-run. **The run is orchestrated by the estate's existing parts:**
+   a JetStream durable work queue for units AND for enumeration chunks (chunking is what closes the
+   one real gap — an API pod dying mid-enumeration), `packages/tracker` as the unit ledger,
+   last-worker CAS publishing `ingest.run.<id>.drained`, and the single dead-man timer A13 permits.
+   `dapr-ext-workflow` is added to no pyproject. Superseded reasoning follows.
+   ~~This resolution contradicts a standing, recently-upheld estate pin.~~
    `docs/OPERATORS.md:95-99` rules "Dapr Workflow stays **un-adopted**" — re-examined and
    UPHELD 2026-07-28 (`:100-123`), repeated at `chart/values.yaml:1142` — on the ground that
    every multi-step path in the estate is token-keyed idempotent, so JetStream's
