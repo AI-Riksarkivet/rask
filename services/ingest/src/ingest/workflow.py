@@ -52,6 +52,11 @@ if TYPE_CHECKING:
 # re-arms. A13 permits exactly one such timer per run and this is it.
 DRAIN_FALLBACK = timedelta(minutes=10)
 
+# One child workflow per this many keys. Small enough that a chunk's result stays compact in the
+# state store, large enough that a million-unit run does not spawn a million children. The plan's
+# own figure (open_ingest.md: "child workflow per ~1-10k keys").
+CHUNK_SIZE = 1000
+
 # Retries are the activity's, not a hand-rolled loop: Dapr owns the backoff and the replay.
 ACTIVITY_RETRY = wf.RetryPolicy(
     first_retry_interval=timedelta(seconds=5),
@@ -149,8 +154,14 @@ def chunk_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, An
 
 
 def emit_start(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None:
-    """Lineage START, through lineage-kit's emitter. A run is visible before it does work."""
-    raise NotImplementedError("wired in the lineage step of P1")
+    """Lineage START, through lineage-kit. A run is visible in the graph before it does any work.
+
+    Deliberately first: the medallion emitted only on COMPLETE, so a run that died mid-harvest left
+    NO record at all — not a failed one, none. A START here means a crashed run is a visibly
+    incomplete run rather than an absence someone has to notice.
+    """
+    spec = RunSpec.model_validate(payload)
+    _lineage().start(spec.run_id, spec.project, spec.dataset, spec.kind, spec.options)
 
 
 def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -160,28 +171,87 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> l
     survive a pod death: as an activity its result is persisted and replayed, which is precisely the
     gap that made a half-published enumeration the one un-redeliverable failure in the queue-only
     design.
+
+    Returns CHUNKS, never units. One child workflow per CHUNK_SIZE keys returns one compact result;
+    a million activity results would melt the state store, which is the whole reason chunking exists
+    and the reason this plane needs no separate ledger.
     """
-    raise NotImplementedError("wired in the sources step of P1")
+    from ingest.sources import SourceSpec, build_source, iter_units
+
+    spec = RunSpec.model_validate(payload)
+    source_spec = SourceSpec(kind=spec.kind, project=spec.project, dataset=spec.dataset, options=spec.options)
+    keys = [obj.uri for obj in iter_units(build_source(source_spec))]
+
+    chunks: list[dict[str, Any]] = []
+    for index in range(0, len(keys), CHUNK_SIZE):
+        window = keys[index : index + CHUNK_SIZE]
+        chunks.append(ChunkSpec(run_id=spec.run_id, chunk_id=f"{spec.run_id}-c{index // CHUNK_SIZE}", keys=window).model_dump())
+    return chunks
 
 
 def publish_units(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> int:
-    """Publish this chunk's units onto the JetStream work queue (nats-py, WorkQueuePolicy)."""
-    raise NotImplementedError("wired in the worker step of P1")
+    """Publish this chunk's units onto the JetStream work queue.
+
+    Idempotent by construction under replay: JetStream dedupes on the message id within the stream's
+    duplicate window, and a unit's id is derived from (run, key) — both stable. A replayed activity
+    therefore re-publishes without re-queuing work, which matters because Dapr replays an activity
+    whose result was not durably recorded before the pod died.
+    """
+    from ingest.runtime import publish_chunk_units
+
+    chunk = ChunkSpec.model_validate(payload)
+    return _run_async(publish_chunk_units(chunk))
 
 
 def reconcile_chunk(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str, Any]:
-    """Storage truth for a chunk whose drained signal was lost — the dead-man's one read."""
-    raise NotImplementedError("wired in the worker step of P1")
+    """Storage truth for a chunk whose drained signal was lost — the dead-man's one read.
+
+    Asks the QUEUE what is outstanding rather than a ledger: with WORK_QUEUE retention an acked unit
+    is gone, so `num_pending == 0` means the chunk really did drain and the signal was simply lost.
+    Degrades to slow, never to stuck.
+    """
+    from ingest.runtime import reconcile_from_queue
+
+    chunk = ChunkSpec.model_validate(payload)
+    return _run_async(reconcile_from_queue(chunk))
 
 
 def finalize(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str, Any]:
     """The lander: fragments -> ONE Lance commit, registered through the catalog."""
-    raise NotImplementedError("wired in the lander step of P1")
+    from ingest.runtime import finalize_run
+
+    spec = RunSpec.model_validate(payload["spec"])
+    return finalize_run(spec, payload.get("fragments") or [], payload.get("errors") or {})
 
 
 def emit_terminal(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None:
-    """Lineage COMPLETE or FAIL — the FAIL branch is the gap the medallion head never closed."""
-    raise NotImplementedError("wired in the lineage step of P1")
+    """Lineage COMPLETE or FAIL — the FAIL branch is the gap the medallion head never closed.
+
+    A run that fails must leave a FAIL record, not silence. The medallion turned a ValueError into a
+    400 and emitted nothing, so a failed harvest was indistinguishable from one that never started.
+    """
+    spec = RunSpec.model_validate(payload["spec"])
+    outcome = RunOutcome.model_validate(payload["outcome"])
+    _lineage().terminal(spec.run_id, outcome.status, outcome.committed_version, outcome.rows, outcome.errors)
+
+
+def _lineage() -> Any:  # noqa: ANN401 — resolved lazily so importing this module needs no emitter
+    from ingest.runtime import lineage_emitter
+
+    return lineage_emitter()
+
+
+def _run_async(coro: Any) -> Any:  # noqa: ANN401
+    """Run a coroutine from a SYNC activity body.
+
+    Dapr Workflow activities are sync callables, but the queue client is async — `nats-py` has no
+    sync surface. A fresh loop per activity is correct here rather than wasteful: an activity is a
+    short, isolated unit that Dapr may replay on any worker thread, so there is no long-lived loop to
+    attach to and nothing to keep warm between invocations.
+    """
+    import asyncio
+
+    return asyncio.run(coro)
 
 
 WORKFLOWS = (ingest_run, chunk_run)
