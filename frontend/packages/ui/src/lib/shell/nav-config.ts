@@ -60,6 +60,15 @@ export type ZoneNavGroup = {
 	defaultCollapsed?: boolean;
 };
 
+/** The zone ROOT row — rendered above every group, with no group label of its own.
+ *
+ *  A zone root is not a member of any thematic section: it is the landing that SUMMARISES all of
+ *  them. Compute's Overview had to sit inside "Cluster" purely because `groups[]` was the only
+ *  container on offer, which reads as "cluster overview" when it actually covers jobs and serve
+ *  too. Optional on purpose — a zone whose root genuinely belongs to a section (media's Search
+ *  really is Explore) should keep it there rather than promote it. */
+export type ZoneNavRoot = ZoneNavLeaf;
+
 /** The per-zone sidebar config: each zone passes ITS OWN routes to the shared AppShell. The zone
  *  list itself lives in the top navbar (`topNav`) — the sidebar never renders other zones.
  *
@@ -72,6 +81,8 @@ export type ZoneNavGroup = {
 export type ZoneNav = {
 	/** The zone's display name — shown as the sidebar's own heading. */
 	title: string;
+	/** The landing row, above and outside every group. See {@link ZoneNavRoot}. */
+	root?: ZoneNavRoot;
 	groups: ZoneNavGroup[];
 };
 
@@ -80,6 +91,13 @@ export type ZoneNav = {
 export function zoneNavLeaves(nav: ZoneNav | null | undefined): ZoneNavLeaf[] {
 	if (!nav) return [];
 	const out: ZoneNavLeaf[] = [];
+	// The root FIRST, and it must be here: zone-contract walks this list to gate every href
+	// (deploy paths, cross-zone reload, trailing slashes). A root that skipped it would be the one
+	// link in the zone nobody checks.
+	if (nav.root) {
+		out.push(nav.root);
+		if (nav.root.children) out.push(...nav.root.children);
+	}
 	for (const group of nav.groups) {
 		for (const item of group.items) {
 			out.push(item);

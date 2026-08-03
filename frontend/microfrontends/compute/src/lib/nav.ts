@@ -12,11 +12,14 @@ import { exact, seg, type ZoneNav } from '@rask/ui/shell';
 // do I debug it. A flat list of seven made "Logs" and "Cluster" look like peers.
 export const COMPUTE_ZONE_NAV: ZoneNav = {
 	title: 'Compute',
+	// Overview is the ZONE ROOT, not a Cluster row. It summarises all three groups — jobs and serve
+	// as much as node health — so filing it under "Cluster" read as "cluster overview" and misnamed
+	// the one page that covers everything. `root` renders it above the groups, ungrouped.
+	root: { title: 'Overview', href: '/compute', match: exact('/compute'), icon: Gauge },
 	groups: [
 		{
 			label: 'Cluster',
 			items: [
-				{ title: 'Overview', href: '/compute', match: exact('/compute'), icon: Gauge },
 				{ title: 'Nodes', href: '/compute/cluster', match: seg('/compute/cluster'), icon: Server },
 				{ title: 'Actors', href: '/compute/actors', match: seg('/compute/actors'), icon: Boxes },
 			],

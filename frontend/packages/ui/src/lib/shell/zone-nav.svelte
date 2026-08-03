@@ -43,6 +43,26 @@
 {/snippet}
 
 {#if nav}
+	{#if nav.root}
+		<!-- The zone ROOT, above and outside every group: it is the landing that summarises the
+		     sections, not a member of one. No GroupLabel — a one-row labelled section is noise. -->
+		<Sidebar.Group>
+			<Sidebar.GroupContent>
+				<Sidebar.Menu>
+					<Sidebar.MenuItem>
+						<Sidebar.MenuButton
+							tooltipContent={nav.root.title}
+							isActive={isActive(nav.root, pathname)}
+						>
+							{#snippet child({ props })}
+								{@render leafLink(nav.root!, props)}
+							{/snippet}
+						</Sidebar.MenuButton>
+					</Sidebar.MenuItem>
+				</Sidebar.Menu>
+			</Sidebar.GroupContent>
+		</Sidebar.Group>
+	{/if}
 	{#each nav.groups as group (group.label)}
 		{@const open = groupOpen(group.items, group.defaultCollapsed, pathname)}
 		<Collapsible.Root {open} class="group/collapsible">
