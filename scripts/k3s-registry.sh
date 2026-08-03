@@ -14,7 +14,14 @@ if docker ps --format '{{.Names}}' | grep -qx "$REG_NAME"; then
   echo ">> registry '$REG_NAME' already running"
 else
   echo ">> starting registry '$REG_NAME' on :$REG_PORT"
-  docker run -d --restart=always -p "${REG_PORT}:5000" --name "$REG_NAME" registry:2 >/dev/null
+  # REGISTRY_STORAGE_DELETE_ENABLED: registry:2 refuses DELETE without it, and without DELETE there is
+  # no way to reclaim anything — `registry garbage-collect` only sweeps blobs no manifest references.
+  # This matters because Tilt pushes a UNIQUELY TAGGED image on every single rebuild and nothing ever
+  # removes the old ones: measured 113 tags of web-home and 62 of lance-rest-catalog, 83.9 GB of dev
+  # registry. `make registry-gc` is the reclaim; this flag is what makes it possible at all.
+  docker run -d --restart=always -p "${REG_PORT}:5000" --name "$REG_NAME" \
+    -e REGISTRY_STORAGE_DELETE_ENABLED=true \
+    registry:2 >/dev/null
 fi
 
 # 2. Tell k3s containerd to reach localhost:<port> over plaintext HTTP.

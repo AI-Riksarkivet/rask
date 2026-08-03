@@ -142,6 +142,22 @@ images themselves are still built by `docker_build_with_restart`, not Dagger** �
 > sources** before `bun install`, so touching one zone invalidates the install layer of all seven images
 > (~90 s each). Both are open.
 
+**The dev loop leaks disk in two places, and both grew past a terabyte before anyone looked.**
+`make dev-gc` reclaims both; `make registry-gc` / `make dagger-gc` do one each.
+
+- **The Dagger engine cache.** Its default GC ceiling is proportional to the disk — measured on a 7.4 TB
+  volume: `maxUsedSpace` **5.67 TB**, `minFreeSpace` 1.51 TB — so it effectively never collects.
+  `dagger-engine-rask-state` reached **1.126 TB**. `make dagger-engine` now writes an explicit 60 GB cap
+  (`DAGGER_MAX_USED_SPACE` to change it), and the script recreates the engine when the CONFIG changes,
+  not only when the version does — otherwise a new ceiling is written to disk and never applied.
+- **The dev registry.** Tilt pushes a uniquely tagged image on *every* rebuild and nothing removes the
+  old ones: measured **113 tags of `web-home`**, 62 of `lance-rest-catalog`, 83.9 GB. The registry is now
+  created with `REGISTRY_STORAGE_DELETE_ENABLED=true` — without it `registry:2` refuses DELETE and
+  nothing can be reclaimed at all.
+
+Both are safe to wipe: every artefact is reproducible with `dagger call image|zone-image … publish`, and
+k3s holds running images in its own containerd cache.
+
 **`make tilt-verify` is not optional ceremony.** This repo shipped a Tiltfile for months
 that could never have worked — it synced into a path that did not exist, against services
 whose uvicorn had no `--reload`, into containers with a read-only rootfs — and nothing

@@ -1,4 +1,4 @@
-.PHONY: help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap tilt-registry tilt-up tilt-verify tilt-down e2e frontend-images prod-render-check alert-rules-check
+.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap tilt-registry tilt-up tilt-verify tilt-down e2e frontend-images prod-render-check alert-rules-check
 
 help:
 	@echo "Targets:"
@@ -510,6 +510,25 @@ e2e-ray-ci: bootstrap ## Governed ray-ON kind stack + real KubeRay + both Ray su
 # Vite HMR). See the Tiltfile header.
 dagger-engine: ## One-time: a Dagger engine that can push to the plain-HTTP dev registry
 	@bash scripts/dagger-engine.sh
+
+# ---- reclaiming the dev loop's disk -----------------------------------------
+# Both of these grow WITHOUT BOUND if nobody looks, and they grew to ~1.2 TB before anyone did:
+#   * the Dagger engine cache — its default GC ceiling is proportional to the disk (5.67 TB on a 7.4 TB
+#     volume), so it never collected. `make dagger-engine` now writes an explicit 60 GB cap; this target
+#     is the manual sweep.
+#   * the dev registry — Tilt pushes a uniquely tagged image on EVERY rebuild and nothing removes the
+#     old ones (measured: 113 tags of web-home, 83.9 GB).
+# Both are safe: every artefact is reproducible with `dagger call image|zone-image ... publish`, and k3s
+# holds running images in its own containerd cache.
+registry-gc: ## Drop all but the newest tags in the dev registry, then sweep blobs
+	@bash scripts/registry-gc.sh
+
+dagger-gc: ## Prune the Dagger engine's build cache to its configured ceiling
+	@_EXPERIMENTAL_DAGGER_RUNNER_HOST=docker-container://$${DAGGER_ENGINE_NAME:-dagger-engine-rask} \
+	  dagger core engine local-cache prune
+
+dev-gc: registry-gc dagger-gc ## Reclaim both the registry and the Dagger cache
+	@df -h / | tail -1 | awk '{print ">> disk: "$$4" free, "$$5" used"}'
 
 tilt-registry: ## One-time: local image registry + point k3s at it (sudo; restarts k3s)
 	bash scripts/k3s-registry.sh
