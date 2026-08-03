@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.11
+# syntax=docker/dockerfile:1.11-labs
 # rask frontend image — SvelteKit SSR built with Bun and RUN by the Bun runtime
 # (svelte-adapter-bun: ships a Bun *server*, not static files). Build context = repo root.
 #
@@ -24,22 +24,37 @@ FROM oven/bun:1-debian@sha256:9dba1a1b43ce28c9d7931bfc4eb00feb63b0114720a0277a8f
 ARG APP=home
 WORKDIR /src
 
-# Every JS workspace member must be present or `bun install --frozen-lockfile`
-# errors with "Workspace not found". Copy all of frontend/microfrontends wholesale so new
-# MFE apps don't silently break this build (.dockerignore strips node_modules/
-# .svelte-kit). /src IS the frontend workspace root: frontend/* is copied to the root
-# of the build stage so bun's workspace globs (microfrontends/*, packages/*) resolve
-# unchanged.
-COPY frontend/microfrontends microfrontends
-COPY frontend/packages packages
+# LAYER ORDER IS THE COST MODEL OF THIS FILE. `bun install --frozen-lockfile` needs every
+# workspace member PRESENT — but only its package.json, not its sources. This build used to copy
+# all eight zones' sources before the install, so touching ONE zone invalidated the install layer
+# of every zone image (~90 s x 8 on any one-line change). Manifests first, install, sources after:
+# a source edit now leaves the install layer cached and re-runs only the two build steps.
+#
+# `--parents` needs the -labs frontend (verified: 1.11 rejects it with "unknown flag"), and the
+# `/./` pivot re-roots the copy so `frontend/microfrontends/x/package.json` lands at
+# `microfrontends/x/package.json` — /src IS the frontend workspace root, so bun's globs
+# (microfrontends/*, packages/*) resolve unchanged. The glob ALSO keeps the old wholesale-copy
+# guarantee: a new member is picked up with no edit here, because a path pattern cannot go stale
+# the way a hand-kept list can.
 COPY frontend/package.json frontend/bun.lock frontend/turbo.json ./
 COPY frontend/.oxlintrc.json frontend/.oxfmtrc.json ./
 # patchedDependencies (e.g. svelte-adapter-bun) — bun install --frozen-lockfile
 # resolves these patch files relative to the project root, so they must be present.
 COPY frontend/patches patches
+COPY --parents frontend/./microfrontends/*/package.json /src/
+COPY --parents frontend/./packages/*/package.json /src/
 
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install --frozen-lockfile
+
+# Sources AFTER the install, and ONLY this zone's. Every member's package.json is already present
+# from the manifest globs above — which is all bun needs the OTHERS for — so copying their sources
+# too only re-ran this image's build steps whenever any other zone changed (~67 s x 8 images on a
+# one-zone edit; measured 2 s once narrowed). COPY overlays rather than replaces, so the
+# node_modules symlink trees bun just created inside each member survive.
+# (.dockerignore strips node_modules/.svelte-kit/.turbo.)
+COPY frontend/microfrontends/${APP} microfrontends/${APP}
+COPY frontend/packages packages
 
 # Pre-build packages/ui (svelte-package → dist/) so its dist exports resolve during
 # the app build. The ui svelte.config.js is already @sveltejs/package@2-compatible.

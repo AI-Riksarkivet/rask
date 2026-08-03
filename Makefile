@@ -9,7 +9,7 @@ help:
 	@echo "  dev-frontends-k3s                      — same, but /api → the IN-CLUSTER gateway (port-forwarded)"
 	@echo "  home frontend-<zone>                   — run one zone each (e.g. frontend-media)"
 	@echo "  tilt-up                                — THE in-cluster dev loop: hot-reload on k3s (needs k3s-up; once: tilt-registry + dagger-engine)"
-	@echo "  tilt-verify-all                        — PROVE live_update on all 3 paths (service / zone / @rask/ui)"
+	@echo "  tilt-verify-all                        — PROVE live_update on all 3 paths (service / zone / packages-ui)"
 	@echo "  dev-gc                                 — reclaim the dev registry + the Dagger cache"
 	@echo "  ray-up ray-down ray-status   ray-up-htr (2-GPU pool, GPUs 0,1)"
 	@echo "  serve-up serve-down serve-status   serve-up-both (transcribe+htrflow)"
@@ -556,9 +556,9 @@ tilt-verify: ## Prove Tilt's live_update actually reaches a running pod (SERVICE
 	@bash scripts/tilt-verify.sh
 
 # All THREE reload paths, because they fail independently and each one was broken on its own at some
-# point: a wheel synced into site-packages, a zone's COMPILED build/, and @rask/ui's dist/ (the only
+# point: a wheel synced into site-packages, a zone's COMPILED build/, and the ui package's dist/ (the only
 # package with a build step — zones bundle its dist, never its source).
-tilt-verify-all: ## Prove live_update on all three paths: python service, zone, and @rask/ui
+tilt-verify-all: ## Prove live_update on all three paths: python service, zone, and packages/ui
 	@bash scripts/tilt-verify.sh
 	@SERVICE=home TIMEOUT=300 bash scripts/tilt-verify.sh
 	@SERVICE=ui   TIMEOUT=300 bash scripts/tilt-verify.sh

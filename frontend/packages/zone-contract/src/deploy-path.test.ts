@@ -72,9 +72,21 @@ describe('the zone image can actually install the workspace', () => {
 	});
 
 	it.each(workspaces)('the builder copies the %s workspace', (glob) => {
-		// `packages/*` is covered by `COPY frontend/packages`, `eslint-rules` would need its own line.
+		// What bun install needs from every member is its package.json — PRESENCE, not sources. The
+		// dockerfile now satisfies that with a `COPY --parents frontend/./<root>/*/package.json` manifest
+		// glob BEFORE the install (so one zone's edit stops invalidating every zone's install layer), and
+		// copies sources per-member after. Either shape guarantees the property this test protects: a new
+		// workspace member cannot be silently absent at `bun install --frozen-lockfile`. A hand-listed
+		// member (the eslint-rules failure this suite exists for) would satisfy neither.
 		const root = `frontend/${glob.replace(/\/\*+$/, '')}`;
-		expect(copied, `.docker/frontend.dockerfile never COPYs ${root}`).toContain(root);
+		const wholesale = copied.includes(root);
+		const manifestGlob = copied.some((t) =>
+			t.startsWith(`${root.replace('frontend/', 'frontend/./')}/*/`),
+		);
+		expect(
+			wholesale || manifestGlob,
+			`.docker/frontend.dockerfile neither COPYs ${root} wholesale nor globs ${root}/*/package.json before bun install`,
+		).toBe(true);
 	});
 });
 
