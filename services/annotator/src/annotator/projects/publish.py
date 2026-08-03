@@ -404,18 +404,32 @@ def _consensus_counts(project: AnnotationProject, plan: PublishPlan) -> dict[str
     }
 
 
-def source_pin(plan: PublishPlan) -> tuple[str, int] | None:
+def source_pin(plan: PublishPlan, *, delimiter: str = "$") -> tuple[str, int] | None:
     """The reproducibility pin (§7.2): the ONE (dataset, version) every published item came from.
 
     Pins only when EVERY published item names the same one dataset with the same one CAPTURED
     version. Two datasets, two versions of one dataset, any uncaptured version, or any item that
     recorded no dataset at all → None: the run facet still reports the per-dataset truth, but a
     single fabricated pin would be a lie — and the pin surfaces as the lineage READ edge, which
-    downstream reproduction trusts."""
+    downstream reproduction trusts.
+
+    …and the same rule applies to the NAME. The pin travels to the catalog as a table reference, so
+    it must BE one: a namespace-qualified id like ``bronze$pages``. `ItemSource.where` carries the
+    MEDIA dataset name, which for an unregistered corpus (a Lance directory the catalog has never
+    heard of) is a bare word. Sending it made the catalog authorize `table:transcripts_v2` — an
+    object that does not exist — and FGA denies before it checks existence, so the ENTIRE publish
+    failed with `can_get_metadata required on table:transcripts_v2` for the sake of a provenance
+    nicety. Observed live, 2026-08-03.
+
+    An unregistered corpus simply has no lineage READ edge to draw: there is no catalog node at the
+    other end. Refusing to name one is the same discipline as refusing to fabricate a version — and
+    the per-dataset truth still reaches the run facet either way."""
     if plan.sources_uncaptured or len(plan.dataset_versions) != 1:
         return None
     dataset, versions = next(iter(plan.dataset_versions.items()))
     if len(versions) != 1 or versions[0] is None:
+        return None
+    if delimiter not in dataset:
         return None
     return dataset, versions[0]
 

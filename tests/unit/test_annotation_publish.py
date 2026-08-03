@@ -363,24 +363,38 @@ def _pin_task(task_id: str, dataset: str | None, version: int | None) -> Task:
 
 
 def test_source_pin_pins_exactly_one_dataset_at_one_version() -> None:
+    """The dataset is a namespace-qualified CATALOG TABLE id, because that is what the pin becomes.
+
+    This case used to assert a bare `"demo"`, which pinned the defect: the pin travels to the
+    catalog as a table reference and a bare word is not one."""
     from annotator.projects.publish import source_pin
 
     project = AnnotationProject(project_id="p1", tenant="acme", slug="vasa")
-    pairs = [(_pin_task("t0", "demo", 24), None), (_pin_task("t1", "demo", 24), None)]
+    pairs = [(_pin_task("t0", "bronze$pages", 24), None), (_pin_task("t1", "bronze$pages", 24), None)]
     plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
 
-    assert source_pin(plan) == ("demo", 24)
+    assert source_pin(plan) == ("bronze$pages", 24)
 
 
 @pytest.mark.parametrize(
     ("specs", "why"),
     [
-        ([("demo", 24), ("other", 3)], "two datasets — a single pin would lie about one of them"),
-        ([("demo", 24), ("demo", 25)], "two VERSIONS of one dataset — same lie"),
-        ([("demo", None), ("demo", 24)], "a missing capture poisons the pin — never fabricate"),
-        ([("demo", None)], "no version captured at all"),
+        ([("bronze$pages", 24), ("bronze$other", 3)], "two datasets — a single pin would lie about one of them"),
+        ([("bronze$pages", 24), ("bronze$pages", 25)], "two VERSIONS of one dataset — same lie"),
+        ([("bronze$pages", None), ("bronze$pages", 24)], "a missing capture poisons the pin — never fabricate"),
+        ([("bronze$pages", None)], "no version captured at all"),
         ([(None, None)], "no dataset recorded"),
-        ([(None, None), ("demo", 24)], "an item with NO recorded dataset mixed with a captured one — a pin would claim provenance some items never had"),
+        (
+            [(None, None), ("bronze$pages", 24)],
+            "an item with NO recorded dataset mixed with a captured one — a pin would claim provenance some items never had",
+        ),
+        # Observed live 2026-08-03: `where` carries the MEDIA dataset name, and for an unregistered
+        # corpus that is a bare word. Sent as a table reference it made the catalog authorize
+        # `table:transcripts_v2` — an object that does not exist — and FGA denies before checking
+        # existence, so the WHOLE publish failed with "can_get_metadata required" for a provenance
+        # nicety. An unregistered corpus has no catalog node to draw a READ edge to.
+        ([("transcripts_v2", 1)], "a bare media dataset name is not a catalog table reference"),
+        ([("transcripts_v2", 1), ("transcripts_v2", 1)], "…however many items agree on it"),
     ],
 )
 def test_source_pin_refuses_anything_ambiguous(specs: list, why: str) -> None:
