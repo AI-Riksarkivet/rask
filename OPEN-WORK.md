@@ -451,10 +451,21 @@ made seedable — the `open_label.md` waves, folded here as that file retires.**
     writer seam exposes only `merge_upsert`/`merge_insert_only`/`delete`, no create. So a fresh
     estate's FIRST save has nothing to write into. Fix by making the table exist (a create-if-absent
     verb on the writer seam), not by widening an except clause.
-- **NEW, owner-reported 2026-08-03, NOT diagnosed: a `derived_inert` flood in the annotate view.**
-  Hundreds of `https://svelte.dev/e/derived_inert` from the compiled bundle — a `$derived` read
-  after its owner was destroyed, or written to. Volume suggests a per-frame path (the PixiJS canvas
-  loop). Needs a dev-build repro to name the component; the minified stack is not enough.
+- ~~**a `derived_inert` flood in the annotate view**~~ **FIXED 2026-08-03 (`6277dcc`).** Worth
+  recording what it was NOT, because two plausible readings are both wrong and both cost time. It is
+  not an error — it is a runtime **WARNING** (`console.warn` from Svelte's `deriveds.js`), which is
+  exactly why a production build prints only the bare URL and the stack names no component. And it is
+  not a misplaced rune: every `$derived` in the annotator and `@rask/engine` is correctly placed —
+  none inside an effect, callback, ticker or `{@attach}`.
+  It was **ownership**. `AnnotatorController` holds 13 `$derived` fields and is constructed at
+  `AnnotatorShell` top level, which the compiler places inside the `{#key unit.key}` BRANCH effect —
+  destroyed on every unit navigation. Two paths kept writing it afterwards: (a) `ImageViewer.onready`
+  has two awaits and is fired UN-AWAITED by `PixiCanvas`, so either can outlive the component and the
+  stale continuation called `attach()` on a destroyed shell (`VideoViewer` had the same shape with a
+  `disposed` flag it never checked); and (b) `detach()` had **zero callers** and released only the
+  viewport chain — `attach()` hands the engine SEVEN closures capturing `this`, so six
+  InteractionManager callbacks stayed live after teardown. Both halves fixed; `detach()` now releases
+  all seven, before nulling `ctx`.
 - **Still open after this wave** (the honest residue): **batch mode** (`runners.jobsUrl` — the
   annotator's batch-labeling submit is still an honest mock); **W3 text spans** (doccano parity —
   needs `char_start`/`char_end` on `Shape` plus a span tool; the review/consensus/publish machine
