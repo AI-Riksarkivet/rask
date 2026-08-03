@@ -122,6 +122,15 @@ Under `svelte-adapter-bun` a relative `/api/*` resolves against the **incoming e
 
 ## Composition — dev and prod share only the base path
 
+**Two local loops — pick by what you are exercising.** `make dev-frontends` (below) is Vite HMR,
+sub-second, `/api` mocked or proxied — the loop for pure UI work. `make tilt-up` runs the zones
+IN-CLUSTER on k3s with hot reload (a zone edit reaches the compiled bundle in ~15 s, a `@rask/ui` edit
+in ~105 s, same pod) — the loop when the BACKEND is the point: auth/OIDC, FGA, Dapr, the gateway's real
+routing, which dev-frontends cannot exercise. Prove it with `make tilt-verify-all` — the verifier
+asserts the marker reaches the COMPILED output in the SAME pod, because a sync that lands in `src/`
+while the in-container build fails, or a silent fallback rebuild, both look identical to a working
+reload otherwise. See CLAUDE.md's tilt section for the four defects that made this loop lie for months.
+
 **Dev.** `make dev-frontends` builds `@rask/ui` + `@rask/api` first, then runs `turbo run dev --filter='./microfrontends/*'`. That filter is load-bearing: an unfiltered `turbo run dev` also starts `@rask/ui`'s `svelte-package -w`, which rewrites `dist/` while zones read it, and turbo tears the run down.
 
 Turborepo 2.9.18 has a **built-in** microfrontends proxy. It reads `microfrontends/home/microfrontends.json` and binds `:3024`. `@vercel/microfrontends` is not installed and is not needed. Flow: `browser → :3024 → longest-prefix match → 127.0.0.1:517x (vite, strictPort) → SvelteKit with paths.base=/<zone>`. No path stripping.

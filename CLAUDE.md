@@ -88,6 +88,7 @@ make tilt-registry   # ONCE per host: registry on :5000 + point k3s at it (sudo;
 make dagger-engine   # ONCE per host: a Dagger engine that may push to that (plain-HTTP) registry
 make tilt-up         # the dev loop; UI on :10350
 make tilt-verify     # PROVE live_update reaches a pod (SERVICE=catalog by default)
+make tilt-verify-all # all THREE reload paths: python service, zone, @rask/ui (compiled output, same pod)
 make k9s             # inspect the cluster (installed into .localbin by `make bootstrap`)
 ```
 
