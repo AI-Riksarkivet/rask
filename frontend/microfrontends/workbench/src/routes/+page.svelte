@@ -31,7 +31,7 @@
 	} from '@lucide/svelte';
 	import type { DockviewApi, SerializedDockview } from 'dockview';
 	import type { PanelRegistry } from '@rask/dockview';
-	import { DockViews, ViewSidebar } from '@rask/dockview/views';
+	import { DockViews } from '@rask/dockview/views';
 	import { parseSelectDetail, RASK_SELECT } from '@rask/dockview/contract';
 	import { makeDockLayoutStore } from '@rask/api/dock-layout';
 	import { makeDockViewsStore } from '@rask/api/dock-views';
@@ -39,6 +39,7 @@
 	import { page } from '$app/state';
 	import ForeignPanel from '$lib/ForeignPanel.svelte';
 	import SelectionLog from '$lib/SelectionLog.svelte';
+	import { bench } from '$lib/bench.svelte';
 	import { Selections, setSelections } from '$lib/selections.svelte';
 
 	const selections = new Selections();
@@ -143,6 +144,17 @@
 
 	let Dock = $state<Component | null>(null);
 	let dockHost = $state<HTMLElement | null>(null);
+	// Hand the views model to the layout's shell rail (see $lib/bench.svelte.ts). Its own onMount:
+	// an async mount callback cannot return a cleanup, and the dock import below is async.
+	onMount(() => {
+		bench.views = views;
+		bench.apply = applyView;
+		return () => {
+			bench.views = null;
+			bench.apply = null;
+		};
+	});
+
 	onMount(async () => {
 		const mod = await dockModule;
 		Dock = mod.Dock as unknown as Component;
@@ -222,7 +234,6 @@
 <svelte:head><title>Workbench</title></svelte:head>
 
 <div class="wrap">
-	<ViewSidebar {views} onselect={applyView} />
 	<div class="dock" bind:this={dockHost}>
 		{#if Dock}
 			<!-- popout: EXPLICITLY off (not just "no popoutUrl configured"): popout re-parents a panel

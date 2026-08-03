@@ -53,6 +53,7 @@
 		meLoading = false,
 		notifications = null,
 		sidebarFooter,
+		sidebarContent,
 		canvas = false,
 		children,
 	}: {
@@ -83,6 +84,11 @@
 		canvas?: boolean;
 		/** Optional zone-owned sidebar footer (e.g. media's live service-status popover). */
 		sidebarFooter?: Snippet;
+		/** Optional zone-owned rail CONTENT under the zone nav (e.g. the workbench's saved views).
+		 *  Forces the rail visible even for a single-leaf zone — such a zone's rail content IS its
+		 *  navigation, and hiding the rail also hid the project switcher and collapse trigger,
+		 *  which read as "this zone forgot the shell" (the missing-variant lesson, again). */
+		sidebarContent?: Snippet;
 		children: Snippet;
 	} = $props();
 
@@ -91,7 +97,7 @@
 	// exist, so zones like the catch-all render no rail and no collapse trigger at all.
 	// Counted across every group AND nested child, so a zone that splits one list into two groups
 	// does not accidentally fall under the threshold.
-	const hasNav = $derived(zoneNavLeaves(zoneNav).length > 1);
+	const hasNav = $derived(zoneNavLeaves(zoneNav).length > 1 || sidebarContent !== undefined);
 
 	// Project-first breadcrumb via HOST: the project IS the request host, so the path
 	// carries only the domain + in-project trail. The project is the breadcrumb ROOT
@@ -132,7 +138,13 @@
 	     navigation"; it now starts icon-collapsed instead (see sidebarOpen), so the canvas keeps its
 	     width and the rail is one click away. -->
 	{#if hasNav}
-		<AppSidebar {pathname} {zoneNav} project={shellProject} footer={sidebarFooter} />
+		<AppSidebar
+			{pathname}
+			{zoneNav}
+			project={shellProject}
+			footer={sidebarFooter}
+			content={sidebarContent}
+		/>
 	{/if}
 	<Sidebar.Inset class="flex min-w-0 flex-col overflow-hidden">
 		<header class="flex min-w-0 shrink-0 flex-col">

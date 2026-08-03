@@ -150,6 +150,12 @@
 		display: flex;
 	}
 	.rask-panel-picker {
+		/* Ten grouped rows outgrew the viewport on shallow docks — the popover now caps and its LIST
+		   scrolls (the field stays pinned), instead of the whole menu spilling off-screen. */
+		max-height: min(60vh, 480px);
+		display: flex;
+		flex-direction: column;
+
 		position: fixed;
 		inset: auto;
 		margin: 0;
@@ -186,6 +192,8 @@
 		color: var(--muted-foreground);
 	}
 	.list {
+		overflow-y: auto;
+
 		display: flex;
 		flex-direction: column;
 		gap: 1px;
