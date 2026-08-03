@@ -1,8 +1,29 @@
-# The global workbench — reversed, and what replaces it
+# The global workbench — the runtime-composed dock, SHIPPED
+
+*Final status 2026-08-03: LIVE and cluster-verified. One `/workbench` zone composes FIFTEEN panels
+served by their owning zones as custom elements (`rask-<zone>-<panel>`): compute lends overview,
+jobs, cluster/nodes, actors, serve and the full log viewer; lakehouse lends lineage runs/events/
+graph, column lineage, datasets, audit, the FGA access summary and ops/DLQ; the workbench itself
+owns only the Selection log. Each zone's element bundle compiles its own Tailwind utilities and
+injects them (with vendor sheets `?inline` under `@layer base`), so panels are pixel-mirrors of
+their zone pages while builds stay uncoupled. Both directions of the boundary contract are live:
+rows dispatch `rask:select` up through a valibot-gated relay; the compositor pushes `filtertext`
+down as a property and every list panel narrows with an honest n/m note. Saved views persist
+per-subject (`dock-layout-library`), the views list rides the shared shell rail (AppShell's
+`sidebarContent` variant), popout is explicitly off for foreign panels, and element bundles carry
+budget ceilings (`element-budget.test.ts`). Known scope-cuts live IN the element files' doc
+comments (overview omits the zone-private pipeline feed; access omits recent-checks — the capi
+proxy is GET-only and the catalog records no past verdicts). Media's three panels remain blocked
+on the corpus dataset; annotator's canvas is not planned. The in-cluster Ray came up via the
+chart's RayService (`singleTenant`) after the external dev-kuberay proved unreachable — fold
+`ray.enabled + singleTenant.enabled + dashboardUrl=""` into the k3s-up values for durability.
+This paragraph supersedes the open_workbench.md work file, deleted per the open-docs convention.*
+
+## The reversal that preceded it
 
 *Status: **the build-time design below was built, shipped, and REVERSED**. 2026-08-03. The reversal
 restores the three per-zone workbenches; the cross-zone ambition continues in
-`open_workbench.md` (repo root) as a runtime-composition plan. The original decision text is kept at
+a runtime-composition plan (now shipped — see the header). The original decision text is kept at
 the bottom because its measurements (the 44-file move-set) and its corrected claims are still true —
 only the conclusion drawn from them was wrong.*
 
@@ -65,9 +86,8 @@ worked. It was still wrong, for reasons that were on the record before it was bu
   workbench composes it at RUNTIME via custom elements — each zone builds and serves
   `rask-<zone>-<panel>` elements; a thin compositor zone loads them from the owning zone's
   deployment. Zone ownership, independent deploys, and the bundle boundary stay honest.
-- **The in-progress plan lives at `open_workbench.md` (repo root)** — the open-work convention;
-  this file records only what is decided. Spike-first: one panel proves light-DOM styling and
-  move-without-remount before anything else is built.
+- **The plan executed spike-first** — one panel proved light-DOM styling and move-without-remount
+  before anything else was built; the work file that tracked it is deleted (see the header).
 - **Iframes remain rejected** for first-party panels (they are the *untrusted-code* tool — VS Code
   webviews, Grafana plugins) — though the dockview fork's never-re-parent guarantee makes them
   viable if an untrusted-plugin surface ever appears.

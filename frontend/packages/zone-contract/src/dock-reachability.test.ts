@@ -74,7 +74,7 @@ const DOCKS = dockRoutes();
 
 describe('dock reachability', () => {
 	it('pins the docks: exactly THE global workbench — a per-zone dock reappearing is a defect', () => {
-		// 2026-08-03: the estate ships ONE dock, the global workbench zone (open_workbench.md) —
+		// 2026-08-03: the estate ships ONE dock, the global workbench zone (docs/architecture/global-workbench.md) —
 		// runtime-composed from custom elements the other zones serve. The per-zone workbenches are
 		// removed by decision, so the pin is exact: the global route, and nothing else.
 		expect(DOCKS.map((d) => d.href)).toEqual(['/workbench/']);
