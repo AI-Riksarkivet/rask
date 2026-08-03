@@ -29,13 +29,13 @@
 		fmtModified,
 		fmtSize,
 		listObjects,
-		listStores,
 		looksLikeLanceDataset,
 		tableIdForPrefix,
 		type Bucket,
 		type S3Listing,
 		type Store,
 	} from './storage';
+	import { listStores } from './remote/storage.remote';
 
 	// The stores come from the catalog's registry (R28), not a hardcoded const. Empty until the
 	// first read lands, so the picker renders whatever the estate actually registered — including

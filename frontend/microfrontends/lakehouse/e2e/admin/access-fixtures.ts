@@ -55,6 +55,19 @@ export const MODEL_CONDITIONS = {
 	},
 };
 
+/** The stores registry the mock catalog serves (`/v1/stores`, `/v1/stores/tiers`) — static, so the
+ *  fullyParallel reads never race; attach WRITES are recorded per bearer like everything mutable. */
+export const STORES = [
+	{ name: 'wh', bucket: 'rask-wh', role: 'bronze', description: 'the warehouse', read_only: true },
+	{
+		name: 'ext',
+		bucket: 'scans-1900',
+		role: 'raw',
+		description: 'external scans',
+		read_only: true,
+	},
+];
+
 const leaf = (over: Record<string, unknown> = {}) => ({
 	users: null,
 	computed: null,

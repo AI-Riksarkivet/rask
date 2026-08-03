@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { Database, HardDrive, Layers } from '@lucide/svelte';
 	import { Badge } from '@rask/ui/badge';
-	import { listStoresByTier, type Store } from '$lib/storage/storage';
+	import { listStoresByTier } from '$lib/storage/remote/storage.remote';
+	import type { Store } from '$lib/storage/storage';
 
 	// The tier -> store view (R28). Grouping is done by the CATALOG (`GET /v1/stores/tiers`), not
 	// here: a store's tier is a governed fact, and transcribing it into the page that displays it is

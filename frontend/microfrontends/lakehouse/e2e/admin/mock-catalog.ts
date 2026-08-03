@@ -12,7 +12,14 @@
 // suffix), so each test carries its own identity and nothing is shared.
 
 import { ME_ADMIN, ME_MEMBER, TOKEN } from './session';
-import { DSL, EXPAND_TREE, MODEL_CONDITIONS, TUPLES, type FixtureTuple } from './access-fixtures';
+import {
+	DSL,
+	EXPAND_TREE,
+	MODEL_CONDITIONS,
+	STORES,
+	TUPLES,
+	type FixtureTuple,
+} from './access-fixtures';
 import { MOCK_CATALOG_PORT } from '../ports';
 
 type ControlEvent = {
@@ -69,8 +76,10 @@ type AccessState = {
 	listUsersBodies: Body[];
 	listObjectsBody: Body | null;
 	simulateBodies: Body[];
-	/** Set via `__mock/access/config`: the next tuple writes 403 — the partial-outcome lever the
-	 *  project-create spec pulls (a failed grant must be NAMED, never rolled into a fake success). */
+	/** Store drafts POSTed to /v1/stores by this bearer (the attach-store flow). */
+	attachedStores: Body[];
+	/** Set via `__mock/access/config`: the next WRITES (tuples, stores) 403 — the partial-outcome /
+	 *  denied-form lever (a failed write must be NAMED, never rolled into a fake success). */
 	failWrites: boolean;
 };
 
@@ -86,6 +95,7 @@ const accessStateOf = (bearer: string): AccessState => {
 			listUsersBodies: [],
 			listObjectsBody: null,
 			simulateBodies: [],
+			attachedStores: [],
 			failWrites: false,
 		};
 		accessStates.set(bearer, state);
@@ -129,6 +139,28 @@ Bun.serve({
 
 		// ── the /v1/access surface + the registry (the FGA workbench's remote functions land here) ──
 		if (url.pathname === '/v1/table') return json({ tables: ['db1$t'] });
+		// The stores registry (the storage area's remote functions). Reads are STATIC; the write is
+		// per-bearer and failWrites-aware, echoing the whole registry exactly like the real catalog.
+		if (url.pathname === '/v1/stores' && req.method === 'GET') return json({ stores: STORES });
+		if (url.pathname === '/v1/stores/tiers') {
+			const tiers: Record<string, unknown[]> = {};
+			for (const s of STORES) (tiers[s.role] ??= []).push(s);
+			return json(tiers);
+		}
+		if (url.pathname === '/v1/stores' && req.method === 'POST') {
+			const state = accessStateOf(bearer);
+			if (state.failWrites) return json({ detail: 'forbidden' }, 403);
+			const body = (await req.json()) as Body;
+			state.attachedStores.push(body);
+			const attached = {
+				name: body.name,
+				bucket: body.bucket,
+				role: body.role,
+				description: body.description ?? '',
+				read_only: true,
+			};
+			return json({ stores: [...STORES, attached] });
+		}
 		if (url.pathname === '/v1/access/model') {
 			return json({ dsl: DSL, authorization_model_id: '01MODEL', conditions: MODEL_CONDITIONS });
 		}

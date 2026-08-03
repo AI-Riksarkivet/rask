@@ -30,19 +30,12 @@ export type Store = {
  *  is config rather than a code change in both languages. */
 export type Bucket = string;
 
-/** Every store the catalog knows, with its role. Reached through this zone's `/capi` proxy — the
- *  CATALOG's row. (`/api` is the lineage service; sending a catalog call there would 404 in a way
- *  that looks like a missing endpoint rather than a wrong upstream.) */
-export const listStores = (): Promise<ApiResult<{ stores: Store[] }>> =>
-	request<{ stores: Store[] }>('/capi', 'v1/stores');
-
-/** The tier -> store view, grouped by the catalog. Derived there rather than transcribed here, so
- *  a store's tier cannot drift between the registry and the page that displays it. */
-export const listStoresByTier = (): Promise<ApiResult<Record<string, Store[]>>> =>
-	request<Record<string, Store[]>>('/capi', 'v1/stores/tiers');
-
 /** What the attach form collects. `read_only` is absent on purpose — the catalog forces it true, so
- *  offering the choice here would be a control that does nothing. */
+ *  offering the choice here would be a control that does nothing.
+ *
+ *  The stores TRANSPORT (list / tiers / attach) lives in `remote/storage.remote.ts` — the zone's
+ *  remote-function dialect. This module keeps the media-browser client (its route is keep-bytes:
+ *  hrefs and content-disposition ARE the contract) plus the shared types and formatters. */
 export type StoreDraft = {
 	name: string;
 	bucket: string;
@@ -50,20 +43,6 @@ export type StoreDraft = {
 	endpoint: string | null;
 	description: string;
 };
-
-/** Attach a bucket for BROWSING. Registers only — reads nothing and ingests nothing.
- *
- *  Estate-admin gated server-side (`can_observe_events` on the root object): a 403 here means the
- *  caller may not attach, and the form must say so rather than disable a button and leave the reason
- *  to guesswork. Returns the WHOLE registry so the caller re-renders from the server's answer instead
- *  of appending its own optimistic copy — the catalog forces `read_only` and may normalise, and a
- *  local append would show a row that differs from what was stored. */
-export const attachStore = (draft: StoreDraft): Promise<ApiResult<{ stores: Store[] }>> =>
-	request<{ stores: Store[] }>('/capi', 'v1/stores', {
-		method: 'POST',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify({ ...draft, endpoint: draft.endpoint?.trim() || null }),
-	});
 
 /** One object under a prefix (mirrors `S3Object`). */
 export type S3Object = { key: string; size: number; last_modified: string | null };

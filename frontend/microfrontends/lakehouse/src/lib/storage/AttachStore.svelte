@@ -4,7 +4,8 @@
 	// cascade. The catalog is the authority: it gates on estate-admin, forces `read_only`, refuses a
 	// duplicate name, and returns the whole registry, which is what this re-renders from.
 	import { Plus, X } from '@lucide/svelte';
-	import { attachStore, type StorageRole, type Store, type StoreDraft } from './storage';
+	import { attachStore } from './remote/storage.remote';
+	import type { StorageRole, Store, StoreDraft } from './storage';
 
 	let { onattached }: { onattached: (stores: Store[]) => void } = $props();
 
