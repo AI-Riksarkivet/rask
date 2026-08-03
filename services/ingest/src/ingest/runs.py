@@ -110,6 +110,30 @@ class WorkflowRunReader(Protocol):
     def state(self, run_id: str) -> dict[str, object] | None: ...
 
 
+def record_from_workflow_state(run_id: str, state: dict[str, object] | None) -> RunRecord | None:
+    """Rebuild the accepted-time record from the workflow's own INPUT.
+
+    THE FIX for a 404 after a pod restart. `InMemoryRunStore` is process-local, so killing the pod
+    mid-run (A3) left a workflow that was still durably executing and an API that answered 404 for
+    it — the run existed, kept working, and became unobservable. That is worse than losing progress:
+    an operator watching a long harvest sees it vanish.
+
+    Nothing needs to be persisted to fix it. The POST handler passes the whole RunSpec as the
+    workflow's input, and Dapr stores that in the run's history, so `serialized_input` IS the
+    accepted-time record. The store becomes a genuine cache — losing it costs one extra gRPC call,
+    which is what its docstring always claimed.
+    """
+    payload = _as_mapping((state or {}).get("serialized_input"))
+    if not payload:
+        return None
+    return RunRecord(
+        run_id=run_id,
+        project=str(payload.get("project") or ""),
+        dataset=str(payload.get("dataset") or ""),
+        kind=str(payload.get("kind") or ""),
+    )
+
+
 def merge_workflow_state(record: RunRecord, state: dict[str, object] | None) -> RunRecord:
     """Overlay the engine's live truth onto the accepted-time record.
 

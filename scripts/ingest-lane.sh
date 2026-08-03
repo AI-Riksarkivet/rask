@@ -303,15 +303,189 @@ with urllib.request.urlopen(req, timeout=30) as r:
 	echo "$run_id" >"$ROOT/.a11-run-id"
 }
 
+# ── A5 — a corrupt unit must be a tracked error, not a poisoned dataset ────────────────
+#
+# The corrupt fixture is a real TIFF header followed by garbage, NOT a file with a wrong
+# extension. That distinction is the test: bronze is faithful to source and must accept formats it
+# does not recognise, so a gate that refused on the extension would prove nothing about corruption
+# and would wrongly reject new material. The refusal has to come from actually decoding it.
+#
+# The assertion is deliberately two-sided. It is not enough that the run notices the bad page — the
+# three GOOD pages must still land. A plane that fails the whole run over one corrupt file makes a
+# 10,000-page harvest hostage to its worst byte, and an operator's only recovery is to delete the
+# offending file and start over.
+cmd_corrupt() {
+	local pod
+	pod="$(ingest_pod)"
+	[ -n "$pod" ] || die "no ingest pod in namespace $NS"
+
+	log "seeding the corrupt fixture set (3 good + 1 corrupt)"
+	local payload
+	payload="$(cd "$ROOT/tests/fixtures/ingest-lane-corrupt" && tar czf - . | base64 -w0)"
+	kubectl exec -i -n "$NS" "$pod" -c ingest -- python -c "
+import base64, io, os, sys, tarfile
+os.makedirs('$POD_FIXTURE_DIR-corrupt', exist_ok=True)
+with tarfile.open(fileobj=io.BytesIO(base64.b64decode(sys.stdin.read()))) as archive:
+    archive.extractall('$POD_FIXTURE_DIR-corrupt')
+print(sorted(os.listdir('$POD_FIXTURE_DIR-corrupt')))
+" <<<"$payload" >/dev/null || die "corrupt fixture seed failed"
+
+	local stamp key dataset
+	stamp="$(date +%s)"
+	key="a5-$stamp"
+	dataset="a5-$stamp"
+	log "A5 — POST with a corrupt page among good ones"
+	local run_id
+	run_id="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
+import json, urllib.request
+body = json.dumps({'kind':'local-dir','project':'demo','dataset':'$dataset',
+                   'options':{'root':'$POD_FIXTURE_DIR-corrupt','pattern':'*.tif'}}).encode()
+req = urllib.request.Request('http://127.0.0.1:8830/api/ingests', data=body,
+                             headers={'Content-Type':'application/json','Idempotency-Key':'$key'})
+with urllib.request.urlopen(req, timeout=30) as r:
+    print(json.load(r)['run_id'])
+")" || die "A5 POST failed"
+
+	local body="" status=""
+	for _ in $(seq 1 60); do
+		body="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
+import urllib.request
+with urllib.request.urlopen('http://127.0.0.1:8830/api/ingests/$run_id', timeout=15) as r:
+    print(r.read().decode())
+" 2>/dev/null)" || true
+		status="$(jq -r .status <<<"$body" 2>/dev/null || echo '')"
+		case "$status" in COMPLETE | COMPLETE_WITH_ERRORS | FAILED) break ;; esac
+		sleep 5
+	done
+	echo "   $body"
+
+	[ "$status" = "COMPLETE_WITH_ERRORS" ] ||
+		die "A5: expected COMPLETE_WITH_ERRORS, got $status — a corrupt page must be REPORTED, not silently dropped or fatal"
+	ok "A5 — run reported COMPLETE_WITH_ERRORS"
+
+	local errors named
+	errors="$(jq -r '.errors | length' <<<"$body")"
+	[ "$errors" = "1" ] || die "A5: expected exactly 1 tracked error, got $errors"
+	named="$(jq -r '.errors | keys[0]' <<<"$body")"
+	case "$named" in *page-0004*) ok "A5 — the error names the corrupt unit ($named)" ;;
+	*) die "A5: the tracked error names $named, not the corrupt page" ;; esac
+
+	local rows
+	rows="$(jq -r .units_done <<<"$body")"
+	[ "$rows" = "3" ] || die "A5: expected the 3 GOOD pages to land, got $rows — one bad byte must not cost the whole run"
+	ok "A5 — the 3 good pages landed anyway"
+}
+
+# ── A3 — kill the pod mid-run; the run must still land every row ──────────────────────
+#
+# This is the assertion `ingest/staging.py` exists for. A worker acks a unit only after its bytes
+# AND its fragment's identity are on the object store, so a pod that dies mid-drain leaves recoverable
+# work: the units it had not acked redeliver, and the fragments it HAD acked are rediscovered from
+# the staging prefix by whichever pod finalizes. Before staging, the acked fragments' names died
+# with the pod — their bytes stranded on the store, their units gone from a WORK_QUEUE stream. That
+# is silent row loss, and the only way to see it is to count.
+cmd_kill() {
+	local pod
+	pod="$(ingest_pod)"
+	[ -n "$pod" ] || die "no ingest pod in namespace $NS"
+
+	local stamp key dataset prefix
+	stamp="$(date +%s)"
+	key="a3-$stamp"
+	dataset="a3-$stamp"
+	prefix="a3-fixtures/$stamp"
+
+	# A3 runs off S3, not the pod's filesystem, and that is the test's design rather than a
+	# convenience. Killing the pod also destroys `/tmp`, so a LocalDirSource run resumes against an
+	# EMPTY directory — enumeration finds no keys, the workflow legitimately completes with zero rows,
+	# and the recovery assertion passes for entirely the wrong reason. The source has to outlive the
+	# process whose death is under test. It is also the more honest shape: a real ingest source is
+	# external by definition.
+	log "A3 — uploading fixtures to S3 so the SOURCE survives the pod"
+	local payload
+	payload="$(cd "$FIXTURES" && tar czf - . | base64 -w0)"
+	kubectl exec -i -n "$NS" "$pod" -c ingest -- python -c "
+import base64, io, os, sys, tarfile
+from storage import s3_client
+bucket = os.environ['RASK_INGEST_WAREHOUSE'].removeprefix('s3://').split('/')[0]
+client = s3_client(os.getenv('RASK_S3_ENDPOINT_URL'))
+with tarfile.open(fileobj=io.BytesIO(base64.b64decode(sys.stdin.read()))) as archive:
+    for member in archive.getmembers():
+        if not member.isfile() or not member.name.endswith('.tif'):
+            continue
+        data = archive.extractfile(member).read()
+        client.put_object(Bucket=bucket, Key='$prefix/' + os.path.basename(member.name), Body=data)
+print('uploaded to s3://%s/%s' % (bucket, '$prefix'))
+" <<<"$payload" || die "A3: S3 fixture upload failed"
+
+	log "A3 — POST, then kill the pod mid-run"
+	local run_id
+	run_id="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
+import json, os, urllib.request
+bucket = os.environ['RASK_INGEST_WAREHOUSE'].removeprefix('s3://').split('/')[0]
+body = json.dumps({'kind':'s3-prefix','project':'demo','dataset':'$dataset',
+                   'options':{'bucket':bucket,'prefix':'$prefix','endpoint':os.getenv('RASK_S3_ENDPOINT_URL')}}).encode()
+req = urllib.request.Request('http://127.0.0.1:8830/api/ingests', data=body,
+                             headers={'Content-Type':'application/json','Idempotency-Key':'$key'})
+with urllib.request.urlopen(req, timeout=30) as r:
+    print(json.load(r)['run_id'])
+")" || die "A3 POST failed"
+	ok "A3 — run $run_id accepted (source on S3)"
+
+	# Immediately, with no grace period: a graceful stop would let the workflow finish and prove
+	# nothing. This is a machine losing power, which is the case durability claims are about.
+	kubectl delete pod -n "$NS" "$pod" --grace-period=0 --force >/dev/null 2>&1 || true
+	ok "A3 — pod $pod killed (grace 0)"
+
+	log "waiting for the replacement pod"
+	local newpod=""
+	for _ in $(seq 1 60); do
+		newpod="$(ingest_pod)"
+		[ -n "$newpod" ] && [ "$newpod" != "$pod" ] && break
+		sleep 5
+	done
+	[ -n "$newpod" ] || die "A3: no replacement pod appeared"
+	ok "A3 — replacement pod $newpod is up"
+
+	local body="" status=""
+	for _ in $(seq 1 90); do
+		body="$(kubectl exec -n "$NS" "$newpod" -c ingest -- python -c "
+import urllib.request
+with urllib.request.urlopen('http://127.0.0.1:8830/api/ingests/$run_id', timeout=15) as r:
+    print(r.read().decode())
+" 2>/dev/null)" || true
+		status="$(jq -r .status <<<"$body" 2>/dev/null || echo '')"
+		case "$status" in COMPLETE | COMPLETE_WITH_ERRORS | FAILED) break ;; esac
+		sleep 5
+	done
+	echo "   $body"
+
+	case "$status" in
+	COMPLETE | COMPLETE_WITH_ERRORS) ok "A3 — the run survived the kill and reached $status" ;;
+	*) die "A3: the run did not recover (last: ${status:-<none>})" ;;
+	esac
+
+	local rows expected
+	expected="$(find "$FIXTURES" -name '*.tif' | wc -l)"
+	rows="$(jq -r .units_done <<<"$body")"
+	[ "$rows" = "$expected" ] ||
+		die "A3: expected all $expected rows after the kill, got $rows — this is the silent row loss staging exists to prevent"
+	ok "A3 — all $rows rows landed despite the kill"
+}
+
 case "${1:-all}" in
 deploy) cmd_deploy ;;
 image) cmd_image ;;
 fixtures) cmd_fixtures ;;
+corrupt) cmd_corrupt ;;
+kill) cmd_kill ;;
 run) cmd_run ;;
 all)
 	cmd_deploy
 	cmd_fixtures
 	cmd_run
+	cmd_corrupt
+	cmd_kill
 	;;
 *) die "usage: $0 {deploy|fixtures|run|all}" ;;
 esac

@@ -245,3 +245,47 @@ def test_provenance_is_not_consulted_for_a_run_still_in_flight() -> None:
     client.app.state.provenance_reader = _Provenance(False)
 
     assert client.get("/v1/ingests/r1").json()["defect"] is None
+
+
+# ── A3: the run must remain observable across a pod death ─────────────────────────────
+
+
+def test_a_run_the_store_LOST_is_rebuilt_from_the_engine() -> None:
+    """A cache miss is not a missing run — the A3 kill-pod finding.
+
+    `InMemoryRunStore` is process-local, so a pod restart drops every accepted record while the
+    workflows keep executing durably. The API answered 404 for a run that was still working, which
+    is worse than losing progress: an operator watching a long harvest sees it disappear.
+
+    Nothing needs persisting. The POST handler passes the whole RunSpec as the workflow input, so the
+    engine already holds the accepted-time record.
+    """
+    from fastapi import FastAPI
+    from ingest.api import router
+
+    app = FastAPI()
+    app.include_router(router, prefix="/v1")
+    app.state.run_store = InMemoryRunStore()  # deliberately EMPTY — the pod just restarted
+    app.state.workflow_reader = _Reader(
+        {
+            "runtime_status": "RUNNING",
+            "serialized_input": json.dumps({"run_id": "r9", "kind": "local-dir", "project": "demo", "dataset": "pages"}),
+        }
+    )
+    body = TestClient(app).get("/v1/ingests/r9").json()
+
+    assert body["run_id"] == "r9"
+    assert body["status"] == "RUNNING"
+
+
+def test_a_run_NEITHER_the_store_nor_the_engine_knows_is_still_404() -> None:
+    """The rebuild must not turn every unknown id into a fabricated run."""
+    from fastapi import FastAPI
+    from ingest.api import router
+
+    app = FastAPI()
+    app.include_router(router, prefix="/v1")
+    app.state.run_store = InMemoryRunStore()
+    app.state.workflow_reader = _Reader(None)
+
+    assert TestClient(app).get("/v1/ingests/nope").status_code == 404

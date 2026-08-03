@@ -21,7 +21,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
-from ingest.runs import RunRecord, RunStore, WorkflowRunReader, WorkflowStarter, merge_workflow_state, run_id_for
+from ingest.runs import RunRecord, RunStore, WorkflowRunReader, WorkflowStarter, merge_workflow_state, record_from_workflow_state, run_id_for
 from ingest.sources import SourceSpec, registered_kinds
 
 
@@ -125,16 +125,24 @@ async def get_ingest(
     reader: Annotated[WorkflowRunReader | None, Depends(get_reader)],
 ) -> RunStatusResponse:
     record = await store.get(run_id)
+    engine_state = await asyncio.to_thread(reader.state, run_id) if reader is not None else None
+
     if record is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no ingest run {run_id!r}")
+        # A cache miss is not a missing run. The store is process-local, so a pod restart loses every
+        # accepted record while the workflows themselves keep executing durably — A3 killed a pod
+        # mid-run and the API answered 404 for a run that was still working. The engine holds the
+        # POST's own payload as the workflow input, so the record is rebuildable from it.
+        record = record_from_workflow_state(run_id, engine_state)
+        if record is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no ingest run {run_id!r}")
+        await store.put(record)
 
     # The store holds only what the caller asked for; everything that MOVES is read from the engine.
     # Without this a completed run reported ACCEPTED forever — nothing writes the record a second
     # time, and nothing should, because the workflow's durable history already is the run's state.
     # `to_thread` because the Dapr client is synchronous gRPC: called inline it blocks the event loop
     # for every other request on the pod, which is the same defect the POST path had to fix.
-    if reader is not None:
-        record = merge_workflow_state(record, await asyncio.to_thread(reader.state, run_id))
+    record = merge_workflow_state(record, engine_state)
 
     # A8's other half. `is_defective` was computed from a flag nothing ever set, so it fired on every
     # completed run — and a gate that always fires is a gate nobody reads. `None` means the graph
