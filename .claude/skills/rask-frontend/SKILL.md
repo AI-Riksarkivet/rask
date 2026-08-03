@@ -43,12 +43,13 @@ Only `@rask/ui` has a build (`svelte-package` → `dist/`); the rest are consume
 | `@rask/zone-contract` | **Test-only** — 16 files / ~830 tests gating the estate's shape |
 | `@rask/config` | One shared `tsconfig.base.json`, extended by 6 of 15 packages |
 
-**A `frontend/packages/*` entry is a LIBRARY, never a domain slice.** `@rask/panels` (2026-08)
-moved the zones' own panels into a package to feed a global `/workbench` zone — it hollowed the
-zones, coupled releases, and went stale on live data; it was reversed the same week. The record is
-`docs/architecture/global-workbench.md`; the sanctioned path to cross-zone composition is runtime
-(custom elements), planned spike-first in `docs/architecture/workbench-web-components.md`. Extract
-the *mechanism* (`@rask/flow`), keep the *domain* in its zone.
+**A `frontend/packages/*` entry is a LIBRARY, never a domain slice.** A zone's panels, stores and
+graphs are the zone — moving them into a shared package hollows the zone, couples releases, and
+cuts them off from their live stores and per-app remote functions (tried once, reversed:
+`docs/architecture/global-workbench.md`). Cross-zone composition, when wanted, is RUNTIME
+composition — custom elements, planned spike-first in
+`docs/architecture/workbench-web-components.md`. Extract the *mechanism* (`@rask/flow`), keep the
+*domain* in its zone.
 
 ## Workbenches — `@rask/dockview`
 

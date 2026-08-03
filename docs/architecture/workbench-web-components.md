@@ -42,6 +42,15 @@ CustomEvent)", tags "namespaced with a team prefix".
   `shadow: 'none'` is reachable **only** through the object form of `<svelte:options customElement>`
   (not the `customElement: true` compiler flag), and only wrapper files are compiled with
   `customElement: true` (a Vite `include` on `src/lib/elements/*.svelte`).
+
+  Verified against the official custom-elements docs (svelte MCP, 2026-08-03), which add three
+  wrapper rules: **declare every prop explicitly** (a bare `$props()` spread gives Svelte no list of
+  properties to expose on the element); **no prop names starting with `on`** (the CE bridge parses
+  them as event-listener attachments); and `shadow: 'none'` forgoes slots (irrelevant — panels take
+  data, not slotted content). The docs also confirm the two claims everything rests on: with no
+  shadow root, page styles apply (light DOM cascade), and *"DOM moves which temporarily (but
+  synchronously) detach the element from the DOM don't lead to unmounting the inner component"* —
+  the destroy fires a tick after `disconnectedCallback` and reconnection cancels it.
 - **No `tag` in the options** — registration is a manual, guarded
   `if (!customElements.get(name)) customElements.define(name, Element)` in the entry, so two
   compositor loads (or HMR) never hit the "already defined" throw.
