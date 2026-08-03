@@ -4,7 +4,7 @@
 	// forwards ONLY the signed-in user's bearer, so an anonymous visitor sees the sign-in banner and a
 	// non-admin the denial banner — never a silent no-op. The service-to-service app-token path is unchanged.
 	import { GitBranch, Play, ShieldAlert } from '@lucide/svelte';
-	import { triggerProduce, triggerTrain } from './medallion';
+	import { triggerProduce, triggerTrain } from './remote/medallion.remote';
 
 	let busy = $state(false);
 	let banner = $state<{ tone: 'ok' | 'fail'; text: string } | null>(null);
@@ -31,7 +31,7 @@
 		busy = true;
 		banner = null;
 		try {
-			const res = await triggerProduce();
+			const res = await triggerProduce({});
 			if (res.ok)
 				banner = { tone: 'ok', text: `Cascade fired — run token ${res.data.token ?? '(none)'}.` };
 			else fail(res.status, res.detail);
@@ -51,7 +51,7 @@
 				.map((s) => s.trim())
 				.filter(Boolean)
 				.map((dataset) => ({ dataset }));
-			const res = await triggerTrain(train.model.trim(), features);
+			const res = await triggerTrain({ model: train.model.trim(), features });
 			if (res.ok) {
 				banner = {
 					tone: 'ok',

@@ -7,6 +7,8 @@ import {
 	MOCK_CATALOG_PORT,
 	MOCK_LINEAGE,
 	MOCK_LINEAGE_PORT,
+	MOCK_OBS,
+	MOCK_OBS_PORT,
 } from './e2e/ports';
 
 // Hermetic e2e for the whole lakehouse zone — all four areas (e2e/data, e2e/lineage, e2e/models,
@@ -77,6 +79,11 @@ export default defineConfig({
 				OIDC_CLIENT_ID: 'lance-admin-e2e',
 				OIDC_REDIRECT_URI: `${AUTH_ON}/auth/callback`,
 				CATALOG_API: `http://localhost:${MOCK_CATALOG_PORT}`,
+				// The three NON-catalog upstreams the ported admin/models remote functions reach —
+				// one combined seed-driven mock (paths never collide). See e2e/admin/mock-observability.ts.
+				GREPTIME_API: MOCK_OBS,
+				NATS_MONITOR_API: MOCK_OBS,
+				MEDALLION_API: MOCK_OBS,
 				// The DLQ panel's live cursor is the LINEAGE one, not the control feed (an outbox drains when
 				// lineage advances), so the admin server needs the mock lineage service too.
 				LINEAGE_API: MOCK_LINEAGE,
@@ -85,6 +92,12 @@ export default defineConfig({
 		{
 			command: 'bun e2e/admin/mock-catalog.ts',
 			port: MOCK_CATALOG_PORT,
+			reuseExistingServer: !process.env.CI,
+			timeout: 30_000,
+		},
+		{
+			command: 'bun e2e/admin/mock-observability.ts',
+			port: MOCK_OBS_PORT,
 			reuseExistingServer: !process.env.CI,
 			timeout: 30_000,
 		},

@@ -24,3 +24,9 @@ export const AUTH_OFF = `http://localhost:${AUTH_OFF_PORT}`;
 export const AUTH_ON = `http://localhost:${AUTH_ON_PORT}`;
 export const MOCK_CATALOG = `http://localhost:${MOCK_CATALOG_PORT}`;
 export const MOCK_LINEAGE = `http://localhost:${MOCK_LINEAGE_PORT}`;
+
+/** The combined observability/pipeline mock: one server standing in for GreptimeDB (`/v1/sql`,
+ *  `/v1/promql*`), the NATS monitor (`/jsz`) and the medallion head (`/produce`, `/train`) — their
+ *  paths never collide, so three env vars point at one port. Purely seed-driven (see the file). */
+export const MOCK_OBS_PORT = 5293;
+export const MOCK_OBS = `http://localhost:${MOCK_OBS_PORT}`;
