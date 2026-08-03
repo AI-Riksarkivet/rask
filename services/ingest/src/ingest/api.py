@@ -120,6 +120,7 @@ class RunStatusResponse(BaseModel):
 @router.get("/ingests/{run_id}", response_model=RunStatusResponse)
 async def get_ingest(
     run_id: str,
+    request: Request,
     store: Annotated[RunStore, Depends(get_store)],
     reader: Annotated[WorkflowRunReader | None, Depends(get_reader)],
 ) -> RunStatusResponse:
@@ -134,6 +135,18 @@ async def get_ingest(
     # for every other request on the pod, which is the same defect the POST path had to fix.
     if reader is not None:
         record = merge_workflow_state(record, await asyncio.to_thread(reader.state, run_id))
+
+    # A8's other half. `is_defective` was computed from a flag nothing ever set, so it fired on every
+    # completed run — and a gate that always fires is a gate nobody reads. `None` means the graph
+    # could not be asked, and an unanswerable question must not be reported as a defect.
+    # `getattr`, not `state.__dict__.get`: Starlette's State keeps its attributes in an inner
+    # `_state` dict, so `__dict__` holds only that wrapper and the lookup silently returns None —
+    # which reads as "no reader configured" and would have reported a provenance defect on every
+    # completed run, i.e. the exact bug this join exists to fix.
+    provenance = getattr(request.app.state, "provenance_reader", None)
+    if provenance is not None and record.status in ("COMPLETE", "COMPLETE_WITH_ERRORS"):
+        present = await asyncio.to_thread(provenance.has_run, run_id)
+        record = record.model_copy(update={"lineage_run_present": present is not False})
 
     return RunStatusResponse(
         run_id=record.run_id,

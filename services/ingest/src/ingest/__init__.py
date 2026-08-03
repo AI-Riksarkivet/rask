@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from ingest.api import router as ingest_router
 from ingest.health import router as health_router
+from ingest.provenance import LineageProvenanceReader
 from ingest.runs import InMemoryRunStore
 
 
@@ -50,6 +51,7 @@ def create_app() -> FastAPI:
     app.state.run_store = InMemoryRunStore()
     app.state.workflow_starter = _DaprWorkflowStarter()
     app.state.workflow_reader = _DaprWorkflowReader()
+    app.state.provenance_reader = LineageProvenanceReader()
     return app
 
 

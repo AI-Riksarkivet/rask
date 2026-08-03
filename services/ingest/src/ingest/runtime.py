@@ -54,6 +54,13 @@ def dataset_uri(spec: RunSpec) -> str:
     return f"{warehouse_root().rstrip('/')}/{spec.project}/{spec.dataset}.lance"
 
 
+def ensure_dataset_at(spec: RunSpec) -> str:
+    """Create the run's dataset empty if absent, and return its URI. D6 step 1, before any write."""
+    uri = dataset_uri(spec)
+    _catalog().ensure_at(uri)
+    return uri
+
+
 async def publish_chunk_units(chunk: ChunkSpec) -> int:
     """Put this chunk's units on the work queue."""
     from ingest.queue import UnitTask, WorkQueue

@@ -106,6 +106,14 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, A
 
     yield ctx.call_activity(emit_start, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
 
+    # BEFORE the fan-out, not before the commit. D6's creation two-step said "created empty before
+    # any fragment is COMMITTED", and that reading put it in `finalize` — which is too late, because
+    # a fragment written against a dataset that does not exist yet takes lance's DEFAULTS for the
+    # creation-time flags. The first in-cluster run fetched, validated and wrote every fixture and
+    # then died at commit with "added files with version 2.1. However, the data storage version is
+    # 2.2." The dataset must exist before the first WRITE, so the writers inherit its format.
+    yield ctx.call_activity(ensure_dataset, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
+
     chunks: list[dict[str, Any]] = yield ctx.call_activity(enumerate_chunks, input=spec.model_dump(), retry_policy=ACTIVITY_RETRY)
     ctx.set_custom_status(f"dispatching {len(chunks)} chunks")
 
@@ -178,6 +186,17 @@ def emit_start(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None:
     """
     spec = RunSpec.model_validate(payload)
     _lineage().start(spec.run_id, spec.project, spec.dataset, spec.kind, spec.options)
+
+
+def ensure_dataset(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> str:
+    """Create the run's bronze dataset EMPTY, carrying the creation-time flags. D6 step 1.
+
+    Idempotent, so a replay is a no-op rather than a second create — which matters because this runs
+    before the fan-out and is therefore the activity most likely to be replayed.
+    """
+    from ingest.runtime import ensure_dataset_at
+
+    return ensure_dataset_at(RunSpec.model_validate(payload))
 
 
 def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -293,7 +312,7 @@ def _run_async(coro: Any) -> Any:  # noqa: ANN401
 
 
 WORKFLOWS = (ingest_run, chunk_run)
-ACTIVITIES = (emit_start, enumerate_chunks, publish_units, drain_chunk, reconcile_chunk, finalize, emit_terminal)
+ACTIVITIES = (emit_start, ensure_dataset, enumerate_chunks, publish_units, drain_chunk, reconcile_chunk, finalize, emit_terminal)
 
 
 def register(runtime: wf.WorkflowRuntime) -> None:

@@ -121,8 +121,22 @@ def write_unit_fragments(dataset_uri: str, batch: pa.Table) -> list[str]:
     `FragmentMetadata.to_json()` returns a **dict** while `FragmentMetadata.from_json()` is typed
     `(json_data: str)`. Pairing them directly raises "the JSON object must be str, bytes or
     bytearray, not dict" at COMMIT time, i.e. after every worker has already done its fetching.
+
+    **The creation flags are passed HERE too, and that is not redundancy.** `write_fragments`
+    defaults to `data_storage_version=None` (which resolves to 2.1) and, worse,
+    `enable_stable_row_ids=False`. A fragment written against a not-yet-existing dataset therefore
+    takes those defaults, and the first in-cluster run died at commit with
+
+        The operation added files with version 2.1. However, the data storage version is 2.2.
+
+    after every fixture had been fetched, validated and written. The stable-row-id half would not
+    even have failed loudly: the commit would have succeeded and D1's change-data-feed and every
+    `source_rowid` reference in silver would have been quietly built on fragments that carry no
+    stable ids — and the flag is creation-time-only, so there is no later point at which it could be
+    repaired. Passing the flags explicitly makes both impossible regardless of what exists yet.
     """
-    return [json.dumps(f.to_json()) for f in lance.fragment.write_fragments(batch, dataset_uri)]
+    written = lance.fragment.write_fragments(batch, dataset_uri, **CREATION_FLAGS)
+    return [json.dumps(f.to_json()) for f in written]
 
 
 def create_empty(dataset_uri: str, schema: pa.Schema) -> int:

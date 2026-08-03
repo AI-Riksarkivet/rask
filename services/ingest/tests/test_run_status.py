@@ -192,3 +192,56 @@ def test_a_complete_run_WITH_lineage_reports_no_defect() -> None:
     body = _client(_Reader(state), _record(lineage_run_present=True)).get("/v1/ingests/r1").json()
 
     assert body["defect"] is None
+
+
+# ── A8's other half: the provenance join ──────────────────────────────────────────────
+
+
+class _Provenance:
+    def __init__(self, answer: bool | None) -> None:
+        self._answer = answer
+
+    def has_run(self, run_id: str) -> bool | None:
+        return self._answer
+
+
+def _client_with_provenance(answer: bool | None, record: RunRecord) -> TestClient:
+    completed = {"committed_version": 1, "rows": 4, "status": "COMPLETE"}
+    client = _client(_Reader({"runtime_status": "COMPLETED", "serialized_output": json.dumps(completed)}), record)
+    client.app.state.provenance_reader = _Provenance(answer)
+    return client
+
+
+def test_a_run_the_graph_does_not_know_is_a_DEFECT() -> None:
+    """The real A8 case: bronze holds rows nothing can explain the origin of."""
+    body = _client_with_provenance(False, _record()).get("/v1/ingests/r1").json()
+
+    assert body["defect"] is not None
+    assert "provenance" in body["defect"]
+
+
+def test_a_run_the_graph_KNOWS_is_not_a_defect() -> None:
+    """The happy path — and the one the first green in-cluster lane wrongly failed.
+
+    `lineage_run_present` defaulted to False and nothing ever set it, so EVERY completed run reported
+    a provenance defect. A gate that fires on every run is one an operator learns to scroll past, and
+    then the single real provenance hole goes by unnoticed among the false ones.
+    """
+    assert _client_with_provenance(True, _record()).get("/v1/ingests/r1").json()["defect"] is None
+
+
+def test_an_UNREACHABLE_graph_is_not_reported_as_a_defect() -> None:
+    """Absent and unknown are different answers, and only one of them is a bug.
+
+    If the lineage service cannot be reached we do not know whether provenance exists. Claiming a
+    defect from ignorance is exactly how the check stops meaning anything.
+    """
+    assert _client_with_provenance(None, _record()).get("/v1/ingests/r1").json()["defect"] is None
+
+
+def test_provenance_is_not_consulted_for_a_run_still_in_flight() -> None:
+    """A RUNNING run has no lineage terminal yet, so asking is both pointless and misleading."""
+    client = _client(_Reader({"runtime_status": "RUNNING"}), _record())
+    client.app.state.provenance_reader = _Provenance(False)
+
+    assert client.get("/v1/ingests/r1").json()["defect"] is None
