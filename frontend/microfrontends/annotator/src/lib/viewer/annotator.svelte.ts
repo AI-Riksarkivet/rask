@@ -336,9 +336,26 @@ export class AnnotatorController {
 		this._version = version ?? null;
 	}
 
+	/** Undo `attach()` — every hook it installed, not just the viewport chain.
+	 *
+	 *  `attach` hands the engine SEVEN closures that capture `this`: six InteractionManager
+	 *  callbacks and the chained `image.onViewportChange`. Clearing only the viewport left the
+	 *  other six live, so an engine event after teardown still wrote this controller's `$state`
+	 *  and re-evaluated its deriveds from a destroyed effect — which is precisely what Svelte
+	 *  reports as `derived_inert`. Release them all, and release them BEFORE `ctx` is nulled
+	 *  (they are reached through it). */
 	detach(): void {
 		this._detachViewport?.();
 		this._detachViewport = null;
+		const im = this.ctx?.plugins.interaction;
+		if (im) {
+			im.onCvToolReady = undefined;
+			im.onMagneticSnap = undefined;
+			im.onSelect = undefined;
+			im.onDirtyChange = undefined;
+			im.onChange = undefined;
+			im.onCommit = undefined;
+		}
 		this.ctx = null;
 		this.table = null;
 	}
