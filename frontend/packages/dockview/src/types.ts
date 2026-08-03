@@ -94,6 +94,9 @@ export interface PanelEntry {
 	readonly component: AnyPanelComponent;
 	/** Human-readable name. Shown in the picker, and used as the new panel's title. */
 	readonly label: string;
+	/** Optional section heading in the "+" picker (e.g. the OWNING ZONE of a foreign panel). Choices
+	 *  sharing a group render under one label; ungrouped ones gather under "Panels". */
+	readonly group?: string;
 	/** Optional glyph for the picker row. */
 	readonly icon?: PanelIcon;
 	/**

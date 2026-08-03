@@ -36,6 +36,18 @@
 	let query = $state('');
 
 	const shown = $derived(choices.filter((c) => matchesPanel(c, query)));
+	/** Grouped view of `shown`, insertion-ordered; headings render only when there is >1 section, so
+	 *  a small ungrouped registry keeps its flat list. */
+	const sections = $derived.by(() => {
+		const bag = new Map<string, typeof shown>();
+		for (const c of shown) {
+			const g = c.group ?? 'Panels';
+			const list = bag.get(g);
+			if (list === undefined) bag.set(g, [c]);
+			else list.push(c);
+		}
+		return [...bag.entries()];
+	});
 
 	/** Anchor under the trigger, flipping up near the bottom edge and clamping to the viewport. */
 	function place(): void {
@@ -101,26 +113,29 @@
 		aria-label="Search panels"
 		autocomplete="off"
 	/>
-	<ul class="list">
-		{#each shown as choice (choice.key)}
-			<li>
-				<button type="button" class="row" onclick={() => pick(choice.key)}>
-					{#if choice.icon}
-						{@const Icon = choice.icon}
-						<Icon size={14} />
-					{/if}
-					<span class="label">{choice.label}</span>
-					<!-- Already-open panels stay listed and stay clickable: a second Runs panel filtered
+	{#each sections as [heading, list] (heading)}
+		{#if sections.length > 1}<p class="heading">{heading}</p>{/if}
+		<ul class="list">
+			{#each list as choice (choice.key)}
+				<li>
+					<button type="button" class="row" onclick={() => pick(choice.key)}>
+						{#if choice.icon}
+							{@const Icon = choice.icon}
+							<Icon size={14} />
+						{/if}
+						<span class="label">{choice.label}</span>
+						<!-- Already-open panels stay listed and stay clickable: a second Runs panel filtered
 					     differently is a real thing to want, and `uniquePanelId` makes the copy safe. The
 					     note just stops it looking like nothing happened. -->
-					{#if choice.open}<span class="open">open</span>{/if}
-				</button>
-			</li>
-		{/each}
-		{#if shown.length === 0}
-			<li class="empty">No panel matches “{query}”.</li>
-		{/if}
-	</ul>
+						{#if choice.open}<span class="open">open</span>{/if}
+					</button>
+				</li>
+			{/each}
+			{#if shown.length === 0}
+				<li class="empty">No panel matches “{query}”.</li>
+			{/if}
+		</ul>
+	{/each}
 </div>
 
 <style>
@@ -161,6 +176,14 @@
 	.field:focus-visible {
 		outline: 2px solid var(--ring);
 		outline-offset: -1px;
+	}
+	.heading {
+		margin: 6px 4px 2px;
+		font-size: 10px;
+		font-weight: 500;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--muted-foreground);
 	}
 	.list {
 		display: flex;
