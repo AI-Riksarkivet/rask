@@ -177,14 +177,32 @@ def seed(root: Path) -> Path:
     )
     lance.write_dataset(chunks, str(db / "chunks.lance"), mode="overwrite", data_storage_version="2.2")
 
+    # The doc-level table `document.table` points at — ONE row per document, and it carries its own
+    # cover blob because `document.media_blob` must name a column in THIS table (the descriptor
+    # validator refuses the dataset outright otherwise: "document.media_blob 'image' missing").
+    # The cover is page 0, which is what a gallery thumbnail should show.
+    doc_schema = pa.schema(
+        [
+            pa.field("doc_id", pa.utf8()),
+            pa.field("title", pa.utf8()),
+            pa.field("n_chunks", pa.int32()),
+            # The SAME `lance.blob.v2` extension metadata the chunks table uses — a bare struct is
+            # refused with "document.media_blob 'image' is not a lance.blob.v2 column".
+            pa.field("image", blob, metadata={b"ARROW:extension:name": b"lance.blob.v2"}),
+            pa.field("mime", pa.utf8()),
+        ]
+    )
     documents = pa.table(
         {
             "doc_id": pa.array([d["doc_id"] for d in DOCUMENTS]),
             "title": pa.array([d["title"] for d in DOCUMENTS]),
             "n_chunks": pa.array([len(d["pages"]) for d in DOCUMENTS], pa.int32()),
-        }
+            "image": pa.array([{"data": page_image(d["title"], 0), "uri": None} for d in DOCUMENTS], type=blob),
+            "mime": pa.array(["image/png"] * len(DOCUMENTS)),
+        },
+        schema=doc_schema,
     )
-    lance.write_dataset(documents, str(db / "documents.lance"), mode="overwrite")
+    lance.write_dataset(documents, str(db / "documents.lance"), mode="overwrite", data_storage_version="2.2")
 
     # The FTS index, through the LANCEDB api — the search service opens the row table with
     # `lancedb` and runs `tbl.search(MatchQuery(...), query_type="fts")`, which needs an index
@@ -202,8 +220,22 @@ def seed(root: Path) -> Path:
     # answers every query with nothing.
     declared = {
         "identity": {"key_fields": ["doc_id", "speech_id", "chunk_id"], "doc_key": "doc_id"},
-        "document": {"table": "chunks", "media_blob": "image", "mime": "image/png"},
-        "display": {"title": ["title"], "body": "text", "caption": "caption"},
+        # `document.table` is the DOC-LEVEL table: `/api/documents` pages it row-for-row with no
+        # DISTINCT (viewer/api/v1/endpoints/system.py:151), so it must hold exactly one row per
+        # document. Pointing it at the page-level `chunks` made the browse gallery list the same
+        # doc_id four times, and the media zone keys that list by doc id — so Svelte threw
+        # `each_key_duplicate` and the whole route died client-side. The blob binding stays on the
+        # page-level image via `capabilities.frames` below.
+        "document": {"table": "documents", "media_blob": "image", "mime": "image/png"},
+        # `metadata` is not decoration: `/api/documents` projects exactly `doc_key + these fields`,
+        # so a title declared ONLY under `display.title` comes back null and the browse gallery
+        # renders three untitled cards.
+        "display": {
+            "title": ["title"],
+            "body": "text",
+            "caption": "caption",
+            "metadata": [{"field": "title", "label": "Title"}, {"field": "n_chunks", "label": "Pages"}],
+        },
         "search": {"row_table": "chunks", "fts": {"table": "chunks", "column": "text"}, "filterable": ["doc_id"]},
         "capabilities": {"frames": "chunks.image"},
     }

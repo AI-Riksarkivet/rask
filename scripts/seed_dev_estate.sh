@@ -96,13 +96,16 @@ EOF
 # naming the cause (PermissionError, bad descriptor) never printed because the logs command is next.
 for _ in $(seq 1 150); do
   SEED_JOB_STATE="$(kubectl get job rask-seed-corpus -n "$NS" -o jsonpath='{.status.conditions[?(@.status=="True")].type}' 2>/dev/null || true)"
-  case "$SEED_JOB_STATE" in Complete*|Failed*) break ;; esac
+  # SUBSTRING match, not prefix: kubectl 1.31+ reports every True condition, so a healthy job reads
+  # "SuccessCriteriaMet Complete" — a `Complete*` prefix test calls that a failure.
+  case "$SEED_JOB_STATE" in *Failed*|*Complete*) break ;; esac
   sleep 2
 done
 kubectl logs -n "$NS" job/rask-seed-corpus 2>/dev/null | grep -vE '^\[' || true
 case "$SEED_JOB_STATE" in
-  Complete*) ;;
-  *) echo "!! corpus seed job did not complete (condition: ${SEED_JOB_STATE:-none}) — logs above" >&2; exit 1 ;;
+  *Failed*) echo "!! corpus seed job FAILED — logs above" >&2; exit 1 ;;
+  *Complete*) ;;
+  *) echo "!! corpus seed job did not reach a terminal condition (saw: ${SEED_JOB_STATE:-none}) — logs above" >&2; exit 1 ;;
 esac
 
 say "2/4 restart the media trio so it re-opens the corpus"
@@ -168,16 +171,25 @@ VERIFY_FAILED=0
 kubectl port-forward -n "$NS" svc/rask-search 18102:8102 >/dev/null 2>&1 &
 SEARCH_PID=$!
 trap 'kill "$SEARCH_PID" 2>/dev/null || true' EXIT INT TERM
+# Poll the ANSWER, not the socket. `kubectl port-forward` binds the local port before the tunnel to
+# the pod is up, so a /dev/tcp probe goes green while the very next curl still returns nothing — and
+# `|| echo 0` then reports that as "0 hits", i.e. a verification failure indistinguishable from a
+# genuinely unreadable corpus. Retry until the service actually answers.
+# `protokoll`, not `arkiv`: the fixture's prose carries the DEFINITE form "arkivet" and Lance FTS
+# matches whole tokens, so `arkiv` scores nothing. `protokoll` is the term the fixture is built to
+# guarantee across several documents — and the bar is >1, because a single-row answer is exactly
+# the emptiness this seeder exists to disprove. `n`, not `limit`: SearchSpec ignores unknown keys.
+HITS=0
 for _ in $(seq 1 30); do
-  (exec 3<>/dev/tcp/127.0.0.1/18102) 2>/dev/null && exec 3<&- && break
-  sleep 1
+  HITS="$(curl -s --max-time 10 "http://127.0.0.1:18102/api/search?dataset=$DATASET_ID&q=protokoll&n=20" \
+    | python3 -c 'import sys,json;d=json.load(sys.stdin);print(len(d if isinstance(d,list) else d.get("hits",[])))' 2>/dev/null || echo 0)"
+  [ "${HITS:-0}" -gt 1 ] && break
+  sleep 2
 done
-HITS="$(curl -s --max-time 20 "http://127.0.0.1:18102/api/search?dataset=$DATASET_ID&q=arkiv&limit=5" \
-  | python3 -c 'import sys,json;d=json.load(sys.stdin);print(len(d.get("hits",d if isinstance(d,list) else [])))' 2>/dev/null || echo 0)"
-if [ "${HITS:-0}" -gt 0 ]; then
-  echo "  search '$DATASET_ID' q=arkiv -> $HITS hits"
+if [ "${HITS:-0}" -gt 1 ]; then
+  echo "  search '$DATASET_ID' q=protokoll -> $HITS hits across the seeded documents"
 else
-  echo "  !! search returned 0 hits for '$DATASET_ID' — the corpus is not readable by rask-search" >&2
+  echo "  !! search returned ${HITS:-0} hits for '$DATASET_ID' (expected >1) — the corpus is not readable by rask-search" >&2
   VERIFY_FAILED=1
 fi
 kill "$SEARCH_PID" 2>/dev/null || true
@@ -192,5 +204,5 @@ fi
 
 say "seeded"
 echo "corpus:    $CORPUS_HOST_PATH  (mount confirmed on rask-viewer)"
-echo "verified:  rask-search returns $HITS hits from '$DATASET_ID'"
+echo "verified:  rask-search returns $HITS hits from '$DATASET_ID' (q=protokoll)"
 echo "next:      open the ingress and look at /media, /annotator, /lakehouse"
