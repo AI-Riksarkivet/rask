@@ -15,11 +15,16 @@
 		zoneNav = null,
 		project,
 		footer,
+		content,
 	}: {
 		pathname?: string;
 		zoneNav?: ZoneNavConfig | null;
 		project?: Project;
 		footer?: Snippet;
+		/** Zone-owned rail content rendered UNDER the zone nav — e.g. the workbench's saved-views
+		 *  list. A snippet rather than a nav shape because such content is page chrome (it changes
+		 *  as the user works), which `ZoneNav`'s static route table cannot express. */
+		content?: Snippet;
 	} = $props();
 </script>
 
@@ -39,6 +44,7 @@
 	</Sidebar.Header>
 	<Sidebar.Content class="pt-2">
 		<ZoneNav {pathname} nav={zoneNav} />
+		{#if content}{@render content()}{/if}
 	</Sidebar.Content>
 	{#if footer}
 		<Sidebar.Footer>{@render footer()}</Sidebar.Footer>

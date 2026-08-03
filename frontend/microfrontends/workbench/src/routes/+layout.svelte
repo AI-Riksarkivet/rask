@@ -6,6 +6,8 @@
 	import { Toaster } from 'svelte-sonner';
 	import { AppShell } from '@rask/ui/shell';
 	import { onMount, type Snippet } from 'svelte';
+	import { ViewSidebar } from '@rask/dockview/views';
+	import { bench } from '$lib/bench.svelte';
 	import { WORKBENCH_ZONE_NAV } from '$lib/nav';
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
 	import type { LayoutData } from './$types';
@@ -35,6 +37,14 @@
 	{notifications}
 	user={data.user}
 	authEnabled={data.authEnabled}
+	sidebarContent={viewsRail}
 >
 	{@render children()}
 </AppShell>
+
+{#snippet viewsRail()}
+	<!-- Browser-only: the views model exists once the page has built the dock. -->
+	{#if browser && bench.views !== null && bench.apply !== null}
+		<ViewSidebar views={bench.views} onselect={bench.apply} rail />
+	{/if}
+{/snippet}

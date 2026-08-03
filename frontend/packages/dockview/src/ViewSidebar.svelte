@@ -14,8 +14,11 @@
 	interface Props {
 		views: DockViews<SerializedDockview>;
 		onselect: (id: string) => void;
+		/** True when rendered INSIDE the shared shell rail (AppShell sidebarContent): drops this
+		 *  component's own aside chrome — width, border — and lets the rail's own geometry rule. */
+		rail?: boolean;
 	}
-	let { views, onselect }: Props = $props();
+	let { views, onselect, rail = false }: Props = $props();
 
 	let creating = $state(false);
 	let draftName = $state('');
@@ -29,7 +32,7 @@
 	}
 </script>
 
-<aside class="views">
+<aside class="views" class:rail>
 	<header>
 		<span class="heading">Views</span>
 		<button
@@ -127,6 +130,11 @@
 		border-inline-end: 1px solid var(--border);
 		background: var(--background);
 		overflow-y: auto;
+	}
+	.views.rail {
+		width: 100%;
+		border-inline-end: none;
+		background: transparent;
 	}
 	header {
 		display: flex;
