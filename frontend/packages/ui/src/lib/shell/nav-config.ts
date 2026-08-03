@@ -515,10 +515,28 @@ const SETTINGS_ENTRY: TopNavEntry = {
 	items: [...GOVERNANCE_ITEMS],
 };
 
-/** The first path segment = the owning zone ('' = the home zone at the origin root). A link whose
- *  zone differs from the current pathname's leaves this app's route manifest, so it must hard-nav
- *  (data-sveltekit-reload); same-zone links stay soft for SPA speed. */
-export const zoneOf = (p: string) => p.split('/').filter(Boolean)[0] ?? '';
+/**
+ * First segments the CATCH-ALL home zone owns as REAL routes, rather than as another zone's base.
+ *
+ * `home` has no base path, so "first segment = zone" quietly misreads its own routes as zones of
+ * their own: `/projects` looked like a `projects` zone. Harmless in one direction (a link from the
+ * lakehouse still hard-navigated, which is correct) and wasteful in the other — standing on `/`, the
+ * navbar's own Projects link cost a full document load to reach a route THIS app serves.
+ *
+ * Keep in step with `@rask/zone-contract`'s `HOME_ROUTES`, which enforces the same fact from the
+ * other side (a link INTO these from another zone must carry `data-sveltekit-reload`). Two lists
+ * because the gate cannot import the shell, and both are one line — a divergence shows up as a
+ * cross-zone test failure rather than as silence.
+ */
+export const HOME_ROUTES = ['projects', 'settings'];
+
+/** The owning ZONE of a path ('' = the home zone, which serves the origin root and `HOME_ROUTES`).
+ *  A link whose zone differs from the current pathname's leaves this app's route manifest, so it
+ *  must hard-nav (data-sveltekit-reload); same-zone links stay soft for SPA speed. */
+export const zoneOf = (p: string) => {
+	const first = p.split('/').filter(Boolean)[0] ?? '';
+	return HOME_ROUTES.includes(first) ? '' : first;
+};
 
 const prefetched = new Set<string>();
 

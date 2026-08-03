@@ -365,4 +365,21 @@ describe('ZoneNav matchers', () => {
 		expect(zoneOf('/')).toBe('');
 		expect(zoneOf('')).toBe('');
 	});
+
+	it("zoneOf: the home zone's OWN routes are the home zone, not zones of their own", () => {
+		// `home` has no base path, so "first segment = zone" misread its own routes as zones: `/projects`
+		// looked like a `projects` zone. The consequence was one-directional and easy to miss — a link
+		// from the lakehouse still hard-navigated (correct), while standing ON `/` the navbar's own
+		// Projects link cost a full document load to reach a route this very app serves.
+		for (const p of ['/projects', '/projects/acme', '/settings', '/settings/notifications']) {
+			expect(zoneOf(p)).toBe('');
+		}
+		// Same-zone from home (soft nav), cross-zone from anywhere else (hard nav) — both directions,
+		// because getting only one of them right is what the old behaviour did.
+		expect(zoneOf('/projects') === zoneOf('/')).toBe(true);
+		expect(zoneOf('/projects') === zoneOf('/lakehouse/catalog')).toBe(false);
+		// …and it must not swallow a zone that merely SHARES a prefix with a home route.
+		expect(zoneOf('/projectsomething')).toBe('projectsomething');
+		expect(zoneOf('/settingsx/thing')).toBe('settingsx');
+	});
 });

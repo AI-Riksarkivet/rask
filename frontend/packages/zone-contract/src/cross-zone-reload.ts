@@ -30,9 +30,14 @@ const ZONE_PATH = new RegExp(`^\\/(${ZONES.join('|')})(?:\\/|$)`);
  * zone DIRECTORIES. It is not — `home` is a separate SvelteKit app, so the hop is cross-app and 404s
  * on a soft nav exactly like any zone hop. `/projects` became such a route when the projects surface
  * moved to the main menu (2026-08-03 ruling); the three lakehouse links into it were correct only
- * because a human wrote the attribute, with nothing to catch the next one that forgets.
+ * because a human wrote the attribute, with nothing to catch the next one that forgets. `/settings`
+ * joined it when the estate gained a real settings page.
+ *
+ * MIRRORS `HOME_ROUTES` in `@rask/ui`'s `nav-config.ts`, which states the same fact for the other
+ * direction (these are the home zone, so a link to them FROM home stays soft). Two lists because the
+ * gate cannot import the shell; a divergence surfaces as a failure here rather than as silence.
  */
-const HOME_ROUTES = ['projects'];
+const HOME_ROUTES = ['projects', 'settings'];
 
 const HOME_PATH = new RegExp(`^\\/(${HOME_ROUTES.join('|')})(?:\\/|$)`);
 
