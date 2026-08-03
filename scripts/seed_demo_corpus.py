@@ -25,8 +25,10 @@ Then point the media services at it:
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
+import math
 import os
 import shutil
 import sys
@@ -105,11 +107,28 @@ def page_image(title: str, page_no: int, width: int = 900, height: int = 1200) -
     return buf.getvalue()
 
 
+def _atlas_xy(doc_index: int, page_no: int) -> tuple[float, float]:
+    """A STABLE 2-D position per chunk — one loose cluster per document.
+
+    Not a real projection and not pretending to be: the fixture has no embedding model, and
+    inventing one would make the atlas look meaningful when it is fixture data. What it must be is
+    DETERMINISTIC (re-seeding cannot reshuffle the map under a saved lasso) and SEPARATED (pages of
+    one volume land together, so a selection is visibly a selection). A document's angle around the
+    unit circle plus a hashed jitter gives both, with no numpy dependency in a seeding script.
+    """
+    theta = 2.0 * math.pi * doc_index / max(len(DOCUMENTS), 1)
+    digest = hashlib.sha256(f"{doc_index}:{page_no}".encode()).digest()
+    jitter_x = (digest[0] / 255.0 - 0.5) * 0.45
+    jitter_y = (digest[1] / 255.0 - 0.5) * 0.45
+    return (math.cos(theta) + jitter_x, math.sin(theta) + jitter_y)
+
+
 def _chunk_rows() -> dict[str, list]:
     """Flatten the fixture into columns. `speech_id` is the page and `chunk_id` its ordinal —
     the identity triple the whole media plane keys on."""
-    columns: dict[str, list] = {k: [] for k in ("doc_id", "speech_id", "chunk_id", "frame_idx", "image", "mime", "caption", "text", "title")}
-    for document in DOCUMENTS:
+    keys = ("doc_id", "speech_id", "chunk_id", "frame_idx", "image", "mime", "caption", "text", "title", "atlas_x", "atlas_y", "atlas_cluster")
+    columns: dict[str, list] = {k: [] for k in keys}
+    for doc_index, document in enumerate(DOCUMENTS):
         for page_no, prose in enumerate(document["pages"]):
             columns["doc_id"].append(document["doc_id"])
             columns["speech_id"].append(page_no)
@@ -120,6 +139,10 @@ def _chunk_rows() -> dict[str, list]:
             columns["caption"].append(f"{document['title']} · page {page_no}")
             columns["text"].append(prose)
             columns["title"].append(document["title"])
+            x, y = _atlas_xy(doc_index, page_no)
+            columns["atlas_x"].append(x)
+            columns["atlas_y"].append(y)
+            columns["atlas_cluster"].append(doc_index)
     return columns
 
 
@@ -158,6 +181,14 @@ def seed(root: Path) -> Path:
             # browsed but never found, which is the failure this fixture exists to prevent.
             pa.field("text", pa.utf8()),
             pa.field("title", pa.utf8()),
+            # The ATLAS projection. `AtlasSpace` binds x/y/cluster to real COLUMNS — it wants a
+            # projection, not raw embeddings — so a fixture without them left `/api/explorer/atlas/
+            # points` answering 404 and the atlas panel showing "this dataset has no embedding map"
+            # forever. That made the whole atlas surface, and any dock panel over it, impossible to
+            # exercise in the dev estate.
+            pa.field("atlas_x", pa.float32()),
+            pa.field("atlas_y", pa.float32()),
+            pa.field("atlas_cluster", pa.int32()),
         ]
     )
     columns = _chunk_rows()
@@ -172,6 +203,9 @@ def seed(root: Path) -> Path:
             "caption": pa.array(columns["caption"]),
             "text": pa.array(columns["text"]),
             "title": pa.array(columns["title"]),
+            "atlas_x": pa.array(columns["atlas_x"], pa.float32()),
+            "atlas_y": pa.array(columns["atlas_y"], pa.float32()),
+            "atlas_cluster": pa.array(columns["atlas_cluster"], pa.int32()),
         },
         schema=schema,
     )
@@ -237,6 +271,22 @@ def seed(root: Path) -> Path:
             "metadata": [{"field": "title", "label": "Title"}, {"field": "n_chunks", "label": "Pages"}],
         },
         "search": {"row_table": "chunks", "fts": {"table": "chunks", "column": "text"}, "filterable": ["doc_id"]},
+        # The ATLAS space. `x`/`y`/`cluster` name COLUMNS on `table` (descriptor.py:210-214
+        # validates each one exists), so this declaration and the three seeded columns must land
+        # together — declaring it over a table without them fails validation rather than degrading.
+        # `source_column` is the text the atlas shows on hover; the channel colours points by
+        # volume, which is what makes a lasso selection legible as a selection.
+        "atlas": [
+            {
+                "name": "text",
+                "table": "chunks",
+                "x": "atlas_x",
+                "y": "atlas_y",
+                "cluster": "atlas_cluster",
+                "source_column": "text",
+                "channels": [{"name": "volume", "column": "title"}],
+            }
+        ],
         "capabilities": {"frames": "chunks.image"},
     }
     (descriptors / f"{DATASET_ID}.json").write_text(json.dumps(declared, indent=2) + "\n")
