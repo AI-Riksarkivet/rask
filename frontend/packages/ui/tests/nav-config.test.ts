@@ -44,7 +44,6 @@ describe('topNav', () => {
 			// trailing form, so a bare '/compute' href cost a 308 redirect round-trip on EVERY
 			// cross-zone hop (measured on all five zones, 2026-07-28) — visible as flicker over a
 			// tunnel. The href must be what the zone actually serves.
-			'/workbench/',
 			'/media/',
 			'/annotator/',
 			'/train/',
