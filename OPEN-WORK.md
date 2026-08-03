@@ -1113,16 +1113,19 @@ and the gate wired to `medallion.services.quality.assert_quality_on_batch` on a 
 **Why it is not "nearly done":** the publication event that should wake a mover is the catalog's, and
 the ingest plane currently registers commits through `ingest.catalog.LocalCatalog` — see 2.
 
-### 2. `LocalCatalog` still stands in for the catalog service
+### 2. ~~`LocalCatalog` still stands in for the catalog service~~ **CLOSED 2026-08-04**
 
-`ingest/catalog.py` creates datasets and records versions on the local filesystem / object store
-directly. The real catalog owns creation server-side (its client-direct fragment door hardcodes
-`LanceOperation.Append` and rules that "CREATE and OVERWRITE stay server-side"), and it is the
-catalog's commit that should emit the publication event the cascade rides. Until that swap happens,
-a run's commit is registered nowhere anything else can see, which is precisely why 1 cannot proceed.
+`ingest/catalog_service.py` routes creation and commits through the catalog
+(`RASK_INGEST_USE_CATALOG=true` in the chart). Verified in-cluster: a run completes, the catalog
+describes the table, and the location is one the CATALOG vends —
+`s3://lance-catalog/caa05d2a_demo$a11-…` — not a path the ingest plane composed. Namespace create is
+part of it (a table's namespace is a catalog object with its own manifest, not implied by the table
+id), and the vended location is resolved once and carried, because re-deriving it from env made
+workers write where the catalog was not looking.
 
-A14's creation contract is already enforced on both `ensure_at` branches, so the swap inherits a
-gate rather than needing one.
+So item 1 is no longer blocked: a commit is now registered somewhere the rest of the estate can see
+it. What remains for the cascade is the SUBSCRIPTION — something that hears the catalog's
+publication and submits the mover.
 
 ### 3. A15–A18 are unwritten
 
