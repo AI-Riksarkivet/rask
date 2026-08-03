@@ -78,12 +78,10 @@ describe('dock reachability', () => {
 		// RETIRED (docs/architecture/global-workbench.md). A zone's dock composes that zone's own
 		// components over one shared store — full fidelity, no cross-zone transport. The pin stays
 		// EXACT: every dock the estate ships must be navigable, and a compositor cannot come back
-		// unnoticed. Three zones ship one today: media (search), lakehouse (lineage), compute (Ray).
-		expect(DOCKS.map((d) => d.href).sort()).toEqual([
-			'/compute/workbench',
-			'/lakehouse/lineage/workbench',
-			'/media/workbench',
-		]);
+		// unnoticed. ONE zone ships one today — media, where "cut and re-cut the corpus" is the
+		// workflow that wanted it. Others earn a dock when a real multi-panel workflow appears in
+		// them, not by symmetry.
+		expect(DOCKS.map((d) => d.href).sort()).toEqual(['/media/workbench']);
 	});
 
 	it.each(DOCKS)('$href is listed in the $zone zone sidebar', ({ zone, href }) => {

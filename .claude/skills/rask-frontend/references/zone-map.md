@@ -39,7 +39,7 @@ Five areas that used to be five separate apps, merged under one router: `data`, 
 
 ## `media` — base `/media`, port 5173, labelled **Search**
 
-Multimodal corpus workbench: FTS / vector / hybrid / voice search, a WebGPU embedding atlas, a Cypher knowledge-graph explorer, and a Svelte-Flow dataflow editor. Reaches `:8101`/`:8102`/`:8103` (plus the catalog and lineage) through its own BFF rather than the gateway.
+Multimodal corpus search: FTS / vector / hybrid / voice search, a WebGPU embedding atlas, a Cypher knowledge-graph explorer, and a Svelte-Flow dataflow editor — plus the estate ONE dock at `/media/workbench` (results + atlas + player over one shared search store, this zone own components). Reaches `:8101`/`:8102`/`:8103` (plus the catalog and lineage) through its own BFF rather than the gateway.
 
 **6 `+server.ts` routes** after the transport ruling area 3, down from 13 — 4 keep-bytes (`api/atlas/points` Arrow + its zone cache, `api/voice/similar` multipart-in, the `api/[...path]` viewer catch-all, `diagram` SSR'd SVG/HTML), plus the 2 **promote-arrow** routes that keep their `+server.ts` because their REQUEST shape pins them there: `api/search` (the POST carries a File) and `api/atlas/chunks` (a read spelled as a POST). Both now answer **Arrow IPC** built by `$lib/server/rows-arrow.ts` — a corpus row is a loose object, so the encoder derives the schema per response and names the JSON-carried columns in the schema metadata; `@rask/media-api`'s `rowsFromArrow` decodes them and OMITS null cells (`RowSchema`'s optional fields admit `undefined`, never `null`).
 

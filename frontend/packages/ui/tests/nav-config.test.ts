@@ -233,7 +233,6 @@ describe('topNav', () => {
 		// and the panel never prepends a second zone-root row.
 		expect(compute.items!.map((i) => i.title)).toEqual([
 			'Overview',
-			'Workbench',
 			'Jobs',
 			'Cluster',
 			'Actors',
@@ -283,7 +282,7 @@ describe('topNav', () => {
 		// absence so the rows cannot come to exist in both places.
 		expect(groups.Governance).toBeUndefined();
 		expect(groups.Operations).toEqual(['Events', 'Streams', 'DLQ']);
-		expect(groups.Lineage).toEqual(['Datasets', 'Jobs', 'Runs', 'Columns', 'Graph', 'Workbench']);
+		expect(groups.Lineage).toEqual(['Datasets', 'Jobs', 'Runs', 'Columns', 'Graph']);
 	});
 
 	it('Media carries its rows too — the panel that was never pinned', () => {

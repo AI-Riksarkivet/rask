@@ -484,31 +484,3 @@ export const deleteRows = command(
 	async ({ table, predicate }): Promise<ApiResult<DeleteRowsResult>> =>
 		parsed(await post(`/v1/table/${enc(table)}/delete`, { predicate }), DeleteRowsResponseSchema),
 );
-
-/** The user-state documents this zone owns — its dock's arrangement and its named views. The
- *  `capi/v1/user-state` proxy died with the transport convergence, so the dock reads and writes
- *  through these two like every other JSON value surface in the zone. */
-const UserStateArg = v.object({
-	document: v.picklist(['dock-layout', 'dock-layout-library']),
-});
-
-/** The catalog's envelope: `{exists, value}` — `exists: false` is a genuine "never saved". */
-export interface UserStateEnvelope {
-	exists?: boolean;
-	value?: unknown;
-}
-
-/** Read the caller's own document. The three-outcome mapping (ok / absent / unreadable) stays in
- *  the dock's store, which is where it is tested — this only carries the status faithfully. */
-export const readUserStateDoc = query(
-	UserStateArg,
-	async ({ document }): Promise<ApiResult<UserStateEnvelope>> =>
-		typedAs<UserStateEnvelope>(await catalogJSON(`/v1/user-state/${document}`)),
-);
-
-/** Save the caller's own document. A refused write is reported as such — never flattened to ok. */
-export const writeUserStateDoc = command(
-	v.object({ ...UserStateArg.entries, value: v.unknown() }),
-	async ({ document, value }): Promise<ApiResult<unknown>> =>
-		catalogJSON(`/v1/user-state/${document}`, { method: 'PUT', body: JSON.stringify(value) }),
-);

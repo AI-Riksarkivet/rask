@@ -233,11 +233,6 @@ const LINEAGE_ITEMS: TopNavItem[] = [
 		href: '/lakehouse/lineage',
 		description: 'The whole medallion DAG on one canvas.',
 	},
-	{
-		title: 'Workbench',
-		href: '/lakehouse/lineage/workbench',
-		description: 'Graph, runs and events in one arrangeable dock.',
-	},
 ];
 
 const MEDIA_ITEMS: TopNavItem[] = [
@@ -294,11 +289,6 @@ const GOVERNANCE_ITEMS: TopNavItem[] = [
  *  Search at /media). */
 const COMPUTE_ITEMS: TopNavItem[] = [
 	{ title: 'Overview', href: '/compute/', description: 'The Ray plane at a glance.' },
-	{
-		title: 'Workbench',
-		href: '/compute/workbench',
-		description: 'Jobs, capacity and actors in one arrangeable dock.',
-	},
 	{ title: 'Jobs', href: '/compute/jobs', description: 'Submitted Ray jobs and their lifecycle.' },
 	{ title: 'Cluster', href: '/compute/cluster', description: 'Nodes and their resource load.' },
 	{ title: 'Actors', href: '/compute/actors', description: 'Live actors across the cluster.' },
