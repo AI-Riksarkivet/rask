@@ -46,7 +46,7 @@
 	}
 </script>
 
-<aside class="flex w-52 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border pr-3">
+<div class="flex max-h-96 flex-col gap-4 overflow-y-auto" data-slot="facet-rail">
 	<div class="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider">
 		<Filter size={12} /> Filter
 	</div>
@@ -107,4 +107,4 @@
 			</Button>
 		{/if}
 	</div>
-</aside>
+</div>

@@ -284,7 +284,9 @@ test('the facet rail filters what is already rendered — no refetch', async ({ 
 	const before = listUsersBodies.length;
 	const nodesBefore = await page.locator('[data-slot="access-node"]').count();
 
-	// Turning a type facet on narrows the canvas…
+	// Turning a type facet on narrows the canvas… (the facets live in a popover now — the resident
+	// 208px rail spent the page's scarcest resource, canvas width, on an idle control)
+	await page.getByRole('button', { name: 'Filter' }).click();
 	await page.getByLabel('Filter by type role').click();
 	await expect(page.getByRole('button', { name: 'Clear filters' })).toBeVisible();
 	await expect

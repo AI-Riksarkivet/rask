@@ -14,12 +14,13 @@
 	import { GraphCanvas } from '@rask/flow';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
+	import * as Popover from '@rask/ui/popover';
 	import { goto } from '$app/navigation';
 	import { onMount, untrack } from 'svelte';
 	import { page } from '$app/state';
 	import { MeSchema, parse } from '@rask/api';
 	import { requestJSON } from '$lib/http';
-	import { RotateCcw, ShieldAlert } from '@lucide/svelte';
+	import { Filter, RotateCcw, ShieldAlert } from '@lucide/svelte';
 	import {
 		AccessModelSchema,
 		checkAccess,
@@ -99,6 +100,8 @@
 	// NEW token, concluded the URL was foreign, and hydrated defaults straight over the user's query.
 	// The symptom was a facet click silently resetting the whole form. Plain bookkeeping, plain `let`.
 	let lastPushed: string | null = null;
+
+	const activeFacets = $derived(selectedTypes.size > 0 || selectedRelations.size > 0);
 
 	const params = $derived(page.url.searchParams);
 
@@ -470,8 +473,17 @@
 	let nodes = $state.raw<AccessNodeType[]>([]);
 	let edges = $state.raw<Edge[]>([]);
 
+	/**
+	 * Layout in its OWN derivation, so it re-runs only when the graph actually changes.
+	 *
+	 * It used to live inside the node-build effect below, which also reads `neighbours` — the hover
+	 * state. That made every pointer enter/leave re-run the full barycentre pass and re-diff the whole
+	 * canvas: O(nodes+edges) work per mouse movement, on a canvas capped at 4000 tuples. Hover now costs
+	 * only the cheap re-map; the placer runs when facets, the query, or the view flip.
+	 */
+	const positioned = $derived(layout(filtered.nodes, filtered.edges));
+
 	$effect(() => {
-		const positioned = layout(filtered.nodes, filtered.edges);
 		const near = neighbours;
 		nodes = positioned.map((n) => ({
 			id: n.id,
@@ -743,21 +755,50 @@
 			<p class="text-xs text-destructive">{failure}</p>
 		{/if}
 
-		<div class="flex min-h-0 flex-1 gap-4">
-			<FacetRail
-				typeCounts={composed.typeCounts}
-				relationCounts={composed.relationCounts}
-				{selectedTypes}
-				{selectedRelations}
-				shown={filtered.nodes.length}
-				total={composed.nodes.length}
-				onchange={(next) => {
+		<!-- The filter is a POPOVER, not a resident column. The rail used to hold 208px of the viewport
+		     permanently for a control that is idle most of the time — on this page the canvas is the
+		     product, and every horizontal pixel spent on chrome is spent against it. The button carries
+		     the two facts that must stay visible while it is closed: how many nodes are shown, and
+		     whether a filter is active at all. -->
+		<div class="flex items-center gap-2">
+			<Popover.Root>
+				<Popover.Trigger>
+					{#snippet child({ props }: { props: Record<string, unknown> })}
+						<Button size="sm" variant={activeFacets ? 'default' : 'outline'} {...props}>
+							<Filter size={13} />
+							Filter
+							{#if activeFacets}
+								<Badge variant="secondary" class="ml-1 px-1.5 font-mono text-[10px]">
+									{filtered.nodes.length}/{composed.nodes.length}
+								</Badge>
+							{/if}
+						</Button>
+					{/snippet}
+				</Popover.Trigger>
+				<Popover.Content align="start" class="w-60 p-3">
+					<FacetRail
+						typeCounts={composed.typeCounts}
+						relationCounts={composed.relationCounts}
+						{selectedTypes}
+						{selectedRelations}
+						shown={filtered.nodes.length}
+						total={composed.nodes.length}
+						onchange={(next) => {
 	selectedTypes = next.types;
 	selectedRelations = next.relations;
 	pushUrl({});
 }}
-			/>
+					/>
+				</Popover.Content>
+			</Popover.Root>
+			{#if activeFacets}
+				<span class="text-xs text-muted-foreground">
+					{filtered.nodes.length} of {composed.nodes.length} nodes shown
+				</span>
+			{/if}
+		</div>
 
+		<div class="flex min-h-0 flex-1 gap-4">
 			<div class="relative min-w-0 flex-1 overflow-hidden rounded-md border border-border">
 				{#if composed.nodes.length === 0}
 					<div
@@ -783,6 +824,19 @@
 					<Badge variant="secondary" class="absolute right-2 top-2 font-mono text-[10px]">
 						{chain.length} hop{chain.length === 1 ? '' : 's'} lit
 					</Badge>
+				{/if}
+				<!-- The encodings, named ON the canvas. Dashed-means-expiring and dimmed-means-filtered are
+				     inventions of this view; a reader should not need the source code to decode them. One
+				     line, muted, bottom-left — the cheapest form that still does the job. -->
+				{#if composed.nodes.length > 0}
+					<div
+						class="pointer-events-none absolute bottom-2 left-2 rounded bg-background/80 px-2 py-0.5 text-[10px] text-muted-foreground"
+						data-slot="canvas-legend"
+					>
+						<span class="text-primary">━</span> derivation path ·
+						<span>┅ ⏳</span> time-boxed ·
+						<span class="opacity-50">▢</span> dimmed = filtered out or off-query
+					</div>
 				{/if}
 			</div>
 
