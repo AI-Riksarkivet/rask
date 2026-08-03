@@ -1159,7 +1159,12 @@ someone to wire it back in and re-create the two-ledger problem.
 - **`IfNotPresent` + a mutable `:dev` tag never re-pulls.** A rebuilt, re-pushed, rolled-out
   Deployment keeps serving arbitrarily old code, and `kubectl rollout restart` does not help. Deploy
   by DIGEST. This cost an hour on a health route that was present in the image and absent from the
-  pod.
+  pod — and then bit a SECOND time from the other direction: re-running the deploy re-applies the
+  chart, which resets a digest-pinned image back to `:dev`, and the node serves its cached copy
+  again. So the trap is not only "remember to pin"; it is that ANY later `kubectl apply` of the
+  release silently un-pins. `scripts/ingest-lane.sh` re-pins ingest on every deploy for exactly this
+  reason; the other services do not, so pin them by hand after a re-deploy or debug a fixed service
+  that is still running the bug.
 - **`tests/e2e` specs must contain no TS type syntax.** The project has no tsconfig, and playwright's
   transform answers a type assertion by failing the whole file with "2 errors building" — no line, no
   cause — which also zeroes every other spec's listing.
