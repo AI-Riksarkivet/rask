@@ -232,9 +232,29 @@ for zone in ZONES:
     build_image(
         'web-' + zone + ':dev',
         '.docker/frontend.dockerfile',
-        # The whole frontend workspace: bun's `--frozen-lockfile` fails with "Workspace not found" if
-        # any member is absent, so this cannot be narrowed to one zone's directory.
-        ['.docker', 'frontend'],
+        # ONLY what this zone syncs, plus the inputs that change its image.
+        #
+        # This used to be the whole `frontend/` tree, on the reasoning that bun's --frozen-lockfile needs
+        # every workspace member present. True of the BUILD CONTEXT — and irrelevant here: `deps` is a
+        # WATCH list. Watching all of frontend/ meant an edit in ANY zone landed in EVERY zone's
+        # live_update as a file "not matching any sync", which Tilt answers by refusing to sync and doing
+        # a full rebuild instead. With a second editor active in the repo, every zone sat permanently in
+        # UpdateStopped:
+        #
+        #   Found file(s) not matching any sync
+        #   (files: [frontend/microfrontends/lakehouse/e2e/admin/access.spec.ts ...])
+        #
+        # reported against web-home. One zone's edits are no longer every zone's problem.
+        [
+            '.docker/frontend.dockerfile',
+            '.docker/dev-serve.sh',
+            'frontend/microfrontends/' + zone,
+            'frontend/packages',
+            'frontend/package.json',
+            'frontend/bun.lock',
+            'frontend/turbo.json',
+            'frontend/patches',
+        ],
         dagger_fn='zone-image',
         dagger_flags='--zone=' + zone,
         build_args={'APP': zone},
