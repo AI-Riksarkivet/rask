@@ -170,3 +170,27 @@ def test_source_spec_carries_no_dataset_path() -> None:
     """
     spec = SourceSpec(kind="test-src", project="p", dataset="pages")
     assert not any("://" in str(v) for v in spec.model_dump().values()), "a dataset PATH leaked into the spec"
+
+
+def test_a_busy_workflow_engine_is_a_RETRYABLE_503_not_a_500(client: tuple[TestClient, _RecordingStarter, InMemoryRunStore]) -> None:
+    """A1's bound must not turn a slow sidecar into an unretryable error.
+
+    Bounding the schedule call is what keeps 202-under-a-second a contract rather than a hope. But
+    the first version let the TimeoutError escape, and FastAPI answered 500 — observed in-cluster on
+    a pod whose daprd had only just started. 500 tells a client "this request can never work"; the
+    truth is "the engine was busy, ask again", which is a 503 with a Retry-After.
+
+    The run id is deterministic, so the retry converges on the SAME run rather than starting a second
+    one — which is the property that makes advising a retry safe at all.
+    """
+    c, starter, _ = client
+
+    async def _timeout(run_id: str, payload: dict[str, object]) -> None:
+        raise TimeoutError
+
+    starter.start = _timeout  # type: ignore[method-assign]
+    res = c.post("/v1/ingests", json=BODY, headers={"Idempotency-Key": "busy"})
+
+    assert res.status_code == 503
+    assert res.headers.get("Retry-After")
+    assert "Idempotency-Key" in res.json()["detail"]

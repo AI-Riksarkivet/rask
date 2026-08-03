@@ -21,6 +21,16 @@ RUN_NAMESPACE = uuid.UUID("6f5c1f2e-9a3d-4a1e-8b77-2f0f1d9c4a10")
 
 RunStatus = Literal["ACCEPTED", "RUNNING", "COMPLETE", "COMPLETE_WITH_ERRORS", "FAILED"]
 
+# The scheduling call is a blocking gRPC round-trip to the sidecar. Bounded, because A1 is a
+# CONTRACT: 202 in under a second. Left unbounded it hangs the request — observed in-cluster at 15s
+# and climbing, which turns the estate's flagship async guarantee into a worse experience than the
+# synchronous handler it replaced.
+#
+# Lives HERE rather than in the package __init__ so both the app factory and the API router can read
+# it: api.py importing it from `ingest` is a cycle (the package imports the router), and the error it
+# raises is an ImportError at collection time in every test, which is a lot of noise for one number.
+SCHEDULE_TIMEOUT_SECONDS = 3.0
+
 
 def run_id_for(project: str, idempotency_key: str) -> str:
     """Derive the run id from the CALLER's key — the estate's idempotency pattern.

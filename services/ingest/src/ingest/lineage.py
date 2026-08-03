@@ -65,6 +65,13 @@ def reset_events() -> None:
     _EVENTS.clear()
 
 
+def _delimiter() -> str:
+    """The catalog's table-id separator. Read from env so it cannot drift from the catalog client's."""
+    import os
+
+    return os.getenv("RASK_CATALOG_DELIMITER", "$")
+
+
 def lineage_run_id(run_id: str) -> str:
     """The graph run id for an ingest run — stable, so two activities agree without sharing state."""
     from lineage_kit import run_id_for
@@ -98,16 +105,44 @@ class LineageRecorder:
         self._record(LineageEvent(run_id=run_id, event_type="START", project=project, dataset=dataset, source_kind=kind))
         self._emit(lambda: _run(run_id).start(inputs=self._inputs(kind, project, dataset, options)))
 
-    def terminal(self, run_id: str, status: str, version: int | None, rows: int, errors: dict[str, str]) -> None:
+    def terminal(
+        self,
+        run_id: str,
+        status: str,
+        version: int | None,
+        rows: int,
+        errors: dict[str, str],
+        project: str = "",
+        dataset: str = "",
+    ) -> None:
+        """COMPLETE or FAIL — and a COMPLETE must NAME WHAT IT WROTE.
+
+        `complete()` with no outputs was the first version, and it records a run with an input and no
+        WROTE edge: the graph knows the run happened and cannot say what it produced. A8 still passed,
+        because A8 asks whether the run EXISTS — which is exactly how a half-recorded provenance
+        survives a provenance check.
+
+        The output also IS the cascade's trigger. The medallion's `/bronze-arrival` head fires only on
+        an event whose `eventType` is COMPLETE and whose outputs contain its configured
+        `{namespace, name}` pair (`ingest_trigger.py:51-58`), so an unnamed output means a bronze
+        write that wakes nothing downstream. R23 is why it works this way round: nothing publishes
+        `medallion.bronze` directly — the head derives it from the write's own lineage, so a tier is
+        announced by the record of what happened rather than by a second, separately-maintained event.
+        """
         event_type = "FAIL" if status == "FAILED" else "COMPLETE"
-        self._record(LineageEvent(run_id=run_id, event_type=event_type, version=version, rows=rows, errors=errors))
+        self._record(LineageEvent(run_id=run_id, event_type=event_type, project=project, dataset=dataset, version=version, rows=rows, errors=errors))
+
+        # The catalog's own identifier for the table — `bronze$pages`, not `pages`. The graph and the
+        # cascade head both key on it, so composing it differently here would make the run's output
+        # name a table nothing else recognises.
+        outputs = [(project, f"{project}{_delimiter()}{dataset}")] if project and dataset else []
 
         def emit() -> None:
             run = _run(run_id)
             if event_type == "FAIL":
-                run.fail(f"ingest run {run_id} failed: {errors or 'no detail'}")
+                run.fail(f"ingest run {run_id} failed: {errors or 'no detail'}", outputs=outputs)
             else:
-                run.complete()
+                run.complete(outputs=outputs)
 
         self._emit(emit)
 

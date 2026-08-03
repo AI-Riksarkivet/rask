@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 from ingest.api import router as ingest_router
 from ingest.health import router as health_router
 from ingest.provenance import LineageProvenanceReader
-from ingest.runs import InMemoryRunStore
+from ingest.runs import SCHEDULE_TIMEOUT_SECONDS, InMemoryRunStore
 
 
 if TYPE_CHECKING:
@@ -24,12 +24,6 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
 
 logger = logging.getLogger(__name__)
-
-# The scheduling call is a blocking gRPC round-trip to the sidecar. Bounded, because A1 is a
-# CONTRACT: 202 in under a second. Left unbounded it hangs the request — observed in-cluster at 15s
-# and climbing, which turns the estate's flagship async guarantee into a worse experience than the
-# synchronous handler it replaced.
-SCHEDULE_TIMEOUT_SECONDS = 3.0
 
 
 def create_app() -> FastAPI:

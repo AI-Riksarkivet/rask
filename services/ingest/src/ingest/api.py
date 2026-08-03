@@ -21,7 +21,16 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
-from ingest.runs import RunRecord, RunStore, WorkflowRunReader, WorkflowStarter, merge_workflow_state, record_from_workflow_state, run_id_for
+from ingest.runs import (
+    SCHEDULE_TIMEOUT_SECONDS,
+    RunRecord,
+    RunStore,
+    WorkflowRunReader,
+    WorkflowStarter,
+    merge_workflow_state,
+    record_from_workflow_state,
+    run_id_for,
+)
 from ingest.sources import SourceSpec, registered_kinds
 
 
@@ -96,7 +105,20 @@ async def create_ingest(
     await store.put(record)
 
     spec = SourceSpec(kind=body.kind, project=body.project, dataset=body.dataset, options=body.options)
-    await starter.start(run_id, {"run_id": run_id, **spec.model_dump()})
+    try:
+        await starter.start(run_id, {"run_id": run_id, **spec.model_dump()})
+    except TimeoutError as exc:
+        # 503, not 500. A1 bounds the schedule call so a slow sidecar cannot hold the POST past its
+        # one-second contract — but the bound turned a BUSY sidecar into an unretryable server error,
+        # observed on a pod whose daprd had only just started. 503 + Retry-After is the same
+        # information in a form a client can act on, and `@rask/api`'s refuse() already reads the
+        # problem+json detail. The run id is deterministic, so the retry converges on this same run
+        # rather than starting a second one.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"the workflow engine did not accept run {run_id} within {SCHEDULE_TIMEOUT_SECONDS}s — retry with the same Idempotency-Key",
+            headers={"Retry-After": "5"},
+        ) from exc
 
     response.headers["Location"] = f"/v1/ingests/{run_id}"
     return IngestAccepted(run_id=run_id)

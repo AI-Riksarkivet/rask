@@ -297,7 +297,15 @@ def emit_terminal(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None
     """
     spec = RunSpec.model_validate(payload["spec"])
     outcome = RunOutcome.model_validate(payload["outcome"])
-    _lineage().terminal(spec.run_id, outcome.status, outcome.committed_version, outcome.rows, outcome.errors)
+    _lineage().terminal(
+        spec.run_id,
+        outcome.status,
+        outcome.committed_version,
+        outcome.rows,
+        outcome.errors,
+        project=spec.project,
+        dataset=spec.dataset,
+    )
 
 
 def _lineage() -> Any:  # noqa: ANN401 — resolved lazily so importing this module needs no emitter

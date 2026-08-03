@@ -289,3 +289,59 @@ def test_a_run_NEITHER_the_store_nor_the_engine_knows_is_still_404() -> None:
     app.state.workflow_reader = _Reader(None)
 
     assert TestClient(app).get("/v1/ingests/nope").status_code == 404
+
+
+# ── the cascade trigger: the terminal event must be one /bronze-arrival recognises ────
+
+
+def test_a_completed_run_NAMES_the_table_it_wrote() -> None:
+    """A COMPLETE with no outputs records a run that produced nothing — and A8 still passes.
+
+    A8 asks whether the run EXISTS, so a half-recorded provenance survives it: the graph knows the
+    run happened and cannot say what it wrote. The WROTE edge is the whole point of the record.
+    """
+    from ingest.lineage import LineageRecorder, recorded_events, reset_events
+
+    reset_events()
+    LineageRecorder().terminal("r1", "COMPLETE", version=2, rows=4, errors={}, project="bronze", dataset="pages")
+
+    event = recorded_events()[-1]
+    assert (event.project, event.dataset) == ("bronze", "pages")
+
+
+def test_the_terminal_event_matches_what_the_CASCADE_HEAD_filters_on() -> None:
+    """The medallion's `/bronze-arrival` fires only on `eventType == COMPLETE` whose outputs contain
+    its configured `{namespace, name}` pair (`ingest_trigger.py:51-58`).
+
+    So the output name has to be the CATALOG's table id (`bronze$pages`), not the bare dataset name.
+    Composing it differently would leave a bronze write that lands its data and wakes nothing —
+    indistinguishable, from the outside, from a cascade that is simply switched off.
+
+    Asserted against the head's own predicate rather than against a copy of it, so the two cannot
+    drift apart: if the medallion changes what it filters on, this fails.
+    """
+    from medallion.core.config import MedallionSettings
+    from medallion.services.ingest_trigger import _bronze_write_dataset
+
+    settings = MedallionSettings.model_validate({"bronze_namespace": "bronze", "bronze_dataset": "bronze$pages"})
+    event = {
+        "eventType": "COMPLETE",
+        "outputs": [{"namespace": "bronze", "name": "bronze$pages"}],
+    }
+
+    assert _bronze_write_dataset(event, settings, "") == "bronze$pages"
+
+
+def test_a_FAILED_run_does_NOT_wake_the_cascade() -> None:
+    """The head filters on COMPLETE for a reason: a FAIL announces that data is NOT there.
+
+    Firing the cascade off one would kick every downstream mover over rows that were never written,
+    and each would then fail for its own unrelated-looking reason.
+    """
+    from medallion.core.config import MedallionSettings
+    from medallion.services.ingest_trigger import _bronze_write_dataset
+
+    settings = MedallionSettings.model_validate({"bronze_namespace": "bronze", "bronze_dataset": "bronze$pages"})
+    event = {"eventType": "FAIL", "outputs": [{"namespace": "bronze", "name": "bronze$pages"}]}
+
+    assert _bronze_write_dataset(event, settings, "") is None
