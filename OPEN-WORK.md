@@ -296,10 +296,39 @@ OIDC (dex session), real OpenFGA, real Dapr actors.**
   per hook, or revive/uninstall kueue. (2) `rask-web-home` crash-loops: tilt's in-container
   `bun run build` dies exit 137 while the chart's 6Gi dev tier is in place — the imaged build is
   fine; the zone images need a full rebuild once deploys are unblocked (the web pods have been
-  serving the 07-31 UI since). (3) The publish's catalog identity (`MEDIA_CATALOG_TOKEN`) is
-  absent/stale in the annotator pod — the long-recorded decision (a dex client-credentials flow vs
-  chart-set `media.catalogToken`) is now the ONLY thing between the saga and a live published
-  table + the lineage READ-edge witness.
+  serving the 07-31 UI since). (3) ~~The publish's catalog identity~~ **DECIDED and SHIPPED same
+  day (sixth wave, below).**
+
+**Sixth wave (2026-08-03): the publish identity — decided, built, and the FULL live witness landed.**
+
+- **The decision:** dex has no client-credentials grant, so machine identity is a dedicated
+  password-grant SERVICE ACCOUNT (`publisher@rask.internal`, chart-declared in dex's static users).
+  `lakehouse.publish_token` mints a FRESH token per publish — nothing long-lived is stored anywhere,
+  so nothing can go stale (the exact failure the hand-pinned July token produced live). Precedence:
+  a set `MEDIA_CATALOG_TOKEN` still wins (prod may pin a token its own machinery rotates).
+- **Secrets per the estate's rule:** the account's password never rides pod env — it is seeded into
+  OpenBao (`secret/lance` gains `publisher-oidc-password`, chart seed job) and fetched through the
+  Dapr secret store (`lance-secrets`, already scoped to the annotator) via `fetch_required_secrets`,
+  fail-closed. Only non-secret coordinates (`MEDIA_PUBLISH_TOKEN_URL`/`CLIENT_ID`/`USERNAME`) ride
+  env; the render test asserts the password appears in NO env block. A minting failure surfaces as
+  `publish_failed` with the IdP's words — never a stranded `publishing`.
+- **The live witness, complete:** `silver$consensus-live-41965_…` PUBLISHED by the minted service
+  identity — lineage records the run COMPLETE with the publisher's verified dex sub as author. Then
+  the PIN: a second project whose send captured `where` + `dataset_version=1` published
+  `silver$pin-live-b_…`, and the lineage graph now shows the READ edge
+  `silver$pin-live-b_… → silver$consensus-live-41965_…` with run inputs `{name, version: "1"}` —
+  §7.2's reproducibility provenance, observed end to end on the real cluster.
+- **Noted along the way:** dex restarts rotate its in-memory keys, killing every outstanding token
+  (pods restarted after dex recover; a persistent-storage dex would remove the class); the annotator
+  maps `UnauthenticatedError` from its own verify path to a 500 rather than 401 on one route
+  (cosmetic, worth a handler row); the lineage read API does not surface custom run FACETS (the
+  consensus/adjudications facet is delivered to the catalog — unit-pinned — but `/runs` returns no
+  facet payloads; a lineage-service read gap, not a write one).
+- **NOT tested, said plainly (owner asked): the label-assist runner.** `runners/assist`
+  (GroundingDINO-tiny + SAM, CPU) is chart-declared (`runners.assist`, `MEDIA_ASSIST_URL` flips the
+  annotator's mock to real) but has never been image-built, deployed, or driven — the canvas assist
+  runs against the in-repo mock today. A full slice: dagger-build the torch image (~1.1 GB weights),
+  enable + deploy, drive a canvas assist request end to end.
 
 - **Recorded, not fixed (named postures):** the Dapr `/actors/*` invocation surface on the
   annotator trusts its caller (the sidecar) and accepts a caller-supplied `actor` field — true for

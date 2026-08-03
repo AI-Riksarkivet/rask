@@ -65,6 +65,47 @@ def _arrow_stream_bytes(plan: PublishPlan) -> bytes:
     return bytes(sink.getvalue())
 
 
+def publish_token(settings: Any) -> str | None:
+    """The saga's catalog identity, resolved at publish time.
+
+    Precedence, and the reasoning behind it:
+
+    1. ``MEDIA_CATALOG_TOKEN`` set → use it verbatim (prod may pin a token its own machinery mints).
+    2. ``MEDIA_PUBLISH_TOKEN_URL`` + ``MEDIA_PUBLISH_USERNAME`` set → mint a FRESH token from the
+       IdP via the password grant with the dedicated service account. The password comes from the
+       Dapr secret store (``lance-secrets``/``lance``), fail-closed — the estate's secrets rule:
+       the store is the SOLE source and no plaintext credential rides pod env. Minted per publish,
+       so nothing stored can expire — the exact failure a hand-pinned token produced live.
+    3. Neither → ``None`` (an auth-off stack publishes anonymously, as before).
+
+    Sync and blocking (the secret fetch + token POST); the caller runs it in a thread.
+    """
+    if settings.catalog_token:
+        return str(settings.catalog_token)
+    if not (settings.publish_token_url and settings.publish_username):
+        return None
+
+    import httpx  # noqa: PLC0415
+
+    from service_kit.governed.secrets import fetch_required_secrets  # noqa: PLC0415 - publish path only
+
+    bundle = fetch_required_secrets(settings.publish_secret_store, settings.publish_secret_key, require="publisher-oidc-password")
+    data = {
+        "grant_type": "password",
+        "username": settings.publish_username,
+        "password": bundle["publisher-oidc-password"],
+        "scope": "openid profile email",
+    }
+    auth = (settings.publish_client_id, settings.publish_client_secret or "") if settings.publish_client_id else None
+    response = httpx.post(settings.publish_token_url, data=data, auth=auth, timeout=15.0)
+    if response.status_code >= 400:
+        raise RuntimeError(f"the IdP refused the publish identity: HTTP {response.status_code} {response.text[:200]}")
+    token = response.json().get("id_token") or response.json().get("access_token")
+    if not token:
+        raise RuntimeError("the IdP's token response carries neither id_token nor access_token")
+    return str(token)
+
+
 class _HttpCreateApi:
     """The create call over direct HTTP — same signature as the SDK's ``DataApi.create_table`` so
     the injectable test seam is unchanged, plus the S4 params the generated client cannot send."""
@@ -305,10 +346,24 @@ async def run_publish_for(project_id: str) -> PublishOutcome | None:
             logger.exception("could not record the missing-catalog failure for project %s", project_id)
         return None
 
+    # The saga's identity: a pinned token when configured, else minted FRESH from the IdP for this
+    # run. Minting failures surface as publish_failed with the IdP's reason — not a stranded
+    # `publishing` — because a wrong password or a sealed secret store is an operator's problem to
+    # SEE, and the retry edge re-mints.
+    try:
+        token = await asyncio.to_thread(publish_token, settings)
+    except Exception as exc:
+        logger.exception("could not obtain a publish identity for project %s", project_id)
+        try:
+            await project_handle.fire({"event": "publish_failed", "actor": subject, "error": f"publish identity unavailable: {exc}"})
+        except Exception:
+            logger.exception("could not record the identity failure for project %s", project_id)
+        return None
+
     publisher = CatalogPublisher(
         settings.catalog_uri,
         delimiter=settings.catalog_delimiter,
-        token=settings.catalog_token,
+        token=token,
     )
     return await run_publish(
         project_handle=project_handle,

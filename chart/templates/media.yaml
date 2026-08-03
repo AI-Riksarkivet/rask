@@ -152,6 +152,13 @@ spec:
             - { name: LANCE_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" $root.Values.dex.issuer) | quote }} }
             - { name: LANCE_FGA_ENABLED, value: "true" }
             - { name: LANCE_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" $root }}:8080" }
+            # The publish saga's identity coordinates. Deliberately NO password here — it is seeded
+            # into OpenBao and fetched via the Dapr secret store, fail-closed (the estate's secrets
+            # rule); a pinned media.catalogToken (above) still wins when set.
+            - { name: MEDIA_PUBLISH_TOKEN_URL, value: "http://{{ include "lance.dexHost" $root }}:{{ $root.Values.dex.port }}/dex/token" }
+            - { name: MEDIA_PUBLISH_CLIENT_ID, value: {{ $root.Values.dex.clientId | quote }} }
+            - { name: MEDIA_PUBLISH_CLIENT_SECRET, value: {{ $root.Values.dex.clientSecret | quote }} }
+            - { name: MEDIA_PUBLISH_USERNAME, value: {{ $root.Values.dex.publisher.username | quote }} }
             {{- with $root.Values.auth.fgaStoreId }}
             - { name: LANCE_FGA_STORE_ID, value: {{ . | quote }} }
             {{- end }}

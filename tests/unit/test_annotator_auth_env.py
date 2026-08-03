@@ -54,3 +54,20 @@ def test_auth_off_leaves_the_annotator_permissive_dev_parity() -> None:
     env = _annotator_env(_render(media__enabled="true"))
     assert "LANCE_FGA_ENABLED" not in env
     assert "LANCE_OIDC_ENABLED" not in env
+
+
+def test_the_publish_identity_coordinates_ride_env_but_the_password_never_does() -> None:
+    """The saga mints a fresh token per publish with the dex service account. Coordinates are env;
+    the PASSWORD is seeded into OpenBao and fetched via the Dapr secret store, fail-closed — a
+    rendered password in any env block would break the estate's secrets rule."""
+    docs = _render(media__enabled="true", auth__enabled="true", auth__allowHeadless="true")
+    env = _annotator_env(docs)
+    assert env["MEDIA_PUBLISH_TOKEN_URL"].endswith("/dex/token")
+    assert env["MEDIA_PUBLISH_CLIENT_ID"] == "lance-catalog"
+    assert env["MEDIA_PUBLISH_USERNAME"] == "publisher@rask.internal"
+    assert "MEDIA_PUBLISH_PASSWORD" not in env
+    assert not any("publisher-oidc-password" in str(v) for v in env.values()), "the secret leaked into env"
+    # …and the OTHER half of the contract: dex knows the account, OpenBao's seed carries the secret.
+    flat = str(docs)
+    assert "publisher@rask.internal" in flat
+    assert "publisher-oidc-password=" in flat

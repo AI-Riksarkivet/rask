@@ -1247,6 +1247,15 @@ dex:
   clientId: lance-catalog
   clientSecret: lance-catalog-secret
   staticUser: alice@example.com
+  # The publish saga's SERVICE ACCOUNT (dex has no client-credentials grant, so machine identity is
+  # a dedicated password-grant user). The annotator mints a FRESH token per publish with it — the
+  # password never rides pod env: it is seeded into OpenBao and fetched through the Dapr secret
+  # store, fail-closed. `passwordHash` is bcrypt of `password` (demo default: "password").
+  publisher:
+    username: publisher@rask.internal
+    userID: "7f2a9c41-5b8e-4d16-a3f7-9e0c1d2b3a45"
+    password: password
+    passwordHash: "$2b$10$TsVVN0.5g.XntmJAGNuXF.gyhwQZgmgjmkevKxTa48M7k06J./53G"
   # NOTE: the demo password is NOT set here — Dex needs a bcrypt HASH, which Helm can't compute at render.
   # It's hardcoded in templates/dex.yaml (staticPasswords[].hash = bcrypt of "password"). To change it,
   # regenerate the hash (e.g. `htpasswd -bnBC 10 "" <pw> | tr -d ':\n'`) and edit that template.

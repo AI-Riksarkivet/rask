@@ -264,3 +264,97 @@ def test_the_http_create_api_raises_the_sdk_exception_on_http_errors(monkeypatch
     with pytest.raises(ApiException) as err:
         _HttpCreateApi("http://catalog:2333").create_table("silver$t", b"A")
     assert err.value.status == 502
+
+
+# --------------------------------------------------------------------------------------------------
+# publish_token — the saga's catalog identity (minted fresh per publish; secrets from the store)
+# --------------------------------------------------------------------------------------------------
+
+
+class _TokenSettings:
+    catalog_token: str | None = None
+    publish_token_url: str | None = None
+    publish_client_id: str | None = None
+    publish_client_secret: str | None = None
+    publish_username: str | None = None
+    publish_secret_store = "lance-secrets"
+    publish_secret_key = "lance"
+
+
+def test_a_pinned_catalog_token_wins_and_touches_nothing_else(monkeypatch: pytest.MonkeyPatch) -> None:
+    from annotator.projects import lakehouse
+
+    settings = _TokenSettings()
+    settings.catalog_token = "pinned"
+    settings.publish_token_url = "http://dex:5556/dex/token"  # present, must be IGNORED
+
+    monkeypatch.setattr(
+        "service_kit.governed.secrets.fetch_required_secrets",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("the store must not be consulted when a token is pinned")),
+    )
+
+    assert lakehouse.publish_token(settings) == "pinned"
+
+
+def test_minting_reads_the_store_and_posts_the_password_grant(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The password comes from the Dapr secret store (fail-closed, sole source) and the grant carries
+    the service account — a FRESH token per publish, so nothing stored can ever go stale."""
+    import httpx
+    from annotator.projects import lakehouse
+
+    from service_kit.governed import secrets as sk_secrets
+
+    settings = _TokenSettings()
+    settings.publish_token_url = "http://dex:5556/dex/token"
+    settings.publish_client_id = "lance-catalog"
+    settings.publish_client_secret = "lance-catalog-secret"
+    settings.publish_username = "publisher@rask.internal"
+
+    fetched: list[tuple[str, str]] = []
+
+    def fake_fetch(store: str, key: str, *, require: str) -> dict[str, str]:
+        fetched.append((store, key))
+        assert require == "publisher-oidc-password"
+        return {"publisher-oidc-password": "s3cret"}
+
+    posted: dict[str, Any] = {}
+
+    def fake_post(url: str, *, data: dict[str, str], auth: Any, timeout: float) -> Any:
+        posted.update(url=url, data=data, auth=auth)
+        return _Resp(200, {"id_token": "minted-token"})
+
+    monkeypatch.setattr(sk_secrets, "fetch_required_secrets", fake_fetch)
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    assert lakehouse.publish_token(settings) == "minted-token"
+    assert fetched == [("lance-secrets", "lance")]
+    assert posted["url"] == "http://dex:5556/dex/token"
+    assert posted["data"]["grant_type"] == "password"
+    assert posted["data"]["username"] == "publisher@rask.internal"
+    assert posted["data"]["password"] == "s3cret"
+    assert posted["auth"] == ("lance-catalog", "lance-catalog-secret")
+
+
+def test_unconfigured_identity_is_none_not_an_error() -> None:
+    from annotator.projects import lakehouse
+
+    assert lakehouse.publish_token(_TokenSettings()) is None
+
+
+def test_an_idp_refusal_raises_with_the_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A wrong password or sealed store is an OPERATOR's problem — it must surface as publish_failed
+    with the IdP's words, never a stranded `publishing`."""
+    import httpx
+    from annotator.projects import lakehouse
+
+    from service_kit.governed import secrets as sk_secrets
+
+    settings = _TokenSettings()
+    settings.publish_token_url = "http://dex:5556/dex/token"
+    settings.publish_username = "publisher@rask.internal"
+
+    monkeypatch.setattr(sk_secrets, "fetch_required_secrets", lambda *a, **k: {"publisher-oidc-password": "wrong"})
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: _Resp(401, text="invalid credentials"))
+
+    with pytest.raises(RuntimeError, match="401"):
+        lakehouse.publish_token(settings)

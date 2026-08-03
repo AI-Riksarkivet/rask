@@ -28,6 +28,12 @@ data:
         hash: "$2b$10$TsVVN0.5g.XntmJAGNuXF.gyhwQZgmgjmkevKxTa48M7k06J./53G"
         username: bob
         userID: "1b6e2f5a-7c4d-4e9b-9f1a-2d3c4b5a6e7f"
+      # The publish saga's service account — the annotator mints a fresh token per publish with it
+      # (password grant; dex has no client-credentials). Password lives in OpenBao, not here.
+      - email: {{ .Values.dex.publisher.username | quote }}
+        hash: {{ .Values.dex.publisher.passwordHash | quote }}
+        username: publisher
+        userID: {{ .Values.dex.publisher.userID | quote }}
     staticClients:
       - id: {{ .Values.dex.clientId }}
         name: Lance Catalog

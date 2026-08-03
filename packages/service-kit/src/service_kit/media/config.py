@@ -67,6 +67,19 @@ class Settings(BaseSettings):
     catalog_uri: str | None = Field(default=None, alias="MEDIA_CATALOG_URI")
     catalog_delimiter: str = Field(default="$", alias="MEDIA_CATALOG_DELIMITER")
     catalog_token: str | None = Field(default=None, alias="MEDIA_CATALOG_TOKEN")
+    # The publish saga's own OIDC identity (the catalog accepts only IdP bearers, and the saga
+    # outlives any user request). A token is minted FRESH per publish via the password grant with a
+    # dedicated service account — nothing long-lived is stored anywhere, so nothing can go stale
+    # (the failure mode a hand-pinned MEDIA_CATALOG_TOKEN just demonstrated live). Coordinates are
+    # config; the PASSWORD is not — it comes from the Dapr secret store, fail-closed, per the
+    # estate's secrets rule. A set MEDIA_CATALOG_TOKEN still wins (prod may pin a token minted by
+    # its own machinery).
+    publish_token_url: str | None = Field(default=None, alias="MEDIA_PUBLISH_TOKEN_URL")
+    publish_client_id: str | None = Field(default=None, alias="MEDIA_PUBLISH_CLIENT_ID")
+    publish_client_secret: str | None = Field(default=None, alias="MEDIA_PUBLISH_CLIENT_SECRET")
+    publish_username: str | None = Field(default=None, alias="MEDIA_PUBLISH_USERNAME")
+    publish_secret_store: str = Field(default="lance-secrets", alias="MEDIA_PUBLISH_SECRET_STORE")
+    publish_secret_key: str = Field(default="lance", alias="MEDIA_PUBLISH_SECRET_KEY")
     # The catalog namespace annotation tables live under; unset → the dataset id.
     catalog_namespace: str | None = Field(default=None, alias="MEDIA_CATALOG_NAMESPACE")
 
