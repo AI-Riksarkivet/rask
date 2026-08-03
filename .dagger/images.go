@@ -24,6 +24,16 @@
 // There is no `--insecure` flag on publish. The fix is an engine that has been TOLD the registry is
 // http, which is what `make dagger-engine` provisions (scripts/dagger-engine.sh). Address the registry
 // by the bridge gateway (172.17.0.1), never `localhost`.
+// NOTE ON THE IGNORE LISTS BELOW. They are not only about context size. Dagger snapshots the host
+// directory, and a file that CHANGES DURING that snapshot aborts the whole build:
+//
+//	failed to sync: conflict at "frontend/microfrontends/lakehouse/e2e/admin/access.spec.ts":
+//	size changed from "24995" to "21182" during sync
+//
+// On a repo with a second editor active — another agent session, a watch task, a Playwright run writing
+// artefacts — that turns into intermittent `exit status 1` builds with no other explanation. Excluding
+// the trees an image does not need (tests, e2e specs, build output) shrinks both the context and the
+// window in which someone else's write can kill the build.
 package main
 
 import (
@@ -93,7 +103,9 @@ func extraArgs(kv []string) []dagger.BuildArg {
 // site-packages, and it must never be on for a shipped image — a writable venv is a persistence surface
 // for anything that achieves code execution. The Tiltfile passes --dev=true explicitly; nothing else does.
 func (m *Rask) Image(
-	// +ignore=[".venv", ".git", "node_modules", "frontend/node_modules", "**/.svelte-kit", "**/.turbo", ".localbin"]
+	// +ignore=[".venv", ".git", "node_modules", "frontend/node_modules", "**/.svelte-kit", "**/.turbo",
+	//          ".localbin", "**/e2e", "**/test-results", "**/playwright-report", "**/*.spec.ts",
+	//          "**/coverage", "**/storybook-static", "**/build"]
 	// +defaultPath="/"
 	src *dagger.Directory,
 	// Dockerfile stem under .docker/.
@@ -128,7 +140,9 @@ func (m *Rask) Image(
 // `zone` is a directory under frontend/microfrontends and becomes the APP build arg, exactly as
 // `make frontend-images` passed it to docker buildx before this module took the build over.
 func (m *Rask) ZoneImage(
-	// +ignore=[".venv", ".git", "node_modules", "frontend/node_modules", "**/.svelte-kit", "**/.turbo", ".localbin"]
+	// +ignore=[".venv", ".git", "node_modules", "frontend/node_modules", "**/.svelte-kit", "**/.turbo",
+	//          ".localbin", "**/e2e", "**/test-results", "**/playwright-report", "**/*.spec.ts",
+	//          "**/coverage", "**/storybook-static", "**/build"]
 	// +defaultPath="/"
 	src *dagger.Directory,
 	// Zone directory under frontend/microfrontends.

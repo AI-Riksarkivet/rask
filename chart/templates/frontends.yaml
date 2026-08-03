@@ -84,10 +84,15 @@ zones additionally get the media plane's upstreams, scoped per zone.
        docker_build_with_restart wiring ran the same in-container build and would have hit the same
        wall, but live_update never fired, so it was never reached.
 
-       Dev only, and deliberately not folded into frontend.resources: a 2Gi limit on a process whose
+       2Gi was the first attempt and STILL OOMed. A vite build alone fits in 2Gi — measured, 11.2s in a
+       `docker run --memory=2g` — but in the pod the container is simultaneously running the Bun server
+       under `--watch`, and server + build together do not. The node has 503Gi allocatable, so the cap
+       is the only constraint that matters here.
+
+       Dev only, and deliberately not folded into frontend.resources: a 6Gi limit on a process whose
        job is to serve a compiled bundle would be wrong everywhere except here. */ -}}
 {{- if $root.Values.dev.reload -}}
-{{- $tier = $fe.devResources | default (dict "requests" (dict "cpu" "100m" "memory" "512Mi") "limits" (dict "cpu" "2" "memory" "2Gi")) -}}
+{{- $tier = $fe.devResources | default (dict "requests" (dict "cpu" "100m" "memory" "512Mi") "limits" (dict "cpu" "4" "memory" "6Gi")) -}}
 {{- end -}}
 {{- /* rask's frontend.securityContext keys WIN; lance-ns's restricted-PodSecurity
        hardening (runAsNonRoot + readOnlyRootFilesystem + RuntimeDefault seccomp) fills
@@ -153,13 +158,15 @@ spec:
                  docker_build — i.e. it requires the image in the local docker daemon, which a publish
                  straight to the registry deliberately avoids.
 
-                 `bun --watch` removes the need for it: bun re-execs when the entry file or anything it
-                 imports changes, and `bun run build` rewrites build/index.js itself. Verified: a watched
-                 process printed BOOT twice when an imported module was edited under it.
+                 `bun --watch` was tried and CANNOT work: it re-execs when the entry file or an import
+                 changes, and the thing that changes them is the very `bun run build` the reload runs —
+                 so the server restarted mid-build, and being PID 1 it took the container and the
+                 half-written build/ with it (exit 137, 6 restarts, unchanged from 256Mi to 6Gi).
+                 .docker/dev-serve.sh instead restarts on a SENTINEL the build touches when it is done.
 
                  args (not command) so the image's `tini --` ENTRYPOINT still reaps PID 1. */}}
           {{- if $root.Values.dev.reload }}
-          args: ["bun", "--watch", "build/index.js"]
+          args: ["/usr/local/bin/dev-serve.sh"]
           {{- end }}
           securityContext:
             {{- toYaml $sc | nindent 12 }}

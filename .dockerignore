@@ -10,6 +10,11 @@
 
 # CI / docker / build orchestration (in the source tree, but never inside the image)
 .docker/
+# ...except the zone dev entrypoint, which is the one thing in here that must reach an IMAGE rather than
+# just describe how to build one. Without this exception the COPY fails with
+# "lstat /.docker/dev-serve.sh: no such file or directory" — the file is on disk, the directory is simply
+# not in the build context.
+!.docker/dev-serve.sh
 .dagger/
 Dockerfile
 *.dockerfile

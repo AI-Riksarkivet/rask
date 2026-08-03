@@ -244,7 +244,9 @@ for zone in ZONES:
             # or the one place a change is most likely to be wrong is the one place it is invisible.
             sync('frontend/packages', '/app/packages'),
             # Rebuild only; `bun --watch` notices build/index.js was rewritten and re-execs itself.
-            run('bun run build', trigger=['frontend/microfrontends/' + zone + '/src', 'frontend/packages']),
+            # `&& touch` — the sentinel moves only on a SUCCESSFUL build, so a broken edit leaves the
+            # previous working bundle being served instead of restarting into a truncated one.
+            run('bun run build && touch /app/app/.restart', trigger=['frontend/microfrontends/' + zone + '/src', 'frontend/packages']),
         ],
     )
 
