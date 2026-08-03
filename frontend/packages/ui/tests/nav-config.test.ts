@@ -180,7 +180,10 @@ describe('topNav', () => {
 		);
 		// R28: Storage joins the panel — the object browser was previously reachable ONLY by typing
 		// the URL, because the lakehouse sidebar is area-scoped and no other area linked to it.
-		expect(groups.Catalog).toEqual(['Projects', 'Tables', 'Namespaces', 'Warehouses', 'Storage']);
+		// Projects left this column by ruling (f5dd1f0: the dropdown loses its filler self-row and the
+		// tenants list) — the project is the TOP of the hierarchy, reached from the switcher, not a row
+		// inside one zone's panel. The test follows the ruling.
+		expect(groups.Catalog).toEqual(['Tables', 'Namespaces', 'Warehouses', 'Storage']);
 		expect(groups.Models).toEqual(['Registry', 'Experiments', 'Pipeline']);
 		expect(groups.Governance).toEqual(['Access', 'Tenants', 'Audit']);
 		expect(groups.Operations).toEqual(['Events', 'Streams', 'DLQ']);

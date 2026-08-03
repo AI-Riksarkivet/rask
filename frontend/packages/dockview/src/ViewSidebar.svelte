@@ -136,6 +136,20 @@
 		border-inline-end: none;
 		background: transparent;
 	}
+	/* ICON-COLLAPSED rail: the shell shrinks the sidebar to a 48px icon strip, where a 200px list of
+	   view names, a heading and a name field can only render as clipped noise (user report: "the
+	   sidebar minimize looks like shit"). Collapse to a single centred + button — the shape every
+	   other icon-mode row takes — and let the labels return with the rail. */
+	:global([data-collapsible='icon']) .views.rail {
+		padding: 4px 0;
+		align-items: center;
+	}
+	:global([data-collapsible='icon']) .views.rail :is(.heading, ul, .new, .empty, .problem) {
+		display: none;
+	}
+	:global([data-collapsible='icon']) .views.rail header {
+		justify-content: center;
+	}
 	header {
 		display: flex;
 		align-items: center;
