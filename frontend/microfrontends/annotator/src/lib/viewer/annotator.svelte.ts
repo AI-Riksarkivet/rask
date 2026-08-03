@@ -69,14 +69,48 @@ export interface BrushOptions {
 /** Fields the sidebar can edit inline. */
 export type EditableField = 'label' | 'status' | 'group' | 'text';
 
-/** One reversible field edit (relabel / status / text / group) — the unit of
- *  undo/redo. `before`/`after` are the effective (overlay-aware) string values. */
+/** One reversible field edit (relabel / status / text / group).
+ *  `before`/`after` are the effective (overlay-aware) string values. */
 interface FieldEdit {
+	kind: 'field';
 	index: number;
 	field: EditableField;
 	before: string;
 	after: string;
 }
+
+/** A drawn shape, reversible by hiding the appended row and dropping it from the save payload. */
+interface InsertEdit {
+	kind: 'insert';
+	/** Row index of the appended row — an insert APPENDS, so this never shifts. */
+	index: number;
+	/** Position in `_inserts`, so redo can put the same row back where it was. */
+	at: number;
+	row: InsertRow;
+}
+
+/** A delete, reversible by un-hiding the row and dropping its id from the save payload. */
+interface DeleteEdit {
+	kind: 'delete';
+	index: number;
+	id: string;
+}
+
+/** A geometry move/resize/vertex-drag. `before` is null when the row had no pending edit yet. */
+interface GeometryEdit {
+	kind: 'geometry';
+	index: number;
+	before: GeometryUpdate | null;
+	after: GeometryUpdate;
+}
+
+/** The unit of undo/redo.
+ *
+ *  This was `FieldEdit` alone, so drawing a shape, deleting one and dragging a vertex were all
+ *  UNDOABLE ONLY BY RELOADING — which loses the whole session. With several annotators doing
+ *  hundreds of shapes a day that is work lost in week one, and it is why an annotator stops
+ *  trusting the canvas. One stack, so Ctrl+Z means the same thing whatever the last action was. */
+type UndoOp = FieldEdit | InsertEdit | DeleteEdit | GeometryEdit;
 
 const STRING_FIELD_CANDIDATES = ['label', 'status', 'source', 'group', 'reviewer'];
 
@@ -141,8 +175,8 @@ export class AnnotatorController {
 
 	// Undo/redo of field edits (the review operations: relabel / accept / reject /
 	// text). Geometry dirtiness is tracked separately (the engine owns geometry).
-	private _undo = $state<FieldEdit[]>([]);
-	private _redo = $state<FieldEdit[]>([]);
+	private _undo = $state<UndoOp[]>([]);
+	private _redo = $state<UndoOp[]>([]);
 	private _geoDirty = $state(false);
 
 	// Structural edits queued for the next Save: shapes drawn (onCommit) and ids
@@ -265,6 +299,12 @@ export class AnnotatorController {
 	readonly allowedTools = $derived(engineToolsFor(this.allowedShapeTypes));
 
 	readonly canDraw = $derived(this.mode === 'edit');
+	/** Rows queued to be INSERTED on the next save — read-only, so a test can assert that an undo
+	 *  actually removed a drawn shape from the payload rather than merely hiding it. */
+	readonly pendingInserts = $derived(this._inserts.length);
+	/** Rows carrying a pending geometry edit. */
+	readonly pendingGeometryEdits = $derived(this._geoEdits.size);
+
 	readonly canUndo = $derived(this._undo.length > 0);
 	readonly canRedo = $derived(this._redo.length > 0);
 	/** Unsaved-edits flag: pending field edits, a canvas geometry edit, or queued
@@ -307,6 +347,9 @@ export class AnnotatorController {
 		};
 		im.onChange = (index, geo) => {
 			// drag-end geometry of an existing shape → queue for Save (canvas already updated)
+			// `before` is what a redo/undo must restore: the PENDING edit if one exists, else null
+			// meaning "the row's own geometry from the table".
+			this._pushUndo({ kind: 'geometry', index, before: this._geoEdits.get(index) ?? null, after: geo });
 			this._geoEdits.set(index, geo);
 			this._geoDirty = true;
 		};
@@ -425,7 +468,10 @@ export class AnnotatorController {
 		if (i == null) return;
 		const t = this.table;
 		const id = t ? rawField(t, 'id', i) : null;
-		if (id) this._deletes = [...this._deletes, id]; // flushed on Save
+		if (id) {
+			this._deletes = [...this._deletes, id];
+			this._pushUndo({ kind: 'delete', index: i, id: String(id) });
+		}
 		// The CANVAS half. This used to be `interaction.handleKeyDown('Delete')`, which never did
 		// anything: `activeTool` is null in select mode — the only mode you can have a selection in —
 		// and no tool implements 'Delete' regardless. So the row vanished from the sidebar and stayed
@@ -505,6 +551,13 @@ export class AnnotatorController {
 	 *  WebGPU canvas, re-apply pending field patches (sync re-materializes caches).
 	 *  Shared by manual draws (onCommit) and AI-assist predictions. */
 	private _appendInsert(row: InsertRow): void {
+		// Recorded BEFORE the append, so `index` is the row index the appended row will occupy.
+		this._pushUndo({
+			kind: 'insert',
+			index: this.table?.numRows ?? this._inserts.length,
+			at: this._inserts.length,
+			row,
+		});
 		this._inserts = [...this._inserts, row];
 		const t = this.table;
 		if (t) {
@@ -611,8 +664,7 @@ export class AnnotatorController {
 		if (!t) return;
 		const before = effectiveField(t, this._overrides, field, index) ?? '';
 		if (before === value) return;
-		this._undo = [...this._undo, { index, field, before, after: value }];
-		this._redo = [];
+		this._pushUndo({ kind: 'field', index, field, before, after: value });
 		this._setField(index, field, value);
 	}
 	setStatus(index: number, status: string): void {
@@ -753,22 +805,79 @@ export class AnnotatorController {
 		}
 	}
 
-	/** Revert the last field edit (canvas + overlay), then re-select it. */
+	/** Push an op and drop the redo branch — a new action invalidates any undone future. */
+	private _pushUndo(op: UndoOp): void {
+		this._undo = [...this._undo, op];
+		this._redo = [];
+	}
+
+	/** Revert the last action — field edit, draw, delete or geometry drag alike. */
 	undo(): void {
 		const op = this._undo.at(-1);
 		if (!op) return;
 		this._undo = this._undo.slice(0, -1);
 		this._redo = [...this._redo, op];
-		this._setField(op.index, op.field, op.before);
-		this.select(op.index);
+		this._apply(op, 'undo');
 	}
-	/** Re-apply the last undone field edit. */
+
+	/** Re-apply the last undone action. */
 	redo(): void {
 		const op = this._redo.at(-1);
 		if (!op) return;
 		this._redo = this._redo.slice(0, -1);
 		this._undo = [...this._undo, op];
-		this._setField(op.index, op.field, op.after);
+		this._apply(op, 'redo');
+	}
+
+	/** The ONE reversal path, so undo and redo can never disagree about what an op means. */
+	private _apply(op: UndoOp, direction: 'undo' | 'redo'): void {
+		const arrow = this.ctx?.plugins.arrow;
+		switch (op.kind) {
+			case 'field':
+				this._setField(op.index, op.field, direction === 'undo' ? op.before : op.after);
+				break;
+			case 'insert': {
+				// A drawn row cannot be removed from an immutable Arrow table, so undo HIDES it (the
+				// same overlay a delete uses) and drops it from the save payload — the row never
+				// reaches the server either way, which is what "undone" has to mean.
+				if (direction === 'undo') {
+					this._inserts = this._inserts.filter((_, i) => i !== op.at);
+					arrow?.setDeleted(op.index);
+				} else {
+					this._inserts = [...this._inserts.slice(0, op.at), op.row, ...this._inserts.slice(op.at)];
+					arrow?.unsetDeleted(op.index);
+				}
+				arrow?.sync();
+				this._geoDirty = true;
+				break;
+			}
+			case 'delete': {
+				if (direction === 'undo') {
+					this._deletes = this._deletes.filter((id) => id !== op.id);
+					arrow?.unsetDeleted(op.index);
+				} else {
+					this._deletes = [...this._deletes, op.id];
+					arrow?.setDeleted(op.index);
+				}
+				arrow?.sync();
+				this._geoDirty = true;
+				break;
+			}
+			case 'geometry': {
+				const geo = direction === 'undo' ? op.before : op.after;
+				if (geo === null) {
+					// No pending edit before this drag: drop the override entirely so the row falls back
+					// to its own geometry from the table, rather than being pinned to a fabricated one.
+					this._geoEdits.delete(op.index);
+				} else {
+					this._geoEdits.set(op.index, geo);
+					arrow?.setOverride(op.index, { x: geo.x, y: geo.y, w: geo.w, h: geo.h, polygon: geo.polygon ?? [] });
+				}
+				arrow?.sync();
+				this._geoDirty = true;
+				break;
+			}
+		}
 		this.select(op.index);
 	}
 

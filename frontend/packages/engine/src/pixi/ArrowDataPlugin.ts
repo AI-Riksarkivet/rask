@@ -234,6 +234,15 @@ export class ArrowDataPlugin {
 		this.dirty = true;
 	}
 
+	/** Un-hide ONE locally-deleted row — the undo of {@link setDeleted}.
+	 *
+	 *  Separate from {@link clearDeleted}, which drops the whole overlay because the table beneath it
+	 *  was replaced. Undoing one delete must not resurrect the others. */
+	unsetDeleted(index: number): void {
+		if (!this.deletedRows.delete(index)) return;
+		this.dirty = true;
+	}
+
 	/** Is this row locally deleted? Lets a caller avoid re-selecting a shape that is already gone. */
 	isDeleted(index: number): boolean {
 		return this.deletedRows.has(index);
