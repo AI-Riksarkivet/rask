@@ -99,3 +99,25 @@ def registered_kinds() -> list[str]:
 def iter_units(adapter: SourceAdapter) -> Iterator[SourceObject]:
     """The one place the plane consumes an adapter — so 'unit' has a single definition."""
     return adapter.iter_objects()
+
+
+def iter_unit_keys(adapter: SourceAdapter) -> Iterator[str]:
+    """Enumerate a source's unit keys WITHOUT fetching, wherever the adapter can.
+
+    Enumeration and fetching are separated by a queue in this plane, so they are separate transfers.
+    Calling `iter_objects()` here — which the first version did — reads every object's bytes to learn
+    its `uri`, discards them, and leaves the workers to fetch the same bytes again: a full second
+    transfer of the entire source. On a rate-limited IIIF volume that doubles the request load on the
+    very endpoint `max_ack_pending` exists to protect, and does it inside one activity with no
+    backpressure at all.
+
+    `getattr` rather than `isinstance`: `KeyedSourceAdapter` is a plain Protocol, NOT
+    `runtime_checkable`, so an isinstance against it raises TypeError rather than answering — the
+    same trap that let a wrongly-shaped adapter reach a live run (see `adapters.py`). Duck typing is
+    the honest test, and the fallback keeps the capability optional for a source that truly cannot
+    list without reading.
+    """
+    keyed = getattr(adapter, "iter_keys", None)
+    if callable(keyed):
+        return iter(keyed())
+    return (obj.uri for obj in adapter.iter_objects())

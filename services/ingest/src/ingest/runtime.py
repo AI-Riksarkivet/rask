@@ -61,8 +61,35 @@ async def publish_chunk_units(chunk: ChunkSpec) -> int:
     queue = await WorkQueue.connect(nats_url())
     try:
         await queue.ensure_stream()
-        tasks = [UnitTask(run_id=chunk.run_id, chunk_id=chunk.chunk_id, key=key, dataset_uri=_uri_for_run(chunk.run_id)) for key in chunk.keys]
+        tasks = [UnitTask(run_id=chunk.run_id, chunk_id=chunk.chunk_id, key=key, dataset_uri=chunk.dataset_uri) for key in chunk.keys]
         return await queue.publish_units(tasks)
+    finally:
+        await queue.close()
+
+
+async def drain_chunk_units(chunk: ChunkSpec) -> dict[str, Any]:
+    """Run a worker over this chunk until its units are accounted for.
+
+    The fetcher is SCHEME-resolved (`ingest.fetch.UriFetcher`), so a worker needs no source spec —
+    only the key its task already carries. That is what keeps I1's "one adapter, one registry entry"
+    claim true at the far end of the queue: a new source kind producing `s3://` or `https://` keys
+    needs no worker change at all.
+
+    The validator is `packages/validate`, a package with zero consumers since it was written. A
+    corrupt TIFF becomes a tracked error and a DLQ entry here, rather than a poisoned row that fails
+    months later at read time in someone else's job.
+    """
+    from ingest.fetch import UriFetcher
+    from ingest.queue import WorkQueue
+    from ingest.validation import PayloadValidator
+    from ingest.worker import Worker
+
+    queue = await WorkQueue.connect(nats_url())
+    try:
+        await queue.ensure_stream()
+        worker = Worker(queue, UriFetcher(), PayloadValidator(), name=chunk.chunk_id)
+        outcome = await worker.drain_chunk(chunk.run_id, chunk.chunk_id, len(chunk.keys), chunk.dataset_uri)
+        return outcome.model_dump()
     finally:
         await queue.close()
 
@@ -98,6 +125,7 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str]) ->
     train operators to ignore the status field.
     """
     from ingest.lander import Lander
+    from ingest.staging import discover_staged, purge_staged
 
     uri = dataset_uri(spec)
     catalog = _catalog()
@@ -106,23 +134,26 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str]) ->
     # ensure_at() themselves and the WORKFLOW never did, so the creation two-step was documented and
     # unwired. Idempotent, so a replayed finalize activity is a no-op rather than a second create.
     catalog.ensure_at(uri)
-    result = Lander(catalog).commit_fragments(uri, fragments, run_id=spec.run_id)
+
+    # STORAGE TRUTH, not the workflow's carried value. Fragments staged by a drain attempt that died
+    # before returning are still on the store and still uncommitted — invisible to `fragments`, which
+    # only holds what the surviving attempts handed back. Reading the staging prefix is what turns a
+    # mid-run pod death from silent row loss into a slower run (A3). The union is order-preserving
+    # and deduplicated, so a fragment reported through both paths commits exactly once.
+    staged = discover_staged(uri, spec.run_id)
+    seen: set[str] = set()
+    all_fragments = [f for f in [*staged, *fragments] if not (f in seen or seen.add(f))]
+
+    result = Lander(catalog).commit_fragments(uri, all_fragments, run_id=spec.run_id)
+    # Only after the commit lands. Purging earlier would delete the record a retried finalize needs,
+    # turning a recoverable failure into exactly the data loss staging exists to prevent.
+    purge_staged(uri, spec.run_id)
     return {
         "committed_version": result.version,
         "rows": result.rows,
         "errors": errors,
         "status": "COMPLETE_WITH_ERRORS" if errors else "COMPLETE",
     }
-
-
-def _uri_for_run(run_id: str) -> str:
-    """The dataset a run writes to, resolved from the run id alone.
-
-    A worker only ever sees a UnitTask, so the path must be derivable without the RunSpec. Held here
-    rather than passed through every layer, so there remains exactly one place that maps a run to a
-    location — I2 again.
-    """
-    return os.getenv("RASK_INGEST_ACTIVE_DATASET", f"{warehouse_root().rstrip('/')}/{run_id}.lance")
 
 
 def _catalog() -> Any:  # noqa: ANN401 — the real client lands with the catalog commit-through step

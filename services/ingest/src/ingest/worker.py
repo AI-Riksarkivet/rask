@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from ingest.lander import write_unit_fragments
 from ingest.queue import UnitTask, WorkQueue
+from ingest.staging import stage_fragments
 
 
 if TYPE_CHECKING:
@@ -142,8 +143,15 @@ class Worker:
                         await msg.ack()  # type: ignore[attr-defined]
                         return
                     # Fragment on disk BEFORE the ack — the stream is the ledger, so an ack is a
-                    # promise the work survived.
-                    outcome.fragments.extend(write_unit_fragments(dataset_uri, units_to_table([(key, result)])))
+                    # promise the work survived. Two writes, in this order, and the ORDER is the
+                    # whole guarantee: the bytes, then the fragment's IDENTITY staged beside them,
+                    # and only then the ack. Acking with that identity held solely in this
+                    # coroutine's locals lost the fragment's NAME when a pod died — its bytes stayed
+                    # on the store, unrecoverable, because the ack had already removed the unit from
+                    # a WORK_QUEUE stream. A run then reported success having silently dropped pages.
+                    written = write_unit_fragments(dataset_uri, units_to_table([(key, result)]))
+                    stage_fragments(dataset_uri, task.run_id, task.key, written)
+                    outcome.fragments.extend(written)
                     outcome.units_done += 1
                     await msg.ack()  # type: ignore[attr-defined]
 

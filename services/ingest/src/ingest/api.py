@@ -14,13 +14,14 @@ Both are pinned by A1/A2 in `tests/test_ingest_api.py`.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
-from ingest.runs import RunRecord, RunStore, WorkflowStarter, run_id_for
+from ingest.runs import RunRecord, RunStore, WorkflowRunReader, WorkflowStarter, merge_workflow_state, run_id_for
 from ingest.sources import SourceSpec, registered_kinds
 
 
@@ -53,6 +54,16 @@ def get_store(request: Request) -> RunStore:
 
 def get_starter(request: Request) -> WorkflowStarter:
     return request.app.state.workflow_starter
+
+
+def get_reader(request: Request) -> WorkflowRunReader | None:
+    """The engine reader, or None where there is no sidecar to ask.
+
+    Optional rather than required so `GET` degrades to the accepted record instead of 500ing when
+    daprd is not up — the status endpoint is what an operator reaches for when something is wrong,
+    and it failing precisely then would be the worst possible time.
+    """
+    return getattr(request.app.state, "workflow_reader", None)
 
 
 @router.post("/ingests", status_code=status.HTTP_202_ACCEPTED, response_model=IngestAccepted)
@@ -107,10 +118,22 @@ class RunStatusResponse(BaseModel):
 
 
 @router.get("/ingests/{run_id}", response_model=RunStatusResponse)
-async def get_ingest(run_id: str, store: Annotated[RunStore, Depends(get_store)]) -> RunStatusResponse:
+async def get_ingest(
+    run_id: str,
+    store: Annotated[RunStore, Depends(get_store)],
+    reader: Annotated[WorkflowRunReader | None, Depends(get_reader)],
+) -> RunStatusResponse:
     record = await store.get(run_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no ingest run {run_id!r}")
+
+    # The store holds only what the caller asked for; everything that MOVES is read from the engine.
+    # Without this a completed run reported ACCEPTED forever — nothing writes the record a second
+    # time, and nothing should, because the workflow's durable history already is the run's state.
+    # `to_thread` because the Dapr client is synchronous gRPC: called inline it blocks the event loop
+    # for every other request on the pod, which is the same defect the POST path had to fix.
+    if reader is not None:
+        record = merge_workflow_state(record, await asyncio.to_thread(reader.state, run_id))
 
     return RunStatusResponse(
         run_id=record.run_id,

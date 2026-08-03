@@ -88,3 +88,84 @@ class WorkflowStarter(Protocol):
     """The seam over `DaprWorkflowClient` — so a test can assert dispatch without a sidecar."""
 
     async def start(self, run_id: str, payload: dict[str, object]) -> None: ...
+
+
+#: Dapr's runtime statuses mapped onto the estate's vocabulary. `SUSPENDED` reads as RUNNING on
+#: purpose: a paused run is not a finished one, and giving it a terminal-looking status would invite
+#: an operator to move on from a run that is still there.
+_RUNTIME_STATUS: dict[str, RunStatus] = {
+    "PENDING": "ACCEPTED",
+    "RUNNING": "RUNNING",
+    "SUSPENDED": "RUNNING",
+    "COMPLETED": "COMPLETE",
+    "FAILED": "FAILED",
+    "TERMINATED": "FAILED",
+}
+
+
+class WorkflowRunReader(Protocol):
+    """Reads a run's live state from the workflow engine. A Protocol so the API needs no sidecar in
+    tests."""
+
+    def state(self, run_id: str) -> dict[str, object] | None: ...
+
+
+def merge_workflow_state(record: RunRecord, state: dict[str, object] | None) -> RunRecord:
+    """Overlay the engine's live truth onto the accepted-time record.
+
+    THE FIX for a run that completed in-cluster and kept reporting ACCEPTED with `units_total: 0`.
+    `InMemoryRunStore` is written once, by the POST handler, and never again — no activity updates
+    it, and none should: the workflow's own durable history IS the run's state, and a second writable
+    copy of it is a consistency problem with no upside.
+
+    So the store keeps only what the engine cannot know (the project, dataset and kind the caller
+    asked for) and everything that CHANGES is read from the engine. That also makes the answer
+    survive a pod restart and stay correct across replicas, neither of which a process-local counter
+    could manage.
+
+    A `None` state means the engine has no such instance. That is not an error: between the store
+    write and the schedule call there is a genuine window where the run exists and the workflow does
+    not, and returning the accepted record unchanged is the honest answer for it.
+    """
+    if state is None:
+        return record
+
+    status = _RUNTIME_STATUS.get(str(state.get("runtime_status") or ""), record.status)
+    output = _as_mapping(state.get("serialized_output") or state.get("output"))
+
+    # The workflow's own terminal state is finer-grained than the engine's: a run that landed 9,997
+    # of 10,000 pages is COMPLETED as far as Dapr is concerned, and only the outcome knows it did so
+    # with errors. Prefer the outcome's status wherever it produced one.
+    outcome_status = output.get("status")
+    if status == "COMPLETE" and outcome_status in ("COMPLETE", "COMPLETE_WITH_ERRORS"):
+        status = outcome_status  # type: ignore[assignment]
+
+    errors = output.get("errors")
+    committed = output.get("committed_version")
+    rows = output.get("rows")
+    return record.model_copy(
+        update={
+            "status": status,
+            "errors": errors if isinstance(errors, dict) else record.errors,
+            "committed_version": committed if isinstance(committed, int) else record.committed_version,
+            "units_done": rows if isinstance(rows, int) else record.units_done,
+        }
+    )
+
+
+def _as_mapping(raw: object) -> dict[str, object]:
+    """A workflow's output, however the engine hands it back.
+
+    Dapr's `WorkflowState` carries the output as a JSON STRING (`serialized_output`), while the
+    in-process test doubles hand back the dict the workflow returned. Accepting both keeps one code
+    path under test and in production — the alternative is a branch that only ever executes in one
+    of the two, which is how a serialization mismatch reaches a live run.
+    """
+    if isinstance(raw, str):
+        import json
+
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+    return raw if isinstance(raw, dict) else {}

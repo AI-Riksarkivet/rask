@@ -49,6 +49,7 @@ def create_app() -> FastAPI:
     app = make_service_app(title="ingest", routers=[health_router, ingest_router], lifespan=_lifespan)
     app.state.run_store = InMemoryRunStore()
     app.state.workflow_starter = _DaprWorkflowStarter()
+    app.state.workflow_reader = _DaprWorkflowReader()
     return app
 
 
@@ -119,3 +120,34 @@ class _DaprWorkflowStarter:
         # past A1's one-second contract. A scheduling failure surfaces as an error on the run rather
         # than a hung connection — a caller that gets no answer cannot retry intelligently.
         await asyncio.wait_for(asyncio.to_thread(_schedule), timeout=SCHEDULE_TIMEOUT_SECONDS)
+
+
+class _DaprWorkflowReader:
+    """Reads a run's live state from the engine, for `GET /v1/ingests/{id}`.
+
+    The run's truth lives in the workflow's durable history, not in this process. Reading it here —
+    rather than having activities write back into a local cache — is what makes the status endpoint
+    correct after a pod restart and consistent across replicas, and it removes the second writable
+    copy of a state that already has an owner.
+    """
+
+    def state(self, run_id: str) -> dict[str, object] | None:
+        try:
+            import dapr.ext.workflow as wf
+
+            state = wf.DaprWorkflowClient().get_workflow_state(run_id, fetch_payloads=True)
+        except Exception:
+            # No sidecar, or the instance is unknown. The caller falls back to the accepted record;
+            # a status endpoint that 500s when the engine is unreachable fails at precisely the
+            # moment an operator is using it to find out why.
+            logger.debug("workflow state unavailable for run %s", run_id, exc_info=True)
+            return None
+        if state is None:
+            return None
+        # `to_json()`, verified against dapr-ext-workflow 1.18.3's own source: it returns
+        # `runtime_status` already flattened to the enum NAME ("COMPLETED", "RUNNING", …) and
+        # `serialized_output` as the JSON string the workflow returned. Reading the attributes
+        # directly would work — WorkflowState.__getattr__ proxies to the wrapped object — but
+        # `runtime_status` is a property that re-maps to a DIFFERENT enum, so the attribute and the
+        # dict disagree on their vocabulary. One accessor, one vocabulary.
+        return dict(state.to_json())

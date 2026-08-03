@@ -93,13 +93,25 @@ class IIIFVolumeSource:
 
     def iter_objects(self) -> Iterator[SourceObject]:
         from service_kit.lakehouse.sources import SourceObject
-        from storage.iiif import DEFAULT_IIIF_BASE, DEFAULT_QUERY_PARAMS, build_image_url, fetch_image, get_image_ids
+        from storage.iiif import fetch_image
+
+        for url in self.iter_keys():
+            yield SourceObject(uri=url, data=fetch_image(url))
+
+    def iter_keys(self) -> Iterator[str]:
+        """Every page's URL, from the volume manifest alone — no image bytes transferred.
+
+        This is where the keys-without-bytes protocol pays for itself. `get_image_ids` is ONE
+        manifest request; building the URLs is string work. Enumerating through `iter_objects`
+        instead downloaded the entire volume — multi-MB per page — purely to read back the URL that
+        had just been used to fetch it, and then the workers fetched all of it again.
+        """
+        from storage.iiif import DEFAULT_IIIF_BASE, DEFAULT_QUERY_PARAMS, build_image_url, get_image_ids
 
         base = self._base or DEFAULT_IIIF_BASE
         query = self._query or DEFAULT_QUERY_PARAMS
         for image_id in get_image_ids(self._volume):
-            url = build_image_url(image_id, iiif_base=base, query_params=query)
-            yield SourceObject(uri=url, data=fetch_image(url))
+            yield build_image_url(image_id, iiif_base=base, query_params=query)
 
 
 def _iiif(spec: SourceSpec) -> SourceAdapter:

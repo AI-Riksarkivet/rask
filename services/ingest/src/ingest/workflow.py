@@ -15,8 +15,8 @@ THE SHAPE, and why each piece is where it is:
 
     chunk_run                  (child — one per ~1-10k units)
       publish_units            activity: units onto the JetStream work queue
-      wait_for_external_event  suspends durably until this chunk drains
-      (timer fallback)         so a lost signal degrades to slow, never stuck
+      drain_chunk              activity: fetch, validate, stage a fragment, ack — the actual work
+      reconcile_chunk          activity: queue truth, only when the drain reports short
 
 **Chunks, never units.** A unit is a page image; a run is millions of them. Persisting and replaying
 a million activity results would melt the state store — the plan said so, and it is the reason the
@@ -30,9 +30,9 @@ are the replay-safe clock; `datetime.now()` here would produce a different histo
 and wedge the run. This is the single easiest way to break a workflow, hence the rule stated rather
 than assumed.
 
-**No polling** (A13). Workers wait on JetStream pull fetch (server-fulfilled); the workflow suspends
-on an external event. The one timer below is the permitted per-run dead-man switch, and it re-arms
-rather than spinning.
+**No polling** (A13). The drain blocks on JetStream's pull `fetch`, which the server fulfils when
+messages exist — a blocking wait, not a loop asking "is it done yet". Nothing in this plane holds an
+ack across a job's runtime, which is the specific thing A13 outlaws.
 """
 
 from __future__ import annotations
@@ -46,11 +46,6 @@ from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from dapr.ext.workflow import DaprWorkflowContext, WorkflowActivityContext
-
-# A chunk that has not signalled within this long is re-checked rather than waited on forever. The
-# dead-man switch, not a poll: it fires only when the drained signal was LOST, does one read, and
-# re-arms. A13 permits exactly one such timer per run and this is it.
-DRAIN_FALLBACK = timedelta(minutes=10)
 
 # One child workflow per this many keys. Small enough that a chunk's result stays compact in the
 # state store, large enough that a million-unit run does not spawn a million children. The plan's
@@ -66,11 +61,18 @@ ACTIVITY_RETRY = wf.RetryPolicy(
 
 
 class ChunkSpec(BaseModel):
-    """One dispatchable slice of a run. Keys are carried by reference-able bounds, not inline."""
+    """One dispatchable slice of a run."""
 
     run_id: str
     chunk_id: str
     keys: list[str] = Field(default_factory=list)
+    #: Resolved ONCE, by `enumerate_chunks`, and carried. It used to be re-derived at each end from
+    #: env — `RASK_INGEST_ACTIVE_DATASET` or `{warehouse}/{run_id}.lance` for workers, and
+    #: `{warehouse}/{project}/{dataset}.lance` for finalize. Those are different datasets: workers
+    #: wrote their fragments into one and the lander committed against another, so every run would
+    #: have committed an empty version while its pages sat orphaned under a run-id path. Two
+    #: derivations of one location is the bug; carrying the resolved value is the fix.
+    dataset_uri: str = ""
 
 
 class ChunkResult(BaseModel):
@@ -130,24 +132,38 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, A
 
 
 def chunk_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, Any]:
-    """Child workflow: publish this chunk's units, then suspend until they drain."""
+    """Child workflow: publish this chunk's units, then drain them.
+
+    THE DRAIN IS AN ACTIVITY, and the first version's was not — it suspended on an external event
+    that nothing in the estate ever raised. Read together, `worker.signal_drained` published to a
+    NATS subject while this waited on a Dapr workflow event, with no bridge between them; and no
+    Deployment ran a `Worker` at all. So every chunk would have published its units, waited the full
+    ten-minute fallback, reconciled an untouched queue, and reported zero fragments. The lane looked
+    complete because a run with no units never reached this code.
+
+    Draining inside an activity is what makes the queue real rather than decorative: Dapr persists
+    the activity's result and replays the activity — not the workflow's decisions — if the pod dies,
+    while JetStream still owns redelivery, poison parking and `max_ack_pending` backpressure within
+    the chunk. Fan-out is across CHUNKS (Dapr distributes child workflows over the pod fleet) and,
+    within a chunk, across `worker.FETCH_CONCURRENCY`.
+
+    Nothing here polls (A13): the activity blocks on JetStream's server-fulfilled pull fetch.
+    """
     chunk = ChunkSpec.model_validate(payload)
 
     yield ctx.call_activity(publish_units, input=chunk.model_dump(), retry_policy=ACTIVITY_RETRY)
 
-    # Suspend durably. The worker that completes the chunk's last unit raises this event with the
-    # chunk's fragments — so completion is a signal, never a poll.
-    drained = ctx.wait_for_external_event(f"drained-{chunk.chunk_id}")
-    fallback = ctx.create_timer(DRAIN_FALLBACK)
-    winner = yield wf.when_any([drained, fallback])
+    drained: dict[str, Any] = yield ctx.call_activity(drain_chunk, input=chunk.model_dump(), retry_policy=ACTIVITY_RETRY)
 
-    if winner is drained:
-        return ChunkResult.model_validate(drained.get_result()).model_dump()
+    # Confirm against the QUEUE, not against the drain's own report. A drain that returned early —
+    # its fetch timed out because another pod held the units — is indistinguishable from a complete
+    # one in its own result, and only the stream knows the difference. `num_pending == 0` on a
+    # WORK_QUEUE stream means every unit was acked, by whichever worker did it.
+    if drained.get("errors") or drained.get("units_done", 0) < len(chunk.keys):
+        reconciled: dict[str, Any] = yield ctx.call_activity(reconcile_chunk, input=chunk.model_dump(), retry_policy=ACTIVITY_RETRY)
+        drained = {**drained, "errors": {**drained.get("errors", {}), **reconciled.get("errors", {})}}
 
-    # The signal was lost, not the work. Ask storage truth once and continue — degrade to slow, not
-    # to stuck, which is the whole reason the fallback exists.
-    recovered: dict[str, Any] = yield ctx.call_activity(reconcile_chunk, input=chunk.model_dump(), retry_policy=ACTIVITY_RETRY)
-    return recovered
+    return ChunkResult.model_validate({k: v for k, v in drained.items() if k in ChunkResult.model_fields}).model_dump()
 
 
 # ── activities — every non-deterministic thing lives behind one of these ───────────────
@@ -176,17 +192,39 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> l
     a million activity results would melt the state store, which is the whole reason chunking exists
     and the reason this plane needs no separate ledger.
     """
-    from ingest.sources import SourceSpec, build_source, iter_units
+    from ingest.sources import SourceSpec, build_source, iter_unit_keys
 
     spec = RunSpec.model_validate(payload)
     source_spec = SourceSpec(kind=spec.kind, project=spec.project, dataset=spec.dataset, options=spec.options)
-    keys = [obj.uri for obj in iter_units(build_source(source_spec))]
+    # KEYS, not objects. `iter_units` reads every object's bytes to hand back its uri — so
+    # enumerating a IIIF volume through it downloaded the whole volume here and the workers then
+    # downloaded it again. Two full transfers of the source, the first with no backpressure at all.
+    keys = list(iter_unit_keys(build_source(source_spec)))
 
+    from ingest.runtime import dataset_uri
+
+    uri = dataset_uri(spec)
     chunks: list[dict[str, Any]] = []
     for index in range(0, len(keys), CHUNK_SIZE):
         window = keys[index : index + CHUNK_SIZE]
-        chunks.append(ChunkSpec(run_id=spec.run_id, chunk_id=f"{spec.run_id}-c{index // CHUNK_SIZE}", keys=window).model_dump())
+        chunks.append(ChunkSpec(run_id=spec.run_id, chunk_id=f"{spec.run_id}-c{index // CHUNK_SIZE}", keys=window, dataset_uri=uri).model_dump())
     return chunks
+
+
+def drain_chunk(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str, Any]:
+    """Consume this chunk's units: fetch, validate, stage a fragment, ack. The plane's actual work.
+
+    Safe to retry, which is the only reason it can be an activity at all. Every unit acked by a
+    previous attempt staged its fragment's identity next to its bytes BEFORE acking
+    (`ingest.staging`), so a replay after a pod death re-drains only what is still on the queue and
+    `finalize` recovers the rest from storage. Without that staging the retry would be silent data
+    loss: acked units are gone from a WORK_QUEUE stream, and their fragments' names died with the
+    pod.
+    """
+    from ingest.runtime import drain_chunk_units
+
+    chunk = ChunkSpec.model_validate(payload)
+    return _run_async(drain_chunk_units(chunk))
 
 
 def publish_units(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> int:
@@ -255,7 +293,7 @@ def _run_async(coro: Any) -> Any:  # noqa: ANN401
 
 
 WORKFLOWS = (ingest_run, chunk_run)
-ACTIVITIES = (emit_start, enumerate_chunks, publish_units, reconcile_chunk, finalize, emit_terminal)
+ACTIVITIES = (emit_start, enumerate_chunks, publish_units, drain_chunk, reconcile_chunk, finalize, emit_terminal)
 
 
 def register(runtime: wf.WorkflowRuntime) -> None:
