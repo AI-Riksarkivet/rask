@@ -46,8 +46,10 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 		// the shared navbar's Lakehouse panel. A project is the TOP of the hierarchy (project ›
 		// warehouse › namespace › table), so listing "projects" as a leaf INSIDE one project's catalog
 		// inverted it: it described lakekeeper's tenant-list endpoint rather than this product's model.
-		// There is ONE project concept and it belongs to the main menu. `/lakehouse/catalog/projects`
-		// still resolves — provisioning has to live somewhere — it is simply not navigation any more.
+		// There is ONE project concept and it belongs to the main menu: the list, the per-project
+		// overview and the create flow are the HOME zone's `/projects` and `/projects/<project>`.
+		// `/lakehouse/catalog/projects` does not resolve at all any more — this zone owns what is BELOW
+		// a project (warehouses › namespaces › tables), and nothing above it.
 		items: [
 			{
 				title: 'Namespaces',

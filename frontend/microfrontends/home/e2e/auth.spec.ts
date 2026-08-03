@@ -51,79 +51,54 @@ test('GET /auth/logout clears the session and redirects home', async ({ page, ba
 	expect(page.url()).toBe(`${baseURL}/`);
 });
 
-test('the navbar carries one entry per zone and no governance column for an anonymous visitor', async ({
+test('the MAIN MENU navbar carries Projects and nothing else for an anonymous visitor', async ({
 	page,
 }) => {
-	// Ground truth first: every zone directory EXCEPT home has exactly one row in ZONE_ENTRIES. A
-	// future zone scaffolded without a navbar entry fails HERE, before any DOM assertion.
+	// REWRITTEN BY RULING (2026-08-03): "we should only see 2 items in topnavbar — projects and
+	// settings, nothing else". This test used to assert the OPPOSITE here — every zone of the estate
+	// present in the bar at `/` — which was right while one bar served every route. It is not the
+	// estate root's bar any more: standing at the main menu you are choosing what to work on, not
+	// moving between zones, so the shell swaps in `mainMenuNav()` on `zoneOf(pathname) === ''`.
+	//
+	// The R15 contract that used to live here — every zone directory has exactly one navbar entry —
+	// did NOT disappear with it. It moved to where it can still be checked: `topNav()` is asserted
+	// zone-by-zone in `@rask/ui`'s `tests/nav-config.test.ts`, and the rendered zone bar is asserted
+	// in the lakehouse and media suites, which run inside a zone. ZONE_ENTRIES stays the ground-truth
+	// table for it, and is still diffed against the zone DIRECTORIES right here, before any DOM
+	// assertion — so a zone scaffolded without a navbar entry still fails in this file.
 	expect(Object.keys(ZONE_ENTRIES).sort()).toEqual(zoneDirs().filter((z) => z !== 'home'));
 	await page.goto('/');
 	const nav = page.getByRole('navigation', { name: 'Zones' });
 	await expect(nav).toBeVisible();
-	// One entry per ZONE (R15): a zone with sub-areas (Lakehouse, Search, Compute) is a
-	// NavigationMenu trigger opening a panel; a single-surface zone (Home, Annotate, Train, Studio)
-	// stays a plain link — a one-row dropdown would be noise.
-	for (const { title, kind } of Object.values(ZONE_ENTRIES)) {
-		await expect(
-			nav.getByRole(kind === 'trigger' ? 'button' : 'link', { name: title, exact: true }),
-		).toBeVisible();
-	}
-	// PLUS exactly one non-zone entry, by ruling (2026-08-03, "projects and settings in topnavbar in
-	// main menu"): `Projects` is a route in THIS zone, not a zone — a project is the top of the
-	// hierarchy (project › warehouse › namespace › table), so it leads the bar rather than sitting
-	// inside one of the zones it scopes. Named here so a second non-zone entry cannot slip into the
-	// counts below unremarked.
+	// THE main-menu contract: Projects, as a link to this zone's own route.
 	await expect(nav.getByRole('link', { name: 'Projects', exact: true })).toHaveAttribute(
 		'href',
 		'/projects',
 	);
-	// …and nothing beyond those entries: the bar carries the zones, the whole zones, and nothing but
-	// the zones + Projects (panel rows live in portalled content, closed here, so they never count).
-	const triggerCount = Object.values(ZONE_ENTRIES).filter((e) => e.kind === 'trigger').length;
-	await expect(nav.getByRole('button')).toHaveCount(triggerCount);
-	await expect(nav.getByRole('link')).toHaveCount(
-		Object.keys(ZONE_ENTRIES).length - triggerCount + 1,
-	);
-	// Every zone in the bar is a DIFFERENT app, so every plain link leaves this app's route manifest
-	// and must hard-navigate. (`Projects` is the one bar entry this zone actually owns, so a reload on
-	// it is a wasted document load rather than a 404 — `zoneOf` reads the first path segment, and
-	// '/projects' has one. Correct-but-pessimistic; see nav-config.ts's Projects note.)
-	await expect(nav.getByRole('link', { name: 'Train', exact: true })).toHaveAttribute(
-		'data-sveltekit-reload',
-		'',
-	);
-	// fetchMe resolves null (no session, no catalog) → estate_admin is unknowable → fail-closed.
-	// Access has no home outside the estate-admin Governance column, so it is nowhere in this bar…
+	// …and NOT ONE zone entry beside it, in either role. Asserted per zone by name rather than as a
+	// bare count: a count says "one thing changed", a name says which, and this is precisely the
+	// assertion that would otherwise rot the next time a zone is added.
+	for (const { title } of Object.values(ZONE_ENTRIES)) {
+		await expect(nav.getByRole('button', { name: title, exact: true })).toHaveCount(0);
+		await expect(nav.getByRole('link', { name: title, exact: true })).toHaveCount(0);
+	}
+	await expect(nav.getByRole('button')).toHaveCount(0);
+	await expect(nav.getByRole('link')).toHaveCount(1);
+	// SETTINGS is the second main-menu entry and it is estate-admin ONLY. fetchMe resolves null here
+	// (no session, no catalog) → estate_admin unknowable → fail-closed, so an anonymous visitor's main
+	// menu is one entry, and the bar never names a surface this viewer is barred from.
+	await expect(nav.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(0);
+	await expect(nav.getByRole('link', { name: 'Settings', exact: true })).toHaveCount(0);
+	// Access lives in the Settings panel now; nowhere in an anonymous bar, panel open or closed.
 	await expect(nav.getByText('Access')).toHaveCount(0);
-	const panel = page.locator('[data-slot="navigation-menu-viewport"]');
-	// This zone SSRs the resolved triggers (fetchMe has nothing to wait for auth-off), so the buttons are
-	// in the markup before the client bundle has attached bits-ui's handlers — clicking straight away
-	// lands on inert HTML and the panel silently never opens.
-	//
-	// That wait used to be `networkidle`, and it can never fire again: every zone's shell now holds a
-	// LIVE query open for the notification bell, so this app has no idle network BY DESIGN. Waiting for
-	// the button to exist would not help either — it exists in the server-rendered HTML, before any
-	// listener is attached. The honest condition is "clicking this actually opens the panel", so that is
-	// what is asserted: click, and if nothing happened yet, click again until it does.
-	await expect(async () => {
-		await nav.getByRole('button', { name: 'Lakehouse', exact: true }).click();
-		await expect(panel).toBeVisible({ timeout: 1000 });
-	}).toPass({ timeout: 20_000 });
-	// …and opening the one trigger that WOULD carry them proves the columns never rendered.
-	await expect(panel.getByText('Catalog', { exact: true })).toBeVisible();
-	await expect(panel.getByText('Governance', { exact: true })).toHaveCount(0);
-	await expect(panel.getByText('Operations', { exact: true })).toHaveCount(0);
-	await expect(panel.locator('a[href^="/lakehouse/admin"]')).toHaveCount(0);
-	// Every panel row leaves the home zone's route manifest, so it must hard-navigate. From HOME that
-	// is still true of every row, including the lakehouse ones — home is its own zone.
-	await expect(panel.getByRole('link', { name: /^Registry/ })).toHaveAttribute(
-		'href',
-		'/lakehouse/models',
-	);
-	await expect(panel.locator('a[href="/lakehouse/models"]')).toHaveAttribute(
-		'data-sveltekit-reload',
-		'',
-	);
+	// There is NO panel to open at all here — the main menu's one entry is a plain link. The rows that
+	// used to be asserted from this page (the Lakehouse panel's Registry row, its hard-navigation, the
+	// absence of /lakehouse/admin rows for a non-admin) are panel behaviour, and panels now only exist
+	// inside a zone: the lakehouse suite asserts them from a lakehouse page, which is the only place a
+	// user can reach them. Pinned here as the absence, so a zone panel reappearing at the estate root
+	// fails rather than passing quietly.
+	await expect(page.locator('[data-slot="navigation-menu-viewport"]')).toHaveCount(0);
+	await expect(nav.locator('a[href^="/lakehouse"]')).toHaveCount(0);
 });
 
 test('the landing shows the gallery empty state and NO auth control when auth is off', async ({

@@ -154,8 +154,11 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 	// Every zone, and the sub-areas underneath them, stay reachable from the one menu — one group per
 	// zone (the icon contributes a leading space to the accessible text). This list is the SHELL's
 	// truth: a zone missing here is the R15 defect (a zone absent from the navbar), not a stale test.
-	// Projects LEADS it and is the one group that is not a zone: the IA round (2026-08-03) put the
-	// estate's project list at the top level in the home zone, above every zone scoped by it.
+	// Projects LEADS it and Settings CLOSES it — the two groups that are not zones, both from the IA
+	// round (2026-08-03). Projects is first because a project is the top of the hierarchy every zone
+	// below it is scoped by; Settings is last because it is where you go deliberately, not where work
+	// happens, so the menu reads from "what you are working on" to "how the estate is configured".
+	// Settings is estate-admin only, and this page resolves one, which is why it appears here.
 	const panel = page.locator('[data-slot="navigation-menu-viewport"]');
 	await expect(panel.locator('[data-slot="navbar-overflow-group"]')).toHaveText([
 		' Projects',
@@ -166,6 +169,7 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 		' Annotate',
 		' Train',
 		' Studio',
+		' Settings',
 	]);
 	// One row per destination the wide bar reaches — including each zone's own root and the
 	// estate-admin-only governance rows.

@@ -59,14 +59,16 @@ test('an estate admin gets the zone triggers + the Marquez-parity sidebar leaves
 	);
 	await page.goto('/lakehouse/lineage');
 	const nav = page.getByRole('navigation', { name: 'Zones' });
-	// The TRIGGERS are exactly the zones that own sub-areas — even for an estate admin, whose extra
-	// surfaces arrive as columns inside Lakehouse's panel rather than as new top-level entries. Named
-	// AND counted: the name list is what catches a zone silently leaving the bar (the R15 defect), the
-	// count is what catches one silently joining it.
-	for (const trigger of ['Lakehouse', 'Compute', 'Search']) {
+	// The TRIGGERS are the zones that own sub-areas, PLUS Settings for an estate admin. Settings is not
+	// a zone: it is estate-wide configuration (access, tenants, audit) that used to be a Governance
+	// COLUMN of the Lakehouse panel, until the 2026-08-03 ruling moved it out — authorization is not a
+	// lakehouse feature; the lakehouse is merely the first thing it governs. Named AND counted: the
+	// name list catches a zone silently leaving the bar (the R15 defect), the count catches one
+	// silently joining it.
+	for (const trigger of ['Lakehouse', 'Compute', 'Search', 'Settings']) {
 		await expect(nav.getByRole('button', { name: trigger, exact: true })).toBeVisible();
 	}
-	await expect(nav.getByRole('button')).toHaveCount(3);
+	await expect(nav.getByRole('button')).toHaveCount(4);
 	// Home is the product mark, not a nav entry. With every panel closed the bar's LINKS are the
 	// single-surface zones — a zone with one surface gets a plain link because a one-row dropdown
 	// would be noise; each panel TRIGGER must stay a button, or clicking it would navigate instead of
@@ -128,11 +130,15 @@ test('a signed-out / unresolved identity gets NO governance column (fail-closed)
 	await expect(panel.locator('a[href^="/lakehouse/admin"]')).toHaveCount(0);
 });
 
-test('an estate admin gets the Governance + Operations columns inside the Lakehouse panel', async ({
+test('an estate admin gets Operations in the Lakehouse panel and Governance under Settings', async ({
 	page,
 }) => {
-	// The positive half of the guarantee above: the admin surfaces DO exist, and they are rows in
-	// Lakehouse's panel — never a top-level entry, and never anywhere else in the bar.
+	// The positive half of the guarantee above, RE-SPLIT by the 2026-08-03 ruling ("governance and
+	// other setting stuff, more in terms of auth, under settings"). Operating THIS estate — events,
+	// streams, dead letters — is an operation on the lakehouse and stays a column of its panel. Who
+	// may do what — access, tenants, audit — is estate-wide configuration and moved to its own
+	// Settings entry. Both halves are asserted here, in the same test, because the thing worth pinning
+	// is the SPLIT: each surface in exactly one panel, and never in both.
 	await page.route('**/capi/v1/me', (route) =>
 		json(route, {
 			sub: 'user:alice',
@@ -145,14 +151,13 @@ test('an estate admin gets the Governance + Operations columns inside the Lakeho
 	await page.goto('/lakehouse/lineage');
 	const nav = page.getByRole('navigation', { name: 'Zones' });
 	const panel = await openPanel(page, 'Lakehouse');
-	for (const label of ['Catalog', 'Models', 'Governance', 'Operations']) {
+	for (const label of ['Catalog', 'Models', 'Operations']) {
 		await expect(panel.getByText(label, { exact: true })).toBeVisible();
 	}
-	// Each governance/operations row links where it claims.
+	// Governance is NOT a column here any more — asserted as an absence so the rows cannot come to
+	// exist in two places, which is the whole point of moving them.
+	await expect(panel.getByText('Governance', { exact: true })).toHaveCount(0);
 	for (const [row, href] of [
-		['Access', '/lakehouse/governance/access'],
-		['Tenants', '/lakehouse/admin/tenants'],
-		['Audit', '/lakehouse/governance/audit'],
 		['Events', '/lakehouse/admin/events'],
 		['Streams', '/lakehouse/admin/streams'],
 		['DLQ', '/lakehouse/admin/dlq'],
@@ -162,9 +167,23 @@ test('an estate admin gets the Governance + Operations columns inside the Lakeho
 			href,
 		);
 	}
-	// …and with the panel closed the bar itself still carries no Access entry of any shape.
+	// …and the governance rows are exactly one panel away, under Settings.
 	await page.keyboard.press('Escape');
 	await expect(panel).toBeHidden();
+	const settings = await openPanel(page, 'Settings');
+	for (const [row, href] of [
+		['Access', '/lakehouse/governance/access'],
+		['Tenants', '/lakehouse/admin/tenants'],
+		['Audit', '/lakehouse/governance/audit'],
+	] as const) {
+		await expect(settings.getByRole('link', { name: new RegExp(`^${row}`) })).toHaveAttribute(
+			'href',
+			href,
+		);
+	}
+	// …and with every panel closed the bar itself still carries no Access entry of any shape.
+	await page.keyboard.press('Escape');
+	await expect(settings).toBeHidden();
 	await expect(nav.getByText('Access')).toHaveCount(0);
 });
 
@@ -275,20 +294,25 @@ test('the loading skeleton reserves the resolved entry widths — no shift when 
 	// must reserve the resolved entries' exact box, chevrons included, so the navbar does not jump
 	// when the identity resolves. Held open until the loading geometry has been measured.
 	//
-	// Resolved as an ESTATE ADMIN on purpose — that is the only identity whose IA differs, and
-	// under the three-trigger bar its extra surfaces must land as columns INSIDE the Lakehouse
-	// panel. So the admin case is exactly the one that would shift the bar if the panel content
-	// ever leaked back out into a top-level entry, which makes it the strongest no-shift probe.
+	// Resolved as a NON-ADMIN. It used to resolve as an estate admin, on the reasoning that the admin
+	// was the strongest probe because its extra surfaces had to land as panel COLUMNS and never as a
+	// top-level entry. The 2026-08-03 ruling changed that premise deliberately: an estate admin now
+	// earns exactly one entry, Settings, so an admin's bar DOES grow by one trigger when /v1/me lands
+	// and cannot be measured for zero shift. That growth is asserted as an intended consequence in
+	// 'an estate admin gets Operations in the Lakehouse panel and Governance under Settings'; what is
+	// measured HERE is the no-CLS contract for the identity that has one — everyone else, which is
+	// every anonymous first paint. Reserving a Settings-width slot for them instead would both leak
+	// the shape of a privilege they do not hold and reserve chrome that never arrives.
 	let release = () => {};
 	const gate = new Promise<void>((resolve) => (release = resolve));
 	await page.route('**/capi/v1/me', async (route) => {
 		await gate;
 		return json(route, {
-			sub: 'user:alice',
-			name: 'Alice',
-			email: 'alice@example.com',
-			estate_admin: true,
-			projects: [{ project: 'acme', role: 'admin' }],
+			sub: 'user:bob',
+			name: 'Bob',
+			email: 'bob@example.com',
+			estate_admin: false,
+			projects: [{ project: 'acme', role: 'member' }],
 		});
 	});
 	await page.goto('/lakehouse/lineage');
@@ -318,12 +342,14 @@ test('the loading skeleton reserves the resolved entry widths — no shift when 
 
 	release();
 	await expect(nav.getByRole('button', { name: 'Lakehouse', exact: true })).toBeVisible();
-	// The resolved bar carries the same triggers the skeleton reserved — no entry is EARNED by
-	// privilege, so the row cannot grow when /v1/me lands (which is the shift this test measures).
+	// The resolved bar carries exactly the triggers the skeleton reserved: for THIS identity no entry
+	// is earned, so the row cannot grow when /v1/me lands — which is the shift this test measures.
 	for (const trigger of ['Lakehouse', 'Compute', 'Search']) {
 		await expect(nav.getByRole('button', { name: trigger, exact: true })).toBeVisible();
 	}
 	await expect(nav.getByRole('button')).toHaveCount(3);
+	// Fail-closed, restated at the exact moment it matters: a resolved NON-admin gets no Settings.
+	await expect(nav.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(0);
 	const resolved = (await nav.boundingBox())!;
 	expect(Math.abs(resolved.width - loading.width)).toBeLessThanOrEqual(1);
 	expect(Math.abs(resolved.x - loading.x)).toBeLessThanOrEqual(1);

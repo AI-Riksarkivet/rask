@@ -97,26 +97,36 @@ test("an estate admin passes the door and gets Lakehouse's governance columns", 
 	await page.goto('/lakehouse/admin/tenants');
 	await expect(page.getByRole('heading', { name: 'Tenants' })).toBeVisible();
 	const nav = page.getByRole('navigation', { name: 'Zones' });
-	// The SAME three triggers the non-admin gets (Lakehouse, Compute, Search) — an admin earns panel
-	// COLUMNS, never an extra top-level entry. That is the whole shape of this pair of tests, and it
-	// only bites while both sides assert the same number: this one said 2 with a comment claiming
-	// "three", stale since the rask zone landed and Compute became a trigger (R16/db15ea8). The 8th
-	// zone (workbench, 117c8ed) rides the bar as a plain LINK, so it does not change the count.
-	await expect(nav.getByRole('button')).toHaveCount(3);
+	// The non-admin's three zone triggers (Lakehouse, Compute, Search) PLUS Settings — the ONE entry
+	// privilege earns, and it earns it because estate-wide configuration is not a zone's feature
+	// (2026-08-03 ruling moved governance out of the Lakehouse panel). Everything else an admin gains
+	// is still a panel COLUMN. That is the whole shape of this pair of tests, and it only bites while
+	// both sides assert their number: the non-admin above asserts 3 and this asserts 4, so a bar that
+	// rendered Settings for everyone, or for no one, fails on one side or the other.
+	await expect(nav.getByRole('button')).toHaveCount(4);
+	await expect(nav.getByRole('button', { name: 'Settings', exact: true })).toBeVisible();
 	await expect(nav.getByRole('button', { name: 'Admin', exact: true })).toHaveCount(0);
 	// Access is NOT a top-level navbar entry, in either shape…
 	await expect(nav.getByRole('link', { name: 'Access', exact: true })).toHaveCount(0);
 	await expect(nav.getByRole('button', { name: 'Access', exact: true })).toHaveCount(0);
-	// …it is a row of Lakehouse's Governance column, which this identity DOES get. Asserted with
-	// the panel open — the positive half of the non-admin guarantee above, so the two tests cannot
-	// both pass on a navbar that simply renders nothing.
-	const panel = await openPanel(page, 'Lakehouse');
-	await expect(panel.getByText('Governance', { exact: true })).toBeVisible();
-	await expect(panel.getByText('Operations', { exact: true })).toBeVisible();
+	// …it is a ROW of the Settings panel, which this identity DOES get. Asserted with the panel open —
+	// the positive half of the non-admin guarantee above, so the two tests cannot both pass on a navbar
+	// that simply renders nothing.
+	const settings = await openPanel(page, 'Settings');
 	for (const href of [
 		'/lakehouse/governance/access',
 		'/lakehouse/admin/tenants',
 		'/lakehouse/governance/audit',
+	]) {
+		await expect(settings.locator(`a[href="${href}"]`)).toBeVisible();
+	}
+	await page.keyboard.press('Escape');
+	await expect(settings).toBeHidden();
+	// …while OPERATIONS — running the estate rather than governing it — stays in the zone's own panel.
+	const panel = await openPanel(page, 'Lakehouse');
+	await expect(panel.getByText('Operations', { exact: true })).toBeVisible();
+	await expect(panel.getByText('Governance', { exact: true })).toHaveCount(0);
+	for (const href of [
 		'/lakehouse/admin/events',
 		'/lakehouse/admin/streams',
 		'/lakehouse/admin/dlq',

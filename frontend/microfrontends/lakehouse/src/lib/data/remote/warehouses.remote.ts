@@ -109,12 +109,11 @@ export const fetchProjects = query(
 		parsed(await catalogJSON('/v1/projects'), v.array(ProjectSchema)),
 );
 
-/** One tenant: its warehouses + effective admins — the hierarchy drill-down's project page. */
-export const fetchProject = query(
-	v.string(),
-	async (project): Promise<ApiResult<ProjectSummary>> =>
-		parsed(await catalogJSON(`/v1/projects/${enc(project)}`), ProjectSchema),
-);
+// `fetchProject` (one tenant: its warehouses + effective admins) is GONE from this zone. Its only
+// consumer was `catalog/projects/[project]`, and the per-project overview moved to the home zone with
+// the rest of the projects surface (2026-08-03 ruling — a project is the TOP of the hierarchy). Home
+// carries its own copy; a second, unreachable one here would be the drift this round exists to end.
+// `fetchProjects` (plural) stays — TenantsPanel reads it.
 
 /** Provision a warehouse — the create that MINTS a project when its `project` is new. Project-admin
  *  gated by the catalog (can_create_warehouse); on success both registry reads refresh in the same
