@@ -31,10 +31,15 @@ ML-backend zoo (our assist contract covers it).
 
 ## The waves
 
-**W1 — assist for real (IN FLIGHT).** `assist-runner` image dagger-building (first ever). Then:
-import → `runners.assist` enabled → `MEDIA_ASSIST_URL` flips mock→real → live canvas drive (both
-producers) → prove pluggability with a second backend behind the same contract + a contract test.
-Acceptance: model shapes land as `origin:"model"` drafts in the live review loop, screenshot kept.
+**W1 — assist for real: CORE LANDED 2026-08-03.** The `assist-runner` image dagger-built (first
+ever, 3.9 GB), pushed to the dev registry, DEPLOYED in-cluster (`rask-assist` rolled out ready,
+weights loaded) and driven for real: GroundingDINO returned a genuine "text" box (conf 0.7476) and
+SAM a real polygon mask (conf 0.637) over the actual corpus page — via the canvas, the mock chip
+gone, the prediction landing in the Review queue like any human work (screenshot kept). The
+in-cluster runner cannot fetch frames until the cluster corpus mount is seeded (`ASSIST_FRAME_BASE`
+→ viewer), so inference was driven through the local corpus against the same image. REMAINING W1
+tail: a second backend behind the same contract + the contract test (the pluggability proof), and
+the producer→backend registry (the CVAT-Nuclio-shaped gap).
 
 **W2 — task templates v1 (the LS-config equivalent).** Declarative `template` on the labeling
 task: `kind` (bbox-detection | segmentation | classification | text-span | transcription | doc-qa |
