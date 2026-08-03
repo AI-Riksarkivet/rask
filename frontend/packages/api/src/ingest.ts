@@ -72,7 +72,7 @@ export async function startIngest(
 ): Promise<IngestAccepted> {
 	const headers: Record<string, string> = { 'content-type': 'application/json' };
 	if (request.idempotencyKey) headers['Idempotency-Key'] = request.idempotencyKey;
-	const res = await fetchFn('/api/ingest/v1/ingests', {
+	const res = await fetchFn('/api/ingest/ingests', {
 		method: 'POST',
 		headers,
 		body: JSON.stringify({
@@ -91,7 +91,7 @@ export async function getIngestRun(
 	runId: string,
 	fetchFn: typeof fetch = fetch,
 ): Promise<IngestRun> {
-	const res = await fetchFn(`/api/ingest/v1/ingests/${encodeURIComponent(runId)}`);
+	const res = await fetchFn(`/api/ingest/ingests/${encodeURIComponent(runId)}`);
 	if (!res.ok) return refuse(res, 'getIngestRun');
 	return parse(IngestRunSchema, await res.json());
 }

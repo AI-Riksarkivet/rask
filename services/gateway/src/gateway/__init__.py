@@ -107,7 +107,14 @@ def _routes() -> list[Route]:
         # "/api/ingest-iiif" can never match the "/api/ingest" row (the next char is "-", not "/").
         # Stated because it looks like a longest-prefix hazard and is not; ordering them either way
         # is safe, and `tests/test_routing.py` pins that rather than leaving it to a reading.
-        ("/api/ingest", "/v1", *ingest),
+        # Rewrites to "/api", not "/v1". The ingest service is composed by `make_service_app`, which
+        # mounts its routers under `settings.api_prefix` — "/api" — so the pod serves `/api/ingests`
+        # and the live openapi.json says so. The "/v1" here was taken from the module's own
+        # docstrings, which describe the route as `/v1/ingests`; that is the ROUTER's path, before
+        # the prefix the app factory adds. Every call through the gateway would have 404'd, and the
+        # unit tests could not see it because they assert the gateway's rewrite in isolation rather
+        # than against the service's real mount. Same shape as the `/api/media` row above.
+        ("/api/ingest", "/api", *ingest),
         # DEPRECATED — the medallion's IIIF head. Retires with the nine-plus-three IIIF files
         # (A12); kept for one deprecation window so the frontend can move to /api/ingest first.
         ("/api/ingest-iiif", "/ingest-iiif", *medallion),
