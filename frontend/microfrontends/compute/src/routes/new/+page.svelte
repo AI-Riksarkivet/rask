@@ -7,11 +7,12 @@
 
 	const ID_RE = /^[A-Za-z0-9._-]+$/;
 
-	// The volume-ingest form — the P7a pipeline head. The retired upload/register door
-	// (batches table) is gone: a volume is HARVESTED from the IIIF Image API by the medallion
-	// producer (`POST /api/ingest-iiif`) into the raw page-image Lance dataset, and the cascade
-	// (raw→bronze promotion, then the HTR movers) runs event-driven from its raw-write lineage
-	// event. Pure action page — one mutation on submit, no reads, so no remote queries here.
+	// The volume-ingest form — the ingest plane's head (`POST /api/ingest`, open_ingest.md P1).
+	// A volume is one SOURCE KIND among several: the door takes {kind, project, dataset, options}
+	// and resolves the adapter from a registry, so adding S3-prefix ingest never touches this page.
+	// The run is genuinely asynchronous — the form gets a run HANDLE back and the cascade proceeds
+	// event-driven from the catalog's publication event. Pure action page: one mutation on submit,
+	// no reads, so no remote queries here.
 
 	let volumeId = $state('');
 	let maxPages = $state('');
@@ -50,9 +51,10 @@
 	<Card class="m-4 max-w-2xl space-y-4 p-6">
 		<h1 class="text-lg font-semibold">Ingest a IIIF volume</h1>
 		<p class="text-muted-foreground text-sm">
-			Harvests every page of the volume from the Riksarkivet IIIF Image API into the raw page-image
-			dataset; the HTR cascade then runs event-driven. Progress lands in the pipeline-runs feed on the
-			landing page.
+			Accepts a run that harvests every page of the volume from the Riksarkivet IIIF Image API into the
+			bronze page-image dataset; the HTR cascade then runs event-driven. The run starts in the
+			background — this form returns as soon as it is dispatched, and progress lands in the
+			pipeline-runs feed on the landing page.
 		</p>
 
 		<label class="block space-y-1">
@@ -86,16 +88,24 @@
 
 		<Button onclick={ingest} disabled={!canIngest}>
 			<CloudDownload class="h-4 w-4" />
-			{busy ? 'Harvesting…' : 'Ingest volume'}
+			{busy ? 'Dispatching…' : 'Ingest volume'}
 		</Button>
 
 		{#if error}<p class="text-destructive text-sm">{error}</p>{/if}
 		{#if result}
 			<div class="space-y-1 rounded border border-emerald-600 p-3 text-sm">
+				<!-- ACCEPTED, not "harvested". The old head declared 202 and then blocked through the
+				     whole harvest, so this panel could honestly say the pages had landed. The run is now
+				     genuinely asynchronous: nothing has been fetched yet when this renders, and claiming
+				     otherwise would be the same declared-but-absent semantics the plane exists to fix. -->
 				<p>
-					Harvested <strong class="font-mono">{volumeId}</strong> — {result.pages} pages into
-					<span class="font-mono">{result.dataset}</span> (cascade token
-					<span class="font-mono">{result.token}</span>).
+					Accepted <strong class="font-mono">{volumeId}</strong> — run
+					<span class="font-mono">{result.run_id}</span>
+					{#if result.deduplicated}
+						<!-- Worth saying out loud: the user pressed the button and NO new work started.
+						     Silence here reads as a no-op bug rather than idempotency working. -->
+						<em>(already running — the same Idempotency-Key resolved to this run)</em>
+					{/if}
 				</p>
 				<a class="underline" href={base}>Back to the runs feed</a>
 			</div>
