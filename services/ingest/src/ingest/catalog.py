@@ -60,13 +60,82 @@ class LocalCatalog:
                 lance.dataset(uri)
             except Exception:
                 create_empty(uri, self._schema)
+            assert_creation_contract(uri)
             return uri
 
         if not Path(uri).exists():
             Path(uri).parent.mkdir(parents=True, exist_ok=True)
             create_empty(uri, self._schema)
+        # A14 is ENFORCED here, not merely available. A dataset that pre-dates the contract — or was
+        # created by any other writer — reaches this path too, and the whole point is that the flags
+        # cannot be added afterwards: refusing at the head of a run is the last moment the operator
+        # can still fix it cheaply, rather than discovering it as duplicate rows months downstream.
+        assert_creation_contract(uri)
         return uri
 
     def register_version(self, dataset_uri: str, version: int, run_id: str) -> None:
         """Record the committed version with the run id — the reconciliation anchor."""
         self.registered.append((dataset_uri, version, run_id))
+
+
+class CreationContractError(ValueError):
+    """A governed dataset was created without a guarantee every tier above it depends on."""
+
+
+def assert_creation_contract(uri: str) -> None:
+    """A14 — REFUSE a governed dataset that is missing its creation-time guarantees.
+
+    Two things must hold from version 1, and neither can be repaired afterwards:
+
+    * **stable row ids** (`enable_stable_row_ids`) — a silent no-op if set later
+      (`lance_docs/file_format.md:4011-4013`). D1's change-data-feed reads `_row_created_at_version`,
+      and every silver/gold row references bronze through `source_rowid`; without stable ids both
+      rest on identifiers that move under compaction.
+    * **an `id` column** — the unenforced primary key (`file_format.md:2887-2910`) that the
+      merge-on-write path converges on. Without it a redelivered hop appends instead of merging,
+      and E2's idempotency claim is simply false.
+
+    (The verb itself is deliberately not named here: I4's gate is a grep over these files, and
+    prose naming a write verb is indistinguishable to it from a second writer. Bluntness is the
+    gate's value — it cannot be argued with — so the prose bends, not the rule.)
+
+    Checked rather than documented, because "silent no-op if late" means the mistake has NO symptom
+    when it is made. The dataset works, the run is green, and the defect surfaces months later as a
+    mover duplicating rows or a `source_rowid` resolving to the wrong page. A14 moves that discovery
+    to the one moment it is still cheap.
+    """
+    import lance
+
+    dataset = lance.dataset(uri)
+
+    if "id" not in dataset.schema.names:
+        raise CreationContractError(
+            f"{uri} has no `id` column — the merge-on-write path would have nothing to converge "
+            f"on, so a redelivered hop appends duplicates instead of updating (A14)"
+        )
+
+    if not _has_stable_row_ids(dataset):
+        raise CreationContractError(
+            f"{uri} was created without enable_stable_row_ids — CDF deltas and every source_rowid "
+            f"reference above it would rest on ids that move under compaction, and setting the flag "
+            f"now is a silent no-op (A14)"
+        )
+
+
+def _has_stable_row_ids(dataset: object) -> bool:
+    """Whether the dataset actually carries stable row ids.
+
+    `has_stable_row_ids` is the accessor pylance 9.0.0 exposes — confirmed by constructing datasets
+    both ways and reading it (True with the flag, False without), not inferred from the parameter
+    name. Read defensively and FALSE-on-absence: if the accessor disappears in an upgrade the gate
+    must refuse rather than pass, or A14 quietly stops gating on the first version bump.
+    """
+    value = getattr(dataset, "has_stable_row_ids", None)
+    if isinstance(value, bool):
+        return value
+    if callable(value):
+        try:
+            return bool(value())
+        except Exception:
+            return False
+    return False

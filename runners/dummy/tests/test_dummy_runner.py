@@ -134,3 +134,78 @@ def test_the_job_runs_end_to_end_from_env(tmp_path: Path) -> None:
 def test_missing_env_refuses_loudly() -> None:
     with pytest.raises(ValueError, match="FROM_URI and TO_URI"):
         run({})
+
+
+def test_a19_the_delta_is_asserted_at_ROW_ID_level_not_just_by_count(tmp_path: Path) -> None:
+    """A19 in full: the two hops' CDF row ids must not overlap and must miss nothing.
+
+    Counting is not enough. A delta predicate that was off by one version, or that silently rescanned
+    the tier and happened to return the right NUMBER of rows, passes a count assertion while feeding
+    the mover the wrong rows entirely. The stable row id is the identity that makes the claim
+    checkable, which is also why the creation flag that produces it is gated (A14).
+    """
+    uri = _bronze(tmp_path, [1, 2, 3])
+    v1 = lance.dataset(uri).version
+
+    _append(uri, [4, 5])
+    first = read_delta(uri, v1)
+    v2 = lance.dataset(uri).version
+
+    _append(uri, [6, 7])
+    second = read_delta(uri, v2)
+
+    first_ids = set(first.column("_rowid").to_pylist())
+    second_ids = set(second.column("_rowid").to_pylist())
+
+    assert first_ids & second_ids == set(), "the two hops overlap — rows would be transformed twice"
+
+    everything = set(read_delta(uri, None).column("_rowid").to_pylist())
+    original = everything - first_ids - second_ids
+    assert len(original) == 3, "the pre-boundary rows were re-delivered into a delta"
+    assert first_ids | second_ids | original == everything, "a row belongs to no hop — it would never be transformed"
+
+
+def test_a19_a_full_E5_replay_converges_to_identical_CONTENT(tmp_path: Path) -> None:
+    """Replay must reproduce silver byte for byte, or bronze is not a replay foundation.
+
+    This is what makes bronze worth keeping: given the same bronze, re-running the transform from
+    scratch must yield the same silver. Anything non-deterministic in the transform — a timestamp, a
+    random projection, dict iteration order — breaks the claim silently, because both runs "succeed"
+    and only their contents differ.
+    """
+    import hashlib
+
+    uri = _bronze(tmp_path, [1, 2, 3, 4])
+
+    def replay_hash(target: str) -> str:
+        rows = transform_batch(read_delta(uri, None))
+        write_silver(target, rows, run_id="replay")
+        table = lance.dataset(target).to_table().sort_by("id")
+        # Hashed from Arrow IPC bytes, not via pandas: the runner is SEALED and ships no pandas, and
+        # a hash that needs a dependency the runner does not carry cannot run where the runner runs.
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, table.schema) as writer:
+            writer.write_table(table)
+        return hashlib.sha256(sink.getvalue().to_pybytes()).hexdigest()
+
+    first = replay_hash(str(tmp_path / "silver-a.lance"))
+    second = replay_hash(str(tmp_path / "silver-b.lance"))
+
+    assert first == second, "an E5 replay produced different silver from identical bronze"
+
+
+def test_a19_a_delta_bounded_by_a_STALE_version_does_not_silently_skip(tmp_path: Path) -> None:
+    """The boundary comes from the publication event, never from a fresh DescribeTable read.
+
+    A mover that read the version itself could observe a version NEWER than the one it was woken for
+    — another writer having committed in between — and would then skip every row in the gap. The rows
+    are lost with no error anywhere: the hop reports success having processed nothing. Bounding by an
+    older version must OVER-deliver (idempotency absorbs it), never under-deliver.
+    """
+    uri = _bronze(tmp_path, [1, 2, 3])
+    v1 = lance.dataset(uri).version
+    _append(uri, [4, 5])
+    _append(uri, [6])
+
+    # Woken for v1 but two commits have landed: every row after v1 must arrive, not just the last.
+    assert sorted(read_delta(uri, v1).column("id").to_pylist()) == [4, 5, 6]
