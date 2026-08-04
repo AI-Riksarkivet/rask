@@ -23,6 +23,7 @@
 	import { Button } from '@rask/ui/button';
 	import { Dialog } from '@rask/ui/dialog';
 	import { Input } from '@rask/ui/input';
+	import { Select } from '@rask/ui/select';
 	import { Textarea } from '@rask/ui/textarea';
 	import { ExternalLink, Trash2 } from '@lucide/svelte';
 
@@ -54,6 +55,41 @@
 		 *  both the permission and the state; hiding the button is presentation, not authorization. */
 		droppable?: boolean;
 	} = $props();
+
+	// QUEUE FILTER. A project of a thousand items is unnavigable without one, which is why this is
+	// the first campaign feature: it is what makes every other one demonstrable.
+	//
+	// Filtered here rather than through TanStack's column filters because `assignee` is not an
+	// accessor column, and adding a hidden one to filter by it would be plumbing in service of the
+	// framework rather than the problem. Filtering the INPUT means pagination, sorting and the
+	// selection model all follow for free.
+	let filterState = $state('');
+	let filterAssignee = $state('');
+
+	const visible = $derived(
+		tasks.filter(
+			(t) =>
+				(filterState === '' || t.state === filterState) &&
+				(filterAssignee === '' ||
+					(t.assignee ?? '').toLowerCase().includes(filterAssignee.trim().toLowerCase())),
+		),
+	);
+	const filtering = $derived(filterState !== '' || filterAssignee.trim() !== '');
+
+	/** The states actually PRESENT, so the dropdown never offers a filter that yields nothing. */
+	const statesPresent = $derived([...new Set(tasks.map((t) => t.state))].sort());
+
+	/** Changing a filter clears the selection.
+	 *
+	 *  Not cosmetic: `rowSelection` is keyed by task id and survives a row leaving the visible set,
+	 *  so filtering down, selecting all, then clearing the filter would leave rows selected that the
+	 *  annotator never saw — and the bulk actions act on a selection. Cleared in the HANDLER rather
+	 *  than an effect, because assigning state inside an effect is the anti-pattern that makes this
+	 *  kind of coupling invisible.
+	 */
+	function onFilterChanged(): void {
+		rowSelection = {};
+	}
 
 	let busy = $state<string | null>(null); // `${task_id}:${event}` in flight
 	let notice = $state<{ ok: boolean; text: string } | null>(null);
@@ -220,7 +256,7 @@
 
 	const table = createSvelteTable({
 		get data() {
-			return tasks;
+			return visible;
 		},
 		columns,
 		getRowId: (task) => task.task_id,
@@ -391,7 +427,58 @@
 	{#if notice}
 		<p class={notice.ok ? 'text-success text-sm' : 'text-destructive text-sm'}>{notice.text}</p>
 	{/if}
-	<DataTable {table} emptyMessage="No items yet — send data points in from Search or the Atlas." />
+
+	<!-- Rendered only when there is something to filter. A filter bar over three items is furniture;
+	     over a thousand it is the only way to work. -->
+	{#if tasks.length > 1}
+		<div class="flex flex-wrap items-center gap-2" data-testid="queue-filter">
+			<Select
+				bind:value={filterState}
+				ariaLabel="Filter by state"
+				onValueChange={onFilterChanged}
+				options={[
+	{ value: '', label: `All states (${tasks.length})` },
+	...statesPresent.map((st) => ({
+		value: st,
+		// The count is what turns the dropdown into a summary of the queue, so a manager
+		// can see WHERE the work is sitting without applying a filter to find out.
+		label: `${st} (${tasks.filter((t) => t.state === st).length})`,
+	})),
+]}
+			/>
+			<Input
+				bind:value={filterAssignee}
+				placeholder="Filter by assignee…"
+				aria-label="Filter by assignee"
+				class="h-8 w-48"
+				oninput={onFilterChanged}
+			/>
+			{#if filtering}
+				<span class="text-muted-foreground text-xs" data-testid="filter-count">
+					{visible.length} of {tasks.length}
+				</span>
+				<Button
+					variant="ghost"
+					size="sm"
+					data-testid="clear-filter"
+					onclick={() => {
+	filterState = '';
+	filterAssignee = '';
+	onFilterChanged();
+}}
+				>
+					Clear
+				</Button>
+			{/if}
+		</div>
+	{/if}
+
+	<DataTable
+		{table}
+		emptyMessage={filtering
+	? 'No items match this filter.'
+	: 'No items yet — send data points in from Search or the Atlas.'}
+	/>
 </div>
 
 <Dialog.Root

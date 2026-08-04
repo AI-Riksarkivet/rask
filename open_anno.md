@@ -13,15 +13,26 @@ file: make the core loop *work* before making any part of it rich.
 All four are wanted. Ordered by cost, cheapest first, because each earlier one makes the next
 easier to judge.
 
-### 40a · Queue filter — *do first*
+### 40a · Queue filter — **LANDED**
 Filter the task queue by **state**, **assignee** and **label**. Pure client work over data the
 listing already returns (`TaskListing.details`); no new route, no new permission.
 
 Why first: a 1000-item project is unnavigable today, which makes every other campaign feature hard
 to even demonstrate. Cheapest thing that makes the rest testable.
 
-Done when: filters compose (state AND assignee), the empty result says *why* it is empty rather
-than looking broken, and the filter survives a refetch (it is view state, not server state).
+Done: state + assignee compose (AND), the state dropdown carries COUNTS so it summarises where the
+work is sitting without applying a filter, the empty result says "No items match this filter" rather
+than the "no items yet" that would be a lie, and changing a filter CLEARS the selection — TanStack
+keys `rowSelection` by id and it survives a row leaving the visible set, so without that a manager
+could bulk-accept rows they never saw.
+
+Filtered at the INPUT array rather than through TanStack's column filters: `assignee` is not an
+accessor column, and adding a hidden one would be plumbing for the framework rather than the problem.
+Pagination, sorting and selection all follow from the filtered set for free.
+
+Side effect worth keeping: `@rask/ui`'s `Select` now passes `onValueChange` through to Bits UI's
+`Select.Root`, which always had it. Without it a consumer had to watch `value` from an `$effect` and
+assign state there — the Svelte 5 anti-pattern.
 
 ### 40b · Bulk assign
 Select N queued items → assign all to one annotator in one action. Extends the existing per-row

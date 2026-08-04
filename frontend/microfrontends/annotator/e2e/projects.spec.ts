@@ -950,3 +950,106 @@ test('the remove control is ABSENT once the project is frozen', async ({ page })
 	await page.goto('/annotator/projects/p1');
 	await expect(page.getByTestId('drop-task')).toHaveCount(0);
 });
+
+// --------------------------------------------------------------------------------------------------
+// 40a — the queue filter. A project of a thousand items is unnavigable without one.
+// --------------------------------------------------------------------------------------------------
+
+test('the queue filters by STATE, and says how many of how many', async ({ page }) => {
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([
+			task('t1', 'unassigned'),
+			task('t2', 'claimed', { assignee: 'gina' }),
+			task('t3', 'accepted'),
+			task('t4', 'claimed', { assignee: 'omar' }),
+		]),
+	);
+
+	await page.goto('/annotator/projects/p1');
+	// The DataTable renders semantic <tr>; `rowgroup` scopes to the BODY so the header row is not
+	// counted as an item — a count that is always one too high hides an off-by-one in the filter.
+	const rows = page.getByRole('rowgroup').last().getByRole('row');
+	await expect(rows).toHaveCount(4);
+
+	// The dropdown carries COUNTS, so it summarises where the work is sitting without having to
+	// apply a filter to find out.
+	const stateFilter = page.getByLabel('Filter by state');
+	await expect(stateFilter).toContainText('All states (4)');
+
+	await stateFilter.press('Enter');
+	await page.getByRole('option', { name: /^claimed/ }).click();
+
+	await expect(rows).toHaveCount(2);
+	await expect(page.getByTestId('filter-count')).toHaveText('2 of 4');
+});
+
+test('the queue filters by ASSIGNEE, and the two filters COMPOSE', async ({ page }) => {
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([
+			task('t1', 'claimed', { assignee: 'gina' }),
+			task('t2', 'claimed', { assignee: 'omar' }),
+			task('t3', 'accepted', { assignee: 'gina' }),
+		]),
+	);
+
+	await page.goto('/annotator/projects/p1');
+	// The DataTable renders semantic <tr>; `rowgroup` scopes to the BODY so the header row is not
+	// counted as an item — a count that is always one too high hides an off-by-one in the filter.
+	const rows = page.getByRole('rowgroup').last().getByRole('row');
+
+	await page.getByLabel('Filter by assignee').fill('gina');
+	await expect(rows, 'the assignee filter did not narrow the queue').toHaveCount(2);
+
+	// AND, not OR: gina's CLAIMED work, which is the question a manager actually asks.
+	await page.getByLabel('Filter by state').press('Enter');
+	await page.getByRole('option', { name: /^claimed/ }).click();
+	await expect(rows, 'the two filters did not compose').toHaveCount(1);
+});
+
+test('an EMPTY filter result says why it is empty, rather than looking broken', async ({
+	page,
+}) => {
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([task('t1', 'claimed', { assignee: 'gina' }), task('t2', 'accepted')]),
+	);
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByLabel('Filter by assignee').fill('nobody-by-that-name');
+
+	// "No items yet — send data points in" would be a LIE here: there are items, they just do not
+	// match. The two states are different and the queue must not conflate them.
+	await expect(page.getByText('No items match this filter.')).toBeVisible();
+	await expect(page.getByText(/No items yet/)).toHaveCount(0);
+});
+
+test('changing a filter CLEARS the selection — a hidden row must never stay selected', async ({
+	page,
+}) => {
+	// `rowSelection` is keyed by task id and survives a row leaving the visible set. Without this,
+	// filtering down, selecting all, then clearing the filter leaves rows selected that the manager
+	// never saw — and the bulk actions act on a selection.
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([
+			task('t1', 'in_review', { assignee: 'gina', submitted_by: 'gina' }),
+			task('t2', 'in_review', { assignee: 'omar', submitted_by: 'omar' }),
+		]),
+	);
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByRole('checkbox', { name: 'Select all' }).check();
+	await expect(page.getByRole('button', { name: /Accept 2 reviewed/ })).toBeVisible();
+
+	await page.getByLabel('Filter by assignee').fill('gina');
+	await expect(
+		page.getByRole('button', { name: /Accept \d+ reviewed/ }),
+		'a selection survived a filter change',
+	).toHaveCount(0);
+});
