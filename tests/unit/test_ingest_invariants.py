@@ -19,6 +19,7 @@ thirteen helm invariants sat green while skipping (§0 C9).
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -44,12 +45,39 @@ def _py_files(root: Path) -> list[Path]:
     return sorted(p for p in root.rglob("*.py") if "__pycache__" not in p.parts) if root.exists() else []
 
 
+def _code_only(source: str) -> str:
+    """The module's CODE, with comments and docstrings removed.
+
+    These gates match on verbs, and a module that explains why it must not call something contains
+    the same characters as one that calls it. `staging.py` tripped I4 for a docstring saying the
+    lander's commit is a blind append *because* `merge_insert` is forbidden outside it: the gate read
+    the word and reported a violation of the very rule that sentence documents.
+
+    Rewriting the prose would have been the smaller change and the wrong one. It leaves a gate that
+    cannot tell a call from a mention, which makes every future comment about a forbidden verb a
+    build failure — and `test_a10_the_gates_do_not_fire_on_innocent_lines` already says why that
+    matters: "a gate that fires on prose gets silenced by the first person it annoys". Parsing
+    narrows the search to what the interpreter will actually run.
+
+    `ast` drops comments by construction; docstrings are dropped explicitly. Every OTHER string
+    literal survives unparsing, so `getattr(lance, "merge_insert")` is still caught.
+    """
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        first = node.body[0] if node.body else None
+        if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+            node.body = node.body[1:] or [ast.Pass()]
+    return ast.unparse(ast.fix_missing_locations(tree))
+
+
 def _offenders(pattern: re.Pattern[str], allowed: set[str]) -> list[str]:
     hits: list[str] = []
     for path in _py_files(INGEST_SRC):
         if path.name in allowed:
             continue
-        if pattern.search(path.read_text(encoding="utf-8")):
+        if pattern.search(_code_only(path.read_text(encoding="utf-8"))):
             hits.append(str(path.relative_to(REPO)))
     return hits
 
@@ -112,6 +140,24 @@ def test_a10_each_gate_catches_a_seeded_violation(pattern: re.Pattern[str], viol
 )
 def test_a10_the_gates_do_not_fire_on_innocent_lines(pattern: re.Pattern[str], innocent: str) -> None:
     assert not pattern.search(innocent), f"gate false-positived on: {innocent!r}"
+
+
+def test_a_gate_reads_code_not_prose() -> None:
+    """A module may DOCUMENT a forbidden verb; it may not call one.
+
+    Both halves matter and they pull in opposite directions, so they are asserted together: strip too
+    little and honest documentation fails the build (which is how this surfaced — `staging.py`
+    explaining why the lander alone commits), strip too much and a real call hides inside whatever
+    the stripper discards.
+    """
+    documented = '"""The lander commits a blind Append; merge_insert is forbidden here."""\n\nimport nats_unrelated\n'
+    assert not WRITE_VERBS.search(_code_only(documented)), "a docstring explaining the rule tripped the gate"
+
+    called = '"""Innocent docstring."""\n\nds.merge_insert("id").execute(tbl)\n'
+    assert WRITE_VERBS.search(_code_only(called)), "stripping hid a real call"
+
+    quoted = '"""Innocent docstring."""\n\nfn = getattr(lance, "merge_insert")\n'
+    assert WRITE_VERBS.search(_code_only(quoted)), "a non-docstring string literal must survive stripping"
 
 
 def test_the_gate_actually_scans_something() -> None:

@@ -147,6 +147,24 @@ def _is_permanent(exc: BaseException) -> bool:
     return isinstance(status, int) and status in PERMANENT_STATUSES
 
 
+def _is_redelivery(msg: object) -> bool:
+    """Has JetStream handed us this unit before?
+
+    `num_delivered` is 1 on a first delivery and climbs on every redelivery, so >1 means some earlier
+    attempt did not ack — a crash, an `ack_wait` expiry, or a nak. Those units must be batched apart
+    from fresh ones (see `drain_chunk`).
+
+    Unknown counts as fresh: a test double or a non-JetStream message has no metadata, and treating
+    that as a redelivery would flush a fragment per message and undo the batching. The cost of being
+    wrong in this direction is bounded — `discover_staged` still refuses to commit an ambiguous
+    overlap rather than duplicating rows.
+    """
+    try:
+        return int(msg.metadata.num_delivered) > 1  # type: ignore[attr-defined]
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
 class Worker:
     """Consumes one run's units until the chunk drains."""
 
@@ -227,11 +245,11 @@ class Worker:
             pending, pending_msgs, pending_bytes = [], [], 0
 
             written = write_unit_fragments(dataset_uri, units_to_table(units))
-            # Staged under the FIRST unit's key: one manifest per fragment, not per row. Recovery
-            # reads the staging prefix and commits whatever it finds, so the granularity only has to
-            # be stable, not per-unit — and per-unit would put 10k tiny JSON objects on the store for
-            # a 10k-page volume, recreating the small-file problem the fragment batching just solved.
-            stage_fragments(dataset_uri, run_id, units[0][0], written)
+            # EVERY unit in the batch, not `units[0][0]`. The manifest is the finalizer's only record
+            # of which rows a fragment holds, so naming one member left the other N-1 invisible and a
+            # partially-acked batch committed its units TWICE
+            # (`tests/test_partial_ack_duplication.py`). Still one manifest — it is keyed on the set.
+            stage_fragments(dataset_uri, run_id, [key for key, _ in units], written)
             outcome.fragments.extend(written)
             outcome.units_done += len(units)
             for msg in msgs_to_ack:
@@ -265,8 +283,22 @@ class Worker:
                     pending_msgs.append(msg)
                     pending_bytes += len(result)
 
-            await asyncio.gather(*(handle(m) for m in msgs))
-            if len(pending) >= FRAGMENT_TARGET_ROWS or pending_bytes >= FRAGMENT_TARGET_BYTES:
+            # A REDELIVERED unit never shares a fragment with a fresh one, and that isolation is what
+            # keeps recovery decidable. `discover_staged` resolves an overlap by dropping the
+            # fragment whose units another already covers — which only works while overlaps are
+            # containments. Let a redelivery batch with fresh units and you get F={u0..u3} against
+            # H={u2,u3,u4,u5}: neither contains the other, so committing either is wrong and
+            # `discover_staged` can only raise. Splitting the fetch is what makes that unreachable.
+            fresh = [m for m in msgs if not _is_redelivery(m)]
+            again = [m for m in msgs if _is_redelivery(m)]
+
+            if fresh:
+                await asyncio.gather(*(handle(m) for m in fresh))
+            if again:
+                await flush()  # close the fresh batch before the redelivered units join it
+                await asyncio.gather(*(handle(m) for m in again))
+                await flush()
+            elif len(pending) >= FRAGMENT_TARGET_ROWS or pending_bytes >= FRAGMENT_TARGET_BYTES:
                 await flush()
 
         # The remainder. A chunk is almost never an exact multiple of the target, so without this the
