@@ -3154,3 +3154,41 @@ than in the head they came from, because enumeration is a discrete phase.
 
 The IIIF read-through cache belongs to the ADAPTER, not the platform — a per-source `Fetcher` is
 already the designed seam.
+
+### The Dapr app-token bypass — fixed in ingest, still open in the medallion
+
+`dapr.io/app-token-secret` makes daprd stamp `dapr-api-token` on **every** request it hands the app,
+and the gateway forwards through Dapr service invocation (`gateway/__init__.py:174`). So the
+app-token proves *"this arrived through Dapr"*, never *"the caller is a trusted service"* — and the
+gateway is a trusted service invoking on behalf of the anonymous public.
+
+Measured 2026-08-04 against the ingest door, which was written in the estate's shape on purpose:
+
+```
+anonymous -> 127.0.0.1:8830/api/ingests    403
+anonymous -> rask-ingest:8830/api/ingests  403
+anonymous -> rask-gateway:8888/api/ingest  202 ACCEPTED
+```
+
+A browser with no login started a real ingest run through the compute zone's form.
+
+`ingest/auth.py` now refuses the service-token path when `dapr-caller-app-id` names a public front
+door (`public_callers`, default `gateway`). **`medallion/api/produce_auth.py::authorize_produce` has
+the identical shape and is NOT yet fixed** — `/api/produce`, `/api/ingest-iiif` and `/api/train`
+inherit the bypass through the same gateway. The catalog's token-gated paths want the same audit.
+
+The fix is small and mechanical (thread the caller app-id, refuse public callers) but it changes who
+may call those endpoints, so it wants its own change with its own in-cluster proof rather than being
+smuggled in beside an ingest commit.
+
+### Circuit breakers cannot see the difference between "refused" and "down"
+
+Removed from the invocation targets in the same session, and worth stating as a rule rather than a
+patch: Dapr's **retry** policy takes a `matching.httpStatusCodes`, its **circuit breaker** does not.
+A breaker keyed on consecutive non-2xx counts an authorization denial exactly like an outage, so five
+refused requests took an entire app-id offline for every caller for 30 s — a denial of service any
+unauthenticated client could trigger on demand, by sending requests it already knew would fail.
+
+If a breaker is ever wanted back, it needs a failure signal that means *unavailable* (transport
+errors, timeouts, 5xx). Until Dapr can express that, `invokeTimeout` plus status-matched retries are
+the honest bound.
