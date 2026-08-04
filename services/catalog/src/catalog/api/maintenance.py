@@ -6,7 +6,8 @@ migration windows (flip on, migrate, flip off). Mutating = anything other than
 GET / HEAD / OPTIONS; health and read endpoints stay available. Default OFF, so
 this is a no-op unless explicitly enabled.
 
-Standard catalog maintenance surface (expire snapshots / remove orphans / compact).
+NOT the table-maintenance surface: compaction, version cleanup and index optimize live in
+``services/compaction`` (``compaction.services.optimize``). This module only gates writes.
 """
 
 from __future__ import annotations
