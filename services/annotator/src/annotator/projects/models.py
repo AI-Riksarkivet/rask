@@ -128,6 +128,13 @@ class Shape(BaseModel):
     polygon: list[float] = Field(default_factory=list)
     t_start: float | None = None
     t_end: float | None = None
+    #: TEXT SPAN. A `text` shape may be a range INTO another annotation's `text`: token-classification
+    #: and the value half of KIE on transcribed text are spans, and no amount of pixel geometry
+    #: expresses one. `parent_id` addresses the row by ID — rows renumber on reload, so an index would
+    #: silently re-point at a different annotation.
+    parent_id: str | None = None
+    char_start: int | None = None
+    char_end: int | None = None
     mask: str | None = None
     label: str | None = None
     text: str | None = None

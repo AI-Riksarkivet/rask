@@ -4,6 +4,7 @@
 	import { Check, X, RotateCcw, ChevronUp, ChevronDown, Link2, Link2Off } from '@lucide/svelte';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
+	import { Select } from '@rask/ui/select';
 	import TextInput from '$lib/ui/TextInput.svelte';
 	import { statusVariant } from './statusStyle';
 	import type { AnnotatorController } from '../annotator.svelte';
@@ -16,6 +17,32 @@
 	/** Which end this shape sits at, so "answers → v1" reads the right way round. */
 	const endLabel = (l: { from_shape: string; to_shape: string }, id: string) =>
 		l.from_shape === id ? `→ ${l.to_shape}` : `← ${l.from_shape}`;
+
+	// TEXT SPANS. A span is a range INTO this annotation's text — token-classification, and the value
+	// half of KIE on transcribed text. Selecting in the field the text is already in is the whole
+	// interaction: no second surface, no separate mode, and the offsets come from the browser's own
+	// selection rather than being counted by hand.
+	let spanStart = $state(-1);
+	let spanEnd = $state(-1);
+	const hasSelection = $derived(spanStart >= 0 && spanEnd > spanStart);
+	/** The classes a span may be labelled with — the same taxonomy everything else is judged against. */
+	const spanClasses = $derived(controller.labelClasses);
+	let spanLabel = $state('');
+
+	/** Read the browser's selection off the text input. Called on select/keyup/mouseup rather than
+	 *  watched from an effect: a selection is an EVENT, and polling for it would fight the caret. */
+	function captureSelection(e: Event): void {
+		const el = e.currentTarget as HTMLInputElement | HTMLTextAreaElement;
+		spanStart = el.selectionStart ?? -1;
+		spanEnd = el.selectionEnd ?? -1;
+	}
+
+	function commitSpan(): void {
+		if (!row || !hasSelection) return;
+		controller.addTextSpan(row.index, spanStart, spanEnd, spanLabel || spanClasses[0] || 'span');
+		spanStart = -1;
+		spanEnd = -1;
+	}
 </script>
 
 {#if row}
@@ -53,8 +80,34 @@
 				value={row.text}
 				placeholder="—"
 				oninput={(e) => controller.updateField(row.index, 'text', e.currentTarget.value)}
+				onselect={captureSelection}
+				onkeyup={captureSelection}
+				onmouseup={captureSelection}
 			/>
 		</label>
+
+		<!-- Offered only when the TASK declares a class that can be drawn as text. A "label selection"
+		     button on a task with no text class is a control that can produce nothing. -->
+		{#if controller.allowsTextSpans && row.text}
+			<div class="flex flex-wrap items-center gap-2" data-testid="span-editor">
+				{#if hasSelection}
+					<span class="text-muted-foreground font-mono text-xs" data-testid="span-preview">
+						“{row.text.slice(spanStart, spanEnd)}” [{spanStart}, {spanEnd})
+					</span>
+					{#if spanClasses.length > 1}
+						<Select
+							bind:value={spanLabel}
+							ariaLabel="Span class"
+							options={spanClasses.map((c) => ({ value: c, label: c }))}
+						/>
+					{/if}
+					<Button size="xs" data-testid="label-selection" onclick={commitSpan}>Label selection</Button>
+				{:else}
+					<!-- Says what to do rather than showing a dead button. -->
+					<span class="text-muted-foreground text-xs">Select text above to label a span.</span>
+				{/if}
+			</div>
+		{/if}
 
 		<label class="flex flex-col gap-1.5 text-xs">
 			<span class="text-muted-foreground">Label</span>

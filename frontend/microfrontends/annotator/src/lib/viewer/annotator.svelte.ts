@@ -318,6 +318,16 @@ export class AnnotatorController {
 	/** Engine tool names the rail may show, or null for "no restriction". */
 	readonly allowedTools = $derived(engineToolsFor(this.allowedShapeTypes));
 
+	/** Whether this task wants TEXT SPANS at all.
+	 *
+	 *  A span is not drawable with a pointer, so it is not in `allowedTools` and the rail can never
+	 *  offer it — the affordance lives in the inspector instead, beside the text it ranges over. An
+	 *  unconstrained canvas allows it too: with no task there is no rule saying otherwise, and the
+	 *  same reasoning that leaves every drawing tool available applies here. */
+	readonly allowsTextSpans = $derived(
+		this.allowedShapeTypes.length === 0 || this.allowedShapeTypes.includes('text'),
+	);
+
 	readonly canDraw = $derived(this.mode === 'edit');
 	/** Rows queued to be INSERTED on the next save — read-only, so a test can assert that an undo
 	 *  actually removed a drawn shape from the payload rather than merely hiding it. */
@@ -578,6 +588,36 @@ export class AnnotatorController {
 		if (this.links.length === before) return;
 		this._pushLinksToCanvas();
 		this._pushUndo({ kind: 'link', link, created: false });
+	}
+
+	/** Create a TEXT SPAN over part of an annotation's text.
+	 *
+	 *  A span is a range INTO another row's text — what token-classification and the value half of
+	 *  KIE on transcribed text are made of. It is a real annotation row like any other, so it rides
+	 *  the same insert queue, the same undo stack and the same save; the only thing that makes it a
+	 *  span is that it names a parent and a character range.
+	 *
+	 *  OFFSETS, not the selected substring: text repeats within a line, so storing "Vasa" would be
+	 *  ambiguous about WHICH "Vasa". The substring is stored alongside so the row reads sensibly in a
+	 *  list, but the range is what is authoritative.
+	 */
+	addTextSpan(parentIndex: number, start: number, end: number, label: string): void {
+		const parent = this.rows.find((r) => r.index === parentIndex);
+		// Refused rather than clamped. A clamped span is a range nobody asked for, and unlike a
+		// clamped box you cannot see that it is wrong by looking at the page.
+		if (!parent || start < 0 || end <= start || end > parent.text.length) return;
+		this._appendInsert(
+			makeInsertRow({
+				shape_type: 'text',
+				parent_id: parent.id,
+				char_start: start,
+				char_end: end,
+				text: parent.text.slice(start, end),
+				label,
+				status: 'accepted',
+				source: 'human',
+			}),
+		);
 	}
 
 	/** The links touching a shape id — what the panel renders beside a selected annotation. */

@@ -21,6 +21,9 @@ export type DraftShape = {
 	mask?: string | null;
 	label?: string | null;
 	text?: string | null;
+	parent_id?: string | null;
+	char_start?: number;
+	char_end?: number;
 	group?: string | null;
 	difficult?: boolean;
 	source?: string | null;
@@ -38,7 +41,11 @@ const NUMERIC = [
 	't_end',
 	'confidence',
 ] as const;
-const TEXTUAL = ['mask', 'label', 'text', 'group', 'source', 'model_version'] as const;
+const TEXTUAL = ['mask', 'label', 'text', 'group', 'source', 'model_version', 'parent_id'] as const;
+/** The textual facet's range. Separate from NUMERIC because 0 is a MEANINGFUL char offset — the very
+ *  first character — and a truthiness check would drop it, silently shifting every span that starts
+ *  at the beginning of its line. */
+const SPAN_OFFSETS = ['char_start', 'char_end'] as const;
 
 /** Map the unit's annotation rows (the media plane's EMPTY_SCHEMA columns) onto draft shapes.
  *
@@ -69,6 +76,11 @@ export function rowsToShapes(table: Table): DraftShape[] {
 		for (const field of TEXTUAL) {
 			const value = row[field];
 			if (typeof value === 'string' && value) shape[field] = value;
+		}
+		for (const field of SPAN_OFFSETS) {
+			const value = row[field];
+			// `Number.isInteger`, not truthiness: char 0 is the first character, not "absent".
+			if (typeof value === 'number' && Number.isInteger(value)) shape[field] = value;
 		}
 		const polygon = row['polygon'];
 		if (polygon != null) {

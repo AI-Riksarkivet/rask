@@ -154,6 +154,16 @@ EMPTY_SCHEMA = pa.schema(
         ("t_start", pa.float32()),
         ("t_end", pa.float32()),
         ("text", pa.string()),
+        # TEXTUAL facet — a span INTO another row's `text`, which is what token-classification and
+        # the value half of KIE are made of. Nullable and additive: Lance assigns field IDs
+        # incrementally, so fragments written before these existed are never rewritten and read back
+        # as null (https://lance.org/format/table/schema/). Adding them is metadata-only.
+        #
+        # `parent_id` is the row the span sits inside, by ID — never an index. Rows renumber on every
+        # reload, and an index would silently re-point at a different annotation.
+        ("parent_id", pa.string()),
+        ("char_start", pa.int32()),
+        ("char_end", pa.int32()),
         ("label", pa.string()),
         ("status", pa.string()),
         ("source", pa.string()),

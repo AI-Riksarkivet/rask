@@ -210,6 +210,11 @@ class ShapeLike(BaseModel):
     shape_type: str = ""
     label: str | None = None
     attributes: dict[str, str] = Field(default_factory=dict)
+    #: The textual facet — set only on a text SPAN. See `_span_violation`.
+    text: str | None = None
+    parent_id: str | None = None
+    char_start: int | None = None
+    char_end: int | None = None
 
 
 class LinkLike(BaseModel):
@@ -220,6 +225,42 @@ class LinkLike(BaseModel):
     name: str = ""
     from_shape: str = ""
     to_shape: str = ""
+
+
+def _span_violation(shapes: list[ShapeLike]) -> str | None:
+    """A text SPAN must name a real parent and land inside its text.
+
+    A `text` shape is not necessarily a span. It is also how a free-standing text annotation is
+    expressed — a DocVQA question someone typed IS the text, not a range into something else — and
+    demanding a parent from every `text` shape breaks a shape the model has always allowed (caught by
+    the DocVQA test, not by review). So span-ness is DECLARED: a `parent_id`, a character range, or
+    both. Declare either and all of it must be coherent; declare neither and this is ordinary text.
+
+    Checked rather than trusted because a span is the one shape whose coordinates mean nothing on
+    their own: `(12, 40)` is only a span if some other row's text is at least 40 characters long. A
+    span past the end of its parent, or pointing at a parent not in the submission, publishes a range
+    nothing can resolve — and unlike a bad box, nobody can SEE it is wrong by looking at the page.
+    """
+    by_id = {s.shape_id: s for s in shapes}
+    for shape in shapes:
+        if shape.shape_type != "text":
+            continue
+        declares = shape.parent_id is not None or shape.char_start is not None or shape.char_end is not None
+        if not declares:
+            continue
+        if not shape.parent_id:
+            return f"text span {shape.shape_id} declares a character range but names no parent — a span is a range INTO another annotation's text"
+        parent = by_id.get(shape.parent_id)
+        if parent is None:
+            return f"text span {shape.shape_id} points at {shape.parent_id!r}, which is not in this submission"
+        start, end = shape.char_start, shape.char_end
+        if start is None or end is None:
+            return f"text span {shape.shape_id} has no character range"
+        if start < 0 or end <= start:
+            return f"text span {shape.shape_id} has an empty or reversed range ({start}, {end})"
+        if end > len(parent.text or ""):
+            return f"text span {shape.shape_id} ends at {end}, past the end of {shape.parent_id} ({len(parent.text or '')} characters)"
+    return None
 
 
 def validate_against_ontology(
@@ -277,6 +318,10 @@ def validate_against_ontology(
                     return f"attribute {attr.name!r} must be a boolean — shape {shape.shape_id} carries {value!r}"
             elif attr.type == "enum" and value not in attr.choices:
                 return f"attribute {attr.name!r} must be one of {attr.choices} — shape {shape.shape_id} carries {value!r}"
+
+    span_problem = _span_violation(shapes)
+    if span_problem is not None:
+        return span_problem
 
     present = {s.label for s in shapes if s.label}
     missing = [c.name for c in ontology.classes if c.required and c.name not in present]

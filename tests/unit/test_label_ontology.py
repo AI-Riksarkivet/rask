@@ -259,3 +259,76 @@ def test_a_mistyped_key_is_REFUSED_not_dropped() -> None:
         LabelOntology.model_validate({"kind": "object-detection", "klasses": []})
     with pytest.raises(ValueError, match="directd"):
         RelationClass.model_validate({"name": "answers", "directd": False})
+
+
+# ── text spans: the shape whose coordinates mean nothing on their own ──────────────────────────────
+#
+# A `text` shape may be a range INTO another annotation's text — token-classification, and the value
+# half of KIE on transcribed text. `(12, 40)` is only a span if some other row's text is at least 40
+# characters long, so unlike a bad box nobody can SEE that a bad span is wrong by looking at the
+# page. That is why it is checked rather than trusted.
+
+
+def _span(shape_id: str, parent: str | None, start: int | None, end: int | None) -> ShapeLike:
+    return ShapeLike(shape_id=shape_id, shape_type="text", label="entity", parent_id=parent, char_start=start, char_end=end)
+
+
+def _line(shape_id: str, text: str) -> ShapeLike:
+    return ShapeLike(shape_id=shape_id, shape_type="bbox", label="line", text=text)
+
+
+SPAN_ONTOLOGY = LabelOntology(
+    kind="token-classification",
+    classes=[LabelClass(name="line", tools=["bbox"]), LabelClass(name="entity", tools=["text"])],
+)
+
+
+def test_a_span_inside_its_parent_is_accepted() -> None:
+    shapes = [_line("l1", "Gustav Vasa was crowned"), _span("s1", "l1", 0, 11)]
+    assert validate_against_ontology(SPAN_ONTOLOGY, shapes) is None
+
+
+def test_a_FREE_STANDING_text_annotation_is_not_treated_as_a_span() -> None:
+    """`text` is not only a span. A DocVQA question someone typed IS the text, not a range into
+    something else — and the pre-existing DocVQA test caught exactly this when the first version of
+    the rule demanded a parent from every `text` shape. Span-ness is DECLARED, not assumed."""
+    plain = ShapeLike(shape_id="q1", shape_type="text", label="entity", text="Vem avkunnade domen?")
+    assert validate_against_ontology(SPAN_ONTOLOGY, [plain]) is None
+
+
+def test_a_RANGE_with_no_parent_is_refused() -> None:
+    """A range with nothing to be a range OF."""
+    violation = validate_against_ontology(SPAN_ONTOLOGY, [_span("s1", None, 0, 5)])
+    assert violation is not None and "no parent" in violation
+
+
+def test_a_span_pointing_at_a_parent_NOT_in_the_submission_is_refused() -> None:
+    """The orphan case — the same class of dangling reference as a link to a deleted shape."""
+    violation = validate_against_ontology(SPAN_ONTOLOGY, [_span("s1", "gone", 0, 5)])
+    assert violation is not None and "gone" in violation
+
+
+def test_a_span_running_PAST_the_end_of_its_parent_is_refused() -> None:
+    """The failure nobody can see by looking at the page: it publishes a range nothing resolves."""
+    shapes = [_line("l1", "short"), _span("s1", "l1", 0, 99)]
+    violation = validate_against_ontology(SPAN_ONTOLOGY, shapes)
+    assert violation is not None and "past the end" in violation
+
+
+@pytest.mark.parametrize(("start", "end"), [(5, 5), (9, 3), (-1, 4)])
+def test_an_empty_or_reversed_range_is_refused(start: int, end: int) -> None:
+    shapes = [_line("l1", "Gustav Vasa"), _span("s1", "l1", start, end)]
+    violation = validate_against_ontology(SPAN_ONTOLOGY, shapes)
+    assert violation is not None and ("empty or reversed" in violation or "past the end" in violation)
+
+
+def test_a_span_with_no_range_at_all_is_refused() -> None:
+    shapes = [_line("l1", "Gustav Vasa"), _span("s1", "l1", None, None)]
+    violation = validate_against_ontology(SPAN_ONTOLOGY, shapes)
+    assert violation is not None and "character range" in violation
+
+
+def test_a_NON_text_shape_is_never_span_checked() -> None:
+    """Every other shape type carries no parent and no range, and must not be refused for it."""
+    ontology = LabelOntology(classes=[LabelClass(name="region", tools=["bbox"])])
+    assert validate_against_ontology(ontology, [_shape(label="region")]) is None
