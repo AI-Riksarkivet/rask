@@ -39,10 +39,13 @@ PROJECT_ID = "proj-1"
 class _FakeActor:
     """Stands in for the Dapr actor proxy: records what it was asked, returns canned state."""
 
-    def __init__(self, state: dict[str, Any] | None) -> None:
+    def __init__(self, state: dict[str, Any] | None, draft: dict[str, Any] | None = None) -> None:
         self.state = state
         self.fired: list[dict[str, Any]] = []
         self.drafts: list[dict[str, Any]] = []
+        #: What `get_draft` answers. Overridable so the import tests can put existing work in the
+        #: draft — appending onto an EMPTY draft would prove nothing about not destroying anything.
+        self.draft: dict[str, Any] = draft if draft is not None else {"revision": 1, "shapes": []}
 
     async def get(self) -> dict[str, Any] | None:
         return self.state
@@ -56,7 +59,7 @@ class _FakeActor:
         return {"revision": 1, "shapes": payload.get("shapes", [])}
 
     async def get_draft(self) -> dict[str, Any] | None:
-        return {"revision": 1, "shapes": []}
+        return self.draft
 
 
 def _app(*, allow: bool, seen: list[dict[str, Any]] | None = None) -> FastAPI:
@@ -525,3 +528,129 @@ def test_the_draft_save_carries_LINKS_through_to_the_actor(monkeypatch: pytest.M
     assert actor.drafts[0].get("links") == [{"name": "answers", "from_shape": "s1", "to_shape": "s2"}], (
         "the endpoint dropped `links` — the actor was asked to save shapes alone"
     )
+
+
+# --------------------------------------------------------------------------------------------------
+# Import (#39) — Arrow IPC into the draft
+# --------------------------------------------------------------------------------------------------
+
+
+def _ipc(rows: list[dict[str, Any]]) -> bytes:
+    import io
+
+    import pyarrow as pa
+
+    table = pa.Table.from_pylist(rows)
+    sink = io.BytesIO()
+    with pa.ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    return sink.getvalue()
+
+
+def test_an_import_APPENDS_to_the_draft_rather_than_replacing_it(_live_project: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The design decision, pinned.
+
+    A whole-draft replace matches how `save_draft` STORES — one keyed write — and was rejected: an
+    import onto a task somebody had already worked would silently destroy that work, and there is no
+    undo anywhere in the actor. Appending is never destructive; a duplicate is removable on the
+    canvas, which is a recoverable annoyance instead of an unrecoverable loss.
+    """
+    actor = _FakeActor(
+        _task(state=TaskState.CLAIMED, assignee=SUBJECT),
+        draft={"revision": 4, "shapes": [{"shape_id": "drawn-1", "shape_type": "bbox"}], "links": []},
+    )
+    monkeypatch.setattr(tasks_ep, "_proxy", lambda _t: actor)
+    client = TestClient(_app(allow=True))
+
+    r = client.post("/tasks/t1/import", content=_ipc([{"id": "a1", "shape_type": "bbox", "label": "figure"}]))
+
+    assert r.status_code == 200, r.text
+    saved = actor.drafts[0]["shapes"]
+    assert [s["shape_id"] for s in saved] == ["drawn-1", "a1"], "the hand-drawn shape was destroyed by the import"
+    assert r.json()["imported"] == 1
+
+
+def test_an_import_guards_on_the_revision_it_read(_live_project: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Read-modify-write, so it must carry the same etag two tabs already get — otherwise a save
+    landing in between is silently overwritten instead of 409'd."""
+    actor = _FakeActor(_task(state=TaskState.CLAIMED, assignee=SUBJECT), draft={"revision": 4, "shapes": [], "links": []})
+    monkeypatch.setattr(tasks_ep, "_proxy", lambda _t: actor)
+    client = TestClient(_app(allow=True))
+
+    client.post("/tasks/t1/import", content=_ipc([{"id": "a1", "shape_type": "bbox"}]))
+
+    assert actor.drafts[0]["base_revision"] == 4
+
+
+def test_an_imported_draft_is_marked_as_such(_live_project: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`import` is its own origin, not folded into `model`: imported work may be a person's, made in
+    another tool, and calling it "model" puts a false provenance claim on every published row."""
+    actor = _FakeActor(_task(state=TaskState.CLAIMED, assignee=SUBJECT), draft={"revision": 1, "shapes": [], "links": []})
+    monkeypatch.setattr(tasks_ep, "_proxy", lambda _t: actor)
+    client = TestClient(_app(allow=True))
+
+    client.post("/tasks/t1/import", content=_ipc([{"id": "a1", "shape_type": "bbox"}]))
+
+    assert actor.drafts[0]["origin"] == "import"
+
+
+def test_the_TASKS_OWN_ontology_refuses_a_foreign_label(_live_project: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The rules come from the task, never from the request — a caller must not be able to supply the
+    contract it is judged by."""
+    actor = _FakeActor(
+        _task(
+            state=TaskState.CLAIMED,
+            assignee=SUBJECT,
+            ontology={"kind": "detection", "classes": [{"name": "figure"}], "allow_empty": True},
+        ),
+        draft={"revision": 1, "shapes": [], "links": []},
+    )
+    monkeypatch.setattr(tasks_ep, "_proxy", lambda _t: actor)
+    client = TestClient(_app(allow=True))
+
+    r = client.post("/tasks/t1/import", content=_ipc([{"id": "a1", "shape_type": "bbox", "label": "spaceship"}]))
+
+    # 400, not 422: every refusal here — malformed Arrow, a foreign label, a dangling relation — means
+    # the same thing to the caller ("fix the file and retry") and each one names its offender in
+    # words. Two status codes for one user action would be precision with no consumer.
+    assert r.status_code == 400, r.text
+    assert "spaceship" in r.text
+    assert actor.drafts == [], "a refused import still wrote to the draft"
+
+
+@pytest.mark.parametrize("state", [TaskState.ACCEPTED, TaskState.IN_REVIEW, TaskState.SKIPPED, TaskState.UNASSIGNED])
+def test_annotations_can_only_be_imported_into_a_CLAIMED_task(state: TaskState, _live_project: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Importing is annotating. Without this an accepted task could be rewritten after review — the
+    same hole `save_draft` had, and it would be no less a hole for arriving as Arrow."""
+    actor = _FakeActor(_task(state=state, assignee=SUBJECT))
+    monkeypatch.setattr(tasks_ep, "_proxy", lambda _t: actor)
+    client = TestClient(_app(allow=True))
+
+    r = client.post("/tasks/t1/import", content=_ipc([{"id": "a1", "shape_type": "bbox"}]))
+
+    assert r.status_code == 409, r.text
+    assert actor.drafts == []
+
+
+def test_an_import_by_a_non_holder_is_403(_live_project: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    actor = _FakeActor(_task(state=TaskState.CLAIMED, assignee="omar"))
+    monkeypatch.setattr(tasks_ep, "_proxy", lambda _t: actor)
+    client = TestClient(_app(allow=True))
+
+    r = client.post("/tasks/t1/import", content=_ipc([{"id": "a1", "shape_type": "bbox"}]))
+
+    assert r.status_code == 403, r.text
+    assert actor.drafts == []
+
+
+def test_an_import_requires_can_annotate(_live_project: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    actor = _FakeActor(_task(state=TaskState.CLAIMED, assignee=SUBJECT))
+    monkeypatch.setattr(tasks_ep, "_proxy", lambda _t: actor)
+    seen: list[dict[str, Any]] = []
+    client = TestClient(_app(allow=False, seen=seen))
+
+    r = client.post("/tasks/t1/import", content=_ipc([{"id": "a1", "shape_type": "bbox"}]))
+
+    assert r.status_code == 403, r.text
+    assert seen[0]["relation"] == "can_annotate"
+    assert actor.drafts == []

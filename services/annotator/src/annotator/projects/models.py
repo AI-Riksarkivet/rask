@@ -61,7 +61,11 @@ TERMINAL_TASK_STATES: frozenset[TaskState] = frozenset({TaskState.ACCEPTED, Task
 SkipPolicy = Literal["requeue_for_others", "requeue_for_me", "terminal"]
 ShapeType = Literal["bbox", "polygon", "mask", "keypoint", "polyline", "segment", "tag", "text"]
 ReviewAction = Literal["accepted", "fix_and_accept", "request_changes"]
-DraftOrigin = Literal["human", "model", "propagated"]
+#: Where a draft's contents came from. `import` is its own member rather than being folded into
+#: `model`: imported work may be a model's output OR a person's, made in another tool, and calling
+#: a human's labels "model" would put a false provenance claim onto every row they eventually
+#: publish. The distinction is the whole reason this field exists.
+DraftOrigin = Literal["human", "model", "propagated", "import"]
 MediaKind = Literal["image", "audio", "video"]
 
 
