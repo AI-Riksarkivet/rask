@@ -79,7 +79,7 @@ spec:
             # § D2 B8 — the publication head. Set ONLY when the catalog is actually emitting control
             # events, because an empty value disables the subscription: a deployment without the
             # emitter must register no route rather than subscribe to a topic nothing publishes on.
-            - { name: MEDALLION_CONTROL_PUBSUB, value: {{ required "pubsub.controlName must be set when catalog.controlEmit is on — an empty value silently disables the medallion publication head" .Values.pubsub.controlName | quote }} }
+            - { name: MEDALLION_CONTROL_PUBSUB, value: "{{ required "pubsub.controlName must be set when catalog.controlEmit is on — an empty value silently disables the medallion publication head" .Values.pubsub.controlName }}-{{ .Values.medallion.producer.daprAppId }}" }
             {{- end }}
             {{- if .Values.medallion.projectsEnabled }}
             # #84 per-tenant routing (opt-in): the catalog's warehouse-registry root. A `project`-carrying
