@@ -239,6 +239,16 @@ class Task(BaseModel):
     #: HERE. It used to capture the `template` and leave the taxonomy on the project, which is why
     #: `label="asdf"` submitted and published.
     ontology: LabelOntology = Field(default_factory=LabelOntology)
+    #: PRE-ANNOTATIONS attached at send — Label Studio's "prediction", and deliberately not a draft.
+    #: A bulk action ("label these five hundred pages as `letter`") produces suggestions, not work:
+    #: a draft is submittable and `save_draft` refuses a task that is not CLAIMED, so writing one as
+    #: the other would manufacture work drawn by nobody and walk it into review. Stored here instead,
+    #: on the task's own document, so it costs no extra write and cannot be mistaken for an answer.
+    #:
+    #: Server-written, like every other capture on this model: `send` validates each shape against
+    #: THIS project's taxonomy before seeding anything and stamps `source`, so a sender can neither
+    #: invent a class nor forge human provenance.
+    prediction: list[Shape] = Field(default_factory=list)
     #: Consensus v1: the replica GROUP this item belongs to (the group id shared by its siblings),
     #: or None for an ordinary item. Sibling ids are deterministic (`{group}-r{k}`), which is what
     #: lets the one-replica-per-annotator guard find them without an index.
