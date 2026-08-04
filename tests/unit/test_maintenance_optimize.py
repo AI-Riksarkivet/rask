@@ -121,3 +121,40 @@ def test_gc_does_not_reclaim_branch_referenced_data(tmp_path: Path) -> None:
     after = {p.name for p in data_dir.iterdir()}
     assert lance.dataset(uri).branches.list(), "GC destroyed the branch — it would delete branch data"
     assert before == after, f"GC reclaimed branch-referenced data files: {before - after}"
+
+
+def test_a_policy_can_skip_cleanup_while_still_compacting(tmp_path: Path) -> None:
+    """`cleanup_enabled=False` keeps the ENTIRE version history — a tier under legal hold, or one
+    whose time-travel window IS the product.
+
+    Compaction still runs, because it changes layout, not history. That is the whole reason these are
+    per-STEP flags rather than one all-or-nothing opt-out: the two operations have different risks and
+    an operator may legitimately want one without the other.
+    """
+    uri = _fragmented_indexed_dataset(tmp_path)
+    before = len(lance.dataset(uri).versions())
+
+    result = compact_one(uri, {}, timedelta(0), cleanup_enabled=False)
+
+    assert result.error is None, result.error
+    assert result.old_versions_removed == 0, "cleanup ran despite the policy disabling it"
+    assert len(lance.dataset(uri).versions()) >= before, "version history was reclaimed anyway"
+
+
+def test_cleanup_still_runs_by_default(tmp_path: Path) -> None:
+    """The negative of the test above. Without it, a gate that skipped cleanup UNCONDITIONALLY would
+    pass — which is the same class of mistake as a detector that refuses everything."""
+    uri = _fragmented_indexed_dataset(tmp_path)
+    result = compact_one(uri, {}, timedelta(0))
+    assert result.error is None, result.error
+    assert result.old_versions_removed > 0, "the default pass must still reclaim old versions"
+
+
+def test_a_policy_can_skip_index_optimization(tmp_path: Path) -> None:
+    """Skipping index optimization after a compaction leaves the new fragments unindexed until the
+    next enabled pass — queries fall back to a flat scan rather than returning wrong rows, which is
+    why it is a legal choice rather than a corrupting one."""
+    uri = _fragmented_indexed_dataset(tmp_path)
+    result = compact_one(uri, {}, timedelta(0), optimize_indices_enabled=False)
+    assert result.error is None, result.error
+    assert result.indices_optimized == 0

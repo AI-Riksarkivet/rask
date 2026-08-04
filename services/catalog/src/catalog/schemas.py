@@ -368,11 +368,17 @@ class CompactResult(BaseModel):
 
 
 class PolicyRequest(BaseModel):
-    """The maintenance policy for one table or namespace — every field optional-with-defaults.
+    """The maintenance policy for one table, namespace or project — every field optional-with-defaults.
 
     ``retention_days`` / ``retain_versions`` override the sweep's global old-version cleanup (Lance
     keeps tag-pinned versions regardless); ``compact_enabled=False`` opts the target out of maintenance
     entirely; ``compact_interval_hours`` bounds how often the sweep maintains it.
+
+    **Resolution is WINNER-TAKES-ALL, not field-by-field.** An exact table match shadows the namespace
+    record which shadows the project record — the winning record supplies EVERY field, and a field the
+    winner leaves unset falls to the sweep's global default rather than to the record it shadowed.
+    Any surface that displays an effective policy has to say so: an inherited value rendered
+    identically to a set one is how nobody can tell what is actually governing their data.
     """
 
     retention_days: int | None = Field(default=None, ge=1, le=3650)
@@ -381,7 +387,19 @@ class PolicyRequest(BaseModel):
     compact_interval_hours: int | None = Field(default=None, ge=1, le=8760)
     # #76 compaction target-size tuning: the target rows per compacted fragment the sweep passes to
     # `compact_files` (Lance's `delta.targetFileSize` analog). None → Lance's default fragment sizing.
+    #
+    # Sizing is a real tradeoff, not a knob to leave alone: manifest work scales with fragment COUNT,
+    # while conflict detection is PER-FRAGMENT — so a tier under many concurrent updates/deletes/
+    # merge_inserts (the annotator's write pattern) wants MORE, smaller fragments, and a scan-heavy
+    # tier wants fewer, larger ones. Per-tier is the point: bronze page images are ~1.8 MB rows,
+    # silver/gold features are not, and one value cannot be right for both.
     target_rows_per_fragment: int | None = Field(default=None, ge=1024, le=10_000_000)
+    # Per-OPERATION opt-outs. `compact_enabled` historically gated the whole pass; these split the
+    # ordered per-dataset pass into its three real steps, because they have different costs and
+    # different risks. The ORDER is fixed and not configurable — compaction obsoletes files, so
+    # cleanup must follow it, and index optimization must follow that.
+    cleanup_enabled: bool = True
+    optimize_indices_enabled: bool = True
 
     @model_validator(mode="after")
     def _not_empty(self) -> Self:

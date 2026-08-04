@@ -5881,13 +5881,24 @@ export interface components {
         };
         /**
          * PolicyRequest
-         * @description The maintenance policy for one table or namespace — every field optional-with-defaults.
+         * @description The maintenance policy for one table, namespace or project — every field optional-with-defaults.
          *
          *     ``retention_days`` / ``retain_versions`` override the sweep's global old-version cleanup (Lance
          *     keeps tag-pinned versions regardless); ``compact_enabled=False`` opts the target out of maintenance
          *     entirely; ``compact_interval_hours`` bounds how often the sweep maintains it.
+         *
+         *     **Resolution is WINNER-TAKES-ALL, not field-by-field.** An exact table match shadows the namespace
+         *     record which shadows the project record — the winning record supplies EVERY field, and a field the
+         *     winner leaves unset falls to the sweep's global default rather than to the record it shadowed.
+         *     Any surface that displays an effective policy has to say so: an inherited value rendered
+         *     identically to a set one is how nobody can tell what is actually governing their data.
          */
         PolicyRequest: {
+            /**
+             * Cleanup Enabled
+             * @default true
+             */
+            cleanup_enabled: boolean;
             /**
              * Compact Enabled
              * @default true
@@ -5895,6 +5906,11 @@ export interface components {
             compact_enabled: boolean;
             /** Compact Interval Hours */
             compact_interval_hours?: number | null;
+            /**
+             * Optimize Indices Enabled
+             * @default true
+             */
+            optimize_indices_enabled: boolean;
             /** Retain Versions */
             retain_versions?: number | null;
             /** Retention Days */

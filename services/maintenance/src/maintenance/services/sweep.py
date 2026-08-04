@@ -166,6 +166,11 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
                 effective_older_than,
                 retain_versions=retain_versions,
                 target_rows_per_fragment=target_rows,
+                # Per-STEP opt-outs from the resolved policy. Winner-takes-all, like every other
+                # field: the record that matched supplies these, and a record that leaves them unset
+                # gets the default (on) rather than inheriting from the record it shadowed.
+                cleanup_enabled=bool((policy or {}).get("cleanup_enabled", True)),
+                optimize_indices_enabled=bool((policy or {}).get("optimize_indices_enabled", True)),
             )
             if policy is not None and policy.get("compact_interval_hours") and result.error is None:
                 # Stamp cadence state only after a successful pass, so a failed tick retries next tick.

@@ -7467,8 +7467,13 @@
         "type": "object"
       },
       "PolicyRequest": {
-        "description": "The maintenance policy for one table or namespace \u2014 every field optional-with-defaults.\n\n``retention_days`` / ``retain_versions`` override the sweep's global old-version cleanup (Lance\nkeeps tag-pinned versions regardless); ``compact_enabled=False`` opts the target out of maintenance\nentirely; ``compact_interval_hours`` bounds how often the sweep maintains it.",
+        "description": "The maintenance policy for one table, namespace or project \u2014 every field optional-with-defaults.\n\n``retention_days`` / ``retain_versions`` override the sweep's global old-version cleanup (Lance\nkeeps tag-pinned versions regardless); ``compact_enabled=False`` opts the target out of maintenance\nentirely; ``compact_interval_hours`` bounds how often the sweep maintains it.\n\n**Resolution is WINNER-TAKES-ALL, not field-by-field.** An exact table match shadows the namespace\nrecord which shadows the project record \u2014 the winning record supplies EVERY field, and a field the\nwinner leaves unset falls to the sweep's global default rather than to the record it shadowed.\nAny surface that displays an effective policy has to say so: an inherited value rendered\nidentically to a set one is how nobody can tell what is actually governing their data.",
         "properties": {
+          "cleanup_enabled": {
+            "default": true,
+            "title": "Cleanup Enabled",
+            "type": "boolean"
+          },
           "compact_enabled": {
             "default": true,
             "title": "Compact Enabled",
@@ -7486,6 +7491,11 @@
               }
             ],
             "title": "Compact Interval Hours"
+          },
+          "optimize_indices_enabled": {
+            "default": true,
+            "title": "Optimize Indices Enabled",
+            "type": "boolean"
           },
           "retain_versions": {
             "anyOf": [

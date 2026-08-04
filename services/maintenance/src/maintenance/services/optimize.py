@@ -72,9 +72,18 @@ def compact_one(
     older_than: timedelta | None,
     retain_versions: int | None = None,
     target_rows_per_fragment: int | None = None,
+    *,
+    cleanup_enabled: bool = True,
+    optimize_indices_enabled: bool = True,
 ) -> DatasetResult:
-    """Compact small fragments + GC old versions for one dataset. Never raises — a per-dataset failure is
-    captured in ``error`` so one bad dataset can't abort the whole maintenance pass."""
+    """One ORDERED maintenance pass over one dataset. Never raises — a per-dataset failure is captured
+    in ``error`` so one bad dataset can't abort the whole pass.
+
+    The order is compact → cleanup → optimize indices, and it is FIXED, not configurable: compaction
+    obsoletes files, so cleanup must follow it, and index optimization must follow that. The two
+    ``*_enabled`` flags let a policy skip a STEP without reordering them — an operator who wants
+    compaction but not version reclamation (a tier under legal hold, say) can have exactly that.
+    """
     try:
         ds = lance.dataset(uri, storage_options=storage_options)
     except Exception as exc:
@@ -107,12 +116,22 @@ def compact_one(
         # freshly-written row isn't in the index → vector/filter queries either miss it or fall back to a
         # flat scan. Index optimize is a maintenance op exactly like compaction (Lance does it distributed
         # via lance-ray; here single-process). Idempotent. Own guard so a no-index dataset can't fail it.
+        if not optimize_indices_enabled:
+            # A policy may skip a STEP; it may not reorder them. Skipping index optimization after a
+            # compaction leaves the new fragments unindexed until the next enabled pass — queries fall
+            # back to a flat scan rather than returning wrong rows, which is why this is a legal choice.
+            log.info("optimize_indices_disabled_by_policy", extra={"uri": uri})
         try:
-            ds.optimize.optimize_indices()
-            # Count USER indices only: defer_index_remap creates the ``__lance_frag_reuse`` SYSTEM index,
-            # which would otherwise report every ever-compacted dataset as "index maintained" forever —
-            # phantom signal in the reclaim metrics (review 2026-07-10, verified on pylance 8.0.0).
-            result.indices_optimized = len([ix for ix in ds.list_indices() if not ix["name"].startswith("__")])
+            if optimize_indices_enabled:
+                ds.optimize.optimize_indices()
+                # Count USER indices only: defer_index_remap creates the ``__lance_frag_reuse`` SYSTEM index,
+                # which would otherwise report every ever-compacted dataset as "index maintained" forever —
+                # phantom signal in the reclaim metrics (review 2026-07-10, verified on pylance 8.0.0).
+                # Counted INSIDE the branch: the metric names work that was DONE, so a skipped step
+                # must report 0 rather than the number of indices that happen to exist. Reporting a
+                # count for a step that did not run is the same dishonesty as a toast built from the
+                # request instead of the response.
+                result.indices_optimized = len([ix for ix in ds.list_indices() if not ix["name"].startswith("__")])
         except Exception as exc:
             log.warning("optimize_indices_skipped", extra={"uri": uri, "error": str(exc)})
         # error_if_tagged_old_versions=False: tagged versions are EXEMPT from GC (they survive until the tag
@@ -122,9 +141,15 @@ def compact_one(
         # retain_versions (#50 policy override): with ``older_than=None`` it is pure count-based
         # retention ("keep exactly the last N"); when both are set, a version must clear *both* bounds
         # to be removed. Never pass both as None — pylance then substitutes a 14-day default.
-        stats: Any = ds.cleanup_old_versions(older_than=older_than, retain_versions=retain_versions, error_if_tagged_old_versions=False)
-        result.old_versions_removed = int(getattr(stats, "old_versions", 0))
-        result.bytes_removed = int(getattr(stats, "bytes_removed", 0))
+        # `cleanup_enabled=False` keeps the ENTIRE version history: a tier under legal hold, or one
+        # whose time-travel window is the product. Compaction may still run — it changes layout, not
+        # history — so this is a real per-step choice rather than an all-or-nothing opt-out.
+        if cleanup_enabled:
+            stats: Any = ds.cleanup_old_versions(older_than=older_than, retain_versions=retain_versions, error_if_tagged_old_versions=False)
+            result.old_versions_removed = int(getattr(stats, "old_versions", 0))
+            result.bytes_removed = int(getattr(stats, "bytes_removed", 0))
+        else:
+            log.info("cleanup_disabled_by_policy", extra={"uri": uri})
     except Exception as exc:
         result.error = f"maintain: {exc}"
         result.error_type = type(exc).__name__
