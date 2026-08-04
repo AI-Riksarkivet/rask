@@ -18,13 +18,19 @@ import json
 from typing import Any
 
 import pytest
+from medallion.core.config import MedallionSettings
 from medallion.services.publication_trigger import handle_publication
 
 
-class _Settings:
-    pubsub = "lineage-pubsub"
-    bronze_topic = "medallion.bronze"
-    publish_timeout_seconds = 5.0
+def _Settings() -> MedallionSettings:  # noqa: N802 — kept call-compatible with the stub it replaces
+    """The REAL settings, not a hand-rolled stub — that stub is why the lane-name bug shipped.
+
+    It carried exactly three attributes (`pubsub`, `bronze_topic`, `publish_timeout_seconds`), so the
+    head could not read `bronze_namespace` even in principle, and the tests below happily asserted the
+    CATALOG identifier was the lane name. A stub that cannot express the thing under test will always
+    agree with whatever the code does.
+    """
+    return MedallionSettings()
 
 
 class _Dapr:
@@ -53,7 +59,10 @@ async def test_a_publication_triggers_the_cascade_WITH_the_range() -> None:
     assert len(dapr.published) == 1
     trigger = dapr.published[0]
     assert (trigger["from_version"], trigger["to_version"]) == (3, 4)
-    assert trigger["dataset"] == "lane$pages"
+    # The LANE, not the catalog identifier. `table:lane$pages` is tenant `lane`, table `pages`; the
+    # medallion lane for it is `bronze$pages`, the same string every tenant's publication produces.
+    assert trigger["dataset"] == "bronze$pages"
+    assert trigger["namespace"] == "bronze"
 
 
 @pytest.mark.asyncio
@@ -144,3 +153,57 @@ async def test_the_trigger_carries_the_CATALOG_VENDED_location() -> None:
     await handle_publication(dapr, _Settings(), _event(from_version=1, to_version=2, location="s3://lane-wh/abc123_lane$pages"))
 
     assert dapr.published[0]["from_uri"] == "s3://lane-wh/abc123_lane$pages"
+
+
+# ── the two naming systems, kept apart ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_the_lane_name_carries_NO_tenant() -> None:
+    """The bug this file previously asserted as correct.
+
+    The catalog names a table `<tenant>$<table>`; the medallion names a lane `<tier>$<lane>`, and
+    `transform.py:109` compares the arrived name against the RAW `settings.from_dataset`, documenting
+    that "the trigger carries the unqualified name for every tenant". Publishing the catalog
+    identifier meant `acme$events` was compared against `bronze$events`, so EVERY tenant's publication
+    was dropped as another lane's — and the tenant leaked into a field that must be tenant-free.
+
+    It appeared to work exactly once, in a cluster test whose tenant was NAMED `bronze` and whose
+    table was named `events`: the two systems' strings collided and nothing was translated at all.
+    Hence a tenant here that could never collide.
+    """
+    dapr = _Dapr()
+
+    await handle_publication(dapr, _Settings(), _event(object_id="table:acme$events", from_version=1, to_version=2))
+
+    trigger = dapr.published[0]
+    assert "acme" not in trigger["dataset"], f"the tenant leaked into the lane name: {trigger['dataset']}"
+    assert trigger["dataset"] == "bronze$events"
+    assert trigger["project"] == "acme", "the tenant must still travel — separately, in `project`"
+
+
+@pytest.mark.asyncio
+async def test_the_lane_name_is_EXACTLY_what_a_mover_compares_against() -> None:
+    """Couples the two sides in one assertion instead of restating a literal on each.
+
+    A mover's discriminator is `arrived != settings.from_dataset`, and a deployment sets that from
+    `bronze_dataset`. Asserting the produced name equals that setting means a change to either side
+    fails here rather than in a cluster, silently, as a DROP nobody sees.
+    """
+    dapr = _Dapr()
+    settings = _Settings()
+
+    await handle_publication(dapr, settings, _event(object_id="table:acme$events", from_version=1, to_version=2))
+
+    assert dapr.published[0]["dataset"] == settings.bronze_dataset
+
+
+@pytest.mark.asyncio
+async def test_a_DIFFERENT_table_is_a_DIFFERENT_lane() -> None:
+    """Lanes are per-table, not one global lane — the page lane and the events lane are distinct
+    movers subscribed to the same topic, and each must see only its own."""
+    dapr = _Dapr()
+
+    await handle_publication(dapr, _Settings(), _event(object_id="table:acme$pages", from_version=1, to_version=2))
+
+    assert dapr.published[0]["dataset"] == "bronze$pages"
