@@ -6,7 +6,7 @@ proves the refusal."*
 
 The refusal is the whole gate. Both guarantees are creation-time-only — setting
 `enable_stable_row_ids` afterwards is a documented silent no-op
-(`lance_docs/file_format.md:4011-4013`) — so a dataset created without them works perfectly, reports
+(`file_format.md:4011-4013 + guide.md:228-229`) — so a dataset created without them works perfectly, reports
 green, and fails months later in someone else's job as a mover that duplicates rows or a
 `source_rowid` that resolves to the wrong page. There is no symptom at the moment the mistake is
 made, which is exactly why it needs a gate rather than a convention.

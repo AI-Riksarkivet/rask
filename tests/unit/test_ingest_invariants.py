@@ -85,9 +85,14 @@ def _offenders(pattern: re.Pattern[str], allowed: set[str]) -> list[str]:
 def test_i4_only_the_lander_writes_lance() -> None:
     """I4: no Lance write verb outside the lander.
 
-    Two writers means two commit paths, and Lance's concurrency is three-valued — an Append against
-    a stale read_version is retryable, an Overwrite against a concurrent Append is NOT
-    (`lance_docs/file_format.md:4825-4833`). One writer is how that stays a non-issue.
+    Two writers means two commit paths. Append is designed to be compatible with almost everything,
+    including itself, and conflicts with exactly three operations — Overwrite, Restore and
+    UpdateMemWalState (`lance_docs/file_format.md:4825-4833`); conflicts elsewhere are described as
+    rebaseable or retryable (`file_format.md:4853`). One writer is how all of that stays a non-issue.
+
+    An earlier version of this docstring called the model "three-valued" and attributed that to
+    4825-4833, which says no such thing — the range is a list of operations, not a taxonomy of
+    retryability.
     """
     offenders = _offenders(WRITE_VERBS, LANDER_ALLOWED)
     assert offenders == [], (
@@ -188,3 +193,41 @@ def test_a13_no_completion_polling_survives() -> None:
         if ".venv" not in path.parts and "__pycache__" not in path.parts and banned.search(path.read_text(encoding="utf-8"))
     ]
     assert offenders == [], f"completion polling reappeared in: {offenders}"
+
+
+# ── citations must RESOLVE ────────────────────────────────────────────────────────────
+
+
+def test_every_lance_docs_citation_points_at_a_real_line() -> None:
+    """A `doc.md:NNNN-NNNN` citation must at least name a range the file HAS.
+
+    This cannot check that the range says what the comment claims — only a person reading both can,
+    and doing so found three wrong out of five: a two-flag claim attributed to a range covering one
+    flag, a "three-valued concurrency" taxonomy attributed to a list of operations, and an
+    "unenforced primary key" attributed to a feature this plane never opted into. What it CAN catch
+    is the cheaper rot: a citation surviving a doc update that moved or shortened the file, which is
+    how a precise-looking reference quietly starts pointing at nothing.
+
+    Skips when the docs are absent rather than failing — they are a checked-in copy, not a build
+    dependency, and a contributor without them should not see a red suite.
+    """
+    docs = REPO / "lance_docs"
+    if not docs.is_dir():
+        pytest.skip(f"no lance_docs at {docs} — clone it there to run this gate")
+
+    citation = re.compile(r"\b([a-z_]+\.md):(\d+)(?:-(\d+))?")
+    lengths = {path.name: len(path.read_text(encoding="utf-8").splitlines()) for path in docs.glob("*.md")}
+
+    broken: list[str] = []
+    checked = 0
+    for path in [*_py_files(INGEST_SRC), *sorted((REPO / "tests" / "unit").glob("*.py"))]:
+        for name, lo, hi in citation.findall(path.read_text(encoding="utf-8")):
+            if name not in lengths:
+                continue
+            checked += 1
+            last = int(hi or lo)
+            if int(lo) < 1 or last > lengths[name]:
+                broken.append(f"{path.name} cites {name}:{lo}-{hi or lo} but that file has {lengths[name]} lines")
+
+    assert checked > 0, "no citations found — this gate is checking nothing"
+    assert broken == [], "citations pointing outside their file:\n  " + "\n  ".join(broken)

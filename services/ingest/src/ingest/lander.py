@@ -39,7 +39,7 @@ from pydantic import BaseModel
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-# Creation-time-only, and silent no-ops if set later (lance_docs/file_format.md:4011-4013) — which is
+# Creation-time-only, and silent no-ops if set later (file_format.md:4011-4013 + guide.md:228-229) — which is
 # why gate A14 makes the catalog refuse a governed dataset created without them. CDF (D1) and every
 # `source_rowid` reference in silver/gold (D2) depend on stable row ids existing from version 1.
 CREATION_FLAGS = {"data_storage_version": "2.2", "enable_stable_row_ids": True}

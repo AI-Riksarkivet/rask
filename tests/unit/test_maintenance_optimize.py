@@ -1,7 +1,7 @@
 """Real-Lance regression tests for the compaction core (`compact_one`) — local filesystem, no S3.
 
 Pins the §4 change: ``compact_files(defer_index_remap=True)`` (Fragment Reuse Index — compaction and
-index maintenance "no longer conflict", lance_docs/guide.md:3150) followed IMMEDIATELY by
+index maintenance "no longer conflict", lance_docs/guide.md:3160) followed IMMEDIATELY by
 ``optimize_indices()`` — the exact shipped sequence in ``compact_one`` — must leave the dataset's
 indices present and the data fully queryable. Drives the SHIPPED function on a real dataset (§0: test
 the shipped composition, not a re-implementation), plus the error-prefix contract the sweep's FAIL

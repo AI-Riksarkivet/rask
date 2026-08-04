@@ -58,7 +58,7 @@ class LocalCatalog:
         """Create the dataset EMPTY if absent.
 
         The creation-time flags (`enable_stable_row_ids`, `data_storage_version=2.2`) are set here or
-        never: they are silent no-ops afterwards (`lance_docs/file_format.md:4011-4013`), and CDF
+        never: they are silent no-ops afterwards (`file_format.md:4011-4013 + guide.md:228-229`), and CDF
         plus every silver `source_rowid` reference depends on them existing from version 1.
         """
         if _is_object_store(uri):
@@ -103,9 +103,14 @@ def assert_creation_contract(uri: str) -> None:
       (`lance_docs/file_format.md:4011-4013`). D1's change-data-feed reads `_row_created_at_version`,
       and every silver/gold row references bronze through `source_rowid`; without stable ids both
       rest on identifiers that move under compaction.
-    * **an `id` column** — the unenforced primary key (`file_format.md:2887-2910`) that the
-      merge-on-write path converges on. Without it a redelivered hop appends instead of merging,
-      and E2's idempotency claim is simply false.
+    * **an `id` column** — the key the merge-on-write path converges on. Without it a redelivered
+      hop appends instead of merging, and E2's idempotency claim is simply false.
+
+      NOT an "unenforced primary key" in Lance's sense, though an earlier comment here cited
+      `file_format.md:2887-2910` as if it were. That feature is opt-in through field metadata
+      (`lance-schema:unenforced-primary-key`), which this plane sets nowhere — so `id` is an ordinary
+      column the estate agrees to merge on, and Lance validates no uniqueness for us. Declaring it
+      properly is open work; claiming it in a comment was not the same thing.
 
     (The verb itself is deliberately not named here: I4's gate is a grep over these files, and
     prose naming a write verb is indistinguishable to it from a second writer. Bluntness is the
