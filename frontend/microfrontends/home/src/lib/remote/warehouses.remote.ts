@@ -109,9 +109,20 @@ export const fetchProject = query(
 		parsed(await catalogJSON(`/v1/projects/${enc(project)}`), ProjectSchema),
 );
 
-/** Provision a warehouse — the create that MINTS a project when its `project` is new. Project-admin
- *  gated by the catalog (can_create_warehouse); a brand-new project has no tuples, so the
- *  estate-admin door opens once and the catalog seeds the caller as the new project's admin.
+/** Register a project — `POST /v1/projects`. The FIRST rung of the hierarchy, and it must be climbed
+ *  explicitly: the catalog refuses a warehouse whose project has no registry record with a 404 that
+ *  says so verbatim ("A warehouse must belong to an existing project (project > warehouse > namespace
+ *  > table) — create it first"). A warehouse create no longer mints its project as a side effect, so
+ *  anything provisioning a NEW project calls this first. */
+export const createProject = command(
+	v.object({ id: v.string(), name: v.optional(v.nullable(v.string())) }),
+	async (body): Promise<ApiResult<unknown>> =>
+		catalogJSON('/v1/projects', { method: 'POST', body: JSON.stringify(body) }),
+);
+
+/** Provision a warehouse under an EXISTING project. Project-admin gated by the catalog
+ *  (can_create_warehouse); a brand-new project has no tuples, so the estate-admin door opens once and
+ *  the catalog seeds the caller as the new project's admin.
  *
  *  No `.refresh()` here, unlike the lakehouse original: the gallery this create sits on is a page
  *  LOAD (`$lib/gallery`), not a `query()`, so there is nothing to single-flight — the dialog's

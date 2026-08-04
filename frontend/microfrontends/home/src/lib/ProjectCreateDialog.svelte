@@ -1,15 +1,17 @@
 <script lang="ts">
-	// Project creation — an estate-admin flow that COMPOSES existing APIs: creating the first (work)
-	// warehouse under a new project name creates the project implicitly; an optional second create with
+	// Project creation — an estate-admin flow that COMPOSES existing APIs: it registers the project,
+	// then provisions its first (work) warehouse under it; an optional second create with
 	// serving:"gold" provisions the per-tenant gold serving warehouse (DECISIONS "Medallion tiers"); the
 	// initial admin grant is one raw FGA tuple written through the shared `writeTuple` remote command
 	// (estate-admin gated at the catalog, like /v1/events). Every step toasts success/failure honestly —
 	// a partial outcome (work warehouse up, gold or grant failed) is NAMED, never rolled into a fake
 	// success.
 	//
-	// The first create is what MINTS the tenant, and the catalog seeds the caller as the new project's
-	// `admin` on that very call (endpoints/warehouses.py — a brand-new project has no tuples, so the
-	// estate-admin door opens once and then hands the project to its creator). So the gold create and
+	// Registering the project is what MINTS the tenant, and the catalog seeds the caller as its `admin`
+	// on that call (a brand-new project has no tuples, so the estate-admin door opens once and then
+	// hands the project to its creator). The warehouse create no longer mints a project as a side
+	// effect — it did until the project registry landed, and assuming it still does is exactly how this
+	// dialog came to provision nothing on every project after the first. So the gold create and
 	// every later project-scoped op run on the creator's OWN project rung, and the admin field below is
 	// for granting a SECOND admin (or handing the tenant to someone else) — never the only thing
 	// standing between the new project and being ungovernable.
@@ -19,7 +21,7 @@
 	// the main menu, not inside one project's catalog.
 	import { Dialog } from '@rask/ui/dialog';
 	import { toast } from 'svelte-sonner';
-	import { createWarehouse } from '$lib/remote/warehouses.remote';
+	import { createProject, createWarehouse } from '$lib/remote/warehouses.remote';
 	// The grant goes through the SAME remote command the FGA workbench writes with — one write door,
 	// so every raw tuple write is validated, audited, control-event-emitting and single-flight alike.
 	import { writeTuple } from '$lib/remote/access.remote';
@@ -86,7 +88,18 @@
 		busy = true;
 		error = null;
 		try {
-			// 1. The work warehouse — its `project` field is what brings the project into existence.
+			// 1. The project itself. It must exist BEFORE any warehouse names it: the catalog enforces
+			// the hierarchy's first rung and answers a warehouse whose project has no registry record
+			// with a 404 that spells out the fix. A warehouse create does NOT mint its project as a
+			// side effect — it did once, and this dialog was written against that behaviour, which is
+			// why creating a second project silently provisioned nothing.
+			const made = await createProject({ id: project, name: project });
+			if (!made.ok) {
+				error = failText(`registering project ${project}`, made.status, made.detail);
+				toast.error(error);
+				return;
+			}
+			// 2. The work warehouse, now that its parent exists.
 			const first = await createWarehouse({ id: wh, project, bucket: whBucket.trim() || null });
 			if (!first.ok) {
 				// No confirmed creation (a timeout may still land server-side — failText says so) — stay
@@ -96,7 +109,7 @@
 				return;
 			}
 			const partials: string[] = [];
-			// 2. Optional gold serving warehouse (a second, serving-classed record).
+			// 3. Optional gold serving warehouse (a second, serving-classed record).
 			const gold = goldId.trim();
 			if (gold) {
 				const res = await createWarehouse({
@@ -111,8 +124,8 @@
 					);
 				}
 			}
-			// 3. Optional extra admin — a raw admin tuple on the new project object, ON TOP of the one the
-			// catalog already seeded for the caller during step 1. Left empty, the project is still
+			// 4. Optional extra admin — a raw admin tuple on the new project object, ON TOP of the one the
+			// catalog already seeded for the caller when it registered the project. Left empty, the project is still
 			// governable (by its creator); filled, it hands a co-admin (or a successor) the same rung.
 			const adminUser = admin.trim();
 			if (adminUser) {
@@ -148,8 +161,8 @@
 	<Dialog.Content>
 		<Dialog.Title>New project</Dialog.Title>
 		<Dialog.Description>
-			Provisioning the first warehouse under a new project name creates the project and makes you its
-			admin; the optional serving warehouse hosts the gold tier in its own bucket.
+			Registers the project, makes you its admin, and provisions its first warehouse under it; the
+			optional serving warehouse hosts the gold tier in its own bucket.
 		</Dialog.Description>
 		<form
 			class="form"
