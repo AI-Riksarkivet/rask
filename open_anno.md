@@ -18,42 +18,42 @@ the owner's to design.
 
 ---
 
-## #39 — Import (shape DECIDED)
+## #39 — Import — **LANDED**
 
-**Annotation import**, not media import: bring EXISTING labels in so work started elsewhere can be
-continued in rask.
+`POST /tasks/{id}/import` accepts **Arrow IPC matching the annotations schema**, and nothing else.
 
-**ONE format — the canonical Arrow schema we already have.** Not a parser zoo.
+- **Backend** — `annotator/projects/imports.py` decodes, normalises shape names through the canonical
+  vocabulary, and refuses against the task's CAPTURED ontology. 29 tests in
+  `tests/unit/test_annotation_import.py`, 12 endpoint tests in `test_task_endpoints.py`.
+- **Converter** — `scripts/coco_to_annotations.py` + 11 tests. The proof that the division holds:
+  the converter translates and does not judge; the service judges and does not translate.
+- **UI** — `ImportButton.svelte` on a CLAIMED task's row, posting bytes to the zone's
+  `+server.ts` import route and showing the server's refusal verbatim.
 
-The first version of this section proposed accepting COCO, YOLO and Label Studio JSON directly. That
-was wrong, and the owner said so: the estate ALREADY has a canonical annotation format —
-`annotations/schema.py`'s `EMPTY_SCHEMA` — and it is the contract the canvas reads, the draft
-validates and the publish writes. Three parsers inside the service would be three things that rot,
-each with its own edge cases and tests, to produce something the schema already describes.
+Decisions, all made against the codebase's precedent:
 
-So the endpoint accepts **Arrow IPC matching the annotations schema**. Converting COCO or YOLO into
-it is a `scripts/` concern — the repo's own convention for one-shot tooling — replaceable without
-touching the service, and testable on its own.
+- Lands in the **DRAFT**, so an imported label reaches the table through submit → accept → publish and
+  earns the same provenance as a drawn one. The draft has no `status` column (`status` is an
+  annotations-table field), so "not drawn here" is `source="import"` plus a new `DraftOrigin` member.
+- **`import` is its own origin**, not folded into `model` — imported work may be a person's, made in
+  another tool, and calling it "model" is a false provenance claim on every published row.
+- **APPENDS**, never replaces. A whole-draft replace matches how `save_draft` stores and would
+  silently destroy existing hand-drawn work with no undo anywhere in the actor.
+- **Fails CLOSED**, unlike the assist endpoint beside it, which fails open so an unreadable rule never
+  loses an interactive prediction someone is watching for. An import is a bulk write nobody is
+  watching. One bad label refuses the WHOLE import.
+- Only the **membership** half of the ontology contract runs at import (`membership_violation`,
+  extracted from `validate_against_ontology` and shared). The completeness half — every required
+  class present — is correct at submit and wrong at import, which is partial work by definition.
 
-Notes for whoever builds it:
+**Found and fixed on the way in:** the draft endpoint dropped every relation. `SaveDraftRequest`
+never declared `links`, and pydantic ignores unknown keys, so the client sent them, the actor was
+built to store them, and the endpoint between forwarded shapes alone. Invisible in a live drive —
+canvas links live in client state and only vanish on reload.
 
-- **Bytes, not a table reference.** The point of this task is data NOT yet in the lakehouse, so the
-  transport is Arrow IPC on a `+server.ts` route, matching the rule the estate already follows for
-  bulk payloads. A governed Lance table is a different (easier) case and needs no import at all.
-- **The landing target is the task's DRAFT** (`Draft.shapes` + `Draft.links`), not the annotations
-  table. An imported label is unreviewed work, and the draft is where unreviewed work lives; it
-  reaches the table through the ordinary submit/accept/publish path, so an imported label earns the
-  same provenance as a drawn one.
-- **`status` is `prediction`, never `accepted`.** Same stance as an assist result: importing is not
-  reviewing.
-- **The task's captured ontology is the contract.** A label outside the taxonomy must be refused AT
-  IMPORT, naming the label — not discovered at submit after someone has reviewed it.
-- **Shape types normalise through `@rask/labeling/shape-types`.** Even one format needs this: rows
-  written by older tooling carry `rectangle`, a name neither side accepts.
-
----
-
----
+**Pinned twice, because it bit twice:** `pa.Table.from_pylist` infers its schema from the FIRST row,
+so a heterogeneous row list silently drops every column row one happens not to carry. Guidance for
+`scripts/` converters: emit the canonical schema explicitly.
 
 ## #27 — Canvas tool placement — **LANDED**
 
