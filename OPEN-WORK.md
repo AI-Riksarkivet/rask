@@ -972,7 +972,7 @@ a create path. Until then `/lakehouse/catalog/projects` and the home picker can 
 the gateway routes `/api/ray` + `/api/serve` to dapr app-id `compute` unconditionally
 (`gateway/__init__.py:78,103,105`). But the Deployment renders only under `singleTenant.enabled`
 (`chart/templates/fleet.yaml:12`), which defaults false and is set by no shipped path — not
-`make k3s-up`, not `values-prod.yaml`, not the Tiltfile.
+`make k3s-up`, not `values-prod.yaml`.
 
 Result: `/api/ray/*` answers `ERR_DIRECT_INVOKE: failed to resolve compute-dapr…` on every default
 install. `Makefile:406` prints that exact route as the post-install check, and `dev-frontends-k3s`

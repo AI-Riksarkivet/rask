@@ -42,7 +42,7 @@ DATASET_ID="${RASK_SEED_DATASET:-$(basename "$MEDIA_DB" .lance)}"
 echo "  dataset id from the deployment: $DATASET_ID"
 
 # The SAME lesson, applied to the path: the chart's default corpus mode is emptyDir, and the only
-# thing in the repo that sets hostPath is the Tiltfile. Writing a perfect fixture into a directory
+# hostPath must be set explicitly. Writing a perfect fixture into a directory
 # no pod mounts is a silent no-op that ends with this script printing "seeded" — so ask the
 # deployment what it actually mounts, and refuse when it disagrees with where we are about to write.
 MOUNTED_HOST_PATH="$(kubectl get deployment rask-viewer -n "$NS" -o jsonpath='{range .spec.template.spec.volumes[*]}{.hostPath.path}{"\n"}{end}' | sed '/^$/d' | head -1)"
@@ -186,7 +186,7 @@ RASK_SEED_DATASET="$DATASET_ID" "$REPO_ROOT/scripts/seed_labeling_task.sh"
 say "5/5 VERIFY — ask the services whether they can actually see it"
 # A Job that reached Complete, three rollouts that finished and two curls that did not crash are
 # not evidence: a malformed descriptor, a wrong dataset name and an unmounted corpus all print the
-# same banner. This repo's own rule ("SSR returning 200 is not working"; `make tilt-verify` is not
+# same banner. This repo's own rule ("SSR returning 200 is not working" is not
 # optional ceremony) applies to its seeder too. Nothing below is reachable unless a service opened
 # the fixture we just wrote.
 VERIFY_FAILED=0

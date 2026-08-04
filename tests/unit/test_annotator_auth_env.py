@@ -23,6 +23,11 @@ def _render(**sets: str) -> list[dict]:
     if not shutil.which("helm"):  # pragma: no cover - CI installs helm
         pytest.skip("helm not on PATH")
     cmd = ["helm", "template", "rask", str(REPO / "chart")]
+    # The chart REQUIRES an image registry unless the images are side-loaded into the node
+    # (`rask.image` in _helpers.tpl): a bare `<component>:<tag>` is `docker.io/library/...`
+    # and ImagePullBackOffs on any real cluster. These tests render the LOCAL shape, which is
+    # the side-loaded one, so they opt in the same way `make k3s-up` does.
+    cmd += ["--set", "image.localImages=true"]
     for key, value in sets.items():
         cmd += ["--set", f"{key.replace('__', '.')}={value}"]
     out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout

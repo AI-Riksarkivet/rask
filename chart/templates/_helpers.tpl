@@ -762,13 +762,11 @@ injected daprd sidecar or the busybox wait-age initContainer (which legitimately
 securityContext:
   runAsNonRoot: true
   allowPrivilegeEscalation: false
-  {{/* dev.reload implies Tilt's live_update, which SYNCS FILES INTO THE RUNNING CONTAINER —
-       impossible against a read-only rootfs. Measured before this: `touch` inside the pod
-       returned "Read-only file system", so every sync silently no-opped and hot reload could
-       never work no matter how correct the reload flags were. Relaxed ONLY when dev.reload is
-       set (dev-only, never production), so the hardened default is untouched for real deploys
-       and tests/unit/test_invariants.py still sees readOnlyRootFilesystem true. */}}
-  readOnlyRootFilesystem: {{ if .Values.dev.reload }}false{{ else }}{{ .Values.security.readOnlyRootFilesystem }}{{ end }}
+  {{/* UNCONDITIONAL. This used to be relaxed to false whenever `dev.reload` was set, which existed
+       solely so Tilt's live_update could write into a running container. Tilt is gone (2026-08-04),
+       and with it the only reason this chart could ever be told to unlock a container's filesystem.
+       A chart a reconciler applies should not carry a values flag that weakens it. */}}
+  readOnlyRootFilesystem: {{ .Values.security.readOnlyRootFilesystem }}
   capabilities:
     drop: ["ALL"]
   seccompProfile:
@@ -787,35 +785,44 @@ is on; harmless (an unused tmpfs) when off, so unconditionally included keeps th
 {{- end -}}
 
 {{/*
-lance.devReloadArgs — uvicorn hot-reload flags for the Tilt loop. Call with (list $root $pkg)
-where $pkg is the service's own top-level package.
+A FULLY-RESOLVED image reference for a first-party component. Call:
+  include "rask.image" (list $root "gateway")
 
-Emits NOTHING unless dev.reload is set, so production manifests are byte-identical.
+GITOPS IS THE FIRST-CLASS CONSUMER of this chart, and that decides the two rules below.
 
-The reload dirs are the site-packages the images actually install into. They previously read
-/app/packages and /app/components, which stopped existing at the src-layout rewrite (and
-`components` was renamed away before that) — uvicorn would have watched two non-existent
-directories and reloaded on nothing. Verified in-cluster: `python -c "import gateway"` resolves
-under /opt/venv/lib/python3.13/site-packages.
+1. `image.repository` is REQUIRED. It used to default to "", which rendered a BARE `gateway:dev` —
+   and a bare name is not a local image, it is `docker.io/library/gateway:dev`. That only ever
+   appeared to work because `make k3s-import` had side-loaded the tag into the node's containerd,
+   so the kubelet never had to pull. A reconciler has no such side channel: every pod
+   ImagePullBackOffs, and the error blames Docker Hub rather than the missing setting. Measured
+   here 2026-08-04, on `controlplane:dev` and `compute:dev`, after a `helm upgrade` reset every
+   Deployment to that default.
 
-Watch the service's own package plus dev.reloadKits, NOT all of site-packages: the latter means
-an inotify watch per installed dependency, which is slow and can exhaust the watch limit.
+   Side-loaded images are still supported — but as an EXPLICIT opt-in (`image.localImages: true`),
+   never as the fallback you reach by forgetting.
 
-Every --reload-dir MUST exist in EVERY image this renders for: uvicorn does not skip a missing
-one, it refuses to start ("Error: Invalid value for '--reload-dir': Path ... does not exist"),
-so one absent directory crashloops the service. lineage_kit was in this list and is absent from
-the gateway image, which crashlooped the ingress. Hence reloadKits is a value, defaulting to the
-one package every first-party image is guaranteed to carry (service_kit — every service is built
-on its make_service_app factory).
+2. `image.digest` wins over `image.tag` when set. A tag is a mutable pointer; GitOps wants the
+   deployed artifact to be exactly what the commit says, and a digest is the only reference that
+   cannot drift under it. Setting both is not an error — the digest simply wins, so an automation
+   can keep writing a human-readable tag alongside it.
 */}}
-{{- define "lance.devReloadArgs" -}}
-{{- $root := index . 0 -}}
-{{- $pkg := index . 1 -}}
-{{- if $root.Values.dev.reload }}
-- "--reload"
-- "--reload-dir=/opt/venv/lib/python3.13/site-packages/{{ $pkg }}"
-{{- range $root.Values.dev.reloadKits }}
-- "--reload-dir=/opt/venv/lib/python3.13/site-packages/{{ . }}"
-{{- end }}
-{{- end }}
+{{- define "rask.image" -}}
+{{- $root := index . 0 -}}{{- $name := index . 1 -}}
+{{- /* Optional 3rd element: an explicit tag that beats image.tag — the per-zone `tag` on a
+       frontend.apps entry, which is the only thing a zone boundary actually buys (independent
+       deploy). A digest still wins over it, so a pinned reconciler is never overridden by a tag. */ -}}
+{{- $override := "" -}}{{- if gt (len .) 2 -}}{{- $override = index . 2 -}}{{- end -}}
+{{- $i := $root.Values.image -}}
+{{- $digest := $i.digest | default "" -}}
+{{- if $i.localImages -}}
+{{- /* Side-loaded: a bare name the kubelet must already hold. Never valid for a remote cluster. */ -}}
+{{- printf "%s:%s" $name (required "image.tag must be set" ($override | default $i.tag)) -}}
+{{- else -}}
+{{- $repo := required "image.repository must be set to a registry (e.g. ghcr.io/<org>/<repo>) — or set image.localImages=true if the images are side-loaded into the node (make k3s-import). A bare name resolves to Docker Hub and will ImagePullBackOff." $i.repository -}}
+{{- if $digest -}}
+{{- printf "%s/%s@%s" $repo $name $digest -}}
+{{- else -}}
+{{- printf "%s/%s:%s" $repo $name (required "image.tag must be set (a release tag in prod; `dev` locally), or set image.digest" ($override | default $i.tag)) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}

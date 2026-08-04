@@ -22,16 +22,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Toolchain rules
 
-- **DAGGER BUILDS EVERY IMAGE. NOT DOCKER. This is not negotiable.** Local, CI and Tilt all reach
+- **DAGGER BUILDS EVERY IMAGE. NOT DOCKER. This is not negotiable.** Local and CI both reach
   BuildKit through `dagger call` against `.dagger/images.go` — `dagger call image --name=<stem>` for
   anything in `.docker/`, `dagger call zone-image --zone=<zone>` for a micro-frontend. **`docker build`
-  and `docker buildx build` must not appear** in the `Makefile`, `scripts/`, `.github/workflows/` or the
-  `Tiltfile`; `scripts/dagger-image.sh` is the single seam every non-Tilt build goes through.
+  and `docker buildx build` must not appear** in the `Makefile`, `scripts/` or `.github/workflows/`;
+  `scripts/dagger-image.sh` is the single seam every build goes through.
   The dockerfile stays the single source of truth — Dagger changes the *driver*, not the definition, so
   a build cannot behave one way locally and another in CI.
-  **Do not add a docker fallback switch.** A `RASK_TILT_BUILDER=docker` escape hatch was added once and
-  rejected outright; it is gone. "Leave it on docker for now" is not an available answer — if a tool
-  cannot work with a Dagger-built image (Tilt's `restart_process` extension could not), solve it.
+  **Do not add a docker fallback switch.** An escape hatch was added once and rejected outright; it is
+  gone. "Leave it on docker for now" is not an available answer — if a tool cannot work with a
+  Dagger-built image, solve it or drop the tool.
 - **JS/TS uses Bun exclusively.** Use `bun` / `bunx`. `npm`, `npx`, `pnpm`, `pnpx` are not on PATH and MCP install commands assume `bunx`.
 - **The JS/TS plane lives in `frontend/`** — its own bun + Turborepo workspace root (its own `package.json`, `bun.lock`, `turbo.json`). Every bun/turbo call is **scoped to it**: `bun --cwd=frontend run <task>`, `bunx turbo --cwd=frontend run <task>`. Use the `--cwd=` form — `bun --cwd <path>` with a space silently no-ops.
 - **JS/TS lint + format is oxlint + oxfmt**, not ESLint/Prettier (both deleted). Svelte support comes from `@rsvelte/oxlint-plugin` (lint) and `@rsvelte/fmt` (format); configs live at `frontend/.oxlintrc.json` and `frontend/.oxfmtrc.json`. `lint` / `fmt` / `fmt:check` are **per-package turbo tasks**, run from `frontend/`.
@@ -75,147 +75,69 @@ an unfiltered `turbo run dev` also starts the ui library's `svelte-package -w` w
 which rewrites `dist/` while the zones read it — one zone crashes and turbo tears the whole
 run down.
 
-### The in-cluster dev loop: tilt + k9s + k3s
+### The in-cluster loop: k3s + k9s
 
-For anything that only manifests **in-cluster** — Dapr sidecar injection, the
-bronze→silver→gold cascade, lineage emission, FGA checks — `make dev-micro` cannot
-reproduce it, and a rebuild cycle (`k3s-build` → `k3s-import` → `k3s-up`) costs minutes.
-That loop is what tilt exists for here.
+`make dev-micro` cannot reproduce anything that only manifests IN-CLUSTER — Dapr sidecar injection,
+the bronze→silver→gold cascade, lineage emission, FGA checks. For those, build and deploy:
 
 ```bash
 make k3s-up          # the cluster + release (one-time per session)
-make tilt-registry   # ONCE per host: registry on :5000 + point k3s at it (sudo; restarts k3s)
+make dev-registry    # ONCE per host: registry on :5000 + point k3s at it (sudo; restarts k3s)
 make dagger-engine   # ONCE per host: a Dagger engine that may push to that (plain-HTTP) registry
-make tilt-up         # the dev loop; UI on :10350
-make tilt-verify     # PROVE live_update reaches a pod (SERVICE=catalog by default)
-make tilt-verify-all # all THREE reload paths: python service, zone, @rask/ui (compiled output, same pod)
 make k9s             # inspect the cluster (installed into .localbin by `make bootstrap`)
 ```
 
-**Tilt builds the fleet images through Dagger** (`RASK_TILT_BUILDER=docker` falls back to Tilt's native
-`docker_build`; the two share no cache, so switching costs one cold rebuild each way). `.dagger/images.go`
-hands the same `.docker/*.dockerfile` to BuildKit — the dockerfile stays the single source of truth, only
-the driver changes. Callable directly: `dagger call image --name=gateway`, `dagger call zone-image --zone=lakehouse`.
+Images are built by Dagger and pushed to that registry:
+`dagger call image --name=gateway publish --address=172.17.0.1:5000/gateway:<tag>`, then
+`kubectl set image` or a chart value. **For pure UI work `make dev-frontends` is the faster loop** —
+Vite HMR, sub-second, no cluster involved.
 
-Two things bite here, and neither announces itself:
+**Tilt was REMOVED 2026-08-04.** It bought an in-cluster hot-reload (~15 s for a zone edit) and cost
+a 479-line Tiltfile, four make targets, a `dev.reload` values flag whose only job was to relax
+`readOnlyRootFilesystem`, a `VENV_OWNER` build arg in four dockerfiles, and — the reason it went — a
+SECOND writer to the cluster. Nobody was using it, and a `helm upgrade` that lands while it is up
+silently replaces every image it injected. If an in-cluster backend loop is ever wanted again, the
+honest version is one owner, not two.
 
-- **The registry is addressed twice.** Tilt and k3s pull via `localhost:5000`; Dagger pushes to
-  `172.17.0.1:5000`. Same container — but Dagger's engine *is* a container, so `localhost` inside it is
-  the engine. Use the bridge gateway for anything Dagger does.
+Two things bite when pushing to the local registry, and neither announces itself:
+
+- **The registry is addressed twice.** k3s pulls via `localhost:5000`; Dagger pushes to
+  `172.17.0.1:5000`. Same container — but Dagger's engine *is* a container, so `localhost` inside it
+  is the engine. Use the bridge gateway for anything Dagger does.
 - **Dagger always speaks HTTPS and `publish` has no `--insecure` flag**, so against the TLS-less dev
-  registry it dies with `http: server gave HTTP response to HTTPS client`. The only lever is the engine's
-  own BuildKit config, which the auto-provisioned engine cannot receive — hence `make dagger-engine`.
-  Re-run it after a Dagger CLI upgrade: a version mismatch makes the CLI quietly provision its own
-  config-less engine and the HTTPS failure returns.
+  registry it dies with `http: server gave HTTP response to HTTPS client`. The only lever is the
+  engine's own BuildKit config, which the auto-provisioned engine cannot receive — hence
+  `make dagger-engine`. Re-run it after a Dagger CLI upgrade: a version mismatch makes the CLI
+  quietly provision its own config-less engine and the HTTPS failure returns.
 
-**The seven zones are eight** (`workbench`, b021499). Tilt's zone list is now *derived* from the chart's
-`frontend.apps` rather than hand-kept beside it — the hand-written list had already drifted, and
-`rask-web-workbench` sat in ImagePullBackOff running whatever `k3s-build` last pushed. The chart deploys
-the zones, so reading its list is the only version that cannot disagree with what is running. **The zone
-images themselves are still built by `docker_build_with_restart`, not Dagger** — that needs
-`custom_build_with_restart` plus a cold seven-zone Dagger rebuild, and is not done.
-
-> **STATUS 2026-07-29: `live_update` WORKS — `make tilt-verify` reports `SYNCED in 2s`.** It had
-> never synced once before this date. There were **two** independent causes, and fixing either alone
-> changes nothing:
->
-> 1. **`helm_resource` meant Tilt never owned the Kubernetes objects.** It shells out to
->    `helm upgrade` behind `k8s_custom_deploy`, so Tilt knew exactly what it wanted to sync and had no
->    container it owned to sync into — `lastFileTimeSynced: null`, `live-update: False`. The Tiltfile
->    now renders with `helm template` + `k8s_yaml`: **`k3s-up` owns the platform, Tilt owns the app
->    Deployments.**
-> 2. **The venv was root-owned, so the container refused the write.** The Python dockerfiles copy
->    `/opt/venv` as root and then `USER 10001`; live_update untars into site-packages *as that user* and
->    got exit code 2, after which Tilt correctly fell back to a full rebuild. That fallback is what made
->    an edit cost ~90 s and a new ReplicaSet. Dev builds now pass `VENV_OWNER=10001:10001`
->    (Tiltfile → `ARG VENV_OWNER`); shipped images keep an immutable root-owned venv.
->
-> The lesson worth keeping: **`dev.reload` clearing `readOnlyRootFilesystem` is necessary but not
-> sufficient** — ownership is a second gate, and nothing surfaces it as one. Tilt's *build history*
-> (`tilt get uiresources <r> -o json` → `buildHistory[].error`, span `liveupdate:*`) named the cause in
-> one line; its *config* (`tilt get liveupdates`) looked perfect throughout. Read the history, not the spec.
->
-> Nine earlier "blockers" (context allow-list, registry, `dev.reload` wiring, reload dirs,
-> `readOnlyRootFilesystem`, helm timeout, …) were all real and none of them was the cause.
->
-> **The ZONES hot-reload too, proven 2026-08-03** — a zone edit reaches the compiled bundle in ~15 s and a
-`@rask/ui` edit in ~105 s, both **in the same pod** (no rebuild, no rollout). Four separate defects had to
-fall, and each one alone left the loop looking broken in a different way:
-
-1. **The zone image never shipped `frontend/packages`**, so every `@rask/*` symlink in it dangled
-   (`node_modules/@rask/ui -> ../../../../packages/ui`). Invisible at runtime — the SSR bundle inlines
-   those packages — and fatal the moment anything rebuilds in-container:
-   `Can't resolve '@rask/ui/styles/tokens.css'`.
-2. **`bun --watch build/index.js` cannot work here.** It re-execs when the entry file or an import
-   changes, and the thing that changes them is the very `bun run build` the reload runs — so the server
-   restarted mid-build and, being PID 1, took the container and the half-written `build/` with it
-   (exit 137, 6 restarts). 137 reads as an OOM; raising the tier 256Mi→2Gi→6Gi changed nothing.
-   `.docker/dev-serve.sh` restarts on a **sentinel** the build touches on success instead.
-3. **Every zone watched all of `frontend/`.** An edit in ANY zone arrived in EVERY other zone's
-   live_update as a file matching no sync rule, which Tilt answers by rebuilding instead of syncing. With
-   a second agent session editing `lakehouse`, every zone sat permanently in `UpdateStopped`. `deps` is a
-   WATCH list — the "bun needs every workspace member" argument applies to the build CONTEXT, not to it.
-4. **`@rask/ui` is the only package with a build step**, and zones bundle its `dist/`, never its source.
-   Syncing `packages/` alone let the zone rebuild against a stale `dist/` — the edit vanished while the
-   sync reported success. live_update now runs `svelte-package` first, triggered only by `packages/ui`.
-
-Also load-bearing: `.dockerignore` excluded `.docker/` wholesale, so shipping `dev-serve.sh` needed an
-explicit `!.docker/dev-serve.sh`; and **Dagger snapshots the host directory**, so a file changing during
-that snapshot aborts the build (`size changed from … during sync`) — with a second editor active that is
-an intermittent `exit status 1` with no other symptom, which the `+ignore` lists in `.dagger/images.go`
-now narrow.
-
-**Still slow: `make k3s-build` rebuilds EVERY image** (the ray-cluster export alone measures 238 s)
-> when usually one service changed. Separately, `.docker/frontend.dockerfile` copies **all seven zones'
-> sources** before `bun install`, so touching one zone invalidates the install layer of all seven images
-> (~90 s each). Both are open.
+**`make k3s-build` rebuilds EVERY image** (the ray-cluster export alone measures 238 s) when usually
+one service changed. Separately, `.docker/frontend.dockerfile` copies **all seven zones' sources**
+before `bun install`, so touching one zone invalidates the install layer of all seven images (~90 s
+each). Both are open.
 
 **The dev loop leaks disk in two places, and both grew past a terabyte before anyone looked.**
 `make dev-gc` reclaims both; `make registry-gc` / `make dagger-gc` do one each.
 
-- **The Dagger engine cache.** Its default GC ceiling is proportional to the disk — measured on a 7.4 TB
-  volume: `maxUsedSpace` **5.67 TB**, `minFreeSpace` 1.51 TB — so it effectively never collects.
-  `dagger-engine-rask-state` reached **1.126 TB**. `make dagger-engine` now writes an explicit 60 GB cap
-  (`DAGGER_MAX_USED_SPACE` to change it), and the script recreates the engine when the CONFIG changes,
-  not only when the version does — otherwise a new ceiling is written to disk and never applied.
-- **The dev registry.** Tilt pushes a uniquely tagged image on *every* rebuild and nothing removes the
-  old ones: measured **113 tags of `web-home`**, 62 of `lance-rest-catalog`, 83.9 GB. The registry is now
-  created with `REGISTRY_STORAGE_DELETE_ENABLED=true` — without it `registry:2` refuses DELETE and
-  nothing can be reclaimed at all.
+- **The Dagger engine cache.** Its default GC ceiling is proportional to the disk — measured on a
+  7.4 TB volume: `maxUsedSpace` **5.67 TB**, `minFreeSpace` 1.51 TB — so it effectively never
+  collects. `dagger-engine-rask-state` reached **1.126 TB**. `make dagger-engine` now writes an
+  explicit 60 GB cap (`DAGGER_MAX_USED_SPACE` to change it), and the script recreates the engine when
+  the CONFIG changes, not only when the version does.
+- **The dev registry.** Every rebuild pushes a uniquely tagged image and nothing removes the old
+  ones: measured **113 tags of `web-home`**, 83.9 GB. The registry is created with
+  `REGISTRY_STORAGE_DELETE_ENABLED=true` — without it `registry:2` refuses DELETE and nothing can be
+  reclaimed at all.
 
-Both are safe to wipe: every artefact is reproducible with `dagger call image|zone-image … publish`, and
-k3s holds running images in its own containerd cache.
+Both are safe to wipe: every artefact is reproducible with `dagger call image|zone-image … publish`,
+and k3s holds running images in its own containerd cache.
 
-**`make tilt-verify` is not optional ceremony.** This repo shipped a Tiltfile for months
-that could never have worked — it synced into a path that did not exist, against services
-whose uvicorn had no `--reload`, into containers with a read-only rootfs — and nothing
-reported a problem. "tilt up started" and "the pod is Running" are not evidence. The
-verifier writes a marker into a real source file and polls the container for it.
+- **`make k3s-up` owns the release.** It renders the chart with `image.localImages=true` (side-loaded
+  images). Running `helm upgrade` by hand with different values replaces every deployed image with
+  the chart default — which is how a whole fleet lands on `:dev` tags that were never imported.
+- **A killed `helm upgrade` leaves the release in `pending-upgrade`,** and every later upgrade is
+  refused until someone runs `helm rollback rask <last-good-rev>`. Check `helm history rask` before
+  anything else.
 
-Scope and limits:
-
-- **All seven zones are in the loop too** (since 2026-07-29 — they were excluded via
-  `frontend.enabled=false`, which made `/` on the ingress 404 under tilt). A zone's reload is
-  NOT Vite HMR: its prod image runs `bun build/index.js` and serves the compiled `build/`, so
-  the Tiltfile syncs `src/` **and** `frontend/packages` (an `@rask/ui` edit must reach every
-  zone that renders it) and then re-runs `bun run build` in-container and restarts. Seconds,
-  not sub-second. **For pure UI work `make dev-frontends` is still the faster loop** — reach
-  for tilt when the BACKEND is the point (auth, FGA, Dapr, the gateway's own routing), which
-  is the one thing `dev-frontends` cannot exercise.
-- **Dependency changes still need a rebuild.** Only the synced package paths hot-reload.
-- **`dev.reload` is dev-only.** It relaxes `readOnlyRootFilesystem` (live_update cannot
-  write into a read-only container) and appends `--reload`. Rendering the chart without it
-  yields zero `--reload` flags and `readOnlyRootFilesystem: true` everywhere. Never set it
-  in production. Every `--reload-dir` must exist in every image — uvicorn refuses to start
-  on a missing one rather than skipping it, which is why `dev.reloadKits` defaults to
-  `service_kit` alone.
-- **Tilt and `make k3s-up` both own the `rask` release.** Running `helm upgrade` by hand
-  while tilt is up replaces tilt's injected image with the chart default, and tilt silently
-  stops managing that deployment — live_update then cannot fire. Pick one owner.
-- **A killed `helm upgrade` leaves the release in `pending-upgrade`,** and every later
-  upgrade is refused until someone runs `helm rollback rask <last-good-rev>`. If tilt
-  appears to build and push images that never reach the cluster, check `helm history rask`
-  before anything else.
 
 `make serve-down` / `make ray-down` to tear down. EAD download: `make harvest-ead` (the `catalog-index` Lance indexer died in the R6/R20 wave — the EAD table re-lands catalog-governed behind `/api/explorer/search`).
 (The app database, Alembic migrations and the `pg-*`/`viewer` targets died at P7a — the only relational

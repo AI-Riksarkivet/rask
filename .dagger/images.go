@@ -2,7 +2,7 @@
 //
 // Until 2026-07-29 this module ran only CI gates (test, lint, typecheck, openapi, charts, frontend,
 // e2e) and every image in the repo was built by `docker buildx` — from the Makefile (`k3s-build`,
-// `frontend-images`), from ci.yml, and from Tilt's own `docker_build`. Dagger being "the build system"
+// `frontend-images`) and from ci.yml. Dagger being "the build system"
 // was therefore true of the checks and not of the artefacts.
 //
 // These functions close that gap WITHOUT forking the build definition: they hand the same
@@ -43,22 +43,6 @@ import (
 	"dagger/rask/internal/dagger"
 )
 
-// devVenvOwner is the uid:gid the Python images' /opt/venv must carry for Tilt's live_update to land a
-// file. The images run as uid 10001; a root-owned venv makes the sync fail with exit code 2 ("the
-// container filesystem denied access") and Tilt falls back to a full rebuild. See the VENV_OWNER ARG in
-// .docker/rest-catalog.dockerfile.
-const devVenvOwner = "10001:10001"
-
-// venvImages are the dockerfiles that DECLARE `ARG VENV_OWNER`. Passing a build arg a dockerfile never
-// declares is not an error, merely a warning — but it is also a lie about which images the dev-loop
-// switch reaches, so the set is explicit and grep-able rather than "whatever we happened to pass".
-var venvImages = map[string]bool{
-	"rest-catalog": true,
-	"gateway":      true,
-	"compute":      true,
-	"controlplane": true,
-}
-
 // provenance turns the OCI label args into BuildArgs, dropping empties.
 //
 // These are NOT computed here on purpose. A Dagger Function is sandboxed and has no host access, so it
@@ -98,10 +82,6 @@ func extraArgs(kv []string) []dagger.BuildArg {
 //
 // `name` is the dockerfile stem: gateway, compute, controlplane, rest-catalog, ray-cluster, ray-lance,
 // runner, assist-runner, cnpg-age-ext.
-//
-// `dev` defaults to FALSE. It makes /opt/venv writable by uid 10001 so Tilt's live_update can sync into
-// site-packages, and it must never be on for a shipped image — a writable venv is a persistence surface
-// for anything that achieves code execution. The Tiltfile passes --dev=true explicitly; nothing else does.
 func (m *Rask) Image(
 	// +ignore=[".venv", ".git", "node_modules", "frontend/node_modules", "**/.svelte-kit", "**/.turbo",
 	//          ".localbin", "**/e2e", "**/test-results", "**/playwright-report", "**/*.spec.ts",
@@ -110,10 +90,6 @@ func (m *Rask) Image(
 	src *dagger.Directory,
 	// Dockerfile stem under .docker/.
 	name string,
-	// Make /opt/venv writable by the app user so Tilt can hot-reload into it. DEV ONLY.
-	// +optional
-	// +default=false
-	dev bool,
 	// +optional
 	buildDate string,
 	// +optional
@@ -125,9 +101,6 @@ func (m *Rask) Image(
 	buildArg []string,
 ) *dagger.Container {
 	args := provenance(buildDate, vcsRef, version)
-	if dev && venvImages[name] {
-		args = append(args, dagger.BuildArg{Name: "VENV_OWNER", Value: devVenvOwner})
-	}
 	args = append(args, extraArgs(buildArg)...)
 	return src.DockerBuild(dagger.DirectoryDockerBuildOpts{
 		Dockerfile: fmt.Sprintf(".docker/%s.dockerfile", name),

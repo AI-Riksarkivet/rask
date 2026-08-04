@@ -3,7 +3,7 @@
 # Two systems now install from this one file:
 #   * the rask fleet (gateway/compute/controlplane),
 #     KubeRay Serve, CloudNativePG, the RustFS Tenant, the SvelteKit microfrontend zones;
-#   * the lance-ns lakehouse (catalog + lineage + medallion + compaction + media), governance
+#   * the lance-ns lakehouse (catalog + lineage + medallion + maintenance + media), governance
 #     (Dex OIDC + OpenFGA), the Dapr/NATS event fabric, OpenBao, and the OTel-first observability tier.
 #
 # Merge rule applied throughout (plan P4): rask's chart is the BASE and every rask key is preserved;
@@ -183,31 +183,24 @@ services:
     ageStatementTimeoutSeconds: 30
 
 # Image registry/tag shared by every fleet + migration container, PLUS the per-image lance-ns block so
-# Tilt can inject each built image independently (image_keys → image.catalog.repository/tag).
 image:
-  repository: ""          # empty => bare "<component>" name (e.g. gateway)
+  # A REGISTRY, e.g. ghcr.io/<org>/<repo> or localhost:5000. Required — see `rask.image` in
+  # _helpers.tpl for why an empty default was actively harmful: it rendered a BARE `gateway:dev`,
+  # which is `docker.io/library/gateway:dev`, and only ever worked because `make k3s-import` had
+  # side-loaded the tag into the node. A GitOps reconciler has no such side channel.
+  repository: ""
   tag: "dev"
+  # Set to pin the deployed artifact by content rather than by a mutable tag. WINS over `tag`.
+  # This is what an image-automation controller (Argo Image Updater, Flux) writes back into git.
+  digest: ""
+  # Opt-in for side-loaded images (`make k3s-build` + `k3s-import`, `kind load`): renders a bare
+  # `<component>:<tag>` that the node must ALREADY hold. Never set this for a remote cluster.
+  localImages: false
   pullPolicy: IfNotPresent
   # The lakehouse image: catalog (catalog.main:app) + lineage (lineage.main:app) + the medallion
-  # movers + compaction + the media services all run from this one image, different entrypoint.
+  # movers + maintenance + the media services all run from this one image, different entrypoint.
   # `lance.catalogImage` uses required() on the tag, so an empty tag FAILS the render loudly.
   catalog: { repository: lance-rest-catalog, tag: dev }
-
-# Dev-only knobs, driven by the Tilt loop (Tiltfile). Never enable in production.
-dev:
-  # Append `uvicorn --reload` (+ reload-dirs) so Tilt's live_update sync hot-reloads the
-  # Python services in-cluster. Applies to BOTH fleet.yaml and services.yaml (catalog,
-  # lineage) via the shared `lance.devReloadArgs` helper — it used to be wired into
-  # fleet.yaml alone, which silently excluded the very services Tilt syncs. The reload
-  # dirs are site-packages, where the src-layout images install; the old
-  # /app/{packages,components} paths have not existed since that rewrite.
-  # The Tiltfile sets this; never enable it in production.
-  reload: false
-  # Shared packages to hot-reload alongside each service's own. MUST exist in every image the
-  # chart renders for — uvicorn refuses to start on a missing --reload-dir rather than skipping
-  # it. lineage_kit is deliberately NOT here: the gateway image does not ship it, and including
-  # it crashlooped the ingress. Add it only if every deployed image is known to carry it.
-  reloadKits: ["service_kit"]
 
 resources:
   # rask fleet tier (templates/fleet.yaml).

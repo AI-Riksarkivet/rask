@@ -72,14 +72,8 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1
 
 WORKDIR /srv
-# Ownership of the venv decides whether `tilt` can hot-reload this image at all, and it
-# defaults to root so PRODUCTION cannot. The container runs as uid 10001; live_update untars the synced
-# source into site-packages AS THAT USER, so a root-owned tree returns exit code 2 ("the container
-# filesystem denied access") and Tilt silently falls back to a full image rebuild — which is what made
-# every sync here look like it did nothing. Dev builds pass VENV_OWNER=10001:10001 (see the Tiltfile);
-# no other build does, so a shipped image keeps its venv immutable to the account running the app.
-ARG VENV_OWNER=root:root
-COPY --from=builder --link --chown=${VENV_OWNER} /opt/venv /opt/venv
+# The venv is root-owned and the app runs as 10001, so it is immutable to the account running it.
+COPY --from=builder --link /opt/venv /opt/venv
 
 # Strip setuid/setgid bits from the whole shipped filesystem (base account tools passwd/chsh/... +
 # anything in the venv) — no use in a container, residual privesc surface. Own RUN so its `|| true`

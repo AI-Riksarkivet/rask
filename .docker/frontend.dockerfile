@@ -96,7 +96,7 @@ COPY --from=builder --chown=10001:10001 /src/microfrontends/${APP} ./microfronte
 # inlines those packages at build time, so nothing resolves the link at runtime.
 #
 # It stops being invisible the moment anything re-runs the build inside the container, which is exactly
-# what Tilt's live_update does under dev.reload:
+# what an in-container rebuild would do:
 #
 #   [plugin @tailwindcss/vite:generate:build] /app/microfrontends/home/src/app.css
 #   Error: Can't resolve '<scope>/ui/styles/tokens.css'
@@ -108,7 +108,6 @@ COPY --from=builder --chown=10001:10001 /src/packages ./packages
 
 # The dev entrypoint. Shipped in every image but only USED when the chart selects it under dev.reload,
 # so a production zone still runs the plain `bun build/index.js` CMD below. A few hundred bytes.
-COPY --chown=10001:10001 .docker/dev-serve.sh /usr/local/bin/dev-serve.sh
 
 # Re-anchor the workdir at the app via a stable symlink so CMD is APP-agnostic.
 RUN ln -s "microfrontends/${APP}" /app/app

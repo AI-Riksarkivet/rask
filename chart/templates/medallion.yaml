@@ -48,7 +48,6 @@ spec:
             - "medallion.producer:app"
             - "--host=0.0.0.0"
             - "--port={{ $port }}"
-            {{- include "lance.devReloadArgs" (list $root "medallion") | nindent 12 }}
           ports: [{ name: http, containerPort: {{ $port }} }]
           env:
             {{- if include "lance.otelEnabled" $root }}
@@ -252,7 +251,6 @@ spec:
             - "medallion.mover:app"
             - "--host=0.0.0.0"
             - "--port={{ $port }}"
-            {{- include "lance.devReloadArgs" (list $root "medallion") | nindent 12 }}
           ports: [{ name: http, containerPort: {{ $port }} }]
           env:
             {{- if include "lance.otelEnabled" $root }}

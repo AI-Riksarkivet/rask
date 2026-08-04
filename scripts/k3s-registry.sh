@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# One-time host setup for the Tilt dev loop: stand up a local image registry and
-# point k3s's containerd at it, so Tilt can PUSH :dev images (fast, cached) instead
+# One-time host setup for the local image path: stand up a local image registry and
+# point k3s's containerd at it, so Dagger can PUSH images (fast, cached) instead
 # of the slow `docker save | k3s ctr images import -` side-load that `make k3s-build`
 # uses. Safe to re-run (idempotent). Requires sudo and restarts k3s once.
 set -euo pipefail
@@ -16,7 +16,7 @@ else
   echo ">> starting registry '$REG_NAME' on :$REG_PORT"
   # REGISTRY_STORAGE_DELETE_ENABLED: registry:2 refuses DELETE without it, and without DELETE there is
   # no way to reclaim anything — `registry garbage-collect` only sweeps blobs no manifest references.
-  # This matters because Tilt pushes a UNIQUELY TAGGED image on every single rebuild and nothing ever
+  # This matters because every rebuild pushes a UNIQUELY TAGGED image and nothing ever
   # removes the old ones: measured 113 tags of web-home and 62 of lance-rest-catalog, 83.9 GB of dev
   # registry. `make registry-gc` is the reclaim; this flag is what makes it possible at all.
   docker run -d --restart=always -p "${REG_PORT}:5000" --name "$REG_NAME" \
@@ -53,7 +53,7 @@ echo ">> restarting k3s to pick up the registry config"
 if systemctl cat k3s.service >/dev/null 2>&1; then
   sudo systemctl restart k3s
   # A restart is asynchronous — returning before the API server is back makes the very
-  # next `kubectl`/`tilt` call fail for a reason that has nothing to do with the caller.
+  # next `kubectl` call fail for a reason that has nothing to do with the caller.
   echo ">> waiting for the k3s API server to come back"
   for _ in $(seq 1 60); do
     if sudo k3s kubectl get --raw='/readyz' >/dev/null 2>&1; then break; fi
@@ -69,7 +69,7 @@ elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^k3d-'; then
   echo "   the cluster with '--registry-use'. See https://k3d.io/stable/usage/registries/"
   exit 1
 else
-  # NEVER exit 0 here. The registry config is written but UNLOADED, so tilt will fail to
+  # NEVER exit 0 here. The registry config is written but UNLOADED, so pushes will fail to
   # pull with an error that points nowhere near this script. A silent success is the same
   # defect class as a green helm install over a failed Job.
   echo "!! k3s is not a systemd service here and no k3d cluster was found."
@@ -85,4 +85,4 @@ else
   echo "!! registry container is up but http://localhost:${REG_PORT}/v2/ did not answer"; exit 1
 fi
 
-echo ">> done. Push to localhost:${REG_PORT}/<image>:dev; k3s will pull it. Run 'make tilt-up'."
+echo ">> done. Push to localhost:${REG_PORT}/<image>:<tag>; k3s will pull it."

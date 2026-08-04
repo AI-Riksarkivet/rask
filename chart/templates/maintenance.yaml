@@ -3,7 +3,7 @@
 {{- $port := .Values.maintenance.port }}
 {{- if .Values.dapr.enabled }}
 # Dapr cron INPUT binding — the sidecar POSTs to /<bindingName> on `schedule`. The schedule lives here
-# as component config, not in app code (no scheduler thread in the service). Scoped to the compaction app.
+# as component config, not in app code (no scheduler thread in the service). Scoped to the maintenance app.
 # Gated on dapr.enabled: without the Dapr control plane the Component CRD doesn't exist and the release
 # would fail to apply (the service still renders below; its cron route just never fires).
 apiVersion: dapr.io/v1alpha1
@@ -45,10 +45,10 @@ spec:
       # Longer grace than the other apps: an in-flight sweep/Lance write must finish, not be SIGKILLed.
       terminationGracePeriodSeconds: {{ .Values.lifecycle.maintenanceTerminationGracePeriodSeconds }}
       {{- if .Values.security.serviceAccounts.enabled }}
-      serviceAccountName: {{ include "lance.fullname" . }}-sa-compaction
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-maintenance
       {{- end }}
       containers:
-        - name: compaction
+        - name: maintenance
           image: "{{ include "lance.catalogImage" . }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- include "lance.securityContext" . | nindent 10 }}
@@ -62,7 +62,6 @@ spec:
             - "maintenance.service:app"
             - "--host=0.0.0.0"
             - "--port={{ $port }}"
-            {{- include "lance.devReloadArgs" (list $root "compaction") | nindent 12 }}
           ports: [{ name: http, containerPort: {{ $port }} }]
           env:
             {{- if include "lance.otelEnabled" $root }}
@@ -89,7 +88,7 @@ spec:
             - { name: COMPACTION_S3_SECRET_ACCESS_KEY, value: {{ .Values.rustfs.secretKey | quote }} }
             {{- else }}
             # A secret store is configured → the S3 secret comes ONLY from it at boot; not in pod env (the
-            # audit's fix — compaction is a real S3 consumer that compacts/GCs the lakehouse). Fails closed.
+            # audit's fix — maintenance is a real S3 consumer that compacts/GCs the lakehouse). Fails closed.
             - { name: COMPACTION_SECRETS_FROM_DAPR, value: "true" }
             {{- end }}
             - { name: COMPACTION_S3_BUCKET, value: {{ .Values.rustfs.bucket | quote }} }
@@ -113,7 +112,7 @@ spec:
             - { name: COMPACTION_S3_EXTRA_BUCKETS, value: {{ $extra | uniq | join "," | quote }} }
             - { name: COMPACTION_S3_REGION, value: "us-east-1" }
           {{- include "lance.appProbes" . | nindent 10 }}
-          resources: {{- include "lance.resources" (dict "root" . "comp" "compaction") | nindent 12 }}
+          resources: {{- include "lance.resources" (dict "root" . "comp" "maintenance") | nindent 12 }}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
       volumes:
