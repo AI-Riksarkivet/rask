@@ -16,7 +16,7 @@
 	import { Button } from '@rask/ui/button';
 	import { cn } from '@rask/ui/utils';
 	import { COMMITS_SHAPE } from '@rask/labeling/shape-types';
-	import { TOOL_DEFS } from '../tool-defs';
+	import { TOOL_DEFS, bandsOf } from '../tool-defs';
 	import type { AnnotatorController } from '../annotator.svelte';
 
 	// `spatial` = this unit has a canvas to draw ON (image / video frame). Audio has no
@@ -48,6 +48,17 @@
 				)
 			: [],
 	);
+
+	/** The rail in BANDS: navigate · draw · assist, in reading order.
+	 *
+	 *  Ten buttons in one undifferentiated column asked the annotator to remember which of them
+	 *  commits a shape and which only moves the view. The bands say it.
+	 *
+	 *  EMPTY BANDS ARE DROPPED, and that is the load-bearing part: the filter above already hides a
+	 *  drawing tool the task refuses, so a bbox-only task empties `assist` entirely — and a separator
+	 *  rendered for an absent band is a hairline with nothing on either side of it. Deriving the
+	 *  bands from what SURVIVED the filter is what keeps the two in agreement. */
+	const bands = $derived(bandsOf(visible));
 </script>
 
 <!-- The rail wears the estate's SIDEBAR tokens, not card: it is this zone's left navigation
@@ -83,21 +94,27 @@
 	{#if spatial}
 		<div class="bg-sidebar-border my-1 h-px w-6"></div>
 
-		{#each visible as t (t.tool)}
-			{@const Icon = t.icon}
-			{@const cvLoading =
-				t.cv === true && controller.activeTool === t.tool && !controller.cvReady.has(t.tool)}
-			<Button
-				variant={controller.activeTool === t.tool ? 'default' : 'ghost'}
-				size="icon-sm"
-				title={`${t.label} (${t.key})${cvLoading ? ' — detecting corners…' : ''}`}
-				aria-pressed={controller.activeTool === t.tool}
-				data-cvready={t.cv ? controller.cvReady.has(t.tool) : undefined}
-				data-snapped={t.tool === 'magnetic' ? controller.magneticSnapped : undefined}
-				onclick={() => controller.setTool(t.tool)}
-			>
-				<Icon class={cn('size-4', cvLoading && 'animate-pulse')} />
-			</Button>
+		{#each bands as band, i (band.group)}
+			{#if i > 0}
+				<!-- Between bands only — never before the first, never after the last. -->
+				<div class="bg-sidebar-border my-1 h-px w-6" data-testid="tool-band-sep"></div>
+			{/if}
+			{#each band.tools as t (t.tool)}
+				{@const Icon = t.icon}
+				{@const cvLoading =
+					t.cv === true && controller.activeTool === t.tool && !controller.cvReady.has(t.tool)}
+				<Button
+					variant={controller.activeTool === t.tool ? 'default' : 'ghost'}
+					size="icon-sm"
+					title={`${t.label} (${t.key})${cvLoading ? ' — detecting corners…' : ''}`}
+					aria-pressed={controller.activeTool === t.tool}
+					data-cvready={t.cv ? controller.cvReady.has(t.tool) : undefined}
+					data-snapped={t.tool === 'magnetic' ? controller.magneticSnapped : undefined}
+					onclick={() => controller.setTool(t.tool)}
+				>
+					<Icon class={cn('size-4', cvLoading && 'animate-pulse')} />
+				</Button>
+			{/each}
 		{/each}
 
 		{#if controller.activeTool === 'brush'}

@@ -55,13 +55,31 @@ Notes for whoever builds it:
 
 ---
 
-## #27 — Canvas tool placement (shape DECIDED, not yet scheduled)
+## #27 — Canvas tool placement — **LANDED**
 
-The rail's **position is right** — a 44px left vertical strip is the CVAT-shaped answer and it
-already is one. What is wrong is **what is in it and in what order**: the tools need grouping
-separators and a deliberate order (navigate · draw · assist), rather than one flat list.
+The rail's POSITION was never the problem — a 44px left strip is the CVAT-shaped answer and already
+was one. Its contents had no order and no grouping: ten buttons in one undifferentiated column,
+asking the annotator to remember which of them commits a shape and which only moves the view.
 
-Not: floating it over the canvas, and not moving it to the right.
+Now three bands in reading order — **navigate · draw · assist** — with the band a property of the
+TOOL, so the order is derived rather than hand-arranged. `bandsOf()` lives beside the registry so the
+rail and its tests use the SAME function; a test that re-implements the grouping can pass while the
+rail disagrees with it.
+
+Two things the work surfaced:
+
+* **`drawing` was doing double duty.** `lasso` carries `drawing: true` — it is an edit-mode
+  affordance — while committing no shape at all: it selects. No amount of reordering a flat list
+  expresses that; a band does.
+* **Empty bands are dropped, separators and all.** The filter already hides a drawing tool the task
+  refuses, so a bbox-only task empties `assist` entirely, and a separator rendered for an absent band
+  is a hairline with nothing either side. Seen live: with no CV pipeline the assist band and its
+  separator are both simply absent.
+
+Hotkeys renumbered to match reading order (1–9, `M` for the one machine-assisted tool). Nothing
+pinned them — verified before changing — and `TOOL_KEYS` derives from the registry, so the keymap
+followed with no separate edit. Leaving them would have shipped `1,2,7 | 3,4,5,6,8,B | 9`, which is
+the same complaint in a different form.
 
 ---
 
