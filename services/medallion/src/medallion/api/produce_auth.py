@@ -28,6 +28,7 @@ from openfga_sdk import OpenFgaClient
 from medallion.api.dependencies import FgaClientDep, SettingsDep
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
+from service_kit.governed.dapr_auth import is_public_caller
 from service_kit.governed.oidc import OIDCVerifier
 from service_kit.lakehouse.warehouse_registry import PROJECT_PATTERN
 
@@ -61,6 +62,9 @@ async def authorize_produce(
     dapr_api_token: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
     project: ProjectParam = None,
+    # The INVOKING Dapr app-id — what separates "a service called me" from "the public front door
+    # called me for a stranger". See `service_kit.governed.dapr_auth.is_public_caller`.
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
 ) -> None:
     """Allow EITHER the Dapr app-api-token (service) OR a signed-in project admin (OIDC + can_administer).
 
@@ -79,11 +83,23 @@ async def authorize_produce(
     # token holder produce into every tenant. Configured project (or none) only; else 403. The door
     # decision is audited like the human one (#41); the shared token names no principal, so the
     # subject is the fixed "service" marker.
-    if dapr_api_token and secrets.compare_digest(dapr_api_token.encode(), expected.encode()):
+    # THE MEASURED BYPASS. The gateway forwards through Dapr service invocation and the callee's
+    # daprd stamps a valid `dapr-api-token` on the way in, so an ANONYMOUS public request reaches this
+    # line already holding the estate's service credential. Measured on the sibling ingest door: 403
+    # straight to the pod, 202 through the gateway. `/produce` writes bronze$events, fabricates
+    # OpenLineage provenance and fires the whole bronze->silver->gold cascade; `/train` spends GPU.
+    # A public caller therefore gets NO service-token path — it falls through to the bearer below.
+    from_public_door = is_public_caller(dapr_caller_app_id)
+    if from_public_door and dapr_api_token and not authorization:
+        audit("produce_service_token", DENY, subject=f"service:{dapr_caller_app_id}", resource=obj, reason="public_caller")
+        raise PermissionDeniedError(
+            f"{dapr_caller_app_id!r} is a public front door: its Dapr app-token authenticates the proxy, not the caller — sign in and retry"
+        )
+    if not from_public_door and dapr_api_token and secrets.compare_digest(dapr_api_token.encode(), expected.encode()):
         if project and project != settings.produce_admin_project:
-            audit("produce_service_token", DENY, subject="service", resource=obj, reason="cross_project")
+            audit("produce_service_token", DENY, subject=f"service:{dapr_caller_app_id or 'direct'}", resource=obj, reason="cross_project")
             raise PermissionDeniedError("the service token cannot produce into another project; use a project-admin bearer")
-        audit("produce_service_token", ALLOW, subject="service", resource=obj)
+        audit("produce_service_token", ALLOW, subject=f"service:{dapr_caller_app_id or 'direct'}", resource=obj)
         return
     # Human path: a signed-in project admin. Only when OIDC is configured + a verifier is wired.
     verifier: OIDCVerifier | None = getattr(request.app.state, "oidc", None)
@@ -113,6 +129,10 @@ async def authorize_train(
     fga_client: FgaClientDep,
     dapr_api_token: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
+    # Forwarded, not re-derived: `/train` delegates its whole decision to `authorize_produce`, so an
+    # unforwarded caller id would silently restore the bypass on exactly this route while `/produce`
+    # looked fixed — the delegation is what makes the two doors one door.
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
 ) -> None:
     """The ``/train`` door: the same dual-auth as produce, PINNED to the configured project.
 
@@ -129,4 +149,5 @@ async def authorize_train(
         dapr_api_token=dapr_api_token,
         authorization=authorization,
         project=None,  # the explicit pin: always the configured produce_admin_project
+        dapr_caller_app_id=dapr_caller_app_id,
     )

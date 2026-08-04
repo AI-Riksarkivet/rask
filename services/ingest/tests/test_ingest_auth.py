@@ -262,15 +262,3 @@ def test_a_DIRECT_caller_with_no_dapr_hop_still_works(monkeypatch: pytest.Monkey
 
     with TestClient(_app()) as client:
         assert client.post("/ingests", json={"project": "demo"}, headers={"dapr-api-token": SERVICE_TOKEN}).status_code == 200
-
-
-def test_the_public_caller_list_is_configurable_and_case_insensitive() -> None:
-    """Deployments name their own front doors, and a header's case is not something to bet on."""
-    settings = IngestAuthSettings()
-    settings.public_callers = "gateway, Edge-Proxy"
-
-    assert settings.is_public_caller("gateway")
-    assert settings.is_public_caller("GATEWAY")
-    assert settings.is_public_caller("edge-proxy")
-    assert not settings.is_public_caller("medallion")
-    assert not settings.is_public_caller(None)
