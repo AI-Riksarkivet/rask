@@ -22,10 +22,18 @@ from __future__ import annotations
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
 
-from catalog.api.dependencies import NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import (
+    ControlEmitterDep,
+    NamespaceDep,
+    SettingsDep,
+    StorageOptionsDep,
+)
+from catalog.api.security import CurrentToken
+from catalog.core.control_emit import emit_control
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import PublishRequest, PublishResult
 from catalog.services import publication
+from service_kit.governed import fga
 
 
 router = APIRouter(prefix="/v1/table", tags=["publication"])
@@ -38,6 +46,8 @@ async def publish_table(
     ns: NamespaceDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
+    control: ControlEmitterDep,
+    token: CurrentToken,
 ) -> PublishResult:
     """Gate `version` and, if it passes, advance `published` to it.
 
@@ -56,6 +66,24 @@ async def publish_table(
         key_column=body.key_column,
         required_columns=tuple(body.required_columns),
     )
+    # The NOTIFICATION, and only after the tag actually moved (D-R2). A refused gate announces
+    # nothing: there is no new readiness to wake anyone for, and an event on a rejection would train
+    # consumers to check whether a "published" notice actually published.
+    #
+    # `extra` carries the RANGE, which is the whole point of the signal (D-R3) — a consumer turns
+    # {from, to} straight into `_row_created_at_version > from AND <= to` and keeps no bookmark. A
+    # consumer that MISSES this event loses nothing: the `published` tag still answers "what is
+    # ready?", which is why the tag is the truth and this is merely the wake-up.
+    if result.published:
+        await emit_control(
+            control,
+            action="table_published",
+            object_type="table",
+            object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
+            actor=f"user:{token.sub}" if token is not None else None,
+            extra={"from_version": result.from_version, "to_version": result.to_version},
+        )
+
     return PublishResult(
         table=result.table,
         published=result.published,

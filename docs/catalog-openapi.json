@@ -2675,7 +2675,8 @@
               "table_renamed",
               "table_registered",
               "table_deregistered",
-              "table_declared"
+              "table_declared",
+              "table_published"
             ],
             "title": "Action",
             "type": "string"

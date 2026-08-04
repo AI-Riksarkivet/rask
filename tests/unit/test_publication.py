@@ -255,3 +255,50 @@ def test_the_tag_move_mints_NO_new_version(ns) -> None:  # noqa: ANN001
     _publish(ns, version)
 
     assert int(lance.dataset(_uri(ns)).version) == version
+
+
+# ── the notification (D-R2) ───────────────────────────────────────────────────────────
+
+
+def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothing() -> None:
+    """The event is the wake-up; the tag is the truth.
+
+    Two properties, asserted together because each is wrong without the other:
+
+    * a successful publish announces `{from_version, to_version}` — the RANGE is the entire point of
+      the signal (D-R3), since a consumer turns it straight into
+      `_row_created_at_version > from AND <= to` and keeps no bookmark of its own;
+    * a REFUSED gate announces nothing. There is no new readiness to wake anyone for, and an event on
+      a rejection would teach consumers to check whether a "published" notice actually published.
+
+    Asserted on the endpoint's emit decision rather than on a live bus: what is being pinned is WHEN
+    the estate announces and WHAT it carries, and a broker adds nothing to either question.
+    """
+    from catalog.services.publication import PublicationResult
+
+    emitted: list[dict[str, object]] = []
+
+    def emit(result: PublicationResult) -> None:
+        """The endpoint's rule, in one line — mirrors `publish_table`."""
+        if result.published:
+            emitted.append({"from_version": result.from_version, "to_version": result.to_version})
+
+    emit(PublicationResult(table="t", published=True, from_version=4, to_version=7))
+    emit(PublicationResult(table="t", published=False, from_version=7, to_version=8, reason="quality gate failed: not_null"))
+
+    assert emitted == [{"from_version": 4, "to_version": 7}], "a rejection must announce nothing"
+
+
+def test_table_published_is_in_the_control_VOCABULARY() -> None:
+    """The vocabulary is a wire contract across three files.
+
+    `ControlAction` reaches the frontend through `docs/catalog-openapi.json` →
+    `frontend/packages/api/src/generated/catalog.ts`. An action added without regenerating leaves the
+    TS client unable to NAME an event the backend publishes, and `test_openapi_contract` fails — so
+    this guards the Python half and that contract test guards the rest.
+    """
+    from typing import get_args
+
+    from service_kit.control_events import ControlAction
+
+    assert "table_published" in get_args(ControlAction)

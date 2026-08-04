@@ -273,8 +273,12 @@ print(len([f for f in os.listdir('$POD_FIXTURE_DIR') if f.endswith('.tif')]) if 
 	# THIS run, and the cheapest way to guarantee that is to give each run its own dataset.
 	local stamp
 	stamp="$(date +%s)"
+	# DATASET overridable so the lane can run TWICE into ONE table — which is the only way to observe
+	# a publication RANGE with a real `from_version` (D-R3). A fresh dataset per run always publishes
+	# from None, so the delta a consumer actually resolves is never exercised.
 	local key="a11-$stamp"
-	local dataset="a11-$stamp"
+	local dataset="${DATASET:-a11-$stamp}"
+	[ -n "${DATASET:-}" ] && key="a11-$dataset-$stamp"
 	log "POST /api/ingests (Idempotency-Key: $key, dataset: $dataset)"
 
 	# Timed, because A1 is a CONTRACT: 202 in under a second. Measured inside the cluster so the
