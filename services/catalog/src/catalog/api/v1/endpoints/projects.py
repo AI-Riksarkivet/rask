@@ -17,13 +17,19 @@ tenants (a fresh project legitimately has zero warehouses), while a warehouse cl
 record still surfaces — that is pre-registry legacy the reconciler reports, and hiding it would make the
 drift invisible instead of fixable.
 
-**Estate-observer gated.** Both routes check ``can_observe_events`` on the fixed root object
+**Estate-observer gated.** The create/list/get routes check ``can_observe_events`` on the fixed root object
 (``settings.fga_root_object``) — the estate-OBSERVER action: it gates the estate-wide reads (the
 ``/v1/events`` feed AND this tenant enumeration), because listing every tenant's name, buckets and admins
 is the same whole-estate disclosure as watching every tenant's governance changes. A mere project admin
 gets a 403 (authorization scope == data scope, the ``/v1/events`` #12 rationale). ``/v1/projects`` matches
 no resource prefix in ``fga_deps.authorize``, so the router-wide gate only sets the 401/503 floor; the
 decision is made here explicitly via ``fga_deps.require_relation`` (audited allow/deny/outage, #41).
+
+**DELETE is gated differently, on purpose: ``project:<id>#can_administer``.** Retiring a tenant is an act
+INSIDE it, so the tenant's own admins must be able to do it without holding estate-wide privilege — and an
+estate OBSERVER, whose bar is "may watch the whole estate", must not be able to delete a tenant they do not
+administer. The delete itself is bottom-up (`open_hierarchy_lifecycle.md` Decision 3): it refuses 409 while
+the project still holds warehouses, naming them, and carries no ``cascade`` at all (see ``delete_project``).
 
 ``admins`` comes from OpenFGA ``list_users`` (the #51 access-review primitive) on
 ``project:<id>#can_administer`` — EFFECTIVE admins (role assignees, team members, the cascade), not raw
@@ -35,12 +41,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from datetime import UTC, datetime
 
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import InvalidInputError, ServiceUnavailableError, TableNotFoundError
+from lance_namespace import (
+    InvalidInputError,
+    NamespaceNotEmptyError,
+    PermissionDeniedError,
+    ServiceUnavailableError,
+    TableNotFoundError,
+)
 from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel
 
@@ -49,6 +60,7 @@ from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDe
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.core.control_emit import emit_control
+from catalog.core.identifiers import CONTROL_ID_RE
 from catalog.services import projects as project_registry
 from catalog.services import warehouses
 from service_kit.governed import fga
@@ -59,9 +71,10 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/projects", tags=["projects"])
 
-# The same DNS-safe id shape the warehouse endpoints enforce (lowercase alnum + hyphen, 3-63 chars) — a
-# project id doubles as an FGA object id and a registry field, so a malformed one is rejected up front.
-_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$")
+# The DNS-safe id shape the whole control plane enforces — a project id doubles as an FGA object id and a
+# registry filename, so a malformed one is rejected up front. SHARED (`catalog.core.identifiers`): this
+# `\Z` anchor was fixed here first and the two other copies kept the `$` that lets "acme\n" through.
+_ID_RE = CONTROL_ID_RE
 
 
 class ProjectWarehouse(BaseModel):
@@ -252,3 +265,123 @@ async def get_project(project_id: str, settings: SettingsDep, token: CurrentToke
     if entries is None:
         raise TableNotFoundError(f"project not found: {project_id}")
     return ProjectResponse(project=project_id, warehouses=entries, admins=await _admins_for(client, settings, project_id))
+
+
+class DeleteProjectResponse(BaseModel):
+    """What the delete actually removed: the retired tenant and how many FGA tuples went with it.
+
+    The count is reported rather than assumed — an operator retiring a tenant needs to see that the authz
+    side really happened (``0`` on an FGA-off stack is a fact, not a silent success)."""
+
+    project: str
+    tuples_revoked: int
+
+
+@router.delete("/{project_id}")
+async def delete_project(
+    project_id: str,
+    settings: SettingsDep,
+    token: CurrentToken,
+    client: FgaClientDep,
+    control: ControlEmitterDep,
+    force: bool = False,
+) -> DeleteProjectResponse:
+    """Retire a tenant: refuse while it still holds warehouses, else revoke its tuples and drop its record.
+
+    Gated on ``project:<id>#can_administer`` — the tenant's OWN admin bar, not the estate-observer gate the
+    read routes use (module docstring). Order, fail-closed and each step earning the next:
+    id shape (400) → existence (404) → authz (403) → deletion protection (409) → emptiness (409) →
+    revoke tuples → delete record → audit + event.
+
+    **Emptiness is bottom-up** (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses
+    refuses 409 and NAMES them — a refusal that does not say what blocks it just moves the search to the
+    user. **There is deliberately no ``cascade`` parameter on this route at all.** A project cascade would
+    reach warehouses, and a warehouse's own delete can purge a bucket; one request must never be able to
+    destroy a tenant's storage transitively. Emptying goes one rung at a time through
+    ``DELETE /v1/warehouses/{id}``, where the purge is its own separate opt-in.
+
+    ``force=true`` overrides deletion PROTECTION only (Decision 5) — the FGA gate above ran first and runs
+    identically with or without it, so forcing cannot delete a project the caller may not administer."""
+    if not _ID_RE.match(project_id):
+        raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
+    so = settings.storage_options()
+    # The record is read first because the gate needs the object it belongs to. Both outcomes below then
+    # answer 404: a missing tenant and a caller who may not administer one are made INDISTINGUISHABLE.
+    #
+    # NO EXISTENCE ORACLE (audit #4 — the rule `_set_warehouse_status` established and
+    # `delete_warehouse` follows): without the collapse, any authenticated caller could enumerate the
+    # estate's tenants by the 404-vs-403 difference alone, and `GET /v1/projects` is estate-observer
+    # gated precisely so they cannot. A create door legitimately answers 404 ("make the tenant first")
+    # because that is a fix the caller needs; a DESTRUCTIVE door has no such teaching to do.
+    record = await run_in_threadpool(project_registry.get_project, settings.registry_root, so, project_id)
+    if record is None:
+        raise TableNotFoundError(f"project not found: {project_id}")
+    try:
+        await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project_id}")
+    except PermissionDeniedError as exc:
+        raise TableNotFoundError(f"project not found: {project_id}") from exc
+    # Protection state and the warehouse listing below are both tenant DISCLOSURE, so they run only after
+    # the gate above has proven the caller administers this tenant.
+    fga_deps.require_not_protected(record, kind="project", obj_id=project_id, force=force)
+
+    # A project's contents ARE its warehouse records — the same registry the listing derives tenants from,
+    # so what the 409 names is exactly what GET /v1/projects/{id} shows.
+    held = sorted(str(r["id"]) for r in await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so) if r.get("project") == project_id)
+    if held:
+        raise NamespaceNotEmptyError(
+            f"project '{project_id}' still holds {len(held)} warehouse(s): {', '.join(held)}. "
+            f"Delete each one first — DELETE /v1/warehouses/{{id}} (its own bucket purge is a separate "
+            f"opt-in) — then delete the project. There is deliberately no cascade here: retiring a tenant "
+            f"must never be able to destroy its buckets transitively in one request."
+        )
+
+    removed = 0
+    revoked = False
+    # Tuples FIRST, record second. A revoke that fails (OpenFGA outage → 503) leaves the tenant fully
+    # described and re-deletable; the opposite order would strand grants on a project no API can name any
+    # more — privilege that nothing in the product can see, let alone clear.
+    if settings.fga_enabled and client is not None:
+        removed = await fga.revoke_object_tuples(
+            client,
+            f"project:{project_id}",
+            # The caller who retired the tenant. `system:catalog` is the honest fallback for an auth-off
+            # stack, where there genuinely is no principal — never a stand-in for one we failed to thread.
+            actor=token.sub if token is not None else "system:catalog",
+            origin="lifecycle_delete",
+        )
+        revoked = True
+    # That call removes every tuple whose OBJECT is `project:<id>` — the admin/member grants and the
+    # `team` edge. Tuples where the project is the USER are a different set, and the one that would matter
+    # is `warehouse:X#project@project:<id>`: none can survive here, because the emptiness refusal above
+    # proves no warehouse record claims this project, and a warehouse's delete revokes its own tuples (that
+    # edge among them) before its record goes. The annotator plane's `annotation_project:X#tenant@project:
+    # <id>` edge is NOT covered by that check — it lives outside the warehouse registry. It confers nothing
+    # once the project itself holds no admin/member tuples (there is no principal left to cascade from), and
+    # a dangling cross-store edge is precisely the drift Decision 4's reconciler reports rather than guesses at.
+    await run_in_threadpool(project_registry.delete_project_record, settings.registry_root, so, project_id)
+
+    actor = f"user:{token.sub}" if token else None
+    log.info("project_deleted", extra={"project": project_id, "tuples_revoked": removed, "forced": force})
+    if revoked:
+        # Mirrors create_project's grant audit, and only when the revoke really ran: an FGA-off stack must
+        # not fabricate a compliance record for a revocation that never happened. The revoke is
+        # subject-agnostic by design (it deletes EVERY tuple on the object), so the grantee is the wildcard
+        # and `removed` carries the magnitude.
+        audit(
+            "access_revoke",
+            SUCCESS,
+            subject=actor,
+            resource=f"project:{project_id}",
+            grantee="*",
+            relation="*",
+            removed=removed,
+            reason="project_deleted",
+        )
+    await emit_control(
+        control,
+        action="project_deleted",
+        object_type="project",
+        object_id=f"project:{project_id}",
+        actor=actor,
+    )
+    return DeleteProjectResponse(project=project_id, tuples_revoked=removed)

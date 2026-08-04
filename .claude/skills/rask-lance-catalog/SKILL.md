@@ -89,6 +89,20 @@ cross-object invariants, high-frequency filtered listings), it is a design decis
 - Deletes are bottom-up: a container refuses **409, naming its contents**; `cascade` is explicit;
   warehouse delete gates on the PROJECT's `can_administer`; bucket purge is a **separate opt-in**;
   project delete has **no cascade at all**.
+- **`force=true` overrides the `protected` flag and NOTHING else** — the FGA gate runs first and
+  identically with or without it. Test both delete doors for force-without-authz.
+- **NO EXISTENCE ORACLE on destructive doors (audit #4).** `delete_warehouse`, `delete_project` and
+  `_set_warehouse_status` all collapse `PermissionDenied → TableNotFound`, so "not yours" and "does
+  not exist" are byte-identical and the door cannot enumerate ids. CREATE doors deliberately do the
+  opposite (`require_project_exists` 404s naming `POST /v1/projects`) because that 404 is a fix the
+  caller needs. Class rule, not a per-endpoint judgement call.
+- **A purge must prove sole ownership first.** One project may back two warehouses with one bucket
+  (`projects_claiming_bucket` subtracts the caller's own project on purpose — the work+gold pair),
+  so `?purge_bucket=true` checks same-project siblings AND the reserved platform buckets before the
+  cascade. Without it, deleting the work warehouse wiped gold's data.
+- Anything making a DESTRUCTIVE decision reads `read_bindings` (which returns unparseable paths) and
+  refuses on a non-empty skip list; `list_bindings` is the tolerant half, for enumeration only. A
+  binding you cannot read is a namespace you cannot see.
 - `deactivate` = offboarding step one (quarantine; resolver 403s bound namespaces).
 - Maintenance (compaction + `optimize_indices` + `cleanup_old_versions` with tags EXEMPT) lives in
   `services/compaction` — `catalog/api/maintenance.py` is read-only maintenance MODE, not this.
@@ -108,6 +122,18 @@ cross-object invariants, high-frequency filtered listings), it is a design decis
   name an event the backend publishes, and `test_openapi_contract` fails. Same for `TupleOrigin`
   (`service_kit/governed/fga.py`) — an origin string not in the Literal is a `ty` error, not a runtime one.
 - `discover_dataset_uris` (maintenance sweep) walks ONE root — multi-warehouse sweeps are untested.
+- **A namespace is a `__manifest` ROW, not a directory** (the `dir` impl the chart runs —
+  `LANCE_REST_IMPL=dir`). Only a TABLE materialises a directory. Any scan that enumerates namespaces
+  by listing directories silently returns `[]` on every real estate — which reads as "checked and
+  clean". The reconciler's `unbound_namespaces` detector shipped with exactly that bug.
+- **The `warehouse_binding_cache` eviction on delete is PER-PROCESS.** `_resolve_warehouse_root`
+  caches bindings positively and forever on the premise that a binding is immutable; the warehouse
+  delete is the first thing that breaks that premise. Other replicas keep routing a dropped
+  namespace at the deleted warehouse's bucket. Latent only because `chart/values.yaml` pins the
+  catalog to `replicas=1` — a second replica needs the control event wired to invalidation first.
+- The `\Z`-anchored `CONTROL_ID_RE` (`catalog/core/identifiers.py`) is the ONE id-shape rule. It was
+  three copies that had already drifted: Python's `$` also matches before a trailing newline, so
+  `"acme\n"` was refused by one door and accepted by another.
 - Credential-level tenant isolation (tenant B's creds refused on bucket A) is untested; only
   byte-placement isolation is proven (`test_warehouse_routing.py` locally,
   `test_warehouses_e2e.py` against real buckets, env-gated).

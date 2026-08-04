@@ -4500,6 +4500,25 @@
         "title": "DeleteFromTableResponse",
         "type": "object"
       },
+      "DeleteProjectResponse": {
+        "description": "What the delete actually removed: the retired tenant and how many FGA tuples went with it.\n\nThe count is reported rather than assumed \u2014 an operator retiring a tenant needs to see that the authz\nside really happened (``0`` on an FGA-off stack is a fact, not a silent success).",
+        "properties": {
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "tuples_revoked": {
+            "title": "Tuples Revoked",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project",
+          "tuples_revoked"
+        ],
+        "title": "DeleteProjectResponse",
+        "type": "object"
+      },
       "DeleteTableBranchRequest": {
         "description": "DeleteTableBranchRequest",
         "properties": {
@@ -4674,6 +4693,48 @@
           }
         },
         "title": "DeleteTableTagResponse",
+        "type": "object"
+      },
+      "DeleteWarehouseResponse": {
+        "description": "What the delete ACTUALLY did \u2014 reported step by step, never assumed.\n\nA warehouse delete touches four independent stores (the native namespaces, OpenFGA, the registry, the\nbucket) and only three of them run by default. Reporting each separately is what makes a partial\nfailure diagnosable instead of a lie: ``bucket_purged=false`` names bytes that are still there, and\n``tuples_revoked`` is a count OpenFGA really returned.",
+        "properties": {
+          "bucket": {
+            "title": "Bucket",
+            "type": "string"
+          },
+          "bucket_purged": {
+            "title": "Bucket Purged",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "namespaces_dropped": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Namespaces Dropped",
+            "type": "array"
+          },
+          "objects_purged": {
+            "title": "Objects Purged",
+            "type": "integer"
+          },
+          "tuples_revoked": {
+            "title": "Tuples Revoked",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "bucket",
+          "namespaces_dropped",
+          "tuples_revoked",
+          "bucket_purged",
+          "objects_purged"
+        ],
+        "title": "DeleteWarehouseResponse",
         "type": "object"
       },
       "DeregisterTableRequest": {
@@ -12220,6 +12281,62 @@
       }
     },
     "/v1/projects/{project_id}": {
+      "delete": {
+        "description": "Retire a tenant: refuse while it still holds warehouses, else revoke its tuples and drop its record.\n\nGated on ``project:<id>#can_administer`` \u2014 the tenant's OWN admin bar, not the estate-observer gate the\nread routes use (module docstring). Order, fail-closed and each step earning the next:\nid shape (400) \u2192 existence (404) \u2192 authz (403) \u2192 deletion protection (409) \u2192 emptiness (409) \u2192\nrevoke tuples \u2192 delete record \u2192 audit + event.\n\n**Emptiness is bottom-up** (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses\nrefuses 409 and NAMES them \u2014 a refusal that does not say what blocks it just moves the search to the\nuser. **There is deliberately no ``cascade`` parameter on this route at all.** A project cascade would\nreach warehouses, and a warehouse's own delete can purge a bucket; one request must never be able to\ndestroy a tenant's storage transitively. Emptying goes one rung at a time through\n``DELETE /v1/warehouses/{id}``, where the purge is its own separate opt-in.\n\n``force=true`` overrides deletion PROTECTION only (Decision 5) \u2014 the FGA gate above ran first and runs\nidentically with or without it, so forcing cannot delete a project the caller may not administer.",
+        "operationId": "delete_project_v1_projects__project_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteProjectResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Project",
+        "tags": [
+          "projects"
+        ]
+      },
       "get": {
         "description": "One derived tenant \u2014 the same shape as the list. Estate-observer gated; unknown project \u2192 404.",
         "operationId": "get_project_v1_projects__project_id__get",
@@ -17171,6 +17288,82 @@
       }
     },
     "/v1/warehouses/{warehouse_id}": {
+      "delete": {
+        "description": "Delete a warehouse: its bindings, its tuples and its registry record \u2014 and its BUCKET only if asked.\n\nGated on ``project#can_administer`` (`open_hierarchy_lifecycle.md` Decision 3), NOT on a relation of the\nwarehouse itself: destroying a tenant's storage is a tenant-level act, so it clears the tenant's own\nadmin bar rather than a rung someone could hold on this one warehouse.\n\nOrder, and every step is load-bearing:\n\n1. The record must exist (404).\n2. **Authorize first.** The gate runs before the protection and emptiness checks, so an unauthorized\n   caller never learns whether the warehouse is protected or what it holds \u2014 a 409 listing another\n   tenant's namespace names is a disclosure a 403 must beat to.\n3. Deletion protection (Decision 5) refuses 409 unless ``force=true``. ``force`` overrides the\n   PROTECTION ONLY \u2014 step 2 has already run, identically, with or without it.\n4. Emptiness: a warehouse still holding namespaces refuses 409 **naming them**; a refusal that does not\n   say what blocks it just moves the search to the user. ``?cascade=true`` drops exactly those.\n5. The cascade drops each bound namespace through the REAL native path, against the warehouse's OWN\n   bucket-rooted connection (so it drops in the right bucket), then revokes its tuples and removes its\n   binding \u2014 one namespace fully finished before the next, so a mid-cascade failure leaves a consistent\n   prefix and a retry converges (every primitive is idempotent). A namespace that still holds TABLES\n   refuses on its own rung: the request omits ``behavior``, so the native drop is Restrict and the level\n   below is emptied first. Do NOT reach for ``behavior=\"Cascade\"`` here \u2014 measured against the directory\n   backend, it does not reject the value, it IGNORES it and drops Restrict-style anyway, so the field\n   would read as a working cascade while doing nothing.\n6. Tuples on ``warehouse:<id>``, then the registry record.\n7. **Bytes only on ``?purge_bucket=true``.** A catalog entry is recoverable, a customer's bucket is not,\n   so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a\n   purge that would take bytes this warehouse does not solely own \u2014 a bucket a same-project sibling\n   still claims, or reserved platform storage \u2014 refuses BEFORE the cascade\n   (:func:`_require_bucket_purgeable`).\n\nThe routing cache is evicted for every dropped namespace: ``_resolve_warehouse_root`` caches bindings\nPOSITIVELY and forever (they are immutable while they exist), so a binding deleted here but left in the\ncache would keep routing that namespace into a warehouse that no longer exists.",
+        "operationId": "delete_warehouse_v1_warehouses__warehouse_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cascade",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Cascade",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "purge_bucket",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Purge Bucket",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteWarehouseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Warehouse",
+        "tags": [
+          "warehouse"
+        ]
+      },
       "get": {
         "description": "One warehouse record \u2014 reader-gated on ``warehouse:<id>`` (fail-closed on an OpenFGA outage).",
         "operationId": "get_warehouse_v1_warehouses__warehouse_id__get",

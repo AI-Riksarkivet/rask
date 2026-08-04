@@ -848,7 +848,26 @@ export interface paths {
         get: operations["get_project_v1_projects__project_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Project
+         * @description Retire a tenant: refuse while it still holds warehouses, else revoke its tuples and drop its record.
+         *
+         *     Gated on ``project:<id>#can_administer`` — the tenant's OWN admin bar, not the estate-observer gate the
+         *     read routes use (module docstring). Order, fail-closed and each step earning the next:
+         *     id shape (400) → existence (404) → authz (403) → deletion protection (409) → emptiness (409) →
+         *     revoke tuples → delete record → audit + event.
+         *
+         *     **Emptiness is bottom-up** (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses
+         *     refuses 409 and NAMES them — a refusal that does not say what blocks it just moves the search to the
+         *     user. **There is deliberately no ``cascade`` parameter on this route at all.** A project cascade would
+         *     reach warehouses, and a warehouse's own delete can purge a bucket; one request must never be able to
+         *     destroy a tenant's storage transitively. Emptying goes one rung at a time through
+         *     ``DELETE /v1/warehouses/{id}``, where the purge is its own separate opt-in.
+         *
+         *     ``force=true`` overrides deletion PROTECTION only (Decision 5) — the FGA gate above ran first and runs
+         *     identically with or without it, so forcing cannot delete a project the caller may not administer.
+         */
+        delete: operations["delete_project_v1_projects__project_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2445,7 +2464,44 @@ export interface paths {
         get: operations["get_warehouse_v1_warehouses__warehouse_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Warehouse
+         * @description Delete a warehouse: its bindings, its tuples and its registry record — and its BUCKET only if asked.
+         *
+         *     Gated on ``project#can_administer`` (`open_hierarchy_lifecycle.md` Decision 3), NOT on a relation of the
+         *     warehouse itself: destroying a tenant's storage is a tenant-level act, so it clears the tenant's own
+         *     admin bar rather than a rung someone could hold on this one warehouse.
+         *
+         *     Order, and every step is load-bearing:
+         *
+         *     1. The record must exist (404).
+         *     2. **Authorize first.** The gate runs before the protection and emptiness checks, so an unauthorized
+         *        caller never learns whether the warehouse is protected or what it holds — a 409 listing another
+         *        tenant's namespace names is a disclosure a 403 must beat to.
+         *     3. Deletion protection (Decision 5) refuses 409 unless ``force=true``. ``force`` overrides the
+         *        PROTECTION ONLY — step 2 has already run, identically, with or without it.
+         *     4. Emptiness: a warehouse still holding namespaces refuses 409 **naming them**; a refusal that does not
+         *        say what blocks it just moves the search to the user. ``?cascade=true`` drops exactly those.
+         *     5. The cascade drops each bound namespace through the REAL native path, against the warehouse's OWN
+         *        bucket-rooted connection (so it drops in the right bucket), then revokes its tuples and removes its
+         *        binding — one namespace fully finished before the next, so a mid-cascade failure leaves a consistent
+         *        prefix and a retry converges (every primitive is idempotent). A namespace that still holds TABLES
+         *        refuses on its own rung: the request omits ``behavior``, so the native drop is Restrict and the level
+         *        below is emptied first. Do NOT reach for ``behavior="Cascade"`` here — measured against the directory
+         *        backend, it does not reject the value, it IGNORES it and drops Restrict-style anyway, so the field
+         *        would read as a working cascade while doing nothing.
+         *     6. Tuples on ``warehouse:<id>``, then the registry record.
+         *     7. **Bytes only on ``?purge_bucket=true``.** A catalog entry is recoverable, a customer's bucket is not,
+         *        so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a
+         *        purge that would take bytes this warehouse does not solely own — a bucket a same-project sibling
+         *        still claims, or reserved platform storage — refuses BEFORE the cascade
+         *        (:func:`_require_bucket_purgeable`).
+         *
+         *     The routing cache is evicted for every dropped namespace: ``_resolve_warehouse_root`` caches bindings
+         *     POSITIVELY and forever (they are immutable while they exist), so a binding deleted here but left in the
+         *     cache would keep routing that namespace into a warehouse that no longer exists.
+         */
+        delete: operations["delete_warehouse_v1_warehouses__warehouse_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4504,6 +4560,19 @@ export interface components {
             version?: number | null;
         };
         /**
+         * DeleteProjectResponse
+         * @description What the delete actually removed: the retired tenant and how many FGA tuples went with it.
+         *
+         *     The count is reported rather than assumed — an operator retiring a tenant needs to see that the authz
+         *     side really happened (``0`` on an FGA-off stack is a fact, not a silent success).
+         */
+        DeleteProjectResponse: {
+            /** Project */
+            project: string;
+            /** Tuples Revoked */
+            tuples_revoked: number;
+        };
+        /**
          * DeleteTableBranchRequest
          * @description DeleteTableBranchRequest
          */
@@ -4580,6 +4649,29 @@ export interface components {
              * @description Optional transaction identifier
              */
             transaction_id?: string | null;
+        };
+        /**
+         * DeleteWarehouseResponse
+         * @description What the delete ACTUALLY did — reported step by step, never assumed.
+         *
+         *     A warehouse delete touches four independent stores (the native namespaces, OpenFGA, the registry, the
+         *     bucket) and only three of them run by default. Reporting each separately is what makes a partial
+         *     failure diagnosable instead of a lie: ``bucket_purged=false`` names bytes that are still there, and
+         *     ``tuples_revoked`` is a count OpenFGA really returned.
+         */
+        DeleteWarehouseResponse: {
+            /** Bucket */
+            bucket: string;
+            /** Bucket Purged */
+            bucket_purged: boolean;
+            /** Id */
+            id: string;
+            /** Namespaces Dropped */
+            namespaces_dropped: string[];
+            /** Objects Purged */
+            objects_purged: number;
+            /** Tuples Revoked */
+            tuples_revoked: number;
         };
         /**
          * DeregisterTableRequest
@@ -8238,6 +8330,39 @@ export interface operations {
             };
         };
     };
+    delete_project_v1_projects__project_id__delete: {
+        parameters: {
+            query?: {
+                force?: boolean;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteProjectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_stores_v1_stores_get: {
         parameters: {
             query?: never;
@@ -10821,6 +10946,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WarehouseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_warehouse_v1_warehouses__warehouse_id__delete: {
+        parameters: {
+            query?: {
+                cascade?: boolean;
+                purge_bucket?: boolean;
+                force?: boolean;
+            };
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteWarehouseResponse"];
                 };
             };
             /** @description Validation Error */

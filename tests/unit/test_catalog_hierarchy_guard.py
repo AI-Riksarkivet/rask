@@ -127,3 +127,40 @@ def test_the_rule_binds_only_where_a_warehouse_can_exist() -> None:
     this an invariant rather than an outage — it fired on 17 existing tests before this existed.
     """
     fga_deps.require_warehouse_scoped(["bronze"], delimiter=DELIM, warehouses_enabled=False)
+
+
+# --------------------------------------------------------------------------- #
+# The control-plane id shape is ONE rule, not one per door.
+# --------------------------------------------------------------------------- #
+
+
+def test_a_control_plane_id_cannot_end_in_a_newline() -> None:
+    """Python's ``$`` also matches just BEFORE a trailing newline, and two of the three copies of this
+    pattern were ``$``-anchored — so ``"acme\\n"`` passed the shape check.
+
+    That is not cosmetic. The id becomes a registry FILENAME and an OpenFGA object id, and OpenFGA
+    rejects whitespace in the latter: ``put_project`` lands, ``seed_project_admin`` fails, and the
+    result is a record with no tuples — the exact record-without-tuples drift Decision 1 exists to
+    prevent, produced by the guard meant to stop it.
+    """
+    from catalog.core.identifiers import CONTROL_ID_RE
+
+    assert CONTROL_ID_RE.match("acme") is not None
+    assert CONTROL_ID_RE.match("acme\n") is None
+    assert CONTROL_ID_RE.match("acme\nevil") is None
+
+
+def test_every_control_plane_door_shares_ONE_id_pattern() -> None:
+    """The three doors validating a project/warehouse id must use the same object, not three copies.
+
+    They were three copies of one sentence ("the same DNS-safe shape the warehouse control plane
+    enforces") and they had already drifted on their end anchor — an id refused by ``POST /v1/projects``
+    was accepted by ``POST /v1/warehouses``. Identity (``is``), not equality: two equal-but-separate
+    compilations would drift again exactly the same way.
+    """
+    from catalog.api.v1.endpoints import policies, projects, warehouses
+    from catalog.core.identifiers import CONTROL_ID_RE
+
+    assert projects._ID_RE is CONTROL_ID_RE
+    assert warehouses._ID_RE is CONTROL_ID_RE
+    assert policies._PROJECT_ID_RE is CONTROL_ID_RE

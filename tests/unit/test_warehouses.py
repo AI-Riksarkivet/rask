@@ -679,3 +679,24 @@ def test_recreate_without_serving_does_not_demote_gold(tmp_path: Any, monkeypatc
     assert again.serving == "gold"
     rec = warehouses.get_warehouse(settings.registry_root, {}, "acme-gold")
     assert rec is not None and rec["serving"] == "gold"
+
+
+def test_an_unreadable_binding_refuses_rather_than_reporting_an_empty_warehouse(tmp_path: Any) -> None:
+    """A binding object the catalog cannot parse must FAIL CLOSED, not vanish from the count.
+
+    `list_warehouses`-style tolerance is right for a LISTING and catastrophic for a DELETE: the
+    unreadable object is the only thing that says which warehouse it binds, so skipping it turns
+    "this warehouse holds nothing" into a guess — and `DELETE ?purge_bucket=true` acts on that guess
+    by destroying the tables of a namespace nobody could enumerate.
+    """
+    root, so = _root(tmp_path), {}
+    warehouses.bind_namespace(root, so, "bronze", "wh-a", "s3://bkt-a")
+    assert warehouses.namespaces_bound_to(root, so, "wh-a") == ["bronze"]
+
+    (tmp_path / "_warehouses" / "bindings" / "silver.json").write_text("{ this is not json")
+    with pytest.raises(ServiceUnavailableError) as exc:
+        warehouses.namespaces_bound_to(root, so, "wh-a")
+    # The refusal names the unreadable object — an operator cannot fix what the error will not identify.
+    assert "silver.json" in str(exc.value)
+    # …and the tolerant listing still serves, because a broken binding must not black out enumeration.
+    assert [b["top_ns"] for b in warehouses.list_bindings(root, so)] == ["bronze"]

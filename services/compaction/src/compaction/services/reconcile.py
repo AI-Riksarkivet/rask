@@ -1,0 +1,663 @@
+"""The cross-store drift reconciler — a REPORT, beside the sweep (`open_hierarchy_lifecycle.md` Decision 4).
+
+**NOTHING DELETES. NOTHING MUTATES.** Every path in this module is read-only, and that is the point:
+a reclaimer that deletes on its first run against an unvalidated rule eats live data. The output is a
+typed report a later, separately-decided reclaimer can consume — once the report has run clean on a
+real estate.
+
+Three stores must agree about the hierarchy (project > warehouse > namespace > table) and NOTHING
+checks that they do:
+
+* **OpenFGA** says WHO. It can hold tuples for a tenant the catalog has never heard of (the live estate
+  held three such projects), and it can hold none at all for one that exists.
+* **The registries** — JSON records on the control root (``_projects/``, ``_warehouses/``,
+  ``_warehouses/bindings/``) — say WHAT EXISTS. Since Decision 1 this is the definition of existence.
+* **Object storage** holds the BYTES. A warehouse delete removes the record; the bucket survives unless
+  someone explicitly asked to purge it, so a bucket can outlive the record that named it.
+
+Seven detectors, one per drift category, each independently testable and each degrading on its own:
+a category whose source is unreachable reports UNAVAILABLE **with the reason** while the other six
+still report. A drift report that 500s on one bad store tells you nothing about the other six. Nor is
+anything capped silently — a truncated scan that reads as "all clear" is worse than no scan, so every
+page ceiling, unreadable record and paginated listing lands in :attr:`ReconcileReport.incomplete`.
+
+Why the registries are re-read here rather than imported from the catalog: compaction has no catalog
+client BY DESIGN, and declaring one would put the whole catalog closure in the compaction image (the
+`tests/unit/test_declared_dependencies.py` contract). This is the same catalog↔compaction shape as
+:mod:`service_kit.lakehouse.maintenance_policies` and :mod:`service_kit.lakehouse.warehouse_registry`:
+one service writes the records, another reads them straight off the bucket. The record layout is the
+shared contract, and the reader below is deliberately the *tolerant* half of it — a record it cannot
+parse is reported as an incomplete scan, never allowed to void a category.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import Awaitable, Callable, Iterable, Mapping
+from datetime import UTC, datetime
+from typing import Any
+
+import lance
+import pyarrow.fs as pafs
+from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel, Field
+
+from compaction.core.config import CompactionSettings
+from service_kit.governed import fga
+from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
+
+
+log = logging.getLogger(__name__)
+
+#: The registry prefixes, byte-identical to what the catalog writes them at. Bindings live UNDER the
+#: warehouse prefix, so every warehouse listing here is non-recursive (a recursive one would read the
+#: bindings as malformed warehouse records).
+_PROJECTS_PREFIX = "_projects"
+_WAREHOUSES_PREFIX = "_warehouses"
+_BINDINGS_PREFIX = "_warehouses/bindings"
+
+#: The FGA object the estate-admin gates check against (`Settings.fga_root_object`'s default). It is the
+#: platform's own root, NOT a tenant warehouse, so it has no registry record BY DESIGN — without this
+#: exclusion every run would report the estate root as a ghost warehouse forever, and a report that
+#: always contains a known-good finding is a report nobody reads.
+DEFAULT_FGA_ROOT_OBJECT = "warehouse:lance_catalog"
+
+#: Page ceiling for one object-type tuple scan. An estate's project/warehouse tuple count is small, so
+#: this is unreachable in practice; it exists so a continuation-token bug cannot spin the report
+#: forever. Hitting it is REPORTED as an incomplete scan, never silently truncated.
+_MAX_TUPLE_PAGES = 200
+_TUPLE_PAGE_SIZE = 100
+
+#: The namespace spec's own object index, one per root: ``object_id``/``object_type`` rows recording
+#: every namespace and table. It is the ONLY place a namespace exists — namespaces are not directories
+#: — so the unbound-namespace scan reads this rather than listing prefixes.
+_MANIFEST_DIR = "__manifest"
+_MANIFEST_NAMESPACE_TYPE = "namespace"
+
+#: The drift categories, in report order. `counts` carries exactly the ones that were CHECKED — an
+#: unavailable or skipped category is absent rather than zero, so a 0 can never read as "clean".
+CATEGORIES: tuple[str, ...] = (
+    "ghost_projects",
+    "ghost_warehouses",
+    "unreferenced_projects",
+    "unbound_namespaces",
+    "orphan_buckets",
+    "dangling_bindings",
+    "orphaned_annotation_tasks",
+)
+
+
+# --------------------------------------------------------------------------- #
+# The report
+# --------------------------------------------------------------------------- #
+
+
+class GhostObject(BaseModel):
+    """An FGA object carrying tuples that no registry record names — authz for a tenant that does not exist."""
+
+    kind: str
+    id: str
+    fga_object: str
+    #: How many tuples hang off it — the size of the grant surface a reclaimer would revoke.
+    tuples: int
+
+
+class UnreferencedProject(BaseModel):
+    """A project record with NO tuples at all: nobody can administer it, so nobody can delete it either."""
+
+    id: str
+
+
+class UnboundNamespace(BaseModel):
+    """A top-level namespace on the SHARED default root with no warehouse binding (pre-rule legacy)."""
+
+    namespace: str
+    #: The root it was found on — the shared default bucket, which is exactly where an unbound
+    #: namespace silently resolves to.
+    root: str
+
+
+class OrphanBucket(BaseModel):
+    """A bucket no warehouse record claims — the "deleted without purge" residue."""
+
+    bucket: str
+
+
+class DanglingBinding(BaseModel):
+    """A namespace→warehouse binding pointing at a warehouse_id with no record."""
+
+    top_ns: str
+    warehouse_id: str
+
+
+class OrphanedAnnotationTask(BaseModel):
+    """An annotation task whose ``tenant`` edge names a catalog project that no longer exists.
+
+    Annotation tasks are NOT warehouses: one catalog project holds many, they live in the annotator
+    plane, and they deliberately do not block a project delete. So retiring a tenant legitimately
+    leaves this edge behind — the annotator's ``owner``/``viewer`` rungs derive from
+    ``admin``/``member from tenant``, and with the tenant's tuples revoked there is no principal left
+    to cascade from. The task is not dangerous, it is UNREACHABLE, and nothing else would ever say so.
+    """
+
+    annotation_project: str
+    #: The tenant it still points at — gone from the project registry.
+    tenant: str
+
+
+class CategoryUnavailable(BaseModel):
+    """A category that could NOT be checked because a store it needs was unreachable."""
+
+    category: str
+    reason: str
+
+
+class CategorySkipped(BaseModel):
+    """A category deliberately not checked because its rule does not apply to this estate."""
+
+    category: str
+    reason: str
+
+
+class IncompleteScan(BaseModel):
+    """A source that answered PARTIALLY — a page ceiling, a paginated listing, an unreadable record.
+
+    Recorded separately from a failure because the categories built on it still report: they may
+    under- or over-report, and this names which input to distrust.
+    """
+
+    source: str
+    reason: str
+
+
+class ReconcileReport(BaseModel):
+    """One cross-store drift scan. Machine-readable on purpose — a later reclaimer consumes this shape.
+
+    ``counts`` holds one entry per CHECKED category and ``total`` their sum; an unavailable or skipped
+    category appears in neither, so "absent" and "zero findings" stay distinguishable.
+    """
+
+    checked_at: str
+    ghost_projects: list[GhostObject] = Field(default_factory=list)
+    ghost_warehouses: list[GhostObject] = Field(default_factory=list)
+    unreferenced_projects: list[UnreferencedProject] = Field(default_factory=list)
+    unbound_namespaces: list[UnboundNamespace] = Field(default_factory=list)
+    orphan_buckets: list[OrphanBucket] = Field(default_factory=list)
+    dangling_bindings: list[DanglingBinding] = Field(default_factory=list)
+    orphaned_annotation_tasks: list[OrphanedAnnotationTask] = Field(default_factory=list)
+    unavailable: list[CategoryUnavailable] = Field(default_factory=list)
+    skipped: list[CategorySkipped] = Field(default_factory=list)
+    incomplete: list[IncompleteScan] = Field(default_factory=list)
+    counts: dict[str, int] = Field(default_factory=dict)
+    total: int = 0
+
+
+# --------------------------------------------------------------------------- #
+# Read-only source readers
+# --------------------------------------------------------------------------- #
+
+
+def _reason(source: str, exc: BaseException) -> str:
+    """A failure reason that names the source AND the exception class — "unavailable" alone is not a lead."""
+    return f"{source}: {type(exc).__name__}: {exc}"
+
+
+async def _read_async[T](source: str, awaitable: Awaitable[T]) -> tuple[T | None, str | None]:
+    """Await one source, converting any failure into a reason string. Never raises — a dead store
+    degrades its own categories and nothing else."""
+    try:
+        return (await awaitable), None
+    except Exception as exc:
+        log.warning("reconcile_source_unavailable", extra={"source": source, "error": str(exc)})
+        return None, _reason(source, exc)
+
+
+async def _read_blocking[T](source: str, fn: Callable[..., T], *args: Any) -> tuple[T | None, str | None]:
+    """The blocking twin of :func:`_read_async` — the registry/bucket listings are blocking IO, so they
+    run in the threadpool exactly like the sweep's."""
+    return await _read_async(source, run_in_threadpool(fn, *args))
+
+
+def _list_json_records(root: str, storage_options: StorageOptions, prefix: str, required: tuple[str, ...]) -> tuple[list[dict[str, str]], list[str]]:
+    """Every readable JSON record directly under ``<root>/<prefix>``, plus a reason per record SKIPPED.
+
+    Non-recursive, so ``_warehouses`` does not swallow ``_warehouses/bindings``. Per-record tolerance
+    matches the catalog's own listings — but here a skip is not merely survived, it is REPORTED: a
+    record this cannot read is a tenant it cannot see, and a category computed without it may name a
+    live object as drift.
+    """
+    fs, base = fs_and_base(root, storage_options)
+    records: list[dict[str, str]] = []
+    skipped: list[str] = []
+    for info in fs.get_file_info(pafs.FileSelector(f"{base}/{prefix}", allow_not_found=True, recursive=False)):
+        if info.type != pafs.FileType.File or not info.path.endswith(".json"):
+            continue
+        try:
+            with fs.open_input_stream(info.path) as stream:
+                record = json.loads(stream.readall().decode("utf-8"))
+        except Exception as exc:
+            skipped.append(f"{info.path} is unreadable ({type(exc).__name__}: {exc})")
+            continue
+        if isinstance(record, dict) and all(record.get(key) for key in required):
+            records.append(record)
+        else:
+            skipped.append(f"{info.path} is missing one of {list(required)}")
+    return records, skipped
+
+
+def _top_level_namespaces(root: str, storage_options: StorageOptions, delimiter: str) -> list[str]:
+    """The top-level namespaces recorded on ``root``, sorted.
+
+    Read from the namespace MANIFEST (``<root>/__manifest``, the spec's own object index), not from
+    the directory listing. A namespace is not a directory: ``create_namespace`` on the ``dir`` impl —
+    what the chart runs (``LANCE_REST_IMPL=dir``) — writes a row and nothing else, while a TABLE lands
+    flat at the root as ``<uuid>_<ns><delimiter><table>/``. Scanning directories therefore finds every
+    table and no namespace at all, which is the failure direction that reports an estate CLEAN.
+
+    ``object_type`` separates namespaces from tables and the delimiter separates top-level from nested
+    (a child is recorded as ``parent<delimiter>child``). A root with no manifest yet is a fresh estate,
+    not an error: it yields ``[]``.
+
+    This reads the SHARED DEFAULT root deliberately: a warehouse-BOUND namespace is created against its
+    warehouse's own bucket and is recorded in THAT bucket's manifest, so the shared root's manifest is
+    precisely where an unbound one lands.
+    """
+    fs, base = fs_and_base(root, storage_options)
+    # Probe first so the fresh-estate case never rides an exception: an absent dataset raises, and a
+    # raise here would report the category unavailable on a brand-new estate.
+    if fs.get_file_info(f"{base}/{_MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
+        return []
+    manifest_uri = f"s3://{base}/{_MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{_MANIFEST_DIR}"
+    dataset = lance.dataset(manifest_uri, storage_options=storage_options)
+    table = dataset.to_table(columns=["object_id", "object_type"])
+    return sorted(
+        {
+            str(object_id)
+            for object_id, object_type in zip(table.column("object_id").to_pylist(), table.column("object_type").to_pylist(), strict=True)
+            if object_type == _MANIFEST_NAMESPACE_TYPE and object_id and delimiter not in str(object_id)
+        }
+    )
+
+
+def _list_bucket_names(client: Any) -> tuple[list[str], str | None]:
+    """Every bucket the credentials can see, sorted, plus a truncation reason when the listing paged.
+
+    S3 ListBuckets grew pagination; a page silently read as the whole estate would make every bucket
+    past it look claimed, which is the direction that HIDES drift.
+    """
+    response = client.list_buckets()
+    names = sorted(str(b["Name"]) for b in (response.get("Buckets") or []) if b.get("Name"))
+    truncated = response.get("ContinuationToken") or response.get("NextContinuationToken") or response.get("IsTruncated")
+    if truncated:
+        return names, f"ListBuckets returned a continuation cursor — these {len(names)} bucket(s) are ONE PAGE, not the estate"
+    return names, None
+
+
+async def _object_tuple_counts(client: Any, object_type: str) -> tuple[dict[str, int], str | None]:
+    """``{object_id: tuple_count}`` for every ``<object_type>:`` object carrying at least one tuple.
+
+    A bare-type Read scan, paged to the end. Returns a truncation reason (never a silently short answer)
+    if the page ceiling is reached with a cursor still outstanding — a short scan would invent ghosts on
+    the registry side and hide them on the FGA side.
+    """
+    counts: dict[str, int] = {}
+    token: str | None = None
+    for _ in range(_MAX_TUPLE_PAGES):
+        page, token = await fga.read_tuples(client, obj=f"{object_type}:", page_size=_TUPLE_PAGE_SIZE, continuation_token=token)
+        for item in page:
+            obj_id = str(item.object).partition(":")[2]
+            if obj_id:
+                counts[obj_id] = counts.get(obj_id, 0) + 1
+        if not token:
+            return counts, None
+    return counts, f"the {object_type} tuple scan hit its {_MAX_TUPLE_PAGES}-page ceiling with a cursor outstanding"
+
+
+async def _annotation_tenant_edges(client: Any) -> tuple[list[tuple[str, str]], str | None]:
+    """``(annotation_project_id, tenant_project_id)`` for every ``annotation_project#tenant`` tuple.
+
+    Distinct from :func:`_object_tuple_counts` because here the tuple's USER is the answer: the edge
+    ``annotation_project:X#tenant@project:Y`` is the only place the annotator plane records which
+    catalog tenant a task belongs to, and no registry this process can read carries it.
+    """
+    edges: list[tuple[str, str]] = []
+    token: str | None = None
+    for _ in range(_MAX_TUPLE_PAGES):
+        page, token = await fga.read_tuples(client, obj="annotation_project:", page_size=_TUPLE_PAGE_SIZE, continuation_token=token)
+        for item in page:
+            if item.relation != "tenant":
+                continue
+            task_id = str(item.object).partition(":")[2]
+            tenant_type, _, tenant_id = str(item.user).partition(":")
+            if task_id and tenant_type == "project" and tenant_id:
+                edges.append((task_id, tenant_id))
+        if not token:
+            return edges, None
+    return edges, f"the annotation_project tuple scan hit its {_MAX_TUPLE_PAGES}-page ceiling with a cursor outstanding"
+
+
+# --------------------------------------------------------------------------- #
+# The detectors — pure, one per category
+# --------------------------------------------------------------------------- #
+
+
+def _ghosts(kind: str, tuple_counts: Mapping[str, int], record_ids: set[str], exclude: set[str]) -> list[GhostObject]:
+    """FGA objects of ``kind`` holding tuples that no registry record names."""
+    return [
+        GhostObject(kind=kind, id=obj_id, fga_object=f"{kind}:{obj_id}", tuples=count)
+        for obj_id, count in sorted(tuple_counts.items())
+        if obj_id not in record_ids and obj_id not in exclude
+    ]
+
+
+def _unreferenced_projects(record_ids: set[str], tuple_counts: Mapping[str, int]) -> list[UnreferencedProject]:
+    """Project records with no tuples at all — an undeletable tenant is drift too."""
+    return [UnreferencedProject(id=project_id) for project_id in sorted(record_ids) if not tuple_counts.get(project_id)]
+
+
+def _orphaned_annotation_tasks(edges: Iterable[tuple[str, str]], project_ids: set[str]) -> list[OrphanedAnnotationTask]:
+    """Annotation tasks whose tenant edge names a project the registry no longer has.
+
+    The expected residue of a project delete, which refuses on warehouses but NOT on annotation tasks
+    (one tenant holds many, and they are not a rung of project > warehouse > namespace > table). This
+    is the category that exists precisely because the delete door was right to let it happen.
+    """
+    return [OrphanedAnnotationTask(annotation_project=task_id, tenant=tenant_id) for task_id, tenant_id in sorted(set(edges)) if tenant_id not in project_ids]
+
+
+def _unbound_namespaces(namespaces: Iterable[str], bound: set[str], root: str) -> list[UnboundNamespace]:
+    """Top-level namespaces on the shared root that no binding claims."""
+    return [UnboundNamespace(namespace=name, root=root) for name in sorted(namespaces) if name not in bound]
+
+
+def _orphan_buckets(buckets: Iterable[str], claimed: set[str], platform: set[str]) -> list[OrphanBucket]:
+    """Buckets no warehouse record claims and no platform role explains.
+
+    Over-reporting is the SAFE direction for a report: an unrecognised platform bucket shows up as a
+    finding a human dismisses, whereas an over-broad exemption hides a real orphan permanently.
+    """
+    return [OrphanBucket(bucket=bucket) for bucket in sorted(buckets) if bucket not in claimed and bucket not in platform]
+
+
+def _dangling_bindings(bindings: Iterable[Mapping[str, str]], warehouse_ids: set[str]) -> list[DanglingBinding]:
+    """Bindings pointing at a warehouse_id with no record — a namespace routed at nothing."""
+    return sorted(
+        (DanglingBinding(top_ns=str(b["top_ns"]), warehouse_id=str(b["warehouse_id"])) for b in bindings if str(b["warehouse_id"]) not in warehouse_ids),
+        key=lambda d: (d.top_ns, d.warehouse_id),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Orchestration
+# --------------------------------------------------------------------------- #
+
+
+class Sources(BaseModel):
+    """Every store this report reads, each paired with the reason it FAILED instead of a value.
+
+    One field per source rather than one try/except per category, so a dead store degrades exactly the
+    categories that needed it and no others — which is the whole difference between this and a report
+    that 500s.
+    """
+
+    fga_projects: dict[str, int] | None = None
+    fga_projects_error: str | None = None
+    fga_warehouses: dict[str, int] | None = None
+    fga_warehouses_error: str | None = None
+    project_records: list[dict[str, str]] | None = None
+    project_records_error: str | None = None
+    warehouse_records: list[dict[str, str]] | None = None
+    warehouse_records_error: str | None = None
+    bindings: list[dict[str, str]] | None = None
+    bindings_error: str | None = None
+    namespaces: list[str] | None = None
+    namespaces_error: str | None = None
+    buckets: list[str] | None = None
+    buckets_error: str | None = None
+    #: ``(annotation_project_id, tenant_project_id)`` for every annotation task carrying a tenant edge.
+    annotation_tenants: list[tuple[str, str]] | None = None
+    annotation_tenants_error: str | None = None
+    incomplete: list[IncompleteScan] = Field(default_factory=list)
+
+
+#: Said when FGA is not wired into the process at all — distinct from an outage, and the distinction
+#: matters: with no client there is nothing wrong with the estate, only with the scan.
+_FGA_ABSENT = "no OpenFGA client is wired into this process, so authz-vs-registry drift cannot be checked"
+
+#: Said when the warehouse feature is off. With warehouses disabled an unbound namespace is CORRECT —
+#: reporting it would train the reader to ignore the category before it ever means anything.
+_WAREHOUSES_OFF = "warehouses are disabled — every namespace resolving to the shared default root is correct, not drift"
+
+
+def _bucket_of(root_uri: str) -> str | None:
+    """The bucket a root URI addresses, or ``None`` for a local/file root (which owns no bucket)."""
+    if not root_uri.startswith("s3://"):
+        return None
+    return root_uri[len("s3://") :].strip("/").split("/")[0] or None
+
+
+async def _annotation_tenant_source(sources: Sources, client: Any) -> tuple[list[tuple[str, str]] | None, str | None]:
+    """The annotation-task tenant edges, folding any truncation note into ``sources.incomplete``."""
+    if client is None:
+        return None, _FGA_ABSENT
+    scan, error = await _read_async("fga:annotation_project", _annotation_tenant_edges(client))
+    if scan is None:
+        return None, error
+    edges, truncation = scan
+    if truncation:
+        sources.incomplete.append(IncompleteScan(source="fga:annotation_project", reason=truncation))
+    return edges, None
+
+
+async def _fga_source(sources: Sources, client: Any, object_type: str) -> tuple[dict[str, int] | None, str | None]:
+    """One object-type tuple scan, folding its truncation note into ``sources.incomplete``."""
+    if client is None:
+        return None, _FGA_ABSENT
+    scan, error = await _read_async(f"fga:{object_type}", _object_tuple_counts(client, object_type))
+    if scan is None:
+        return None, error
+    counts, truncation = scan
+    if truncation:
+        sources.incomplete.append(IncompleteScan(source=f"fga:{object_type}", reason=truncation))
+    return counts, None
+
+
+async def _registry_source(
+    sources: Sources,
+    source_name: str,
+    control_root: str,
+    storage_options: StorageOptions,
+    prefix: str,
+    required: tuple[str, ...],
+) -> tuple[list[dict[str, str]] | None, str | None]:
+    """One registry listing, folding its per-record skips into ``sources.incomplete``."""
+    listing, error = await _read_blocking(source_name, _list_json_records, control_root, storage_options, prefix, required)
+    if listing is None:
+        return None, error
+    records, skipped = listing
+    sources.incomplete.extend(IncompleteScan(source=source_name, reason=reason) for reason in skipped)
+    return records, None
+
+
+async def _bucket_source(sources: Sources, bucket_client: Any) -> tuple[list[str] | None, str | None]:
+    """The bucket listing, folding its pagination note into ``sources.incomplete``."""
+    if bucket_client is None:
+        return None, "no S3 client is wired into this process, so bucket residue cannot be checked"
+    listing, error = await _read_blocking("storage:buckets", _list_bucket_names, bucket_client)
+    if listing is None:
+        return None, error
+    names, truncation = listing
+    if truncation:
+        sources.incomplete.append(IncompleteScan(source="storage:buckets", reason=truncation))
+    return names, None
+
+
+async def load_sources(
+    *,
+    client: Any,
+    control_root: str,
+    namespace_root: str,
+    storage_options: StorageOptions,
+    bucket_client: Any,
+    delimiter: str,
+) -> Sources:
+    """Read all seven sources, independently. Nothing here raises."""
+    sources = Sources()
+    sources.fga_projects, sources.fga_projects_error = await _fga_source(sources, client, "project")
+    sources.fga_warehouses, sources.fga_warehouses_error = await _fga_source(sources, client, "warehouse")
+    sources.project_records, sources.project_records_error = await _registry_source(
+        sources, "registry:projects", control_root, storage_options, _PROJECTS_PREFIX, ("id",)
+    )
+    sources.warehouse_records, sources.warehouse_records_error = await _registry_source(
+        sources, "registry:warehouses", control_root, storage_options, _WAREHOUSES_PREFIX, ("id", "bucket", "project")
+    )
+    sources.bindings, sources.bindings_error = await _registry_source(
+        sources, "registry:bindings", control_root, storage_options, _BINDINGS_PREFIX, ("top_ns", "warehouse_id")
+    )
+    sources.namespaces, sources.namespaces_error = await _read_blocking("catalog:namespaces", _top_level_namespaces, namespace_root, storage_options, delimiter)
+    sources.buckets, sources.buckets_error = await _bucket_source(sources, bucket_client)
+    sources.annotation_tenants, sources.annotation_tenants_error = await _annotation_tenant_source(sources, client)
+    return sources
+
+
+def _first(*reasons: str | None) -> str | None:
+    """The first source failure among a category's inputs — the reason that category cannot be checked."""
+    return next((reason for reason in reasons if reason), None)
+
+
+def build_report(
+    sources: Sources,
+    *,
+    warehouses_enabled: bool,
+    namespace_root: str,
+    platform_buckets: set[str],
+    fga_root_object: str,
+) -> ReconcileReport:
+    """Run every detector whose inputs are present; record the rest as unavailable or skipped."""
+    report = ReconcileReport(checked_at=datetime.now(UTC).isoformat(), incomplete=list(sources.incomplete))
+    project_ids = {str(r["id"]) for r in sources.project_records or []}
+    warehouse_ids = {str(r["id"]) for r in sources.warehouse_records or []}
+    root_type, _, root_id = fga_root_object.partition(":")
+
+    if (reason := _first(sources.fga_projects_error, sources.project_records_error)) is not None:
+        report.unavailable.append(CategoryUnavailable(category="ghost_projects", reason=reason))
+    else:
+        report.ghost_projects = _ghosts("project", sources.fga_projects or {}, project_ids, {root_id} if root_type == "project" else set())
+        report.counts["ghost_projects"] = len(report.ghost_projects)
+
+    if (reason := _first(sources.fga_warehouses_error, sources.warehouse_records_error)) is not None:
+        report.unavailable.append(CategoryUnavailable(category="ghost_warehouses", reason=reason))
+    else:
+        report.ghost_warehouses = _ghosts("warehouse", sources.fga_warehouses or {}, warehouse_ids, {root_id} if root_type == "warehouse" else set())
+        report.counts["ghost_warehouses"] = len(report.ghost_warehouses)
+
+    if (reason := _first(sources.project_records_error, sources.fga_projects_error)) is not None:
+        report.unavailable.append(CategoryUnavailable(category="unreferenced_projects", reason=reason))
+    else:
+        report.unreferenced_projects = _unreferenced_projects(project_ids, sources.fga_projects or {})
+        report.counts["unreferenced_projects"] = len(report.unreferenced_projects)
+
+    if not warehouses_enabled:
+        report.skipped.append(CategorySkipped(category="unbound_namespaces", reason=_WAREHOUSES_OFF))
+    elif (reason := _first(sources.namespaces_error, sources.bindings_error)) is not None:
+        report.unavailable.append(CategoryUnavailable(category="unbound_namespaces", reason=reason))
+    else:
+        bound = {str(b["top_ns"]) for b in sources.bindings or []}
+        report.unbound_namespaces = _unbound_namespaces(sources.namespaces or [], bound, namespace_root)
+        report.counts["unbound_namespaces"] = len(report.unbound_namespaces)
+
+    if (reason := _first(sources.buckets_error, sources.warehouse_records_error)) is not None:
+        report.unavailable.append(CategoryUnavailable(category="orphan_buckets", reason=reason))
+    else:
+        claimed = {str(r["bucket"]) for r in sources.warehouse_records or []}
+        report.orphan_buckets = _orphan_buckets(sources.buckets or [], claimed, platform_buckets)
+        report.counts["orphan_buckets"] = len(report.orphan_buckets)
+
+    if (reason := _first(sources.bindings_error, sources.warehouse_records_error)) is not None:
+        report.unavailable.append(CategoryUnavailable(category="dangling_bindings", reason=reason))
+    else:
+        report.dangling_bindings = _dangling_bindings(sources.bindings or [], warehouse_ids)
+        report.counts["dangling_bindings"] = len(report.dangling_bindings)
+
+    if (reason := _first(sources.annotation_tenants_error, sources.project_records_error)) is not None:
+        report.unavailable.append(CategoryUnavailable(category="orphaned_annotation_tasks", reason=reason))
+    else:
+        report.orphaned_annotation_tasks = _orphaned_annotation_tasks(sources.annotation_tenants or [], project_ids)
+        report.counts["orphaned_annotation_tasks"] = len(report.orphaned_annotation_tasks)
+
+    report.total = sum(report.counts.values())
+    return report
+
+
+async def reconcile(
+    settings: CompactionSettings,
+    client: Any = None,
+    *,
+    warehouses_enabled: bool,
+    control_root: str | None = None,
+    namespace_root: str | None = None,
+    platform_buckets: Iterable[str] | None = None,
+    fga_root_object: str = DEFAULT_FGA_ROOT_OBJECT,
+    bucket_client: Any = None,
+) -> ReconcileReport:
+    """Scan the three stores and REPORT their disagreements. Deletes nothing; mutates nothing.
+
+    ``client`` is an OpenFGA client (``None`` → the two ghost categories and ``unreferenced_projects``
+    report unavailable rather than silently empty). ``bucket_client`` is an S3 client (``None`` → same,
+    for ``orphan_buckets``); when omitted one is built from the sweep's own credentials.
+
+    ``control_root`` defaults to the root the sweep already reads the maintenance-policy registry from
+    (``COMPACTION_POLICY_ROOT``, else the primary bucket) — the catalog's control root, and the one
+    place the project/warehouse/binding records live. ``namespace_root`` defaults to the primary
+    lakehouse bucket: the SHARED default root, where a namespace with no warehouse binding lands.
+
+    ``warehouses_enabled`` mirrors the catalog's own switch and is passed IN — compaction does not own
+    that setting, and inferring it from the presence of records would report an estate mid-migration as
+    clean. With warehouses off, ``unbound_namespaces`` is skipped, not zero.
+    """
+    resolved_control_root = control_root or settings.resolved_policy_root
+    resolved_namespace_root = namespace_root or f"s3://{settings.s3_bucket}"
+    storage_options = settings.storage_options()
+    if bucket_client is None and resolved_namespace_root.startswith("s3://"):
+        # Via the canonical wrapper (packages/storage), never boto3 directly, and with the sweep's own
+        # credentials passed explicitly — the env chain is one global pair and this process may address
+        # a different backend than the ambient one.
+        from storage import s3_client
+
+        bucket_client = s3_client(
+            settings.s3_endpoint,
+            access_key=settings.s3_access_key_id,
+            secret_key=settings.s3_secret_access_key.get_secret_value(),
+        )
+
+    platform = {b for b in (platform_buckets if platform_buckets is not None else settings.sweep_buckets) if b}
+    for uri in (resolved_control_root, resolved_namespace_root):
+        if (bucket := _bucket_of(uri)) is not None:
+            platform.add(bucket)
+
+    sources = await load_sources(
+        client=client,
+        control_root=resolved_control_root,
+        namespace_root=resolved_namespace_root,
+        storage_options=storage_options,
+        bucket_client=bucket_client,
+        delimiter=settings.delimiter,
+    )
+    report = build_report(
+        sources,
+        warehouses_enabled=warehouses_enabled,
+        namespace_root=resolved_namespace_root,
+        platform_buckets=platform,
+        fga_root_object=fga_root_object,
+    )
+    log.info(
+        "reconcile_report",
+        extra={
+            "total": report.total,
+            "counts": report.counts,
+            "unavailable": [u.category for u in report.unavailable],
+            "incomplete": len(report.incomplete),
+        },
+    )
+    return report

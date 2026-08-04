@@ -21,6 +21,7 @@ import logging
 from typing import Any
 
 import pyarrow.fs as pafs
+from lance_namespace import ServiceUnavailableError
 
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
@@ -190,18 +191,23 @@ def set_warehouse_status(control_root: str, storage_options: StorageOptions, war
 # --------------------------------------------------------------------------- #
 
 
-def list_bindings(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
-    """Every readable namespace→warehouse binding (unordered). An absent prefix yields ``[]``.
+def read_bindings(control_root: str, storage_options: StorageOptions) -> tuple[list[dict[str, str]], list[str]]:
+    """``(readable bindings, paths that could NOT be read)``. An absent prefix yields ``([], [])``.
 
-    This is how the delete door learns what a warehouse still HOLDS — the 409 refusal names those
-    namespaces, and ``?cascade=true`` drops exactly them. Per-record tolerance matches
-    :func:`list_warehouses`: one unreadable binding is skipped with a warning rather than voiding
-    the listing — but note the consequence, which is why the delete path treats a skip as serious:
-    a binding it cannot read is a namespace it cannot see, and deleting a warehouse that still holds
-    one would orphan that namespace's tables. The reconciler reports unreadable bindings as drift.
+    The skipped paths are RETURNED, not merely logged, because the two callers need opposite things
+    from the same tolerance and a plain list cannot serve both:
+
+    * a LISTING wants to survive one bad object (the :func:`list_warehouses` posture);
+    * the DELETE door must fail closed on one. A binding it cannot read is a namespace it cannot
+      see, so an unreadable object turns "this warehouse is empty" into a guess — and with
+      ``?purge_bucket=true`` that guess destroys the tables of a namespace nobody could enumerate.
+
+    An earlier version of this function only logged the skip and its own docstring claimed the delete
+    path "treats a skip as serious". It could not: nothing crossed the return boundary to treat.
     """
     fs, base = fs_and_base(control_root, storage_options)
     out: list[dict[str, str]] = []
+    skipped: list[str] = []
     for info in fs.get_file_info(pafs.FileSelector(f"{base}/{_BINDINGS_PREFIX}", allow_not_found=True)):
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
             continue
@@ -210,12 +216,23 @@ def list_bindings(control_root: str, storage_options: StorageOptions) -> list[di
                 record = json.loads(stream.readall().decode("utf-8"))
         except Exception as exc:
             log.warning("binding_record_unreadable", extra={"path": info.path, "error": str(exc)})
+            skipped.append(info.path)
             continue
         if isinstance(record, dict) and record.get("top_ns") and record.get("warehouse_id"):
             out.append(record)
         else:
             log.warning("binding_record_malformed", extra={"path": info.path})
-    return out
+            skipped.append(info.path)
+    return out, skipped
+
+
+def list_bindings(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
+    """Every READABLE namespace→warehouse binding (unordered), skipping what it cannot parse.
+
+    The tolerant half of :func:`read_bindings`, for callers that only enumerate. Anything that makes
+    a DESTRUCTIVE decision must use ``read_bindings`` and refuse on a non-empty skip list.
+    """
+    return read_bindings(control_root, storage_options)[0]
 
 
 def namespaces_bound_to(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> list[str]:
@@ -223,8 +240,19 @@ def namespaces_bound_to(control_root: str, storage_options: StorageOptions, ware
 
     The warehouse's *contents* for lifecycle purposes: non-empty ⇒ the delete refuses 409 and names
     them; ``?cascade=true`` drops them bottom-up in this order.
+
+    Raises ``ServiceUnavailableError`` if ANY binding object is unreadable — including ones belonging
+    to other warehouses. That looks over-broad and is deliberate: the unreadable object's own content
+    is what says which warehouse it binds, so "it probably wasn't this one's" is precisely the
+    assumption that cannot be made. Refusing is recoverable; a wrong emptiness answer is not.
     """
-    return sorted(str(b["top_ns"]) for b in list_bindings(control_root, storage_options) if b.get("warehouse_id") == warehouse_id)
+    bindings, skipped = read_bindings(control_root, storage_options)
+    if skipped:
+        raise ServiceUnavailableError(
+            f"{len(skipped)} namespace binding record(s) could not be read ({', '.join(sorted(skipped))}), so this "
+            f"warehouse's contents cannot be determined. Refusing rather than reporting a possibly-empty warehouse."
+        )
+    return sorted(str(b["top_ns"]) for b in bindings if b.get("warehouse_id") == warehouse_id)
 
 
 def unbind_namespace(control_root: str, storage_options: StorageOptions, top_ns: str) -> None:

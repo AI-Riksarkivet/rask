@@ -12,7 +12,25 @@ splitting it into segments. (Parent-namespace derivation lives in ``service_kit.
 
 from __future__ import annotations
 
+import re
+
 from lance_namespace import InvalidInputError
+
+
+#: The shape a control-plane id (project, warehouse, bucket) must have: DNS-safe — lowercase
+#: alphanumeric plus hyphens, 3-63 characters, never starting or ending with a hyphen. It doubles as an
+#: S3 bucket name, a registry filename and an OpenFGA object id, so the strictest of those wins.
+#:
+#: **Anchored with ``\Z``, not ``$``, and that is load-bearing.** Python's ``$`` also matches just BEFORE
+#: a trailing newline, so ``"acme\n"`` satisfied a ``$``-anchored copy of this rule. That id then became a
+#: registry filename AND an FGA object id — and OpenFGA rejects whitespace in the latter, so the registry
+#: record landed and the tuple write failed: precisely the record-without-tuples drift Decision 1 exists to
+#: prevent. Found 2026-08-04 in an adversarial review, live in two of the three copies of this pattern.
+#:
+#: It is ONE constant because it was three copies that had already diverged. A shape rule duplicated per
+#: endpoint is a rule that holds until someone fixes one site.
+ID_PATTERN = r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]"
+CONTROL_ID_RE = re.compile(rf"^{ID_PATTERN}\Z")
 
 
 def parse_identifier(id_str: str, delimiter: str) -> list[str]:

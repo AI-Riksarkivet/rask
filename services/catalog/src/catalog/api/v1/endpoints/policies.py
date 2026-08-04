@@ -19,7 +19,6 @@ too rather than checking a phantom relation, which would 400 → fail-closed 503
 from __future__ import annotations
 
 import logging
-import re
 
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
@@ -35,7 +34,7 @@ from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.control_emit import emit_control
-from catalog.core.identifiers import parse_identifier
+from catalog.core.identifiers import CONTROL_ID_RE, parse_identifier
 from catalog.schemas import PolicyDeleteResponse, PolicyRequest, PolicyResponse
 from catalog.services import native, warehouses
 from service_kit.governed import fga
@@ -48,9 +47,10 @@ table_router = APIRouter(prefix="/v1/table", tags=["policy"])
 namespace_router = APIRouter(prefix="/v1/namespace", tags=["policy"])
 project_router = APIRouter(prefix="/v1/project", tags=["policy"])
 
-# The same DNS-safe shape the warehouse control plane enforces for project ids — a malformed id must
-# never become a path-traversing registry key or a phantom FGA object.
-_PROJECT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$")
+# The same DNS-safe shape the whole control plane enforces for project ids — a malformed id must never
+# become a path-traversing registry key or a phantom FGA object. SHARED, not re-declared: this was one of
+# three copies that had drifted apart on their end anchor (`catalog.core.identifiers.CONTROL_ID_RE`).
+_PROJECT_ID_RE = CONTROL_ID_RE
 
 
 def _canonical(segments: list[str], delimiter: str) -> str:
