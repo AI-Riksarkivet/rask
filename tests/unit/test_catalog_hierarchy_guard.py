@@ -5,7 +5,9 @@ table produced `parent_object() -> None`, the create went through, and the row g
 with no containment edge. It was invisible to every warehouse- or namespace-level grant and
 unreachable by the hierarchy the UI navigates — an orphan that nothing reported.
 
-These tests pin the refusal AND its wording, because a guard whose message does not say which rung
+The refusal is the spec's own InvalidInput (code 13 -> HTTP 400, RFC 9457 problem body via
+install_problem_handlers) — the Lance Namespace error model has no 422, and client SDKs dispatch on
+the numeric code. These tests pin the refusal AND its wording, because a guard whose message does not say which rung
 is missing just moves the confusion one layer out.
 """
 
@@ -13,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 from catalog.api import fga_deps
-from fastapi import HTTPException
+from lance_namespace import InvalidInputError
 
 
 DELIM = "$"
@@ -21,9 +23,8 @@ DELIM = "$"
 
 def test_a_table_with_no_namespace_is_refused() -> None:
     """The orphan case, which used to succeed silently."""
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(InvalidInputError) as exc:
         fga_deps.require_parent("table", ["orphan"], delimiter=DELIM)
-    assert exc.value.status_code == 422
 
 
 def test_the_refusal_names_the_rule_and_the_fix() -> None:
@@ -33,9 +34,9 @@ def test_the_refusal_names_the_rule_and_the_fix() -> None:
     test — but the three load-bearing parts (the identifier, the hierarchy, a corrected example)
     cannot quietly disappear.
     """
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(InvalidInputError) as exc:
         fga_deps.require_parent("table", ["sales"], delimiter=DELIM)
-    detail = str(exc.value.detail)
+    detail = str(exc.value)
     assert "sales" in detail
     assert "namespace" in detail
     assert "project > warehouse > namespace > table" in detail
@@ -80,7 +81,7 @@ def test_the_guard_agrees_with_what_the_grant_path_would_have_done() -> None:
         refused = False
         try:
             fga_deps.require_parent("table", segments, delimiter=DELIM)
-        except HTTPException:
+        except InvalidInputError:
             refused = True
         assert refused is would_orphan, f"guard and parent_object disagree on {segments}"
 
@@ -96,16 +97,15 @@ def test_a_top_level_namespace_outside_a_warehouse_is_refused() -> None:
     Nothing errored — the namespace worked, its tables worked, and the data went to the wrong
     tenant's storage. That silence is why this is a refusal now rather than a warning.
     """
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(InvalidInputError) as exc:
         fga_deps.require_warehouse_scoped(["bronze"], delimiter=DELIM, warehouses_enabled=True)
-    assert exc.value.status_code == 422
 
 
 def test_the_namespace_refusal_points_at_the_warehouse_route() -> None:
     """A refusal that does not say where to go instead is just an outage."""
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(InvalidInputError) as exc:
         fga_deps.require_warehouse_scoped(["bronze"], delimiter=DELIM, warehouses_enabled=True)
-    detail = str(exc.value.detail)
+    detail = str(exc.value)
     assert "bronze" in detail
     assert "/v1/warehouses/{warehouse_id}/namespaces" in detail
     assert "project > warehouse > namespace > table" in detail

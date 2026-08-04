@@ -25,8 +25,9 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import HTTPException, Request
+from fastapi import Request
 from lance_namespace import (
+    InvalidInputError,
     PermissionDeniedError,
     ServiceUnavailableError,
     UnauthenticatedError,
@@ -433,9 +434,10 @@ def require_parent(resource: str, segments: list[str], *, delimiter: str) -> Non
     hierarchy the UI navigates. Orphans are cheap to create and expensive to find, so the answer is a
     refusal at the door with a message that says which rung is missing.
 
-    Raised as **422**, not 400 or 403: the request is well-formed and the caller may well be
-    authorized — the IDENTIFIER is the thing that cannot be satisfied. A caller who reads the detail
-    learns the rule and the fix in one line, which a bare 400 does not give them.
+    Raised as the spec's own ``InvalidInput`` (error code 13 → HTTP 400, RFC 9457 problem body via
+    ``install_problem_handlers``), NOT a bespoke 422: the Lance Namespace error model has no 422, and
+    every client SDK dispatches on the numeric ``code`` — a status outside the spec's mapping is one
+    no generated client understands. The DETAIL does the teaching: it names the rule and the fix.
 
     Namespaces are deliberately NOT rejected here. A top-level namespace legitimately parents to the
     catalog's warehouse root, and until a warehouse can be NAMED in the identifier (see the module
@@ -446,14 +448,11 @@ def require_parent(resource: str, segments: list[str], *, delimiter: str) -> Non
     if fga.parent_namespace_id(segments, delimiter=delimiter) is not None:
         return
     ident = fga.canonical_object_id(segments, delimiter=delimiter)
-    raise HTTPException(
-        status_code=422,
-        detail=(
-            f"table '{ident}' has no namespace to belong to. A table must live inside a namespace "
-            f"(project > warehouse > namespace > table), so its identifier needs at least one "
-            f"namespace segment before the table name — e.g. '<namespace>{delimiter}{ident}'. "
-            "Create the namespace first if it does not exist."
-        ),
+    raise InvalidInputError(
+        f"table '{ident}' has no namespace to belong to. A table must live inside a namespace "
+        f"(project > warehouse > namespace > table), so its identifier needs at least one "
+        f"namespace segment before the table name — e.g. '<namespace>{delimiter}{ident}'. "
+        "Create the namespace first if it does not exist."
     )
 
 
@@ -484,16 +483,13 @@ def require_warehouse_scoped(segments: list[str], *, delimiter: str, warehouses_
     if len(segments) > 1:
         return
     ident = fga.canonical_object_id(segments, delimiter=delimiter)
-    raise HTTPException(
-        status_code=422,
-        detail=(
-            f"top-level namespace '{ident}' must belong to a warehouse. A namespace is logical "
-            f"separation inside a tenant (project > warehouse > namespace > table), and an unbound "
-            f"namespace resolves to the shared default bucket instead of the tenant's own. "
-            f"Create it through its warehouse — POST /v1/warehouses/{{warehouse_id}}/namespaces with "
-            f"name '{ident}' — or nest it under an existing namespace "
-            f"('<parent>{delimiter}{ident}')."
-        ),
+    raise InvalidInputError(
+        f"top-level namespace '{ident}' must belong to a warehouse. A namespace is logical "
+        f"separation inside a tenant (project > warehouse > namespace > table), and an unbound "
+        f"namespace resolves to the shared default bucket instead of the tenant's own. "
+        f"Create it through its warehouse — POST /v1/warehouses/{{warehouse_id}}/namespaces with "
+        f"name '{ident}' — or nest it under an existing namespace "
+        f"('<parent>{delimiter}{ident}')."
     )
 
 
