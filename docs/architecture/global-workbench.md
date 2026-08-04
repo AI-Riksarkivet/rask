@@ -141,6 +141,14 @@ overturned. Two rulings landed after it, in this order:
   home is the catch-all, and the annotator is already a canvas — none of them qualify.
   `dock-reachability.test.ts` pins the set EXACTLY, so neither a compositor, nor a symmetry-dock,
   nor a nested path can return unnoticed.
+- **A panel renders the PAGE'S component (added 2026-08-04, after it was got wrong).** Retiring the
+  compositor removed the *structural* cause of mirroring — an element could not import a page
+  component — but not the habit. The in-zone panels were hand-written anyway: `/compute/actors` 416
+  lines against a 49-line `ActorsPanel` sharing nothing, and the same for cluster, jobs, serve and the
+  run board. Five of twelve panels were mirrors while the record, the skill and the PR all claimed
+  none were. The view now lives in one component the route and the panel both render; where the two
+  read different sources, rows arrive as a PROP so the dock keeps its shared store.
+
 - **Panels' domain code stays in its zone** — the lesson of the `@rask/panels` reversal, and now
   structural rather than a rule to remember: with the dock inside the zone there is no other place
   for a panel to live. `frontend/packages/*` stays mechanism-only (`@rask/dockview`, `@rask/flow`).
