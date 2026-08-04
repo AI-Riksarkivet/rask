@@ -195,3 +195,23 @@ def test_the_NAMESPACE_is_created_before_the_table() -> None:
 
     assert namespace.called, "the namespace was never created — the table create would 404"
     assert table.called
+
+
+def test_the_catalogs_row_count_is_the_TIER_not_the_run() -> None:
+    """`CommitFragmentsResponse.row_count` is the dataset total after the commit.
+
+    Reporting it as the run's `units_done` made a second run against one dataset claim 8 units done
+    for 4 ingested files — the identical bug the Lander path had already fixed, walking straight back
+    in through the code that bypassed it. A run's progress must describe the run, so the count comes
+    from its own fragments.
+    """
+    from ingest.runtime import _rows_in
+
+    assert _rows_in(['{"physical_rows": 3}', '{"physical_rows": 1}']) == 4
+
+
+def test_a_malformed_fragment_does_not_zero_the_whole_count() -> None:
+    """One unreadable manifest must cost one fragment's rows, not the run's entire reported progress."""
+    from ingest.runtime import _rows_in
+
+    assert _rows_in(['{"physical_rows": 2}', "not json", '{"physical_rows": 2}']) == 4

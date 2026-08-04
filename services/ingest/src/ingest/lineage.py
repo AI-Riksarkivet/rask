@@ -27,6 +27,7 @@ medallion's `/bronze-arrival` did.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -67,8 +68,6 @@ def reset_events() -> None:
 
 def _delimiter() -> str:
     """The catalog's table-id separator. Read from env so it cannot drift from the catalog client's."""
-    import os
-
     return os.getenv("RASK_CATALOG_DELIMITER", "$")
 
 
@@ -77,6 +76,34 @@ def lineage_run_id(run_id: str) -> str:
     from lineage_kit import run_id_for
 
     return run_id_for(f"ingest:{run_id}")
+
+
+def _emitter() -> Any:  # noqa: ANN401 — Emitter
+    """lineage-kit's configured transport. The ingest plane does NOT publish to the lineage topic.
+
+    It briefly did, on the theory that the cascade needs the ingest run's own event to fire. Two
+    things came back from running it:
+
+    * The Dapr publish failed outright — `pubsub lineage-pubsub is not found`, because the component
+      is scoped per app and `ingest` is not on its list. I8's never-raise guard swallowed that into a
+      log line, and because the topic emit ran BEFORE the HTTP one, it took the GRAPH write down with
+      it: the run landed its data and recorded no provenance, which A8 reported on the very next run.
+      A dual-delivery path whose first leg can silently cancel the second is worse than either leg
+      alone.
+    * It was not needed. The CATALOG announces the write — `lance-catalog/insert.bronze$events`,
+      eventType COMPLETE, outputs `[bronze$events]` — which is exactly what the medallion's
+      `/bronze-arrival` filters on. Verified in-cluster: an ingest run produced
+      `POST /bronze-arrival 200` on the producer and `POST /medallion-event 200` on the
+      bronze-to-silver mover, with no event from this module involved at all.
+
+    That is the right shape, not a lucky accident. The governed WRITER announces the tier, so the
+    announcement carries the catalog's authority and happens exactly once per commit. An ingest-side
+    publish would be a second announcement of the same write — a double-fired cascade whose two
+    triggers nothing keeps in agreement.
+    """
+    from lineage_kit import build_emitter
+
+    return build_emitter()
 
 
 def _run(run_id: str) -> Any:  # noqa: ANN401 — LineageRun, imported lazily to keep this module light
@@ -90,7 +117,7 @@ def _run(run_id: str) -> Any:  # noqa: ANN401 — LineageRun, imported lazily to
     from lineage_kit.config import LineageSettings
     from lineage_kit.runs import LineageRun
 
-    return LineageRun(job_name=JOB_NAME, namespace=LineageSettings().namespace, run_id=lineage_run_id(run_id))
+    return LineageRun(job_name=JOB_NAME, namespace=LineageSettings().namespace, run_id=lineage_run_id(run_id), emitter=_emitter())
 
 
 class LineageRecorder:

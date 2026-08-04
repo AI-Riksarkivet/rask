@@ -1101,7 +1101,38 @@ gate; the compute zone's run-status page. A11 runs in-cluster from `scripts/inge
 asserts on outcomes — 202 in 46 ms, a COMPLETE run, a committed bronze version, one row per fixture,
 no provenance defect, and idempotent replay.
 
-### 1. The cascade above bronze is not deployed *(the largest gap)*
+### 1. The cascade above bronze — deployed, fires on CREATE only *(narrowed 2026-08-04)*
+
+**What now works.** The medallion is in the lane slice (`scripts/ingest-lane.sh`), and an ingest run
+DOES reach the cascade head: `POST /bronze-arrival 200` on the producer, and on the first run into a
+table `POST /medallion-event 200` on the bronze-to-silver mover. The trigger is the CATALOG's own
+write lineage (`lance-catalog/create_table.bronze$events`, eventType COMPLETE, outputs
+`[bronze$events]`) — which is exactly what `/bronze-arrival` filters on, and is the right shape: the
+governed WRITER announces the tier, once per commit, with the catalog's authority.
+
+An ingest-side publish was tried and REMOVED. The Dapr publish failed outright (`pubsub
+lineage-pubsub is not found` — the component is scoped per app and `ingest` is not on its list), I8's
+never-raise guard swallowed it, and because the topic emit ran before the HTTP one it took the GRAPH
+write down with it. A8 reported the resulting provenance hole on the very next run. It was also
+redundant: a second announcement of the same write is a double-fired cascade whose two triggers
+nothing keeps in agreement.
+
+**What is still open, precisely:**
+
+* **The trigger fires on CREATE, not on every INSERT.** Measured: the first ingest into
+  `bronze$events` produced two `/bronze-arrival` hits (create_table + insert) and one
+  `medallion.bronze`; a later ingest into the SAME table produced one hit and NO trigger. So a table's
+  second and subsequent arrivals do not cascade. Either the insert event's output namespace differs
+  from the create's, or the head's filter matches only one of them — read
+  `catalog/services/lineage_deps.emit_measured_write` against `ingest_trigger._bronze_write_dataset`
+  before changing anything.
+* **The movers move no DATA in this slice.** `MEDALLION_FROM_URI`/`TO_URI` are unset and no project
+  routing is configured, so `handle_stage` skips its compute path entirely (`transform.py:210` —
+  `if settings.compute_enabled and from_uri and to_uri`). The mover wakes, emits, and writes nothing.
+  Configuring the tier URIs (or the per-project warehouse registry) is what turns the proven TRIGGER
+  chain into a proven DATA chain.
+
+### 1b. The original framing, for context
 
 `runners/dummy` proves bronze→silver→gold **as tests**, not as a running lane: nothing in-cluster
 subscribes to the catalog's publication event and moves a bronze commit into silver, and no quality

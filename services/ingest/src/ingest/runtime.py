@@ -54,6 +54,19 @@ def dataset_uri(spec: RunSpec) -> str:
     return f"{warehouse_root().rstrip('/')}/{spec.project}/{spec.dataset}.lance"
 
 
+def _rows_in(fragments_json: list[str]) -> int:
+    """Physical rows across a run's fragments — its OWN contribution, independent of the tier."""
+    import json
+
+    total = 0
+    for blob in fragments_json:
+        try:
+            total += int(json.loads(blob).get("physical_rows") or 0)
+        except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
+            continue
+    return total
+
+
 def ensure_dataset_at(spec: RunSpec) -> str:
     """Create the run's dataset empty if absent, and return the URI to write into. D6 step 1.
 
@@ -153,14 +166,20 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str]) ->
         # THE CATALOG COMMITS. A commit registered only in this process is one the cascade cannot
         # ride: the event that wakes a mover is the catalog's publication of a new version, so a
         # locally-recorded commit lands the data and tells nothing downstream it happened.
-        version, rows = catalog.commit(
+        version, tier_rows = catalog.commit(
             spec.project,
             spec.dataset,
             all_fragments,
             read_version=catalog.describe_version(spec.project, spec.dataset),
             run_id=spec.run_id,
         )
-        result = CommitResult(dataset_uri=uri, version=version, rows=rows, rows_added=rows, fragments_committed=len(all_fragments))
+        # `row_count` from the catalog is the DATASET's total after the commit, not this run's work —
+        # the same distinction the Lander path already draws, and it came straight back the moment the
+        # catalog path bypassed that code: a second run against one dataset reported 8 units done for
+        # 4 ingested files. Counted here from the committed FRAGMENTS, which is also the only form
+        # that stays right under concurrent commits.
+        added = _rows_in(all_fragments)
+        result = CommitResult(dataset_uri=uri, version=version, rows=tier_rows, rows_added=added, fragments_committed=len(all_fragments))
     else:
         result = Lander(catalog).commit_fragments(uri, all_fragments, run_id=spec.run_id)
     # Only after the commit lands. Purging earlier would delete the record a retried finalize needs,
