@@ -13,7 +13,8 @@
 	import DetailTabs from '$lib/data/DetailTabs.svelte';
 	import StageBadge from '$lib/data/StageBadge.svelte';
 	import { stageOf } from '$lib/data/stage';
-	import type { AccessGraph, NamespacePolicy, PolicyRequest } from '$lib/data/namespace';
+	import { policyRequestFrom } from '$lib/data/namespace';
+	import type { AccessGraph, NamespacePolicy } from '$lib/data/namespace';
 	import {
 		checkAccess,
 		fetchAccess,
@@ -205,11 +206,7 @@
 		policyError = null;
 		const current = ns;
 		try {
-			const body: PolicyRequest = { compact_enabled: draft.enabled };
-			if (draft.retention_days != null) body.retention_days = draft.retention_days;
-			if (draft.retain_versions != null) body.retain_versions = draft.retain_versions;
-			if (draft.interval != null) body.compact_interval_hours = draft.interval;
-			if (draft.target != null) body.target_rows_per_fragment = draft.target;
+			const body = policyRequestFrom(draft);
 			const res = await setNamespacePolicy({ namespace: current, policy: body });
 			if (ns !== current) return; // navigated away — drop the stale result
 			if (res.ok) {
