@@ -5,7 +5,7 @@
 	// table count from the registry the /namespaces page already derives from), the kind-generalized
 	// GrantsPanel, and a maintenance-policy card mirroring the table policy form. Same stack-mode
 	// states as the registry — governed without a session ⇒ sign-in, unreachable ⇒ retrying.
-	import { GrantsPanel, type GrantsClient } from '@rask/ui/grants-panel';
+	import { GrantsPanel, subjectDisplay, type GrantsClient } from '@rask/ui/grants-panel';
 	import { Boxes, Network, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
@@ -121,7 +121,9 @@
 
 	// Split the one-hop edges for the card: inbound = grants (subject holds a rung ON the namespace),
 	// outbound = the container edge (namespace → parent/project). Labels come from the graph's nodes.
-	const graphLabel = (id: string): string => graph?.nodes.find((n) => n.id === id)?.label ?? id;
+	// #68: node labels carry raw OIDC subs — render the display form, keep the full value for title.
+	const graphNode = (id: string): { label: string; title: string } =>
+		subjectDisplay(graph?.nodes.find((n) => n.id === id)?.label ?? id);
 	const grantEdges = $derived.by(() => {
 		const g = graph;
 		return g === null ? [] : g.edges.filter((e) => e.target === g.object);
@@ -403,9 +405,9 @@
 								<ul class="edges">
 									{#each grantEdges as e (`${e.source}:${e.relation}`)}
 										<li class="mono">
-											<span class="subject">{graphLabel(e.source)}</span>
+											<span class="subject" title={graphNode(e.source).title}>{graphNode(e.source).label}</span>
 											<span class="chip rel">{e.relation}</span>
-											<span class="mut">on {graphLabel(e.target)}</span>
+											<span class="mut">on {graphNode(e.target).label}</span>
 										</li>
 									{/each}
 								</ul>
@@ -415,7 +417,7 @@
 									{#each containerEdges as e (`${e.relation}:${e.target}`)}
 										<li class="mono">
 											<span class="mut">{e.relation} →</span>
-											<span class="subject">{graphLabel(e.target)}</span>
+											<span class="subject" title={graphNode(e.target).title}>{graphNode(e.target).label}</span>
 										</li>
 									{/each}
 								</ul>

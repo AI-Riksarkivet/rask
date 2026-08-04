@@ -5,3 +5,4 @@ export {
 	type GrantsKind,
 	type GrantsResult,
 } from './grants-panel.svelte';
+export { subjectDisplay, type SubjectDisplay } from './subject.js';
