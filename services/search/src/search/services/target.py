@@ -64,6 +64,14 @@ class SearchTarget(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    #: WHERE this hit set came from, stamped onto every row. A hit that does not name its own origin
+    #: cannot be rendered once results from two corpora share a list: display fields, media kind and
+    #: capabilities are all per-(dataset, table), so the reader would have to assume one — and the
+    #: assumption is invisible in the rows.
+    dataset_id: str
+    #: The DECLARED search name (`Declared.searches[].name`), not the Lance table. It is what
+    #: `?table=` carries, so it is what a link back to this hit must say.
+    table_name: str
     row_table_name: str
     key_fields: list[str]
     payload_columns: list[str]
@@ -154,6 +162,8 @@ def resolve_target(handle: DatasetHandle, table: str | None = None) -> SearchTar
     scene = search.vectors.get(SearchMode.SCENE.value)
 
     return SearchTarget(
+        dataset_id=handle.descriptor.id,
+        table_name=search.name,
         row_table_name=search.row_table,
         key_fields=list(declared.identity.key_fields),
         payload_columns=hit_columns(declared, row_info),
