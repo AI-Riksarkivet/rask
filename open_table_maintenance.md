@@ -22,13 +22,15 @@ Compact creates new files and obsoletes old ones, so cleanup must follow it on t
 index optimization after that. Four services would mean four scans of every warehouse bucket plus
 cross-service ordering to get right. Operations stay modules; each is independently schedulable.
 
-Also here since 54fc413: a **report-only reconciler** (`maintenance/services/reconcile.py`, 7 drift
-detectors, mutates nothing) that nothing can yet run — see §4.
+Also here: a **report-only reconciler** (`maintenance/services/reconcile.py`) with 8 drift categories,
+mutating nothing. It RUNS — its own Dapr cron binding `maintenance-reconcile-cron` on its own
+schedule, with read-only FGA + S3 clients (04129b6) — and its unreferenced-FILE pass landed with it
+(`maintenance/services/orphans.py`, 3dd3e13, gated by `MAINTENANCE_ORPHAN_SCAN_ENABLED`).
 
 `catalog/api/maintenance_mode.py` is a different thing entirely: read-only maintenance MODE (503 +
 Retry-After for a migration window). Renamed in the same commit so the two cannot be confused.
 
-## 2. The reclamation gap — now specified, still unbuilt
+## 2. The reclamation gap — REPORTED (nothing reclaims yet)
 
 The Lance spec (lance.org/format/table/layout/ + /transaction/, fetched 2026-08-04) names exactly
 what can be orphaned, which is what makes this buildable rather than guesswork:
@@ -46,9 +48,15 @@ Our own two producers, on top of those: a partially-failed write, and **a bucket
 record was deleted without `?purge_bucket=true`** — which the delete door creates deliberately (a
 catalog entry is recoverable, a customer's bucket is not).
 
-**Nothing reclaims any of it.** The phrase "remove orphans" appears nowhere in the service. The
-reconciler's orphan-FILE category was specified in Decision 4 and is absent from the shipped module,
-undisclosed until an adversarial review caught it.
+**Nothing reclaims any of it — but it is now NAMED.** `maintenance/services/orphans.py` lists a
+dataset's files and subtracts what any LIVE version references (the union across versions, because
+every manifest still in `_versions/` is reachable by time-travel). On the live estate that reports 23
+orphans, all `_transactions/*.txn`, and zero data orphans.
+
+Three file classes look like orphans and are NOT — each found by running against a real estate, and
+each would have driven a reclaimer into live data: `_refs/tags/*.json` (tags PIN versions),
+`data/<stem>/*.blob` (large-binary SIDECARS that `data_files()` does not name — 29 MB of real page
+images), and `.lance-reserved`.
 
 **Report-only first, always.** A reclaimer that deletes on its first run against a rule nobody has
 validated is how a maintenance job eats live data.
@@ -67,11 +75,8 @@ one.
 
 ## 4. Still not verified
 
-- **Orphan-file reclamation** — does not exist (§2).
-- **The reconciler cannot RUN.** `reconcile()` is called from nowhere, and the service's config
-  builds no OpenFGA client — so even once a route exists, four of its seven categories
-  (ghost_projects, ghost_warehouses, unreferenced_projects, orphaned_annotation_tasks) report
-  UNAVAILABLE forever, including the ghost projects that motivated the whole thing.
+- **Orphan RECLAMATION** — the report exists (§2); nothing deletes, deliberately, until it has run
+  clean on a real estate over time.
 - **Reindex from scratch.** `optimize_indices()` folds new fragments into EXISTING indices. Nothing
   rebuilds an index whose parameters changed, and nothing reports one that has drifted.
 - **The sweep against real object storage** — the sweep tests use local dirs; only the skipped e2e
@@ -80,10 +85,12 @@ one.
 
 ## 5. Order of work
 
-1. ~~Rename the service to `maintenance`.~~ Done 2026-08-04.
-2. Wire the reconciler so it can RUN (cron binding + an FGA client on the service).
-3. The orphan-file detector, report-only, per the spec list in §2.
-4. Policy surface: which operations, what cadence, which warehouses.
+1. ~~Rename the service to `maintenance`.~~ Done 2026-08-04 (06cc757).
+2. ~~Wire the reconciler so it can RUN.~~ Done 2026-08-04 (04129b6).
+3. ~~The orphan-file detector, report-only.~~ Done 2026-08-04 (3dd3e13).
+4. Policy surface: which operations, what cadence, which warehouses. **Read the Lance indexing /
+   prune / compaction docs first and report the findings** — that is a standing instruction, not a
+   formality: the three false-positive classes in §2 were all things the layout doc alone did not say.
 5. Multi-warehouse sweep coverage.
 6. Only then consider letting anything delete.
 
