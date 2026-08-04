@@ -2676,6 +2676,11 @@
               "table_registered",
               "table_deregistered",
               "table_declared",
+              "table_protected",
+              "table_unprotected",
+              "namespace_protected",
+              "namespace_unprotected",
+              "table_undropped",
               "table_published"
             ],
             "title": "Action",
@@ -7468,8 +7473,26 @@
         "type": "object"
       },
       "PolicyRequest": {
-        "description": "The maintenance policy for one table or namespace \u2014 every field optional-with-defaults.\n\n``retention_days`` / ``retain_versions`` override the sweep's global old-version cleanup (Lance\nkeeps tag-pinned versions regardless); ``compact_enabled=False`` opts the target out of maintenance\nentirely; ``compact_interval_hours`` bounds how often the sweep maintains it.",
+        "description": "The maintenance policy for one table, namespace or project \u2014 every field optional-with-defaults.\n\n``retention_days`` / ``retain_versions`` override the sweep's global old-version cleanup (Lance\nkeeps tag-pinned versions regardless); ``compact_enabled=False`` opts the target out of maintenance\nentirely; ``compact_interval_hours`` bounds how often the sweep maintains it.\n\n**Resolution is WINNER-TAKES-ALL, not field-by-field.** An exact table match shadows the namespace\nrecord which shadows the project record \u2014 the winning record supplies EVERY field, and a field the\nwinner leaves unset falls to the sweep's global default rather than to the record it shadowed.\nAny surface that displays an effective policy has to say so: an inherited value rendered\nidentically to a set one is how nobody can tell what is actually governing their data.",
         "properties": {
+          "auto_cleanup_interval_commits": {
+            "anyOf": [
+              {
+                "maximum": 1000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Cleanup Interval Commits"
+          },
+          "cleanup_enabled": {
+            "default": true,
+            "title": "Cleanup Enabled",
+            "type": "boolean"
+          },
           "compact_enabled": {
             "default": true,
             "title": "Compact Enabled",
@@ -7487,6 +7510,11 @@
               }
             ],
             "title": "Compact Interval Hours"
+          },
+          "optimize_indices_enabled": {
+            "default": true,
+            "title": "Optimize Indices Enabled",
+            "type": "boolean"
           },
           "retain_versions": {
             "anyOf": [
@@ -7513,6 +7541,19 @@
               }
             ],
             "title": "Retention Days"
+          },
+          "scan_batch_size": {
+            "anyOf": [
+              {
+                "maximum": 8192.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scan Batch Size"
           },
           "target_rows_per_fragment": {
             "anyOf": [
@@ -7732,6 +7773,24 @@
           "tag"
         ],
         "title": "PromoteResponse",
+        "type": "object"
+      },
+      "ProtectionResponse": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "protected": {
+            "title": "Protected",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "protected"
+        ],
+        "title": "ProtectionResponse",
         "type": "object"
       },
       "PublishRequest": {
@@ -9262,6 +9321,40 @@
         "title": "TagContents",
         "type": "object"
       },
+      "TrashEntry": {
+        "description": "One recoverable drop \u2014 what the owner needs to decide whether to undrop before the deadline.",
+        "properties": {
+          "dropped_at": {
+            "title": "Dropped At",
+            "type": "string"
+          },
+          "dropped_by": {
+            "title": "Dropped By",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "location": {
+            "title": "Location",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "location",
+          "dropped_by",
+          "dropped_at",
+          "expires_at"
+        ],
+        "title": "TrashEntry",
+        "type": "object"
+      },
       "TupleCondition": {
         "description": "A CEL condition attached to a grant, with the parameters that ride the TUPLE.\n\nFor the model's ``non_expired_grant`` that is ``grant_time`` + ``grant_duration`` \u2014 the window.\n``current_time`` is deliberately NOT here: the clock belongs to the caller and is supplied per\ncheck, so a grant cannot pin the present moment at the instant it was written.",
         "properties": {
@@ -10047,6 +10140,23 @@
         "title": "VersionRange",
         "type": "object"
       },
+      "WarehouseNamespacesResponse": {
+        "description": "The namespaces BOUND to one warehouse \u2014 the registry's answer, same shape as the spec's\nListNamespaces (``{\"namespaces\": [...]}``) so a spec client parses it unchanged.",
+        "properties": {
+          "namespaces": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Namespaces",
+            "type": "array"
+          }
+        },
+        "required": [
+          "namespaces"
+        ],
+        "title": "WarehouseNamespacesResponse",
+        "type": "object"
+      },
       "WarehouseResponse": {
         "properties": {
           "bucket": {
@@ -10384,6 +10494,34 @@
         ],
         "title": "WorkflowSearchMode",
         "type": "string"
+      },
+      "catalog__api__v1__endpoints__namespaces__SetProtectionRequest": {
+        "description": "The one field this door writes. Setting is idempotent; clearing removes the record.",
+        "properties": {
+          "protected": {
+            "title": "Protected",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "protected"
+        ],
+        "title": "SetProtectionRequest",
+        "type": "object"
+      },
+      "catalog__api__v1__endpoints__tables__SetProtectionRequest": {
+        "description": "The one field this door writes. Setting it is idempotent; clearing removes the record.",
+        "properties": {
+          "protected": {
+            "title": "Protected",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "protected"
+        ],
+        "title": "SetProtectionRequest",
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -11702,7 +11840,7 @@
     },
     "/v1/namespace/{id}/drop": {
       "post": {
-        "description": "Drop namespace ``id`` (``drop_namespace``); revoke its FGA tuples \u2014 and, for a Cascade drop, every\ndropped child's \u2014 so a reused id can't inherit stale grants.",
+        "description": "Drop namespace ``id`` (``drop_namespace``); revoke its FGA tuples \u2014 and, for a Cascade drop, every\ndropped child's \u2014 so a reused id can't inherit stale grants.\n\nDeletion protection (#73): a ``protected`` control-root record refuses 409 unless ``force=true``\n\u2014 and it also stops a CASCADE from a parent taking this namespace with it, because the cascade\narrives at this same door. ``force`` turns the protection lock only; the FGA gate ran first.",
         "operationId": "drop_namespace_v1_namespace__id__drop_post",
         "parameters": [
           {
@@ -11712,6 +11850,16 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
             }
           }
         ],
@@ -12042,6 +12190,64 @@
         "summary": "Set Namespace Policy",
         "tags": [
           "policy"
+        ]
+      }
+    },
+    "/v1/namespace/{id}/protection": {
+      "post": {
+        "description": "Set or clear deletion protection on namespace ``id`` (#73). Owner-gated by the router\n(``protection`` maps to ``can_delete`` \u2014 whoever may delete the namespace decides whether\ndeleting it needs a second thought). Same control-root record contract as the table door.",
+        "operationId": "set_namespace_protection_v1_namespace__id__protection_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/catalog__api__v1__endpoints__namespaces__SetProtectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Namespace Protection",
+        "tags": [
+          "namespace"
         ]
       }
     },
@@ -14268,7 +14474,7 @@
     },
     "/v1/table/{id}/deregister": {
       "post": {
-        "description": "Deregister the table at ``id`` (detach it without deleting data) via lance_namespace\n``deregister_table``, then revoke its FGA ownership and emit a best-effort ``deregister_table`` marker.",
+        "description": "Deregister the table at ``id`` (detach it without deleting data) via lance_namespace\n``deregister_table``, then revoke its FGA ownership and emit a best-effort ``deregister_table`` marker.\n\nProtection-gated like drop (#73): deregister keeps bytes but REMOVES the object from governance \u2014\nthe flag's whole jurisdiction \u2014 so leaving it ungated would make \"deregister, then delete the\nfiles by hand\" the unprotected path around the protected drop.",
         "operationId": "deregister_table_v1_table__id__deregister_post",
         "parameters": [
           {
@@ -14278,6 +14484,16 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
             }
           },
           {
@@ -14476,7 +14692,7 @@
     },
     "/v1/table/{id}/drop": {
       "post": {
-        "description": "Drop the table at ``id`` via ``drop_table``, then revoke its FGA tuples and\nemit a best-effort ``drop_table`` lineage event.",
+        "description": "Drop the table at ``id`` via ``drop_table``, then revoke its FGA tuples and\nemit a best-effort ``drop_table`` lineage event.\n\nDeletion protection (#73, the warehouse door's Decision-5 contract extended to the rung where a\ndrop deletes BYTES): a ``protected`` control-root record refuses 409 unless ``force=true``, and\n``force`` turns the protection lock ONLY \u2014 the FGA gate ran before this handler, identically\nwith or without it.",
         "operationId": "drop_table_v1_table__id__drop_post",
         "parameters": [
           {
@@ -14486,6 +14702,26 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "purge",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Purge",
+              "type": "boolean"
             }
           },
           {
@@ -15689,6 +15925,64 @@
         ]
       }
     },
+    "/v1/table/{id}/protection": {
+      "post": {
+        "description": "Set or clear deletion protection on the table at ``id`` (#73 \u2014 the warehouse contract on the\nrung where a drop deletes bytes). Owner-gated by the router (``protection`` maps to ``can_drop``:\nwhoever may destroy the table decides whether destroying it needs a second thought). The flag is\na CONTROL-ROOT record, deliberately not schema metadata \u2014 control-plane state that emits a\ncontrol event and never creates a table version, readable even when the dataset is corrupted,\nand unreachable from the future properties write door (#78).",
+        "operationId": "set_table_protection_v1_table__id__protection_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/catalog__api__v1__endpoints__tables__SetProtectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Table Protection",
+        "tags": [
+          "table"
+        ]
+      }
+    },
     "/v1/table/{id}/publish": {
       "post": {
         "description": "Gate `version` and, if it passes, advance `published` to it.\n\nA refused gate is a 200 with `published=False`, not an error status: the request was well-formed\nand the system did exactly what it should. Errors are reserved for the caller getting it wrong \u2014\nan unknown version (404), a backwards move (409), a malformed one (400) \u2014 all raised as\n`lance_namespace` typed errors so the shared problem-body handler renders them.",
@@ -15889,6 +16183,16 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
             }
           },
           {
@@ -16426,6 +16730,106 @@
         "summary": "Get Table Tag Version",
         "tags": [
           "tag"
+        ]
+      }
+    },
+    "/v1/table/{id}/tasks": {
+      "get": {
+        "description": "What is queued for THIS table (#75 brings \u00a72.4). Today that is exactly one thing: a pending\ntrash expiry. It exists the moment expiry does, because an undrop deadline the owner cannot see\nis not a safety feature \u2014 the estate's task surfaces are otherwise all estate-global, so \"what is\nscheduled against my table\" was unanswerable. Reader-gated by the router alongside describe.",
+        "operationId": "table_tasks_v1_table__id__tasks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TrashEntry"
+                  },
+                  "title": "Response Table Tasks V1 Table  Id  Tasks Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Table Tasks",
+        "tags": [
+          "table"
+        ]
+      }
+    },
+    "/v1/table/{id}/undrop": {
+      "post": {
+        "description": "Recover a dropped table from the trash (#75) \u2014 re-register its still-present bytes at its old\nid and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into\nthe namespace is the same authority as removing it).\n\n404 when there is no trash record: an expired or never-trashed drop is genuinely unrecoverable,\nand saying so plainly beats a 200 that recovers nothing.",
+        "operationId": "undrop_table_v1_table__id__undrop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterTableResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Undrop Table",
+        "tags": [
+          "table"
         ]
       }
     },
@@ -17651,6 +18055,52 @@
       }
     },
     "/v1/warehouses/{warehouse_id}/namespaces": {
+      "get": {
+        "description": "The namespaces bound to this warehouse, read from the REGISTRY \u2014 the same source the delete\ndoor consults. This read exists so no surface has to INFER the answer: the lakehouse warehouse\npage used to derive its namespace list by grouping the table registry, which made an EMPTY\nnamespace structurally invisible \u2014 the page said \"no namespaces\" while the delete door refused\n409 naming one (observed live, #66). Reader-gated like the record itself (``can_get_metadata``);\na missing warehouse is the same 404 as everywhere else.",
+        "operationId": "list_warehouse_namespaces_v1_warehouses__warehouse_id__namespaces_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseNamespacesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Warehouse Namespaces",
+        "tags": [
+          "warehouse"
+        ]
+      },
       "post": {
         "description": "Create a top-level namespace INSIDE this warehouse's bucket and bind it, so all its tables route\nthere (#3-A physical isolation). Gated on ``can_create_namespace`` (writer) on ``warehouse:<id>``.\n\nThe namespace is created via the warehouse's bucket-rooted connection (not the default), the binding is\npersisted + cached (so subsequent table ops resolve without a registry read), and FGA is seeded with the\nnamespace's ``parent`` edge pointing at the warehouse \u2014 so the owner's grant cascades into the tables.",
         "operationId": "create_warehouse_namespace_v1_warehouses__warehouse_id__namespaces_post",

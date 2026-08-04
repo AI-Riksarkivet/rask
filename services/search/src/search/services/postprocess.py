@@ -60,6 +60,12 @@ def postprocess_hits(raw: list[dict[str, Any]], target: SearchTarget) -> list[di
     for h in raw:
         value = h.pop(target.alignments_column, None) if target.alignments_column else None
         h["alignments"] = parse_alignments_json(value)
+        # PROVENANCE, stamped in the one funnel every search path returns through. Doing it per
+        # search path instead is how one of them (the filter-only browse, say) would quietly ship
+        # rows that cannot say where they came from — and nothing would fail until two corpora
+        # shared a result list.
+        h["_dataset"] = target.dataset_id
+        h["_table"] = target.table_name
     if target.caption_column:
         attach_captions(
             target.caption_table(),

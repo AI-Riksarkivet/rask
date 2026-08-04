@@ -1,14 +1,16 @@
 <script lang="ts">
 	// `/warehouses/<id>` — the warehouse rung of the hierarchy (goal cond 3): the registry record
-	// (project, bucket, status, root) + the namespaces that live in it. There is no bindings read
-	// API, so the namespace list is DERIVED from the table registry by the `<project>-<stage>`
-	// naming convention (#84) — labeled as derived, never presented as a registry fact.
+	// (project, bucket, status, root) + the namespaces BOUND to it, read from the registry's own
+	// bindings API — the same source the delete door consults. The list was previously DERIVED by
+	// grouping the table registry, which made an empty namespace structurally invisible: the page
+	// said "no namespaces" while the delete door refused 409 naming one (observed live, #66). The
+	// table registry now only ENRICHES each bound namespace with its table count.
 	import { RefreshCw, ShieldAlert, Warehouse as WarehouseIcon } from '@lucide/svelte';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import type { Warehouse } from '$lib/data/catalog';
 	import { fetchTables } from '$lib/data/remote/catalog.remote';
-	import { fetchWarehouse } from '$lib/data/remote/warehouses.remote';
+	import { fetchWarehouse, fetchWarehouseNamespaces } from '$lib/data/remote/warehouses.remote';
 	import { namespaceOfTable, stageOf } from '$lib/data/stage';
 	import StageBadge from '$lib/data/StageBadge.svelte';
 
@@ -19,6 +21,9 @@
 
 	let wh = $state<Warehouse | null>(null);
 	let tables = $state<string[] | null>(null);
+	// The registry's bindings answer. `null` = the read itself failed (rendered as its own honest
+	// state, never silently collapsed into "no namespaces" — that collapse was the #66 bug's shape).
+	let bound = $state<string[] | null>(null);
 	let lastStatus = $state(0);
 	let settled = $state(false);
 
@@ -29,7 +34,11 @@
 
 	async function load(): Promise<void> {
 		const current = id;
-		const [whRes, tRes] = await Promise.all([fetchWarehouse(current), fetchTables()]);
+		const [whRes, nsRes, tRes] = await Promise.all([
+			fetchWarehouse(current),
+			fetchWarehouseNamespaces(current),
+			fetchTables(),
+		]);
 		if (id !== current) return; // latest-wins across navigation
 		settled = true;
 		if (whRes.ok) {
@@ -39,6 +48,7 @@
 			wh = null;
 			lastStatus = whRes.status;
 		}
+		bound = nsRes.ok ? [...nsRes.data.namespaces].sort() : null;
 		tables = tRes.ok ? [...tRes.data.tables].sort() : null;
 	}
 
@@ -46,26 +56,24 @@
 		void id;
 		wh = null;
 		tables = null;
+		bound = null;
 		lastStatus = 0;
 		settled = false;
 		load();
 	});
 
-	// The warehouse's namespaces, derived: group the registry by namespace, keep those whose
-	// stage-name project prefix matches this warehouse's project (bare stage names belong to the
-	// projectless default path and are only shown when the project has no prefixed zones).
+	// The warehouse's namespaces: the LIST is the registry's bindings answer, verbatim — including
+	// a namespace with zero tables, which is exactly what the delete door will refuse on. The table
+	// registry only decorates each bound namespace with its table count (0 when the table read
+	// failed or genuinely holds none — the count is enrichment, so its absence never hides a row).
 	const namespaces = $derived.by(() => {
-		const project = wh?.project;
-		if (!project || tables === null) return [];
+		if (bound === null) return [];
 		const counts = new Map<string, number>();
-		for (const t of tables) {
+		for (const t of tables ?? []) {
 			const ns = namespaceOfTable(t);
 			counts.set(ns, (counts.get(ns) ?? 0) + 1);
 		}
-		return [...counts.entries()]
-			.map(([ns, count]) => ({ ns, count, info: stageOf(ns) }))
-			.filter(({ info }) => info?.project === project)
-			.sort((a, b) => a.ns.localeCompare(b.ns));
+		return bound.map((ns) => ({ ns, count: counts.get(ns) ?? 0, info: stageOf(ns) }));
 	});
 
 	function statusOf(w: Warehouse): string {
@@ -129,13 +137,12 @@
 		<section>
 			<h2>Namespaces</h2>
 			<p class="mut">
-				Derived from the table registry by the <span class="mono">&lt;project&gt;-&lt;stage&gt;</span> naming
-				convention — the registry has no bindings read API.
+				Bound to this warehouse in the registry — the same answer the delete door consults.
 			</p>
-			{#if tables === null}
-				<p class="mut">Table registry unavailable right now — namespaces can't be derived.</p>
+			{#if bound === null}
+				<p class="mut">Bindings unavailable right now — this list cannot be shown, so it is not.</p>
 			{:else if namespaces.length === 0}
-				<p class="mut">No project-prefixed namespaces in the registry for {wh.project}.</p>
+				<p class="mut">No namespaces bound to this warehouse — it can be deleted without a cascade.</p>
 			{:else}
 				<ul class="list">
 					{#each namespaces as { ns, count, info } (ns)}

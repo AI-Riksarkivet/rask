@@ -25,7 +25,7 @@ from maintenance.core.lineage_emit import MaintenanceEmitter, table_id_from_uri
 from maintenance.core.metrics import record_reclaimed, record_run
 from maintenance.services.optimize import DatasetResult, compact_one, discover_dataset_uris
 from service_kit.governed import fga
-from service_kit.lakehouse import maintenance_policies
+from service_kit.lakehouse import maintenance_policies, trash
 from service_kit.lakehouse.objectfs import s3_filesystem
 
 
@@ -129,6 +129,19 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
             continue
         log.info("compaction_bucket_discovered", extra={"bucket": bucket, "datasets": len(found)})
         uris.extend(found)
+    # #75 trash expiry — REPORT ONLY, and staying that way until #79's gate opens. The sweep names
+    # which recoverable drops are past their grace deadline and deletes NOTHING: the estate's rule is
+    # that a reclaimer earns its delete permission by first proving its report runs clean, and this is
+    # the reclaimer whose false positive costs a table someone was still inside their window to undrop.
+    try:
+        due = trash.expired(trash.list_all(settings.resolved_policy_root, options))
+        if due:
+            log.info(
+                "trash_expiry_due_report_only",
+                extra={"count": len(due), "ids": [str(r.get("id")) for r in due][:20]},
+            )
+    except Exception as exc:  # noqa: BLE001 — the trash report must never abort a maintenance tick
+        log.warning("trash_expiry_report_failed", extra={"error": str(exc)})
     results: list[DatasetResult] = []
     now = datetime.now(UTC)
     for uri in uris:
@@ -137,6 +150,8 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
             effective_older_than: timedelta | None = older_than
             retain_versions: int | None = None
             target_rows: int | None = None  # #76 compaction target-size from the policy
+            batch_size: int | None = None  # the sweep's READ batch — rows are not a unit of memory
+            auto_cleanup_interval: int | None = None  # #58 — set means the DATASET owns version cleanup
             policy: dict[str, Any] | None
             try:
                 policy = maintenance_policies.resolve_policy(policy_records, uri, logical_id=table_id_from_uri(uri), delimiter=settings.delimiter)
@@ -157,15 +172,27 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
                         effective_older_than = None
                     if policy.get("target_rows_per_fragment"):
                         target_rows = int(str(policy["target_rows_per_fragment"]))
+                    if policy.get("scan_batch_size"):
+                        batch_size = int(str(policy["scan_batch_size"]))
+                    if policy.get("auto_cleanup_interval_commits"):
+                        auto_cleanup_interval = int(str(policy["auto_cleanup_interval_commits"]))
             except Exception as exc:
                 log.warning("compaction_policy_ignored", extra={"uri": uri, "error": str(exc)})
                 effective_older_than, retain_versions, target_rows, policy = older_than, None, None, None
+                batch_size, auto_cleanup_interval = None, None
             result = compact_one(
                 uri,
                 options,
                 effective_older_than,
                 retain_versions=retain_versions,
                 target_rows_per_fragment=target_rows,
+                # Per-STEP opt-outs from the resolved policy. Winner-takes-all, like every other
+                # field: the record that matched supplies these, and a record that leaves them unset
+                # gets the default (on) rather than inheriting from the record it shadowed.
+                cleanup_enabled=bool((policy or {}).get("cleanup_enabled", True)),
+                optimize_indices_enabled=bool((policy or {}).get("optimize_indices_enabled", True)),
+                scan_batch_size=batch_size,
+                auto_cleanup_interval_commits=auto_cleanup_interval,
             )
             if policy is not None and policy.get("compact_interval_hours") and result.error is None:
                 # Stamp cadence state only after a successful pass, so a failed tick retries next tick.

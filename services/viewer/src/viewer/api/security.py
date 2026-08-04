@@ -1,0 +1,49 @@
+"""Who is asking, and may they see this corpus.
+
+The viewer shipped with no authorization at all: `GET /api/datasets` enumerated every corpus in the
+registry — ids, table stats, declared capabilities — to any caller, and `/api/datasets/{id}/descriptor`
+handed out a corpus's full schema. That was the documented "localhost / trusted network" posture,
+and it stops being defensible the moment more than one person can reach the zone. A corpus LIST is
+itself sensitive: it names data someone may not know exists.
+
+**A corpus is not a new kind of object.** `MediaSettings.catalog_table_id(dataset_id, table)` already
+maps a media dataset's table onto the catalog's identifier, and the annotator reads and writes Lance
+through exactly that mapping. So the FGA object is the `table` the model already defines, with the
+rungs it already has — no parallel `dataset` type to keep in step with the real one.
+
+Everything mechanical (bearer → verified subject, the three-outcome checker) comes from
+`service_kit.governed.deps`, shared with the annotator rather than copied out of it.
+"""
+
+from __future__ import annotations
+
+from typing import Annotated
+
+from fastapi import Depends
+
+from service_kit.governed.deps import FgaChecker, make_auth_deps
+from viewer.core.config import ViewerSettings, get_viewer_settings
+
+
+SettingsDep = Annotated[ViewerSettings, Depends(get_viewer_settings)]
+
+_deps = make_auth_deps(SettingsDep)
+
+CurrentSubject = Annotated[str, Depends(_deps.current_subject)]
+CheckerDep = Annotated[FgaChecker, Depends(_deps.get_checker)]
+
+#: The relation a READ of a corpus's metadata requires. `can_get_metadata` and not `can_read_data`:
+#: listing a corpus and reading its descriptor is metadata, and the model already separates the two —
+#: gating the list on data access would hide corpora from someone allowed to know they exist.
+READ_METADATA = "can_get_metadata"
+
+
+def corpus_object(settings: ViewerSettings, dataset_id: str, table: str) -> str:
+    """The FGA object for one corpus table: `table:<namespace>/<table>`.
+
+    Built through `catalog_table_id` so the object this service checks is the SAME identifier the
+    annotator writes through and the catalog authorizes on. Deriving it any other way here would
+    create a second naming scheme that agrees until someone sets `MEDIA_CATALOG_NAMESPACE`.
+    """
+    segments = settings.catalog_table_id(dataset_id, table)
+    return f"table:{settings.catalog_delimiter.join(segments)}"

@@ -368,11 +368,17 @@ class CompactResult(BaseModel):
 
 
 class PolicyRequest(BaseModel):
-    """The maintenance policy for one table or namespace — every field optional-with-defaults.
+    """The maintenance policy for one table, namespace or project — every field optional-with-defaults.
 
     ``retention_days`` / ``retain_versions`` override the sweep's global old-version cleanup (Lance
     keeps tag-pinned versions regardless); ``compact_enabled=False`` opts the target out of maintenance
     entirely; ``compact_interval_hours`` bounds how often the sweep maintains it.
+
+    **Resolution is WINNER-TAKES-ALL, not field-by-field.** An exact table match shadows the namespace
+    record which shadows the project record — the winning record supplies EVERY field, and a field the
+    winner leaves unset falls to the sweep's global default rather than to the record it shadowed.
+    Any surface that displays an effective policy has to say so: an inherited value rendered
+    identically to a set one is how nobody can tell what is actually governing their data.
     """
 
     retention_days: int | None = Field(default=None, ge=1, le=3650)
@@ -381,7 +387,37 @@ class PolicyRequest(BaseModel):
     compact_interval_hours: int | None = Field(default=None, ge=1, le=8760)
     # #76 compaction target-size tuning: the target rows per compacted fragment the sweep passes to
     # `compact_files` (Lance's `delta.targetFileSize` analog). None → Lance's default fragment sizing.
+    #
+    # Sizing is a real tradeoff, not a knob to leave alone: manifest work scales with fragment COUNT,
+    # while conflict detection is PER-FRAGMENT — so a tier under many concurrent updates/deletes/
+    # merge_inserts (the annotator's write pattern) wants MORE, smaller fragments, and a scan-heavy
+    # tier wants fewer, larger ones. Per-tier is the point: bronze page images are ~1.8 MB rows,
+    # silver/gold features are not, and one value cannot be right for both.
     target_rows_per_fragment: int | None = Field(default=None, ge=1024, le=10_000_000)
+    # Per-OPERATION opt-outs. `compact_enabled` historically gated the whole pass; these split the
+    # ordered per-dataset pass into its three real steps, because they have different costs and
+    # different risks. The ORDER is fixed and not configurable — compaction obsoletes files, so
+    # cleanup must follow it, and index optimization must follow that.
+    cleanup_enabled: bool = True
+    optimize_indices_enabled: bool = True
+    # The sweep's READ batch, passed to `compact_files`. Lance's default is 8192 ROWS, and rows are
+    # not a unit of memory: against bronze page-image rows (~1.8 MB each, measured) 8192 rows is
+    # ~15 GB *per compute thread* — the default is safe for feature tables and ruinous for a blob
+    # tier. Per-tier is the whole point, exactly as with `target_rows_per_fragment`. None → Lance's
+    # default, which is correct wherever rows are small.
+    scan_batch_size: int | None = Field(default=None, ge=1, le=8192)
+    # #58 — WHO reclaims old versions. Lance ships its own auto-cleanup ON THE COMMIT PATH
+    # (`lance.auto_cleanup.interval` / `.older_than`), so a tier that writes often may need no cron of
+    # ours at all: the writer reclaims as it goes, and our sweep's cleanup step is redundant work
+    # against the same versions. Set this to hand version reclamation to the DATASET.
+    #
+    # It is not free, and that is why it is a choice rather than a default: auto-cleanup runs inside
+    # the commit, so it needs delete permission on the store and it adds latency to every Nth write.
+    # A tier that writes rarely is better served by the sweep, which costs the writer nothing.
+    #
+    # Turning it on DISABLES the sweep's own cleanup for that target — one owner, never two. Both
+    # running is not additive, it is two processes racing to delete the same manifests.
+    auto_cleanup_interval_commits: int | None = Field(default=None, ge=1, le=1_000_000)
 
     @model_validator(mode="after")
     def _not_empty(self) -> Self:

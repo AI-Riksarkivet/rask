@@ -121,3 +121,113 @@ def test_gc_does_not_reclaim_branch_referenced_data(tmp_path: Path) -> None:
     after = {p.name for p in data_dir.iterdir()}
     assert lance.dataset(uri).branches.list(), "GC destroyed the branch — it would delete branch data"
     assert before == after, f"GC reclaimed branch-referenced data files: {before - after}"
+
+
+def test_a_policy_can_skip_cleanup_while_still_compacting(tmp_path: Path) -> None:
+    """`cleanup_enabled=False` keeps the ENTIRE version history — a tier under legal hold, or one
+    whose time-travel window IS the product.
+
+    Compaction still runs, because it changes layout, not history. That is the whole reason these are
+    per-STEP flags rather than one all-or-nothing opt-out: the two operations have different risks and
+    an operator may legitimately want one without the other.
+    """
+    uri = _fragmented_indexed_dataset(tmp_path)
+    before = len(lance.dataset(uri).versions())
+
+    result = compact_one(uri, {}, timedelta(0), cleanup_enabled=False)
+
+    assert result.error is None, result.error
+    assert result.old_versions_removed == 0, "cleanup ran despite the policy disabling it"
+    assert len(lance.dataset(uri).versions()) >= before, "version history was reclaimed anyway"
+
+
+def test_cleanup_still_runs_by_default(tmp_path: Path) -> None:
+    """The negative of the test above. Without it, a gate that skipped cleanup UNCONDITIONALLY would
+    pass — which is the same class of mistake as a detector that refuses everything."""
+    uri = _fragmented_indexed_dataset(tmp_path)
+    result = compact_one(uri, {}, timedelta(0))
+    assert result.error is None, result.error
+    assert result.old_versions_removed > 0, "the default pass must still reclaim old versions"
+
+
+def test_a_policy_can_skip_index_optimization(tmp_path: Path) -> None:
+    """Skipping index optimization after a compaction leaves the new fragments unindexed until the
+    next enabled pass — queries fall back to a flat scan rather than returning wrong rows, which is
+    why it is a legal choice rather than a corrupting one."""
+    uri = _fragmented_indexed_dataset(tmp_path)
+    result = compact_one(uri, {}, timedelta(0), optimize_indices_enabled=False)
+    assert result.error is None, result.error
+    assert result.indices_optimized == 0
+
+
+def test_a_scan_batch_size_reaches_compaction_and_still_compacts(tmp_path: Path) -> None:
+    """The sweep's READ batch is policy-settable because rows are not a unit of memory: Lance's
+    default 8192-ROW batch against ~1.8 MB bronze page-image rows is ~15 GB per compute thread.
+
+    Asserts the value REACHES `compact_files` (a silently-dropped kwarg is the failure mode that
+    matters here — the pass would look identical while still reading 8192 rows) and that compaction
+    genuinely still happens at a small batch.
+    """
+    uri = _fragmented_indexed_dataset(tmp_path)
+    seen: dict[str, object] = {}
+    real = lance.dataset(uri).optimize.__class__.compact_files
+
+    def _spy(self: object, *args: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        return real(self, *args, **kwargs)  # ty: ignore[invalid-argument-type] — a spy is deliberately untyped
+
+    lance.dataset(uri).optimize.__class__.compact_files = _spy  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    try:
+        result = compact_one(uri, {}, timedelta(0), scan_batch_size=64)
+    finally:
+        lance.dataset(uri).optimize.__class__.compact_files = real  # type: ignore[method-assign]
+
+    assert result.error is None, result.error
+    assert seen.get("batch_size") == 64, f"scan_batch_size never reached compact_files: {seen}"
+    assert result.fragments_removed > 0, "compaction did not run at a small batch size"
+
+
+def test_no_batch_size_leaves_lance_defaulting(tmp_path: Path) -> None:
+    """The negative: an unset policy must not pin a batch size at all. Passing `batch_size=None`
+    through to Lance is NOT the same as omitting it, and pinning some invented default here would
+    make every small-row table read in tiny batches for no reason."""
+    uri = _fragmented_indexed_dataset(tmp_path)
+    seen: dict[str, object] = {}
+    real = lance.dataset(uri).optimize.__class__.compact_files
+
+    def _spy(self: object, *args: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        return real(self, *args, **kwargs)  # ty: ignore[invalid-argument-type] — a spy is deliberately untyped
+
+    lance.dataset(uri).optimize.__class__.compact_files = _spy  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    try:
+        compact_one(uri, {}, timedelta(0))
+    finally:
+        lance.dataset(uri).optimize.__class__.compact_files = real  # type: ignore[method-assign]
+
+    assert "batch_size" not in seen, f"an unset policy pinned a batch size anyway: {seen}"
+
+
+def test_handing_cleanup_to_the_dataset_skips_our_own_sweep(tmp_path: Path) -> None:
+    """#58 — Lance ships its OWN auto-cleanup on the commit path, so a write-heavy tier may need no
+    cron of ours. Setting the interval configures the DATASET and SKIPS this pass's cleanup step:
+    one owner, never two, because both running is two processes racing to delete the same manifests.
+    """
+    uri = _fragmented_indexed_dataset(tmp_path)
+    before = len(lance.dataset(uri).versions())
+
+    result = compact_one(uri, {}, timedelta(0), auto_cleanup_interval_commits=10)
+
+    assert result.error is None, result.error
+    assert result.auto_cleanup_configured is True, "the dataset was never given the cleanup config"
+    assert result.old_versions_removed == 0, "our sweep reclaimed versions the DATASET now owns"
+    assert len(lance.dataset(uri).versions()) >= before, "the sweep reclaimed anyway"
+
+
+def test_without_the_interval_our_sweep_still_owns_cleanup(tmp_path: Path) -> None:
+    """The negative of the test above — without it, code that ALWAYS delegated would pass."""
+    uri = _fragmented_indexed_dataset(tmp_path)
+    result = compact_one(uri, {}, timedelta(0))
+    assert result.error is None, result.error
+    assert result.auto_cleanup_configured is False
+    assert result.old_versions_removed > 0, "nobody reclaimed old versions"

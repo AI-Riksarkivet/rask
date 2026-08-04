@@ -22,6 +22,8 @@
 	import { fmtTime, hitKey, queryTerms, makeHighlighter } from '$lib/utils';
 	import SearchBar from '$lib/components/search-bar.svelte';
 	import SavedViews from '$lib/components/saved-views.svelte';
+	import DatasetPicker from '$lib/components/dataset-picker.svelte';
+	import { descriptor } from '$lib/descriptor-store.svelte';
 	import ActiveFilters from '$lib/components/active-filters.svelte';
 	import HitList from '$lib/components/hit-list.svelte';
 	import HitCard from '$lib/components/hit-card.svelte';
@@ -741,7 +743,15 @@
 <div class="grid h-full min-h-0 grid-rows-[auto_1fr]">
 	<div class="border-border bg-card/40 border-b">
 		<SearchBar bind:spec onsubmit={runSearch} adoptSignal={searchBarAdopt} />
-		<div class="flex items-center justify-end px-6 pb-1">
+		<!-- WHICH corpus, beside the views that are scoped to it. The mechanism (`?dataset=`) always
+		     existed; nothing on screen said so, so choosing one meant hand-editing the URL. -->
+		<div class="flex items-center justify-between gap-2 px-6 pb-1">
+			<DatasetPicker
+				activeId={descriptor.view?.id ?? null}
+				defaultId={descriptor.defaultId}
+				url={page.url}
+				searchTables={descriptor.view?.searchTables ?? []}
+			/>
 			<SavedViews {spec} onapply={applySavedView} />
 		</div>
 		<ActiveFilters bind:spec onchange={runSearch} />

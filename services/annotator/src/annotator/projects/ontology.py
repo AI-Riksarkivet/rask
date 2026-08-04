@@ -263,26 +263,25 @@ def _span_violation(shapes: list[ShapeLike]) -> str | None:
     return None
 
 
-def validate_against_ontology(
-    ontology: LabelOntology,
-    shapes: list[ShapeLike],
-    links: list[LinkLike] | None = None,
-) -> str | None:
-    """The output contract as ONE pure function: the first violation, or None.
+def membership_violation(ontology: LabelOntology, shapes: list[ShapeLike]) -> str | None:
+    """Is every shape a legal MEMBER of the taxonomy? The first violation, or None.
 
-    Pure and shared so the actor's refusal and any test speak the same words. Violations NAME the
-    rule and the offender — a 409 nobody can act on is not enforcement.
+    The half of the output contract that asks "does this annotation belong to the declared
+    vocabulary" — closed label set, the tools a class permits, and the types its attributes declare.
+    Deliberately NOT the other half, which asks "is this submission complete" (every required class
+    present, every required relation drawn).
 
-    Order matters: the emptiness rule runs first because every rule after it is a per-shape or
-    per-link test that zero shapes satisfies vacuously.
+    Split out because IMPORT needs exactly this half and must not have the other. An import is
+    partial, unreviewed work by definition — refusing it because a required class has not been
+    annotated yet would refuse the very thing importing is for, and the completeness rules still run
+    at submit where they mean something.
+
+    Shared rather than reimplemented so the two stages cannot drift: a membership rule that import
+    applied more loosely than submit would accept labels at the door that are refused later, which
+    is a worse failure than refusing them up front.
     """
     if not ontology.constrains:
         return None
-
-    links = links or []
-
-    if not shapes and not ontology.allow_empty:
-        return f"task {ontology.kind or 'ontology'} is constrained — a submission must carry at least one annotation (set allow_empty to accept blank items)"
 
     declared = {c.name: c for c in ontology.classes}
 
@@ -318,6 +317,33 @@ def validate_against_ontology(
                     return f"attribute {attr.name!r} must be a boolean — shape {shape.shape_id} carries {value!r}"
             elif attr.type == "enum" and value not in attr.choices:
                 return f"attribute {attr.name!r} must be one of {attr.choices} — shape {shape.shape_id} carries {value!r}"
+    return None
+
+
+def validate_against_ontology(
+    ontology: LabelOntology,
+    shapes: list[ShapeLike],
+    links: list[LinkLike] | None = None,
+) -> str | None:
+    """The output contract as ONE pure function: the first violation, or None.
+
+    Pure and shared so the actor's refusal and any test speak the same words. Violations NAME the
+    rule and the offender — a 409 nobody can act on is not enforcement.
+
+    Order matters: the emptiness rule runs first because every rule after it is a per-shape or
+    per-link test that zero shapes satisfies vacuously.
+    """
+    if not ontology.constrains:
+        return None
+
+    links = links or []
+
+    if not shapes and not ontology.allow_empty:
+        return f"task {ontology.kind or 'ontology'} is constrained — a submission must carry at least one annotation (set allow_empty to accept blank items)"
+
+    membership = membership_violation(ontology, shapes)
+    if membership is not None:
+        return membership
 
     span_problem = _span_violation(shapes)
     if span_problem is not None:

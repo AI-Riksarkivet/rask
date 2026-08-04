@@ -5,7 +5,7 @@
 	// table count from the registry the /namespaces page already derives from), the kind-generalized
 	// GrantsPanel, and a maintenance-policy card mirroring the table policy form. Same stack-mode
 	// states as the registry — governed without a session ⇒ sign-in, unreachable ⇒ retrying.
-	import { GrantsPanel, type GrantsClient } from '@rask/ui/grants-panel';
+	import { GrantsPanel, subjectDisplay, type GrantsClient } from '@rask/ui/grants-panel';
 	import { Boxes, Network, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
@@ -13,7 +13,8 @@
 	import DetailTabs from '$lib/data/DetailTabs.svelte';
 	import StageBadge from '$lib/data/StageBadge.svelte';
 	import { stageOf } from '$lib/data/stage';
-	import type { AccessGraph, NamespacePolicy, PolicyRequest } from '$lib/data/namespace';
+	import { policyRequestFrom } from '$lib/data/namespace';
+	import type { AccessGraph, NamespacePolicy } from '$lib/data/namespace';
 	import {
 		checkAccess,
 		fetchAccess,
@@ -120,7 +121,9 @@
 
 	// Split the one-hop edges for the card: inbound = grants (subject holds a rung ON the namespace),
 	// outbound = the container edge (namespace → parent/project). Labels come from the graph's nodes.
-	const graphLabel = (id: string): string => graph?.nodes.find((n) => n.id === id)?.label ?? id;
+	// #68: node labels carry raw OIDC subs — render the display form, keep the full value for title.
+	const graphNode = (id: string): { label: string; title: string } =>
+		subjectDisplay(graph?.nodes.find((n) => n.id === id)?.label ?? id);
 	const grantEdges = $derived.by(() => {
 		const g = graph;
 		return g === null ? [] : g.edges.filter((e) => e.target === g.object);
@@ -205,11 +208,7 @@
 		policyError = null;
 		const current = ns;
 		try {
-			const body: PolicyRequest = { compact_enabled: draft.enabled };
-			if (draft.retention_days != null) body.retention_days = draft.retention_days;
-			if (draft.retain_versions != null) body.retain_versions = draft.retain_versions;
-			if (draft.interval != null) body.compact_interval_hours = draft.interval;
-			if (draft.target != null) body.target_rows_per_fragment = draft.target;
+			const body = policyRequestFrom(draft);
 			const res = await setNamespacePolicy({ namespace: current, policy: body });
 			if (ns !== current) return; // navigated away — drop the stale result
 			if (res.ok) {
@@ -406,9 +405,10 @@
 								<ul class="edges">
 									{#each grantEdges as e (`${e.source}:${e.relation}`)}
 										<li class="mono">
-											<span class="subject">{graphLabel(e.source)}</span>
+											<span class="subject" title={graphNode(e.source).title}>{graphNode(e.source).label}</span
+											>
 											<span class="chip rel">{e.relation}</span>
-											<span class="mut">on {graphLabel(e.target)}</span>
+											<span class="mut">on {graphNode(e.target).label}</span>
 										</li>
 									{/each}
 								</ul>
@@ -418,7 +418,8 @@
 									{#each containerEdges as e (`${e.relation}:${e.target}`)}
 										<li class="mono">
 											<span class="mut">{e.relation} →</span>
-											<span class="subject">{graphLabel(e.target)}</span>
+											<span class="subject" title={graphNode(e.target).title}>{graphNode(e.target).label}</span
+											>
 										</li>
 									{/each}
 								</ul>

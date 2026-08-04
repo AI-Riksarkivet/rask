@@ -367,7 +367,22 @@ frontend:
     # The DEFAULT tag; shared across zones. A zone may override it with `tag:` on its apps entry below —
     # that is what makes the zone split mean anything: independent deploy is the only thing a zone
     # boundary buys, and one shared tag across every zone cancels it.
-    tag: "dev"
+    #
+    # An IMMUTABLE commit tag, never `dev`. `dev` was the default here and it cost a day: it is a
+    # MOVING pointer that no one owns, so the deployed UI was whatever last happened to claim the name
+    # — measured 2026-08-04 as an image predating both the media→explorer rename and the compositor
+    # removal, still serving a navbar reading "Search" with a dead top-level Workbench entry.
+    #
+    # The failure mode it creates is the reason this line matters more than it looks. Two lanes deploy
+    # this cluster; one rolls a verified tag out with `kubectl set image`, the other renders this chart.
+    # While the default was `dev`, EVERY chart render silently reverted the other lane's work (observed
+    # three times in one session, ~10 minutes apart) — and neither side saw an error, because pulling
+    # `dev` always succeeds. Pinning a commit makes the chart carry the intent, so a render REPRODUCES
+    # the fleet instead of overwriting it, and a disagreement shows up as a diff in git rather than as a
+    # UI that quietly rots back to last week.
+    #
+    # Bump this when new zone images are published (`dagger call zone-image --zone=<z> publish …`).
+    tag: "7ea481c"
     pullPolicy: IfNotPresent
   service:
     port: 3000

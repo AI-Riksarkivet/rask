@@ -12,6 +12,7 @@
 	// 401/403/501) cached and transient failures (offline, 5xx) retried on the next open.
 	import { ChevronRight, ShieldCheck } from '@lucide/svelte';
 	import { Select } from '../select/index.js';
+	import { subjectDisplay } from './subject.js';
 
 	export type GrantsKind = 'table' | 'namespace';
 	/** Mirrors the zones' status-aware ApiResult (http.ts): 0 = fetch-level failure/offline. */
@@ -210,10 +211,15 @@
 						{#each held as grant (grant.relation)}
 							<tr>
 								<td class="mono rel">{grant.relation}</td>
-								<td>
+								<!-- One flex-gapped chip per holder (#68): adjacent inline spans rendered two
+								     subjects as ONE glued string once an opaque OIDC sub wrapped. The chip shows
+								     the display form; the FULL subject rides `title`, because the raw value is
+								     what a tuple write or a support ticket needs. -->
+								<td class="whos">
 									{#each grant.users as user (user)}
-										<span class="who mono" class:wild={user === '*'}
-											>{user === '*' ? 'everyone (*)' : user}</span
+										{@const d = subjectDisplay(user)}
+										<span class="who mono" class:wild={user === '*'} title={d.title}
+											>{user === '*' ? 'everyone (*)' : d.label}</span
 										>
 									{/each}
 								</td>
@@ -351,6 +357,12 @@
 	.rel {
 		color: var(--mut);
 		white-space: nowrap;
+	}
+	.whos {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px;
+		align-items: center;
 	}
 	.who {
 		display: inline-block;

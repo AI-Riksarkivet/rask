@@ -120,6 +120,13 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         "maintenance/preview": "can_drop",
         "maintenance/run": "can_drop",
         "maintenance/compact": "can_drop",
+        # #73 deletion protection: arming/disarming the safety on an object is a statement about its
+        # DESTRUCTION, so it clears the same owner bar as the drop it guards — a writer must not be
+        # able to disarm protection they could never act on. (An unmapped suffix would fall through
+        # to writer-tier — never leave it unset.)
+        "protection": "can_drop",
+        # #75 undrop RESTORES the object into its namespace — the same authority as removing it.
+        "undrop": "can_drop",
         # Publication ADVANCES the `published` tag, so it clears the same bar as `tags/update` — the
         # rung that already exists for re-pointing the ref plane. Anything lower would make `publish`
         # a way for a plain data writer to move a tag they are not allowed to move directly, which is
@@ -129,6 +136,7 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
     },
     "namespace": {
         "drop": "can_delete",
+        "protection": "can_delete",
         "policy/set": "can_delete",
         "policy/delete": "can_delete",
         "access/list": "can_delete",

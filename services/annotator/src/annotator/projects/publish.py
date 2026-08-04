@@ -87,7 +87,16 @@ PUBLISHED_LABELS_SCHEMA: Final[pa.Schema] = pa.schema(
         ("mask", pa.string()),
         ("label", pa.string()),
         ("text", pa.string()),
-        ("attributes", pa.string()),  # json
+        # The ontology declares per-class attributes with REAL types (free/int/enum/bool), enforces
+        # them at submit and publishes them — and while this was `pa.string()` no downstream consumer
+        # could filter on one. Declared, enforced, unqueryable. `pa.json_()` makes
+        # `json_get_int(attributes, 'order') > 3` a Lance filter.
+        #
+        # Verified end to end before changing it: the extension type survives Arrow IPC (the hop to
+        # the catalog, which is what actually writes Lance here) and `lance.write_dataset` preserves
+        # it. `_json_attributes` already emits `{}` rather than "" for a shapeless row, which matters
+        # because an empty string is not valid JSON.
+        ("attributes", pa.json_()),
         ("group", pa.string()),
         ("difficult", pa.bool_()),
         # who made it — server-stamped, never client-claimed
@@ -242,8 +251,16 @@ def _row(
 
 
 def _json_attributes(shape: Shape | None) -> str:
-    """`attributes` is a JSON string column (§7.1). Sorted keys so a replayed publish produces byte-
-    identical rows — an activity that replays after a crash must not rewrite the dataset differently."""
+    """The JSON text for one row's `attributes` (§7.1), landing in a `pa.json_()` column.
+
+    Sorted keys so a replayed publish produces byte-identical rows — an activity that replays after a
+    crash must not rewrite the dataset differently.
+
+    It must always return VALID JSON, and that is now load-bearing rather than tidy: under
+    `pa.string()` malformed text landed happily and only broke whoever parsed it later, whereas Lance
+    refuses to encode it into a JSON column and fails the whole publish write. `{}` for a shapeless
+    row is the reason this never returns `""`.
+    """
     import json  # noqa: PLC0415 - only needed on this path
 
     return json.dumps(dict(sorted(shape.attributes.items())), separators=(",", ":")) if shape else "{}"

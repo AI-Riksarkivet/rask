@@ -12,7 +12,7 @@
 	import { page } from '$app/state';
 	import type { ProjectSummary } from '$lib/catalog';
 	import ProjectDeleteDialog from '$lib/ProjectDeleteDialog.svelte';
-	import { fetchProject } from '$lib/remote/warehouses.remote';
+	import { fetchProject, projectEvents, type ProjectEvent } from '$lib/remote/warehouses.remote';
 
 	const project = $derived(page.params.project ?? '');
 
@@ -20,6 +20,11 @@
 	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
 
 	let detail = $state<ProjectSummary | null>(null);
+	// #71 the project's 10 most recent control events. `denied` is its own quiet state — the events
+	// feed is estate-admin gated at the catalog, and a project admin who is not estate admin should
+	// see a page that simply omits the panel's content, not an error.
+	let events = $state<ProjectEvent[] | null>(null);
+	let eventsDenied = $state(false);
 	let lastStatus = $state(0);
 	let settled = $state(false);
 	let deleting = $state(false);
@@ -33,7 +38,7 @@
 
 	async function load(): Promise<void> {
 		const current = project;
-		const res = await fetchProject(current);
+		const [res, evRes] = await Promise.all([fetchProject(current), projectEvents(current)]);
 		if (project !== current) return; // latest-wins across navigation
 		settled = true;
 		if (res.ok) {
@@ -43,11 +48,15 @@
 			detail = null;
 			lastStatus = res.status;
 		}
+		events = evRes.ok ? evRes.data : null;
+		eventsDenied = !evRes.ok && (evRes.status === 401 || evRes.status === 403);
 	}
 
 	$effect(() => {
 		void project;
 		detail = null;
+		events = null;
+		eventsDenied = false;
 		lastStatus = 0;
 		settled = false;
 		load();
@@ -137,6 +146,35 @@
 			{/if}
 		</section>
 
+		<!-- #71 what just happened HERE: the 10 most recent control events on this project and its
+		     warehouses, newest first. The estate-wide, filterable stream is one reload-link away. -->
+		<section>
+			<h2>Recent activity</h2>
+			{#if eventsDenied}
+				<p class="mut">
+					The event feed is estate-admin gated — ask an estate admin, or check
+					<a href="/lakehouse/admin/events" data-sveltekit-reload>the estate stream</a>.
+				</p>
+			{:else if events === null}
+				<p class="mut">Events unavailable right now.</p>
+			{:else if events.length === 0}
+				<p class="mut">No governance changes recorded on this project yet.</p>
+			{:else}
+				<ul class="evlist">
+					{#each events as e (e.event_id)}
+						<li class="mono">
+							<span class="evaction">{e.action.replaceAll('_', ' ')}</span>
+							<span class="evobj">{e.object_id}</span>
+							<span class="evts">{e.occurred_at.slice(0, 19).replace('T', ' ')}</span>
+						</li>
+					{/each}
+				</ul>
+				<p class="mut">
+					<a href="/lakehouse/admin/events" data-sveltekit-reload>All events, live and filterable →</a>
+				</p>
+			{/if}
+		</section>
+
 		<!-- Retiring the tenant. Last on the page and fenced off, because it is the one action here that
 		     cannot be undone by repeating it. The catalog is the gate (project `can_administer`), so this
 		     renders for anyone who can READ the project and the refusal is rendered honestly rather than
@@ -167,6 +205,33 @@
 </div>
 
 <style>
+	.evlist {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		font-size: 12px;
+	}
+	.evlist li {
+		display: grid;
+		grid-template-columns: 180px 1fr auto;
+		gap: 12px;
+		align-items: baseline;
+		padding: 4px 0;
+		border-bottom: 1px solid color-mix(in srgb, var(--line) 45%, transparent);
+	}
+	.evaction {
+		color: var(--fg);
+	}
+	.evobj {
+		color: var(--mut);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.evts {
+		color: var(--faint);
+	}
+
 	.page {
 		max-width: 860px;
 		margin: 0 auto;

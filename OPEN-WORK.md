@@ -3096,3 +3096,61 @@ Recorded rather than hidden, each with what would unblock it:
   serializer reads it. Not part of publish.
 * **Active learning** (`Draft.origin = "model"`, `confidence`, `uncertainty`). The columns and the
   `prediction_import` send path exist in this design; the ranking loop does not.
+
+---
+
+## Ingest plane — what round 3 left open
+
+`open_ingest.md` is deleted; rounds 1–3 landed on `ingest-plane` and merged. The readiness contract
+ruled in its § D2 is BUILT: a commit is not a publication (the `published` tag advances only after
+the quality gate passes), the tag is the truth and the `table_published` event is only the
+notification, and that event carries `{from_version, to_version}` so a consumer resolves an exact
+row delta via `_row_created_at_version` without a bookmark. Proven in-cluster.
+
+What is still open, most consequential first:
+
+### The movers COMPOSE a dataset path; the catalog VENDS one
+
+`transform.py:191` builds `{project_root}/medallion/{namespace}`, while the catalog vends tables at
+`s3://<warehouse>/<hash>_<ns>$<name>`. The two never meet, so no configuration of names can make an
+ingest-written table visible to a mover — the cascade fires correctly and then finds nothing to move.
+
+This is I2 ("resolve the location through the CATALOG, never compose a path") violated on the mover
+side, and it predates the ingest plane. The fix is to make the movers catalog-resolved. It is a
+change to a service outside the ingest plane and wants its own review.
+
+Everything else in the cascade now works: the publication head is subscribed
+(`catalog.control.v1 -> /publication-arrival`), receives deliveries, carries `{from, to, project}`,
+and the mover wakes and correctly identifies another lane.
+
+### `/bronze-arrival` still exists alongside `/publication-arrival`
+
+Both publish the same `medallion.bronze` trigger, and the movers' token de-duplication is what stops
+a table emitting both signals from cascading twice. Retiring the lineage head is a follow-up once
+every writer publishes — doing it before then would strand any writer that has not adopted publish.
+
+### `StagingOverlapError` is reachable
+
+`drain_chunk` separates redelivered messages from fresh ones within ONE fetch but batches all
+redeliveries in that fetch together regardless of origin batch, so two crashed batches' remainders
+can merge into a fragment that overlaps both and is contained by neither. The finalizer now searches
+for an exact cover (refusing 0% of resolvable inputs, down from 18.2%) and refuses only the genuinely
+undecidable case, naming the stranded units. Removing the state entirely means preserving the
+original batch grouping on redelivery.
+
+### `id` is not a declared primary key
+
+`catalog.py` used to claim it was, citing `file_format.md:2887-2910`. Lance's unenforced primary key
+is opt-in through field metadata (`lance-schema:unenforced-primary-key`) which this plane sets
+nowhere, so `id` is an ordinary column the estate agrees to merge on and Lance validates no
+uniqueness. Declaring it properly is open.
+
+### Dropped from the medallion head, still not restored
+
+The empty-source refusal (a mis-set prefix currently commits nothing, reports COMPLETE, and emits a
+WROTE edge for a table it did not write) and the ingest ceilings (`s3-prefix` at a bucket root
+enumerates the whole bucket). Both are guards against a mis-pointed source; both are cheaper here
+than in the head they came from, because enumeration is a discrete phase.
+
+The IIIF read-through cache belongs to the ADAPTER, not the platform — a per-source `Fetcher` is
+already the designed seam.

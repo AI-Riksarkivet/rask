@@ -15,6 +15,7 @@ from catalog.core.vending import (
     ModeBVendor,
     StaticPrefixVendor,
     StsVendor,
+    Tier,
     WebIdentityVendor,
     build_session_policy,
     make_vendor,
@@ -168,3 +169,60 @@ def test_sts_vendor_against_a_real_assume_role_implementation() -> None:
     assert opts["access_key_id"] and opts["secret_access_key"] and opts["session_token"]
     assert opts["region"] == "us-east-1"
     assert creds.expires_at_millis is not None
+
+
+# ---- #74 the cross-tenant attack, evaluated OFFLINE -------------------------------------------
+# The e2e attack (tests/e2e-py/test_credential_isolation_e2e.py) is the real proof: it points a
+# vended credential at another tenant's bucket and asks the STORE. It is env-gated, so it cannot
+# guard the claim on every commit. These evaluate the same attack against the policy the vendor
+# actually builds, using an IAM-semantics evaluator — no store, no mock of one, just the document.
+
+
+def _policy_allows(policy: Any, *, action: str, bucket: str, key: str) -> bool:
+    """Does this session policy ALLOW ``action`` on ``bucket/key``? IAM semantics, narrowed to what
+    a session policy can express here: explicit Allow only (no Deny statements are emitted), and a
+    ``*`` in a Resource arn matches any run of characters — the same wildcard the store applies."""
+    import re
+
+    target = f"arn:aws:s3:::{bucket}/{key}" if key else f"arn:aws:s3:::{bucket}"
+    for stmt in policy["Statement"]:
+        if stmt["Effect"] != "Allow" or action not in stmt["Action"]:
+            continue
+        pattern = "^" + ".*".join(re.escape(part) for part in stmt["Resource"].split("*")) + "$"
+        if re.match(pattern, target):
+            return True
+    return False
+
+
+@pytest.mark.parametrize("tier", ["read", "write"])
+def test_a_tenants_policy_denies_another_tenants_bucket(tier: Tier) -> None:
+    """THE #74 claim, offline: the credential vended for tenant B's table must not reach tenant A's
+    bucket at all — not for GET, not for PUT, not even to LIST it."""
+    policy: Any = build_session_policy("tenant-b", "isobns/isobtbl.lance", tier)
+    assert not _policy_allows(policy, action="s3:GetObject", bucket="tenant-a", key="isoans/isoatbl.lance/data/x.lance")
+    assert not _policy_allows(policy, action="s3:PutObject", bucket="tenant-a", key="isoans/isoatbl.lance/data/x.lance")
+    assert not _policy_allows(policy, action="s3:ListBucket", bucket="tenant-a", key="")
+
+
+@pytest.mark.parametrize("tier", ["read", "write"])
+def test_a_tenants_policy_still_allows_its_OWN_table(tier: Tier) -> None:
+    """The negative twin: a policy that denied everything would satisfy the test above while
+    breaking the product, so pin that B keeps reaching B."""
+    policy: Any = build_session_policy("tenant-b", "isobns/isobtbl.lance", tier)
+    assert _policy_allows(policy, action="s3:GetObject", bucket="tenant-b", key="isobns/isobtbl.lance/data/x.lance")
+    assert _policy_allows(policy, action="s3:ListBucket", bucket="tenant-b", key="")
+
+
+def test_a_policy_does_not_reach_a_SIBLING_table_in_the_same_bucket() -> None:
+    """Single-bucket deployments share one bucket across tables, so the prefix — not just the
+    bucket — is the boundary. A credential for one table must not read its neighbour."""
+    policy: Any = build_session_policy("shared", "nsa/tbl_a.lance", "write")
+    assert not _policy_allows(policy, action="s3:GetObject", bucket="shared", key="nsa/tbl_b.lance/data/x.lance")
+    assert _policy_allows(policy, action="s3:GetObject", bucket="shared", key="nsa/tbl_a.lance/data/x.lance")
+
+
+def test_a_read_tier_policy_cannot_write_its_own_table() -> None:
+    """The tier split is a security boundary, not an ergonomic one."""
+    policy: Any = build_session_policy("tenant-b", "isobns/isobtbl.lance", "read")
+    assert not _policy_allows(policy, action="s3:PutObject", bucket="tenant-b", key="isobns/isobtbl.lance/data/x.lance")
+    assert not _policy_allows(policy, action="s3:DeleteObject", bucket="tenant-b", key="isobns/isobtbl.lance/data/x.lance")

@@ -18,9 +18,10 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import lance
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 from service_kit.lancekit import store
 from service_kit.lancekit.introspect import TableInfo, discover_tables
@@ -83,6 +84,20 @@ class FtsBinding(BaseModel):
 
 
 class Search(BaseModel):
+    """One SEARCHABLE table, with the bindings that make it searchable.
+
+    Named, and a corpus may declare several. It was a single object, which meant a corpus could
+    expose exactly one searchable table no matter how many it held — you could pick a DATASET but
+    never a table within it.
+
+    The shape mirrors `atlas`, which solved the same problem first: a named list, each entry bound to
+    its own table. Display fields, fts and vector bindings are all per-TABLE, so they had to travel
+    with the table rather than sit beside a single privileged one.
+    """
+
+    #: Stable key the UI and the `table=` selector use. `default` for a corpus that declares one,
+    #: which is what every descriptor on disk says today.
+    name: str = "default"
     row_table: str
     fts: FtsBinding | None = None
     vectors: dict[str, VectorBinding] = Field(default_factory=dict)  # mode name → binding
@@ -123,9 +138,56 @@ class Declared(BaseModel):
     document: DocumentBinding | None = None
     time: TimeBinding | None = None
     display: Display = Display()
-    search: Search | None = None
+    #: Every searchable table this corpus exposes, in declaration order. The FIRST is the default.
+    searches: list[Search] = Field(default_factory=list)
     atlas: list[AtlasSpace] = Field(default_factory=list)
     capabilities: dict[str, str] = Field(default_factory=dict)  # capability → table/column it needs
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_single_search(cls, data: Any) -> Any:
+        """`search: {...}` (what every descriptor on disk carries) becomes `searches: [{...}]`.
+
+        A before-validator and not a migration script: descriptors are FILES, written by hand and by
+        seeding scripts, and rewriting them all to land one feature would make the feature's blast
+        radius the whole corpus estate. `extra="allow"` on this model makes the translation
+        load-bearing rather than cosmetic — without popping the key, `search` would survive as an
+        untyped extra and quietly shadow nothing while the real list stayed empty.
+        """
+        if not isinstance(data, dict):
+            return data
+        legacy = data.get("search")
+        if legacy is None:
+            return data
+        data = dict(data)
+        data.pop("search")
+        # An explicit `searches` wins: a descriptor carrying both is stating the new shape, and the
+        # legacy key is then a leftover rather than an instruction.
+        data.setdefault("searches", [legacy])
+        return data
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def search(self) -> Search | None:
+        """The DEFAULT searchable table, or None.
+
+        A property, so the ~15 existing readers of `declared.search` keep working untouched — and a
+        COMPUTED field, so the served JSON still carries `search` beside the new `searches`. The
+        frontend reads `declared.search` today; dropping it from the wire to add a list would have
+        broken every zone in the same commit that added the capability.
+        """
+        return self.searches[0] if self.searches else None
+
+    def search_named(self, name: str | None) -> Search | None:
+        """One declared table by name — `None` selects the default.
+
+        Returns `None` for a name this corpus does not declare, which callers must treat as a 404
+        rather than silently falling back to the default: a search that quietly answered from a
+        different table than the one asked for would be a wrong answer, not a lenient one.
+        """
+        if name is None:
+            return self.search
+        return next((s for s in self.searches if s.name == name), None)
 
 
 class DatasetDescriptor(BaseModel):
@@ -173,15 +235,24 @@ def validate_descriptor(declared: Declared, tables: dict[str, TableInfo]) -> lis
     """
     problems: list[str] = []
 
-    row_table = declared.search.row_table if declared.search else None
-    if row_table:
-        info = tables.get(row_table)
+    # EVERY declared searchable table, not just the default. A corpus can now expose several, and a
+    # second one whose row table does not exist would otherwise load fine and 500 the first time
+    # anyone selected it.
+    seen_names: set[str] = set()
+    for search in declared.searches:
+        if search.name in seen_names:
+            # Names are the `table=` selector's keys, so a duplicate makes the selector ambiguous —
+            # and the one it resolves to would depend on declaration order, invisibly.
+            problems.append(f"search {search.name!r} is declared twice")
+        seen_names.add(search.name)
+
+        info = tables.get(search.row_table)
         if info is None:
-            problems.append(f"search.row_table {row_table!r} does not exist")
-        else:
-            for key in declared.identity.key_fields:
-                if info.column(key) is None:
-                    problems.append(f"identity field {key!r} missing from {row_table!r}")
+            problems.append(f"search {search.name!r}: row_table {search.row_table!r} does not exist")
+            continue
+        for key in declared.identity.key_fields:
+            if info.column(key) is None:
+                problems.append(f"identity field {key!r} missing from {search.row_table!r}")
 
     if declared.document is not None:
         doc_table = tables.get(declared.document.table)
@@ -194,18 +265,18 @@ def validate_descriptor(declared: Declared, tables: dict[str, TableInfo]) -> lis
             elif not blob_col.is_blob:
                 problems.append(f"document.media_blob {declared.document.media_blob!r} is not a lance.blob.v2 column")
 
-    if declared.search is not None:
-        for mode, binding in declared.search.vectors.items():
+    for search in declared.searches:
+        for mode, binding in search.vectors.items():
             info = tables.get(binding.table)
             column = info.column(binding.column) if info else None
             if column is None:
                 problems.append(f"vector binding {mode!r}: {binding.table}.{binding.column} missing")
             elif column.vector_dim != binding.dim:
                 problems.append(f"vector binding {mode!r}: {binding.table}.{binding.column} dim {column.vector_dim} != declared {binding.dim}")
-        if declared.search.fts is not None:
-            info = tables.get(declared.search.fts.table)
-            if info is None or info.column(declared.search.fts.column) is None:
-                problems.append(f"fts binding: {declared.search.fts.table}.{declared.search.fts.column} missing")
+        if search.fts is not None:
+            info = tables.get(search.fts.table)
+            if info is None or info.column(search.fts.column) is None:
+                problems.append(f"fts binding: {search.fts.table}.{search.fts.column} missing")
 
     for space in declared.atlas:
         info = tables.get(space.table)

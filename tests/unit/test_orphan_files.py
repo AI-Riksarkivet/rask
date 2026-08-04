@@ -13,6 +13,7 @@ NEGATIVE — that nothing live is ever named.
 from __future__ import annotations
 
 import pathlib
+from typing import Any
 
 import lance
 import pyarrow as pa
@@ -350,3 +351,67 @@ def test_a_refused_dataset_does_not_read_as_clean_in_the_aggregate(tmp_path: pat
     assert report.datasets_unreadable == 1
     assert report.total == 0
     assert report.incomplete and "tree/" in report.incomplete[0]
+
+
+def test_a_memwal_shard_tree_is_refused(tmp_path: pathlib.Path) -> None:
+    """`_mem_wal/{shard}/` is an LSM tree beside the base table — WAL entries and SSTable datasets
+    that NO base-table manifest references, so a prefix scan reports all of it.
+
+    Refused rather than handled, and the spec gives the sharpest reason to keep it that way:
+    "Deleting WAL files can weaken writer fencing… a stalled writer may write into empty space with
+    an old writer_epoch." Fencing works by a put-if-not-exists COLLISION; GC removes the thing that
+    collides. A failed flush also leaves a whole `{random8}_gen_{i}/` directory behind, because a
+    retry writes a NEW one rather than reusing a partial — a real orphan producer that still needs
+    the shard manifests to judge.
+    """
+    uri, prefix = _dataset(tmp_path)
+    shard = tmp_path / "t.lance" / "_mem_wal" / "shard-0" / "wal"
+    shard.mkdir(parents=True)
+    (shard / "1010000000000000000000000000000000000000000000000000000000000000.arrow").write_bytes(b"wal")
+
+    result = orphans.scan_dataset(_fs(), uri, prefix)
+    assert result.checked is False
+    assert result.orphans == []
+    assert "_mem_wal/" in (result.reason or "")
+    assert "fencing" in (result.reason or "")
+
+
+def test_a_dataset_using_overlays_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    """An overlay writes new cell values to `data/overlay-<uuid>.lance` — INSIDE `data/`, where a
+    false positive deletes real values — and is referenced from `DataFragment.overlays`, which
+    `data_files()` does not report.
+
+    Overlays are experimental and unwritable by this pylance, so the fragment is faked at exactly the
+    seam the reader uses. Feature flag 64 settles the behaviour: a reader that does not understand
+    overlays must REFUSE, because ignoring one returns stale base values — "a correctness bug rather
+    than a degraded experience".
+    """
+    uri, prefix = _dataset(tmp_path)
+    real = lance.dataset(uri)
+
+    class _FragmentWithOverlay:
+        def __init__(self, inner: Any) -> None:
+            self._inner = inner
+            self.metadata = type("MD", (), {"overlays": [object()], "deletion_file": None})()
+            self.fragment_id = 0
+
+        def data_files(self) -> list:
+            return self._inner.data_files()
+
+    class _DatasetWithOverlay:
+        def __init__(self, inner: Any) -> None:
+            self._inner = inner
+
+        def versions(self) -> list:
+            return self._inner.versions()
+
+        def get_fragments(self) -> list:
+            return [_FragmentWithOverlay(f) for f in self._inner.get_fragments()]
+
+    monkeypatch.setattr(orphans.lance, "dataset", lambda *a, **k: _DatasetWithOverlay(real))
+
+    result = orphans.scan_dataset(_fs(), uri, prefix)
+    assert result.checked is False, "a dataset using overlays must be refused, not scanned"
+    assert result.orphans == []
+    assert "overlay" in (result.reason or "").lower()
+    assert "64" in (result.reason or "")

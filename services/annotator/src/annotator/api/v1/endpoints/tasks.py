@@ -16,13 +16,15 @@ Two rules the machine cannot express, enforced here because they need the task's
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated, Any, Final, cast
 
-from fastapi import APIRouter, Path, status
+from fastapi import APIRouter, Path, Request, status
 from pydantic import BaseModel, Field
 
 from annotator.api.security import CheckerDep, CurrentSubject
 from annotator.projects.actor import AnnotationTaskActorInterface
+from annotator.projects.imports import shapes_from_ipc
 from annotator.projects.machines import (
     FROZEN_PROJECT_STATES,
     HOLDER_OR_MANAGER,
@@ -32,10 +34,13 @@ from annotator.projects.machines import (
     IllegalTransition,
     task_transition,
 )
-from annotator.projects.models import ProjectState, Shape, TaskState
+from annotator.projects.models import Link, ProjectState, Shape, TaskState
+from annotator.projects.ontology import LabelOntology
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tasks", tags=["annotation-tasks"])
 
@@ -73,6 +78,12 @@ class FireRequest(BaseModel):
 
 class SaveDraftRequest(BaseModel):
     shapes: list[Shape] = Field(default_factory=list)
+    #: The typed edges drawn between those shapes. Declared HERE and not only on `Draft`, because a
+    #: field this model does not name is dropped in silence: pydantic ignores unknown keys, so the
+    #: client sent `links`, the actor was built to store them, and the endpoint between them
+    #: forwarded shapes alone. Nothing errored — and on a task whose ontology declares a REQUIRED
+    #: relation the submit then read an always-empty list and refused work that was actually done.
+    links: list[Link] = Field(default_factory=list)
     base_revision: int | None = None
     origin: str = "human"
 
@@ -260,6 +271,7 @@ async def save_draft(task_id: TaskId, payload: SaveDraftRequest, checker: Checke
                 "project_id": str(current["project_id"]),
                 "author": subject,
                 "shapes": [s.model_dump(mode="json") for s in payload.shapes],
+                "links": [link.model_dump(mode="json") for link in payload.links],
                 "base_revision": payload.base_revision,
                 "origin": payload.origin,
             }
@@ -269,6 +281,79 @@ async def save_draft(task_id: TaskId, payload: SaveDraftRequest, checker: Checke
 
     audit("task.save_draft", SUCCESS, subject=subject, resource=task_id)
     return draft
+
+
+@router.post("/{task_id}/import", status_code=status.HTTP_200_OK)
+async def import_annotations(task_id: TaskId, request: Request, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
+    """Import annotations made elsewhere into this task's draft, as Arrow IPC.
+
+    ONE format — the canonical annotations schema — because the estate already has one and three
+    parsers inside the service would be three things that rot. Converting COCO or YOLO into it is a
+    `scripts/` concern. See `annotator.projects.imports`.
+
+    **APPENDS to the draft; it does not replace it.** The alternative was a whole-draft replace,
+    which matches how `save_draft` stores (a draft is one keyed write), and it was rejected: an
+    import onto a task somebody had already worked would silently destroy that work, with no undo
+    anywhere in the actor. Appending is never destructive, composes (importing twice gives two sets,
+    visibly), and leaves duplicates removable on the canvas — a recoverable annoyance instead of an
+    unrecoverable loss.
+
+    The same state rules as a draft save, and for the same reason: importing is annotating. A task
+    that is not CLAIMED by this caller cannot receive one, so an import can no more write into an
+    already-reviewed task than a manual edit can.
+    """
+    actor = _proxy(task_id)
+    current = await actor.get()
+    if current is None:
+        raise ConflictError(f"task {task_id} has not been sent into a project")
+    await _authorize(checker, subject, "can_annotate", str(current["project_id"]), "task.import")
+
+    await _refuse_if_project_frozen(str(current["project_id"]), "import")
+    if TaskState(current["state"]) is not TaskState.CLAIMED:
+        raise ConflictError(f"task {task_id} is {current['state']} — annotations can only be imported into a claimed task")
+    if current.get("assignee") not in (None, subject):
+        raise ForbiddenError(f"task {task_id} is held by {current['assignee']}")
+
+    existing = await actor.get_draft() or {}
+    existing_shapes: list[dict[str, Any]] = list(existing.get("shapes") or [])
+    existing_links: list[dict[str, Any]] = list(existing.get("links") or [])
+    taken = {str(s.get("shape_id")) for s in existing_shapes if s.get("shape_id")}
+
+    # The ontology CAPTURED on the task, not one the client sends — the caller must not be able to
+    # supply the rules it is judged by. An absent/unparseable ontology means "constrains nothing",
+    # which is the same posture every other surface takes.
+    ontology = None
+    raw_ontology = current.get("ontology")
+    if raw_ontology:
+        try:
+            parsed = LabelOntology.model_validate(raw_ontology)
+        except Exception:  # noqa: BLE001 - an unreadable rule is not a reason to 500 the import
+            logger.warning("task %s carries an ontology this service cannot parse", task_id)
+        else:
+            ontology = parsed if parsed.constrains else None
+
+    payload = await request.body()
+    shapes, links = shapes_from_ipc(payload, ontology=ontology, taken_ids=taken)
+
+    try:
+        draft = await actor.save_draft(
+            {
+                "task_id": task_id,
+                "project_id": str(current["project_id"]),
+                "author": subject,
+                "shapes": existing_shapes + [s.model_dump(mode="json") for s in shapes],
+                "links": existing_links + [link.model_dump(mode="json") for link in links],
+                # Read from the draft we just appended to, so a save that lands in between is a 409
+                # rather than a silent overwrite — the same guarantee two tabs already get.
+                "base_revision": existing.get("revision"),
+                "origin": "import",
+            }
+        )
+    except IllegalTransition as exc:
+        raise ConflictError(str(exc)) from exc
+
+    audit("task.import", SUCCESS, subject=subject, resource=task_id)
+    return {"imported": len(shapes), "links": len(links), "draft": draft}
 
 
 @router.get("/{task_id}/draft")

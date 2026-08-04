@@ -72,3 +72,41 @@ export const PolicyDeleteResponseSchema = v.object({
 	id: v.string(),
 });
 export type NamespacePolicyDelete = v.InferOutput<typeof PolicyDeleteResponseSchema>;
+
+/** The maintenance toggles a policy form edits, before it becomes a `PolicyRequest`. */
+export interface PolicyDraft {
+	retention_days: number | null;
+	retain_versions: number | null;
+	interval: number | null;
+	target: number | null;
+	enabled: boolean;
+}
+
+/**
+ * One policy form's state → the request body, for BOTH the table and the namespace form.
+ *
+ * Shared rather than written twice. It was written twice, identically, and when the catalog widened
+ * `PolicyRequest` with per-step flags (`cleanup_enabled`, `optimize_indices_enabled` — a policy can
+ * now skip a STEP) both copies broke in exactly the same way. One builder means the next contract
+ * change is one edit and one test.
+ *
+ * The three step flags all follow the form's single `enabled` toggle, which is what preserves the
+ * behaviour the UI already promises: one switch means "maintenance on this object", not "compaction
+ * only". Hardcoding the two new flags to `true` would have satisfied the type and been WRONG in the
+ * dangerous direction — cleanup deletes old versions, so it would run on objects whose owner had
+ * explicitly turned maintenance off.
+ */
+export function policyRequestFrom(draft: PolicyDraft): PolicyRequest {
+	const body: PolicyRequest = {
+		compact_enabled: draft.enabled,
+		cleanup_enabled: draft.enabled,
+		optimize_indices_enabled: draft.enabled,
+	};
+	// Absent, not null: an omitted knob means "inherit", and sending null would overwrite an
+	// inherited value with an explicit nothing.
+	if (draft.retention_days != null) body.retention_days = draft.retention_days;
+	if (draft.retain_versions != null) body.retain_versions = draft.retain_versions;
+	if (draft.interval != null) body.compact_interval_hours = draft.interval;
+	if (draft.target != null) body.target_rows_per_fragment = draft.target;
+	return body;
+}

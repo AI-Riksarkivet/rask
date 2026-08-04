@@ -7,6 +7,7 @@
 		type DocTranscriptChunk,
 		type DiarTurn,
 		activeView,
+		viewForHit,
 		getDocTranscript,
 		getDiarization,
 		mediaUrl,
@@ -16,6 +17,7 @@
 	import { ChevronRight, Maximize2, Minimize2 } from '@lucide/svelte';
 	import { Button } from '@rask/ui';
 	import TranscriptWindow from './transcript-window.svelte';
+	import { panesFor, shownTab } from '$lib/pane-capabilities';
 	import ChunkTimeline from './chunk-timeline.svelte';
 	import DiarizationTimeline from './diarization-timeline.svelte';
 	import { on } from 'svelte/events';
@@ -34,7 +36,23 @@
 	// Which element this corpus actually needs — read from the dataset's own declaration, so a
 	// page-image corpus never gets a <video>. Derived, not constant: the dataset can be switched
 	// under the pane.
-	const mediaKind = $derived(activeView().mediaKind);
+	/** The view THIS hit is rendered through, not the active corpus's.
+	 *
+	 *  Every accessor below was `activeView()`, which is correct exactly while one corpus fills the
+	 *  screen. In a fused result set carrying rows from two corpora it describes every row as if it
+	 *  came from whichever corpus happens to be selected — and it renders, so nothing complains. The
+	 *  hit names its own origin (`_dataset`, stamped by the search service); this reads it.
+	 *
+	 *  Falls back to the active view for a hit that names none, which reproduces the previous
+	 *  behaviour exactly for the case where that behaviour was right. */
+	const view = $derived(hit ? viewForHit(hit) : activeView());
+
+	const mediaKind = $derived(view.mediaKind);
+
+	// WHICH PANES this corpus may show. The media element was already chosen from the declared mime,
+	// but the chrome around it was not gated at all — so an image corpus got a time scrubber and both
+	// audio tabs. Same rule as the zone sidebar: gate on what the corpus DECLARES.
+	const panes = $derived(panesFor(view));
 
 	let mediaEl = $state<HTMLVideoElement | HTMLAudioElement | null>(null);
 	let mediaError = $state<string | null>(null);
@@ -50,6 +68,10 @@
 	// 'transcript' so existing behaviour (the karaoke window) is unchanged; the
 	// <video> stays mounted across tabs so playback/seek never resets.
 	let tab = $state<'transcript' | 'speakers'>('transcript');
+
+	/** The tab actually shown. DERIVED, not a corrected `tab`: clamping by assigning inside an effect
+	 *  hides the coupling, and it would rewrite the user's pick where they cannot see it happen. */
+	const shown = $derived(shownTab(tab, panes));
 	let diarTurns = $state<DiarTurn[]>([]);
 
 	// Search hits ship `alignments: []` (the per-word timing blob is ~80% of a
@@ -68,7 +90,7 @@
 		}
 		docChunks = [];
 		let cancelled = false; // supersede guard + leak guard
-		getDocTranscript(activeView().docId(h))
+		getDocTranscript(viewForHit(h).docId(h))
 			.then((doc) => {
 				if (!cancelled) docChunks = doc.chunks;
 			})
@@ -92,7 +114,7 @@
 		}
 		diarTurns = [];
 		let cancelled = false; // supersede guard + leak guard
-		getDiarization(activeView().docId(h))
+		getDiarization(viewForHit(h).docId(h))
 			.then((d) => {
 				if (!cancelled) diarTurns = d.turns;
 			})
@@ -122,7 +144,6 @@
 	const findVoice = (pick: { speaker: string } | { turnId: number }) => {
 		const h = hit;
 		if (!h) return;
-		const view = activeView();
 		const docId = view.docId(h);
 		// Chip label: the descriptor's display title for this row (mirrors hit-card).
 		const label = view.title(h) || undefined;
@@ -144,7 +165,6 @@
 	const currentChunkIdx = $derived.by((): number => {
 		const cs = docChunks;
 		if (cs.length === 0) return 0;
-		const view = activeView();
 		const t = currentTime;
 		const i = cs.findIndex((c) => {
 			const span = view.time(c);
@@ -191,11 +211,11 @@
 	const currentChunk = $derived(docChunks[currentChunkIdx]);
 	const chunkStart = $derived.by((): number => {
 		const c = currentChunk ?? hit;
-		return c ? (activeView().time(c)?.start ?? 0) : 0;
+		return c ? (viewForHit(c).time(c)?.start ?? 0) : 0;
 	});
 	const chunkEnd = $derived.by((): number => {
 		const c = currentChunk ?? hit;
-		return c ? (activeView().time(c)?.end ?? 0) : 0;
+		return c ? (viewForHit(c).time(c)?.end ?? 0) : 0;
 	});
 
 	// Timeline click → jump there and play. Mirrors the hit-seek $effect; here
@@ -244,7 +264,6 @@
 	const metaRows = $derived.by((): [string, string][] => {
 		const h = hit;
 		if (!h) return [];
-		const view = activeView();
 		const rows: [string, string][] = [];
 		const caption = view.caption(h);
 		if (caption) rows.push(['Caption', caption]);
@@ -276,7 +295,7 @@
 		if (!hit || !mediaEl) return;
 
 		const el = mediaEl;
-		const start = activeView().time(hit)?.start ?? 0;
+		const start = view.time(hit)?.start ?? 0;
 		let cancelled = false;
 		const seek = () => {
 			if (cancelled) return;
@@ -363,8 +382,8 @@
 				<!-- The per-row FRAME, not the doc blob: on a paged corpus the row IS the page, so
              /api/chunk-frame/<identity> is the thing the hit points at. -->
 				<img
-					src={activeView().frameUrl(hit)}
-					alt={activeView().title(hit)}
+					src={view.frameUrl(hit)}
+					alt={view.title(hit)}
 					class={isFullscreen
 	? 'min-h-0 w-full flex-1 bg-black object-contain'
 	: 'max-h-[45vh] w-full shrink-0 bg-black object-contain'}
@@ -400,7 +419,8 @@
 				</video>
 			{/if}
 
-			{#if !isFullscreen}
+			<!-- The scrubber is meaningless without a time axis: a still image has nothing to scrub. -->
+			{#if !isFullscreen && panes.timeline}
 				<ChunkTimeline
 					chunks={docChunks}
 					{duration}
@@ -409,28 +429,38 @@
 					{currentChunkIdx}
 					onSeek={seekTo}
 				/>
-				<!-- Bridge bar: ties the video to its synced views (a 2-tab switch
-             between the karaoke transcript and the speaker timeline) and holds
-             the fullscreen toggle (kept off the video so nothing covers it). -->
+			{/if}
+			<!-- Bridge bar: ties the media to its synced views and holds the fullscreen toggle (kept off
+           the media so nothing covers it). Rendered for EVERY corpus, because the toggle applies to
+           an image as much as to a video — it is the TABS inside it that are conditional. Gating the
+           whole bar on the timeline is what would take fullscreen away from image corpora. -->
+			{#if !isFullscreen}
 				<div
 					class="border-border/70 text-muted-foreground flex items-center gap-1.5 border-t px-3 py-1.5 text-xs font-medium"
+					data-testid="viewer-bridge-bar"
 				>
-					<Button
-						variant={tab === 'transcript' ? 'secondary' : 'ghost'}
-						size="xs"
-						aria-pressed={tab === 'transcript'}
-						onclick={() => (tab = 'transcript')}
-					>
-						Transcript
-					</Button>
-					<Button
-						variant={tab === 'speakers' ? 'secondary' : 'ghost'}
-						size="xs"
-						aria-pressed={tab === 'speakers'}
-						onclick={() => (tab = 'speakers')}
-					>
-						Speakers
-					</Button>
+					{#if panes.transcript}
+						<Button
+							variant={shown === 'transcript' ? 'secondary' : 'ghost'}
+							size="xs"
+							aria-pressed={shown === 'transcript'}
+							data-testid="tab-transcript"
+							onclick={() => (tab = 'transcript')}
+						>
+							Transcript
+						</Button>
+					{/if}
+					{#if panes.speakers}
+						<Button
+							variant={shown === 'speakers' ? 'secondary' : 'ghost'}
+							size="xs"
+							aria-pressed={shown === 'speakers'}
+							data-testid="tab-speakers"
+							onclick={() => (tab = 'speakers')}
+						>
+							Speakers
+						</Button>
+					{/if}
 					{@render fsToggle(
 						'ml-auto rounded-md p-1 transition-colors hover:bg-muted hover:text-foreground',
 					)}
@@ -445,58 +475,64 @@
            play button — only the ≤3 windowed chunks render, so it stays small.
            Fullscreen always shows the transcript overlay (the tab switch lives
            on the bridge bar, which is hidden in fullscreen). -->
-			<div
-				class={isFullscreen
+			<!-- `shown` is null when the corpus declares NEITHER an alignment table nor speaker turns —
+           an image corpus — so the whole sync body is absent rather than an empty panel that reads
+           as a failed load. -->
+			{#if shown !== null}
+				<div
+					class={isFullscreen
 	? 'absolute inset-x-0 bottom-20 mx-auto max-h-[32%] w-[min(92%,60rem)] overflow-y-auto rounded-xl bg-black/55 px-6 py-4 text-lg leading-8 text-white backdrop-blur-sm'
-	: tab === 'speakers'
+	: shown === 'speakers'
 		? 'flex min-h-[10rem] flex-1 flex-col overflow-hidden'
 		: 'min-h-[8rem] flex-1 overflow-y-auto text-sm leading-7'}
-			>
-				{#if !isFullscreen && tab === 'speakers'}
-					{#if diarTurns.length > 0}
-						<!-- Compact speaker lanes (Chunk⇄Video zoom) pinned on top; the karaoke
+					data-testid="viewer-sync-body"
+				>
+					{#if !isFullscreen && shown === 'speakers'}
+						{#if diarTurns.length > 0}
+							<!-- Compact speaker lanes (Chunk⇄Video zoom) pinned on top; the karaoke
                  transcript fills the rest and is the only part that scrolls, so the
                  video + lanes + transcript all stay in view. Both synced to <video>. -->
-						<div class="flex h-full min-h-0 flex-col">
-							<div class="shrink-0">
-								<DiarizationTimeline
-									turns={diarTurns}
-									{currentTime}
-									{duration}
-									{chunkStart}
-									{chunkEnd}
-									onSeek={seekTo}
-									voiceEnabled={voiceSearch.built}
-									onFindVoice={findVoice}
-								/>
+							<div class="flex h-full min-h-0 flex-col">
+								<div class="shrink-0">
+									<DiarizationTimeline
+										turns={diarTurns}
+										{currentTime}
+										{duration}
+										{chunkStart}
+										{chunkEnd}
+										onSeek={seekTo}
+										voiceEnabled={voiceSearch.built}
+										onFindVoice={findVoice}
+									/>
+								</div>
+								<div
+									class="border-border/70 min-h-0 flex-1 overflow-y-auto border-t text-sm leading-7"
+								>
+									<TranscriptWindow
+										chunks={windowChunks}
+										{currentChunkIdx}
+										{windowStartIdx}
+										media={mediaEl}
+										{query}
+										variant="panel"
+									/>
+								</div>
 							</div>
-							<div
-								class="border-border/70 min-h-0 flex-1 overflow-y-auto border-t text-sm leading-7"
-							>
-								<TranscriptWindow
-									chunks={windowChunks}
-									{currentChunkIdx}
-									{windowStartIdx}
-									media={mediaEl}
-									{query}
-									variant="panel"
-								/>
-							</div>
-						</div>
+						{:else}
+							<div class="text-muted-foreground p-3 text-xs">Diarization not built for this video.</div>
+						{/if}
 					{:else}
-						<div class="text-muted-foreground p-3 text-xs">Diarization not built for this video.</div>
+						<TranscriptWindow
+							chunks={windowChunks}
+							{currentChunkIdx}
+							{windowStartIdx}
+							media={mediaEl}
+							{query}
+							variant={isFullscreen ? 'overlay' : 'panel'}
+						/>
 					{/if}
-				{:else}
-					<TranscriptWindow
-						chunks={windowChunks}
-						{currentChunkIdx}
-						{windowStartIdx}
-						media={mediaEl}
-						{query}
-						variant={isFullscreen ? 'overlay' : 'panel'}
-					/>
-				{/if}
-			</div>
+				</div>
+			{/if}
 		</div>
 
 		{#if mediaError}

@@ -69,6 +69,16 @@ class Settings(BaseSettings):
     # the chart turns it on for the catalog. Additive + backward-compatible — an unbound namespace always
     # routes to the default `root`. The warehouse REGISTRY (records + bindings) lives under `control_root`.
     warehouses_enabled: bool = Field(default=False, alias="LANCE_WAREHOUSES_ENABLED")
+    # #75 drop→undrop grace: how long a dropped table stays recoverable in `_trash/`. Stamped onto the
+    # record AT DROP TIME (never read at expiry), so shortening this can't retroactively destroy a
+    # window a user is still inside.
+    #
+    # DEFAULT 0 = OFF, and that is a deliberate choice rather than timidity. With a grace period a
+    # drop DEREGISTERS instead of deleting, which silently changes what `drop_table` means for every
+    # existing caller and diverges from the spec's own "drop removes the data". A deployment opts in
+    # to recoverable drops; it is never opted in for them by an upgrade. Set it (7 is the sensible
+    # value) on any estate where a fat-fingered drop costs harvested page images.
+    trash_grace_days: int = Field(default=0, ge=0, le=365, alias="LANCE_TRASH_GRACE_DAYS")
     control_root: str = Field(default="", alias="LANCE_CONTROL_ROOT")
     # Buckets NO warehouse may ever claim, beyond the always-reserved catalog root/registry buckets (audit
     # 2026-07-23: a project admin could register a warehouse over the SHARED bucket — or a medallion zone

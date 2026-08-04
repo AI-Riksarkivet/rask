@@ -53,6 +53,14 @@ ControlAction = Literal[
     "table_registered",
     "table_deregistered",
     "table_declared",
+    # #73 deletion protection on the table/namespace rungs — the same Decision-5 flag warehouses
+    # carry, emitted so the console can show WHO armed or disarmed the safety on an object.
+    "table_protected",
+    "table_unprotected",
+    "namespace_protected",
+    "namespace_unprotected",
+    # #75 the drop→undrop path: a recoverable drop and its recovery are both governance events.
+    "table_undropped",
     # § D2 D-R2: the tag is the truth, this event is only the NOTIFICATION. A publication moves the
     # `published` ref, so it belongs to the same family as the other ref-plane mutations here — and a
     # consumer that misses it loses nothing, because the tag still answers "what is ready?".

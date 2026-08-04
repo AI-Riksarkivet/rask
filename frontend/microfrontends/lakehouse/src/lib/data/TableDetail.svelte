@@ -30,11 +30,11 @@
 		insertRows,
 		partErrored,
 		type Policy,
-		type PolicyRequest,
 		RETYPE_TYPES,
 		type TableStats,
 		type TableDetail,
 	} from './catalog';
+	import { policyRequestFrom } from './namespace';
 	import {
 		addColumn,
 		backfillColumn,
@@ -434,11 +434,7 @@
 		busy = true;
 		policyError = null;
 		try {
-			const body: PolicyRequest = { compact_enabled: draft.enabled };
-			if (draft.retention_days != null) body.retention_days = draft.retention_days;
-			if (draft.retain_versions != null) body.retain_versions = draft.retain_versions;
-			if (draft.interval != null) body.compact_interval_hours = draft.interval;
-			if (draft.target != null) body.target_rows_per_fragment = draft.target;
+			const body = policyRequestFrom(draft);
 			const res = await setTablePolicy({ table, policy: body });
 			if (res.ok) {
 				editingPolicy = false;

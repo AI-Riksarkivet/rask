@@ -109,9 +109,61 @@ export const fetchProject = query(
 		parsed(await catalogJSON(`/v1/projects/${enc(project)}`), ProjectSchema),
 );
 
-/** Provision a warehouse — the create that MINTS a project when its `project` is new. Project-admin
- *  gated by the catalog (can_create_warehouse); a brand-new project has no tuples, so the
- *  estate-admin door opens once and the catalog seeds the caller as the new project's admin.
+/** One control event, as `/v1/events` reports it — the fields the project page renders. */
+const ProjectEventSchema = v.object({
+	event_id: v.string(),
+	occurred_at: v.string(),
+	action: v.string(),
+	object_type: v.string(),
+	object_id: v.string(),
+	actor: v.nullable(v.string()),
+});
+const EventsPageSchema = v.object({ events: v.array(ProjectEventSchema) });
+export type ProjectEvent = v.InferOutput<typeof ProjectEventSchema>;
+
+/** The 10 most recent control events touching ONE project (#71) — its own record plus its
+ *  warehouses. Scope is honest about its reach: namespace/table events cannot be mapped to a
+ *  project without walking the whole hierarchy per event, so this shows the governance rungs the
+ *  page itself renders (project + warehouses); the estate-wide, filterable stream stays one link
+ *  away at /lakehouse/admin/events. The events feed is estate-admin gated at the catalog — the
+ *  page renders the 403 as its own quiet state rather than an error. */
+export const projectEvents = query(
+	v.string(),
+	async (project): Promise<ApiResult<ProjectEvent[]>> => {
+		const rec = await catalogJSON(`/v1/projects/${enc(project)}`);
+		const mine = new Set<string>([`project:${project}`]);
+		if (rec.ok) {
+			const parsedRec = v.safeParse(ProjectSchema, rec.data);
+			if (parsedRec.success)
+				for (const w of parsedRec.output.warehouses) mine.add(`warehouse:${w.id}`);
+		}
+		const res = await catalogJSON('/v1/events?since=0');
+		if (!res.ok) return res;
+		const parsedPage = v.safeParse(EventsPageSchema, res.data);
+		if (!parsedPage.success)
+			return { ok: false, status: 502, detail: 'catalog contract drift: events page' };
+		const events = parsedPage.output.events
+			.filter((e) => mine.has(e.object_id))
+			.sort((a, b) => b.occurred_at.localeCompare(a.occurred_at))
+			.slice(0, 10);
+		return { ok: true, data: events };
+	},
+);
+
+/** Register a project — `POST /v1/projects`. The FIRST rung of the hierarchy, and it must be climbed
+ *  explicitly: the catalog refuses a warehouse whose project has no registry record with a 404 that
+ *  says so verbatim ("A warehouse must belong to an existing project (project > warehouse > namespace
+ *  > table) — create it first"). A warehouse create no longer mints its project as a side effect, so
+ *  anything provisioning a NEW project calls this first. */
+export const createProject = command(
+	v.object({ id: v.string(), name: v.optional(v.nullable(v.string())) }),
+	async (body): Promise<ApiResult<unknown>> =>
+		catalogJSON('/v1/projects', { method: 'POST', body: JSON.stringify(body) }),
+);
+
+/** Provision a warehouse under an EXISTING project. Project-admin gated by the catalog
+ *  (can_create_warehouse); a brand-new project has no tuples, so the estate-admin door opens once and
+ *  the catalog seeds the caller as the new project's admin.
  *
  *  No `.refresh()` here, unlike the lakehouse original: the gallery this create sits on is a page
  *  LOAD (`$lib/gallery`), not a `query()`, so there is nothing to single-flight — the dialog's
