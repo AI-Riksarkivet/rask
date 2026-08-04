@@ -355,7 +355,7 @@ def test_undrop_re_registers_from_the_trash_record_and_clears_it(tmp_path: Any) 
     ns: Any = _TrashableNamespace()
     _drop_table(settings, ns)
     asyncio.run(t_ep.undrop_table(id="bronze$pages", ns=ns, settings=settings, token=None, client=None, control=NoopControlEmitter()))
-    assert "register_table:s3://bkt/bronze/pages.lance" in ns.calls
+    assert "register_table:pages.lance" in ns.calls, "the RELATIVE form register_table accepts"
     assert trash.get(settings.registry_root, settings.storage_options(), "bronze$pages") is None
 
 
@@ -425,3 +425,19 @@ def test_the_tasks_suffix_is_reader_tier_not_writer(tmp_path: Any) -> None:
     """The live audit's other finding: `tasks` was unmapped, so it fell through to WRITER — and after a
     drop the owner has no write rung, making their own deadline unreadable."""
     assert "tasks" in fga_deps._META_READ_ACTIONS  # noqa: SLF001
+
+
+def test_undrop_registers_a_RELATIVE_location(tmp_path: Any) -> None:
+    """`register_table` refuses absolute URIs ("Location must be a relative path within the root
+    directory") — undrop 400'd live on the very location describe_table had just reported. The `dir`
+    backend lays table dirs out FLAT under the connection root, so the relative form is the final
+    segment; the record keeps the absolute URI because that is what an operator reading trash needs."""
+    from catalog.api.v1.endpoints import tables as t_ep
+
+    settings = _settings(tmp_path, grace_days=7)
+    ns: Any = _TrashableNamespace()
+    _drop_table(settings, ns)
+    asyncio.run(t_ep.undrop_table(id="bronze$pages", ns=ns, settings=settings, token=None, client=None, control=NoopControlEmitter()))
+    registered = [c for c in ns.calls if c.startswith("register_table:")]
+    assert registered == ["register_table:pages.lance"], registered
+    assert "://" not in registered[0], "an absolute URI reached register_table — the live 400"

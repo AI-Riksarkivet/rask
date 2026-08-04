@@ -499,7 +499,13 @@ async def undrop_table(
     record = await run_in_threadpool(trash.get, settings.registry_root, so, canonical)
     if record is None:
         raise TableNotFoundError(f"no recoverable drop for table: {canonical}. The grace period may have expired, or the drop purged its bytes.")
-    body = RegisterTableRequest(id=segments, location=str(record["location"]))
+    # `register_table` REFUSES an absolute URI ("Location must be a relative path within the root
+    # directory") — found by driving the deployed catalog, where undrop 400'd on the very location
+    # `describe_table` had just reported. The `dir` backend lays table directories out FLAT under the
+    # connection root (`<uuid>_<table_id>`), so the relative form is the final path segment; the
+    # absolute URI stays on the record because that is what an operator reading the trash needs.
+    location = str(record["location"])
+    body = RegisterTableRequest(id=segments, location=location.rstrip("/").rsplit("/", 1)[-1])
     response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
     # Clear only AFTER the re-register commits — a failed register must leave the table recoverable.
     await run_in_threadpool(trash.clear, settings.registry_root, so, canonical)
