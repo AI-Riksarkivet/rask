@@ -22,11 +22,14 @@
 
 	let {
 		onopen,
+		onselect,
 		initialDataset = null,
 	}: {
 		/** Open these key-paths in the canvas; `dataset` = the picked dataset's selector
 		 *  (null for the backend default) so the deep link carries `?dataset=`. */
 		onopen: (keys: string[], dataset: string | null) => void;
+		/** Offer keys for a bulk send. Optional — a surface that only views passes nothing. */
+		onselect?: ((keys: string[], dataset: string | null) => void) | undefined;
 		/** Dataset to restore on mount (the URL's `?dataset=` — e.g. exiting the canvas). */
 		initialDataset?: string | null;
 	} = $props();
@@ -143,6 +146,7 @@
 			{view}
 			doc={openDoc}
 			onopen={(keys) => onopen(keys, view!.datasetParam())}
+			onselect={onselect ? (keys) => onselect(keys, view!.datasetParam()) : undefined}
 			onback={() => (openDoc = null)}
 		/>
 	{:else}
