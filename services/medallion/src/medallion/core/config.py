@@ -247,6 +247,12 @@ class MedallionSettings(BaseSettings):
     producer_operation: str = Field(default="lance_ray_ingest", alias="MEDALLION_PRODUCER_OPERATION")
     producer_author: str = Field(default="ray", alias="MEDALLION_PRODUCER_AUTHOR")
     bronze_topic: str = Field(default="medallion.bronze", alias="MEDALLION_BRONZE_TOPIC")
+
+    # The catalog's control channel, where `table_published` lands (§ D2 B8). Empty DISABLES the
+    # publication head, which is what keeps this additive: a deployment that has not enabled the
+    # catalog's control emitter registers no subscription and behaves exactly as before.
+    control_pubsub: str = Field(default="", alias="MEDALLION_CONTROL_PUBSUB")
+    control_topic: str = Field(default="catalog.control.v1", alias="MEDALLION_CONTROL_TOPIC")
     # --- Ray TRAIN head (#115a, docs/RAY-TRAIN.md): OWN topic (D1 — long-running, terminal-on-failure;
     # never a field on the stage trigger) + submit-and-ack consumer (D2). The trainer has its OWN service
     # identity + rung (D5): reader on the feature namespaces, writer on namespace:<models> ONLY.

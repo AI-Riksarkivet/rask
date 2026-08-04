@@ -75,6 +75,12 @@ spec:
             - { name: MEDALLION_PRODUCER_OPERATION, value: {{ .Values.medallion.producer.operation | quote }} }
             - { name: MEDALLION_PRODUCER_AUTHOR, value: {{ .Values.medallion.producer.author | quote }} }
             - { name: MEDALLION_BRONZE_TOPIC, value: {{ .Values.medallion.producer.bronzeTopic | quote }} }
+            {{- if .Values.catalog.controlEmit }}
+            # § D2 B8 — the publication head. Set ONLY when the catalog is actually emitting control
+            # events, because an empty value disables the subscription: a deployment without the
+            # emitter must register no route rather than subscribe to a topic nothing publishes on.
+            - { name: MEDALLION_CONTROL_PUBSUB, value: {{ required "pubsub.controlName must be set when catalog.controlEmit is on — an empty value silently disables the medallion publication head" .Values.pubsub.controlName | quote }} }
+            {{- end }}
             {{- if .Values.medallion.projectsEnabled }}
             # #84 per-tenant routing (opt-in): the catalog's warehouse-registry root. A `project`-carrying
             # /produce resolves that project's ACTIVE warehouse and seeds <root>/medallion/bronze there;
