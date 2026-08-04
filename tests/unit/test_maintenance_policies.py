@@ -302,3 +302,36 @@ def test_retention_policy_prunes_unpinned_old_versions(tmp_path: Path) -> None:
 
     with pytest.raises((ValueError, OSError)):
         lance.dataset(uri, version=1)  # pruned per policy
+
+
+def test_a_partial_policy_update_preserves_fields_it_did_not_mention(tmp_path: Any) -> None:
+    """The destructive round-trip an audit found: `put_policy` overwrites the whole record, so a
+    client that read a policy, changed one knob and sent it back wrote the model's DEFAULTS over
+    every field it never mentioned — silently clearing `scan_batch_size` (the compaction memory
+    bound, ~15 GB/thread without it on bronze page rows) and `auto_cleanup_interval_commits` (which
+    owns version reclamation). The lakehouse form does exactly that, and its own comment states the
+    belief this makes true: an omitted knob means INHERIT."""
+    from catalog.api.v1.endpoints.policies import _record
+    from catalog.schemas import PolicyRequest
+
+    stored = _record("table", "bronze$pages", "bkt/pages", PolicyRequest(scan_batch_size=64, auto_cleanup_interval_commits=10))
+    assert stored["scan_batch_size"] == 64
+
+    # A later save that only flips compaction off — exactly what the form sends.
+    updated = _record("table", "bronze$pages", "bkt/pages", PolicyRequest(compact_enabled=False), stored)
+
+    assert updated["compact_enabled"] is False, "the field the caller DID set must apply"
+    assert updated["scan_batch_size"] == 64, "the memory bound was silently cleared"
+    assert updated["auto_cleanup_interval_commits"] == 10, "version-reclamation ownership was flipped back"
+
+
+def test_a_first_write_still_gets_the_model_defaults(tmp_path: Any) -> None:
+    """The negative twin: with nothing to inherit from, defaults must still land — otherwise a first
+    policy would be missing every field the caller left alone."""
+    from catalog.api.v1.endpoints.policies import _record
+    from catalog.schemas import PolicyRequest
+
+    first = _record("table", "t", "p", PolicyRequest(retention_days=30))
+    assert first["retention_days"] == 30
+    assert first["compact_enabled"] is True and first["cleanup_enabled"] is True
+    assert first["scan_batch_size"] is None

@@ -25,7 +25,7 @@ from maintenance.core.lineage_emit import MaintenanceEmitter, table_id_from_uri
 from maintenance.core.metrics import record_reclaimed, record_run
 from maintenance.services.optimize import DatasetResult, compact_one, discover_dataset_uris
 from service_kit.governed import fga
-from service_kit.lakehouse import maintenance_policies, trash
+from service_kit.lakehouse import maintenance_policies, trash, warehouse_records
 from service_kit.lakehouse.objectfs import s3_filesystem
 
 
@@ -120,8 +120,24 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     # The count distinguishes "no policies set" from "policies invisible" (e.g. the catalog's control
     # root moved without MAINTENANCE_POLICY_ROOT following — a wrong root lists cleanly as empty).
     log.info("compaction_policies_loaded", extra={"policies": len(policy_records)})
+    # #81 EVERY warehouse the registry knows, not just the configured list. `sweep_buckets` is the
+    # primary bucket plus a static env var — but a per-warehouse bucket is created by an API CALL at
+    # runtime, so every tenant provisioned since the last config edit was invisible to maintenance and
+    # its tables accumulated superseded versions and small fragments forever. A storage leak created
+    # by the very feature that introduces new buckets, and silent: the sweep reported success over the
+    # buckets it did know. An unreadable registry is NOT fatal here (unlike the policy registry, whose
+    # absence would mean sweeping without protective retention overrides) — it degrades to the
+    # configured list, which is exactly the old behaviour, and says so.
+    buckets = list(settings.sweep_buckets)
+    try:
+        registry = warehouse_records.list_warehouse_records(settings.resolved_control_root, options)
+        discovered = [b for b in warehouse_records.maintainable_buckets(registry) if b not in buckets]
+        buckets.extend(discovered)
+        log.info("sweep_registry_buckets", extra={"configured": len(settings.sweep_buckets), "from_registry": len(discovered)})
+    except Exception as exc:  # noqa: BLE001 — a missing registry must not stop maintaining what we know
+        log.warning("sweep_registry_unreadable", extra={"error": str(exc)})
     uris: list[str] = []
-    for bucket in settings.sweep_buckets:
+    for bucket in buckets:
         try:
             found = discover_dataset_uris(fs, bucket)
         except Exception as exc:

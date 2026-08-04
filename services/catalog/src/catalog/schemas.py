@@ -444,6 +444,15 @@ class PolicyResponse(BaseModel):
     compact_enabled: bool = True
     compact_interval_hours: int | None = None
     target_rows_per_fragment: int | None = None
+    # These four were MISSING while PolicyRequest accepted them, and the omission was destructive
+    # rather than cosmetic: `put_policy` overwrites the whole record, so a client that read a policy,
+    # edited one field and sent it back wrote NULL over every field the response never mentioned —
+    # silently removing the compaction memory bound and flipping version-reclamation ownership back
+    # to the sweep. The comment above this class already warned about exactly this; it was not heeded.
+    cleanup_enabled: bool = True
+    optimize_indices_enabled: bool = True
+    scan_batch_size: int | None = None
+    auto_cleanup_interval_commits: int | None = None
 
 
 class PolicyDeleteResponse(BaseModel):

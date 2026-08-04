@@ -7591,6 +7591,17 @@
       },
       "PolicyResponse": {
         "properties": {
+          "auto_cleanup_interval_commits": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Cleanup Interval Commits"
+          },
           "buckets": {
             "anyOf": [
               {
@@ -7604,6 +7615,11 @@
               }
             ],
             "title": "Buckets"
+          },
+          "cleanup_enabled": {
+            "default": true,
+            "title": "Cleanup Enabled",
+            "type": "boolean"
           },
           "compact_enabled": {
             "default": true,
@@ -7628,6 +7644,11 @@
           "kind": {
             "title": "Kind",
             "type": "string"
+          },
+          "optimize_indices_enabled": {
+            "default": true,
+            "title": "Optimize Indices Enabled",
+            "type": "boolean"
           },
           "path": {
             "title": "Path",
@@ -7654,6 +7675,17 @@
               }
             ],
             "title": "Retention Days"
+          },
+          "scan_batch_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scan Batch Size"
           },
           "target_rows_per_fragment": {
             "anyOf": [
