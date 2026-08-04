@@ -37,6 +37,13 @@ CheckerDep = Annotated[FgaChecker, Depends(_deps.get_checker)]
 #: gating the list on data access would hide corpora from someone allowed to know they exist.
 READ_METADATA = "can_get_metadata"
 
+#: The relation a read of actual BYTES requires (#90). Separate from `READ_METADATA` because the
+#: model separates them and the difference is the whole point for an archive: knowing a volume of
+#: sealed records exists is not the same permission as reading the pages. `/api/page` returns image
+#: bytes, so it takes this rung; `/api/pages` lists metadata and takes the metadata rung, matching
+#: how `datasets.py` reasons about a corpus listing.
+READ_DATA = "can_read_data"
+
 
 def corpus_object(settings: ViewerSettings, dataset_id: str, table: str) -> str:
     """The FGA object for one corpus table: `table:<namespace>/<table>`.
@@ -47,3 +54,14 @@ def corpus_object(settings: ViewerSettings, dataset_id: str, table: str) -> str:
     """
     segments = settings.catalog_table_id(dataset_id, table)
     return f"table:{settings.catalog_delimiter.join(segments)}"
+
+
+def table_object(table_id: str) -> str:
+    """The FGA object for a caller-supplied CATALOG TABLE ID (``bronze$pages``) — ``table:<id>``.
+
+    The page routes are addressed by catalog table id directly, not by a media dataset id, so they
+    need no `catalog_table_id` mapping — the identifier the caller passes IS the one the catalog
+    authorizes on. Kept here beside `corpus_object` so both naming rules live in one file: the way
+    this goes wrong is a second module deriving an object string that agrees until it does not.
+    """
+    return f"table:{table_id}"
