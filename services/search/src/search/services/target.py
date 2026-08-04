@@ -100,17 +100,24 @@ class SearchTarget(BaseModel):
         return self.table_for(scene.table)
 
 
-def resolve_target(handle: DatasetHandle) -> SearchTarget:
+def resolve_target(handle: DatasetHandle, table: str | None = None) -> SearchTarget:
     """Open the search tables named by ``handle``'s descriptor.
 
-    Raises :class:`ValidationError` (HTTP 400) when the dataset declares no
-    search block — an unsearchable dataset is a client addressing error, not a
-    server fault. A vector-binding table that fails to open degrades that leg
-    to empty instead of failing every mode.
+    ``table`` selects one of the corpus's DECLARED searchable tables by name; ``None`` takes the
+    default (the first declared). A corpus may declare several — see ``Declared.searches``.
+
+    Raises :class:`ValidationError` (HTTP 400) when the dataset declares no search block, or when
+    ``table`` names one it does not declare. Both are client addressing errors, not server faults —
+    and the second must NOT fall back to the default: answering from a different table than the one
+    asked for is a wrong answer, not a lenient one, and it would be invisible in the results.
+    A vector-binding table that fails to open degrades that leg to empty instead of failing every mode.
     """
     declared = handle.descriptor.declared
-    search = declared.search
+    search = declared.search_named(table)
     if search is None:
+        if table is not None:
+            known = ", ".join(s.name for s in declared.searches) or "none"
+            raise ValidationError(f"dataset declares no searchable table {table!r} — declared: {known}")
         raise ValidationError("dataset has no search bindings")
 
     # Open FIRST, then consult the cached descriptor: the open is ground truth,

@@ -84,6 +84,11 @@ class SearchSpec(BaseModel):
     # is declared next to it — this keeps the GET wire shape flat. The router
     # resolves it; the service layer never reads it.
     dataset: str | None = None
+    # OPTIONAL searchable-table selector within that dataset (None → the corpus's
+    # DEFAULT, i.e. the first declared). A corpus may declare several — bindings
+    # are per-table, so the table is part of WHAT is being searched, not a filter
+    # on it. Rides beside `dataset` for the same reason and on the same wire.
+    table: str | None = None
 
     @field_validator("q", "q_vec")
     @classmethod

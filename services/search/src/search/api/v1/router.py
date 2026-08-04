@@ -38,8 +38,14 @@ router = APIRouter(prefix="/api", tags=["search"])
 _MAX_IMAGE_BYTES = 25 * 1024 * 1024
 
 
-def _filterable(handle: DatasetHandle) -> list[str]:
-    search = handle.descriptor.declared.search
+def _filterable(handle: DatasetHandle, table: str | None = None) -> list[str]:
+    """The filter fields the SELECTED searchable table declares.
+
+    Table-aware, and it has to be: `filterable` lives on each `Search`, so reading the DEFAULT
+    table's list while searching another would silently drop that table's own filters and silently
+    accept the default's — filters that do not exist on the rows being searched.
+    """
+    search = handle.descriptor.declared.search_named(table)
     return search.filterable if search is not None else []
 
 
@@ -92,7 +98,7 @@ def search_get(
     spec: Annotated[SearchSpec, Query()],
 ) -> list[dict[str, Any]]:
     handle = dataset_handle(state, spec.dataset)
-    filters = extract_filters(request.query_params, _filterable(handle))
+    filters = extract_filters(request.query_params, _filterable(handle, spec.table))
     # Empty-input short-circuit: only the topic facet triggers filter-only
     # browse (the Tree page contract); other filters without a query stay [].
     if not spec.q and not spec.q_vec and not filters.get(TOPIC_FILTER):
@@ -146,6 +152,7 @@ async def search_post(
     spec: Annotated[PostSearchSpec, Depends(_post_spec)],
     image: Annotated[UploadFile | None, File()] = None,
     dataset: Annotated[str | None, Query(description="Dataset id (default DB when omitted)")] = None,
+    table: Annotated[str | None, Query(description="Searchable table name (the corpus default when omitted)")] = None,
 ) -> list[dict[str, Any]]:
     image_bytes = None
     if image is not None:
@@ -158,7 +165,11 @@ async def search_post(
     handle = await run_in_threadpool(dataset_handle, state, dataset)
     form = await request.form()  # already parsed by FastAPI; cached by Starlette
     form_values = {k: v for k, v in form.items() if isinstance(v, str)}
-    filters = extract_filters(form_values, _filterable(handle))
+    filters = extract_filters(form_values, _filterable(handle, table))
+    # The POST takes `table` as a QUERY param (the form carries the spec fields), but `run_search`
+    # reads `spec.table`. Setting it here is what makes the two agree — without it the selector
+    # would filter by the right table's fields and then SEARCH the default one.
+    spec = spec.model_copy(update={"table": table})
     if not spec.q and not spec.q_vec and not image_bytes and not filters.get(TOPIC_FILTER):
         return []
     # The cache lookup does blocking version reads and run_search makes blocking

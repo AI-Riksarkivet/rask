@@ -372,7 +372,7 @@ def run_search(
     getters raise :class:`ServiceUnavailableError` (HTTP 503) when their vLLM
     server is unreachable.
     """
-    target = resolve_target(handle)
+    target = resolve_target(handle, spec.table)
     where = build_where_clause(
         filters=filters or {},
         filterable=target.filterable,
