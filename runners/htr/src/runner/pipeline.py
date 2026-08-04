@@ -10,6 +10,7 @@ from htr.actors.fake import FakeAltoActor
 from htr.actors.io import AltoWriterActor, PageLoaderActor, PrefetchActor
 from htr.actors.layout import LayoutActor
 from htr.actors.lines import LineActor
+from htr.models import LINE_MODEL, REGION_MODEL
 from runner.htrflow_service import HTRFlowViaServeBytes
 from runner.transcribe_service import TranscribeViaServe
 
@@ -81,14 +82,14 @@ def htr_pipeline(
     )
     ds = ds.map_batches(
         LayoutActor,
-        fn_constructor_kwargs={"model": "Riksarkivet/yolov9-regions-1"},
+        fn_constructor_kwargs={"model": REGION_MODEL.repo},
         num_gpus=0.001,
         batch_size=8,
         compute=ray.data.ActorPoolStrategy(size=2),
     )
     ds = ds.map_batches(
         LineActor,
-        fn_constructor_kwargs={"model": "Riksarkivet/yolov9-lines-within-regions-1"},
+        fn_constructor_kwargs={"model": LINE_MODEL.repo},
         num_gpus=0.001,
         batch_size=8,
         compute=ray.data.ActorPoolStrategy(size=2),

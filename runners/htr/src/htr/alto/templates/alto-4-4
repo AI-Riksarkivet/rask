@@ -14,6 +14,13 @@
                 <applicationDescription>{{ metadata.get("Summary") }}</applicationDescription>
             </processingSoftware>
         </Processing>
+        {%- for model in models %}
+        <Processing ID="model_{{ model.step }}">
+            <processingDateTime>{{ timestamp }}</processingDateTime>
+            <processingStepDescription>{{ model.step }}</processingStepDescription>
+            <processingStepSettings>model={{ model }}</processingStepSettings>
+        </Processing>
+        {%- endfor %}
     </Description>
     {%- if document.regions %}
     <ReadingOrder>

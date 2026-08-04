@@ -6,29 +6,21 @@ Polygons stored on Line.abs_polygon when YOLO segmentation produces masks; else 
 
 import io
 import logging
-import os
 
 import numpy as np
 from PIL import Image
 
 from htr._columns import pack, unpack
+from htr.models import LINE_MODEL, MODEL_REVISION
 from htr.preprocessing import crop_region
 from htr.schemas import Line
 
 
 logger = logging.getLogger(__name__)
 
-#: The Hugging Face revision every weight load pins to. ``main`` is a MOVING POINTER: an upstream
-#: push silently changes what this actor loads, so the identical pipeline over the identical pages
-#: produces DIFFERENT transcriptions while lineage records the same model name. For an archive
-#: publishing machine-generated readings of historical records, that is the provenance claim that
-#: matters most. Override per-deployment with ``RASK_HTR_MODEL_REVISION``; pin it to a commit sha
-#: before any run whose output will be published.
-MODEL_REVISION = os.environ.get("RASK_HTR_MODEL_REVISION", "main")
-
 
 class LineActor:
-    def __init__(self, model: str = "Riksarkivet/yolov9-lines-within-regions-1", **_unused) -> None:
+    def __init__(self, model: str = LINE_MODEL.repo, **_unused) -> None:
         self.model_name = model
         self._model = None
 

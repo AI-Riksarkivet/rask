@@ -4,28 +4,20 @@ One row per page. Reads `image_bytes`, writes `regions` (list[Region])."""
 
 import io
 import logging
-import os
 
 import numpy as np
 from PIL import Image
 
 from htr._columns import pack
+from htr.models import MODEL_REVISION, REGION_MODEL
 from htr.schemas import Region
 
 
 logger = logging.getLogger(__name__)
 
-#: The Hugging Face revision every weight load pins to. ``main`` is a MOVING POINTER: an upstream
-#: push silently changes what this actor loads, so the identical pipeline over the identical pages
-#: produces DIFFERENT transcriptions while lineage records the same model name. For an archive
-#: publishing machine-generated readings of historical records, that is the provenance claim that
-#: matters most. Override per-deployment with ``RASK_HTR_MODEL_REVISION``; pin it to a commit sha
-#: before any run whose output will be published.
-MODEL_REVISION = os.environ.get("RASK_HTR_MODEL_REVISION", "main")
-
 
 class LayoutActor:
-    def __init__(self, model: str = "Riksarkivet/yolov9-regions-1", **_unused) -> None:
+    def __init__(self, model: str = REGION_MODEL.repo, **_unused) -> None:
         self.model_name = model
         self._model = None
 

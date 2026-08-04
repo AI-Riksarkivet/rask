@@ -29,19 +29,17 @@ import os
 from PIL import Image
 from ray import serve
 
+from htr.models import MODEL_REVISION, TEXT_MODEL
+
 
 logger = logging.getLogger(__name__)
-
-#: The Hugging Face revision every weight load pins to — see htr/actors/layout.py for why a moving
-#: ``main`` is a provenance defect rather than a convenience. Override with RASK_HTR_MODEL_REVISION.
-MODEL_REVISION = os.environ.get("RASK_HTR_MODEL_REVISION", "main")
 
 
 # Mirror constants from htr.actors.transcription so behavior matches the
 # old TranscribeActor exactly.
 MAX_BATCH = 64
 PREPROCESS_WORKERS = 4
-DEFAULT_MODEL = "Riksarkivet/trocr-base-handwritten-hist-swe-2"
+DEFAULT_MODEL = TEXT_MODEL.repo
 
 
 # Replica/GPU sizing is env-driven so transcribe + htrflow can co-reside on a

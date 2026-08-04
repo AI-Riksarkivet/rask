@@ -19,15 +19,13 @@ from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 from transformers.models.trocr.modeling_trocr import TrOCRSinusoidalPositionalEmbedding
 
 from htr._columns import pack, unpack
+from htr.models import MODEL_REVISION, TEXT_MODEL
 from htr.preprocessing import crop_region
 from htr.schemas import Line, TranscribedLine
 
 
 logger = logging.getLogger(__name__)
 
-#: The Hugging Face revision every weight load pins to — see htr/actors/layout.py for why a moving
-#: ``main`` is a provenance defect rather than a convenience. Override with RASK_HTR_MODEL_REVISION.
-MODEL_REVISION = os.environ.get("RASK_HTR_MODEL_REVISION", "main")
 
 MAX_BATCH = 64  # length-bucketed; bigger amortizes kernel launches but raises peak GPU memory.
 # 64 fits two actors per GPU on a 96 GB card with ~30 GB/actor headroom for decoder KV cache;
@@ -75,7 +73,7 @@ class TranscribeActor:
 
     def __init__(
         self,
-        model: str = "Riksarkivet/trocr-base-handwritten-hist-swe-2",
+        model: str = TEXT_MODEL.repo,
         max_batch: int = MAX_BATCH,
         use_tf32: bool = False,
         num_beams: int | None = None,
