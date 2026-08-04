@@ -99,6 +99,32 @@ estate is then one a user could have built, every guard above has run against it
 cannot exist through the UI cannot be seeded either. (The FGA fixture file stays for CI model tests
 — that is its job; populating a live estate is not.)
 
+## Diffed against Lakekeeper (docs.lakekeeper.io, fetched 2026-08-04 — not from memory)
+
+Their model: Server → Project → Warehouse → Namespace → Table, strict containment. Where we agree,
+where we are ahead, and what is worth taking:
+
+- **Agrees with Decision 3:** "Warehouses and Namespaces cannot be deleted via the /catalog API if
+  child objects are present." Empty-or-refuse is their rule too.
+- **We are ahead on cascade:** their cascade-drop is "planned for the management API"; ours is a
+  designed, explicit `?cascade=true`.
+- **Agrees on purge separation:** their table drop takes a PURGE flag; our bucket purge is a
+  separate opt-in. Same principle — metadata removal and byte removal never share a default.
+
+**ADOPTED from the diff (Decision 5): deletion protection.** Lakekeeper lets a warehouse, namespace
+or table be marked *protected*; protected entities refuse deletion, and only an explicit
+`force=true` bypasses it. This is cheap (one registry/properties field + one check in the delete
+door) and is the guard rail that makes `cascade` survivable — a fat-fingered cascade cannot take a
+protected object with it. Refusal: 409 with "protected; pass force=true to override" (and force
+still requires the same FGA gate, it is not an authz bypass).
+
+**DEFERRED from the diff (recorded, not adopted): table soft-delete/undrop.** Lakekeeper marks
+dropped tables deleted and reclaims after an expiration delay, recoverable until then. Valuable,
+but it needs a deferred-deletion queue (the compaction service's territory), and their own docs
+show the footgun: engines that issue PURGE "immediately delete files", silently undermining it, and
+the delay is frozen at drop time. Do it deliberately later or not at all — half a soft-delete is
+worse than none. Until then, drop = drop, as today, and `deactivate` remains the recoverable step.
+
 ## Spec compliance (audited 2026-08-04 against lance.org)
 
 - **Operations 47/47** of the spec's named list implemented, verified mechanically.
@@ -119,8 +145,9 @@ transaction that would justify a relational store. Revisit only if that changes.
 
 1. Project registry + `POST /v1/projects` + `require_project_exists` in warehouse-create
    (removes the bootstrap exception).
-2. `DELETE /v1/warehouses/{id}` — empty-check, cascade, separate bucket purge.
-3. `DELETE /v1/projects/{id}` — empty-check, no cascade.
+2. `DELETE /v1/warehouses/{id}` — empty-check, cascade, separate bucket purge, protection flag
+   (`protected` in the registry record; `force=true` to override, same FGA gate).
+3. `DELETE /v1/projects/{id}` — empty-check, no cascade, same protection flag.
 4. `seed_estate.py` through the real APIs; retire the FGA-only live seed.
 5. The reconciler report.
 6. Then the deferred hard problems, in this order: orphan-file reclamation (report → delete),
