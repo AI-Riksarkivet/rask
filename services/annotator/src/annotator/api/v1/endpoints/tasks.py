@@ -32,7 +32,7 @@ from annotator.projects.machines import (
     IllegalTransition,
     task_transition,
 )
-from annotator.projects.models import ProjectState, Shape, TaskState
+from annotator.projects.models import Link, ProjectState, Shape, TaskState
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 
@@ -73,6 +73,12 @@ class FireRequest(BaseModel):
 
 class SaveDraftRequest(BaseModel):
     shapes: list[Shape] = Field(default_factory=list)
+    #: The typed edges drawn between those shapes. Declared HERE and not only on `Draft`, because a
+    #: field this model does not name is dropped in silence: pydantic ignores unknown keys, so the
+    #: client sent `links`, the actor was built to store them, and the endpoint between them
+    #: forwarded shapes alone. Nothing errored — and on a task whose ontology declares a REQUIRED
+    #: relation the submit then read an always-empty list and refused work that was actually done.
+    links: list[Link] = Field(default_factory=list)
     base_revision: int | None = None
     origin: str = "human"
 
@@ -260,6 +266,7 @@ async def save_draft(task_id: TaskId, payload: SaveDraftRequest, checker: Checke
                 "project_id": str(current["project_id"]),
                 "author": subject,
                 "shapes": [s.model_dump(mode="json") for s in payload.shapes],
+                "links": [link.model_dump(mode="json") for link in payload.links],
                 "base_revision": payload.base_revision,
                 "origin": payload.origin,
             }

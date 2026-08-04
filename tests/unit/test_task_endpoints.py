@@ -493,3 +493,35 @@ def test_assigning_a_second_replica_to_the_same_recipient_is_409(monkeypatch: py
     assert r.status_code == 409, r.text
     assert "one replica per annotator" in r.json()["detail"]
     assert "g1-r1" in r.json()["detail"], "the refusal must name the replica already worked"
+
+
+def test_the_draft_save_carries_LINKS_through_to_the_actor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Relations must survive the HTTP boundary, and once did not.
+
+    The whole relation path was built end to end — the canvas draws a link, the remote function sends
+    `links`, `Draft` carries them, `save_draft` on the actor validates them, and the submit check
+    reads them — except for THIS hop. `SaveDraftRequest` had no `links` field, and pydantic drops an
+    unknown key in silence, so the endpoint forwarded shapes alone.
+
+    Nothing errored, which is exactly why it survived a live drive: canvas links live in client state,
+    so they render correctly until the page is reloaded and the draft is re-read from the actor. Then
+    every relation is gone. On a task whose ontology declares a REQUIRED relation it is worse than
+    lost work — the submit reads an always-empty list and refuses a submission that was actually
+    complete.
+    """
+    actor = _FakeActor(_task(state=TaskState.CLAIMED, assignee=SUBJECT))
+    monkeypatch.setattr(tasks_ep, "_proxy", lambda _t: actor)
+    client = TestClient(_app(allow=True))
+
+    r = client.put(
+        "/tasks/t1/draft",
+        json={
+            "shapes": [{"shape_type": "bbox", "shape_id": "s1"}, {"shape_type": "bbox", "shape_id": "s2"}],
+            "links": [{"name": "answers", "from_shape": "s1", "to_shape": "s2"}],
+        },
+    )
+
+    assert r.status_code == 200, r.text
+    assert actor.drafts[0].get("links") == [{"name": "answers", "from_shape": "s1", "to_shape": "s2"}], (
+        "the endpoint dropped `links` — the actor was asked to save shapes alone"
+    )
