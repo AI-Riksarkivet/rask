@@ -405,7 +405,8 @@
 								<ul class="edges">
 									{#each grantEdges as e (`${e.source}:${e.relation}`)}
 										<li class="mono">
-											<span class="subject" title={graphNode(e.source).title}>{graphNode(e.source).label}</span>
+											<span class="subject" title={graphNode(e.source).title}>{graphNode(e.source).label}</span
+											>
 											<span class="chip rel">{e.relation}</span>
 											<span class="mut">on {graphNode(e.target).label}</span>
 										</li>
@@ -417,7 +418,8 @@
 									{#each containerEdges as e (`${e.relation}:${e.target}`)}
 										<li class="mono">
 											<span class="mut">{e.relation} →</span>
-											<span class="subject" title={graphNode(e.target).title}>{graphNode(e.target).label}</span>
+											<span class="subject" title={graphNode(e.target).title}>{graphNode(e.target).label}</span
+											>
 										</li>
 									{/each}
 								</ul>
