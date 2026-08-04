@@ -253,3 +253,15 @@ export const DraftSchema = v.object({
 	origin: v.optional(v.string(), 'human'),
 });
 export type Draft = v.InferOutput<typeof DraftSchema>;
+
+/** One direct grant on a project. `user` is the FGA string as STORED (`user:gina`) — a revoke has to
+ *  send it back verbatim, and a prettified name that cannot round-trip is a trap. */
+export const MemberSchema = v.object({ user: v.string(), relation: v.string() });
+
+export const MemberListSchema = v.object({
+	members: v.array(MemberSchema),
+	/** The rungs the API will grant, supplied by the SERVER so a UI never keeps a second copy of the
+	 *  authorization model's ladder. */
+	grantable: v.optional(v.array(v.string()), []),
+});
+export type MemberList = v.InferOutput<typeof MemberListSchema>;

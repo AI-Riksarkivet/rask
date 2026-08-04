@@ -63,15 +63,32 @@ has NO rate rather than 0% — 0% reads as "everything they did was rejected", t
 truth. And reviewers appear even with no submissions of their own, or the panel silently omits the
 people doing the reviewing.
 
-### 40d · Membership UI — *do last*
+### 40d · Membership UI — **LANDED**
 See and edit who is member / reviewer / manager on a project. This writes **FGA tuples**, so it
 touches the authorization model — use the `openfga` skill, and the write path is the lakehouse's
 existing tuple write (`access.remote.ts`), which is the estate's reference for gated mutations.
 
 Heaviest and last because it is the only one that can lock someone out of their own project.
 
-Done when: a manager cannot remove their own last manager grant (self-lockout is refused, named),
-and every write is `can_manage`-gated server-side.
+Done, and the model needed NO change — the rungs were already concentric and directly assignable.
+What was missing was any way to grant one, so a creator got `owner` at create and nobody else could
+be added; every collaborative project needed someone with direct store access.
+
+`GET/PUT/DELETE /projects/{id}/members` in the ANNOTATOR service (service-kit's `read_object_tuples`
+/ `write_tuples` / `delete_tuples` — no catalog dependency). READS are `can_manage`-gated too: who
+has access names the people worth phishing.
+
+The refusal is stronger than "your own last grant": the LAST owner-or-manager on the project cannot
+be revoked at all, because that leaves it administrable only by a tenant admin — on a tenant whose
+admin has moved on, nobody. Named in the 409, not discovered later.
+
+A grant reads before writing, which is not an optimisation: an OpenFGA Write is transactional and
+rejects the whole batch if one tuple exists, so without the read a repeated grant is a 400 instead
+of a no-op.
+
+Bug the e2e caught: one `error` state gated both the list and the refusal, so a refused revoke HID
+the list — and "grant another owner first" is impossible if you cannot see who there is. Load errors
+and action errors are now separate.
 
 ---
 
@@ -145,11 +162,15 @@ capability the medallion's HTR output does not currently produce in document ord
    the same class of orphan as a link to a deleted shape and must be refused the same way.
 4. Selection UI on the inspector's existing text field, committing through the same undo stack.
 
-**Why it is not built here.** Step 2 changes the schema of the PUBLISHED table, which is the
-contract the gold tier and every downstream reader see. That is a migration with a real blast
-radius, and doing it without being able to verify the publish end-to-end would be the kind of
-half-landed change this file exists to prevent. It is the one item in this wave I am stopping short
-of rather than starting and leaving mid-flight.
+**CORRECTION — the earlier reason for not building this was WRONG.** It said step 2 was "a migration
+with a real blast radius" because it changes the published table's schema. That is false for Lance:
+adding a NULLABLE column is a **metadata-only** operation. Field IDs are assigned incrementally, so
+fragments written before the change keep their original field structure and are never rewritten, and
+a reader returns null for rows that predate the column
+(https://lance.org/format/table/schema/). Heterogeneous fragments are the normal case, not a hazard.
+
+So there is no migration to fear here, and the four steps above are ordinary work. The honest reason
+it is not yet built is simply that it had not been reached — not that it was risky.
 
 **Deliberately not claimed:** that the right PIXELS are lit. A WebGL drawing buffer is not preserved
 after present, so a screenshot of it proves nothing (this zone's delete spec records the same). What

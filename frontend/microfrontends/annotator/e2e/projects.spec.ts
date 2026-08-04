@@ -1189,3 +1189,80 @@ test('the metrics panel is ABSENT on a project nobody has touched', async ({ pag
 	await page.goto('/annotator/projects/p1');
 	await expect(page.getByTestId('annotator-metrics')).toHaveCount(0);
 });
+
+// --------------------------------------------------------------------------------------------------
+// 40d — membership. The rungs existed; there was no way to grant one.
+// --------------------------------------------------------------------------------------------------
+
+test('membership lists direct grants and grants a new one', async ({ page }) => {
+	await snapshot(page, { project: project('labeling'), legal_events: LEGAL.labeling }, listing([]));
+	await seed(page, {
+		'GET /projects/p1/members': {
+			members: [{ user: 'user:gina', relation: 'owner' }],
+			grantable: ['owner', 'manager', 'reviewer', 'annotator'],
+		},
+		'PUT /projects/p1/members': {
+			members: [
+				{ user: 'user:gina', relation: 'owner' },
+				{ user: 'user:omar', relation: 'annotator' },
+			],
+			grantable: ['owner', 'manager', 'reviewer', 'annotator'],
+		},
+	});
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('load-members').click();
+	await expect(page.getByTestId('member-row')).toHaveCount(1);
+
+	await page.getByLabel('Person to grant').fill('omar');
+	await page.getByTestId('grant-member').click();
+
+	await expect(page.getByTestId('member-row')).toHaveCount(2);
+	const put = (await calls(page)).find((c) => c.method === 'PUT')!;
+	// The bare subject travels; normalising to `user:omar` is the SERVER's job, because asking a UI
+	// to know the prefix is asking it to know the authorization model.
+	expect(put.body).toMatchObject({ user: 'omar', relation: 'annotator' });
+});
+
+test('revoking the LAST administrator is refused, and the refusal is shown', async ({ page }) => {
+	// The one mistake nobody can undo from inside the product. The server refuses with a named 409;
+	// this asserts the manager actually SEES it rather than the row silently staying put.
+	await snapshot(page, { project: project('labeling'), legal_events: LEGAL.labeling }, listing([]));
+	await seed(page, {
+		'GET /projects/p1/members': {
+			members: [{ user: 'user:gina', relation: 'owner' }],
+			grantable: ['owner', 'manager', 'reviewer', 'annotator'],
+		},
+		'DELETE /projects/p1/members': {
+			status: 409,
+			body: {
+				detail:
+					'user:gina holds the only remaining owner on this project — grant another owner or manager first, or nobody will be able to administer it',
+			},
+		},
+	});
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('load-members').click();
+	await page.getByTestId('revoke-member').click();
+
+	await expect(page.getByTestId('members-error')).toContainText('only remaining owner');
+	await expect(page.getByTestId('member-row'), 'the row vanished despite the refusal').toHaveCount(
+		1,
+	);
+});
+
+test('a non-manager is told WHY, not shown an empty list', async ({ page }) => {
+	// "This project has no members" and "you may not see them" are different facts. Rendering the
+	// second as the first would send someone looking for a bug in the grant path.
+	await snapshot(page, { project: project('labeling'), legal_events: LEGAL.labeling }, listing([]));
+	await seed(page, {
+		'GET /projects/p1/members': { status: 403, body: { detail: 'omar lacks can_manage' } },
+	});
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('load-members').click();
+
+	await expect(page.getByTestId('members-error')).toContainText('lacks can_manage');
+	await expect(page.getByTestId('member-row')).toHaveCount(0);
+});

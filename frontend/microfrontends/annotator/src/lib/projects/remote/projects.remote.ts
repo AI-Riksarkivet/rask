@@ -3,10 +3,12 @@ import { env } from '$env/dynamic/private';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
 import {
+	MemberListSchema,
 	ProjectDetailSchema,
 	ProjectListSchema,
 	ProjectSchema,
 	TaskListingSchema,
+	type MemberList,
 	type Project,
 	type ProjectDetail,
 	type ProjectList,
@@ -211,6 +213,41 @@ export const fetchProject = query(
 	ProjectIdArg,
 	async ({ projectId }): Promise<ApiResult<ProjectDetail>> =>
 		parsed(ProjectDetailSchema, await annotatorJSON(`/projects/${projectId}`)),
+);
+
+/** Who holds which rung directly on this project. `can_manage`-gated server-side: who has access is
+ *  itself sensitive, and a viewer has no business enumerating the people worth phishing. */
+export const fetchMembers = query(
+	ProjectIdArg,
+	async ({ projectId }): Promise<ApiResult<MemberList>> =>
+		parsed(MemberListSchema, await annotatorJSON(`/projects/${projectId}/members`)),
+);
+
+/** Grant one rung. Idempotent server-side, so a double-click is a no-op rather than a 400. */
+export const grantMember = command(
+	v.object({ projectId: v.string(), user: v.string(), relation: v.string() }),
+	async ({ projectId, user, relation }): Promise<ApiResult<MemberList>> => {
+		const result = parsed(
+			MemberListSchema,
+			await write('PUT', `/projects/${projectId}/members`, { user, relation }),
+		);
+		if (result.ok) void fetchMembers({ projectId }).refresh();
+		return result;
+	},
+);
+
+/** Revoke one rung. The server REFUSES the last owner/manager — a project nobody can administer is
+ *  not a state anyone can undo from inside the product, so the refusal arrives as a named 409. */
+export const revokeMember = command(
+	v.object({ projectId: v.string(), user: v.string(), relation: v.string() }),
+	async ({ projectId, user, relation }): Promise<ApiResult<MemberList>> => {
+		const result = parsed(
+			MemberListSchema,
+			await write('DELETE', `/projects/${projectId}/members`, { user, relation }),
+		);
+		if (result.ok) void fetchMembers({ projectId }).refresh();
+		return result;
+	},
 );
 
 /** The work queue: states + counts, and with `details` the full task documents the queue renders. */
