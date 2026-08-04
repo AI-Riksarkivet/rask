@@ -33,6 +33,7 @@
 	// owns which item is open; the trigger's `data-state` is the primitive's own public signal, so a
 	// MutationObserver on it stays correct through pointer, keyboard and programmatic opens alike.
 	let panelLeft = $state(0);
+	let panelTop = $state(0);
 
 	$effect(() => {
 		const root = ref;
@@ -46,7 +47,6 @@
 			// A panel mid-open animation can measure 0. Keeping the last position beats snapping to the
 			// far left for a frame, and the observer fires again once the real width lands.
 			if (panelWidth === 0) return;
-			const rootLeft = root.getBoundingClientRect().left;
 			const trigger = open.getBoundingClientRect();
 			const centred = trigger.left + trigger.width / 2 - panelWidth / 2;
 			const GUTTER = 8;
@@ -54,7 +54,15 @@
 				Math.max(GUTTER, centred),
 				Math.max(GUTTER, window.innerWidth - panelWidth - GUTTER),
 			);
-			panelLeft = clamped - rootLeft;
+			// FIXED coordinates, not root-relative. The panel used to be `absolute` inside the nav,
+			// which put it inside `MAIN`'s `overflow: hidden` — and MAIN starts where the SIDEBAR ends
+			// (x=256). Any panel wide enough to extend left of that had its first column silently
+			// CLIPPED: the Lakehouse panel measured x=9..745 and painted from 256, losing the whole
+			// Catalog column. It reads exactly like "the sidebar is on top of the dropdown", which is
+			// why raising z-index was the obvious fix and never worked — z-50 already beat the
+			// sidebar's z-10; nothing was overlapping, the paint was clipped.
+			panelLeft = clamped;
+			panelTop = root.getBoundingClientRect().bottom;
 		};
 
 		// `data-state` flips on the trigger and the panel's width lands a frame later, so re-measure on
@@ -91,6 +99,6 @@
 >
 	{@render children?.()}
 	{#if viewport}
-		<NavigationMenuViewport left={panelLeft} />
+		<NavigationMenuViewport left={panelLeft} top={panelTop} />
 	{/if}
 </NavigationMenuPrimitive.Root>

@@ -2,6 +2,7 @@
 	import { ChevronRight } from '@lucide/svelte';
 	import * as Collapsible from '../components/collapsible/index.js';
 	import * as Sidebar from '../components/sidebar/index.js';
+	import { useSidebar } from '../components/sidebar/context.svelte.js';
 	import { prefetchOnIntent, type ZoneNav, type ZoneNavLeaf } from './nav-config.js';
 
 	// The CURRENT zone's own routes, as LABELLED GROUPS. The cross-zone list lives in the top navbar
@@ -15,9 +16,17 @@
 	// area, which meant the zone's other four areas were invisible from wherever you stood.
 	let { pathname = '', nav = null }: { pathname?: string; nav?: ZoneNav | null } = $props();
 
+	// The RAIL's own collapse state. Load-bearing for `groupOpen` below: in icon mode a collapsed
+	// group renders NOTHING — `Collapsible.Content` does not mount its items — so the icons vanish,
+	// and the label you would click to get them back is itself hidden by `group-data-[collapsible=icon]`.
+	// The rail then shows a gap where a section used to be, with no way to recover it.
+	const sidebar = useSidebar();
+
 	/** A group is open when it is not explicitly collapsed, OR when it holds the active route — a
-	 *  section that hides the page you are on reads as a broken sidebar. */
+	 *  section that hides the page you are on reads as a broken sidebar — OR whenever the rail is
+	 *  collapsed to icons, where "closed" would mean the section's icons are simply absent. */
 	function groupOpen(items: ZoneNavLeaf[], collapsed: boolean | undefined, p: string): boolean {
+		if (sidebar.state === 'collapsed') return true;
 		return !collapsed || items.some((i) => isActive(i, p));
 	}
 
