@@ -13,7 +13,7 @@ catalog; the actual MP4 bytes live wherever the URI points:
 
 This module only builds those URI strings and guesses MIME types; the Blob
 V2 write wiring lives in :mod:`ratch.ingest`, the Range-read path in the
-backend (``backend/app.py`` ``/api/media``).
+backend (``backend/app.py`` ``/api/explorer``).
 """
 
 from __future__ import annotations

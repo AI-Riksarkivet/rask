@@ -41,7 +41,7 @@ export type ZoneNavLeaf = {
 	/** Active predicate vs the FULL pathname. */
 	match: (p: string) => boolean;
 	icon?: IconComponent;
-	/** True for a leaf that leaves this zone's route manifest (e.g. media's Annotate → /annotator):
+	/** True for a leaf that leaves this zone's route manifest (e.g. the explorer's Annotate → /annotator):
 	 *  the sidebar link then hard-navigates (data-sveltekit-reload) instead of soft-routing. */
 	reload?: boolean;
 	/** Sub-routes, rendered as a `Sidebar.MenuSub` under this leaf and auto-expanded while any of
@@ -67,7 +67,7 @@ export type ZoneNavGroup = {
  *  A zone root is not a member of any thematic section: it is the landing that SUMMARISES all of
  *  them. Compute's Overview had to sit inside "Cluster" purely because `groups[]` was the only
  *  container on offer, which reads as "cluster overview" when it actually covers jobs and serve
- *  too. Optional on purpose — a zone whose root genuinely belongs to a section (media's Search
+ *  too. Optional on purpose — a zone whose root genuinely belongs to a section (the explorer's Search
  *  really is Explore) should keep it there rather than promote it. */
 export type ZoneNavRoot = ZoneNavLeaf;
 
@@ -236,19 +236,19 @@ const LINEAGE_ITEMS: TopNavItem[] = [
 	},
 ];
 
-const MEDIA_ITEMS: TopNavItem[] = [
-	{ title: 'Search', href: '/media/', description: 'Semantic search over the corpus.' },
-	{ title: 'Atlas', href: '/media/atlas', description: 'The embedding map of the corpus.' },
-	{ title: 'Tree', href: '/media/tree', description: 'The corpus by topic hierarchy.' },
-	{ title: 'Graph', href: '/media/graph', description: 'Relations between media entities.' },
+const EXPLORER_ITEMS: TopNavItem[] = [
+	{ title: 'Search', href: '/explorer/', description: 'Semantic search over the corpus.' },
+	{ title: 'Atlas', href: '/explorer/atlas', description: 'The embedding map of the corpus.' },
+	{ title: 'Tree', href: '/explorer/tree', description: 'The corpus by topic hierarchy.' },
+	{ title: 'Graph', href: '/explorer/graph', description: 'Relations between media entities.' },
 	{
 		// The dock lives INSIDE this zone (its panels are the zone's own components sharing one
 		// search) — so it is a row of the zone's panel, exactly like every other area.
 		title: 'Workbench',
-		href: '/media/workbench',
+		href: '/explorer/workbench',
 		description: 'Results, atlas and player in one arrangeable dock.',
 	},
-	{ title: 'Workflow', href: '/media/workflow', description: 'The derivation pipeline.' },
+	{ title: 'Workflow', href: '/explorer/workflow', description: 'The derivation pipeline.' },
 ];
 
 const MODEL_ITEMS: TopNavItem[] = [
@@ -287,7 +287,7 @@ const GOVERNANCE_ITEMS: TopNavItem[] = [
 
 /** COMPUTE's panel rows — the Ray/job plane. The old overview zone folded in here (R16), so the
  *  zone root IS the overview and rides the panel as its first row (matching exactly, like Media's
- *  Search at /media). */
+ *  Search at /explorer). */
 const COMPUTE_ITEMS: TopNavItem[] = [
 	{ title: 'Overview', href: '/compute/', description: 'The Ray plane at a glance.' },
 	{ title: 'Jobs', href: '/compute/jobs', description: 'Submitted Ray jobs and their lifecycle.' },
@@ -317,7 +317,7 @@ const OPERATIONS_ITEMS: TopNavItem[] = [
 ];
 
 /**
- * The top-navbar IA. Seven zones — home, lakehouse, media, annotator, compute, train, studio — and
+ * The top-navbar IA. Seven zones — home, lakehouse, explorer, annotator, compute, train, studio — and
  * the bar carries an entry for EVERY one of them (R15: a zone missing from the shared navbar is a
  * defect, regardless of scaffold status). Lakehouse and Lineage stay two views of the ONE merged
  * estate zone rather than two apps — a hop from the catalog to the lineage graph, or to governance,
@@ -381,7 +381,9 @@ export function mainMenuNav(estateAdmin: boolean): TopNavEntry[] {
  */
 export function isMainMenu(pathname: string): boolean {
 	const p = norm(pathname);
-	return p === '' || p === '/' || p === '/projects' || p === '/settings' || p.startsWith('/settings/');
+	return (
+		p === '' || p === '/' || p === '/projects' || p === '/settings' || p.startsWith('/settings/')
+	);
 }
 
 export function topNav(estateAdmin: boolean): TopNavEntry[] {
@@ -447,14 +449,16 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			tier: 'primary',
 		},
 		{
-			// SEARCH is the media read plane — the viewer. Named for what it is FOR, not for the
-			// directory it lives in: a person looking for a moment in the corpus is searching, and
-			// "Media" described our folder layout rather than their task.
-			title: 'Search',
-			href: '/media/',
+			// EXPLORER is the corpus read plane — the viewer. It was labelled "Search" while the
+			// directory was `media`, on the reasoning that a label should name the task rather than
+			// our folder layout. The zone is now `explorer` on every surface (path, package, image),
+			// so the label and the directory finally agree, and "explore" is the wider truth of what
+			// this zone does: search is ONE of its leaves, beside the atlas, the tree and the graph.
+			title: 'Explorer',
+			href: '/explorer/',
 			icon: Search,
-			match: under('/media'),
-			items: [...MEDIA_ITEMS],
+			match: under('/explorer'),
+			items: [...EXPLORER_ITEMS],
 		},
 		{
 			// ANNOTATE is its own microfrontend (/annotator) and its own job: the write plane over the

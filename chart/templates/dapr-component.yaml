@@ -160,13 +160,13 @@ spec:
 {{- $secretScopes = append $secretScopes .daprAppId }}
 {{- end }}
 {{- end }}
-  {{- if .Values.media.enabled }}
+  {{- if .Values.explorer.enabled }}
   {{- /* The media plane resolves PER-STORE S3 credentials through this component: a registry store
          may name its own `secret`, and raw lives on an external backend whose keys are not the
          deployment's. Unscoped, the sidecar answers "component not found" and the object browser 500s
          on that store — which is what happened the moment the first external store was declared.
          Credentials are secret-store ONLY; there is deliberately no env fallback to fall back TO. */}}
-  {{- range $name, $svc := .Values.media.services }}
+  {{- range $name, $svc := .Values.explorer.services }}
   {{- $secretScopes = append $secretScopes ($svc.daprAppId | default $name) }}
   {{- end }}
   {{- end }}

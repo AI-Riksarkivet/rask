@@ -115,15 +115,15 @@ describe('the media zone does not proxy the annotation write surface', () => {
 	// surface is reachable from this zone only through two named functions with fixed payloads. A proxy
 	// forwards whatever a caller spells; a command cannot.
 	it('exposes no /api/annotations route at all', () => {
-		expect(bffRoutes('media').filter((r) => r.startsWith('/api/annotations'))).toEqual([]);
+		expect(bffRoutes('explorer').filter((r) => r.startsWith('/api/annotations'))).toEqual([]);
 	});
 	it('exposes no /api/assist route at all', () => {
-		expect(bffRoutes('media').filter((r) => r.startsWith('/api/assist'))).toEqual([]);
+		expect(bffRoutes('explorer').filter((r) => r.startsWith('/api/assist'))).toEqual([]);
 	});
 	it('exposes no /api/jobs route at all', () => {
 		// `jobs/apply` became a command; `jobs/[...path]` was a status passthrough with no caller in the
 		// estate at all (`jobStatus` in @rask/labeling is exported dead code) and was deleted outright.
-		expect(bffRoutes('media').filter((r) => r.startsWith('/api/jobs'))).toEqual([]);
+		expect(bffRoutes('explorer').filter((r) => r.startsWith('/api/jobs'))).toEqual([]);
 	});
 });
 
@@ -156,7 +156,7 @@ describe('the chart hands a zone only the upstreams its routes use', () => {
 	}
 
 	it('media routes to the viewer, search and annotator services', () => {
-		expect([...upstreamsUsed('media')].sort()).toEqual([
+		expect([...upstreamsUsed('explorer')].sort()).toEqual([
 			'ANNOTATOR_API',
 			// The dev-only split seam (`?? ANNOTATOR_API`): the local dev trio's annotator serves
 			// the annotations plane while the labeling-tasks plane runs in-cluster. The chart never
@@ -188,8 +188,8 @@ describe('the chart hands a zone only the upstreams its routes use', () => {
 		const searchLine = chart.split('\n').findIndex((l) => l.includes('name: SEARCH_API'));
 		expect(searchLine).toBeGreaterThan(-1);
 		const guard = chart.split('\n')[searchLine - 1] ?? '';
-		expect(guard, 'SEARCH_API must sit behind an `eq .name "media"` guard').toContain(
-			'eq .name "media"',
+		expect(guard, 'SEARCH_API must sit behind an `eq .name "explorer"` guard').toContain(
+			'eq .name "explorer"',
 		);
 	});
 });

@@ -2,14 +2,14 @@ import { test, expect, type Route } from '@playwright/test';
 import { STORES } from '../admin/access-fixtures';
 
 // Hermetic coverage for the R18 storage area: /lakehouse/catalog/storage is the S3 object browser over
-// the estate's registered STORES, served through this zone's /api/media BFF route onto the rask gateway,
-// whose /api/media row routes to the media-plane viewer's objects endpoints (volumes-api retired in the
+// the estate's registered STORES, served through this zone's /api/explorer BFF route onto the rask gateway,
+// whose /api/explorer row routes to the media-plane viewer's objects endpoints (volumes-api retired in the
 // R6/R20 wave). Only the browser's backend calls are stubbed — empty, populated (prefix navigation
 // + the text preview pane) and unreachable states are each asserted, so a dead viewer can never
 // render as a stuck spinner.
 //
 // TWO transports, and the split is why the bucket identity below is not ours to choose:
-//   · the OBJECT reads (`/api/media/*`) are browser-side, so `page.route` still stands in for them;
+//   · the OBJECT reads (`/api/explorer/*`) are browser-side, so `page.route` still stands in for them;
 //   · WHICH stores exist is `listStores()` in src/lib/storage/remote/storage.remote.ts — a remote
 //     function that reads the catalog SERVER-SIDE (`CATALOG_API` → e2e/admin/mock-catalog.ts →
 //     the STORES fixture). `page.route` cannot reach it, so the browser lands on the registry's
@@ -26,9 +26,9 @@ const json = (route: Route, body: unknown, status = 200) =>
 test('an empty bucket renders the honest empty state, with search + bucket controls', async ({
 	page,
 }) => {
-	await page.route('**/api/media/**', (route) => {
+	await page.route('**/api/explorer/**', (route) => {
 		const url = new URL(route.request().url());
-		if (url.pathname.endsWith('/media/objects')) {
+		if (url.pathname.endsWith('/explorer/objects')) {
 			// Echo the store the page actually asked for — a stand-in that answered a DIFFERENT bucket
 			// than the one requested could never catch the page reading the wrong store.
 			const bucket = url.searchParams.get('bucket') ?? STORE;
@@ -50,12 +50,12 @@ test('an empty bucket renders the honest empty state, with search + bucket contr
 test('prefix navigation lists one level and the preview pane decodes a text object', async ({
 	page,
 }) => {
-	await page.route('**/api/media/**', (route) => {
+	await page.route('**/api/explorer/**', (route) => {
 		const url = new URL(route.request().url());
 		const prefix = url.searchParams.get('prefix') ?? '';
 		// Echo the store the page asked for (see the empty-state test) — never a literal of our own.
 		const bucket = url.searchParams.get('bucket') ?? STORE;
-		if (url.pathname.endsWith('/media/objects')) {
+		if (url.pathname.endsWith('/explorer/objects')) {
 			if (prefix === 'vol1/') {
 				return json(route, {
 					bucket,
@@ -68,7 +68,7 @@ test('prefix navigation lists one level and the preview pane decodes a text obje
 			}
 			return json(route, { bucket, prefix: '', prefixes: ['vol1/'], objects: [] });
 		}
-		if (url.pathname.endsWith('/media/object')) {
+		if (url.pathname.endsWith('/explorer/object')) {
 			return json(route, {
 				key: 'vol1/readme.txt',
 				size: 24,
@@ -77,7 +77,7 @@ test('prefix navigation lists one level and the preview pane decodes a text obje
 				etag: 'abc123',
 			});
 		}
-		if (url.pathname.endsWith('/media/object/download')) {
+		if (url.pathname.endsWith('/explorer/object/download')) {
 			return route.fulfill({
 				status: 200,
 				contentType: 'text/plain',
@@ -105,14 +105,14 @@ test('prefix navigation lists one level and the preview pane decodes a text obje
 	// (the download link addresses the SELECTED store) instead of the retired `BUCKETS[0]` literal.
 	await expect(pane.getByRole('link', { name: 'Download' })).toHaveAttribute(
 		'href',
-		`/lakehouse/api/media/object/download?bucket=${STORE}&key=vol1%2Freadme.txt`,
+		`/lakehouse/api/explorer/object/download?bucket=${STORE}&key=vol1%2Freadme.txt`,
 	);
 });
 
 test('a dead storage backend renders the unreachable state with retry — no spinner hang', async ({
 	page,
 }) => {
-	await page.route('**/api/media/**', (route) => json(route, { error: 'ECONNREFUSED' }, 502));
+	await page.route('**/api/explorer/**', (route) => json(route, { error: 'ECONNREFUSED' }, 502));
 	await page.goto('/lakehouse/catalog/storage');
 	await expect(page.getByText('Storage service unreachable (HTTP 502).')).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();
@@ -126,7 +126,7 @@ test('an unprovisioned bucket names itself instead of claiming the service is un
 	// which is wrong about the layer, says nothing about which bucket, and points at no fix. The
 	// backend now answers a 404 whose problem+json `detail` carries all three; the browser must show
 	// THAT, not paper over it with its own generic outage copy.
-	await page.route('**/api/media/**', (route) =>
+	await page.route('**/api/explorer/**', (route) =>
 		json(
 			route,
 			{

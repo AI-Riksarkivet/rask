@@ -108,7 +108,7 @@ against a **local valibot schema** instead of an imported `@rask/api` one
 with `error(502, …)` (a plain throw becomes a generic "Internal Error"):
 
 ```ts
-const res = await getRequestEvent().fetch(`/api/media/objects?${params}`);
+const res = await getRequestEvent().fetch(`/api/explorer/objects?${params}`);
 if (!res.ok) error(502, `media viewer → HTTP ${res.status} ${res.statusText}`);
 return v.parse(S3ListingSchema, await res.json());
 ```

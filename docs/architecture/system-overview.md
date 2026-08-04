@@ -12,8 +12,8 @@
 !!! warning "R6/R20 + R22 (2026-07-28): the `-api` services and the old zone set are DELETED too"
     The diagrams and tables below still show `services/core_api` (`:8801`), `services/search_api`
     (`:8802`) and `services/volumes_api` (`:8803`). **All three are gone.** The S3 object browser is
-    now the lance media **viewer** (`/api/media/object*`, `:8101`); lines/EAD FTS re-land as
-    catalog-governed Lance tables behind `/api/media/search`; and the `ray` service was renamed
+    now the lance media **viewer** (`/api/explorer/object*`, `:8101`); lines/EAD FTS re-land as
+    catalog-governed Lance tables behind `/api/explorer/search`; and the `ray` service was renamed
     **`compute`** on every surface (R22) while its public paths stay `/api/ray` + `/api/serve`.
 
     The frontend table likewise lists `{overview,compute,discover,storage,train,studio}` at
@@ -29,8 +29,8 @@
     The R6/R20 media wave retired the remaining trio. The gateway now routes only the
     `compute` service (ray-api → `ray` at R20, → `compute` at R22), controlplane, and the lance
     lakehouse/media planes; the S3 object browser lives in the media viewer
-    (`/api/media/object*`), and lines/EAD FTS re-land as catalog-governed Lance
-    tables behind `/api/media/search`. Sections naming the deleted services are
+    (`/api/explorer/object*`), and lines/EAD FTS re-land as catalog-governed Lance
+    tables behind `/api/explorer/search`. Sections naming the deleted services are
     historical context.
 
 Snapshot of the **current** architecture across runner, Ray, backend, frontend

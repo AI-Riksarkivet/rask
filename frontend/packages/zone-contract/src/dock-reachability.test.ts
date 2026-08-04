@@ -81,7 +81,7 @@ describe('dock reachability', () => {
 		// unnoticed. ONE zone ships one today — media, where "cut and re-cut the corpus" is the
 		// workflow that wanted it. Others earn a dock when a real multi-panel workflow appears in
 		// them, not by symmetry.
-		expect(DOCKS.map((d) => d.href).sort()).toEqual(['/media/workbench']);
+		expect(DOCKS.map((d) => d.href).sort()).toEqual(['/explorer/workbench']);
 	});
 
 	it.each(DOCKS)('$href is listed in the $zone zone sidebar', ({ zone, href }) => {

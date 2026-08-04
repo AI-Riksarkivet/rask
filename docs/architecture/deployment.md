@@ -133,7 +133,7 @@ allowed (an externally-managed device plugin / the NVIDIA GPU Operator) and warn
 ### StorageClasses: omit, don't guess
 
 No template names a StorageClass. `rustfs.storageClass`, `ray.hfCacheStorageClass` and
-`media.corpus.storageClass` all default to `""`, which omits `storageClassName` so the **cluster's
+`explorer.corpus.storageClass` all default to `""`, which omits `storageClassName` so the **cluster's
 default** class provisions — the only portable answer (`local-path` is k3s's provisioner name and does not
 exist on kind, whose default is `standard`). Note `storageClassName: ""` is *not* the same as omitting it:
 the empty string disables dynamic provisioning, which is why the templates use `with`. Pinned by

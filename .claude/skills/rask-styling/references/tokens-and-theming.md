@@ -57,8 +57,8 @@ All seven zones import the same three stylesheets and point `@source` at `../../
 
 | Zone | Extra |
 |---|---|
-| `media`, `annotator` | also `@source './lib' './routes' './app.html'` |
-| `lakehouse`, `media` | also `@import '@xyflow/svelte/dist/style.css' layer(base)` |
+| `explorer`, `annotator` | also `@source './lib' './routes' './app.html'` |
+| `lakehouse`, `explorer` | also `@import '@xyflow/svelte/dist/style.css' layer(base)` |
 | `home`, `compute`, `studio`, `train` | rely on Tailwind's default scan |
 
 The five zones without explicit `./lib`/`./routes` sources depend on Tailwind 4 auto-detecting the SvelteKit source tree. Adding an explicit `@source` is safe; removing one is not.

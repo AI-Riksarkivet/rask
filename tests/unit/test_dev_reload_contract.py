@@ -64,7 +64,7 @@ def _uvicorn_containers(docs: list[dict]) -> list[tuple[str, dict]]:
 
 def test_dev_reload_reaches_every_uvicorn_service() -> None:
     """Not a list of names — every uvicorn container the chart renders, whatever it is called."""
-    docs = _render(media__enabled="true", frontend__enabled="true", dev__reload="true")
+    docs = _render(explorer__enabled="true", frontend__enabled="true", dev__reload="true")
     containers = _uvicorn_containers(docs)
     assert containers, "no uvicorn containers rendered — the check would pass vacuously"
 
@@ -83,7 +83,7 @@ def test_each_service_watches_its_own_package() -> None:
     """A reload-dir that does not exist in the image CRASHLOOPS the service — uvicorn refuses to
     start on a missing `--reload-dir` rather than skipping it. So each service must watch its own
     package plus the shared kits, never another service's."""
-    docs = _render(media__enabled="true", dev__reload="true")
+    docs = _render(explorer__enabled="true", dev__reload="true")
     for name, c in _uvicorn_containers(docs):
         args = c.get("args") or []
         if "--reload" not in args:
@@ -99,7 +99,7 @@ def test_each_service_watches_its_own_package() -> None:
 def test_production_manifests_carry_no_reload() -> None:
     """The default render is what ships. A `--reload` here means uvicorn watches directories and
     restarts workers in a cluster nobody is editing."""
-    docs = _render(media__enabled="true", frontend__enabled="true")
+    docs = _render(explorer__enabled="true", frontend__enabled="true")
     leaked = [name for name, c in _uvicorn_containers(docs) if any("--reload" in str(a) for a in (c.get("args") or []))]
     assert not leaked, f"production manifests leak --reload: {sorted(leaked)}"
 
@@ -107,7 +107,7 @@ def test_production_manifests_carry_no_reload() -> None:
 def test_production_keeps_a_read_only_root_filesystem() -> None:
     """`dev.reload` relaxes `readOnlyRootFilesystem` so live_update can write into the container.
     Leaking THAT is a security regression, which is why it is asserted separately from the flag."""
-    docs = _render(media__enabled="true", frontend__enabled="true")
+    docs = _render(explorer__enabled="true", frontend__enabled="true")
     writable = [f"{name}/{c['name']}" for name, c in _uvicorn_containers(docs) if (c.get("securityContext") or {}).get("readOnlyRootFilesystem") is False]
     assert not writable, f"production containers have a writable root filesystem: {sorted(writable)}"
 
@@ -115,7 +115,7 @@ def test_production_keeps_a_read_only_root_filesystem() -> None:
 def test_dev_reload_relaxes_the_root_filesystem_where_it_must() -> None:
     """The other direction: live_update cannot write into a read-only container, so `dev.reload`
     must relax it — otherwise the sync fails and, again, nothing says so."""
-    docs = _render(media__enabled="true", dev__reload="true")
+    docs = _render(explorer__enabled="true", dev__reload="true")
     still_ro = [name for name, c in _uvicorn_containers(docs) if (c.get("securityContext") or {}).get("readOnlyRootFilesystem") is True]
     assert not still_ro, f"dev.reload=true but these keep a read-only rootfs, so live_update cannot write: {sorted(still_ro)}"
 

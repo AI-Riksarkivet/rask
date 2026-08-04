@@ -26,14 +26,14 @@ def test_ray_rows_map_to_the_compute_service(gw) -> None:
 
 
 def test_media_objects_ride_the_viewer_row(gw) -> None:
-    # The storage browser (R18): /api/media/objects → the media-plane viewer with
-    # the /api/media prefix rewritten to the viewer's internal /api.
+    # The storage browser (R18): /api/explorer/objects → the media-plane viewer with
+    # the /api/explorer prefix rewritten to the viewer's internal /api.
     routes = gw._routes()
-    picked = gw._pick_route("/api/media/objects", routes)
+    picked = gw._pick_route("/api/explorer/objects", routes)
     assert picked is not None
     prefix, upstream_prefix, app_id, _fallback = picked
     assert app_id == "viewer"
-    assert prefix == "/api/media"
+    assert prefix == "/api/explorer"
     assert upstream_prefix == "/api"
 
 

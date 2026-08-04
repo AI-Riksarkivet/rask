@@ -9,7 +9,7 @@
  * chunk tag is a first-class, reviewable, versioned annotation. See labeling/types.ts.
  */
 
-import { apiUrl } from '@rask/media-api/base';
+import { apiUrl } from '@rask/explorer-api/base';
 
 /** A chunk (or unit) + the tag labels to set. `keys` = the NON-doc identity fields,
  *  positional (pairs with keyFields minus the doc key). */

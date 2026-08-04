@@ -15,7 +15,13 @@ import { tableFromArrays } from 'apache-arrow';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('svelte-sonner', () => ({
-	toast: { success: () => {}, error: () => {}, message: () => {}, warning: () => {}, info: () => {} },
+	toast: {
+		success: () => {},
+		error: () => {},
+		message: () => {},
+		warning: () => {},
+		info: () => {},
+	},
 }));
 vi.mock('./remote/assist.remote', () => ({
 	assistRegions: async () => ({ shapes: [] }),
@@ -134,7 +140,10 @@ describe('geometry actions are undoable', () => {
 
 		c.undo();
 		expect(h.hidden.has(0), 'undo did not un-hide the deleted row').toBe(false);
-		expect(c.rows.map((r) => r.id), 'undo did not restore the row to the list').toContain('a1');
+		expect(
+			c.rows.map((r) => r.id),
+			'undo did not restore the row to the list',
+		).toContain('a1');
 
 		c.redo();
 		expect(h.hidden.has(0), 'redo did not re-hide the row').toBe(true);

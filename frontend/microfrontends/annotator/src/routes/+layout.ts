@@ -1,5 +1,5 @@
 import { base } from '$app/paths';
-import { setApiBase } from '@rask/media-api/base';
+import { setApiBase } from '@rask/explorer-api/base';
 
 // Every media-plane fetch this zone's labeling clients make goes through THIS zone's
 // same-origin BFF proxy routes at `${base}/api/*` — set the shared client's base once,

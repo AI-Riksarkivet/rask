@@ -83,8 +83,8 @@ config:
 services:
   # ---- rask fleet (uvicorn modules, one Deployment each via templates/fleet.yaml) ----
   # (core-api/search-api/volumes-api died in the R6/R20 media wave: the S3 object browser
-  # rides the media-plane viewer at /api/media/object*; lines/EAD FTS re-land as
-  # catalog-governed Lance tables behind /api/media/search. The Ray-plane service is
+  # rides the media-plane viewer at /api/explorer/object*; lines/EAD FTS re-land as
+  # catalog-governed Lance tables behind /api/explorer/search. The Ray-plane service is
   # `compute` on EVERY surface — uv member, import, k8s objects, dapr app-id, image —
   # per R22, which supersedes R20's `ray` choice and its ray-api PyPI-shadow exception.
   # Its public gateway rows stay /api/ray + /api/serve: the URL namespace names the
@@ -384,8 +384,8 @@ frontend:
     - {name: lakehouse, path: /lakehouse}
     # The lance-media zones: full BFF zones like the rest — SSR on, the shared session handle, and
     # same-origin /<zone>/api/* proxy routes to the media Services (VIEWER_API/SEARCH_API/
-    # ANNOTATOR_API env, rendered when media.enabled). Deploy together with media.enabled=true.
-    - {name: media, path: /media}
+    # ANNOTATOR_API env, rendered when explorer.enabled). Deploy together with explorer.enabled=true.
+    - {name: explorer, path: /explorer}
     - {name: annotator, path: /annotator}
   # Per-user OIDC login (opt-in), shared across ALL zones — one origin, one sealed cookie, so a login on
   # any zone is a login on every zone. REQUIRED when enabled: sessionSecret (seals the cookie),
@@ -399,7 +399,7 @@ frontend:
 
 # --- lance-ns nginx gateway: RETIRED (lance-ns-merge.md decision 4 + P4) ----------------------------
 # The rask fleet gateway at services.gateway (uvicorn `gateway:app` on :8888) is the ONE front door; it
-# carries the lance routes (/api/catalog, /api/lineage, /api/produce, /api/train, /api/media/*) and the
+# carries the lance routes (/api/catalog, /api/lineage, /api/produce, /api/train, /api/explorer/*) and the
 # lineage sidecar-only 403 guard as Python middleware. templates/gateway.yaml (nginx ConfigMap +
 # Deployment + Service) is deleted; the former top-level `gateway:` values block went with it.
 
@@ -682,12 +682,12 @@ compaction:
 # The viewer/search/annotator services from the lance-audio checkout. All three share the catalog image
 # and read the corpus from a node-local hostPath (NO data move — only the annotations table lives in the
 # catalog; MEDIA_READ/WRITE_BACKEND=catalog is the merge's env flip, "direct" restores standalone dev).
-media:
+explorer:
   enabled: false
   # Where the pods mount the corpus (read-only, all three services).
   corpusMountPath: /media-corpus
   # HOW the corpus volume is provided. This used to be an unconditional `hostPath` with
-  # `type: Directory` pointed at /var/media-corpus — which means media.enabled=true on a cluster where
+  # `type: Directory` pointed at /var/media-corpus — which means explorer.enabled=true on a cluster where
   # nobody had pre-created that directory wedged all three pods in ContainerCreating, with a kubelet
   # event as the only diagnostic (live-proof 2026-07-28, defect 5; the plan already said no hostPath
   # ships). Modes:
@@ -743,7 +743,7 @@ encoders:
 # --- Model runners (runners/ — the lance-audio fold) ----------------------------------------------
 # Only the CPU-viable subset ships: `assist` (GroundingDINO-tiny + SAM-ViT-base, CPU wheels, weights
 # baked into the image). The CUDA-pinned runners (asr/diarize/voiceprint) and the LLM-dependent batch
-# runners (topics/kg) have no honest deployment on a GPU-less estate. When enabled (and media.enabled),
+# runners (topics/kg) have no honest deployment on a GPU-less estate. When enabled (and explorer.enabled),
 # the annotator's MEDIA_ASSIST_URL points at the assist Service, flipping its in-repo mock to real
 # predictions. NOTE: runners/htr is the rask HTR runner — a sealed project, not deployed from here.
 runners:

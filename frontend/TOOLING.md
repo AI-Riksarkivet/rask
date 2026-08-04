@@ -41,7 +41,7 @@ the Svelte compiler's own validator and a11y warnings) as oxlint rules, in oxlin
 config upward from the working directory, so no package needs `--config ../../..` or a per-depth
 relative path. Ignore globs live _inside_ each config for the same reason.
 
-This is not theoretical hygiene. `microfrontends/media` shipped its own `.oxfmtrc.json` and
+This is not theoretical hygiene. `microfrontends/explorer` shipped its own `.oxfmtrc.json` and
 `.oxlintrc.json`, inherited from the standalone lance-media repo. They sat dormant while nothing
 invoked the oxc tools — and the moment oxlint and oxfmt were switched on they silently won, because
 _nearest config wins_. That zone got 80-column double-quoted output against the root's 100-column
@@ -117,7 +117,7 @@ So TypeScript 7 cannot be the `typescript` dependency while `svelte-check` is in
 - `typescript@6.0.3` — resolved by `svelte-check`, which owns `.svelte`.
 - `@typescript/native-preview` (`tsgo` — the TS 7 engine under a second package name so both install)
   — the `check:tsgo` task, over every package whose sources are pure TypeScript: `@rask/api`,
-  `@rask/engine`, `@rask/labeling`, `@rask/media-api`, `@rask/zone-contract`, plus media's core.
+  `@rask/engine`, `@rask/labeling`, `@rask/explorer-api`, `@rask/zone-contract`, plus media's core.
 
 `tsgo` cannot resolve `*.svelte` imports either, so it could not own the component surface even if
 `svelte-check` were gone. **Every line of TypeScript that TypeScript 7 can check, it checks.** The

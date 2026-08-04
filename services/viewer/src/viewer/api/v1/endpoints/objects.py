@@ -3,7 +3,7 @@
 Ported from the retired rask ``volumes-api`` in the R6/R20 media wave
 (docs/architecture/lance-ns-merge.md): one delimiter-scoped listing, a HEAD,
 and a byte download over the two fixed rask buckets. Public paths ride the
-existing ``/api/media`` gateway row (``/api/media/objects`` → ``/api/objects``
+existing ``/api/explorer`` gateway row (``/api/explorer/objects`` → ``/api/objects``
 here), so the gateway grows zero new rows.
 
 Uses ``storage.s3_client`` (never raw boto3); endpoint/creds resolve from env

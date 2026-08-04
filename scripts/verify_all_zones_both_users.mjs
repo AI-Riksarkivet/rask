@@ -25,7 +25,7 @@ const SHOT = '/home/blackwell/Desktop/lance-ns/docs/audits/shots';
 const ZONES = [
 	{ name: 'home', path: '/' },
 	{ name: 'lakehouse', path: '/lakehouse/' },
-	{ name: 'media', path: '/media/' },
+	{ name: 'explorer', path: '/explorer/' },
 	{ name: 'annotator', path: '/annotator/' },
 ];
 
@@ -200,7 +200,7 @@ for (const user of ['alice@example.com', 'bob@example.com']) {
 		// Same surface, a DIFFERENT zone, with its own transport — the point of sharing the feed. The
 		// annotator is the one that matters: it is where a person waits on the batch they are annotating
 		// for, and it is where the bell was missing.
-		for (const other of ['media', 'annotator']) {
+		for (const other of ['explorer', 'annotator']) {
 			await page.goto(`${ORIGIN}/${other}/`, { waitUntil: 'domcontentloaded' });
 			await page.waitForTimeout(3000);
 			const otherBell = page.getByRole('button', { name: /notification/i }).first();

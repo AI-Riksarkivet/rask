@@ -2,7 +2,7 @@
 
 Only CORS is registered. Deliberately NO ``BaseHTTPMiddleware``-based
 RequestID/Timing middleware: ``BaseHTTPMiddleware`` fully buffers the response
-body, which would break the ``/api/media`` ``StreamingResponse`` Range streaming
+body, which would break the ``/api/explorer`` ``StreamingResponse`` Range streaming
 (206 partial-content video seeking). If per-request IDs/timing are ever needed,
 use a pure ASGI middleware that passes through streaming bodies, or wire it via
 OpenTelemetry's ASGI instrumentation — not ``BaseHTTPMiddleware``.

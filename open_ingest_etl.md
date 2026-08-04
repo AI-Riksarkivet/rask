@@ -334,7 +334,7 @@ requires a JVM stack or a second storage system:
 
 The composed shape — **Arrow-native end to end**, which suits an estate that is already
 Rust/Go at every layer (Lance, RustFS, NATS, Dapr) and already speaks Arrow IPC on the wire
-(`@rask/media-api`, `@rask/labeling`):
+(`@rask/explorer-api`, `@rask/labeling`):
 
 ```
 record source → [Redpanda Connect (EL) or first-party worker] → NATS subject (Arrow IPC or
@@ -1063,7 +1063,7 @@ visible. RustFS bucket notifications, if supported, are a future *source-side* a
 trigger only — run completion never depends on them.
 
 Chain: ingest lander commit → `medallion.bronze.<ds>` → bronze→silver mover (transform →
-quality assertions → commit) → `medallion.silver.<ds>` → silver→gold mover → 
+quality assertions → commit) → `medallion.silver.<ds>` → silver→gold mover →
 `medallion.gold.<ds>` → (open end). Routing lives in the **subject name** on the existing
 `MEDALLION` stream (`medallion.>`), replacing today's shared-topic + payload string-filter
 (the mechanism behind the M3 dead lane) and the producer's `/bronze-arrival`

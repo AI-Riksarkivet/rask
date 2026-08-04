@@ -249,7 +249,7 @@ test('a row that genuinely leaves the zone still hard-navigates', async ({ page 
 	await expect(nav.locator('a[href="/annotator/"]')).toHaveAttribute('data-sveltekit-reload', '');
 	await openPanel(page, 'Search');
 	const panel = page.locator('[data-slot="navigation-menu-viewport"]');
-	await expect(panel.locator('a[href="/media/atlas"]')).toHaveAttribute(
+	await expect(panel.locator('a[href="/explorer/atlas"]')).toHaveAttribute(
 		'data-sveltekit-reload',
 		'',
 	);

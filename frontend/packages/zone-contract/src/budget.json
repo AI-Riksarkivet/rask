@@ -11,7 +11,7 @@
 			"deferredGzipKB": 120,
 			"note": "Four areas (catalog, lineage, models, admin) in one router. Carries @xyflow/svelte for the lineage graph and layerchart for the model experiments. 2026-08-03: the per-zone lineage WORKBENCH was removed (global-workbench-only decision, see open_workbench.md), taking @rask/dockview's ~67 KB out of the deferred half and its ~33 KB stylesheet out of the static half; the ceilings return to their pre-dock values. When the GLOBAL workbench lands it pays these costs in its own zone, not here."
 		},
-		"media": {
+		"explorer": {
 			"staticGzipKB": 1050,
 			"deferredGzipKB": 120,
 			"note": "embedding-atlas + d3 + elkjs for the atlas/tree/graph surfaces. The HEAVIEST zone to enter — nearly three times the annotator. 2026-08-03: the per-zone WORKBENCH was removed (global-workbench-only decision, see open_workbench.md) — the dock's ~66 KB left the deferred half and its stylesheet left the static half; ceilings unchanged (they were never raised for the dock here)."

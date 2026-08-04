@@ -74,11 +74,11 @@ PY
 }
 
 # ── 1 + 2. the render contract (offline: helm only, no cluster needed) ────────────────────────────
-# media.enabled=true because the chart ships the media plane off by default — the encoder env lives
+# explorer.enabled=true because the chart ships the media plane off by default — the encoder env lives
 # on the media workloads, so a render with media off would assert nothing at all.
 
 step "1/5 render with encoders unset — no encoder env anywhere"
-helm template "$RELEASE" "$CHART" --set media.enabled=true >"$WORK/off.yaml"
+helm template "$RELEASE" "$CHART" --set explorer.enabled=true >"$WORK/off.yaml"
 for var in MEDIA_EMBED_URL MEDIA_RERANK_URL; do
   n=$(grep -c "$var" "$WORK/off.yaml" || true)
   [ "$n" = "0" ] || fail "$var must not render when encoders.* is unset (found $n) — unset is the honest-off state"
@@ -86,7 +86,7 @@ done
 echo "no MEDIA_EMBED_URL / MEDIA_RERANK_URL rendered (honest off)"
 
 step "2/5 render with encoders set — both URLs on search + viewer, neither on annotator"
-helm template "$RELEASE" "$CHART" --set media.enabled=true \
+helm template "$RELEASE" "$CHART" --set explorer.enabled=true \
   --set encoders.embedUrl=http://enc.test:8001 \
   --set encoders.rerankUrl=http://enc.test:8002 >"$WORK/on.yaml"
 for comp in search viewer; do
@@ -107,7 +107,7 @@ echo "annotator: no encoder env (correct — it neither calls nor probes them)"
 # `.Values.encoders.embedUrl` then aborts the whole render ("nil pointer evaluating interface
 # {}.embedUrl"), which is why media.yaml goes through `| default dict`. `--set encoders=null` is the
 # same shape as the stored-values case, so it reproduces it without needing a release.
-helm template "$RELEASE" "$CHART" --set media.enabled=true --set encoders=null >"$WORK/nil.yaml" 2>"$WORK/nil.err" ||
+helm template "$RELEASE" "$CHART" --set explorer.enabled=true --set encoders=null >"$WORK/nil.yaml" 2>"$WORK/nil.err" ||
   fail "the chart does not render when encoders is nil: $(head -2 "$WORK/nil.err") — a --reuse-values upgrade would fail here"
 grep -qE '^\s+- \{ name: MEDIA_(EMBED|RERANK)_URL' "$WORK/nil.yaml" &&
   fail "encoder env rendered from a nil encoders key"
@@ -116,7 +116,7 @@ echo "encoders=null (the --reuse-values shape): renders clean, no encoder env, n
 # ── 3. live baseline ─────────────────────────────────────────────────────────────────────────────
 
 step "3/5 live baseline through $INGRESS — the vector modes are 503"
-kubectl get "deploy/$RELEASE-search" >/dev/null 2>&1 || fail "release $RELEASE has no search deployment (media.enabled?)"
+kubectl get "deploy/$RELEASE-search" >/dev/null 2>&1 || fail "release $RELEASE has no search deployment (explorer.enabled?)"
 code=$(search "mode=semantic")
 [ "$code" = "503" ] || fail "expected mode=semantic to be 503 before wiring, got $code — is an encoder already configured? ($(detail))"
 echo "mode=semantic → 503 $(detail)"

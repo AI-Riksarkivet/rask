@@ -17,7 +17,7 @@ zones in `frontend/microfrontends/`, and one-shot tools in `scripts/`.
 | `services/gateway` | Reverse proxy (`:8888`) | [Services](services.md) |
 | `services/compute` | The `compute` service — Ray dashboard + Serve proxy (`:8804`) | [Services](services.md) |
 | `services/controlplane` | Project provisioning (`:8820`) | [Services](services.md) |
-| `services/{viewer,search,annotator}` | The lance media plane (`/api/media/*`; the viewer carries the S3 object browser) | [Services](services.md) |
+| `services/{viewer,search,annotator}` | The lance media plane (`/api/explorer/*`; the viewer carries the S3 object browser) | [Services](services.md) |
 | `services/{catalog,lineage,medallion,compaction}` | The lance lakehouse plane | [Services](services.md) |
 | `scripts/` | One-shot Python tools (+ the dev/ops shell scripts) | below |
 

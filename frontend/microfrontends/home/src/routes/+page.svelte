@@ -48,8 +48,8 @@
 		<Badge variant="outline">Scaffold — no insights wired yet</Badge>
 	</header>
 	<p class="text-muted-foreground max-w-2xl text-sm">
-		The governed lakehouse estate. Open a project to work in it, or configure the estate itself —
-		this page will summarise what is happening across every project you can see.
+		The governed lakehouse estate. Open a project to work in it, or configure the estate itself — this
+		page will summarise what is happening across every project you can see.
 	</p>
 
 	<!-- The two real destinations from here. SAME-ZONE links: `/projects` and `/settings` are routes

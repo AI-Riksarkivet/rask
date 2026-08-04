@@ -310,7 +310,7 @@ for zone in ZONES:
 FLEET_TEMPLATES = [
     'templates/services.yaml',    # catalog, lineage
     'templates/medallion.yaml',   # the producer + the three movers
-    'templates/media.yaml',       # viewer, search, annotator  (needs media.enabled)
+    'templates/explorer.yaml',       # viewer, search, annotator  (needs explorer.enabled)
     'templates/compaction.yaml',  # compaction
     'templates/fleet.yaml',       # gateway
     # The fleet CONFIGMAP, for the same reason the ingress and dex are here: this list renders the
@@ -336,7 +336,7 @@ FLEET_TEMPLATES = [
     #
     # Whoever turns auth ON must own the IdP that auth depends on.
     'templates/dex.yaml',
-    # The WHOLE Dapr plane. Tilt sets auth.enabled, media.enabled and storage.stores, and every one
+    # The WHOLE Dapr plane. Tilt sets auth.enabled, explorer.enabled and storage.stores, and every one
     # of those is expressed in a Dapr CR — components (pubsub/state/secrets), their SCOPES, the
     # resiliency policy and the sidecar-injection sweep. Rendering the pods without them left Helm
     # owning the config at ITS values, and the two disagreed silently three separate times in one
@@ -381,7 +381,7 @@ k8s_yaml(local(
         '--set', 'dev.reload=true',
         # The media trio defaults OFF in the chart, so the annotator/viewer/search had no pods at
         # all under Tilt. They are the services most worth iterating on, so turn them on here.
-        '--set', 'media.enabled=true',
+        '--set', 'explorer.enabled=true',
         # The storage registry. Raw and derived live on the EXTERNAL store (a different host with
         # different credentials); only the governed tiers are on the warehouse this chart deploys.
         # Without this every store resolves to the warehouse, and a bucket holding millions of objects
@@ -394,7 +394,7 @@ k8s_yaml(local(
         '--set', 'frontend.enabled=true',
         # Governance ON. The chart defaults auth.enabled=false ("open dev mode"), and nothing here
         # turned it on — so every zone rendered signed-out with no way IN: no sign-in control at all,
-        # `/media/capi/v1/me` answering 401, and Dex running the whole time with nothing pointing at
+        # `/explorer/capi/v1/me` answering 401, and Dex running the whole time with nothing pointing at
         # it. Auth is the single most repo-specific thing the in-cluster loop exists to exercise
         # (FGA, the BFF, cross-zone sessions), and it is exactly what `make dev-frontends` cannot do,
         # so leaving it off made the slower loop pointless.
@@ -467,8 +467,8 @@ for zone in ZONES:
 #   kubectl port-forward svc/rask-web-home 5273:3000  # …-lakehouse | -media | -annotator |
 #                                                     # -compute | -studio | -train
 #
-# The media trio is gated behind `media.enabled` (chart default FALSE, and Tilt does not override
-# it), so rask-viewer/-search/-annotator have NO PODS unless you pass `--set media.enabled=true`:
+# The media trio is gated behind `explorer.enabled` (chart default FALSE, and Tilt does not override
+# it), so rask-viewer/-search/-annotator have NO PODS unless you pass `--set explorer.enabled=true`:
 #   kubectl port-forward svc/rask-viewer    8101:8101
 #   kubectl port-forward svc/rask-search    8102:8102
 #   kubectl port-forward svc/rask-annotator 8103:8103

@@ -181,9 +181,9 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 		'/lakehouse/lineage',
 		'/lakehouse/lineage/runs',
 		'/lakehouse/lineage/columns',
-		// Zone-root hrefs carry the TRAILING SLASH — load-bearing (a bare /media costs a 308 per hop;
+		// Zone-root hrefs carry the TRAILING SLASH — load-bearing (a bare /explorer costs a 308 per hop;
 		// nav-config.test pins it). The old bare forms predated that convention landing here.
-		'/media/',
+		'/explorer/',
 		'/annotator/',
 		// GOVERNANCE is not in this bar at either width any more — it moved to the main menu's Settings
 		// entry with the two-level ruling, so `/lakehouse/governance/access` is unreachable from inside
@@ -224,7 +224,7 @@ test('the wide Lakehouse panel carries NO filler self-row — its sub-area rows 
 	//   - the row linked /lakehouse/catalog, a redirect-to-tables page, so it said nothing a real row
 	//     (Tables, Namespaces, Warehouses, …) does not already say;
 	//   - it rendered for THIS zone alone — every flat-`items` zone carries a real, function-titled root
-	//     row (Search at /media/, Overview at /compute/), so their equivalent is skipped as a duplicate;
+	//     row (Search at /explorer/, Overview at /compute/), so their equivalent is skipped as a duplicate;
 	//   - the zone root is NOT unreachable: the narrow overflow menu still prepends every zone's root
 	//     uniformly, which the "below the breakpoint …" test above pins by asserting /lakehouse/catalog.
 	await page.setViewportSize({ width: 1440, height: 900 });

@@ -3,8 +3,8 @@
 !!! warning "P7b / R6+R20 (2026-07-28): the fleet described below is RETIRED down to gateway + ray + controlplane"
     The R6/R20 media wave deleted `core-api` (the transitional husk), `search-api`, and
     `volumes-api`. Their still-needed capabilities serve from the **media plane**: the S3 object
-    browser moved into the lance `viewer` (`/api/media/objects` → viewer `/api/objects`); lines FTS
-    and the EAD catalog search re-land as catalog-governed Lance tables behind `/api/media/search`.
+    browser moved into the lance `viewer` (`/api/explorer/objects` → viewer `/api/objects`); lines FTS
+    and the EAD catalog search re-land as catalog-governed Lance tables behind `/api/explorer/search`.
     `ray-api` survives as the **`compute` service** (`ray` at R20; R22 renamed it `compute` on
     every surface — uv member, import, k8s/dapr/image/gateway — killing the ray-api PyPI-shadow
     exception; the public paths stay `/api/ray` + `/api/serve`). The gateway's

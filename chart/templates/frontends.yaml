@@ -273,7 +273,7 @@ spec:
               value: {{ printf "http://%s:5556/dex" (include "lance.dexHost" $root) | quote }}
             {{- end }}
             {{- end }}
-            {{- if and $root.Values.media.enabled (or (eq .name "media") (eq .name "annotator")) }}
+            {{- if and $root.Values.explorer.enabled (or (eq .name "explorer") (eq .name "annotator")) }}
             # --- the media plane's upstreams for these two zones' BFF proxy routes -------
             # (/<zone>/api/* -> the media Services). Scoped PER ZONE, not handed to both: a
             # zone should not hold a service URL it never routes to. media searches and
@@ -281,12 +281,12 @@ spec:
             # + batch-job submit; the annotator reads the viewer for the media it draws on
             # the canvas and never searches.
             - name: VIEWER_API
-              value: {{ printf "http://%s-viewer:%v" (include "rask.fullname" $root) $root.Values.media.services.viewer.port | quote }}
+              value: {{ printf "http://%s-viewer:%v" (include "rask.fullname" $root) $root.Values.explorer.services.viewer.port | quote }}
             - name: ANNOTATOR_API
-              value: {{ printf "http://%s-annotator:%v" (include "rask.fullname" $root) $root.Values.media.services.annotator.port | quote }}
-            {{- if eq .name "media" }}
+              value: {{ printf "http://%s-annotator:%v" (include "rask.fullname" $root) $root.Values.explorer.services.annotator.port | quote }}
+            {{- if eq .name "explorer" }}
             - name: SEARCH_API
-              value: {{ printf "http://%s-search:%v" (include "rask.fullname" $root) $root.Values.media.services.search.port | quote }}
+              value: {{ printf "http://%s-search:%v" (include "rask.fullname" $root) $root.Values.explorer.services.search.port | quote }}
             {{- end }}
             {{- if and (eq .name "annotator") $root.Values.runners.enabled }}
             # Mirror of the annotator SERVICE's runner seams (media.yaml) onto the zone's

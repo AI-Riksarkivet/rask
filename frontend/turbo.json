@@ -12,7 +12,7 @@
 		// `vite build` is reading. With only `^build` these two ran CONCURRENTLY inside a package, and on
 		// a cold checkout (CI, nothing cached) the build lost the race:
 		//
-		//     media:build: ENOENT … '/src/frontend/microfrontends/media/.svelte-kit/types/route_meta_data.json'
+		//     explorer:build: ENOENT … '/src/frontend/microfrontends/explorer/.svelte-kit/types/route_meta_data.json'
 		//
 		// It reads as a flake because it hits whichever zone happens to interleave, and it never
 		// reproduces locally where `.svelte-kit` is already warm. Depending on the package's OWN build
@@ -34,7 +34,7 @@
 		// depends on @rask/zone-contract (it is a gate, not a runtime dep), so this raced the zone builds
 		// and measured a half-written output/client. manifest.test.ts fails if this list drifts.
 		"@rask/zone-contract#test": {
-			"dependsOn": ["annotator#build", "compute#build", "home#build", "lakehouse#build", "media#build", "studio#build", "train#build"],
+			"dependsOn": ["annotator#build", "compute#build", "home#build", "lakehouse#build", "explorer#build", "studio#build", "train#build"],
 			"outputs": []
 		},
 		"test:e2e": {

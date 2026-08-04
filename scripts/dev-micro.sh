@@ -8,7 +8,7 @@
 # overridable via *_PORT env vars. (The orchestrator process died at P7a; the
 # core-api/search-api/volumes-api trio died in the R6/R20 media wave — the S3
 # object browser now rides the media-plane VIEWER, which this fleet starts so
-# the lakehouse storage browser has a live /api/media backend in dev. See
+# the lakehouse storage browser has a live /api/explorer backend in dev. See
 # docs/architecture/lance-ns-merge.md P7.)
 set -euo pipefail
 
@@ -42,9 +42,9 @@ ANNOTATOR_PORT="${ANNOTATOR_PORT:-$((8103 + OFFSET))}"
 # offset, it would route to whatever holds the default ports). No-op at OFFSET=0.
 export RASK_COMPUTE_URL="${RASK_COMPUTE_URL:-http://127.0.0.1:${COMPUTE_PORT}}"
 export RASK_CONTROLPLANE_URL="${RASK_CONTROLPLANE_URL:-http://127.0.0.1:${CONTROLPLANE_PORT}}"
-export RASK_MEDIA_VIEWER_URL="${RASK_MEDIA_VIEWER_URL:-http://127.0.0.1:${VIEWER_PORT}}"
-export RASK_MEDIA_SEARCH_URL="${RASK_MEDIA_SEARCH_URL:-http://127.0.0.1:${SEARCH_PORT}}"
-export RASK_MEDIA_ANNOTATOR_URL="${RASK_MEDIA_ANNOTATOR_URL:-http://127.0.0.1:${ANNOTATOR_PORT}}"
+export RASK_EXPLORER_VIEWER_URL="${RASK_EXPLORER_VIEWER_URL:-http://127.0.0.1:${VIEWER_PORT}}"
+export RASK_EXPLORER_SEARCH_URL="${RASK_EXPLORER_SEARCH_URL:-http://127.0.0.1:${SEARCH_PORT}}"
+export RASK_EXPLORER_ANNOTATOR_URL="${RASK_EXPLORER_ANNOTATOR_URL:-http://127.0.0.1:${ANNOTATOR_PORT}}"
 # The viewer reads its own VIEWER_PORT (media-plane settings), exported here so
 # its `run()` row and the gateway row above always agree under PORT_OFFSET.
 export VIEWER_PORT
@@ -61,8 +61,8 @@ run() {  # run <name> <port> <module> [extra env assignments...]
 run gateway      "$GATEWAY_PORT"      gateway:app
 run compute      "$COMPUTE_PORT"      compute:app
 run controlplane "$CONTROLPLANE_PORT" controlplane:app
-# The media-plane viewer: /api/media/* (incl. the lakehouse storage browser's
-# /api/media/object* routes). Its DatasetRegistry is lazy, so it boots without a
+# The media-plane viewer: /api/explorer/* (incl. the lakehouse storage browser's
+# /api/explorer/object* routes). Its DatasetRegistry is lazy, so it boots without a
 # staged corpus — dataset routes then 404 honestly while the objects browser works.
 run viewer       "$VIEWER_PORT"       viewer.main:app
 # The other two thirds of the media plane. Until 2026-07-28 the fleet started ONLY the viewer, so the
