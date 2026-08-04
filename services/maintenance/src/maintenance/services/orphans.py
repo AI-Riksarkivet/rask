@@ -57,6 +57,11 @@ _VERSIONS_DIR = "_versions"
 #: avoid, since a reclaimer acting on it would unpin published data.
 _REFS_DIR = "_refs"
 
+#: Named branches live here — `tree/{branch_name}/` holds a WHOLE parallel dataset (its own
+#: `_versions/`, `_transactions/`, `_deletions/`, `_indices/`). Branch names may contain `/`, so this
+#: is a path prefix, not one segment.
+_TREE_DIR = "tree"
+
 #: A zero-byte marker Lance writes at the dataset root. Structural, never referenced by a manifest,
 #: so a naive scan reports it once per dataset forever.
 _RESERVED_MARKER = ".lance-reserved"
@@ -169,6 +174,48 @@ def referenced_paths(dataset_uri: str, storage_options: dict[str, str] | None = 
     return referenced, len(versions), note
 
 
+def _unscannable_reason(fs: pafs.FileSystem, prefix: str, referenced: set[str]) -> str | None:
+    """Why this dataset CANNOT be scanned safely, or ``None`` if it can.
+
+    Two layouts make the "list the prefix, subtract the referenced set" method produce false
+    positives on LIVE data. Both are refused rather than approximated, because the failure mode is a
+    reclaimer deleting a branch or another dataset's files.
+
+    **Branches.** A branch is a shallow clone of its parent whose `_versions/`, `_transactions/`,
+    `_deletions/` and `_indices/` live under `tree/{branch}/`. `lance.dataset(uri)` opens the MAIN
+    branch, so nothing under `tree/` is ever in the referenced set — every file of every branch is
+    unreferenced BY CONSTRUCTION. Measured: a two-commit branch made 6 of 7 findings branch files,
+    including the branch's own `data/*.lance`.
+
+    **Multi-base / shallow clones.** A manifest's `base_paths[]` lets a DataFile, DeletionFile or
+    index resolve under ANOTHER dataset root (feature flag 16). pylance does not expose `base_paths`,
+    so this is detected by its consequence instead, which is strictly more robust: if a path the
+    manifest REFERENCES is not present under this prefix, the dataset's files do not all live here.
+    A prefix listing therefore cannot be subtracted from a referenced set that spans roots. The
+    mirror hazard is worse and invisible from here — the SOURCE of a clone holds files that only the
+    CLONE's manifest still references, so scanning the source alone would name them garbage.
+    """
+    tree = f"{prefix}/{_TREE_DIR}"
+    try:
+        if fs.get_file_info(tree).type == pafs.FileType.Directory:
+            return (
+                f"{prefix}: has branches (`{_TREE_DIR}/`), whose files are unreferenced by the main branch "
+                "BY CONSTRUCTION — scanning would report every branch as garbage"
+            )
+    except Exception:  # noqa: S110 — an unstattable path is not evidence of branches
+        pass
+
+    # A referenced path that is not here means the dataset spans roots (base_paths / shallow clone).
+    # Checked against the exact-match entries only; the trailing-slash entries are sidecar DIRECTORIES.
+    missing = [rel for rel in sorted(referenced) if not rel.endswith("/") and fs.get_file_info(f"{prefix}/{rel}").type != pafs.FileType.File]
+    if missing:
+        return (
+            f"{prefix}: {len(missing)} referenced file(s) do not live under this prefix (e.g. {missing[0]}) — "
+            "the dataset spans base_paths (shallow clone / multi-base), so a prefix listing cannot be subtracted"
+        )
+    return None
+
+
 def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, prefix: str, storage_options: dict[str, str] | None = None) -> DatasetOrphanScan:
     """List one dataset's files and subtract what any live version references.
 
@@ -187,6 +234,11 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, prefix: str, storage_opt
 
     if note:
         return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=note)
+
+    # Layout gate — refuse the two shapes whose false positives are LIVE data (see _unscannable_reason).
+    if (unscannable := _unscannable_reason(fs, prefix, referenced)) is not None:
+        log.warning("orphan_scan_skipped", extra={"dataset": dataset_uri, "reason": unscannable})
+        return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=unscannable)
 
     orphans: list[OrphanFile] = []
     try:

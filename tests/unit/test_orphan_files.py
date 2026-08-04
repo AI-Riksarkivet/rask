@@ -281,3 +281,72 @@ def test_a_blob_sidecar_of_a_referenced_data_file_is_not_an_orphan(tmp_path: pat
     named = {o.path for o in orphans.scan_dataset(_fs(), uri, prefix).orphans}
     assert f"data/{stems[0]}/10000000000000000000000000000000.blob" not in named, "a LIVE blob sidecar was named as an orphan"
     assert f"data/{'f' * 50}/10000000000000000000000000000000.blob" in named, "a sidecar with no live parent must still be reported"
+
+
+# --------------------------------------------------------------------------- #
+# The layout gate — two shapes whose false positives are LIVE data.
+# Built with the REAL lance branch/clone APIs, because the whole bug was that the
+# on-disk layout does not match what a prefix scan assumes.
+# --------------------------------------------------------------------------- #
+
+
+def test_a_branched_dataset_is_refused_not_scanned(tmp_path: pathlib.Path) -> None:
+    """A branch is a whole parallel dataset under `tree/{branch}/` — its own `_versions/`,
+    `_transactions/`, `_deletions/`, `_indices/`.
+
+    `lance.dataset(uri)` opens the MAIN branch, so nothing under `tree/` is ever in the referenced
+    set: every file of every branch is unreferenced BY CONSTRUCTION. Measured before the gate: a
+    two-commit branch produced 6 of 7 findings as branch files, INCLUDING the branch's own
+    `data/*.lance`. A reclaimer acting on that destroys the branch.
+    """
+    uri = str(tmp_path / "branched.lance")
+    ds = lance.write_dataset(_table(), uri)
+    branch = ds.create_branch("feature-a")
+    lance.write_dataset(_table(2), branch, mode="append")
+    assert (tmp_path / "branched.lance" / "tree" / "feature-a").exists(), "fixture must really branch"
+
+    result = orphans.scan_dataset(_fs(), uri, uri)
+    assert result.checked is False, "a branched dataset must be refused, not scanned"
+    assert result.orphans == []
+    assert "tree/" in (result.reason or "")
+
+
+def test_a_shallow_clone_is_refused_because_its_data_lives_elsewhere(tmp_path: pathlib.Path) -> None:
+    """A clone's manifest references data files that resolve through `base_paths` to ANOTHER dataset
+    root, so they are simply not under this prefix.
+
+    `base_paths` is not exposed by pylance, so the gate detects the CONSEQUENCE — a referenced path
+    that is not present locally — which is strictly more robust than reading the flag would be.
+    """
+    source = str(tmp_path / "src.lance")
+    ds = lance.write_dataset(_table(), source)
+    clone = str(tmp_path / "clone.lance")
+    ds.shallow_clone(clone, reference=1)
+
+    result = orphans.scan_dataset(_fs(), clone, clone)
+    assert result.checked is False, "a dataset spanning base_paths must be refused"
+    assert result.orphans == []
+    assert "base_paths" in (result.reason or "")
+
+
+def test_an_ordinary_dataset_is_still_scanned(tmp_path: pathlib.Path) -> None:
+    """The gate must refuse only the two hazardous layouts. A gate that refuses everything is a
+    detector that does nothing, and would pass both tests above."""
+    uri, prefix = _dataset(tmp_path)
+    result = orphans.scan_dataset(_fs(), uri, prefix)
+    assert result.checked is True
+    assert result.reason is None
+
+
+def test_a_refused_dataset_does_not_read_as_clean_in_the_aggregate(tmp_path: pathlib.Path) -> None:
+    """Refusing must INCREASE `datasets_unreadable` and land in `incomplete` — never quietly lower
+    the orphan count. Otherwise the branchiest bucket in the estate reports as the tidiest."""
+    uri = str(tmp_path / "branched.lance")
+    ds = lance.write_dataset(_table(), uri)
+    ds.create_branch("feature-a")
+
+    report = orphans.scan_datasets(_fs(), [(uri, uri)])
+    assert report.datasets_scanned == 0
+    assert report.datasets_unreadable == 1
+    assert report.total == 0
+    assert report.incomplete and "tree/" in report.incomplete[0]
