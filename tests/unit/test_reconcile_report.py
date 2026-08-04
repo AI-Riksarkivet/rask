@@ -17,6 +17,7 @@ import ast
 import asyncio
 import hashlib
 import io
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -540,3 +541,80 @@ def test_a_full_run_leaves_every_store_byte_identical(tmp_path: Path, monkeypatc
 
     assert report.total == 5, "the fixture must actually BE drifted, or 'nothing changed' proves nothing"
     assert after == before
+
+
+# --- the orphan scan's bucket coverage (#81 residual) ----------------------------------------------
+# `run_sweep` reads the warehouse REGISTRY so a bucket provisioned by an API call after the last
+# config edit is still maintained. The orphan scan kept iterating the configured list alone — same
+# blindness, worse consequence: it reports ZERO orphans for those buckets, and a zero in a drift
+# report is read as "checked and clean".
+
+
+def _settings_for_scan(tmp_path: Path) -> MaintenanceSettings:
+    return MaintenanceSettings.model_validate(
+        {
+            "s3_endpoint": "",
+            "s3_access_key_id": "x",
+            "s3_secret_access_key": "x",
+            "s3_bucket": "configured-bucket",
+            "control_root": f"file://{tmp_path}",
+        }
+    )
+
+
+def test_a_registry_only_bucket_is_scanned(tmp_path: Path) -> None:
+    """A warehouse provisioned at runtime is in no static list — and must still be looked at."""
+    report = mod.ReconcileReport(checked_at=datetime.now(UTC).isoformat())
+    sources = mod.Sources()
+    sources.warehouse_records = [
+        {"id": "acme-wh", "bucket": "acme-bucket", "project": "acme"},
+        {"id": "beta-wh", "bucket": "beta-bucket", "project": "beta"},
+    ]
+
+    buckets = mod._scannable_buckets(report, _settings_for_scan(tmp_path), sources)
+
+    assert buckets[0] == "configured-bucket"  # the configured list still leads
+    assert set(buckets) == {"configured-bucket", "acme-bucket", "beta-bucket"}
+    assert report.incomplete == []
+
+
+def test_a_deactivated_warehouse_is_still_scanned(tmp_path: Path) -> None:
+    """Unlike the SWEEP, which skips it. Reporting is not rewriting.
+
+    The sweep excludes a deactivated warehouse because compacting a quarantined tenant's data would
+    be the one process still rewriting bytes the estate has said nobody may touch. Naming its orphans
+    changes nothing on disk, and is exactly what an operator wants before deciding to offboard it.
+    """
+    report = mod.ReconcileReport(checked_at=datetime.now(UTC).isoformat())
+    sources = mod.Sources()
+    sources.warehouse_records = [{"id": "gone-wh", "bucket": "quarantined", "project": "p", "status": "deactivated"}]
+
+    assert "quarantined" in mod._scannable_buckets(report, _settings_for_scan(tmp_path), sources)
+
+
+def test_an_unreadable_registry_is_REPORTED_not_silently_narrowed(tmp_path: Path) -> None:
+    """The posture that separates a report from a sweep.
+
+    The sweep degrades to the configured list with a log line, costing one maintenance cycle. This
+    may not: buckets nobody looked at must be named, or the resulting `orphan_files: 0` is a zero
+    that means "we did not look" — the one number this report must never print.
+    """
+    report = mod.ReconcileReport(checked_at=datetime.now(UTC).isoformat())
+    sources = mod.Sources()
+    sources.warehouse_records_error = "control root unreachable"
+
+    buckets = mod._scannable_buckets(report, _settings_for_scan(tmp_path), sources)
+
+    assert buckets == ["configured-bucket"]
+    assert [i.source for i in report.incomplete] == ["registry:warehouses"]
+    assert "UNSCANNED" in report.incomplete[0].reason
+    assert "control root unreachable" in report.incomplete[0].reason
+
+
+def test_a_registry_bucket_that_duplicates_the_configured_one_is_not_scanned_twice(tmp_path: Path) -> None:
+    """The common case on a single-bucket estate — a doubled scan would double every finding."""
+    report = mod.ReconcileReport(checked_at=datetime.now(UTC).isoformat())
+    sources = mod.Sources()
+    sources.warehouse_records = [{"id": "w", "bucket": "configured-bucket", "project": "p"}]
+
+    assert mod._scannable_buckets(report, _settings_for_scan(tmp_path), sources) == ["configured-bucket"]
