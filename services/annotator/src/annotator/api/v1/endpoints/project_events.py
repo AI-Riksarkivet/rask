@@ -23,6 +23,7 @@ The fourth precondition — every task terminal — is NOT checked here. It live
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated, Any, Final, cast
 
 from fastapi import APIRouter, Path, status
@@ -32,8 +33,13 @@ from annotator.api.security import CheckerDep, CurrentSubject
 from annotator.projects.machines import FROZEN_PROJECT_STATES, PROJECT_EDGES, IllegalTransition, legal_task_events, project_transition
 from annotator.projects.models import ItemSource, MediaRef, ProjectState, Task, TaskState, new_id
 from annotator.projects.project_actor import AnnotationProjectActorInterface
-from service_kit.exceptions import ConflictError, ForbiddenError
+from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
+from service_kit.media.deps import StateDep
+from service_kit.media.state import dataset_handle
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/projects", tags=["annotation-projects"])
@@ -220,8 +226,85 @@ async def clear_adjudication(
     return updated
 
 
+#: A task may be dropped only while the project can still change what it will publish. Past
+#: `frozen` the answer set is closed and a publish is being prepared against it — removing an item
+#: then would change what the run facet describes after the description was fixed.
+DROPPABLE_STATES = frozenset({ProjectState.DRAFT, ProjectState.LABELING})
+
+
+@router.delete("/{project_id}/tasks/{task_id}", status_code=status.HTTP_200_OK)
+async def drop_task(
+    project_id: ProjectId,
+    task_id: Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")],
+    checker: CheckerDep,
+    subject: CurrentSubject,
+) -> dict[str, Any]:
+    """Remove one item from a project.
+
+    Exists because a send can put items into a project that can NEVER be completed. The case we hit
+    is an item naming a media dataset that has since been renamed or removed: the canvas cannot open
+    it, so it cannot be claimed, submitted or skipped — and the publish precondition requires every
+    task terminal. One unfinishable item wedges the project permanently, and before this the only way
+    past it was to abandon the project and re-send everything.
+
+    `can_manage`, not the annotator's own permission: discarding work is a manager act. Idempotent —
+    dropping an absent task is a no-op, so a retry cannot 404 a project that is already how the
+    caller wants it.
+    """
+    await _check(checker, subject, "can_manage", f"annotation_project:{project_id}", "project.drop_task")
+    proxy = _project_proxy(project_id)
+    doc = await proxy.get()
+    if doc is None:
+        raise NotFoundError(f"annotation project {project_id} does not exist")
+    state = ProjectState(doc["state"])
+    if state not in DROPPABLE_STATES:
+        raise ConflictError(f"project {project_id} is {state.value} — items can be dropped only in {sorted(s.value for s in DROPPABLE_STATES)}")
+    result = await proxy.drop_task({"task_id": task_id, "actor": subject})
+    audit("project.drop_task", SUCCESS, subject=subject, resource=project_id)
+    return result
+
+
+def _refuse_unknown_datasets(state: Any, payload: SendItemsRequest) -> None:
+    """Refuse the WHOLE send if any item names a media dataset that does not resolve.
+
+    Removal (`DELETE .../tasks/{id}`) is the escape hatch; this is the thing that stops the trap
+    being set. An item naming a dataset that was renamed or removed cannot be opened on the canvas,
+    so it can never be claimed, submitted or skipped — and the publish precondition requires EVERY
+    task terminal, so one of them wedges the project. Creating it is the mistake; refusing at send
+    is where it costs nothing.
+
+    The whole send, not the offending items: a partial send produces exactly the half-populated
+    project this is meant to prevent, and it costs ZERO seeded task actors to refuse here — the same
+    argument the project-state check above makes.
+
+    An UNVERIFIABLE registry lets the send through. If the dataset plane cannot be consulted at all
+    (a degraded start, a mount that is not there yet) then refusing every send would take the whole
+    labeling plane down for a check that is a guard, not a gate — the canvas still reports the real
+    404 at read, and removal still exists. Not being able to check is not evidence of a problem.
+    """
+    names = sorted({item.source.where for item in payload.items if item.source.where})
+    if not names:
+        return  # every item takes the backend default, which resolves by construction
+    unknown: list[str] = []
+    for name in names:
+        try:
+            dataset_handle(state, name)
+        except NotFoundError:
+            unknown.append(name)
+        except Exception:  # noqa: BLE001 - see docstring: unverifiable is not the same as wrong
+            logger.warning("send could not consult the dataset registry; not refusing on a check that did not run")
+            return
+    if unknown:
+        try:
+            known = sorted(state.registry.list_ids())
+        except Exception:  # noqa: BLE001 - naming the alternatives is a nicety, never the refusal
+            known = []
+        detail = f"dataset(s) {unknown} do not exist — an item naming one could never be opened, claimed or completed"
+        raise ConflictError(f"{detail}; known datasets are {known}" if known else detail)
+
+
 @router.post("/{project_id}/items", status_code=status.HTTP_201_CREATED)
-async def send_items(project_id: ProjectId, payload: SendItemsRequest, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
+async def send_items(project_id: ProjectId, payload: SendItemsRequest, state: StateDep, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
     """Send items into the project as tasks.
 
     Two writes per item, and the ORDER is the whole correctness argument: seed the TASK actor first,
@@ -240,6 +323,11 @@ async def send_items(project_id: ProjectId, payload: SendItemsRequest, checker: 
         raise ConflictError(f"project {project_id} is {project['state']} — items may only be sent while it is draft or labeling")
     await _check(checker, subject, "can_send_items", f"annotation_project:{project_id}", "project.send")
 
+    # REFUSE an item whose media dataset does not resolve. Deliberately after the FGA check: the
+    # refusal names the datasets that DO exist, which is what makes it actionable and also what
+    # makes it something an unauthorised caller must not be able to enumerate.
+    _refuse_unknown_datasets(state, payload)
+
     # Consensus v1: N>1 seeds N independent replica items per source item, deterministic sibling
     # ids (`{gid}-r{k}`) — determinism is what lets the one-replica-per-annotator guard find them.
     consensus_n = int(project.get("consensus_n") or 1)
@@ -255,9 +343,12 @@ async def send_items(project_id: ProjectId, payload: SendItemsRequest, checker: 
         capture: dict[str, Any] = {
             "review_required": bool(project.get("review_required", True)),
             "lease_seconds": int(project.get("lease_seconds") or 1800),
-            # The template rides every item, like the two captures above: submit enforcement reads
-            # the ITEM's copy, so a mid-flight template edit cannot retroactively invalidate work.
-            "template": project.get("template") or {},
+            # The ONTOLOGY rides every item, like the two captures above: submit enforcement reads
+            # the ITEM's copy, so a mid-flight ontology edit cannot retroactively invalidate work.
+            # This used to capture the `template` and leave the taxonomy behind on the project —
+            # which is precisely why the closed-set label check could not exist: the class list was
+            # not in scope where enforcement happens, so `label="asdf"` submitted and published.
+            "ontology": project.get("ontology") or {},
         }
         replicas = (
             [Task(task_id=group_id, project_id=project_id, source=item.source, media=item.media, **capture)]

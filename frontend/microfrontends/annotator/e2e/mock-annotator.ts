@@ -1,6 +1,6 @@
 // A tiny in-memory stand-in for the ANNOTATOR service endpoints this zone reaches SERVER-side, where
 // `page.route` cannot reach: the whole projects/tasks plane and the interactive assist call, which
-// became remote functions in the transport migration (open_transport.md, area 4). Runs as a second
+// became remote functions in the transport migration (the transport ruling, area 4). Runs as a second
 // Playwright `webServer`; both dev servers' ANNOTATOR_API / ANNOTATOR_PROJECTS_API point here.
 //
 // The mechanism is the lakehouse mock catalog's GENERIC one, minus its per-bearer keying: `__mock/seed`
@@ -57,6 +57,24 @@ Bun.serve({
 			seeded.get(`${req.method} ${url.pathname}${url.search}`) ??
 			seeded.get(`${req.method} ${url.pathname}`);
 		if (hit === undefined) return json({ detail: 'unstubbed' }, 404);
+		// A seed may name a FILE instead of a JSON body. The real service answers the annotations
+		// plane in Arrow IPC, and a mock that can only speak JSON cannot stand in for it — which
+		// matters beyond fidelity: `playwright-cli` can only send text bodies (`--body`), so without
+		// this there is no way to drive a canvas surface from the CLI at all, only from the runner.
+		const filed = hit as {
+			file?: unknown;
+			contentType?: unknown;
+			headers?: Record<string, string>;
+		};
+		if (filed && typeof filed === 'object' && typeof filed.file === 'string') {
+			return new Response(Bun.file(filed.file), {
+				headers: {
+					'content-type':
+						typeof filed.contentType === 'string' ? filed.contentType : 'application/octet-stream',
+					...filed.headers,
+				},
+			});
+		}
 		const shaped = hit as { status?: number; body?: unknown };
 		return shaped && typeof shaped === 'object' && 'status' in shaped
 			? json(shaped.body ?? {}, shaped.status)

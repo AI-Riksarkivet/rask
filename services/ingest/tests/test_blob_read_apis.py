@@ -115,9 +115,7 @@ def test_the_three_APIs_agree_on_the_same_bytes(tmp_path: Path) -> None:
 
 #: The schema as it was — nullable — kept ONLY so the trap can be demonstrated. Deleting this and
 #: trusting the prose is how the trap gets rediscovered by whoever relaxes the real schema next.
-_NULLABLE_SCHEMA = pa.schema(
-    [pa.field("id", pa.int64()), pa.field("source_uri", pa.string()), blob_field("payload", nullable=True)]
-)
+_NULLABLE_SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("source_uri", pa.string()), blob_field("payload", nullable=True)])
 
 
 def test_ALL_THREE_apis_silently_drop_a_null_row(tmp_path: Path) -> None:
@@ -135,8 +133,7 @@ def test_ALL_THREE_apis_silently_drop_a_null_row(tmp_path: Path) -> None:
     handles = dataset.take_blobs("payload", indices=[0, 1, 2])
     assert len(handles) == 2, "take_blobs dropped the null row"
     assert not any(hasattr(h, "id") or hasattr(h, "row_id") or hasattr(h, "index") for h in handles), (
-        "if a handle ever gains row identity, the positional trap below is fixed upstream and this "
-        "test should be revisited"
+        "if a handle ever gains row identity, the positional trap below is fixed upstream and this test should be revisited"
     )
     assert handles[1].size() == len(PAYLOADS[2]), "position 1 of the result is ROW 2 — the silent mis-mapping"
 

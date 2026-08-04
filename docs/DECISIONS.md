@@ -103,7 +103,7 @@ needed for "which feature versions trained this model"), and the **multimodal re
 
 - **Tier-2 content search** — Lance FTS + FLAT exact vector scan over dataset *content* (the rask
   `index_catalog.py`/`search_api` pattern — **both retired in the R6/R20 media wave**; content search
-  re-lands as catalog-governed Lance tables behind `/api/media/search`); today's `/search` is
+  re-lands as catalog-governed Lance tables behind `/api/explorer/search`); today's `/search` is
   metadata-only by design. Stays behind the
   measured recall gate (decision pin 2026-07-05, firnflow/lance_docs audit): default is FTS + FLAT exact
   scan with **no** ANN/IVF_PQ index on an embedding column unless recall@10 ≥ 0.95 against

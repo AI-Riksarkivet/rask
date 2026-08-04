@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { Radio } from '@lucide/svelte';
+	import { goto } from '$app/navigation';
+	import { base } from '$app/paths';
 	import LineageGraph from '$lib/lineage/LineageGraph.svelte';
 	import { LineageState } from '$lib/lineage/store.svelte';
 	import { createLineageClient } from '@rask/api/lineage';
@@ -49,7 +51,12 @@
 		</div>
 	</header>
 
-	<LineageGraph {store} bind:buildMs />
+	<!-- `base`/`navigate` are PROPS on purpose: LineageGraph is ALSO compiled into the zone's custom
+	     element bundle, where `$app/paths` and `$app/navigation` do not resolve. The element supplies
+	     them (`lib/elements/GraphElement.svelte`); this page is the other surface that owns a router,
+	     and it had been mounting the graph without either — so every node click called an undefined
+	     `navigate` and the canvas was a dead end. -->
+	<LineageGraph {store} {base} navigate={(href) => void goto(href)} bind:buildMs />
 </div>
 
 <style>

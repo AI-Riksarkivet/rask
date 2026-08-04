@@ -85,6 +85,10 @@ async def create_namespace(
 ) -> CreateNamespaceResponse:
     """Create a namespace via ``create_namespace``, then seed its FGA owner + parent edge."""
     segments = parse_identifier(id, settings.delimiter)
+    # A top-level namespace needs a warehouse to live in. This door cannot name one, so it is refused
+    # here and the caller is sent to the warehouse-scoped route; checked BEFORE the native create, so a
+    # refusal leaves nothing half-made. Nested namespaces inherit their parent's binding and pass.
+    fga_deps.require_warehouse_scoped(segments, delimiter=settings.delimiter, warehouses_enabled=settings.warehouses_enabled)
     req = body or CreateNamespaceRequest()
     req.id = reconcile_body_id(segments, req.id)
     response: CreateNamespaceResponse = await run_in_threadpool(native.call, ns, "create_namespace", req)

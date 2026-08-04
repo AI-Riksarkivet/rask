@@ -12,10 +12,15 @@ import type { Table } from 'apache-arrow';
 
 import { fetchDraft, saveDraft } from './remote/tasks.remote';
 import { rowsToShapes } from './draft-shapes.js';
+import type { AnnoLink } from '$lib/viewer/annotator.svelte';
 
 /** Snapshot the table into the task's draft. Returns null on success, or the failure detail —
  *  the caller surfaces it; a silent miss here means work that LOOKS saved but never publishes. */
-export async function syncTaskDraft(taskId: string, table: Table): Promise<string | null> {
+export async function syncTaskDraft(
+	taskId: string,
+	table: Table,
+	links: AnnoLink[] = [],
+): Promise<string | null> {
 	const shapes = rowsToShapes(table);
 	// `refresh()`, not a bare call: a query instance is cached by its argument, so the SECOND save of
 	// a session would guard against the revision the first one started from and 409 forever.
@@ -41,6 +46,10 @@ export async function syncTaskDraft(taskId: string, table: Table): Promise<strin
 	const saved = await saveDraft({
 		taskId,
 		shapes,
+		// Relations ride the draft beside the shapes. Omitting them here is how a link drawn on the
+		// canvas would look saved and never publish — and, for a task declaring a REQUIRED relation,
+		// how the submit would refuse work that had actually been done.
+		links,
 		...(baseRevision === null ? {} : { base_revision: baseRevision }),
 	});
 	return saved.ok ? null : saved.detail;

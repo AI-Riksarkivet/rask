@@ -281,9 +281,9 @@ jobs:
       # The pattern is anchored on `paths: {` to match @repo/zone-contract's zoneBase() resolver
       # (manifest.ts:72, /paths:\s*\{[^}]*base:\s*['"]([^'"]*)['"]/) rather than being a second, looser
       # opinion about the same file. It has to be anchored: an unanchored `base:` match picks up prose,
-      # and these configs are full of it — media's own header says "Zone base: this zone owns /media".
+      # and these configs are full of it — the explorer's own header says "Zone base: this zone owns /explorer".
       # Verified against a config carrying a `// base: '/DECOY'` comment above the real one — unanchored
-      # returns /DECOY, anchored returns /media. If a config is ever reformatted so `paths: { … base }`
+      # returns /DECOY, anchored returns /explorer. If a config is ever reformatted so `paths: { … base }`
       # spans lines, sed (line-based, unlike the JS regex) resolves '' and the zone gets probed at '/',
       # which is a 404 for a domain zone — a loud failure, not a silent pass.
       - name: Smoke-run each zone image

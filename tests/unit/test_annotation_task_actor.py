@@ -470,13 +470,13 @@ async def test_an_explicit_lease_seconds_still_wins_over_the_capture() -> None:
 
 
 # --------------------------------------------------------------------------------------------------
-# Task templates — the submit-time output contract, enforced in the actor for ANY caller
+# The task ONTOLOGY — the submit-time output contract, enforced in the actor for ANY caller
 # --------------------------------------------------------------------------------------------------
 
 
-async def _claimed_with_template(template: dict[str, Any], shapes: list[dict[str, Any]]) -> _Actor:
+async def _claimed_with_ontology(ontology: dict[str, Any], shapes: list[dict[str, Any]]) -> _Actor:
     actor = _Actor()
-    await actor.seed(_task(template=template))
+    await actor.seed(_task(ontology=ontology))
     await actor.fire({"event": "claim", "actor": "gina"})
     if shapes:
         await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": shapes})
@@ -484,19 +484,20 @@ async def _claimed_with_template(template: dict[str, Any], shapes: list[dict[str
 
 
 @pytest.mark.asyncio
-async def test_a_submit_violating_the_template_is_refused_with_the_violation_named() -> None:
-    template = {"kind": "classification", "tools": ["tag"], "enforce": True}
-    actor = await _claimed_with_template(template, [{"shape_type": "bbox", "label": "portrait"}])
+async def test_a_submit_violating_the_ontology_is_refused_with_the_violation_named() -> None:
+    # Tools are declared PER CLASS now, so this says what it always meant: "portrait" is a tag.
+    ontology = {"kind": "classification", "classes": [{"name": "portrait", "tools": ["tag"]}]}
+    actor = await _claimed_with_ontology(ontology, [{"shape_type": "bbox", "label": "portrait"}])
 
-    with pytest.raises(IllegalTransition, match="classification"):
+    with pytest.raises(IllegalTransition, match="portrait"):
         await actor.fire({"event": "submit", "actor": "gina"})
     assert (await _state(actor))["state"] == "claimed", "a refused submit must not move the task"
 
 
 @pytest.mark.asyncio
 async def test_a_conforming_submit_passes() -> None:
-    template = {"tools": ["bbox"], "required_labels": ["portrait"], "enforce": True}
-    actor = await _claimed_with_template(template, [{"shape_type": "bbox", "label": "portrait"}])
+    ontology = {"classes": [{"name": "portrait", "tools": ["bbox"], "required": True}]}
+    actor = await _claimed_with_ontology(ontology, [{"shape_type": "bbox", "label": "portrait"}])
 
     result = await actor.fire({"event": "submit", "actor": "gina"})
     assert result["state"] in {"in_review", "accepted"}
@@ -507,20 +508,25 @@ async def test_a_draftless_submit_is_refused() -> None:
     """No draft = an empty shape set.
 
     This used to assert the `required_labels` message, and that reading was the bug the audit
-    found: `required_labels` was the ONLY rule an empty set could fail, so a template that declared
-    none accepted a submission with nothing in it. The empty-set rule now catches this first — a
-    strictly earlier refusal that no longer depends on the template having declared labels."""
-    template = {"required_labels": ["portrait"], "enforce": True}
-    actor = await _claimed_with_template(template, [])
+    found: a required label was the ONLY rule an empty set could fail, so a task that declared none
+    accepted a submission with nothing in it. The empty-set rule now catches this first — a strictly
+    earlier refusal that no longer depends on the task having declared a required class."""
+    ontology = {"classes": [{"name": "portrait", "required": True}]}
+    actor = await _claimed_with_ontology(ontology, [])
 
-    with pytest.raises(IllegalTransition, match="at least one shape"):
+    with pytest.raises(IllegalTransition, match="at least one annotation"):
         await actor.fire({"event": "submit", "actor": "gina"})
 
 
 @pytest.mark.asyncio
-async def test_an_unenforced_template_never_blocks_a_submit() -> None:
-    """Every pre-template project (default template, enforce=False) behaves exactly as before."""
-    actor = await _claimed_with_template({}, [{"shape_type": "text", "label": ""}])
+async def test_an_ontology_that_CONSTRAINS_NOTHING_never_blocks_a_submit() -> None:
+    """An ontology with no classes is the pre-ontology behaviour, exactly.
+
+    This replaces `enforce=False`, and it is a strictly better shape: the flag was a document-wide
+    kill switch that voided declarations someone had explicitly written, so a project could declare
+    classes, tools and required attributes and have every one ignored. Here there is nothing to
+    ignore — an empty ontology declares nothing, and everything declared is applied."""
+    actor = await _claimed_with_ontology({}, [{"shape_type": "text", "label": ""}])
     assert (await actor.fire({"event": "submit", "actor": "gina"}))["state"] in {"in_review", "accepted"}
 
 
@@ -532,11 +538,11 @@ async def test_an_unenforced_template_never_blocks_a_submit() -> None:
 @pytest.mark.asyncio
 async def test_a_draft_cannot_be_written_after_the_task_left_CLAIMED() -> None:
     """The TOCTOU the audit proved: the endpoint reads the state and invokes the actor as two
-    steps, so a concurrent submit can land in between — the template validates the conforming
+    steps, so a concurrent submit can land in between — the ontology validates the conforming
     draft, the task moves on, and the late write puts never-validated shapes into a reviewed task
     that publish then carries into silver. Inside the actor's own turn the state cannot move."""
-    template = {"tools": ["tag"], "required_labels": ["cat"], "enforce": True}
-    actor = await _claimed_with_template(template, [{"shape_type": "tag", "label": "cat"}])
+    ontology = {"classes": [{"name": "cat", "tools": ["tag"], "required": True}]}
+    actor = await _claimed_with_ontology(ontology, [{"shape_type": "tag", "label": "cat"}])
     assert (await actor.fire({"event": "submit", "actor": "gina"}))["state"] in {"in_review", "accepted"}
 
     with pytest.raises(IllegalTransition, match="save_draft"):
@@ -553,9 +559,105 @@ async def test_a_draft_cannot_be_written_after_the_task_left_CLAIMED() -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_enforced_template_refuses_a_draftless_submit_even_with_no_required_labels() -> None:
-    """The other half of the same critical: `required_labels` was the ONLY rule an empty shape set
-    could fail, and the create dialog fills it from an OPTIONAL textarea."""
-    actor = await _claimed_with_template({"kind": "reading-order", "tools": ["bbox"], "enforce": True}, [])
-    with pytest.raises(IllegalTransition, match="at least one shape"):
+async def test_a_CONSTRAINED_ontology_refuses_a_draftless_submit_even_with_nothing_required() -> None:
+    """The other half of the same critical: a required class was the ONLY rule an empty shape set
+    could fail, and the create dialog filled that from an OPTIONAL textarea."""
+    ontology = {"kind": "reading-order", "classes": [{"name": "line", "tools": ["bbox"]}]}
+    actor = await _claimed_with_ontology(ontology, [])
+    with pytest.raises(IllegalTransition, match="at least one annotation"):
+        await actor.fire({"event": "submit", "actor": "gina"})
+
+
+# --------------------------------------------------------------------------------------------------
+# Relations: declared in the ontology, and STORABLE — a contract nobody can satisfy is not a contract
+# --------------------------------------------------------------------------------------------------
+
+
+KIE = {
+    "kind": "document-question-answering",
+    "classes": [{"name": "key", "tools": ["bbox"]}, {"name": "value", "tools": ["bbox"]}],
+    "relations": [{"name": "answers", "from_classes": ["key"], "to_classes": ["value"], "required": True}],
+}
+KIE_SHAPES = [
+    {"shape_id": "s1", "shape_type": "bbox", "label": "key"},
+    {"shape_id": "s2", "shape_type": "bbox", "label": "value"},
+]
+
+
+@pytest.mark.asyncio
+async def test_a_link_SURVIVES_the_draft_write() -> None:
+    """The gap that made a required relation impossible to satisfy.
+
+    `Draft` carried only `shapes`, and `save_draft` builds the model field by field — so a `links`
+    key was dropped on the floor with no error. The submit check then read an always-empty link list,
+    which meant an ontology declaring a REQUIRED relation refused every submission that could ever be
+    made. Declared, enforced, and unsatisfiable: the worst of the three.
+    """
+    actor = _Actor()
+    await actor.seed(_task(ontology=KIE))
+    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.save_draft(
+        {
+            "task_id": "t1",
+            "project_id": "p1",
+            "author": "gina",
+            "shapes": KIE_SHAPES,
+            "links": [{"name": "answers", "from_shape": "s1", "to_shape": "s2"}],
+        }
+    )
+
+    stored = await actor.get_draft()
+    assert stored is not None
+    assert stored["links"] == [{"name": "answers", "from_shape": "s1", "to_shape": "s2"}], "the link was dropped by the draft write"
+
+
+@pytest.mark.asyncio
+async def test_a_KIE_submit_with_its_link_is_ACCEPTED() -> None:
+    actor = _Actor()
+    await actor.seed(_task(ontology=KIE))
+    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.save_draft(
+        {
+            "task_id": "t1",
+            "project_id": "p1",
+            "author": "gina",
+            "shapes": KIE_SHAPES,
+            "links": [{"name": "answers", "from_shape": "s1", "to_shape": "s2"}],
+        }
+    )
+
+    result = await actor.fire({"event": "submit", "actor": "gina"})
+    assert result["state"] in {"in_review", "accepted"}
+
+
+@pytest.mark.asyncio
+async def test_a_KIE_submit_WITHOUT_the_required_link_is_refused_by_name() -> None:
+    """Still enforced — the fix is that it is now SATISFIABLE, not that it stopped being a rule."""
+    actor = _Actor()
+    await actor.seed(_task(ontology=KIE))
+    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": KIE_SHAPES})
+
+    with pytest.raises(IllegalTransition, match="answers"):
+        await actor.fire({"event": "submit", "actor": "gina"})
+
+
+@pytest.mark.asyncio
+async def test_a_link_pointing_the_WRONG_WAY_is_refused() -> None:
+    """`answers` is directed key→value. The endpoint classes are the closed set that makes a link
+    checkable the same way a label is."""
+    actor = _Actor()
+    await actor.seed(_task(ontology=KIE))
+    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.save_draft(
+        {
+            "task_id": "t1",
+            "project_id": "p1",
+            "author": "gina",
+            "shapes": KIE_SHAPES,
+            "links": [{"name": "answers", "from_shape": "s2", "to_shape": "s1"}],
+        }
+    )
+
+    with pytest.raises(IllegalTransition, match="source"):
         await actor.fire({"event": "submit", "actor": "gina"})

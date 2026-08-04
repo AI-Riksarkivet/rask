@@ -1,0 +1,283 @@
+"""Unreferenced-file detection, against REAL Lance datasets on the local filesystem.
+
+Deliberately not faked: the whole risk in this pass is disagreeing with what Lance actually writes,
+and a double that agrees with my assumptions would prove only that I am self-consistent. Every
+fixture here is a real dataset built with `lance.write_dataset`, so the layout under test is the
+layout Lance produces (`data/`, `_deletions/`, `_transactions/`, `_versions/`).
+
+The load-bearing property is asymmetric: reporting a live file as an orphan is catastrophic (a
+reclaimer would delete a table's data), while missing one is merely untidy. So most of these pin the
+NEGATIVE — that nothing live is ever named.
+"""
+
+from __future__ import annotations
+
+import pathlib
+
+import lance
+import pyarrow as pa
+import pyarrow.fs as pafs
+import pytest
+from maintenance.services import orphans
+
+
+def _fs() -> pafs.FileSystem:
+    return pafs.LocalFileSystem()
+
+
+def _table(n: int = 3) -> pa.Table:
+    return pa.table({"id": pa.array(list(range(n))), "v": pa.array([f"r{i}" for i in range(n)])})
+
+
+def _dataset(tmp_path: pathlib.Path, name: str = "t.lance") -> tuple[str, str]:
+    """A real multi-version dataset. Returns ``(uri, prefix)`` — Lance opens by URI, pyarrow lists by path."""
+    path = str(tmp_path / name)
+    lance.write_dataset(_table(), path)
+    lance.write_dataset(_table(), path, mode="append")
+    return path, path
+
+
+# --------------------------------------------------------------------------- #
+# the safety property: a healthy dataset has NO orphans
+# --------------------------------------------------------------------------- #
+
+
+def test_a_healthy_dataset_reports_no_data_or_deletion_orphans(tmp_path: pathlib.Path) -> None:
+    """The baseline that makes every other finding meaningful — but NOT "reports nothing".
+
+    A freshly written dataset always carries `_transactions/*.txn`, because the spec keeps a
+    transaction file per commit attempt and nothing prunes them. So "healthy" means no orphaned DATA
+    and no orphaned DELETION vectors — the two kinds whose reclamation would lose rows. Writing this
+    as `orphans == []` fails on a correct implementation, which is how a true finding gets mistaken
+    for a bug in the detector.
+    """
+    uri, prefix = _dataset(tmp_path)
+    result = orphans.scan_dataset(_fs(), uri, prefix)
+    assert result.checked
+    dangerous = [o.path for o in result.orphans if o.kind in ("data", "deletions", "indices")]
+    assert dangerous == [], f"a healthy dataset must have no reclaimable data, got {dangerous}"
+
+
+def test_files_only_an_OLD_version_references_are_not_orphans(tmp_path: pathlib.Path) -> None:
+    """The single most dangerous way this pass could be wrong.
+
+    Every manifest still in `_versions/` is reachable by time-travel until `cleanup_old_versions`
+    removes it, so a data file that only version 1 cites is LIVE. Computing the referenced set from
+    the CURRENT version alone would report most of a healthy table's history as garbage — and a
+    reclaimer acting on that would destroy the table's history.
+    """
+    uri, _prefix = _dataset(tmp_path)
+    at_v1 = lance.dataset(uri, version=1)
+    only_v1 = {f"data/{f.path}" for fr in at_v1.get_fragments() for f in fr.data_files()}
+    assert only_v1, "fixture must actually have a v1 data file"
+
+    referenced, versions, note = orphans.referenced_paths(uri)
+    assert note is None
+    assert versions >= 2
+    assert only_v1 <= referenced, "a file referenced only by an older version was treated as unreferenced"
+
+
+def test_a_deletion_vector_is_referenced_not_orphaned(tmp_path: pathlib.Path) -> None:
+    """`_deletions/*.arrow` is named by a fragment, not by the dataset directory, so it is exactly the
+    kind of file a path-only scan would miss and report. Its on-disk name is rendered by Lance's own
+    `DeletionFile.path()` rather than reconstructed from the naming convention here."""
+    uri, prefix = _dataset(tmp_path)
+    lance.dataset(uri).delete("id = 1")
+    deletions = sorted(p.name for p in (tmp_path / "t.lance" / "_deletions").iterdir())
+    assert deletions, "fixture must actually produce a deletion vector"
+
+    result = orphans.scan_dataset(_fs(), uri, prefix)
+    assert result.checked
+    assert [o.path for o in result.orphans if o.kind == "deletions"] == []
+
+
+# --------------------------------------------------------------------------- #
+# what it DOES find
+# --------------------------------------------------------------------------- #
+
+
+def test_a_stray_data_file_is_reported(tmp_path: pathlib.Path) -> None:
+    """The partially-failed write: fragments on disk, commit never landed, so no manifest names them.
+    Nothing in the estate reclaims these and nothing else reports them."""
+    uri, prefix = _dataset(tmp_path)
+    stray = tmp_path / "t.lance" / "data" / "00000000000000000000000000deadbeef.lance"
+    stray.write_bytes(b"fragments from a write whose commit never landed")
+
+    result = orphans.scan_dataset(_fs(), uri, prefix)
+    found = {o.path: o for o in result.orphans}
+    assert "data/00000000000000000000000000deadbeef.lance" in found
+    assert found["data/00000000000000000000000000deadbeef.lance"].kind == "data"
+    assert found["data/00000000000000000000000000deadbeef.lance"].size_bytes > 0
+
+
+def test_transaction_files_are_reported_because_they_accumulate_by_design(tmp_path: pathlib.Path) -> None:
+    """The spec is explicit that on a conflict "transaction files remain in storage describing each
+    commit attempt". So a busy table grows `_transactions/` forever, nothing prunes them, and this is
+    the only thing that will ever say so."""
+    uri, prefix = _dataset(tmp_path)
+    txns = list((tmp_path / "t.lance" / "_transactions").iterdir())
+    assert txns, "fixture must actually produce .txn files"
+
+    result = orphans.scan_dataset(_fs(), uri, prefix)
+    reported = {o.path for o in result.orphans if o.kind == "transactions"}
+    assert reported, "the .txn files Lance leaves behind were not reported"
+    assert all(p.endswith(".txn") for p in reported)
+
+
+def test_manifests_and_the_version_hint_are_never_reported(tmp_path: pathlib.Path) -> None:
+    """A manifest IS what makes a version live, so it can never be "unreferenced" while present; the
+    hint is disposable but written every commit. Reporting either every single run is how a report
+    teaches its reader to skip it — the failure mode that makes a correct detector useless."""
+    uri, prefix = _dataset(tmp_path)
+    hint = tmp_path / "t.lance" / "_versions" / "latest_version_hint.json"
+    assert hint.exists(), "fixture must actually have the hint file"
+
+    result = orphans.scan_dataset(_fs(), uri, prefix)
+    assert [o.path for o in result.orphans if o.kind == "versions"] == []
+
+
+# --------------------------------------------------------------------------- #
+# unreadable is not clean
+# --------------------------------------------------------------------------- #
+
+
+def test_an_unreadable_dataset_yields_no_orphans_and_says_why(tmp_path: pathlib.Path) -> None:
+    """ "We could not determine the referenced set" must never render as "none of these files are
+    referenced" — that shape is what deletes a live table. `checked=False` with a reason, and the
+    orphan list EMPTY BY CONSTRUCTION."""
+    result = orphans.scan_dataset(_fs(), str(tmp_path / "not-a-dataset"), str(tmp_path / "not-a-dataset"))
+    assert result.checked is False
+    assert result.orphans == []
+    assert result.reason
+
+
+def test_an_unreadable_dataset_does_not_quietly_shrink_the_report(tmp_path: pathlib.Path) -> None:
+    """Aggregated, an unreadable dataset must INCREASE the incomplete count rather than silently
+    lower the orphan total — otherwise a bucket nobody can read reports as the cleanest one."""
+    uri, prefix = _dataset(tmp_path)
+    (tmp_path / "t.lance" / "data" / "0000000000000000000000000000000abc.lance").write_bytes(b"stray")
+    missing = str(tmp_path / "gone.lance")
+
+    report = orphans.scan_datasets(_fs(), [(uri, prefix), (missing, missing)])
+    assert report.datasets_scanned == 1
+    assert report.datasets_unreadable == 1
+    assert report.incomplete, "an unreadable dataset must be named, not absorbed"
+    assert report.total == len(report.orphans) >= 1
+
+
+# --------------------------------------------------------------------------- #
+# report-only, mechanically
+# --------------------------------------------------------------------------- #
+
+
+def test_the_module_contains_no_delete_call() -> None:
+    """The property the whole design rests on. Asserted against the SOURCE because a behavioural test
+    can only prove the paths it happens to exercise, and this must hold on every path."""
+    # Match CALL syntax, not the bare word: the module's docstring necessarily NAMES the destructive
+    # operations in order to explain that it does not perform them, and a substring check on the word
+    # alone fails on its own documentation. (Same trap caught earlier on `provision`.)
+    src = pathlib.Path(orphans.__file__).read_text()
+    for verb in (
+        "delete_file(",
+        "delete_dir(",
+        "delete_objects(",
+        "delete_bucket(",
+        "cleanup_old_versions(",
+        "unlink(",
+        "rmtree(",
+        "open_output_stream(",
+        "compact_files(",
+        "optimize_indices(",
+    ):
+        assert verb not in src, f"the orphan pass calls {verb} — it must only REPORT"
+
+
+def test_a_scan_leaves_the_dataset_byte_identical(tmp_path: pathlib.Path) -> None:
+    """The behavioural half: fingerprint every file before and after a scan of a DRIFTED dataset (the
+    state a reclaimer would be tempted to fix) and require they match exactly."""
+    import hashlib
+
+    uri, prefix = _dataset(tmp_path)
+    (tmp_path / "t.lance" / "data" / "000000000000000000000000000000cafe.lance").write_bytes(b"stray")
+    root = tmp_path / "t.lance"
+
+    def fingerprint() -> dict[str, str]:
+        return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.rglob("*")) if p.is_file()}
+
+    before = fingerprint()
+    report = orphans.scan_datasets(_fs(), [(uri, prefix)])
+    assert report.total >= 1, "the fixture must actually BE drifted, or 'nothing changed' proves nothing"
+    assert fingerprint() == before
+
+
+@pytest.mark.parametrize(
+    ("rel", "expected"),
+    [
+        ("data/x.lance", "data"),
+        ("_deletions/0-1-2.arrow", "deletions"),
+        ("_indices/abc-uuid/index.idx", "indices"),
+        ("_transactions/3-uuid.txn", "transactions"),
+        ("_versions/9.manifest", "versions"),
+        ("something-else.bin", "other"),
+    ],
+)
+def test_every_lance_owned_area_is_classified(rel: str, expected: str) -> None:
+    """A finding without a kind is a finding a reader cannot triage — `data/` is potential data loss,
+    `_transactions/` is expected accumulation, and they warrant different responses."""
+    assert orphans._kind_of(rel) == expected
+
+
+def test_a_tag_is_never_reported_as_an_orphan(tmp_path: pathlib.Path) -> None:
+    """Tags PIN versions — `_refs/tags/*.json` is live metadata, not residue.
+
+    Caught by the first live run, which reported every `publish-*` promotion tag in the estate as an
+    orphan. That is the precise failure this module exists to avoid: a reclaimer acting on it would
+    unpin published data, and `cleanup_old_versions` (which exempts tagged versions) would then be
+    free to collect the versions those tags were protecting.
+    """
+    uri, prefix = _dataset(tmp_path)
+    lance.dataset(uri).tags.create("blessed", 1)
+    tags = list((tmp_path / "t.lance" / "_refs" / "tags").iterdir())
+    assert tags, "fixture must actually write a tag file"
+
+    result = orphans.scan_dataset(_fs(), uri, prefix)
+    named = {o.path for o in result.orphans}
+    assert not any(p.startswith("_refs/") for p in named), f"a tag was reported as an orphan: {named}"
+
+
+def test_the_reserved_marker_is_never_reported(tmp_path: pathlib.Path) -> None:
+    """`.lance-reserved` is a zero-byte structural marker at the dataset root, never named by a
+    manifest — so a naive scan reports it once per dataset, every run, forever."""
+    uri, prefix = _dataset(tmp_path)
+    (tmp_path / "t.lance" / ".lance-reserved").write_bytes(b"")
+    result = orphans.scan_dataset(_fs(), uri, prefix)
+    assert ".lance-reserved" not in {o.path for o in result.orphans}
+
+
+def test_a_blob_sidecar_of_a_referenced_data_file_is_not_an_orphan(tmp_path: pathlib.Path) -> None:
+    """A large-binary column's bytes live in `data/<data-file-stem>/*.blob`, NOT inside the `.lance`.
+
+    `data_files()` names only the `.lance`, so a scan that stops there reports every blob in the
+    estate as reclaimable. Measured live 2026-08-04 against the bronze page-image table: 29 MB of
+    real page images named as garbage. The sidecar DIRECTORY of a referenced data file is referenced.
+
+    A sidecar whose parent data file is referenced by no live version is still reported, and
+    correctly so — `cleanup_old_versions` reclaims the `.lance` and leaves the sidecar behind, which
+    is exactly the reclamation gap this pass exists to name.
+    """
+    uri, prefix = _dataset(tmp_path)
+    referenced, _, _ = orphans.referenced_paths(uri)
+    stems = [p.removeprefix("data/").removesuffix(".lance") for p in referenced if p.endswith(".lance")]
+    assert stems, "fixture must have at least one referenced data file"
+
+    live_sidecar = tmp_path / "t.lance" / "data" / stems[0]
+    live_sidecar.mkdir(parents=True, exist_ok=True)
+    (live_sidecar / "10000000000000000000000000000000.blob").write_bytes(b"page image bytes")
+
+    dead_sidecar = tmp_path / "t.lance" / "data" / ("f" * 50)
+    dead_sidecar.mkdir(parents=True, exist_ok=True)
+    (dead_sidecar / "10000000000000000000000000000000.blob").write_bytes(b"left by a reclaimed version")
+
+    named = {o.path for o in orphans.scan_dataset(_fs(), uri, prefix).orphans}
+    assert f"data/{stems[0]}/10000000000000000000000000000000.blob" not in named, "a LIVE blob sidecar was named as an orphan"
+    assert f"data/{'f' * 50}/10000000000000000000000000000000.blob" in named, "a sidecar with no live parent must still be reported"

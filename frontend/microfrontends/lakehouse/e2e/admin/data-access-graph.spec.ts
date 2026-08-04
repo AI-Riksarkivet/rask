@@ -3,7 +3,7 @@ import { mockMe, signIn, TOKEN } from './session';
 import { MOCK_CATALOG } from '../ports';
 
 // Hermetic #81 coverage: the SvelteFlow authorization graph is lazy-mounted from the table detail
-// page. Its read and its inline grant are remote functions now (open_transport.md, area 1) — both run
+// page. Its read and its inline grant are remote functions now (the transport ruling, area 1) — both run
 // on the zone SERVER — so the graph is seeded on the mock catalog and the grant asserted through its
 // per-bearer ledger. Same assertions as the /capi-era spec: the focus object + subject nodes render,
 // and an inline grant reaches the catalog with the exact {user, relation} body.

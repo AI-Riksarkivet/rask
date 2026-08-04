@@ -64,13 +64,12 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && useradd -r --no-create-home --shell /usr/sbin/nologin --uid 10001 app
 
-# A root-owned venv makes Tilt's live_update fail with exit code 2 and silently fall back to a full
-# rebuild — the defect that made a dev edit cost ~90s and a new ReplicaSet (see CLAUDE.md's tilt
-# status). Dev builds pass 10001:10001; shipped images keep the venv immutable and root-owned.
-ARG VENV_OWNER=root:root
+# The venv is copied root-owned and stays immutable — the container runs as uid 10001 and never
+# writes into it. This carried a `VENV_OWNER` build arg so Tilt's live_update could sync into the venv
+# as 10001:10001; Tilt was removed 2026-08-04 along with that arg in the other four dockerfiles, and an
+# arg no build passes is only a claim that a dev loop still exists.
 RUN --network=none --mount=from=builder,source=/opt/venv,target=/tmp/venv \
-    cp -a /tmp/venv /opt/venv \
- && if [ "${VENV_OWNER}" != "root:root" ]; then chown -R "${VENV_OWNER}" /opt/venv; fi
+    cp -a /tmp/venv /opt/venv
 
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \

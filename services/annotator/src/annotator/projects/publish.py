@@ -346,7 +346,10 @@ def project_facet(project: AnnotationProject, plan: PublishPlan, *, frozen_at: d
         annotatorCount=len(annotators),
         reviewerCount=len(reviewers),
         reviewRequired=project.review_required,
-        labelClasses=sorted(c.name for c in project.label_schema.classes),
+        # ONE class list. This read `label_schema.classes` while the facet's `template` below came
+        # from a separate object nothing cross-checked, so the run facet could carry a taxonomy the
+        # enforcement had never heard of. Both now project from the same ontology.
+        labelClasses=sorted(c.name for c in project.ontology.classes),
         shapeCount=plan.shape_count,
         sendOrigins=dict(sorted(origins.items())),
         # §7.2's per-dataset `version`, from the SEND capture (`ItemSource.dataset_version`). A
@@ -367,8 +370,9 @@ def project_facet(project: AnnotationProject, plan: PublishPlan, *, frozen_at: d
         # An accepted task with no reviewer is legal (the project can waive review), so it is
         # REPORTED rather than refused — and it is the number a governance reader most wants.
         tasksWithoutReview=sum(1 for a in plan.attributions if a.outcome == "accepted" and not a.reviewed_by),
-        # The declarative template travels whole — the facet is where "what was this task" lives.
-        template=project.template.model_dump(mode="json"),
+        # The task definition travels whole — the facet is where "what was this task" lives, and
+        # `labelClasses` above is now a projection OF this rather than a second opinion about it.
+        ontology=project.ontology.model_dump(mode="json"),
         # Consensus v1 (only when replica groups exist): agreement COUNTS from label multisets per
         # group — every replica's rows still land, and no merged truth is invented here.
         **({"consensus": _consensus_counts(project, plan)} if plan.replica_groups else {}),
@@ -404,18 +408,32 @@ def _consensus_counts(project: AnnotationProject, plan: PublishPlan) -> dict[str
     }
 
 
-def source_pin(plan: PublishPlan) -> tuple[str, int] | None:
+def source_pin(plan: PublishPlan, *, delimiter: str = "$") -> tuple[str, int] | None:
     """The reproducibility pin (§7.2): the ONE (dataset, version) every published item came from.
 
     Pins only when EVERY published item names the same one dataset with the same one CAPTURED
     version. Two datasets, two versions of one dataset, any uncaptured version, or any item that
     recorded no dataset at all → None: the run facet still reports the per-dataset truth, but a
     single fabricated pin would be a lie — and the pin surfaces as the lineage READ edge, which
-    downstream reproduction trusts."""
+    downstream reproduction trusts.
+
+    …and the same rule applies to the NAME. The pin travels to the catalog as a table reference, so
+    it must BE one: a namespace-qualified id like ``bronze$pages``. `ItemSource.where` carries the
+    MEDIA dataset name, which for an unregistered corpus (a Lance directory the catalog has never
+    heard of) is a bare word. Sending it made the catalog authorize `table:transcripts_v2` — an
+    object that does not exist — and FGA denies before it checks existence, so the ENTIRE publish
+    failed with `can_get_metadata required on table:transcripts_v2` for the sake of a provenance
+    nicety. Observed live, 2026-08-03.
+
+    An unregistered corpus simply has no lineage READ edge to draw: there is no catalog node at the
+    other end. Refusing to name one is the same discipline as refusing to fabricate a version — and
+    the per-dataset truth still reaches the run facet either way."""
     if plan.sources_uncaptured or len(plan.dataset_versions) != 1:
         return None
     dataset, versions = next(iter(plan.dataset_versions.items()))
     if len(versions) != 1 or versions[0] is None:
+        return None
+    if delimiter not in dataset:
         return None
     return dataset, versions[0]
 
@@ -430,7 +448,10 @@ def table_properties(project: AnnotationProject, plan: PublishPlan) -> dict[str,
         "annotation.accepted_count": str(plan.accepted_count),
         "annotation.skipped_count": str(plan.skipped_count),
         "annotation.review_required": str(project.review_required).lower(),
-        "annotation.label_classes": ",".join(sorted(c.name for c in project.label_schema.classes)),
-        # §7.1: a downstream consumer must know what SHAPE of labels this table holds.
-        "annotation.template_kind": project.template.kind,
+        "annotation.label_classes": ",".join(sorted(c.name for c in project.ontology.classes)),
+        # §7.1: a downstream consumer must know what SHAPE of labels this table holds. `kind` is a
+        # free string now (aligned with Hugging Face pipeline ids by convention), so an empty one is
+        # a real answer — an unconstrained project genuinely has no task type, and inventing
+        # "bbox-detection" for it would be a claim nothing made.
+        "annotation.task_kind": project.ontology.kind,
     }

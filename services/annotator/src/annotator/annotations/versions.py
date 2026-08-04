@@ -20,6 +20,7 @@ from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel
 
 from annotator.annotations.schema import ANNOTATIONS_TABLE
+from annotator.api.security import RawBearerToken
 from service_kit.exceptions import NotFoundError
 from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
 from service_kit.lancekit.reader import CatalogTableReader, open_catalog_reader
@@ -52,6 +53,7 @@ def annotation_versions(
     doc_id: str,
     speech_id: int,
     chunk_id: int,
+    caller_token: RawBearerToken = None,
     dataset: DatasetParam = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 20,
 ) -> list[AnnotationVersion]:
@@ -70,7 +72,11 @@ def annotation_versions(
         # there), so history comes from ITS version surface — never the local replica,
         # which is absent or stale here and used to silently return [].
         response.headers[VERSION_SOURCE_HEADER] = "catalog"
-        reader = open_catalog_reader(table_id=settings.catalog_table_id(handle.id, ANNOTATIONS_TABLE), settings=settings)
+        reader = open_catalog_reader(
+            table_id=settings.catalog_table_id(handle.id, ANNOTATIONS_TABLE),
+            settings=settings,
+            caller_token=caller_token,
+        )
         where = chunk_key_filter(declared, doc_id, (speech_id, chunk_id))
         return catalog_annotation_versions(reader, where, limit=limit)
     response.headers[VERSION_SOURCE_HEADER] = "local"

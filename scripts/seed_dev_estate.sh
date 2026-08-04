@@ -2,8 +2,8 @@
 # Seed the dev estate so every surface SHOWS something: media corpus, RustFS + a governed
 # lakehouse table, and a labeling task with items.
 #
-# WHY THIS EXISTS. A fresh install serves an EMPTY corpus (`media.corpus.mode` defaults to
-# `emptyDir`), so `/media` finds nothing, `/annotator` has no page to draw on and `/lakehouse`
+# WHY THIS EXISTS. A fresh install serves an EMPTY corpus (`explorer.corpus.mode` defaults to
+# `emptyDir`), so `/explorer` finds nothing, `/annotator` has no page to draw on and `/lakehouse`
 # lists no tables — and a developer cannot tell "not built" from "not seeded". Two seed scripts
 # existed but were wired to no command and documented in no target, so nobody ran them.
 #
@@ -42,20 +42,20 @@ DATASET_ID="${RASK_SEED_DATASET:-$(basename "$MEDIA_DB" .lance)}"
 echo "  dataset id from the deployment: $DATASET_ID"
 
 # The SAME lesson, applied to the path: the chart's default corpus mode is emptyDir, and the only
-# thing in the repo that sets hostPath is the Tiltfile. Writing a perfect fixture into a directory
+# hostPath must be set explicitly. Writing a perfect fixture into a directory
 # no pod mounts is a silent no-op that ends with this script printing "seeded" — so ask the
 # deployment what it actually mounts, and refuse when it disagrees with where we are about to write.
 MOUNTED_HOST_PATH="$(kubectl get deployment rask-viewer -n "$NS" -o jsonpath='{range .spec.template.spec.volumes[*]}{.hostPath.path}{"\n"}{end}' | sed '/^$/d' | head -1)"
 if [ -z "$MOUNTED_HOST_PATH" ]; then
-  echo "!! rask-viewer mounts NO hostPath for its corpus (chart default is media.corpus.mode=emptyDir)." >&2
+  echo "!! rask-viewer mounts NO hostPath for its corpus (chart default is explorer.corpus.mode=emptyDir)." >&2
   echo "   Anything seeded to $CORPUS_HOST_PATH would be invisible to every service." >&2
-  echo "   Install with --set media.corpus.mode=hostPath --set media.corpus.hostPath=$CORPUS_HOST_PATH" >&2
+  echo "   Install with --set explorer.corpus.mode=hostPath --set explorer.corpus.hostPath=$CORPUS_HOST_PATH" >&2
   exit 1
 fi
 if [ "$MOUNTED_HOST_PATH" != "$CORPUS_HOST_PATH" ]; then
   echo "!! the release mounts $MOUNTED_HOST_PATH but this run would seed $CORPUS_HOST_PATH." >&2
   echo "   RASK_MEDIA_CORPUS moves the SEEDER, not the chart. Re-run with RASK_MEDIA_CORPUS=$MOUNTED_HOST_PATH" >&2
-  echo "   or reinstall the release with media.corpus.hostPath=$CORPUS_HOST_PATH." >&2
+  echo "   or reinstall the release with explorer.corpus.hostPath=$CORPUS_HOST_PATH." >&2
   exit 1
 fi
 echo "  corpus hostPath confirmed mounted by rask-viewer: $MOUNTED_HOST_PATH"
@@ -152,6 +152,28 @@ else
     echo "  !! lakehouse seeding FAILED — the corpus above is still seeded; see the error and re-run" >&2
     LAKEHOUSE_FAILED=1
   fi
+
+  # The ANNOTATIONS table, through the catalog. Without this the annotate canvas cannot open at all,
+  # and the reason is not obvious: the catalog authorises BEFORE it checks existence, so a table that
+  # was never created answers 403 "can_get_metadata required" rather than 404. No grant can fix that
+  # — there is no object to grant on. Creating it as the demo user makes that user its owner, and
+  # `can_get_metadata: reader` follows from ownership.
+  #
+  # scripts/seed_annotations.py already did all of this and was wired to NOTHING — the same disease
+  # as the corpus and bronze seeders before this script existed.
+  echo "  annotations table (the canvas cannot open without it):"
+  if MEDIA_CATALOG_TOKEN="$SEED_TOKEN" uv run --project "$REPO_ROOT" python -c "
+import sys
+sys.path.insert(0, '$REPO_ROOT/scripts')
+from seed_annotations import seed_catalog
+print('   ', seed_catalog('http://127.0.0.1:12433', '$DATASET_ID', 'fe00cd746463ad2c'), 'created')
+" 2>&1 | sed 's/^/  /'; then
+    :
+  else
+    echo "  !! annotations table creation FAILED — /annotator will 403 on open" >&2
+    LAKEHOUSE_FAILED=1
+  fi
+
   kill "$RUSTFS_PID" "$CATALOG_PID" "$DEX_PID" 2>/dev/null || true
   trap - EXIT INT TERM
 fi
@@ -164,7 +186,7 @@ RASK_SEED_DATASET="$DATASET_ID" "$REPO_ROOT/scripts/seed_labeling_task.sh"
 say "5/5 VERIFY — ask the services whether they can actually see it"
 # A Job that reached Complete, three rollouts that finished and two curls that did not crash are
 # not evidence: a malformed descriptor, a wrong dataset name and an unmounted corpus all print the
-# same banner. This repo's own rule ("SSR returning 200 is not working"; `make tilt-verify` is not
+# same banner. This repo's own rule ("SSR returning 200 is not working" is not
 # optional ceremony) applies to its seeder too. Nothing below is reachable unless a service opened
 # the fixture we just wrote.
 VERIFY_FAILED=0
@@ -195,6 +217,39 @@ fi
 kill "$SEARCH_PID" 2>/dev/null || true
 trap - EXIT INT TERM
 
+# The ANNOTATE canvas, end to end. Search returning hits proves the corpus is readable; it proves
+# nothing about whether a user can open the annotator, which failed for a completely separate reason
+# (an unauthenticated catalog read, then a table that did not exist). Both were invisible to every
+# check this script had, so both get one here.
+kubectl port-forward -n "$NS" svc/rask-annotator 18103:8103 >/dev/null 2>&1 &
+ANNO_PID=$!
+kubectl port-forward -n "$NS" svc/rask-dex 12434:5556 >/dev/null 2>&1 &
+ANNO_DEX_PID=$!
+trap 'kill "$ANNO_PID" "$ANNO_DEX_PID" 2>/dev/null || true' EXIT INT TERM
+ANNO_CODE=000
+for _ in $(seq 1 30); do
+  ANNO_TOKEN="$(curl -s --max-time 10 -X POST "http://localhost:12434/dex/token" \
+    -d grant_type=password -d "username=${RASK_SEED_USER:-alice@example.com}" \
+    -d "password=${RASK_SEED_PASS:-password}" -d scope='openid profile email' \
+    -u lance-catalog:lance-catalog-secret \
+    | python3 -c 'import sys,json; print(json.load(sys.stdin).get("id_token",""))' 2>/dev/null || true)"
+  if [ -n "$ANNO_TOKEN" ]; then
+    ANNO_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "Authorization: Bearer $ANNO_TOKEN" \
+      "http://127.0.0.1:18103/api/annotations/fe00cd746463ad2c/0/0?dataset=$DATASET_ID" 2>/dev/null || echo 000)"
+    [ "$ANNO_CODE" = "200" ] && break
+  fi
+  sleep 2
+done
+if [ "$ANNO_CODE" = "200" ]; then
+  echo "  annotate canvas: GET /api/annotations/… -> 200 (readable by the demo user)"
+else
+  echo "  !! the annotate canvas is NOT openable: GET /api/annotations/… -> $ANNO_CODE" >&2
+  echo "     403 = the annotations table is missing or ungranted; 401 = no bearer reached the catalog." >&2
+  VERIFY_FAILED=1
+fi
+kill "$ANNO_PID" "$ANNO_DEX_PID" 2>/dev/null || true
+trap - EXIT INT TERM
+
 if [ "${LAKEHOUSE_FAILED:-0}" = "1" ] || [ "$VERIFY_FAILED" = "1" ]; then
   say "NOT seeded"
   [ "${LAKEHOUSE_FAILED:-0}" = "1" ] && echo "the lakehouse half failed (see above)" >&2
@@ -205,4 +260,4 @@ fi
 say "seeded"
 echo "corpus:    $CORPUS_HOST_PATH  (mount confirmed on rask-viewer)"
 echo "verified:  rask-search returns $HITS hits from '$DATASET_ID' (q=protokoll)"
-echo "next:      open the ingress and look at /media, /annotator, /lakehouse"
+echo "next:      open the ingress and look at /explorer, /annotator, /lakehouse"

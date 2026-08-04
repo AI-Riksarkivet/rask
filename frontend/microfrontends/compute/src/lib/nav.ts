@@ -1,4 +1,13 @@
-import { Boxes, FileText, Gauge, ListTree, ScrollText, Server, ServerCog } from '@lucide/svelte';
+import {
+	Boxes,
+	FileText,
+	Gauge,
+	LayoutDashboard,
+	ListTree,
+	ScrollText,
+	Server,
+	ServerCog,
+} from '@lucide/svelte';
 import { exact, seg, type ZoneNav } from '@rask/ui/shell';
 
 // The compute zone's OWN sidebar routes (the shared shell renders exactly what a zone passes — the
@@ -49,4 +58,16 @@ export const COMPUTE_ZONE_NAV: ZoneNav = {
 			],
 		},
 	],
+	// PINNED to the rail's bottom — the dock composes the whole zone, so it sits below the areas.
+	footer: {
+		label: 'Workspace',
+		items: [
+			{
+				title: 'Workbench',
+				href: '/compute/workbench',
+				match: seg('/compute/workbench'),
+				icon: LayoutDashboard,
+			},
+		],
+	},
 };

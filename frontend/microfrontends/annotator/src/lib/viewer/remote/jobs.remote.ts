@@ -5,7 +5,7 @@ import type { ApiResult } from '@rask/api/client';
 import type { JobResult } from '@rask/labeling/jobs';
 
 // Batch labeling jobs — submit a producer over a chunk-level selection, then poll it
-// (open_transport.md, area 4). Both `/api/jobs/apply` and the `/api/jobs/[...path]` status proxy are
+// (the transport ruling, area 4). Both `/api/jobs/apply` and the `/api/jobs/[...path]` status proxy are
 // deleted; these two functions are what they carried.
 //
 // SHARED-SEAM NOTE: `@rask/labeling/jobs` still owns this wire shape for the MEDIA zone, which mounts

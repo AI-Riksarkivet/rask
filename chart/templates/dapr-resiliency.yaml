@@ -3,41 +3,25 @@
 # broker backOff — see values.yaml dapr.resiliency): the SIDECAR owns pub/sub delivery retries, so a
 # delivery that exhausts this schedule is published to the subscription's dead-letter topic (visible,
 # ERROR-logged parking) instead of silently ceasing to redeliver after the broker's maxDeliver.
-# Schedule: constant 90s x 5 retries = 450s (~7.5 min) — under the component's 720s crash-recovery
-# ack window so broker redelivery never races these retries.
+# Schedule mirrors the previous broker one: exponential 30s→300s, 5 total attempts (~7.5 min) — under
+# the component's 720s crash-recovery ack window so broker redelivery never races these retries.
 #
-# WHY CONSTANT AND NOT EXPONENTIAL — the M4 correction, 2026-08-03. Two earlier attempts both failed,
-# in OPPOSITE directions, and the second one never reached a cluster at all:
+# THE FIELDS MUST MATCH THE POLICY (fixed 2026-07-28). This block previously read
+# `policy: exponential` with `duration: 30s`. Dapr reads `duration` ONLY under PolicyConstant
+# (dapr/kit retry.go: Duration drives NewConstantBackOff; InitialInterval/Multiplier/MaxInterval/
+# RandomizationFactor drive NewExponentialBackOff). Under `exponential` the duration was ignored and
+# `initialInterval` fell back to its 500ms default, so the rendered schedule was
+# 0.5 + 0.75 + 1.125 + 1.7 ≈ 4 SECONDS — not the ~7.5 min stated here, and `maxInterval: 300s` was
+# unreachable dead config. Because the sidecar DLTs and ACKs the original on exhaustion, the 720s
+# broker ackWait never applies to an app-returned RETRY, so resiliency being ON (the default)
+# SHORTENED the app-failure retry window ~125x versus OFF. The whole point of this CRD was inverted.
 #
-#   1. `policy: exponential` with `duration: 30s`. Dapr reads `duration` ONLY under PolicyConstant
-#      (dapr/kit retry.go: Duration drives NewConstantBackOff; InitialInterval/Multiplier/MaxInterval/
-#      RandomizationFactor drive NewExponentialBackOff), so the duration was ignored, `initialInterval`
-#      fell back to its 500ms default, and the real schedule was 0.5 + 0.75 + 1.125 + 1.7 ~= 4 SECONDS.
-#      Because the sidecar DLTs and ACKs the original on exhaustion, the 720s broker ackWait never
-#      applies to an app-returned RETRY — so resiliency being ON (the default) SHORTENED the
-#      app-failure retry window ~125x versus OFF. The whole point of this CRD was inverted.
-#
-#   2. The 2026-07-28 fix swapped in `initialInterval`/`multiplier`/`randomizationFactor` to match the
-#      exponential policy. Correct against dapr/kit — and REJECTED BY THE CRD. Those three fields do
-#      not exist in `resiliencies.dapr.io`: not in the vendored dapr-1.18.1 chart's
-#      crds/resiliency.yaml (which carries only duration/maxInterval/maxRetries), not in the live
-#      cluster CRD (which accepts duration, matching, maxInterval, maxRetries, policy and the
-#      status-code matchers), and not in the Go type `Retry` itself. `kubectl apply --dry-run=server`
-#      answers: strict decoding error: unknown field "initialInterval", "multiplier",
-#      "randomizationFactor". So that fix never applied ONCE — the deployed object still carries
-#      `duration: 30s` under `policy: exponential`, i.e. it is still living the ~4s window from (1).
-#      CI stayed green the whole time because the gate proves the RENDER, never an apply.
-#
-# An exponential policy with a non-default initial interval is therefore UNEXPRESSIBLE in this CRD,
-# and no Dapr version fixes that (the fields are absent from the Go type, not merely from the
-# generated schema). Constant is the only policy whose interval field the CRD actually exposes — and
-# it is deterministic by construction, which is what `randomizationFactor: 0` was reaching for anyway.
-# `maxInterval` is dropped with it: exponential-only, and dead config here.
-#
-# The arithmetic, so the next edit can check itself: 90 x 5 = 450s = 7.5 min, over 5 retries
-# (6 attempts). No jitter, so 450s is both the typical and the worst case — 270s of margin under the
-# 720s broker window, where the old jittered exponential would have left 45s. That margin is the
-# invariant: the broker must not redeliver while the sidecar is still retrying.
+# The arithmetic, so the next edit can check itself: 30 + 60 + 120 + 240 = 450s = 7.5 min over 4
+# retries (5 attempts). The 4th step is 240s, under `maxInterval: 300s`, so the cap is a guard rather
+# than a participant. `randomizationFactor` is pinned to 0 rather than left at Dapr's 0.5 default:
+# with jitter the worst case is 450 x 1.5 = 675s, which still fits the 720s broker window but leaves
+# only 45s of margin — and that margin is the invariant that stops the broker redelivering while the
+# sidecar is still retrying. Deterministic beats 6% headroom here.
 apiVersion: dapr.io/v1alpha1
 kind: Resiliency
 metadata:
@@ -47,9 +31,16 @@ spec:
   policies:
     retries:
       pubsubDeliveryRetry:
-        policy: constant
-        duration: 90s
-        maxRetries: 5
+        # ONLY the fields the Resiliency CRD actually declares: policy, duration, matching,
+        # maxInterval, maxRetries. `initialInterval`, `multiplier` and `randomizationFactor` were
+        # sent for months and REJECTED every time — `strict decoding error: unknown field` — so this
+        # CR never applied and the retry it describes never existed. `helm upgrade` swallowed it as
+        # a warning; a GitOps reconciler parks the whole Application OutOfSync on it. `duration` is
+        # the CRD's name for the first backoff step.
+        policy: exponential
+        duration: 30s
+        maxInterval: 300s
+        maxRetries: 4
   targets:
     components:
 {{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId) }}
@@ -122,8 +113,8 @@ spec:
 {{- if .Values.medallion.enabled }}
 {{- $invoked = append $invoked .Values.medallion.producer.daprAppId }}
 {{- end }}
-{{- if .Values.media.enabled }}
-{{- range $name, $svc := .Values.media.services }}
+{{- if .Values.explorer.enabled }}
+{{- range $name, $svc := .Values.explorer.services }}
 {{- $invoked = append $invoked $svc.daprAppId }}
 {{- end }}
 {{- end }}

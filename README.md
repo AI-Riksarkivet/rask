@@ -64,7 +64,6 @@ Two lifecycles, same chart (`chart/`), same `:dev` image set, same release name 
   make k3s-install                       # one-time host bootstrap (sudo)
   make k3s-build k3s-import k3s-up       # build, side-load, helm install + wait
   make k3s-down / k3s-purge
-  make tilt-up                           # in-cluster hot-reload dev loop
   ```
 
 ## CI

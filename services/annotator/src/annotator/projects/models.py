@@ -18,10 +18,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal, cast
+from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
+
+from annotator.projects.ontology import LabelOntology
 
 
 def new_id() -> str:
@@ -57,120 +59,10 @@ class TaskState(StrEnum):
 TERMINAL_TASK_STATES: frozenset[TaskState] = frozenset({TaskState.ACCEPTED, TaskState.SKIPPED})
 
 SkipPolicy = Literal["requeue_for_others", "requeue_for_me", "terminal"]
-ShapeType = Literal["bbox", "polygon", "mask", "segment", "tag", "text"]
+ShapeType = Literal["bbox", "polygon", "mask", "keypoint", "polyline", "segment", "tag", "text"]
 ReviewAction = Literal["accepted", "fix_and_accept", "request_changes"]
 DraftOrigin = Literal["human", "model", "propagated"]
 MediaKind = Literal["image", "audio", "video"]
-
-
-TemplateKind = Literal[
-    "bbox-detection",
-    "segmentation",
-    "classification",
-    "text-span",
-    "transcription",
-    "doc-qa",
-    "reading-order",
-]
-AttrType = Literal["free", "int", "enum"]
-
-
-class OutputAttr(BaseModel):
-    """One typed attribute the template requires on every submitted shape.
-
-    Typed here, validated at SUBMIT in the task actor — the same never-trust-the-client posture as
-    `review_required`: a client that could skip the template's output block would publish items
-    that do not carry what the task promised downstream."""
-
-    #: `extra="forbid"` because every enforcement-bearing field here DEFAULTS PERMISSIVE: a typo in
-    #: `required` (or, on the template, in `enforce`) would otherwise be dropped silently and the
-    #: create still answer 201, leaving a project that advertises a contract it does not apply.
-    model_config = ConfigDict(extra="forbid")
-
-    name: str = Field(min_length=1, max_length=64)
-    type: AttrType = "free"
-    #: `enum` only — the closed set of legal values.
-    choices: list[str] = Field(default_factory=list)
-    required: bool = False
-
-
-class TaskTemplate(BaseModel):
-    """The labeling task's SHAPE, declaratively (the Label-Studio-config equivalent, v1).
-
-    Deliberately flat — no nesting, no conditionals: `kind` names the task for humans and presets,
-    `tools` closes the set of shape types a submit may contain, `required_labels` are the labels
-    every completed item must carry at least once, `attributes` the typed fields each shape must
-    answer. The default template is exactly today's unconstrained behavior, so existing projects
-    are untouched."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    kind: TemplateKind = "bbox-detection"
-    modality: MediaKind = "image"
-    tools: list[ShapeType] = Field(default_factory=lambda: [cast(ShapeType, "bbox")])
-    required_labels: list[str] = Field(default_factory=list)
-    attributes: list[OutputAttr] = Field(default_factory=list)
-    #: Unconstrained escape hatch: True (the default-model case) skips tool/label enforcement so a
-    #: template-less project behaves exactly as before templates existed.
-    enforce: bool = False
-    #: An enforced template refuses an EMPTY submission by default. Every other rule below is a
-    #: per-shape or per-label test, so zero shapes satisfies all of them vacuously — claim, submit,
-    #: done, without drawing anything. A blank page is a real archival outcome, so it stays
-    #: expressible; it just has to be declared rather than fallen into.
-    allow_empty: bool = False
-
-
-def validate_against_template(template: TaskTemplate, shapes: list[Shape]) -> str | None:
-    """The template's output contract, as ONE pure function: the first violation, or None.
-
-    Pure and shared so the actor's refusal and any test speak the same words. Violations NAME the
-    rule and the offender — a 409 nobody can act on is not enforcement."""
-    if not template.enforce:
-        return None
-    if not shapes and not template.allow_empty:
-        return f"template {template.kind} is enforced — a submission must carry at least one shape (set allow_empty to accept blank items)"
-    allowed = set(template.tools)
-    for shape in shapes:
-        if shape.shape_type not in allowed:
-            return f"template {template.kind} allows tools {sorted(allowed)} — shape {shape.shape_id} is {shape.shape_type}"
-    present = {s.label for s in shapes if s.label}
-    missing = [label for label in template.required_labels if label not in present]
-    if missing:
-        return f"template {template.kind} requires labels {missing} — none of the submitted shapes carry them"
-    for attr in template.attributes:
-        for shape in shapes:
-            value = shape.attributes.get(attr.name)
-            if value is None or value == "":
-                # `required` governs PRESENCE ONLY. The type rules below apply to whatever is
-                # actually there — an optional `enum` still declares a closed set, and an optional
-                # `int` is still an int. Skipping the whole attribute here (the original shape of
-                # this loop) let 'GARBAGE' sit in a column whose facet advertises `choices`.
-                if attr.required:
-                    return f"template {template.kind} requires attribute {attr.name!r} on every shape — shape {shape.shape_id} lacks it"
-                continue
-            if attr.type == "int":
-                try:
-                    int(value)
-                except ValueError:
-                    return f"attribute {attr.name!r} must be an integer — shape {shape.shape_id} carries {value!r}"
-            elif attr.type == "enum" and value not in attr.choices:
-                return f"attribute {attr.name!r} must be one of {attr.choices} — shape {shape.shape_id} carries {value!r}"
-    return None
-
-
-class LabelClass(BaseModel):
-    """One class in a project's taxonomy."""
-
-    name: str
-    colour: str | None = None
-    shape_types: list[ShapeType] = Field(default_factory=list)
-
-
-class LabelSchema(BaseModel):
-    """The taxonomy for a project (§4.1). A managed taxonomy plugs in here."""
-
-    classes: list[LabelClass] = Field(default_factory=list)
-    attributes: list[str] = Field(default_factory=list)
 
 
 class MediaRef(BaseModel):
@@ -236,6 +128,13 @@ class Shape(BaseModel):
     polygon: list[float] = Field(default_factory=list)
     t_start: float | None = None
     t_end: float | None = None
+    #: TEXT SPAN. A `text` shape may be a range INTO another annotation's `text`: token-classification
+    #: and the value half of KIE on transcribed text are spans, and no amount of pixel geometry
+    #: expresses one. `parent_id` addresses the row by ID — rows renumber on reload, so an index would
+    #: silently re-point at a different annotation.
+    parent_id: str | None = None
+    char_start: int | None = None
+    char_end: int | None = None
     mask: str | None = None
     label: str | None = None
     text: str | None = None
@@ -245,6 +144,23 @@ class Shape(BaseModel):
     source: str | None = None
     model_version: str | None = None
     confidence: float | None = None
+
+
+class Link(BaseModel):
+    """One typed edge between two shapes in a draft — the structure KIE and DocVQA need.
+
+    Key information extraction is a key→value linking problem and document VQA binds a question to
+    the region that answers it. Neither is a per-shape property, so no amount of attribute typing
+    reaches them. The ontology declares which links are LEGAL (`RelationClass`); this is one that
+    was actually drawn.
+
+    Endpoints are shape IDs, not indices: a draft is replaced whole on every save, and an index
+    would silently re-point at a different shape the moment one is deleted.
+    """
+
+    name: str
+    from_shape: str
+    to_shape: str
 
 
 class Draft(BaseModel):
@@ -259,6 +175,11 @@ class Draft(BaseModel):
     project_id: str
     author: str
     shapes: list[Shape] = Field(default_factory=list)
+    #: The links drawn between those shapes. Absent from this model until 2026-08-04, which made an
+    #: ontology declaring a REQUIRED relation unsatisfiable: the submit check read an always-empty
+    #: list, so every submission that could ever be made was refused. Declared, enforced, and
+    #: impossible — the worst of the three, and invisible because nothing errored on the way in.
+    links: list[Link] = Field(default_factory=list)
     revision: int = 0
     updated_at: datetime | None = None
     origin: DraftOrigin = "human"
@@ -308,9 +229,12 @@ class Task(BaseModel):
     #: when the request names no duration — before the capture existed the project setting was
     #: stored and never read, and every claim ran on the client's default.
     lease_seconds: int = 1800
-    #: Captured from the project at send (like `review_required`/`lease_seconds`): the template the
-    #: SUBMIT is validated against, in the actor, for any caller.
-    template: TaskTemplate = Field(default_factory=TaskTemplate)
+    #: Captured from the project at send (like `review_required`/`lease_seconds`): the ontology the
+    #: SUBMIT is validated against, in the actor, for any caller. Capturing it is what makes the
+    #: closed-set label check possible at all — enforcement happens here, so the taxonomy has to be
+    #: HERE. It used to capture the `template` and leave the taxonomy on the project, which is why
+    #: `label="asdf"` submitted and published.
+    ontology: LabelOntology = Field(default_factory=LabelOntology)
     #: Consensus v1: the replica GROUP this item belongs to (the group id shared by its siblings),
     #: or None for an ordinary item. Sibling ids are deterministic (`{group}-r{k}`), which is what
     #: lets the one-replica-per-annotator guard find them without an index.
@@ -339,7 +263,6 @@ class AnnotationProject(BaseModel):
     #: why). Rendered on the detail page and the canvas handoff — the LS-parity "instructions page".
     instructions: str = ""
     state: ProjectState = ProjectState.DRAFT
-    label_schema: LabelSchema = Field(default_factory=LabelSchema)
     review_required: bool = True
     lease_seconds: int = 1800
     #: Consensus v1: how many INDEPENDENT annotators label each sent item. N>1 makes `send` seed N
@@ -347,10 +270,13 @@ class AnnotationProject(BaseModel):
     #: most one replica of a group. The publish emits every accepted replica's rows and reports
     #: agreement COUNTS in the run facet — merging is a manager step, deliberately not built yet.
     consensus_n: int = Field(default=1, ge=1, le=5)
-    #: The labeling task's declarative SHAPE (v1 template). Captured onto every item at send —
-    #: the enforcement reads the ITEM's copy, so mid-flight template edits cannot retroactively
-    #: invalidate work already in review.
-    template: TaskTemplate = Field(default_factory=TaskTemplate)
+    #: The whole labeling task definition — taxonomy, per-class tools, attributes and relations.
+    #: Replaces the `label_schema` + `template` PAIR, which nothing cross-checked: the published
+    #: facet stamped its class list from one and enforcement read the other, so a project could
+    #: declare polygon classes and refuse every polygon at submit. Captured onto every item at send,
+    #: and enforcement reads the ITEM's copy, so a mid-flight edit cannot retroactively invalidate
+    #: work already in review.
+    ontology: LabelOntology = Field(default_factory=LabelOntology)
     skip_policy: SkipPolicy = "requeue_for_others"
     #: Consensus v1's merge step: replica group id → the manager's canonical pick. Pre-publish
     #: metadata (re-pickable while the project is adjudicable); the publish validates every pick

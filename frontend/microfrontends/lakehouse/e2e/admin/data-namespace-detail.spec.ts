@@ -6,7 +6,7 @@ import { MOCK_CATALOG } from '../ports';
 // catalog's namespace-scoped governance — the table roster (from the same /v1/table list the
 // registry groups), the #50 maintenance-policy card (describe/set/delete) and the kind-generalized
 // GrantsPanel (list/grant/revoke against the NAMESPACE surface). All of it rides remote functions
-// now (open_transport.md, area 1), so the wire is seeded on the mock catalog and the writes are
+// now (the transport ruling, area 1), so the wire is seeded on the mock catalog and the writes are
 // asserted through its per-bearer ledger — same assertions as the /capi-era spec, including the one
 // that matters most: the writes land on the NAMESPACE paths, never the table ones.
 

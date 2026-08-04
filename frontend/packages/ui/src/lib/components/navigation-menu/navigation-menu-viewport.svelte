@@ -5,11 +5,27 @@
 	let {
 		ref = $bindable(null),
 		class: className,
+		left = 0,
+		top = 0,
 		...restProps
-	}: NavigationMenuPrimitive.ViewportProps = $props();
+	}: NavigationMenuPrimitive.ViewportProps & {
+		/** VIEWPORT coordinates, in px — the parent centres the panel under whichever trigger is open
+		 *  and clamps it into the window. */
+		left?: number;
+		top?: number;
+	} = $props();
 </script>
 
-<div class="absolute top-full left-0 isolate z-50 flex justify-center">
+<!-- FIXED, not absolute. As an absolute child of the nav this sat inside `MAIN`'s `overflow: hidden`,
+     and MAIN begins where the sidebar ends — so any panel reaching left of that had its first column
+     clipped away and the sidebar appeared to be painted on top of it. Fixed positioning leaves every
+     clipping ancestor behind; z-50 then genuinely wins because nothing above it creates a stacking
+     context.
+
+     Both coordinates are inline styles because they are MEASURED: Tailwind cannot express "centred
+     under the third of eight triggers, clamped to the window". SSR renders 0/0 with the panel closed
+     (nothing to measure, nothing visible); the parent places it on the first frame it opens. -->
+<div class="fixed isolate z-50 flex justify-center" style="left: {left}px; top: {top}px">
 	<NavigationMenuPrimitive.Viewport
 		bind:ref
 		data-slot="navigation-menu-viewport"

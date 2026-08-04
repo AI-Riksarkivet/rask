@@ -20,7 +20,7 @@
 				}
 			]
 		},
-		"media": {
+		"explorer": {
 			"development": {
 				"local": {
 					"port": 5173
@@ -28,7 +28,7 @@
 			},
 			"routing": [
 				{
-					"paths": ["/media", "/media/:path*"]
+					"paths": ["/explorer", "/explorer/:path*"]
 				}
 			]
 		},
@@ -77,18 +77,6 @@
 			"routing": [
 				{
 					"paths": ["/train", "/train/:path*"]
-				}
-			]
-		},
-		"workbench": {
-			"development": {
-				"local": {
-					"port": 5179
-				}
-			},
-			"routing": [
-				{
-					"paths": ["/workbench", "/workbench/:path*"]
 				}
 			]
 		}

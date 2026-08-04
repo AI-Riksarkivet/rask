@@ -55,10 +55,13 @@ test('a warehouse row opens the full record with the serving marker + project ju
 	await expect(drawer).toContainText('s3://acme-gold-bucket');
 	// the serving-class marker — a gold warehouse is stated as such, a work one is not
 	await expect(drawer.getByText('serving · gold')).toBeVisible();
-	await expect(drawer.getByRole('link', { name: 'Open project' })).toHaveAttribute(
-		'href',
-		'/lakehouse/catalog/projects/acme',
-	);
+	// The project jump now LEAVES this zone: a project is the top of the hierarchy, so its page is
+	// home's `/projects/<p>` (2026-08-03 ruling). Both halves are asserted, because either alone is
+	// a bug that looks fine — a base-relative href would 404, and an absolute one without
+	// `data-sveltekit-reload` soft-navigates into a route this zone's router does not own.
+	const jump = drawer.getByRole('link', { name: 'Open project' });
+	await expect(jump).toHaveAttribute('href', '/projects/acme');
+	await expect(jump).toHaveAttribute('data-sveltekit-reload', '');
 });
 
 test('a work warehouse row states the work class honestly (no serving marker)', async ({

@@ -26,14 +26,14 @@ def test_ray_rows_map_to_the_compute_service(gw) -> None:
 
 
 def test_media_objects_ride_the_viewer_row(gw) -> None:
-    # The storage browser (R18): /api/media/objects → the media-plane viewer with
-    # the /api/media prefix rewritten to the viewer's internal /api.
+    # The storage browser (R18): /api/explorer/objects → the media-plane viewer with
+    # the /api/explorer prefix rewritten to the viewer's internal /api.
     routes = gw._routes()
-    picked = gw._pick_route("/api/media/objects", routes)
+    picked = gw._pick_route("/api/explorer/objects", routes)
     assert picked is not None
     prefix, upstream_prefix, app_id, _fallback = picked
     assert app_id == "viewer"
-    assert prefix == "/api/media"
+    assert prefix == "/api/explorer"
     assert upstream_prefix == "/api"
 
 
@@ -82,7 +82,7 @@ def test_ingest_row_reaches_the_ingest_plane_and_does_not_swallow_ingest_iiif() 
     assert legacy is not None and legacy[2] == "lance-ray"
 
 
-def test_the_ingest_rewrite_lands_on_a_path_the_service_ACTUALLY_serves(monkeypatch) -> None:  # noqa: ANN001
+def test_the_ingest_rewrite_lands_on_a_path_the_service_ACTUALLY_serves(monkeypatch) -> None:
     """The gateway's rewritten path must exist in the ingest app, not merely look plausible.
 
     This row shipped rewriting to "/v1", taken from the ingest module's own docstrings — which say
@@ -99,8 +99,9 @@ def test_the_ingest_rewrite_lands_on_a_path_the_service_ACTUALLY_serves(monkeypa
     deployment uses, which is its own way of being wrong.
     """
     monkeypatch.setenv("RASK_API_PREFIX", "/api")
-    from gateway import _pick_route, _routes
     from ingest import create_app
+
+    from gateway import _pick_route, _routes
 
     served = set(create_app().openapi()["paths"])
 

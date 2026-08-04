@@ -10,6 +10,8 @@
 	import {
 		norm,
 		prefetchOnIntent,
+		isMainMenu,
+		mainMenuNav,
 		topNav,
 		under,
 		zoneOf,
@@ -58,10 +60,23 @@
 		class?: string;
 	} = $props();
 
-	const entries = $derived(topNav(me?.estate_admin ?? false));
+	// TWO LEVELS, TWO BARS. The ESTATE level — `/`, `/projects`, `/settings` — is where you choose what
+	// to work on: Home · Projects · Settings. Everything else is inside a project and gets the zone
+	// bar. `isMainMenu` owns that test (nav-config.ts), and the boundary is deliberate: `/projects` is
+	// the list and stays at the estate level, while `/projects/<id>` is a project you have OPENED, so
+	// it gets the zone bar — opening a project is what puts you inside one.
+	//
+	// It replaced `zoneOf(pathname) === ''`, which could not tell those two apart: both are home-zone
+	// paths, and one of them is the whole point of the distinction.
+	const inMainMenu = $derived(isMainMenu(pathname));
+	const entries = $derived(
+		inMainMenu ? mainMenuNav(me?.estate_admin ?? false) : topNav(me?.estate_admin ?? false),
+	);
 	// The identity-free base set: what the skeleton reserves space for while /v1/me is in flight
 	// (an admin's extra panel columns append on resolve — earned content, not reserved chrome).
-	const placeholders = topNav(false);
+	// Skeletons must reserve the bar you are ACTUALLY about to get, or the main menu flashes eight
+	// placeholder chips and settles into two.
+	const placeholders = $derived(inMainMenu ? mainMenuNav(false) : topNav(false));
 	// Cross-zone links leave THIS app's route manifest → hard nav (data-sveltekit-reload); the home
 	// zone owns the origin root, so its zone key is ''. A plain function over the `pathname` prop, not
 	// a `$derived`: the panel rows render inside bits-ui's portalled Content, and a derived read from
@@ -124,7 +139,16 @@
 	<NavigationMenu.Root aria-label="Zones" class={cn('min-w-0', collapsed && 'max-w-none flex-1')}>
 		<NavigationMenu.List class="justify-start gap-0.5">
 			{#if meLoading}
-				{#each collapsed ? placeholders.slice(0, 1) : placeholders as entry (entry.title)}
+				{#each collapsed ? placeholders.slice(0, 1) : placeholders as entry, i (entry.title)}
+					<!-- The tier gap is RESERVED here too, on the same rule as the resolved bar. It is
+					     chrome, not content: leaving it out made the row 26px narrower while /v1/me was in
+					     flight and 26px wider the instant it landed — a layout shift measured by
+					     `the loading skeleton reserves the resolved entry widths`, which is exactly the
+					     regression that test exists to catch. Skeleton and resolved must reserve the SAME
+					     boxes, gaps included. -->
+					{#if !collapsed && i > 0 && entry.tier !== 'primary' && placeholders[i - 1]?.tier === 'primary'}
+						<li role="none" class="w-4 shrink-0 sm:w-6"></li>
+					{/if}
 					<li aria-hidden="true">
 						<span class={cn(chrome, 'relative')}>
 							{#if collapsed}
@@ -183,7 +207,19 @@
 					</NavigationMenu.Content>
 				</NavigationMenu.Item>
 			{:else}
-				{#each entries as entry (entry.title)}
+				{#each entries as entry, i (entry.title)}
+					<!-- THE TIER GAP. `tier: 'primary'` already told the bar which entries lead — the
+					     lakehouse you govern and the compute that fills it — but nothing rendered that
+					     weighting, so eight equal chips told a newcomer nothing about where to start. One
+					     spacer at the boundary, drawn from the data rather than from a hardcoded index, so
+					     re-tiering an entry moves the gap with it. `role="none"` ALONE, not `aria-hidden`
+					     beside it: the two are not combinable (aria-hidden is unsupported on role=none, and
+					     the svelte a11y checker rejects the pair), and `none` is the right one. It strips the
+					     listitem semantics, so a screen reader walking the list never meets an empty item
+					     between two real ones — exactly what a decorative spacer should do. -->
+					{#if i > 0 && entry.tier !== 'primary' && entries[i - 1]?.tier === 'primary'}
+						<li role="none" class="w-4 shrink-0 sm:w-6" data-slot="navbar-tier-gap"></li>
+					{/if}
 					<NavigationMenu.Item>
 						{#if entry.groups}
 							<!-- A trigger spanning SEVERAL concerns (Lakehouse: the catalog, the model

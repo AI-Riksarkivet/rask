@@ -1,4 +1,4 @@
-.PHONY: tilt-verify-all registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap tilt-registry tilt-up tilt-verify tilt-down e2e frontend-images prod-render-check alert-rules-check
+.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check
 
 help:
 	@echo "Targets:"
@@ -7,9 +7,7 @@ help:
 	@echo "  dev-micro                              — backend fleet (gateway :8888 + per-domain services)"
 	@echo "  dev-frontends                          — all 6 zones behind the :3024 proxy (browse http://localhost:3024)"
 	@echo "  dev-frontends-k3s                      — same, but /api → the IN-CLUSTER gateway (port-forwarded)"
-	@echo "  home frontend-<zone>                   — run one zone each (e.g. frontend-media)"
-	@echo "  tilt-up                                — THE in-cluster dev loop: hot-reload on k3s (needs k3s-up; once: tilt-registry + dagger-engine)"
-	@echo "  tilt-verify-all                        — PROVE live_update on all 3 paths (service / zone / packages-ui)"
+	@echo "  home frontend-<zone>                   — run one zone each (e.g. frontend-explorer)"
 	@echo "  dev-gc                                 — reclaim the dev registry + the Dagger cache"
 	@echo "  ray-up ray-down ray-status   ray-up-htr (2-GPU pool, GPUs 0,1)"
 	@echo "  serve-up serve-down serve-status   serve-up-both (transcribe+htrflow)"
@@ -175,7 +173,7 @@ dev-micro:
 # their own ports AND Turborepo auto-starts its built-in microfrontends proxy (from
 # frontend/microfrontends/home/microfrontends.json — no extra package) on :3024:
 #   single origin → http://localhost:3024   (browse THIS for cross-zone nav)
-#   home :5273 (catch-all: /) · media :5173 /media · lakehouse :5174 /lakehouse · compute :5175 /compute · studio :5176 /studio · annotator :5177 /annotator
+#   home :5273 (catch-all: /) · media :5173 /explorer · lakehouse :5174 /lakehouse · compute :5175 /compute · studio :5176 /studio · annotator :5177 /annotator
 # The shared ui-package shell + nav render with NO backend; start one
 # (`make dev-micro`) only when you need live /api data.
 
@@ -183,7 +181,7 @@ dev-micro:
 # `make k3s-build`/`k3s-import` (one image per zone via --build-arg APP=$z) and
 # sync-favicons; the zone-contract deploy-path gate pins this list to the zone
 # directories that actually exist, so add/retire a zone HERE too.
-ZONES ?= home lakehouse media annotator compute studio train workbench
+ZONES ?= home lakehouse explorer annotator compute studio train
 
 dev-frontends:        # build the ui + api libs once, then all zones + :3024 proxy
 	# Build the libs FIRST so the zones read a complete dist/. Running `turbo run dev`
@@ -212,7 +210,7 @@ dev-frontends-k3s:    # frontend HMR (Path A) against the IN-CLUSTER backend
 home:      # catch-all zone only, :5273 (serves /)
 	bun --cwd=frontend run dev:home
 
-frontend-%:           # run one domain zone on its own port, e.g. `make frontend-media`
+frontend-%:           # run one domain zone on its own port, e.g. `make frontend-explorer`
 	bun --cwd=frontend run dev:$*
 
 frontend-build:       # production-build every zone + the ui library (turbo, cached)
@@ -315,13 +313,13 @@ qwen-serve:
 # ---- EAD harvest -----------------------------------------------------------
 # (search-index / search-index-fresh died at P7a with scripts/index_alto.py;
 # catalog-index died in the R6/R20 wave with scripts/index_catalog.py — the EAD
-# data re-lands as a catalog-governed Lance table served at /api/media/search.
+# data re-lands as a catalog-governed Lance table served at /api/explorer/search.
 # harvest-ead survives: it only downloads the EAD source files.)
 harvest-ead:
 	uv run python scripts/harvest_ead.py
 
 # ---- dev seeding -----------------------------------------------------------
-# A fresh install serves an EMPTY corpus (media.corpus.mode defaults to emptyDir), so /media finds
+# A fresh install serves an EMPTY corpus (explorer.corpus.mode defaults to emptyDir), so /explorer finds
 # nothing, /annotator has no page and /lakehouse lists no tables — and "not seeded" is
 # indistinguishable from "not built". One command fixes that for the whole estate.
 seed-dev: ## Seed the dev estate: media corpus + a labeling task with items (needs a running cluster)
@@ -356,7 +354,7 @@ COMPOSE_IMAGES = gateway compute controlplane
 KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 HELM ?= KUBECONFIG=$(KUBECONFIG) helm
 KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
-# lance-rest-catalog is the ONE lakehouse image (catalog + lineage + medallion + compaction +
+# lance-rest-catalog is the ONE lakehouse image (catalog + lineage + medallion + maintenance +
 # media trio — chart `image.catalog`); the default render runs 8 containers from it, so the
 # build/import set must carry it or kind/k3s deploys ImagePullBackOff on every lakehouse pod.
 K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog
@@ -406,6 +404,7 @@ k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait 
 	if [ -z "$$HF_TOKEN" ]; then echo "WARN: no HF token (env, .env, or 'hf auth login') — htrflow Serve will 401 on the gated TrOCR model"; fi; \
 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m \
 	  --take-ownership \
+	  --set image.localImages=true \
 	  $${HF_TOKEN:+--set-string secrets.hfToken=$$HF_TOKEN} \
 	  $${AWS_ACCESS_KEY_ID:+--set-string rustfs.accessKey=$$AWS_ACCESS_KEY_ID} \
 	  $${AWS_SECRET_ACCESS_KEY:+--set-string rustfs.secretKey=$$AWS_SECRET_ACCESS_KEY}
@@ -481,7 +480,7 @@ kind-load: ## Side-load the :dev image set into the kind cluster
 # migration and the bucket-init hook block on were the only ones this target never preloaded, which
 # is exactly backwards.
 kind-preload: bootstrap ## Pull the chart's third-party images into the host cache, then side-load them
-	@imgs=$$(helm template rask ./chart --set singleTenant.enabled=true --set media.enabled=true \
+	@imgs=$$(helm template rask ./chart --set singleTenant.enabled=true --set explorer.enabled=true \
 	    --set observability.enabled=true 2>/dev/null \
 	  | grep -oE 'image: *"?[A-Za-z0-9./:@_-]+' | sed 's/image: *"\?//' \
 	  | grep -vE "^($$(echo '$(K3S_IMAGES)' | tr ' ' '|'))(:|$$)" \
@@ -514,11 +513,11 @@ e2e-ci: bootstrap ## Governed kind stack + the 5 live e2e suites (CAS/#2/#3-A/#3
 e2e-ray-ci: bootstrap ## Governed ray-ON kind stack + real KubeRay + both Ray suites == CI e2e-ray
 	CLUSTER=$(KIND_CLUSTER)-ray-e2e RELEASE=rask bash scripts/ray_e2e_stack.sh
 
-# ---- Tilt dev loop (in-cluster hot-reload for the Python fleet) -------------
-# One-time: `make tilt-registry` (local registry + point k3s at it). Then, with the
-# cluster up (`make k3s-up`), `make tilt-up` builds editable dev images and hot-reloads
-# the fleet on .py changes. Frontends iterate faster via `make dev-frontends` (local
-# Vite HMR). See the Tiltfile header.
+# ---- the local image path (registry + Dagger engine) ------------------------
+# `make dev-registry` once per host (a local registry on :5000, and k3s pointed at it), and
+# `make dagger-engine` once (an engine that may push to a plain-HTTP registry). Every
+# `dagger call image|zone-image ... publish` goes through both. Iterate the frontends with
+# `make dev-frontends` (local Vite HMR); backend changes rebuild and `make k3s-up`.
 dagger-engine: ## One-time: a Dagger engine that can push to the plain-HTTP dev registry
 	@bash scripts/dagger-engine.sh
 
@@ -527,7 +526,6 @@ dagger-engine: ## One-time: a Dagger engine that can push to the plain-HTTP dev 
 #   * the Dagger engine cache — its default GC ceiling is proportional to the disk (5.67 TB on a 7.4 TB
 #     volume), so it never collected. `make dagger-engine` now writes an explicit 60 GB cap; this target
 #     is the manual sweep.
-#   * the dev registry — Tilt pushes a uniquely tagged image on EVERY rebuild and nothing removes the
 #     old ones (measured: 113 tags of web-home, 83.9 GB).
 # Both are safe: every artefact is reproducible with `dagger call image|zone-image ... publish`, and k3s
 # holds running images in its own containerd cache.
@@ -541,40 +539,12 @@ dagger-gc: ## Prune the Dagger engine's build cache to its configured ceiling
 dev-gc: registry-gc dagger-gc ## Reclaim both the registry and the Dagger cache
 	@df -h / | tail -1 | awk '{print ">> disk: "$$4" free, "$$5" used"}'
 
-tilt-registry: ## One-time: local image registry + point k3s at it (sudo; restarts k3s)
+dev-registry: ## One-time: local image registry + point k3s at it (sudo; restarts k3s)
 	bash scripts/k3s-registry.sh
-
-tilt-up: ## Dev loop: editable fleet images + uvicorn --reload via Tilt (needs k3s-up + tilt-registry)
-	@test -x $(LOCALBIN)/tilt || command -v tilt >/dev/null 2>&1 || { echo "!! tilt not installed — https://docs.tilt.dev/install.html"; exit 1; }
-	@# Tilt's own "address already in use" does not say WHO holds the port. When the running
-	@# instance belongs to another user (a `sudo make tilt-up` earlier), Ctrl-C in your own
-	@# shell does nothing and the stale instance keeps owning the release.
-	@# `pgrep -x tilt` matches the BINARY's process name. `pgrep -f '/tilt up'` matched any
-	@# command LINE containing that string — including this recipe's own shell, so the guard
-	@# always tripped on itself and made tilt-up impossible to run.
-	@if pgrep -x tilt >/dev/null 2>&1; then \
-	  echo "!! tilt is already running and holds :10350 —"; \
-	  ps -o pid,user,etime -p $$(pgrep -x tilt | head -1) 2>/dev/null | tail -1; \
-	  echo "   stop it first:  sudo pkill -x tilt   (or Ctrl-C in the terminal that owns it)"; \
-	  exit 1; \
-	fi
-	@KUBECONFIG=$(KUBECONFIG) $(LOCALBIN)/tilt up
-
-tilt-verify: ## Prove Tilt's live_update actually reaches a running pod (SERVICE=catalog)
-	@bash scripts/tilt-verify.sh
 
 # All THREE reload paths, because they fail independently and each one was broken on its own at some
 # point: a wheel synced into site-packages, a zone's COMPILED build/, and the ui package's dist/ (the only
 # package with a build step — zones bundle its dist, never its source).
-tilt-verify-all: ## Prove live_update on all three paths: python service, zone, and packages/ui
-	@bash scripts/tilt-verify.sh
-	@SERVICE=home TIMEOUT=300 bash scripts/tilt-verify.sh
-	@SERVICE=ui   TIMEOUT=300 bash scripts/tilt-verify.sh
-	@echo ">> all three live_update paths verified"
-
-tilt-down: ## Stop the Tilt session and revert the dev deploy (keeps the cluster/data)
-	@KUBECONFIG=$(KUBECONFIG) $(LOCALBIN)/tilt down
-
 # ---- e2e (Playwright) -------------------------------------------------------
 e2e: ## Browser e2e against a running deploy (RASK_E2E_BASE_URL, default http://localhost)
 	cd tests/e2e && bun install && bunx playwright test

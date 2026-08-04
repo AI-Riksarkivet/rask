@@ -18,7 +18,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from annotator.projects.models import AnnotationProject, Draft, LabelClass, LabelSchema, Shape, Task, TaskState
+from annotator.projects.models import AnnotationProject, Draft, Shape, Task, TaskState
+from annotator.projects.ontology import LabelClass, LabelOntology
 from annotator.projects.publish import (
     NO_SHAPE,
     PROJECT_FACET,
@@ -40,7 +41,7 @@ def _project(**kw: Any) -> AnnotationProject:
         "tenant": "acme",
         "slug": "vasa-portraits",
         "review_required": True,
-        "label_schema": LabelSchema(classes=[LabelClass(name="ship"), LabelClass(name="person")]),
+        "ontology": LabelOntology(classes=[LabelClass(name="ship"), LabelClass(name="person")]),
     }
     base.update(kw)
     return AnnotationProject.model_validate(base)
@@ -363,24 +364,38 @@ def _pin_task(task_id: str, dataset: str | None, version: int | None) -> Task:
 
 
 def test_source_pin_pins_exactly_one_dataset_at_one_version() -> None:
+    """The dataset is a namespace-qualified CATALOG TABLE id, because that is what the pin becomes.
+
+    This case used to assert a bare `"demo"`, which pinned the defect: the pin travels to the
+    catalog as a table reference and a bare word is not one."""
     from annotator.projects.publish import source_pin
 
     project = AnnotationProject(project_id="p1", tenant="acme", slug="vasa")
-    pairs = [(_pin_task("t0", "demo", 24), None), (_pin_task("t1", "demo", 24), None)]
+    pairs = [(_pin_task("t0", "bronze$pages", 24), None), (_pin_task("t1", "bronze$pages", 24), None)]
     plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
 
-    assert source_pin(plan) == ("demo", 24)
+    assert source_pin(plan) == ("bronze$pages", 24)
 
 
 @pytest.mark.parametrize(
     ("specs", "why"),
     [
-        ([("demo", 24), ("other", 3)], "two datasets — a single pin would lie about one of them"),
-        ([("demo", 24), ("demo", 25)], "two VERSIONS of one dataset — same lie"),
-        ([("demo", None), ("demo", 24)], "a missing capture poisons the pin — never fabricate"),
-        ([("demo", None)], "no version captured at all"),
+        ([("bronze$pages", 24), ("bronze$other", 3)], "two datasets — a single pin would lie about one of them"),
+        ([("bronze$pages", 24), ("bronze$pages", 25)], "two VERSIONS of one dataset — same lie"),
+        ([("bronze$pages", None), ("bronze$pages", 24)], "a missing capture poisons the pin — never fabricate"),
+        ([("bronze$pages", None)], "no version captured at all"),
         ([(None, None)], "no dataset recorded"),
-        ([(None, None), ("demo", 24)], "an item with NO recorded dataset mixed with a captured one — a pin would claim provenance some items never had"),
+        (
+            [(None, None), ("bronze$pages", 24)],
+            "an item with NO recorded dataset mixed with a captured one — a pin would claim provenance some items never had",
+        ),
+        # Observed live 2026-08-03: `where` carries the MEDIA dataset name, and for an unregistered
+        # corpus that is a bare word. Sent as a table reference it made the catalog authorize
+        # `table:transcripts_v2` — an object that does not exist — and FGA denies before checking
+        # existence, so the WHOLE publish failed with "can_get_metadata required" for a provenance
+        # nicety. An unregistered corpus has no catalog node to draw a READ edge to.
+        ([("transcripts_v2", 1)], "a bare media dataset name is not a catalog table reference"),
+        ([("transcripts_v2", 1), ("transcripts_v2", 1)], "…however many items agree on it"),
     ],
 )
 def test_source_pin_refuses_anything_ambiguous(specs: list, why: str) -> None:
@@ -525,21 +540,45 @@ def test_a_pick_naming_another_groups_member_refuses_the_publish() -> None:
         build_plan(project, pairs, publish_id="tok", published_at=NOW)
 
 
-def test_the_template_is_stamped_into_properties_and_facet() -> None:
+def test_the_ontology_is_stamped_into_properties_and_facet() -> None:
     """§7.1: a downstream consumer must know what SHAPE of labels the table holds."""
-    from annotator.projects.models import TaskTemplate
     from annotator.projects.publish import table_properties
 
     project = AnnotationProject(
         project_id="p1",
         tenant="acme",
         slug="vasa",
-        template=TaskTemplate(kind="reading-order", tools=["bbox"], enforce=True),
+        ontology=LabelOntology(kind="reading-order", classes=[LabelClass(name="line", tools=["bbox"])]),
     )
     pairs = [(_pin_task("t0", "demo", 24), None)]
     plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
 
-    assert table_properties(project, plan)["annotation.template_kind"] == "reading-order"
+    assert table_properties(project, plan)["annotation.task_kind"] == "reading-order"
     facet = project_facet(project, plan)
-    assert facet["template"]["kind"] == "reading-order"
-    assert facet["template"]["enforce"] is True
+    assert facet["ontology"]["kind"] == "reading-order"
+    assert facet["ontology"]["classes"][0]["tools"] == ["bbox"]
+
+
+def test_the_facets_TWO_class_lists_became_ONE_and_cannot_disagree() -> None:
+    """The defect that motivated the merge, pinned so it cannot come back.
+
+    `labelClasses` was projected from `label_schema` while `template` — the enforcement contract —
+    was a separate object beside it. Nothing cross-checked them, so a run facet could advertise a
+    taxonomy that no submission was ever judged against. Both now read from the same ontology, so
+    the facet's summary and its full document are the same fact stated twice.
+    """
+    from annotator.projects.publish import table_properties
+
+    project = AnnotationProject(
+        project_id="p1",
+        tenant="acme",
+        slug="vasa",
+        ontology=LabelOntology(kind="object-detection", classes=[LabelClass(name="ship"), LabelClass(name="person")]),
+    )
+    plan = build_plan(project, [(_pin_task("t0", "demo", 24), None)], publish_id="tok", published_at=NOW)
+    facet = project_facet(project, plan)
+
+    summary = facet["labelClasses"]
+    whole = sorted(c["name"] for c in facet["ontology"]["classes"])
+    assert summary == whole == ["person", "ship"]
+    assert table_properties(project, plan)["annotation.label_classes"] == "person,ship"

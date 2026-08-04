@@ -2,7 +2,7 @@
 
 A Lance lakehouse REST catalog + in-service lineage (OpenLineage → Apache AGE) + governance, running as
 **event-driven microservices on a local kind cluster**, deployed by one umbrella Helm chart and
-iterated with Tilt. Diagram: [`k8s-event-driven-architecture.html`](k8s-event-driven-architecture.html).
+iterated by rebuilding with Dagger and redeploying. Diagram: [`k8s-event-driven-architecture.html`](k8s-event-driven-architecture.html).
 
 ## One command
 
@@ -11,11 +11,10 @@ make up        # bootstrap toolchain + kind cluster + build images + deploy ever
 make verify    # prove the event-driven flow end-to-end
 make dashboards# port-forward the UIs (web / lineage / Perses / GreptimeDB / Dapr dashboard)
 make k9s       # inspect the cluster
-make tilt-up   # dev loop: hot-reload the FastAPI services
 make down      # tear down
 ```
 
-`make up` is idempotent. It needs only **docker** + **helm** on PATH; it downloads kind/kubectl/k9s/tilt
+`make up` is idempotent. It needs only **docker** + **helm** on PATH; it downloads kind/kubectl/k9s
 into `.localbin/` (gitignored).
 
 ## The components (one `helm install`, all gated by `<key>.enabled`)
@@ -225,7 +224,7 @@ catalog/lineage.
 
 ✅ Verified: the event-driven catalog→lineage flow, all components healthy (`helm STATUS: deployed`),
 Dapr sidecar injection, the full 3-signal observability (`make e2e-obs` green — AGE data + PromQL metric
-+ distributed trace + logs in GreptimeDB), `tilt ci` brings the whole stack up green.
++ distributed trace + logs in GreptimeDB), `make k3s-up` brings the whole stack up green.
 ✅ Verified: the event-driven **medallion** cascade — one `lance-ray` `/produce` cascades
 raw→bronze→silver→gold via Dapr pub/sub, building the lineage DAG, as **one distributed trace** across
 all 5 services, with the `medallion_stage_transitions_total` metric in PromQL (`make e2e-medallion`).
@@ -239,11 +238,11 @@ port-forward fronts the whole platform (`/lineage/livez` → 200 through the gat
 (`GET /v1.0/secrets/lance-secrets/lance` → 200) instead of plaintext env. Fixed the kv-v2 nuance:
 Dapr defaults `vaultKVPrefix=dapr` (reads `secret/data/dapr/<key>`); set `vaultKVUsePrefix=false` so it
 reads the natural `secret/data/<key>` the seed writes.
-✅ Verified: the **Lakekeeper-style multi-tenant ReBAC** — `team → project → warehouse(bucket) →
+✅ Verified: the **multi-tenant ReBAC hierarchy** — `team → project → warehouse(bucket) →
 namespace → table` with concentric `owner>writer>reader` rungs + a `validator` rung that gates medallion
 stage promotion. Proven offline (`fga model test`: 7/7 tests, 24/24 checks) **and** live against the
 deployed OpenFGA: a plain writer `can_promote` gold = **false**, a validator = **true**; projects are
-isolated (one bucket per project; a team can own many). See `packages/service-kit/src/service_kit/governed/auth/model.fga` + `model.fga.yaml`.
+isolated (one bucket per warehouse, and a project holds MANY warehouses; a team can own many projects). See `packages/service-kit/src/service_kit/governed/auth/model.fga` + `model.fga.yaml`.
 ⚠️ Deployed-not-wired: the app auto-seeding of the project/team/warehouse hierarchy on create (the
 namespace→warehouse parent + creator-owner are seeded; project/team/validator grants are set out-of-band
 for now); the end-to-end Dex-token → catalog → OpenFGA request demo (auth is `--set auth.enabled=true`).

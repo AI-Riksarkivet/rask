@@ -12,13 +12,13 @@ on `/htrflow`). Images come from **IIIF** or
 pre-staged **S3** buckets; ALTO XML output lands back in S3. The HTTP backend is
 a fleet of FastAPI services behind a **gateway** on port 8888: the **ray**
 service (dashboard introspection + Serve proxy), the **controlplane**, and the
-lance lakehouse/media planes (`/api/catalog`, `/api/lineage`, `/api/media/*`).
+lance lakehouse/media planes (`/api/catalog`, `/api/lineage`, `/api/explorer/*`).
 A set of **SvelteKit 2 + Svelte 5 SSR** apps (svelte-adapter-bun, served behind the
 gateway) composed as routing-based microfrontend zones — a catch-all `home`
 owning `/` plus per-domain apps (lakehouse/media/annotator/compute/studio/train) —
 consumes all of these via the gateway. State lives in the governed Lance
 lakehouse on S3; the batches DB died at P7a and the lines/EAD Lance tables
-re-land catalog-governed behind `/api/media/search` (R6).
+re-land catalog-governed behind `/api/explorer/search` (R6).
 
 ## Component map
 

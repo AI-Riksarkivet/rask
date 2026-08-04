@@ -73,11 +73,24 @@ function dockRoutes(): { zone: string; href: string; file: string }[] {
 const DOCKS = dockRoutes();
 
 describe('dock reachability', () => {
-	it('pins the docks: exactly THE global workbench — a per-zone dock reappearing is a defect', () => {
-		// 2026-08-03: the estate ships ONE dock, the global workbench zone (docs/architecture/global-workbench.md) —
-		// runtime-composed from custom elements the other zones serve. The per-zone workbenches are
-		// removed by decision, so the pin is exact: the global route, and nothing else.
-		expect(DOCKS.map((d) => d.href)).toEqual(['/workbench/']);
+	it('pins the docks the estate ships — one per zone that has one, all navigable', () => {
+		// 2026-08-04: docks belong INSIDE the zones and the global compositor is RETIRED
+		// (docs/architecture/global-workbench.md). A zone's dock composes that zone's own components
+		// over its own stores and remotes — full fidelity, no cross-zone transport.
+		//
+		// THREE now, and every one at ZONE level (`/<zone>/workbench`). The lakehouse's briefly sat at
+		// `/lakehouse/lineage/workbench`, which buried a zone-level surface inside one AREA and hid it
+		// from anyone standing in catalog or models; this pin is what stops that recurring, because a
+		// nested path simply is not in the list.
+		//
+		// EXACT rather than a floor: a compositor cannot come back unnoticed, and a fourth dock added
+		// "for symmetry" has to argue for itself here first. train and studio carry placeholder data,
+		// home is the catch-all, and the annotator is already a canvas.
+		expect(DOCKS.map((d) => d.href).sort()).toEqual([
+			'/compute/workbench',
+			'/explorer/workbench',
+			'/lakehouse/workbench',
+		]);
 	});
 
 	it.each(DOCKS)('$href is listed in the $zone zone sidebar', ({ zone, href }) => {

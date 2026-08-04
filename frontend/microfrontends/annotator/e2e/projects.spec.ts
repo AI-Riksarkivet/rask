@@ -8,7 +8,7 @@ import { MOCK_ANNOTATOR } from './ports';
 // endpoints with the right bodies, keeps the three review actions distinct, states what a publish
 // lands before firing it, narrates a running publish, and surfaces a server 403 as the refusal it is.
 //
-// The transport is remote functions now (open_transport.md, area 4): every read and write below runs
+// The transport is remote functions now (the transport ruling, area 4): every read and write below runs
 // on the zone SERVER, which `page.route` cannot see — so the wire is seeded on, and asserted through,
 // the mock annotator's ledger (e2e/mock-annotator.ts). Same assertions as the BFF-era spec; the paths
 // are the UPSTREAM ones (`/tasks/t1/events`) rather than the proxied `/annotator/api/…`, because that
@@ -698,10 +698,10 @@ test('instructions: the create dialog sends them and the detail page shows them 
 });
 
 // --------------------------------------------------------------------------------------------------
-// Task templates v1 — a preset picked at create travels as an ENFORCED template
+// The task ONTOLOGY — a preset picked at create travels as ONE document, class list included
 // --------------------------------------------------------------------------------------------------
 
-test('template: picking a task type sends an enforced template; the detail page wears the chip', async ({
+test('ontology: picking a task type sends ONE document; the detail page wears it', async ({
 	page,
 }) => {
 	await seed(page, {
@@ -712,13 +712,19 @@ test('template: picking a task type sends an enforced template; the detail page 
 		page,
 		{
 			project: project('labeling', {
-				template: {
+				ontology: {
 					kind: 'reading-order',
 					modality: 'image',
-					tools: ['bbox'],
-					required_labels: ['region'],
-					attributes: [{ name: 'order', type: 'int', required: true }],
-					enforce: true,
+					classes: [
+						{
+							name: 'region',
+							tools: ['bbox'],
+							attributes: [{ name: 'order', type: 'int', required: true }],
+							required: true,
+						},
+					],
+					relations: [],
+					allow_empty: false,
 				},
 			}),
 			legal_events: LEGAL.labeling,
@@ -749,21 +755,514 @@ test('template: picking a task type sends an enforced template; the detail page 
 	await dialog.getByPlaceholder('vasa-portraits').press('Enter');
 
 	const create = await createCall(page);
-	const template = (create.body as { template: Record<string, unknown> }).template;
-	expect(template).toMatchObject({
-		kind: 'reading-order',
-		tools: ['bbox'],
-		required_labels: ['region'],
-		enforce: true,
-	});
-	expect((template.attributes as unknown[])[0]).toMatchObject({
+	const ontology = (create.body as { ontology: Record<string, unknown> }).ontology;
+	// ONE payload. This used to assert a `template` while a SECOND `label_schema` built its own
+	// class list from the same textarea — two objects nothing cross-checked, which is the defect
+	// this model closes. The tools now live ON the class, so they cannot name a shape the taxonomy
+	// does not permit.
+	expect(ontology).toMatchObject({ kind: 'reading-order' });
+	const classes = ontology.classes as Record<string, unknown>[];
+	expect(classes).toHaveLength(1);
+	expect(classes[0]).toMatchObject({ name: 'region', tools: ['bbox'] });
+	expect((classes[0]!.attributes as unknown[])[0]).toMatchObject({
 		name: 'order',
 		type: 'int',
 		required: true,
 	});
+	// NOT required — the create dialog used to derive `required_labels` from every class name, so a
+	// third class silently made all three mandatory on every item. It is now an explicit toggle,
+	// and this test does not tick it.
+	expect(classes[0]).toMatchObject({ required: false });
 
-	// The detail page names the task type and that it is enforced.
+	// The detail page names the task type and the taxonomy, from the same document.
 	await page.goto('/annotator/projects/p1');
-	await expect(page.getByTestId('template-chip')).toContainText('reading-order');
-	await expect(page.getByTestId('template-chip')).toContainText('enforced at submit');
+	await expect(page.getByTestId('task-kind-chip')).toContainText('reading-order');
+	await expect(page.getByTestId('label-taxonomy')).toContainText('region');
+	await expect(page.getByTestId('label-taxonomy')).toContainText('bbox');
+});
+
+test('ontology: "every class is required" is an explicit choice, not a side effect of naming classes', async ({
+	page,
+}) => {
+	// The bug this replaced, pinned from the UI side: the dialog derived a project-level
+	// `required_labels` from EVERY class name, so adding a third class silently made all three
+	// mandatory on every item — a contract nobody wrote, discovered at submit.
+	await seed(page, {
+		'GET /projects': { projects: [], total: 0 },
+		'POST /projects': project('draft'),
+	});
+
+	await page.goto('/annotator/');
+	await page.getByRole('button', { name: 'New labeling task' }).first().click();
+	const dialog = page.getByRole('dialog');
+	await dialog.getByPlaceholder('vasa-portraits').fill('required-classes');
+	await dialog.getByPlaceholder('person, ship, signature').fill('person, ship, signature');
+	await expect(dialog.getByPlaceholder('person, ship, signature')).toHaveValue(
+		'person, ship, signature',
+	);
+	await dialog.getByLabel('Every class is required').check();
+	await dialog.getByPlaceholder('vasa-portraits').press('Enter');
+
+	const create = await createCall(page);
+	const classes = (create.body as { ontology: { classes: Record<string, unknown>[] } }).ontology
+		.classes;
+	expect(classes.map((c) => c.name)).toEqual(['person', 'ship', 'signature']);
+	expect(classes.every((c) => c.required === true)).toBe(true);
+});
+
+test('ontology: a manager edits the taxonomy after create, and the PATCH carries the whole document', async ({
+	page,
+}) => {
+	// There was no way to edit an ontology at all — it was set at create and never again, so a
+	// taxonomy typo meant a new project. A closed set you cannot correct is one people work around.
+	await snapshot(
+		page,
+		{
+			project: project('labeling', {
+				ontology: {
+					kind: 'object-detection',
+					modality: 'image',
+					classes: [{ name: 'shp', tools: ['bbox'], attributes: [], required: false }],
+					relations: [],
+					allow_empty: false,
+				},
+			}),
+			legal_events: LEGAL.labeling,
+		},
+		listing([]),
+	);
+	await seed(page, { 'PATCH /projects/p1/ontology': project('labeling') });
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('edit-ontology-trigger').click();
+
+	// The form opens SEEDED from the stored ontology — an edit surface that starts blank is a
+	// replace surface wearing an edit label, and this is a whole-document PUT underneath.
+	const classes = page.getByTestId('edit-ontology').getByPlaceholder('person, ship, signature');
+	await expect(classes).toHaveValue('shp');
+
+	await classes.fill('ship, person');
+	await expect(classes).toHaveValue('ship, person');
+	await page.getByTestId('edit-ontology').getByRole('button', { name: 'Save' }).click();
+
+	await expect
+		.poll(async () => (await calls(page)).filter((c) => c.method === 'PATCH').length, {
+			timeout: 10_000,
+		})
+		.toBe(1);
+	const patch = (await calls(page)).find((c) => c.method === 'PATCH')!;
+
+	expect(patch.path).toBe('/projects/p1/ontology');
+	const sent = (patch.body as { ontology: { classes: { name: string }[] } }).ontology;
+	expect(sent.classes.map((c) => c.name)).toEqual(['ship', 'person']);
+});
+
+test('ontology: the editor REFUSES to flatten structure it cannot express', async ({ page }) => {
+	// The form offers three fields. An ontology carrying relations or per-class attributes has
+	// structure this form would silently drop on save — so it declines rather than losing it. A
+	// half-editor that quietly flattens a document is worse than no editor.
+	await snapshot(
+		page,
+		{
+			project: project('labeling', {
+				ontology: {
+					kind: 'document-question-answering',
+					modality: 'image',
+					classes: [
+						{ name: 'key', tools: ['bbox'], attributes: [], required: false },
+						{ name: 'value', tools: ['bbox'], attributes: [], required: false },
+					],
+					relations: [
+						{
+							name: 'answers',
+							from_classes: ['key'],
+							to_classes: ['value'],
+							directed: true,
+							required: false,
+						},
+					],
+					allow_empty: false,
+				},
+			}),
+			legal_events: LEGAL.labeling,
+		},
+		listing([]),
+	);
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('edit-ontology-trigger').click();
+
+	await expect(page.getByTestId('ontology-too-rich')).toContainText('relation');
+	await expect(page.getByTestId('edit-ontology').getByRole('button', { name: 'Save' })).toHaveCount(
+		0,
+	);
+});
+
+test('ontology: the edit button is ABSENT once the project is frozen', async ({ page }) => {
+	// Mirrors the server's own gate. Past `frozen` a publish is being prepared against the answer
+	// set, so an edit could only be ignored (every remaining item captured its copy) or misleading —
+	// the run facet would report a taxonomy no task was ever judged against. The route still 409s;
+	// this only stops offering the door.
+	await snapshot(page, { project: project('frozen'), legal_events: LEGAL.labeling }, listing([]));
+
+	await page.goto('/annotator/projects/p1');
+	await expect(page.getByTestId('edit-ontology-trigger')).toHaveCount(0);
+});
+
+test('an unfinishable item can be REMOVED — otherwise one of them wedges the publish forever', async ({
+	page,
+}) => {
+	// The publish precondition requires EVERY task terminal. An item naming a media dataset that was
+	// renamed or removed cannot be opened, so it can never be claimed, submitted or skipped — and
+	// before this the only way past it was to abandon the project and re-send everything.
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([task('t1', 'unassigned')]),
+	);
+	await seed(page, {
+		'DELETE /projects/p1/tasks/t1': { task_id: 't1', removed: true, total: 0 },
+	});
+	page.on('dialog', (d) => void d.accept());
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('drop-task').first().click();
+
+	await expect
+		.poll(async () => (await calls(page)).filter((c) => c.method === 'DELETE').length, {
+			timeout: 10_000,
+		})
+		.toBe(1);
+	const del = (await calls(page)).find((c) => c.method === 'DELETE')!;
+	expect(del.path).toBe('/projects/p1/tasks/t1');
+});
+
+test('the remove control is ABSENT once the project is frozen', async ({ page }) => {
+	// Mirrors the server's own `DROPPABLE_STATES`. Past `frozen` a publish is being prepared against
+	// the answer set, so removing an item would change what the run facet describes after the
+	// description was fixed. The route still 409s; this only stops offering the door.
+	await snapshot(
+		page,
+		{ project: project('frozen'), legal_events: LEGAL.labeling },
+		listing([task('t1', 'accepted')]),
+	);
+
+	await page.goto('/annotator/projects/p1');
+	await expect(page.getByTestId('drop-task')).toHaveCount(0);
+});
+
+// --------------------------------------------------------------------------------------------------
+// 40a — the queue filter. A project of a thousand items is unnavigable without one.
+// --------------------------------------------------------------------------------------------------
+
+test('the queue filters by STATE, and says how many of how many', async ({ page }) => {
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([
+			task('t1', 'unassigned'),
+			task('t2', 'claimed', { assignee: 'gina' }),
+			task('t3', 'accepted'),
+			task('t4', 'claimed', { assignee: 'omar' }),
+		]),
+	);
+
+	await page.goto('/annotator/projects/p1');
+	// The DataTable renders semantic <tr>; `rowgroup` scopes to the BODY so the header row is not
+	// counted as an item — a count that is always one too high hides an off-by-one in the filter.
+	const rows = page.getByRole('rowgroup').last().getByRole('row');
+	await expect(rows).toHaveCount(4);
+
+	// The dropdown carries COUNTS, so it summarises where the work is sitting without having to
+	// apply a filter to find out.
+	const stateFilter = page.getByLabel('Filter by state');
+	await expect(stateFilter).toContainText('All states (4)');
+
+	await stateFilter.press('Enter');
+	await page.getByRole('option', { name: /^claimed/ }).click();
+
+	await expect(rows).toHaveCount(2);
+	await expect(page.getByTestId('filter-count')).toHaveText('2 of 4');
+});
+
+test('the queue filters by ASSIGNEE, and the two filters COMPOSE', async ({ page }) => {
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([
+			task('t1', 'claimed', { assignee: 'gina' }),
+			task('t2', 'claimed', { assignee: 'omar' }),
+			task('t3', 'accepted', { assignee: 'gina' }),
+		]),
+	);
+
+	await page.goto('/annotator/projects/p1');
+	// The DataTable renders semantic <tr>; `rowgroup` scopes to the BODY so the header row is not
+	// counted as an item — a count that is always one too high hides an off-by-one in the filter.
+	const rows = page.getByRole('rowgroup').last().getByRole('row');
+
+	await page.getByLabel('Filter by assignee').fill('gina');
+	await expect(rows, 'the assignee filter did not narrow the queue').toHaveCount(2);
+
+	// AND, not OR: gina's CLAIMED work, which is the question a manager actually asks.
+	await page.getByLabel('Filter by state').press('Enter');
+	await page.getByRole('option', { name: /^claimed/ }).click();
+	await expect(rows, 'the two filters did not compose').toHaveCount(1);
+});
+
+test('an EMPTY filter result says why it is empty, rather than looking broken', async ({
+	page,
+}) => {
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([task('t1', 'claimed', { assignee: 'gina' }), task('t2', 'accepted')]),
+	);
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByLabel('Filter by assignee').fill('nobody-by-that-name');
+
+	// "No items yet — send data points in" would be a LIE here: there are items, they just do not
+	// match. The two states are different and the queue must not conflate them.
+	await expect(page.getByText('No items match this filter.')).toBeVisible();
+	await expect(page.getByText(/No items yet/)).toHaveCount(0);
+});
+
+test('changing a filter CLEARS the selection — a hidden row must never stay selected', async ({
+	page,
+}) => {
+	// `rowSelection` is keyed by task id and survives a row leaving the visible set. Without this,
+	// filtering down, selecting all, then clearing the filter leaves rows selected that the manager
+	// never saw — and the bulk actions act on a selection.
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([
+			task('t1', 'in_review', { assignee: 'gina', submitted_by: 'gina' }),
+			task('t2', 'in_review', { assignee: 'omar', submitted_by: 'omar' }),
+		]),
+	);
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByRole('checkbox', { name: 'Select all' }).check();
+	await expect(page.getByRole('button', { name: /Accept 2 reviewed/ })).toBeVisible();
+
+	await page.getByLabel('Filter by assignee').fill('gina');
+	await expect(
+		page.getByRole('button', { name: /Accept \d+ reviewed/ }),
+		'a selection survived a filter change',
+	).toHaveCount(0);
+});
+
+// --------------------------------------------------------------------------------------------------
+// 40b — bulk assign. One gated event per item, reported per item.
+// --------------------------------------------------------------------------------------------------
+
+/** An unassigned row the machine WILL take an `assign` for. `TASK_EVENTS` does not carry that edge
+ *  for `unassigned`, and the per-row assign test declares it the same way. */
+function assignable(id: string) {
+	return {
+		...task(id, 'unassigned'),
+		legal_events: [
+			{ event: 'claim', to: 'claimed', permission: 'can_claim' },
+			{ event: 'assign', to: 'claimed', permission: 'can_manage' },
+		],
+	};
+}
+
+test('bulk assign fires ONE gated event per selected item, carrying the assignee', async ({
+	page,
+}) => {
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([assignable('t1'), assignable('t2'), task('t3', 'accepted')]),
+	);
+	await seed(page, {
+		'POST /tasks/t1/events': task('t1', 'claimed', { assignee: 'gina' }),
+		'POST /tasks/t2/events': task('t2', 'claimed', { assignee: 'gina' }),
+	});
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByRole('checkbox', { name: 'Select all' }).check();
+
+	// Only the ASSIGNABLE rows are offered — t3 is accepted and its machine has no `assign` edge.
+	await expect(page.getByTestId('bulk-assign')).toHaveText('Assign 2');
+	await page.getByTestId('bulk-assign').click();
+
+	await page.getByTestId('bulk-assign-dialog').getByRole('textbox').fill('gina');
+	await page.getByRole('button', { name: 'Assign all' }).click();
+
+	await expect
+		.poll(async () => (await calls(page)).filter((c) => c.method === 'POST').length, {
+			timeout: 10_000,
+		})
+		.toBe(2);
+	const posts = (await calls(page)).filter((c) => c.method === 'POST');
+	expect(posts.map((c) => c.path).sort()).toEqual(['/tasks/t1/events', '/tasks/t2/events']);
+	for (const p of posts) expect(p.body).toMatchObject({ event: 'assign', assignee: 'gina' });
+});
+
+test('a PARTIAL failure names what failed and reports what landed', async ({ page }) => {
+	// The whole reason for one-event-per-item: there is no transaction across task actors, so a
+	// rollback would be a second best-effort loop that can itself half-fail. Reporting the truth
+	// beats claiming an atomicity the model cannot deliver.
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([assignable('t1'), assignable('t2')]),
+	);
+	await seed(page, {
+		'POST /tasks/t1/events': task('t1', 'claimed', { assignee: 'gina' }),
+		'POST /tasks/t2/events': { status: 409, body: { detail: 'task t2 is already held by omar' } },
+	});
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByRole('checkbox', { name: 'Select all' }).check();
+	await page.getByTestId('bulk-assign').click();
+	await page.getByTestId('bulk-assign-dialog').getByRole('textbox').fill('gina');
+	await page.getByRole('button', { name: 'Assign all' }).click();
+
+	// Counts AND the server's own words. "Assign failed" would leave a manager unable to tell a
+	// permission problem from a race on one row.
+	await expect(page.getByText(/1 of 2 assigned to gina/)).toBeVisible();
+	await expect(page.getByText(/already held by omar/)).toBeVisible();
+});
+
+test('bulk assign is not offered when nothing selected can take it', async ({ page }) => {
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([task('t1', 'accepted'), task('t2', 'skipped')]),
+	);
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByRole('checkbox', { name: 'Select all' }).check();
+
+	await expect(page.getByTestId('bulk-assign')).toBeDisabled();
+});
+
+// --------------------------------------------------------------------------------------------------
+// 40c — per-annotator metrics. Derived from the queue, so they cannot disagree with it.
+// --------------------------------------------------------------------------------------------------
+
+test('the metrics panel reports throughput and accept-rate, and includes a person with none', async ({
+	page,
+}) => {
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([
+			task('t1', 'accepted', { submitted_by: 'gina' }),
+			task('t2', 'accepted', { submitted_by: 'gina' }),
+			task('t3', 'in_review', { submitted_by: 'gina' }),
+			task('t4', 'changes_requested', { submitted_by: 'gina', review_action: 'request_changes' }),
+			// omar holds work and has submitted nothing — exactly who a manager is looking for, and
+			// exactly who a "drop the empty rows" panel would hide.
+			task('t5', 'claimed', { assignee: 'omar' }),
+		]),
+	);
+
+	await page.goto('/annotator/projects/p1');
+	const panel = page.getByTestId('annotator-metrics');
+	await expect(panel).toBeVisible();
+	await expect(panel.getByTestId('metrics-row')).toHaveCount(2);
+
+	const gina = panel.getByTestId('metrics-row').filter({ hasText: 'gina' });
+	// 4 submitted, 2 accepted → 50%.
+	await expect(gina.getByTestId('accept-rate')).toHaveText('50%');
+
+	const omar = panel.getByTestId('metrics-row').filter({ hasText: 'omar' });
+	await expect(omar, 'a person holding work but submitting none was hidden').toHaveCount(1);
+	// A rate is a rate. 0% would read as "everything they did was rejected" — the opposite of true.
+	await expect(omar.getByTestId('accept-rate')).toHaveText('—');
+});
+
+test('the metrics panel is ABSENT on a project nobody has touched', async ({ page }) => {
+	// No people, no panel. A table of zero rows is furniture that implies data was expected.
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([task('t1', 'unassigned')]),
+	);
+
+	await page.goto('/annotator/projects/p1');
+	await expect(page.getByTestId('annotator-metrics')).toHaveCount(0);
+});
+
+// --------------------------------------------------------------------------------------------------
+// 40d — membership. The rungs existed; there was no way to grant one.
+// --------------------------------------------------------------------------------------------------
+
+test('membership lists direct grants and grants a new one', async ({ page }) => {
+	await snapshot(page, { project: project('labeling'), legal_events: LEGAL.labeling }, listing([]));
+	await seed(page, {
+		'GET /projects/p1/members': {
+			members: [{ user: 'user:gina', relation: 'owner' }],
+			grantable: ['owner', 'manager', 'reviewer', 'annotator'],
+		},
+		'PUT /projects/p1/members': {
+			members: [
+				{ user: 'user:gina', relation: 'owner' },
+				{ user: 'user:omar', relation: 'annotator' },
+			],
+			grantable: ['owner', 'manager', 'reviewer', 'annotator'],
+		},
+	});
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('load-members').click();
+	await expect(page.getByTestId('member-row')).toHaveCount(1);
+
+	await page.getByLabel('Person to grant').fill('omar');
+	await page.getByTestId('grant-member').click();
+
+	await expect(page.getByTestId('member-row')).toHaveCount(2);
+	const put = (await calls(page)).find((c) => c.method === 'PUT')!;
+	// The bare subject travels; normalising to `user:omar` is the SERVER's job, because asking a UI
+	// to know the prefix is asking it to know the authorization model.
+	expect(put.body).toMatchObject({ user: 'omar', relation: 'annotator' });
+});
+
+test('revoking the LAST administrator is refused, and the refusal is shown', async ({ page }) => {
+	// The one mistake nobody can undo from inside the product. The server refuses with a named 409;
+	// this asserts the manager actually SEES it rather than the row silently staying put.
+	await snapshot(page, { project: project('labeling'), legal_events: LEGAL.labeling }, listing([]));
+	await seed(page, {
+		'GET /projects/p1/members': {
+			members: [{ user: 'user:gina', relation: 'owner' }],
+			grantable: ['owner', 'manager', 'reviewer', 'annotator'],
+		},
+		'DELETE /projects/p1/members': {
+			status: 409,
+			body: {
+				detail:
+					'user:gina holds the only remaining owner on this project — grant another owner or manager first, or nobody will be able to administer it',
+			},
+		},
+	});
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('load-members').click();
+	await page.getByTestId('revoke-member').click();
+
+	await expect(page.getByTestId('members-error')).toContainText('only remaining owner');
+	await expect(page.getByTestId('member-row'), 'the row vanished despite the refusal').toHaveCount(
+		1,
+	);
+});
+
+test('a non-manager is told WHY, not shown an empty list', async ({ page }) => {
+	// "This project has no members" and "you may not see them" are different facts. Rendering the
+	// second as the first would send someone looking for a bug in the grant path.
+	await snapshot(page, { project: project('labeling'), legal_events: LEGAL.labeling }, listing([]));
+	await seed(page, {
+		'GET /projects/p1/members': { status: 403, body: { detail: 'omar lacks can_manage' } },
+	});
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('load-members').click();
+
+	await expect(page.getByTestId('members-error')).toContainText('lacks can_manage');
+	await expect(page.getByTestId('member-row')).toHaveCount(0);
 });

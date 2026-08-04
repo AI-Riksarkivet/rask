@@ -7,7 +7,7 @@ import { FRONTEND_ROOT } from './manifest';
 describe('the served set is derived from the zones, not hardcoded', () => {
 	it('contains every zone prefix and the catch-all zone routes', () => {
 		const served = servedSegments();
-		for (const zone of ['lakehouse', 'media', 'annotator']) {
+		for (const zone of ['lakehouse', 'explorer', 'annotator']) {
 			expect(served, `${zone} serves /${zone}`).toContain(zone);
 		}
 		// home owns no prefix, so its own route dirs are reachable at the root.
@@ -24,7 +24,7 @@ describe('the served set is derived from the zones, not hardcoded', () => {
 });
 
 describe('findDeadLinks', () => {
-	const served = new Set(['lakehouse', 'media', 'annotator', 'auth', 'capi']);
+	const served = new Set(['lakehouse', 'explorer', 'annotator', 'auth', 'capi']);
 
 	it('flags a link to a merged-away zone root', () => {
 		const found = findDeadLinks('<a href="/data" data-sveltekit-reload>x</a>', served);
@@ -94,7 +94,7 @@ describe('every domain-relative link in the estate lands somewhere', () => {
 				.map(
 					(v) =>
 						`${rel}:${v.line} links to "${v.href}" but no zone serves "/${v.segment}" — a hard ` +
-						`navigation straight to a 404. Zone paths are /lakehouse, /media, /annotator; the ` +
+						`navigation straight to a 404. Zone paths are /lakehouse, /explorer, /annotator; the ` +
 						`pre-merge roots (/data, /lineage, /models, /admin) are areas of the lakehouse zone now.`,
 				)
 				.join('\n'),

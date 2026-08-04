@@ -46,8 +46,18 @@
 		<ZoneNav {pathname} nav={zoneNav} />
 		{#if content}{@render content()}{/if}
 	</Sidebar.Content>
-	{#if footer}
-		<Sidebar.Footer>{@render footer()}</Sidebar.Footer>
+	{#if zoneNav?.footer || footer}
+		<!-- PINNED, not scrolled. `zoneNav.footer` is real nav (the dock lives here), rendered by the
+		     SAME `ZoneNav` component as the rail via a synthetic one-group nav — so a footer leaf keeps
+		     active-state matching, the reload flag and its collapsed-rail tooltip, with no second
+		     renderer to drift. The free-form `footer` snippet stays for page chrome that is not
+		     navigation at all (the explorer's live service-status badge). -->
+		<Sidebar.Footer>
+			{#if zoneNav?.footer}
+				<ZoneNav {pathname} nav={{ title: zoneNav.title, groups: [zoneNav.footer] }} />
+			{/if}
+			{#if footer}{@render footer()}{/if}
+		</Sidebar.Footer>
 	{/if}
 	<Sidebar.Rail />
 </Sidebar.Root>

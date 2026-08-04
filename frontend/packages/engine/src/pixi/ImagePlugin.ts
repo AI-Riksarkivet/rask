@@ -1,6 +1,29 @@
 import { Application, ColorMatrixFilter, Sprite, Texture } from 'pixi.js';
 import type { ViewportBounds } from './types.js';
 
+/** Ask the server WHY an image failed, once, after `<img>` has already given up.
+ *
+ *  `<img>.onerror` exposes neither status nor body, so this re-requests the same URL purely to read
+ *  them. It is diagnosis, not a retry: the result is only ever used to build the message. If even
+ *  this fails, say the plain thing rather than inventing a cause.
+ */
+async function explain(url: string): Promise<string> {
+	try {
+		const res = await fetch(url);
+		if (res.ok) {
+			// It answers fine on a second look, so the failure was the DECODE — the bytes are not an
+			// image the browser understands. Naming the content type is what makes that actionable
+			// (an HTML error page and a truncated TIFF both fail here, and they need different fixes).
+			return `image could not be decoded (server sent ${res.headers.get('content-type') ?? 'no content-type'}): ${url}`;
+		}
+		const body = (await res.json().catch(() => null)) as { detail?: unknown } | null;
+		const detail = typeof body?.detail === 'string' ? body.detail : res.statusText;
+		return `${res.status} ${detail} — ${url}`;
+	} catch {
+		return `Failed to load image: ${url}`;
+	}
+}
+
 export class ImagePlugin {
 	private app: Application;
 	private sprite: Sprite | null = null;
@@ -46,7 +69,16 @@ export class ImagePlugin {
 		img.crossOrigin = 'anonymous';
 		await new Promise<void>((resolve, reject) => {
 			img.onload = () => resolve();
-			img.onerror = () => reject(new Error(`Failed to load image: ${url}`));
+			// `<img>` is kept for the HAPPY path — it streams and decodes natively, and nothing here
+			// beats it. But its `onerror` carries NO status and NO body by design, so a server that
+			// answered a perfectly clear `404 {"detail": "dataset 'demo' not found"}` reached the user
+			// as "Failed to load image: <url>". The reason was on the wire the whole time and the
+			// element threw it away.
+			//
+			// So a FAILURE pays one extra request to find out why. The happy path pays nothing.
+			img.onerror = () => {
+				void explain(url).then((why) => reject(new Error(why)));
+			};
 			img.src = url;
 		});
 

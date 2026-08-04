@@ -1,9 +1,0 @@
-/* The ELEMENTS' own utility layer. The host page's Tailwind build scans only ITS sources plus
-   ui/dist, so utility classes written in an element's markup would silently not exist there (the
-   spike's styling lesson). Each zone's element bundle therefore compiles its own utilities over
-   exactly the element sources and injects them once at runtime (see index.ts) — self-contained,
-   zone-owned, and pixel-identical to the zone's pages because the class strings ARE the pages'.
-   Utilities only — no preflight, no tokens: the host page already defines both, and the token
-   variables resolve through :root, which keeps the elements following the host's light/dark. */
-@import 'tailwindcss/utilities' source(none);
-@source './';

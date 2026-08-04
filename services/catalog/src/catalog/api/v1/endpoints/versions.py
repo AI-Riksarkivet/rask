@@ -50,7 +50,7 @@ async def table_history(
 ) -> dict[str, object]:
     """The table's commit log — one row per version, newest first: **what** changed and **when**.
 
-    Answers the question a Lakekeeper-style history view asks, from the format itself rather than from a
+    Answers the question a catalog history view asks, from the format itself rather than from a
     side-table we would have to keep in sync. Lance is immutable and append-only at the manifest level, so
     ``versions()`` gives the timestamps and the transaction log gives the substance: the operation kind, the
     delete predicate exactly as the caller wrote it, which fields an update rewrote, fragment deltas, and

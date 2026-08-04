@@ -37,7 +37,7 @@ Everything here is what remains *after* that.
 
 **What.** `services/{viewer,search,annotator}` read the corpus from a node-local `hostPath`
 (`/var/media-corpus`, `chart/templates/media.yaml:126`), staged from the lance-audio box. `MEDIA_DB_ROOT`,
-`MEDIA_DB` and `MEDIA_DESCRIPTOR_DIR` all hang off `media.corpusMountPath`; 10+ files across the three
+`MEDIA_DB` and `MEDIA_DESCRIPTOR_DIR` all hang off `explorer.corpusMountPath`; 10+ files across the three
 services read it.
 
 **Why it is open.** It was correct for a single-node kind cluster and deliberately deferred — "NO data move:
@@ -376,7 +376,7 @@ made seedable — the `open_label.md` waves, folded here as that file retires.**
   it at the one seam every actor call already goes through, so existing handlers work as written
   and future actor-side preconditions inherit it.
 - **`make seed-dev` — the estate is seedable in one command.** A fresh install serves an EMPTY
-  corpus (`media.corpus.mode` defaults to `emptyDir`), which is why `/media` found nothing,
+  corpus (`explorer.corpus.mode` defaults to `emptyDir`), which is why `/media` found nothing,
   `/annotator` had no page and `/lakehouse` listed no tables — "not seeded" was indistinguishable
   from "not built", and the two existing seed scripts were wired to no command. Now: a searchable
   multi-document corpus (10 pages / 3 documents + an FTS index), real IIIF pages into RustFS
@@ -424,23 +424,48 @@ made seedable — the `open_label.md` waves, folded here as that file retires.**
   claims to cover; the script is still pinned to one release name, one node and fixed local ports;
   and the labeling seed hard-codes fixture-internal doc ids with a `dataset_version` that is already
   wrong.
-- **NEW, owner-reported 2026-08-03, root cause found, NOT fixed: the annotate canvas 403s on a
-  catalog-backed estate because the annotations READ has no identity.** `/annotator` renders
-  "annotate · image · load failed — annotations HTTP 403". The catalog's own log names it:
-  `POST /v1/table/transcripts_v2$annotations/describe … 401 Unauthorized` — the annotator service
-  calls the catalog with NO bearer and surfaces the 401 to the browser as a 403. So it is not a
-  grant problem and no tuple will fix it. The publish wave gave WRITES a real service identity
-  (dex password-grant, secret via OpenBao/Dapr); the `MEDIA_READ_BACKEND=catalog` path was never
-  given one. Two things to settle together: (a) which identity a read uses — the signed-in user's
-  forwarded bearer (correct for FGA, since the row filter should be the USER's) or the service
-  account; and (b) `wire.py:59` treats a MISSING annotations table as an empty stream in local mode
-  but has no equivalent guard in catalog mode, so a fresh estate — which legitimately has no
-  annotations yet — cannot open the canvas at all. Fix (a) properly; do NOT paper over it by
-  swallowing 401/403 as "empty", which would hide real permission failures.
-- **NEW, owner-reported 2026-08-03, NOT diagnosed: a `derived_inert` flood in the annotate view.**
-  Hundreds of `https://svelte.dev/e/derived_inert` from the compiled bundle — a `$derived` read
-  after its owner was destroyed, or written to. Volume suggests a per-frame path (the PixiJS canvas
-  loop). Needs a dev-build repro to name the component; the minified stack is not enough.
+- ~~**the annotate canvas 403s because the annotations READ has no identity**~~ **FIXED 2026-08-03,
+  and two claims in the original entry were WRONG — corrected here because both would have sent the
+  next reader the wrong way.**
+  - The symptom and its cause held: the catalog logged `401 Unauthorized` for
+    `POST /v1/table/transcripts_v2$annotations/describe`, the annotator sent no bearer, and the
+    browser was told 403. Root cause was deeper than a missing env var — `open_reader`/`open_writer`
+    had **no credential parameter at all**, only `settings.catalog_token`, which the chart leaves
+    empty (`values.yaml: catalogToken: ""`).
+  - **WRONG CLAIM 1 — "the row filter should be the USER's".** The catalog performs **no row
+    filtering**: `query_table` passes the body straight to the native namespace with no user
+    predicate, and `authorize` checks one relation on one `table:` object. The forwarded bearer is
+    still correct, but for a different reason — **confused deputy**: with A granted reader and B not,
+    a user bearer gives A 200 / B 403, while a service token gives A 200 / **B 200**, silently
+    over-permitting B. The principals diverge, not the rows.
+  - **WRONG CLAIM 2 — "no equivalent guard in catalog mode".** `wire.py` already guards catalog-mode
+    absence (`NotFoundError` → empty stream), and `versions.py` does the same. The 401, laundered
+    into `ForbiddenError`, simply bypassed that guard. `translate_catalog_errors` now keeps 401 as
+    `UnauthorizedError`.
+  - Still open from this thread: **`services/viewer` has the identical missing-bearer defect** on its
+    own catalog call and no bearer plumbing to fix it with (no `security.py`, no `HTTPBearer`). Its
+    error message no longer lies — a 401 used to report as "catalog does not know table X" — but the
+    credential itself is unfixed.
+  - **And the genuine absence hole is on the WRITE path, not the read**: `save.py` and `tags.py` call
+    `reader.table_version()` unguarded, and **nothing anywhere creates the annotations table** — the
+    writer seam exposes only `merge_upsert`/`merge_insert_only`/`delete`, no create. So a fresh
+    estate's FIRST save has nothing to write into. Fix by making the table exist (a create-if-absent
+    verb on the writer seam), not by widening an except clause.
+- ~~**a `derived_inert` flood in the annotate view**~~ **FIXED 2026-08-03 (`6277dcc`).** Worth
+  recording what it was NOT, because two plausible readings are both wrong and both cost time. It is
+  not an error — it is a runtime **WARNING** (`console.warn` from Svelte's `deriveds.js`), which is
+  exactly why a production build prints only the bare URL and the stack names no component. And it is
+  not a misplaced rune: every `$derived` in the annotator and `@rask/engine` is correctly placed —
+  none inside an effect, callback, ticker or `{@attach}`.
+  It was **ownership**. `AnnotatorController` holds 13 `$derived` fields and is constructed at
+  `AnnotatorShell` top level, which the compiler places inside the `{#key unit.key}` BRANCH effect —
+  destroyed on every unit navigation. Two paths kept writing it afterwards: (a) `ImageViewer.onready`
+  has two awaits and is fired UN-AWAITED by `PixiCanvas`, so either can outlive the component and the
+  stale continuation called `attach()` on a destroyed shell (`VideoViewer` had the same shape with a
+  `disposed` flag it never checked); and (b) `detach()` had **zero callers** and released only the
+  viewport chain — `attach()` hands the engine SEVEN closures capturing `this`, so six
+  InteractionManager callbacks stayed live after teardown. Both halves fixed; `detach()` now releases
+  all seven, before nulling `ctx`.
 - **Still open after this wave** (the honest residue): **batch mode** (`runners.jobsUrl` — the
   annotator's batch-labeling submit is still an honest mock); **W3 text spans** (doccano parity —
   needs `char_start`/`char_end` on `Shape` plus a span tool; the review/consensus/publish machine
@@ -598,7 +623,7 @@ and `services/volumes_api` are deleted; the gateway's core rows AND its `/api` c
 image-list entries are deleted; `ray-api` took the clean `ray` name everywhere external (R20),
 then became `compute` on EVERY surface — uv member and import included — at R22 (`import compute`
 shadows nothing, so R20's PyPI-shadow exception died with the rename). The S3 object browser was
-ported into the media viewer (`viewer/api/v1/endpoints/objects.py`, public `/api/media/object*`,
+ported into the media viewer (`viewer/api/v1/endpoints/objects.py`, public `/api/explorer/object*`,
 tests `tests/unit/test_objects_browser.py`) and the lakehouse storage browser re-pointed to it.
 The EAD `/catalog/search` endpoint retired with **zero frontend callers**; its re-land is D2d below.
 
@@ -610,7 +635,7 @@ now (nothing called it: `searchLines`/`searchStats` had zero zone importers). Th
 `s3://images-batch-search/lines` table is a corpse.
 **What closes it.** The P7b gold wave: a **catalog-governed lines table** (line text/geometry/
 confidence are `GOLD_CONTRACT_COLUMNS`) + a `DatasetRegistry` descriptor, served at
-`/api/media/search?dataset=lines&mode=fts`. Thumb crops ride as a blob column served by the media
+`/api/explorer/search?dataset=lines&mode=fts`. Thumb crops ride as a blob column served by the media
 blob route — no raw-S3-key proxy gets re-created.
 
 ### D2d · The EAD catalog re-lands as a catalog-governed Lance table *(new, 2026-07-28 — the second half of D2a)*
@@ -619,7 +644,7 @@ blob route — no raw-S3-key proxy gets re-created.
 survives (EAD download only). The `archive_catalog` Lance table at `s3://images-batch-search` is
 frozen and unserved.
 **What closes it.** An ingest job that writes the EAD table **through the catalog** (governed), plus
-a descriptor, so `/api/media/search?dataset=archive_catalog&mode=fts` serves it (media search's
+a descriptor, so `/api/explorer/search?dataset=archive_catalog&mode=fts` serves it (media search's
 dynamic filterable params cover `archive_code`/`date_*` natively).
 
 ### D2e · Warehouse-bucket generalization of the objects browser *(new, 2026-07-28 — the R8 follow-up)*
@@ -984,7 +1009,7 @@ a create path. Until then `/lakehouse/catalog/projects` and the home picker can 
 the gateway routes `/api/ray` + `/api/serve` to dapr app-id `compute` unconditionally
 (`gateway/__init__.py:78,103,105`). But the Deployment renders only under `singleTenant.enabled`
 (`chart/templates/fleet.yaml:12`), which defaults false and is set by no shipped path — not
-`make k3s-up`, not `values-prod.yaml`, not the Tiltfile.
+`make k3s-up`, not `values-prod.yaml`.
 
 Result: `/api/ray/*` answers `ERR_DIRECT_INVOKE: failed to resolve compute-dapr…` on every default
 install. `Makefile:406` prints that exact route as the post-install check, and `dev-frontends-k3s`

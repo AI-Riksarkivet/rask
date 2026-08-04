@@ -58,6 +58,12 @@ def sample_table(doc_id: str) -> pa.Table:
         "t_start": [0.0, 0.0, 0.0],  # image annotations have no time axis
         "t_end": [0.0, 0.0, 0.0],
         "text": ["regeringen", "principmodellen", "region"],
+        # The TEXTUAL facet. Empty here on purpose: none of these three rows is a span, and a
+        # non-span row must carry `-1` rather than 0 — 0 is a meaningful offset (the first
+        # character), so zeros would seed three zero-length spans pointing at nothing.
+        "parent_id": ["", "", ""],
+        "char_start": [-1, -1, -1],
+        "char_end": [-1, -1, -1],
         "label": ["text-line", "text-line", "figure"],
         "status": ["prediction", "prediction", "accepted"],
         "source": ["model:htr-trocr@v1", "model:htr-trocr@v1", "manual"],

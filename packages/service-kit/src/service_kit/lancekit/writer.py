@@ -191,12 +191,18 @@ def open_writer(
     dataset: lance.LanceDataset | None,
     table_id: list[str],
     settings: Settings,
+    caller_token: str | None = None,
 ) -> TableWriter:
     """Select the write path from settings — the single host-agnostic seam.
 
     ``MEDIA_WRITE_BACKEND=direct`` (default) ⇒ :class:`LanceTableWriter` (byte-identical
     to today). ``=catalog`` ⇒ :class:`CatalogTableWriter` over the live REST catalog
     when ``MEDIA_CATALOG_URI`` is set, else the in-process :class:`LocalCatalogWriteTransport`.
+
+    ``caller_token`` is the END USER's bearer, forwarded so the catalog authorises the WRITE against
+    the caller rather than against a service account — the same confused-deputy argument as
+    :func:`open_reader`, and it bites harder on a write. Falls back to ``settings.catalog_token``
+    for callers with no request context (the publish saga, which outlives any request).
     """
     if settings.write_backend != "catalog":
         if dataset is None:
@@ -207,7 +213,7 @@ def open_writer(
             settings.catalog_uri,
             list(table_id),
             delimiter=settings.catalog_delimiter,
-            token=settings.catalog_token,
+            token=caller_token or settings.catalog_token,
         )
     else:
         if dataset is None:

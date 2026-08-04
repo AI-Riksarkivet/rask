@@ -2659,10 +2659,13 @@
             "enum": [
               "grant_added",
               "grant_revoked",
+              "project_created",
+              "project_deleted",
               "warehouse_created",
               "warehouse_activated",
               "warehouse_deactivated",
               "warehouse_bound",
+              "warehouse_deleted",
               "policy_set",
               "policy_deleted",
               "namespace_created",
@@ -2703,6 +2706,7 @@
           },
           "object_type": {
             "enum": [
+              "project",
               "grant",
               "warehouse",
               "policy",
@@ -3261,6 +3265,20 @@
           }
         },
         "title": "CreateNamespaceResponse",
+        "type": "object"
+      },
+      "CreateProjectRequest": {
+        "description": "The create payload. Just the id \u2014 a tenant is a name, its admins, and what it later holds.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "CreateProjectRequest",
         "type": "object"
       },
       "CreateTableBranchRequest": {
@@ -4482,6 +4500,25 @@
         "title": "DeleteFromTableResponse",
         "type": "object"
       },
+      "DeleteProjectResponse": {
+        "description": "What the delete actually removed: the retired tenant and how many FGA tuples went with it.\n\nThe count is reported rather than assumed \u2014 an operator retiring a tenant needs to see that the authz\nside really happened (``0`` on an FGA-off stack is a fact, not a silent success).",
+        "properties": {
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "tuples_revoked": {
+            "title": "Tuples Revoked",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project",
+          "tuples_revoked"
+        ],
+        "title": "DeleteProjectResponse",
+        "type": "object"
+      },
       "DeleteTableBranchRequest": {
         "description": "DeleteTableBranchRequest",
         "properties": {
@@ -4656,6 +4693,48 @@
           }
         },
         "title": "DeleteTableTagResponse",
+        "type": "object"
+      },
+      "DeleteWarehouseResponse": {
+        "description": "What the delete ACTUALLY did \u2014 reported step by step, never assumed.\n\nA warehouse delete touches four independent stores (the native namespaces, OpenFGA, the registry, the\nbucket) and only three of them run by default. Reporting each separately is what makes a partial\nfailure diagnosable instead of a lie: ``bucket_purged=false`` names bytes that are still there, and\n``tuples_revoked`` is a count OpenFGA really returned.",
+        "properties": {
+          "bucket": {
+            "title": "Bucket",
+            "type": "string"
+          },
+          "bucket_purged": {
+            "title": "Bucket Purged",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "namespaces_dropped": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Namespaces Dropped",
+            "type": "array"
+          },
+          "objects_purged": {
+            "title": "Objects Purged",
+            "type": "integer"
+          },
+          "tuples_revoked": {
+            "title": "Tuples Revoked",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "bucket",
+          "namespaces_dropped",
+          "tuples_revoked",
+          "bucket_purged",
+          "objects_purged"
+        ],
+        "title": "DeleteWarehouseResponse",
         "type": "object"
       },
       "DeregisterTableRequest": {
@@ -12154,9 +12233,110 @@
         "tags": [
           "projects"
         ]
+      },
+      "post": {
+        "description": "Mint a tenant: registry record + the creator's ``admin`` tuple, in one operation. Estate-admin gated.\n\nThe gate is ``can_observe_events`` on the fixed root object \u2014 the estate-admin bar every whole-estate\nsurface uses. Idempotent: re-POSTing an existing id carries ``created_at``/``created_by``/``protected``\nforward and re-asserts the admin tuple (a duplicate FGA write is a no-op), so a partial-failure retry\n(record written, tuple write failed) converges instead of erroring. The grant is audited and published\nlike any other ACL change, only when it was actually written.",
+        "operationId": "create_project_v1_projects_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Project",
+        "tags": [
+          "projects"
+        ]
       }
     },
     "/v1/projects/{project_id}": {
+      "delete": {
+        "description": "Retire a tenant: refuse while it still holds warehouses, else revoke its tuples and drop its record.\n\nGated on ``project:<id>#can_administer`` \u2014 the tenant's OWN admin bar, not the estate-observer gate the\nread routes use (module docstring). Order, fail-closed and each step earning the next:\nid shape (400) \u2192 existence (404) \u2192 authz (403) \u2192 deletion protection (409) \u2192 emptiness (409) \u2192\nrevoke tuples \u2192 delete record \u2192 audit + event.\n\n**Emptiness is bottom-up** (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses\nrefuses 409 and NAMES them \u2014 a refusal that does not say what blocks it just moves the search to the\nuser. **There is deliberately no ``cascade`` parameter on this route at all.** A project cascade would\nreach warehouses, and a warehouse's own delete can purge a bucket; one request must never be able to\ndestroy a tenant's storage transitively. Emptying goes one rung at a time through\n``DELETE /v1/warehouses/{id}``, where the purge is its own separate opt-in.\n\n``force=true`` overrides deletion PROTECTION only (Decision 5) \u2014 the FGA gate above ran first and runs\nidentically with or without it, so forcing cannot delete a project the caller may not administer.",
+        "operationId": "delete_project_v1_projects__project_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteProjectResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Project",
+        "tags": [
+          "projects"
+        ]
+      },
       "get": {
         "description": "One derived tenant \u2014 the same shape as the list. Estate-observer gated; unknown project \u2192 404.",
         "operationId": "get_project_v1_projects__project_id__get",
@@ -14451,7 +14631,7 @@
     },
     "/v1/table/{id}/history": {
       "get": {
-        "description": "The table's commit log \u2014 one row per version, newest first: **what** changed and **when**.\n\nAnswers the question a Lakekeeper-style history view asks, from the format itself rather than from a\nside-table we would have to keep in sync. Lance is immutable and append-only at the manifest level, so\n``versions()`` gives the timestamps and the transaction log gives the substance: the operation kind, the\ndelete predicate exactly as the caller wrote it, which fields an update rewrote, fragment deltas, and\nwhether the schema was set at that version.\n\n**It does not answer WHO, deliberately.** Lance's transaction log has no notion of a user and should not\nhave one \u2014 identity is this estate's concern, not the format's. The actor per version already lives in\nthe lineage store, on the ``author`` run facet\n(``GET /datasets/{name}/producers`` \u2192 ``dataset_version`` + ``author`` + ``operation``), which is written\nfrom the verified OIDC subject on every governed write. A who/when/what view joins the two on the version\nnumber. Two sources, each authoritative for its own half \u2014 a third that merged them would just be a copy\nof one of them, free to drift.\n\nReader-tier: ``can_get_metadata`` on the table, the same rung as describe/list-versions. A commit log is\nmetadata about the data, and it leaks real information (predicates name values, field names name\ncolumns), so it is gated exactly like the schema is rather than being treated as public.\n\n``limit`` bounds the per-version transaction reads \u2014 a table with 10k versions must not turn a UI page\ninto 10k object-store round trips.",
+        "description": "The table's commit log \u2014 one row per version, newest first: **what** changed and **when**.\n\nAnswers the question a catalog history view asks, from the format itself rather than from a\nside-table we would have to keep in sync. Lance is immutable and append-only at the manifest level, so\n``versions()`` gives the timestamps and the transaction log gives the substance: the operation kind, the\ndelete predicate exactly as the caller wrote it, which fields an update rewrote, fragment deltas, and\nwhether the schema was set at that version.\n\n**It does not answer WHO, deliberately.** Lance's transaction log has no notion of a user and should not\nhave one \u2014 identity is this estate's concern, not the format's. The actor per version already lives in\nthe lineage store, on the ``author`` run facet\n(``GET /datasets/{name}/producers`` \u2192 ``dataset_version`` + ``author`` + ``operation``), which is written\nfrom the verified OIDC subject on every governed write. A who/when/what view joins the two on the version\nnumber. Two sources, each authoritative for its own half \u2014 a third that merged them would just be a copy\nof one of them, free to drift.\n\nReader-tier: ``can_get_metadata`` on the table, the same rung as describe/list-versions. A commit log is\nmetadata about the data, and it leaks real information (predicates name values, field names name\ncolumns), so it is gated exactly like the schema is rather than being treated as public.\n\n``limit`` bounds the per-version transaction reads \u2014 a table with 10k versions must not turn a UI page\ninto 10k object-store round trips.",
         "operationId": "table_history_v1_table__id__history_get",
         "parameters": [
           {
@@ -17062,7 +17242,7 @@
         ]
       },
       "post": {
-        "description": "Provision a warehouse: create its physical bucket + register it + seed FGA. Admin-gated.\n\nOrder (fail-closed): authorize FIRST (``can_create_warehouse`` on the project, or \u2014 for a project that\ndoes not exist yet \u2014 the estate admin's ``can_observe_events`` on the root), THEN provision the bucket\n(idempotent), write the registry record, and grant the caller ``owner`` on ``warehouse:<id>`` with a\n``parent`` edge to the project. A re-run with the same id is idempotent (bucket + record both\noverwrite-safe).\n\nMinting a NEW tenant additionally grants the caller ``admin`` on ``project:<project>``: a brand-new\nproject has no tuples, so without that seed it would stay adminless forever (see\n``fga_deps.require_can_create_warehouse``). That bootstrap grant is audited + published like any other\ngrant.",
+        "description": "Provision a warehouse: create its physical bucket + register it + seed FGA. Admin-gated.\n\nOrder (fail-closed): the project must EXIST (``require_project_exists`` \u2014 404 naming\n``POST /v1/projects`` as the fix; existence is the registry's answer, identical for every caller, so\nit runs before authz), THEN authorize ``can_create_warehouse`` on the project, THEN provision the\nbucket (idempotent), write the registry record, and grant the caller ``owner`` on ``warehouse:<id>``\nwith its ``project`` edge. A re-run with the same id is idempotent (bucket + record overwrite-safe).\n\nThe estate-admin bootstrap exception is GONE (Decision 1): tenants are minted explicitly at\n``POST /v1/projects``, which seeds the project's admin \u2014 so by the time this runs the project has\nadmins of its own and one door is enough.",
         "operationId": "create_warehouse_v1_warehouses_post",
         "requestBody": {
           "content": {
@@ -17108,6 +17288,82 @@
       }
     },
     "/v1/warehouses/{warehouse_id}": {
+      "delete": {
+        "description": "Delete a warehouse: its bindings, its tuples and its registry record \u2014 and its BUCKET only if asked.\n\nGated on ``project#can_administer`` (`open_hierarchy_lifecycle.md` Decision 3), NOT on a relation of the\nwarehouse itself: destroying a tenant's storage is a tenant-level act, so it clears the tenant's own\nadmin bar rather than a rung someone could hold on this one warehouse.\n\nOrder, and every step is load-bearing:\n\n1. The record must exist (404).\n2. **Authorize first.** The gate runs before the protection and emptiness checks, so an unauthorized\n   caller never learns whether the warehouse is protected or what it holds \u2014 a 409 listing another\n   tenant's namespace names is a disclosure a 403 must beat to.\n3. Deletion protection (Decision 5) refuses 409 unless ``force=true``. ``force`` overrides the\n   PROTECTION ONLY \u2014 step 2 has already run, identically, with or without it.\n4. Emptiness: a warehouse still holding namespaces refuses 409 **naming them**; a refusal that does not\n   say what blocks it just moves the search to the user. ``?cascade=true`` drops exactly those.\n5. The cascade drops each bound namespace through the REAL native path, against the warehouse's OWN\n   bucket-rooted connection (so it drops in the right bucket), then revokes its tuples and removes its\n   binding \u2014 one namespace fully finished before the next, so a mid-cascade failure leaves a consistent\n   prefix and a retry converges (every primitive is idempotent). A namespace that still holds TABLES\n   refuses on its own rung: the request omits ``behavior``, so the native drop is Restrict and the level\n   below is emptied first. Do NOT reach for ``behavior=\"Cascade\"`` here \u2014 measured against the directory\n   backend, it does not reject the value, it IGNORES it and drops Restrict-style anyway, so the field\n   would read as a working cascade while doing nothing.\n6. Tuples on ``warehouse:<id>``, then the registry record.\n7. **Bytes only on ``?purge_bucket=true``.** A catalog entry is recoverable, a customer's bucket is not,\n   so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a\n   purge that would take bytes this warehouse does not solely own \u2014 a bucket a same-project sibling\n   still claims, or reserved platform storage \u2014 refuses BEFORE the cascade\n   (:func:`_require_bucket_purgeable`).\n\nThe routing cache is evicted for every dropped namespace: ``_resolve_warehouse_root`` caches bindings\nPOSITIVELY and forever (they are immutable while they exist), so a binding deleted here but left in the\ncache would keep routing that namespace into a warehouse that no longer exists.",
+        "operationId": "delete_warehouse_v1_warehouses__warehouse_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cascade",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Cascade",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "purge_bucket",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Purge Bucket",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteWarehouseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Warehouse",
+        "tags": [
+          "warehouse"
+        ]
+      },
       "get": {
         "description": "One warehouse record \u2014 reader-gated on ``warehouse:<id>`` (fail-closed on an OpenFGA outage).",
         "operationId": "get_warehouse_v1_warehouses__warehouse_id__get",

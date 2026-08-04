@@ -60,7 +60,7 @@ _SUBSCRIBER_TOPIC = "LINEAGE_DAPR_TOPIC"
 
 #: Every env var that names the topic a service PUBLISHES lineage to. Each must equal the
 #: subscriber's. `LANCE_DAPR_TOPIC` is the catalog's (it emits its own table-lifecycle runs).
-_PUBLISHER_TOPICS = ("MEDALLION_LINEAGE_TOPIC", "COMPACTION_LINEAGE_TOPIC", "LANCE_DAPR_TOPIC")
+_PUBLISHER_TOPICS = ("MEDALLION_LINEAGE_TOPIC", "MAINTENANCE_LINEAGE_TOPIC", "LANCE_DAPR_TOPIC")
 
 
 def _render(*set_values: str) -> str:
@@ -68,6 +68,9 @@ def _render(*set_values: str) -> str:
     if not Path(helm).exists():
         pytest.skip("helm not available")
     argv = [helm, "template", "rask", str(CHART)]
+    # Side-loaded images: see `rask.image` in _helpers.tpl — the chart refuses a bare
+    # `<component>:<tag>` unless this is set, because that is docker.io and not a local image.
+    argv += ["--set", "image.localImages=true"]
     for value in set_values:
         argv += ["--set", value]
     proc = subprocess.run(argv, capture_output=True, text=True, timeout=300)

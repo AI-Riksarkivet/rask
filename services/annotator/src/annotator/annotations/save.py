@@ -23,6 +23,7 @@ from annotator.annotations.schema import (
     SaveResult,
     identity_values,
 )
+from annotator.api.security import RawBearerToken
 from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
 from service_kit.lancekit.reader import open_reader
 from service_kit.lancekit.registry import table_dataset
@@ -59,6 +60,7 @@ def save_annotations(
     speech_id: int,
     chunk_id: int,
     body: SaveAnnotations,
+    caller_token: RawBearerToken = None,
     dataset: DatasetParam = None,
 ) -> SaveResult:
     """Flush a review delta to Lance as ONE atomic version (see module docstring)."""
@@ -73,7 +75,7 @@ def save_annotations(
     # copy would resurrect old fields), and the 409 compares the version the client
     # loaded against the same source the wire GET served it from.
     table_id = state.settings.catalog_table_id(handle.id, ANNOTATIONS_TABLE)
-    reader = open_reader(dataset=ds, table_id=table_id, settings=state.settings)
+    reader = open_reader(dataset=ds, table_id=table_id, settings=state.settings, caller_token=caller_token)
     check_base_version_value(reader.table_version(), body.base_version)
 
     where = chunk_key_filter(declared, doc_id, (speech_id, chunk_id))
@@ -108,7 +110,7 @@ def save_annotations(
 
     # Writes flow through the writer seam (direct default = byte-identical; catalog
     # merge_insert/delete at merge, which yields OpenFGA + OpenLineage for free).
-    writer = open_writer(dataset=ds, table_id=table_id, settings=state.settings)
+    writer = open_writer(dataset=ds, table_id=table_id, settings=state.settings, caller_token=caller_token)
     touched = 0
     if delta.num_rows:
         writer.merge_upsert(delta, "id")
@@ -122,6 +124,7 @@ def save_annotations(
         state.settings,
         touched=touched,
         unit_key=f"{doc_id}/{speech_id}/{chunk_id}",
+        caller_token=caller_token,
     )
     if touched:
         logger.info(

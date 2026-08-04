@@ -26,7 +26,7 @@ const PORT = Number(args.port ?? 5176);
 // hydration are the app's own, identical to the estate zones.)
 
 // Only `/api/annotations` still leaves the app as a BFF route — the assist and jobs planes became
-// remote functions (open_transport.md, area 4), which are app endpoints under `/annotator/_app/…`
+// remote functions (the transport ruling, area 4), which are app endpoints under `/annotator/_app/…`
 // and are served by the handler below, never proxied.
 function apiUpstream(pathname: string): string {
 	return pathname.startsWith('/api/annotations') ? ANNOTATOR : VIEWER;

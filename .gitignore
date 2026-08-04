@@ -30,7 +30,6 @@ scripts/batch_ids.txt
 # Demo runtime endpoints (written by scripts/medallion_demo.sh; machine-specific)
 .medallion-demo.env
 
-# Locally-downloaded cluster tooling (kind/kubectl/k9s/tilt) — not committed
 .localbin/
 
 # playwright-cli skill scratch logs (tool artifacts, not source)
@@ -49,7 +48,6 @@ chart/charts/
 # git worktrees created by tooling — a second checkout, never content of this one
 .claude/worktrees/
 
-# Tilt editor stubs (`tilt dump api-docs`) — dropped at the repo root by the Tilt VS Code extension
 /api/
 
 # Local ingest-lane run ids — written by scripts/ingest-lane.sh, consumed by the A20 e2e.

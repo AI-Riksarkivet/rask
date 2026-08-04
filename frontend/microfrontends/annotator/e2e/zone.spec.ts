@@ -78,7 +78,7 @@ test.beforeEach(async ({ page }) => {
 		return json(route, { detail: 'unstubbed' }, 404);
 	});
 	// No `/api/config` mock any more: the runner-presence signal is a remote query reading this
-	// server's own env (open_transport.md, area 4), and THIS server is started with no runner — which
+	// server's own env (the transport ruling, area 4), and THIS server is started with no runner — which
 	// is exactly the honest-mock state the chip specs below assert. The real-runner path needs a
 	// different server env, so it lives in e2e/runner/.
 	await page.route('**/annotator/api/datasets', (route) => json(route, DATASETS));

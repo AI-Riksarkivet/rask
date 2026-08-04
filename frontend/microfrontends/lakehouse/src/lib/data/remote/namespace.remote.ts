@@ -13,7 +13,7 @@ import {
 } from '../namespace';
 
 // The NAMESPACE-scoped lifecycle + maintenance-policy surfaces, in the zone's remote-function dialect
-// (open_transport.md, area 1) — same names, same ApiResult shapes as the /capi client this replaces,
+// (the transport ruling, area 1) — same names, same ApiResult shapes as the /capi client this replaces,
 // transport only. Owner-gated by the CATALOG (can_delete on namespace:<id>) against the signed-in
 // user's own bearer, which is the confused-deputy stance the deleted routes carried.
 //

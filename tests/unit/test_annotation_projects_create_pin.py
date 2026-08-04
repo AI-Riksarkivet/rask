@@ -217,14 +217,43 @@ def test_instructions_travel_from_the_create_payload_to_the_persisted_doc(_actor
     assert _actor.created[0]["instructions"] == "Label every visible portrait; skip seals."
 
 
-def test_the_template_travels_from_the_create_payload_to_the_persisted_doc(_actor: _FakeProjectActor) -> None:
+def test_the_ontology_travels_from_the_create_payload_to_the_persisted_doc(_actor: _FakeProjectActor) -> None:
     client = TestClient(_app(allow=True))
     r = client.post(
         "/projects",
-        json={**PAYLOAD, "template": {"kind": "text-span", "tools": ["text"], "required_labels": ["entity"], "enforce": True}},
+        json={
+            **PAYLOAD,
+            "ontology": {
+                "kind": "token-classification",
+                "classes": [{"name": "entity", "tools": ["text"], "required": True}],
+            },
+        },
     )
     assert r.status_code == 201, r.text
-    stored = _actor.created[0]["template"]
-    assert stored["kind"] == "text-span"
-    assert stored["required_labels"] == ["entity"]
-    assert stored["enforce"] is True
+    stored = _actor.created[0]["ontology"]
+    assert stored["kind"] == "token-classification"
+    assert stored["classes"][0]["name"] == "entity"
+    assert stored["classes"][0]["required"] is True
+
+
+def test_an_ontology_that_CONTRADICTS_ITSELF_is_refused_at_create(_actor: _FakeProjectActor) -> None:
+    """The cross-check the two-object model had nowhere to run.
+
+    `label_schema` and `template` were separate fields, so no validator ever saw both — a project
+    could declare a taxonomy and an enforcement contract that disagreed and still answer 201. One
+    document means the model validates itself, and the create endpoint gets that for free.
+    """
+    client = TestClient(_app(allow=True))
+    r = client.post(
+        "/projects",
+        json={
+            **PAYLOAD,
+            "ontology": {
+                "classes": [{"name": "key"}],
+                "relations": [{"name": "answers", "from_classes": ["key"], "to_classes": ["value"]}],
+            },
+        },
+    )
+    assert r.status_code == 422, r.text
+    assert "value" in r.text, "the refusal must name the undeclared class"
+    assert _actor.created == [], "a project was persisted despite a contradictory ontology"

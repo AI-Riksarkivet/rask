@@ -3,7 +3,7 @@ import { mockMe, signIn, TOKEN } from './session';
 import { MOCK_CATALOG } from '../ports';
 
 // Hermetic grant/revoke coverage (#72): the GrantsPanel "Manage access" form mutates the ACL on a
-// TABLE. The transport is remote functions now (open_transport.md, area 1) — the review, the grant
+// TABLE. The transport is remote functions now (the transport ruling, area 1) — the review, the grant
 // and the revoke all run on the zone SERVER, which `page.route` cannot see — so the wire is seeded
 // on, and asserted through, the mock catalog's per-bearer ledger. Same assertions as the /capi-era
 // spec: the grant carries {user, relation}, the review re-fetches, revoke hits its own endpoint.

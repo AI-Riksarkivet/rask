@@ -1,10 +1,10 @@
 model
   schema 1.1
 
-# Lance catalog authorization model — Lakekeeper-style multi-tenant ReBAC (OpenFGA / Zanzibar).
+# Lance catalog authorization model — multi-tenant ReBAC (OpenFGA / Zanzibar).
 #
 # Hierarchy:  team -> project -> warehouse(= one S3 bucket) -> namespace (self-nesting) -> table
-#   mirrors Lakekeeper's  server -> project -> warehouse -> namespace -> table  hierarchy, with lance's
+#   the estate's containment rule end to end, with lance's
 #   concentric-rung style (owner > writer > reader) layered on top, plus a `validator` rung.
 #   `materialized_view` and `transaction` hang off namespace/warehouse and inherit the SAME rungs via
 #   `parent`, so a grant on the enclosing stage reaches the views + transactions inside it.

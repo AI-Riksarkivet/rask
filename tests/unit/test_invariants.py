@@ -243,6 +243,9 @@ def _helm_template(*set_values: str) -> str:
     if not Path(helm).exists():
         pytest.skip("helm not available")
     argv = [helm, "template", str(CHART)]
+    # Side-loaded images: see `rask.image` in _helpers.tpl — the chart refuses a bare
+    # `<component>:<tag>` unless this is set, because that is docker.io and not a local image.
+    argv += ["--set", "image.localImages=true"]
     for value in set_values:
         argv += ["--set", value]
     return subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
@@ -437,7 +440,7 @@ _PINNED_TOPICS: list[tuple[str, str]] = [
     ("packages/service-kit/src/service_kit/control_events.py", 'CONTROL_TOPIC = "catalog.control.v1"'),
     ("services/lineage/src/lineage/core/config.py", 'default="lineage.events.v1", alias="LINEAGE_DAPR_TOPIC"'),
     ("services/catalog/src/catalog/core/config.py", 'default="lineage.events.v1", alias="LANCE_DAPR_TOPIC"'),
-    ("services/compaction/src/compaction/core/config.py", 'default="lineage.events.v1", alias="COMPACTION_LINEAGE_TOPIC"'),
+    ("services/maintenance/src/maintenance/core/config.py", 'default="lineage.events.v1", alias="MAINTENANCE_LINEAGE_TOPIC"'),
     ("services/medallion/src/medallion/core/config.py", 'default="lineage.events.v1", alias="MEDALLION_LINEAGE_TOPIC"'),
     # the intra-cascade trigger topics (unversioned by design: both ends deploy atomically from one chart)
     ("services/medallion/src/medallion/core/config.py", 'default="medallion.bronze", alias="MEDALLION_SUB_TOPIC"'),
@@ -692,6 +695,9 @@ def _helm_notes(*set_values: str) -> str:
             + 'data:\n  notes: {{ include "notes.body" . | quote }}\n'
         )
         argv = [helm, "template", "rask", str(probe)]
+        # Side-loaded images: see `rask.image` in _helpers.tpl — the chart refuses a bare
+        # `<component>:<tag>` unless this is set, because that is docker.io and not a local image.
+        argv += ["--set", "image.localImages=true"]
         for value in set_values:
             argv += ["--set", value]
         out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
@@ -717,7 +723,7 @@ def test_no_pvc_hardcodes_a_provisioner_specific_storage_class() -> None:
     template may name one as a literal. (Note `storageClassName: ""` is NOT the same as omitting it — the
     empty string DISABLES dynamic provisioning — so an empty literal is an offender too.)
     """
-    rendered = _helm_template("singleTenant.enabled=true", "media.enabled=true", "media.corpus.mode=pvc")
+    rendered = _helm_template("singleTenant.enabled=true", "explorer.enabled=true", "explorer.corpus.mode=pvc")
     assert _pvc_docs(rendered), "the chart rendered no PVCs — this guard would pass vacuously"
     offenders: list[str] = []
     # EVERY doc, not just kind: PersistentVolumeClaim — the four RustFS Tenant volumes are a
@@ -814,13 +820,13 @@ def test_the_gpu_device_plugin_cannot_render_without_gpu_workloads() -> None:
 def test_no_workload_mounts_a_hostpath_that_must_pre_exist() -> None:
     """`hostPath` + `type: Directory` = ContainerCreating forever unless a human prepared the node.
 
-    live-proof defect 5: `media.enabled=true` mounted /var/media-corpus with `type: Directory`, so on a
+    live-proof defect 5: `explorer.enabled=true` mounted /var/media-corpus with `type: Directory`, so on a
     fresh cluster all three media pods wedged with a kubelet event as the only clue — and the plan already
     said no hostPath ships. First-party workloads must default to a volume that needs no node preparation
     (emptyDir for dev, a PVC for prod); where a node-local path IS the point (the OTel collector tailing
     /var/log/pods) it must be `DirectoryOrCreate`, never the fail-if-absent `Directory`.
     """
-    rendered = _helm_template("singleTenant.enabled=true", "media.enabled=true", "observability.enabled=true")
+    rendered = _helm_template("singleTenant.enabled=true", "explorer.enabled=true", "observability.enabled=true")
     offenders: list[str] = []
     for doc in rendered.split("\n---"):
         if "hostPath" not in doc:
@@ -835,9 +841,9 @@ def test_no_workload_mounts_a_hostpath_that_must_pre_exist() -> None:
     )
     # The media corpus specifically: the DEFAULT must be node-independent.
     media_pods = [d for d in rendered.split("\n---") if "app.kubernetes.io/component: viewer" in d and "kind: Deployment" in d]
-    assert media_pods, "media.enabled=true rendered no viewer Deployment"
+    assert media_pods, "explorer.enabled=true rendered no viewer Deployment"
     assert "hostPath" not in media_pods[0], (
-        "the media corpus volume still defaults to a hostPath — set media.corpus.mode's default to a volume that works on an unprepared node"
+        "the media corpus volume still defaults to a hostPath — set explorer.corpus.mode's default to a volume that works on an unprepared node"
     )
 
 
@@ -919,7 +925,7 @@ def test_no_job_that_gates_readiness_is_a_post_install_hook() -> None:
     the same deadlock one phase to the left, now blocking every other resource too. The fix is to take
     them out of the hook lifecycle entirely, which is what this pins.
     """
-    rendered = _helm_template("singleTenant.enabled=true", "media.enabled=true")
+    rendered = _helm_template("singleTenant.enabled=true", "explorer.enabled=true")
     offenders: list[str] = []
     for comp in _BOOTSTRAP_JOBS:
         doc = _job_by_component(rendered, comp)
@@ -971,7 +977,7 @@ def test_the_bucket_init_verifies_the_buckets_the_operator_owns() -> None:
     expected = values["rustfs"]["buckets"]
     assert expected, "rustfs.buckets is empty — this guard would pass vacuously"
 
-    rendered = _helm_template("singleTenant.enabled=true", "media.enabled=true")
+    rendered = _helm_template("singleTenant.enabled=true", "explorer.enabled=true")
     job = _job_by_component(rendered, "rustfs-mkbucket")
     assert job is not None, "the bucket-init Job does not render"
 
@@ -1008,7 +1014,7 @@ def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:
     """
     import yaml
 
-    rendered = _helm_template("singleTenant.enabled=true", "media.enabled=true")
+    rendered = _helm_template("singleTenant.enabled=true", "explorer.enabled=true")
     docs = [d for d in yaml.safe_load_all(rendered) if d]
 
     webhook = next(

@@ -13,8 +13,8 @@
 		listDocuments,
 		type Document,
 		type DocumentsResponse,
-	} from '@rask/media-api';
-	import { setActiveView, type DatasetView } from '@rask/media-api/descriptor';
+	} from '@rask/explorer-api';
+	import { setActiveView, type DatasetView } from '@rask/explorer-api/descriptor';
 	import { Button } from '@rask/ui/button';
 	import { Select } from '@rask/ui/select';
 	import DocTile from './DocTile.svelte';

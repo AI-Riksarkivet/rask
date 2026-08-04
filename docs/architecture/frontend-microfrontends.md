@@ -20,7 +20,7 @@ status: new
     | zones `overview`, `storage`, `discover` | **retired** — `/storage` and `/catalog` are routes inside `lakehouse` |
     | base `/default/<domain>` | a bare `/<zone>`; `/default/lakehouse` is asserted *not* to be a zone path |
     | `/<project>/<domain>` | the project comes from the request **host** (`demo.localhost` → `demo`) |
-    | 7 zones, 3 packages | 7 zones, **8** packages — `@rask/dockview`, `@rask/engine`, `@rask/labeling`, `@rask/media-api`, `@rask/config` all arrived with the merge |
+    | 7 zones, 3 packages | 7 zones, **8** packages — `@rask/dockview`, `@rask/engine`, `@rask/labeling`, `@rask/explorer-api`, `@rask/config` all arrived with the merge |
 
     For the current zone list, ports, data dialects, dock workbenches and gates, read
     **`.claude/skills/rask-frontend`** — it is checked against the code and updated with it.
@@ -133,7 +133,7 @@ There are **two distinct layers** — keep them separate:
 2. **Data** — how an app reaches the _backend_. The frontend **never** talks to a domain
    service directly; it always hits the **gateway** (`:8888`), which path-routes `/api/*`
    longest-prefix-first (`ray` :8804, controlplane :8820, and the lance
-   lakehouse/media planes — `/api/catalog`, `/api/lineage`, `/api/media/*`).
+   lakehouse/media planes — `/api/catalog`, `/api/lineage`, `/api/explorer/*`).
 
 ```mermaid
 sequenceDiagram
@@ -146,7 +146,7 @@ sequenceDiagram
   B->>APP: GET /storage
   APP-->>B: SSR HTML (shared shell + page)
   Note over B,SVC: data — /api/* always via the one gateway
-  B->>APP: GET /api/media/objects
+  B->>APP: GET /api/explorer/objects
   APP->>GW: Vite dev proxy / same-origin forwards /api/*
   GW->>SVC: longest-prefix route → the media viewer
   SVC-->>B: JSON

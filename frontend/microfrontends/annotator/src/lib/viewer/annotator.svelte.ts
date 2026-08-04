@@ -22,6 +22,7 @@ import type { Table } from 'apache-arrow';
 import type { CommitShape, GeometryUpdate, PixiContext, Tool } from '@rask/engine';
 import { LayerStore, buildBatchTable } from '@rask/engine';
 import type { LabelDelta, LabelOp, LabelOutcome, Selection } from '@rask/labeling/types';
+import { canonicalShapeType, engineToolsFor } from '@rask/labeling/shape-types';
 import { isChunkSelection } from '@rask/labeling/types';
 import { PRODUCERS } from '@rask/labeling/producers';
 import { rowSignature } from '@rask/labeling/history';
@@ -68,13 +69,67 @@ export interface BrushOptions {
 /** Fields the sidebar can edit inline. */
 export type EditableField = 'label' | 'status' | 'group' | 'text';
 
-/** One reversible field edit (relabel / status / text / group) — the unit of
- *  undo/redo. `before`/`after` are the effective (overlay-aware) string values. */
+/** One reversible field edit (relabel / status / text / group).
+ *  `before`/`after` are the effective (overlay-aware) string values. */
 interface FieldEdit {
+	kind: 'field';
 	index: number;
 	field: EditableField;
 	before: string;
 	after: string;
+}
+
+/** A drawn shape, reversible by hiding the appended row and dropping it from the save payload. */
+interface InsertEdit {
+	kind: 'insert';
+	/** Row index of the appended row — an insert APPENDS, so this never shifts. */
+	index: number;
+	/** Position in `_inserts`, so redo can put the same row back where it was. */
+	at: number;
+	row: InsertRow;
+}
+
+/** A delete, reversible by un-hiding the row and dropping its id from the save payload. */
+interface DeleteEdit {
+	kind: 'delete';
+	index: number;
+	id: string;
+}
+
+/** A geometry move/resize/vertex-drag. `before` is null when the row had no pending edit yet. */
+interface GeometryEdit {
+	kind: 'geometry';
+	index: number;
+	before: GeometryUpdate | null;
+	after: GeometryUpdate;
+}
+
+/** The unit of undo/redo.
+ *
+ *  This was `FieldEdit` alone, so drawing a shape, deleting one and dragging a vertex were all
+ *  UNDOABLE ONLY BY RELOADING — which loses the whole session. With several annotators doing
+ *  hundreds of shapes a day that is work lost in week one, and it is why an annotator stops
+ *  trusting the canvas. One stack, so Ctrl+Z means the same thing whatever the last action was. */
+/** A link drawn or removed. Reversible on the SAME stack as everything else — a relation is work,
+ *  and work that only Ctrl+Z sometimes reaches is work an annotator stops trusting. */
+interface LinkEdit {
+	kind: 'link';
+	link: AnnoLink;
+	/** true = the link was CREATED (so undo removes it); false = it was deleted. */
+	created: boolean;
+}
+
+type UndoOp = FieldEdit | InsertEdit | DeleteEdit | GeometryEdit | LinkEdit;
+
+/** One typed edge between two shapes, addressed by shape ID.
+ *
+ *  IDs, never row indices: the draft is replaced whole on every save and rows shift when one is
+ *  deleted, so an index would silently re-point at a different shape. Mirrors the service's `Link`.
+ */
+export interface AnnoLink {
+	name: string;
+	from_shape: string;
+	to_shape: string;
 }
 
 const STRING_FIELD_CANDIDATES = ['label', 'status', 'source', 'group', 'reviewer'];
@@ -140,8 +195,8 @@ export class AnnotatorController {
 
 	// Undo/redo of field edits (the review operations: relabel / accept / reject /
 	// text). Geometry dirtiness is tracked separately (the engine owns geometry).
-	private _undo = $state<FieldEdit[]>([]);
-	private _redo = $state<FieldEdit[]>([]);
+	private _undo = $state<UndoOp[]>([]);
+	private _redo = $state<UndoOp[]>([]);
 	private _geoDirty = $state(false);
 
 	// Structural edits queued for the next Save: shapes drawn (onCommit) and ids
@@ -252,7 +307,34 @@ export class AnnotatorController {
 		return m;
 	});
 
+	/** The shape types the OPEN TASK permits, canonical names — empty = unconstrained.
+	 *
+	 *  Enforcement lives server-side at submit and stays there; this is the same contract read
+	 *  EARLY so the rail can decline to offer a tool the task will refuse. Discovering a violation
+	 *  after drawing is enforcement that punishes; not offering the tool is enforcement that
+	 *  teaches, and the 409 remains as the backstop for any caller that is not this canvas. */
+	allowedShapeTypes = $state<string[]>([]);
+
+	/** Engine tool names the rail may show, or null for "no restriction". */
+	readonly allowedTools = $derived(engineToolsFor(this.allowedShapeTypes));
+
+	/** Whether this task wants TEXT SPANS at all.
+	 *
+	 *  A span is not drawable with a pointer, so it is not in `allowedTools` and the rail can never
+	 *  offer it — the affordance lives in the inspector instead, beside the text it ranges over. An
+	 *  unconstrained canvas allows it too: with no task there is no rule saying otherwise, and the
+	 *  same reasoning that leaves every drawing tool available applies here. */
+	readonly allowsTextSpans = $derived(
+		this.allowedShapeTypes.length === 0 || this.allowedShapeTypes.includes('text'),
+	);
+
 	readonly canDraw = $derived(this.mode === 'edit');
+	/** Rows queued to be INSERTED on the next save — read-only, so a test can assert that an undo
+	 *  actually removed a drawn shape from the payload rather than merely hiding it. */
+	readonly pendingInserts = $derived(this._inserts.length);
+	/** Rows carrying a pending geometry edit. */
+	readonly pendingGeometryEdits = $derived(this._geoEdits.size);
+
 	readonly canUndo = $derived(this._undo.length > 0);
 	readonly canRedo = $derived(this._redo.length > 0);
 	/** Unsaved-edits flag: pending field edits, a canvas geometry edit, or queued
@@ -287,6 +369,12 @@ export class AnnotatorController {
 		this.magneticSnapped = false;
 		im.onMagneticSnap = (snapped) => (this.magneticSnapped = snapped);
 		im.onSelect = (index) => {
+			// The CANVAS path, and the one that matters for relations: an annotator picks the target
+			// by clicking the shape, not a sidebar row (selecting a row swaps the list out for the
+			// detail pane, so there is no list left to click). This used to assign `selectedIndex`
+			// directly, which walked straight past the link interception in `select()` — the rail
+			// armed, the click landed, and nothing happened.
+			if (index !== null && this._linkPick(index)) return;
 			this.selectedIndex = index;
 			this._mirrorSelection(im.getSelectedSet());
 		};
@@ -295,6 +383,14 @@ export class AnnotatorController {
 		};
 		im.onChange = (index, geo) => {
 			// drag-end geometry of an existing shape → queue for Save (canvas already updated)
+			// `before` is what a redo/undo must restore: the PENDING edit if one exists, else null
+			// meaning "the row's own geometry from the table".
+			this._pushUndo({
+				kind: 'geometry',
+				index,
+				before: this._geoEdits.get(index) ?? null,
+				after: geo,
+			});
 			this._geoEdits.set(index, geo);
 			this._geoDirty = true;
 		};
@@ -336,9 +432,26 @@ export class AnnotatorController {
 		this._version = version ?? null;
 	}
 
+	/** Undo `attach()` — every hook it installed, not just the viewport chain.
+	 *
+	 *  `attach` hands the engine SEVEN closures that capture `this`: six InteractionManager
+	 *  callbacks and the chained `image.onViewportChange`. Clearing only the viewport left the
+	 *  other six live, so an engine event after teardown still wrote this controller's `$state`
+	 *  and re-evaluated its deriveds from a destroyed effect — which is precisely what Svelte
+	 *  reports as `derived_inert`. Release them all, and release them BEFORE `ctx` is nulled
+	 *  (they are reached through it). */
 	detach(): void {
 		this._detachViewport?.();
 		this._detachViewport = null;
+		const im = this.ctx?.plugins.interaction;
+		if (im) {
+			im.onCvToolReady = undefined;
+			im.onMagneticSnap = undefined;
+			im.onSelect = undefined;
+			im.onDirtyChange = undefined;
+			im.onChange = undefined;
+			im.onCommit = undefined;
+		}
 		this.ctx = null;
 		this.table = null;
 	}
@@ -360,6 +473,15 @@ export class AnnotatorController {
 
 	// ── selection ──
 	select(index: number | null): void {
+		// While a relation is armed, a click on a shape is an ENDPOINT, not a selection. Letting it
+		// also change the selection would move the sidebar out from under the annotator mid-link.
+		if (index !== null && this._linkPick(index)) return;
+		this._selectRow(index);
+	}
+
+	/** Selection WITHOUT the link interception. Undo/redo must reach this directly: routing an
+	 *  internal reselect through `select()` would feed the undone row into a half-drawn link. */
+	private _selectRow(index: number | null): void {
 		this.multiSelect = false;
 		this.selectedIndex = index;
 		const im = this.ctx?.plugins.interaction;
@@ -391,13 +513,167 @@ export class AnnotatorController {
 		});
 	}
 
+	// ── relations ────────────────────────────────────────────────────────────────────────────────
+	//
+	// The ontology could declare a relation and the actor could validate one, but nothing could DRAW
+	// one — so KIE and DocVQA were expressible in config and unproducible in practice, and a task
+	// declaring a REQUIRED relation could not be submitted at all.
+	//
+	// Two clicks, not a drag: a drag between two small boxes on a zoomed canvas is a precision task,
+	// and it collides with the marquee/pan gestures the same pointer already owns.
+
+	/** The links drawn on this unit. Rides the draft beside `shapes`. */
+	links = $state<AnnoLink[]>([]);
+	/** The relation being drawn, or null. Set from the task's ontology by the shell. */
+	linkMode = $state<string | null>(null);
+	/** The first endpoint picked, waiting for its target. */
+	pendingLinkFrom = $state<string | null>(null);
+	/** Relation names this task declares. Empty ⇒ the unit has no relations to draw. */
+	relationNames = $state<string[]>([]);
+	/** Classes the TASK declares as drawable with `text` — the only legitimate labels for a span.
+	 *
+	 *  NOT `labelClasses`, which is derived from labels already present in the table: on a page whose
+	 *  only rows are `line`, that offers `line` as the class for a span, and a span labelled with its
+	 *  parent's class is meaningless. Observed live before this existed.
+	 *
+	 *  Empty on an unconstrained canvas, where the caller falls back to a plain name. */
+	textSpanClasses = $state<string[]>([]);
+
+	/** Arm link-drawing for `name`, or disarm when it is already armed (a toggle, like the tools).
+	 *
+	 *  Arming ADOPTS the annotation currently being inspected as the source. The rail lives in that
+	 *  annotation's inspector, so "link answers" plainly means "link THIS one", and the sidebar
+	 *  replaces the list with the detail on selection — asking for a source click after arming would
+	 *  be both redundant and, from the sidebar, impossible. The next click is the TARGET.
+	 *
+	 *  A canvas armed with nothing selected still works: the first click becomes the source. */
+	toggleLinkMode(name: string): void {
+		const arming = this.linkMode !== name;
+		this.linkMode = arming ? name : null;
+		this.pendingLinkFrom = arming ? (this.selected?.id ?? null) : null;
+	}
+
+	/** Feed a picked row into the pending link. Returns true when the click was CONSUMED, so the
+	 *  caller does not also treat it as an ordinary selection. */
+	private _linkPick(index: number): boolean {
+		if (!this.linkMode) return false;
+		const id = this.rows.find((r) => r.index === index)?.id;
+		if (!id) return false;
+		if (this.pendingLinkFrom === null) {
+			this.pendingLinkFrom = id;
+			return true;
+		}
+		if (this.pendingLinkFrom === id) {
+			// Clicking the source again CANCELS. A self-link is meaningless for every relation this
+			// model can express, and silently ignoring the click would read as a broken canvas.
+			this.pendingLinkFrom = null;
+			return true;
+		}
+		this.addLink({ name: this.linkMode, from_shape: this.pendingLinkFrom, to_shape: id });
+		this.pendingLinkFrom = null;
+		return true;
+	}
+
+	/** Add a link, undoably. A duplicate is a no-op rather than a second identical edge. */
+	addLink(link: AnnoLink): void {
+		const exists = this.links.some(
+			(l) =>
+				l.name === link.name && l.from_shape === link.from_shape && l.to_shape === link.to_shape,
+		);
+		if (exists) return;
+		this.links = [...this.links, link];
+		this._pushLinksToCanvas();
+		this._pushUndo({ kind: 'link', link, created: true });
+	}
+
+	/** Remove a link, undoably. */
+	removeLink(link: AnnoLink): void {
+		const before = this.links.length;
+		this.links = this.links.filter(
+			(l) =>
+				!(l.name === link.name && l.from_shape === link.from_shape && l.to_shape === link.to_shape),
+		);
+		if (this.links.length === before) return;
+		this._pushLinksToCanvas();
+		this._pushUndo({ kind: 'link', link, created: false });
+	}
+
+	/** Create a TEXT SPAN over part of an annotation's text.
+	 *
+	 *  A span is a range INTO another row's text — what token-classification and the value half of
+	 *  KIE on transcribed text are made of. It is a real annotation row like any other, so it rides
+	 *  the same insert queue, the same undo stack and the same save; the only thing that makes it a
+	 *  span is that it names a parent and a character range.
+	 *
+	 *  OFFSETS, not the selected substring: text repeats within a line, so storing "Vasa" would be
+	 *  ambiguous about WHICH "Vasa". The substring is stored alongside so the row reads sensibly in a
+	 *  list, but the range is what is authoritative.
+	 */
+	addTextSpan(parentIndex: number, start: number, end: number, label: string): void {
+		const parent = this.rows.find((r) => r.index === parentIndex);
+		// Refused rather than clamped. A clamped span is a range nobody asked for, and unlike a
+		// clamped box you cannot see that it is wrong by looking at the page.
+		if (!parent || start < 0 || end <= start || end > parent.text.length) return;
+		this._appendInsert(
+			makeInsertRow({
+				shape_type: 'text',
+				parent_id: parent.id,
+				char_start: start,
+				char_end: end,
+				text: parent.text.slice(start, end),
+				label,
+				status: 'accepted',
+				source: 'human',
+			}),
+		);
+	}
+
+	/** The links touching a shape id — what the panel renders beside a selected annotation. */
+	linksFor(id: string): AnnoLink[] {
+		return this.links.filter((l) => l.from_shape === id || l.to_shape === id);
+	}
+
+	/** Push the links to the CANVAS as row indices.
+	 *
+	 *  The model addresses endpoints by shape ID (a draft is replaced whole on every save, so an
+	 *  index would silently re-point at a different shape); the engine knows rows by position and has
+	 *  never known what an annotation is called. This is the one place those two facts meet, and it
+	 *  is re-run whenever either side changes — a reload renumbers rows, which would otherwise leave
+	 *  every edge pointing somewhere arbitrary.
+	 *
+	 *  A link whose endpoint is not in the current table is DROPPED rather than clamped: a link to a
+	 *  row that is not here has no honest position, and drawing it at row 0 would be a lie the
+	 *  annotator could not tell from a real edge.
+	 */
+	private _pushLinksToCanvas(): void {
+		const arrow = this.ctx?.plugins.arrow;
+		if (!arrow) return;
+		const byId = new Map(this.rows.map((r) => [r.id, r.index]));
+		const edges: { from: number; to: number }[] = [];
+		for (const link of this.links) {
+			const from = byId.get(link.from_shape);
+			const to = byId.get(link.to_shape);
+			if (from === undefined || to === undefined) continue;
+			edges.push({ from, to });
+		}
+		arrow.setLinks(edges);
+	}
+
 	deleteSelected(): void {
 		const i = this.selectedIndex;
 		if (i == null) return;
 		const t = this.table;
 		const id = t ? rawField(t, 'id', i) : null;
-		if (id) this._deletes = [...this._deletes, id]; // flushed on Save; sidebar drops it now
-		this.ctx?.plugins.interaction.handleKeyDown('Delete');
+		if (id) {
+			this._deletes = [...this._deletes, id];
+			this._pushUndo({ kind: 'delete', index: i, id: String(id) });
+		}
+		// The CANVAS half. This used to be `interaction.handleKeyDown('Delete')`, which never did
+		// anything: `activeTool` is null in select mode — the only mode you can have a selection in —
+		// and no tool implements 'Delete' regardless. So the row vanished from the sidebar and stayed
+		// on the canvas until Save reloaded the table: one delete, two answers.
+		this.ctx?.plugins.arrow.setDeleted(i);
+		this.ctx?.plugins.arrow.sync();
 		this._geoDirty = true;
 		this.select(null);
 	}
@@ -471,6 +747,13 @@ export class AnnotatorController {
 	 *  WebGPU canvas, re-apply pending field patches (sync re-materializes caches).
 	 *  Shared by manual draws (onCommit) and AI-assist predictions. */
 	private _appendInsert(row: InsertRow): void {
+		// Recorded BEFORE the append, so `index` is the row index the appended row will occupy.
+		this._pushUndo({
+			kind: 'insert',
+			index: this.table?.numRows ?? this._inserts.length,
+			at: this._inserts.length,
+			row,
+		});
 		this._inserts = [...this._inserts, row];
 		const t = this.table;
 		if (t) {
@@ -480,6 +763,8 @@ export class AnnotatorController {
 			const next = t.concat(buildBatchTable(t.schema, [row as unknown as Record<string, unknown>]));
 			const arrow = this.ctx?.plugins.arrow;
 			if (arrow) {
+				// An insert APPENDS, so existing row indices are unchanged and the delete overlay stays
+				// valid across this swap — unlike _reload(), which renumbers and must clear it.
 				arrow.load(next);
 				arrow.sync();
 			}
@@ -509,11 +794,18 @@ export class AnnotatorController {
 		this.saving = true;
 		this.saveError = null;
 		try {
+			// Deferred like `_syncTaskDraft` does: `review-selection.svelte` reaches for `$app/paths`,
+			// and importing it at module scope is what would make this controller unloadable in a
+			// plain unit test.
+			const { reviewSelection } = await import('$lib/labeling/review-selection.svelte');
 			const answer = await requestAssist({
 				...target,
 				producer,
 				prompt,
 				region: region ?? null,
+				// The SERVER checks the producer's return against this task's captured template. The
+				// id is all the client sends — never the rules it is judged by.
+				taskId: reviewSelection.taskId ?? null,
 			});
 			if (!answer.ok) {
 				// The server's own words: 401 (sign in), 403 (no permission), 5xx from the runner.
@@ -521,10 +813,19 @@ export class AnnotatorController {
 				return;
 			}
 			const result = answer.data;
+			// Predictions the task refused. Said out loud, because a producer whose output the task
+			// rejects is a MISCONFIGURATION — silently filtering leaves a backend that looks wired up
+			// and returns nothing, with nowhere to see why.
+			if (result.dropped?.length) {
+				toast.warning(
+					`${result.dropped.length} prediction${result.dropped.length === 1 ? '' : 's'} outside this task’s contract`,
+					{ description: result.dropped[0] },
+				);
+			}
 			for (const s of result.shapes) {
 				this._appendInsert(
 					makeInsertRow({
-						shape_type: s.shape_type ?? 'rectangle',
+						shape_type: canonicalShapeType(s.shape_type) ?? 'bbox',
 						x: s.x,
 						y: s.y,
 						width: s.width,
@@ -549,7 +850,10 @@ export class AnnotatorController {
 	/** Map a committed engine shape → the queued insert row (backend NewAnnotation). */
 	private _buildInsert(shape: CommitShape): InsertRow {
 		return makeInsertRow({
-			shape_type: shape.type === 'rect' ? 'rectangle' : shape.type,
+			// ONE seam, and it maps into the SERVICE vocabulary. This used to say
+			// `shape.type === 'rect' ? 'rectangle' : shape.type` — a third name accepted by neither
+			// side, so five of seven tools produced a draft the service refused at submit.
+			shape_type: canonicalShapeType(shape.type) ?? shape.type,
 			x: shape.x,
 			y: shape.y,
 			width: shape.width,
@@ -572,8 +876,7 @@ export class AnnotatorController {
 		if (!t) return;
 		const before = effectiveField(t, this._overrides, field, index) ?? '';
 		if (before === value) return;
-		this._undo = [...this._undo, { index, field, before, after: value }];
-		this._redo = [];
+		this._pushUndo({ kind: 'field', index, field, before, after: value });
 		this._setField(index, field, value);
 	}
 	setStatus(index: number, status: string): void {
@@ -714,23 +1017,103 @@ export class AnnotatorController {
 		}
 	}
 
-	/** Revert the last field edit (canvas + overlay), then re-select it. */
+	/** Push an op and drop the redo branch — a new action invalidates any undone future. */
+	private _pushUndo(op: UndoOp): void {
+		this._undo = [...this._undo, op];
+		this._redo = [];
+	}
+
+	/** Revert the last action — field edit, draw, delete or geometry drag alike. */
 	undo(): void {
 		const op = this._undo.at(-1);
 		if (!op) return;
 		this._undo = this._undo.slice(0, -1);
 		this._redo = [...this._redo, op];
-		this._setField(op.index, op.field, op.before);
-		this.select(op.index);
+		this._apply(op, 'undo');
 	}
-	/** Re-apply the last undone field edit. */
+
+	/** Re-apply the last undone action. */
 	redo(): void {
 		const op = this._redo.at(-1);
 		if (!op) return;
 		this._redo = this._redo.slice(0, -1);
 		this._undo = [...this._undo, op];
-		this._setField(op.index, op.field, op.after);
-		this.select(op.index);
+		this._apply(op, 'redo');
+	}
+
+	/** The ONE reversal path, so undo and redo can never disagree about what an op means. */
+	private _apply(op: UndoOp, direction: 'undo' | 'redo'): void {
+		const arrow = this.ctx?.plugins.arrow;
+		switch (op.kind) {
+			case 'field':
+				this._setField(op.index, op.field, direction === 'undo' ? op.before : op.after);
+				break;
+			case 'link': {
+				// `created XOR undo` — undoing a creation removes, undoing a deletion restores, and
+				// redo is the mirror. One expression rather than four branches that can disagree.
+				const present = op.created !== (direction === 'undo');
+				const gone = this.links.filter(
+					(l) =>
+						!(
+							l.name === op.link.name &&
+							l.from_shape === op.link.from_shape &&
+							l.to_shape === op.link.to_shape
+						),
+				);
+				this.links = present ? [...gone, op.link] : gone;
+				this._pushLinksToCanvas();
+				break;
+			}
+			case 'insert': {
+				// A drawn row cannot be removed from an immutable Arrow table, so undo HIDES it (the
+				// same overlay a delete uses) and drops it from the save payload — the row never
+				// reaches the server either way, which is what "undone" has to mean.
+				if (direction === 'undo') {
+					this._inserts = this._inserts.filter((_, i) => i !== op.at);
+					arrow?.setDeleted(op.index);
+				} else {
+					this._inserts = [...this._inserts.slice(0, op.at), op.row, ...this._inserts.slice(op.at)];
+					arrow?.unsetDeleted(op.index);
+				}
+				arrow?.sync();
+				this._geoDirty = true;
+				break;
+			}
+			case 'delete': {
+				if (direction === 'undo') {
+					this._deletes = this._deletes.filter((id) => id !== op.id);
+					arrow?.unsetDeleted(op.index);
+				} else {
+					this._deletes = [...this._deletes, op.id];
+					arrow?.setDeleted(op.index);
+				}
+				arrow?.sync();
+				this._geoDirty = true;
+				break;
+			}
+			case 'geometry': {
+				const geo = direction === 'undo' ? op.before : op.after;
+				if (geo === null) {
+					// No pending edit before this drag: drop the override entirely so the row falls back
+					// to its own geometry from the table, rather than being pinned to a fabricated one.
+					this._geoEdits.delete(op.index);
+				} else {
+					this._geoEdits.set(op.index, geo);
+					arrow?.setOverride(op.index, {
+						x: geo.x,
+						y: geo.y,
+						w: geo.w,
+						h: geo.h,
+						polygon: geo.polygon ?? [],
+					});
+				}
+				arrow?.sync();
+				this._geoDirty = true;
+				break;
+			}
+		}
+		// A link op touches no ROW, so there is nothing to reselect for it.
+		if (op.kind !== 'link') this._selectRow(op.index);
 	}
 
 	/** Apply a field value to BOTH the WebGPU canvas (arrow.setFieldOverride →
@@ -758,7 +1141,66 @@ export class AnnotatorController {
 
 	/** Flush the accumulated field-edit overlay to Lance as ONE atomic version, then
 	 *  reload so the display reflects the persisted (merge-reordered) rows. */
-	async save(): Promise<void> {
+	// ── autosave ─────────────────────────────────────────────────────────────────────────────────
+	//
+	// Deferred until now because it needed a real answer to ONE question: what happens when the save
+	// conflicts. A manual save reloads and drops the pending edits — defensible, because the user
+	// pressed Save and is told to their face. Doing that on a TIMER would discard work nobody asked
+	// to discard, in the background, while they were still typing. So autosave HALTS on a conflict
+	// and leaves the edits alone; resolving it is a decision, and decisions belong to the annotator.
+
+	/** Milliseconds of quiet after the last edit before an autosave fires. */
+	static readonly AUTOSAVE_IDLE_MS = 4000;
+
+	/** Off until a caller starts it — the ad-hoc canvas and the tests must not get a background
+	 *  writer they never asked for. */
+	autosaveOn = $state(false);
+	/** Set when autosave stops itself. Non-null means it will NOT retry until the user saves. */
+	autosaveHalted = $state<string | null>(null);
+	/** Epoch ms of the last successful save, for the status line. */
+	lastSavedAt = $state<number | null>(null);
+	private _autosaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+	/** What the status line says. One string, so the canvas can never show two answers at once. */
+	readonly saveStatus = $derived.by<string>(() => {
+		if (this.saving) return 'saving…';
+		if (this.autosaveHalted) return this.autosaveHalted;
+		if (this.dirty) return this.autosaveOn ? 'unsaved — autosaving' : 'unsaved';
+		if (this.lastSavedAt !== null) return 'saved';
+		return '';
+	});
+
+	/** Begin autosaving. Idempotent; the caller owns the stop. */
+	startAutosave(): void {
+		this.autosaveOn = true;
+	}
+
+	stopAutosave(): void {
+		this.autosaveOn = false;
+		this._clearAutosaveTimer();
+	}
+
+	private _clearAutosaveTimer(): void {
+		if (this._autosaveTimer !== null) {
+			clearTimeout(this._autosaveTimer);
+			this._autosaveTimer = null;
+		}
+	}
+
+	/** Called by the shell whenever the dirty state changes. DEBOUNCED on purpose: saving on every
+	 *  keystroke would put a write behind each character of a label, and the transport is a
+	 *  whole-payload PUT guarded by a version — a burst of those is a conflict generator. */
+	scheduleAutosave(): void {
+		this._clearAutosaveTimer();
+		if (!this.autosaveOn || this.autosaveHalted !== null) return;
+		if (!this.canSave) return;
+		this._autosaveTimer = setTimeout(() => {
+			this._autosaveTimer = null;
+			void this.save({ auto: true });
+		}, AnnotatorController.AUTOSAVE_IDLE_MS);
+	}
+
+	async save(opts: { auto?: boolean } = {}): Promise<void> {
 		const t = this.table;
 		const url = this._saveUrl;
 		if (!t || !url || this.saving) return;
@@ -779,18 +1221,37 @@ export class AnnotatorController {
 		try {
 			const { status } = await postSave(url, payload);
 			if (status === 'conflict') {
+				if (opts.auto) {
+					// HALT rather than reload. The manual path below drops the pending edits, which is
+					// fine when a person pressed Save and is told — but a background timer discarding
+					// someone's work while they type is not a tradeoff, it is data loss. Stop, say so,
+					// and leave the edits exactly where they are.
+					this.autosaveHalted = 'conflict — autosave paused, save manually to resolve';
+					this.saveError =
+						'Annotations changed on the server. Your edits are still here — press Save to review the conflict.';
+					toast.error(this.saveError);
+					return;
+				}
 				// The table advanced under us (another reviewer / a deriver). Reload to the
 				// server state; the user's pending edits are dropped — they re-apply on fresh data.
 				this.saveError = 'Annotations changed on the server — reloaded. Re-apply your edits.';
 				toast.error(this.saveError);
-			} else {
+			} else if (!opts.auto) {
+				// An autosave is SILENT on success. A toast every four idle seconds is noise that
+				// trains people to ignore toasts, including the ones that matter.
 				toast.success('Annotations saved');
 			}
 			await this._reload();
 			this._resetOverlays();
 			await this._syncTaskDraft();
+			this.lastSavedAt = Date.now();
+			// A successful manual save is what clears a halt: the conflict has been looked at.
+			if (!opts.auto) this.autosaveHalted = null;
 		} catch (e) {
 			this.saveError = e instanceof Error ? e.message : String(e);
+			// A transport failure halts autosave too. Retrying a broken connection every four seconds
+			// buries the real error under a hundred identical toasts.
+			if (opts.auto) this.autosaveHalted = `autosave paused — ${this.saveError}`;
 			toast.error(`Save failed: ${this.saveError}`);
 		} finally {
 			this.saving = false;
@@ -807,7 +1268,7 @@ export class AnnotatorController {
 		const taskId = reviewSelection.taskId;
 		if (!taskId || reviewSelection.total !== 1 || !this.table) return;
 		const { syncTaskDraft } = await import('$lib/projects/draft-sync');
-		const detail = await syncTaskDraft(taskId, this.table);
+		const detail = await syncTaskDraft(taskId, this.table, this.links);
 		if (detail !== null) {
 			toast.error(
 				`Saved to the corpus, but the task draft did not update — the publish will not carry these shapes (${detail})`,
@@ -848,11 +1309,18 @@ export class AnnotatorController {
 		const ctx = this.ctx;
 		if (ctx) {
 			ctx.plugins.arrow.clearOverrides(); // drop stale geometry overrides — table is authoritative
+			// The delete overlay is positional, so a reload renumbering rows would leave it hiding an
+			// unrelated shape. The reloaded table has the deletions applied already.
+			ctx.plugins.arrow.clearDeleted();
 			ctx.plugins.arrow.load(table);
 			ctx.plugins.arrow.sync();
 		}
 		this.table = table;
 		this.count = table.numRows;
+		// AFTER `this.table` is swapped: the id→index map is built from `rows`, which reads the new
+		// table. Re-pushing here is what stops a reload — which renumbers every row — from leaving
+		// each edge pointing at whatever now happens to sit at its old index.
+		this._pushLinksToCanvas();
 		this.select(null);
 	}
 

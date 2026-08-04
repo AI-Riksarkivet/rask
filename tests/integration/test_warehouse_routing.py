@@ -144,8 +144,16 @@ def test_binding_collides_with_existing_default_namespace_409(
         {},
         {"id": "wh-a", "bucket": "wh-a", "root_uri": str(warehouse_root), "project": "acme"},
     )
-    # Create "shared" in the DEFAULT root first (unbound → routes to default).
-    assert client.post("/v1/namespace/shared/create").status_code == 200
+    # A LEGACY unbound namespace in the default root. Created through the app's OWN native connection
+    # rather than the HTTP door, because that door is gone: a top-level namespace must now be created
+    # inside a warehouse (`require_warehouse_scoped`). The collision is still reachable — every
+    # namespace made before that rule landed is exactly this shape — so the guard below must hold.
+    # Going through the native API (not mkdir) is what makes the namespace VISIBLE to the existence
+    # probe the guard uses; a bare directory is not a namespace to it.
+    from catalog.services import native
+    from lance_namespace import CreateNamespaceRequest
+
+    native.call(client.app.state.namespace, "create_namespace", CreateNamespaceRequest(id=["shared"]))
 
     # Binding "shared" to the warehouse would route shared$* to the warehouse bucket and ORPHAN the
     # default-root tables — the collision guard must reject it with 409.

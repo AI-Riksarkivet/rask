@@ -5,9 +5,13 @@ import { test, expect, type Page, type Route } from '@playwright/test';
 // carrying exactly this zone's views (Datasets / Jobs / Runs / Columns + the Graph at the root), and
 // the two-row header — navbar row above, breadcrumb bar below.
 //
-// The bar's IA (8a0fbbc) is THREE domain triggers — Lakehouse (Catalog + Models, plus Governance +
-// Operations for an estate admin), Lineage, Media — never a flat list of zones. Every entry carries
-// sub-areas, so every entry is a NavigationMenu trigger; Home is the product mark, not an entry.
+// The bar's IA is ONE ENTRY PER ZONE (R15), grouped by domain — never a flat list of routes. A zone
+// that owns sub-areas renders as a NavigationMenu TRIGGER (a button opening a panel): Lakehouse
+// (Catalog + Models + Lineage, plus Governance + Operations for an estate admin), Compute, Search.
+// A single-surface zone stays a plain LINK: Annotate, Train, Studio. Home is the product
+// mark, not an entry. Both sets are asserted BY NAME below — a bare `toHaveCount(2)` is what let
+// these assertions rot silently through the seven-zone IA (db15ea8, which gave Compute its panel)
+// and the workbench zone (117c8ed, the 8th zone).
 
 const json = (route: Route, body: unknown, status = 200) =>
 	route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
@@ -55,21 +59,34 @@ test('an estate admin gets the zone triggers + the Marquez-parity sidebar leaves
 	);
 	await page.goto('/lakehouse/lineage');
 	const nav = page.getByRole('navigation', { name: 'Zones' });
-	// The bar is three DOMAIN triggers and nothing else — even for an estate admin, whose extra
-	// surfaces arrive as columns inside Lakehouse's panel rather than as new top-level entries.
-	// All three carry sub-areas, so all three are NavigationMenu triggers (buttons), never links.
-	for (const domain of ['Lakehouse', 'Search']) {
-		await expect(nav.getByRole('button', { name: domain, exact: true })).toBeVisible();
+	// THIS IS THE IN-PROJECT BAR — one entry per ZONE and nothing else. The two-level ruling took
+	// Home, Projects and Settings out of it: they are the ESTATE level, and you meet them at `/`,
+	// `/projects` and `/settings`, where the shell swaps in the main-menu bar instead. Inside a
+	// project the bar's only job is moving between zones, and it is identity-independent again —
+	// an admin earns panel COLUMNS here, never a new destination.
+	//
+	// Named AND counted: the name list catches a zone silently leaving the bar (the R15 defect), the
+	// count catches one silently joining it.
+	for (const trigger of ['Lakehouse', 'Compute', 'Search']) {
+		await expect(nav.getByRole('button', { name: trigger, exact: true })).toBeVisible();
 	}
-	// Two TRIGGERS (Lakehouse, Search) — Annotate is a plain link, not a button, because that
-	// zone has a single surface and a one-row dropdown would be noise. Compute joins as a third
-	// trigger when the rask zone lands.
-	await expect(nav.getByRole('button')).toHaveCount(2);
-	// Home is the product mark, not a nav entry. With every panel closed the ONLY link in the bar is
-	// Annotate — the single-surface zone that is a plain link by design; each panel TRIGGER must stay a
-	// button, or clicking it would navigate instead of opening the panel.
-	await expect(nav.getByRole('link')).toHaveCount(1);
-	await expect(nav.getByRole('link', { name: 'Annotate', exact: true })).toBeVisible();
+	await expect(nav.getByRole('button')).toHaveCount(3);
+	// The bar's LINKS are the single-surface zones — one surface means a one-row dropdown would be
+	// noise; each panel TRIGGER must stay a button, or clicking it would navigate instead of opening
+	// the panel.
+	for (const link of ['Annotate', 'Train', 'Studio']) {
+		await expect(nav.getByRole('link', { name: link, exact: true })).toBeVisible();
+	}
+	await expect(nav.getByRole('link')).toHaveCount(3);
+	// The three estate-level entries are ABSENT here, in either role — pinned, because their leaving
+	// this bar IS the ruling and a regression would otherwise just look like a longer bar.
+	for (const estate of ['Home', 'Projects', 'Settings']) {
+		await expect(nav.getByRole('link', { name: estate, exact: true })).toHaveCount(0);
+		await expect(nav.getByRole('button', { name: estate, exact: true })).toHaveCount(0);
+	}
+	// THE TIER GAP: Lakehouse and Compute lead, then a spacer, then the task destinations. Rendered
+	// from the `tier` data rather than a hardcoded index, so re-tiering an entry moves it.
+	await expect(nav.locator('[data-slot="navbar-tier-gap"]')).toHaveCount(1);
 	// The zone sidebar lists exactly the four first-class views + the Graph (active at the root).
 	// Scoped to the sidebar: page content may legitimately link to the same views (e.g. the graph
 	// header's capped hint links to Datasets), which would trip strict mode on a page-wide query.
@@ -96,12 +113,13 @@ test('a signed-out / unresolved identity gets NO governance column (fail-closed)
 	await page.route('**/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	await page.goto('/lakehouse/lineage');
 	const nav = page.getByRole('navigation', { name: 'Zones' });
-	// The bar never advertises privilege — the same three triggers whoever is looking…
-	await expect(nav.getByRole('button', { name: 'Lakehouse', exact: true })).toBeVisible();
-	// Two TRIGGERS (Lakehouse, Search) — Annotate is a plain link, not a button, because that
-	// zone has a single surface and a one-row dropdown would be noise. Compute joins as a third
-	// trigger when the rask zone lands.
-	await expect(nav.getByRole('button')).toHaveCount(2);
+	// The bar never advertises privilege — the same triggers whoever is looking…
+	for (const trigger of ['Lakehouse', 'Compute', 'Search']) {
+		await expect(nav.getByRole('button', { name: trigger, exact: true })).toBeVisible();
+	}
+	// …and the same NUMBER of them: a privileged surface must never earn a top-level entry. Named
+	// above and counted here (see the file header on why a bare count alone is not enough).
+	await expect(nav.getByRole('button')).toHaveCount(3);
 	// …so the fail-closed guarantee now lives one level in, on Lakehouse's COLUMNS. This is what
 	// the old "no Admin entry in the bar" assertion stood for: with the admin surfaces folded into
 	// a shared trigger, hiding them means the Governance/Operations columns never render at all and
@@ -114,11 +132,15 @@ test('a signed-out / unresolved identity gets NO governance column (fail-closed)
 	await expect(panel.locator('a[href^="/lakehouse/admin"]')).toHaveCount(0);
 });
 
-test('an estate admin gets the Governance + Operations columns inside the Lakehouse panel', async ({
+test('an estate admin gets Operations in the Lakehouse panel and Governance under Settings', async ({
 	page,
 }) => {
-	// The positive half of the guarantee above: the admin surfaces DO exist, and they are rows in
-	// Lakehouse's panel — never a top-level entry, and never anywhere else in the bar.
+	// The positive half of the guarantee above, RE-SPLIT by the 2026-08-03 ruling ("governance and
+	// other setting stuff, more in terms of auth, under settings"). Operating THIS estate — events,
+	// streams, dead letters — is an operation on the lakehouse and stays a column of its panel. Who
+	// may do what — access, tenants, audit — is estate-wide configuration and moved to its own
+	// Settings entry. Both halves are asserted here, in the same test, because the thing worth pinning
+	// is the SPLIT: each surface in exactly one panel, and never in both.
 	await page.route('**/capi/v1/me', (route) =>
 		json(route, {
 			sub: 'user:alice',
@@ -131,14 +153,13 @@ test('an estate admin gets the Governance + Operations columns inside the Lakeho
 	await page.goto('/lakehouse/lineage');
 	const nav = page.getByRole('navigation', { name: 'Zones' });
 	const panel = await openPanel(page, 'Lakehouse');
-	for (const label of ['Catalog', 'Models', 'Governance', 'Operations']) {
+	for (const label of ['Catalog', 'Models', 'Operations']) {
 		await expect(panel.getByText(label, { exact: true })).toBeVisible();
 	}
-	// Each governance/operations row links where it claims.
+	// Governance is NOT a column here any more — asserted as an absence so the rows cannot come to
+	// exist in two places, which is the whole point of moving them.
+	await expect(panel.getByText('Governance', { exact: true })).toHaveCount(0);
 	for (const [row, href] of [
-		['Access', '/lakehouse/governance/access'],
-		['Tenants', '/lakehouse/admin/tenants'],
-		['Audit', '/lakehouse/governance/audit'],
 		['Events', '/lakehouse/admin/events'],
 		['Streams', '/lakehouse/admin/streams'],
 		['DLQ', '/lakehouse/admin/dlq'],
@@ -148,6 +169,13 @@ test('an estate admin gets the Governance + Operations columns inside the Lakeho
 			href,
 		);
 	}
+	// The governance half is NOT assertable from here any more, and that is the point: Settings is an
+	// ESTATE-level entry, so it is not in this bar at all. Its rows are pinned where a user can
+	// actually reach them — `home/e2e/projects/settings.spec.ts`, which drives `/settings` itself and
+	// checks each row's href AND its data-sveltekit-reload (those pages are still served by THIS zone,
+	// so the link crosses zones). What this test still owns is the absence:
+	await expect(nav.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(0);
+	await expect(nav.getByRole('link', { name: 'Settings', exact: true })).toHaveCount(0);
 	// …and with the panel closed the bar itself still carries no Access entry of any shape.
 	await page.keyboard.press('Escape');
 	await expect(panel).toBeHidden();
@@ -170,10 +198,10 @@ test('a domain trigger opens a panel of its rows — pointer and keyboard, same-
 	// The rows link where they claim — the Catalog column over the data area, the Models column over
 	// the models area, both under the one trigger and both inside THIS zone.
 	for (const [row, href] of [
-		['Projects', '/lakehouse/catalog/projects'],
 		['Tables', '/lakehouse/catalog/tables'],
 		['Namespaces', '/lakehouse/catalog/namespaces'],
 		['Warehouses', '/lakehouse/catalog/warehouses'],
+		['Storage', '/lakehouse/catalog/storage/'],
 		['Registry', '/lakehouse/models'],
 		['Experiments', '/lakehouse/models/experiments'],
 		['Pipeline', '/lakehouse/models/pipeline'],
@@ -183,6 +211,13 @@ test('a domain trigger opens a panel of its rows — pointer and keyboard, same-
 			href,
 		);
 	}
+	// NO `Projects` row — INVERTED BY RULING (2026-08-03, f5dd1f0). This list used to lead with
+	// Projects → /lakehouse/catalog/projects. There is ONE project concept and it is the TOP of the
+	// hierarchy (project > warehouse > namespace > table); a tenants list nested inside a
+	// project-scoped zone's own dropdown inverted that hierarchy. The IA round then FINISHED the move:
+	// the route itself is deleted and the surface is the home zone's `/projects`, so this href
+	// resolves nowhere at all. The assertion stays as the guard against the dead row returning.
+	await expect(panel.locator('a[href="/lakehouse/catalog/projects"]')).toHaveCount(0);
 	// These rows used to leave this zone's route manifest and had to hard-navigate. Since the catalog,
 	// lineage, models and admin areas merged into ONE zone they are same-zone soft navigations, and the
 	// shell must NOT force a document reload on them — that is the whole payoff of the merge.
@@ -207,10 +242,14 @@ test('a row that genuinely leaves the zone still hard-navigates', async ({ page 
 	await page.route('**/capi/v1/me', (route) => json(route, { detail: 'anon' }, 401));
 	await page.goto('/lakehouse/lineage');
 	const nav = page.getByRole('navigation', { name: 'Zones' });
-	await expect(nav.locator('a[href="/annotator"]')).toHaveAttribute('data-sveltekit-reload', '');
+	// The href carries a TRAILING SLASH (1fe9439, pinned by @rask/zone-contract's nav-truth suite):
+	// each zone's `paths.base` serves the trailing form, so a bare `/annotator` costs the browser a
+	// 308 on every cross-zone hop. This locator asserted the bare form and so stopped matching at all
+	// — a missing element passes nothing, it just reports "not found".
+	await expect(nav.locator('a[href="/annotator/"]')).toHaveAttribute('data-sveltekit-reload', '');
 	await openPanel(page, 'Search');
 	const panel = page.locator('[data-slot="navigation-menu-viewport"]');
-	await expect(panel.locator('a[href="/media/atlas"]')).toHaveAttribute(
+	await expect(panel.locator('a[href="/explorer/atlas"]')).toHaveAttribute(
 		'data-sveltekit-reload',
 		'',
 	);
@@ -250,20 +289,25 @@ test('the loading skeleton reserves the resolved entry widths — no shift when 
 	// must reserve the resolved entries' exact box, chevrons included, so the navbar does not jump
 	// when the identity resolves. Held open until the loading geometry has been measured.
 	//
-	// Resolved as an ESTATE ADMIN on purpose — that is the only identity whose IA differs, and
-	// under the three-trigger bar its extra surfaces must land as columns INSIDE the Lakehouse
-	// panel. So the admin case is exactly the one that would shift the bar if the panel content
-	// ever leaked back out into a top-level entry, which makes it the strongest no-shift probe.
+	// Resolved as a NON-ADMIN, and the contract is whole again for BOTH identities. It briefly could
+	// not be: while Settings rode the zone bar, an admin's row genuinely grew by one trigger when
+	// /v1/me landed. The two-level ruling moved Settings to the main menu, so the in-project bar is
+	// identity-independent once more and nothing is earned by privilege here at all.
+	//
+	// The shift this now catches is the TIER GAP: the skeleton must reserve it exactly as the resolved
+	// bar renders it. It did not, at first — the row measured 26px narrower while /v1/me was in flight
+	// and snapped wider the instant it resolved. Chrome is chrome whether or not the identity has
+	// landed.
 	let release = () => {};
 	const gate = new Promise<void>((resolve) => (release = resolve));
 	await page.route('**/capi/v1/me', async (route) => {
 		await gate;
 		return json(route, {
-			sub: 'user:alice',
-			name: 'Alice',
-			email: 'alice@example.com',
-			estate_admin: true,
-			projects: [{ project: 'acme', role: 'admin' }],
+			sub: 'user:bob',
+			name: 'Bob',
+			email: 'bob@example.com',
+			estate_admin: false,
+			projects: [{ project: 'acme', role: 'member' }],
 		});
 	});
 	await page.goto('/lakehouse/lineage');
@@ -293,11 +337,14 @@ test('the loading skeleton reserves the resolved entry widths — no shift when 
 
 	release();
 	await expect(nav.getByRole('button', { name: 'Lakehouse', exact: true })).toBeVisible();
-	// The resolved bar carries the same three triggers the skeleton reserved — no earned entry.
-	// Two TRIGGERS (Lakehouse, Search) — Annotate is a plain link, not a button, because that
-	// zone has a single surface and a one-row dropdown would be noise. Compute joins as a third
-	// trigger when the rask zone lands.
-	await expect(nav.getByRole('button')).toHaveCount(2);
+	// The resolved bar carries exactly the triggers the skeleton reserved: for THIS identity no entry
+	// is earned, so the row cannot grow when /v1/me lands — which is the shift this test measures.
+	for (const trigger of ['Lakehouse', 'Compute', 'Search']) {
+		await expect(nav.getByRole('button', { name: trigger, exact: true })).toBeVisible();
+	}
+	await expect(nav.getByRole('button')).toHaveCount(3);
+	// Fail-closed, restated at the exact moment it matters: a resolved NON-admin gets no Settings.
+	await expect(nav.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(0);
 	const resolved = (await nav.boundingBox())!;
 	expect(Math.abs(resolved.width - loading.width)).toBeLessThanOrEqual(1);
 	expect(Math.abs(resolved.x - loading.x)).toBeLessThanOrEqual(1);

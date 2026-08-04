@@ -152,13 +152,17 @@ export function layout(
 		layer.forEach((id, i) => placed.set(id, { x: X0 + d * COL_W, y: Y0 + offset + i * ROW_H }));
 	});
 
-	// Isolated nodes: a compact grid parked BELOW the graph, roughly as wide as the graph is.
-	const graphCols = Math.max(1, layers.length);
+	// Isolated nodes: a compact grid parked BELOW the graph, roughly as wide as the graph is — but
+	// never narrower than a square block. `layers.length` alone is 0 when the estate has NO edges at
+	// all (a fresh lakehouse, before any OpenLineage event has landed), which collapsed the grid to a
+	// single column and rebuilt the exact tower this partition exists to prevent: 60 datasets became
+	// one 6,600 px strip, and 120 fell outside the fitView gutters entirely.
+	const isoCols = Math.max(1, layers.length, Math.ceil(Math.sqrt(isolated.length)));
 	const graphBottom = Y0 + tallest * ROW_H + ROW_H;
 	isolated.forEach((id, i) => {
 		placed.set(id, {
-			x: X0 + (i % graphCols) * COL_W,
-			y: graphBottom + Math.floor(i / graphCols) * ROW_H,
+			x: X0 + (i % isoCols) * COL_W,
+			y: graphBottom + Math.floor(i / isoCols) * ROW_H,
 		});
 	});
 

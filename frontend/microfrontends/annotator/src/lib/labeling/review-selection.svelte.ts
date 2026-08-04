@@ -13,7 +13,7 @@ import type { MediaKind, MediaUnit } from '$lib/viewer/types';
  *  chunk-frame + annotations endpoints take, under THIS zone's base (the same-origin
  *  BFF proxy routes at `/annotator/api/*`). Modality defaults to image/document (our
  *  corpus); `kind` selects the temporal viewers (audio waveform / video frame-overlay),
- *  whose media source defaults to the doc's `/api/media` stream — `mediaUrl` overrides
+ *  whose media source defaults to the doc's `/api/explorer` stream — `mediaUrl` overrides
  *  it (a deep-link can annotate any same-origin media, e.g. a fixture clip). A
  *  non-default `dataset` rides every URL as `?dataset=` (the media services' selector;
  *  omitted ⇒ the backend default dataset), so frame/annotations/save all target the
@@ -31,7 +31,7 @@ function unitFromKey(
 		key,
 		imageUrl: `${base}/api/chunk-frame/${key}${ds}`,
 		...(kind === 'audio' || kind === 'video'
-			? { mediaUrl: mediaUrl ?? `${base}/api/media/${doc}${ds}` }
+			? { mediaUrl: mediaUrl ?? `${base}/api/explorer/${doc}${ds}` }
 			: {}),
 		annotationsUrl: `${base}/api/annotations/${key}${ds}`,
 	};

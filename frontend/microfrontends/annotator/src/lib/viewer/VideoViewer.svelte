@@ -42,6 +42,10 @@
 		ctx = c;
 		try {
 			const { table, version } = await loadAnnotations(unit.annotationsUrl);
+			// The fetch can outlive this component (remounted per unit; onready is fired
+			// un-awaited). Attaching from a stale continuation re-arms a controller whose owning
+			// effect is destroyed — the `derived_inert` flood. Same guard as ImageViewer.
+			if (disposed) return;
 			c.plugins.arrow.load(table);
 			c.plugins.arrow.sync();
 			// Spatial attach (this viewer HAS a canvas) — draw tools, zoom, layers all bind.
@@ -108,6 +112,9 @@
 
 	onDestroy(() => {
 		disposed = true;
+		// Release the seven engine closures attach() installed over the controller; without this
+		// the engine keeps writing a destroyed component's state.
+		controller?.detach();
 		ctx = null;
 	});
 </script>

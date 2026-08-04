@@ -96,6 +96,16 @@ cmd_deploy() {
 		    meta = doc.get("metadata") or {}
 		    if any("helm.sh/hook" in key for key in (meta.get("annotations") or {})):
 		        continue  # a test hook is not part of the release
+		    if doc.get("kind") == "Ingress":
+		        # NEVER apply the estate's Ingress from the lane.
+		        #
+		        # This deploys a SLICE into its own namespace, but the chart's Ingress has no host: its
+		        # rules are bare paths, including `/` and `/api`. Applied here it becomes a second
+		        # host-less claim on the same paths, and Traefik picks between them arbitrarily —
+		        # observed 2026-08-04: `/`, `/projects` and `/settings` on the real estate started
+		        # answering FastAPI's {"detail":"Not Found"} because the root was resolving to THIS
+		        # namespace's gateway. Nothing in the lane needs the ingress; it is reached in-cluster.
+		        continue
 		    if doc.get("kind") == "CustomResourceDefinition":
 		        buckets["crds"].append(doc)
 		    elif meta.get("namespace") == "default":

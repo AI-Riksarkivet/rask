@@ -38,61 +38,65 @@
 	// Consensus v1: how many INDEPENDENT annotators label each sent item. N>1 seeds N replica
 	// items per item at send; one annotator may hold at most one replica of a group.
 	let consensusN = $state(1);
-	// The labeling TASK, specified at create: what is being labelled (class names) and with what
-	// geometry. This is `LabelSchema` (§4.1) — the canvas constrains its tools to it, the publish
-	// stamps it into the table properties and the lineage facet.
+	// The labeling TASK, specified at create — ONE document now (`LabelOntology`).
+	//
+	// This used to build TWO payloads from this same textarea: a `label_schema` of classes and a
+	// `template` whose `required_labels` was *every* class name. Nothing cross-checked them, and the
+	// second was a bug on its own — adding a third class silently made all three mandatory on every
+	// item, because "the taxonomy" and "what is mandatory" were conflated. They are separate
+	// properties in every product that has both, and they are separate here.
 	let classesText = $state('');
 	let shapeKind = $state('bbox');
+	let classesRequired = $state(false);
 	const SHAPE_KINDS = ['bbox', 'polygon', 'mask', 'segment', 'tag', 'text'];
-	// Task templates v1 — the LS-config idea as PRESETS: pick a task type and the template's
-	// tools/attributes come with it, ENFORCED server-side at submit. 'free' keeps today's
-	// unconstrained behavior (enforce=false), so nothing existing changes.
-	let templateKind = $state('free');
-	const TEMPLATE_PRESETS: Record<
+
+	// PRESETS, aligned with Hugging Face pipeline ids by convention — `kind` is a free string
+	// server-side, so this list is a starting vocabulary, not a closed enum. Picking one seeds the
+	// tools each class gets; the enforceable contract is the classes themselves.
+	let taskKind = $state('free');
+	const TASK_PRESETS: Record<
 		string,
-		{
-			tools: string[];
-			attributes?: { name: string; type?: string; choices?: string[]; required?: boolean }[];
-		}
+		{ tools: string[]; attributes?: { name: string; type?: string; required?: boolean }[] }
 	> = {
-		'bbox-detection': { tools: ['bbox'] },
-		segmentation: { tools: ['polygon', 'mask'] },
-		classification: { tools: ['tag'] },
-		'text-span': { tools: ['text'] },
-		transcription: { tools: ['bbox', 'text'] },
-		'doc-qa': { tools: ['bbox', 'text'] },
+		'object-detection': { tools: ['bbox'] },
+		'image-segmentation': { tools: ['polygon', 'mask'] },
+		'image-classification': { tools: ['tag'] },
+		'token-classification': { tools: ['text'] },
+		'image-to-text': { tools: ['bbox', 'text'] },
+		'document-question-answering': { tools: ['bbox', 'text'] },
 		'reading-order': {
 			tools: ['bbox'],
 			attributes: [{ name: 'order', type: 'int', required: true }],
 		},
 	};
 
-	// Derived, not a function: the payload is a pure projection of templateKind + classesText,
-	// which is exactly what $derived is for (svelte-runes: computed → $derived, const = read-only).
-	const templatePayload = $derived.by(() => {
-		const preset = TEMPLATE_PRESETS[templateKind];
-		if (!preset) return undefined; // 'free' — the unconstrained default
-		return {
-			kind: templateKind,
-			tools: preset.tools,
-			// The taxonomy doubles as the output contract: every listed class must appear.
-			required_labels: classesText
-				.split(',')
-				.map((c) => c.trim())
-				.filter(Boolean),
-			attributes: preset.attributes ?? [],
-			enforce: true,
-		};
-	});
-
-	function labelSchema(): { classes: { name: string; shape_types: string[] }[] } | undefined {
-		const names = classesText
+	const classNames = $derived(
+		classesText
 			.split(',')
 			.map((c) => c.trim())
-			.filter(Boolean);
-		if (names.length === 0) return undefined;
-		return { classes: names.map((name) => ({ name, shape_types: [shapeKind] })) };
-	}
+			.filter(Boolean),
+	);
+
+	// Derived, not a function: a pure projection of taskKind + classesText + the two toggles, which
+	// is exactly what $derived is for. One payload — there is nothing left for a second to disagree
+	// with.
+	const ontologyPayload = $derived.by(() => {
+		if (classNames.length === 0 && taskKind === 'free') return undefined;
+		const preset = TASK_PRESETS[taskKind];
+		// The preset's tools when one is picked, else the single shape kind. Per-class tools are
+		// expressible in the model and NOT yet authorable here — a real per-class editor is its own
+		// piece of work, so every class currently gets the same list.
+		const tools = preset?.tools ?? [shapeKind];
+		return {
+			...(taskKind === 'free' ? {} : { kind: taskKind }),
+			classes: classNames.map((name) => ({
+				name,
+				tools,
+				attributes: preset?.attributes ?? [],
+				required: classesRequired,
+			})),
+		};
+	});
 
 	async function resolveTenant(): Promise<string> {
 		const me = await fetchMeViaBff();
@@ -144,7 +148,6 @@
 		if (!slug.trim() || creating) return;
 		creating = true;
 		createError = '';
-		const schema = labelSchema();
 		const result = await createProject({
 			tenant,
 			slug: slug.trim(),
@@ -153,8 +156,7 @@
 			instructions: instructions.trim(),
 			review_required: reviewRequired,
 			consensus_n: Math.min(5, Math.max(1, Math.round(consensusN) || 1)),
-			...(schema ? { label_schema: schema } : {}),
-			...(templatePayload ? { template: templatePayload } : {}),
+			...(ontologyPayload ? { ontology: ontologyPayload } : {}),
 		});
 		creating = false;
 		if (result.ok) {
@@ -302,17 +304,25 @@
 			<label class="flex flex-col gap-1 text-sm">
 				<span
 					>Task type <span class="text-muted-foreground"
-						>(a template — its tools and outputs are enforced at submit)</span
+						>(seeds each class's tools — enforced at submit)</span
 					></span
 				>
 				<Select
-					bind:value={templateKind}
+					bind:value={taskKind}
 					ariaLabel="Task type"
 					options={[
-	{ value: 'free', label: 'free (no template)' },
-	...Object.keys(TEMPLATE_PRESETS).map((kind) => ({ value: kind, label: kind })),
+	{ value: 'free', label: 'free (no task type)' },
+	...Object.keys(TASK_PRESETS).map((kind) => ({ value: kind, label: kind })),
 ]}
 				/>
+			</label>
+			<label class="flex items-center gap-2 text-sm">
+				<Checkbox bind:checked={classesRequired} aria-label="Every class is required" />
+				<span
+					>Every class is required <span class="text-muted-foreground"
+						>(each must appear on every completed item)</span
+					></span
+				>
 			</label>
 			<label class="flex flex-col gap-1 text-sm">
 				<span

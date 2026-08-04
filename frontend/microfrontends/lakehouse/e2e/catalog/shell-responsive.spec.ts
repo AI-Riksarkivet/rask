@@ -98,13 +98,14 @@ for (const width of WIDTHS) {
 		page,
 		baseURL,
 	}) => {
-		// KNOWN #105 regression, marked expected-to-fail so it stays LOUD and self-expiring: with
-		// EIGHT zones the wide bar at exactly 1024px (the collapse boundary) genuinely collides with
-		// the account control. The fix is the shell owner's — either the bar's layout or raising
-		// SHELL_COLLAPSE_BREAKPOINT, which is `lg:`-coupled in @rask/ui (sidebar.svelte:84) and so
-		// cannot be bumped from a zone. When the shell is fixed this marker makes the test fail as
-		// "passed unexpectedly", forcing its removal. (Recorded in the transport round's final report.)
-		test.fail(width === 1024, '#105: 8-zone bar collides with the account control at 1024px');
+		// #105 IS FIXED, and this is what fixed it — not a layout change. The marker here was
+		// `test.fail(width === 1024, …)`: with EIGHT entries the wide bar genuinely collided with the
+		// account control at exactly 1024px, the collapse boundary. The two-level ruling took Projects
+		// and Settings out of the in-project bar and another session retired the workbench zone, so the
+		// bar is six entries and no longer overflows. The marker then failed as "expected to fail, but
+		// passed", which is precisely why it was written that way — a known defect that goes quiet on
+		// its own is a defect nobody removes. Deleted with its cause, and the geometry below now runs
+		// for real at every width.
 		await page.setViewportSize({ width, height: 900 });
 		await openShell(page, baseURL);
 
@@ -154,11 +155,15 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 	// Every zone, and the sub-areas underneath them, stay reachable from the one menu — one group per
 	// zone (the icon contributes a leading space to the accessible text). This list is the SHELL's
 	// truth: a zone missing here is the R15 defect (a zone absent from the navbar), not a stale test.
+	// Projects LEADS it and Settings CLOSES it — the two groups that are not zones, both from the IA
+	// ZONES ONLY. This page is inside a project, so the collapsed bar folds the IN-PROJECT bar — the
+	// same seven zones the wide bar carries. Home, Projects and Settings are the estate level and are
+	// not in this bar at either width; collapsing must not smuggle them back in, which is what pinning
+	// the exact list here catches. Their overflow behaviour belongs to the main menu, where they live.
 	const panel = page.locator('[data-slot="navigation-menu-viewport"]');
 	await expect(panel.locator('[data-slot="navbar-overflow-group"]')).toHaveText([
 		' Lakehouse',
 		' Compute',
-		' Workbench',
 		' Search',
 		' Annotate',
 		' Train',
@@ -167,6 +172,8 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 	// One row per destination the wide bar reaches — including each zone's own root and the
 	// estate-admin-only governance rows.
 	for (const href of [
+		// NO '/projects' HERE. The estate's project list is a MAIN-MENU destination, and this page is
+		// inside a project — the collapsed bar folds the in-project bar, which carries zones only.
 		'/lakehouse/catalog',
 		'/lakehouse/catalog/tables',
 		'/lakehouse/catalog/warehouses',
@@ -174,11 +181,14 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 		'/lakehouse/lineage',
 		'/lakehouse/lineage/runs',
 		'/lakehouse/lineage/columns',
-		// Zone-root hrefs carry the TRAILING SLASH — load-bearing (a bare /media costs a 308 per hop;
+		// Zone-root hrefs carry the TRAILING SLASH — load-bearing (a bare /explorer costs a 308 per hop;
 		// nav-config.test pins it). The old bare forms predated that convention landing here.
-		'/media/',
+		'/explorer/',
 		'/annotator/',
-		'/lakehouse/governance/access',
+		// GOVERNANCE is not in this bar at either width any more — it moved to the main menu's Settings
+		// entry with the two-level ruling, so `/lakehouse/governance/access` is unreachable from inside
+		// a zone by design. Operations DID stay (running the estate is an operation on the lakehouse),
+		// which is why its DLQ row is still expected right below.
 		'/lakehouse/admin/dlq',
 	]) {
 		await expect(panel.locator(`a[href="${href}"]`)).toHaveCount(1);
@@ -204,31 +214,54 @@ test('above the breakpoint the zone links stay on the bar (no overflow menu) (#1
 	await expect(page.getByRole('link', { name: 'Annotate', exact: true })).toBeVisible();
 });
 
-test('the wide Lakehouse panel offers a way into the zone ROOT, not only its sub-areas', async ({
+test('the wide Lakehouse panel carries NO filler self-row — its sub-area rows are the way in', async ({
 	page,
 	baseURL,
 }) => {
-	// The `groups` branch shipped without the zone-root row that the `items` branch renders and its own
-	// comment declares mandatory ("a panel must not be the only way in, and the trigger is a button, not a
-	// link"). Consequence, on every wide screen: /lakehouse/catalog was reachable by breadcrumb or by typing
-	// the URL, and by nothing you could click. The narrow bar asserted this all along (the overflow test
-	// above lists /lakehouse/catalog); the wide bar only asserted that the trigger was VISIBLE, so opening the
-	// panel — the thing a user actually does — was never checked.
+	// INVERTED BY RULING (2026-08-03, f5dd1f0 — pinned in top-navbar.svelte's `groups` branch). This
+	// test used to demand the opposite: a synthesized "Lakehouse · Open the lakehouse zone." row inside
+	// the wide panel. The ruling deleted it, and the reasoning is what this assertion now guards:
+	//   - the row linked /lakehouse/catalog, a redirect-to-tables page, so it said nothing a real row
+	//     (Tables, Namespaces, Warehouses, …) does not already say;
+	//   - it rendered for THIS zone alone — every flat-`items` zone carries a real, function-titled root
+	//     row (Search at /explorer/, Overview at /compute/), so their equivalent is skipped as a duplicate;
+	//   - the zone root is NOT unreachable: the narrow overflow menu still prepends every zone's root
+	//     uniformly, which the "below the breakpoint …" test above pins by asserting /lakehouse/catalog.
 	await page.setViewportSize({ width: 1440, height: 900 });
 	await openShell(page, baseURL);
 	await page.getByRole('button', { name: 'Lakehouse' }).click();
 	const panel = page.locator('[data-slot="navigation-menu-viewport"]');
-	await expect(panel.locator('a[href="/lakehouse/catalog"]')).toHaveCount(1);
-	// The trigger stays a button (that is the whole reason the row is needed), so this is not a regression
-	// to a link-trigger — the panel row is the way in.
+	await expect(panel.locator('a[href="/lakehouse/catalog"]')).toHaveCount(0);
+	// The trigger stays a BUTTON either way — this ruling removed a row, it did not turn the trigger
+	// into a link (which would navigate instead of opening the panel and hide every column behind a
+	// page load).
 	await expect(page.getByRole('button', { name: 'Lakehouse' })).toBeVisible();
+	const nav = page.getByRole('navigation', { name: 'Zones' });
+	await expect(nav.getByRole('link', { name: 'Lakehouse', exact: true })).toHaveCount(0);
+	// What a user clicks instead: the real rows, one per area, each resolving to a page that exists.
+	for (const href of [
+		'/lakehouse/catalog/tables',
+		'/lakehouse/catalog/namespaces',
+		'/lakehouse/catalog/warehouses',
+		'/lakehouse/models',
+		'/lakehouse/lineage',
+	]) {
+		await expect(panel.locator(`a[href="${href}"]`)).toHaveCount(1);
+	}
+	// The tenants list is gone from this panel too, by the SAME ruling: there is ONE project concept
+	// and it is the TOP of the hierarchy (project > warehouse > namespace > table), so a tenants row
+	// inside a project-scoped zone's dropdown inverted it. The IA round then deleted the route
+	// outright — the surface is the home zone's `/projects` — so this href resolves nowhere; the
+	// assertion stays as the guard against the dead row returning.
+	await expect(panel.locator('a[href="/lakehouse/catalog/projects"]')).toHaveCount(0);
 
-	// …and the row must not COST the columns. The first attempt at this fix added the row as a sibling
-	// before the grid, which gave NavigationMenu.Content two children; bits-ui sizes the shared viewport
-	// from the active content, so it measured 69px — the row's own height — and clipped all five columns.
-	// The href assertion above passed anyway (every link was still in the DOM, and Playwright reported
-	// them visible: the clip is on an ancestor). A screenshot is what caught it. So assert the rendered
-	// GEOMETRY, which is the thing that was wrong.
+	// …and the panel must still RENDER its columns. Kept from the version this test replaced, because
+	// it is the assertion that earned its keep: when the self-row briefly existed it was a sibling
+	// before the grid, giving NavigationMenu.Content two children — bits-ui sizes the shared viewport
+	// from the active content, measured 69px (the row's own height) and clipped all five columns. Every
+	// href assertion above passed anyway (the links were in the DOM and Playwright called them visible;
+	// the clip is on an ancestor). Only a screenshot caught it. So assert the rendered GEOMETRY too —
+	// now guarding the grid-only panel against the same class of collapse.
 	const box = await panel.boundingBox();
 	expect(box!.height, 'the panel is clipped — the group columns are not showing').toBeGreaterThan(
 		200,

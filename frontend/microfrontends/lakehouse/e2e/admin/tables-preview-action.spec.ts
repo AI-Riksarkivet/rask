@@ -8,7 +8,7 @@ import { MOCK_CATALOG } from '../ports';
 // query machinery — first-N rows parsed from real Arrow bytes onto the shared data-table. The tab
 // itself is covered by tables-preview.spec.ts; this asserts the path from a row to it.
 //
-// The registry list and the detail aggregate are remote functions now (open_transport.md, area 1),
+// The registry list and the detail aggregate are remote functions now (the transport ruling, area 1),
 // so they are seeded on the mock catalog; the Arrow query keeps its bytes route and its intercept.
 
 const json = (route: Route, body: unknown, status = 200) =>

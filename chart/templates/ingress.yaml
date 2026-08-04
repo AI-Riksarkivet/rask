@@ -16,7 +16,7 @@ from a prefix the edge never routes.
 
 The zones' own /<zone>/api/* BFF routes (bearer-forwarding proxies to the media
 viewer/search/annotator Services) are covered by the zone prefix rules — there are
-deliberately NO root-absolute /api/media|/api/search rules: that side door let
+deliberately NO root-absolute /api/explorer|/api/search rules: that side door let
 unauthenticated edge traffic reach the media services directly, bypassing the BFF gate.
 
 k3s ships Traefik and the annotations are ingress-nginx's; both are keyed defaults in

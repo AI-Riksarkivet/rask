@@ -47,36 +47,79 @@ const PublishRecordSchema = v.object({
 	published_by: v.string(),
 });
 
-export const LabelClassSchema = v.object({
+/** One typed field an annotation of its owning class must (or may) answer. */
+const OutputAttrSchema = v.object({
+	name: v.string(),
+	type: v.optional(v.string(), 'free'),
+	choices: v.optional(v.array(v.string()), []),
+	required: v.optional(v.boolean(), false),
+});
+
+/** One class in the taxonomy — and the ONLY place its tools and attributes are declared. */
+const LabelClassSchema = v.object({
 	name: v.string(),
 	colour: v.nullish(v.string()),
-	shape_types: v.optional(v.array(v.string()), []),
+	/** Which primitives this class may be drawn with. Empty = any. */
+	tools: v.optional(v.array(v.string()), []),
+	attributes: v.optional(v.array(OutputAttrSchema), []),
+	/** At-least-once. EXPLICIT per class — it used to be a project-level `required_labels` list the
+	 *  create dialog filled from "every class name", which silently made every class mandatory on
+	 *  every item the moment a third was added. */
+	required: v.optional(v.boolean(), false),
 });
-export type LabelClass = v.InferOutput<typeof LabelClassSchema>;
 
-/** Task templates v1 — the labeling task's declarative shape (the LS-config equivalent). */
-export const TaskTemplateSchema = v.object({
-	kind: v.optional(v.string(), 'bbox-detection'),
+/** A typed LINK between two annotations — the structure KIE and DocVQA need. */
+const RelationClassSchema = v.object({
+	name: v.string(),
+	from_classes: v.optional(v.array(v.string()), []),
+	to_classes: v.optional(v.array(v.string()), []),
+	directed: v.optional(v.boolean(), true),
+	required: v.optional(v.boolean(), false),
+});
+
+/**
+ * The whole labeling task definition, as ONE object — mirrors the service's `LabelOntology`.
+ *
+ * Replaces the `TaskTemplateSchema` + `label_schema` PAIR. Nothing cross-checked those two, and
+ * they disagreed in ways the estate acted on: the create dialog derived a `required_labels` list
+ * from every class name AND a separate taxonomy from the same textarea, the published facet stamped
+ * its class list from one while enforcement read the other, and the class list was never captured
+ * onto a task at all — so the one property a taxonomy is FOR, that a label belongs to it, went
+ * unenforced and `label="asdf"` published.
+ *
+ * There is no `enforce` flag. It was a document-wide kill switch that voided explicitly authored
+ * declarations; here an ontology with no classes constrains nothing, and everything declared
+ * applies. `kind` is a free string (aligned with Hugging Face pipeline ids by convention), because
+ * a task-type name buys a shared vocabulary, not a contract.
+ */
+const LabelOntologySchema = v.object({
+	kind: v.optional(v.string(), ''),
 	modality: v.optional(v.string(), 'image'),
-	tools: v.optional(v.array(v.string()), ['bbox']),
-	required_labels: v.optional(v.array(v.string()), []),
-	attributes: v.optional(
-		v.array(
-			v.object({
-				name: v.string(),
-				type: v.optional(v.string(), 'free'),
-				choices: v.optional(v.array(v.string()), []),
-				required: v.optional(v.boolean(), false),
-			}),
-		),
-		[],
-	),
-	enforce: v.optional(v.boolean(), false),
-	/** An enforced template refuses a submission with no shapes unless this says a blank item is a
-	 *  legitimate outcome. Mirrors `TaskTemplate.allow_empty`; the server is the enforcer. */
+	classes: v.optional(v.array(LabelClassSchema), []),
+	relations: v.optional(v.array(RelationClassSchema), []),
 	allow_empty: v.optional(v.boolean(), false),
 });
-export type TaskTemplate = v.InferOutput<typeof TaskTemplateSchema>;
+type LabelOntology = v.InferOutput<typeof LabelOntologySchema>;
+
+/** True when this ontology says anything at all — the client mirror of `LabelOntology.constrains`.
+ *  Module-local: `ontologyTools` is the only thing that needs it, and the only thing exported. */
+function constrains(ontology: LabelOntology | undefined): boolean {
+	return Boolean(ontology && (ontology.classes.length > 0 || ontology.relations.length > 0));
+}
+
+/**
+ * The union of every class's tools — DERIVED, so it cannot disagree with the taxonomy.
+ *
+ * Empty means unconstrained, and one unconstrained class makes the whole task unconstrained: if a
+ * class may be drawn with anything, restricting the rail would hide a tool that class permits.
+ * Mirrors `LabelOntology.tools` server-side; the two must agree, which is why both are derived from
+ * the same field rather than declared beside it.
+ */
+export function ontologyTools(ontology: LabelOntology | undefined): string[] {
+	if (!constrains(ontology) || !ontology) return [];
+	if (ontology.classes.some((c) => c.tools.length === 0)) return [];
+	return [...new Set(ontology.classes.flatMap((c) => c.tools))];
+}
 
 /** Consensus v1's merge step: the manager's canonical PICK for one replica group. */
 export const AdjudicationSchema = v.object({
@@ -101,22 +144,14 @@ export const ProjectSchema = v.object({
 	consensus_n: v.optional(v.number(), 1),
 	// Replica group id → the manager's canonical pick (empty until someone adjudicates).
 	adjudications: v.optional(v.record(v.string(), AdjudicationSchema), {}),
-	// The declarative task template (v1); absent = the unconstrained default.
-	template: v.optional(TaskTemplateSchema, {
-		kind: 'bbox-detection',
+	// The whole task definition; an empty one is the unconstrained default.
+	ontology: v.optional(LabelOntologySchema, {
+		kind: '',
 		modality: 'image',
-		tools: ['bbox'],
-		required_labels: [],
-		attributes: [],
-		enforce: false,
+		classes: [],
+		relations: [],
+		allow_empty: false,
 	}),
-	label_schema: v.optional(
-		v.object({
-			classes: v.optional(v.array(LabelClassSchema), []),
-			attributes: v.optional(v.array(v.string()), []),
-		}),
-		{ classes: [], attributes: [] },
-	),
 	counts: v.optional(v.record(v.string(), v.number()), {}),
 	created_at: v.nullish(v.string()),
 	created_by: v.nullish(v.string()),
@@ -175,6 +210,10 @@ export const TaskDetailSchema = v.object({
 	review_action: v.nullish(v.string()),
 	review_notes: v.optional(v.array(ReviewNoteSchema), []),
 	legal_events: v.optional(v.array(LegalEventSchema), []),
+	// The ontology CAPTURED onto this item at send. The server has always sent the capture —
+	// valibot's `v.object` strips unknown keys, so declaring it here is what lets the canvas see the
+	// contract it will be judged against, instead of learning the rule from a 409 after the work.
+	ontology: v.optional(LabelOntologySchema),
 });
 export type TaskDetail = v.InferOutput<typeof TaskDetailSchema>;
 
@@ -201,7 +240,28 @@ export const DraftSchema = v.object({
 	project_id: v.string(),
 	author: v.string(),
 	shapes: v.array(v.record(v.string(), v.unknown())),
+	/** Typed edges between those shapes — what KIE and DocVQA are actually made of.
+	 *
+	 *  Declared here because valibot's `v.object` STRIPS unknown keys: without this line a link
+	 *  round-tripped from the server would vanish on the way back into the client, which is the same
+	 *  class of silent loss that made `template` invisible to the canvas before #35. */
+	links: v.optional(
+		v.array(v.object({ name: v.string(), from_shape: v.string(), to_shape: v.string() })),
+		[],
+	),
 	revision: v.number(),
 	origin: v.optional(v.string(), 'human'),
 });
 export type Draft = v.InferOutput<typeof DraftSchema>;
+
+/** One direct grant on a project. `user` is the FGA string as STORED (`user:gina`) — a revoke has to
+ *  send it back verbatim, and a prettified name that cannot round-trip is a trap. */
+export const MemberSchema = v.object({ user: v.string(), relation: v.string() });
+
+export const MemberListSchema = v.object({
+	members: v.array(MemberSchema),
+	/** The rungs the API will grant, supplied by the SERVER so a UI never keeps a second copy of the
+	 *  authorization model's ladder. */
+	grantable: v.optional(v.array(v.string()), []),
+});
+export type MemberList = v.InferOutput<typeof MemberListSchema>;

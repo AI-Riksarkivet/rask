@@ -56,7 +56,7 @@ const enc = encodeURIComponent;
 
 // The TABLE-scoped access surfaces (#72 grant/revoke, #81 graph) moved to remote functions with the
 // namespace ones they duplicated — `remote/access-objects.remote.ts`, kind-generalized over
-// 'table' | 'namespace' (open_transport.md, area 1). Their contracts live in `./namespace`.
+// 'table' | 'namespace' (the transport ruling, area 1). Their contracts live in `./namespace`.
 
 export type TablesList = components['schemas']['ListTablesResponse'];
 
@@ -233,4 +233,4 @@ export const DropNamespaceResponseSchema = v.object({
 	transaction_id: v.optional(v.array(v.string())),
 });
 export type DropNamespace = v.InferOutput<typeof DropNamespaceResponseSchema>;
-// The drop itself is a remote command — `remote/namespace.remote.ts` (open_transport.md, area 1).
+// The drop itself is a remote command — `remote/namespace.remote.ts` (the transport ruling, area 1).

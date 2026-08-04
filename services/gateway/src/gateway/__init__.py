@@ -10,7 +10,7 @@ defaults that match `Procfile.micro`.
 Carries the lance-ns rows since the gateway fold (docs/architecture/lance-ns-merge.md,
 decision 4 + P1 "Gateway fold (code half)" + P4: rask's FastAPI gateway wins, the
 nginx gateway retired): `/api/catalog`, `/api/lineage`, `/api/produce`, `/api/train`
-and the whole-plane media namespace `/api/media{,/search,/annotations}`. The lance
+and the whole-plane explorer namespace `/api/explorer{,/search,/annotations}`. The lance
 services serve their own internal prefixes (`/v1/...`, `/api/...`), so each route
 row names the upstream prefix that replaces the public one — a wrong prefix
 silently 404s (the dev-micro.sh warning). The nginx `lance.lineageSidecarOnlyRoutes`
@@ -80,25 +80,25 @@ def _routes() -> list[Route]:
     # lance-plane upstreams (P1 gateway fold). Localhost defaults follow the lance
     # dev conventions: catalog 2333, lineage 8000, the lance-ray producer 8002 (the
     # port-forward the verify/e2e scripts use — its in-cluster port 8000 collides
-    # with lineage on one host), media trio 8101/8102/8103 (chart media.services).
+    # with lineage on one host), explorer trio 8101/8102/8103 (chart explorer.services).
     catalog = ("catalog", os.environ.get("RASK_CATALOG_API_URL", "http://127.0.0.1:2333"))
     lineage = ("lineage", os.environ.get("RASK_LINEAGE_API_URL", "http://127.0.0.1:8000"))
     medallion = ("lance-ray", os.environ.get("RASK_MEDALLION_API_URL", "http://127.0.0.1:8002"))
-    viewer = ("viewer", os.environ.get("RASK_MEDIA_VIEWER_URL", "http://127.0.0.1:8101"))
-    media_search = ("search", os.environ.get("RASK_MEDIA_SEARCH_URL", "http://127.0.0.1:8102"))
-    annotator = ("annotator", os.environ.get("RASK_MEDIA_ANNOTATOR_URL", "http://127.0.0.1:8103"))
+    viewer = ("viewer", os.environ.get("RASK_EXPLORER_VIEWER_URL", "http://127.0.0.1:8101"))
+    explorer_search = ("search", os.environ.get("RASK_EXPLORER_SEARCH_URL", "http://127.0.0.1:8102"))
+    annotator = ("annotator", os.environ.get("RASK_EXPLORER_ANNOTATOR_URL", "http://127.0.0.1:8103"))
     # The ingest plane (open_ingest.md Phase 1) — a BARE app-id, deliberately: the medallion row
     # below points at `lance-ray`, a legacy app-id that no longer names anything about the service
     # it reaches (audit m1). A new row does not inherit that mistake.
     ingest = ("ingest", os.environ.get("RASK_INGEST_URL", "http://127.0.0.1:8830"))
     # longest / most-specific prefixes first; the prefix itself is the catch-all.
-    # The two deeper media rows MUST outrank /api/media. There is NO bare /api
+    # The two deeper explorer rows MUST outrank /api/explorer. There is NO bare /api
     # catch-all since the R6/R20 wave (core-api/search-api/volumes-api retired):
     # an unmatched /api/* 404s at the gateway with "no upstream", which is correct.
     return [
-        ("/api/media/search", "/api/search", *media_search),
-        ("/api/media/annotations", "/api/annotations", *annotator),
-        ("/api/media", "/api", *viewer),
+        ("/api/explorer/search", "/api/search", *explorer_search),
+        ("/api/explorer/annotations", "/api/annotations", *annotator),
+        ("/api/explorer", "/api", *viewer),
         ("/api/catalog", "", *catalog),
         ("/api/lineage", "", *lineage),
         ("/api/produce", "/produce", *medallion),
@@ -279,7 +279,7 @@ async def proxy(path: str, request: Request) -> Response:
     base = _target_base(app_id, fallback)
 
     # The upstream prefix replaces the public one: /api/catalog/v1/x → /v1/x,
-    # /api/media/search?q → /api/search?q. rask rows rewrite to themselves.
+    # /api/explorer/search?q → /api/search?q. rask rows rewrite to themselves.
     upstream_path = upstream_prefix + norm_path[len(route_prefix) :]
     url = httpx.URL(f"{base}{upstream_path}").copy_with(query=request.url.query.encode("utf-8") or None)
     headers = [(k, v) for k, v in request.headers.raw if k.lower() not in _HOP_BY_HOP]

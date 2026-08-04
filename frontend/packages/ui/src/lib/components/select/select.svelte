@@ -23,18 +23,23 @@
 		placeholder = 'Select…',
 		ariaLabel,
 		disabled = false,
+		onValueChange,
 	}: {
 		value?: string;
 		options: SelectOption[];
 		placeholder?: string;
 		ariaLabel?: string;
 		disabled?: boolean;
+		/** Fired after `value` changes. Bits UI's `Select.Root` has always had this; not passing it
+		 *  through forced consumers to watch `value` from an `$effect` and assign state there, which
+		 *  is the Svelte 5 anti-pattern — a side effect of picking an option belongs on the pick. */
+		onValueChange?: (value: string) => void;
 	} = $props();
 
 	const label = $derived(options.find((o) => o.value === value)?.label ?? placeholder);
 </script>
 
-<Select.Root type="single" bind:value items={options} {disabled}>
+<Select.Root type="single" bind:value items={options} {disabled} {onValueChange}>
 	<Select.Trigger
 		aria-label={ariaLabel}
 		data-slot="select-trigger"

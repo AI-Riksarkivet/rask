@@ -45,6 +45,7 @@ from service_kit.exceptions import (
     ForbiddenError,
     NotFoundError,
     ServiceUnavailableError,
+    UnauthorizedError,
     ValidationError,
 )
 
@@ -309,7 +310,13 @@ def translate_catalog_errors() -> Iterator[None]:
         yield
     except _api_exc.ConflictException as exc:
         raise ConflictError(f"catalog write conflict: {exc.body}") from exc
-    except (_api_exc.ForbiddenException, _api_exc.UnauthorizedException) as exc:
+    except _api_exc.UnauthorizedException as exc:
+        # 401 is NOT 403, and collapsing them cost real debugging time: the annotator sent no
+        # bearer, the catalog answered 401, and the browser was told 403 — which reads as "you lack
+        # a grant" and sends you looking for a missing FGA tuple that was never the problem. A
+        # missing/invalid credential must stay 401 so the next reader can tell authn from authz.
+        raise UnauthorizedError(f"catalog rejected the credential: {exc.body}") from exc
+    except _api_exc.ForbiddenException as exc:
         raise ForbiddenError(f"catalog denied the request: {exc.body}") from exc
     except _api_exc.NotFoundException as exc:
         raise NotFoundError(f"catalog table not found: {exc.body}") from exc
@@ -411,6 +418,7 @@ def open_reader(
     dataset: lance.LanceDataset | None,
     table_id: list[str],
     settings: Settings,
+    caller_token: str | None = None,
 ) -> TableReader:
     """Select the read path from settings — the single host-agnostic seam.
 
@@ -420,6 +428,12 @@ def open_reader(
     :class:`LocalCatalogTransport`. ``dataset`` is the already-opened Lance table
     (the caller keeps ``table_dataset``'s 404 semantics); it backs the direct + local
     paths and is unused by the REST path.
+
+    ``caller_token`` is the END USER's bearer, forwarded so the catalog's answer is about the
+    CALLER. It takes precedence over ``settings.catalog_token`` — a service credential would make
+    every reader a confused deputy, because the catalog checks a relation on the `table:` object and
+    injects no row predicate: an ungranted user gets 200 instead of 403. The settings token remains
+    the fallback for callers with no request context (the publish saga, which outlives any request).
     """
     if settings.read_backend != "catalog":
         if dataset is None:
@@ -429,7 +443,7 @@ def open_reader(
         transport: CatalogTransport = RestCatalogTransport(
             settings.catalog_uri,
             delimiter=settings.catalog_delimiter,
-            token=settings.catalog_token,
+            token=caller_token or settings.catalog_token,
         )
     else:
         if dataset is None:
@@ -438,7 +452,7 @@ def open_reader(
     return CatalogTableReader(transport, list(table_id))
 
 
-def open_catalog_reader(*, table_id: list[str], settings: Settings) -> CatalogTableReader:
+def open_catalog_reader(*, table_id: list[str], settings: Settings, caller_token: str | None = None) -> CatalogTableReader:
     """The catalog-native reader, for surfaces only the catalog exposes (version
     listing + time-travel) — the seam behind paths gated on
     ``settings.rest_catalog_mode``, where the LIVE catalog owns the version
@@ -448,7 +462,7 @@ def open_catalog_reader(*, table_id: list[str], settings: Settings) -> CatalogTa
     uri = settings.catalog_uri
     if not settings.rest_catalog_mode or not uri:
         raise ValueError("catalog version surface requires full catalog mode (MEDIA_CATALOG_URI set + both MEDIA_*_BACKEND=catalog)")
-    transport = RestCatalogTransport(uri, delimiter=settings.catalog_delimiter, token=settings.catalog_token)
+    transport = RestCatalogTransport(uri, delimiter=settings.catalog_delimiter, token=caller_token or settings.catalog_token)
     return CatalogTableReader(transport, list(table_id))
 
 

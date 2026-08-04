@@ -25,9 +25,9 @@ an unmatched `/api/*` 404s with `no upstream`. Upstream URLs are env-overridable
 | `RASK_CATALOG_API_URL` | `http://127.0.0.1:2333` | lance catalog (`/api/catalog`) |
 | `RASK_LINEAGE_API_URL` | `http://127.0.0.1:8000` | lineage (`/api/lineage`) |
 | `RASK_MEDALLION_API_URL` | `http://127.0.0.1:8002` | medallion producer (`/api/produce`, `/api/ingest-iiif`, `/api/train`) |
-| `RASK_MEDIA_VIEWER_URL` | `http://127.0.0.1:8101` | media viewer (`/api/media`) |
-| `RASK_MEDIA_SEARCH_URL` | `http://127.0.0.1:8102` | media search (`/api/media/search`) |
-| `RASK_MEDIA_ANNOTATOR_URL` | `http://127.0.0.1:8103` | annotator (`/api/media/annotations`) |
+| `RASK_EXPLORER_VIEWER_URL` | `http://127.0.0.1:8101` | media viewer (`/api/explorer`) |
+| `RASK_EXPLORER_SEARCH_URL` | `http://127.0.0.1:8102` | media search (`/api/explorer/search`) |
+| `RASK_EXPLORER_ANNOTATOR_URL` | `http://127.0.0.1:8103` | annotator (`/api/explorer/annotations`) |
 
 ## compute — `services/compute`
 
@@ -57,10 +57,10 @@ Port **:8820**. Project provisioning over the k8s API (`/api/projects`). See
 
 ## The media plane — `services/{viewer,search,annotator}`
 
-Ports **:8101/:8102/:8103**, public under `/api/media/*` through the gateway.
+Ports **:8101/:8102/:8103**, public under `/api/explorer/*` through the gateway.
 The **viewer** additionally serves the **S3 object browser** ported from the
-retired volumes-api (`/api/media/objects`, `/api/media/object`,
-`/api/media/object/download` → viewer `/api/object*`) — the lakehouse zone's
+retired volumes-api (`/api/explorer/objects`, `/api/explorer/object`,
+`/api/explorer/object/download` → viewer `/api/object*`) — the lakehouse zone's
 storage browser backend. It reads the two fixed rask buckets via
 `storage.s3_client` (env: `RASK_S3_ENDPOINT_URL` + `AWS_*`).
 
@@ -68,8 +68,8 @@ Retired capabilities and where they re-land (R6):
 
 | Retired | Replacement |
 |---|---|
-| search-api lines FTS (`/api/v1/search`) | a catalog-governed `lines` Lance table served at `/api/media/search?dataset=lines&mode=fts` (re-lands with P7b gold) |
-| core-api EAD catalog search (`/api/v1/catalog`) | a catalog-governed `archive_catalog` table behind `/api/media/search` (ingest job refit of `harvest_ead`) |
+| search-api lines FTS (`/api/v1/search`) | a catalog-governed `lines` Lance table served at `/api/explorer/search?dataset=lines&mode=fts` (re-lands with P7b gold) |
+| core-api EAD catalog search (`/api/v1/catalog`) | a catalog-governed `archive_catalog` table behind `/api/explorer/search` (ingest job refit of `harvest_ead`) |
 | volumes-api page/ALTO viewing | media-plane Blob-V2 viewing over the P7b datasets; ALTO becomes a P7c `exporter` projection |
 | volumes-api `/objects` S3 browser | **ported now** into the viewer (above) |
 
@@ -81,4 +81,4 @@ Retired capabilities and where they re-land (R6):
 | ray | ray | `GET /api/ray/health`, `/api/ray/jobs`, … + `/api/serve/*` proxy |
 | projects | controlplane | `/api/projects/*` |
 | lakehouse | catalog / lineage / medallion | `/api/catalog/*`, `/api/lineage/*`, `/api/produce`, `/api/ingest-iiif`, `/api/train` |
-| media | viewer / search / annotator | `/api/media/*`, `/api/media/search`, `/api/media/annotations`, `/api/media/object*` |
+| media | viewer / search / annotator | `/api/explorer/*`, `/api/explorer/search`, `/api/explorer/annotations`, `/api/explorer/object*` |

@@ -20,7 +20,7 @@ PATH                               STATUS
 /api/ray                           404
 /api/serve                         308
 /api/projects                      503
-/api/media                         404
+/api/explorer                         404
 /auth/login                        302
 ```
 
@@ -50,7 +50,7 @@ Every `/api/*` row above answers with a **Dapr** error, not the gateway's own `n
 ```
 /api/catalog   ERR_DIRECT_INVOKE  "failed getting app id either from the URL path or the header dapr-app-id"
 /api/ray       ERR_DIRECT_INVOKE  "failed to invoke, id: compute,      err: circuit breaker is open"
-/api/media     ERR_DIRECT_INVOKE  "failed to invoke, id: viewer,       err: circuit breaker is open"
+/api/explorer     ERR_DIRECT_INVOKE  "failed to invoke, id: viewer,       err: circuit breaker is open"
 /api/projects  ERR_DIRECT_INVOKE  "failed to invoke, id: controlplane, err: circuit breaker is open"
 ```
 

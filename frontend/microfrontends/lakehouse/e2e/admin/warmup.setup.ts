@@ -22,8 +22,9 @@ test('warm the admin dev server routes', async ({ context, page }) => {
 		// The surfaces whose transport moved onto remote functions: their specs live here now, and
 		// this server had never compiled them.
 		'/lakehouse/models',
-		'/lakehouse/catalog/projects',
-		'/lakehouse/catalog/projects/acme',
+		// No `/lakehouse/catalog/projects*` rows: both routes are DELETED (2026-08-03 ruling — a
+		// project is the top of the hierarchy, so its list and its overview are the home zone's).
+		// Warming a route the zone no longer serves compiles nothing and costs a 404 round-trip.
 		'/lakehouse/catalog/warehouses',
 		'/lakehouse/catalog/warehouses/acme-wh',
 		'/lakehouse/catalog/namespaces/acme-silver',

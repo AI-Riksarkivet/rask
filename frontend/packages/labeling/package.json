@@ -15,7 +15,7 @@
 		"fmt:check": "rsvelte-fmt --check ."
 	},
 	"dependencies": {
-		"@rask/media-api": "workspace:*",
+		"@rask/explorer-api": "workspace:*",
 		"apache-arrow": "^21.2.0"
 	},
 	"devDependencies": {

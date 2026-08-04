@@ -28,6 +28,14 @@ export interface InsertRow {
 	group: string;
 	status: string;
 	source: string;
+	/** The TEXTUAL facet — set only on a text SPAN, a range into another row's `text`.
+	 *
+	 *  `parent_id` addresses the row by ID, never by index: rows renumber on every reload, so an
+	 *  index would silently re-point at a different annotation. Offsets rather than the substring,
+	 *  because text repeats within a line and "Vasa" would be ambiguous about WHICH "Vasa". */
+	parent_id: string;
+	char_start: number;
+	char_end: number;
 }
 
 /** The ONE InsertRow factory — human-drawn defaults; callers override what differs
@@ -50,6 +58,12 @@ export function makeInsertRow(partial: Partial<InsertRow> & { shape_type: string
 		group: '',
 		status: 'accepted',
 		source: 'human',
+		// A row is a SPAN only when it says so. `-1` rather than 0, because 0 is a meaningful offset
+		// — the first character — and a default of 0 would make every non-span row look like a
+		// zero-length span at the start of a parent it does not have.
+		parent_id: '',
+		char_start: -1,
+		char_end: -1,
 		...partial,
 	};
 }

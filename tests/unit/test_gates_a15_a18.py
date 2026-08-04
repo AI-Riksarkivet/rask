@@ -85,7 +85,7 @@ def test_a15_version_gc_retention_exceeds_the_longest_permitted_ingest_run() -> 
     run duration without widening retention fails here instead of in production at 3am.
     """
     values = _chart_values()
-    retention_hours = float(values["compaction"]["olderThanDays"]) * 24
+    retention_hours = float(values["maintenance"]["olderThanDays"]) * 24
     max_run_hours = float(values["services"]["ingest"]["env"]["RASK_INGEST_MAX_RUN_HOURS"])
 
     assert max_run_hours > 0, "a max run duration of 0 makes the relation vacuous"
@@ -103,11 +103,14 @@ def test_a15_the_relation_is_stated_where_BOTH_values_live() -> None:
     """
     values = _chart_values()
 
-    assert "olderThanDays" in values["compaction"]
+    assert "olderThanDays" in values["maintenance"]
     assert "RASK_INGEST_MAX_RUN_HOURS" in values["services"]["ingest"]["env"]
 
 
 # ── A16 — index maintenance and compaction are owned lanes ────────────────────────────
+#
+# The chart key is `maintenance`, not `compaction`: the service was renamed 2026-08-04 because it
+# does four things (compact, cleanup, indices, reconcile), not one. The gate follows the chart.
 
 
 def test_a16_compaction_runs_on_a_schedule_that_is_configured_not_implied() -> None:
@@ -118,11 +121,11 @@ def test_a16_compaction_runs_on_a_schedule_that_is_configured_not_implied() -> N
     chart value is what makes it reviewable; a hardcoded default is a lane whose absence looks
     identical to its presence.
     """
-    compaction = _chart_values()["compaction"]
+    maintenance = _chart_values()["maintenance"]
 
-    assert compaction["enabled"] is True
-    assert compaction["schedule"], "no cron schedule — the compaction lane would never fire"
-    assert compaction["bindingName"], "no binding name — the cron has nothing to POST"
+    assert maintenance["enabled"] is True
+    assert maintenance["schedule"], "no cron schedule — the compaction lane would never fire"
+    assert maintenance["bindingName"], "no binding name — the cron has nothing to POST"
 
 
 def test_a16_indexed_search_returns_rows_from_the_LATEST_delta(tmp_path: Path) -> None:

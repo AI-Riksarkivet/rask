@@ -1,20 +1,23 @@
-import { test, expect, type Page, type Route } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { mockMe, signIn, TOKEN } from './session';
-import { MOCK_CATALOG } from '../ports';
+import { MOCK_CATALOG, MOCK_OBS } from '../ports';
 
 // Hermetic /models coverage. The registry's reads and its promote ride `models.remote.ts` now, so
 // they run on the ZONE SERVER and `page.route` cannot reach them — the responses are seeded on the
 // mock catalog per bearer instead (the admin dev server's CATALOG_API points there), and the promote's
-// wire body is read back from the mock's call log. The training-curve reads still go through the
-// browser-side `/api/experiments` BFF, so those stay `page.route`d.
+// wire body is read back from the mock's call log.
+//
+// The training curves moved the same way: `TrainingCurves.svelte` calls `fetchTrainingCurves`
+// (`models/remote/experiments.remote.ts`), which runs REAL PromQL range queries against GREPTIME_API
+// server-side. The `/api/experiments` BFF route it replaced no longer exists, so the `page.route`
+// stand-in this file used to carry intercepted nothing and every curve read fell through to an
+// unseeded mock → 404 → the "metrics store unreachable" state. They are seeded on
+// mock-observability now, like models-experiments.spec.ts does for the instant queries.
 //
 // Lives in the admin project because that is the server whose CATALOG_API is the mock; each test signs
 // in with its own bearer so the fullyParallel suite shares no mock state.
 
 type Model = { model: string; latest_version: number | null; blessed_version: number | null };
-
-const json = (route: Route, body: unknown, status = 200) =>
-	route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
 let token: string;
 
@@ -22,6 +25,37 @@ let token: string;
 const seed = async (page: Page, routes: Record<string, unknown>): Promise<void> => {
 	await page.request.post(`${MOCK_CATALOG}/__mock/seed`, { data: { bearer: token, routes } });
 };
+
+/** Same, on the GreptimeDB stand-in the curve reads reach. */
+const seedObs = async (page: Page, routes: Record<string, unknown>): Promise<void> => {
+	await page.request.post(`${MOCK_OBS}/__mock/seed`, { data: { bearer: token, routes } });
+};
+
+// `promqlRange` stamps `start`/`end` from the SERVER's clock, so the query string cannot be predicted
+// from here — the seed is keyed on the PATH alone, which mock-observability falls back to when no
+// with-query key matches. One consequence is load-bearing for the test below: all three curve queries
+// (rows / features / runs) and both models share that one key, so "this curve has points and that one
+// does not" has to be staged in TIME (re-seed between reads) rather than per query.
+const CURVE_RANGE = 'GET /v1/prometheus/api/v1/query_range';
+
+/** A raw Prometheus range (matrix) body — exactly what GreptimeDB's query_range answers.
+ *  `status` is the STRING "success": mock-observability detects its {status, body} envelope by a
+ *  NUMERIC status only, precisely so a Prometheus payload passes through as a body instead of being
+ *  read as "respond 'success'". */
+const promRange = (points: Array<[number, number]>) => ({
+	status: 'success',
+	data: {
+		resultType: 'matrix',
+		result: points.length
+			? [
+					{
+						metric: {},
+						values: points.map(([t, v]) => [t, String(v)] as [number, string]),
+					},
+				]
+			: [],
+	},
+});
 
 /** Every mutating request this test's bearer made to the catalog. */
 const calls = async (
@@ -56,28 +90,10 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
 	await signIn(context, { token });
 	await mockMe(page);
-	// The detail's training curves come from the experiments BFF's ?model= mode: demo has a real
-	// series, fraud has none (the honest empty state).
-	await page.route('**/api/experiments**', (route) => {
-		const url = new URL(route.request().url());
-		const model = url.searchParams.get('model') ?? '';
-		const points =
-			model === 'demo'
-				? [
-						{ t: '2026-07-24T10:00:00Z', v: 4 },
-						{ t: '2026-07-24T11:00:00Z', v: 9 },
-					]
-				: [];
-		return json(route, {
-			model,
-			source: 'GreptimeDB (OTLP)',
-			curves: [
-				{ key: 'rows', title: 'Rows seen per run', points },
-				{ key: 'features', title: 'Feature datasets per run', points: [] },
-				{ key: 'runs', title: 'Cumulative training runs', points: [] },
-			],
-		});
-	});
+	// Default: the metrics store is up and has NOTHING for these models. Every detail-panel test
+	// expands a row, so without this each one would render "metrics store unreachable" — a state that
+	// is not what it is testing, and one that used to be masked by the dead `/api/experiments` route.
+	await seedObs(page, { [CURVE_RANGE]: promRange([]) });
 	await seed(page, {
 		'GET /v1/model': { models: [DEMO, FRAUD] },
 		'GET /v1/model/demo': describeOf(DEMO, DEMO_ARTIFACTS),
@@ -123,18 +139,39 @@ test('an artifact-less model shows the honest empty artifacts state', async ({ p
 test('training curves plot where series exist and state the truth where none do', async ({
 	page,
 }) => {
+	// demo reads while the range query answers with a real matrix → its curves plot for real, from
+	// the flattened [unix, value] pairs `promqlRange` produces (the seeded body is the raw Prometheus
+	// answer, so the query URL, the parse and the LayerChart render are all exercised).
+	await seedObs(page, {
+		[CURVE_RANGE]: promRange([
+			[1753351200, 4],
+			[1753354800, 9],
+		]),
+	});
 	await page.goto('/lakehouse/models');
 	await page.locator('td', { hasText: 'demo' }).first().click();
-	// demo: the rows curve has points → one LayerChart plot; the empty curves are simply absent.
 	await expect(page.getByLabel('Curve Rows seen per run')).toBeVisible();
 	await expect(
 		page.getByLabel('Curve Rows seen per run').locator('svg.lc-layout-svg'),
 	).toBeVisible();
-	await expect(page.getByLabel('Curve Cumulative training runs')).toHaveCount(0);
-	// fraud: no series at all → the honest empty state, no fabricated flat line.
+	// All three of the remote function's curves are named and plotted — the titles are the contract
+	// between experiments.remote.ts's CURVES table and the figures the detail renders.
+	await expect(page.getByLabel(/^Curve /)).toHaveCount(3);
+
+	// fraud reads against an EMPTY matrix → the honest empty state, and NOT a fabricated flat line:
+	// `withData` drops every point-less curve, so no figure survives.
+	//
+	// The old assertion here ("Curve Cumulative training runs" absent WHILE the rows curve plots)
+	// cannot be expressed any more and is deliberately not faked: the curve reads are server-side
+	// PromQL now, and mock-observability can only key a `query_range` seed on the path — its
+	// `start`/`end` come from the server clock — so all three curve queries necessarily share one
+	// answer. The point-less-curve filter is pinned below at the all-empty granularity instead; the
+	// mixed case needs mock-observability to match seeds on the `query` parameter.
+	await seedObs(page, { [CURVE_RANGE]: promRange([]) });
 	await page.locator('td', { hasText: 'demo' }).first().click(); // collapse
 	await page.locator('td', { hasText: 'fraud' }).first().click();
 	await expect(page.getByText('No training series recorded for this model')).toBeVisible();
+	await expect(page.getByLabel(/^Curve /)).toHaveCount(0);
 });
 
 test('bless promotes the candidate and the row updates', async ({ page }) => {

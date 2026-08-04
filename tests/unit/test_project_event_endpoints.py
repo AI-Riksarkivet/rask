@@ -10,6 +10,7 @@ The actors are faked, so these prove the HTTP contract without a sidecar.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -21,6 +22,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from service_kit.exceptions import register_handlers
+from service_kit.media.deps import get_state
 
 
 SUBJECT = "henry"
@@ -82,6 +84,11 @@ def _app(project: _FakeProject, *, grant: set[str], seen: list[dict[str, Any]], 
     app.include_router(ev.router)
     app.dependency_overrides[get_checker] = lambda: checker
     app.dependency_overrides[current_subject] = lambda: SUBJECT
+    # `send` now consults the dataset registry to refuse an item whose media dataset does not
+    # resolve, so this router carries `StateDep`. Real app state is built by the service lifespan
+    # and does not exist here; this stands in for it. `list_ids` answers the "known datasets are …"
+    # half of a refusal, and these tests never exercise a refusal.
+    app.dependency_overrides[get_state] = lambda: SimpleNamespace(registry=SimpleNamespace(list_ids=list))
     return app
 
 
@@ -538,21 +545,28 @@ def test_clearing_an_adjudication_is_a_manager_gated_delete(wired: Any, monkeypa
     assert ("can_manage", "annotation_project:p1") in [(c["relation"], c["obj"]) for c in seen]
 
 
-def test_send_captures_the_projects_template_onto_every_item(wired: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The template rides each item like review_required/lease_seconds — enforcement reads the
-    ITEM's copy, so a mid-flight template edit cannot retroactively invalidate work in review."""
+def test_send_captures_the_projects_ontology_onto_every_item(wired: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ontology rides each item like review_required/lease_seconds — enforcement reads the
+    ITEM's copy, so a mid-flight ontology edit cannot retroactively invalidate work in review.
+
+    Capturing the TAXONOMY is also what makes the closed-set label check possible at all: the send
+    used to copy the `template` and leave `label_schema` behind on the project, so the class list
+    was not in scope where enforcement happens and `label="asdf"` submitted and published."""
     client, _project, task, _seen = wired({"can_send_items"}, state=ProjectState.LABELING)
 
-    async def _templated_get(self: Any) -> dict[str, Any] | None:
+    async def _ontology_get(self: Any) -> dict[str, Any] | None:
         return {
             "state": str(self.state),
             "project_id": "p1",
             "review_required": True,
             "lease_seconds": 900,
-            "template": {"kind": "doc-qa", "tools": ["bbox", "text"], "enforce": True},
+            "ontology": {
+                "kind": "document-question-answering",
+                "classes": [{"name": "question", "tools": ["bbox"]}, {"name": "answer", "tools": ["bbox"]}],
+            },
         }
 
-    monkeypatch.setattr(_FakeProject, "get", _templated_get)
+    monkeypatch.setattr(_FakeProject, "get", _ontology_get)
 
     r = client.post(
         "/projects/p1/items",
@@ -560,5 +574,6 @@ def test_send_captures_the_projects_template_onto_every_item(wired: Any, monkeyp
     )
 
     assert r.status_code == 201, r.text
-    assert task.seeded[0]["template"]["kind"] == "doc-qa"
-    assert task.seeded[0]["template"]["enforce"] is True
+    assert task.seeded[0]["ontology"]["kind"] == "document-question-answering"
+    # The TAXONOMY rides too — not just the enforcement knobs. That is the half that was missing.
+    assert [c["name"] for c in task.seeded[0]["ontology"]["classes"]] == ["question", "answer"]

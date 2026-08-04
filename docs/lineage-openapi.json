@@ -2385,7 +2385,7 @@
     },
     "/datasets/{name}/columns/{field}/upstream": {
       "get": {
-        "description": "Column-level provenance (#24): the columns ``name.field`` was (transitively) derived from.\n\nOur deepest moat \u2014 field-to-field lineage neither Marquez nor Lakekeeper derives. Gated on\n``can_get_metadata`` for the owning ``name``; related columns whose *owning dataset* the caller can't\nsee are dropped (a column has no ACL of its own \u2014 it inherits its table's), closing the same\ntransitive-disclosure hole at column resolution. Auth off \u2192 pass-through.",
+        "description": "Column-level provenance (#24): the columns ``name.field`` was (transitively) derived from.\n\nOur deepest moat \u2014 field-to-field lineage a format-unaware catalog cannot derive. Gated on\n``can_get_metadata`` for the owning ``name``; related columns whose *owning dataset* the caller can't\nsee are dropped (a column has no ACL of its own \u2014 it inherits its table's), closing the same\ntransitive-disclosure hole at column resolution. Auth off \u2192 pass-through.",
         "operationId": "get_column_upstream_datasets__name__columns__field__upstream_get",
         "parameters": [
           {
@@ -3056,7 +3056,7 @@
     },
     "/datasets/{name}/reconcile": {
       "get": {
-        "description": "Does the lineage graph agree with the **actual Lance file on storage**? (#23)\n\nOur moat over format-unaware catalogs (Marquez, Lakekeeper): because we own a Lance lakehouse we\nread the real on-disk version and cross-check it against the version the graph recorded on the\n``WROTE`` edge \u2014 surfacing a write that bypassed lineage (``storage_ahead``) or a lineage claim\nwith no data behind it (``missing_on_storage``). Gated on ``can_get_metadata`` for ``name``; the\nLance read runs in the threadpool so the blocking object-store I/O never stalls the event loop.",
+        "description": "Does the lineage graph agree with the **actual Lance file on storage**? (#23)\n\nOur moat over format-unaware catalogs: because we own a Lance lakehouse we\nread the real on-disk version and cross-check it against the version the graph recorded on the\n``WROTE`` edge \u2014 surfacing a write that bypassed lineage (``storage_ahead``) or a lineage claim\nwith no data behind it (``missing_on_storage``). Gated on ``can_get_metadata`` for ``name``; the\nLance read runs in the threadpool so the blocking object-store I/O never stalls the event loop.",
         "operationId": "get_reconcile_datasets__name__reconcile_get",
         "parameters": [
           {

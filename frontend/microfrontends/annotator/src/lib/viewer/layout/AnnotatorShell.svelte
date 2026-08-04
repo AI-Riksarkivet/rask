@@ -7,6 +7,8 @@
 	import type { MediaUnit } from '$lib/viewer/types';
 	import { AnnotatorController } from '$lib/viewer/annotator.svelte';
 	import { reviewSelection } from '$lib/labeling/review-selection.svelte';
+	import { ontologyTools } from '$lib/projects/types';
+	import { fetchTask } from '$lib/projects/remote/tasks.remote';
 	import { ResizableSplit } from '@rask/ui/resizable-split';
 	import { Badge } from '@rask/ui/badge';
 	import AnnotatorToolbar from './AnnotatorToolbar.svelte';
@@ -20,6 +22,73 @@
 
 	const Viewer = $derived(viewerFor(unit.kind));
 	const controller = new AnnotatorController();
+
+	// Read the task's captured template so the RAIL can decline to offer a tool the task will
+	// refuse. Enforcement stays server-side at submit — this only moves the same contract earlier,
+	// so a violation is a tool that is not there rather than a 409 after the work. Only when opened
+	// FROM a task: an ad-hoc `?keys=` canvas has no contract and stays unconstrained.
+	$effect(() => {
+		const id = reviewSelection.taskId;
+		if (!id) {
+			controller.allowedShapeTypes = [];
+			controller.relationNames = [];
+			controller.textSpanClasses = [];
+			return;
+		}
+		let alive = true;
+		void fetchTask({ taskId: id })
+			.then((result) => {
+				if (!alive) return;
+				// DERIVED from the taxonomy, never read from a list beside it: `ontologyTools` is the
+				// union of every class's tools and is empty when any class is unconstrained. That
+				// replaces `enforce ? tools : []`, where a flat `tools` list could contradict the very
+				// classes it sat next to — and where one false flag voided every declaration a
+				// manager had explicitly written.
+				controller.allowedShapeTypes = result.ok ? ontologyTools(result.data.ontology) : [];
+				// The relations this task DECLARES. Empty means the inspector offers no link rail at
+				// all — a control that can produce nothing reads as broken rather than inapplicable.
+				controller.relationNames = result.ok
+					? (result.data.ontology?.relations ?? []).map((r) => r.name)
+					: [];
+				// The classes a TEXT SPAN may be labelled with, from the ontology rather than from
+				// whatever labels happen to be on the page already.
+				controller.textSpanClasses = result.ok
+					? (result.data.ontology?.classes ?? [])
+							.filter((c) => c.tools.includes('text'))
+							.map((c) => c.name)
+					: [];
+			})
+			.catch(() => {
+				// A failed read must not silently narrow the rail: unconstrained is the honest
+				// fallback, and the 409 still backstops it.
+				if (alive) {
+					controller.allowedShapeTypes = [];
+					controller.relationNames = [];
+				}
+			});
+		return () => {
+			alive = false;
+		};
+	});
+	// AUTOSAVE. Started only for a canvas opened FROM A TASK: that is the surface where losing work
+	// costs someone their afternoon, and it is the one with a draft to reconcile against. The ad-hoc
+	// `?keys=` canvas keeps the explicit-save behaviour it has always had.
+	//
+	// The debounce is driven from HERE rather than inside the controller because a component has a
+	// lifecycle and a class does not — this is what guarantees the timer dies with the canvas
+	// instead of firing a write into a unit nobody is looking at any more.
+	$effect(() => {
+		if (reviewSelection.taskId) controller.startAutosave();
+		else controller.stopAutosave();
+		return () => controller.stopAutosave();
+	});
+	$effect(() => {
+		// Reading `dirty` is the subscription: every edit re-runs this and pushes the timer out, so a
+		// burst of typing produces ONE write rather than one per keystroke.
+		void controller.dirty;
+		controller.scheduleAutosave();
+	});
+
 	let status = $state('loading…');
 	// True when the unit's media/annotations failed to load — the status chip turns
 	// destructive and carries the reason (never a silent, eternal "loading…").
@@ -136,7 +205,7 @@
 						class="absolute bottom-2 left-2 z-10 font-mono shadow-sm backdrop-blur"
 						data-testid="annotate-status"
 					>
-						annotate · {unit.kind} · {status}
+						annotate · {unit.kind} · {status}{controller.saveStatus ? ` · ${controller.saveStatus}` : ''}
 					</Badge>
 					<Viewer
 						{unit}
@@ -151,7 +220,7 @@
 }}
 					/>
 					{#if spatial && controller.canDraw}
-						<AiAssistBar {controller} />
+						<AiAssistBar {controller} taskId={reviewSelection.taskId} />
 					{/if}
 					<PageNav {pages} current={pageIndex} onNavigate={navigate} />
 					{#if spatial}

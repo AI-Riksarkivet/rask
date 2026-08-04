@@ -486,12 +486,16 @@ async def test_the_pin_reaches_the_publisher_when_the_plan_pins() -> None:
     project, publisher = _Project(), _Publisher()
     tasks = {"t0": _Task("t0", TaskState.ACCEPTED, 1), "t1": _Task("t1", TaskState.ACCEPTED, 1)}
     for t in tasks.values():
-        t.doc["source"]["where"] = "demo"
+        # A namespace-qualified CATALOG TABLE id, because that is what the pin BECOMES on the wire.
+        # This used to say "demo" — a bare word — and so asserted the defect: sending a media dataset
+        # name as a table reference made the catalog authorize an object that does not exist, and the
+        # whole publish died with "can_get_metadata required on table:transcripts_v2".
+        t.doc["source"]["where"] = "bronze$pages"
         t.doc["source"]["dataset_version"] = 24
 
     await _run(project, tasks, publisher)
 
-    assert publisher.pin == ("demo", 24)
+    assert publisher.pin == ("bronze$pages", 24)
 
 
 @pytest.mark.asyncio

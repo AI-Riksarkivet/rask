@@ -5,7 +5,7 @@ import type { ApiResult } from '@rask/api/client';
 import { RawJszSchema, type JetStreamOverview } from '../jetstream';
 
 // `/streams`' data plane, in the zone's remote-function dialect — the /api/jetstream route moved here
-// VERBATIM (open_transport.md blocked-port #3, unblocked by the mock-observability harness): the NATS
+// VERBATIM (the transport ruling blocked-port #3, unblocked by the mock-observability harness): the NATS
 // HTTP monitor is unauthenticated by design and in-cluster only, so this server-side seam stays the
 // ONLY gate; the raw ~29 KB /jsz payload is trimmed to what the panel renders; and the estate-admin
 // door (the catalog's `can_observe_events`, probed with a side-effect-free past-any-head /v1/events

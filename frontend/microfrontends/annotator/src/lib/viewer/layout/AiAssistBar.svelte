@@ -9,32 +9,41 @@
 	import { Button } from '@rask/ui/button';
 	import { cn } from '@rask/ui/utils';
 	import TextInput from '$lib/ui/TextInput.svelte';
-	import { zoneConfig } from '../remote/config.remote';
+	import { assistProducers } from '../remote/assist.remote';
+	import AssistRegistry from './AssistRegistry.svelte';
 	import type { AnnotatorController } from '../annotator.svelte';
 
-	let { controller }: { controller: AnnotatorController } = $props();
+	let { controller, taskId = null }: { controller: AnnotatorController; taskId?: string | null } =
+		$props();
 
 	let prompt = $state('');
 	let mode = $state<string>('detect');
-	// Registry producers beyond the two built-ins (the swap-a-model-without-code seam): the zone's
-	// config mirrors MEDIA_ASSIST_BACKENDS' names, and each renders as its own region-driven mode.
+	// Registry producers beyond the two built-ins (the swap-a-model-without-code seam), asked of the
+	// SERVICE. This used to read the zone's own `zoneConfig`, which re-parsed MEDIA_ASSIST_BACKENDS
+	// out of THIS pod's env — a second copy of the registry that could name producers the service
+	// does not have, and miss ones it does.
 	let extraProducers = $state<string[]>([]);
 
 	// HONEST MOCK: until a real model runner is deployed (MEDIA_ASSIST_URL set), the
 	// backend answers assist calls with a deterministic mock — the shapes LOOK real, so
-	// without this chip a reviewer could mistake them for model output. Presence comes
-	// from the zone's own `zoneConfig` remote query (server env, never the URL itself).
-	// FAIL-HONEST: mock is the stack's default state, so the chip shows until the config
-	// CONFIRMS a real runner — a failed/unreachable config read keeps the warning up
-	// rather than silently passing mock shapes off as model output.
+	// without this chip a reviewer could mistake them for model output.
+	// FAIL-HONEST: mock is the stack's default state, so the chip shows until the service
+	// CONFIRMS a real runner — a failed/unreachable read keeps the warning up rather than
+	// silently passing mock shapes off as model output.
 	let assistMocked = $state(true);
 	onMount(async () => {
 		try {
-			const cfg = await zoneConfig();
-			assistMocked = cfg.assistRunner !== true;
-			extraProducers = cfg.assistProducers;
+			const result = await assistProducers(null);
+			if (!result.ok) return; // unreachable — keep the fail-honest mock chip
+			// Mocked unless SOMETHING real is reachable. Per-producer state lives in the registry
+			// panel; this chip answers the coarser question the canvas needs at a glance.
+			assistMocked = !result.data.producers.some((p) => p.configured);
+			// The two built-ins already have their own buttons.
+			extraProducers = result.data.producers
+				.filter((p) => p.name !== 'grounding-dino' && p.name !== 'sam')
+				.map((p) => p.name);
 		} catch {
-			// config unreachable — keep the fail-honest mock chip
+			// unreachable — keep the fail-honest mock chip
 		}
 	});
 
@@ -111,6 +120,8 @@
 			{controller.saving ? 'segmenting…' : 'Click or drag a box to segment'}
 		</span>
 	{/if}
+
+	<AssistRegistry {taskId} />
 
 	{#if assistMocked}
 		<!-- The honesty chip is a real warning Badge now, so "this output is not a model" carries

@@ -1,23 +1,60 @@
-# The global workbench — the runtime-composed dock, SHIPPED
+# The global workbench — built, shipped, RETIRED
 
-*Final status 2026-08-03: LIVE and cluster-verified. One `/workbench` zone composes FIFTEEN panels
-served by their owning zones as custom elements (`rask-<zone>-<panel>`): compute lends overview,
-jobs, cluster/nodes, actors, serve and the full log viewer; lakehouse lends lineage runs/events/
-graph, column lineage, datasets, audit, the FGA access summary and ops/DLQ; the workbench itself
-owns only the Selection log. Each zone's element bundle compiles its own Tailwind utilities and
-injects them (with vendor sheets `?inline` under `@layer base`), so panels are pixel-mirrors of
-their zone pages while builds stay uncoupled. Both directions of the boundary contract are live:
-rows dispatch `rask:select` up through a valibot-gated relay; the compositor pushes `filtertext`
-down as a property and every list panel narrows with an honest n/m note. Saved views persist
-per-subject (`dock-layout-library`), the views list rides the shared shell rail (AppShell's
-`sidebarContent` variant), popout is explicitly off for foreign panels, and element bundles carry
-budget ceilings (`element-budget.test.ts`). Known scope-cuts live IN the element files' doc
-comments (overview omits the zone-private pipeline feed; access omits recent-checks — the capi
-proxy is GET-only and the catalog records no past verdicts). Media's three panels remain blocked
-on the corpus dataset; annotator's canvas is not planned. The in-cluster Ray came up via the
-chart's RayService (`singleTenant`) after the external dev-kuberay proved unreachable — fold
-`ray.enabled + singleTenant.enabled + dashboardUrl=""` into the k3s-up values for durability.
-This paragraph supersedes the open_workbench.md work file, deleted per the open-docs convention.*
+*Final ruling 2026-08-03 (evening). The cross-zone compositor zone is DELETED. `@rask/dockview`
+stays and is now used the way it should have been from the start: **a dock lives INSIDE its zone**,
+composing that zone's own components over one shared store. `/explorer/workbench` (results + atlas
++ player over one search) is the estate's ONE dock — see "The standing decision" for why it is the
+only one.*
+
+## Why it was retired
+
+**The feature was YAGNI.** The compositor's only unique capability was mixing panels from
+DIFFERENT zones in one dock. No one had that workflow. Every complaint it drew was about panel
+QUALITY, never about composition — which is the tell: the thing being asked for was "the zone's
+real view, arrangeable", and that never needed a compositor.
+
+**Its cost was fidelity, and the cost was structural, not sloppiness:**
+
+- A custom element **cannot import a remote function** (`.remote.ts` endpoints are per-app), so
+  every panel's data had to be re-plumbed through whatever GET-only proxy the zone happened to
+  expose. Some surfaces had no such path at all — JetStream/streams and the FGA check/expand
+  family are POST-only or remote-only, and were reported BLOCKED rather than faked.
+- A custom element **cannot reuse a component that touches `$app/*` or the zone's live tick**,
+  which is most of the good ones. Those panels had to be MIRRORED — re-implemented to look like
+  the zone page. That mirroring is what the user kept seeing as "weird tables".
+- Everything else — per-zone element bundles, their own compiled Tailwind, cache-busting, budget
+  ceilings, a valibot-gated event contract — was overhead in service of the one feature nobody
+  needed.
+
+**What a dock inside the zone gets for free:** the zone's real components, its remote functions,
+its live stores through ordinary context, its own navbar (the compositor even managed to paint
+over the shared navbar's dropdowns — a bug that cannot exist in a zone page). One store, no
+transport, no mirroring.
+
+## What was kept
+
+`@rask/dockview` in full — the binding, the G1–G4 chrome (split menus, the searchable "+" picker,
+panel alerts, named views + `ViewSidebar`), `@rask/api/dock-layout` + `dock-views`, and the
+catalog's `dock-layout` / `dock-layout-library` user-state envelopes. All of it is zone-agnostic
+and all of it now serves the in-zone docks. `dock-reachability.test.ts` pins the docks the estate
+ships, so a compositor cannot return unnoticed.
+
+## What was deleted
+
+The `workbench` zone and its eight registration points; both zones' `src/lib/elements/**`,
+`vite.elements.config.ts`, `elements.css` and chained element builds; the `elements` budget
+ceilings and `element-budget.test.ts`; `@rask/dockview/contract` and its pin test; the
+`/api/audit` shim that existed only for an element; the top-level Workbench navbar entry.
+
+## The lesson worth keeping
+
+Two reversals in one day, in opposite directions, taught the same thing: **the zone is the unit of
+ownership.** Moving a zone's panels into a shared package hollows it (the `@rask/panels`
+reversal); moving a zone's panels behind a cross-zone element boundary starves them (this one).
+Extract the *mechanism* into a library — `@rask/dockview`, `@rask/flow` — and keep the *domain*,
+with its data and its components, in the zone that owns it.
+
+---
 
 ## The reversal that preceded it
 
@@ -68,24 +105,53 @@ worked. It was still wrong, for reasons that were on the record before it was bu
 - Lineage panels + `LineageGraph`/`MedallionNode`/`JobNode` + `store.svelte.ts` → back in
   `lakehouse/src/lib/{dock,lineage}`; compute's three panels → back in `compute/src/lib/dock/panels`
   with their direct `$lib/remote/compute.remote` imports (live data again).
-- The three workbench routes (`/lakehouse/lineage/workbench`, `/media/workbench`,
-  `/compute/workbench`) and their navbar/sidebar rows.
+- The three workbench routes (`/lakehouse/lineage/workbench`, `/media/workbench` — now
+  `/explorer/workbench`, `/compute/workbench`) and their navbar/sidebar rows. Two of the three were
+  reverted again hours later; see "The standing decision".
 - The `workbench` zone and `@rask/panels` deleted; all eight registration points unwound.
 - **Kept:** `@rask/flow` (a real library), `@rask/dockview` including the G4 views store +
   `ViewSidebar`, the `dock-layout-library` backend envelope, and the dock-reachability gate
-  (floor: the three in-zone docks).
+  (now an EXACT pin, not a floor: `['/explorer/workbench']`).
 
-## The standing decision (corrected 2026-08-03, same day)
+## The standing decision (final, 2026-08-03 evening)
 
-- **ONE global workbench, or none — NO per-zone workbenches.** The first version of this reversal
-  restored the three local workbench routes; that over-shot. The user's decision predating the
-  reversal stands: the workbench is a single cross-zone surface. The local routes, their `lib/dock`
-  wrappers, nav rows and per-zone user-state proxies were removed the same day;
-  `dock-reachability.test.ts` pins the dock count at zero until the global one ships.
-- **Panels' domain code stays in its zone** (the actual lesson of the reversal). The global
-  workbench composes it at RUNTIME via custom elements — each zone builds and serves
-  `rask-<zone>-<panel>` elements; a thin compositor zone loads them from the owning zone's
-  deployment. Zone ownership, independent deploys, and the bundle boundary stay honest.
+This section replaces an earlier "ONE global workbench, or none" ruling that the retirement above
+overturned. Two rulings landed after it, in this order:
+
+- **A dock lives INSIDE its zone.** Not a compositor, not custom elements. A dock panel is the
+  zone's REAL component, importing the zone's own remote functions and sharing one store through
+  `createContext` — which is precisely what an element could never do (endpoints are per-app; a
+  `$app`-bound component cannot be mounted from a foreign bundle), and why the compositor's panels
+  had to be mirrored copies. That fidelity cost, not the bundle size, is what retired it.
+- **One dock per zone that earns one, at ZONE level — three today.** The instruction that shaped
+  this was *"why are you putting workbench on lineage? … **start with** workbench actually only in
+  media"*, and it carried two separate corrections that were briefly collapsed into one. The first
+  is permanent: `/lakehouse/lineage/workbench` buried a ZONE surface inside one AREA, so it was
+  invisible from catalog or models — docks now live at `/<zone>/workbench`, full stop. The second
+  was sequencing, not cancellation: prove the recipe on ONE zone before spending it on three. That
+  was read as "media only, forever" for a while; it was not.
+
+  The explorer's dock shipped and was proven end to end (results → atlas ring → player, saved views
+  persisting per subject), so lakehouse and compute followed on the same recipe — lakehouse with
+  lineage graph + runs + events over ONE `LineageState` plus the catalog's own tables and object
+  browser, compute with jobs + cluster + actors + serve over its own remotes.
+
+  A dock is still EARNED, never granted by symmetry: it costs ~100 KB deferred and only pays where a
+  multi-panel view of ONE subject is the actual workflow. train and studio carry placeholder data,
+  home is the catch-all, and the annotator is already a canvas — none of them qualify.
+  `dock-reachability.test.ts` pins the set EXACTLY, so neither a compositor, nor a symmetry-dock,
+  nor a nested path can return unnoticed.
+- **A panel renders the PAGE'S component (added 2026-08-04, after it was got wrong).** Retiring the
+  compositor removed the *structural* cause of mirroring — an element could not import a page
+  component — but not the habit. The in-zone panels were hand-written anyway: `/compute/actors` 416
+  lines against a 49-line `ActorsPanel` sharing nothing, and the same for cluster, jobs, serve and the
+  run board. Five of twelve panels were mirrors while the record, the skill and the PR all claimed
+  none were. The view now lives in one component the route and the panel both render; where the two
+  read different sources, rows arrive as a PROP so the dock keeps its shared store.
+
+- **Panels' domain code stays in its zone** — the lesson of the `@rask/panels` reversal, and now
+  structural rather than a rule to remember: with the dock inside the zone there is no other place
+  for a panel to live. `frontend/packages/*` stays mechanism-only (`@rask/dockview`, `@rask/flow`).
 - **The plan executed spike-first** — one panel proved light-DOM styling and move-without-remount
   before anything else was built; the work file that tracked it is deleted (see the header).
 - **Iframes remain rejected** for first-party panels (they are the *untrusted-code* tool — VS Code
@@ -98,7 +164,7 @@ worked. It was still wrong, for reasons that were on the record before it was bu
 
 The original text follows, unedited in substance. Its factual corrections stand — a component *can*
 cross a bundle boundary by import (`@rask/ui` proves it seven times), module federation is
-unavailable under Vite 8 + rolldown, `@rask/media-api`'s base guard is per-process and no blocker.
+unavailable under Vite 8 + rolldown, `@rask/explorer-api`'s base guard is per-process and no blocker.
 Its conclusion — therefore centralize the panels in one zone — is the part the reversal rejects:
 "possible" was answered, "wise" was never asked.
 

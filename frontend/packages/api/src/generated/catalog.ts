@@ -72,6 +72,12 @@ export interface paths {
          *     Any relation the compiled model defines on the type may be probed (base rungs included — an admin
          *     debugging a cascade asks about ``writer``, not just ``can_write_data``); an unknown one is a clean 400.
          *     ``checked`` echoes the resolved tuple so the verdict is unambiguous.
+         *
+         *     ``context`` supplies the runtime values a CONDITION needs — ``current_time`` for the model's
+         *     ``non_expired_grant``. Omitting it against a time-boxed grant is a DENY, not a neutral answer:
+         *     OpenFGA cannot evaluate the CEL expression without its operands. The server does NOT default the
+         *     clock, deliberately — a check that silently substituted "now" would answer a question the caller
+         *     did not ask, and the whole point of the explorer is asking "was this true at 14:00?".
          */
         post: operations["check_access_v1_access_check_post"];
         delete?: never;
@@ -180,6 +186,42 @@ export interface paths {
         get: operations["get_access_model_v1_access_model_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/access/simulate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Simulate Access
+         * @description "Would this grant do what I think?" — a Check evaluated as if ``hypothetical`` existed.
+         *
+         *     Nothing is written. OpenFGA's contextual tuples are per-request, so the store is untouched and the
+         *     simulation owes no cleanup. This exists because the model is CONCENTRIC: a grant three levels up
+         *     cascades to every child, and predicting that by reading the DSL is exactly the reasoning humans get
+         *     wrong. The only way to find out today is to write the tuple and look — which on an authorization
+         *     store is a change you then have to remember to undo.
+         *
+         *     Returns the DELTA. ``allowed`` alone cannot be acted on: a grant that changes nothing and a grant
+         *     that unlocks access both answer true. ``baseline`` is the same Check WITHOUT the hypothesis, so the
+         *     caller can distinguish "this is what changes the answer" from "this grant is a no-op" — and the
+         *     second is the more common finding.
+         *
+         *     Every hypothetical tuple is validated exactly like a real write (``_validated_write_tuple``): a
+         *     derived ``can_*`` or an unknown type is a clean 400 here rather than a confusing OpenFGA rejection,
+         *     and — more importantly — a hypothesis this API would refuse to write must not be simulatable, or
+         *     the answer describes a grant that cannot exist.
+         */
+        post: operations["simulate_access_v1_access_simulate_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -775,7 +817,17 @@ export interface paths {
          */
         get: operations["list_projects_v1_projects_get"];
         put?: never;
-        post?: never;
+        /**
+         * Create Project
+         * @description Mint a tenant: registry record + the creator's ``admin`` tuple, in one operation. Estate-admin gated.
+         *
+         *     The gate is ``can_observe_events`` on the fixed root object — the estate-admin bar every whole-estate
+         *     surface uses. Idempotent: re-POSTing an existing id carries ``created_at``/``created_by``/``protected``
+         *     forward and re-asserts the admin tuple (a duplicate FGA write is a no-op), so a partial-failure retry
+         *     (record written, tuple write failed) converges instead of erroring. The grant is audited and published
+         *     like any other ACL change, only when it was actually written.
+         */
+        post: operations["create_project_v1_projects_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -796,7 +848,26 @@ export interface paths {
         get: operations["get_project_v1_projects__project_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Project
+         * @description Retire a tenant: refuse while it still holds warehouses, else revoke its tuples and drop its record.
+         *
+         *     Gated on ``project:<id>#can_administer`` — the tenant's OWN admin bar, not the estate-observer gate the
+         *     read routes use (module docstring). Order, fail-closed and each step earning the next:
+         *     id shape (400) → existence (404) → authz (403) → deletion protection (409) → emptiness (409) →
+         *     revoke tuples → delete record → audit + event.
+         *
+         *     **Emptiness is bottom-up** (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses
+         *     refuses 409 and NAMES them — a refusal that does not say what blocks it just moves the search to the
+         *     user. **There is deliberately no ``cascade`` parameter on this route at all.** A project cascade would
+         *     reach warehouses, and a warehouse's own delete can purge a bucket; one request must never be able to
+         *     destroy a tenant's storage transitively. Emptying goes one rung at a time through
+         *     ``DELETE /v1/warehouses/{id}``, where the purge is its own separate opt-in.
+         *
+         *     ``force=true`` overrides deletion PROTECTION only (Decision 5) — the FGA gate above ran first and runs
+         *     identically with or without it, so forcing cannot delete a project the caller may not administer.
+         */
+        delete: operations["delete_project_v1_projects__project_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1288,6 +1359,14 @@ export interface paths {
          *     ``data_base`` (#3-B, repeatable) spreads the table's fragments across the named approved buckets (Lance
          *     multi-base). Each MUST be on the ``LANCE_MULTIBASE_DATA_BASES`` allowlist — a caller can never point a
          *     base at an arbitrary bucket. Omitted → a single-location table exactly as before.
+         *
+         *     Derived-write lineage (S4, optional — the same metadata ``merge_insert`` has always taken):
+         *     ``source`` + ``source_version`` record the version-pinned upstream this table DERIVES FROM
+         *     (an annotation publish from ``transcripts@N``, a Ray job's first write), surfaced as a
+         *     version-pinned INPUT on the CREATE RunEvent; the ``X-Lance-Run-Facets`` header carries producer
+         *     run metadata (e.g. the ``annotationProject`` facet) verbatim onto the same event. Before S4,
+         *     every FIRST write of a derived table was emitted with no pin and no facet — only later merges
+         *     could carry provenance.
          */
         post: operations["create_table_v1_table__id__create_post"];
         delete?: never;
@@ -1557,7 +1636,7 @@ export interface paths {
          * Table History
          * @description The table's commit log — one row per version, newest first: **what** changed and **when**.
          *
-         *     Answers the question a Lakekeeper-style history view asks, from the format itself rather than from a
+         *     Answers the question a catalog history view asks, from the format itself rather than from a
          *     side-table we would have to keep in sync. Lance is immutable and append-only at the manifest level, so
          *     ``versions()`` gives the timestamps and the transaction log gives the substance: the operation kind, the
          *     delete predicate exactly as the caller wrote it, which fields an update rewrote, fragment deltas, and
@@ -2354,16 +2433,15 @@ export interface paths {
          * Create Warehouse
          * @description Provision a warehouse: create its physical bucket + register it + seed FGA. Admin-gated.
          *
-         *     Order (fail-closed): authorize FIRST (``can_create_warehouse`` on the project, or — for a project that
-         *     does not exist yet — the estate admin's ``can_observe_events`` on the root), THEN provision the bucket
-         *     (idempotent), write the registry record, and grant the caller ``owner`` on ``warehouse:<id>`` with a
-         *     ``parent`` edge to the project. A re-run with the same id is idempotent (bucket + record both
-         *     overwrite-safe).
+         *     Order (fail-closed): the project must EXIST (``require_project_exists`` — 404 naming
+         *     ``POST /v1/projects`` as the fix; existence is the registry's answer, identical for every caller, so
+         *     it runs before authz), THEN authorize ``can_create_warehouse`` on the project, THEN provision the
+         *     bucket (idempotent), write the registry record, and grant the caller ``owner`` on ``warehouse:<id>``
+         *     with its ``project`` edge. A re-run with the same id is idempotent (bucket + record overwrite-safe).
          *
-         *     Minting a NEW tenant additionally grants the caller ``admin`` on ``project:<project>``: a brand-new
-         *     project has no tuples, so without that seed it would stay adminless forever (see
-         *     ``fga_deps.require_can_create_warehouse``). That bootstrap grant is audited + published like any other
-         *     grant.
+         *     The estate-admin bootstrap exception is GONE (Decision 1): tenants are minted explicitly at
+         *     ``POST /v1/projects``, which seeds the project's admin — so by the time this runs the project has
+         *     admins of its own and one door is enough.
          */
         post: operations["create_warehouse_v1_warehouses_post"];
         delete?: never;
@@ -2386,7 +2464,44 @@ export interface paths {
         get: operations["get_warehouse_v1_warehouses__warehouse_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Warehouse
+         * @description Delete a warehouse: its bindings, its tuples and its registry record — and its BUCKET only if asked.
+         *
+         *     Gated on ``project#can_administer`` (`open_hierarchy_lifecycle.md` Decision 3), NOT on a relation of the
+         *     warehouse itself: destroying a tenant's storage is a tenant-level act, so it clears the tenant's own
+         *     admin bar rather than a rung someone could hold on this one warehouse.
+         *
+         *     Order, and every step is load-bearing:
+         *
+         *     1. The record must exist (404).
+         *     2. **Authorize first.** The gate runs before the protection and emptiness checks, so an unauthorized
+         *        caller never learns whether the warehouse is protected or what it holds — a 409 listing another
+         *        tenant's namespace names is a disclosure a 403 must beat to.
+         *     3. Deletion protection (Decision 5) refuses 409 unless ``force=true``. ``force`` overrides the
+         *        PROTECTION ONLY — step 2 has already run, identically, with or without it.
+         *     4. Emptiness: a warehouse still holding namespaces refuses 409 **naming them**; a refusal that does not
+         *        say what blocks it just moves the search to the user. ``?cascade=true`` drops exactly those.
+         *     5. The cascade drops each bound namespace through the REAL native path, against the warehouse's OWN
+         *        bucket-rooted connection (so it drops in the right bucket), then revokes its tuples and removes its
+         *        binding — one namespace fully finished before the next, so a mid-cascade failure leaves a consistent
+         *        prefix and a retry converges (every primitive is idempotent). A namespace that still holds TABLES
+         *        refuses on its own rung: the request omits ``behavior``, so the native drop is Restrict and the level
+         *        below is emptied first. Do NOT reach for ``behavior="Cascade"`` here — measured against the directory
+         *        backend, it does not reject the value, it IGNORES it and drops Restrict-style anyway, so the field
+         *        would read as a working cascade while doing nothing.
+         *     6. Tuples on ``warehouse:<id>``, then the registry record.
+         *     7. **Bytes only on ``?purge_bucket=true``.** A catalog entry is recoverable, a customer's bucket is not,
+         *        so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a
+         *        purge that would take bytes this warehouse does not solely own — a bucket a same-project sibling
+         *        still claims, or reserved platform storage — refuses BEFORE the cascade
+         *        (:func:`_require_bucket_purgeable`).
+         *
+         *     The routing cache is evicted for every dropped namespace: ``_resolve_warehouse_root`` caches bindings
+         *     POSITIVELY and forever (they are immutable while they exist), so a binding deleted here but left in the
+         *     cache would keep routing that namespace into a warehouse that no longer exists.
+         */
+        delete: operations["delete_warehouse_v1_warehouses__warehouse_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2464,6 +2579,27 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AccessCheckBody
+         * @description A check, plus the runtime ``context`` any CONDITION on the path needs (``current_time`` for
+         *     ``non_expired_grant``).
+         *
+         *     Separate from :class:`AccessTuple` because context is a property of the QUESTION, not of the stored
+         *     fact — the tuple carries the window, the caller carries the clock.
+         */
+        AccessCheckBody: {
+            condition?: components["schemas"]["TupleCondition"] | null;
+            /** Context */
+            context?: {
+                [key: string]: unknown;
+            };
+            /** Object */
+            object: string;
+            /** Relation */
+            relation: string;
+            /** User */
+            user: string;
+        };
         /**
          * AccessCheckRequest
          * @description A simulated authorization question — does ``user`` hold ``relation`` on this object? The
@@ -2707,8 +2843,53 @@ export interface components {
         AccessModelResponse: {
             /** Authorization Model Id */
             authorization_model_id: string;
+            /** Conditions */
+            conditions?: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            };
             /** Dsl */
             dsl: string;
+        };
+        /**
+         * AccessSimulateRequest
+         * @description "Would this grant do what I think?" — a Check evaluated AS IF ``hypothetical`` existed.
+         *
+         *     Nothing is written. The model is concentric, so a grant three levels up cascades to every child;
+         *     predicting that by reading the DSL is exactly the reasoning people get wrong, and today the only
+         *     way to find out is to write the tuple and look.
+         */
+        AccessSimulateRequest: {
+            /**
+             * Hypothetical
+             * @description Tuples to pretend exist. Capped — a Check is not a bulk what-if engine.
+             */
+            hypothetical?: components["schemas"]["AccessTuple"][];
+            /** Object */
+            object: string;
+            /** Relation */
+            relation: string;
+            /** User */
+            user: string;
+        };
+        /**
+         * AccessSimulateResult
+         * @description The DELTA, not the verdict.
+         *
+         *     ``allowed`` alone cannot be acted on: a grant that changes nothing and a grant that unlocks access
+         *     both answer true. ``baseline`` is the same Check WITHOUT the hypothesis, so the caller can say
+         *     "this grant is what changes the answer" — or "this grant is a no-op", which is the more common and
+         *     more useful finding.
+         */
+        AccessSimulateResult: {
+            /** Allowed */
+            allowed: boolean;
+            /** Baseline */
+            baseline: boolean;
+            checked: components["schemas"]["AccessTuple"];
+            /** Hypothetical */
+            hypothetical: components["schemas"]["AccessTuple"][];
         };
         /**
          * AccessTuple
@@ -2717,6 +2898,7 @@ export interface components {
          *     one as the body and echo it back, and a check verdict carries the exact tuple it probed.
          */
         AccessTuple: {
+            condition?: components["schemas"]["TupleCondition"] | null;
             /** Object */
             object: string;
             /** Relation */
@@ -3595,7 +3777,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "policy_set" | "policy_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -3610,7 +3792,7 @@ export interface components {
              * Object Type
              * @enum {string}
              */
-            object_type: "grant" | "warehouse" | "policy" | "namespace" | "table";
+            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table";
             /**
              * Occurred At
              * Format: date-time
@@ -3836,6 +4018,14 @@ export interface components {
              * @description Optional transaction identifier
              */
             transaction_id?: string | null;
+        };
+        /**
+         * CreateProjectRequest
+         * @description The create payload. Just the id — a tenant is a name, its admins, and what it later holds.
+         */
+        CreateProjectRequest: {
+            /** Id */
+            id: string;
         };
         /**
          * CreateTableBranchRequest
@@ -4370,6 +4560,19 @@ export interface components {
             version?: number | null;
         };
         /**
+         * DeleteProjectResponse
+         * @description What the delete actually removed: the retired tenant and how many FGA tuples went with it.
+         *
+         *     The count is reported rather than assumed — an operator retiring a tenant needs to see that the authz
+         *     side really happened (``0`` on an FGA-off stack is a fact, not a silent success).
+         */
+        DeleteProjectResponse: {
+            /** Project */
+            project: string;
+            /** Tuples Revoked */
+            tuples_revoked: number;
+        };
+        /**
          * DeleteTableBranchRequest
          * @description DeleteTableBranchRequest
          */
@@ -4446,6 +4649,29 @@ export interface components {
              * @description Optional transaction identifier
              */
             transaction_id?: string | null;
+        };
+        /**
+         * DeleteWarehouseResponse
+         * @description What the delete ACTUALLY did — reported step by step, never assumed.
+         *
+         *     A warehouse delete touches four independent stores (the native namespaces, OpenFGA, the registry, the
+         *     bucket) and only three of them run by default. Reporting each separately is what makes a partial
+         *     failure diagnosable instead of a lie: ``bucket_purged=false`` names bytes that are still there, and
+         *     ``tuples_revoked`` is a count OpenFGA really returned.
+         */
+        DeleteWarehouseResponse: {
+            /** Bucket */
+            bucket: string;
+            /** Bucket Purged */
+            bucket_purged: boolean;
+            /** Id */
+            id: string;
+            /** Namespaces Dropped */
+            namespaces_dropped: string[];
+            /** Objects Purged */
+            objects_purged: number;
+            /** Tuples Revoked */
+            tuples_revoked: number;
         };
         /**
          * DeregisterTableRequest
@@ -6374,6 +6600,22 @@ export interface components {
             version: number;
         };
         /**
+         * TupleCondition
+         * @description A CEL condition attached to a grant, with the parameters that ride the TUPLE.
+         *
+         *     For the model's ``non_expired_grant`` that is ``grant_time`` + ``grant_duration`` — the window.
+         *     ``current_time`` is deliberately NOT here: the clock belongs to the caller and is supplied per
+         *     check, so a grant cannot pin the present moment at the instant it was written.
+         */
+        TupleCondition: {
+            /** Context */
+            context?: {
+                [key: string]: unknown;
+            };
+            /** Name */
+            name: string;
+        };
+        /**
          * UpdateFieldMetadataEntry
          * @description UpdateFieldMetadataEntry
          */
@@ -6940,7 +7182,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AccessTuple"];
+                "application/json": components["schemas"]["AccessCheckBody"];
             };
         };
         responses: {
@@ -7079,6 +7321,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccessModelResponse"];
+                };
+            };
+        };
+    };
+    simulate_access_v1_access_simulate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessSimulateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessSimulateResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -7991,6 +8266,39 @@ export interface operations {
             };
         };
     };
+    create_project_v1_projects_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateProjectRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_project_v1_projects__project_id__get: {
         parameters: {
             query?: never;
@@ -8009,6 +8317,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_project_v1_projects__project_id__delete: {
+        parameters: {
+            query?: {
+                force?: boolean;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteProjectResponse"];
                 };
             };
             /** @description Validation Error */
@@ -8727,8 +9068,11 @@ export interface operations {
                 mode?: string | null;
                 properties?: string | null;
                 data_base?: string[];
+                source?: string | null;
+                source_version?: number | null;
             };
             header?: {
+                "X-Lance-Run-Facets"?: string | null;
                 authorization?: string | null;
             };
             path: {
@@ -10602,6 +10946,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WarehouseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_warehouse_v1_warehouses__warehouse_id__delete: {
+        parameters: {
+            query?: {
+                cascade?: boolean;
+                purge_bucket?: boolean;
+                force?: boolean;
+            };
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteWarehouseResponse"];
                 };
             };
             /** @description Validation Error */

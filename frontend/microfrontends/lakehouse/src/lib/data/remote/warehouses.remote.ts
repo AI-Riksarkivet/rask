@@ -5,7 +5,7 @@ import { parse } from '@rask/api';
 import type { ApiResult } from '@rask/api/client';
 import type { CreateWarehouseBody, ProjectSummary, WarehouseRecord } from '../catalog';
 
-// The warehouse + project registry, in the zone's remote-function dialect (open_transport.md) — same
+// The warehouse + project registry, in the zone's remote-function dialect — same
 // names, same `ApiResult` shapes as the /capi client this replaces, transport only. The three narrow
 // BFF routes it retires (`capi/v1/warehouses`, `capi/v1/warehouses/[id]/[action]`) existed to keep the
 // catalog's project-admin gate enforced against a REAL user rather than a service credential; that
@@ -109,12 +109,11 @@ export const fetchProjects = query(
 		parsed(await catalogJSON('/v1/projects'), v.array(ProjectSchema)),
 );
 
-/** One tenant: its warehouses + effective admins — the hierarchy drill-down's project page. */
-export const fetchProject = query(
-	v.string(),
-	async (project): Promise<ApiResult<ProjectSummary>> =>
-		parsed(await catalogJSON(`/v1/projects/${enc(project)}`), ProjectSchema),
-);
+// `fetchProject` (one tenant: its warehouses + effective admins) is GONE from this zone. Its only
+// consumer was `catalog/projects/[project]`, and the per-project overview moved to the home zone with
+// the rest of the projects surface (2026-08-03 ruling — a project is the TOP of the hierarchy). Home
+// carries its own copy; a second, unreachable one here would be the drift this round exists to end.
+// `fetchProjects` (plural) stays — TenantsPanel reads it.
 
 /** Provision a warehouse — the create that MINTS a project when its `project` is new. Project-admin
  *  gated by the catalog (can_create_warehouse); on success both registry reads refresh in the same

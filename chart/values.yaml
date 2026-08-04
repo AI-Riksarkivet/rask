@@ -3,7 +3,7 @@
 # Two systems now install from this one file:
 #   * the rask fleet (gateway/compute/controlplane),
 #     KubeRay Serve, CloudNativePG, the RustFS Tenant, the SvelteKit microfrontend zones;
-#   * the lance-ns lakehouse (catalog + lineage + medallion + compaction + media), governance
+#   * the lance-ns lakehouse (catalog + lineage + medallion + maintenance + media), governance
 #     (Dex OIDC + OpenFGA), the Dapr/NATS event fabric, OpenBao, and the OTel-first observability tier.
 #
 # Merge rule applied throughout (plan P4): rask's chart is the BASE and every rask key is preserved;
@@ -83,8 +83,8 @@ config:
 services:
   # ---- rask fleet (uvicorn modules, one Deployment each via templates/fleet.yaml) ----
   # (core-api/search-api/volumes-api died in the R6/R20 media wave: the S3 object browser
-  # rides the media-plane viewer at /api/media/object*; lines/EAD FTS re-land as
-  # catalog-governed Lance tables behind /api/media/search. The Ray-plane service is
+  # rides the media-plane viewer at /api/explorer/object*; lines/EAD FTS re-land as
+  # catalog-governed Lance tables behind /api/explorer/search. The Ray-plane service is
   # `compute` on EVERY surface — uv member, import, k8s objects, dapr app-id, image —
   # per R22, which supersedes R20's `ray` choice and its ray-api PyPI-shadow exception.
   # Its public gateway rows stay /api/ray + /api/serve: the URL namespace names the
@@ -223,31 +223,24 @@ services:
     ageStatementTimeoutSeconds: 30
 
 # Image registry/tag shared by every fleet + migration container, PLUS the per-image lance-ns block so
-# Tilt can inject each built image independently (image_keys → image.catalog.repository/tag).
 image:
-  repository: ""          # empty => bare "<component>" name (e.g. gateway)
+  # A REGISTRY, e.g. ghcr.io/<org>/<repo> or localhost:5000. Required — see `rask.image` in
+  # _helpers.tpl for why an empty default was actively harmful: it rendered a BARE `gateway:dev`,
+  # which is `docker.io/library/gateway:dev`, and only ever worked because `make k3s-import` had
+  # side-loaded the tag into the node. A GitOps reconciler has no such side channel.
+  repository: ""
   tag: "dev"
+  # Set to pin the deployed artifact by content rather than by a mutable tag. WINS over `tag`.
+  # This is what an image-automation controller (Argo Image Updater, Flux) writes back into git.
+  digest: ""
+  # Opt-in for side-loaded images (`make k3s-build` + `k3s-import`, `kind load`): renders a bare
+  # `<component>:<tag>` that the node must ALREADY hold. Never set this for a remote cluster.
+  localImages: false
   pullPolicy: IfNotPresent
   # The lakehouse image: catalog (catalog.main:app) + lineage (lineage.main:app) + the medallion
-  # movers + compaction + the media services all run from this one image, different entrypoint.
+  # movers + maintenance + the media services all run from this one image, different entrypoint.
   # `lance.catalogImage` uses required() on the tag, so an empty tag FAILS the render loudly.
   catalog: { repository: lance-rest-catalog, tag: dev }
-
-# Dev-only knobs, driven by the Tilt loop (Tiltfile). Never enable in production.
-dev:
-  # Append `uvicorn --reload` (+ reload-dirs) so Tilt's live_update sync hot-reloads the
-  # Python services in-cluster. Applies to BOTH fleet.yaml and services.yaml (catalog,
-  # lineage) via the shared `lance.devReloadArgs` helper — it used to be wired into
-  # fleet.yaml alone, which silently excluded the very services Tilt syncs. The reload
-  # dirs are site-packages, where the src-layout images install; the old
-  # /app/{packages,components} paths have not existed since that rewrite.
-  # The Tiltfile sets this; never enable it in production.
-  reload: false
-  # Shared packages to hot-reload alongside each service's own. MUST exist in every image the
-  # chart renders for — uvicorn refuses to start on a missing --reload-dir rather than skipping
-  # it. lineage_kit is deliberately NOT here: the gateway image does not ship it, and including
-  # it crashlooped the ingress. Add it only if every deployed image is known to carry it.
-  reloadKits: ["service_kit"]
 
 resources:
   # rask fleet tier (templates/fleet.yaml).
@@ -296,7 +289,7 @@ resources:
 lifecycle:
   preStopSeconds: 5
   terminationGracePeriodSeconds: 30
-  compactionTerminationGracePeriodSeconds: 120
+  maintenanceTerminationGracePeriodSeconds: 120
 
 # --- Pod hardening (applied to every app container via the lance.securityContext helper) ----------
 # runAsNonRoot + drop-ALL-caps + RuntimeDefault seccomp are unconditional (the restricted PodSecurity
@@ -424,13 +417,9 @@ frontend:
     - {name: lakehouse, path: /lakehouse}
     # The lance-media zones: full BFF zones like the rest — SSR on, the shared session handle, and
     # same-origin /<zone>/api/* proxy routes to the media Services (VIEWER_API/SEARCH_API/
-    # ANNOTATOR_API env, rendered when media.enabled). Deploy together with media.enabled=true.
-    - {name: media, path: /media}
+    # ANNOTATOR_API env, rendered when explorer.enabled). Deploy together with explorer.enabled=true.
+    - {name: explorer, path: /explorer}
     - {name: annotator, path: /annotator}
-    # THE global workbench — its own zone so it composes ACROSS zones, but it owns NO panel code:
-    # foreign panels are custom elements built and served by their OWNING zone's deployment,
-    # loaded here by URL at runtime (open_workbench.md).
-    - {name: workbench, path: /workbench}
   # Per-user OIDC login (opt-in), shared across ALL zones — one origin, one sealed cookie, so a login on
   # any zone is a login on every zone. REQUIRED when enabled: sessionSecret (seals the cookie),
   # publicIssuer, publicOrigin (forms the home zone's /auth/callback redirect URI). The confidential Dex
@@ -443,7 +432,7 @@ frontend:
 
 # --- lance-ns nginx gateway: RETIRED (lance-ns-merge.md decision 4 + P4) ----------------------------
 # The rask fleet gateway at services.gateway (uvicorn `gateway:app` on :8888) is the ONE front door; it
-# carries the lance routes (/api/catalog, /api/lineage, /api/produce, /api/train, /api/media/*) and the
+# carries the lance routes (/api/catalog, /api/lineage, /api/produce, /api/train, /api/explorer/*) and the
 # lineage sidecar-only 403 guard as Python middleware. templates/gateway.yaml (nginx ConfigMap +
 # Deployment + Service) is deleted; the former top-level `gateway:` values block went with it.
 
@@ -688,12 +677,20 @@ medallion:
 # --- Compaction/GC microservice (Dapr cron binding) -----------------------------------------------
 # A bindings.cron component POSTs /<bindingName> on `schedule`; the service compacts small Lance
 # fragments + GCs old versions across the lakehouse bucket. Schedule/retention are component config.
-compaction:
+maintenance:
   enabled: true
-  daprAppId: compaction
+  daprAppId: maintenance
   port: 8000
-  bindingName: compaction-cron
+  bindingName: maintenance-cron
   schedule: "@every 120s" # demo cadence (prod: e.g. "0 */30 * * * *")
+  # The drift reconciler's OWN cron. It only READS three stores (OpenFGA, the control-root registries,
+  # the bucket listing) and reports where they disagree — cheap next to the sweep, which rewrites data
+  # files, which is why it gets its own schedule instead of inheriting that one.
+  reconcileBindingName: maintenance-reconcile-cron
+  reconcileSchedule: "@every 300s"
+  # The catalog's control root (project/warehouse registries). Empty => the primary bucket, which is
+  # what the catalog itself defaults to; set both together if the catalog's root is moved.
+  controlRoot: ""
   olderThanDays: 7 # version GC keeps this much history
   # Emit a maintenance lineage event per materially-compacted dataset (shows GC in producers() next to
   # writes) AND a FAIL event per maintain:-errored dataset (deterministic per-dataset run id — the flood
@@ -708,12 +705,12 @@ compaction:
 # The viewer/search/annotator services from the lance-audio checkout. All three share the catalog image
 # and read the corpus from a node-local hostPath (NO data move — only the annotations table lives in the
 # catalog; MEDIA_READ/WRITE_BACKEND=catalog is the merge's env flip, "direct" restores standalone dev).
-media:
+explorer:
   enabled: false
   # Where the pods mount the corpus (read-only, all three services).
   corpusMountPath: /media-corpus
   # HOW the corpus volume is provided. This used to be an unconditional `hostPath` with
-  # `type: Directory` pointed at /var/media-corpus — which means media.enabled=true on a cluster where
+  # `type: Directory` pointed at /var/media-corpus — which means explorer.enabled=true on a cluster where
   # nobody had pre-created that directory wedged all three pods in ContainerCreating, with a kubelet
   # event as the only diagnostic (live-proof 2026-07-28, defect 5; the plan already said no hostPath
   # ships). Modes:
@@ -769,7 +766,7 @@ encoders:
 # --- Model runners (runners/ — the lance-audio fold) ----------------------------------------------
 # Only the CPU-viable subset ships: `assist` (GroundingDINO-tiny + SAM-ViT-base, CPU wheels, weights
 # baked into the image). The CUDA-pinned runners (asr/diarize/voiceprint) and the LLM-dependent batch
-# runners (topics/kg) have no honest deployment on a GPU-less estate. When enabled (and media.enabled),
+# runners (topics/kg) have no honest deployment on a GPU-less estate. When enabled (and explorer.enabled),
 # the annotator's MEDIA_ASSIST_URL points at the assist Service, flipping its in-repo mock to real
 # predictions. NOTE: runners/htr is the rask HTR runner — a sealed project, not deployed from here.
 runners:

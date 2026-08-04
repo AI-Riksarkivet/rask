@@ -6,7 +6,7 @@
 // the catalog serializes with response_model_exclude_none (absent-not-null fields), so a drift is
 // surfaced instead of lying downstream.
 //
-// The TRANSPORT moved to remote functions (open_transport.md, area 1): the access surfaces live in
+// The TRANSPORT moved to remote functions (the transport ruling, area 1): the access surfaces live in
 // `remote/access-objects.remote.ts`, the lifecycle + policy ones in `remote/namespace.remote.ts`.
 // This module keeps the contracts they parse against — a `.remote.ts` may export only remote
 // functions.

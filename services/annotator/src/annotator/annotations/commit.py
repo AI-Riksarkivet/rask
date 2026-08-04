@@ -46,6 +46,7 @@ def finalize_commit(
     *,
     touched: int,
     unit_key: str,
+    caller_token: str | None = None,
 ) -> SaveResult:
     """Close out a write: report the post-write version FROM THE READER SEAM and
     emit the pre-merge OpenLineage RunEvent. In full catalog mode no local table is
@@ -53,7 +54,7 @@ def finalize_commit(
     for the same write (``effective_lineage_sink`` is ``none`` there)."""
     table_id = settings.catalog_table_id(handle.id, ANNOTATIONS_TABLE)
     fresh = None if settings.rest_catalog_mode else table_dataset(handle, ANNOTATIONS_TABLE)
-    reader = open_reader(dataset=fresh, table_id=table_id, settings=settings)
+    reader = open_reader(dataset=fresh, table_id=table_id, settings=settings, caller_token=caller_token)
     version = reader.table_version()
     sink = settings.effective_lineage_sink
     if touched and sink != "none" and fresh is not None:

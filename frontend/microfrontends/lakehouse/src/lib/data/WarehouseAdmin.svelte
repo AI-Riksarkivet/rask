@@ -377,8 +377,14 @@
 			<dd class="mono">{drawerRow.id}</dd>
 			<dt>project</dt>
 			<dd>
-				<a class="mono jump" href={`${base}/catalog/projects/${encodeURIComponent(drawerRow.project)}`}
-					>{drawerRow.project}</a
+				<!-- The project rung is the TOP of the hierarchy and lives in the HOME zone (2026-08-03
+				     ruling); this zone owns warehouse and below. So the href is absolute rather than
+				     base-relative, and it MUST hard-navigate — a soft nav would land in a route this zone
+				     does not own. -->
+				<a
+					class="mono jump"
+					href={`/projects/${encodeURIComponent(drawerRow.project)}`}
+					data-sveltekit-reload>{drawerRow.project}</a
 				>
 			</dd>
 			<dt>bucket</dt>
@@ -406,8 +412,11 @@
 			<a class="jbtn" href={`${base}/catalog/warehouses/${encodeURIComponent(drawerRow.id)}`}
 				>Open detail</a
 			>
-			<a class="jbtn" href={`${base}/catalog/projects/${encodeURIComponent(drawerRow.project)}`}
-				>Open project</a
+			<!-- cross-zone, same reason as the project cell above -->
+			<a
+				class="jbtn"
+				href={`/projects/${encodeURIComponent(drawerRow.project)}`}
+				data-sveltekit-reload>Open project</a
 			>
 		</div>
 	{/if}

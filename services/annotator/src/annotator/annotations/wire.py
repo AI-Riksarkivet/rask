@@ -13,6 +13,7 @@ from fastapi import APIRouter, Query, Response
 
 from annotator.annotations.schema import ANNOTATIONS_TABLE, EMPTY_SCHEMA
 from annotator.annotations.versions import VERSION_SOURCE_HEADER, checkout
+from annotator.api.security import RawBearerToken
 from service_kit.exceptions import NotFoundError
 from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
 from service_kit.lancekit.reader import open_catalog_reader, open_reader
@@ -40,6 +41,7 @@ def annotations(
     doc_id: str,
     speech_id: int,
     chunk_id: int,
+    caller_token: RawBearerToken = None,
     dataset: DatasetParam = None,
     version: Annotated[int | None, Query(ge=1, description="Read a historical version (time-travel).")] = None,
 ) -> Response:
@@ -70,7 +72,11 @@ def annotations(
             # can feed a listed version straight back here. A bad/reclaimed
             # version (or a table the catalog doesn't know) is the catalog's 404,
             # translated to ours — never a silent empty local fallback.
-            reader = open_catalog_reader(table_id=settings.catalog_table_id(handle.id, ANNOTATIONS_TABLE), settings=settings)
+            reader = open_catalog_reader(
+                table_id=settings.catalog_table_id(handle.id, ANNOTATIONS_TABLE),
+                settings=settings,
+                caller_token=caller_token,
+            )
             table = reader.to_table(filter=where, version=version)
             return _annotations_response(table, version, source="catalog")
         # A historical read is a direct time-travel snapshot of the LOCAL lineage
@@ -88,6 +94,7 @@ def annotations(
         dataset=ds,
         table_id=settings.catalog_table_id(handle.id, ANNOTATIONS_TABLE),
         settings=settings,
+        caller_token=caller_token,
     )
     try:
         served_version = reader.table_version()

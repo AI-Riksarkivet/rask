@@ -111,19 +111,19 @@ describe('the media zone does not proxy the annotation write surface', () => {
 	// This used to allow exactly one route — `/api/annotations/tags`, media's workflow tag write — as
 	// the narrow, deliberate exception. It allows NONE now, and that is a tightening rather than a
 	// relaxation: the tag write and the batch-job submit are `command()`s on the zone server
-	// (`src/lib/workflow/remote/labeling.remote.ts`, open_transport.md area 3), so the annotator's write
+	// (`src/lib/workflow/remote/labeling.remote.ts`, the transport ruling area 3), so the annotator's write
 	// surface is reachable from this zone only through two named functions with fixed payloads. A proxy
 	// forwards whatever a caller spells; a command cannot.
 	it('exposes no /api/annotations route at all', () => {
-		expect(bffRoutes('media').filter((r) => r.startsWith('/api/annotations'))).toEqual([]);
+		expect(bffRoutes('explorer').filter((r) => r.startsWith('/api/annotations'))).toEqual([]);
 	});
 	it('exposes no /api/assist route at all', () => {
-		expect(bffRoutes('media').filter((r) => r.startsWith('/api/assist'))).toEqual([]);
+		expect(bffRoutes('explorer').filter((r) => r.startsWith('/api/assist'))).toEqual([]);
 	});
 	it('exposes no /api/jobs route at all', () => {
 		// `jobs/apply` became a command; `jobs/[...path]` was a status passthrough with no caller in the
 		// estate at all (`jobStatus` in @rask/labeling is exported dead code) and was deleted outright.
-		expect(bffRoutes('media').filter((r) => r.startsWith('/api/jobs'))).toEqual([]);
+		expect(bffRoutes('explorer').filter((r) => r.startsWith('/api/jobs'))).toEqual([]);
 	});
 });
 
@@ -136,7 +136,7 @@ describe('the chart hands a zone only the upstreams its routes use', () => {
 
 	/** The `*_API` names a zone's own SERVER code actually reads out of $env.
 	 *
-	 *  Scoped to `src/routes` until the transport round (open_transport.md): a zone reached its upstreams
+	 *  Scoped to `src/routes` until the transport round: a zone reached its upstreams
 	 *  only through `+server.ts` files then. It reaches most of them through remote functions now
 	 *  (`src/lib/**\/*.remote.ts`), which read the same `$env/dynamic/private` and are just as much a
 	 *  hole punched through to a backend — so the whole of `src` is the honest scope. Narrowing it back
@@ -156,7 +156,7 @@ describe('the chart hands a zone only the upstreams its routes use', () => {
 	}
 
 	it('media routes to the viewer, search and annotator services', () => {
-		expect([...upstreamsUsed('media')].sort()).toEqual([
+		expect([...upstreamsUsed('explorer')].sort()).toEqual([
 			'ANNOTATOR_API',
 			// The dev-only split seam (`?? ANNOTATOR_API`): the local dev trio's annotator serves
 			// the annotations plane while the labeling-tasks plane runs in-cluster. The chart never
@@ -188,8 +188,8 @@ describe('the chart hands a zone only the upstreams its routes use', () => {
 		const searchLine = chart.split('\n').findIndex((l) => l.includes('name: SEARCH_API'));
 		expect(searchLine).toBeGreaterThan(-1);
 		const guard = chart.split('\n')[searchLine - 1] ?? '';
-		expect(guard, 'SEARCH_API must sit behind an `eq .name "media"` guard').toContain(
-			'eq .name "media"',
+		expect(guard, 'SEARCH_API must sit behind an `eq .name "explorer"` guard').toContain(
+			'eq .name "explorer"',
 		);
 	});
 });

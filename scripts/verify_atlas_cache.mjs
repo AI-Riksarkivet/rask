@@ -2,7 +2,7 @@
  * Condition 6: the atlas payload is filled ONCE and served to everyone allowed to see it — and to nobody
  * else, warm or cold.
  *
- * `/media/api/atlas/points` is 6,678,928 bytes. A tab-local memo fixed the space toggle; a refresh, a
+ * `/explorer/api/atlas/points` is 6,678,928 bytes. A tab-local memo fixed the space toggle; a refresh, a
  * second tab and a second user each still paid it in full. The server half caches the PAYLOAD, keyed on
  * the resource, and authorises every request before a byte is reachable.
  *
@@ -18,7 +18,7 @@
 import { chromium } from '@playwright/test';
 
 const ORIGIN = 'http://localhost:8090';
-const POINTS = '/media/api/atlas/points?space=text&v=6';
+const POINTS = '/explorer/api/atlas/points?space=text&v=6';
 
 const browser = await chromium.launch({
 	args: ['--host-resolver-rules=MAP lance-ns-dex:5556 127.0.0.1:5556'],
@@ -26,7 +26,7 @@ const browser = await chromium.launch({
 
 async function login(context, user) {
 	const page = await context.newPage();
-	await page.goto(`${ORIGIN}/auth/login?redirect=${encodeURIComponent('/media/')}`, {
+	await page.goto(`${ORIGIN}/auth/login?redirect=${encodeURIComponent('/explorer/')}`, {
 		waitUntil: 'domcontentloaded',
 	});
 	await page.waitForURL(/\/dex\/auth/, { timeout: 20000 });
@@ -74,7 +74,7 @@ check(
 // ── the entry is warm; an unauthenticated caller must STILL be refused ────────────────────────────
 const anon = await browser.newContext();
 const anonPage = await anon.newPage();
-await anonPage.goto(`${ORIGIN}/media/`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+await anonPage.goto(`${ORIGIN}/explorer/`, { waitUntil: 'domcontentloaded' }).catch(() => {});
 const anonRead = await probe(anonPage, POINTS);
 check(
 	'an unauthenticated caller is refused WHILE the entry is warm',
@@ -93,7 +93,7 @@ check(
 // ── a caller-supplied `v` must not be able to fork the key ────────────────────────────────────────
 const forks = [];
 for (const junk of ['1', '99', 'x', 'zzz', String(Date.now())]) {
-	forks.push(await probe(alice, `/media/api/atlas/points?space=text&v=${junk}`));
+	forks.push(await probe(alice, `/explorer/api/atlas/points?space=text&v=${junk}`));
 }
 check(
 	'junk `v` tokens cannot fork the cache',

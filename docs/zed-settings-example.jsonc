@@ -51,7 +51,6 @@
       "port_forwards": [
         // the app + tooling UIs
         { "local_port": 8080, "remote_port": 80 },  // k3s traefik ingress — THE app UI
-        { "local_port": 10350, "remote_port": 10350 },  // Tilt UI
         { "local_port": 3024, "remote_port": 3024 },  // microfrontends composing proxy
         { "local_port": 8888, "remote_port": 8888 },  // gateway API (/api/*)
         { "local_port": 6006, "remote_port": 6006 },  // Storybook (@rask/ui)
@@ -60,7 +59,7 @@
         { "local_port": 8804, "remote_port": 8804 },  // compute (/api/ray, /api/serve)
         { "local_port": 8820, "remote_port": 8820 },  // controlplane (/api/projects)
         { "local_port": 8101, "remote_port": 8101 },  // media viewer
-        { "local_port": 5000, "remote_port": 5000 },  // tilt image registry
+        { "local_port": 5000, "remote_port": 5000 },  // dev image registry
         // SvelteKit zone dev servers (make dev-frontends)
         { "local_port": 5173, "remote_port": 5173 },
         { "local_port": 5174, "remote_port": 5174 },

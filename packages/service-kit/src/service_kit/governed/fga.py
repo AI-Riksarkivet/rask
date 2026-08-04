@@ -945,7 +945,22 @@ def _is_duplicate_write(exc: ApiException) -> bool:
 #: Where a tuple write came from, recorded on every audit row so provenance can say HOW a grant
 #: happened and not merely who. `create` dwarfs the rest in a real estate — it is the post-registration
 #: seed — and telling it apart from a deliberate admin grant is most of the value.
-TupleOrigin = Literal["admin_api", "grant_api", "create", "warehouse_bootstrap", "train", "annotator"]
+#:
+#: The tenant-lifecycle origins (`project_create`, `warehouse_create`, `lifecycle_delete`) name the
+#: control-plane doors that mint and retire a tenant's authz: an audit row can then say a grant was born
+#: WITH its project rather than added to it later, and a revoke was a deletion rather than an admin's
+#: choice. `warehouse_bootstrap` is gone with the exception it named — a project's first warehouse no
+#: longer mints its admin (that moved to `POST /v1/projects`, `open_hierarchy_lifecycle.md` Decision 1).
+TupleOrigin = Literal[
+    "admin_api",
+    "grant_api",
+    "create",
+    "project_create",
+    "warehouse_create",
+    "lifecycle_delete",
+    "train",
+    "annotator",
+]
 
 
 def _audit_tuples(action: str, tuples: list[ClientTuple], actor: str, origin: TupleOrigin) -> None:

@@ -23,21 +23,26 @@
 	import { Button } from '@rask/ui/button';
 	import { Dialog } from '@rask/ui/dialog';
 	import { Input } from '@rask/ui/input';
+	import { Select } from '@rask/ui/select';
 	import { Textarea } from '@rask/ui/textarea';
-	import { ExternalLink } from '@lucide/svelte';
+	import { ExternalLink, Trash2 } from '@lucide/svelte';
 
 	import LeaseChip from './LeaseChip.svelte';
+	import { dropTask } from './remote/projects.remote';
 	import { fireTaskEvent } from './remote/tasks.remote';
 	import { EVENT_LABELS, taskStateVariant } from './presentation.js';
 	import type { Adjudication, TaskDetail } from './types.js';
 
 	let {
+		projectId,
 		tasks,
 		me,
 		consensusN = 1,
 		adjudications = {},
+		droppable = false,
 		onchanged,
 	}: {
+		projectId: string;
 		tasks: TaskDetail[];
 		me: string | null;
 		/** The labeling task's `consensus_n` — labels the replica chip ("replica k/N"). */
@@ -46,7 +51,45 @@
 		adjudications?: Record<string, Adjudication>;
 		/** Fired after any successful task event so the page refetches ONE snapshot. */
 		onchanged: () => void;
+		/** Whether this project can still have items removed (draft/labeling). The SERVER re-checks
+		 *  both the permission and the state; hiding the button is presentation, not authorization. */
+		droppable?: boolean;
 	} = $props();
+
+	// QUEUE FILTER. A project of a thousand items is unnavigable without one, which is why this is
+	// the first campaign feature: it is what makes every other one demonstrable.
+	//
+	// Filtered here rather than through TanStack's column filters because `assignee` is not an
+	// accessor column, and adding a hidden one to filter by it would be plumbing in service of the
+	// framework rather than the problem. Filtering the INPUT means pagination, sorting and the
+	// selection model all follow for free.
+	let filterState = $state('');
+	let filterAssignee = $state('');
+
+	const visible = $derived(
+		tasks.filter(
+			(t) =>
+				(filterState === '' || t.state === filterState) &&
+				(filterAssignee === '' ||
+					(t.assignee ?? '').toLowerCase().includes(filterAssignee.trim().toLowerCase())),
+		),
+	);
+	const filtering = $derived(filterState !== '' || filterAssignee.trim() !== '');
+
+	/** The states actually PRESENT, so the dropdown never offers a filter that yields nothing. */
+	const statesPresent = $derived([...new Set(tasks.map((t) => t.state))].sort());
+
+	/** Changing a filter clears the selection.
+	 *
+	 *  Not cosmetic: `rowSelection` is keyed by task id and survives a row leaving the visible set,
+	 *  so filtering down, selecting all, then clearing the filter would leave rows selected that the
+	 *  annotator never saw — and the bulk actions act on a selection. Cleared in the HANDLER rather
+	 *  than an effect, because assigning state inside an effect is the anti-pattern that makes this
+	 *  kind of coupling invisible.
+	 */
+	function onFilterChanged(): void {
+		rowSelection = {};
+	}
 
 	let busy = $state<string | null>(null); // `${task_id}:${event}` in flight
 	let notice = $state<{ ok: boolean; text: string } | null>(null);
@@ -92,6 +135,53 @@
 	);
 	let bulkBusy = $state(false);
 
+	/** Selected rows the machine will actually accept an `assign` for.
+	 *
+	 *  Derived from each task's OWN `legal_events`, exactly like the per-row button — not from a
+	 *  second guess at the state machine here. A row the machine refuses still FAILS individually and
+	 *  is reported; this only stops the button offering work it can already see is impossible. */
+	const selectedAssignable = $derived(
+		tasks.filter((t) => selectedIds.includes(t.task_id) && canAssign(t)),
+	);
+	/** Non-null while the BULK assign dialog is open, holding the rows it will act on. */
+	let bulkAssignFor = $state<TaskDetail[] | null>(null);
+
+	/** Assign every selected item to one annotator.
+	 *
+	 *  ONE gated event per item, reported per item — the bulk-accept precedent beside this, and the
+	 *  only shape the actor model can honour. There is no transaction across task actors, so a
+	 *  rollback would be a second best-effort loop that can itself half-fail; claiming atomicity we
+	 *  cannot deliver would be worse than reporting the truth.
+	 */
+	async function bulkAssign(targets: TaskDetail[], to: string): Promise<void> {
+		// SNAPSHOT at entry, like bulkAccept: clearing the selection below re-derives the source to
+		// [], and a completion notice computed after that reports "Assigned 0" for real work.
+		const items = [...targets];
+		if (bulkBusy || items.length === 0 || !to) return;
+		bulkBusy = true;
+		notice = null;
+		const failures: string[] = [];
+		for (const task of items) {
+			const result = await fireTaskEvent({ taskId: task.task_id, event: 'assign', assignee: to });
+			if (!result.ok) failures.push(`${task.source.keys[0] ?? task.task_id}: ${result.detail}`);
+		}
+		bulkBusy = false;
+		rowSelection = {};
+		// Names WHICH failed and how many landed. "Assign failed" would leave a manager unable to
+		// tell a permission problem from a race on one row.
+		notice =
+			failures.length === 0
+				? {
+						ok: true,
+						text: `Assigned ${items.length} item${items.length === 1 ? '' : 's'} to ${to}.`,
+					}
+				: {
+						ok: false,
+						text: `${items.length - failures.length} of ${items.length} assigned to ${to} — ${failures[0]}`,
+					};
+		onchanged();
+	}
+
 	async function bulkAccept(): Promise<void> {
 		// SNAPSHOT the derived at entry: clearing the selection below re-derives it to [], and a
 		// completion notice computed from the post-clear value reports "Accepted 0" for real work
@@ -126,6 +216,23 @@
 		return task.legal_events
 			.map((e) => e.event)
 			.filter((e) => e !== 'assign' && e !== 'save_draft');
+	}
+
+	/** Remove an item that can never be completed. Confirmed, because it discards queued work and
+	 *  there is no undo — the task's own document survives, but nothing lists it any more. */
+	async function remove(task: TaskDetail): Promise<void> {
+		if (busy !== null) return;
+		if (!confirm(`Remove this item from the project? Its queued work is discarded.`)) return;
+		busy = `${task.task_id}:drop`;
+		notice = null;
+		const result = await dropTask({ projectId, taskId: task.task_id });
+		busy = null;
+		// The SERVER's words — a 409 past `labeling`, a 403, or its own report. "Remove failed" would
+		// tell the manager nothing about which of those happened.
+		notice = result.ok
+			? { ok: true, text: result.data.removed ? 'Item removed.' : 'That item was already gone.' }
+			: { ok: false, text: result.detail };
+		if (result.ok) onchanged();
 	}
 
 	function canAssign(task: TaskDetail): boolean {
@@ -196,7 +303,7 @@
 
 	const table = createSvelteTable({
 		get data() {
-			return tasks;
+			return visible;
 		},
 		columns,
 		getRowId: (task) => task.task_id,
@@ -270,6 +377,21 @@
 	<!-- flex-wrap: an in_review row carries three review buttons and the cell must stack them
 	     rather than clip at the card edge (found by looking at the A2/A3 screenshots). -->
 	<div class="flex flex-wrap items-center justify-end gap-1">
+		{#if droppable}
+			<!-- The exit an unfinishable item had none of. An item naming a media dataset that was
+			     renamed or removed cannot be opened, so it can never reach a terminal state — and the
+			     publish requires EVERY task terminal, so one of them wedges the project forever. -->
+			<Button
+				variant="ghost"
+				size="icon-sm"
+				disabled={busy !== null}
+				data-testid="drop-task"
+				title="remove this item from the project (it cannot be completed)"
+				onclick={() => void remove(task)}
+			>
+				<Trash2 class="size-3.5" />
+			</Button>
+		{/if}
 		{#if task.state === 'claimed'}
 			<Button
 				variant="outline"
@@ -337,11 +459,24 @@
 			data-testid="bulk-bar"
 		>
 			<span class="text-muted-foreground">
-				{selectedIds.length} selected · {selectedReviewable.length} reviewable
+				{selectedIds.length} selected · {selectedReviewable.length} reviewable · {selectedAssignable.length}
+				assignable
 			</span>
 			<Button
+				variant="outline"
 				size="sm"
 				class="ml-auto"
+				data-testid="bulk-assign"
+				disabled={bulkBusy || selectedAssignable.length === 0}
+				onclick={() => {
+	bulkAssignFor = [...selectedAssignable];
+	assignee = '';
+}}
+			>
+				{`Assign ${selectedAssignable.length}`}
+			</Button>
+			<Button
+				size="sm"
 				disabled={bulkBusy || selectedReviewable.length === 0}
 				onclick={() => void bulkAccept()}
 			>
@@ -352,8 +487,90 @@
 	{#if notice}
 		<p class={notice.ok ? 'text-success text-sm' : 'text-destructive text-sm'}>{notice.text}</p>
 	{/if}
-	<DataTable {table} emptyMessage="No items yet — send data points in from Search or the Atlas." />
+
+	<!-- Rendered only when there is something to filter. A filter bar over three items is furniture;
+	     over a thousand it is the only way to work. -->
+	{#if tasks.length > 1}
+		<div class="flex flex-wrap items-center gap-2" data-testid="queue-filter">
+			<Select
+				bind:value={filterState}
+				ariaLabel="Filter by state"
+				onValueChange={onFilterChanged}
+				options={[
+	{ value: '', label: `All states (${tasks.length})` },
+	...statesPresent.map((st) => ({
+		value: st,
+		// The count is what turns the dropdown into a summary of the queue, so a manager
+		// can see WHERE the work is sitting without applying a filter to find out.
+		label: `${st} (${tasks.filter((t) => t.state === st).length})`,
+	})),
+]}
+			/>
+			<Input
+				bind:value={filterAssignee}
+				placeholder="Filter by assignee…"
+				aria-label="Filter by assignee"
+				class="h-8 w-48"
+				oninput={onFilterChanged}
+			/>
+			{#if filtering}
+				<span class="text-muted-foreground text-xs" data-testid="filter-count">
+					{visible.length} of {tasks.length}
+				</span>
+				<Button
+					variant="ghost"
+					size="sm"
+					data-testid="clear-filter"
+					onclick={() => {
+	filterState = '';
+	filterAssignee = '';
+	onFilterChanged();
+}}
+				>
+					Clear
+				</Button>
+			{/if}
+		</div>
+	{/if}
+
+	<DataTable
+		{table}
+		emptyMessage={filtering
+	? 'No items match this filter.'
+	: 'No items yet — send data points in from Search or the Atlas.'}
+	/>
 </div>
+
+<!-- BULK assign. A separate dialog from the per-row one rather than a mode flag on it: the two
+     differ in what they act on, what they say, and what they do on submit, and a shared dialog
+     branching three ways on a nullable pair is how the wrong set gets assigned. -->
+<Dialog.Root
+	open={bulkAssignFor !== null}
+	onOpenChange={(open) => (bulkAssignFor = open ? bulkAssignFor : null)}
+>
+	<Dialog.Content class="sm:max-w-sm" data-testid="bulk-assign-dialog">
+		<Dialog.Title>Assign {bulkAssignFor?.length ?? 0} items</Dialog.Title>
+		<Dialog.Description>
+			Each is assigned individually and reported individually — there is no transaction across items,
+			so a refusal on one leaves the rest alone.
+		</Dialog.Description>
+		<form
+			class="flex flex-col gap-3"
+			onsubmit={(e) => {
+	e.preventDefault();
+	const targets = bulkAssignFor;
+	bulkAssignFor = null;
+	if (targets && assignee.trim()) void bulkAssign(targets, assignee.trim());
+}}
+		>
+			<Input bind:value={assignee} placeholder="annotator (OIDC subject or username)" />
+			<div class="flex justify-end gap-2">
+				<Button type="button" variant="outline" onclick={() => (bulkAssignFor = null)}>Cancel</Button>
+				<Button type="submit" disabled={!assignee.trim()}>Assign all</Button>
+			</div>
+		</form>
+	</Dialog.Content>
+</Dialog.Root>
 
 <Dialog.Root
 	open={assignFor !== null}

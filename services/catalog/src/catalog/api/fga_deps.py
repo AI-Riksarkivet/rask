@@ -26,9 +26,13 @@ from __future__ import annotations
 import logging
 
 from fastapi import Request
+from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
+    InvalidInputError,
+    NamespaceNotEmptyError,
     PermissionDeniedError,
     ServiceUnavailableError,
+    TableNotFoundError,
     UnauthenticatedError,
 )
 from openfga_sdk import OpenFgaClient
@@ -413,6 +417,157 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
 
 
 # --------------------------------------------------------------------------- #
+# Hierarchy enforcement — the estate's containment rule, checked BEFORE the write.
+# --------------------------------------------------------------------------- #
+
+
+def require_parent(resource: str, segments: list[str], *, delimiter: str) -> None:
+    """Reject a create that would produce an object with no parent to belong to.
+
+    THE RULE, which the authz model already states and the write path did not:
+    ``project -> warehouse -> namespace (self-nesting) -> table``. `model.fga` declares
+    ``table.parent: [namespace]`` and ``namespace.parent: [warehouse, namespace]``, so an object
+    whose parent is absent is not "a table at the root" — it is a table the model has no way to
+    describe.
+
+    Until this existed, a single-segment table was created anyway: ``fga.parent_object`` returned
+    ``None`` for it, the create proceeded, and the object got an owner grant and no containment edge.
+    Nothing failed at write time and nothing was visibly wrong — the row simply sat outside every
+    cascade, invisible to a warehouse-level or namespace-level grant, and impossible to reach by the
+    hierarchy the UI navigates. Orphans are cheap to create and expensive to find, so the answer is a
+    refusal at the door with a message that says which rung is missing.
+
+    Raised as the spec's own ``InvalidInput`` (error code 13 → HTTP 400, RFC 9457 problem body via
+    ``install_problem_handlers``), NOT a bespoke 422: the Lance Namespace error model has no 422, and
+    every client SDK dispatches on the numeric ``code`` — a status outside the spec's mapping is one
+    no generated client understands. The DETAIL does the teaching: it names the rule and the fix.
+
+    Namespaces are deliberately NOT rejected here. A top-level namespace legitimately parents to the
+    catalog's warehouse root, and until a warehouse can be NAMED in the identifier (see the module
+    note below) rejecting one would refuse the only shape the API can currently express.
+    """
+    if resource != "table":
+        return
+    if fga.parent_namespace_id(segments, delimiter=delimiter) is not None:
+        return
+    ident = fga.canonical_object_id(segments, delimiter=delimiter)
+    raise InvalidInputError(
+        f"table '{ident}' has no namespace to belong to. A table must live inside a namespace "
+        f"(project > warehouse > namespace > table), so its identifier needs at least one "
+        f"namespace segment before the table name — e.g. '<namespace>{delimiter}{ident}'. "
+        "Create the namespace first if it does not exist."
+    )
+
+
+def require_warehouse_scoped(segments: list[str], *, delimiter: str, warehouses_enabled: bool) -> None:
+    """Refuse a TOP-LEVEL namespace created outside a warehouse.
+
+    A namespace is logical separation INSIDE a tenant, so it has to live in one:
+    ``project > warehouse > namespace > table``. The warehouse-scoped door
+    (``POST /v1/warehouses/{warehouse_id}/namespaces``) binds the new namespace to a real bucket, and
+    every table beneath it then lands in that tenant's storage — physically isolated from every other
+    tenant's.
+
+    This generic door could not. It created the namespace UNBOUND, and the resolver fell back to the
+    shared default root: the namespace worked, tables under it worked, and the data quietly went to
+    the wrong bucket — a multi-tenancy hole that no error ever reported. That fallback existed for
+    backward compatibility, which is exactly what this refusal gives up on purpose.
+
+    NESTED namespaces are untouched: their parent is the namespace above them, so they inherit that
+    one's warehouse binding. Only the top-level rung has a warehouse to name.
+
+    NO-OP WHEN WAREHOUSES ARE DISABLED, and that is not a loophole. With ``warehouses_enabled`` off
+    there are no warehouses to belong to — the deployment is single-bucket by configuration, the
+    default root is the only correct destination, and demanding a warehouse would be a rule no caller
+    could satisfy. The rule binds exactly where it is meaningful: a multi-tenant deployment.
+    """
+    if not warehouses_enabled:
+        return
+    if len(segments) > 1:
+        return
+    ident = fga.canonical_object_id(segments, delimiter=delimiter)
+    raise InvalidInputError(
+        f"top-level namespace '{ident}' must belong to a warehouse. A namespace is logical "
+        f"separation inside a tenant (project > warehouse > namespace > table), and an unbound "
+        f"namespace resolves to the shared default bucket instead of the tenant's own. "
+        f"Create it through its warehouse — POST /v1/warehouses/{{warehouse_id}}/namespaces with "
+        f"name '{ident}' — or nest it under an existing namespace "
+        f"('<parent>{delimiter}{ident}')."
+    )
+
+
+def require_not_protected(record: dict[str, str], *, kind: str, obj_id: str, force: bool) -> None:
+    """Refuse to delete an object marked ``protected`` unless the caller passed ``force=true``.
+
+    Deletion protection (`open_hierarchy_lifecycle.md` Decision 5): an opt-in flag on the registry
+    record that makes an object refuse deletion. It is what makes ``cascade`` survivable — a
+    fat-fingered cascade cannot take a protected object with it — and it is the ONE thing standing
+    between a mistyped id and an irreversible purge.
+
+    ``force`` overrides the PROTECTION ONLY. It is not an authz bypass: the FGA gate has already run
+    (and runs identically with or without it), so a caller who may not delete this object cannot
+    delete it by forcing. Two independent locks, and force turns exactly one.
+
+    Refusal is ``NamespaceNotEmptyError`` (spec code 3 → HTTP 409) — the spec's own "this container will
+    not be deleted right now" error, reused rather than minting a status the client SDKs do not map.
+    """
+    if force or (record.get("protected") or "false").lower() != "true":
+        return
+    raise NamespaceNotEmptyError(
+        f"{kind} '{obj_id}' is protected against deletion. Pass force=true to override "
+        f"(protection only — the same authorization is still required), or clear the flag first."
+    )
+
+
+async def require_project_exists(settings: Settings, project: str) -> None:
+    """Refuse an operation naming a project the registry does not know.
+
+    Existence is a LAYER-3 invariant (`open_hierarchy_lifecycle.md`): it comes from the project
+    registry, not from FGA tuples and not from warehouse records implying a tenant. Checked before
+    authz on purpose — the answer is the same for every caller, discloses nothing, and a 404 here
+    tells an authorized admin the actual fix (create the project) instead of a misleading 403.
+
+    Raises the same ``TableNotFoundError`` (spec code 4 → HTTP 404 problem body) the project detail
+    route already answers for an unknown tenant, so one client error path covers both.
+    """
+    from catalog.services import projects as project_registry
+
+    record = await run_in_threadpool(project_registry.get_project, settings.registry_root, settings.storage_options(), project)
+    if record is None:
+        raise TableNotFoundError(
+            f"project not found: {project}. A warehouse must belong to an existing project "
+            f"(project > warehouse > namespace > table) — create it first: POST /v1/projects "
+            f'with {{"id": "{project}"}}.'
+        )
+
+
+async def seed_project_admin(
+    client: OpenFgaClient | None,
+    settings: Settings,
+    token: IDToken | None,
+    *,
+    project: str,
+) -> bool:
+    """Grant the creator ``admin`` on the new ``project:<id>`` — the tuple that makes a tenant
+    self-sustaining (every later warehouse/namespace/table grant cascades from it).
+
+    Written by ``POST /v1/projects`` in the same operation as the registry record, which is the whole
+    point of Decision 1: existence and permission are minted together and cannot drift. Idempotent —
+    ``write_tuples`` swallows duplicate writes on a create retry. Returns True when the tuple was
+    actually written, so the caller audits a grant that really happened (never one an FGA-off stack
+    silently skipped)."""
+    if not (settings.fga_enabled and token is not None and client is not None):
+        return False
+    await fga.write_tuples(
+        client,
+        [fga.ClientTuple(user=f"user:{token.sub}", relation="admin", object=f"project:{project}")],
+        actor=token.sub,
+        origin="project_create",
+    )
+    return True
+
+
+# --------------------------------------------------------------------------- #
 # Post-create ownership seeding — the single write-side authz policy. Every create
 # endpoint calls this instead of inlining the guard + grant_on_create + parent_object.
 # --------------------------------------------------------------------------- #
@@ -590,43 +745,24 @@ async def require_can_create_warehouse(
     token: IDToken | None,
     *,
     project: str,
-    bootstrap: bool = False,
 ) -> None:
     """Gate the #3-A admin control-plane warehouse-create on ``project#can_create_warehouse``.
 
-    This wires the model's highest-privilege action (``project.can_create_warehouse = admin``,
-    ``service_kit/governed/auth/model.fga``) that until now was defined but NEVER enforced — provisioning a
-    physical bucket is a platform/project-admin operation, not the writer-tier create-on-parent that guards
-    tables/namespaces. Fail-closed like every other gate: 403 on deny, 503 on an OpenFGA outage (via
-    ``_require``/``fga.check``). No-op when FGA is off / unwired / unauthenticated (parity with the other
-    ``require_*`` deps — those postures are enforced at the boot/authn layer).
+    The model's highest-privilege action (``project.can_create_warehouse = admin``,
+    ``service_kit/governed/auth/model.fga``): provisioning a physical bucket is a project-admin
+    operation, not the writer-tier create-on-parent that guards tables/namespaces. Fail-closed like
+    every other gate: 403 on deny, 503 on an OpenFGA outage. No-op when FGA is off / unwired /
+    unauthenticated (those postures are enforced at the boot/authn layer).
 
-    ``bootstrap=True`` marks a project that does NOT exist yet (no warehouse record claims it — the estate
-    keeps no project records, so a project exists exactly when a warehouse claims it, see
-    ``endpoints/projects.py``). Such a project has no tuples at all, so ``can_create_warehouse`` on it can
-    only ever deny — which made a tenant's FIRST warehouse uncreatable by anyone, estate admin included
-    (found live 2026-07-24: every project create 403'd). The bootstrap case therefore opens ONE additional
-    door: ``can_observe_events`` on the fixed root object — the very bar ``/v1/events`` and ``/v1/access``
-    use for "platform admin", an owner-tier grant on ``settings.fga_root_object`` that only the estate's
-    bootstrapped admin holds (``chart/templates/bootstrap-admin.yaml``). The project's own door stays open
-    first, so a pre-seeded project admin (the seed scripts write ``project:<p> admin`` before any warehouse
-    exists) keeps minting their tenant exactly as before; an ordinary user clears NEITHER door and gets the
-    same 403 as today. The extra door SHUTS the moment the project exists: adding a second warehouse to a
-    live tenant remains that tenant's admins' call, unchanged."""
+    There is deliberately NO bootstrap exception any more. It existed because a not-yet-existing
+    project had no tuples, so its first warehouse was uncreatable — the estate admin got a side door
+    (``can_observe_events`` on the root). Decision 1 replaced the implicit mint: the estate admin
+    creates the PROJECT explicitly (``POST /v1/projects``, which seeds its admin), and
+    ``require_project_exists`` refuses a warehouse for an unknown tenant BEFORE this gate runs — so
+    by the time we are here, the project exists and has admins, and one door is enough."""
     if not (settings.fga_enabled and client is not None and token is not None):
         return
-    obj = f"project:{project}"
-    if not bootstrap:
-        await _require(client, user=token.sub, relation="can_create_warehouse", obj=obj)
-        return
-    await _require_any(
-        client,
-        user=token.sub,
-        doors=[
-            ("can_create_warehouse", obj),
-            ("can_observe_events", settings.fga_root_object),
-        ],
-    )
+    await _require(client, user=token.sub, relation="can_create_warehouse", obj=f"project:{project}")
 
 
 async def seed_warehouse(
@@ -636,8 +772,7 @@ async def seed_warehouse(
     *,
     warehouse_id: str,
     project: str,
-    grant_project_admin: bool = False,
-) -> bool:
+) -> None:
     """Grant the creator ``owner`` on the new ``warehouse:<id>`` and link it to its ``project:<project>``
     parent, so the concentric cascade (project → warehouse → namespace → table) reaches everything created
     under it. No-op when FGA is off / unauthenticated / unwired.
@@ -648,23 +783,18 @@ async def seed_warehouse(
     ``parent``, a relation the ``warehouse`` type does not define — writing it makes OpenFGA reject the whole
     seed → 503). Idempotent: ``write_tuples`` swallows duplicate-tuple writes on a create retry.
 
-    ``grant_project_admin`` additionally writes ``user:<sub> admin project:<project>`` — the tuple that makes
-    a brand-new tenant self-sustaining. It rides the SAME write batch as the warehouse tuples (one call, one
-    failure mode) and is set only when the warehouse being created is the project's FIRST, i.e. exactly the
-    :func:`require_can_create_warehouse` ``bootstrap`` case. Without it a project minted by an estate admin
-    would have no admin of its own: the estate-admin door shuts as soon as the project exists, so the very
-    next warehouse (the flow's optional gold serving one) would 403 and no project-scoped grant could ever be
-    made from inside the project. Returns ``True`` when that bootstrap tuple was actually written, so the
-    caller can audit/announce a grant that really happened (never one an FGA-off stack silently skipped)."""
+    The project-admin bootstrap tuple this used to optionally carry moved to ``seed_project_admin``,
+    written by ``POST /v1/projects`` — a tenant's admin is minted with the tenant, not with its
+    first warehouse."""
     if not (settings.fga_enabled and token is not None and client is not None):
-        return False
+        return
     obj = f"warehouse:{warehouse_id}"
-    project_obj = f"project:{project}"
-    tuples = [
-        fga.ClientTuple(user=f"user:{token.sub}", relation="owner", object=obj),
-        fga.ClientTuple(user=project_obj, relation="project", object=obj),
-    ]
-    if grant_project_admin:
-        tuples.append(fga.ClientTuple(user=f"user:{token.sub}", relation="admin", object=project_obj))
-    await fga.write_tuples(client, tuples, actor=token.sub, origin="warehouse_bootstrap")
-    return grant_project_admin
+    await fga.write_tuples(
+        client,
+        [
+            fga.ClientTuple(user=f"user:{token.sub}", relation="owner", object=obj),
+            fga.ClientTuple(user=f"project:{project}", relation="project", object=obj),
+        ],
+        actor=token.sub,
+        origin="warehouse_create",
+    )

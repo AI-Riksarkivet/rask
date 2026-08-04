@@ -1,6 +1,6 @@
 """Storage-version reconciliation endpoint (#23) — does the graph agree with the on-disk Lance file?
 
-Our moat over format-unaware catalogs (Marquez, Lakekeeper): because we own a Lance lakehouse we read
+Our moat over format-unaware catalogs: because we own a Lance lakehouse we read
 the real on-disk version and cross-check it against the version the graph recorded on the ``WROTE`` edge.
 Gated on ``can_get_metadata`` for ``{name}`` (router-level); the blocking Lance read runs in the
 threadpool so the object-store I/O never stalls the event loop.
@@ -35,7 +35,7 @@ router = APIRouter(
 async def get_reconcile(name: str, repository: RepositoryDep, settings: SettingsDep) -> ReconcileStatus:
     """Does the lineage graph agree with the **actual Lance file on storage**? (#23)
 
-    Our moat over format-unaware catalogs (Marquez, Lakekeeper): because we own a Lance lakehouse we
+    Our moat over format-unaware catalogs: because we own a Lance lakehouse we
     read the real on-disk version and cross-check it against the version the graph recorded on the
     ``WROTE`` edge — surfacing a write that bypassed lineage (``storage_ahead``) or a lineage claim
     with no data behind it (``missing_on_storage``). Gated on ``can_get_metadata`` for ``name``; the

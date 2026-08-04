@@ -756,10 +756,13 @@ test('a flat 60-dataset estate packs into a square-ish grid, cheaply', async ({ 
 	);
 	await page.goto('/lakehouse/lineage');
 	await expect(page.locator('.svelte-flow__node')).toHaveCount(FLAT_ROOTS, { timeout: 20_000 });
-	// Assert the PROPERTY the packer promises, not a pixel count. `placer` in routes/+page.svelte
-	// wraps depth-0 roots every ceil(sqrt(n)) cards, so the block comes out roughly square; the
-	// card pitch (COL_W/ROW_H) is a styling choice that must be free to change — pinning the old
-	// literal 8 reddened this test the moment the node card got more compact.
+	// Assert the PROPERTY the packer promises, not a pixel count. The packer is `layout()` in
+	// `@rask/flow` (it moved out of routes/+page.svelte at 857e9d5, then into the package at
+	// 886b6e8): edgeless datasets are "isolated" and get parked in a compact grid, so the block
+	// comes out roughly square; the card pitch (COL_W/ROW_H) is a styling choice that must be free
+	// to change — pinning the old literal 8 reddened this test the moment the node card got more
+	// compact. The property is unchanged and still correct — see layout.ts's own docstring, which
+	// names "60 roots stacked in one column is a 6,600 px tower" as the thing to avoid.
 	const side = Math.ceil(Math.sqrt(FLAT_ROOTS));
 	const layout = await settledLayout(
 		page,

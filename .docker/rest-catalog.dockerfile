@@ -2,9 +2,9 @@
 # Lance lakehouse image — ONE image, many entrypoints, built from the ROOT uv workspace
 # (src-layout services installed as wheels; no PYTHONPATH, no raw source COPY in the final stage).
 # The chart runs every lakehouse container from this image with a different command
-# (see chart/templates/{services,medallion,compaction,media}.yaml → include "lance.catalogImage"):
+# (see chart/templates/{services,medallion,maintenance,media}.yaml → include "lance.catalogImage"):
 #   catalog.main:app (:2333) · lineage.main:app (:8000) · medallion.producer:app /
-#   medallion.mover:app (:8000) · compaction.service:app (:8000) ·
+#   medallion.mover:app (:8000) · maintenance.service:app (:8000) ·
 #   viewer.main:app (:8101) · search.main:app (:8102) · annotator.main:app (:8103)
 # — optionally wrapped in `opentelemetry-instrument` (shipped via lineage's opentelemetry-distro).
 # Build context = repo root:  docker build -f .docker/rest-catalog.dockerfile .
@@ -30,7 +30,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=packages,target=packages \
     --mount=type=bind,source=services,target=services \
     uv sync --frozen --no-dev --no-install-workspace --no-editable \
-        --package catalog --package lineage --package medallion --package compaction \
+        --package catalog --package lineage --package medallion --package maintenance \
         --package viewer --package search --package annotator
 
 # Step 2: COPY real sources and install the workspace members as wheels (--no-editable →
@@ -40,7 +40,7 @@ COPY packages packages
 COPY services services
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable \
-        --package catalog --package lineage --package medallion --package compaction \
+        --package catalog --package lineage --package medallion --package maintenance \
         --package viewer --package search --package annotator
 
 # Strip residual setuid/setgid bits before the venv leaves the builder.
@@ -53,7 +53,7 @@ ARG BUILD_DATE
 ARG VCS_REF
 ARG VERSION
 LABEL org.opencontainers.image.title="lance-rest-catalog" \
-      org.opencontainers.image.description="Lance lakehouse fleet image — REST catalog + lineage + medallion + compaction + media trio (viewer/search/annotator); one image, per-container uvicorn commands" \
+      org.opencontainers.image.description="Lance lakehouse fleet image — REST catalog + lineage + medallion + maintenance + media trio (viewer/search/annotator); one image, per-container uvicorn commands" \
       org.opencontainers.image.source="https://github.com/AI-Riksarkivet/rask" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
@@ -72,14 +72,8 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1
 
 WORKDIR /srv
-# Ownership of the venv decides whether `tilt` can hot-reload this image at all, and it
-# defaults to root so PRODUCTION cannot. The container runs as uid 10001; live_update untars the synced
-# source into site-packages AS THAT USER, so a root-owned tree returns exit code 2 ("the container
-# filesystem denied access") and Tilt silently falls back to a full image rebuild — which is what made
-# every sync here look like it did nothing. Dev builds pass VENV_OWNER=10001:10001 (see the Tiltfile);
-# no other build does, so a shipped image keeps its venv immutable to the account running the app.
-ARG VENV_OWNER=root:root
-COPY --from=builder --link --chown=${VENV_OWNER} /opt/venv /opt/venv
+# The venv is root-owned and the app runs as 10001, so it is immutable to the account running it.
+COPY --from=builder --link /opt/venv /opt/venv
 
 # Strip setuid/setgid bits from the whole shipped filesystem (base account tools passwd/chsh/... +
 # anything in the venv) — no use in a container, residual privesc surface. Own RUN so its `|| true`
@@ -90,7 +84,7 @@ RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + || true
 # admission when the image user is numeric; a name ("app") makes the kubelet reject the pod
 # (CreateContainerConfigError). The chart's lance.securityContext relies on this.
 USER 10001
-# 2333 catalog · 8000 lineage/medallion/compaction · 8101/8102/8103 viewer/search/annotator.
+# 2333 catalog · 8000 lineage/medallion/maintenance · 8101/8102/8103 viewer/search/annotator.
 EXPOSE 2333 8000 8101 8102 8103
 
 # Cheap socket-connect probe against the default CMD's port (avoids urllib's ssl/http.client

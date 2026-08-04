@@ -6,7 +6,7 @@ import { MOCK_CATALOG } from '../ports';
 // JSON body (no Arrow payload) POSTed to /v1/table/{ns}${name}/declare, after which the registry
 // re-lists and shows the reserved row.
 //
-// The transport is remote functions now (open_transport.md, area 1): both the list and the declare
+// The transport is remote functions now (the transport ruling, area 1): both the list and the declare
 // run on the zone SERVER, which `page.route` cannot see — so the wire is seeded on, and asserted
 // through, the mock catalog's per-bearer ledger. Same assertions as the /capi-era spec, including the
 // %24-encoded id and the EMPTY body when no location is given.

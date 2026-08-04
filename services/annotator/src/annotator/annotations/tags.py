@@ -23,6 +23,7 @@ from annotator.annotations.schema import (
     TagWrite,
     identity_values,
 )
+from annotator.api.security import RawBearerToken
 from service_kit.exceptions import ValidationError
 from service_kit.lancekit.descriptor import Declared
 from service_kit.lancekit.keys import validate_doc_key
@@ -93,6 +94,7 @@ def apply_tags(
     state: StateDep,
     author: AuthorDep,
     body: TagBatch,
+    caller_token: RawBearerToken = None,
     dataset: DatasetParam = None,
 ) -> SaveResult:
     """Apply a TagBatch: adds insert-if-absent (never clobbering a reviewer's edits to
@@ -105,11 +107,11 @@ def apply_tags(
     # last-write-wins per deterministic id is the pragmatic contract. Version + schema
     # come from the reader seam so catalog mode checks against the catalog's truth.
     table_id = state.settings.catalog_table_id(handle.id, ANNOTATIONS_TABLE)
-    reader = open_reader(dataset=ds, table_id=table_id, settings=state.settings)
+    reader = open_reader(dataset=ds, table_id=table_id, settings=state.settings, caller_token=caller_token)
     check_base_version_value(reader.table_version(), body.base_version)
 
     delta = tag_rows(body.adds, declared, author=author, schema=reader.schema)
-    writer = open_writer(dataset=ds, table_id=table_id, settings=state.settings)
+    writer = open_writer(dataset=ds, table_id=table_id, settings=state.settings, caller_token=caller_token)
     touched = 0
     if delta.num_rows:
         # INSERT-ONLY (not upsert): a tag that already exists is left untouched, so a
@@ -128,6 +130,7 @@ def apply_tags(
         state.settings,
         touched=touched,
         unit_key=f"tags:{len(body.adds)}+{len(body.removes)}",
+        caller_token=caller_token,
     )
     if touched:
         logger.info("tagged → v%d (%d add-rows, %d remove)", result.version, delta.num_rows, len(remove_ids))

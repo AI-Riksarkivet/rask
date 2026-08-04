@@ -3,17 +3,19 @@ import { env } from '$env/dynamic/private';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
 import {
+	MemberListSchema,
 	ProjectDetailSchema,
 	ProjectListSchema,
 	ProjectSchema,
 	TaskListingSchema,
+	type MemberList,
 	type Project,
 	type ProjectDetail,
 	type ProjectList,
 	type TaskListing,
 } from '../types.js';
 
-// The annotation-PROJECTS plane, in the zone's remote-function dialect (open_transport.md, area 4) —
+// The annotation-PROJECTS plane, in the zone's remote-function dialect (the transport ruling, area 4) —
 // same `ApiResult` shapes at every call site, transport only. The `/api/projects/[...path]` proxy
 // (GET+POST+PUT+DELETE) is deleted: its four verbs were a routing detail, and each surface it carried
 // is a named function here.
@@ -112,7 +114,7 @@ function parsed<T>(
 
 /** A JSON write, gated by the session guard above. */
 const write = (
-	method: 'POST' | 'PUT' | 'DELETE',
+	method: 'POST' | 'PUT' | 'PATCH' | 'DELETE',
 	path: string,
 	body?: unknown,
 ): Promise<ApiResult<unknown>> =>
@@ -125,6 +127,46 @@ const write = (
 
 const ProjectIdArg = v.object({ projectId: v.string() });
 
+/** The ontology as it rides the wire. Deliberately permissive about which keys are present — the
+ *  SERVICE validates it as a unit, and mirroring those rules here would be a second source of truth
+ *  for exactly the cross-checks this model exists to centralise. */
+const OntologyWireSchema = v.object({
+	kind: v.optional(v.string()),
+	modality: v.optional(v.string()),
+	classes: v.optional(
+		v.array(
+			v.object({
+				name: v.string(),
+				colour: v.optional(v.nullable(v.string())),
+				tools: v.optional(v.array(v.string())),
+				attributes: v.optional(
+					v.array(
+						v.object({
+							name: v.string(),
+							type: v.optional(v.string()),
+							choices: v.optional(v.array(v.string())),
+							required: v.optional(v.boolean()),
+						}),
+					),
+				),
+				required: v.optional(v.boolean()),
+			}),
+		),
+	),
+	relations: v.optional(
+		v.array(
+			v.object({
+				name: v.string(),
+				from_classes: v.optional(v.array(v.string())),
+				to_classes: v.optional(v.array(v.string())),
+				directed: v.optional(v.boolean()),
+				required: v.optional(v.boolean()),
+			}),
+		),
+	),
+	allow_empty: v.optional(v.boolean()),
+});
+
 /** The create body — the same optional-everything shape the dialog builds. Mirrors the service's
  *  `CreateProjectRequest`; the template's defaults live server-side, so an absent key is not `null`. */
 const CreateProjectSchema = v.object({
@@ -136,33 +178,10 @@ const CreateProjectSchema = v.object({
 	review_required: v.optional(v.boolean()),
 	lease_seconds: v.optional(v.number()),
 	consensus_n: v.optional(v.number()),
-	// Task templates v1: picked at create, ENFORCED server-side at submit.
-	template: v.optional(
-		v.object({
-			kind: v.string(),
-			tools: v.optional(v.array(v.string())),
-			required_labels: v.optional(v.array(v.string())),
-			attributes: v.optional(
-				v.array(
-					v.object({
-						name: v.string(),
-						type: v.optional(v.string()),
-						choices: v.optional(v.array(v.string())),
-						required: v.optional(v.boolean()),
-					}),
-				),
-			),
-			enforce: v.optional(v.boolean()),
-		}),
-	),
-	label_schema: v.optional(
-		v.object({
-			classes: v.array(
-				v.object({ name: v.string(), shape_types: v.optional(v.array(v.string())) }),
-			),
-			attributes: v.optional(v.array(v.string())),
-		}),
-	),
+	// The whole task definition; absent = an unconstrained project. Parsed by the SERVICE's own
+	// model, whose cross-checks (relations must reference declared classes, no duplicate names) had
+	// nowhere to run while this was two independent fields.
+	ontology: v.optional(OntologyWireSchema),
 });
 
 /** One item sent into a labeling task: where it comes from, and how it is displayed. */
@@ -194,6 +213,41 @@ export const fetchProject = query(
 	ProjectIdArg,
 	async ({ projectId }): Promise<ApiResult<ProjectDetail>> =>
 		parsed(ProjectDetailSchema, await annotatorJSON(`/projects/${projectId}`)),
+);
+
+/** Who holds which rung directly on this project. `can_manage`-gated server-side: who has access is
+ *  itself sensitive, and a viewer has no business enumerating the people worth phishing. */
+export const fetchMembers = query(
+	ProjectIdArg,
+	async ({ projectId }): Promise<ApiResult<MemberList>> =>
+		parsed(MemberListSchema, await annotatorJSON(`/projects/${projectId}/members`)),
+);
+
+/** Grant one rung. Idempotent server-side, so a double-click is a no-op rather than a 400. */
+export const grantMember = command(
+	v.object({ projectId: v.string(), user: v.string(), relation: v.string() }),
+	async ({ projectId, user, relation }): Promise<ApiResult<MemberList>> => {
+		const result = parsed(
+			MemberListSchema,
+			await write('PUT', `/projects/${projectId}/members`, { user, relation }),
+		);
+		if (result.ok) void fetchMembers({ projectId }).refresh();
+		return result;
+	},
+);
+
+/** Revoke one rung. The server REFUSES the last owner/manager — a project nobody can administer is
+ *  not a state anyone can undo from inside the product, so the refusal arrives as a named 409. */
+export const revokeMember = command(
+	v.object({ projectId: v.string(), user: v.string(), relation: v.string() }),
+	async ({ projectId, user, relation }): Promise<ApiResult<MemberList>> => {
+		const result = parsed(
+			MemberListSchema,
+			await write('DELETE', `/projects/${projectId}/members`, { user, relation }),
+		);
+		if (result.ok) void fetchMembers({ projectId }).refresh();
+		return result;
+	},
 );
 
 /** The work queue: states + counts, and with `details` the full task documents the queue renders. */
@@ -237,6 +291,29 @@ export const fireProjectEvent = command(
 		),
 );
 
+/**
+ * Replace a project's ontology. `can_manage` server-side; 409 once the project is past labeling.
+ *
+ * WHOLE-DOCUMENT, matching the route: a partial merge would have to answer "what does an absent
+ * `classes` mean" — cleared or unchanged — and the two readings differ by an entire taxonomy.
+ *
+ * Items already sent are unaffected. Each captured its own copy at send, so work in review is
+ * judged by the contract it was issued under; that capture is what makes editing during `labeling`
+ * safe enough to allow at all.
+ */
+export const updateProjectOntology = command(
+	v.object({ projectId: v.string(), ontology: OntologyWireSchema }),
+	async ({ projectId, ontology }): Promise<ApiResult<Project>> => {
+		const result = parsed(
+			ProjectSchema,
+			await write('PATCH', `/projects/${projectId}/ontology`, { ontology }),
+		);
+		// Single-flight the read this write invalidates, like every other mutation here.
+		if (result.ok) void fetchProject({ projectId }).refresh();
+		return result;
+	},
+);
+
 /** Send items into a labeling task — each becomes a claimable item (×`consensus_n` replicas). */
 export const sendItems = command(
 	v.object({ projectId: v.string(), items: v.array(SendItemSchema) }),
@@ -265,6 +342,27 @@ export const adjudicate = command(
 
 /** Withdraw a group's pick. Exists because the publish refuses a stale pick — without removal one
  *  wrong pick would wedge the publish permanently. Body-less, exactly as the DELETE proxy forwarded. */
+/**
+ * Remove one item from a project.
+ *
+ * The exit an unfinishable item had none of: an item naming a media dataset that was renamed or
+ * removed cannot be opened, so it cannot be claimed, submitted or skipped — and the publish
+ * precondition requires every task terminal, so one of them wedges the project permanently.
+ *
+ * Returns the actor's own report rather than the Project, because removal touches the task INDEX,
+ * not the project document, and reporting a project here would invite reading a count off it that
+ * this call did not change.
+ */
+export const dropTask = command(
+	v.object({ projectId: v.string(), taskId: v.string() }),
+	async ({ projectId, taskId }): Promise<ApiResult<{ task_id: string; removed: boolean }>> => {
+		const result = await write('DELETE', `/projects/${projectId}/tasks/${enc(taskId)}`);
+		// Single-flight the listing this invalidates, like every other mutation here.
+		if (result.ok) void listTasks({ projectId }).refresh();
+		return result as ApiResult<{ task_id: string; removed: boolean }>;
+	},
+);
+
 export const clearAdjudication = command(
 	v.object({ projectId: v.string(), groupId: v.string() }),
 	async ({ projectId, groupId }): Promise<ApiResult<Project>> =>

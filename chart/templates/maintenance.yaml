@@ -1,0 +1,168 @@
+{{- if .Values.maintenance.enabled }}
+{{- $root := . }}
+{{- $port := .Values.maintenance.port }}
+{{- if .Values.dapr.enabled }}
+# Dapr cron INPUT binding — the sidecar POSTs to /<bindingName> on `schedule`. The schedule lives here
+# as component config, not in app code (no scheduler thread in the service). Scoped to the maintenance app.
+# Gated on dapr.enabled: without the Dapr control plane the Component CRD doesn't exist and the release
+# would fail to apply (the service still renders below; its cron route just never fires).
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.maintenance.bindingName }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ .Values.maintenance.schedule | quote }} }
+scopes:
+  - {{ .Values.maintenance.daprAppId }}
+---
+# The RECONCILE cron — its own binding on its own schedule. Separate from the sweep above because the
+# two differ by an order of magnitude in cost: the sweep rewrites data files, this only reads three
+# stores and reports where they disagree. Sharing one binding would force the cheap drift report onto
+# the expensive rewrite's cadence, which is how a drift report becomes too stale to act on.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.maintenance.reconcileBindingName }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ .Values.maintenance.reconcileSchedule | quote }} }
+scopes:
+  - {{ .Values.maintenance.daprAppId }}
+---
+{{- end }}
+# Table maintenance service — runs uvicorn maintenance.service:app (shares the catalog image).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lance.fullname" . }}-maintenance
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/component: maintenance, app.kubernetes.io/instance: {{ .Release.Name }} }
+  template:
+    metadata:
+      labels:
+        {{- include "lance.labels" . | nindent 8 }}
+        app.kubernetes.io/component: maintenance
+        {{- include "rask.daprPodLabels" $root | nindent 8 }}
+        lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
+      {{- if .Values.dapr.sidecars }}
+      annotations:
+        {{- include "rask.daprAnnotations" (list $root .Values.maintenance.daprAppId $port) | nindent 8 }}
+      {{- end }}
+    spec:
+      # Longer grace than the other apps: an in-flight sweep/Lance write must finish, not be SIGKILLed.
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.maintenanceTerminationGracePeriodSeconds }}
+      {{- if .Values.security.serviceAccounts.enabled }}
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-maintenance
+      {{- end }}
+      containers:
+        - name: maintenance
+          image: "{{ include "lance.catalogImage" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "lance.securityContext" . | nindent 10 }}
+          {{- include "lance.preStop" . | nindent 10 }}
+          {{- if include "lance.otelEnabled" $root }}
+          command: ["opentelemetry-instrument", "uvicorn"]
+          {{- else }}
+          command: ["uvicorn"]
+          {{- end }}
+          args:
+            - "maintenance.service:app"
+            - "--host=0.0.0.0"
+            - "--port={{ $port }}"
+          ports: [{ name: http, containerPort: {{ $port }} }]
+          env:
+            {{- if include "lance.otelEnabled" $root }}
+            {{- include "lance.otelEnv" (list $root .Values.maintenance.daprAppId) | nindent 12 }}
+            {{- end }}
+            {{- include "lance.lineageEmitEnv" (list $root) | nindent 12 }}
+            - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
+            # Fail-closed at boot if behind a Dapr sidecar but the app-token is unset (open forgery path) —
+            # symmetric with the lineage service (the audit's consistency fix).
+            - { name: MAINTENANCE_DAPR_ENABLED, value: {{ .Values.dapr.sidecars | quote }} }
+            - name: APP_API_TOKEN  # verify the Dapr-stamped header on the cron route (forged-sweep guard)
+              valueFrom:
+                secretKeyRef: { name: {{ .Release.Name }}-dapr-app-token, key: token }
+            {{- if .Values.maintenance.lineageEmit }}
+            - { name: MAINTENANCE_LINEAGE_EMIT_ENABLED, value: "true" }
+            - { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ .Values.pubsub.name | quote }} }
+            - { name: MAINTENANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
+            {{- end }}
+            - { name: MAINTENANCE_BINDING_NAME, value: {{ .Values.maintenance.bindingName | quote }} }
+            - { name: MAINTENANCE_OLDER_THAN_DAYS, value: {{ .Values.maintenance.olderThanDays | quote }} }
+            - { name: MAINTENANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
+            - { name: MAINTENANCE_S3_ACCESS_KEY_ID, value: {{ .Values.rustfs.accessKey | quote }} }
+            {{- if not (include "lance.secretsViaDapr" .) }}
+            - { name: MAINTENANCE_S3_SECRET_ACCESS_KEY, value: {{ .Values.rustfs.secretKey | quote }} }
+            {{- else }}
+            # A secret store is configured → the S3 secret comes ONLY from it at boot; not in pod env (the
+            # audit's fix — maintenance is a real S3 consumer that compacts/GCs the lakehouse). Fails closed.
+            - { name: MAINTENANCE_SECRETS_FROM_DAPR, value: "true" }
+            {{- end }}
+            - { name: MAINTENANCE_S3_BUCKET, value: {{ .Values.rustfs.bucket | quote }} }
+            {{- /* The #50 policy registry root defaults to this bucket, matching the catalog's
+                   LANCE_REST_ROOT (also .Values.rustfs.bucket, services.yaml). If LANCE_CONTROL_ROOT ever
+                   moves the catalog's registry, set MAINTENANCE_POLICY_ROOT to the same value — a wrong root
+                   lists cleanly as "no policies" (the sweep logs compaction_policies_loaded per tick). */}}
+            {{- /* EVERY bucket that can hold Lance data must be swept, or its tables accumulate superseded
+                   versions + small fragments FOREVER (audit 2026-07-14: the sweep saw exactly ONE bucket,
+                   so the medallion zone buckets and every #3-B multi-base data bucket leaked storage
+                   silently). Union of: the medallion storage zones (gold can live in its own bucket) and
+                   the approved multi-base data bases. Per-warehouse (#3-A) buckets are provisioned at
+                   RUNTIME, so they are appended by the operator as tenants are onboarded. */}}
+            {{- $extra := list }}
+            {{- range $ns, $bkt := .Values.medallion.buckets }}
+            {{- if ne $bkt $.Values.rustfs.bucket }}{{ $extra = append $extra $bkt }}{{ end }}
+            {{- end }}
+            {{- range .Values.catalog.multibase.dataBases }}
+            {{- $extra = append $extra (. | replace "s3://" "" | trimSuffix "/") }}
+            {{- end }}
+            - { name: MAINTENANCE_S3_EXTRA_BUCKETS, value: {{ $extra | uniq | join "," | quote }} }
+            - { name: MAINTENANCE_S3_REGION, value: "us-east-1" }
+            {{- /* The drift reconciler's inputs. It only ever READS: OpenFGA says who, the control-root
+                   registries say what exists, object storage holds the bytes. Every one of these mirrors a
+                   CATALOG setting and must match it — a divergent fga_root_object reports the estate root as
+                   a ghost forever, and a divergent warehouses_enabled reports every namespace as unbound. */}}
+            - { name: MAINTENANCE_RECONCILE_BINDING_NAME, value: {{ .Values.maintenance.reconcileBindingName | quote }} }
+            - { name: MAINTENANCE_WAREHOUSES_ENABLED, value: {{ .Values.catalog.warehouses.enabled | default false | quote }} }
+            - { name: MAINTENANCE_CONTROL_ROOT, value: {{ .Values.maintenance.controlRoot | default "" | quote }} }
+            {{- if .Values.auth.enabled }}
+            - { name: MAINTENANCE_FGA_ENABLED, value: "true" }
+            - { name: MAINTENANCE_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
+            {{- /* Store/model ids are PINNED, never provisioned here — the SAME auth.fgaStoreId the catalog
+                   reads and the bootstrap-admin Job grants into, so the store this reports on can never
+                   diverge from the store the catalog checks against. A maintenance job that provisioned its
+                   own store would read an EMPTY one and report every real tenant as a ghost; unset, the four
+                   authz categories report unavailable-with-a-reason, which is the honest answer. */}}
+            {{- with .Values.auth.fgaStoreId }}
+            - { name: MAINTENANCE_FGA_STORE_ID, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.auth.fgaModelId }}
+            - { name: MAINTENANCE_FGA_MODEL_ID, value: {{ . | quote }} }
+            {{- end }}
+            {{- end }}
+          {{- include "lance.appProbes" . | nindent 10 }}
+          resources: {{- include "lance.resources" (dict "root" . "comp" "maintenance") | nindent 12 }}
+          volumeMounts:
+            {{- include "lance.tmpMount" . | nindent 12 }}
+      volumes:
+        {{- include "lance.tmpVolume" . | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lance.fullname" . }}-maintenance
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  ports: [{ name: http, port: {{ $port }}, targetPort: http }]
+  selector: { app.kubernetes.io/component: maintenance, app.kubernetes.io/instance: {{ .Release.Name }} }
+{{- end }}

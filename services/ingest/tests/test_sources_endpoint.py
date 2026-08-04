@@ -33,17 +33,21 @@ ADAPTERS = Path(__file__).resolve().parents[1] / "src" / "ingest" / "adapters.py
 BUILTIN_KINDS = ("iiif", "local-dir", "s3-prefix")
 
 
-@pytest.fixture(scope="module")
-def sources() -> list[dict[str, object]]:
-    """The endpoint's payload, read once through the real app factory.
+@pytest.fixture
+def sources(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+    """The endpoint's payload, read through the real app factory.
 
     Through `create_app()` rather than by calling `describe_sources()` directly, because the registry
     is populated by an import-time side effect inside the factory — a test that imports the registry
     itself proves the descriptors exist while saying nothing about whether the app serves them.
-    """
-    import os
 
-    os.environ.setdefault("RASK_API_PREFIX", "/api")
+    `monkeypatch.setenv`, not `os.environ.setdefault`. Routers mount under `settings.api_prefix`,
+    whose CODE default is `/api/v1` while every deployment sets `/api` — so the prefix has to be
+    pinned or the request 404s. `setdefault` pinned nothing when another module had already set a
+    different value, which is why these passed alone and errored in the full suite. Function-scoped
+    for the same reason: a module-scoped fixture outlives the monkeypatch that makes it correct.
+    """
+    monkeypatch.setenv("RASK_API_PREFIX", "/api")
     response = TestClient(create_app()).get("/api/sources")
     assert response.status_code == 200, response.text
     return response.json()

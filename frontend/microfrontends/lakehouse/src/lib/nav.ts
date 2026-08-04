@@ -7,8 +7,8 @@ import {
 	Cpu,
 	Database,
 	FlaskConical,
-	FolderKanban,
 	HardDrive,
+	LayoutDashboard,
 	Inbox,
 	Layers,
 	Network,
@@ -43,13 +43,15 @@ import { exact, seg, type ZoneNav } from '@rask/ui/shell';
 const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 	{
 		label: 'Catalog',
+		// NO 'Projects' LEAF, by ruling (2026-08-03) — the same one that took the tenants row out of
+		// the shared navbar's Lakehouse panel. A project is the TOP of the hierarchy (project ›
+		// warehouse › namespace › table), so listing "projects" as a leaf INSIDE one project's catalog
+		// inverted it: it described lakekeeper's tenant-list endpoint rather than this product's model.
+		// There is ONE project concept and it belongs to the main menu: the list, the per-project
+		// overview and the create flow are the HOME zone's `/projects` and `/projects/<project>`.
+		// `/lakehouse/catalog/projects` does not resolve at all any more — this zone owns what is BELOW
+		// a project (warehouses › namespaces › tables), and nothing above it.
 		items: [
-			{
-				title: 'Projects',
-				href: '/lakehouse/catalog/projects',
-				match: seg('/lakehouse/catalog/projects'),
-				icon: FolderKanban,
-			},
 			{
 				title: 'Namespaces',
 				href: '/lakehouse/catalog/namespaces',
@@ -152,6 +154,12 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 				icon: ShieldCheck,
 			},
 			{
+				title: 'Tenants',
+				href: '/lakehouse/admin/tenants',
+				match: seg('/lakehouse/admin/tenants'),
+				icon: Building2,
+			},
+			{
 				title: 'Audit',
 				href: '/lakehouse/governance/audit',
 				match: seg('/lakehouse/governance/audit'),
@@ -160,17 +168,16 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 		],
 	},
 	{
-		label: 'Admin',
+		// OPERATIONS, not "Admin", and without Tenants — by ruling (2026-08-03). The shared navbar's
+		// panel has said Governance = [Access, Tenants, Audit] and Operations = [Events, Streams, DLQ]
+		// for some time; this sidebar still said "Admin" and kept Tenants inside it, so the same estate
+		// answered the same question two different ways depending on which control you opened. Who may
+		// do what — access, TENANTS, audit — is governance; running the estate — events, streams, dead
+		// letters — is operations. The navbar was right, so the sidebar moves to it.
+		label: 'Operations',
 		// The operational drawer — real, but not what anyone opens the lakehouse for. Collapsed until
 		// you are actually inside it (the shell auto-expands whichever group holds the active route).
-		defaultCollapsed: true,
 		items: [
-			{
-				title: 'Tenants',
-				href: '/lakehouse/admin/tenants',
-				match: seg('/lakehouse/admin/tenants'),
-				icon: Building2,
-			},
 			{
 				title: 'Streams',
 				href: '/lakehouse/admin/streams',
@@ -192,6 +199,24 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 		],
 	},
 ];
+
+/** PINNED to the rail's bottom, outside `groups`. The dock briefly sat as the last leaf of
+ *  "Lineage", which made a ZONE-level surface read as a lineage feature and hid it from anyone
+ *  standing in catalog or models. It composes the whole zone — graph + runs + events over ONE
+ *  LineageState, plus the catalog's own table registry and object browser — so it belongs below the
+ *  areas rather than among them. Not privilege-filtered: every identity that can see the zone can
+ *  open its dock. */
+const LAKEHOUSE_FOOTER: ZoneNav['footer'] = {
+	label: 'Workspace',
+	items: [
+		{
+			title: 'Workbench',
+			href: '/lakehouse/workbench',
+			match: seg('/lakehouse/workbench'),
+			icon: LayoutDashboard,
+		},
+	],
+};
 
 /** Groups behind the estate-admin door — the ones `/lakehouse/admin/*` serves. */
 const PRIVILEGED_GROUPS = new Set(['Governance', 'Admin']);
@@ -219,5 +244,6 @@ export function lakehouseSidebar(estateAdmin: boolean): ZoneNav {
 		groups: estateAdmin
 			? LAKEHOUSE_GROUPS
 			: LAKEHOUSE_GROUPS.filter((g) => !PRIVILEGED_GROUPS.has(g.label)),
+		footer: LAKEHOUSE_FOOTER,
 	};
 }

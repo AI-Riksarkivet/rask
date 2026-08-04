@@ -1,7 +1,7 @@
 # open-gateway — kgateway becomes the edge, then the Python gateway dissolves
 
 Plan, 2026-08-03. Two phases, **strictly sequenced**; a fresh session picks up Phase 1
-(the tilt session is the natural owner — the footprint is `chart/` + the Tiltfile, which
+(the footprint is `chart/`, which
 it already owns). Phase 2 starts only after Phase 1 is proven with a browser. Do not
 stack the two: they both change the only path between the browser and every backend, and
 stacked changes there make nothing attributable.
@@ -68,7 +68,7 @@ straight to services and `services/gateway` is deleted.
 
 ---
 
-## Phase 1 — nginx → kgateway at the edge (chart + Tiltfile only)
+## Phase 1 — nginx → kgateway at the edge (chart only)
 
 The rask gateway, every service, and all app code are untouched. Goal block for the
 executing session:
@@ -89,12 +89,12 @@ executing session:
 >    connected >90s through the new edge.
 > 4. The Dapr helper comments' "routes become HTTPRoutes" note is honoured or explicitly
 >    deferred with a comment at the site.
-> 5. Verified like it ships: `make k3s-up` + `tilt-up` green with the toggle ON, and a
+> 5. Verified like it ships: `make k3s-up` green with the toggle ON, and a
 >    real browser through the new edge reaches `/`, `/lakehouse`, `/compute`, and
 >    `/api/catalog` — not just `kubectl get gateway`.
 > 6. OpenFGA stays ClusterIP-only and the rask gateway Deployment is untouched — if
 >    either changes, the change is wrong.
-> 7. Footprint is `chart/` + Tiltfile only; commit own paths only (concurrent sessions
+> 7. Footprint is `chart/` only; commit own paths only (concurrent sessions
 >    are active in this repo).
 
 **Phase-2 readiness (free now, saves a round later):** shape the HTTPRoutes per-service
@@ -116,7 +116,7 @@ Everything the Python gateway does either moves to the edge, moves to a service,
 
 **The blocker that shapes everything: `make dev-micro` must survive.** The no-k8s dev
 loop is a hard requirement (fleet as plain processes, one stable `/api` origin).
-HTTPRoutes only exist in a cluster. The cure is the Tiltfile's own pattern — **derive,
+HTTPRoutes only exist in a cluster. The cure is to **derive,
 don't duplicate**: a thin dev-only proxy whose route table is RENDERED from the chart's
 HTTPRoutes, plus a contract test proving the two agree. Two hand-kept tables is the
 disease this plan exists to avoid.

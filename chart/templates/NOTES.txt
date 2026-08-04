@@ -29,9 +29,9 @@ Services (ClusterIP):
   - lance-ray: {{ include "rask.fullname" $root }}-lance-ray:{{ .port }} (medallion producer + movers)
 {{- end }}
 {{- end }}
-{{- with .Values.media }}
+{{- with .Values.explorer }}
 {{- if .enabled }}
-  - media:     {{ include "rask.fullname" $root }}-{viewer,search,annotator} (the media plane, /api/media/*)
+  - media:     {{ include "rask.fullname" $root }}-{viewer,search,annotator} (the media plane, /api/explorer/*)
 {{- end }}
 {{- end }}
 {{- with .Values.age }}

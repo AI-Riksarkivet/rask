@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
 import { DraftSchema, TaskDetailSchema, type Draft, type TaskDetail } from '../types.js';
 
-// The TASK half of the projects plane (open_transport.md, area 4) — task reads, task events
+// The TASK half of the projects plane (the transport ruling, area 4) — task reads, task events
 // (claim / assign / submit / release / skip / accept / fix_and_accept / request_changes / …) and the
 // revision-guarded draft read+save. The `/api/tasks/[...path]` proxy is deleted; its three verbs are
 // the named functions below, same `ApiResult` shapes at every call site, transport only.
@@ -125,6 +125,13 @@ export const saveDraft = command(
 	v.object({
 		taskId: v.string(),
 		shapes: v.array(v.record(v.string(), v.unknown())),
+		/** Typed edges between those shapes. The service drops an unlisted key SILENTLY (`save_draft`
+		 *  builds the model field by field so a caller cannot set `revision`), so a schema that omits
+		 *  this loses every relation without erroring. */
+		links: v.optional(
+			v.array(v.object({ name: v.string(), from_shape: v.string(), to_shape: v.string() })),
+			[],
+		),
 		base_revision: v.optional(v.nullable(v.number())),
 		origin: v.optional(v.string()),
 	}),
