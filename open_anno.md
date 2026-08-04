@@ -125,9 +125,9 @@ projection. You can select rows where `json_get_int(attributes, 'order') > 3`; y
 `attributes.order` as a column. A training consumer that wants a field AS a column still needs a
 derived column — the JSON type buys querying, not free flattening.
 
-## #28 — Explorer: choose a dataset, search across several — **PARTLY LANDED**
+## #28 — Explorer: choose a dataset, search across several — **3 of 4 DONE, 1 BLOCKED**
 
-Three parts. Two are done; the third is BLOCKED on a design question that is genuinely the owner's.
+Four parts. Three are settled; multi-dataset search is BLOCKED, and the reason is below rather than a shrug.
 
 **Done — the dataset picker.** The mechanism was never missing: `descriptor-store` has always read
 `?dataset=<id>` and the backend has always listed corpora at `GET /api/datasets`. Nothing on screen
@@ -164,8 +164,17 @@ alternatives are materially different products:
 **Grouped** is the cheapest by a wide margin and the only one that avoids claiming something false.
 Worth confirming before anyone builds the other two.
 
-**Not started — reconsidering the lakehouse `/catalog/projects` route.** A scoping question rather
-than a defect, and it belongs to whoever owns the lakehouse zone's IA.
+**Already resolved — the lakehouse `/catalog/projects` route.** The issue asked for it to be
+reconsidered; it had already been deleted by the 2026-08-03 IA ruling
+(`140315e feat(ia): the project is the top of the hierarchy, and the main menu says so`). VERIFIED
+rather than taken on trust: the directory is absent from `src/routes/catalog/`, and
+`lakehouse/e2e/lineage/shell.spec.ts:220` asserts the link has count 0.
+
+The reasoning is worth keeping because it is the same shape as the Guide row above: the catalog
+hierarchy runs project > warehouse > namespace > table, so listing "projects" as a leaf INSIDE one
+project's catalog inverted it — it described lakekeeper's tenant-list endpoint rather than this
+product's model. There is ONE project concept and it is the estate's: `/projects` in the home zone.
+The lakehouse owns what is BELOW a project, and nothing above it.
 
 ---
 
