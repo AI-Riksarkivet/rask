@@ -123,14 +123,24 @@ overturned. Two rulings landed after it, in this order:
   `createContext` — which is precisely what an element could never do (endpoints are per-app; a
   `$app`-bound component cannot be mounted from a foreign bundle), and why the compositor's panels
   had to be mirrored copies. That fidelity cost, not the bundle size, is what retired it.
-- **ONE dock, in the explorer — not one per zone.** Lakehouse and compute briefly got docks on the
-  same recipe (`/lakehouse/lineage/workbench`, `/compute/workbench`); both were reverted at the
-  user's instruction — *"why are you putting workbench on lineage? … start with workbench actually
-  only in media"* — because a dock earns its ~100 KB only where re-cutting ONE subject repeatedly
-  is the actual workflow. Searching a corpus is that workflow; reading a lineage graph is not.
-  Another zone earns a dock when a real multi-panel workflow appears in it, never by symmetry.
-  `dock-reachability.test.ts` pins the set EXACTLY (`['/explorer/workbench']`), so neither a
-  compositor nor a symmetry-dock can return unnoticed.
+- **One dock per zone that earns one, at ZONE level — three today.** The instruction that shaped
+  this was *"why are you putting workbench on lineage? … **start with** workbench actually only in
+  media"*, and it carried two separate corrections that were briefly collapsed into one. The first
+  is permanent: `/lakehouse/lineage/workbench` buried a ZONE surface inside one AREA, so it was
+  invisible from catalog or models — docks now live at `/<zone>/workbench`, full stop. The second
+  was sequencing, not cancellation: prove the recipe on ONE zone before spending it on three. That
+  was read as "media only, forever" for a while; it was not.
+
+  The explorer's dock shipped and was proven end to end (results → atlas ring → player, saved views
+  persisting per subject), so lakehouse and compute followed on the same recipe — lakehouse with
+  lineage graph + runs + events over ONE `LineageState` plus the catalog's own tables and object
+  browser, compute with jobs + cluster + actors + serve over its own remotes.
+
+  A dock is still EARNED, never granted by symmetry: it costs ~100 KB deferred and only pays where a
+  multi-panel view of ONE subject is the actual workflow. train and studio carry placeholder data,
+  home is the catch-all, and the annotator is already a canvas — none of them qualify.
+  `dock-reachability.test.ts` pins the set EXACTLY, so neither a compositor, nor a symmetry-dock,
+  nor a nested path can return unnoticed.
 - **Panels' domain code stays in its zone** — the lesson of the `@rask/panels` reversal, and now
   structural rather than a rule to remember: with the dock inside the zone there is no other place
   for a panel to live. `frontend/packages/*` stays mechanism-only (`@rask/dockview`, `@rask/flow`).

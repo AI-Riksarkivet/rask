@@ -18,10 +18,10 @@ Package name equals directory name for all seven (`manifest.test.ts:53`). Base i
 | zone | base | dev port | nav label | what it is |
 |---|---|---|---|---|
 | `home` | `''` catch-all | 5273 | Home | The ESTATE LEVEL: `/` (an insights landing, scaffold-badged), `/projects` (+ `/projects/<id>`, the gallery/table list, create, and one project's overview) and `/settings` (estate config, admin-gated SERVER-side) — plus the **OIDC BFF** (`/auth/{login,callback,logout}`) |
-| `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one — `catalog`, `lineage`, `models`, `admin`, `governance`, `storage`; 49 route files, **8 `+server.ts` routes** — 4 keep-bytes (Arrow preview/insert, blob bytes, media downloads), 1 keep-flow (`capi/v1/me`), 2 catch-alls (17 element reads — the cross-zone blocker) + the thin `/api/audit` shim for the workbench element; every JSON value surface rides one of the zone's 15 `.remote.ts` modules and `requestJSON` has ZERO call sites left |
-| `explorer` | `/explorer` | 5173 | **Explorer** | Corpus search workbench (and the estate's ONE dock, `/explorer/workbench`): FTS/vector/hybrid, WebGPU atlas, Cypher KG, Svelte-Flow editor; **6 `+server.ts` routes** (was 13) — 4 keep-bytes + `api/search`/`api/atlas/chunks`, which keep their route (multipart / rowid-list POST) but answer **Arrow IPC**; every JSON value surface rides one of 5 `.remote.ts` modules (the transport ruling area 3) |
+| `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one (dock at `/lakehouse/workbench`) — `catalog`, `lineage`, `models`, `admin`, `governance`, `storage`; 49 route files, **8 `+server.ts` routes** — 4 keep-bytes (Arrow preview/insert, blob bytes, media downloads), 1 keep-flow (`capi/v1/me`), 2 catch-alls (17 element reads — the cross-zone blocker) + the thin `/api/audit` shim for the workbench element; every JSON value surface rides one of the zone's 15 `.remote.ts` modules and `requestJSON` has ZERO call sites left |
+| `explorer` | `/explorer` | 5173 | **Explorer** | Corpus search workbench (with a dock at `/explorer/workbench`): FTS/vector/hybrid, WebGPU atlas, Cypher KG, Svelte-Flow editor; **6 `+server.ts` routes** (was 13) — 4 keep-bytes + `api/search`/`api/atlas/chunks`, which keep their route (multipart / rowid-list POST) but answer **Arrow IPC**; every JSON value surface rides one of 5 `.remote.ts` modules (the transport ruling area 3) |
 | `annotator` | `/annotator` | 5177 | **Annotate** | PixiJS/WebGPU canvas over Arrow-backed rows; **3 `+server.ts` routes** (was 9) — the Arrow annotations transport, `capi/v1/me`, the viewer catch-all; every JSON value surface rides one of 6 `.remote.ts` modules |
-| `compute` | `/compute` | 5175 | Compute | Ray/Serve observability, 9 pages |
+| `compute` | `/compute` | 5175 | Compute | Ray/Serve observability, 9 pages + a dock at `/compute/workbench` |
 | `train` | `/train` | 5178 | Train | **Placeholder data only** — every page badges it |
 | `studio` | `/studio` | 5176 | Studio | Mini-app launcher, one tenant |
 
@@ -54,12 +54,31 @@ components in the zone that owns them.
 
 ## Workbenches — `@rask/dockview`
 
-**ONE dock, and it lives INSIDE its zone** (final ruling 2026-08-03 — the record is
-`docs/architecture/global-workbench.md`). `explorer` ships `/explorer/workbench`: the zone's OWN
-components (`search-bar`, `hit-list`, `AtlasMap`, `player-pane`) over ONE `Bench` store shared
-through ordinary `createContext`, so a hit picked in the results panel is the hit the atlas
-highlights and the player loads. No other zone has one — a dock is earned by a real multi-panel
-workflow ("cut and re-cut the corpus"), never by symmetry.
+**A dock lives INSIDE its zone, at ZONE level — `/<zone>/workbench`** (the record is
+`docs/architecture/global-workbench.md`). THREE ship, each composing that zone's OWN components over
+its own stores and remotes:
+
+| dock | panels | what they share |
+|---|---|---|
+| `/explorer/workbench` | results · atlas · player | ONE `Bench` search store via `createContext` — a hit picked in results is the hit the atlas highlights and the player loads |
+| `/lakehouse/workbench` | lineage graph · runs · events · tables · storage | ONE `LineageState`, polled once, so the DAG and the run board can never be a poll apart; Tables/Storage are the very `TableRegistry` / `ObjectBrowser` the catalog pages render |
+| `/compute/workbench` | jobs · cluster · actors · serve | the zone's own `getRayJobs`/`getRayCluster`/`getActors`/`getServe` remotes on the zone's own poll clock |
+
+**ZONE level is load-bearing.** The lakehouse's briefly sat at `/lakehouse/lineage/workbench`, which
+buried a zone surface inside one AREA and hid it from anyone standing in catalog or models — it was
+reverted for exactly that. `dock-reachability.test.ts` pins the set EXACTLY, so a nested path is
+simply not in the list. A dock is still EARNED by a real multi-panel workflow, never granted by
+symmetry: train and studio carry placeholder data, home is the catch-all, the annotator is already
+a canvas.
+
+**Adding a dock to a zone? Four things fail QUIETLY if you skip them** (all four were skipped once,
+each surfacing differently): declare `@rask/dockview` in that zone's `package.json` (bun hoisting
+hides an undeclared import until the clean container build); `@import '@rask/dockview/styles.css'
+layer(base)` in its `app.css` (else the grid never lays out and panels stack as bare text); give the
+zone a session handle if its user-state is OIDC-gated (a bearer-less write 401s and the layout
+silently never persists); and make sure the dock's parent is a SIZED flex item — `flex: 1 1 0`
+against a block parent mounts every group at ZERO height, which reads as "the dock is broken" rather
+than "the dock has no height".
 
 The cross-zone compositor ZONE that briefly existed is DELETED, and with it the whole custom-element
 machinery (per-zone `src/lib/elements/**`, `vite.elements.config.ts`, element budgets, the
