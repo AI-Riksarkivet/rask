@@ -13,7 +13,7 @@ no object storage, no mocks where the real primitive runs.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from catalog.core.config import Settings
@@ -21,9 +21,13 @@ from catalog.services import warehouses
 from lance_namespace import TableNotFoundError
 
 
-def _settings(tmp_path: Any) -> Settings:
+def _settings(tmp_path: Any, *, fga_enabled: bool = False) -> Settings:
     data: dict[str, object] = {
         "warehouses_enabled": True,
+        # The Settings model refuses FGA without OIDC ("authz needs a user") — a real guard, so the
+        # FGA-on case carries a matching issuer rather than being waved through.
+        "fga_enabled": fga_enabled,
+        **({"oidc_enabled": True, "oidc_issuer": "https://issuer.test", "oidc_audience": "test"} if fga_enabled else {}),
         "control_root": f"file://{tmp_path}",
         "s3_access_key_id": "x",
         "s3_secret_access_key": "x",
@@ -85,3 +89,69 @@ def test_a_missing_warehouse_is_the_same_404_as_everywhere_else(tmp_path: Any) -
     settings = _settings(tmp_path)
     with pytest.raises(TableNotFoundError):
         _read(settings, "nope-wh")
+
+
+def _estate(settings: Settings) -> Any:
+    from catalog.api.v1.endpoints import warehouses as wh_ep
+
+    return asyncio.run(wh_ep.list_estate_bindings(settings=settings, token=None, client=None))
+
+
+def test_the_estate_read_returns_every_binding_in_one_pass(tmp_path: Any) -> None:
+    """#86: the per-warehouse read answers for one id, and a page listing the estate was calling it
+    once per warehouse — each call re-reading EVERY binding before filtering in Python. This is the
+    union `read_bindings` already produces in a single pass.
+
+    The exact-dict assertion also pins the SHAPE: a mapping, not a list, because every caller wants
+    to know WHICH warehouse a namespace lives in and a list would make each of them re-derive it."""
+    settings = _settings(tmp_path)
+    _seed(settings, warehouse_id="a-wh", bindings=("a-one", "a-two"))
+    _seed(settings, warehouse_id="b-wh", bindings=("b-one",))
+
+    assert _estate(settings).bindings == {"a-one": "a-wh", "a-two": "a-wh", "b-one": "b-wh"}
+
+
+def test_an_estate_with_no_bindings_is_an_empty_mapping(tmp_path: Any) -> None:
+    settings = _settings(tmp_path)
+    _seed(settings, warehouse_id="bare-wh")
+    assert _estate(settings).bindings == {}
+
+
+def test_the_estate_read_is_FILTERED_to_what_the_caller_may_see(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    """The security half, which the endpoint's own docstring calls load-bearing: a binding names a
+    namespace AND the tenant bucket it lives in, so leaking one leaks another tenant's shape. Ran
+    untested until the audit — the three tests above all had FGA off."""
+    from catalog.api.v1.endpoints import warehouses as wh_ep
+
+    from service_kit.governed import fga as fga_module
+    from service_kit.governed.oidc import IDToken
+
+    settings = _settings(tmp_path, fga_enabled=True)
+    _seed(settings, warehouse_id="mine-wh", bindings=("mine",))
+    _seed(settings, warehouse_id="theirs-wh", bindings=("theirs",))
+
+    async def _only_mine(*args: Any, **kwargs: Any) -> list[str]:
+        return ["warehouse:mine-wh"]
+
+    monkeypatch.setattr(fga_module, "list_objects", _only_mine)
+    result = asyncio.run(
+        wh_ep.list_estate_bindings(settings=settings, token=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1), client=cast(Any, object()))
+    )
+    assert result.bindings == {"mine": "mine-wh"}, "another tenant's namespace leaked through the filter"
+
+
+def test_an_unreadable_binding_refuses_rather_than_reporting_a_partial_estate(tmp_path: Any) -> None:
+    """Fail-CLOSED, matching the per-warehouse sibling. Answering with the tolerant reader would put
+    an invisible bound namespace back — a 200 with one silently missing, which the page's
+    read-failed channel cannot see because nothing failed."""
+    from lance_namespace import ServiceUnavailableError
+
+    settings = _settings(tmp_path)
+    _seed(settings, warehouse_id="ok-wh", bindings=("fine",))
+    # A binding object the reader cannot parse — the corrupt-record case, written straight to the store.
+    fs, base = __import__("service_kit.lakehouse.objectfs", fromlist=["x"]).fs_and_base(settings.registry_root, settings.storage_options())
+    with fs.open_output_stream(f"{base}/_warehouses/bindings/broken.json") as stream:
+        stream.write(b"{not json")
+
+    with pytest.raises(ServiceUnavailableError, match="could not be read"):
+        _estate(settings)

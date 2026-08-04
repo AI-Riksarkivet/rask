@@ -5647,6 +5647,23 @@
         "title": "DropTableResponse",
         "type": "object"
       },
+      "EstateBindingsResponse": {
+        "description": "Every namespace\u2192warehouse binding the caller can see, in ONE read (#86).\n\nThe per-warehouse sibling below answers for one id; a page listing the estate's namespaces was\ncalling it once per warehouse, and each of those calls re-LISTs and re-GETs every binding in the\nestate before filtering in Python \u2014 O(warehouses \u00d7 bindings) for a union the underlying\n``list_bindings`` already produces in a single pass.",
+        "properties": {
+          "bindings": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Bindings",
+            "type": "object"
+          }
+        },
+        "required": [
+          "bindings"
+        ],
+        "title": "EstateBindingsResponse",
+        "type": "object"
+      },
       "EventsResponse": {
         "description": "A poll response: control events strictly after the caller's cursor, the new head cursor, and a reset\nflag (``True`` when the client's cursor fell off the bounded buffer \u2192 the console should re-read all).",
         "properties": {
@@ -17815,6 +17832,33 @@
           }
         ],
         "summary": "Create Warehouse",
+        "tags": [
+          "warehouse"
+        ]
+      }
+    },
+    "/v1/warehouses/-/bindings": {
+      "get": {
+        "description": "Every binding the caller may see, from ONE ``list_bindings`` pass (#86).\n\n``/-/`` rather than a bare ``/bindings``: the sibling routes are ``/{warehouse_id}/\u2026`` and\n``bindings`` is a VALID warehouse id, so a literal segment there would shadow a real tenant's\nwarehouse. ``-`` can never be an id (``CONTROL_ID_RE`` requires \u22653 chars with alphanumeric ends),\nwhich makes the collision impossible rather than merely unlikely. This is the FIRST ``/-/`` route\nin the estate and it is our own convention, borrowed from GitLab \u2014 the Lance spec's own root\nplaceholder is the delimiter, which is not available here.\n\nGoverned exactly like the warehouse listing it complements: with FGA on, filtered to the\nwarehouses the caller can ``can_get_metadata`` \u2014 a binding names a namespace AND the tenant\nbucket it lives in, so leaking one leaks another tenant's shape.",
+        "operationId": "list_estate_bindings_v1_warehouses___bindings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EstateBindingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Estate Bindings",
         "tags": [
           "warehouse"
         ]

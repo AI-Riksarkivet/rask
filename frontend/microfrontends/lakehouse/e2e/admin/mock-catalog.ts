@@ -182,6 +182,14 @@ Bun.serve({
 
 		// ── the /v1/access surface + the registry (the FGA workbench's remote functions land here) ──
 		if (url.pathname === '/v1/table') return json({ tables: ['db1$t'] });
+		// #86 the estate-wide bindings read the namespaces page loads alongside the table list. Served
+		// here because the page reaches it SERVER-side through a remote function, where page.route
+		// cannot intercept — and an unserved endpoint would leave the page permanently in its
+		// bindings-unavailable state, which is a different assertion than the specs mean to make.
+		// EMPTY by default, deliberately: `ok` with no bindings keeps the degraded banner off (the
+		// point of serving it at all) while adding no row to fixtures that never mentioned one. A
+		// static `db1` here silently appended a phantom namespace to every other spec's world.
+		if (url.pathname === '/v1/warehouses/-/bindings') return json({ bindings: {} });
 		// The stores registry (the storage area's remote functions). Reads are STATIC; the write is
 		// per-bearer and failWrites-aware, echoing the whole registry exactly like the real catalog.
 		if (url.pathname === '/v1/stores' && req.method === 'GET') return json({ stores: STORES });

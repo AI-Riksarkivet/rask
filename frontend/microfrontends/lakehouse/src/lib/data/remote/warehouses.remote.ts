@@ -120,6 +120,18 @@ export const fetchWarehouse = query(
 		parsed(await catalogJSON(`/v1/warehouses/${enc(id)}`), WarehouseSchema),
 );
 
+/** `EstateBindingsResponse` — `{namespace: warehouse_id}` for the whole estate, in ONE catalog read.
+ *  Replaces the 1+N fan-out the namespaces page used to do (fetchWarehouses, then one
+ *  fetchWarehouseNamespaces per warehouse) — and each of those legs re-read EVERY binding in the
+ *  estate server-side before filtering, so the union cost O(warehouses × bindings) to compute
+ *  something `list_bindings` produces in a single pass. */
+const EstateBindingsSchema = v.object({ bindings: v.record(v.string(), v.string()) });
+
+export const fetchEstateBindings = query(
+	async (): Promise<ApiResult<{ bindings: Record<string, string> }>> =>
+		parsed(await catalogJSON('/v1/warehouses/-/bindings'), EstateBindingsSchema),
+);
+
 /** `WarehouseNamespacesResponse` — the spec's ListNamespaces shape (`{"namespaces": [...]}`). */
 const WarehouseNamespacesSchema = v.object({ namespaces: v.array(v.string()) });
 

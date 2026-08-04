@@ -40,6 +40,7 @@ from lance_namespace import (
     NamespaceNotEmptyError,
     NamespaceNotFoundError,
     PermissionDeniedError,
+    ServiceUnavailableError,
     TableNotFoundError,
     UnsupportedOperationError,
 )
@@ -243,6 +244,57 @@ class WarehouseNamespacesResponse(BaseModel):
     ListNamespaces (``{"namespaces": [...]}``) so a spec client parses it unchanged."""
 
     namespaces: list[str]
+
+
+class EstateBindingsResponse(BaseModel):
+    """Every namespace→warehouse binding the caller can see, in ONE read (#86).
+
+    The per-warehouse sibling below answers for one id; a page listing the estate's namespaces was
+    calling it once per warehouse, and each of those calls re-LISTs and re-GETs every binding in the
+    estate before filtering in Python — O(warehouses × bindings) for a union the underlying
+    ``list_bindings`` already produces in a single pass.
+    """
+
+    bindings: dict[str, str]
+    """``{namespace: warehouse_id}`` — a mapping rather than a list, because every caller so far
+    wants to know WHICH warehouse a namespace lives in, and a list would make them re-derive it."""
+
+
+@router.get("/-/bindings", response_model_exclude_none=True)
+async def list_estate_bindings(
+    settings: SettingsDep,
+    token: CurrentToken,
+    client: FgaClientDep,
+) -> EstateBindingsResponse:
+    """Every binding the caller may see, from ONE ``list_bindings`` pass (#86).
+
+    ``/-/`` rather than a bare ``/bindings``: the sibling routes are ``/{warehouse_id}/…`` and
+    ``bindings`` is a VALID warehouse id, so a literal segment there would shadow a real tenant's
+    warehouse. ``-`` can never be an id (``CONTROL_ID_RE`` requires ≥3 chars with alphanumeric ends),
+    which makes the collision impossible rather than merely unlikely. This is the FIRST ``/-/`` route
+    in the estate and it is our own convention, borrowed from GitLab — the Lance spec's own root
+    placeholder is the delimiter, which is not available here.
+
+    Governed exactly like the warehouse listing it complements: with FGA on, filtered to the
+    warehouses the caller can ``can_get_metadata`` — a binding names a namespace AND the tenant
+    bucket it lives in, so leaking one leaks another tenant's shape.
+    """
+    _require_enabled(settings)
+    # `read_bindings`, NOT the tolerant `list_bindings`: the per-warehouse sibling 503s on any binding
+    # it could not parse, and answering the estate question with the opposite tolerance would put an
+    # invisible bound namespace back — a 200 with one silently missing, which the frontend's
+    # read-failed channel cannot see because nothing failed. One corrupt object degrades LOUDLY here,
+    # exactly as it does one route over.
+    records, skipped = await run_in_threadpool(warehouses.read_bindings, settings.registry_root, settings.storage_options())
+    if skipped:
+        raise ServiceUnavailableError(
+            f"{len(skipped)} namespace binding(s) could not be read (e.g. {skipped[0]}) — refusing to "
+            f"report a partial estate, because a binding you cannot read is a namespace you cannot see."
+        )
+    if settings.fga_enabled and client is not None and token is not None:
+        allowed = set(await fga.list_objects(client, user=token.sub, relation="can_get_metadata", object_type="warehouse"))
+        records = [r for r in records if f"warehouse:{r.get('warehouse_id')}" in allowed]
+    return EstateBindingsResponse(bindings={str(r["top_ns"]): str(r["warehouse_id"]) for r in records})
 
 
 @router.get("/{warehouse_id}/namespaces", response_model_exclude_none=True)
