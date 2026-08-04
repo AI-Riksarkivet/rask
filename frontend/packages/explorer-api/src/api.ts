@@ -26,7 +26,7 @@ import {
 } from './descriptor';
 
 export type { Alignment, Row, SearchMode } from './descriptor';
-export { activeView } from './descriptor';
+export { activeView, registerView, viewForHit } from './descriptor';
 export { apiUrl, setApiBase } from './base';
 
 /** Legacy alias — a search/browse result row. Field access goes through the

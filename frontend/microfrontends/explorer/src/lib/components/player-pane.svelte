@@ -7,6 +7,7 @@
 		type DocTranscriptChunk,
 		type DiarTurn,
 		activeView,
+		viewForHit,
 		getDocTranscript,
 		getDiarization,
 		mediaUrl,
@@ -35,12 +36,23 @@
 	// Which element this corpus actually needs — read from the dataset's own declaration, so a
 	// page-image corpus never gets a <video>. Derived, not constant: the dataset can be switched
 	// under the pane.
-	const mediaKind = $derived(activeView().mediaKind);
+	/** The view THIS hit is rendered through, not the active corpus's.
+	 *
+	 *  Every accessor below was `activeView()`, which is correct exactly while one corpus fills the
+	 *  screen. In a fused result set carrying rows from two corpora it describes every row as if it
+	 *  came from whichever corpus happens to be selected — and it renders, so nothing complains. The
+	 *  hit names its own origin (`_dataset`, stamped by the search service); this reads it.
+	 *
+	 *  Falls back to the active view for a hit that names none, which reproduces the previous
+	 *  behaviour exactly for the case where that behaviour was right. */
+	const view = $derived(hit ? viewForHit(hit) : activeView());
+
+	const mediaKind = $derived(view.mediaKind);
 
 	// WHICH PANES this corpus may show. The media element was already chosen from the declared mime,
 	// but the chrome around it was not gated at all — so an image corpus got a time scrubber and both
 	// audio tabs. Same rule as the zone sidebar: gate on what the corpus DECLARES.
-	const panes = $derived(panesFor(activeView()));
+	const panes = $derived(panesFor(view));
 
 	let mediaEl = $state<HTMLVideoElement | HTMLAudioElement | null>(null);
 	let mediaError = $state<string | null>(null);
@@ -78,7 +90,7 @@
 		}
 		docChunks = [];
 		let cancelled = false; // supersede guard + leak guard
-		getDocTranscript(activeView().docId(h))
+		getDocTranscript(viewForHit(h).docId(h))
 			.then((doc) => {
 				if (!cancelled) docChunks = doc.chunks;
 			})
@@ -102,7 +114,7 @@
 		}
 		diarTurns = [];
 		let cancelled = false; // supersede guard + leak guard
-		getDiarization(activeView().docId(h))
+		getDiarization(viewForHit(h).docId(h))
 			.then((d) => {
 				if (!cancelled) diarTurns = d.turns;
 			})
@@ -132,7 +144,6 @@
 	const findVoice = (pick: { speaker: string } | { turnId: number }) => {
 		const h = hit;
 		if (!h) return;
-		const view = activeView();
 		const docId = view.docId(h);
 		// Chip label: the descriptor's display title for this row (mirrors hit-card).
 		const label = view.title(h) || undefined;
@@ -154,7 +165,6 @@
 	const currentChunkIdx = $derived.by((): number => {
 		const cs = docChunks;
 		if (cs.length === 0) return 0;
-		const view = activeView();
 		const t = currentTime;
 		const i = cs.findIndex((c) => {
 			const span = view.time(c);
@@ -201,11 +211,11 @@
 	const currentChunk = $derived(docChunks[currentChunkIdx]);
 	const chunkStart = $derived.by((): number => {
 		const c = currentChunk ?? hit;
-		return c ? (activeView().time(c)?.start ?? 0) : 0;
+		return c ? (viewForHit(c).time(c)?.start ?? 0) : 0;
 	});
 	const chunkEnd = $derived.by((): number => {
 		const c = currentChunk ?? hit;
-		return c ? (activeView().time(c)?.end ?? 0) : 0;
+		return c ? (viewForHit(c).time(c)?.end ?? 0) : 0;
 	});
 
 	// Timeline click → jump there and play. Mirrors the hit-seek $effect; here
@@ -254,7 +264,6 @@
 	const metaRows = $derived.by((): [string, string][] => {
 		const h = hit;
 		if (!h) return [];
-		const view = activeView();
 		const rows: [string, string][] = [];
 		const caption = view.caption(h);
 		if (caption) rows.push(['Caption', caption]);
@@ -286,7 +295,7 @@
 		if (!hit || !mediaEl) return;
 
 		const el = mediaEl;
-		const start = activeView().time(hit)?.start ?? 0;
+		const start = view.time(hit)?.start ?? 0;
 		let cancelled = false;
 		const seek = () => {
 			if (cancelled) return;
@@ -373,8 +382,8 @@
 				<!-- The per-row FRAME, not the doc blob: on a paged corpus the row IS the page, so
              /api/chunk-frame/<identity> is the thing the hit points at. -->
 				<img
-					src={activeView().frameUrl(hit)}
-					alt={activeView().title(hit)}
+					src={view.frameUrl(hit)}
+					alt={view.title(hit)}
 					class={isFullscreen
 	? 'min-h-0 w-full flex-1 bg-black object-contain'
 	: 'max-h-[45vh] w-full shrink-0 bg-black object-contain'}

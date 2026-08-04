@@ -563,8 +563,45 @@ export class DatasetView {
 
 let _active: DatasetView | null = null;
 
+/**
+ * Every view the app has loaded, by dataset id.
+ *
+ * The active view is enough while one corpus fills the screen. It stops being enough the moment
+ * results from two corpora share a list: display fields, media kind and capabilities are all
+ * per-corpus, so a renderer reading the ACTIVE view would describe every row as if it came from
+ * whichever corpus happened to be selected — silently, since the rows still render.
+ *
+ * A map rather than a second singleton, because a fused result set can carry hits from N corpora at
+ * once and each of them has to be resolvable at the same time.
+ */
+const _views = new Map<string, DatasetView>();
+
 export function setActiveView(view: DatasetView): void {
 	_active = view;
+	registerView(view);
+}
+
+/** Make a view resolvable by `viewForHit` without making it the active one. */
+export function registerView(view: DatasetView): void {
+	_views.set(view.id, view);
+}
+
+/**
+ * The view a HIT should be rendered through.
+ *
+ * `_dataset` is stamped on every hit by the search service. A hit that carries none — a single-corpus
+ * result from before the stamp, or a synthetic row — falls back to the active view, which is exactly
+ * what every renderer used unconditionally before this existed. So the fallback is not a guess: it
+ * reproduces the previous behaviour precisely for the case where that behaviour was correct.
+ *
+ * Returns the ACTIVE view when the named corpus has not been loaded. That is the honest floor: the
+ * alternative is throwing mid-render on a list that is otherwise fine, and a hit is not the place to
+ * discover that a descriptor fetch failed.
+ */
+export function viewForHit(hit: Row): DatasetView {
+	const id = typeof hit._dataset === 'string' ? hit._dataset : null;
+	const found = id === null ? null : (_views.get(id) ?? null);
+	return found ?? activeView();
 }
 
 export function activeViewOrNull(): DatasetView | null {
