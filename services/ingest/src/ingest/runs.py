@@ -57,6 +57,16 @@ class RunRecord(BaseModel):
     committed_version: int | None = None
     lineage_run_present: bool = False
 
+    # The PUBLICATION half (§ D2). A commit makes rows readable; only a publication makes them ready,
+    # so a run that committed and did not publish is a distinct, visible state rather than a green
+    # run with a silent hole. `from_version`/`to_version` are the range a consumer resolves its delta
+    # from (D-R3) and belong on the record for the same reason the committed version does.
+    published: bool | None = None
+    from_version: int | None = None
+    to_version: int | None = None
+    publish_reason: str | None = None
+    publish_error: str | None = None
+
     @property
     def is_defective(self) -> bool:
         """A8: 'green sync with no lineage edge is a bug the UI should surface'.
@@ -186,6 +196,12 @@ def merge_workflow_state(record: RunRecord, state: dict[str, object] | None) -> 
     if not isinstance(total, int):
         total = _as_mapping(state.get("serialized_custom_status")).get("units_total")
 
+    # The PUBLICATION half, carried from the workflow output the same way the commit is. Read
+    # permissively (`in output` rather than a truthiness test) because `published=False` is a REAL
+    # answer — the gate refused — and treating it as absent would report a blocked batch as an
+    # unpublished-but-unexplained one, which is the distinction § D2 exists to make visible.
+    publication = {key: output[key] for key in ("published", "from_version", "to_version", "publish_reason", "publish_error") if key in output}
+
     return record.model_copy(
         update={
             "status": status,
@@ -193,6 +209,7 @@ def merge_workflow_state(record: RunRecord, state: dict[str, object] | None) -> 
             "committed_version": committed if isinstance(committed, int) else record.committed_version,
             "units_done": rows if isinstance(rows, int) else record.units_done,
             "units_total": total if isinstance(total, int) else record.units_total,
+            **publication,
         }
     )
 

@@ -152,6 +152,16 @@ class RunStatusResponse(BaseModel):
         default=None,
         description="set when the run reports success but its lineage run is missing",
     )
+    #: § D2. A COMMIT IS NOT A PUBLICATION — these say whether the committed version is consumable.
+    #: `published=false` with a `publish_reason` is the quality gate refusing the DATA (the run itself
+    #: was fine); with a `publish_error` it is the publish call not completing. Both leave the
+    #: previously published version serving, and both must be visible: a run that committed and did
+    #: not publish looks identical to a published one otherwise.
+    published: bool | None = None
+    from_version: int | None = None
+    to_version: int | None = None
+    publish_reason: str | None = None
+    publish_error: str | None = None
 
 
 @router.get("/ingests/{run_id}", response_model=RunStatusResponse)
@@ -201,4 +211,9 @@ async def get_ingest(
         errors=record.errors,
         committed_version=record.committed_version,
         defect=("run reports success but no lineage run exists for it — the data landed with no provenance record" if record.is_defective else None),
+        published=record.published,
+        from_version=record.from_version,
+        to_version=record.to_version,
+        publish_reason=record.publish_reason,
+        publish_error=record.publish_error,
     )

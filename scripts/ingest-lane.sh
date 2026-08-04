@@ -26,6 +26,11 @@ REGISTRY="${REGISTRY:-localhost:5000}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURES="$ROOT/tests/fixtures/ingest-lane"
 POD_FIXTURE_DIR="/tmp/ingest-fixtures"
+# The tenant the lane ingests into. NOT `demo`: that namespace predates warehouse enforcement and
+# exists unbound in the default root, and the catalog refuses to adopt it ("binding it to a
+# warehouse would orphan its tables"), so the lane could never provision it. A lane-owned project
+# can be created and bound cleanly.
+PROJECT="${PROJECT:-lane}"
 
 log() { printf '\033[1;36m>> %s\033[0m\n' "$*"; }
 ok() { printf '\033[1;32m  OK  %s\033[0m\n' "$*"; }
@@ -173,6 +178,48 @@ ingest_pod() {
 # chart volume that exists only for this test. `kubectl cp` needs tar in the container, which the
 # distroless-ish runtime does not have — so the bytes go over `kubectl exec` as base64 and are
 # decoded by the Python that is already there.
+# Provision the tenant hierarchy the way an ADMIN would, because ingest deliberately will not.
+#
+# With `warehouses.enabled` (the chart default) the catalog enforces
+# project > warehouse > namespace > table and refuses a bare top-level namespace. Ingest is a data
+# writer, not a tenant provisioner — `POST /v1/projects` is estate-admin gated and writes the
+# creator's project#admin tuple — so the lane does this setup itself rather than asking the plane to
+# quietly grant itself tenancy.
+#
+# Idempotent: each door answers 200 on a repeat, and a 409 means someone got there first, which is
+# success for our purposes. Only a hard failure on the NAMESPACE is fatal, since that is the one the
+# run actually needs.
+cmd_provision() {
+	local pod
+	pod="$(ingest_pod)" || die "no ingest pod"
+	log "provisioning $PROJECT (project > warehouse > namespace) via the catalog"
+	kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
+import json, os, sys, urllib.request, urllib.error
+base = os.getenv('RASK_CATALOG_URL', 'http://rask-catalog:2333').rstrip('/')
+def post(path, body):
+    req = urllib.request.Request(base + path, data=json.dumps(body).encode(),
+                                 headers={'Content-Type': 'application/json'}, method='POST')
+    try:
+        with urllib.request.urlopen(req, timeout=90) as r:
+            return r.status, ''
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode()[:200]
+project = '$PROJECT'
+for path, body, fatal in (
+    ('/v1/projects', {'id': project, 'name': project}, False),
+    ('/v1/warehouses', {'id': project + '-wh', 'project': project}, False),
+    ('/v1/warehouses/' + project + '-wh/namespaces', {'namespace': project}, True),
+):
+    status, detail = post(path, body)
+    print('   %-46s -> %s' % (path, status))
+    # 409 = it already exists, which is the state we wanted. Anything else on the namespace is fatal:
+    # without it every run fails at the namespace step with units_total 0.
+    if fatal and status >= 400 and status != 409:
+        sys.exit('   provisioning failed: %s %s' % (status, detail))
+" || die "could not provision $PROJECT"
+	ok "$PROJECT provisioned"
+}
+
 cmd_fixtures() {
 	local pod
 	pod="$(ingest_pod)" || die "no ingest pod"
@@ -237,7 +284,7 @@ print(len([f for f in os.listdir('$POD_FIXTURE_DIR') if f.endswith('.tif')]) if 
 import json, time, urllib.request
 body = json.dumps({
     'kind': 'local-dir',
-    'project': 'demo',
+    'project': '$PROJECT',
     'dataset': '$dataset',
     'options': {'root': '$POD_FIXTURE_DIR', 'pattern': '*.tif'},
 }).encode()
@@ -303,7 +350,7 @@ with urllib.request.urlopen('http://127.0.0.1:8830/api/ingests/$run_id', timeout
 	local repeat
 	repeat="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
 import json, urllib.request
-body = json.dumps({'kind':'local-dir','project':'demo','dataset':'$dataset',
+body = json.dumps({'kind':'local-dir','project':'$PROJECT','dataset':'$dataset',
                    'options':{'root':'$POD_FIXTURE_DIR','pattern':'*.tif'}}).encode()
 req = urllib.request.Request('http://127.0.0.1:8830/api/ingests', data=body,
                              headers={'Content-Type':'application/json','Idempotency-Key':'$key'})
@@ -353,7 +400,7 @@ print(sorted(os.listdir('$POD_FIXTURE_DIR-corrupt')))
 	local run_id
 	run_id="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
 import json, urllib.request
-body = json.dumps({'kind':'local-dir','project':'demo','dataset':'$dataset',
+body = json.dumps({'kind':'local-dir','project':'$PROJECT','dataset':'$dataset',
                    'options':{'root':'$POD_FIXTURE_DIR-corrupt','pattern':'*.tif'}}).encode()
 req = urllib.request.Request('http://127.0.0.1:8830/api/ingests', data=body,
                              headers={'Content-Type':'application/json','Idempotency-Key':'$key'})
@@ -443,7 +490,7 @@ print('uploaded to s3://%s/%s' % (bucket, '$prefix'))
 	run_id="$(kubectl exec -n "$NS" "$pod" -c ingest -- python -c "
 import json, os, urllib.request
 bucket = os.environ['RASK_INGEST_WAREHOUSE'].removeprefix('s3://').split('/')[0]
-body = json.dumps({'kind':'s3-prefix','project':'demo','dataset':'$dataset',
+body = json.dumps({'kind':'s3-prefix','project':'$PROJECT','dataset':'$dataset',
                    'options':{'bucket':bucket,'prefix':'$prefix','endpoint':os.getenv('RASK_S3_ENDPOINT_URL')}}).encode()
 req = urllib.request.Request('http://127.0.0.1:8830/api/ingests', data=body,
                              headers={'Content-Type':'application/json','Idempotency-Key':'$key'})
@@ -497,15 +544,17 @@ case "${1:-all}" in
 deploy) cmd_deploy ;;
 image) cmd_image ;;
 fixtures) cmd_fixtures ;;
+provision) cmd_provision ;;
 corrupt) cmd_corrupt ;;
 kill) cmd_kill ;;
 run) cmd_run ;;
 all)
 	cmd_deploy
+	cmd_provision
 	cmd_fixtures
 	cmd_run
 	cmd_corrupt
 	cmd_kill
 	;;
-*) die "usage: $0 {deploy|fixtures|run|all}" ;;
+*) die "usage: $0 {deploy|image|provision|fixtures|run|corrupt|kill|all}" ;;
 esac

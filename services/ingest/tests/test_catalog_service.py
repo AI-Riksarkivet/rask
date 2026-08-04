@@ -57,6 +57,7 @@ def test_an_absent_table_is_CREATED_empty_and_then_described() -> None:
         httpx.Response(404, json={"detail": "no such table"}),
         httpx.Response(200, json={"location": "s3://governed/bronze/pages.lance", "version": 1}),
     ]
+    respx.post(f"{BASE}/v1/namespace/bronze/exists").mock(return_value=httpx.Response(404, json={}))
     respx.post(f"{BASE}/v1/namespace/bronze/create").mock(return_value=httpx.Response(200, json={}))
     create = respx.post(f"{BASE}/v1/table/bronze$pages/create").mock(return_value=httpx.Response(200, json={"version": 1}))
 
@@ -76,6 +77,7 @@ def test_the_create_body_carries_ZERO_rows() -> None:
         httpx.Response(404),
         httpx.Response(200, json={"location": "s3://b/p.lance", "version": 1}),
     ]
+    respx.post(f"{BASE}/v1/namespace/bronze/exists").mock(return_value=httpx.Response(404, json={}))
     respx.post(f"{BASE}/v1/namespace/bronze/create").mock(return_value=httpx.Response(200, json={}))
     create = respx.post(f"{BASE}/v1/table/bronze$pages/create").mock(return_value=httpx.Response(200, json={}))
 
@@ -97,6 +99,7 @@ def test_a_create_RACE_is_not_a_failure() -> None:
         httpx.Response(404),
         httpx.Response(200, json={"location": "s3://b/p.lance", "version": 1}),
     ]
+    respx.post(f"{BASE}/v1/namespace/bronze/exists").mock(return_value=httpx.Response(404, json={}))
     respx.post(f"{BASE}/v1/namespace/bronze/create").mock(return_value=httpx.Response(200, json={}))
     respx.post(f"{BASE}/v1/table/bronze$pages/create").mock(return_value=httpx.Response(409, json={"detail": "exists"}))
 
@@ -183,11 +186,19 @@ def test_the_NAMESPACE_is_created_before_the_table() -> None:
     and against a fresh catalog the table create fails with NamespaceNotFoundError ("Child namespace
     reads require an existing __manifest dataset"). Nothing in the table endpoints says so; only a
     real catalog does, and only the first time.
+
+    The namespace is PROBED before it is created, and the probe answering 404 here is what makes the
+    create run. Probing is not an optimisation: where namespaces are warehouse-scoped, a create
+    against an already-bound namespace is refused by `require_warehouse_scoped` BEFORE the catalog
+    reaches its already-exists check — so an unconditional create fails on a correctly provisioned
+    tenant. Measured in-cluster: the lane provisioned project > warehouse > namespace successfully
+    and every run still died here.
     """
     respx.post(f"{BASE}/v1/table/demo$pages/describe").side_effect = [
         httpx.Response(404),
         httpx.Response(200, json={"location": "s3://b/demo/pages.lance", "version": 1}),
     ]
+    respx.post(f"{BASE}/v1/namespace/demo/exists").mock(return_value=httpx.Response(404, json={}))
     namespace = respx.post(f"{BASE}/v1/namespace/demo/create").mock(return_value=httpx.Response(200, json={}))
     table = respx.post(f"{BASE}/v1/table/demo$pages/create").mock(return_value=httpx.Response(200, json={}))
 
@@ -215,3 +226,32 @@ def test_a_malformed_fragment_does_not_zero_the_whole_count() -> None:
     from ingest.runtime import _rows_in
 
     assert _rows_in(['{"physical_rows": 2}', "not json", '{"physical_rows": 2}']) == 4
+
+
+@respx.mock
+def test_an_EXISTING_namespace_is_not_re_created() -> None:
+    """The defect this probe exists for, pinned.
+
+    Where namespaces are warehouse-scoped, `POST /v1/namespace/{id}/create` on an already-bound
+    namespace is refused by `require_warehouse_scoped` before the catalog reaches its already-exists
+    check:
+
+        top-level namespace 'lane' must belong to a warehouse
+
+    So a correctly provisioned tenant made every ingest run fail at the namespace step — measured
+    in-cluster after the lane had provisioned project > warehouse > namespace and got 200 for each.
+    An existing namespace must be left alone.
+    """
+    respx.post(f"{BASE}/v1/table/lane$pages/describe").side_effect = [
+        httpx.Response(404),
+        httpx.Response(200, json={"location": "s3://b/lane/pages.lance", "version": 1}),
+    ]
+    respx.post(f"{BASE}/v1/namespace/lane/exists").mock(return_value=httpx.Response(200, json={}))
+    create = respx.post(f"{BASE}/v1/namespace/lane/create").mock(
+        return_value=httpx.Response(400, json={"detail": "top-level namespace 'lane' must belong to a warehouse"})
+    )
+    respx.post(f"{BASE}/v1/table/lane$pages/create").mock(return_value=httpx.Response(200, json={}))
+
+    _client().ensure("lane", "pages")
+
+    assert not create.called, "an existing namespace was re-created — the warehouse guard refuses that"

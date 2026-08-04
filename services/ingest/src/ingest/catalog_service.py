@@ -192,9 +192,26 @@ class CatalogServiceClient:
         return str(location) if location else None
 
     def _ensure_namespace(self, project: str) -> None:
-        """Create the project's namespace if absent. Idempotent — verified against the live catalog,
-        which answers 200 to a repeated create rather than 409."""
+        """Ensure the project's namespace exists. Probes FIRST, creates only if it does not.
+
+        The probe is not an optimisation. Where namespaces are warehouse-scoped, a create against an
+        ALREADY-BOUND namespace is refused by `require_warehouse_scoped` before the catalog ever
+        reaches its already-exists check — so an unconditional create fails on a correctly
+        provisioned tenant, which is exactly what happened here: the lane provisioned
+        project > warehouse > namespace successfully and every run still died at this call.
+
+        `exists` answers the question actually being asked, and it is the only form that behaves the
+        same whether or not warehouses are enabled.
+        """
         import httpx
+
+        probe = f"{self._base}/v1/namespace/{project}/exists"
+        try:
+            found = httpx.post(probe, json={}, headers=self._headers(), timeout=TIMEOUT_SECONDS)
+        except Exception as exc:
+            raise CatalogError(f"catalog unreachable for namespace probe: {exc}") from exc
+        if found.status_code < 400:
+            return
 
         url = f"{self._base}/v1/namespace/{project}/create"
         try:
@@ -205,6 +222,23 @@ class CatalogServiceClient:
         if response.status_code == 409:
             return  # another writer got there first
         if response.status_code >= 400:
+            # A namespace that must belong to a WAREHOUSE is not something this plane may create.
+            #
+            # With `warehouses.enabled` (the chart default) the catalog enforces
+            # `project > warehouse > namespace > table`, and a bare top-level create is refused. The
+            # tempting fix — have ingest provision the chain — is wrong: `POST /v1/projects` is
+            # estate-admin gated and writes the creator's `project#admin` tuple, so an ingest run
+            # doing it would be the DATA plane provisioning tenancy for itself. Ingest is a writer.
+            #
+            # So it refuses, and names the three doors an admin uses. A caller seeing this has a
+            # setup gap, not a bug, and the message is the fix.
+            if "must belong to a warehouse" in response.text:
+                raise CatalogError(
+                    f"namespace {project!r} is not provisioned: this deployment scopes namespaces to warehouses "
+                    f"(project > warehouse > namespace > table), and ingest does not provision tenancy. "
+                    f"An admin creates it with POST /v1/projects, POST /v1/warehouses, "
+                    f"POST /v1/warehouses/{{id}}/namespaces."
+                )
             raise CatalogError(f"catalog refused namespace {project!r} ({response.status_code}): {response.text[:300]}")
 
     def _create_empty(self, project: str, dataset: str) -> None:
