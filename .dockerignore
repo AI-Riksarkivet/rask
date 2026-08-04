@@ -14,6 +14,12 @@
 Dockerfile
 *.dockerfile
 .dockerignore
+# …except the build-time import gate, which by definition has to be IN the build. It is COPYd to
+# /tmp, run, and removed in the same layer, so it never reaches the shipped filesystem: the rule
+# above is about what the IMAGE carries, and this is the one file that must cross the context
+# boundary to enforce it. The negation must FOLLOW `.docker/` — .dockerignore is last-match-wins,
+# and placed above it the pattern is silently overridden with no error anywhere.
+!.docker/import-gate.py
 
 # Local k8s tooling (downloaded binaries) + cluster state
 .localbin/

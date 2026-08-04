@@ -67,6 +67,13 @@ RUN apt-get update \
 RUN --network=none --mount=from=builder,source=/opt/venv,target=/tmp/venv \
     cp -a /tmp/venv /opt/venv
 
+# ── the import gate ──────────────────────────────────────────────────────────
+# Import every module this image serves, against the venv the runtime stage ships. A missing
+# DECLARED dependency is invisible to the workspace venv (a sibling member resolves it) and can
+# only be seen here, where the deployable's own closure is the only one present. See the script.
+COPY .docker/import-gate.py /tmp/import-gate.py
+RUN --network=none /opt/venv/bin/python /tmp/import-gate.py compute && rm /tmp/import-gate.py
+
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
