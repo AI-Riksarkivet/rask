@@ -67,6 +67,39 @@ Not: floating it over the canvas, and not moving it to the right.
 
 ---
 
+## #43 — The JSON columns are opaque strings (NEW)
+
+Three columns hold JSON and are typed `pa.string()`, so nothing can query them:
+
+| Column | Where |
+| --- | --- |
+| `attributes` | the PUBLISHED table — its own comment says `# json` |
+| `metadata` | the annotations table |
+| `links` | the annotations table |
+
+This is the session's recurring shape one more time: the ontology declares per-class attributes with
+REAL types (`free` / `int` / `enum` / `bool`), enforces them at submit, publishes them — and then no
+consumer can filter on one. Reading every row and parsing client-side is the only option.
+
+Lance types these natively. `pa.json_()` stores JSONB and gives `json_get_string` / `json_get_int` /
+`json_get_bool` / `json_extract` / `json_array_contains` in filters, a scalar JSON index on a hot
+path (`IndexConfig(index_type="json", parameters={"target_index_type": "btree", "path": "order"})`),
+and an INVERTED index for full-text over a whole document
+(https://lance.org/guide/json/).
+
+**The caveat that shapes the design:** JSON functions work in FILTERS only, not in projection. You
+can select rows where `json_get_int(attributes, 'order') > 3`, but you cannot project
+`attributes.order` as a column. So a training consumer that wants a field AS a column still needs a
+derived/computed column — the JSON type buys querying, not free flattening.
+
+Scope when picked up: change the three column types, keep the writers' JSON encoding as-is (they
+already emit sorted-key JSON strings for byte-identical replays), add an index on whichever path the
+review queue actually filters by, and prove a filter returns the right rows. The `attributes` change
+touches the published table, which is additive and metadata-only in Lance — the same property that
+made the text-span facet safe.
+
+---
+
 ## #42 — `/annotator/browse` as the bulk-labeling surface
 
 **Owner is designing this.** Intended direction, from the owner: select data by active learning,
