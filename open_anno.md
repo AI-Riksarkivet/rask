@@ -16,7 +16,7 @@ navigate · draw · assist), **#43** (the three JSON columns became `pa.json_()`
 inside them), **#39** (annotation import — ONE canonical format, Arrow IPC into the task draft, plus
 the `scripts/` COCO converter), and **#31** (the explorer sidebar derives from the descriptor).
 
-Two things remain. ONE is a decision, not a build; the other is the owner's to design.
+ONE thing remains, and it is the owner's to design.
 
 ---
 
@@ -37,37 +37,31 @@ The Atlas nav gate is table-sensitive (spaces are bound to a table); Tree and Gr
 
 ---
 
-## #28 — Multi-dataset search — **BLOCKED on a ranking decision**
+## #28 + #43 — Multi-corpus search and per-hit rendering — **LANDED**
 
-The rest of #28 landed: the dataset **picker** (`dataset-picker.svelte` + the pure
-`dataset-choice.ts`), the sidebar **Guide** row is gone, and the lakehouse `/catalog/projects` route
-turned out to have been deleted already by the 2026-08-03 IA ruling (`140315e`) — verified, not
-assumed.
+Both, together, because they were one refactor: fusing results from several corpora is pointless if
+the renderer cannot tell which corpus a row came from.
 
-What is left is searching ACROSS corpora, and it is blocked on a question rather than on effort.
+- Every hit carries `_dataset` / `_table`, stamped in the one funnel all search paths return through.
+- `fuse.py` — reciprocal-rank fusion, the ranking chosen over grouped and quota-interleaved. Scores
+  are discarded because BM25 is normalised per index and vector distances depend on the space.
+- `?corpus=a&corpus=b` fans out; a refusing corpus is skipped with its reason logged rather than
+  killing the request.
+- `viewForHit(hit)` resolves a hit through ITS OWN corpus's view. That also closed #43's second half:
+  media kind and pane capabilities were resolved per DATASET, so a mixed corpus could not render
+  correctly no matter what the pane gates said.
+- The picker's "+ also search" toggle, and — the load-bearing part — the store REGISTERS each
+  fanned-out descriptor. Requesting without registering leaves every foreign row rendering as if it
+  belonged to the active corpus, and it renders, so nothing reports it.
 
-The *transport* is ready: `GET /api/search` already takes an optional `dataset`, so fanning out N
-calls is straightforward. What is not ready is the RENDER path. Every hit renderer resolves its
-display fields through the module-level `activeView()` singleton — **61 call sites across 27 files**
-(`hit-card`, `hit-table`, `doc-tile`, `player-pane`, `transcript-window`, `chunk-timeline`, the atlas,
-the workflow nodes, `utils.hitKey`, …). Two corpora have different column names, so a merged result
-list cannot be rendered until a per-hit `DatasetView` is threaded through all of them. That is a
-substantial refactor of the zone's core, not an afternoon.
+**A design error the tests caught, kept because it is the sort that repeats:** the first RRF identity
+keyed on `(dataset, table, keys)`, so nothing could ever compound — which silently degenerates RRF
+into the rank-interleaving that was explicitly not chosen. The rule is asymmetric: `_dataset` yes,
+`_table` no. Across corpora a shared id is coincidence; across tables of one corpus it is the same
+document at two granularities, and that agreement is what fusion exists to reward.
 
-And before doing it, one question needs an answer that is not the implementer's to pick: **scores are
-not comparable across corpora.** BM25 is normalised per index and vector distances depend on the
-space, so "merge by score and interleave" produces a ranking that looks authoritative and means
-nothing. The alternatives are materially different products:
-
-- **Grouped per corpus** — N result lists side by side, each internally ranked. Honest, no
-  cross-corpus scoring claim, and it needs no per-hit view because each list has ONE view.
-- **Interleaved with per-corpus quotas** — one list, k hits from each, ordered within each corpus.
-- **True fused ranking** — requires a comparable score (reciprocal-rank fusion is the usual answer)
-  and is the only option that needs the full per-hit-view refactor.
-
-**DECIDED by the owner: true fused ranking (RRF).** The most defensible single list, and the most
-work — it needs the full per-hit `DatasetView` refactor, which is the same refactor #43's second half
-needs (media kind and pane capabilities are resolved per DATASET, not per ROW). Do them together.
+Live: `?corpus=voices` -> picker "demo +1"; the voices hit renders `<audio>` while `demo` (an image
+corpus) stays active.
 
 ---
 
