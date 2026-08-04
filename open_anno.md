@@ -91,9 +91,44 @@ and strokes a line plus a directed arrowhead into a `links` Graphics on the anno
 so it inherits the viewport transform. The drawing MATH is `linkPath()`, extracted so an arrowhead
 pointing the wrong way is catchable without a GPU.
 
-**Remaining:**
-- **Text-span annotation.** The `text` shape type exists in the vocabulary and nothing produces
-  one. Needed for token-classification and for the "value" half of KIE on born-digital text.
+**Remaining: text-span annotation — DESIGN DECIDED, NOT BUILT.**
+
+`text` is in the shape vocabulary and nothing can produce one. Four things are missing, and I
+checked each rather than assuming:
+
+| Needed | State today |
+| --- | --- |
+| A surface to select text on | `viewerFor()` has Image, Audio, Video. There is no text viewer. |
+| A source of text for a unit | The annotator serves `chunk-frame` (image) and `annotations` (Arrow). No endpoint returns a unit's transcription. |
+| Offsets on a shape | `Shape` carries x/y/w/h/rotation/polygon/t_start/t_end. No character range. |
+| Offsets in the Arrow schema | `annotations/schema.py` has a `text` STRING column, no start/end. |
+
+**The decision, taken rather than left open.** Two models were possible:
+
+* **(a) A span INTO an annotation's own `text`.** Every row already carries the transcription of its
+  own line or region, so the text is present client-side already. A span is a child annotation with
+  a character range into its parent's text. No new endpoint, no new viewer — the inspector already
+  renders that text field.
+* **(b) A span over a whole-unit transcription.** Needs a text endpoint, a text viewer, and a
+  document-level coordinate space that nothing else in this plane has.
+
+**Take (a).** It is the one the codebase already supports: the Arrow table is per-unit annotation
+rows each carrying `text`, and (b) would invent a second coordinate space beside the pixel one for a
+capability the medallion's HTR output does not currently produce in document order.
+
+**The work (a) implies**, in order:
+1. `Shape.char_start` / `char_end: int | None`, and a `parent_id` naming the row the span is inside.
+2. The same three columns in `annotations/schema.py` — a THIRD facet beside the spatial and temporal
+   ones the schema already comments as such.
+3. Validation: a span's range must lie inside its parent's `text`; a span whose parent is gone is
+   the same class of orphan as a link to a deleted shape and must be refused the same way.
+4. Selection UI on the inspector's existing text field, committing through the same undo stack.
+
+**Why it is not built here.** Step 2 changes the schema of the PUBLISHED table, which is the
+contract the gold tier and every downstream reader see. That is a migration with a real blast
+radius, and doing it without being able to verify the publish end-to-end would be the kind of
+half-landed change this file exists to prevent. It is the one item in this wave I am stopping short
+of rather than starting and leaving mid-flight.
 
 **Deliberately not claimed:** that the right PIXELS are lit. A WebGL drawing buffer is not preserved
 after present, so a screenshot of it proves nothing (this zone's delete spec records the same). What
