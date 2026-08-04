@@ -164,7 +164,13 @@ export const fetchTableTasks = query(
  *  than pretending. Single-flights the table list so the recovered table reappears. */
 export const undropTable = command(v.string(), async (table): Promise<ApiResult<unknown>> => {
 	const res = await catalogJSON(`/v1/table/${enc(table)}/undrop`, { method: 'POST' });
-	if (res.ok) void fetchTables().refresh();
+	if (res.ok) {
+		// BOTH reads, and the detail one is load-bearing: the page offering Undrop is showing a CACHED
+		// 404 for this very table, so refreshing only the list left the recovered table still rendering
+		// "not a catalog-registered table" until a hard reload — seen in the browser, not reasoned about.
+		void fetchTables().refresh();
+		void fetchTableDetail({ table }).refresh();
+	}
 	return res;
 });
 
