@@ -30,10 +30,12 @@ from fastapi import APIRouter, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from service_kit.exceptions import NotFoundError, ServiceUnavailableError
+from service_kit.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError
+from service_kit.governed.audit import FAILURE, audit
 from service_kit.governed.secrets import fetch_dapr_secret
 from service_kit.schemas.storage import Store, store_by_name
 from storage import BucketNotFoundError, ObjectNotFoundError, s3_client, s3_errors
+from viewer.api.security import BROWSE_STORAGE, CheckerDep, CurrentSubject, SettingsDep
 
 
 log = logging.getLogger(__name__)
@@ -199,8 +201,31 @@ def _bucket_missing(client: object, bucket: str) -> bool:
     return False
 
 
+async def _require_browse(checker: object, subject: str, settings: object, store: str, action: str) -> None:
+    """Estate-admin gate for the raw object routes (#90).
+
+    These three routes — an S3 LIST, a HEAD, and a FULL BYTE DOWNLOAD over any bucket in the store
+    registry — shipped with no token dependency and no authorization at all. They validated only the
+    store NAME against the registry, which answers "is this a bucket we know" and never "may you read
+    it". Their neighbour `datasets.py` was already FGA-gated, so this was an inconsistency rather
+    than a stance.
+
+    Checked against the ROOT object, not the store. The relation resolves on any warehouse its owner
+    owns, so what makes this an estate privilege is precisely that this call names `fga_root_object`
+    — the same arrangement `can_observe_events` has. Checking it against a tenant warehouse would
+    silently widen the scope, which is why the object is built here and not passed in.
+    """
+    obj = settings.fga_root_object  # ty: ignore[unresolved-attribute]
+    if not await checker(user=subject, relation=BROWSE_STORAGE, obj=obj):  # ty: ignore[call-non-callable]
+        audit(action, FAILURE, subject=subject, resource=store, relation=BROWSE_STORAGE)
+        raise ForbiddenError(f"{subject} lacks {BROWSE_STORAGE} on {obj}")
+
+
 @router.get("/objects")
-def list_objects(
+async def list_objects(
+    checker: CheckerDep,
+    subject: CurrentSubject,
+    settings: SettingsDep,
     bucket: BucketName,
     prefix: Annotated[str, Query(description='Key prefix to list under (delimiter "/").')] = "",
 ) -> S3Listing:
@@ -208,6 +233,7 @@ def list_objects(
 
     404s (never 500s) when the bucket itself is absent — see the module docstring.
     """
+    await _require_browse(checker, subject, settings, bucket, "viewer.objects.list")
     client = _client_for(bucket)
     paginator = client.get_paginator("list_objects_v2")
     prefixes: list[str] = []
@@ -237,7 +263,10 @@ def list_objects(
 
 
 @router.get("/object")
-def head_object(
+async def head_object(
+    checker: CheckerDep,
+    subject: CurrentSubject,
+    settings: SettingsDep,
     bucket: BucketName,
     key: Annotated[str, Query(description="Full object key to describe.")],
 ) -> S3ObjectHead:
@@ -248,6 +277,7 @@ def head_object(
     old blanket `except Exception` reported an outage as "object not found", which is
     the same lie in the other direction.
     """
+    await _require_browse(checker, subject, settings, bucket, "viewer.object.head")
     client = _client_for(bucket)
     try:
         with s3_errors(bucket=bucket, key=key):
@@ -268,7 +298,10 @@ def head_object(
 
 
 @router.get("/object/download")
-def download_object(
+async def download_object(
+    checker: CheckerDep,
+    subject: CurrentSubject,
+    settings: SettingsDep,
     bucket: BucketName,
     key: Annotated[str, Query(description="Full object key to download.")],
 ) -> Response:
@@ -282,6 +315,7 @@ def download_object(
     Same 404 split as the HEAD sibling (missing key vs missing bucket); outages still
     surface as outages.
     """
+    await _require_browse(checker, subject, settings, bucket, "viewer.object.download")
     client = _client_for(bucket)
     try:
         with s3_errors(bucket=bucket, key=key):

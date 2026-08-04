@@ -195,14 +195,15 @@ class _Token:
 # Checks made OUTSIDE catalog/api/fga_deps.py. Static strings in app code (grep `relation=`), so
 # they are listed here with their source — the model cross-check below is what matters.
 _OTHER_SERVICE_PAIRS: dict[tuple[str, str], str] = {
-    ("table", "can_read_data"): "catalog/api/v1/endpoints/tables.py (list_objects filter)",
+    ("table", "can_read_data"): "catalog tables.py (list_objects filter) + viewer pages.py (#90 page BYTES)",
     ("table", "can_write_data"): "catalog/api/v1/endpoints/credentials.py (write-tier vend)",
-    ("table", "can_get_metadata"): "lineage/api/fga_deps.py (LINEAGE_FGA_OBJECT_TYPE default=table)",
+    ("table", "can_get_metadata"): "lineage fga_deps.py + viewer datasets.py/pages.py (#90 page LISTING)",
     ("namespace", "can_create_table"): "medallion/services/train.py + transform.py default",
     ("namespace", "can_promote"): "medallion silver->gold mover (chart requiredAction)",
     ("table", "can_promote"): "catalog require_can_promote (#17 model promotion endpoint)",
     ("project", "can_create_warehouse"): "catalog fga_deps.require_can_create_warehouse (#3-A)",
     ("project", "can_administer"): "catalog/api/v1/endpoints/policies.py (#84 project policy routes)",
+    ("warehouse", "can_browse_storage"): "viewer/api/v1/endpoints/objects.py (#90 raw object browser, root object only)",
 }
 
 
