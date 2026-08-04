@@ -120,9 +120,15 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         "maintenance/preview": "can_drop",
         "maintenance/run": "can_drop",
         "maintenance/compact": "can_drop",
+        # #73 deletion protection: arming/disarming the safety on an object is a statement about its
+        # DESTRUCTION, so it clears the same owner bar as the drop it guards — a writer must not be
+        # able to disarm protection they could never act on. (An unmapped suffix would fall through
+        # to writer-tier — never leave it unset.)
+        "protection": "can_drop",
     },
     "namespace": {
         "drop": "can_delete",
+        "protection": "can_delete",
         "policy/set": "can_delete",
         "policy/delete": "can_delete",
         "access/list": "can_delete",

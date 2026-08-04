@@ -32,6 +32,7 @@ from lance_namespace import (
     RestoreTableResponse,
     TableExistsRequest,
 )
+from pydantic import BaseModel
 
 from catalog.api import fga_deps, lineage_deps
 from catalog.api.dependencies import (
@@ -58,6 +59,7 @@ from catalog.core.lineage_emit import (
 )
 from catalog.services import dataplane, native
 from service_kit.governed import fga
+from service_kit.lakehouse import protection
 
 
 log = logging.getLogger(__name__)
@@ -271,11 +273,23 @@ async def drop_table(
     control: ControlEmitterDep,
     token: CurrentToken,
     authorization: Annotated[str | None, Header()] = None,
+    force: bool = False,
 ) -> DropTableResponse:
     """Drop the table at ``id`` via ``drop_table``, then revoke its FGA tuples and
-    emit a best-effort ``drop_table`` lineage event."""
+    emit a best-effort ``drop_table`` lineage event.
+
+    Deletion protection (#73, the warehouse door's Decision-5 contract extended to the rung where a
+    drop deletes BYTES): a ``protected`` control-root record refuses 409 unless ``force=true``, and
+    ``force`` turns the protection lock ONLY — the FGA gate ran before this handler, identically
+    with or without it."""
     segments = parse_identifier(id, settings.delimiter)
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
+    fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
     response: DropTableResponse = await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
+    # The record's job ends with the object: clear it so a LATER table reusing this id does not
+    # inherit a protection nobody set on it (the same reuse rule as the FGA revoke below).
+    await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     # Record the drop as best-effort lineage — provenance of the deletion (the dataset node persists in the
     # graph, named a `drop_table` run). Inline-awaited (NOT BackgroundTasks) → reaches the durable
     # Dapr/JetStream transport before the response; best-effort, so it never fails the drop. Emitted BEFORE
@@ -313,11 +327,20 @@ async def deregister_table(
     control: ControlEmitterDep,
     token: CurrentToken,
     authorization: Annotated[str | None, Header()] = None,
+    force: bool = False,
 ) -> DeregisterTableResponse:
     """Deregister the table at ``id`` (detach it without deleting data) via lance_namespace
-    ``deregister_table``, then revoke its FGA ownership and emit a best-effort ``deregister_table`` marker."""
+    ``deregister_table``, then revoke its FGA ownership and emit a best-effort ``deregister_table`` marker.
+
+    Protection-gated like drop (#73): deregister keeps bytes but REMOVES the object from governance —
+    the flag's whole jurisdiction — so leaving it ungated would make "deregister, then delete the
+    files by hand" the unprotected path around the protected drop."""
     segments = parse_identifier(id, settings.delimiter)
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
+    fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
     response: DeregisterTableResponse = await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
+    await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     # Record the detach as best-effort lineage — asymmetric with drop (which deletes data), deregister
     # only detaches, so without this marker the Dataset node looks like a still-live, never-touched table.
     # Versionless (no data was written), inline-awaited so it reaches the durable transport before the
@@ -389,6 +412,55 @@ async def register_table(
     return response
 
 
+class SetProtectionRequest(BaseModel):
+    """The one field this door writes. Setting it is idempotent; clearing removes the record."""
+
+    protected: bool
+
+
+class ProtectionResponse(BaseModel):
+    id: str
+    protected: bool
+
+
+@router.post("/{id}/protection", response_model_exclude_none=True)
+async def set_table_protection(
+    id: str,
+    body: SetProtectionRequest,
+    settings: SettingsDep,
+    token: CurrentToken,
+    control: ControlEmitterDep,
+) -> ProtectionResponse:
+    """Set or clear deletion protection on the table at ``id`` (#73 — the warehouse contract on the
+    rung where a drop deletes bytes). Owner-gated by the router (``protection`` maps to ``can_drop``:
+    whoever may destroy the table decides whether destroying it needs a second thought). The flag is
+    a CONTROL-ROOT record, deliberately not schema metadata — control-plane state that emits a
+    control event and never creates a table version, readable even when the dataset is corrupted,
+    and unreachable from the future properties write door (#78)."""
+    segments = parse_identifier(id, settings.delimiter)
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    so = settings.storage_options()
+    if body.protected:
+        record = {
+            "kind": "table",
+            "id": canonical,
+            "protected": "true",
+            "set_by": f"user:{token.sub}" if token is not None else "anonymous",
+        }
+        await run_in_threadpool(protection.set_protection, settings.registry_root, so, record)
+    else:
+        await run_in_threadpool(protection.clear_protection, settings.registry_root, so, "table", canonical)
+    await emit_control(
+        control,
+        action="table_protected" if body.protected else "table_unprotected",
+        object_type="table",
+        object_id=f"table:{canonical}",
+        actor=f"user:{token.sub}" if token is not None else None,
+        extra={},
+    )
+    return ProtectionResponse(id=canonical, protected=body.protected)
+
+
 @router.post("/{id}/rename", response_model_exclude_none=True)
 async def rename_table(
     id: str,
@@ -401,6 +473,7 @@ async def rename_table(
     emitter: LineageEmitterDep,
     control: ControlEmitterDep,
     authorization: Annotated[str | None, Header()] = None,
+    force: bool = False,
 ) -> RenameTableResponse:
     """Rename the table at ``id`` IN-PROCESS (#5b), then migrate its FGA ownership and emit dest←source
     lineage.
@@ -417,6 +490,12 @@ async def rename_table(
     version). Source missing → 404 ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``."""
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)  # a contradictory body id is a 400, like every {id} route
+    # #73: a rename DELETES the source bytes (byte-copy + deregister below), so the source's protection
+    # gates it exactly like drop. `force` rides the query string as on the sibling doors. Checked FIRST —
+    # before the parent/create gates — so a protected source refuses identically regardless of destination.
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
+    fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
     # Rename mints a new table identifier under ``new_namespace_id`` (defaulting to the source's parent
     # namespace, i.e. all source segments but the last) + ``new_table_name``.
     dest_parent = list(body.new_namespace_id) if body.new_namespace_id else segments[:-1]

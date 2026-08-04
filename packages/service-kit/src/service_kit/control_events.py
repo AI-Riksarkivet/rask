@@ -53,6 +53,12 @@ ControlAction = Literal[
     "table_registered",
     "table_deregistered",
     "table_declared",
+    # #73 deletion protection on the table/namespace rungs — the same Decision-5 flag warehouses
+    # carry, emitted so the console can show WHO armed or disarmed the safety on an object.
+    "table_protected",
+    "table_unprotected",
+    "namespace_protected",
+    "namespace_unprotected",
 ]
 
 #: The kind of governed object the action targets — drives which console view invalidates. `project` is the

@@ -20,6 +20,7 @@ from lance_namespace import (
     ListTablesResponse,
     NamespaceExistsRequest,
 )
+from pydantic import BaseModel
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep
@@ -27,6 +28,8 @@ from catalog.api.security import CurrentToken
 from catalog.core.control_emit import emit_control
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import native
+from service_kit.governed import fga
+from service_kit.lakehouse import protection
 
 
 log = logging.getLogger(__name__)
@@ -136,10 +139,18 @@ async def drop_namespace(
     client: FgaClientDep,
     control: ControlEmitterDep,
     body: DropNamespaceRequest | None = None,
+    force: bool = False,
 ) -> DropNamespaceResponse:
     """Drop namespace ``id`` (``drop_namespace``); revoke its FGA tuples — and, for a Cascade drop, every
-    dropped child's — so a reused id can't inherit stale grants."""
+    dropped child's — so a reused id can't inherit stale grants.
+
+    Deletion protection (#73): a ``protected`` control-root record refuses 409 unless ``force=true``
+    — and it also stops a CASCADE from a parent taking this namespace with it, because the cascade
+    arrives at this same door. ``force`` turns the protection lock only; the FGA gate ran first."""
     segments = parse_identifier(id, settings.delimiter)
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "namespace", canonical)
+    fga_deps.require_not_protected(guard or {}, kind="namespace", obj_id=canonical, force=force)
     req = body or DropNamespaceRequest()
     req.id = reconcile_body_id(segments, req.id)
     # A Cascade drop (behavior=Cascade; case-insensitive per the lance spec) removes all child tables +
@@ -153,6 +164,8 @@ async def drop_namespace(
     if cascade and settings.fga_enabled and client is not None:
         descendants = await run_in_threadpool(_collect_descendants, ns, segments)
     response: DropNamespaceResponse = await run_in_threadpool(native.call, ns, "drop_namespace", req)
+    # The record dies with the object — a reused id must not inherit protection nobody set on it.
+    await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "namespace", canonical)
     # Revoke AFTER the drop commits (so a failed/restricted drop leaves the still-valid grants in place):
     # the namespace's own tuples, then every cascaded descendant's.
     await fga_deps.revoke_ownership(client, settings, resource="namespace", segments=segments, token=token)
@@ -167,6 +180,52 @@ async def drop_namespace(
         extra={"cascade": cascade, "descendants_revoked": len(descendants)},
     )
     return response
+
+
+class SetProtectionRequest(BaseModel):
+    """The one field this door writes. Setting is idempotent; clearing removes the record."""
+
+    protected: bool
+
+
+class ProtectionResponse(BaseModel):
+    id: str
+    protected: bool
+
+
+@router.post("/{id}/protection", response_model_exclude_none=True)
+async def set_namespace_protection(
+    id: str,
+    body: SetProtectionRequest,
+    settings: SettingsDep,
+    token: CurrentToken,
+    control: ControlEmitterDep,
+) -> ProtectionResponse:
+    """Set or clear deletion protection on namespace ``id`` (#73). Owner-gated by the router
+    (``protection`` maps to ``can_delete`` — whoever may delete the namespace decides whether
+    deleting it needs a second thought). Same control-root record contract as the table door."""
+    segments = parse_identifier(id, settings.delimiter)
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    so = settings.storage_options()
+    if body.protected:
+        record = {
+            "kind": "namespace",
+            "id": canonical,
+            "protected": "true",
+            "set_by": f"user:{token.sub}" if token is not None else "anonymous",
+        }
+        await run_in_threadpool(protection.set_protection, settings.registry_root, so, record)
+    else:
+        await run_in_threadpool(protection.clear_protection, settings.registry_root, so, "namespace", canonical)
+    await emit_control(
+        control,
+        action="namespace_protected" if body.protected else "namespace_unprotected",
+        object_type="namespace",
+        object_id=f"namespace:{canonical}",
+        actor=f"user:{token.sub}" if token is not None else None,
+        extra={},
+    )
+    return ProtectionResponse(id=canonical, protected=body.protected)
 
 
 @router.post("/{id}/exists", status_code=200)

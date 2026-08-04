@@ -91,6 +91,14 @@ cross-object invariants, high-frequency filtered listings), it is a design decis
   project delete has **no cascade at all**.
 - **`force=true` overrides the `protected` flag and NOTHING else** — the FGA gate runs first and
   identically with or without it. Test both delete doors for force-without-authz.
+- **Protection covers EVERY rung since #73** (2026-08-04): warehouses/projects carry `protected` on
+  their registry records; tables/namespaces carry it as a **control-root `_protection/` record**
+  (`service_kit.lakehouse.protection`) gating drop/deregister/rename (table) and drop (namespace) —
+  deliberately NOT schema metadata, so unprotect is never reachable through the properties door,
+  toggling never creates a table version, and the guard answers even for a corrupted dataset. Set
+  via `POST /v1/table/{id}/protection` / `/v1/namespace/{id}/protection`, owner-gated (`protection`
+  maps to `can_drop`/`can_delete` in `_OWNER_SUFFIX_RELATION` — an unmapped suffix falls to writer
+  tier). The record dies with the object: drop/deregister clear it so a reused id can't inherit it.
 - **NO EXISTENCE ORACLE on destructive doors (audit #4).** `delete_warehouse`, `delete_project` and
   `_set_warehouse_status` all collapse `PermissionDenied → TableNotFound`, so "not yours" and "does
   not exist" are byte-identical and the door cannot enumerate ids. CREATE doors deliberately do the
