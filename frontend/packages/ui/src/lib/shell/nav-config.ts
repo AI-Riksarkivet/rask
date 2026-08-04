@@ -86,6 +86,14 @@ export type ZoneNav = {
 	/** The landing row, above and outside every group. See {@link ZoneNavRoot}. */
 	root?: ZoneNavRoot;
 	groups: ZoneNavGroup[];
+	/** PINNED TO THE BOTTOM, in `Sidebar.Footer` — it does not scroll with `groups`.
+	 *
+	 *  For a surface that is not one of the zone's AREAS but a place you go to work across them: the
+	 *  dock is the case this exists for. Rendered by the same `ZoneNav` component as the rail (the
+	 *  sidebar hands it a synthetic one-group nav), so a footer leaf keeps active-state matching, the
+	 *  `reload` flag and its tooltip — and `zoneNavLeaves` walks it, which is what keeps
+	 *  `dock-reachability` able to prove the dock is reachable from its own zone. */
+	footer?: ZoneNavGroup;
 };
 
 /** Every leaf in a zone's nav, flattened depth-first (parents before their children). The shell uses
@@ -100,7 +108,9 @@ export function zoneNavLeaves(nav: ZoneNav | null | undefined): ZoneNavLeaf[] {
 		out.push(nav.root);
 		if (nav.root.children) out.push(...nav.root.children);
 	}
-	for (const group of nav.groups) {
+	// The footer group is nav, not chrome — walk it too, or every gate that reads this list would
+	// stop seeing the dock the moment it moved to the bottom of the rail.
+	for (const group of [...nav.groups, ...(nav.footer ? [nav.footer] : [])]) {
 		for (const item of group.items) {
 			out.push(item);
 			if (item.children) out.push(...item.children);

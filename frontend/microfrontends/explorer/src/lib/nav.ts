@@ -33,12 +33,6 @@ export const EXPLORER_ZONE_NAV: ZoneNav = {
 			label: 'Workspace',
 			items: [
 				{
-					title: 'Workbench',
-					href: '/explorer/workbench',
-					match: seg('/explorer/workbench'),
-					icon: LayoutDashboard,
-				},
-				{
 					title: 'Workflow',
 					href: '/explorer/workflow',
 					match: seg('/explorer/workflow'),
@@ -53,4 +47,17 @@ export const EXPLORER_ZONE_NAV: ZoneNav = {
 			],
 		},
 	],
+	// PINNED to the rail's bottom. The dock is not one of this zone's AREAS — it is where you go to
+	// work across them — so it sits below the areas rather than scrolling among them.
+	footer: {
+		label: 'Workspace',
+		items: [
+			{
+				title: 'Workbench',
+				href: '/explorer/workbench',
+				match: seg('/explorer/workbench'),
+				icon: LayoutDashboard,
+			},
+		],
+	},
 };

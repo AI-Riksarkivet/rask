@@ -27,19 +27,6 @@ export const COMPUTE_ZONE_NAV: ZoneNav = {
 	root: { title: 'Overview', href: '/compute', match: exact('/compute'), icon: Gauge },
 	groups: [
 		{
-			label: 'Workspace',
-			items: [
-				{
-					// The zone's own dock: jobs + capacity + actors + serve over this zone's remotes,
-					// arranged. Same recipe as the explorer's and the lakehouse's.
-					title: 'Workbench',
-					href: '/compute/workbench',
-					match: seg('/compute/workbench'),
-					icon: LayoutDashboard,
-				},
-			],
-		},
-		{
 			label: 'Cluster',
 			items: [
 				{ title: 'Nodes', href: '/compute/cluster', match: seg('/compute/cluster'), icon: Server },
@@ -71,4 +58,16 @@ export const COMPUTE_ZONE_NAV: ZoneNav = {
 			],
 		},
 	],
+	// PINNED to the rail's bottom — the dock composes the whole zone, so it sits below the areas.
+	footer: {
+		label: 'Workspace',
+		items: [
+			{
+				title: 'Workbench',
+				href: '/compute/workbench',
+				match: seg('/compute/workbench'),
+				icon: LayoutDashboard,
+			},
+		],
+	},
 };

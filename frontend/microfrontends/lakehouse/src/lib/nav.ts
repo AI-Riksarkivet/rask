@@ -42,23 +42,6 @@ import { exact, seg, type ZoneNav } from '@rask/ui/shell';
  */
 const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 	{
-		// FIRST, and its own group. The dock briefly sat as the last leaf of "Lineage", which made a
-		// ZONE-level surface read as a lineage feature and hid it from anyone standing in catalog or
-		// models — the reason that placement was reverted. It composes the whole zone, so it sits
-		// beside the areas rather than inside one.
-		label: 'Workspace',
-		items: [
-			{
-				// graph + runs + events over ONE LineageState, plus the catalog's own table registry
-				// and object browser — every one of them this zone's real component.
-				title: 'Workbench',
-				href: '/lakehouse/workbench',
-				match: seg('/lakehouse/workbench'),
-				icon: LayoutDashboard,
-			},
-		],
-	},
-	{
 		label: 'Catalog',
 		// NO 'Projects' LEAF, by ruling (2026-08-03) — the same one that took the tenants row out of
 		// the shared navbar's Lakehouse panel. A project is the TOP of the hierarchy (project ›
@@ -194,7 +177,6 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 		label: 'Operations',
 		// The operational drawer — real, but not what anyone opens the lakehouse for. Collapsed until
 		// you are actually inside it (the shell auto-expands whichever group holds the active route).
-		defaultCollapsed: true,
 		items: [
 			{
 				title: 'Streams',
@@ -217,6 +199,24 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 		],
 	},
 ];
+
+/** PINNED to the rail's bottom, outside `groups`. The dock briefly sat as the last leaf of
+ *  "Lineage", which made a ZONE-level surface read as a lineage feature and hid it from anyone
+ *  standing in catalog or models. It composes the whole zone — graph + runs + events over ONE
+ *  LineageState, plus the catalog's own table registry and object browser — so it belongs below the
+ *  areas rather than among them. Not privilege-filtered: every identity that can see the zone can
+ *  open its dock. */
+const LAKEHOUSE_FOOTER: ZoneNav['footer'] = {
+	label: 'Workspace',
+	items: [
+		{
+			title: 'Workbench',
+			href: '/lakehouse/workbench',
+			match: seg('/lakehouse/workbench'),
+			icon: LayoutDashboard,
+		},
+	],
+};
 
 /** Groups behind the estate-admin door — the ones `/lakehouse/admin/*` serves. */
 const PRIVILEGED_GROUPS = new Set(['Governance', 'Admin']);
@@ -244,5 +244,6 @@ export function lakehouseSidebar(estateAdmin: boolean): ZoneNav {
 		groups: estateAdmin
 			? LAKEHOUSE_GROUPS
 			: LAKEHOUSE_GROUPS.filter((g) => !PRIVILEGED_GROUPS.has(g.label)),
+		footer: LAKEHOUSE_FOOTER,
 	};
 }
