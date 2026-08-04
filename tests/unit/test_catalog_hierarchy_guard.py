@@ -23,7 +23,7 @@ DELIM = "$"
 
 def test_a_table_with_no_namespace_is_refused() -> None:
     """The orphan case, which used to succeed silently."""
-    with pytest.raises(InvalidInputError) as exc:
+    with pytest.raises(InvalidInputError):
         fga_deps.require_parent("table", ["orphan"], delimiter=DELIM)
 
 
@@ -97,7 +97,7 @@ def test_a_top_level_namespace_outside_a_warehouse_is_refused() -> None:
     Nothing errored — the namespace worked, its tables worked, and the data went to the wrong
     tenant's storage. That silence is why this is a refusal now rather than a warning.
     """
-    with pytest.raises(InvalidInputError) as exc:
+    with pytest.raises(InvalidInputError):
         fga_deps.require_warehouse_scoped(["bronze"], delimiter=DELIM, warehouses_enabled=True)
 
 

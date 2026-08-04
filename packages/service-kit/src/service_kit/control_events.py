@@ -30,15 +30,19 @@ from pydantic import BaseModel, Field
 CONTROL_TOPIC = "catalog.control.v1"
 
 #: The mutation that occurred. A `Literal` union (house style — no runtime enum) whose members double as the
-#: wire values. Grouped by object: grants, warehouses, policies, namespaces, tables. `table_renamed` matters
-#: most to the UI — it invalidates every open view of that table.
+#: wire values. Grouped by object: projects, grants, warehouses, policies, namespaces, tables.
+#: `table_renamed` matters most to the UI — it invalidates every open view of that table; `project_deleted`
+#: matters most to the shell, which must drop a tenant that no longer exists from every picker.
 ControlAction = Literal[
     "grant_added",
     "grant_revoked",
+    "project_created",
+    "project_deleted",
     "warehouse_created",
     "warehouse_activated",
     "warehouse_deactivated",
     "warehouse_bound",
+    "warehouse_deleted",
     "policy_set",
     "policy_deleted",
     "namespace_created",
@@ -51,8 +55,10 @@ ControlAction = Literal[
     "table_declared",
 ]
 
-#: The kind of governed object the action targets — drives which console view invalidates.
-ControlObjectType = Literal["grant", "warehouse", "policy", "namespace", "table"]
+#: The kind of governed object the action targets — drives which console view invalidates. `project` is the
+#: top of rask's hierarchy (project > warehouse > namespace > table) and became a first-class control object
+#: when tenants got their own registry record (`open_hierarchy_lifecycle.md` Decision 1).
+ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table"]
 
 
 class CatalogControlEvent(BaseModel):

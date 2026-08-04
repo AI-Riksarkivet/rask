@@ -51,9 +51,15 @@ Three layers, each owned in ONE place:
 
 | Layer | Owner |
 | --- | --- |
-| shape (what can exist) | the guards in `catalog/api/fga_deps.py` — `require_parent` (a table must have a namespace; rename destinations too), `require_warehouse_scoped` (a top-level namespace only via `POST /v1/warehouses/{id}/namespaces`; **no-op when `warehouses_enabled` is off** — single-bucket deployments have no warehouse to demand) |
+| shape (what can exist) | the guards in `catalog/api/fga_deps.py` — `require_parent` (a table must have a namespace; rename destinations too), `require_warehouse_scoped` (a top-level namespace only via `POST /v1/warehouses/{id}/namespaces`; **no-op when `warehouses_enabled` is off** — single-bucket deployments have no warehouse to demand), `require_project_exists` (a warehouse's project must have a registry record — 404 naming `POST /v1/projects`), `require_not_protected` (deletion protection; `force=true` overrides the flag and **nothing else**) |
 | who | the FGA model's `can_*` relations (`service_kit/governed/auth/model.fga`) — the app never invents policy |
-| what is possible NOW | the registries (warehouse records + `top_ns → warehouse_id → root_uri` bindings in `catalog/services/warehouses.py`), checked BEFORE the native write |
+| what is possible NOW | the registries, checked BEFORE the native write: **project records** (`catalog/services/projects.py`, `_projects/<id>.json`), warehouse records + `top_ns → warehouse_id → root_uri` bindings (`catalog/services/warehouses.py`) |
+
+**A tenant EXISTS when its registry record does** — not when a warehouse implies it and not when FGA
+holds tuples for it. `POST /v1/projects` writes the record AND the creator's `project#admin` tuple in
+one operation (estate-admin gated on `can_observe_events` at the root), which is what stops existence
+and permission drifting apart. There is **no bootstrap exception** in warehouse-create any more: one
+door, and a warehouse-owner cannot ride a create into project admin.
 
 Check order at every create door: **identity (401) → shape (`InvalidInput` 400) → parent exists
 (404) → authz (403) → conflict (409) → native write → tuples (`seed_ownership`) → events.** Guards
@@ -68,7 +74,7 @@ one client error path serves the whole API.
 | State | Store |
 | --- | --- |
 | table data + versions | Lance datasets on object storage (rustfs) |
-| warehouse registry + namespace bindings | JSON records on the control root, CAS'd conditional writes (the `cas` e2e marker proves the primitive) |
+| project registry (`_projects/<id>.json`), warehouse registry + namespace bindings | JSON records on the control root, CAS'd conditional writes (the `cas` e2e marker proves the primitive) |
 | authz | OpenFGA on its chart-managed Postgres |
 | lineage | AGE (Postgres), chart-managed |
 
@@ -95,6 +101,12 @@ cross-object invariants, high-frequency filtered listings), it is a design decis
 - The FGA-only live seed (`fga_seed_demo.py`) writes projects no registry knows — the origin of
   "ghost projects". The replacement (`seed_estate.py`, planned) drives the real APIs in hierarchy
   order so seeded state is always constructible state.
+- **The control-event vocabulary is a wire contract in three files.** `ControlAction` /
+  `ControlObjectType` (`service_kit/control_events.py`) reach the frontend through
+  `docs/catalog-openapi.json` → `frontend/packages/api/src/generated/catalog.ts`. Adding an action
+  without `make openapi` + `bun --cwd=frontend run gen:types:catalog` leaves the TS client unable to
+  name an event the backend publishes, and `test_openapi_contract` fails. Same for `TupleOrigin`
+  (`service_kit/governed/fga.py`) — an origin string not in the Literal is a `ty` error, not a runtime one.
 - `discover_dataset_uris` (maintenance sweep) walks ONE root — multi-warehouse sweeps are untested.
 - Credential-level tenant isolation (tenant B's creds refused on bucket A) is untested; only
   byte-placement isolation is proven (`test_warehouse_routing.py` locally,

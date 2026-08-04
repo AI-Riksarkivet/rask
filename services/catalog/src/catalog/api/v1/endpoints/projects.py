@@ -1,13 +1,21 @@
-"""``GET /v1/projects`` — first-class tenant enumeration, DERIVED from the warehouse registry (no new DB).
+"""``/v1/projects`` — first-class tenants: an explicit registry record, created in ONE operation with its tuples.
 
-A *project* is the FGA model's tenant type (``service_kit/governed/auth/model.fga``): warehouses hang off it via
-their ``project`` field, and every grant cascades down from it. The estate never stores a project record —
-a project EXISTS exactly when a warehouse record claims it — so these endpoints derive the tenant list by
-grouping the warehouse registry (``catalog.services.warehouses.list_warehouses``, which already skips a
-corrupt/unreadable record with a warning rather than voiding the listing; the grouping here extends that
-per-record tolerance to records missing their ``project``/``id`` fields). Creation stays IMPLICIT via
-warehouse-create by design: ``POST /v1/warehouses`` (gated on ``project#can_create_warehouse``) is the one
-door that mints a tenant, so there is no project-create endpoint to drift from the registry truth.
+A *project* is the FGA model's tenant type (``service_kit/governed/auth/model.fga``): warehouses hang off it
+via their ``project`` field, and every grant cascades down from it. A project EXISTS when its registry
+record does (``catalog/services/projects.py`` — ``_projects/<id>.json`` on the control root, no DB), and
+``POST /v1/projects`` writes that record AND the creator's ``admin`` tuple in one operation, so existence
+and permission cannot drift (`open_hierarchy_lifecycle.md`, Decision 1 — the live estate once held three
+tenants in authz the catalog had never heard of, seeded FGA-only).
+
+Creation used to be IMPLICIT via warehouse-create, with an estate-admin bootstrap exception for the first
+warehouse of a not-yet-existing project. That door is gone: the estate admin creates the PROJECT here,
+then that project's admins create warehouses (``require_project_exists`` refuses a warehouse for an
+unknown tenant with a 404 that names this route). One way to make a tenant.
+
+The LISTING is the union of the registry and the warehouse-derived view: registry records define the
+tenants (a fresh project legitimately has zero warehouses), while a warehouse claiming a project with no
+record still surfaces — that is pre-registry legacy the reconciler reports, and hiding it would make the
+drift invisible instead of fixable.
 
 **Estate-observer gated.** Both routes check ``can_observe_events`` on the fixed root object
 (``settings.fga_root_object``) — the estate-OBSERVER action: it gates the estate-wide reads (the
@@ -28,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from datetime import UTC, datetime
 
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
@@ -36,11 +45,14 @@ from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import FgaClientDep, SettingsDep
+from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
+from catalog.core.control_emit import emit_control
+from catalog.services import projects as project_registry
 from catalog.services import warehouses
 from service_kit.governed import fga
+from service_kit.governed.audit import SUCCESS, audit
 
 
 log = logging.getLogger(__name__)
@@ -127,9 +139,84 @@ async def _admins_for(client: OpenFgaClient | None, settings: Settings, project:
 
 
 async def _load_grouped(settings: Settings) -> dict[str, list[ProjectWarehouse]]:
-    """Read the registry (blocking S3/FS IO → threadpool) and group it by project."""
-    records = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, settings.storage_options())
-    return _group_by_project(records)
+    """The tenant map: PROJECT REGISTRY ∪ warehouse-derived (blocking S3/FS IO → threadpool).
+
+    Registry records define the tenants — a fresh project has zero warehouses and must still list.
+    Warehouse-derived entries without a registry record are pre-registry legacy: kept visible (the
+    reconciler reports them as drift; a listing that hid them would make the drift undiagnosable)."""
+    so = settings.storage_options()
+    records = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so)
+    grouped = _group_by_project(records)
+    for record in await run_in_threadpool(project_registry.list_projects, settings.registry_root, so):
+        grouped.setdefault(str(record["id"]), [])
+    return grouped
+
+
+class CreateProjectRequest(BaseModel):
+    """The create payload. Just the id — a tenant is a name, its admins, and what it later holds."""
+
+    id: str
+
+
+@router.post("", response_model_exclude_none=True)
+async def create_project(
+    settings: SettingsDep,
+    token: CurrentToken,
+    client: FgaClientDep,
+    control: ControlEmitterDep,
+    body: CreateProjectRequest,
+) -> ProjectResponse:
+    """Mint a tenant: registry record + the creator's ``admin`` tuple, in one operation. Estate-admin gated.
+
+    The gate is ``can_observe_events`` on the fixed root object — the estate-admin bar every whole-estate
+    surface uses. Idempotent: re-POSTing an existing id carries ``created_at``/``created_by``/``protected``
+    forward and re-asserts the admin tuple (a duplicate FGA write is a no-op), so a partial-failure retry
+    (record written, tuple write failed) converges instead of erroring. The grant is audited and published
+    like any other ACL change, only when it was actually written."""
+    project_id = body.id
+    if not _ID_RE.match(project_id):
+        raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
+    await fga_deps.require_relation(client, settings, token, relation="can_observe_events", obj=settings.fga_root_object)
+    so = settings.storage_options()
+    existing = await run_in_threadpool(project_registry.get_project, settings.registry_root, so, project_id)
+    actor = f"user:{token.sub}" if token else None
+    record = {
+        "id": project_id,
+        "created_at": (existing.get("created_at") if existing else None) or datetime.now(UTC).isoformat(),
+        "created_by": (existing.get("created_by") if existing else None) or (token.sub if token else ""),
+        # Deletion protection (Decision 5): mutable lifecycle field, carried forward on re-create —
+        # an idempotent re-POST must never silently strip protection, same rule as warehouse `status`.
+        "protected": (existing.get("protected") if existing else None) or "false",
+    }
+    await run_in_threadpool(project_registry.put_project, settings.registry_root, so, record)
+    granted = await fga_deps.seed_project_admin(client, settings, token, project=project_id)
+    log.info("project_created", extra={"project": project_id, "existing": existing is not None})
+    await emit_control(
+        control,
+        action="project_created",
+        object_type="project",
+        object_id=f"project:{project_id}",
+        actor=actor,
+    )
+    if granted:
+        audit(
+            "access_grant",
+            SUCCESS,
+            subject=actor,
+            resource=f"project:{project_id}",
+            grantee=actor,
+            relation="admin",
+            reason="project_created",
+        )
+        await emit_control(
+            control,
+            action="grant_added",
+            object_type="grant",
+            object_id=f"project:{project_id}",
+            actor=actor,
+            extra={"relation": "admin", "subject": actor, "reason": "project_created"},
+        )
+    return ProjectResponse(project=project_id, warehouses=[], admins=await _admins_for(client, settings, project_id))
 
 
 @router.get("")
