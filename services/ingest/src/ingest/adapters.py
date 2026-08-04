@@ -17,6 +17,7 @@ else, which is the drift this design exists to prevent.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,14 +30,50 @@ if TYPE_CHECKING:
     from service_kit.lakehouse.sources import SourceAdapter, SourceObject
 
 
+#: The ONE directory tree `local-dir` may read, and there is deliberately no default.
+#:
+#: `options.root` is caller-supplied and reaches `LocalDirSource`, which rglobs and reads every match.
+#: Unconfined, that is an arbitrary-file-read primitive pointed at the ingest pod's own filesystem:
+#: `{"kind":"local-dir","options":{"root":"/proc/self","pattern":"environ"}}` lands the process
+#: environment — including the S3 credential — as rows in a governed table that the explorer will
+#: then serve. Extensionless files sail past the payload validator, so nothing downstream catches it.
+#:
+#: Unset means the kind is REFUSED, not "read anything". A default of `/` or of the working directory
+#: would be the same hole with an extra step, and a source that cannot be pointed anywhere is a
+#: source nobody can abuse.
+LOCAL_ROOT_ENV = "RASK_INGEST_LOCAL_ROOT"
+
+
+def local_root() -> Path | None:
+    """The configured base, resolved, or None when `local-dir` is not enabled here."""
+    base = os.getenv(LOCAL_ROOT_ENV)
+    return Path(base).resolve() if base else None
+
+
+def confine_to_local_root(candidate: str) -> Path:
+    """Resolve `candidate` and refuse it unless it sits under the configured base.
+
+    `resolve()` before comparing, so `..` and symlinks are collapsed FIRST — comparing the raw string
+    would let `/allowed/../etc` through, and a symlink inside the base would let the traversal happen
+    on the filesystem's side of the check.
+    """
+    base = local_root()
+    if base is None:
+        raise ValueError(f"local-dir is not enabled here: set {LOCAL_ROOT_ENV} to the directory it may read")
+    resolved = Path(candidate).resolve()
+    if resolved != base and base not in resolved.parents:
+        raise ValueError(f"local-dir path {candidate!r} is outside {LOCAL_ROOT_ENV} ({base})")
+    return resolved
+
+
 def _local_dir(spec: SourceSpec) -> SourceAdapter:
-    """A directory tree. The dummy lane's fixture source — deterministic, no network (A11)."""
+    """A directory tree UNDER the configured root. The lane's fixture source — deterministic, no network."""
     from service_kit.lakehouse.sources import LocalDirSource
 
     root = str(spec.options.get("root") or "")
     if not root:
         raise ValueError("local-dir source requires options.root")
-    return LocalDirSource(Path(root), str(spec.options.get("pattern") or "*"))
+    return LocalDirSource(confine_to_local_root(root), str(spec.options.get("pattern") or "*"))
 
 
 def _local_dir_lineage(spec: SourceSpec) -> LineageInput:

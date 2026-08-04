@@ -96,7 +96,7 @@ def test_a9_a_source_appears_ONLY_in_the_registry() -> None:
     assert offenders == [], f"source kinds leaked outside the registry: {offenders}"
 
 
-def test_every_registered_adapter_actually_implements_iter_objects() -> None:
+def test_every_registered_adapter_actually_implements_iter_objects(tmp_path: Path) -> None:
     """The check that would have caught the IIIF mistake — and cannot be done with isinstance.
 
     `SourceAdapter` is a plain Protocol, not `runtime_checkable`, so `isinstance(x, SourceAdapter)`
@@ -110,7 +110,10 @@ def test_every_registered_adapter_actually_implements_iter_objects() -> None:
     from ingest.sources import build_source
 
     probes = {
-        "local-dir": {"root": "/tmp"},
+        # Inside the confinement root, not a bare "/tmp": `local-dir` now refuses any path
+        # outside RASK_INGEST_LOCAL_ROOT, and a probe that ignores that would be asserting
+        # against a source shape the service will not build.
+        "local-dir": {"root": str(tmp_path)},
         "s3-prefix": {"bucket": "b", "prefix": "p/"},
         "iiif": {"volume_id": "v1"},
     }

@@ -34,7 +34,6 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 
@@ -110,8 +109,19 @@ def _fetch_s3(uri: str) -> bytes:
 
 
 def _fetch_file(uri: str) -> bytes:
-    """`unquote` is load-bearing: `Path.as_uri()` percent-encodes, so a fixture named `sida 1.tif`
+    """Read a local file, CONFINED to the configured local-dir root.
+
+    The confinement is repeated here rather than trusted from the adapter, because a unit key crosses
+    the QUEUE as a bare `file://` URI: whatever enumerated it is long gone by the time a worker reads
+    it, and anything able to enqueue would otherwise bypass a check that lives only at enumeration.
+    Two checks on the same rule, at the two places the rule can be broken.
+
+    `unquote` is load-bearing: `Path.as_uri()` percent-encodes, so a fixture named `sida 1.tif`
     round-trips as `sida%201.tif` and the read fails with a FileNotFoundError naming a path that
-    visibly exists on disk."""
+    visibly exists on disk. It runs BEFORE confinement, so an encoded traversal (`%2e%2e%2f`) is
+    decoded and then refused rather than slipping past as an opaque string.
+    """
+    from ingest.adapters import confine_to_local_root
+
     parsed = urlparse(uri)
-    return Path(unquote(parsed.path if parsed.scheme == "file" else uri)).read_bytes()
+    return confine_to_local_root(unquote(parsed.path if parsed.scheme == "file" else uri)).read_bytes()
