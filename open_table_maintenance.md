@@ -227,9 +227,11 @@ dataset** — "a correctness bug rather than a degraded experience." So the pass
    flags, cadence, retention, project tier, `scan_batch_size`, `auto_cleanup_interval_commits`. The
    UI to set them per project/tier is what remains (#65).
 5. ~~Multi-warehouse sweep coverage.~~ Done (#81) — the sweep reads the warehouse REGISTRY, so a
-   bucket provisioned by an API call after the last config edit is swept. **Residual: the orphan
-   scan at `reconcile.py:613` still iterates `settings.sweep_buckets` and did not get the same
-   treatment.**
+   bucket provisioned by an API call after the last config edit is swept. ~~Residual: the orphan
+   scan still iterates `settings.sweep_buckets`.~~ Closed too: `_scannable_buckets` reuses the
+   registry the reconciler already loaded, reports an `IncompleteScan` rather than narrowing
+   silently when it is unreadable, and — unlike the sweep — still scans DEACTIVATED warehouses,
+   because reporting is not rewriting.
 6. ~~Global `scan_batch_size` floor.~~ Done (#93, ac16876) — see §4.
 
 Re-ordered 2026-08-04 (#94) from here, by the audits:
