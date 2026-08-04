@@ -17,6 +17,7 @@ FastAPI introspects these signatures at runtime, so the annotations stay real
 objects.
 """
 
+import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
@@ -24,12 +25,16 @@ from starlette.concurrency import run_in_threadpool
 
 from search.api.dependencies import EmbedderFactoryDep, RerankerFactoryDep, StateDep
 from search.services.filters import TOPIC_FILTER, extract_filters
+from search.services.fuse import reciprocal_rank_fusion
 from search.services.result_cache import run_cached
 from search.services.service import run_search
 from search.services.spec import PostSearchSpec, SearchMode, SearchSpec
-from service_kit.exceptions import ValidationError
+from service_kit.exceptions import DomainError, ValidationError
 from service_kit.lancekit.registry import DatasetHandle
 from service_kit.media.state import AppState, dataset_handle
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/api", tags=["search"])
@@ -96,7 +101,13 @@ def search_get(
     # below (extra="ignore" keeps them out of the model), so the wire shape is
     # unchanged.
     spec: Annotated[SearchSpec, Query()],
+    # FAN-OUT. Repeat it (`?corpus=a&corpus=b`) to search several at once. Its own name rather than
+    # overloading `dataset`: a repeated `dataset` would change that param's type from the caller's
+    # point of view, and every existing client sends exactly one.
+    corpus: Annotated[list[str] | None, Query(description="Fan out across these corpora, fused by RRF")] = None,
 ) -> list[dict[str, Any]]:
+    if corpus:
+        return _fused_search(state, corpus, request, spec, get_embedder, get_reranker)
     handle = dataset_handle(state, spec.dataset)
     filters = extract_filters(request.query_params, _filterable(handle, spec.table))
     # Empty-input short-circuit: only the topic facet triggers filter-only
@@ -104,6 +115,51 @@ def search_get(
     if not spec.q and not spec.q_vec and not filters.get(TOPIC_FILTER):
         return []
     return _cached_search(state, handle, spec, filters, None, get_embedder, get_reranker)
+
+
+def _fused_search(
+    state: AppState,
+    corpora: list[str],
+    request: Request,
+    spec: SearchSpec,
+    get_embedder: Any,
+    get_reranker: Any,
+) -> list[dict[str, Any]]:
+    """Search several corpora and fuse the results by RECIPROCAL RANK.
+
+    Not by score: BM25 is normalised per index and vector distances depend on the space, so
+    `_score` from one corpus and `_score` from another are not comparable. Sorting a merged list by
+    them produces an ordering that looks authoritative and means nothing — and nothing in the rows
+    would show it. See `services/fuse.py`.
+
+    Each corpus keeps its OWN filters, because `filterable` is declared per searchable table: a
+    filter valid in one corpus may name a column another does not have. A corpus that refuses the
+    request (unknown table, no search bindings) is SKIPPED with its reason logged rather than failing
+    the whole fan-out — one misconfigured corpus should not take the others down with it.
+
+    Sequential, deliberately: `run_search` is CPU- and IO-blocking and already offloaded by the
+    caller, and the corpus count is small. Concurrency here would need a bounded pool to avoid N
+    simultaneous embedder calls, which is a change worth making when a measurement asks for it.
+    """
+    ranked: list[list[dict[str, Any]]] = []
+    key_fields: list[str] = []
+    for dataset_id in dict.fromkeys(corpora):  # de-duplicated, order preserved
+        try:
+            handle = dataset_handle(state, dataset_id)
+            filters = extract_filters(request.query_params, _filterable(handle, spec.table))
+            if not spec.q and not spec.q_vec and not filters.get(TOPIC_FILTER):
+                continue
+            hits = _cached_search(state, handle, spec, filters, None, get_embedder, get_reranker)
+        except DomainError as exc:
+            logger.warning("fan-out: skipping corpus %s — %s", dataset_id, exc)
+            continue
+        if hits and not key_fields:
+            key_fields = list(handle.descriptor.declared.identity.key_fields)
+        ranked.append(hits)
+
+    if not key_fields:
+        return []
+    return reciprocal_rank_fusion(ranked, key_fields=key_fields, limit=spec.n)
 
 
 def _post_spec(
