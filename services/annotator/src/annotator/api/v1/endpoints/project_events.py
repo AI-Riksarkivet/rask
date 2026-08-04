@@ -23,6 +23,7 @@ The fourth precondition — every task terminal — is NOT checked here. It live
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated, Any, Final, cast
 
 from fastapi import APIRouter, Path, status
@@ -34,6 +35,11 @@ from annotator.projects.models import ItemSource, MediaRef, ProjectState, Task, 
 from annotator.projects.project_actor import AnnotationProjectActorInterface
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
+from service_kit.media.deps import StateDep
+from service_kit.media.state import dataset_handle
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/projects", tags=["annotation-projects"])
@@ -258,8 +264,47 @@ async def drop_task(
     return result
 
 
+def _refuse_unknown_datasets(state: Any, payload: SendItemsRequest) -> None:
+    """Refuse the WHOLE send if any item names a media dataset that does not resolve.
+
+    Removal (`DELETE .../tasks/{id}`) is the escape hatch; this is the thing that stops the trap
+    being set. An item naming a dataset that was renamed or removed cannot be opened on the canvas,
+    so it can never be claimed, submitted or skipped — and the publish precondition requires EVERY
+    task terminal, so one of them wedges the project. Creating it is the mistake; refusing at send
+    is where it costs nothing.
+
+    The whole send, not the offending items: a partial send produces exactly the half-populated
+    project this is meant to prevent, and it costs ZERO seeded task actors to refuse here — the same
+    argument the project-state check above makes.
+
+    An UNVERIFIABLE registry lets the send through. If the dataset plane cannot be consulted at all
+    (a degraded start, a mount that is not there yet) then refusing every send would take the whole
+    labeling plane down for a check that is a guard, not a gate — the canvas still reports the real
+    404 at read, and removal still exists. Not being able to check is not evidence of a problem.
+    """
+    names = sorted({item.source.where for item in payload.items if item.source.where})
+    if not names:
+        return  # every item takes the backend default, which resolves by construction
+    unknown: list[str] = []
+    for name in names:
+        try:
+            dataset_handle(state, name)
+        except NotFoundError:
+            unknown.append(name)
+        except Exception:  # noqa: BLE001 - see docstring: unverifiable is not the same as wrong
+            logger.warning("send could not consult the dataset registry; not refusing on a check that did not run")
+            return
+    if unknown:
+        try:
+            known = sorted(state.registry.list_ids())
+        except Exception:  # noqa: BLE001 - naming the alternatives is a nicety, never the refusal
+            known = []
+        detail = f"dataset(s) {unknown} do not exist — an item naming one could never be opened, claimed or completed"
+        raise ConflictError(f"{detail}; known datasets are {known}" if known else detail)
+
+
 @router.post("/{project_id}/items", status_code=status.HTTP_201_CREATED)
-async def send_items(project_id: ProjectId, payload: SendItemsRequest, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
+async def send_items(project_id: ProjectId, payload: SendItemsRequest, state: StateDep, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
     """Send items into the project as tasks.
 
     Two writes per item, and the ORDER is the whole correctness argument: seed the TASK actor first,
@@ -277,6 +322,11 @@ async def send_items(project_id: ProjectId, payload: SendItemsRequest, checker: 
         # actor's own refusal would fire only after the first `seed` had already landed.
         raise ConflictError(f"project {project_id} is {project['state']} — items may only be sent while it is draft or labeling")
     await _check(checker, subject, "can_send_items", f"annotation_project:{project_id}", "project.send")
+
+    # REFUSE an item whose media dataset does not resolve. Deliberately after the FGA check: the
+    # refusal names the datasets that DO exist, which is what makes it actionable and also what
+    # makes it something an unauthorised caller must not be able to enumerate.
+    _refuse_unknown_datasets(state, payload)
 
     # Consensus v1: N>1 seeds N independent replica items per source item, deterministic sibling
     # ids (`{gid}-r{k}`) — determinism is what lets the one-replica-per-annotator guard find them.

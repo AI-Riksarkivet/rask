@@ -10,6 +10,7 @@ The actors are faked, so these prove the HTTP contract without a sidecar.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -21,6 +22,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from service_kit.exceptions import register_handlers
+from service_kit.media.deps import get_state
 
 
 SUBJECT = "henry"
@@ -82,6 +84,11 @@ def _app(project: _FakeProject, *, grant: set[str], seen: list[dict[str, Any]], 
     app.include_router(ev.router)
     app.dependency_overrides[get_checker] = lambda: checker
     app.dependency_overrides[current_subject] = lambda: SUBJECT
+    # `send` now consults the dataset registry to refuse an item whose media dataset does not
+    # resolve, so this router carries `StateDep`. Real app state is built by the service lifespan
+    # and does not exist here; this stands in for it. `list_ids` answers the "known datasets are …"
+    # half of a refusal, and these tests never exercise a refusal.
+    app.dependency_overrides[get_state] = lambda: SimpleNamespace(registry=SimpleNamespace(list_ids=list))
     return app
 
 
