@@ -139,6 +139,23 @@ class Shape(BaseModel):
     confidence: float | None = None
 
 
+class Link(BaseModel):
+    """One typed edge between two shapes in a draft — the structure KIE and DocVQA need.
+
+    Key information extraction is a key→value linking problem and document VQA binds a question to
+    the region that answers it. Neither is a per-shape property, so no amount of attribute typing
+    reaches them. The ontology declares which links are LEGAL (`RelationClass`); this is one that
+    was actually drawn.
+
+    Endpoints are shape IDs, not indices: a draft is replaced whole on every save, and an index
+    would silently re-point at a different shape the moment one is deleted.
+    """
+
+    name: str
+    from_shape: str
+    to_shape: str
+
+
 class Draft(BaseModel):
     """ONE document per (task, author) holding the whole shape set as a single list (§4.3).
 
@@ -151,6 +168,11 @@ class Draft(BaseModel):
     project_id: str
     author: str
     shapes: list[Shape] = Field(default_factory=list)
+    #: The links drawn between those shapes. Absent from this model until 2026-08-04, which made an
+    #: ontology declaring a REQUIRED relation unsatisfiable: the submit check read an always-empty
+    #: list, so every submission that could ever be made was refused. Declared, enforced, and
+    #: impossible — the worst of the three, and invisible because nothing errored on the way in.
+    links: list[Link] = Field(default_factory=list)
     revision: int = 0
     updated_at: datetime | None = None
     origin: DraftOrigin = "human"

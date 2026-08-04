@@ -35,6 +35,7 @@ from dapr.actor import Actor, ActorInterface, Remindable, actormethod
 from annotator.projects.machines import IllegalTransition, submit_target, task_transition
 from annotator.projects.models import (
     Draft,
+    Link,
     ReviewNote,
     Shape,
     Task,
@@ -290,6 +291,9 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
             project_id=str(payload["project_id"]),
             author=str(payload["author"]),
             shapes=[Shape.model_validate(s) for s in payload.get("shapes", [])],
+            # Built field by field on purpose (a caller must not be able to set `revision`), which is
+            # exactly why an unlisted field is dropped in SILENCE — `links` was, and nothing errored.
+            links=[Link.model_validate(link) for link in payload.get("links", [])],
             revision=(current.revision + 1) if current else 1,
             updated_at=datetime.now(UTC),
             origin=payload.get("origin", "human"),

@@ -240,6 +240,15 @@ export const DraftSchema = v.object({
 	project_id: v.string(),
 	author: v.string(),
 	shapes: v.array(v.record(v.string(), v.unknown())),
+	/** Typed edges between those shapes — what KIE and DocVQA are actually made of.
+	 *
+	 *  Declared here because valibot's `v.object` STRIPS unknown keys: without this line a link
+	 *  round-tripped from the server would vanish on the way back into the client, which is the same
+	 *  class of silent loss that made `template` invisible to the canvas before #35. */
+	links: v.optional(
+		v.array(v.object({ name: v.string(), from_shape: v.string(), to_shape: v.string() })),
+		[],
+	),
 	revision: v.number(),
 	origin: v.optional(v.string(), 'human'),
 });

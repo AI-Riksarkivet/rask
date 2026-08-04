@@ -566,3 +566,98 @@ async def test_a_CONSTRAINED_ontology_refuses_a_draftless_submit_even_with_nothi
     actor = await _claimed_with_ontology(ontology, [])
     with pytest.raises(IllegalTransition, match="at least one annotation"):
         await actor.fire({"event": "submit", "actor": "gina"})
+
+
+# --------------------------------------------------------------------------------------------------
+# Relations: declared in the ontology, and STORABLE — a contract nobody can satisfy is not a contract
+# --------------------------------------------------------------------------------------------------
+
+
+KIE = {
+    "kind": "document-question-answering",
+    "classes": [{"name": "key", "tools": ["bbox"]}, {"name": "value", "tools": ["bbox"]}],
+    "relations": [{"name": "answers", "from_classes": ["key"], "to_classes": ["value"], "required": True}],
+}
+KIE_SHAPES = [
+    {"shape_id": "s1", "shape_type": "bbox", "label": "key"},
+    {"shape_id": "s2", "shape_type": "bbox", "label": "value"},
+]
+
+
+@pytest.mark.asyncio
+async def test_a_link_SURVIVES_the_draft_write() -> None:
+    """The gap that made a required relation impossible to satisfy.
+
+    `Draft` carried only `shapes`, and `save_draft` builds the model field by field — so a `links`
+    key was dropped on the floor with no error. The submit check then read an always-empty link list,
+    which meant an ontology declaring a REQUIRED relation refused every submission that could ever be
+    made. Declared, enforced, and unsatisfiable: the worst of the three.
+    """
+    actor = _Actor()
+    await actor.seed(_task(ontology=KIE))
+    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.save_draft(
+        {
+            "task_id": "t1",
+            "project_id": "p1",
+            "author": "gina",
+            "shapes": KIE_SHAPES,
+            "links": [{"name": "answers", "from_shape": "s1", "to_shape": "s2"}],
+        }
+    )
+
+    stored = await actor.get_draft()
+    assert stored is not None
+    assert stored["links"] == [{"name": "answers", "from_shape": "s1", "to_shape": "s2"}], "the link was dropped by the draft write"
+
+
+@pytest.mark.asyncio
+async def test_a_KIE_submit_with_its_link_is_ACCEPTED() -> None:
+    actor = _Actor()
+    await actor.seed(_task(ontology=KIE))
+    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.save_draft(
+        {
+            "task_id": "t1",
+            "project_id": "p1",
+            "author": "gina",
+            "shapes": KIE_SHAPES,
+            "links": [{"name": "answers", "from_shape": "s1", "to_shape": "s2"}],
+        }
+    )
+
+    result = await actor.fire({"event": "submit", "actor": "gina"})
+    assert result["state"] in {"in_review", "accepted"}
+
+
+@pytest.mark.asyncio
+async def test_a_KIE_submit_WITHOUT_the_required_link_is_refused_by_name() -> None:
+    """Still enforced — the fix is that it is now SATISFIABLE, not that it stopped being a rule."""
+    actor = _Actor()
+    await actor.seed(_task(ontology=KIE))
+    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.save_draft({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": KIE_SHAPES})
+
+    with pytest.raises(IllegalTransition, match="answers"):
+        await actor.fire({"event": "submit", "actor": "gina"})
+
+
+@pytest.mark.asyncio
+async def test_a_link_pointing_the_WRONG_WAY_is_refused() -> None:
+    """`answers` is directed key→value. The endpoint classes are the closed set that makes a link
+    checkable the same way a label is."""
+    actor = _Actor()
+    await actor.seed(_task(ontology=KIE))
+    await actor.fire({"event": "claim", "actor": "gina"})
+    await actor.save_draft(
+        {
+            "task_id": "t1",
+            "project_id": "p1",
+            "author": "gina",
+            "shapes": KIE_SHAPES,
+            "links": [{"name": "answers", "from_shape": "s2", "to_shape": "s1"}],
+        }
+    )
+
+    with pytest.raises(IllegalTransition, match="source"):
+        await actor.fire({"event": "submit", "actor": "gina"})
