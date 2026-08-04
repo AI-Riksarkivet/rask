@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from lance_namespace import (
     PermissionDeniedError,
     ServiceUnavailableError,
@@ -410,6 +410,51 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
     relation = _action_relation(fga_type, suffix)
     obj = _object(fga_type, segments, settings.delimiter)
     await _require(client, user=token.sub, relation=relation, obj=obj)
+
+
+# --------------------------------------------------------------------------- #
+# Hierarchy enforcement — the estate's containment rule, checked BEFORE the write.
+# --------------------------------------------------------------------------- #
+
+
+def require_parent(resource: str, segments: list[str], *, delimiter: str) -> None:
+    """Reject a create that would produce an object with no parent to belong to.
+
+    THE RULE, which the authz model already states and the write path did not:
+    ``project -> warehouse -> namespace (self-nesting) -> table``. `model.fga` declares
+    ``table.parent: [namespace]`` and ``namespace.parent: [warehouse, namespace]``, so an object
+    whose parent is absent is not "a table at the root" — it is a table the model has no way to
+    describe.
+
+    Until this existed, a single-segment table was created anyway: ``fga.parent_object`` returned
+    ``None`` for it, the create proceeded, and the object got an owner grant and no containment edge.
+    Nothing failed at write time and nothing was visibly wrong — the row simply sat outside every
+    cascade, invisible to a warehouse-level or namespace-level grant, and impossible to reach by the
+    hierarchy the UI navigates. Orphans are cheap to create and expensive to find, so the answer is a
+    refusal at the door with a message that says which rung is missing.
+
+    Raised as **422**, not 400 or 403: the request is well-formed and the caller may well be
+    authorized — the IDENTIFIER is the thing that cannot be satisfied. A caller who reads the detail
+    learns the rule and the fix in one line, which a bare 400 does not give them.
+
+    Namespaces are deliberately NOT rejected here. A top-level namespace legitimately parents to the
+    catalog's warehouse root, and until a warehouse can be NAMED in the identifier (see the module
+    note below) rejecting one would refuse the only shape the API can currently express.
+    """
+    if resource != "table":
+        return
+    if fga.parent_namespace_id(segments, delimiter=delimiter) is not None:
+        return
+    ident = fga.canonical_object_id(segments, delimiter=delimiter)
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            f"table '{ident}' has no namespace to belong to. A table must live inside a namespace "
+            f"(project > warehouse > namespace > table), so its identifier needs at least one "
+            f"namespace segment before the table name — e.g. '<namespace>{delimiter}{ident}'. "
+            "Create the namespace first if it does not exist."
+        ),
+    )
 
 
 # --------------------------------------------------------------------------- #
