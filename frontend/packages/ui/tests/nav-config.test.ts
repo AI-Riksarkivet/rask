@@ -79,11 +79,11 @@ describe('topNav', () => {
 				.find((e) => e.title === 'Lakehouse')!
 				.groups!.map((g) => g.label);
 		// The governance guarantee, both polarities: a non-admin's panel cannot even name them.
-		expect(labels(false)).toEqual(['Catalog', 'Models', 'Lineage']);
+		expect(labels(false)).toEqual(['Workspace', 'Catalog', 'Models', 'Lineage']);
 		// Operations — streams, events, dead letters — is an operation ON the lakehouse, so it stays a
 		// column here. Governance is not a lakehouse feature and no longer appears in this panel at
 		// all; asserted as an ABSENCE so it cannot quietly return and exist in two places.
-		expect(labels(true)).toEqual(['Catalog', 'Models', 'Lineage', 'Operations']);
+		expect(labels(true)).toEqual(['Workspace', 'Catalog', 'Models', 'Lineage', 'Operations']);
 		expect(labels(true)).not.toContain('Governance');
 	});
 
@@ -255,6 +255,10 @@ describe('topNav', () => {
 		// and the panel never prepends a second zone-root row.
 		expect(compute.items!.map((i) => i.title)).toEqual([
 			'Overview',
+			// The zone's own dock, second — `dock-reachability.test.ts` requires /compute/workbench to
+			// appear in this panel, because the navbar is how someone standing in another zone learns
+			// the dock exists at all.
+			'Workbench',
 			'Jobs',
 			'Cluster',
 			'Actors',
