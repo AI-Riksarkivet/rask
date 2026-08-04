@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
+from lance import blob_field
 
 
 if TYPE_CHECKING:
@@ -25,11 +26,33 @@ if TYPE_CHECKING:
 
 # The bronze schema: the data AS RECEIVED plus the acquisition facts (§3.5). Bronze is the archive's
 # copy and the replay foundation, so nothing here decodes or converts.
+#
+# `payload` is a BLOB column. It was `pa.binary()`, which forces every page image INLINE into the
+# `.lance` data file and gives up all three of Lance's placement tiers — and the code this plane
+# replaced already used `blob_field` (`medallion/services/ingest.py:31`), so this was a regression
+# against knowledge the estate had already paid for.
+#
+# What the tiers buy, per `docs/architecture/lance-blob-v2-findings.md` (measured, not read):
+#
+#   inline     < inline_size_threshold   bytes sit in the .lance file with the other columns
+#   packed     between the two           many payloads share one .blob sidecar — this is what stops
+#                                        a million mid-sized pages becoming a million S3 objects
+#   dedicated  >= dedicated_threshold    the payload gets its OWN .blob file, REFERENCED rather than
+#                                        re-copied by every compaction of the fragment
+#
+# Evaluation is dedicated-FIRST, then inline (counterintuitive, and stated in the docstring).
+# Thresholds are left at Lance's defaults (16 KiB / 2 MiB): a scanned archival page lands in
+# `dedicated`, a thumbnail or a born-digital text page lands in `packed` or `inline`, which is the
+# behaviour we want and did not have to invent.
+#
+# Placement is transparent to readers — all four shapes round-trip identically through `read_blobs`,
+# `take_blobs`, `read_blob_ranges` and a blob-handling scanner — so this is a pure write-side choice
+# that can be retuned for new datasets without touching a reader.
 BRONZE_SCHEMA = pa.schema(
     [
         pa.field("id", pa.int64()),
         pa.field("source_uri", pa.string()),
-        pa.field("payload", pa.binary()),
+        blob_field("payload", nullable=True),
     ]
 )
 

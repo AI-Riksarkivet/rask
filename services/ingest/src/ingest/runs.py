@@ -177,12 +177,22 @@ def merge_workflow_state(record: RunRecord, state: dict[str, object] | None) -> 
     errors = output.get("errors")
     committed = output.get("committed_version")
     rows = output.get("rows")
+
+    # The DENOMINATOR, and it has two sources because a run needs it at two different times. While
+    # the run is in flight only the custom status has it (the output does not exist yet); once the
+    # run is terminal the output carries it permanently. Reading both is what makes "4 of 500"
+    # available for the whole life of a run rather than only after it ends.
+    total = output.get("units_total")
+    if not isinstance(total, int):
+        total = _as_mapping(state.get("serialized_custom_status")).get("units_total")
+
     return record.model_copy(
         update={
             "status": status,
             "errors": errors if isinstance(errors, dict) else record.errors,
             "committed_version": committed if isinstance(committed, int) else record.committed_version,
             "units_done": rows if isinstance(rows, int) else record.units_done,
+            "units_total": total if isinstance(total, int) else record.units_total,
         }
     )
 

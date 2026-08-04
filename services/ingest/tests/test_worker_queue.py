@@ -175,3 +175,23 @@ def test_the_queue_module_is_the_only_nats_importer() -> None:
     """I3, asserted from the inside too — queue.py is the documented exception, and it is this one."""
     assert STREAM == "INGEST"
     assert unit_subject("r1") == "ingest.tasks.r1"
+
+
+def test_the_ack_ceiling_exceeds_the_fragment_batch() -> None:
+    """A deadlock that would look exactly like a slow source.
+
+    The worker holds a whole fragment's worth of messages UNACKED while it accumulates them (that is
+    what makes the ack a per-batch promise). If `max_ack_pending` is below the batch size, JetStream
+    stops delivering at the ceiling and the drain waits forever for units it will never be sent. At
+    the old values — ceiling 32, batch 1024 — every run would have hung on its 33rd unit.
+
+    Asserted as a RELATION between the two constants, so raising the batch without raising the
+    ceiling fails here instead of in a cluster at 3am.
+    """
+    from ingest.queue import MAX_ACK_PENDING
+    from ingest.worker import FRAGMENT_TARGET_ROWS
+
+    assert MAX_ACK_PENDING > FRAGMENT_TARGET_ROWS, (
+        f"max_ack_pending={MAX_ACK_PENDING} <= fragment batch {FRAGMENT_TARGET_ROWS}: the drain will "
+        f"deadlock once a batch fills, because the held messages are never acked"
+    )

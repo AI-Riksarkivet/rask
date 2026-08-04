@@ -37,6 +37,7 @@ ack across a job's runtime, which is the specific thing A13 outlaws.
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -125,7 +126,13 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, A
         input={"spec": spec.model_dump(), "dataset_uri": dataset_location},
         retry_policy=ACTIVITY_RETRY,
     )
-    ctx.set_custom_status(f"dispatching {len(chunks)} chunks")
+    # The enumerated total, published as CUSTOM STATUS so it is readable while the run is still
+    # going. `units_total` was declared on the run record and never assigned by anything, so the API
+    # could say "4 done" and never "4 of 500" — no progress bar was possible for exactly the long
+    # harvest where one matters. Custom status rides the workflow's own durable state, so it survives
+    # a pod death like every other run fact and needs no second writable copy.
+    units_total = sum(len(chunk.get("keys") or ()) for chunk in chunks)
+    ctx.set_custom_status(json.dumps({"units_total": units_total, "chunks": len(chunks)}))
 
     # Fan out. when_all is fan-in: the parent suspends until every child has drained, and survives
     # its own pod dying because the history replays. This is the durable-orchestration property that
@@ -135,13 +142,13 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, A
     parsed = [ChunkResult.model_validate(r) for r in results]
     fragments = [f for r in parsed for f in r.fragments]
     errors = {k: v for r in parsed for k, v in r.errors.items()}
-    ctx.set_custom_status(f"finalizing {len(fragments)} fragments")
+    ctx.set_custom_status(json.dumps({"units_total": units_total, "finalizing": len(fragments)}))
 
     # Exactly one commit for the whole run — D6. Nothing is visible in bronze until this returns, so
     # there is no observable partially-ingested state to reason about.
     outcome: dict[str, Any] = yield ctx.call_activity(
         finalize,
-        input={"spec": spec.model_dump(), "fragments": fragments, "errors": errors},
+        input={"spec": spec.model_dump(), "fragments": fragments, "errors": errors, "units_total": units_total},
         retry_policy=ACTIVITY_RETRY,
     )
 
@@ -286,7 +293,11 @@ def finalize(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> dict[str,
     from ingest.runtime import finalize_run
 
     spec = RunSpec.model_validate(payload["spec"])
-    return finalize_run(spec, payload.get("fragments") or [], payload.get("errors") or {})
+    outcome = finalize_run(spec, payload.get("fragments") or [], payload.get("errors") or {})
+    # Carried into the terminal output so a FINISHED run still reports what it set out to do — the
+    # custom status is the live view, this is the permanent one.
+    outcome["units_total"] = int(payload.get("units_total") or 0)
+    return outcome
 
 
 def emit_terminal(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> None:

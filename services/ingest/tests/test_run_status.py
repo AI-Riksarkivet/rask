@@ -345,3 +345,45 @@ def test_a_FAILED_run_does_NOT_wake_the_cascade() -> None:
     event = {"eventType": "FAIL", "outputs": [{"namespace": "bronze", "name": "bronze$pages"}]}
 
     assert _bronze_write_dataset(event, settings, "") is None
+
+
+def test_units_total_comes_from_the_engine_while_the_run_is_IN_FLIGHT() -> None:
+    """The denominator has to exist BEFORE the run ends, or a progress bar is impossible.
+
+    `units_total` was declared and never assigned, so the API could say "4 done" and never
+    "4 of 500". While a run is in flight there is no output yet — only the custom status — so that is
+    where the live total is read from.
+    """
+    state = {
+        "runtime_status": "RUNNING",
+        "serialized_custom_status": json.dumps({"units_total": 500, "chunks": 1}),
+    }
+    merged = merge_workflow_state(_record(), state)
+
+    assert merged.units_total == 500
+    assert merged.status == "RUNNING"
+
+
+def test_units_total_survives_into_the_TERMINAL_record() -> None:
+    """Once the run ends, the output carries it permanently — the custom status is the live view."""
+    state = {
+        "runtime_status": "COMPLETED",
+        "serialized_output": json.dumps({"committed_version": 2, "rows": 500, "units_total": 500, "status": "COMPLETE"}),
+    }
+    merged = merge_workflow_state(_record(), state)
+
+    assert (merged.units_done, merged.units_total) == (500, 500)
+
+
+def test_a_partial_run_reports_BOTH_numbers() -> None:
+    """The case the field exists for: 497 of 500 landed, and an operator can see the 3 that did not."""
+    state = {
+        "runtime_status": "COMPLETED",
+        "serialized_output": json.dumps(
+            {"committed_version": 9, "rows": 497, "units_total": 500, "errors": {"p1": "404", "p2": "404", "p3": "corrupt"}, "status": "COMPLETE_WITH_ERRORS"}
+        ),
+    }
+    merged = merge_workflow_state(_record(), state)
+
+    assert (merged.units_done, merged.units_total) == (497, 500)
+    assert len(merged.errors) == 3

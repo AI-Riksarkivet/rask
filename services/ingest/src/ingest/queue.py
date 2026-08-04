@@ -25,6 +25,7 @@ redeliver forever — hence `max_deliver` and the dlq.ingest.tasks parking subje
 from __future__ import annotations
 
 import json
+import os
 from typing import TYPE_CHECKING, Any, Self
 
 import nats
@@ -49,7 +50,13 @@ DLQ_SUBJECT = "dlq.ingest.tasks"
 ACK_WAIT_SECONDS = 300
 
 # Bounded in-flight work per worker — backpressure, not a performance knob.
-MAX_ACK_PENDING = 32
+#
+# MUST exceed `worker.FRAGMENT_TARGET_ROWS`. The worker holds a whole fragment's worth of messages
+# UNACKED while it accumulates them, so a ceiling below the batch size makes JetStream stop
+# delivering at the ceiling and the drain waits forever for units it will never be sent — a deadlock
+# that looks exactly like a slow source. At 32 (the old value) against a 1024-row batch it would have
+# hung on the 33rd unit of every run.
+MAX_ACK_PENDING = int(os.getenv("RASK_INGEST_MAX_ACK_PENDING", "2048"))
 
 # After this many deliveries a unit is poison: it parks on the DLQ subject and the run completes
 # WITH ERRORS rather than hanging. A run that never finishes is worse than one that reports what
