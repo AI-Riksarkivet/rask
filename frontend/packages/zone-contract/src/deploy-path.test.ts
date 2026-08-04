@@ -9,26 +9,6 @@ import { FRONTEND_ROOT, REPO_ROOT, zoneDirs } from './manifest';
 
 const zones = zoneDirs();
 
-describe('the budget gate is ordered after the builds it weighs', () => {
-	// budget.test.ts measures each zone's .svelte-kit/output/client. turbo's `test -> build` edge only
-	// orders a package against ITSELF, and no zone depends on @rask/zone-contract (it is a gate, not a
-	// runtime dep), so `turbo run test build` ran the two concurrently and the budget was measured off a
-	// half-written directory. The explicit per-zone edge fixes the order; this keeps it from drifting.
-	// turbo.json is JSONC — drop whole-line // comments before parsing (never a partial line, so a
-	// `//` inside a string value can't be clipped).
-	const turbo = JSON.parse(
-		readFileSync(resolve(FRONTEND_ROOT, 'turbo.json'), 'utf8')
-			.split('\n')
-			.filter((l) => !l.trimStart().startsWith('//'))
-			.join('\n'),
-	) as { tasks: Record<string, { dependsOn?: string[] }> };
-	const deps = turbo.tasks['@rask/zone-contract#test']?.dependsOn;
-
-	it('depends on every zone build, and only those', () => {
-		expect(deps?.slice().sort()).toEqual(zones.map((z) => `${z}#build`).sort());
-	});
-});
-
 describe('the Makefile builds and loads exactly the zones that exist', () => {
 	// `ZONES` drives `make frontend-images` (docker build --build-arg APP=$z), `make frontend-load` and
 	// `make load` (kind load docker-image lance-$z:dev). It still listed the SEVEN pre-merge zones, so

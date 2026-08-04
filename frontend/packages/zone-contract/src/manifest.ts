@@ -36,7 +36,6 @@ export function routingConfig(): RoutingConfig {
  *  `node_modules/`, `.turbo/`), so the four pre-merge zones — admin, data, lineage, models — survive
  *  as husks in every working tree that ever built them. `git status` is clean, a fresh checkout looks
  *  fine, and the CI cache hides it too. Counting those husks as zones failed 39 tests across all four
- *  gate files at once, and `.svelte-kit/output/client` is still there so even the budget gate found
  *  something to weigh. A gate that fires on leftover build output is worse than no gate: the fix
  *  people reach for is deleting the gate. */
 export function zoneDirs(): string[] {
