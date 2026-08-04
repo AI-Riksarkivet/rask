@@ -134,6 +134,7 @@ def test_bronze_CANNOT_EXPRESS_the_null_that_makes_readers_lie(tmp_path: Path) -
             "id": pa.array([1, 2, 3], pa.int64()),
             "source_uri": pa.array(["a", "b", "c"], pa.string()),
             "payload": blob_array([b"aaa", None, b"ccc"]),
+            "stage": pa.array(["bronze"] * 3, pa.string()),
         },
         schema=BRONZE_SCHEMA,
     )

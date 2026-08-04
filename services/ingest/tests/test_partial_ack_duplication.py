@@ -120,9 +120,16 @@ def test_an_UNDECIDABLE_overlap_raises_rather_than_guessing(tmp_path: Path) -> N
     u3; committing either alone loses two units. Since a fragment cannot be split, the only honest
     answer is to stop with every byte still on the store and named by its manifest.
 
-    The worker keeps this unreachable by never batching a redelivered unit with a fresh one. This
-    test pins the behaviour for when that isolation fails, because the alternative to a loud failure
-    is silent corruption in whichever direction the code happened to lean.
+    This state is REACHABLE — an earlier version of this docstring said the worker prevented it, and
+    that was wrong. `drain_chunk` separates redelivered messages from fresh ones within one fetch,
+    but batches all redeliveries in that fetch TOGETHER regardless of which original batch each came
+    from, so two batches' remainders merge into one fragment that overlaps both and is contained by
+    neither. Two crashed batches whose remainders arrive in the same fetch produce exactly this.
+
+    So the raise is an operational state, not a broken-invariant alarm. It is still the right
+    answer — the alternatives are silent duplication or silent loss — but a finalizer that can
+    resolve a partial overlap, or a batching rule that preserves the original grouping on
+    redelivery, would remove the state instead of reporting it. Both are open work.
     """
     dataset = str(tmp_path / "bronze")
 

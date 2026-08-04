@@ -115,9 +115,20 @@ class StagingOverlapError(RuntimeError):
     Raised rather than resolved because both alternatives are silent data corruption: committing
     both duplicates the units they share, committing one loses the units it lacks. A run that stops
     here keeps every byte it fetched — the fragments are still on the store, still named by their
-    manifests — and can be finished by hand. The worker makes this unreachable (see
-    `drain_chunk`: a redelivered unit is never batched with a fresh one), so reaching it means that
-    isolation broke, which is worth a loud failure rather than a quiet repair.
+    manifests — and can be finished by hand.
+
+    **This is REACHABLE.** An earlier version of this docstring claimed the worker made it
+    impossible, "a redelivered unit is never batched with a fresh one". That is only half of what
+    `drain_chunk` does: it separates redelivered messages from fresh ones WITHIN ONE FETCH, but it
+    batches all redeliveries in that fetch TOGETHER, whatever original batch each came from. Two
+    different batches' remainders therefore land in one new fragment, which partially overlaps both
+    predecessors and is contained by neither — exactly this error.
+
+    So it is a real operational state, not a broken-invariant alarm, and a run can hit it without
+    anything else having gone wrong. Failing loudly is still right — the alternative is choosing
+    silently between duplication and loss — but "fix the isolation" is NOT the remedy; the remedy is
+    a finalizer that can resolve a partial overlap, or a batching rule that keeps redeliveries in
+    their original grouping. Both are open.
     """
 
 
@@ -128,7 +139,18 @@ def discover_staged(dataset_uri: str, run_id: str) -> list[str]:
     fragments, not rows), so when a batch is partly acked and its remainder comes back as a second,
     smaller fragment, the two OVERLAP: the first already holds the rows the second re-fetched.
     Appending both writes those units twice, and nothing downstream would catch it — the lander's
-    commit is a blind append, with `merge_insert` forbidden by `test_ingest_invariants.py`.
+    commit is a blind `Append`.
+
+    That last part used to say `merge_insert` was "forbidden by test_ingest_invariants.py", which is
+    simply false: I4's allowlist is `LANDER_ALLOWED = {"lander.py"}`, so the lander is precisely
+    where `merge_insert` IS permitted. The real reason is structural and was measured rather than
+    assumed. `MergeInsertBuilder.execute` takes a `ReaderLike` and coerces it (`lance/dataset.py`
+    `_coerce_reader`); there is no `FragmentMetadata` overload on it or on `execute_uncommitted`,
+    and the lander holds exactly that — JSON from `FragmentMetadata.to_json()`. The one route that
+    works (commit `detached=True`, read the staged rows back, re-wrap with `blob_array`, upsert)
+    requires materialising every payload in the lander and rewriting all of it, which writes the
+    archive twice and pushes every byte through the single process the fan-out design exists to keep
+    them out of. So a blind append is right; the reason it is right had nothing to do with I4.
 
     So this resolves ownership instead of collecting. Largest unit set first, and a fragment is
     taken only if it adds units nothing already taken covers:

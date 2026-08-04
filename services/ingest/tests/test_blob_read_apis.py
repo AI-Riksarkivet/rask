@@ -37,14 +37,17 @@ PAYLOADS = [b"II*\x00" + b"A" * 500, b"II*\x00" + b"B" * 480, b"II*\x00" + b"C" 
 
 def _dataset(tmp_path: Path, payloads: list[bytes | None], schema: pa.Schema = BRONZE_SCHEMA) -> lance.LanceDataset:
     uri = str(tmp_path / "bronze.lance")
-    table = pa.table(
-        {
-            "id": pa.array(range(len(payloads)), pa.int64()),
-            "source_uri": pa.array([f"file:///p{i}.tif" for i in range(len(payloads))]),
-            "payload": blob_array(payloads),
-        },
-        schema=schema,
-    )
+    columns: dict[str, pa.Array] = {
+        "id": pa.array(range(len(payloads)), pa.int64()),
+        "source_uri": pa.array([f"file:///p{i}.tif" for i in range(len(payloads))]),
+        "payload": blob_array(payloads),
+    }
+    # Driven off the schema under test, so one helper serves both the real BRONZE_SCHEMA and the
+    # deliberately-nullable variant below (which omits `stage` — it exists only to demonstrate the
+    # null trap, and adding columns to it would obscure what it is for).
+    if "stage" in schema.names:
+        columns["stage"] = pa.array(["bronze"] * len(payloads), pa.string())
+    table = pa.table(columns, schema=schema)
     lance.write_dataset(table, uri, **CREATION_FLAGS)
     return lance.dataset(uri)
 
@@ -152,3 +155,31 @@ def test_bronze_makes_that_state_UNREACHABLE(tmp_path: Path) -> None:
 
     with pytest.raises(OSError, match="non-nullable"):
         _dataset(tmp_path, [PAYLOADS[0], None])
+
+
+# ── the reader the estate actually has ────────────────────────────────────────────────
+
+
+def test_bronze_satisfies_the_columns_THE_VIEWER_PROJECTS() -> None:
+    """Bronze must be openable by the one reader that exists, and this asserts it against that
+    reader's own list rather than against a copy of it.
+
+    Found by asking whether anything had ever read these bytes. Nothing had. The media viewer
+    projects `_PAGE_COLUMNS = ["id", "source_uri", "stage"]`, `stage` had been dropped from
+    `BRONZE_SCHEMA`, and that projection sits OUTSIDE the endpoint's try/except — so every dataset
+    this plane wrote answered `GET /api/pages` and `GET /api/page` with a 500:
+
+        Invalid user input: Schema error: No field named stage. Valid fields are id, source_uri.
+
+    Every ingest gate passed throughout, because they all read the dataset directly. The drop was
+    recorded in open_ingest.md as cheap and "not fatal" on the reasoning that the movers re-stamp an
+    absent `stage` — true for the movers, and irrelevant to a reader that projects it.
+
+    Imported from the viewer rather than restated, so the two cannot drift apart again: a column
+    added to the viewer's projection fails HERE, at ingest, which is where it can still be fixed.
+    """
+    from viewer.api.v1.endpoints.pages import _PAGE_COLUMNS
+
+    missing = [column for column in _PAGE_COLUMNS if column not in BRONZE_SCHEMA.names]
+
+    assert missing == [], f"the viewer projects {missing}, which bronze does not carry — every page read 500s"

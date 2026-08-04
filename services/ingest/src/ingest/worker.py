@@ -114,7 +114,7 @@ def units_to_table(units: Sequence[tuple[str, bytes]]) -> pa.Table:
 
     from lance import blob_array
 
-    from ingest.runtime import BRONZE_SCHEMA
+    from ingest.runtime import BRONZE_SCHEMA, BRONZE_STAGE
 
     ids = [int.from_bytes(hashlib.sha256(k.encode()).digest()[:8], "big", signed=True) for k, _ in units]
     return pa.table(
@@ -122,6 +122,10 @@ def units_to_table(units: Sequence[tuple[str, bytes]]) -> pa.Table:
             "id": pa.array(ids, pa.int64()),
             "source_uri": pa.array([k for k, _ in units], pa.string()),
             "payload": blob_array([p for _, p in units]),
+            # The tier stamp, written at ingest because bronze is the first GOVERNED tier (R23).
+            # Not decoration: the media viewer PROJECTS it, so a bronze table without it is one no
+            # reader in the estate can open — see the schema comment.
+            "stage": pa.array([BRONZE_STAGE] * len(units), pa.string()),
         },
         schema=BRONZE_SCHEMA,
     )

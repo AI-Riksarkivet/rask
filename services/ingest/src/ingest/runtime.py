@@ -69,13 +69,34 @@ if TYPE_CHECKING:
 # an empty payload ("empty payload") and the worker parks it, so a unit either lands with bytes or is
 # recorded in `errors`. The old `nullable=True` advertised a state this plane never creates, and it
 # was exactly the state that makes every read API lie.
+#
+# `stage` is the tier provenance stamp every governed dataset in the estate carries. The head this
+# plane replaced wrote it AT INGEST — it absorbed the retired raw→bronze mover when R23 made bronze
+# the first governed tier — and dropping it was recorded here as a cheap, non-fatal loss because the
+# movers' `_stamp_stage` appends the column when it is absent.
+#
+# That was wrong, and measurably so. The READ path hard-requires it: the media viewer projects
+# `_PAGE_COLUMNS = ["id", "source_uri", "stage"]` (`viewer/api/v1/endpoints/pages.py:37`), and that
+# projection is not inside its try/except — so every bronze table this plane wrote 500'd on
+# `GET /api/pages` and `GET /api/page`:
+#
+#   Invalid user input: Schema error: No field named stage. Valid fields are id, source_uri.
+#
+# Every dataset this plane produced was unreadable by the only reader the estate has, and the ingest
+# lane's own gates could not see it because they read the dataset directly. A dropped column is only
+# cheap until something projects it.
 BRONZE_SCHEMA = pa.schema(
     [
         pa.field("id", pa.int64()),
         pa.field("source_uri", pa.string()),
         blob_field("payload", nullable=False),
+        pa.field("stage", pa.string()),
     ]
 )
+
+#: What `stage` holds at ingest. Bronze is the first GOVERNED tier (R23: raw is the external world),
+#: so the cascade's later movers re-stamp their own tier as the rows move up.
+BRONZE_STAGE = "bronze"
 
 
 def nats_url() -> str:
