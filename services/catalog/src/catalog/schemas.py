@@ -538,3 +538,34 @@ class CommitFragmentsRequest(BaseModel):
 class CommitFragmentsResponse(BaseModel):
     version: int
     row_count: int
+
+
+class PublishRequest(BaseModel):
+    """Ask the catalog to gate a committed version and, if it passes, publish it.
+
+    `version` is explicit rather than "whatever is latest": between a writer's commit and its publish
+    call another writer may have committed, and publishing a version nobody gated is the failure the
+    gate exists to prevent. The caller names what it wrote.
+    """
+
+    version: int = Field(ge=1)
+    #: The identity column the `not_null` assertion checks. Stages key differently — bronze on `id`,
+    #: a derived tier possibly on something else — so the caller names it rather than the gate guessing.
+    key_column: str = Field(min_length=1, max_length=128)
+    required_columns: list[str] = Field(default_factory=list)
+
+
+class PublishResult(BaseModel):
+    """The outcome, and the RANGE a notification should carry (§ D2 D-R3).
+
+    `published=False` is a normal answer, not an error: the gate refused, the pointer did not move,
+    and the previously published version keeps serving. `assertions` come back either way so a
+    blocked batch is auditable without re-running anything.
+    """
+
+    table: str
+    published: bool
+    from_version: int | None
+    to_version: int
+    assertions: list[dict[str, object]] = Field(default_factory=list)
+    reason: str | None = None

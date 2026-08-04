@@ -12,6 +12,7 @@ for.
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -97,6 +98,10 @@ BRONZE_SCHEMA = pa.schema(
 #: What `stage` holds at ingest. Bronze is the first GOVERNED tier (R23: raw is the external world),
 #: so the cascade's later movers re-stamp their own tier as the rows move up.
 BRONZE_STAGE = "bronze"
+
+
+#: Publish failures are logged rather than raised — a landed commit must not become a failed run.
+_log = logging.getLogger(__name__)
 
 
 def nats_url() -> str:
@@ -250,6 +255,17 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str]) ->
     # Only after the commit lands. Purging earlier would delete the record a retried finalize needs,
     # turning a recoverable failure into exactly the data loss staging exists to prevent.
     purge_staged(uri, spec.run_id)
+
+    # A COMMIT IS NOT A PUBLICATION (§ D2 D-R1). The rows are now readable, and until the catalog
+    # gates this version and advances `published` they are not READY — nothing downstream should act
+    # on them. The plane asks; it never moves the tag itself, because publication has to be one
+    # operation shared by every writer or the contract drifts per writer.
+    #
+    # A REFUSED gate is not a failed run. The run did its job: it fetched, wrote and committed
+    # exactly what it was asked to. It is the DATA the gate refused, so the outcome is reported
+    # (`published`, and the range) rather than raised — an operator needs to see a run that
+    # completed and did not publish, which is a different thing from one that broke.
+    publication = _publish(catalog, spec, result.version)
     return {
         "committed_version": result.version,
         # THIS run's rows. `result.rows` is the dataset total, which is the same number only for a
@@ -259,6 +275,33 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str]) ->
         "dataset_rows": result.rows,
         "errors": errors,
         "status": "COMPLETE_WITH_ERRORS" if errors else "COMPLETE",
+        **publication,
+    }
+
+
+def _publish(catalog: Any, spec: RunSpec, version: int) -> dict[str, Any]:  # noqa: ANN401 — the catalog seam
+    """Publish the committed version, and report the RANGE it covers (§ D2 D-R3).
+
+    `from_version`/`to_version` are what a consumer needs to resolve an exact row delta
+    (`_row_created_at_version > from AND <= to`) without keeping a bookmark of its own.
+
+    A catalog that cannot publish must not turn a good ingest into a failed one: the rows are
+    committed and a later publish can still gate them, so the failure is REPORTED on the run rather
+    than raised. Silence here would be worse than either — a run that looks published and is not.
+    """
+    publish = getattr(catalog, "publish", None)
+    if publish is None:
+        return {"published": False, "publish_error": "catalog has no publish operation"}
+    try:
+        body = publish(spec.project, spec.dataset, version)
+    except Exception as exc:
+        _log.warning("publish failed for run %s at version %s: %s", spec.run_id, version, exc)
+        return {"published": False, "publish_error": str(exc)}
+    return {
+        "published": bool(body.get("published")),
+        "from_version": body.get("from_version"),
+        "to_version": body.get("to_version"),
+        "publish_reason": body.get("reason"),
     }
 
 

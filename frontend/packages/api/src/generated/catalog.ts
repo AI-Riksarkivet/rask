@@ -1907,6 +1907,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/table/{id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish Table
+         * @description Gate `version` and, if it passes, advance `published` to it.
+         *
+         *     A refused gate is a 200 with `published=False`, not an error status: the request was well-formed
+         *     and the system did exactly what it should. Errors are reserved for the caller getting it wrong —
+         *     an unknown version (404), a backwards move (409), a malformed one (400) — all raised as
+         *     `lance_namespace` typed errors so the shared problem-body handler renders them.
+         */
+        post: operations["publish_table_v1_table__id__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/table/{id}/query": {
         parameters: {
             query?: never;
@@ -5981,6 +6006,46 @@ export interface components {
             tag: string;
         };
         /**
+         * PublishRequest
+         * @description Ask the catalog to gate a committed version and, if it passes, publish it.
+         *
+         *     `version` is explicit rather than "whatever is latest": between a writer's commit and its publish
+         *     call another writer may have committed, and publishing a version nobody gated is the failure the
+         *     gate exists to prevent. The caller names what it wrote.
+         */
+        PublishRequest: {
+            /** Key Column */
+            key_column: string;
+            /** Required Columns */
+            required_columns?: string[];
+            /** Version */
+            version: number;
+        };
+        /**
+         * PublishResult
+         * @description The outcome, and the RANGE a notification should carry (§ D2 D-R3).
+         *
+         *     `published=False` is a normal answer, not an error: the gate refused, the pointer did not move,
+         *     and the previously published version keeps serving. `assertions` come back either way so a
+         *     blocked batch is auditable without re-running anything.
+         */
+        PublishResult: {
+            /** Assertions */
+            assertions?: {
+                [key: string]: unknown;
+            }[];
+            /** From Version */
+            from_version: number | null;
+            /** Published */
+            published: boolean;
+            /** Reason */
+            reason?: string | null;
+            /** Table */
+            table: string;
+            /** To Version */
+            to_version: number;
+        };
+        /**
          * QueryTableRequest
          * @description QueryTableRequest
          */
@@ -9908,6 +9973,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PolicyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_table_v1_table__id__publish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishResult"];
                 };
             };
             /** @description Validation Error */

@@ -147,6 +147,31 @@ class CatalogServiceClient:
         self.registered.append((self.table_id(project, dataset), version, run_id))
         return version, int(body.get("row_count", 0))
 
+    def publish(self, project: str, dataset: str, version: int, *, key_column: str = "id") -> dict[str, object]:
+        """Ask the catalog to gate `version` and, if it passes, advance the `published` tag.
+
+        A commit makes bronze READABLE; this is what makes it READY (§ D2 D-R1). The plane does not
+        move the tag itself and must not: publication is the catalog's operation so that every writer
+        — this plane, a Ray job, a backfill — publishes identically, and so the FGA rung
+        (`can_update_tag`) and the quality gate apply to all of them the same way.
+
+        A REFUSED gate is a normal outcome, not an error: the response says `published: false` with
+        the failed assertions, the pointer stays where it was, and the run reports what happened. A
+        run whose data the gate rejected has still run correctly — it is the DATA that was refused.
+        """
+        import httpx
+
+        url = f"{self._base}/v1/table/{self.table_id(project, dataset)}/publish"
+        payload = {"version": version, "key_column": key_column}
+        try:
+            response = httpx.post(url, json=payload, headers=self._headers(), timeout=TIMEOUT_SECONDS)
+        except Exception as exc:
+            raise CatalogError(f"catalog unreachable for publish: {exc}") from exc
+
+        if response.status_code >= 400:
+            raise CatalogError(f"catalog refused the publish ({response.status_code}): {response.text[:300]}")
+        return dict(response.json())
+
     # ── internals ─────────────────────────────────────────────────────────────────────
 
     def _describe(self, project: str, dataset: str) -> str | None:

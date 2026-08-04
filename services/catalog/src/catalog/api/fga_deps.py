@@ -120,6 +120,12 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         "maintenance/preview": "can_drop",
         "maintenance/run": "can_drop",
         "maintenance/compact": "can_drop",
+        # Publication ADVANCES the `published` tag, so it clears the same bar as `tags/update` — the
+        # rung that already exists for re-pointing the ref plane. Anything lower would make `publish`
+        # a way for a plain data writer to move a tag they are not allowed to move directly, which is
+        # the escalation the ref-plane rungs exist to close. The quality gate is orthogonal: it
+        # decides whether the DATA may be published, this decides whether the CALLER may.
+        "publish": "can_update_tag",
     },
     "namespace": {
         "drop": "can_delete",
