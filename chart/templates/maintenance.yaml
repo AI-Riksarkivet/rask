@@ -99,6 +99,8 @@ spec:
             {{- end }}
             - { name: MAINTENANCE_BINDING_NAME, value: {{ .Values.maintenance.bindingName | quote }} }
             - { name: MAINTENANCE_OLDER_THAN_DAYS, value: {{ .Values.maintenance.olderThanDays | quote }} }
+            - { name: MAINTENANCE_SCAN_BATCH_SIZE, value: {{ .Values.maintenance.scanBatchSize | quote }} }
+            - { name: MAINTENANCE_COMPACT_THREADS, value: {{ .Values.maintenance.compactThreads | quote }} }
             - { name: MAINTENANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
             - { name: MAINTENANCE_S3_ACCESS_KEY_ID, value: {{ .Values.rustfs.accessKey | quote }} }
             {{- if not (include "lance.secretsViaDapr" .) }}

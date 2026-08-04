@@ -707,6 +707,20 @@ maintenance:
   # what the catalog itself defaults to; set both together if the catalog's root is moved.
   controlRoot: ""
   olderThanDays: 7 # version GC keeps this much history
+  # How much the compaction READ may pull at once. The two multiply — the ceiling is
+  # scanBatchSize x row size x compactThreads — so they are set together or not at all.
+  #
+  # Lance's own defaults are 8192 rows and one thread per HOST core. Rows are not a unit of memory:
+  # against ~1.8 MB bronze page-image rows that is ~15 GB per thread, while this pod names no
+  # `resources` key and so runs on `resources.default` — a 512Mi LIMIT. With the sweep enabled at
+  # `@every 120s` over the medallion buckets and no policy shipped, the first blob-tier tick
+  # OOM-killed it, and a maintenance pod in CrashLoopBackOff maintains nothing at all.
+  #
+  # 64 x ~1.8 MB x 2 is ~230 MB, which fits. Raise them together if you also raise the pod's tier;
+  # for a tier whose rows are small, prefer a per-tier maintenance policy (`scan_batch_size`) over
+  # raising this global, so the blob tiers stay bounded.
+  scanBatchSize: 64
+  compactThreads: 2
   # Emit a maintenance lineage event per materially-compacted dataset (shows GC in producers() next to
   # writes) AND a FAIL event per maintain:-errored dataset (deterministic per-dataset run id — the flood
   # guard). Off by default (opt-in, like the medallion toggles); on → compaction joins the pubsub scope +

@@ -29,6 +29,30 @@ class MaintenanceSettings(BaseSettings):
     # ge=1 (not 0): timedelta(0) is falsy, so pylance collapses `older_than` to None and silently drops the
     # threshold — to GC aggressively, use a small positive value, not 0.
     older_than_days: int = Field(default=7, ge=1, alias="MAINTENANCE_OLDER_THAN_DAYS")
+
+    # --- The compaction READ bound (#93). Two knobs, because the memory is their PRODUCT and bounding
+    # one alone bounds nothing.
+    #
+    # `scan_batch_size` shipped as a per-tier policy field with no global default, so out of the box
+    # `compact_files` used Lance's own 8192-ROW batch. Rows are not a unit of memory: against ~1.8 MB
+    # bronze page-image rows (measured) that is ~15 GB per compute thread, and the chart runs this
+    # sweep every 120s over the medallion buckets with `maintenance.enabled: true` and no policy
+    # anywhere. The pod names no `resources` tier, so it inherits `resources.default` — a 512Mi LIMIT.
+    # A 15 GB read is a 30x overshoot of the whole container; the first blob-tier tick OOM-kills it,
+    # and a maintenance pod in CrashLoopBackOff means NOTHING is being maintained.
+    #
+    # 64 rows x ~1.8 MB x 2 threads is ~230 MB worst case, which fits 512Mi with room for the
+    # process itself. On tiers where rows are small this is slower than Lance's default and that is
+    # the deliberate trade: slow compaction is recoverable, an OOM-killed sweep is an outage. Raise
+    # both per tier via the maintenance policy (`scan_batch_size`) once a tier's row size is known —
+    # that is what the per-tier surface is FOR; this only stops the UNPOLICIED estate killing itself.
+    scan_batch_size: int = Field(default=64, ge=1, le=8192, alias="MAINTENANCE_SCAN_BATCH_SIZE")
+    # Lance's `num_threads` defaults to the machine's parallelism, which is the HOST's core count, not
+    # the pod's `limits.cpu: "1"` — so on a 64-core node the batch bound above would have been
+    # multiplied by 64 while the cgroup still allowed one core's worth of work. Pinning it makes the
+    # ceiling a number someone can actually compute.
+    compact_threads: int = Field(default=2, ge=1, le=64, alias="MAINTENANCE_COMPACT_THREADS")
+
     # Behind a Dapr sidecar? — when true, boot fails closed if the app-token is unset (the cron route would
     # otherwise be an open forged-sweep path). Symmetric with the lineage service. Off in dev (no sidecar).
     dapr_enabled: bool = Field(default=False, alias="MAINTENANCE_DAPR_ENABLED")
