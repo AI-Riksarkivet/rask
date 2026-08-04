@@ -44,6 +44,8 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from maintenance.core.config import MaintenanceSettings
+from maintenance.services.optimize import discover_dataset_uris
+from maintenance.services.orphans import OrphanFile, scan_datasets
 from service_kit.governed import fga
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
@@ -85,6 +87,7 @@ CATEGORIES: tuple[str, ...] = (
     "orphan_buckets",
     "dangling_bindings",
     "orphaned_annotation_tasks",
+    "orphan_files",
 )
 
 
@@ -186,6 +189,8 @@ class ReconcileReport(BaseModel):
     orphan_buckets: list[OrphanBucket] = Field(default_factory=list)
     dangling_bindings: list[DanglingBinding] = Field(default_factory=list)
     orphaned_annotation_tasks: list[OrphanedAnnotationTask] = Field(default_factory=list)
+    #: Files under a dataset prefix that no LIVE version references (the reclamation gap).
+    orphan_files: list[OrphanFile] = Field(default_factory=list)
     unavailable: list[CategoryUnavailable] = Field(default_factory=list)
     skipped: list[CategorySkipped] = Field(default_factory=list)
     incomplete: list[IncompleteScan] = Field(default_factory=list)
@@ -589,6 +594,36 @@ def build_report(
     return report
 
 
+_ORPHAN_SCAN_OFF = "MAINTENANCE_ORPHAN_SCAN_ENABLED is off — the per-dataset file scan is a different order of work from the store comparison"
+
+
+def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings) -> None:
+    """Attach the unreferenced-file findings, or say honestly why they are absent.
+
+    Gated separately because it opens EVERY dataset and unions the file references of EVERY live
+    version, across the data buckets — a different order of work from comparing three stores. When
+    off it is SKIPPED with a reason, never reported as zero: a 0 that means "we did not look" is the
+    one number this report must never print.
+    """
+    if not settings.orphan_scan_enabled:
+        report.skipped.append(CategorySkipped(category="orphan_files", reason=_ORPHAN_SCAN_OFF))
+        return
+    fs, _ = fs_and_base(f"s3://{settings.s3_bucket}", settings.storage_options())
+    datasets: list[tuple[str, str]] = []
+    for bucket in settings.sweep_buckets:
+        try:
+            for uri in discover_dataset_uris(fs, bucket):
+                datasets.append((uri, uri.removeprefix("s3://")))
+        except Exception as exc:
+            report.incomplete.append(IncompleteScan(source=f"storage:{bucket}", reason=f"dataset discovery failed: {exc}"))
+    scan = scan_datasets(fs, datasets, settings.storage_options())
+    report.orphan_files = scan.orphans
+    report.counts["orphan_files"] = len(scan.orphans)
+    report.total += len(scan.orphans)
+    for note in scan.incomplete:
+        report.incomplete.append(IncompleteScan(source="storage:datasets", reason=note))
+
+
 async def reconcile(
     settings: MaintenanceSettings,
     client: Any = None,
@@ -650,6 +685,10 @@ async def reconcile(
         platform_buckets=platform,
         fga_root_object=fga_root_object,
     )
+    # The unreferenced-FILE pass runs after the store comparison and is separately gated: it opens
+    # every dataset rather than comparing three stores, so it is a different order of work. Blocking
+    # Lance/S3 IO, so it goes to the threadpool like every other read here.
+    await run_in_threadpool(_orphan_category, report, settings)
     log.info(
         "reconcile_report",
         extra={

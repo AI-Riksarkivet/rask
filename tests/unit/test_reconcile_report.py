@@ -193,9 +193,13 @@ def test_a_fully_consistent_estate_reports_no_drift(tmp_path: Path, monkeypatch:
     "clean" is provable rather than inferred from a report that simply said nothing."""
     report = _Estate(tmp_path).run(monkeypatch)
     assert report.total == 0
-    assert set(report.counts) == set(mod.CATEGORIES)
+    # The real invariant is that no category goes MISSING: each is counted, unavailable, or skipped.
+    # `orphan_files` is skipped by default (it opens every dataset — a different order of work), and a
+    # category silently absent from all three lists is the failure this guards.
+    accounted = set(report.counts) | {u.category for u in report.unavailable} | {s.category for s in report.skipped}
+    assert accounted == set(mod.CATEGORIES), f"unaccounted categories: {set(mod.CATEGORIES) - accounted}"
     assert report.unavailable == []
-    assert report.skipped == []
+    assert [s.category for s in report.skipped] == ["orphan_files"]
     assert report.incomplete == []
 
 
@@ -296,7 +300,7 @@ def test_unbound_namespaces_is_skipped_not_zero_when_warehouses_are_off(tmp_path
     _Estate.namespace_dir(tmp_path, "legacy_ns")
     report = estate.run(monkeypatch, warehouses_enabled=False)
     assert report.unbound_namespaces == []
-    assert [s.category for s in report.skipped] == ["unbound_namespaces"]
+    assert {s.category for s in report.skipped} == {"unbound_namespaces", "orphan_files"}
     assert "unbound_namespaces" not in report.counts
     assert report.total == 0
 
@@ -363,7 +367,7 @@ def test_a_dead_bucket_listing_degrades_only_orphan_buckets(tmp_path: Path, monk
     assert [u.category for u in report.unavailable] == ["orphan_buckets"]
     assert "PermissionError" in report.unavailable[0].reason
     assert "orphan_buckets" not in report.counts
-    assert set(report.counts) == set(mod.CATEGORIES) - {"orphan_buckets"}
+    assert set(report.counts) == set(mod.CATEGORIES) - {"orphan_buckets", "orphan_files"}
 
 
 def test_no_scan_is_capped_silently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -381,7 +385,7 @@ def test_no_scan_is_capped_silently(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert "storage:buckets" in reasons and "ONE PAGE" in reasons["storage:buckets"]
     assert "registry:projects" in reasons and "unreadable" in reasons["registry:projects"]
     # ...and the run is still a full report, not a failure: every category was reached.
-    assert set(report.counts) == set(mod.CATEGORIES)
+    assert set(report.counts) == set(mod.CATEGORIES) - {"orphan_files"}
 
 
 def test_a_missing_control_root_is_not_a_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -435,6 +439,12 @@ def test_an_unwired_openfga_client_is_reported_not_assumed_clean(tmp_path: Path,
 #: thing for someone to copy in here, and the most destructive: ``cleanup_old_versions`` deletes
 #: history irreversibly. A prefix list that omits its own neighbour's calls is a gate that reads as
 #: strict and is not; :func:`test_the_mutating_call_gate_is_not_vacuous` pins that it catches them.
+#: Pure builtins whose NAME happens to start with a mutating-sounding prefix. `str.removeprefix` is
+#: the live example — it allocates a new string and touches nothing. Listed explicitly rather than by
+#: loosening the prefixes, because a looser gate is exactly how `cleanup_old_versions` would slip back
+#: in (it was missed once already).
+_PURE_DESPITE_NAME = frozenset({"removeprefix", "removesuffix"})
+
 _MUTATING_CALL_PREFIXES = (
     "add_",
     "alter",
@@ -489,7 +499,7 @@ def test_the_module_contains_no_mutating_call() -> None:
     write fails here.
     """
     path = Path(mod.__file__)
-    offenders = sorted(name for name in _called_names(path.read_text()) if name.lower().startswith(_MUTATING_CALL_PREFIXES))
+    offenders = sorted(name for name in _called_names(path.read_text()) if name.lower().startswith(_MUTATING_CALL_PREFIXES) and name not in _PURE_DESPITE_NAME)
     assert offenders == [], f"{path.name} calls {offenders} — the reconciler is REPORT-ONLY and must never mutate a store"
 
 

@@ -94,6 +94,13 @@ class MaintenanceSettings(BaseSettings):
     # reader to skip the category. Must match the catalog's LANCE_FGA_ROOT_OBJECT.
     fga_root_object: str = Field(default="warehouse:lance_catalog", alias="MAINTENANCE_FGA_ROOT_OBJECT")
 
+    # The orphan-FILE pass is separately gated because it is a different ORDER of work from the rest
+    # of the drift report: the others compare three stores (O(stores)), this opens every dataset and
+    # unions the file references of every live version (O(datasets x versions x fragments)) across the
+    # DATA buckets. Off by default so the cheap report stays cheap; step 4's policy surface gives it a
+    # cadence of its own.
+    orphan_scan_enabled: bool = Field(default=False, alias="MAINTENANCE_ORPHAN_SCAN_ENABLED")
+
     # The reconciler reads the catalog's registries (`_projects/`, `_warehouses/`) off the control root.
     # Defaults to the primary bucket, matching the catalog's own LANCE_CONTROL_ROOT default; override
     # only when the catalog's control root has been moved.

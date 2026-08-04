@@ -123,6 +123,15 @@ cross-object invariants, high-frequency filtered listings), it is a design decis
 
 - `deregister` keeps bytes ON PURPOSE (external data); `drop` removes them. Neither leaves Lance
   orphans — but partially-failed writes and unpurged buckets do, and nothing reclaims those yet.
+  `services/maintenance`'s orphan pass REPORTS them (`MAINTENANCE_ORPHAN_SCAN_ENABLED`, off by
+  default — it opens every dataset, unlike the rest of the drift report which compares three stores).
+- **Three Lance file classes look like orphans and are not.** A scan that names any of them would
+  drive a reclaimer into live data, and all three were found by running against a real estate, not by
+  reading the layout doc: `_refs/tags/*.json` are TAGS, which PIN versions (`cleanup_old_versions`
+  exempts tagged versions for that reason); `.lance-reserved` is a structural marker; and a large
+  binary column's bytes live in `data/<data-file-stem>/*.blob`, a SIDECAR that `data_files()` does not
+  name — the first live run called 29 MB of real page images reclaimable. Conversely `_transactions/
+  *.txn` genuinely accumulate forever (the spec keeps one per commit attempt) and nothing prunes them.
 - The FGA-only live seed (`fga_seed_demo.py`) writes projects no registry knows — the origin of
   "ghost projects". The replacement (`seed_estate.py`, planned) drives the real APIs in hierarchy
   order so seeded state is always constructible state.
