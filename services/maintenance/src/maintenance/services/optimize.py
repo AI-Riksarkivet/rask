@@ -30,6 +30,10 @@ class DatasetResult(BaseModel):
     indices_optimized: int = 0
     old_versions_removed: int = 0
     bytes_removed: int = 0
+    #: True when this pass handed version reclamation to the DATASET (#58) instead of sweeping it.
+    #: Distinguishes "reclaimed nothing" from "the writer reclaims this one" — which read identically
+    #: on ``old_versions_removed=0`` alone.
+    auto_cleanup_configured: bool = False
     error: str | None = None
     # Stable identifier for span aggregation (otel attributes.md: set `error.type` whenever the span
     # status is ERROR) — the exception CLASS name, never the message.
@@ -75,6 +79,8 @@ def compact_one(
     *,
     cleanup_enabled: bool = True,
     optimize_indices_enabled: bool = True,
+    scan_batch_size: int | None = None,
+    auto_cleanup_interval_commits: int | None = None,
 ) -> DatasetResult:
     """One ORDERED maintenance pass over one dataset. Never raises — a per-dataset failure is captured
     in ``error`` so one bad dataset can't abort the whole pass.
@@ -83,6 +89,13 @@ def compact_one(
     obsoletes files, so cleanup must follow it, and index optimization must follow that. The two
     ``*_enabled`` flags let a policy skip a STEP without reordering them — an operator who wants
     compaction but not version reclamation (a tier under legal hold, say) can have exactly that.
+
+    ``scan_batch_size`` bounds the compaction read. Lance's default batch is 8192 ROWS, and rows are
+    not a unit of memory: against ~1.8 MB bronze page-image rows that is ~15 GB per compute thread.
+
+    ``auto_cleanup_interval_commits`` hands version reclamation to the DATASET (#58) — Lance's own
+    commit-path auto-cleanup — and, having done so, SKIPS this pass's cleanup step. One owner, never
+    two: both running is not additive, it is two processes racing to delete the same manifests.
     """
     try:
         ds = lance.dataset(uri, storage_options=storage_options)
@@ -96,7 +109,11 @@ def compact_one(
         # fragments into the indices; the interplay is pinned by
         # tests/unit/test_compaction_optimize.py::test_compact_one_defer_index_remap_keeps_indices_working.
         # #76 target-size tuning: the #50 policy's target_rows_per_fragment (None → Lance default sizing).
-        size_kw = {"target_rows_per_fragment": target_rows_per_fragment} if target_rows_per_fragment else {}
+        size_kw: dict[str, Any] = {"target_rows_per_fragment": target_rows_per_fragment} if target_rows_per_fragment else {}
+        # Rows are not a unit of memory — see the docstring. Passed to BOTH compaction attempts below,
+        # because the fallback path reads exactly the same bytes as the deferred one.
+        if scan_batch_size is not None:
+            size_kw["batch_size"] = scan_batch_size
         try:
             metrics: Any = ds.optimize.compact_files(defer_index_remap=True, **size_kw)
         except Exception as exc:
@@ -144,7 +161,31 @@ def compact_one(
         # `cleanup_enabled=False` keeps the ENTIRE version history: a tier under legal hold, or one
         # whose time-travel window is the product. Compaction may still run — it changes layout, not
         # history — so this is a real per-step choice rather than an all-or-nothing opt-out.
-        if cleanup_enabled:
+        #
+        # #58: when the DATASET owns version reclamation, configure it here and do not also sweep.
+        # Applied AFTER compaction so a failure to configure can never cost us the compaction that
+        # already succeeded, and recorded on the result so an operator can see which owner ran.
+        if auto_cleanup_interval_commits is not None:
+            try:
+                from lance.dataset import AutoCleanupConfig
+
+                # AutoCleanupConfig is a TypedDict keyed in SECONDS, not a timedelta — the 14-day
+                # fallback mirrors what pylance substitutes when neither bound is given.
+                ds.optimize.enable_auto_cleanup(
+                    AutoCleanupConfig(
+                        interval=auto_cleanup_interval_commits,
+                        older_than_seconds=int((older_than or timedelta(days=14)).total_seconds()),
+                    ),
+                )
+                result.auto_cleanup_configured = True
+            except Exception as exc:
+                # Not fatal: the dataset keeps whatever cleanup config it had, and the NEXT pass retries.
+                # It IS reported, because silently falling back to no cleanup at all is how a tier grows
+                # versions forever while its policy says it is being reclaimed.
+                log.warning("auto_cleanup_enable_failed", extra={"uri": uri, "error": str(exc)})
+                result.error = f"auto_cleanup: {exc}"
+                result.error_type = type(exc).__name__
+        elif cleanup_enabled:
             stats: Any = ds.cleanup_old_versions(older_than=older_than, retain_versions=retain_versions, error_if_tagged_old_versions=False)
             result.old_versions_removed = int(getattr(stats, "old_versions", 0))
             result.bytes_removed = int(getattr(stats, "bytes_removed", 0))

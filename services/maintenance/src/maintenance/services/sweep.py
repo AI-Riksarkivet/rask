@@ -137,6 +137,8 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
             effective_older_than: timedelta | None = older_than
             retain_versions: int | None = None
             target_rows: int | None = None  # #76 compaction target-size from the policy
+            batch_size: int | None = None  # the sweep's READ batch — rows are not a unit of memory
+            auto_cleanup_interval: int | None = None  # #58 — set means the DATASET owns version cleanup
             policy: dict[str, Any] | None
             try:
                 policy = maintenance_policies.resolve_policy(policy_records, uri, logical_id=table_id_from_uri(uri), delimiter=settings.delimiter)
@@ -157,9 +159,14 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
                         effective_older_than = None
                     if policy.get("target_rows_per_fragment"):
                         target_rows = int(str(policy["target_rows_per_fragment"]))
+                    if policy.get("scan_batch_size"):
+                        batch_size = int(str(policy["scan_batch_size"]))
+                    if policy.get("auto_cleanup_interval_commits"):
+                        auto_cleanup_interval = int(str(policy["auto_cleanup_interval_commits"]))
             except Exception as exc:
                 log.warning("compaction_policy_ignored", extra={"uri": uri, "error": str(exc)})
                 effective_older_than, retain_versions, target_rows, policy = older_than, None, None, None
+                batch_size, auto_cleanup_interval = None, None
             result = compact_one(
                 uri,
                 options,
@@ -171,6 +178,8 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
                 # gets the default (on) rather than inheriting from the record it shadowed.
                 cleanup_enabled=bool((policy or {}).get("cleanup_enabled", True)),
                 optimize_indices_enabled=bool((policy or {}).get("optimize_indices_enabled", True)),
+                scan_batch_size=batch_size,
+                auto_cleanup_interval_commits=auto_cleanup_interval,
             )
             if policy is not None and policy.get("compact_interval_hours") and result.error is None:
                 # Stamp cadence state only after a successful pass, so a failed tick retries next tick.
