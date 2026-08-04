@@ -57,6 +57,62 @@ test('a 403 on the estate listing degrades to the caller’s own memberships —
 	await expect(beta).toContainText('member');
 });
 
+test('an EMPTY estate listing still shows the caller’s memberships — the live bug', async ({
+	page,
+}) => {
+	// THE ONE THAT SHIPPED. `200 []` is not the same claim as "you belong to nothing", and the admin
+	// branch used to substitute the listing for the membership list outright — so an estate admin with
+	// three memberships was told "You are not a member of any project yet. Ask a project admin for
+	// access." while holding admin on all three. Observed on the running cluster: /v1/me returned
+	// acme/research/default, /capi/v1/projects returned [], the gallery rendered the empty state.
+	//
+	// It is the LIVE shape, not a contrived one: the catalog derives its project registry from
+	// registered WAREHOUSES, so a project that exists in authz but has no warehouse yet is absent from
+	// the listing and present in the identity. The rule pinned here is the one that cannot produce
+	// that outcome — you are never shown FEWER projects than you belong to.
+	await seed(page, {
+		'GET /v1/me': ME_ADMIN_WITH_MEMBERSHIPS,
+		'GET /v1/projects': [],
+	});
+	const res = await page.goto('/projects');
+	expect(res?.status()).toBe(200);
+	for (const [project, role] of [
+		['acme', 'admin'],
+		['beta', 'member'],
+	] as const) {
+		const card = page.locator(`a[href="/projects/${project}"]`);
+		await expect(card).toContainText(project);
+		await expect(card).toContainText(role);
+	}
+	// …and the empty state is NOT what she gets, which is the sentence that made this a bug report.
+	await expect(page.getByText('You are not a member of any project yet')).toHaveCount(0);
+});
+
+test('the estate listing ADDS to memberships rather than replacing them', async ({ page }) => {
+	// The merge, from the other side: the listing knows projects the caller does not belong to (and
+	// the warehouse counts only it has), memberships cover what it has not caught up with. Neither
+	// list may swallow the other, and a project in both must appear ONCE, carrying its role.
+	await seed(page, {
+		'GET /v1/me': ME_ADMIN_WITH_MEMBERSHIPS,
+		'GET /v1/projects': [
+			{ project: 'acme', warehouses: [{ id: 'acme-wh' }, { id: 'acme-gold' }] },
+			{ project: 'someone-elses', warehouses: [] },
+		],
+	});
+	await page.goto('/projects');
+	// From the listing, with its warehouse count, and still carrying HER role — not duplicated.
+	const acme = page.locator('a[href="/projects/acme"]');
+	await expect(acme).toHaveCount(1);
+	await expect(acme).toContainText('admin');
+	await expect(acme).toContainText('2 warehouses');
+	// Listing-only: a project she can see as an admin but does not belong to — no role badge.
+	await expect(page.locator('a[href="/projects/someone-elses"]')).toHaveCount(1);
+	// Membership-only: absent from the listing, still hers.
+	const beta = page.locator('a[href="/projects/beta"]');
+	await expect(beta).toHaveCount(1);
+	await expect(beta).toContainText('member');
+});
+
 test('an unreachable catalog degrades the same way — the memberships /v1/me already resolved', async ({
 	page,
 }) => {
