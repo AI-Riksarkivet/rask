@@ -223,7 +223,7 @@ Hrefs are **flat and absolute** (`/lakehouse/data`, `/explorer/`, `/compute/`) �
 
 **Trailing slashes on zone-root hrefs are load-bearing.** Each zone's `paths.base` serves the trailing form, so a bare `/compute` costs a 308 per hop (`tests/nav-config.test.ts:26-29`).
 
-## Adding a zone — five places plus a budget
+## Adding a zone — five places
 
 Globbed membership means there is no list to append to, but five files must agree or the gates fail:
 
@@ -233,7 +233,9 @@ Globbed membership means there is no list to append to, but five files must agre
 4. `chart/values.yaml` `frontend.apps`
 5. `Makefile` `ZONES`
 
-Plus a `budget.json` entry. `manifest.test.ts`, `deploy-path.test.ts`, and `budget.test.ts` pin all six. R15 is law: a zone missing from the shared navbar is a defect regardless of scaffold status.
+`manifest.test.ts` and `deploy-path.test.ts` pin all five. R15 is law: a zone missing from the shared navbar is a defect regardless of scaffold status.
+
+(There was a sixth: a `budget.json` ceiling per zone, gated by `budget.test.ts`. Removed 2026-08-04 — see that commit for why.)
 
 ## TypeScript strictness is split
 

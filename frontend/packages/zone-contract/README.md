@@ -47,7 +47,6 @@ private to `manifest.test.ts`, which is how that file grew to nine unrelated con
 | `deploy-path.test.ts`          | turbo task order, `Makefile ZONES`, dockerfile `COPY`, nothing names a dead path  |
 | `cross-zone-reload.ts` + test  | a cross-zone `<a>` hard-navigates — on Svelte's own compiler, not a regex         |
 | `link-targets.ts` + test       | every domain-relative link lands on a route that exists                           |
-| `budget.test.ts` + `.json`     | per-zone entry/deferred gzip ceilings; no vendored blob; no chunk dominates       |
 | `bff-routes.test.ts`           | every BFF route has a caller, and each zone gets only the upstreams it uses       |
 | `live-stream.test.ts`          | a live query survives both idle timeouts                                          |
 | `poll-reason.test.ts`          | every deliberate poll states why                                                  |

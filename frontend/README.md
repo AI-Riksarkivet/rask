@@ -64,7 +64,6 @@ frontend/
                     #     · nothing outside the frontend names a retired package or zone (the dockerfile,
                     #       chart, CI workflow, dagger module, verification scripts)
                     #     · every BFF route has a caller — a route with no caller is a hole to a backend
-                    #     · budget.json — the per-zone gzipped client-bundle ceiling
                     #   plus the local composition proxy driven by the same routing config
                     #   (`bun run dev` → one origin on :5200, like the cluster Ingress)
 ```
