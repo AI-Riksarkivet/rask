@@ -239,11 +239,11 @@ port-forward fronts the whole platform (`/lineage/livez` → 200 through the gat
 (`GET /v1.0/secrets/lance-secrets/lance` → 200) instead of plaintext env. Fixed the kv-v2 nuance:
 Dapr defaults `vaultKVPrefix=dapr` (reads `secret/data/dapr/<key>`); set `vaultKVUsePrefix=false` so it
 reads the natural `secret/data/<key>` the seed writes.
-✅ Verified: the **Lakekeeper-style multi-tenant ReBAC** — `team → project → warehouse(bucket) →
+✅ Verified: the **multi-tenant ReBAC hierarchy** — `team → project → warehouse(bucket) →
 namespace → table` with concentric `owner>writer>reader` rungs + a `validator` rung that gates medallion
 stage promotion. Proven offline (`fga model test`: 7/7 tests, 24/24 checks) **and** live against the
 deployed OpenFGA: a plain writer `can_promote` gold = **false**, a validator = **true**; projects are
-isolated (one bucket per project; a team can own many). See `packages/service-kit/src/service_kit/governed/auth/model.fga` + `model.fga.yaml`.
+isolated (one bucket per warehouse, and a project holds MANY warehouses; a team can own many projects). See `packages/service-kit/src/service_kit/governed/auth/model.fga` + `model.fga.yaml`.
 ⚠️ Deployed-not-wired: the app auto-seeding of the project/team/warehouse hierarchy on create (the
 namespace→warehouse parent + creator-owner are seeded; project/team/validator grants are set out-of-band
 for now); the end-to-end Dex-token → catalog → OpenFGA request demo (auth is `--set auth.enabled=true`).

@@ -73,7 +73,14 @@
 			<p>You don't have access to this project's registry facts.</p>
 		</div>
 	{:else if missing}
-		<div class="empty"><p>No such project — no warehouse claims it.</p></div>
+		<!-- Existence is the project REGISTRY record, not a warehouse implying one: a tenant created
+		     through POST /v1/projects legitimately has zero warehouses and must not read as missing.
+		     The old copy ("no warehouse claims it") stated the pre-registry definition, so an FGA-only
+		     ghost — a project you hold a role on that the catalog never recorded — showed this text
+		     while the gallery listed it, naming neither the cause nor the fix. -->
+		<div class="empty">
+			<p>No such project — the catalog has no registry record for <code class="mono">{project}</code>.</p>
+		</div>
 	{:else if offline}
 		<div class="empty">
 			<RefreshCw size={16} />
