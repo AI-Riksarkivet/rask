@@ -32,23 +32,49 @@ having two spellings of it would be the drift this module exists to prevent.
 
 from __future__ import annotations
 
+import contextlib
 from typing import TYPE_CHECKING
 
-import lance
-from lance_namespace import InvalidInputError, InvalidTableStateError, TableVersionNotFoundError
+from lance_namespace import (
+    CreateTableTagRequest,
+    DeleteTableTagRequest,
+    GetTableTagVersionRequest,
+    InvalidInputError,
+    InvalidTableStateError,
+    TableTagNotFoundError,
+    TableVersionNotFoundError,
+    UpdateTableTagRequest,
+)
 from pydantic import BaseModel
 
+from catalog.core.namespace import open_dataset
+from catalog.services import dataplane
 from service_kit.lakehouse.quality import Assertion, assert_quality, passed
 
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from lance_namespace import LanceNamespace
+
 
 #: The pointer a consumer reads. One flat name per dataset — tag names cannot contain `/`, so a
 #: branch cannot carry its own `published` and must encode the branch in the name if it ever needs
 #: one. Matches `BLESSED_TAG` in the model registry: same concept, different subject.
 PUBLISHED_TAG = "published"
+
+#: Held on the candidate version for the DURATION OF THE GATE, then dropped.
+#:
+#: `cleanup_old_versions` exempts only TAGGED versions, and version N is untagged for exactly as long
+#: as the gate takes to run — so a slow gate against a short `older_than` lets maintenance collect the
+#: very version being gated, and the publish then advances a pointer at something that no longer
+#: exists. The window is small and entirely real, and it widens with every assertion added to the
+#: gate. A tag closes it: while `publishing` names N, maintenance cannot touch it.
+#:
+#: Removed in a `finally`, so a crashed gate leaves at most one stale `publishing` tag rather than
+#: pinning a version forever. A stale one is visible in `ListTableTags` and blocks nothing except the
+#: GC of one version.
+PUBLISHING_TAG = "publishing"
 
 
 class PublicationResult(BaseModel):
@@ -68,29 +94,43 @@ class PublicationResult(BaseModel):
     reason: str | None = None
 
 
-def published_version(uri: str, storage_options: dict[str, str]) -> int | None:
-    """The version `published` points at, or None when nothing has been published yet."""
-    return _tag_version(lance.dataset(uri, storage_options=storage_options), PUBLISHED_TAG)
-
-
-def _tag_version(dataset: lance.LanceDataset, tag: str) -> int | None:
+def _tag_version(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str], tag: str) -> int | None:
     """The version a tag points at, or None when unset.
 
-    An unset tag RAISES (`Ref not found`) rather than returning None — the same pylance behaviour the
-    model registry documents at `models.py:104-105`. Reading it as a falsy return means the first
-    publication of every dataset crashes.
+    Goes through the catalog's own `GetTableTagVersion` rather than reading `ds.tags` directly, so
+    there is ONE resolution path and it is the one the spec defines. The dataplane already converts
+    pylance's raise-on-unset (`Ref not found` — it does NOT return None) into the spec's
+    `TableTagNotFound`; this turns that into the absence it represents.
     """
     try:
-        version = dataset.tags.get_version(tag)
-    except ValueError:
+        return int(dataplane.get_tag_version(ns, so, GetTableTagVersionRequest(id=list(table_id), tag=tag)).version)
+    except TableTagNotFoundError:
         return None
-    return int(version) if version is not None else None
+
+
+def published_version(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str]) -> int | None:
+    """The version `published` points at, or None when nothing has been published yet."""
+    return _tag_version(ns, so, table_id, PUBLISHED_TAG)
+
+
+def _set_tag(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str], tag: str, version: int) -> None:
+    """Create the tag, or move it if it already exists.
+
+    The spec splits create and update into two operations and refuses the wrong one, so which to call
+    depends on state the caller cannot assume — the first publication of every dataset needs create,
+    every later one needs update.
+    """
+    if _tag_version(ns, so, table_id, tag) is None:
+        dataplane.create_tag(ns, so, CreateTableTagRequest(id=list(table_id), tag=tag, version=version))
+    else:
+        dataplane.update_tag(ns, so, UpdateTableTagRequest(id=list(table_id), tag=tag, version=version))
 
 
 def publish(
-    uri: str,
+    ns: LanceNamespace,
     storage_options: dict[str, str],
     *,
+    table_id: Sequence[str],
     version: int,
     key_column: str,
     required_columns: Sequence[str] = (),
@@ -99,7 +139,7 @@ def publish(
     """Gate `version`, then advance `published` to it. Returns the range the notification should carry.
 
     Fail-closed in every direction: an out-of-range version raises before anything is read, and a
-    failed assertion returns `published=False` with the tag untouched, so the previous published
+    failed assertion returns `published=False` with the tag untouched, so the previously published
     version keeps serving. The assertions travel back either way — a blocked batch has to be
     auditable, not merely rejected.
 
@@ -109,53 +149,57 @@ def publish(
     if version < 1:
         raise InvalidInputError(f"version must be >= 1, got {version}")
 
-    dataset = lance.dataset(uri, storage_options=storage_options)
+    table_id = list(table_id)
+    dataset = open_dataset(ns, storage_options, table_id)
     latest = int(dataset.version)
     if version > latest:
         raise TableVersionNotFoundError(f"version {version} not found (latest is {latest})")
 
-    previous = _tag_version(dataset, tag)
-
-    # Gate the version being published, not `latest` — they differ the moment a second writer commits
-    # while this gate runs, and publishing a version nobody checked is the whole failure being
-    # prevented here.
-    at_version = lance.dataset(uri, storage_options=storage_options, version=version)
-    assertions = assert_quality(
-        at_version.uri,
-        storage_options,
-        key_column=key_column,
-        required_columns=tuple(required_columns),
-    )
-
-    if not passed(assertions):
-        failed = [a.assertion for a in assertions if not a.success]
-        return PublicationResult(
-            table=uri,
-            published=False,
-            from_version=previous,
-            to_version=version,
-            assertions=assertions,
-            reason=f"quality gate failed: {', '.join(failed)}",
-        )
-
+    previous = _tag_version(ns, storage_options, table_id, tag)
     if previous is not None and version < previous:
-        # Publishing backwards is a rollback, and a rollback that arrives by accident — a late
-        # retry of an older run — silently un-publishes newer good data. An intentional rollback
-        # goes through the catalog's tag API with the operator naming the version.
+        # Publishing backwards is a rollback, and a rollback arriving by accident — a late retry of an
+        # older run — silently un-publishes newer good data. Checked BEFORE the gate: there is no point
+        # spending a full scan on a version that cannot be published either way.
         raise InvalidTableStateError(
             f"refusing to move {tag!r} backwards from {previous} to {version}; roll back explicitly via the tag API if that is intended"
         )
 
-    tags = dataset.tags
-    if previous is None:
-        tags.create(tag, version)
-    else:
-        tags.update(tag, version)
+    try:
+        # Pin the candidate for the gate's duration — see PUBLISHING_TAG.
+        _set_tag(ns, storage_options, table_id, PUBLISHING_TAG, version)
 
-    return PublicationResult(
-        table=uri,
-        published=True,
-        from_version=previous,
-        to_version=version,
-        assertions=assertions,
-    )
+        # Gate the version being published, not `latest`: they differ the moment another writer commits
+        # while this gate runs, and publishing a version nobody checked is the whole failure this
+        # prevents.
+        candidate = open_dataset(ns, storage_options, table_id, version=version)
+        assertions = assert_quality(
+            candidate.uri,
+            storage_options,
+            key_column=key_column,
+            required_columns=tuple(required_columns),
+        )
+
+        if not passed(assertions):
+            failed = [a.assertion for a in assertions if not a.success]
+            return PublicationResult(
+                table=candidate.uri,
+                published=False,
+                from_version=previous,
+                to_version=version,
+                assertions=assertions,
+                reason=f"quality gate failed: {', '.join(failed)}",
+            )
+
+        _set_tag(ns, storage_options, table_id, tag, version)
+        return PublicationResult(
+            table=candidate.uri,
+            published=True,
+            from_version=previous,
+            to_version=version,
+            assertions=assertions,
+        )
+    finally:
+        # Suppressed on purpose: a failure to unpin must never mask the publish outcome, and the worst
+        # case is one version exempt from GC until someone deletes a visible tag.
+        with contextlib.suppress(Exception):
+            dataplane.delete_tag(ns, storage_options, DeleteTableTagRequest(id=table_id, tag=PUBLISHING_TAG))
