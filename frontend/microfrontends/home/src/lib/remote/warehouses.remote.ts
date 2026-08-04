@@ -29,6 +29,14 @@ const WarehouseSchema = v.object({
 	status: v.optional(v.nullable(v.string())),
 });
 
+/** `DeleteProjectResponse` — what the retirement REALLY removed. `tuples_revoked` is reported rather
+ *  than assumed (a `0` on an FGA-off stack is a fact, not a silent success), which is why the success
+ *  toast is written from this body instead of from the request. */
+const DeleteProjectSchema = v.object({
+	project: v.string(),
+	tuples_revoked: v.number(),
+});
+
 /** `ProjectResponse` — the tenant's warehouses (a narrower record than the registry's) + its
  *  effective admins. */
 const ProjectSchema = v.object({
@@ -121,5 +129,39 @@ export const createWarehouse = command(
 		parsed(
 			await catalogJSON('/v1/warehouses', { method: 'POST', body: JSON.stringify(body) }),
 			WarehouseSchema,
+		),
+);
+
+/** Retire a tenant — `DELETE /v1/projects/{id}`. Gated at the catalog on the project's OWN
+ *  `can_administer` bar, and every refusal is a state the dialog renders rather than an exception:
+ *
+ *  · **409** is the interesting one, and it comes in two flavours the `detail` distinguishes. Either the
+ *    project still holds warehouses — the detail NAMES them, and they are the caller's next click — or
+ *    the record carries the `protected` flag, which `force` overrides.
+ *  · **404** is deliberately indistinguishable from "not yours": the delete door refuses to be an
+ *    existence oracle for the estate's tenants, so the UI must not invent a distinction either.
+ *
+ *  **`force` is the ONLY parameter, and there is no `cascade` on this route at all.** A project cascade
+ *  would reach warehouses, and a warehouse's own delete can purge a bucket — one request must never be
+ *  able to destroy a tenant's storage transitively. Emptying goes one rung at a time through
+ *  `DELETE /v1/warehouses/{id}`, which is exactly what the 409's blocker links point at.
+ *
+ *  No `.refresh()`: the thing this deletes is what `fetchProject` reads, so refreshing it would re-read a
+ *  project that no longer exists purely to watch it 404. The caller navigates back to `/projects`
+ *  instead, and that load re-reads the estate. */
+export const deleteProject = command(
+	v.object({
+		project: v.string(),
+		/** Overrides the registry record's deletion-PROTECTION flag ONLY — the FGA gate ran first and runs
+		 *  identically with or without it, so forcing cannot delete a project the caller may not
+		 *  administer. Omitted (not `false`) unless the caller opted in. */
+		force: v.optional(v.boolean()),
+	}),
+	async ({ project, force }): Promise<ApiResult<{ project: string; tuples_revoked: number }>> =>
+		parsed(
+			await catalogJSON(`/v1/projects/${enc(project)}${force ? '?force=true' : ''}`, {
+				method: 'DELETE',
+			}),
+			DeleteProjectSchema,
 		),
 );
