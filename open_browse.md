@@ -8,9 +8,9 @@ Working plan, not settled architecture — hence the repo root rather than `docs
 | --- | --- | --- |
 | 1 | The page, with search/filter selection + preview + "send to project" | **done** |
 | 2 | Apply a LABEL to a selection (the predictions path) | **done** |
-| 3 | k-NN "more like this" endpoint + selector | next |
+| 3 | k-NN "more like this" endpoint + selector | **done** |
 | 4 | `scripts/` labelling functions → Arrow → import | deferred — decision parked |
-| 5 | Propagation with visible thresholds | needs 3 |
+| 5 | Propagation with visible thresholds | next |
 | 6 | Uncertainty selector | needs a trained model |
 
 **Step 2 landed as PREDICTIONS, following Label Studio.** A send may carry `prediction: [Shape]`;
@@ -24,6 +24,15 @@ The UI offers only classes the taxonomy allows as a whole-item `tag`; a class dr
 withheld rather than sent to a guaranteed 409. The client cap now mirrors the server's
 (`SEND_TASK_CAP = 1000`, divided by `consensus_n`) — it was 5 000, a number of the client's own
 invention, and a 2 000-item selection passed every check and came back 422.
+
+**Step 3 landed as `GET /api/explorer/search/similar`** — a row key in, that row's own vector out,
+its neighbours back. No new gateway row (the existing `/api/explorer/search` prefix forwards to
+`/api/search`) and no new retrieval: it reads the seed's embedding and hands it to the existing
+`vector_search`, which is what makes the atlas lasso a second CALLER rather than a second mechanism.
+The seed is dropped from its own neighbours; a short key is refused rather than treated as a prefix;
+a corpus with no vector space, a key matching no row, and a row not yet embedded are three distinct
+refusals rather than an empty list. The browse panel adds neighbours to the existing selection,
+de-duplicated, and reports how many were NEW.
 
 **Owner decisions still open:** #1 (uncertainty scores) is moot until a model exists; #2 is settled
 as LLM-as-labeler → distil rather than Snorkel-style majority vote; #3 (where labelling functions
