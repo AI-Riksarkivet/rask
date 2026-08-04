@@ -457,6 +457,46 @@ def require_parent(resource: str, segments: list[str], *, delimiter: str) -> Non
     )
 
 
+def require_warehouse_scoped(segments: list[str], *, delimiter: str, warehouses_enabled: bool) -> None:
+    """Refuse a TOP-LEVEL namespace created outside a warehouse.
+
+    A namespace is logical separation INSIDE a tenant, so it has to live in one:
+    ``project > warehouse > namespace > table``. The warehouse-scoped door
+    (``POST /v1/warehouses/{warehouse_id}/namespaces``) binds the new namespace to a real bucket, and
+    every table beneath it then lands in that tenant's storage — physically isolated from every other
+    tenant's.
+
+    This generic door could not. It created the namespace UNBOUND, and the resolver fell back to the
+    shared default root: the namespace worked, tables under it worked, and the data quietly went to
+    the wrong bucket — a multi-tenancy hole that no error ever reported. That fallback existed for
+    backward compatibility, which is exactly what this refusal gives up on purpose.
+
+    NESTED namespaces are untouched: their parent is the namespace above them, so they inherit that
+    one's warehouse binding. Only the top-level rung has a warehouse to name.
+
+    NO-OP WHEN WAREHOUSES ARE DISABLED, and that is not a loophole. With ``warehouses_enabled`` off
+    there are no warehouses to belong to — the deployment is single-bucket by configuration, the
+    default root is the only correct destination, and demanding a warehouse would be a rule no caller
+    could satisfy. The rule binds exactly where it is meaningful: a multi-tenant deployment.
+    """
+    if not warehouses_enabled:
+        return
+    if len(segments) > 1:
+        return
+    ident = fga.canonical_object_id(segments, delimiter=delimiter)
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            f"top-level namespace '{ident}' must belong to a warehouse. A namespace is logical "
+            f"separation inside a tenant (project > warehouse > namespace > table), and an unbound "
+            f"namespace resolves to the shared default bucket instead of the tenant's own. "
+            f"Create it through its warehouse — POST /v1/warehouses/{{warehouse_id}}/namespaces with "
+            f"name '{ident}' — or nest it under an existing namespace "
+            f"('<parent>{delimiter}{ident}')."
+        ),
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Post-create ownership seeding — the single write-side authz policy. Every create
 # endpoint calls this instead of inlining the guard + grant_on_create + parent_object.

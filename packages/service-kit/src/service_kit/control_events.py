@@ -4,7 +4,7 @@ Distinct from the OpenLineage **data** events (`catalog/core/lineage_emit.py`, w
 *writes*): this is the **control-plane** stream — a grant changed, a warehouse was deactivated, a policy
 was set, a namespace/table was created/dropped/renamed. Those mutations already land in the durable audit
 trail (#41, GreptimeDB); this is the real-time **subscribable** layer on top, so internal consumers (cache
-invalidation, an in-estate reaction worker) and the admin console get a live feed (Polaris/Lakekeeper ship
+invalidation, an in-estate reaction worker) and the admin console get a live feed (comparable catalogs ship
 the same).
 
 Shared here (`service_kit`) so producers (the catalog) and consumers import ONE model. The event is a

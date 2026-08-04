@@ -83,3 +83,47 @@ def test_the_guard_agrees_with_what_the_grant_path_would_have_done() -> None:
         except HTTPException:
             refused = True
         assert refused is would_orphan, f"guard and parent_object disagree on {segments}"
+
+
+# --------------------------------------------------------------------------- #
+# A top-level namespace must belong to a warehouse.
+# --------------------------------------------------------------------------- #
+
+
+def test_a_top_level_namespace_outside_a_warehouse_is_refused() -> None:
+    """The multi-tenancy hole: an unbound namespace resolved to the SHARED default bucket.
+
+    Nothing errored — the namespace worked, its tables worked, and the data went to the wrong
+    tenant's storage. That silence is why this is a refusal now rather than a warning.
+    """
+    with pytest.raises(HTTPException) as exc:
+        fga_deps.require_warehouse_scoped(["bronze"], delimiter=DELIM, warehouses_enabled=True)
+    assert exc.value.status_code == 422
+
+
+def test_the_namespace_refusal_points_at_the_warehouse_route() -> None:
+    """A refusal that does not say where to go instead is just an outage."""
+    with pytest.raises(HTTPException) as exc:
+        fga_deps.require_warehouse_scoped(["bronze"], delimiter=DELIM, warehouses_enabled=True)
+    detail = str(exc.value.detail)
+    assert "bronze" in detail
+    assert "/v1/warehouses/{warehouse_id}/namespaces" in detail
+    assert "project > warehouse > namespace > table" in detail
+    # …and the other legal shape: nesting under an existing (already bound) namespace.
+    assert f"<parent>{DELIM}bronze" in detail
+
+
+@pytest.mark.parametrize("segments", [["acme", "silver"], ["acme", "silver", "deep"]])
+def test_a_nested_namespace_inherits_its_parents_binding(segments: list[str]) -> None:
+    """Only the TOP rung names a warehouse; everything below inherits it, so nesting stays open."""
+    fga_deps.require_warehouse_scoped(segments, delimiter=DELIM, warehouses_enabled=True)
+
+
+def test_the_rule_binds_only_where_a_warehouse_can_exist() -> None:
+    """With warehouses DISABLED the deployment is single-bucket by configuration.
+
+    There is no warehouse to belong to, the default root is the only correct destination, and
+    demanding one would be a rule no caller could satisfy. Gating on the feature flag is what makes
+    this an invariant rather than an outage — it fired on 17 existing tests before this existed.
+    """
+    fga_deps.require_warehouse_scoped(["bronze"], delimiter=DELIM, warehouses_enabled=False)

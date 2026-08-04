@@ -1,6 +1,6 @@
 """Column-level lineage query endpoints (#24) — field-to-field provenance / impact / subgraph.
 
-Our deepest moat: field-to-field lineage neither Marquez nor Lakekeeper derives. Every route is gated
+Our deepest moat: field-to-field lineage a format-unaware catalog cannot derive. Every route is gated
 on OpenFGA ``can_get_metadata`` for the owning ``{name}`` (router-level ``require_metadata_access``); a
 column has no ACL of its own (it inherits its table's), so related columns whose owning dataset the
 caller can't see are dropped via :func:`~lineage.api.fga_deps.governed` / the per-request filter.
@@ -29,7 +29,7 @@ router = APIRouter(
 async def get_column_upstream(name: str, field: str, repository: RepositoryDep, datasets: FilterDep, settings: SettingsDep) -> ColumnNeighbors:
     """Column-level provenance (#24): the columns ``name.field`` was (transitively) derived from.
 
-    Our deepest moat — field-to-field lineage neither Marquez nor Lakekeeper derives. Gated on
+    Our deepest moat — field-to-field lineage a format-unaware catalog cannot derive. Gated on
     ``can_get_metadata`` for the owning ``name``; related columns whose *owning dataset* the caller can't
     see are dropped (a column has no ACL of its own — it inherits its table's), closing the same
     transitive-disclosure hole at column resolution. Auth off → pass-through.
