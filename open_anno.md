@@ -1,0 +1,124 @@
+# open_anno — the annotation plane's remaining work
+
+Working plan, not settled architecture. Delete this file when the work lands; it does not belong
+in `docs/`, which asserts "settled" by location regardless of what the contents say.
+
+**MVP first.** Every item below is ordered simplest-first within itself. The rule for the whole
+file: make the core loop *work* before making any part of it rich.
+
+---
+
+## #40 — Campaign operations
+
+All four are wanted. Ordered by cost, cheapest first, because each earlier one makes the next
+easier to judge.
+
+### 40a · Queue filter — *do first*
+Filter the task queue by **state**, **assignee** and **label**. Pure client work over data the
+listing already returns (`TaskListing.details`); no new route, no new permission.
+
+Why first: a 1000-item project is unnavigable today, which makes every other campaign feature hard
+to even demonstrate. Cheapest thing that makes the rest testable.
+
+Done when: filters compose (state AND assignee), the empty result says *why* it is empty rather
+than looking broken, and the filter survives a refetch (it is view state, not server state).
+
+### 40b · Bulk assign
+Select N queued items → assign all to one annotator in one action. Extends the existing per-row
+assign dialog (`TaskQueue.svelte`, `canAssign`).
+
+Open question to settle when building: does a partial failure roll back or report per-item? The
+codebase's precedent (bulk accept, `projects.spec.ts:412`) fires **one gated event per item** and
+reports each — follow that. Do not invent a transaction the actor model cannot honour.
+
+Done when: a partial failure names which items failed and which landed; a refused item leaves the
+others alone.
+
+### 40c · Per-annotator metrics
+Throughput and accept-rate per person. Read-only, derived from the `Transition` list already
+recorded on each task — **no new state**, and that constraint is the point: a metric stored
+separately from the transitions it summarises is a metric that can disagree with them.
+
+Done when: the numbers reconcile against the raw transitions for a seeded project, and a person
+with zero items shows as zero rather than being absent (absence reads as a bug).
+
+### 40d · Membership UI — *do last*
+See and edit who is member / reviewer / manager on a project. This writes **FGA tuples**, so it
+touches the authorization model — use the `openfga` skill, and the write path is the lakehouse's
+existing tuple write (`access.remote.ts`), which is the estate's reference for gated mutations.
+
+Heaviest and last because it is the only one that can lock someone out of their own project.
+
+Done when: a manager cannot remove their own last manager grant (self-lockout is refused, named),
+and every write is `can_manage`-gated server-side.
+
+---
+
+## #39 — Import (shape DECIDED, not yet scheduled)
+
+**Annotation import**, not media import. Bring EXISTING labels in — COCO / YOLO / Label Studio
+JSON — into an annotation project's tasks and drafts, so work started elsewhere can be continued
+in rask.
+
+Not the other three shapes that were considered: media upload, registering an external path, and
+a UI over the existing IIIF harvest are all separate pieces of work and none of them is what was
+meant here.
+
+Notes for whoever picks it up:
+- The landing target is a task's **draft** (`Draft.shapes` + `Draft.links`), not the Lance
+  annotations table — an imported label is unreviewed work, and the draft is where unreviewed work
+  lives. It reaches the table through the ordinary submit/accept/publish path, so imported labels
+  get the same provenance as drawn ones.
+- Imported shapes must be normalised through the canonical vocabulary
+  (`@rask/labeling/shape-types`) exactly like a model's predictions are. COCO says `bbox`,
+  YOLO says a normalised centre-form box, Label Studio says percentages — three dialects, one
+  seam, and the seam already exists.
+- The task's captured **ontology** is the contract: an import carrying a label outside the
+  taxonomy must be refused *at import*, naming the label, not discovered at submit.
+- `status` on an imported shape should be `prediction`, not `accepted` — the same stance as an
+  assist result. Importing is not reviewing.
+
+---
+
+## #41 — Relations + text-span (partly landed)
+
+**Landed:** `RelationClass` in the ontology, `Draft.links` storage, submit-time validation, and the
+two-click link editor in the annotation inspector (arming adopts the inspected shape; the target is
+picked on the canvas).
+
+**Remaining:**
+- **Draw the link as an edge ON the canvas.** Today a link is visible in the inspector only. This
+  is `@rask/engine` work — a line between two shape centres, following the viewport transform.
+- **Text-span annotation.** The `text` shape type exists in the vocabulary and nothing produces
+  one. Needed for token-classification and for the "value" half of KIE on born-digital text.
+
+---
+
+## #37 — Stale items (partly landed)
+
+**Landed:** removal (`DELETE /projects/{id}/tasks/{task_id}`, `can_manage`, refused past
+`labeling`), and the read path now reports the server's actual reason — `<img>.onerror` carries
+neither status nor body, so a clear `404 dataset 'demo' not found` used to reach the user as
+"Failed to load image: <url>".
+
+**Remaining:** the WRITE half. `POST /projects/{id}/items` does not verify that each item's dataset
+resolves, so a stale item can still be created. Refusing at send is what stops the trap being set
+in the first place; removal is only the escape hatch.
+
+---
+
+## #27 — Canvas tool placement (shape DECIDED, not yet scheduled)
+
+The rail's **position is right** — a 44px left vertical strip is the CVAT-shaped answer and it
+already is one. What is wrong is **what is in it and in what order**: the tools need grouping
+separators and a deliberate order (navigate · draw · assist), rather than one flat list.
+
+Not: floating it over the canvas, and not moving it to the right.
+
+---
+
+## #42 — `/annotator/browse` as the bulk-labeling surface
+
+**Owner is designing this.** Intended direction, from the owner: select data by active learning,
+AI-assisted selection, and bulk labelling with weak supervision + embeddings. Do not design it
+speculatively — it stays out of scope until that design exists.
