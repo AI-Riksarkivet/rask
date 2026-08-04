@@ -1053,3 +1053,91 @@ test('changing a filter CLEARS the selection — a hidden row must never stay se
 		'a selection survived a filter change',
 	).toHaveCount(0);
 });
+
+// --------------------------------------------------------------------------------------------------
+// 40b — bulk assign. One gated event per item, reported per item.
+// --------------------------------------------------------------------------------------------------
+
+/** An unassigned row the machine WILL take an `assign` for. `TASK_EVENTS` does not carry that edge
+ *  for `unassigned`, and the per-row assign test declares it the same way. */
+function assignable(id: string) {
+	return {
+		...task(id, 'unassigned'),
+		legal_events: [
+			{ event: 'claim', to: 'claimed', permission: 'can_claim' },
+			{ event: 'assign', to: 'claimed', permission: 'can_manage' },
+		],
+	};
+}
+
+test('bulk assign fires ONE gated event per selected item, carrying the assignee', async ({
+	page,
+}) => {
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([assignable('t1'), assignable('t2'), task('t3', 'accepted')]),
+	);
+	await seed(page, {
+		'POST /tasks/t1/events': task('t1', 'claimed', { assignee: 'gina' }),
+		'POST /tasks/t2/events': task('t2', 'claimed', { assignee: 'gina' }),
+	});
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByRole('checkbox', { name: 'Select all' }).check();
+
+	// Only the ASSIGNABLE rows are offered — t3 is accepted and its machine has no `assign` edge.
+	await expect(page.getByTestId('bulk-assign')).toHaveText('Assign 2');
+	await page.getByTestId('bulk-assign').click();
+
+	await page.getByTestId('bulk-assign-dialog').getByRole('textbox').fill('gina');
+	await page.getByRole('button', { name: 'Assign all' }).click();
+
+	await expect
+		.poll(async () => (await calls(page)).filter((c) => c.method === 'POST').length, {
+			timeout: 10_000,
+		})
+		.toBe(2);
+	const posts = (await calls(page)).filter((c) => c.method === 'POST');
+	expect(posts.map((c) => c.path).sort()).toEqual(['/tasks/t1/events', '/tasks/t2/events']);
+	for (const p of posts) expect(p.body).toMatchObject({ event: 'assign', assignee: 'gina' });
+});
+
+test('a PARTIAL failure names what failed and reports what landed', async ({ page }) => {
+	// The whole reason for one-event-per-item: there is no transaction across task actors, so a
+	// rollback would be a second best-effort loop that can itself half-fail. Reporting the truth
+	// beats claiming an atomicity the model cannot deliver.
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([assignable('t1'), assignable('t2')]),
+	);
+	await seed(page, {
+		'POST /tasks/t1/events': task('t1', 'claimed', { assignee: 'gina' }),
+		'POST /tasks/t2/events': { status: 409, body: { detail: 'task t2 is already held by omar' } },
+	});
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByRole('checkbox', { name: 'Select all' }).check();
+	await page.getByTestId('bulk-assign').click();
+	await page.getByTestId('bulk-assign-dialog').getByRole('textbox').fill('gina');
+	await page.getByRole('button', { name: 'Assign all' }).click();
+
+	// Counts AND the server's own words. "Assign failed" would leave a manager unable to tell a
+	// permission problem from a race on one row.
+	await expect(page.getByText(/1 of 2 assigned to gina/)).toBeVisible();
+	await expect(page.getByText(/already held by omar/)).toBeVisible();
+});
+
+test('bulk assign is not offered when nothing selected can take it', async ({ page }) => {
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([task('t1', 'accepted'), task('t2', 'skipped')]),
+	);
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByRole('checkbox', { name: 'Select all' }).check();
+
+	await expect(page.getByTestId('bulk-assign')).toBeDisabled();
+});

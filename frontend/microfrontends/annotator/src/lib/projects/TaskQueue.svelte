@@ -135,6 +135,53 @@
 	);
 	let bulkBusy = $state(false);
 
+	/** Selected rows the machine will actually accept an `assign` for.
+	 *
+	 *  Derived from each task's OWN `legal_events`, exactly like the per-row button — not from a
+	 *  second guess at the state machine here. A row the machine refuses still FAILS individually and
+	 *  is reported; this only stops the button offering work it can already see is impossible. */
+	const selectedAssignable = $derived(
+		tasks.filter((t) => selectedIds.includes(t.task_id) && canAssign(t)),
+	);
+	/** Non-null while the BULK assign dialog is open, holding the rows it will act on. */
+	let bulkAssignFor = $state<TaskDetail[] | null>(null);
+
+	/** Assign every selected item to one annotator.
+	 *
+	 *  ONE gated event per item, reported per item — the bulk-accept precedent beside this, and the
+	 *  only shape the actor model can honour. There is no transaction across task actors, so a
+	 *  rollback would be a second best-effort loop that can itself half-fail; claiming atomicity we
+	 *  cannot deliver would be worse than reporting the truth.
+	 */
+	async function bulkAssign(targets: TaskDetail[], to: string): Promise<void> {
+		// SNAPSHOT at entry, like bulkAccept: clearing the selection below re-derives the source to
+		// [], and a completion notice computed after that reports "Assigned 0" for real work.
+		const items = [...targets];
+		if (bulkBusy || items.length === 0 || !to) return;
+		bulkBusy = true;
+		notice = null;
+		const failures: string[] = [];
+		for (const task of items) {
+			const result = await fireTaskEvent({ taskId: task.task_id, event: 'assign', assignee: to });
+			if (!result.ok) failures.push(`${task.source.keys[0] ?? task.task_id}: ${result.detail}`);
+		}
+		bulkBusy = false;
+		rowSelection = {};
+		// Names WHICH failed and how many landed. "Assign failed" would leave a manager unable to
+		// tell a permission problem from a race on one row.
+		notice =
+			failures.length === 0
+				? {
+						ok: true,
+						text: `Assigned ${items.length} item${items.length === 1 ? '' : 's'} to ${to}.`,
+					}
+				: {
+						ok: false,
+						text: `${items.length - failures.length} of ${items.length} assigned to ${to} — ${failures[0]}`,
+					};
+		onchanged();
+	}
+
 	async function bulkAccept(): Promise<void> {
 		// SNAPSHOT the derived at entry: clearing the selection below re-derives it to [], and a
 		// completion notice computed from the post-clear value reports "Accepted 0" for real work
@@ -412,11 +459,24 @@
 			data-testid="bulk-bar"
 		>
 			<span class="text-muted-foreground">
-				{selectedIds.length} selected · {selectedReviewable.length} reviewable
+				{selectedIds.length} selected · {selectedReviewable.length} reviewable · {selectedAssignable.length}
+				assignable
 			</span>
 			<Button
+				variant="outline"
 				size="sm"
 				class="ml-auto"
+				data-testid="bulk-assign"
+				disabled={bulkBusy || selectedAssignable.length === 0}
+				onclick={() => {
+	bulkAssignFor = [...selectedAssignable];
+	assignee = '';
+}}
+			>
+				{`Assign ${selectedAssignable.length}`}
+			</Button>
+			<Button
+				size="sm"
 				disabled={bulkBusy || selectedReviewable.length === 0}
 				onclick={() => void bulkAccept()}
 			>
@@ -480,6 +540,37 @@
 	: 'No items yet — send data points in from Search or the Atlas.'}
 	/>
 </div>
+
+<!-- BULK assign. A separate dialog from the per-row one rather than a mode flag on it: the two
+     differ in what they act on, what they say, and what they do on submit, and a shared dialog
+     branching three ways on a nullable pair is how the wrong set gets assigned. -->
+<Dialog.Root
+	open={bulkAssignFor !== null}
+	onOpenChange={(open) => (bulkAssignFor = open ? bulkAssignFor : null)}
+>
+	<Dialog.Content class="sm:max-w-sm" data-testid="bulk-assign-dialog">
+		<Dialog.Title>Assign {bulkAssignFor?.length ?? 0} items</Dialog.Title>
+		<Dialog.Description>
+			Each is assigned individually and reported individually — there is no transaction across items,
+			so a refusal on one leaves the rest alone.
+		</Dialog.Description>
+		<form
+			class="flex flex-col gap-3"
+			onsubmit={(e) => {
+	e.preventDefault();
+	const targets = bulkAssignFor;
+	bulkAssignFor = null;
+	if (targets && assignee.trim()) void bulkAssign(targets, assignee.trim());
+}}
+		>
+			<Input bind:value={assignee} placeholder="annotator (OIDC subject or username)" />
+			<div class="flex justify-end gap-2">
+				<Button type="button" variant="outline" onclick={() => (bulkAssignFor = null)}>Cancel</Button>
+				<Button type="submit" disabled={!assignee.trim()}>Assign all</Button>
+			</div>
+		</form>
+	</Dialog.Content>
+</Dialog.Root>
 
 <Dialog.Root
 	open={assignFor !== null}

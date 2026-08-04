@@ -34,16 +34,19 @@ Side effect worth keeping: `@rask/ui`'s `Select` now passes `onValueChange` thro
 `Select.Root`, which always had it. Without it a consumer had to watch `value` from an `$effect` and
 assign state there — the Svelte 5 anti-pattern.
 
-### 40b · Bulk assign
+### 40b · Bulk assign — **LANDED**
 Select N queued items → assign all to one annotator in one action. Extends the existing per-row
 assign dialog (`TaskQueue.svelte`, `canAssign`).
 
-Open question to settle when building: does a partial failure roll back or report per-item? The
-codebase's precedent (bulk accept, `projects.spec.ts:412`) fires **one gated event per item** and
-reports each — follow that. Do not invent a transaction the actor model cannot honour.
+Settled as predicted: ONE gated event per item, reported per item — the bulk-accept precedent, and
+the only shape the actor model can honour. There is no transaction across task actors, so a rollback
+would be a second best-effort loop that can itself half-fail; claiming an atomicity we cannot deliver
+is worse than reporting the truth.
 
-Done when: a partial failure names which items failed and which landed; a refused item leaves the
-others alone.
+Done: the button offers only rows whose OWN `legal_events` carry an `assign` edge (not a second guess
+at the machine here), a partial failure reads "1 of 2 assigned to gina — <the server's words>", and a
+separate dialog from the per-row one because the two differ in what they act on, what they say and
+what they do on submit.
 
 ### 40c · Per-annotator metrics
 Throughput and accept-rate per person. Read-only, derived from the `Transition` list already
