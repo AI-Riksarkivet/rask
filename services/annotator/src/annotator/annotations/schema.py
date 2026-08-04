@@ -175,9 +175,17 @@ EMPTY_SCHEMA = pa.schema(
         ("group_id", pa.string()),
         ("reading_order", pa.int32()),
         ("difficult", pa.bool_()),
-        ("links", pa.string()),
+        # JSON columns, typed as JSON. They were `pa.string()` — valid JSON in every writer, and
+        # entirely opaque to every reader: a consumer had to fetch every row and parse client-side to
+        # answer "which annotations carry this attribute". `pa.json_()` stores JSONB and makes
+        # `json_get_*` / `json_extract` / `json_exists` work in a Lance filter
+        # (https://lance.org/guide/json/).
+        #
+        # A null is fine (the insert path lets absent columns fall to null); an EMPTY STRING would
+        # not be — it is not valid JSON — which is why every writer emits `{}` / `[]` rather than "".
+        ("links", pa.json_()),
         ("mask", pa.string()),
-        ("metadata", pa.string()),
+        ("metadata", pa.json_()),
         # row lifecycle — stamped server-side (save/tags): both at row birth,
         # updated_at again on every edit. Timezone-aware UTC, microseconds.
         ("created_at", pa.timestamp("us", tz="UTC")),

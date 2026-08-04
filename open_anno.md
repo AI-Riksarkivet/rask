@@ -85,38 +85,45 @@ the same complaint in a different form.
 
 ---
 
-## #43 — The JSON columns are opaque strings (NEW)
+## #43 — The JSON columns are opaque strings — **LANDED**
 
-Three columns hold JSON and are typed `pa.string()`, so nothing can query them:
+`attributes` (published table), `metadata` and `links` (annotations table) were `pa.string()`: valid
+JSON in every writer, entirely opaque to every reader. All three are now `pa.json_()` — Lance JSONB —
+so `json_get_*` / `json_extract` / `json_exists` work in a filter.
 
-| Column | Where |
-| --- | --- |
-| `attributes` | the PUBLISHED table — its own comment says `# json` |
-| `metadata` | the annotations table |
-| `links` | the annotations table |
+Proven end to end in `tests/unit/test_json_columns.py` (9 tests), against REAL Lance datasets built
+from the REAL schemas — an in-memory Arrow test would prove the annotation and nothing about the
+engine. Revert-checked: with the columns back on `pa.string()`, **8 of the 9 fail**, the central one
+with `No function matches 'json_get_int(Utf8, Utf8)'`.
 
-This is the session's recurring shape one more time: the ontology declares per-class attributes with
-REAL types (`free` / `int` / `enum` / `bool`), enforces them at submit, publishes them — and then no
-consumer can filter on one. Reading every row and parsing client-side is the only option.
+The IPC hop is covered on purpose: the annotator never writes Lance, it posts Arrow IPC to the
+catalog. A type that degraded to string on the wire would leave the published table unfilterable
+while every schema-level test still passed.
 
-Lance types these natively. `pa.json_()` stores JSONB and gives `json_get_string` / `json_get_int` /
-`json_get_bool` / `json_extract` / `json_array_contains` in filters, a scalar JSON index on a hot
-path (`IndexConfig(index_type="json", parameters={"target_index_type": "btree", "path": "order"})`),
-and an INVERTED index for full-text over a whole document
-(https://lance.org/guide/json/).
+**Two things the experiments contradicted, recorded because assuming either would have been wrong:**
 
-**The caveat that shapes the design:** JSON functions work in FILTERS only, not in projection. You
-can select rows where `json_get_int(attributes, 'order') > 3`, but you cannot project
-`attributes.order` as a column. So a training consumer that wants a field AS a column still needs a
-derived/computed column — the JSON type buys querying, not free flattening.
+- **`alter_columns` string→json is a SILENT NO-OP** in lance 9.0.0 — it reports success and the type
+  stays `string`. So this applies to NEWLY WRITTEN tables; existing string-typed tables need a
+  rewrite, not an alter.
+- **An empty string is not refused** — Lance coerces `""` to JSON `null` (stored as `'null'`).
+  Malformed JSON (`{oops`) IS refused, at `write_dataset`, as
+  `OSError(LanceError(Arrow): Failed to encode JSON)`. Both pinned. No writer emits `""` today
+  (`_json_attributes` returns `{}` for a shapeless row), and that is now load-bearing rather than
+  tidy: garbage that used to land happily now fails the whole publish write.
 
-Scope when picked up: change the three column types, keep the writers' JSON encoding as-is (they
-already emit sorted-key JSON strings for byte-identical replays), add an index on whichever path the
-review queue actually filters by, and prove a filter returns the right rows. The `attributes` change
-touches the published table, which is additive and metadata-only in Lance — the same property that
-made the text-span facet safe.
+**No index was added, and that is a finding rather than a cut.** The plan said to index "whichever
+path the review queue actually filters by". There is no such path: the annotations dataset is
+filtered ONLY by descriptor identity key fields (`chunk_key_filter` → `doc_key` + int key fields),
+and the review queue's filter is CLIENT-side over task actor state (`t.state`, `t.assignee`,
+`TaskQueue.svelte:70-77`) — it never touches this Lance table. A Lance JSON index must name one
+concrete path, and it must be rebuilt after every overwrite
+(`medallion/services/compute.py:200-212`), so indexing a path nobody queries is standing cost for no
+query. The type change is precisely what unblocks the index the day a filter lands.
 
----
+**The caveat that still shapes downstream design:** JSON functions work in FILTERS only, not in
+projection. You can select rows where `json_get_int(attributes, 'order') > 3`; you cannot project
+`attributes.order` as a column. A training consumer that wants a field AS a column still needs a
+derived column — the JSON type buys querying, not free flattening.
 
 ## #42 — `/annotator/browse` as the bulk-labeling surface
 
