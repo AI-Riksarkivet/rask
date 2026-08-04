@@ -260,7 +260,8 @@ def test_the_tag_move_mints_NO_new_version(ns) -> None:  # noqa: ANN001
 # ── the notification (D-R2) ───────────────────────────────────────────────────────────
 
 
-def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothing() -> None:
+@pytest.mark.asyncio
+async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothing(ns, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
     """The event is the wake-up; the tag is the truth.
 
     Two properties, asserted together because each is wrong without the other:
@@ -268,25 +269,37 @@ def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothing() -
     * a successful publish announces `{from_version, to_version}` — the RANGE is the entire point of
       the signal (D-R3), since a consumer turns it straight into
       `_row_created_at_version > from AND <= to` and keeps no bookmark of its own;
-    * a REFUSED gate announces nothing. There is no new readiness to wake anyone for, and an event on
+    * a REFUSED gate announces NOTHING. There is no new readiness to wake anyone for, and an event on
       a rejection would teach consumers to check whether a "published" notice actually published.
 
-    Asserted on the endpoint's emit decision rather than on a live bus: what is being pinned is WHEN
-    the estate announces and WHAT it carries, and a broker adds nothing to either question.
+    Drives the REAL endpoint. An earlier version of this test defined its own `emit()` mirroring
+    `publish_table`'s rule and asserted on that — so it would have passed just as happily if the
+    endpoint emitted on every rejection. A test that reimplements the code under test proves only
+    that the copy is self-consistent.
     """
-    from catalog.services.publication import PublicationResult
+    from catalog.api.v1.endpoints.publication import publish_table
+    from catalog.core.config import Settings
+    from catalog.schemas import PublishRequest
 
-    emitted: list[dict[str, object]] = []
+    announced: list[dict[str, object]] = []
 
-    def emit(result: PublicationResult) -> None:
-        """The endpoint's rule, in one line — mirrors `publish_table`."""
-        if result.published:
-            emitted.append({"from_version": result.from_version, "to_version": result.to_version})
+    class _Emitter:
+        async def emit(self, event: object) -> None:
+            announced.append({"action": getattr(event, "action", None), **dict(getattr(event, "extra", {}) or {})})
 
-    emit(PublicationResult(table="t", published=True, from_version=4, to_version=7))
-    emit(PublicationResult(table="t", published=False, from_version=7, to_version=8, reason="quality gate failed: not_null"))
+    # The alias, not the field name — pydantic-settings validates on the env alias.
+    monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "x")
+    monkeypatch.setenv("LANCE_S3_SECRET_ACCESS_KEY", "y")
+    settings = Settings()
 
-    assert emitted == [{"from_version": 4, "to_version": 7}], "a rejection must announce nothing"
+    good = _write(ns, [1, 2, 3])
+    await publish_table("pages", PublishRequest(version=good, key_column="id"), ns, settings, {}, _Emitter(), None)  # ty: ignore[invalid-argument-type]
+
+    bad = _write(ns, [4, None, 6])
+    await publish_table("pages", PublishRequest(version=bad, key_column="id"), ns, settings, {}, _Emitter(), None)  # ty: ignore[invalid-argument-type]
+
+    assert [a["action"] for a in announced] == ["table_published"], "a rejection must announce nothing"
+    assert (announced[0]["from_version"], announced[0]["to_version"]) == (None, good)
 
 
 def test_table_published_is_in_the_control_VOCABULARY() -> None:
