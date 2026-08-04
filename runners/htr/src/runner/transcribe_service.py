@@ -32,6 +32,10 @@ from ray import serve
 
 logger = logging.getLogger(__name__)
 
+#: The Hugging Face revision every weight load pins to — see htr/actors/layout.py for why a moving
+#: ``main`` is a provenance defect rather than a convenience. Override with RASK_HTR_MODEL_REVISION.
+MODEL_REVISION = os.environ.get("RASK_HTR_MODEL_REVISION", "main")
+
 
 # Mirror constants from htr.actors.transcription so behavior matches the
 # old TranscribeActor exactly.
@@ -83,9 +87,10 @@ class TranscribeService:
             torch.backends.cudnn.allow_tf32 = True
         torch.backends.cudnn.benchmark = True
 
-        self.processor = TrOCRProcessor.from_pretrained(self.model_name, use_fast=True)
+        self.processor = TrOCRProcessor.from_pretrained(self.model_name, use_fast=True, revision=MODEL_REVISION)
         self.model = VisionEncoderDecoderModel.from_pretrained(
             self.model_name,
+            revision=MODEL_REVISION,
             dtype=self.dtype,
             device_map="cuda:0" if torch.cuda.is_available() else None,
             attn_implementation={"encoder": "sdpa", "decoder": "eager"},

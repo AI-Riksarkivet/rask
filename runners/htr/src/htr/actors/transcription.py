@@ -25,6 +25,10 @@ from htr.schemas import Line, TranscribedLine
 
 logger = logging.getLogger(__name__)
 
+#: The Hugging Face revision every weight load pins to — see htr/actors/layout.py for why a moving
+#: ``main`` is a provenance defect rather than a convenience. Override with RASK_HTR_MODEL_REVISION.
+MODEL_REVISION = os.environ.get("RASK_HTR_MODEL_REVISION", "main")
+
 MAX_BATCH = 64  # length-bucketed; bigger amortizes kernel launches but raises peak GPU memory.
 # 64 fits two actors per GPU on a 96 GB card with ~30 GB/actor headroom for decoder KV cache;
 # 128 OOMs on text-dense volumes (A0038595).
@@ -104,11 +108,12 @@ class TranscribeActor:
         # cuDNN benchmark picks fastest kernels for fixed shapes (encoder is 384x384).
         torch.backends.cudnn.benchmark = True
 
-        self.processor = TrOCRProcessor.from_pretrained(self.model_name, use_fast=True)
+        self.processor = TrOCRProcessor.from_pretrained(self.model_name, use_fast=True, revision=MODEL_REVISION)
         # device_map + dtype propagates through HF's lazy-init path so weights land
         # on cuda in the right precision; encoder gets HF native SDPA (Flash) for free.
         self.model = VisionEncoderDecoderModel.from_pretrained(
             self.model_name,
+            revision=MODEL_REVISION,
             dtype=self.dtype,
             device_map="cuda:0" if torch.cuda.is_available() else None,
             attn_implementation={"encoder": "sdpa", "decoder": "eager"},

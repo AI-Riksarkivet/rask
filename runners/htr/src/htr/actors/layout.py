@@ -4,6 +4,7 @@ One row per page. Reads `image_bytes`, writes `regions` (list[Region])."""
 
 import io
 import logging
+import os
 
 import numpy as np
 from PIL import Image
@@ -13,6 +14,14 @@ from htr.schemas import Region
 
 
 logger = logging.getLogger(__name__)
+
+#: The Hugging Face revision every weight load pins to. ``main`` is a MOVING POINTER: an upstream
+#: push silently changes what this actor loads, so the identical pipeline over the identical pages
+#: produces DIFFERENT transcriptions while lineage records the same model name. For an archive
+#: publishing machine-generated readings of historical records, that is the provenance claim that
+#: matters most. Override per-deployment with ``RASK_HTR_MODEL_REVISION``; pin it to a commit sha
+#: before any run whose output will be published.
+MODEL_REVISION = os.environ.get("RASK_HTR_MODEL_REVISION", "main")
 
 
 class LayoutActor:
@@ -28,10 +37,10 @@ class LayoutActor:
 
         # Ultralytics' YOLO() doesn't resolve HF Hub repo IDs — fetch the .pt
         # file ourselves and pass the local path.
-        pt_files = [f for f in list_repo_files(self.model_name) if f.endswith(".pt")]
+        pt_files = [f for f in list_repo_files(self.model_name, revision=MODEL_REVISION) if f.endswith(".pt")]
         if not pt_files:
             raise RuntimeError(f"No .pt file in {self.model_name}")
-        model_file = hf_hub_download(repo_id=self.model_name, filename=pt_files[0])
+        model_file = hf_hub_download(repo_id=self.model_name, filename=pt_files[0], revision=MODEL_REVISION)
         self._model = YOLO(model_file)
         try:
             import torch
