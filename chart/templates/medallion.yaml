@@ -271,21 +271,6 @@ spec:
             - name: APP_API_TOKEN  # verify the Dapr-stamped header on /medallion-event (forged-trigger guard)
               valueFrom:
                 secretKeyRef: { name: {{ $root.Release.Name }}-dapr-app-token, key: token }
-            # S3 CREDENTIALS. A mover reads its upstream tier and writes its downstream one, both on
-            # object storage — but it was given no endpoint and no keys, so `storage_options()` was
-            # `{}` and every `s3://` open fell through to real AWS: "Bucket 'bronze-wh' not found".
-            # The compute path had therefore never once read a governed table in-cluster. Same ONE
-            # credential pair as the rest of the fleet (P4 RustFS unification).
-            - { name: RASK_S3_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" $root | quote }} }
-            - { name: AWS_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" $root | quote }} }
-            - { name: AWS_ALLOW_HTTP, value: "true" }
-            {{- $moverSecret := $root.Values.existingSecret | default (printf "%s-app" (include "rask.fullname" $root)) }}
-            - name: AWS_ACCESS_KEY_ID
-              valueFrom:
-                secretKeyRef: { name: {{ $moverSecret }}, key: AWS_ACCESS_KEY_ID }
-            - name: AWS_SECRET_ACCESS_KEY
-              valueFrom:
-                secretKeyRef: { name: {{ $moverSecret }}, key: AWS_SECRET_ACCESS_KEY }
             - { name: MEDALLION_FROM_NAMESPACE, value: {{ .fromNamespace | quote }} }
             - { name: MEDALLION_FROM_DATASET, value: {{ .fromDataset | quote }} }
             - { name: MEDALLION_TO_NAMESPACE, value: {{ .toNamespace | quote }} }
