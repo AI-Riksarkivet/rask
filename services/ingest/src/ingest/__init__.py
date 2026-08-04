@@ -16,12 +16,14 @@ from ingest.api import router as ingest_router
 from ingest.health import router as health_router
 from ingest.provenance import LineageProvenanceReader
 from ingest.runs import SCHEDULE_TIMEOUT_SECONDS, InMemoryRunStore
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from fastapi import FastAPI
+from fastapi import FastAPI
+
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +48,57 @@ def create_app() -> FastAPI:
     app.state.workflow_starter = _DaprWorkflowStarter()
     app.state.workflow_reader = _DaprWorkflowReader()
     app.state.provenance_reader = LineageProvenanceReader()
+    # The authz/authn clients the ingest door needs. Wired here rather than lazily inside the
+    # dependency because `authorize_ingest` FAILS CLOSED on a missing client — a lazily-absent client
+    # would 503 every request instead of authorizing it, and the estate's review found exactly that
+    # bypass shape once already (a gate silently off with FGA_ENABLED=true because the client was
+    # never built).
+    _wire_auth(app)
+    # A DENIAL MUST BE A 403, NOT A 500. `make_service_app` carries the fleet's own handlers, which do
+    # not know the `lance_namespace` typed errors the auth door raises — so without this an
+    # unauthorized ingest answered "Internal Server Error", which tells the caller nothing, tells
+    # monitoring the wrong thing, and would have had someone debugging a crash that was the gate
+    # working. The same handler every governed service installs; the estate's rule is that endpoints
+    # raise typed errors and ONE translator maps all 22 codes.
+    install_problem_handlers(app, logger)
     return app
+
+
+def _wire_auth(app: FastAPI) -> None:
+    """Build the FGA client and OIDC verifier onto `app.state`, or leave them None when disabled.
+
+    Same construction shape as the catalog, lineage and medallion consumers — pinned store/model else
+    provision, explicit timeout — so all of them behave alike. A per-service variation here is how one
+    pod ends up minting a model version on every restart.
+    """
+    from ingest.auth import get_auth_settings
+
+    settings = get_auth_settings()
+
+    app.state.fga = None
+    if settings.fga_enabled:
+        from service_kit.governed import fga
+
+        store_id, model_id = settings.fga_store_id, settings.fga_model_id
+        if store_id and model_id:
+            app.state.fga = fga.make_client(settings.fga_api_url, store_id, model_id, timeout_seconds=settings.fga_timeout_seconds)
+        else:
+            # Deliberately NOT provisioning here. The ingest plane is a data writer, not an authz
+            # owner: minting a store/model would make a writer the source of truth for the estate's
+            # permissions. Unpinned means the door fails closed (503) until an operator pins it.
+            logger.warning("ingest: LANCE_FGA_ENABLED without a pinned store/model — the ingest door will 503")
+
+    app.state.oidc = None
+    if settings.oidc_enabled and settings.oidc_issuer and settings.oidc_audience:
+        from service_kit.governed.oidc import OIDCVerifier
+
+        app.state.oidc = OIDCVerifier(
+            settings.oidc_issuer,
+            settings.oidc_audience,
+            settings.oidc_cache_ttl,
+            leeway=settings.oidc_leeway,
+            allow_insecure=settings.oidc_allow_insecure,
+        )
 
 
 def _lifespan(settings: Any) -> Any:  # noqa: ANN401 — service_kit's LifespanFactory shape

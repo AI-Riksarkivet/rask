@@ -21,6 +21,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
+from ingest.auth import AuthSettingsDep, authorize_ingest
 from ingest.runs import (
     SCHEDULE_TIMEOUT_SECONDS,
     RunRecord,
@@ -94,10 +95,19 @@ def get_reader(request: Request) -> WorkflowRunReader | None:
 async def create_ingest(
     body: IngestRequest,
     response: Response,
+    request: Request,
     store: Annotated[RunStore, Depends(get_store)],
     starter: Annotated[WorkflowStarter, Depends(get_starter)],
+    settings: AuthSettingsDep,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    dapr_api_token: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
 ) -> IngestAccepted:
+    # BEFORE anything else. The body names the project this write lands in, so the admin check targets
+    # that project rather than a configured one — authorization scope must equal write scope, or an
+    # admin of project A passes the gate while the rows land in project B.
+    await authorize_ingest(request, settings, body.project, dapr_api_token, authorization)
+
     if body.kind not in registered_kinds():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -170,6 +180,9 @@ async def get_ingest(
     request: Request,
     store: Annotated[RunStore, Depends(get_store)],
     reader: Annotated[WorkflowRunReader | None, Depends(get_reader)],
+    settings: AuthSettingsDep,
+    dapr_api_token: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
 ) -> RunStatusResponse:
     record = await store.get(run_id)
     engine_state = await asyncio.to_thread(reader.state, run_id) if reader is not None else None
@@ -183,6 +196,11 @@ async def get_ingest(
         if record is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no ingest run {run_id!r}")
         await store.put(record)
+
+    # Authorized against the run's OWN project, which is only knowable after the record is resolved —
+    # a run id names a tenant, and a status body carries that tenant's project, dataset, source keys
+    # and error detail. Reading it is not public.
+    await authorize_ingest(request, settings, record.project, dapr_api_token, authorization)
 
     # The store holds only what the caller asked for; everything that MOVES is read from the engine.
     # Without this a completed run reported ACCEPTED forever — nothing writes the record a second
