@@ -27,6 +27,7 @@
 	import { Textarea } from '@rask/ui/textarea';
 	import { ExternalLink, Trash2 } from '@lucide/svelte';
 
+	import ImportButton from './ImportButton.svelte';
 	import LeaseChip from './LeaseChip.svelte';
 	import { dropTask } from './remote/projects.remote';
 	import { fireTaskEvent } from './remote/tasks.remote';
@@ -401,6 +402,9 @@
 			>
 				<ExternalLink class="size-3.5" /> Annotate
 			</Button>
+			<!-- Only on a CLAIMED task, mirroring the server: importing is annotating, so it obeys the
+			     same state rule as a draft save rather than being a second way in. -->
+			<ImportButton taskId={task.task_id} onimported={onchanged} />
 		{/if}
 		{#if canAssign(task)}
 			<Button
