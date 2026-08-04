@@ -71,6 +71,33 @@ simply not in the list. A dock is still EARNED by a real multi-panel workflow, n
 symmetry: train and studio carry placeholder data, home is the catch-all, the annotator is already
 a canvas.
 
+**A PANEL RENDERS THE PAGE'S COMPONENT. It is not a smaller re-implementation.**
+
+This is the rule the estate has broken twice, in opposite directions, and the second time from inside
+a zone where nothing was watching. The compositor was retired because an element *could not* import a
+page component and every panel had to be mirrored — then the in-zone panels were hand-written anyway:
+`/compute/actors` was 416 lines with sorting, filters and search; `ActorsPanel` was 49 lines, four
+columns, no controls, sharing ZERO components. They drifted immediately. Fixed 2026-08-04.
+
+The shape to copy:
+
+| | |
+|---|---|
+| the view lives in | `$lib/boards/<X>Board.svelte` (compute) or beside its domain (`$lib/lineage/RunsBoard.svelte`) |
+| the route is | `<svelte:head>` + `<XBoard />` — nine lines |
+| the panel is | `<XBoard />`, plus a box if it needs one |
+
+**When the panel's DATA differs, pass rows as a PROP — do not give the board its own fetch.** The
+lakehouse run board is the case: the route reads `listRuns` on the lineage cursor, the dock's panel
+reads the same rows out of the shared `LineageState` that also feeds the graph and the event feed. One
+poll for three panels is the property that earns an in-zone dock; a self-fetching board would have
+re-mirrored the view and broken it in one move. So the board owns PRESENTATION (sort, filter,
+pagination, drill-in) and the caller owns where the rows came from.
+
+A panel with no page counterpart is fine and is NOT a mirror — `EventsPanel` renders
+`LineageState.events`, which no route renders (`/admin/events` is the *governance* feed, a different
+plane). Do not invent a pairing to satisfy the rule.
+
 **Adding a dock to a zone? Four things fail QUIETLY if you skip them** (all four were skipped once,
 each surfacing differently): declare `@rask/dockview` in that zone's `package.json` (bun hoisting
 hides an undeclared import until the clean container build); `@import '@rask/dockview/styles.css'
