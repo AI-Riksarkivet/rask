@@ -94,8 +94,22 @@ compaction / index optimize / reconcile / orphan-report have no upstream equival
 **`delete_unverified=True` is documented as "extremely dangerous"** — it can delete an in-flight
 operation's files. Our sweep must never pass it.
 
+**Now expressible (d8a4868).** `auto_cleanup_interval_commits` on the policy hands version
+reclamation to the DATASET and SKIPS our cleanup step — one owner, never two, because both running
+is two processes racing to delete the same manifests. `DatasetResult.auto_cleanup_configured`
+reports which owner ran, since "reclaimed nothing" and "the writer owns this one" otherwise both
+read as `old_versions_removed=0`. It stays opt-in: auto-cleanup runs inside the commit, needs delete
+permission and adds latency to every Nth write, so a rarely-written tier is better served by the
+sweep, which costs the writer nothing.
+
+**Also now expressible: `scan_batch_size`.** Lance's default read batch is 8192 ROWS, and rows are
+not a unit of memory — against ~1.8 MB bronze page rows that is ~15 GB per compute thread. Safe for
+feature tables, ruinous for a blob tier, so it is per-tier policy rather than a constant.
+
 Still unowned: WHICH operations run, HOW OFTEN, against WHICH warehouses. `discover_dataset_uris`
 walks ONE root; with per-warehouse buckets it must walk every one, untested across more than one.
+And the policy has no PROJECT-scoped view (#65) — the fields exist, the surface to set them per
+project/tier does not.
 
 ## 5. What the specs added that we had not considered
 
@@ -124,10 +138,36 @@ walks ONE root; with per-warehouse buckets it must walk every one, untested acro
 - **Feature flags are the refusal mechanism.** Flag 64 (data overlay files): a reader that does not
   understand them "must refuse a dataset that uses them… a correctness bug rather than a degraded
   experience." Unknown flags ≥32 must be rejected.
-- **NOT YET MINED**: `mem_wal.md` (LSM shards, `_mem_wal/` tree, SSTable compaction order, and a
-  documented warning that GC'ing WAL files WEAKENS writer fencing) and `data_overlay_file.md`
-  (overlay→overlay merges must be contiguous in `committed_version`; an overlay→base fold on an
-  indexed field must rebuild that index in the same commit). Both are maintenance-relevant.
+## 5b. The last two specs, MINED (0dc737c) — a fifth false-positive class
+
+`mem_wal.md` and `data_overlay_file.md` were the two unread specs. Both describe files the orphan
+pass had never seen, and in the directory where a false positive costs real values. Findings:
+
+**`mem_wal.md` — `_mem_wal/`.** MemWAL is an LSM layer: each shard holds a write-ahead log plus
+SSTable datasets, and **no base-table manifest references any of it**. To the shipped detector that
+is the definition of garbage — the whole tree would be reported. Two further facts make reclaiming
+there a job for the shard manifests, not a prefix subtraction:
+
+- **SSTable compaction has an ORDER.** Newer SSTables shadow older ones, so "unreferenced" is only
+  meaningful relative to a shard's own manifest, not the table's.
+- **Deleting WAL files WEAKENS WRITER FENCING.** Fencing detects a stalled writer by a
+  put-if-not-exists COLLISION — the very file whose existence is the signal. GC the file and the
+  collision cannot happen, so a zombie writer is no longer fenced. This is the rare case where
+  correct-looking reclamation silently removes a SAFETY mechanism rather than bytes.
+
+**`data_overlay_file.md` — flag 64.** Overlays are `data/overlay-*.lance` referenced from
+`DataFragment.overlays`, which `data_files()` does not enumerate — so every overlay reads as
+unreferenced. Two invariants also constrain any future folding we do:
+
+- **overlay→overlay merges must be CONTIGUOUS in `committed_version`.** Merging across a gap is not
+  a slower path, it is wrong.
+- **an overlay→base fold on an INDEXED field must rebuild that index in the SAME commit,** or the
+  index silently describes pre-fold values.
+
+The spec's own rule settles the design: a reader that does not understand flag 64 **must refuse the
+dataset** — "a correctness bug rather than a degraded experience." So the pass REFUSES both layouts
+(unavailable-with-reason) rather than guessing, which is what 0dc737c implements and what
+`test_a_memwal_shard_tree_is_refused` / `test_a_dataset_using_overlays_is_refused` pin.
 
 ## 6. Still not verified
 
