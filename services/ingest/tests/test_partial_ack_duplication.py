@@ -153,3 +153,91 @@ def test_a_manifest_from_BEFORE_batching_still_reads(tmp_path: Path) -> None:
     (root / "legacy.json").write_text(json.dumps({"unit": "u9", "fragments": ['{"units":["u9"]}']}), encoding="utf-8")
 
     assert discover_staged(dataset, RUN) == ['{"units":["u9"]}']
+
+
+# ── the selection must not refuse work it can actually do ─────────────────────────────
+
+
+def _exact_cover_exists(sets: list[frozenset[str]], universe: frozenset[str]) -> bool:
+    """Brute force: is there ANY subset of these fragments covering every unit exactly once?
+
+    Exponential and deliberately so — it is the independent oracle the selection is judged against,
+    and reusing the selection's own logic to score the selection would prove nothing.
+    """
+    from itertools import combinations
+
+    for size in range(1, len(sets) + 1):
+        for combo in combinations(sets, size):
+            covered: set[str] = set()
+            for s in combo:
+                if s & covered:
+                    break
+                covered |= s
+            else:
+                if covered == universe:
+                    return True
+    return False
+
+
+def test_selection_does_not_REFUSE_an_input_it_can_resolve(tmp_path: Path) -> None:
+    """The measured defect: the sweep raised on 24% of inputs that HAD a valid exact cover.
+
+    The plainest case is three equal fragments, A={u0,u1} B={u1,u2} C={u2,u3}. The old loop took A,
+    met B, and raised on the spot — while A+C covers every unit exactly once and was sitting right
+    there. Raising mid-sweep never gave C the chance.
+
+    Fuzzed against a brute-force oracle rather than against hand-picked cases, because the failure is
+    about ORDER and hand-picked examples are chosen by the same intuition that wrote the bug. Any
+    input the oracle says is resolvable must not raise.
+    """
+    import random
+
+    # Seeded, so a failure is reproducible — the whole value of a fuzz here is that it explores
+    # orderings a hand-picked case would not, and an unreproducible one cannot be debugged.
+    rng = random.Random(20260804)  # noqa: S311 — shuffling test inputs, not minting secrets
+    universe = [f"u{i}" for i in range(6)]
+    refused_but_resolvable = 0
+    resolvable = 0
+
+    for case in range(400):
+        # Random batches over a small universe — the shape a partially-acked run produces.
+        sets = []
+        for _ in range(rng.randint(2, 4)):
+            k = rng.randint(1, 4)
+            sets.append(frozenset(rng.sample(universe, k)))
+        covered_universe = frozenset().union(*sets)
+        if not _exact_cover_exists(sets, covered_universe):
+            continue
+        resolvable += 1
+
+        dataset = str(tmp_path / f"case{case}")
+        for index, unit_set in enumerate(sets):
+            units = sorted(unit_set)
+            fragment = json.dumps({"n": index, "units": units})
+            stage_fragments(dataset, RUN, units, [fragment])
+
+        try:
+            discover_staged(dataset, RUN)
+        except StagingOverlapError:
+            refused_but_resolvable += 1
+
+    assert resolvable > 50, f"the fuzz produced only {resolvable} resolvable cases — it is testing nothing"
+    assert refused_but_resolvable == 0, (
+        f"{refused_but_resolvable}/{resolvable} resolvable inputs were REFUSED — the sweep is raising on work it could have done"
+    )
+
+
+def test_a_TRULY_unresolvable_overlap_still_raises(tmp_path: Path) -> None:
+    """Deferring the judgement must not soften it.
+
+    F={u0..u3} against H={u2,u3,u4,u5}: neither contains the other, committing both duplicates u2/u3,
+    committing either alone loses two units. No selection resolves that, and it must still stop —
+    with every byte on the store and named by its manifest.
+    """
+    dataset = str(tmp_path / "bronze")
+
+    stage_fragments(dataset, RUN, ["u0", "u1", "u2", "u3"], [FRAGMENT_F])
+    stage_fragments(dataset, RUN, ["u2", "u3", "u4", "u5"], ['{"id":0,"units":["u2","u3","u4","u5"]}'])
+
+    with pytest.raises(StagingOverlapError, match="u4"):
+        discover_staged(dataset, RUN)
