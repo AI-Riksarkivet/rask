@@ -10,7 +10,7 @@
  */
 
 import { getDatasetView } from '@rask/explorer-api';
-import { setActiveView, type DatasetView } from '@rask/explorer-api/descriptor';
+import { setActiveTable, setActiveView, type DatasetView } from '@rask/explorer-api/descriptor';
 import { serviceHealth } from '$lib/service-health.svelte';
 
 class DescriptorStore {
@@ -63,6 +63,12 @@ class DescriptorStore {
 				isDefault = true;
 			}
 			if (isDefault) this.defaultId = id;
+			// The TABLE selection, published the same way the view is. `explorer-api` cannot read
+			// `location` (it renders under SSR), so the app is what tells it — and doing it here, beside
+			// the dataset it belongs to, is what stops the two halves of one selection drifting apart.
+			setActiveTable(
+				typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('table'),
+			);
 			const view = await getDatasetView(id, isDefault);
 			setActiveView(view);
 			this.view = view;

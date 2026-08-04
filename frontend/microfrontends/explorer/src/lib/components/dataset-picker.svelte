@@ -16,19 +16,36 @@
 	import * as Popover from '@rask/ui/popover';
 	import { listDatasets } from '@rask/explorer-api';
 
-	import { datasetChoices, datasetHref, type DatasetChoice } from '$lib/dataset-choice';
+	import {
+		datasetChoices,
+		datasetHref,
+		tableChoices,
+		tableHref,
+		type DatasetChoice,
+		type SearchTableLike,
+	} from '$lib/dataset-choice';
 
 	let {
 		activeId,
 		defaultId = null,
 		url,
+		searchTables = [],
 	}: {
 		/** What the descriptor actually loaded — not the query param; they differ on the default. */
 		activeId: string | null;
 		/** The backend's default DB id, which is reached by having NO `?dataset=` at all. */
 		defaultId?: string | null;
 		url: URL;
+		/** The active corpus's declared searchable tables. A corpus may expose several. */
+		searchTables?: SearchTableLike[];
 	} = $props();
+
+	/** The table section. DERIVED from the URL, not fetched: the corpus's declared tables arrive with
+	 *  the descriptor the layout already loaded, so there is nothing to go and ask for. */
+	const tables = $derived(tableChoices(searchTables, url.searchParams.get('table')));
+	/** One table is not a choice — showing a section with a single row would be furniture. */
+	const showTables = $derived(tables.length > 1);
+	const activeTable = $derived(tables.find((t) => t.active) ?? null);
 
 	let choices = $state<DatasetChoice[]>([]);
 	let error = $state('');
@@ -49,7 +66,13 @@
 		loaded = true;
 	}
 
-	const label = $derived(activeId ?? 'dataset');
+	/** Corpus, plus the table when the corpus offers more than one — so the trigger always says
+	 *  exactly what is being searched rather than only half of it. */
+	const label = $derived(
+		showTables && activeTable
+			? `${activeId ?? 'dataset'} · ${activeTable.name}`
+			: (activeId ?? 'dataset'),
+	);
 </script>
 
 <Popover.Root onOpenChange={(open) => open && void load()}>
@@ -69,6 +92,37 @@
 		{/snippet}
 	</Popover.Trigger>
 	<Popover.Content class="w-80 p-1" align="start">
+		<!-- TABLES first: the narrower choice, and the one already answerable — the corpus's declared
+		     tables ride in the descriptor the layout loaded, so this section needs no fetch and is
+		     there the instant the popover opens. Hidden when the corpus declares one, because a
+		     section with a single row is furniture rather than a choice. -->
+		{#if showTables}
+			<div class="text-muted-foreground px-2 pt-1 pb-0.5 text-[10px] font-medium uppercase">Table</div>
+			<ul class="flex flex-col" data-testid="table-list">
+				{#each tables as table (table.name)}
+					<li>
+						<a
+							href={tableHref(url, table)}
+							data-sveltekit-reload
+							data-testid="table-option"
+							data-active={table.active}
+							class="hover:bg-accent flex items-center gap-2 rounded-sm px-2 py-1.5 no-underline
+								{table.active ? 'bg-accent/60' : ''}"
+						>
+							<span class="font-mono text-xs">{table.name}</span>
+							{#if table.name !== table.rowTable}
+								<span class="text-muted-foreground text-[11px]">{table.rowTable}</span>
+							{/if}
+							{#if table.active}
+								<Badge variant="outline" class="ml-auto py-0 text-[10px]">current</Badge>
+							{/if}
+						</a>
+					</li>
+				{/each}
+			</ul>
+			<div class="border-border my-1 border-t"></div>
+			<div class="text-muted-foreground px-2 pb-0.5 text-[10px] font-medium uppercase">Corpus</div>
+		{/if}
 		{#if error}
 			<p class="text-destructive px-2 py-1.5 text-xs" data-testid="dataset-picker-error">{error}</p>
 		{:else if !loaded}

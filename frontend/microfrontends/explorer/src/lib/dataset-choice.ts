@@ -80,5 +80,59 @@ export function datasetHref(current: URL, choice: { id: string; isDefault: boole
 	const next = new URL(current.href);
 	if (choice.isDefault) next.searchParams.delete('dataset');
 	else next.searchParams.set('dataset', choice.id);
+	// A table name is only meaningful inside the corpus that declares it, so switching corpora must
+	// drop it. Carrying `?table=lines` onto a corpus with no `lines` produces a refusal from the
+	// service the moment the page loads — a broken link built by our own picker.
+	next.searchParams.delete('table');
+	return `${next.pathname}${next.search}`;
+}
+
+/** One searchable table inside the active corpus. */
+export interface TableChoice {
+	name: string;
+	/** The underlying Lance table it reads — shown so two similarly-named entries are tellable apart. */
+	rowTable: string;
+	active: boolean;
+	/** True for the corpus's default, which is reached by having NO `?table=` at all. */
+	isDefault: boolean;
+}
+
+/** The shape `DatasetView.searchTables` returns, declared structurally so this module imports no client. */
+export interface SearchTableLike {
+	name: string;
+	row_table: string;
+}
+
+/**
+ * The table picker's entries for one corpus.
+ *
+ * `activeName` is the `?table=` value — unlike the DATASET picker, which reads what the descriptor
+ * loaded. The difference is real: a dataset is resolved server-side (the default corpus's id comes
+ * from health), whereas the table is chosen purely by the URL, and with no param the default is
+ * active by definition.
+ */
+export function tableChoices(tables: SearchTableLike[], activeName: string | null): TableChoice[] {
+	return tables.map((table, index) => ({
+		name: table.name,
+		rowTable: table.row_table,
+		isDefault: index === 0,
+		active: activeName === null ? index === 0 : table.name === activeName,
+	}));
+}
+
+/**
+ * The URL that selects one searchable table, preserving everything else.
+ *
+ * Same two rules as `datasetHref`, for the same reasons: the DEFAULT drops the param rather than
+ * naming itself, and every other param survives so a search in progress is not discarded.
+ *
+ * It additionally drops `table` whenever the DATASET changes, which `datasetHref` now does too — a
+ * table name is only meaningful inside the corpus that declares it, so carrying `?table=lines` onto
+ * a corpus with no `lines` would produce a refusal from the service on arrival.
+ */
+export function tableHref(current: URL, choice: { name: string; isDefault: boolean }): string {
+	const next = new URL(current.href);
+	if (choice.isDefault) next.searchParams.delete('table');
+	else next.searchParams.set('table', choice.name);
 	return `${next.pathname}${next.search}`;
 }

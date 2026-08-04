@@ -12,7 +12,13 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { datasetChoices, datasetHref, type DatasetSummaryLike } from './dataset-choice';
+import {
+	datasetChoices,
+	datasetHref,
+	tableChoices,
+	tableHref,
+	type DatasetSummaryLike,
+} from './dataset-choice';
 
 const summary = (id: string, rows = 10, capabilities: string[] = []): DatasetSummaryLike => ({
 	id,
@@ -115,5 +121,85 @@ describe('the href each entry links to', () => {
 		expect(datasetHref(at('/explorer/atlas'), { id: 'smoke', isDefault: false })).toBe(
 			'/explorer/atlas?dataset=smoke',
 		);
+	});
+});
+
+describe('the searchable-table entries', () => {
+	const TABLES = [
+		{ name: 'pages', row_table: 'pages' },
+		{ name: 'lines', row_table: 'lines' },
+	];
+
+	it('marks the FIRST table active when no ?table= is set', () => {
+		// Unlike the dataset picker — which reads what the descriptor loaded — the table is chosen
+		// purely by the URL, so with no param the default is active by definition.
+		expect(tableChoices(TABLES, null).map((t) => [t.name, t.active])).toEqual([
+			['pages', true],
+			['lines', false],
+		]);
+	});
+
+	it('marks the NAMED table active', () => {
+		expect(tableChoices(TABLES, 'lines').map((t) => [t.name, t.active])).toEqual([
+			['pages', false],
+			['lines', true],
+		]);
+	});
+
+	it('carries the underlying row table so lookalike names are tellable apart', () => {
+		expect(tableChoices([{ name: 'text', row_table: 'chunks_v2' }], null)[0]?.rowTable).toBe(
+			'chunks_v2',
+		);
+	});
+
+	it('is empty for an unsearchable corpus', () => {
+		expect(tableChoices([], null)).toEqual([]);
+	});
+});
+
+describe('the href each TABLE entry links to', () => {
+	const at = (path: string) => new URL(`http://x${path}`);
+
+	it('sets ?table= for a non-default table', () => {
+		expect(tableHref(at('/explorer/'), { name: 'lines', isDefault: false })).toBe(
+			'/explorer/?table=lines',
+		);
+	});
+
+	it('DROPS the param for the default table', () => {
+		expect(tableHref(at('/explorer/?table=lines'), { name: 'pages', isDefault: true })).toBe(
+			'/explorer/',
+		);
+	});
+
+	it('preserves the dataset and the query', () => {
+		const href = tableHref(at('/explorer/?dataset=smoke&q=vasa'), {
+			name: 'lines',
+			isDefault: false,
+		});
+
+		const params = new URL(`http://x${href}`).searchParams;
+		expect(params.get('dataset')).toBe('smoke');
+		expect(params.get('q')).toBe('vasa');
+		expect(params.get('table')).toBe('lines');
+	});
+});
+
+describe('switching CORPUS clears the table', () => {
+	const at = (path: string) => new URL(`http://x${path}`);
+
+	it('drops ?table= when the dataset changes', () => {
+		// A table name is only meaningful inside the corpus that declares it. Carrying `?table=lines`
+		// onto a corpus with no `lines` produces a refusal from the service on arrival — a broken
+		// link built by our own picker.
+		const href = datasetHref(at('/explorer/?table=lines'), { id: 'smoke', isDefault: false });
+
+		expect(new URL(`http://x${href}`).searchParams.get('table')).toBeNull();
+	});
+
+	it('drops it when returning to the default corpus too', () => {
+		expect(
+			datasetHref(at('/explorer/?dataset=a&table=lines'), { id: 'demo', isDefault: true }),
+		).toBe('/explorer/');
 	});
 });

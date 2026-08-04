@@ -139,3 +139,37 @@ describe('the rest of the rail', () => {
 		expect(bare.footer?.items.map((i) => i.title)).toEqual(['Workbench']);
 	});
 });
+
+describe('the Atlas gate follows the ACTIVE TABLE, not just the corpus', () => {
+	const spaceOn = (table: string) => ({ ...ATLAS_SPACE, table });
+
+	it('offers Atlas when a space is bound to the table being searched', () => {
+		const nav = explorerZoneNav(view({ atlas: [spaceOn('pages')] }), 'pages');
+
+		expect(explore(nav)).toContain('Atlas');
+	});
+
+	it('HIDES Atlas when every space belongs to a different table', () => {
+		// The reason this gate is table-sensitive at all: an atlas over `pages` has nothing to draw
+		// while you are searching `lines`, so offering it leads to a page that can only say so.
+		const nav = explorerZoneNav(view({ atlas: [spaceOn('pages')] }), 'lines');
+
+		expect(explore(nav)).not.toContain('Atlas');
+	});
+
+	it('falls back to ANY space when no table is active', () => {
+		// The single-table corpus every descriptor on disk still describes.
+		const nav = explorerZoneNav(view({ atlas: [spaceOn('pages')] }), null);
+
+		expect(explore(nav)).toContain('Atlas');
+	});
+
+	it('leaves Tree and Graph alone — capabilities are declared per CORPUS', () => {
+		// The asymmetry is a property of the descriptor, not an oversight: `capabilities` is declared
+		// once per corpus, so switching tables cannot change it.
+		const declared = view({ capabilities: { topics: 'topics.tree', graph: 'kg' } });
+
+		expect(explore(explorerZoneNav(declared, 'pages'))).toEqual(['Search', 'Tree', 'Graph']);
+		expect(explore(explorerZoneNav(declared, 'lines'))).toEqual(['Search', 'Tree', 'Graph']);
+	});
+});

@@ -15,6 +15,7 @@ import * as v from 'valibot';
 
 import { apiUrl } from './base';
 import {
+	activeTable,
 	activeView,
 	AlignmentSchema,
 	type Alignment,
@@ -82,6 +83,12 @@ export interface SearchSpec {
 	filters?: Record<string, string> | undefined;
 	/** Topic browse token — matches the dataset's topic layers server-side. */
 	topic?: string | undefined;
+	/** WHICH of the corpus's declared searchable tables to search; undefined = its default.
+	 *
+	 *  Part of what is being searched, not a filter on it. Without this the picker would relabel and
+	 *  re-gate the sidebar while the request still went to the default table — the UI and the rows
+	 *  would disagree, silently. */
+	table?: string | undefined;
 	image?: File | null | undefined;
 	/** Non-default dataset id; omitted for the default DB. */
 	dataset?: string | undefined;
@@ -228,6 +235,12 @@ function appendCommonSearchParams(
 	if (spec.topic) out.append('topic', spec.topic);
 	const ds = datasetParam(spec);
 	if (ds) out.append('dataset', ds);
+	// Beside `dataset`, on the ONE seam both the GET and the multipart POST go through — adding it to
+	// only one of them is how an image search would quietly query a different table than a text one.
+	// Mirrors `datasetParam`: an explicit spec value wins, else the module-level selection the app
+	// set from the URL. Both halves of one selection therefore travel by the same route.
+	const tbl = spec.table ?? activeTable();
+	if (tbl) out.append('table', tbl);
 }
 
 /** Run a search. POST + multipart when an image is attached; GET otherwise. The RESPONSE is Arrow IPC

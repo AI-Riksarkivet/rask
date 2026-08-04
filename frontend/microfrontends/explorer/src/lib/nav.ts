@@ -42,7 +42,14 @@ const AREAS = [
 		href: '/explorer/atlas',
 		match: seg('/explorer/atlas'),
 		icon: Map,
-		available: (view: DatasetView) => view.atlasSpaces.length > 0,
+		// Table-SENSITIVE, and the only gate that is. An atlas space is bound to a specific table
+		// (`AtlasSpace.table`), so a corpus with an atlas over `pages` has nothing to draw while you
+		// are searching `lines`. Falls back to "any space" when no table is active, which is the
+		// single-table corpus every descriptor on disk still describes.
+		available: (view: DatasetView, rowTable: string | null) =>
+			rowTable === null
+				? view.atlasSpaces.length > 0
+				: view.atlasSpaces.some((space) => space.table === rowTable),
 	},
 	{
 		title: 'Tree',
@@ -52,6 +59,9 @@ const AREAS = [
 		// The SCHEMA, not the runtime. `/tree` gated on `/api/topics` answering `res.built`, which
 		// conflates "this corpus has no hierarchy" with "the hierarchy has not been computed yet" —
 		// two different answers, and only the first is a reason to hide the door.
+		// Dataset-level, not table-level: `capabilities` is declared once per corpus, so switching
+		// tables cannot change it. Stated rather than left implicit — the asymmetry with Atlas above
+		// is a property of the descriptor, not an oversight here.
 		available: (view: DatasetView) => view.hasCapability('topics'),
 	},
 	{
@@ -76,11 +86,14 @@ const AREAS = [
  * Called from a `$derived` in the layout, so switching datasets recomputes the rail: a corpus with an
  * atlas and one without must not share a sidebar just because they were visited in the same session.
  */
-export function explorerZoneNav(view: DatasetView | null): ZoneNav {
+export function explorerZoneNav(
+	view: DatasetView | null,
+	activeRowTable: string | null = null,
+): ZoneNav {
 	const explore = AREAS.filter(
 		(area) =>
 			('always' in area && area.always) ||
-			(view !== null && 'available' in area && area.available(view)),
+			(view !== null && 'available' in area && area.available(view, activeRowTable)),
 	).map(({ title, href, match, icon }) => ({ title, href, match, icon }));
 
 	return {

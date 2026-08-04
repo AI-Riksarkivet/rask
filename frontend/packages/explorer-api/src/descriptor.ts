@@ -76,6 +76,8 @@ const VectorBindingSchema = v.object({
 });
 
 const SearchSchema = v.object({
+	/** Stable key the `?table=` selector uses. `default` for a corpus declaring one. */
+	name: v.optional(v.string(), 'default'),
 	row_table: v.string(),
 	fts: v.optional(
 		v.nullable(
@@ -107,6 +109,7 @@ const AtlasSpaceSchema = v.object({
 	table: v.string(),
 	channels: v.optional(v.array(AtlasChannelSchema), []),
 });
+export type SearchDecl = v.InferOutput<typeof SearchSchema>;
 export type AtlasSpaceDecl = v.InferOutput<typeof AtlasSpaceSchema>;
 
 const DeclaredSchema = v.looseObject({
@@ -114,7 +117,12 @@ const DeclaredSchema = v.looseObject({
 	document: v.optional(v.nullable(DocumentBindingSchema), null),
 	time: v.optional(v.nullable(TimeBindingSchema), null),
 	display: v.optional(DisplaySchema, {}),
+	/** The DEFAULT searchable table. The service still serves it beside `searches` for exactly this
+	 *  reason — dropping it from the wire to add the list would have broken every zone at once. */
 	search: v.optional(v.nullable(SearchSchema), null),
+	/** EVERY searchable table this corpus exposes, in declaration order; the first is the default.
+	 *  Absent on a service that predates the list, which is why `searchTables` falls back to `search`. */
+	searches: v.optional(v.array(SearchSchema), []),
 	atlas: v.optional(v.array(AtlasSpaceSchema), []),
 	capabilities: v.optional(v.record(v.string(), v.string()), {}),
 });
@@ -485,6 +493,36 @@ export class DatasetView {
 		return name in this.declared.capabilities;
 	}
 
+	// ── searchable tables ─────────────────────────────────────────────
+	/**
+	 * Every searchable table this corpus declares, in declaration order.
+	 *
+	 * Falls back to the single `search` block, which is what a service predating the list serves and
+	 * what every descriptor on disk still says. Without the fallback a corpus would look UNSEARCHABLE
+	 * to the picker the moment it was read from an older service — the failure would be an empty
+	 * table list, which reads as "this corpus has nothing" rather than "I am talking to an old API".
+	 */
+	get searchTables(): SearchDecl[] {
+		if (this.declared.searches.length > 0) return this.declared.searches;
+		return this.declared.search ? [this.declared.search] : [];
+	}
+
+	/** The default searchable table — the first declared — or null for an unsearchable corpus. */
+	get defaultSearchTable(): SearchDecl | null {
+		return this.searchTables[0] ?? null;
+	}
+
+	/**
+	 * One declared table by name; `null` for a name this corpus does not declare.
+	 *
+	 * Null rather than a fall-back to the default, matching the service: a search that quietly
+	 * answered from a different table than the one asked for is a wrong answer, not a lenient one.
+	 */
+	searchTable(name: string | null): SearchDecl | null {
+		if (name === null) return this.defaultSearchTable;
+		return this.searchTables.find((s) => s.name === name) ?? null;
+	}
+
 	// ── atlas ─────────────────────────────────────────────────────────
 	get atlasSpaces(): AtlasSpaceDecl[] {
 		return this.declared.atlas;
@@ -531,6 +569,25 @@ export function setActiveView(view: DatasetView): void {
 
 export function activeViewOrNull(): DatasetView | null {
 	return _active;
+}
+
+/**
+ * The searchable TABLE selected within the active view — `null` for the corpus's default.
+ *
+ * A module-level singleton beside `_active`, and deliberately the same shape: `dataset` already
+ * reaches the request layer this way (`datasetParam()`), so threading a table through every call
+ * site instead would leave the two halves of one selection travelling by different routes — and the
+ * one that got forgotten would be silent. It is set from the URL by the app's descriptor store,
+ * because this package must not read `location` (it renders under SSR).
+ */
+let _activeTable: string | null = null;
+
+export function setActiveTable(name: string | null): void {
+	_activeTable = name;
+}
+
+export function activeTable(): string | null {
+	return _activeTable;
 }
 
 /** The active dataset view. Throws if the descriptor hasn't loaded yet — call

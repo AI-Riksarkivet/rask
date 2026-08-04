@@ -750,6 +750,7 @@
 				activeId={descriptor.view?.id ?? null}
 				defaultId={descriptor.defaultId}
 				url={page.url}
+				searchTables={descriptor.view?.searchTables ?? []}
 			/>
 			<SavedViews {spec} onapply={applySavedView} />
 		</div>
