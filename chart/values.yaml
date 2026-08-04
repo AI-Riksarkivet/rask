@@ -661,6 +661,14 @@ maintenance:
   port: 8000
   bindingName: maintenance-cron
   schedule: "@every 120s" # demo cadence (prod: e.g. "0 */30 * * * *")
+  # The drift reconciler's OWN cron. It only READS three stores (OpenFGA, the control-root registries,
+  # the bucket listing) and reports where they disagree — cheap next to the sweep, which rewrites data
+  # files, which is why it gets its own schedule instead of inheriting that one.
+  reconcileBindingName: maintenance-reconcile-cron
+  reconcileSchedule: "@every 300s"
+  # The catalog's control root (project/warehouse registries). Empty => the primary bucket, which is
+  # what the catalog itself defaults to; set both together if the catalog's root is moved.
+  controlRoot: ""
   olderThanDays: 7 # version GC keeps this much history
   # Emit a maintenance lineage event per materially-compacted dataset (shows GC in producers() next to
   # writes) AND a FAIL event per maintain:-errored dataset (deterministic per-dataset run id — the flood

@@ -81,13 +81,13 @@ def test_sweep_buckets_unions_primary_and_extras() -> None:
     bucket was invisible to it: their tables accumulated superseded manifest versions and small fragments
     forever. A storage leak created by the very features that introduce new buckets.
     """
-    from maintenance.core.config import CompactionSettings
+    from maintenance.core.config import MaintenanceSettings
 
-    s = CompactionSettings.model_validate({"s3_bucket": "lance-catalog", "s3_extra_buckets": "lance-source, s3://mb-a/, lance-catalog, "})
+    s = MaintenanceSettings.model_validate({"s3_bucket": "lance-catalog", "s3_extra_buckets": "lance-source, s3://mb-a/, lance-catalog, "})
     # primary first, extras normalized (s3:// + slashes stripped), de-duplicated, empties dropped
     assert s.sweep_buckets == ["lance-catalog", "lance-source", "mb-a"]
 
-    bare = CompactionSettings.model_validate({"s3_bucket": "only"})
+    bare = MaintenanceSettings.model_validate({"s3_bucket": "only"})
     assert bare.sweep_buckets == ["only"]  # no extras => unchanged single-bucket behavior
 
 

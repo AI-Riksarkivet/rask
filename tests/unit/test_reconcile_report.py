@@ -25,7 +25,7 @@ import pytest
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
 from lance_namespace import CreateNamespaceRequest, CreateTableRequest, ServiceUnavailableError, connect
-from maintenance.core.config import CompactionSettings
+from maintenance.core.config import MaintenanceSettings
 from maintenance.services import reconcile as mod
 from openfga_sdk.client.models import ClientTuple
 from pydantic import SecretStr
@@ -61,9 +61,21 @@ class _FakeFga:
         self.endless = endless
         self.writes: list[Any] = []
 
-    async def read_tuples(self, _client: object, *, obj: str | None = None, **_kw: object) -> tuple[list[ClientTuple], str | None]:
+    async def read_tuples(self, _client: object, *, obj: str | None = None, user: str | None = None, **_kw: object) -> tuple[list[ClientTuple], str | None]:
         if self.error is not None:
             raise self.error
+        # Real OpenFGA REJECTS a tuple_key that carries neither an object id nor a user:
+        #   "the 'tuple_key' field was provided but the object type field is required and both the
+        #    object id and user cannot be empty"  (HTTP 400, measured live 2026-08-04)
+        # A bare-type filter (`obj="project:"`) is exactly that shape. The double used to accept it,
+        # which is how four categories shipped built on a call no real server would answer — every
+        # unit test green, every one of them UNAVAILABLE in production. Refuse it here so that can
+        # never happen again: the only legal reads are a full object id, a user filter, or NO filter.
+        if obj is not None and obj.endswith(":") and not user:
+            raise AssertionError(
+                f"read_tuples(obj={obj!r}) is the bare-type shape OpenFGA answers with HTTP 400 — "
+                "read the whole store (no filter) and bucket by object type instead"
+            )
         prefix = obj or ""
         page = [
             ClientTuple(user=user, relation=relation, object=name)
@@ -106,8 +118,8 @@ class _FakeS3:
         raise AssertionError(f"the reconciler called S3 {name}() — it is report-only")
 
 
-def _settings() -> CompactionSettings:
-    return CompactionSettings(s3_bucket=_PRIMARY_BUCKET, s3_secret_access_key=SecretStr("unit"))
+def _settings() -> MaintenanceSettings:
+    return MaintenanceSettings(s3_bucket=_PRIMARY_BUCKET, s3_secret_access_key=SecretStr("unit"))
 
 
 class _Estate:
@@ -365,8 +377,7 @@ def test_no_scan_is_capped_silently(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     report = estate.run(monkeypatch)
     reasons = {scan.source: scan.reason for scan in report.incomplete}
-    assert "fga:project" in reasons and "page ceiling" in reasons["fga:project"]
-    assert "fga:warehouse" in reasons
+    assert "fga:tuples" in reasons and "page ceiling" in reasons["fga:tuples"]
     assert "storage:buckets" in reasons and "ONE PAGE" in reasons["storage:buckets"]
     assert "registry:projects" in reasons and "unreadable" in reasons["registry:projects"]
     # ...and the run is still a full report, not a failure: every category was reached.

@@ -109,7 +109,15 @@ cross-object invariants, high-frequency filtered listings), it is a design decis
   `catalog/api/maintenance_mode.py` is read-only maintenance MODE (503 + Retry-After), not this. The
   operations are ONE ordered pass per dataset (compact obsoletes files → cleanup → then indices),
   which is why they are modules in one service rather than four services each rescanning every bucket.
-- The reconciler reports cross-store drift and deletes nothing until its report runs clean.
+- The reconciler reports cross-store drift and deletes nothing until its report runs clean. It runs on
+  its OWN Dapr cron binding (`maintenance-reconcile-cron`), separate from the sweep's — a read-only
+  drift report must not inherit the data-rewriting sweep's cadence.
+- **OpenFGA rejects a bare-type Read.** `read_tuples(obj="project:")` with no user is HTTP 400
+  (*"the object id and user cannot be empty"*), and the wrapper reports it as
+  `ServiceUnavailableError` — so it presents as a permanent outage on a healthy server. To enumerate
+  by type, read the WHOLE store unfiltered and bucket client-side; governance tuples are
+  admin-frequency, and a real estate fits in one page. Measured live 2026-08-04, after four detectors
+  shipped green against a double that accepted the filter.
 
 ## Gotchas
 

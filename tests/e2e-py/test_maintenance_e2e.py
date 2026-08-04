@@ -10,7 +10,7 @@ Run (port-forward compaction + greptime), or `make e2e-compaction`:
 
     kubectl port-forward svc/lance-ns-compaction 8000:8000 &
     kubectl port-forward svc/lance-ns-greptimedb-standalone 4000:4000 &
-    LANCE_E2E_COMPACTION_URL=http://localhost:8000 LANCE_E2E_GREPTIME_URL=http://localhost:4000 \
+    LANCE_E2E_MAINTENANCE_URL=http://localhost:8000 LANCE_E2E_GREPTIME_URL=http://localhost:4000 \
     uv run pytest tests/e2e-py/test_maintenance_e2e.py -v
 """
 
@@ -23,9 +23,9 @@ import pytest
 import requests
 
 
-COMPACTION = os.environ.get("LANCE_E2E_COMPACTION_URL", "")
+MAINTENANCE = os.environ.get("LANCE_E2E_MAINTENANCE_URL", "")
 GREPTIME = os.environ.get("LANCE_E2E_GREPTIME_URL", "")
-BINDING = os.environ.get("LANCE_E2E_COMPACTION_BINDING", "compaction-cron")
+BINDING = os.environ.get("LANCE_E2E_MAINTENANCE_BINDING", "maintenance-cron")
 # The cron route is sidecar-only (§1 fail-closed): a direct POST must present the same
 # `dapr-api-token` the sidecar stamps. `make e2e-compaction` reads it from the app-token secret.
 DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
@@ -42,14 +42,14 @@ def _prom_sum(query: str) -> float:
 
 @pytest.fixture(scope="module")
 def urls() -> tuple[str, str]:
-    if not (COMPACTION and GREPTIME):
-        pytest.skip("set LANCE_E2E_COMPACTION_URL and LANCE_E2E_GREPTIME_URL (see module docstring)")
+    if not (MAINTENANCE and GREPTIME):
+        pytest.skip("set LANCE_E2E_MAINTENANCE_URL and LANCE_E2E_GREPTIME_URL (see module docstring)")
     try:
-        requests.get(f"{COMPACTION.rstrip('/')}/livez", timeout=5).raise_for_status()
+        requests.get(f"{MAINTENANCE.rstrip('/')}/livez", timeout=5).raise_for_status()
         requests.get(f"{GREPTIME.rstrip('/')}/health", timeout=5).raise_for_status()
     except Exception:
         pytest.skip("compaction or greptime not reachable")
-    return COMPACTION.rstrip("/"), GREPTIME.rstrip("/")
+    return MAINTENANCE.rstrip("/"), GREPTIME.rstrip("/")
 
 
 def test_sweep_compacts_real_datasets_and_meters(urls: tuple[str, str]) -> None:

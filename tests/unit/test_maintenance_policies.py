@@ -15,7 +15,7 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pytest
-from maintenance.core.config import CompactionSettings
+from maintenance.core.config import MaintenanceSettings
 from maintenance.services.optimize import compact_one
 from maintenance.services.sweep import _policy_skip_reason
 
@@ -227,8 +227,8 @@ def test_resolve_matches_namespace_by_logical_parent_chain() -> None:
     assert hit is not None and hit["retention_days"] == 1
 
 
-def _settings(tmp_path: Path) -> CompactionSettings:
-    return CompactionSettings.model_validate(
+def _settings(tmp_path: Path) -> MaintenanceSettings:
+    return MaintenanceSettings.model_validate(
         {
             "s3_endpoint": "",
             "s3_access_key_id": "x",

@@ -43,7 +43,7 @@ import pyarrow.fs as pafs
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from maintenance.core.config import CompactionSettings
+from maintenance.core.config import MaintenanceSettings
 from service_kit.governed import fga
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
@@ -294,47 +294,54 @@ def _list_bucket_names(client: Any) -> tuple[list[str], str | None]:
     return names, None
 
 
-async def _object_tuple_counts(client: Any, object_type: str) -> tuple[dict[str, int], str | None]:
-    """``{object_id: tuple_count}`` for every ``<object_type>:`` object carrying at least one tuple.
+class TupleScan(BaseModel):
+    """One whole-store tuple read, bucketed by object type — the input to every authz category."""
 
-    A bare-type Read scan, paged to the end. Returns a truncation reason (never a silently short answer)
-    if the page ceiling is reached with a cursor still outstanding — a short scan would invent ghosts on
-    the registry side and hide them on the FGA side.
+    #: ``{object_type: {object_id: tuple_count}}``
+    counts_by_type: dict[str, dict[str, int]] = Field(default_factory=dict)
+    #: ``(annotation_project_id, tenant_project_id)`` for each ``annotation_project#tenant`` edge.
+    annotation_tenants: list[tuple[str, str]] = Field(default_factory=list)
+
+
+async def _scan_tuples(client: Any) -> tuple[TupleScan, str | None]:
+    """Read the WHOLE store once, paged to the end, and bucket every tuple by its object type.
+
+    **One unfiltered read, not one bare-type read per category, and that is a correctness fix rather
+    than an optimization.** OpenFGA rejects a Read whose ``tuple_key`` is present but carries neither
+    an object id nor a user: ``the 'tuple_key' field was provided but the object type field is
+    required and both the object id and user cannot be empty`` (HTTP 400). A bare-type filter
+    (``obj="project:"``) is exactly that shape, so every authz category built on one failed against a
+    real server while passing against a double that accepted the filter. Measured live 2026-08-04.
+
+    The wrapper reports that 400 as ``ServiceUnavailableError``, so the failure presented as "the
+    authorization service is down" — permanently, on a healthy server. That is why the fix is here and
+    not a retry.
+
+    Reading everything is affordable BY THE SHAPE OF THIS DATA: these are governance tuples, written
+    at admin frequency, and one page covers a real estate (the live cluster returned 22 in a single
+    page). It is also strictly fewer round-trips than the four scans it replaces.
+
+    Returns a truncation reason — never a silently short answer — if the page ceiling is reached with
+    a cursor outstanding: a short scan would invent ghosts on the registry side and hide them on the
+    FGA side, in the same run.
     """
-    counts: dict[str, int] = {}
+    scan = TupleScan()
     token: str | None = None
     for _ in range(_MAX_TUPLE_PAGES):
-        page, token = await fga.read_tuples(client, obj=f"{object_type}:", page_size=_TUPLE_PAGE_SIZE, continuation_token=token)
+        page, token = await fga.read_tuples(client, page_size=_TUPLE_PAGE_SIZE, continuation_token=token)
         for item in page:
-            obj_id = str(item.object).partition(":")[2]
-            if obj_id:
-                counts[obj_id] = counts.get(obj_id, 0) + 1
-        if not token:
-            return counts, None
-    return counts, f"the {object_type} tuple scan hit its {_MAX_TUPLE_PAGES}-page ceiling with a cursor outstanding"
-
-
-async def _annotation_tenant_edges(client: Any) -> tuple[list[tuple[str, str]], str | None]:
-    """``(annotation_project_id, tenant_project_id)`` for every ``annotation_project#tenant`` tuple.
-
-    Distinct from :func:`_object_tuple_counts` because here the tuple's USER is the answer: the edge
-    ``annotation_project:X#tenant@project:Y`` is the only place the annotator plane records which
-    catalog tenant a task belongs to, and no registry this process can read carries it.
-    """
-    edges: list[tuple[str, str]] = []
-    token: str | None = None
-    for _ in range(_MAX_TUPLE_PAGES):
-        page, token = await fga.read_tuples(client, obj="annotation_project:", page_size=_TUPLE_PAGE_SIZE, continuation_token=token)
-        for item in page:
-            if item.relation != "tenant":
+            obj_type, _, obj_id = str(item.object).partition(":")
+            if not obj_id:
                 continue
-            task_id = str(item.object).partition(":")[2]
-            tenant_type, _, tenant_id = str(item.user).partition(":")
-            if task_id and tenant_type == "project" and tenant_id:
-                edges.append((task_id, tenant_id))
+            bucket = scan.counts_by_type.setdefault(obj_type, {})
+            bucket[obj_id] = bucket.get(obj_id, 0) + 1
+            if obj_type == "annotation_project" and item.relation == "tenant":
+                tenant_type, _, tenant_id = str(item.user).partition(":")
+                if tenant_type == "project" and tenant_id:
+                    scan.annotation_tenants.append((obj_id, tenant_id))
         if not token:
-            return edges, None
-    return edges, f"the annotation_project tuple scan hit its {_MAX_TUPLE_PAGES}-page ceiling with a cursor outstanding"
+            return scan, None
+    return scan, f"the tuple scan hit its {_MAX_TUPLE_PAGES}-page ceiling with a cursor outstanding"
 
 
 # --------------------------------------------------------------------------- #
@@ -401,10 +408,10 @@ class Sources(BaseModel):
     that 500s.
     """
 
-    fga_projects: dict[str, int] | None = None
-    fga_projects_error: str | None = None
-    fga_warehouses: dict[str, int] | None = None
-    fga_warehouses_error: str | None = None
+    #: ONE whole-store tuple scan (see `_scan_tuples`), bucketed by object type. All four authz
+    #: categories read this same snapshot, so they cannot disagree about the store's contents.
+    tuples: TupleScan | None = None
+    tuples_error: str | None = None
     project_records: list[dict[str, str]] | None = None
     project_records_error: str | None = None
     warehouse_records: list[dict[str, str]] | None = None
@@ -415,9 +422,6 @@ class Sources(BaseModel):
     namespaces_error: str | None = None
     buckets: list[str] | None = None
     buckets_error: str | None = None
-    #: ``(annotation_project_id, tenant_project_id)`` for every annotation task carrying a tenant edge.
-    annotation_tenants: list[tuple[str, str]] | None = None
-    annotation_tenants_error: str | None = None
     incomplete: list[IncompleteScan] = Field(default_factory=list)
 
 
@@ -437,30 +441,22 @@ def _bucket_of(root_uri: str) -> str | None:
     return root_uri[len("s3://") :].strip("/").split("/")[0] or None
 
 
-async def _annotation_tenant_source(sources: Sources, client: Any) -> tuple[list[tuple[str, str]] | None, str | None]:
-    """The annotation-task tenant edges, folding any truncation note into ``sources.incomplete``."""
+async def _fga_source(sources: Sources, client: Any) -> tuple[TupleScan | None, str | None]:
+    """ONE whole-store tuple scan feeding all four authz categories.
+
+    Previously four separate bare-type scans, one per category — a request shape OpenFGA rejects with
+    a 400 (see :func:`_scan_tuples`). Folding them into one read also means the four categories can no
+    longer disagree about the store's contents, because they now read the same snapshot.
+    """
     if client is None:
         return None, _FGA_ABSENT
-    scan, error = await _read_async("fga:annotation_project", _annotation_tenant_edges(client))
-    if scan is None:
+    result, error = await _read_async("fga:tuples", _scan_tuples(client))
+    if result is None:
         return None, error
-    edges, truncation = scan
+    scan, truncation = result
     if truncation:
-        sources.incomplete.append(IncompleteScan(source="fga:annotation_project", reason=truncation))
-    return edges, None
-
-
-async def _fga_source(sources: Sources, client: Any, object_type: str) -> tuple[dict[str, int] | None, str | None]:
-    """One object-type tuple scan, folding its truncation note into ``sources.incomplete``."""
-    if client is None:
-        return None, _FGA_ABSENT
-    scan, error = await _read_async(f"fga:{object_type}", _object_tuple_counts(client, object_type))
-    if scan is None:
-        return None, error
-    counts, truncation = scan
-    if truncation:
-        sources.incomplete.append(IncompleteScan(source=f"fga:{object_type}", reason=truncation))
-    return counts, None
+        sources.incomplete.append(IncompleteScan(source="fga:tuples", reason=truncation))
+    return scan, None
 
 
 async def _registry_source(
@@ -504,8 +500,7 @@ async def load_sources(
 ) -> Sources:
     """Read all seven sources, independently. Nothing here raises."""
     sources = Sources()
-    sources.fga_projects, sources.fga_projects_error = await _fga_source(sources, client, "project")
-    sources.fga_warehouses, sources.fga_warehouses_error = await _fga_source(sources, client, "warehouse")
+    sources.tuples, sources.tuples_error = await _fga_source(sources, client)
     sources.project_records, sources.project_records_error = await _registry_source(
         sources, "registry:projects", control_root, storage_options, _PROJECTS_PREFIX, ("id",)
     )
@@ -517,8 +512,12 @@ async def load_sources(
     )
     sources.namespaces, sources.namespaces_error = await _read_blocking("catalog:namespaces", _top_level_namespaces, namespace_root, storage_options, delimiter)
     sources.buckets, sources.buckets_error = await _bucket_source(sources, bucket_client)
-    sources.annotation_tenants, sources.annotation_tenants_error = await _annotation_tenant_source(sources, client)
     return sources
+
+
+def _by_type(sources: Sources, object_type: str) -> dict[str, int]:
+    """``{object_id: tuple_count}`` for one object type out of the single whole-store scan."""
+    return (sources.tuples.counts_by_type.get(object_type, {}) if sources.tuples else {}) or {}
 
 
 def _first(*reasons: str | None) -> str | None:
@@ -540,22 +539,22 @@ def build_report(
     warehouse_ids = {str(r["id"]) for r in sources.warehouse_records or []}
     root_type, _, root_id = fga_root_object.partition(":")
 
-    if (reason := _first(sources.fga_projects_error, sources.project_records_error)) is not None:
+    if (reason := _first(sources.tuples_error, sources.project_records_error)) is not None:
         report.unavailable.append(CategoryUnavailable(category="ghost_projects", reason=reason))
     else:
-        report.ghost_projects = _ghosts("project", sources.fga_projects or {}, project_ids, {root_id} if root_type == "project" else set())
+        report.ghost_projects = _ghosts("project", _by_type(sources, "project"), project_ids, {root_id} if root_type == "project" else set())
         report.counts["ghost_projects"] = len(report.ghost_projects)
 
-    if (reason := _first(sources.fga_warehouses_error, sources.warehouse_records_error)) is not None:
+    if (reason := _first(sources.tuples_error, sources.warehouse_records_error)) is not None:
         report.unavailable.append(CategoryUnavailable(category="ghost_warehouses", reason=reason))
     else:
-        report.ghost_warehouses = _ghosts("warehouse", sources.fga_warehouses or {}, warehouse_ids, {root_id} if root_type == "warehouse" else set())
+        report.ghost_warehouses = _ghosts("warehouse", _by_type(sources, "warehouse"), warehouse_ids, {root_id} if root_type == "warehouse" else set())
         report.counts["ghost_warehouses"] = len(report.ghost_warehouses)
 
-    if (reason := _first(sources.project_records_error, sources.fga_projects_error)) is not None:
+    if (reason := _first(sources.project_records_error, sources.tuples_error)) is not None:
         report.unavailable.append(CategoryUnavailable(category="unreferenced_projects", reason=reason))
     else:
-        report.unreferenced_projects = _unreferenced_projects(project_ids, sources.fga_projects or {})
+        report.unreferenced_projects = _unreferenced_projects(project_ids, _by_type(sources, "project"))
         report.counts["unreferenced_projects"] = len(report.unreferenced_projects)
 
     if not warehouses_enabled:
@@ -580,10 +579,10 @@ def build_report(
         report.dangling_bindings = _dangling_bindings(sources.bindings or [], warehouse_ids)
         report.counts["dangling_bindings"] = len(report.dangling_bindings)
 
-    if (reason := _first(sources.annotation_tenants_error, sources.project_records_error)) is not None:
+    if (reason := _first(sources.tuples_error, sources.project_records_error)) is not None:
         report.unavailable.append(CategoryUnavailable(category="orphaned_annotation_tasks", reason=reason))
     else:
-        report.orphaned_annotation_tasks = _orphaned_annotation_tasks(sources.annotation_tenants or [], project_ids)
+        report.orphaned_annotation_tasks = _orphaned_annotation_tasks(sources.tuples.annotation_tenants if sources.tuples else [], project_ids)
         report.counts["orphaned_annotation_tasks"] = len(report.orphaned_annotation_tasks)
 
     report.total = sum(report.counts.values())
@@ -591,7 +590,7 @@ def build_report(
 
 
 async def reconcile(
-    settings: CompactionSettings,
+    settings: MaintenanceSettings,
     client: Any = None,
     *,
     warehouses_enabled: bool,
@@ -608,7 +607,7 @@ async def reconcile(
     for ``orphan_buckets``); when omitted one is built from the sweep's own credentials.
 
     ``control_root`` defaults to the root the sweep already reads the maintenance-policy registry from
-    (``COMPACTION_POLICY_ROOT``, else the primary bucket) — the catalog's control root, and the one
+    (``MAINTENANCE_POLICY_ROOT``, else the primary bucket) — the catalog's control root, and the one
     place the project/warehouse/binding records live. ``namespace_root`` defaults to the primary
     lakehouse bucket: the SHARED default root, where a namespace with no warehouse binding lands.
 

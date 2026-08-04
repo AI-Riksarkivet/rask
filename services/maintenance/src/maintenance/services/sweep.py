@@ -20,7 +20,7 @@ import pyarrow.fs as pafs
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 
-from maintenance.core.config import CompactionSettings
+from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter, table_id_from_uri
 from maintenance.core.metrics import record_reclaimed, record_run
 from maintenance.services.optimize import DatasetResult, compact_one, discover_dataset_uris
@@ -45,14 +45,14 @@ _MAX_FAIL_EMITS_PER_TICK = 25
 tracer = trace.get_tracer(__name__)
 
 
-def _s3fs(settings: CompactionSettings) -> pafs.S3FileSystem:
+def _s3fs(settings: MaintenanceSettings) -> pafs.S3FileSystem:
     """A pyarrow S3 filesystem over the RustFS endpoint — used only to LIST the bucket."""
     return s3_filesystem(settings.storage_options())
 
 
 def _policy_skip_reason(
     policy: dict[str, object],
-    settings: CompactionSettings,
+    settings: MaintenanceSettings,
     options: dict[str, str],
     now: datetime,
     uri: str,
@@ -90,7 +90,7 @@ def _policy_skip_reason(
     return None
 
 
-def run_sweep(settings: CompactionSettings) -> list[DatasetResult]:
+def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     """Discover every dataset in EVERY swept bucket and compact + GC each; record what was reclaimed.
 
     #50/#84 policies: a per-table/namespace/project record from the catalog's ``_policies/`` registry can
@@ -118,7 +118,7 @@ def run_sweep(settings: CompactionSettings) -> list[DatasetResult]:
         log.error("compaction_policies_unreadable_tick_aborted")
         raise
     # The count distinguishes "no policies set" from "policies invisible" (e.g. the catalog's control
-    # root moved without COMPACTION_POLICY_ROOT following — a wrong root lists cleanly as empty).
+    # root moved without MAINTENANCE_POLICY_ROOT following — a wrong root lists cleanly as empty).
     log.info("compaction_policies_loaded", extra={"policies": len(policy_records)})
     uris: list[str] = []
     for bucket in settings.sweep_buckets:
