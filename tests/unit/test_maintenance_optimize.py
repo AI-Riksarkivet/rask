@@ -174,9 +174,9 @@ def test_a_scan_batch_size_reaches_compaction_and_still_compacts(tmp_path: Path)
 
     def _spy(self: object, *args: object, **kwargs: object) -> object:
         seen.update(kwargs)
-        return real(self, *args, **kwargs)
+        return real(self, *args, **kwargs)  # ty: ignore[invalid-argument-type] — a spy is deliberately untyped
 
-    lance.dataset(uri).optimize.__class__.compact_files = _spy  # type: ignore[method-assign]
+    lance.dataset(uri).optimize.__class__.compact_files = _spy  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     try:
         result = compact_one(uri, {}, timedelta(0), scan_batch_size=64)
     finally:
@@ -197,9 +197,9 @@ def test_no_batch_size_leaves_lance_defaulting(tmp_path: Path) -> None:
 
     def _spy(self: object, *args: object, **kwargs: object) -> object:
         seen.update(kwargs)
-        return real(self, *args, **kwargs)
+        return real(self, *args, **kwargs)  # ty: ignore[invalid-argument-type] — a spy is deliberately untyped
 
-    lance.dataset(uri).optimize.__class__.compact_files = _spy  # type: ignore[method-assign]
+    lance.dataset(uri).optimize.__class__.compact_files = _spy  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     try:
         compact_one(uri, {}, timedelta(0))
     finally:
