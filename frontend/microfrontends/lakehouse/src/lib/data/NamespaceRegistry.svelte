@@ -26,6 +26,7 @@
 	import { page } from '$app/state';
 	import { fetchTables } from './remote/catalog.remote';
 	import { dropNamespace } from './remote/namespace.remote';
+	import { fetchWarehouseNamespaces, fetchWarehouses } from './remote/warehouses.remote';
 	import RowDrawer from './RowDrawer.svelte';
 	import { namespaceOfTable, stageOf, type StageInfo } from './stage';
 	import StageBadge from './StageBadge.svelte';
@@ -35,6 +36,10 @@
 	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
 
 	let tables = $state<string[] | null>(null);
+	// #83 the namespaces BOUND in the registry — the same source the drop door consults. Without it
+	// this page lists only namespaces that already hold a table, so a freshly-bound EMPTY namespace is
+	// invisible: exactly the object someone came here to find and drop (the #66 defect, second surface).
+	let bound = $state<string[]>([]);
 	let lastStatus = $state(0);
 	let settled = $state(false);
 	let busy = $state(false);
@@ -55,6 +60,13 @@
 		} else {
 			lastStatus = res.status;
 		}
+		// Union the registry's bindings across every readable warehouse. Admin-frequency page, a handful
+		// of warehouses — and it reuses the #66 bindings read rather than inventing an estate-wide one.
+		const whs = await fetchWarehouses();
+		if (whs.ok) {
+			const lists = await Promise.all(whs.data.map((w) => fetchWarehouseNamespaces(w.id)));
+			bound = [...new Set(lists.flatMap((r) => (r.ok ? r.data.namespaces : [])))];
+		}
 	}
 
 	// Same source as the table registry it groups (this view IS the table list, folded by namespace), so
@@ -65,6 +77,8 @@
 	type Row = { ns: string; count: number; stage: StageInfo | null };
 	const rows = $derived.by((): Row[] => {
 		const m = new Map<string, number>();
+		// Seed with every BOUND namespace at zero, so one holding no tables still gets a row.
+		for (const ns of bound) m.set(ns, 0);
 		for (const t of tables ?? []) {
 			const ns = namespaceOfTable(t);
 			m.set(ns, (m.get(ns) ?? 0) + 1);
