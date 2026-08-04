@@ -256,7 +256,7 @@ resources:
 lifecycle:
   preStopSeconds: 5
   terminationGracePeriodSeconds: 30
-  compactionTerminationGracePeriodSeconds: 120
+  maintenanceTerminationGracePeriodSeconds: 120
 
 # --- Pod hardening (applied to every app container via the lance.securityContext helper) ----------
 # runAsNonRoot + drop-ALL-caps + RuntimeDefault seccomp are unconditional (the restricted PodSecurity
@@ -662,11 +662,11 @@ medallion:
 # --- Compaction/GC microservice (Dapr cron binding) -----------------------------------------------
 # A bindings.cron component POSTs /<bindingName> on `schedule`; the service compacts small Lance
 # fragments + GCs old versions across the lakehouse bucket. Schedule/retention are component config.
-compaction:
+maintenance:
   enabled: true
-  daprAppId: compaction
+  daprAppId: maintenance
   port: 8000
-  bindingName: compaction-cron
+  bindingName: maintenance-cron
   schedule: "@every 120s" # demo cadence (prod: e.g. "0 */30 * * * *")
   olderThanDays: 7 # version GC keeps this much history
   # Emit a maintenance lineage event per materially-compacted dataset (shows GC in producers() next to

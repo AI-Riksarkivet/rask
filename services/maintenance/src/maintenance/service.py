@@ -3,7 +3,7 @@
 A ``bindings.cron`` component POSTs to ``/<binding-name>`` every interval (no app code drives the
 schedule — it's component config). Each tick runs one maintenance sweep: discover every Lance dataset in
 the lakehouse bucket, then ``compact_files()`` + ``cleanup_old_versions()`` each. Blocking Lance/S3 IO
-runs in the threadpool so the event loop stays free. Run: ``uvicorn compaction.service:app``.
+runs in the threadpool so the event loop stays free. Run: ``uvicorn maintenance.service:app``.
 
 Thin entrypoint: lifespan + ``FastAPI()`` + health, with the cron route + OPTIONS ack registered via
 ``compaction.api.routes``. The sweep logic lives in ``compaction.services``.
@@ -19,9 +19,9 @@ from dapr.aio.clients import DaprClient
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 
-from compaction.api.routes import router
-from compaction.core.config import apply_dapr_secrets, get_settings
-from compaction.core.lineage_emit import make_emitter
+from maintenance.api.routes import router
+from maintenance.core.config import apply_dapr_secrets, get_settings
+from maintenance.core.lineage_emit import make_emitter
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lakehouse.ns_errors import install_problem_handlers

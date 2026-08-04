@@ -105,7 +105,10 @@ cross-object invariants, high-frequency filtered listings), it is a design decis
   binding you cannot read is a namespace you cannot see.
 - `deactivate` = offboarding step one (quarantine; resolver 403s bound namespaces).
 - Maintenance (compaction + `optimize_indices` + `cleanup_old_versions` with tags EXEMPT) lives in
-  `services/compaction` — `catalog/api/maintenance.py` is read-only maintenance MODE, not this.
+  **`services/maintenance`** (renamed from `compaction` — it does four things, not one) —
+  `catalog/api/maintenance_mode.py` is read-only maintenance MODE (503 + Retry-After), not this. The
+  operations are ONE ordered pass per dataset (compact obsoletes files → cleanup → then indices),
+  which is why they are modules in one service rather than four services each rescanning every bucket.
 - The reconciler reports cross-store drift and deletes nothing until its report runs clean.
 
 ## Gotchas

@@ -157,7 +157,7 @@ build_image(
         sync('services/catalog/src/catalog', SITE + '/catalog'),
         sync('services/lineage/src/lineage', SITE + '/lineage'),
         sync('services/medallion/src/medallion', SITE + '/medallion'),
-        sync('services/compaction/src/compaction', SITE + '/compaction'),
+        sync('services/maintenance/src/maintenance', SITE + '/maintenance'),
         sync('services/viewer/src/viewer', SITE + '/viewer'),
         sync('services/search/src/search', SITE + '/search'),
         sync('services/annotator/src/annotator', SITE + '/annotator'),
@@ -304,14 +304,14 @@ for zone in ZONES:
 #
 # `helm()` (Tilt's builtin) cannot do `-s`, so this shells out to `helm template` and hands Tilt the
 # rendered objects. Ten of the eleven rendered Deployments run `lance-rest-catalog:dev` — the image
-# built above — so live_update covers catalog, lineage, the medallion movers, compaction and the
+# built above — so live_update covers catalog, lineage, the medallion movers, maintenance and the
 # media trio. `rask-gateway` runs `gateway:dev`, which Tilt does not build, so it deploys but does
 # not hot-reload.
 FLEET_TEMPLATES = [
     'templates/services.yaml',    # catalog, lineage
     'templates/medallion.yaml',   # the producer + the three movers
     'templates/explorer.yaml',       # viewer, search, annotator  (needs explorer.enabled)
-    'templates/compaction.yaml',  # compaction
+    'templates/maintenance.yaml',  # maintenance
     'templates/fleet.yaml',       # gateway
     # The fleet CONFIGMAP, for the same reason the ingress and dex are here: this list renders the
     # services, and their configuration is not optional to them. Without it RAY_DASHBOARD_URL,
@@ -441,7 +441,7 @@ k8s_yaml(local(
 
 # Group the fleet under one label in the UI, and give the hot-reloadable ones their own group so it
 # is obvious at a glance which resources a source edit actually moves.
-for name in ['rask-catalog', 'rask-lineage', 'rask-compaction',
+for name in ['rask-catalog', 'rask-lineage', 'rask-maintenance',
              'rask-viewer', 'rask-search', 'rask-annotator',
              'rask-bronze-to-silver', 'rask-silver-to-gold', 'rask-media-to-silver',
              'rask-lance-ray', 'rask-gateway', 'rask-controlplane']:

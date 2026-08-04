@@ -43,7 +43,7 @@ import pyarrow.fs as pafs
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from compaction.core.config import CompactionSettings
+from maintenance.core.config import CompactionSettings
 from service_kit.governed import fga
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 

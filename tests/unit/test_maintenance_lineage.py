@@ -20,7 +20,8 @@ import time
 from typing import Any, cast
 
 import pytest
-from compaction.core.lineage_emit import (
+from lineage.models import RunEvent
+from maintenance.core.lineage_emit import (
     COMPACTION,
     DaprMaintenanceEmitter,
     NoopEmitter,
@@ -30,9 +31,8 @@ from compaction.core.lineage_emit import (
     make_emitter,
     table_id_from_uri,
 )
-from compaction.services.optimize import DatasetResult
-from compaction.services.sweep import _MAX_FAIL_EMITS_PER_TICK, emit_sweep_lineage
-from lineage.models import RunEvent
+from maintenance.services.optimize import DatasetResult
+from maintenance.services.sweep import _MAX_FAIL_EMITS_PER_TICK, emit_sweep_lineage
 
 
 # --------------------------------------------------------------------------- #

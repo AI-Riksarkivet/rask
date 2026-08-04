@@ -1,6 +1,6 @@
-{{- if .Values.compaction.enabled }}
+{{- if .Values.maintenance.enabled }}
 {{- $root := . }}
-{{- $port := .Values.compaction.port }}
+{{- $port := .Values.maintenance.port }}
 {{- if .Values.dapr.enabled }}
 # Dapr cron INPUT binding — the sidecar POSTs to /<bindingName> on `schedule`. The schedule lives here
 # as component config, not in app code (no scheduler thread in the service). Scoped to the compaction app.
@@ -9,41 +9,41 @@
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
-  name: {{ .Values.compaction.bindingName }}
+  name: {{ .Values.maintenance.bindingName }}
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
   type: bindings.cron
   version: v1
   metadata:
-    - { name: schedule, value: {{ .Values.compaction.schedule | quote }} }
+    - { name: schedule, value: {{ .Values.maintenance.schedule | quote }} }
 scopes:
-  - {{ .Values.compaction.daprAppId }}
+  - {{ .Values.maintenance.daprAppId }}
 ---
 {{- end }}
-# Compaction/GC service — runs uvicorn compaction.service:app (shares the catalog image).
+# Compaction/GC service — runs uvicorn maintenance.service:app (shares the catalog image).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "lance.fullname" . }}-compaction
+  name: {{ include "lance.fullname" . }}-maintenance
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
   replicas: 1
   selector:
-    matchLabels: { app.kubernetes.io/component: compaction, app.kubernetes.io/instance: {{ .Release.Name }} }
+    matchLabels: { app.kubernetes.io/component: maintenance, app.kubernetes.io/instance: {{ .Release.Name }} }
   template:
     metadata:
       labels:
         {{- include "lance.labels" . | nindent 8 }}
-        app.kubernetes.io/component: compaction
+        app.kubernetes.io/component: maintenance
         {{- include "rask.daprPodLabels" $root | nindent 8 }}
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
       {{- if .Values.dapr.sidecars }}
       annotations:
-        {{- include "rask.daprAnnotations" (list $root .Values.compaction.daprAppId $port) | nindent 8 }}
+        {{- include "rask.daprAnnotations" (list $root .Values.maintenance.daprAppId $port) | nindent 8 }}
       {{- end }}
     spec:
       # Longer grace than the other apps: an in-flight sweep/Lance write must finish, not be SIGKILLed.
-      terminationGracePeriodSeconds: {{ .Values.lifecycle.compactionTerminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.maintenanceTerminationGracePeriodSeconds }}
       {{- if .Values.security.serviceAccounts.enabled }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-compaction
       {{- end }}
@@ -59,14 +59,14 @@ spec:
           command: ["uvicorn"]
           {{- end }}
           args:
-            - "compaction.service:app"
+            - "maintenance.service:app"
             - "--host=0.0.0.0"
             - "--port={{ $port }}"
             {{- include "lance.devReloadArgs" (list $root "compaction") | nindent 12 }}
           ports: [{ name: http, containerPort: {{ $port }} }]
           env:
             {{- if include "lance.otelEnabled" $root }}
-            {{- include "lance.otelEnv" (list $root .Values.compaction.daprAppId) | nindent 12 }}
+            {{- include "lance.otelEnv" (list $root .Values.maintenance.daprAppId) | nindent 12 }}
             {{- end }}
             {{- include "lance.lineageEmitEnv" (list $root) | nindent 12 }}
             - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
@@ -76,13 +76,13 @@ spec:
             - name: APP_API_TOKEN  # verify the Dapr-stamped header on the cron route (forged-sweep guard)
               valueFrom:
                 secretKeyRef: { name: {{ .Release.Name }}-dapr-app-token, key: token }
-            {{- if .Values.compaction.lineageEmit }}
+            {{- if .Values.maintenance.lineageEmit }}
             - { name: COMPACTION_LINEAGE_EMIT_ENABLED, value: "true" }
             - { name: COMPACTION_LINEAGE_PUBSUB, value: {{ .Values.pubsub.name | quote }} }
-            - { name: COMPACTION_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
+            - { name: MAINTENANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
             {{- end }}
-            - { name: COMPACTION_BINDING_NAME, value: {{ .Values.compaction.bindingName | quote }} }
-            - { name: COMPACTION_OLDER_THAN_DAYS, value: {{ .Values.compaction.olderThanDays | quote }} }
+            - { name: COMPACTION_BINDING_NAME, value: {{ .Values.maintenance.bindingName | quote }} }
+            - { name: COMPACTION_OLDER_THAN_DAYS, value: {{ .Values.maintenance.olderThanDays | quote }} }
             - { name: COMPACTION_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
             - { name: COMPACTION_S3_ACCESS_KEY_ID, value: {{ .Values.rustfs.accessKey | quote }} }
             {{- if not (include "lance.secretsViaDapr" .) }}
@@ -122,9 +122,9 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "lance.fullname" . }}-compaction
+  name: {{ include "lance.fullname" . }}-maintenance
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
   ports: [{ name: http, port: {{ $port }}, targetPort: http }]
-  selector: { app.kubernetes.io/component: compaction, app.kubernetes.io/instance: {{ .Release.Name }} }
+  selector: { app.kubernetes.io/component: maintenance, app.kubernetes.io/instance: {{ .Release.Name }} }
 {{- end }}

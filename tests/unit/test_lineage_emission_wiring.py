@@ -60,7 +60,7 @@ _SUBSCRIBER_TOPIC = "LINEAGE_DAPR_TOPIC"
 
 #: Every env var that names the topic a service PUBLISHES lineage to. Each must equal the
 #: subscriber's. `LANCE_DAPR_TOPIC` is the catalog's (it emits its own table-lifecycle runs).
-_PUBLISHER_TOPICS = ("MEDALLION_LINEAGE_TOPIC", "COMPACTION_LINEAGE_TOPIC", "LANCE_DAPR_TOPIC")
+_PUBLISHER_TOPICS = ("MEDALLION_LINEAGE_TOPIC", "MAINTENANCE_LINEAGE_TOPIC", "LANCE_DAPR_TOPIC")
 
 
 def _render(*set_values: str) -> str:

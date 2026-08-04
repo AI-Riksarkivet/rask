@@ -156,7 +156,7 @@ rustfs:
   storageClass: "" # "" = the cluster default SC; prod: a CSI class that supports VolumeSnapshot + encryption
 
 # --- Compaction/GC at a real cadence (not the 120s demo sweep) -------------------------------------
-compaction:
+maintenance:
   schedule: "0 */30 * * * *" # every 30 min
   olderThanDays: 7
 

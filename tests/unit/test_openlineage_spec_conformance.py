@@ -26,9 +26,9 @@ from typing import Any
 
 import pytest
 from catalog.core import lineage_emit as catalog_emit
-from compaction.core import lineage_emit as compaction_emit
 from jsonschema import Draft202012Validator, FormatChecker
 from lineage.models import Dataset, RunEvent
+from maintenance.core import lineage_emit as compaction_emit
 from medallion.schemas import events as medallion_events
 from openlineage.client import facet_v2
 

@@ -355,7 +355,7 @@ COMPOSE_IMAGES = gateway compute controlplane
 KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 HELM ?= KUBECONFIG=$(KUBECONFIG) helm
 KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
-# lance-rest-catalog is the ONE lakehouse image (catalog + lineage + medallion + compaction +
+# lance-rest-catalog is the ONE lakehouse image (catalog + lineage + medallion + maintenance +
 # media trio — chart `image.catalog`); the default render runs 8 containers from it, so the
 # build/import set must carry it or kind/k3s deploys ImagePullBackOff on every lakehouse pod.
 K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog

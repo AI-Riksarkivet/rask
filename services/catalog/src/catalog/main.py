@@ -21,7 +21,7 @@ from pydantic import SecretStr
 from catalog.api.body_limit import BodySizeLimitMiddleware
 from catalog.api.dapr import register_control_dapr
 from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
-from catalog.api.maintenance import maintenance_middleware
+from catalog.api.maintenance_mode import maintenance_middleware
 from catalog.api.v1.router import api_router
 from catalog.core.config import get_settings
 from catalog.core.control_buffer import ControlEventBuffer

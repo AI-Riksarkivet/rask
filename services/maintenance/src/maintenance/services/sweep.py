@@ -20,10 +20,10 @@ import pyarrow.fs as pafs
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 
-from compaction.core.config import CompactionSettings
-from compaction.core.lineage_emit import MaintenanceEmitter, table_id_from_uri
-from compaction.core.metrics import record_reclaimed, record_run
-from compaction.services.optimize import DatasetResult, compact_one, discover_dataset_uris
+from maintenance.core.config import CompactionSettings
+from maintenance.core.lineage_emit import MaintenanceEmitter, table_id_from_uri
+from maintenance.core.metrics import record_reclaimed, record_run
+from maintenance.services.optimize import DatasetResult, compact_one, discover_dataset_uris
 from service_kit.governed import fga
 from service_kit.lakehouse import maintenance_policies
 from service_kit.lakehouse.objectfs import s3_filesystem

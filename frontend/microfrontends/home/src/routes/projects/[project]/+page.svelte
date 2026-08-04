@@ -79,7 +79,9 @@
 		     ghost — a project you hold a role on that the catalog never recorded — showed this text
 		     while the gallery listed it, naming neither the cause nor the fix. -->
 		<div class="empty">
-			<p>No such project — the catalog has no registry record for <code class="mono">{project}</code>.</p>
+			<p>
+				No such project — the catalog has no registry record for <code class="mono">{project}</code>.
+			</p>
 		</div>
 	{:else if offline}
 		<div class="empty">

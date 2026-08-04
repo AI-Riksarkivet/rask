@@ -6,8 +6,8 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 
-from compaction.core.config import CompactionSettings, get_settings
-from compaction.core.lineage_emit import MaintenanceEmitter
+from maintenance.core.config import CompactionSettings, get_settings
+from maintenance.core.lineage_emit import MaintenanceEmitter
 
 
 SettingsDep = Annotated[CompactionSettings, Depends(get_settings)]

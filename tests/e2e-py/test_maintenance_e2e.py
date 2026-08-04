@@ -11,7 +11,7 @@ Run (port-forward compaction + greptime), or `make e2e-compaction`:
     kubectl port-forward svc/lance-ns-compaction 8000:8000 &
     kubectl port-forward svc/lance-ns-greptimedb-standalone 4000:4000 &
     LANCE_E2E_COMPACTION_URL=http://localhost:8000 LANCE_E2E_GREPTIME_URL=http://localhost:4000 \
-    uv run pytest tests/e2e-py/test_compaction_e2e.py -v
+    uv run pytest tests/e2e-py/test_maintenance_e2e.py -v
 """
 
 from __future__ import annotations

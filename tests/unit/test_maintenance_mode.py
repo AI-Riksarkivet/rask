@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from catalog.api.maintenance import RETRY_AFTER_SECONDS, is_mutating, maintenance_response
+from catalog.api.maintenance_mode import RETRY_AFTER_SECONDS, is_mutating, maintenance_response
 
 
 def test_is_mutating_classifies_methods() -> None:

@@ -36,7 +36,7 @@ class CompactionSettings(BaseSettings):
     # Bound each Dapr publish so a hung sidecar can't stall a sweep (best-effort → the outage is swallowed).
     publish_timeout_seconds: float = Field(default=5.0, gt=0, alias="COMPACTION_PUBLISH_TIMEOUT_SECONDS")
     lineage_pubsub: str = Field(default="lineage-pubsub", alias="COMPACTION_LINEAGE_PUBSUB")
-    lineage_topic: str = Field(default="lineage.events.v1", alias="COMPACTION_LINEAGE_TOPIC")
+    lineage_topic: str = Field(default="lineage.events.v1", alias="MAINTENANCE_LINEAGE_TOPIC")
     lineage_job_namespace: str = Field(default="compaction", alias="COMPACTION_LINEAGE_JOB_NAMESPACE")
     # The catalog id delimiter — to derive a dataset's parent namespace from its table id (matches the
     # catalog's LANCE_DELIMITER default). The catalog lays tables out as <uuid>_<table_id>; table_id is the

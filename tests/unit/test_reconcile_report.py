@@ -24,9 +24,9 @@ import pyarrow as pa
 import pytest
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
-from compaction.core.config import CompactionSettings
-from compaction.services import reconcile as mod
 from lance_namespace import CreateNamespaceRequest, CreateTableRequest, ServiceUnavailableError, connect
+from maintenance.core.config import CompactionSettings
+from maintenance.services import reconcile as mod
 from openfga_sdk.client.models import ClientTuple
 from pydantic import SecretStr
 

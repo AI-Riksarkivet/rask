@@ -18,8 +18,8 @@ spec:
     - { name: name, value: "lance-dapr" }
 scopes:
   - {{ .Values.services.catalog.daprAppId }}
-{{- if .Values.compaction.lineageEmit }}
-  - {{ .Values.compaction.daprAppId }} {{/* compaction publishes maintenance lineage only when lineageEmit is on */}}
+{{- if .Values.maintenance.lineageEmit }}
+  - {{ .Values.maintenance.daprAppId }} {{/* compaction publishes maintenance lineage only when lineageEmit is on */}}
 {{- end }}
 {{- if .Values.catalog.controlEmit }}
 ---
@@ -148,8 +148,8 @@ spec:
     # An unconditional "true" would leave the component fronting EVERY app secret unverified in prod.
     - { name: skipVerify, value: {{ ternary "false" "true" (hasPrefix "https://" (include "lance.vaultAddr" .)) | quote }} }
 {{- $secretScopes := list .Values.services.catalog.daprAppId .Values.services.lineage.daprAppId }}
-{{- if .Values.compaction.enabled }}
-{{- $secretScopes = append $secretScopes .Values.compaction.daprAppId }}
+{{- if .Values.maintenance.enabled }}
+{{- $secretScopes = append $secretScopes .Values.maintenance.daprAppId }}
 {{- end }}
 {{- if .Values.medallion.enabled }}
 {{- /* The medallion plane consumes the store too (MEDALLION_SECRETS_FROM_DAPR fetches the S3 secret at

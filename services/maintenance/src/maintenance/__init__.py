@@ -14,5 +14,5 @@ All idempotent, so a missed/retried tick is safe. Per-table/namespace #50 mainte
 catalog's ``_policies/`` registry) can disable a dataset's maintenance, re-pace it, or override its
 old-version retention; policy-less datasets keep the global defaults. (At scale these run distributed via
 lance-ray's ``compact_database`` + distributed index build; here single-process.) Run:
-``uvicorn compaction.service:app``.
+``uvicorn maintenance.service:app``.
 """

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import lance
 import pyarrow as pa
-from compaction.services.optimize import compact_one
+from maintenance.services.optimize import compact_one
 
 
 def _fragmented_indexed_dataset(root: Path) -> str:
@@ -81,7 +81,7 @@ def test_sweep_buckets_unions_primary_and_extras() -> None:
     bucket was invisible to it: their tables accumulated superseded manifest versions and small fragments
     forever. A storage leak created by the very features that introduce new buckets.
     """
-    from compaction.core.config import CompactionSettings
+    from maintenance.core.config import CompactionSettings
 
     s = CompactionSettings.model_validate({"s3_bucket": "lance-catalog", "s3_extra_buckets": "lance-source, s3://mb-a/, lance-catalog, "})
     # primary first, extras normalized (s3:// + slashes stripped), de-duplicated, empties dropped

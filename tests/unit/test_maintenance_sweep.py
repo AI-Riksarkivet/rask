@@ -9,8 +9,8 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pyarrow.fs as pafs
-from compaction.services.optimize import DatasetResult, discover_dataset_uris
-from compaction.services.sweep import summarize
+from maintenance.services.optimize import DatasetResult, discover_dataset_uris
+from maintenance.services.sweep import summarize
 
 
 def _dir(path: str) -> pafs.FileInfo:
@@ -97,7 +97,7 @@ def test_on_cron_single_flight_skips_an_overlapping_sweep(monkeypatch: Any) -> N
     import asyncio
     import types
 
-    from compaction.api import routes
+    from maintenance.api import routes
 
     ran: list[int] = []
     monkeypatch.setattr(routes, "run_sweep", lambda _settings: (ran.append(1), [])[1])

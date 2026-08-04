@@ -15,9 +15,9 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pytest
-from compaction.core.config import CompactionSettings
-from compaction.services.optimize import compact_one
-from compaction.services.sweep import _policy_skip_reason
+from maintenance.core.config import CompactionSettings
+from maintenance.services.optimize import compact_one
+from maintenance.services.sweep import _policy_skip_reason
 
 from service_kit.lakehouse import maintenance_policies as mp
 
@@ -190,7 +190,7 @@ def test_sweep_consumes_a_project_policy_via_the_same_resolution_call(tmp_path: 
     # list_policies + resolve_policy(records, uri, logical_id=table_id_from_uri(uri)) and then applies
     # the skip logic. Drive exactly that call shape off a real registry and prove a project record
     # both resolves and opts its bucket's datasets out.
-    from compaction.core.lineage_emit import table_id_from_uri
+    from maintenance.core.lineage_emit import table_id_from_uri
 
     root = str(tmp_path)
     mp.put_policy(root, {}, _project_policy(compact_enabled=False))

@@ -437,7 +437,7 @@ _PINNED_TOPICS: list[tuple[str, str]] = [
     ("packages/service-kit/src/service_kit/control_events.py", 'CONTROL_TOPIC = "catalog.control.v1"'),
     ("services/lineage/src/lineage/core/config.py", 'default="lineage.events.v1", alias="LINEAGE_DAPR_TOPIC"'),
     ("services/catalog/src/catalog/core/config.py", 'default="lineage.events.v1", alias="LANCE_DAPR_TOPIC"'),
-    ("services/compaction/src/compaction/core/config.py", 'default="lineage.events.v1", alias="COMPACTION_LINEAGE_TOPIC"'),
+    ("services/maintenance/src/maintenance/core/config.py", 'default="lineage.events.v1", alias="MAINTENANCE_LINEAGE_TOPIC"'),
     ("services/medallion/src/medallion/core/config.py", 'default="lineage.events.v1", alias="MEDALLION_LINEAGE_TOPIC"'),
     # the intra-cascade trigger topics (unversioned by design: both ends deploy atomically from one chart)
     ("services/medallion/src/medallion/core/config.py", 'default="medallion.bronze", alias="MEDALLION_SUB_TOPIC"'),
