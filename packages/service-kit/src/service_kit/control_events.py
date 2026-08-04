@@ -59,6 +59,8 @@ ControlAction = Literal[
     "table_unprotected",
     "namespace_protected",
     "namespace_unprotected",
+    # #75 the drop→undrop path: a recoverable drop and its recovery are both governance events.
+    "table_undropped",
 ]
 
 #: The kind of governed object the action targets — drives which console view invalidates. `project` is the

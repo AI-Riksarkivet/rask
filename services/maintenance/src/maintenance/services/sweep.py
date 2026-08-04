@@ -25,7 +25,7 @@ from maintenance.core.lineage_emit import MaintenanceEmitter, table_id_from_uri
 from maintenance.core.metrics import record_reclaimed, record_run
 from maintenance.services.optimize import DatasetResult, compact_one, discover_dataset_uris
 from service_kit.governed import fga
-from service_kit.lakehouse import maintenance_policies
+from service_kit.lakehouse import maintenance_policies, trash
 from service_kit.lakehouse.objectfs import s3_filesystem
 
 
@@ -129,6 +129,19 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
             continue
         log.info("compaction_bucket_discovered", extra={"bucket": bucket, "datasets": len(found)})
         uris.extend(found)
+    # #75 trash expiry — REPORT ONLY, and staying that way until #79's gate opens. The sweep names
+    # which recoverable drops are past their grace deadline and deletes NOTHING: the estate's rule is
+    # that a reclaimer earns its delete permission by first proving its report runs clean, and this is
+    # the reclaimer whose false positive costs a table someone was still inside their window to undrop.
+    try:
+        due = trash.expired(trash.list_all(settings.resolved_policy_root, options))
+        if due:
+            log.info(
+                "trash_expiry_due_report_only",
+                extra={"count": len(due), "ids": [str(r.get("id")) for r in due][:20]},
+            )
+    except Exception as exc:  # noqa: BLE001 — the trash report must never abort a maintenance tick
+        log.warning("trash_expiry_report_failed", extra={"error": str(exc)})
     results: list[DatasetResult] = []
     now = datetime.now(UTC)
     for uri in uris:

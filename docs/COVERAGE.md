@@ -78,8 +78,16 @@ Zero cross-service imports; `common` imports no service; services share only the
 event-driven estate is a self-contained, contributable unit.
 
 ## Lakekeeper diff (for the ephemeral spin-up-per-workload model)
-**N/A by design:** multi-warehouse data plane, control-plane management API, soft-delete/undrop (replaced by
-Lance version time-travel + `restore_table`), user/role admin API, Postgres task queue (NATS+Dapr instead).
+**N/A by design:** multi-warehouse data plane, control-plane management API, user/role admin API,
+Postgres task queue (NATS+Dapr instead).
+
+**CORRECTED 2026-08-04 — soft-delete/undrop was NOT N/A.** This file claimed it was "replaced by Lance
+version time-travel + `restore_table`". That argument does not hold: **time-travel does not survive
+`drop_table`.** `restore_table` rewinds a *live* table; a drop deletes the bytes, and there is no version
+left to rewind to. The replacement covered bad-WRITE recovery and was silently read as covering bad-DROP
+recovery — the more dangerous kind of wrong entry, because everyone who read it stopped thinking about the
+problem. Deletion protection now closes the sharpest edge (#73: `protected` on tables/namespaces, refusing
+drop/deregister/rename), and the durable fix is the trash-namespace undrop on the maintenance sweep (#75).
 **Ahead of Lakekeeper:** the lineage moat (reconcile, column lineage, gold whole-history JSONB) +
 web-identity credential vending. One caveat: a *long-lived single shared* cluster would want runtime
 grant/role admin — N/A only while the model stays spin-up-per-workload.

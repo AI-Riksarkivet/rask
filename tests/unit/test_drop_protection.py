@@ -24,13 +24,17 @@ import pytest
 from catalog.api import fga_deps
 from catalog.core.config import Settings
 from catalog.core.control_emit import NoopControlEmitter
-from lance_namespace import NamespaceNotEmptyError
+from lance_namespace import NamespaceNotEmptyError, TableNotFoundError
 
 from service_kit.lakehouse import protection
 
 
-def _settings(tmp_path: Any) -> Settings:
+def _settings(tmp_path: Any, *, grace_days: int = 0) -> Settings:
+    """``grace_days=0`` is also the SHIPPED default (#75): recoverable drops are opt-in, because a
+    grace period changes what `drop_table` means for every existing caller. The trash tests below
+    pass it explicitly, which is exactly how a deployment turns the feature on."""
     data: dict[str, object] = {
+        "trash_grace_days": grace_days,
         "control_root": f"file://{tmp_path}",
         "s3_access_key_id": "x",
         "s3_secret_access_key": "x",
@@ -240,3 +244,139 @@ def test_the_protection_suffix_is_owner_gated_not_writer(tmp_path: Any) -> None:
     """The authz map is where a forgotten entry silently falls to WRITER tier — pin both kinds."""
     assert fga_deps._OWNER_SUFFIX_RELATION["table"]["protection"] == "can_drop"  # noqa: SLF001
     assert fga_deps._OWNER_SUFFIX_RELATION["namespace"]["protection"] == "can_delete"  # noqa: SLF001
+
+
+# ---------------------------------------------------------------- #75 trash / undrop
+
+
+def test_expired_selects_only_past_deadlines_and_never_deletes(tmp_path: Any) -> None:
+    """``expired`` is a SELECTION. It is the report half of a reclaimer whose false positive costs a
+    table someone was still inside their window to recover."""
+    from datetime import UTC, datetime, timedelta
+
+    from service_kit.lakehouse import trash
+
+    now = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
+    fresh = trash.make_record("ns$fresh", location="s3://b/fresh", dropped_by="u", grace_days=7, now=now)
+    old = trash.make_record("ns$old", location="s3://b/old", dropped_by="u", grace_days=7, now=now - timedelta(days=30))
+    due = trash.expired([fresh, old], now=now)
+    assert [r["id"] for r in due] == ["ns$old"]
+
+
+def test_an_undated_or_unparseable_record_is_NOT_expired(tmp_path: Any) -> None:
+    """ "We do not know when this expires" must read as "not yet" — the same fail-toward-not-deleting
+    stance the sweep takes when the policy registry is unreadable."""
+    from service_kit.lakehouse import trash
+
+    assert trash.expired([{"id": "a"}, {"id": "b", "expires_at": "not-a-date"}]) == []
+
+
+def test_the_deadline_is_stamped_at_drop_time(tmp_path: Any) -> None:
+    """Shortening the estate grace period must never retroactively destroy a live window, so the
+    deadline is DATA on the record, not policy consulted at expiry."""
+    from datetime import UTC, datetime
+
+    from service_kit.lakehouse import trash
+
+    now = datetime(2026, 8, 4, tzinfo=UTC)
+    record = trash.make_record("ns$t", location="s3://b/t", dropped_by="u", grace_days=3, now=now)
+    assert record["expires_at"].startswith("2026-08-07")
+
+
+def test_trash_roundtrip_and_listing(tmp_path: Any) -> None:
+    from service_kit.lakehouse import trash
+
+    settings = _settings(tmp_path)
+    so = settings.storage_options()
+    assert trash.list_all(settings.registry_root, so) == []
+    trash.put(settings.registry_root, so, trash.make_record("ns$t", location="s3://b/t", dropped_by="u", grace_days=7))
+    assert trash.get(settings.registry_root, so, "ns$t") is not None
+    assert len(trash.list_all(settings.registry_root, so)) == 1
+    assert trash.clear(settings.registry_root, so, "ns$t") is True
+    assert trash.get(settings.registry_root, so, "ns$t") is None
+
+
+class _TrashableNamespace(_RecordingNamespace):
+    """Adds the describe/deregister/register trio the #75 drop→undrop path drives."""
+
+    def describe_table(self, request: Any) -> Any:
+        self.calls.append("describe_table")
+        return type("R", (), {"location": "s3://bkt/bronze/pages.lance", "model_fields_set": set()})()
+
+    def register_table(self, request: Any) -> Any:
+        self.calls.append(f"register_table:{request.location}")
+        return type("R", (), {"location": request.location, "model_fields_set": set()})()
+
+
+def test_a_drop_with_a_grace_period_DEREGISTERS_and_files_trash(tmp_path: Any) -> None:
+    """#75: the drop that used to destroy bytes now detaches them and records the deadline — the whole
+    point, because time-travel cannot recover a drop (restore_table rewinds a LIVE table)."""
+    from service_kit.lakehouse import trash
+
+    settings = _settings(tmp_path, grace_days=7)
+    ns: Any = _TrashableNamespace()
+    _drop_table(settings, ns)
+    assert "drop_table" not in ns.calls, "the bytes were destroyed despite a grace period"
+    assert "deregister_table" in ns.calls
+    record = trash.get(settings.registry_root, settings.storage_options(), "bronze$pages")
+    assert record is not None and record["location"] == "s3://bkt/bronze/pages.lance"
+
+
+def test_purge_true_still_destroys_immediately(tmp_path: Any) -> None:
+    """The explicit opt-out: a caller who means 'destroy the bytes now' says so, and no trash is filed."""
+    from service_kit.lakehouse import trash
+
+    settings = _settings(tmp_path, grace_days=7)
+    ns: Any = _TrashableNamespace()
+    asyncio.run(
+        __import__("catalog.api.v1.endpoints.tables", fromlist=["tables"]).drop_table(
+            id="bronze$pages",
+            ns=ns,
+            settings=settings,
+            client=None,
+            emitter=_NoopLineage(),
+            control=NoopControlEmitter(),
+            token=None,
+            authorization=None,
+            force=False,
+            purge=True,
+        )
+    )
+    assert "drop_table" in ns.calls
+    assert trash.get(settings.registry_root, settings.storage_options(), "bronze$pages") is None
+
+
+def test_undrop_re_registers_from_the_trash_record_and_clears_it(tmp_path: Any) -> None:
+    from catalog.api.v1.endpoints import tables as t_ep
+
+    from service_kit.lakehouse import trash
+
+    settings = _settings(tmp_path, grace_days=7)
+    ns: Any = _TrashableNamespace()
+    _drop_table(settings, ns)
+    asyncio.run(t_ep.undrop_table(id="bronze$pages", ns=ns, settings=settings, token=None, client=None, control=NoopControlEmitter()))
+    assert "register_table:s3://bkt/bronze/pages.lance" in ns.calls
+    assert trash.get(settings.registry_root, settings.storage_options(), "bronze$pages") is None
+
+
+def test_undrop_without_a_record_is_an_honest_404(tmp_path: Any) -> None:
+    """An expired or never-trashed drop is genuinely unrecoverable — say so, rather than a 200 that
+    recovers nothing."""
+    from catalog.api.v1.endpoints import tables as t_ep
+
+    settings = _settings(tmp_path, grace_days=7)
+    ns: Any = _TrashableNamespace()
+    with pytest.raises(TableNotFoundError, match="no recoverable drop"):
+        asyncio.run(t_ep.undrop_table(id="bronze$gone", ns=ns, settings=settings, token=None, client=None, control=NoopControlEmitter()))
+
+
+def test_the_tasks_door_shows_the_pending_expiry(tmp_path: Any) -> None:
+    """§2.4 per-object task visibility: an undrop deadline the owner cannot see is not a safety feature."""
+    from catalog.api.v1.endpoints import tables as t_ep
+
+    settings = _settings(tmp_path, grace_days=7)
+    ns: Any = _TrashableNamespace()
+    assert asyncio.run(t_ep.table_tasks(id="bronze$pages", settings=settings, token=None)) == []
+    _drop_table(settings, ns)
+    tasks = asyncio.run(t_ep.table_tasks(id="bronze$pages", settings=settings, token=None))
+    assert len(tasks) == 1 and tasks[0].location == "s3://bkt/bronze/pages.lance" and tasks[0].expires_at

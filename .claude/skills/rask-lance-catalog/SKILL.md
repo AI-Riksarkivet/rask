@@ -91,6 +91,12 @@ cross-object invariants, high-frequency filtered listings), it is a design decis
   project delete has **no cascade at all**.
 - **`force=true` overrides the `protected` flag and NOTHING else** — the FGA gate runs first and
   identically with or without it. Test both delete doors for force-without-authz.
+- **Recoverable drops are OPT-IN (#75).** With `LANCE_TRASH_GRACE_DAYS` > 0 (default 0/OFF, because a
+  grace period changes what `drop_table` means for every caller) a drop DEREGISTERS and files a
+  `_trash/` record; `POST /v1/table/{id}/undrop` re-registers from it; `GET /v1/table/{id}/tasks`
+  shows the pending deadline (§2.4 per-object task visibility). The sweep REPORTS expired trash and
+  deletes nothing. COVERAGE.md's old "soft-delete is N/A, time-travel replaces it" entry was WRONG and
+  is corrected: time-travel does not survive `drop_table`.
 - **Protection covers EVERY rung since #73** (2026-08-04): warehouses/projects carry `protected` on
   their registry records; tables/namespaces carry it as a **control-root `_protection/` record**
   (`service_kit.lakehouse.protection`) gating drop/deregister/rename (table) and drop (namespace) —

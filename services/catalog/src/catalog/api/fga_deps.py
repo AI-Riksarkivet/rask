@@ -125,6 +125,8 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # able to disarm protection they could never act on. (An unmapped suffix would fall through
         # to writer-tier — never leave it unset.)
         "protection": "can_drop",
+        # #75 undrop RESTORES the object into its namespace — the same authority as removing it.
+        "undrop": "can_drop",
     },
     "namespace": {
         "drop": "can_delete",

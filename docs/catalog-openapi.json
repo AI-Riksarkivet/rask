@@ -2679,7 +2679,8 @@
               "table_protected",
               "table_unprotected",
               "namespace_protected",
-              "namespace_unprotected"
+              "namespace_unprotected",
+              "table_undropped"
             ],
             "title": "Action",
             "type": "string"
@@ -9235,6 +9236,40 @@
         "title": "TagContents",
         "type": "object"
       },
+      "TrashEntry": {
+        "description": "One recoverable drop \u2014 what the owner needs to decide whether to undrop before the deadline.",
+        "properties": {
+          "dropped_at": {
+            "title": "Dropped At",
+            "type": "string"
+          },
+          "dropped_by": {
+            "title": "Dropped By",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "location": {
+            "title": "Location",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "location",
+          "dropped_by",
+          "dropped_at",
+          "expires_at"
+        ],
+        "title": "TrashEntry",
+        "type": "object"
+      },
       "TupleCondition": {
         "description": "A CEL condition attached to a grant, with the parameters that ride the TUPLE.\n\nFor the model's ``non_expired_grant`` that is ``grant_time`` + ``grant_duration`` \u2014 the window.\n``current_time`` is deliberately NOT here: the clock belongs to the caller and is supplied per\ncheck, so a grant cannot pin the present moment at the instant it was written.",
         "properties": {
@@ -14595,6 +14630,16 @@
             }
           },
           {
+            "in": "query",
+            "name": "purge",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Purge",
+              "type": "boolean"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -16542,6 +16587,106 @@
         "summary": "Get Table Tag Version",
         "tags": [
           "tag"
+        ]
+      }
+    },
+    "/v1/table/{id}/tasks": {
+      "get": {
+        "description": "What is queued for THIS table (#75 brings \u00a72.4). Today that is exactly one thing: a pending\ntrash expiry. It exists the moment expiry does, because an undrop deadline the owner cannot see\nis not a safety feature \u2014 the estate's task surfaces are otherwise all estate-global, so \"what is\nscheduled against my table\" was unanswerable. Reader-gated by the router alongside describe.",
+        "operationId": "table_tasks_v1_table__id__tasks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TrashEntry"
+                  },
+                  "title": "Response Table Tasks V1 Table  Id  Tasks Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Table Tasks",
+        "tags": [
+          "table"
+        ]
+      }
+    },
+    "/v1/table/{id}/undrop": {
+      "post": {
+        "description": "Recover a dropped table from the trash (#75) \u2014 re-register its still-present bytes at its old\nid and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into\nthe namespace is the same authority as removing it).\n\n404 when there is no trash record: an expired or never-trashed drop is genuinely unrecoverable,\nand saying so plainly beats a 200 that recovers nothing.",
+        "operationId": "undrop_table_v1_table__id__undrop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterTableResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Undrop Table",
+        "tags": [
+          "table"
         ]
       }
     },

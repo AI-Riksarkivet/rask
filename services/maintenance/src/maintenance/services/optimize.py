@@ -44,7 +44,7 @@ def discover_dataset_uris(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 
     """Lance datasets under ``bucket`` — a directory IS a dataset iff it has a ``_versions/`` child
     (the Lance table-layout marker); any other directory is a namespace prefix and is recursed into
     (bounded by ``max_depth``). Skips ``__`` bookkeeping dirs (the catalog's ``__manifest``) and the
-    control-plane registries (``_warehouses``, ``_policies``, ``_protection``) — no dataset ever
+    control-plane registries (``_warehouses``, ``_policies``, ``_protection``, ``_trash``) — no dataset ever
     lives under them, and probing them is wasted S3 round-trips on the hot discovery path.
 
     The catalog lays top-level tables out as ``<uuid>_<table_id>/``, but the medallion cascade nests
@@ -58,7 +58,7 @@ def discover_dataset_uris(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 
             if info.type != pafs.FileType.Directory:
                 continue
             name = info.path.rstrip("/").split("/")[-1]
-            if name.startswith("__") or name in ("_warehouses", "_policies", "_protection"):
+            if name.startswith("__") or name in ("_warehouses", "_policies", "_protection", "_trash"):
                 continue
             marker = fs.get_file_info(f"{info.path}/_versions")
             if marker.type == pafs.FileType.Directory:
