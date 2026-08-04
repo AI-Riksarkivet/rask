@@ -134,7 +134,19 @@ async def dataset_descriptor(dataset_id: str, state: StateDep, checker: CheckerD
     open would mean the list only had to be guessed.
     """
     handle = dataset_handle(state, dataset_id)
-    obj = corpus_object(settings, dataset_id, handle.descriptor.declared.search.row_table)
+    # `Search | None` — the same shape the listing handles, and it must be handled identically here:
+    # with no row table there is nothing to name as an FGA object, so DENY rather than guess one.
+    # Reading it unguarded was a 500 (`'NoneType' object has no attribute 'row_table'`).
+    search = handle.descriptor.declared.search
+    if search is None:
+        # Deny under authz, serve with it off — the SAME rule the listing applies, because a corpus
+        # that appears in the list must also be openable from it. Denying unconditionally here (the
+        # first version of this guard) would have broken every FGA-off dev stack.
+        if settings.fga_enabled:
+            audit("viewer.descriptor.read", FAILURE, subject=subject, resource=dataset_id, relation=READ_METADATA)
+            raise ForbiddenError(f"corpus {dataset_id} declares no searchable table — nothing to authorize against")
+        return handle.descriptor
+    obj = corpus_object(settings, dataset_id, search.row_table)
     if not await checker(user=subject, relation=READ_METADATA, obj=obj):
         audit("viewer.descriptor.read", FAILURE, subject=subject, resource=dataset_id, relation=READ_METADATA)
         raise ForbiddenError(f"{subject} lacks {READ_METADATA} on {obj}")

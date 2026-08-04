@@ -204,3 +204,36 @@ def test_the_same_corpus_still_lists_when_authz_is_OFF() -> None:
     client = TestClient(_app(registry, allow=True, fga_enabled=False))
 
     assert [d["id"] for d in client.get("/api/datasets").json()["datasets"]] == ["vasa"]
+
+
+def test_the_descriptor_route_survives_a_corpus_with_no_search_block() -> None:
+    """A 500 I shipped: `dataset_descriptor` read `declared.search.row_table` with no None guard.
+
+    `Search | None` is a real shape, handled correctly in the LISTING's `_row_table` and forgotten
+    one function below. `ty` could not catch it because `dataset_handle` returns a loose type, so
+    the only thing that would have was a test for the branch — this one.
+
+    Denied, matching the listing: with nothing to name as an FGA object, guessing an identifier
+    would authorize against something the catalog never governs.
+    """
+    registry = _Registry({"vasa": "chunks"})
+    registry.strip_search.add("vasa")
+    client = TestClient(_app(registry, allow=True, fga_enabled=True))
+
+    r = client.get("/api/datasets/vasa/descriptor")
+
+    assert r.status_code == 403, r.text
+
+
+def test_a_search_less_descriptor_still_serves_when_authz_is_OFF() -> None:
+    """The mirror of the test above, and the reason the guard is conditional.
+
+    A corpus that the LISTING shows on an FGA-off stack must also be openable from it. The first
+    version of this guard denied unconditionally, which would have broken every dev stack the moment
+    a corpus omitted its search block.
+    """
+    registry = _Registry({"vasa": "chunks"})
+    registry.strip_search.add("vasa")
+    client = TestClient(_app(registry, allow=True, fga_enabled=False))
+
+    assert client.get("/api/datasets/vasa/descriptor").status_code == 200
