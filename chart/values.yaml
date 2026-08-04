@@ -90,6 +90,46 @@ services:
   # Its public gateway rows stay /api/ray + /api/serve: the URL namespace names the
   # Ray cluster, not the service. The zone image namespace is web-<zone>, so the bare
   # `compute` image name is this service's.)
+  # The ingest plane (open_ingest.md Phase 1): pre-bronze acquisition — control API + workers +
+  # the lander. frontDoor because the gateway routes /api/ingest to this app-id; a bare app-id,
+  # NOT the legacy `lance-ray` shape the medallion still carries (audit m1).
+  ingest:
+    module: "ingest:create_app"
+    port: 8830
+    replicas: 1
+    frontDoor: true
+    waitFor: []
+    # Where the plane lands bronze. WITHOUT this the code falls back to a temp dir, and the first
+    # in-cluster run resolved a RELATIVE path ("tmp/rask-ingest/...") inside the container — data
+    # would have landed in the pod's ephemeral filesystem and vanished with it, silently, because a
+    # relative Lance path is perfectly valid. Points at the warehouse bucket like every other tier.
+    # Writes Lance to the warehouse, so it needs the S3 endpoint injected (see fleet.yaml). Values
+    # files cannot carry Helm templates — a `{{ include ... }}` here renders as a LITERAL string — so
+    # the endpoint is a template concern and this is only the flag that asks for it.
+    lanceWriter: true
+    env:
+      # Lineage is both WRITTEN and READ here, and the two need different halves of one service.
+      # RASK_LINEAGE_ENDPOINT is lineage-kit's emitter target: unset, its transport degrades to a
+      # logged no-op, so every run would land its data and leave no provenance record while still
+      # reporting success — exactly the hole A8 exists to catch. RASK_LINEAGE_URL is the read side,
+      # which the status endpoint joins against so A8's verdict comes from the graph rather than from
+      # a flag nothing sets. Both point at the release's lineage Service.
+      RASK_LINEAGE_ENDPOINT: http://rask-lineage:8000
+      RASK_LINEAGE_URL: http://rask-lineage:8000
+      # Route creation and commits through the CATALOG rather than writing the object store
+      # directly. Opt-in by an explicit flag, never inferred from a reachable URL: a catalog that is
+      # merely down must fail the run loudly, not silently downgrade to a local write that produces
+      # governed data the catalog has never heard of — and that nothing downstream will ever be told
+      # about, because the event a mover rides is the catalog's publication of a new version.
+      RASK_INGEST_USE_CATALOG: "true"
+      RASK_CATALOG_URL: http://rask-catalog:2333
+      # A15's other side of the relation. A run holds a read_version from enumeration until commit,
+      # so version GC's retention window (compaction.olderThanDays) must be at least this long — GC
+      # is otherwise free to delete the version a live run is about to commit against, and the run
+      # that hits it is the longest, most expensive harvest. Declared HERE, in the chart, so the two
+      # numbers can be compared before a deploy rather than discovered to disagree at 3am;
+      # tests/unit/test_gates_a15_a18.py asserts the relation, not either constant.
+      RASK_INGEST_MAX_RUN_HOURS: "24"
   compute:
     module: "compute:app"
     port: 8804
@@ -621,24 +661,6 @@ medallion:
     operation: lance_ray_ingest
     author: ray
     bronzeTopic: medallion.bronze
-    # The IIIF page lane (P7a, re-tiered by R23): /ingest-iiif harvests a volume's pages into THIS
-    # bronze dataset (beside bronzeDataset — /bronze-arrival fires the cascade for either name). The
-    # bronze page dataset replaced the prefetch lane + the IIIFCachedSource cache; HTR then runs as
-    # cascade compute (the P7b layout/lines + transcribe movers).
-    iiifBronzeDataset: bronze$pages
-    # The IIIF Image API the page lane harvests from (MEDALLION_IIIF_BASE_URL). This value used to live
-    # ONLY as a code default in services/medallion/core/config.py with no chart knob at all, so any
-    # deploy outside the Riksarkivet network could not ingest a page without `kubectl set env` on a
-    # running Deployment (live-proof 2026-07-28, defect 1 — a fix that dies with the pod).
-    #   * https://iiifintern-ai.ra.se     — RA-INTERNAL (the default below); resolves only on RA's network.
-    #   * https://lbiiif.riksarkivet.se   — the PUBLIC Riksarkivet IIIF endpoint; same `arkis!<image-id>`
-    #                                       path shape, reachable from anywhere. Use this for any deploy
-    #                                       (or CI/demo cluster) that is not inside RA.
-    iiifBaseUrl: "https://iiifintern-ai.ra.se"
-    # The IIIF Image API derivative requested per page, appended to `{base}/arkis!{image-id}/`.
-    # `full/max/0/default.jpg` is the full-resolution default; a server that caps derivative size wants
-    # e.g. `full/2000,/0/default.jpg`.
-    iiifQueryParams: "full/max/0/default.jpg"
   # The 3 stage movers run medallion.mover:app, differing only by env. order = the DAG. (R23: there is
   # no raw→bronze mover — its stage stamp/provenance logic merged into the producer's bronze ingest.)
   # requiredAction/serviceIdentity gate each hop when fgaEnabled: silver→gold needs `can_promote`
@@ -795,6 +817,27 @@ stateStore:
     # catalog is the service that creates the published table, but nothing here provisions workflow
     # instances and none are expected.
     - catalog
+    # ── `ingest` is here for the SECRET store, not for state. Read this before removing it. ─────────
+    # The ingest workers resolve their S3 credentials through `lance-secrets` — fail-closed, no env
+    # fallback — and dapr-component.yaml:180 derives the secret-store scope by concat'ing THIS list.
+    # `$secretScopes`'s other members are hardcoded template branches (catalog, lineage, compaction,
+    # medallion, media), so `stateStore.scopes` is the only values-level lever that grants secret
+    # access. Unscoped, the sidecar answers ERR_SECRET_STORES_NOT_CONFIGURED and every worker
+    # fail-closes at boot — the same failure the medallion hit live 2026-07-24.
+    #
+    # The state-store grant rides along because the two lists are deliberately coupled (a state store
+    # resolves its own DSN through the secret store, so state ⊆ secrets). Ingest does NOT use it:
+    # docs/DECISIONS.md § "Ingest orchestration" ruled Dapr Workflow un-adopted — every step of the run
+    # is idempotent by a caller-chosen key — and the unit ledger is JetStream KV, not Dapr state. If a
+    # future reader is auditing for dead config, this is the entry that looks like it and is not.
+    #
+    # Declared AHEAD of the Deployment on purpose: a sidecar loads components at BOOT, and M7's
+    # hot-reload abort (dapr-statestore.yaml:62, actorStateStore: "true") means a LATER addition would
+    # not reach already-running pods without a rollout. Adding one while the app has no pod is the
+    # single safe case. Precedent: `annotator` is scoped with no pod at chart defaults
+    # (media.enabled: false) — DAPR-AUDIT.md:273. Removing an app-id from this list is NOT safe the
+    # same way; it needs `kubectl rollout restart` for every scoped app.
+    - ingest
 
 # --- Backups — a FALLBACK for the SELF-CONTAINED in-cluster path only. OFF by default. When you run the
 # managed/operator path (CloudNativePG for AGE, rustfs-operator for S3 — the rask deployment), DISABLE these
@@ -1060,15 +1103,36 @@ nats:
       fileStore:
         pvc:
           size: 1Gi
+    # Clustered by default since 2026-08-03 (open_ingest.md Phase 0). The single node was flagged in
+    # this file as "a prod SPOF" while `streamReplicas` was pinned to 1 because raft replication needs
+    # 3+ nodes — so the SPOF was documented and then structurally guaranteed. The ingest plane makes
+    # that untenable: its unit work queue IS a JetStream stream, so a lost node loses in-flight ingest
+    # work, not just eventing.
+    #
+    # The subchart key is `config.cluster.*` — NOT `replicaCount`, which the nats chart does not have.
+    # A `--set nats.replicaCount=3` is a silent no-op that leaves one node running while every stream
+    # asks for 3 replicas and JetStream refuses to create them (tests/unit/test_invariants.py:320
+    # `test_every_helm_set_key_in_our_scripts_exists_in_values` exists for exactly this class of bug).
+    #
+    # Cost, stated rather than discovered: 3 pods and 3 PVCs instead of 1. `replicas: 3` is the
+    # subchart's own default once cluster.enabled is true, and is the minimum for raft quorum — the
+    # subchart's comment reads "must be 2 or higher when jetstream is enabled", but 2 gives no
+    # majority, so 3 is the first honest value.
+    cluster:
+      enabled: true
+      replicas: 3
   # the headless service is <release>-nats:4222
   # First-party keys (the nats subchart ignores them):
   # Externalize: when set, the pubsub components + the stream-provision Job connect HERE instead of the
-  # in-cluster NATS — pair with nats.enabled=false to use a managed/clustered NATS (the in-cluster
-  # single node is a prod SPOF: the bus down = no lineage ingest, no cascade).
+  # in-cluster NATS — pair with nats.enabled=false to use a managed/clustered NATS. values-prod.yaml
+  # still recommends this for production: an in-chart cluster removes the single-node SPOF but leaves
+  # NATS a workload this chart operates, and a managed bus is the stronger answer where one exists.
+  # The two are alternatives, not a sequence — pick one per environment.
   externalUrl: "" # e.g. nats://nats.internal:4222
-  # Raft replication for the LINEAGE/MEDALLION streams — REQUIRES a clustered NATS (3+ nodes); the
-  # in-cluster single-node subchart only supports 1. Set 3 together with externalUrl in prod.
-  streamReplicas: 1
+  # Raft replication for every provisioned stream. REQUIRES a clustered NATS, which the block above
+  # now provides in-chart; keep the two in step, because a streamReplicas above the node count makes
+  # `nats stream add` fail outright rather than degrade.
+  streamReplicas: 3
 
 # --- Dapr control plane (subchart) — injects the daprd sidecar into annotated pods ----------------
 dapr:

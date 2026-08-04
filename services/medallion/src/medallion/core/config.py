@@ -5,7 +5,7 @@ edge of the DAG (from-dataset → to-dataset, subscribe-topic → publish-topic)
 (``medallion.producer:app``) reads its own ``MEDALLION_BRONZE_*`` / producer fields. Both publish through
 the shared Dapr ``pubsub.jetstream`` component the catalog/lineage already use.
 
-R23: raw is NOT a governed tier — it is the external world (the IIIF Image API, external object
+R23: raw is NOT a governed tier — it is the external world (image APIs, external object
 storage). The governed medallion is exactly bronze → silver → gold; the producer harvests external raw
 and writes BRONZE directly (the bronze ingest head), so there is no raw dataset, raw topic, or
 raw-to-bronze mover anywhere in this config.
@@ -247,6 +247,12 @@ class MedallionSettings(BaseSettings):
     producer_operation: str = Field(default="lance_ray_ingest", alias="MEDALLION_PRODUCER_OPERATION")
     producer_author: str = Field(default="ray", alias="MEDALLION_PRODUCER_AUTHOR")
     bronze_topic: str = Field(default="medallion.bronze", alias="MEDALLION_BRONZE_TOPIC")
+
+    # The catalog's control channel, where `table_published` lands (§ D2 B8). Empty DISABLES the
+    # publication head, which is what keeps this additive: a deployment that has not enabled the
+    # catalog's control emitter registers no subscription and behaves exactly as before.
+    control_pubsub: str = Field(default="", alias="MEDALLION_CONTROL_PUBSUB")
+    control_topic: str = Field(default="catalog.control.v1", alias="MEDALLION_CONTROL_TOPIC")
     # --- Ray TRAIN head (#115a, docs/RAY-TRAIN.md): OWN topic (D1 — long-running, terminal-on-failure;
     # never a field on the stage trigger) + submit-and-ack consumer (D2). The trainer has its OWN service
     # identity + rung (D5): reader on the feature namespaces, writer on namespace:<models> ONLY.
@@ -266,7 +272,7 @@ class MedallionSettings(BaseSettings):
 
     # --- media ingest head (multimodal §9) — POST /ingest-media lands external media as bronze blobs and
     # triggers the media chain. The head reads an external S3 source prefix through the provider-agnostic
-    # SourceAdapter seam (a real deployment points bucket/prefix at IIIF/GCS/HF exports; the demo seeds
+    # SourceAdapter seam (a real deployment points bucket/prefix at an image API / GCS / HF export; the demo seeds
     # sample PNGs there first). Requires compute (there is no dummy media): media_bronze_uri is where the
     # bronze blob-v2 table lands; the trigger on media_topic drives the media mover (bronze -> silver
     # derive). Empty media_bronze_uri = the media head is off (POST /ingest-media -> 409). ----------------
@@ -283,26 +289,8 @@ class MedallionSettings(BaseSettings):
     # an external media drop). Prod points the bucket/prefix at real media and turns this off.
     media_seed_samples: bool = Field(default=True, alias="MEDALLION_MEDIA_SEED_SAMPLES")
 
-    # --- IIIF ingest head (P7a — the lance-ray seam producer that replaced rask's prefetch lane +
-    # ``IIIFCachedSource``'s cache role). POST /ingest-iiif harvests a volume's pages from the IIIF Image
-    # API (external raw, R23) and lands them DIRECTLY as the BRONZE page-image blob-v2 Lance dataset
-    # (stage stamp at ingest; source_rowid roots at bronze) — HTR runs as cascade compute downstream.
-    # The head emits ONE bronze-write OpenLineage event (input = the external ``iiif://…`` source) and
-    # NEVER publishes ``medallion.bronze`` itself: the /bronze-arrival subscription reacts to the
-    # COMPLETE write matching ``bronze_namespace``/``iiif_bronze_dataset`` and fires the cascade
-    # (publishing both would double-fire). Empty ``iiif_bronze_uri`` = the head is off (→ 409). -------
-    iiif_base_url: str = Field(default="https://iiifintern-ai.ra.se", alias="MEDALLION_IIIF_BASE_URL")
-    iiif_query_params: str = Field(default="full/max/0/default.jpg", alias="MEDALLION_IIIF_QUERY_PARAMS")
-    iiif_bronze_uri: str = Field(default="", alias="MEDALLION_IIIF_BRONZE_URI")
-    # The page lane's bronze DATASET name — a values knob beside bronze_dataset (chart
-    # medallion.producer): /bronze-arrival fires for a COMPLETE write to (bronze_namespace,
-    # iiif_bronze_dataset) exactly as it does for (bronze_namespace, bronze_dataset), so the page lane
-    # and the events lane share one cascade head.
-    iiif_bronze_dataset: str = Field(default="bronze$pages", alias="MEDALLION_IIIF_BRONZE_DATASET")
-    iiif_timeout_seconds: float = Field(default=15.0, gt=0, alias="MEDALLION_IIIF_TIMEOUT_SECONDS")
     # The Ray branch (requires ray_enabled): the self-contained harvest job baked into the unified ray
     # image, submitted via the Ray Jobs REST API exactly like the stage transforms.
-    iiif_ray_entrypoint: str = Field(default="python /home/ray/jobs/ray_iiif_ingest_job.py", alias="MEDALLION_IIIF_RAY_ENTRYPOINT")
 
 
 def project_namespace(project: str, name: str) -> str:

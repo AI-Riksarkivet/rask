@@ -71,11 +71,16 @@ spec:
             - { name: MEDALLION_BRONZE_DATASET, value: {{ .Values.medallion.producer.bronzeDataset | quote }} }
             # The IIIF page lane's bronze dataset name (P7a, re-tiered by R23) — a values knob beside
             # bronzeDataset; /bronze-arrival fires the cascade for either name.
-            - { name: MEDALLION_IIIF_BRONZE_DATASET, value: {{ .Values.medallion.producer.iiifBronzeDataset | quote }} }
             - { name: MEDALLION_BRONZE_NAMESPACE, value: {{ .Values.medallion.producer.bronzeNamespace | quote }} }
             - { name: MEDALLION_PRODUCER_OPERATION, value: {{ .Values.medallion.producer.operation | quote }} }
             - { name: MEDALLION_PRODUCER_AUTHOR, value: {{ .Values.medallion.producer.author | quote }} }
             - { name: MEDALLION_BRONZE_TOPIC, value: {{ .Values.medallion.producer.bronzeTopic | quote }} }
+            {{- if .Values.catalog.controlEmit }}
+            # § D2 B8 — the publication head. Set ONLY when the catalog is actually emitting control
+            # events, because an empty value disables the subscription: a deployment without the
+            # emitter must register no route rather than subscribe to a topic nothing publishes on.
+            - { name: MEDALLION_CONTROL_PUBSUB, value: "{{ required "pubsub.controlName must be set when catalog.controlEmit is on — an empty value silently disables the medallion publication head" .Values.pubsub.controlName }}-{{ .Values.medallion.producer.daprAppId }}" }
+            {{- end }}
             {{- if .Values.medallion.projectsEnabled }}
             # #84 per-tenant routing (opt-in): the catalog's warehouse-registry root. A `project`-carrying
             # /produce resolves that project's ACTIVE warehouse and seeds <root>/medallion/bronze there;
@@ -163,22 +168,18 @@ spec:
             - { name: MEDALLION_MEDIA_BRONZE_URI, value: "s3://{{ include "lance.stageBucket" (list . "bronze-media") }}/medallion/bronze-media" }
             # The IIIF page head (P7a): /ingest-iiif lands the BRONZE page-image blob dataset beside the
             # events lane's bronze URI (same namespace root, its own dataset directory).
-            - { name: MEDALLION_IIIF_BRONZE_URI, value: "s3://{{ include "lance.stageBucket" (list . .Values.medallion.producer.bronzeNamespace) }}/medallion/{{ .Values.medallion.producer.bronzeNamespace }}-pages" }
             # Which IIIF Image API the head harvests from. WIRED, not left to the code default: that
             # default is RA-INTERNAL and resolves only inside the archives' network, so every deploy
             # elsewhere needed a `kubectl set env` to ingest a single page (live-proof 2026-07-28,
             # defect 1). One knob feeds both harvest paths — the in-process httpx client AND the
-            # IIIF_BASE_URL the Ray branch passes into scripts/ray_iiif_ingest_job.py.
             {{- /* `| default` on both, for the same `--reuse-values` reason the `encoders` block above
                  documents: these are NEW keys, and a stored release whose user values carry
                  `medallion: {compute: true}` leaves `medallion.producer` sub-keys nil. The fallbacks are
                  the code defaults (services/medallion/core/config.py), so an un-migrated release renders
                  exactly what it ran before rather than an empty base URL. */}}
-            - { name: MEDALLION_IIIF_BASE_URL, value: {{ .Values.medallion.producer.iiifBaseUrl | default "https://iiifintern-ai.ra.se" | quote }} }
             # The IIIF Image API derivative path appended per page. Travels with baseUrl: a different
             # server may not serve `full/max` (some cap at `full/2000,`), and a wrong derivative is a
             # per-page 404 rather than a boot failure.
-            - { name: MEDALLION_IIIF_QUERY_PARAMS, value: {{ .Values.medallion.producer.iiifQueryParams | default "full/max/0/default.jpg" | quote }} }
             - { name: MEDALLION_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
             - { name: MEDALLION_S3_ACCESS_KEY_ID, value: {{ .Values.rustfs.accessKey | quote }} }
             {{- if not (include "lance.secretsViaDapr" .) }}
@@ -270,6 +271,21 @@ spec:
             - name: APP_API_TOKEN  # verify the Dapr-stamped header on /medallion-event (forged-trigger guard)
               valueFrom:
                 secretKeyRef: { name: {{ $root.Release.Name }}-dapr-app-token, key: token }
+            # S3 CREDENTIALS. A mover reads its upstream tier and writes its downstream one, both on
+            # object storage — but it was given no endpoint and no keys, so `storage_options()` was
+            # `{}` and every `s3://` open fell through to real AWS: "Bucket 'bronze-wh' not found".
+            # The compute path had therefore never once read a governed table in-cluster. Same ONE
+            # credential pair as the rest of the fleet (P4 RustFS unification).
+            - { name: RASK_S3_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" $root | quote }} }
+            - { name: AWS_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" $root | quote }} }
+            - { name: AWS_ALLOW_HTTP, value: "true" }
+            {{- $moverSecret := $root.Values.existingSecret | default (printf "%s-app" (include "rask.fullname" $root)) }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: { name: {{ $moverSecret }}, key: AWS_ACCESS_KEY_ID }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ $moverSecret }}, key: AWS_SECRET_ACCESS_KEY }
             - { name: MEDALLION_FROM_NAMESPACE, value: {{ .fromNamespace | quote }} }
             - { name: MEDALLION_FROM_DATASET, value: {{ .fromDataset | quote }} }
             - { name: MEDALLION_TO_NAMESPACE, value: {{ .toNamespace | quote }} }

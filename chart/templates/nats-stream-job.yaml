@@ -71,6 +71,24 @@ spec:
               # each app's durableName, which only avoids clashing with the app's main consumer
               # because the two live on different streams.
               add_if_missing DLQ "dlq.>"
+              # The ingest plane's own stream (open_ingest.md Phase 0): unit tasks on
+              # `ingest.tasks.<run>` and the last-worker drained signal on `ingest.run.<id>.drained`.
+              # Its OWN stream rather than a subject space on MEDALLION, because MEDALLION carries tier
+              # PUBLICATION events (medallion.<tier>.<dataset>) whose retention and consumer model are
+              # unrelated: ingest units are work-queue traffic consumed exactly once, tier events are a
+              # doorbell every mover may read. Dead-lettered units park on `dlq.ingest.tasks`, already
+              # covered by the DLQ stream above.
+              #
+              # DELIBERATELY NOT in the durable-drift reconcile loop below — the same structural reason
+              # CATALOG_CONTROL is absent, not an oversight. That loop deletes any durable whose
+              # max_deliver/backoff differ from the values Dapr's pubsub components are templated with.
+              # The ingest work queue is a raw nats-py pull consumer (WorkQueuePolicy retention, batch
+              # fetch, nak(delay), in_progress heartbeats — semantics the Dapr component cannot express;
+              # open_ingest.md "Client choices"), so its config would never match EXP_MAXD/EXP_BOFF and
+              # every run of this Job would delete the queue out from under in-flight ingest work.
+              # Revisit only if ingest moves onto a Dapr subscription (open decision §7.5), at which
+              # point it joins the loop like any other app.
+              add_if_missing INGEST "ingest.>"
               {{- if .Values.catalog.controlEmit }}
               # Control-plane change-events (grants/warehouses/policies/tables) broadcast to EVERY catalog
               # replica's ring buffer (GET /v1/events). Its own stream so a parking-free broadcast publish

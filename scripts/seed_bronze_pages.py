@@ -1,7 +1,7 @@
 """Seed ``bronze$pages`` with REAL Riksarkivet page images — REGISTERED IN THE CATALOG.
 
 Why this exists: the chart's producer ships without MEDALLION_COMPUTE_ENABLED /
-MEDALLION_IIIF_BRONZE_URI, so ``POST /ingest-iiif`` answers 409 ("iiif ingest head is not
+the page-lane bronze URI, so the retired medallion ingest head answered 409 ("head is not
 configured") on a default install. A fresh estate therefore has no way to get bronze page data in
 from the API at all, and the document viewer has nothing to render.
 

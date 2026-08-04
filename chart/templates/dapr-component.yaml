@@ -43,6 +43,38 @@ spec:
     - { name: deliverPolicy, value: "new" }
 scopes:
   - {{ .Values.services.catalog.daprAppId }}
+{{- if .Values.medallion.enabled }}
+---
+# The CASCADE's view of the same control stream (§ D2 B8). A SEPARATE component, not another scope on
+# the broadcast one above, because the two want opposite delivery semantics:
+#
+#   the console buffer  — broadcast, ephemeral, deliverPolicy=new. Every replica must see every event
+#                         to answer GET /v1/events, and a missed one costs a stale refresh hint.
+#   the cascade head    — queue group + DURABLE. Exactly one replica must act on a publication, and a
+#                         trigger published while the producer is down must be DELIVERED on recovery,
+#                         not skipped. That is the chaos-verified rule the comment block below states
+#                         for every `new` subscriber, and a publication is the most expensive thing in
+#                         the estate to silently drop.
+#
+# Sharing the broadcast component would give a scaled producer one cascade per replica, and lose any
+# trigger published during a rollout — both silent.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.pubsub.controlName | default "catalog-control-pubsub" }}-{{ .Values.medallion.producer.daprAppId }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  type: pubsub.jetstream
+  version: v1
+  metadata:
+    - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
+    - { name: name, value: "lance-dapr-catalog-control" }
+    - { name: queueGroupName, value: {{ .Values.medallion.producer.daprAppId | quote }} }
+    - { name: deliverPolicy, value: "new" }
+    - { name: durableName, value: "{{ .Values.medallion.producer.daprAppId }}-control-durable" }
+scopes:
+  - {{ .Values.medallion.producer.daprAppId }}
+{{- end }}
 {{- end }}
 {{- /* One component PER SUBSCRIBER app-id (see the lance.subPubsub helper): queueGroupName makes that
      app's replicas a competing-consumer group (single delivery per app — without it every replica gets

@@ -78,7 +78,7 @@ async def produce(dapr: DaprClient, settings: MedallionSettings, *, token: str |
         operation=settings.producer_operation,
         author=settings.producer_author,
         job_namespace=settings.job_namespace,
-        inputs=[],  # the dummy seed has no external source; the IIIF/S3 heads carry theirs (R23)
+        inputs=[],  # the dummy seed has no external source; the ingest plane carries its own (R23)
         output_namespace=project_namespace(project, settings.bronze_namespace),
         output_name=project_namespace(project, settings.bronze_dataset),
         version=result.version if result else 1,

@@ -18,6 +18,7 @@ from medallion.api.dependencies import DaprClientDep, SettingsDep
 from medallion.api.dlq import register_dlq_route
 from medallion.core.config import get_settings
 from medallion.services.ingest_trigger import handle_bronze_arrival
+from medallion.services.publication_trigger import handle_publication
 from service_kit.governed.dapr_auth import require_dapr_token
 
 
@@ -50,5 +51,30 @@ def register_bronze_arrival_route(app: FastAPI) -> DaprApp:
         param → 422). Authenticated by the Dapr app-api-token so a forged bronze-arrival event can't drive
         the cascade."""
         return await handle_bronze_arrival(dapr, config, event)
+
+    # THE PUBLICATION HEAD (§ D2 B8). Separate subscription, separate topic, separate signal: this one
+    # fires on the catalog's `table_published` — the moment the quality gate passed a version and the
+    # `published` tag moved — and carries the {from_version, to_version} range onto the stage trigger.
+    #
+    # It does not replace `/bronze-arrival` in this commit. Both heads publish the same
+    # `medallion.bronze` trigger, and the movers' own token de-duplication is what keeps a table that
+    # emits BOTH signals from cascading twice. Retiring the lineage head is a follow-up once every
+    # writer publishes.
+    if settings.control_pubsub:
+
+        @dapr_app.subscribe(
+            pubsub=settings.control_pubsub,
+            topic=settings.control_topic,
+            route="/publication-arrival",
+            dead_letter_topic=settings.dlq_topic or None,
+        )
+        async def on_publication(
+            event: dict[str, Any],
+            dapr: DaprClientDep,
+            config: SettingsDep,
+            _: Annotated[None, Depends(require_dapr_token)],
+        ) -> dict[str, str]:
+            """A publication became consumable — wake the cascade for exactly the rows it added."""
+            return await handle_publication(dapr, config, event)
 
     return dapr_app

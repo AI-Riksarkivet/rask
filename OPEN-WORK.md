@@ -500,9 +500,35 @@ made seedable — the `open_label.md` waves, folded here as that file retires.**
 - **`table_properties` never reach the Lance dataset** — the catalog's create carries them into the
   namespace *declare* and the response echo only, so §7.1's "stamped at create" is not readable off the
   table. (Found by the lance-docs audit; estate-wide, not annotation-specific.)
-- **RustFS conditional-PUT is assumed, never verified** — Lance's commit atomicity on S3-compatible
-  stores requires put-if-not-exists or an external manifest store; nothing in the repo configures or
-  proves either. The shared `annotations` table's concurrent `merge_insert`s are the exposed surface.
+- ~~**RustFS conditional-PUT is assumed, never verified**~~ **VERIFIED 2026-08-03 — it IS enforced.**
+  Lance's commit atomicity on S3-compatible stores requires put-if-not-exists or an external manifest
+  store, and nothing in the repo configured or proved either; the shared `annotations` table's
+  concurrent `merge_insert`s were the exposed surface. Run against the live `svc/rask-rustfs-io`
+  (`scripts/verify_lance_storage.py` row 5): a second `If-None-Match: *` PUT on the same key is
+  **rejected with `PreconditionFailed`**. Put-if-not-exists holds on this store, so Lance commit
+  atomicity needs no external manifest store — which also demotes `open_ingest.md` D8's
+  managed-versioning narrowing from a necessity to an optimisation here. Full table: `open_ingest.md`
+  §7.11 (6 verified, 0 failed, 0 blocked).
+
+**Eighth wave (2026-08-03): the store registry became multi-endpoint and attachable — the
+`open_ingest.md` shipped ledger, folded here as that file's first generation retires.**
+
+The ingest wave's own authority is the root plan doc `open_ingest.md` (the merged study/spec — audit,
+options, D1–D8, E1–E7, the §6d gate A1–A20, and both `/goal` blocks). Two items shipped ahead of it and
+are recorded here because the register, not a plan doc, is where shipped work lives:
+
+- **Per-store endpoint, credentials and TLS.** `Store` gained `endpoint`, `secret` and `insecure`
+  (`packages/service-kit/src/service_kit/schemas/storage.py:55-71`); the object browser resolves a
+  client **per store** (`services/viewer/src/viewer/api/v1/endpoints/objects.py:112-113`). Raw lives on
+  external HCP while the governed tiers are on the warehouse, and one process env holding one credential
+  pair is precisely why `images-batch` listed as empty against a bucket holding 3.5M objects.
+  Credentials resolve through the Dapr secret store, **fail-closed, no env fallback** (`objects.py:69-70`
+  — "never falls back to env").
+- **Attach a bucket from the UI.** `POST /v1/stores`
+  (`services/catalog/src/catalog/api/v1/endpoints/stores.py:69-74`), estate-admin gated via
+  `require_relation(..., "can_observe_events")` (`:96`), persisted as an estate document
+  (`UserStateDocument.ATTACHED_STORES` at `ESTATE_SUBJECT`, `:57`), and attached stores forced
+  **read-only** (`:107`).
 
 ---
 
@@ -640,7 +666,16 @@ run as `medallion.bronze`/`medallion.silver` movers; the HTR-cascade e2e (IIIF �
 gold with lineage populated) goes green. *(R23 re-tiered the head: the IIIF harvest lands bronze
 directly — there is no raw tier.)*
 
-### D2f · The `/ingest-s3` head route for the second external-raw source family *(new, 2026-07-28 — R23)*
+### ~~D2f · The `/ingest-s3` head route for the second external-raw source family~~ *(new, 2026-07-28 — R23; **SUPERSEDED 2026-08-03 by `open_ingest.md`**)*
+
+> **Superseded — do not build this shape.** The plan below adds a second per-source head route to the
+> medallion, which is exactly the coupling `open_ingest.md` R1 removes: acquisition leaves the
+> medallion entirely for the `ingest` service plane, and a new source becomes one `SourceAdapter`
+> registry entry + one lineage-input twin — **zero** new endpoints (invariant I1). The
+> `/bronze-arrival` self-subscription this plan reuses is itself deleted by that move (lineage stops
+> being a control plane); the cascade trigger becomes the catalog's publication event. The landed
+> adapter seam (`s3_harvest.py`) is kept and rehomed, not rebuilt. Retained verbatim below for the
+> reasoning trail.
 
 **What.** R23 names TWO external-raw source families: the IIIF Image API (shipped: `/ingest-iiif`) and
 external object storage (the ra-hcp pattern). The **adapter seam is landed**:
@@ -651,8 +686,10 @@ against moto incl. the bronze blob-v2 landing (`tests/unit/test_s3_harvest.py`).
 allowlists, token/admin auth, #84 project routing — symmetric with `/ingest-iiif`) is scaffolding-only:
 wiring it properly needs the same auth/ceiling/project design pass the IIIF head got, out of the R23
 corrective wave's scope.
-**What closes it.** The route + settings (`MEDALLION_S3_SOURCE_*`), emitting input=`s3://…` /
-output=bronze through the same `/bronze-arrival` seam, with the double-fire pin extended to it.
+**What closes it.** ~~The route + settings (`MEDALLION_S3_SOURCE_*`), emitting input=`s3://…` /
+output=bronze through the same `/bronze-arrival` seam, with the double-fire pin extended to it.~~
+**Now closed by:** the S3-prefix adapter getting its registry entry in the `ingest` plane
+(`open_ingest.md` §5 point 6, sequencing step 3) — no route, no settings block, no `/bronze-arrival`.
 
 ### D2g · The bronze ingest head's own FGA write gate *(new, 2026-07-28 — R23 collapse residue)*
 
@@ -987,6 +1024,15 @@ gateway invokes with no timeout, retry or circuit breaker. `rayservice.yaml`
 carries the same gate but is genuinely optional — an in-cluster Ray is only wanted for exercising
 auth/OpenBao/Dapr locally.
 
+**Its own memory tier, and why (folded from `open_ingest.md`'s shipped ledger, 2026-08-03).** Once it
+actually rendered, `compute` was **OOMKilled on the shared 512Mi tier** — it is the only fleet service
+importing the Ray SDK — so it carries its own 1536Mi limit (`chart/values.yaml:222-224`) and is pointed
+at the external cluster via `ray.dashboardUrl` (`chart/values.yaml:891` →
+`chart/templates/configmap.yaml:46-47`). Worth keeping because it is load-bearing elsewhere: it is the
+argument for going httpx-only in `ray-kit` (the heavy `ray` SDK import exists only for
+`JobSubmissionClient`, itself a REST wrapper over `/api/jobs/`), which would remove the fleet's sole Ray
+SDK dependency **and** this 1536Mi tier — see `open_ingest.md` § "Package topology".
+
 
 ---
 
@@ -1064,6 +1110,120 @@ execution events surfaced without app-log noise. An opportunity, not a defect.
 3. `MERGE-REPIN-DELTA.md` was a diff, was applied (the plan is re-pinned, rulings R8–R10 + D7 recorded),
    and was deleted as its own instructions required — git history keeps it. **This file is not deletable**;
    it is reconciled at P8, never dropped.
+
+
+## The ingest plane — what Phase 1 did NOT close *(folded from `open_ingest.md`, 2026-08-04)*
+
+`open_ingest.md` and `open_ingest_etl.md` are retired per the repo's fold-then-delete convention
+(root `open_*.md` is a WORKING plan; when the work lands, what is still live moves here and the file
+goes). The plan's own record of what shipped is the branch's commit history — 37 commits on
+`ingest-plane`, each one naming the defect it closed. What follows is only what is still OPEN.
+
+**What DID land, so nobody re-does it:** the `services/ingest` plane (source-agnostic control API,
+Dapr Workflow orchestration, JetStream unit queue, the single-writer lander, fragment staging);
+gates A1 A2 A3 A5 A6 A7 A8 A9 A10 A11 A12 A13 A14 A19 A20 and I1–I4; `runners/dummy` and its quality
+gate; the compute zone's run-status page. A11 runs in-cluster from `scripts/ingest-lane.sh` and
+asserts on outcomes — 202 in 46 ms, a COMPLETE run, a committed bronze version, one row per fixture,
+no provenance defect, and idempotent replay.
+
+### 1. The cascade above bronze — deployed, fires on CREATE only *(narrowed 2026-08-04)*
+
+**What now works.** The medallion is in the lane slice (`scripts/ingest-lane.sh`), and an ingest run
+DOES reach the cascade head: `POST /bronze-arrival 200` on the producer, and on the first run into a
+table `POST /medallion-event 200` on the bronze-to-silver mover. The trigger is the CATALOG's own
+write lineage (`lance-catalog/create_table.bronze$events`, eventType COMPLETE, outputs
+`[bronze$events]`) — which is exactly what `/bronze-arrival` filters on, and is the right shape: the
+governed WRITER announces the tier, once per commit, with the catalog's authority.
+
+An ingest-side publish was tried and REMOVED. The Dapr publish failed outright (`pubsub
+lineage-pubsub is not found` — the component is scoped per app and `ingest` is not on its list), I8's
+never-raise guard swallowed it, and because the topic emit ran before the HTTP one it took the GRAPH
+write down with it. A8 reported the resulting provenance hole on the very next run. It was also
+redundant: a second announcement of the same write is a double-fired cascade whose two triggers
+nothing keeps in agreement.
+
+**What is still open, precisely:**
+
+* **The trigger fires on CREATE, not on every INSERT.** Measured: the first ingest into
+  `bronze$events` produced two `/bronze-arrival` hits (create_table + insert) and one
+  `medallion.bronze`; a later ingest into the SAME table produced one hit and NO trigger. So a table's
+  second and subsequent arrivals do not cascade. Either the insert event's output namespace differs
+  from the create's, or the head's filter matches only one of them — read
+  `catalog/services/lineage_deps.emit_measured_write` against `ingest_trigger._bronze_write_dataset`
+  before changing anything.
+* **The movers move no DATA in this slice.** `MEDALLION_FROM_URI`/`TO_URI` are unset and no project
+  routing is configured, so `handle_stage` skips its compute path entirely (`transform.py:210` —
+  `if settings.compute_enabled and from_uri and to_uri`). The mover wakes, emits, and writes nothing.
+  Configuring the tier URIs (or the per-project warehouse registry) is what turns the proven TRIGGER
+  chain into a proven DATA chain.
+
+### 1b. The original framing, for context
+
+`runners/dummy` proves bronze→silver→gold **as tests**, not as a running lane: nothing in-cluster
+subscribes to the catalog's publication event and moves a bronze commit into silver, and no quality
+gate decides promote-vs-hold into gold on a deployed dataset. The mover's mechanics are real and
+covered (CDF delta read, merge-on-write convergence, `source_rowid` carried not copied, an E5 replay
+that reproduces silver byte for byte); what is missing is the subscription, the Ray job submission,
+and the gate wired to `medallion.services.quality.assert_quality_on_batch` on a live tier.
+
+**Why it is not "nearly done":** the publication event that should wake a mover is the catalog's, and
+the ingest plane currently registers commits through `ingest.catalog.LocalCatalog` — see 2.
+
+### 2. ~~`LocalCatalog` still stands in for the catalog service~~ **CLOSED 2026-08-04**
+
+`ingest/catalog_service.py` routes creation and commits through the catalog
+(`RASK_INGEST_USE_CATALOG=true` in the chart). Verified in-cluster: a run completes, the catalog
+describes the table, and the location is one the CATALOG vends —
+`s3://lance-catalog/caa05d2a_demo$a11-…` — not a path the ingest plane composed. Namespace create is
+part of it (a table's namespace is a catalog object with its own manifest, not implied by the table
+id), and the vended location is resolved once and carried, because re-deriving it from env made
+workers write where the catalog was not looking.
+
+So item 1 is no longer blocked: a commit is now registered somewhere the rest of the estate can see
+it. What remains for the cascade is the SUBSCRIPTION — something that hears the catalog's
+publication and submits the mover.
+
+### 3. A15–A18 are unwritten
+
+- **A15** — cleanup can never eat a live run: assert the cron cleanup's `older_than` ≥ the maximum
+  permitted ingest-run duration, as a relation between two config values rather than two constants
+  that happen to agree today.
+- **A16** — index maintenance and compaction as owned lanes: `optimize_indices` delta-maintenance
+  runs and is observable; indexed search returns rows added by the latest published delta.
+- **A17** — the mover contract (E1–E3): a stale event is acked without work; a redelivered event for
+  already-produced output is a no-op with a deterministic run id; two replicas on one dataset never
+  transform concurrently; a submission failure returns RETRY → backoff → maxDeliver → DLQ + FAIL run.
+- **A18** — publication behaviour: gate FAIL → no tag advance, no event, FAIL lineage run, downstream
+  provably never woken; gate PASS → the emitted event's version equals the commit RESPONSE value; a
+  rollback fires exactly one event and idempotency absorbs it.
+
+A17 and A18 both need 1, since they are assertions about a mover and a publication that do not run.
+
+### 4. `packages/tracker` has zero consumers and should probably die
+
+Adopting Dapr Workflow dissolved the reason it existed (`docs/DECISIONS.md`): the workflow's own
+durable history is the run ledger, so nothing needs a side table of unit states. It is not deleted
+here because that is an owner call, not a cleanup — but it is dead weight, and leaving it invites
+someone to wire it back in and re-create the two-ledger problem.
+
+### 5. Known operational sharp edges, recorded rather than fixed
+
+- **helm cannot reach k3s 1.36 on this host** — `Kubernetes cluster unreachable: the server could
+  not find the requested resource`, on helm 3.16.4 and 3.20.0 alike, while kubectl against the same
+  kubeconfig works. `scripts/ingest-lane.sh` deploys with `helm template | kubectl apply` as a
+  result. The chart stays the single source of truth; only the delivery changed.
+- **`IfNotPresent` + a mutable `:dev` tag never re-pulls.** A rebuilt, re-pushed, rolled-out
+  Deployment keeps serving arbitrarily old code, and `kubectl rollout restart` does not help. Deploy
+  by DIGEST. This cost an hour on a health route that was present in the image and absent from the
+  pod — and then bit a SECOND time from the other direction: re-running the deploy re-applies the
+  chart, which resets a digest-pinned image back to `:dev`, and the node serves its cached copy
+  again. So the trap is not only "remember to pin"; it is that ANY later `kubectl apply` of the
+  release silently un-pins. `scripts/ingest-lane.sh` re-pins ingest on every deploy for exactly this
+  reason; the other services do not, so pin them by hand after a re-deploy or debug a fixed service
+  that is still running the bug.
+- **`tests/e2e` specs must contain no TS type syntax.** The project has no tsconfig, and playwright's
+  transform answers a type assertion by failing the whole file with "2 errors building" — no line, no
+  cause — which also zeroes every other spec's listing.
 
 
 ---
@@ -2936,3 +3096,61 @@ Recorded rather than hidden, each with what would unblock it:
   serializer reads it. Not part of publish.
 * **Active learning** (`Draft.origin = "model"`, `confidence`, `uncertainty`). The columns and the
   `prediction_import` send path exist in this design; the ranking loop does not.
+
+---
+
+## Ingest plane — what round 3 left open
+
+`open_ingest.md` is deleted; rounds 1–3 landed on `ingest-plane` and merged. The readiness contract
+ruled in its § D2 is BUILT: a commit is not a publication (the `published` tag advances only after
+the quality gate passes), the tag is the truth and the `table_published` event is only the
+notification, and that event carries `{from_version, to_version}` so a consumer resolves an exact
+row delta via `_row_created_at_version` without a bookmark. Proven in-cluster.
+
+What is still open, most consequential first:
+
+### The movers COMPOSE a dataset path; the catalog VENDS one
+
+`transform.py:191` builds `{project_root}/medallion/{namespace}`, while the catalog vends tables at
+`s3://<warehouse>/<hash>_<ns>$<name>`. The two never meet, so no configuration of names can make an
+ingest-written table visible to a mover — the cascade fires correctly and then finds nothing to move.
+
+This is I2 ("resolve the location through the CATALOG, never compose a path") violated on the mover
+side, and it predates the ingest plane. The fix is to make the movers catalog-resolved. It is a
+change to a service outside the ingest plane and wants its own review.
+
+Everything else in the cascade now works: the publication head is subscribed
+(`catalog.control.v1 -> /publication-arrival`), receives deliveries, carries `{from, to, project}`,
+and the mover wakes and correctly identifies another lane.
+
+### `/bronze-arrival` still exists alongside `/publication-arrival`
+
+Both publish the same `medallion.bronze` trigger, and the movers' token de-duplication is what stops
+a table emitting both signals from cascading twice. Retiring the lineage head is a follow-up once
+every writer publishes — doing it before then would strand any writer that has not adopted publish.
+
+### `StagingOverlapError` is reachable
+
+`drain_chunk` separates redelivered messages from fresh ones within ONE fetch but batches all
+redeliveries in that fetch together regardless of origin batch, so two crashed batches' remainders
+can merge into a fragment that overlaps both and is contained by neither. The finalizer now searches
+for an exact cover (refusing 0% of resolvable inputs, down from 18.2%) and refuses only the genuinely
+undecidable case, naming the stranded units. Removing the state entirely means preserving the
+original batch grouping on redelivery.
+
+### `id` is not a declared primary key
+
+`catalog.py` used to claim it was, citing `file_format.md:2887-2910`. Lance's unenforced primary key
+is opt-in through field metadata (`lance-schema:unenforced-primary-key`) which this plane sets
+nowhere, so `id` is an ordinary column the estate agrees to merge on and Lance validates no
+uniqueness. Declaring it properly is open.
+
+### Dropped from the medallion head, still not restored
+
+The empty-source refusal (a mis-set prefix currently commits nothing, reports COMPLETE, and emits a
+WROTE edge for a table it did not write) and the ingest ceilings (`s3-prefix` at a bucket root
+enumerates the whole bucket). Both are guards against a mis-pointed source; both are cheaper here
+than in the head they came from, because enumeration is a discrete phase.
+
+The IIIF read-through cache belongs to the ADAPTER, not the platform — a per-source `Fetcher` is
+already the designed seam.

@@ -3,7 +3,7 @@ name = "htr-runner"
 version = "0.1.0"
 description = "Sealed HTR model runner — Ray Data pipeline + the HTR actors (image → ALTO)."
 requires-python = ">=3.13"
-license = "AGPL-3.0-only"
+license = "Apache-2.0"
 dependencies = [
     # `storage` is the only first-party dep, taken as a PATH dep (see [tool.uv.sources]) —
     # deliberately NOT `workspace = true`, because this project is sealed OUT of the root uv

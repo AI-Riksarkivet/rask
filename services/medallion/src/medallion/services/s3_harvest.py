@@ -1,16 +1,10 @@
 """External object-storage harvest — the SECOND external-raw source family (R23).
 
-External raw spans (at least) two source families: the IIIF Image API
-(:class:`medallion.services.iiif_produce.IIIFVolumeSource`) and **external object storage** — the ra-hcp
-pattern, read through ``packages/storage``'s provider-agnostic S3 client (HCP ↔ MinIO/RustFS/AWS swaps by
-env only, never a code change). This module is that adapter seam: :class:`S3PrefixSource` wraps
-``storage.S3Source`` behind the ``SourceAdapter`` protocol so ``ingest_to_bronze`` lands the objects as
-the bronze blob-v2 dataset, and :func:`s3_input` names the external source on the bronze-write
-OpenLineage event (``(s3://<bucket>, <prefix>)`` — the OpenLineage external-dataset naming convention,
-the twin of ``iiif_produce.iiif_input``).
-
-A dedicated producer head route (``POST /ingest-s3`` — config, token auth, project routing, symmetric
-with ``/ingest-iiif``) is the recorded follow-up; see ``OPEN-WORK.md``.
+External raw spans several source families, and each is now ONE registry entry in the ingest
+plane rather than a head route here (open_ingest.md I1). This module is the S3 half of that:
+``S3PrefixSource`` plus the ``s3_input()`` lineage twin, which sat here unit-tested against moto
+with NO ROUTE WIRED for months — precisely because reaching it meant adding another head. It is
+registered by ``ingest.adapters`` now; the code below is kept as the harvest mechanics.
 """
 
 from __future__ import annotations
@@ -24,8 +18,8 @@ from storage import S3Source
 class S3PrefixSource:
     """A ``SourceAdapter`` over one external ``s3://<bucket>/<prefix>`` — each object's bytes + s3 URI.
 
-    Wraps :class:`storage.S3Source` (the harvest library, exactly like the IIIF reader survives in
-    ``storage.iiif``): keys iterate in listing order and are re-sorted here so the positional bronze
+    Wraps :class:`storage.S3Source` (the harvest library, exactly as the image-API reader survives in
+    ``storage``): keys iterate in listing order and are re-sorted here so the positional bronze
     ``id`` is reproducible — same prefix -> same ids -> same rows every harvest.
     """
 

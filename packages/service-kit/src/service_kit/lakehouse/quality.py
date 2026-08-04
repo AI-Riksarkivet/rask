@@ -1,4 +1,10 @@
-"""Automated data-quality assertions for the medallion quality gate.
+"""Automated data-quality assertions — the gate every publication runs.
+
+Lives in `service_kit.lakehouse` rather than in one service because § D-R1 makes the gate a property
+of PUBLICATION, not of the medallion: a version becomes consumable only after it passes, whoever
+wrote it. It started in `medallion/services/quality.py` and moved here the moment a second caller
+(the catalog's `publish`) needed it — a gate that only one writer can run is a gate every other
+writer has to reimplement, which is how the estate ends up with two definitions of "good enough".
 
 A medallion stage that produced a real Lance dataset (compute on) can be VALIDATED before it promotes: the
 mover runs cheap, exact assertions on the dataset it just wrote — does it have rows? is the key column free
@@ -14,6 +20,7 @@ Both gate movement. The checks use ``count_rows`` (with a filter) so they never 
 from __future__ import annotations
 
 import lance
+import pyarrow as pa
 from pydantic import BaseModel
 
 from service_kit.lakehouse import blobs
@@ -78,3 +85,42 @@ def assert_quality(
 def passed(assertions: list[Assertion]) -> bool:
     """Whether EVERY assertion succeeded — the gate promotes only when this is true."""
     return all(a.success for a in assertions)
+
+
+def assert_quality_on_batch(
+    table: pa.Table,
+    *,
+    key_column: str,
+    required_columns: tuple[str, ...] | list[str] = (),
+) -> list[Assertion]:
+    """The SAME assertions, run on an uncommitted batch — D3's pre-commit gate.
+
+    `assert_quality` above validates a dataset that already exists, which means the commit has
+    already happened. `transform.py` calls it that way (:324-337, :462-468): a failed assertion
+    leaves the commit in place, skips the next-stage trigger, and emits COMPLETE-with-failed-
+    assertions — no FAIL run, no DLQ. So today a bad batch IS in the tier; it merely does not
+    propagate. Anyone reading that table directly, or any consumer resolving `latest` rather than
+    the published tag, sees data the gate rejected.
+
+    D3 closes that window: where a hop's delta is a single transaction — every mover hop, and
+    ingest's one commit — the assertions run on the batch BEFORE it is committed, so a rejected
+    batch never becomes a version at all. Uncommitted fragments are invisible until commit
+    (`lance_docs/guide.md:1533-1636`), which is what makes this possible rather than merely
+    desirable.
+
+    Deliberately the same assertion NAMES and the same `passed()`, so the pre-commit gate and the
+    post-publish monitor cannot drift on what "good" means — the reason `blob_column_resolves` is
+    already shared between the gate and the reconcile sweep.
+
+    The blob check is absent here by necessity, not oversight: blob resolution is a property of
+    stored payloads, and there are none until the commit. It remains a post-publish monitor
+    (recorded via metadata-only commits, D3), which is the honest split — this gate catches
+    structure, that one catches storage.
+    """
+    assertions = [Assertion(assertion=ROW_COUNT_POSITIVE, success=table.num_rows > 0)]
+    if key_column and key_column in table.column_names:
+        nulls = table.column(key_column).null_count
+        assertions.append(Assertion(assertion=NOT_NULL, success=nulls == 0, column=key_column))
+    for column in required_columns:
+        assertions.append(Assertion(assertion=COLUMN_DECLARED, success=column in table.column_names, column=column))
+    return assertions

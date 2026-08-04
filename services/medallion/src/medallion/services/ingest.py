@@ -31,7 +31,7 @@ _BRONZE_STAGE = "bronze"
 _INGEST_SCHEMA = pa.schema([pa.field("id", pa.int64()), blob_field("payload"), pa.field("source_uri", pa.string())])
 
 #: Extra STRING columns appended after the core ingest triple — ``{column_name: extractor(obj)}``,
-#: applied in mapping order. The IIIF page lane uses this for ``volume_id``/``page_key`` (P7a); the
+#: applied in mapping order. A page lane uses this for grouping columns such as volume/page keys; the
 #: media/events lanes pass none and stay byte-identical to the pre-P7a write.
 type ExtraColumns = Mapping[str, Callable[[SourceObject], str]]
 

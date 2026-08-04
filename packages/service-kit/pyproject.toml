@@ -3,7 +3,7 @@ name = "service-kit"
 version = "0.1.0"
 description = "Shared FastAPI app factory for rask backend services (lifespan, config, logging, middleware)."
 requires-python = ">=3.13"
-license = "AGPL-3.0-only"
+license = "Apache-2.0"
 dependencies = [
     "storage",
     "fastapi>=0.115",

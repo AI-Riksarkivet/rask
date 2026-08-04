@@ -595,6 +595,10 @@ export interface paths {
          * Drop Namespace
          * @description Drop namespace ``id`` (``drop_namespace``); revoke its FGA tuples — and, for a Cascade drop, every
          *     dropped child's — so a reused id can't inherit stale grants.
+         *
+         *     Deletion protection (#73): a ``protected`` control-root record refuses 409 unless ``force=true``
+         *     — and it also stops a CASCADE from a parent taking this namespace with it, because the cascade
+         *     arrives at this same door. ``force`` turns the protection lock only; the FGA gate ran first.
          */
         post: operations["drop_namespace_v1_namespace__id__drop_post"];
         delete?: never;
@@ -698,6 +702,28 @@ export interface paths {
          *     directory prefix unless a table policy overrides it. Owner-gated by the router (``can_delete``).
          */
         post: operations["set_namespace_policy_v1_namespace__id__policy_set_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespace/{id}/protection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Namespace Protection
+         * @description Set or clear deletion protection on namespace ``id`` (#73). Owner-gated by the router
+         *     (``protection`` maps to ``can_delete`` — whoever may delete the namespace decides whether
+         *     deleting it needs a second thought). Same control-root record contract as the table door.
+         */
+        post: operations["set_namespace_protection_v1_namespace__id__protection_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1494,6 +1520,10 @@ export interface paths {
          * Deregister Table
          * @description Deregister the table at ``id`` (detach it without deleting data) via lance_namespace
          *     ``deregister_table``, then revoke its FGA ownership and emit a best-effort ``deregister_table`` marker.
+         *
+         *     Protection-gated like drop (#73): deregister keeps bytes but REMOVES the object from governance —
+         *     the flag's whole jurisdiction — so leaving it ungated would make "deregister, then delete the
+         *     files by hand" the unprotected path around the protected drop.
          */
         post: operations["deregister_table_v1_table__id__deregister_post"];
         delete?: never;
@@ -1556,6 +1586,11 @@ export interface paths {
          * Drop Table
          * @description Drop the table at ``id`` via ``drop_table``, then revoke its FGA tuples and
          *     emit a best-effort ``drop_table`` lineage event.
+         *
+         *     Deletion protection (#73, the warehouse door's Decision-5 contract extended to the rung where a
+         *     drop deletes BYTES): a ``protected`` control-root record refuses 409 unless ``force=true``, and
+         *     ``force`` turns the protection lock ONLY — the FGA gate ran before this handler, identically
+         *     with or without it.
          */
         post: operations["drop_table_v1_table__id__drop_post"];
         delete?: never;
@@ -1907,6 +1942,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/table/{id}/protection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Table Protection
+         * @description Set or clear deletion protection on the table at ``id`` (#73 — the warehouse contract on the
+         *     rung where a drop deletes bytes). Owner-gated by the router (``protection`` maps to ``can_drop``:
+         *     whoever may destroy the table decides whether destroying it needs a second thought). The flag is
+         *     a CONTROL-ROOT record, deliberately not schema metadata — control-plane state that emits a
+         *     control event and never creates a table version, readable even when the dataset is corrupted,
+         *     and unreachable from the future properties write door (#78).
+         */
+        post: operations["set_table_protection_v1_table__id__protection_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/table/{id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish Table
+         * @description Gate `version` and, if it passes, advance `published` to it.
+         *
+         *     A refused gate is a 200 with `published=False`, not an error status: the request was well-formed
+         *     and the system did exactly what it should. Errors are reserved for the caller getting it wrong —
+         *     an unknown version (404), a backwards move (409), a malformed one (400) — all raised as
+         *     `lance_namespace` typed errors so the shared problem-body handler renders them.
+         */
+        post: operations["publish_table_v1_table__id__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/table/{id}/query": {
         parameters: {
             query?: never;
@@ -2136,6 +2221,54 @@ export interface paths {
          * @description Resolve which table version a tag points to — wraps lance_namespace GetTableTagVersion.
          */
         post: operations["get_table_tag_version_v1_table__id__tags_version_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/table/{id}/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Table Tasks
+         * @description What is queued for THIS table (#75 brings §2.4). Today that is exactly one thing: a pending
+         *     trash expiry. It exists the moment expiry does, because an undrop deadline the owner cannot see
+         *     is not a safety feature — the estate's task surfaces are otherwise all estate-global, so "what is
+         *     scheduled against my table" was unanswerable. Reader-gated by the router alongside describe.
+         */
+        get: operations["table_tasks_v1_table__id__tasks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/table/{id}/undrop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Undrop Table
+         * @description Recover a dropped table from the trash (#75) — re-register its still-present bytes at its old
+         *     id and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into
+         *     the namespace is the same authority as removing it).
+         *
+         *     404 when there is no trash record: an expired or never-trashed drop is genuinely unrecoverable,
+         *     and saying so plainly beats a 200 that recovers nothing.
+         */
+        post: operations["undrop_table_v1_table__id__undrop_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2557,7 +2690,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Warehouse Namespaces
+         * @description The namespaces bound to this warehouse, read from the REGISTRY — the same source the delete
+         *     door consults. This read exists so no surface has to INFER the answer: the lakehouse warehouse
+         *     page used to derive its namespace list by grouping the table registry, which made an EMPTY
+         *     namespace structurally invisible — the page said "no namespaces" while the delete door refused
+         *     409 naming one (observed live, #66). Reader-gated like the record itself (``can_get_metadata``);
+         *     a missing warehouse is the same 404 as everywhere else.
+         */
+        get: operations["list_warehouse_namespaces_v1_warehouses__warehouse_id__namespaces_get"];
         put?: never;
         /**
          * Create Warehouse Namespace
@@ -3777,7 +3919,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "table_published";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -5894,6 +6036,8 @@ export interface components {
          *     identically to a set one is how nobody can tell what is actually governing their data.
          */
         PolicyRequest: {
+            /** Auto Cleanup Interval Commits */
+            auto_cleanup_interval_commits?: number | null;
             /**
              * Cleanup Enabled
              * @default true
@@ -5915,6 +6059,8 @@ export interface components {
             retain_versions?: number | null;
             /** Retention Days */
             retention_days?: number | null;
+            /** Scan Batch Size */
+            scan_batch_size?: number | null;
             /** Target Rows Per Fragment */
             target_rows_per_fragment?: number | null;
         };
@@ -5995,6 +6141,53 @@ export interface components {
             model: string;
             /** Tag */
             tag: string;
+        };
+        /** ProtectionResponse */
+        ProtectionResponse: {
+            /** Id */
+            id: string;
+            /** Protected */
+            protected: boolean;
+        };
+        /**
+         * PublishRequest
+         * @description Ask the catalog to gate a committed version and, if it passes, publish it.
+         *
+         *     `version` is explicit rather than "whatever is latest": between a writer's commit and its publish
+         *     call another writer may have committed, and publishing a version nobody gated is the failure the
+         *     gate exists to prevent. The caller names what it wrote.
+         */
+        PublishRequest: {
+            /** Key Column */
+            key_column: string;
+            /** Required Columns */
+            required_columns?: string[];
+            /** Version */
+            version: number;
+        };
+        /**
+         * PublishResult
+         * @description The outcome, and the RANGE a notification should carry (§ D2 D-R3).
+         *
+         *     `published=False` is a normal answer, not an error: the gate refused, the pointer did not move,
+         *     and the previously published version keeps serving. `assertions` come back either way so a
+         *     blocked batch is auditable without re-running anything.
+         */
+        PublishResult: {
+            /** Assertions */
+            assertions?: {
+                [key: string]: unknown;
+            }[];
+            /** From Version */
+            from_version: number | null;
+            /** Published */
+            published: boolean;
+            /** Reason */
+            reason?: string | null;
+            /** Table */
+            table: string;
+            /** To Version */
+            to_version: number;
         };
         /**
          * QueryTableRequest
@@ -6616,6 +6809,22 @@ export interface components {
             version: number;
         };
         /**
+         * TrashEntry
+         * @description One recoverable drop — what the owner needs to decide whether to undrop before the deadline.
+         */
+        TrashEntry: {
+            /** Dropped At */
+            dropped_at: string;
+            /** Dropped By */
+            dropped_by: string;
+            /** Expires At */
+            expires_at: string;
+            /** Id */
+            id: string;
+            /** Location */
+            location: string;
+        };
+        /**
          * TupleCondition
          * @description A CEL condition attached to a grant, with the parameters that ride the TUPLE.
          *
@@ -6953,6 +7162,15 @@ export interface components {
              */
             start_version: number;
         };
+        /**
+         * WarehouseNamespacesResponse
+         * @description The namespaces BOUND to one warehouse — the registry's answer, same shape as the spec's
+         *     ListNamespaces (``{"namespaces": [...]}``) so a spec client parses it unchanged.
+         */
+        WarehouseNamespacesResponse: {
+            /** Namespaces */
+            namespaces: string[];
+        };
         /** WarehouseResponse */
         WarehouseResponse: {
             /** Bucket */
@@ -7120,6 +7338,22 @@ export interface components {
          * @enum {string}
          */
         WorkflowSearchMode: "fts" | "semantic" | "visual" | "scene" | "scene_fts" | "hybrid" | "all";
+        /**
+         * SetProtectionRequest
+         * @description The one field this door writes. Setting is idempotent; clearing removes the record.
+         */
+        catalog__api__v1__endpoints__namespaces__SetProtectionRequest: {
+            /** Protected */
+            protected: boolean;
+        };
+        /**
+         * SetProtectionRequest
+         * @description The one field this door writes. Setting it is idempotent; clearing removes the record.
+         */
+        catalog__api__v1__endpoints__tables__SetProtectionRequest: {
+            /** Protected */
+            protected: boolean;
+        };
     };
     responses: never;
     parameters: never;
@@ -7935,7 +8169,9 @@ export interface operations {
     };
     drop_namespace_v1_namespace__id__drop_post: {
         parameters: {
-            query?: never;
+            query?: {
+                force?: boolean;
+            };
             header?: never;
             path: {
                 id: string;
@@ -8117,6 +8353,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PolicyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_namespace_protection_v1_namespace__id__protection_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["catalog__api__v1__endpoints__namespaces__SetProtectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -9305,7 +9576,9 @@ export interface operations {
     };
     deregister_table_v1_table__id__deregister_post: {
         parameters: {
-            query?: never;
+            query?: {
+                force?: boolean;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -9376,7 +9649,10 @@ export interface operations {
     };
     drop_table_v1_table__id__drop_post: {
         parameters: {
-            query?: never;
+            query?: {
+                force?: boolean;
+                purge?: boolean;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -9937,6 +10213,76 @@ export interface operations {
             };
         };
     };
+    set_table_protection_v1_table__id__protection_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["catalog__api__v1__endpoints__tables__SetProtectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_table_v1_table__id__publish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     query_table_v1_table__id__query_post: {
         parameters: {
             query?: never;
@@ -10011,7 +10357,9 @@ export interface operations {
     };
     rename_table_v1_table__id__rename_post: {
         parameters: {
-            query?: never;
+            query?: {
+                force?: boolean;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -10311,6 +10659,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GetTableTagVersionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    table_tasks_v1_table__id__tasks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrashEntry"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    undrop_table_v1_table__id__undrop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterTableResponse"];
                 };
             };
             /** @description Validation Error */
@@ -11059,6 +11469,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WarehouseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_warehouse_namespaces_v1_warehouses__warehouse_id__namespaces_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WarehouseNamespacesResponse"];
                 };
             };
             /** @description Validation Error */

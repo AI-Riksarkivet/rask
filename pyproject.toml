@@ -3,7 +3,7 @@ name = "rask-workspace"
 version = "0.1.0"
 description = "rask monorepo — uv workspace root (no entry points; deployables build via `uv sync --package <name>`)."
 requires-python = ">=3.13"
-license = "AGPL-3.0-only"
+license = "Apache-2.0"
 dependencies = []
 
 [build-system]
@@ -42,6 +42,12 @@ dev = [
     # RunEvents against the vendored 2-0-2 core schema. jsonschema resolves as a moto
     # transitive today — declared because the gate depends on it directly.
     "openlineage-python>=1.50.0",
+    # respx — the prescribed way to test an outbound HTTPX boundary (writing-python's testing
+    # reference). It intercepts at the TRANSPORT, so an assertion is about the request that would
+    # actually reach the upstream, not about whether our own function was called with the arguments
+    # we then assert it was called with. First consumer: the ingest plane's catalog service client,
+    # whose whole contract is the shape of three POSTs.
+    "respx>=0.21",
     "jsonschema>=4.26",
     "duckdb>=1.4",
     "requests>=2.32",
@@ -169,7 +175,8 @@ exclude = [
 # never silently vanish from the gate (tests/unit/test_e2e_collection_gate.py asserts it), but
 # excluded from offline runs via `-m "not e2e"` (make test / test-slow), the same way `slow` is.
 # tests/e2e-py/conftest.py force-applies the e2e marker to every item collected under it.
-testpaths = ["packages/lineage-kit/tests", "packages/ray-kit/tests", "packages/service-kit/tests", "packages/storage/tests", "packages/tracker/tests", "packages/validate/tests", "services/gateway/tests", "services/compute/tests", "services/controlplane/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
+testpaths = ["packages/lineage-kit/tests", "packages/ray-kit/tests", "packages/service-kit/tests", "packages/storage/tests", "packages/tracker/tests", "packages/validate/tests", "services/gateway/tests",
+    "services/ingest/tests", "services/compute/tests", "services/controlplane/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
 addopts = "--cov --cov-report=term-missing:skip-covered --import-mode=importlib"
 markers = [
     "slow: marks tests requiring real models or long runtimes (deselect with '-m \"not slow\"')",

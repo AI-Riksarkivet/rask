@@ -3,7 +3,7 @@ name = "gateway"
 version = "0.1.0"
 description = "API gateway — path-routes /api/* to the per-domain backends."
 requires-python = ">=3.13"
-license = "AGPL-3.0-only"
+license = "Apache-2.0"
 dependencies = [
     "service-kit",
     "fastapi>=0.115",

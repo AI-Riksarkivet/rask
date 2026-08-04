@@ -6,49 +6,36 @@ in-process fake-Ray ``compute.transform_stage``. Uses only ``httpx`` against the
 ``ray`` package in the mover image.
 
 Idempotent under at-least-once redelivery: the submission id is DETERMINISTIC per (stage, token), so a
-redelivered trigger (the handler blocks until the job finishes, which can exceed the 30s ack window)
-RE-ATTACHES to the same job and polls it, rather than starting a second concurrent job that would race the
-write. A failure (submit error, FAILED job, or timeout) raises so the mover returns RETRY and the sidecar
-redelivers; on redelivery a terminally FAILED/STOPPED job with the same id is DELETED and resubmitted fresh
-(so the retry runs on a healthy worker rather than re-observing the same failure), while a still-running job
-is re-attached and polled. Production KubeRay handles in-job task retry/orchestration.
+redelivered trigger RE-ATTACHES to the same job rather than starting a second concurrent job that would
+race the write. A submit failure raises so the mover returns RETRY and the sidecar redelivers.
 
-Known limitation (STAGE path only): ``submit_stage_job`` blocks until the job finishes, so a job that
-outlives the redelivery window exhausts it — it suits bounded-duration stage transforms. The window depends
-on the deploy: with the DEFAULT ``dapr.resiliency.enabled=true`` the sidecar owns retries and the broker
-crash-recovery ackWait is 720s (ample vs the 180s job timeout); only the ``resiliency=false`` escape hatch
-reverts to the broker-only ~2.5 min (30s ackWait × maxDeliver 5) this note previously described. The
-TRAIN path (``submit_train_job``, #115a) is exactly the async-completion redesign this paragraph used to
-call future work: submit-and-ack, the job emits its own lifecycle, and — unlike the stage
-path — a terminally FAILED prior job is NEVER deleted-and-resubmitted. The two functions deliberately share
-``_submission_id`` but keep separate submit protocols (accepted #115a deviation from "extract one core":
-their re-attach semantics differ at the terminal-failure branch; if you fix the shared POST/GET protocol in
-one, mirror it in the other). See docs/RESILIENCE.md + docs/RAY-TRAIN.md.
+EVERY path is submit-and-ack since A13 (2026-08-03). The stage path used to block until the
+job finished, which made the ack contract a race — a job outliving the redelivery window exhausted it —
+and, more to the point, asked a question the data already answers: a job's completion signal is its own
+registered commit through the catalog, and the publication event off that commit wakes the next tier.
+A job that dies commits nothing and rings nothing; the lineage reconciler catches it against storage
+truth. What was previously described here as the TRAIN path's "async-completion redesign" is now simply
+how all three work. See docs/RESILIENCE.md + docs/RAY-TRAIN.md.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
-import re
-from collections.abc import Mapping
 
 import httpx
-from opentelemetry import propagate
-
-from ray_kit import submit as rk
 
 from medallion.core.config import MedallionSettings
+from ray_kit import submit as rk
 
 
 log = logging.getLogger(__name__)
 
-_TERMINAL_OK = "SUCCEEDED"
+# Still live after A13: the TRAIN path reads it to decide re-attach vs already_failed
+# (:237). Its sibling _TERMINAL_OK and the poll-error tolerance went with the completion
+# poll — nothing observes a job to SUCCEEDED any more, so only the FAILED/STOPPED test
+# survives, and only at submit time.
 _TERMINAL_BAD = frozenset({"FAILED", "STOPPED"})
-# Tolerate a few transient poll blips (a 5xx / connect timeout) before giving up, so one bad GET doesn't
-# abandon an in-flight job and trigger a redelivery that re-attaches anyway — bounded by the job timeout.
-_MAX_POLL_ERRORS = 3
 
 
 async def submit_stage_job(
@@ -60,10 +47,10 @@ async def submit_stage_job(
     token: str | None,
     lineage_json: str = "",
 ) -> None:
-    """Submit (or re-attach to) the stage transform on the Ray cluster and block until it succeeds.
+    """Submit (or re-attach to) the stage transform on the Ray cluster and RETURN — never block.
 
-    Raises :class:`RayJobError` on a submit failure, a FAILED/STOPPED job, or a timeout — the caller maps
-    that to RETRY. On success the downstream Lance dataset exists at ``to_uri`` and the caller measures it.
+    Raises :class:`RayJobError` on a submit failure, which the caller maps to RETRY. Completion is the
+    job's own registered commit, not something observed from here.
 
     ``lineage_json`` is this run's consume-layer provenance document (R26). It rides the runtime_env so
     the job writes the ``lineage`` JSONB column in the SAME commit as the data — the distributed path
@@ -103,67 +90,23 @@ async def submit_stage_job(
         "runtime_env": {"env_vars": env_vars},
     }
 
+    # SUBMIT-AND-ACK (A13, 2026-08-03) — the stage path no longer blocks on completion.
+    #
+    # It held the ack across the whole job runtime in a `while True: sleep()` completion poll
+    # inside the HTTP request. Two things were wrong, and only the first is obvious. A job outliving
+    # the redelivery window exhausted it, so the ack contract was a race the module docstring had to
+    # describe rather than a property the code had. The second is why this is a DELETION rather than
+    # a tuning exercise: nothing needs the poll. A job's completion signal is its own registered
+    # commit through the catalog, and the publication event off that commit is what wakes the next
+    # tier — polling was asking a question the data already answers.
+    #
+    # Holding an ack across a job's runtime is precisely what the ack contract forbids: ackWait
+    # expires and the broker redelivers forever. A job that dies commits nothing and rings nothing;
+    # the lineage reconciler catches it against storage truth, and the deterministic submission id
+    # makes a redelivered trigger re-attach instead of starting a second job.
     async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
         await rk.submit_or_reattach(client, submission_id, body)
-        log.info("ray_stage_job_submitted", extra={"submission_id": submission_id, "stage": stage})
-        try:
-            async with asyncio.timeout(settings.ray_job_timeout_seconds):
-                await rk.await_success(client, submission_id, settings.ray_poll_interval_seconds)
-        except TimeoutError as exc:
-            raise rk.RayJobError(f"ray stage job {submission_id} did not finish within {settings.ray_job_timeout_seconds}s") from exc
-    log.info("ray_stage_job_succeeded", extra={"submission_id": submission_id, "stage": stage})
-
-
-async def submit_iiif_ingest_job(
-    settings: MedallionSettings,
-    *,
-    bronze_uri: str,
-    volume_id: str,
-    max_pages: int | None,
-    token: str | None,
-) -> None:
-    """Submit (or re-attach to) the IIIF→bronze harvest job (``scripts/ray_iiif_ingest_job.py``) and block
-    until it succeeds — the P7a producer's Ray branch, on the same Jobs-REST seam as the stage movers.
-
-    Deterministic ``ray-iiif-ingest-<volume>-<token>`` submission id → an at-least-once retry re-attaches
-    instead of racing a second harvest of the same volume. Raises :class:`RayJobError` on a submit
-    failure, a FAILED/STOPPED job, or a timeout; on success the bronze page dataset exists at
-    ``bronze_uri`` and the caller measures it for the ONE bronze-write emit.
-    """
-    submission_id = rk.submission_id(f"iiif-ingest-{volume_id}", token)
-    env_vars = {
-        "VOLUME_ID": volume_id,
-        "BRONZE_URI": bronze_uri,
-        "IIIF_BASE_URL": settings.iiif_base_url,
-        "IIIF_QUERY_PARAMS": settings.iiif_query_params,
-        "MAX_PAGES": "" if max_pages is None else str(max_pages),
-        "S3_ENDPOINT": settings.s3_endpoint,
-        "S3_KEY": settings.s3_access_key_id,
-        "S3_SECRET": settings.s3_secret_access_key.get_secret_value(),
-        "S3_REGION": settings.s3_region,
-        "OTEL_EXPORTER_OTLP_ENDPOINT": os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-        "OTEL_EXPORTER_OTLP_PROTOCOL": os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", ""),
-        "OTEL_EXPORTER_OTLP_HEADERS": os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", ""),
-        "OTEL_EXPORTER_OTLP_TRACES_HEADERS": os.environ.get("OTEL_EXPORTER_OTLP_TRACES_HEADERS", ""),
-        "OTEL_SERVICE_NAME": os.environ.get("OTEL_SERVICE_NAME", ""),
-        "OTEL_RESOURCE_ATTRIBUTES": os.environ.get("OTEL_RESOURCE_ATTRIBUTES", ""),
-        **rk.lineage_env(),
-        **rk.trace_env(),
-    }
-    body = {
-        "entrypoint": settings.iiif_ray_entrypoint,
-        "submission_id": submission_id,
-        "runtime_env": {"env_vars": env_vars},
-    }
-    async with httpx.AsyncClient(base_url=settings.ray_address, timeout=settings.ray_request_timeout_seconds) as client:
-        await rk.submit_or_reattach(client, submission_id, body)
-        log.info("ray_iiif_ingest_submitted", extra={"submission_id": submission_id, "volume_id": volume_id})
-        try:
-            async with asyncio.timeout(settings.ray_job_timeout_seconds):
-                await rk.await_success(client, submission_id, settings.ray_poll_interval_seconds)
-        except TimeoutError as exc:
-            raise rk.RayJobError(f"ray iiif ingest job {submission_id} did not finish within {settings.ray_job_timeout_seconds}s") from exc
-    log.info("ray_iiif_ingest_succeeded", extra={"submission_id": submission_id, "volume_id": volume_id})
+    log.info("ray_stage_job_submitted", extra={"submission_id": submission_id, "stage": stage})
 
 
 async def submit_train_job(

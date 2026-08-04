@@ -3,7 +3,7 @@ name = "compute"
 version = "0.1.0"
 description = "the compute service — Ray dashboard introspection + Ray Serve proxy over ray-kit (R22: `compute` aligns service ↔ zone ↔ plane; import `compute` shadows nothing)."
 requires-python = ">=3.13"
-license = "AGPL-3.0-only"
+license = "Apache-2.0"
 dependencies = [
     "service-kit",
     "ray-kit",

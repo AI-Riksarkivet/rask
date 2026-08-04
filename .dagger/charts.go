@@ -20,6 +20,25 @@ const helmVersion = "3.16.4"
 // promVersion matches the CI job's promtool exactly (PV=2.55.1) — the version that authored rules_test.yml.
 const promVersion = "2.55.1"
 
+// helmBinary is the pinned helm executable on its own, so every lane that needs helm gets the SAME one.
+// Extracted 2026-08-03 when the pytest lane gained helm too (test.go): the thirteen chart-render
+// invariants in tests/unit/test_invariants.py had been calling `pytest.skip("helm not available")` on
+// every CI run because .dagger/base() is a uv image with no helm — a silent hole, since a skipped test
+// reads as a passing suite. Two independently-curled helm installs would let the render gates and the
+// pytest invariants disagree about the same chart under different Helm minors, which is exactly what
+// helmVersion exists to prevent — so both take this file.
+func helmBinary() *dagger.File {
+	return dag.Container().
+		From(chartsBaseImage).
+		WithExec([]string{"apt-get", "update"}).
+		WithExec([]string{"apt-get", "install", "-y", "--no-install-recommends", "curl", "ca-certificates"}).
+		// The official get.helm.sh archive extracts to linux-amd64/helm.
+		WithExec([]string{"sh", "-c",
+			"curl -fsSL https://get.helm.sh/helm-v" + helmVersion + "-linux-amd64.tar.gz" +
+				" | tar xz -C /tmp && install -m0755 /tmp/linux-amd64/helm /usr/local/bin/helm"}).
+		File("/usr/local/bin/helm")
+}
+
 // chartsBase builds the tool container for the non-Python hermetic gates: a small Debian base with the
 // pinned helm + promtool binaries curled from their release archives onto PATH, plus the repo source.
 // `.localbin` is excluded (on top of base()'s excludes) so the Makefile's `export PATH := $(LOCALBIN):…`
@@ -33,10 +52,8 @@ func (m *Rask) chartsBase(src *dagger.Directory) *dagger.Container {
 		// make (runs the gate targets) + curl/ca-certificates (fetch the tool archives). bash, tar, grep,
 		// awk and coreutils are already in the Debian base.
 		WithExec([]string{"apt-get", "install", "-y", "--no-install-recommends", "make", "curl", "ca-certificates"}).
-		// Pin helm — the official get.helm.sh archive extracts to linux-amd64/helm.
-		WithExec([]string{"sh", "-c",
-			"curl -fsSL https://get.helm.sh/helm-v" + helmVersion + "-linux-amd64.tar.gz" +
-				" | tar xz -C /tmp && install -m0755 /tmp/linux-amd64/helm /usr/local/bin/helm"}).
+		// Pinned helm, shared with the pytest lane so the two cannot drift onto different Helm minors.
+		WithFile("/usr/local/bin/helm", helmBinary()).
 		// Pin promtool — same URL + version the CI job uses; the archive nests promtool under its dir.
 		WithExec([]string{"sh", "-c",
 			"curl -fsSL https://github.com/prometheus/prometheus/releases/download/v" + promVersion +
@@ -126,27 +143,33 @@ const resiliencyGate = `set -euo pipefail
 helm template chart > /tmp/resil.yaml
 grep -q "kind: Resiliency" /tmp/resil.yaml
 grep -q "pubsubDeliveryRetry" /tmp/resil.yaml
-# The schedule must MATCH the policy it declares, and the comments must state what renders.
-# Presence-only checking (the two greps above, which were the whole gate until 2026-07-28) passed a
-# policy whose fields contradicted its type: "policy: exponential" with "duration: 30s", a
-# PolicyConstant-ONLY field (dapr/kit retry.go). Dapr ignored the duration, initialInterval stayed at
-# its 500ms default, and the rendered window was ~4s where both comments claimed minutes — so
-# resiliency ON was ~125x SHORTER than OFF, inverting the point of the CRD. Assert the numbers.
+# The schedule must MATCH the policy it declares, the numbers must produce the window the comments
+# claim, AND — new in the M4 correction (2026-08-03) — every field must be one the CRD ACCEPTS.
+# Two prior shapes failed here, in opposite directions. Presence-only checking (the two greps above,
+# the whole gate until 2026-07-28) passed "policy: exponential" with "duration: 30s", a
+# PolicyConstant-ONLY field (dapr/kit retry.go): Dapr ignored the duration, initialInterval stayed at
+# its 500ms default, and the real window was ~4s where both comments claimed minutes — resiliency ON
+# was ~125x SHORTER than OFF. The 2026-07-28 fix then asserted initialInterval/multiplier/
+# randomizationFactor — correct for dapr/kit, but those three fields DO NOT EXIST in
+# resiliencies.dapr.io (absent from the vendored dapr-1.18.1 chart CRD, from the live cluster CRD,
+# and from the Go type Retry), so the API server rejected the CR by strict decoding and it never
+# applied ONCE while this gate stayed green. A render gate cannot see an apply failure — hence the
+# explicit CRD-vocabulary assertion below, which is the part that would have caught it.
 awk '/^ +pubsubDeliveryRetry:/{f=1;next} f&&/^ +[a-zA-Z]+: /{print} f&&/^ +[a-z]+:$/{exit}' /tmp/resil.yaml > /tmp/policy.txt
-grep -q "policy: exponential" /tmp/policy.txt
-grep -q "initialInterval: 30s" /tmp/policy.txt
-grep -q "multiplier: 2" /tmp/policy.txt
-grep -q "randomizationFactor: 0" /tmp/policy.txt
-! grep -q "duration:" /tmp/policy.txt
-init=$(sed -n 's/.*initialInterval: \([0-9]*\)s.*/\1/p' /tmp/policy.txt)
-mult=$(sed -n 's/.*multiplier: \([0-9]*\).*/\1/p' /tmp/policy.txt)
-cap=$(sed -n 's/.*maxInterval: \([0-9]*\)s.*/\1/p' /tmp/policy.txt)
+grep -q "policy: constant" /tmp/policy.txt
+grep -q "duration: 90s" /tmp/policy.txt
+grep -q "maxRetries: 5" /tmp/policy.txt
+# CRD vocabulary: a Resiliency retry accepts only policy/duration/maxInterval/maxRetries/matching and
+# the status-code matchers. Anything else is dropped by strict decoding and the CR never lands.
+! grep -qE "initialInterval:|multiplier:|randomizationFactor:" /tmp/policy.txt
+# maxInterval is exponential-only; under a constant policy it is dead config, so it must be absent.
+! grep -q "maxInterval:" /tmp/policy.txt
+d=$(sed -n 's/.*duration: \([0-9]*\)s.*/\1/p' /tmp/policy.txt)
 n=$(sed -n 's/.*maxRetries: \([0-9]*\).*/\1/p' /tmp/policy.txt)
-w=0; step=$init
-for _ in $(seq 1 "$n"); do [ "$step" -gt "$cap" ] && step=$cap; w=$((w+step)); step=$((step*mult)); done
+w=$((d*n))
 [ "$w" -ge 400 ] && [ "$w" -le 500 ] || { echo "FAIL: rendered retry window ${w}s is not the ~450s (7.5 min) the comments claim"; exit 1; }
 [ "$w" -lt 720 ] || { echo "FAIL: retry window ${w}s meets/exceeds the broker's 720s first backOff step — the broker would redeliver mid-retry"; exit 1; }
-echo "resiliency window ${w}s — matches the documented 7.5 min, under the 720s broker step"
+echo "resiliency window ${w}s (constant ${d}s x ${n}) — matches the documented 7.5 min, under the 720s broker step"
 dlq=$(grep -c "DLQ_TOPIC" /tmp/resil.yaml || true); [ "$dlq" -ge 3 ] || exit 1
 grep -q '"dlq.>"' /tmp/resil.yaml
 grep -q "720s,720s" /tmp/resil.yaml

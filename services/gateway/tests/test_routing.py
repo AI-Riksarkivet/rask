@@ -58,3 +58,62 @@ def test_target_base_falls_back_when_disabled(gw, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("RASK_DAPR_ENABLED", "false")
     base = gw._target_base("compute", "http://127.0.0.1:8804")
     assert base == "http://127.0.0.1:8804"
+
+
+def test_ingest_row_reaches_the_ingest_plane_and_does_not_swallow_ingest_iiif() -> None:
+    """The /api/ingest row, and the sibling-prefix property it only LOOKS like it violates.
+
+    `_pick_route` matches on `path == prefix or path.startswith(prefix + "/")`, so "/api/ingest-iiif"
+    cannot match the "/api/ingest" row — the next character is "-", not "/". Worth a test rather than
+    a comment: the two rows coexist through a deprecation window, and "longest prefix first" is the
+    kind of rule someone reorders on instinct.
+    """
+    from gateway import _pick_route, _routes
+
+    rows = _routes()
+    ingest = _pick_route("/api/ingest", rows)
+    assert ingest is not None and ingest[2] == "ingest"
+
+    sub = _pick_route("/api/ingest/ingests/abc", rows)
+    assert sub is not None and sub[2] == "ingest"
+
+    # The deprecated medallion head still resolves to the medallion, not to the new plane.
+    legacy = _pick_route("/api/ingest-iiif", rows)
+    assert legacy is not None and legacy[2] == "lance-ray"
+
+
+def test_the_ingest_rewrite_lands_on_a_path_the_service_ACTUALLY_serves(monkeypatch) -> None:
+    """The gateway's rewritten path must exist in the ingest app, not merely look plausible.
+
+    This row shipped rewriting to "/v1", taken from the ingest module's own docstrings — which say
+    `POST /v1/ingests`. That is the ROUTER's path, before the prefix `make_service_app` adds: the app
+    mounts every router under `settings.api_prefix`, and the chart deploys `RASK_API_PREFIX=/api`
+    (values.yaml:67, confirmed on the live pod), so the service serves `/api/ingests`. Every call
+    through the gateway 404'd.
+
+    The existing routing tests could not catch it, because they assert the gateway in ISOLATION: that
+    a path picks the right row. A rewrite is only correct RELATIVE to what the other side serves.
+
+    The prefix is pinned here rather than inherited, because the suite's own conftest sets
+    `RASK_API_PREFIX=/api/v1` for config isolation — so an ambient reading would test a prefix no
+    deployment uses, which is its own way of being wrong.
+    """
+    monkeypatch.setenv("RASK_API_PREFIX", "/api")
+    from ingest import create_app
+
+    from gateway import _pick_route, _routes
+
+    served = set(create_app().openapi()["paths"])
+
+    rows = _routes()
+    for public, expected in (
+        ("/api/ingest/ingests", "/api/ingests"),
+        ("/api/ingest/ingests/{run_id}", "/api/ingests/{run_id}"),
+    ):
+        route = _pick_route(public, rows)
+        assert route is not None, f"no gateway row for {public}"
+        route_prefix, upstream_prefix, _, _ = route
+        rewritten = upstream_prefix + public[len(route_prefix) :]
+
+        assert rewritten == expected
+        assert rewritten in served, f"the gateway rewrites {public} to {rewritten}, which the ingest app does not serve: {sorted(served)}"

@@ -3,7 +3,7 @@ name = "lineage-kit"
 version = "0.1.0"
 description = "The one compute-lineage layer (R21): pydantic OpenLineage emission shapes + job→stage→actor run seams for Ray Data pipelines, Ray actors, and Ray Serve deployments."
 requires-python = ">=3.13"
-license = "AGPL-3.0-only"
+license = "Apache-2.0"
 dependencies = [
     # The official client is the transport + the spec authority the tests round-trip against.
     # Deliberately LIGHT (attrs/httpx/requests/pyyaml/dateutil) — this package must be importable

@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 
 from service_kit.exceptions import register_handlers
 
+
 OBJ = "annotation_project:p1"
 
 

@@ -1,0 +1,55 @@
+[project]
+name = "dummy-runner"
+version = "0.1.0"
+description = "Sealed DUMMY runner — a trivial transform with REAL mechanics, so the whole lane is provable without a GPU or a model download."
+requires-python = ">=3.13"
+license = "Apache-2.0"
+dependencies = [
+    # `storage` as a PATH dep (see [tool.uv.sources]) — deliberately NOT `workspace = true`, because
+    # this project is sealed OUT of the root uv workspace exactly like runners/htr. It has no heavy
+    # pins to keep out today, but the SHAPE is the point: a runner that quietly became a workspace
+    # member would be a precedent, and the next one would carry torch in with it.
+    "storage",
+    # The write path this runner exercises for real: CDF delta read, merge_insert, fragment commit.
+    # Pinned to the version §7.11 verified rather than a floor, since the mechanics are the claim.
+    "pylance>=9.0.0",
+    "pyarrow>=25.0",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+dummy-runner = "dummy_runner.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dummy_runner"]
+
+[tool.uv.sources]
+storage = { path = "../../packages/storage" }
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"
+
+# Mirrors the root ruff config, exactly as runners/htr does. Ruff resolves the NEAREST pyproject, so
+# without this the sealed runner would silently fall back to ruff's small default rule set — held to a
+# weaker standard than the rest of the repo, with nothing to say so.
+[tool.ruff]
+line-length = 160
+
+[tool.ruff.lint]
+# Copied VERBATIM from the root pyproject, not approximated. The first version of this block selected
+# eight families where root selects sixteen, which is worse than having no config at all: it looks
+# like the runner is linted to the estate's standard while quietly holding it to a weaker one, and a
+# `# noqa: BLE001` for a rule that was never enabled is how that surfaced.
+select = ["E", "F", "W", "I", "UP", "B", "S", "C4", "SIM", "RUF", "C901", "RET", "PERF", "FURB", "A", "ANN"]
+ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN", "S101"]

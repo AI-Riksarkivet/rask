@@ -6,7 +6,7 @@ submit time: a job the settings name but the image does not carry fails only on 
 logs say "No such file or directory", after the mover has already committed to the Dapr redelivery cycle.
 
 That is not hypothetical — it is how the P7a IIIF head's Ray branch was dead on arrival:
-``MEDALLION_IIIF_RAY_ENTRYPOINT`` defaulted to ``ray_iiif_ingest_job.py`` while
+An entrypoint setting defaulted to a job script the image did not carry, while
 ``.docker/ray-lance.dockerfile``'s COPY listed only the lance/stage/train jobs. These tests close the loop
 in the unit tier, where it costs nothing.
 
@@ -55,7 +55,7 @@ def _entrypoint_jobs() -> dict[str, str]:
     """``{setting name: script basename}`` for every submit entrypoint the settings default to."""
     settings = MedallionSettings()
     jobs: dict[str, str] = {}
-    for name in ("ray_entrypoint", "iiif_ray_entrypoint", "train_entrypoint"):
+    for name in ("ray_entrypoint", "train_entrypoint"):
         entrypoint = str(getattr(settings, name))
         assert _JOB_DIR in entrypoint, f"{name} must name a job baked at {_JOB_DIR}, got {entrypoint!r}"
         jobs[name] = Path(entrypoint.split()[-1]).name

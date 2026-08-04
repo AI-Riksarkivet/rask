@@ -87,6 +87,10 @@ def _routes() -> list[Route]:
     viewer = ("viewer", os.environ.get("RASK_EXPLORER_VIEWER_URL", "http://127.0.0.1:8101"))
     explorer_search = ("search", os.environ.get("RASK_EXPLORER_SEARCH_URL", "http://127.0.0.1:8102"))
     annotator = ("annotator", os.environ.get("RASK_EXPLORER_ANNOTATOR_URL", "http://127.0.0.1:8103"))
+    # The ingest plane (open_ingest.md Phase 1) — a BARE app-id, deliberately: the medallion row
+    # below points at `lance-ray`, a legacy app-id that no longer names anything about the service
+    # it reaches (audit m1). A new row does not inherit that mistake.
+    ingest = ("ingest", os.environ.get("RASK_INGEST_URL", "http://127.0.0.1:8830"))
     # longest / most-specific prefixes first; the prefix itself is the catch-all.
     # The two deeper explorer rows MUST outrank /api/explorer. There is NO bare /api
     # catch-all since the R6/R20 wave (core-api/search-api/volumes-api retired):
@@ -98,6 +102,21 @@ def _routes() -> list[Route]:
         ("/api/catalog", "", *catalog),
         ("/api/lineage", "", *lineage),
         ("/api/produce", "/produce", *medallion),
+        # /api/ingest must outrank /api/ingest-iiif is NOT true — they are siblings, not nested, and
+        # `_pick_route` requires `path == prefix or path.startswith(prefix + "/")`, so
+        # "/api/ingest-iiif" can never match the "/api/ingest" row (the next char is "-", not "/").
+        # Stated because it looks like a longest-prefix hazard and is not; ordering them either way
+        # is safe, and `tests/test_routing.py` pins that rather than leaving it to a reading.
+        # Rewrites to "/api", not "/v1". The ingest service is composed by `make_service_app`, which
+        # mounts its routers under `settings.api_prefix` — "/api" — so the pod serves `/api/ingests`
+        # and the live openapi.json says so. The "/v1" here was taken from the module's own
+        # docstrings, which describe the route as `/v1/ingests`; that is the ROUTER's path, before
+        # the prefix the app factory adds. Every call through the gateway would have 404'd, and the
+        # unit tests could not see it because they assert the gateway's rewrite in isolation rather
+        # than against the service's real mount. Same shape as the `/api/media` row above.
+        ("/api/ingest", "/api", *ingest),
+        # DEPRECATED — the medallion's IIIF head. Retires with the nine-plus-three IIIF files
+        # (A12); kept for one deprecation window so the frontend can move to /api/ingest first.
         ("/api/ingest-iiif", "/ingest-iiif", *medallion),
         ("/api/train", "/train", *medallion),
         (f"{prefix}/ray", f"{prefix}/ray", *compute),

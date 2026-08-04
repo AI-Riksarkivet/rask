@@ -3,7 +3,7 @@ name = "catalog"
 version = "0.1.0"
 description = "Lance Namespace REST catalog — namespaces/tables/branches/tags over native Lance, plus STS credential vending."
 requires-python = ">=3.13"
-license = "AGPL-3.0-only"
+license = "Apache-2.0"
 dependencies = [
     "service-kit[governed,lakehouse]",
     "fastapi>=0.115",

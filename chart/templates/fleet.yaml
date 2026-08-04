@@ -100,6 +100,34 @@ spec:
                  ray-kit's httpx paths read RAY_AUTH_TOKEN and attach the Bearer header. */}}
             {{- include "rask.rayAuthEnv" $root | nindent 12 }}
             {{- end }}
+            {{- if $svc.lanceWriter }}
+            {{- /* The S3 endpoint for services that write Lance. NOT optional: the pod already
+                 receives AWS_* credentials from the fleet secret, so with no endpoint lance's
+                 object_store silently resolves s3.us-east-1.amazonaws.com — the first in-cluster
+                 ingest write got 403 InvalidAccessKeyId FROM REAL AWS, with the RustFS key echoed in
+                 Amazon's error body. Credentials-present + endpoint-absent is the worst combination:
+                 it fails far away, slowly, and names Amazon rather than the missing config. */}}
+            - { name: RASK_S3_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" $root | quote }} }
+            - { name: AWS_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" $root | quote }} }
+            - { name: AWS_ALLOW_HTTP, value: "true" }
+            {{- /* The warehouse root, from the chart's OWN bucket helper rather than a literal. The
+                 first attempt hardcoded "rask-lakehouse" in values.yaml and RustFS answered
+                 NoSuchBucket — the estate's bucket is `rustfs.bucket` (lance-catalog), and a values
+                 file cannot call the helper because it cannot template at all. Deriving it here means
+                 the ingest plane follows the bucket every other tier follows, including a rename. */}}
+            - { name: RASK_INGEST_WAREHOUSE, value: "s3://{{ include "lance.stageBucket" (list $root $root.Values.medallion.producer.bronzeNamespace) }}/ingest" }
+            {{- end }}
+            {{- /* Per-service env passthrough. Added 2026-08-03 because this block was a FIXED set of
+                 includes: a values key a service needed had nowhere to render, and the first
+                 in-cluster ingest run resolved a RELATIVE warehouse path inside the container as a
+                 result — data would have landed in the pod's ephemeral filesystem and vanished with
+                 it, silently, since a relative Lance path is perfectly valid.
+                 Deliberately opt-in and per-service rather than a global map: config that applies to
+                 everything belongs in the configmap this pod already mounts via envFrom, and a
+                 catch-all here would become the place config goes to avoid a decision. */}}
+            {{- range $k, $v := $svc.env }}
+            - { name: {{ $k }}, value: {{ $v | quote }} }
+            {{- end }}
           readinessProbe:
             httpGet: {path: {{ $svc.healthPath | default "/api/health" }}, port: http}
             initialDelaySeconds: 5

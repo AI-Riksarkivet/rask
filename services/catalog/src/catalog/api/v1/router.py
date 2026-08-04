@@ -20,6 +20,7 @@ from catalog.api.v1.endpoints import (
     namespaces,
     policies,
     projects,
+    publication,
     stores,
     tables,
     tags,
@@ -55,6 +56,7 @@ for _module in (
     projects,
     me,
     maintenance,
+    publication,
     user_state,
     stores,
 ):

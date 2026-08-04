@@ -34,11 +34,11 @@ from medallion.schemas.events import build_run_event
 from medallion.services.compute import measure_stage, read_upstream, transform_stage
 from medallion.services.derivers import UnderivableMediaError
 from medallion.services.promotion import promotion_lineage
-from medallion.services.quality import Assertion, assert_quality, passed
 from medallion.services.ray_submit import submit_stage_job
 from service_kit import dapr_publish
 from service_kit.governed import fga
 from service_kit.lakehouse import outbox
+from service_kit.lakehouse.quality import Assertion, assert_quality, passed
 from service_kit.lakehouse.warehouse_registry import (
     UnresolvableProjectError,
     is_safe_project,
@@ -79,7 +79,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
     its own service identity. Unauthorized -> ``DROP`` (redelivery won't grant the role): the cascade
     enforces the ReBAC, so a mover lacking the validator role genuinely cannot promote to gold.
 
-    ``dataset`` on the trigger names the lane that fired (P7a: bronze$events vs the IIIF page lane's
+    ``dataset`` on the trigger names the lane that fired (bronze$events vs a page lane's
     bronze$pages, which share the ``medallion.bronze`` topic). A name that is not this mover's input is
     the other lane's and is DROPped; an ABSENT name makes no claim and proceeds.
 
@@ -93,7 +93,7 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
     token = data.get("token") if isinstance(data, dict) else None
     transition = f"{settings.from_namespace}->{settings.to_namespace}"
 
-    # LANE DISCRIMINATION (P7a). Two ingest lanes — bronze$events and the IIIF page lane bronze$pages —
+    # LANE DISCRIMINATION. Two ingest lanes — bronze$events and the page lane bronze$pages —
     # publish to the SAME medallion.bronze topic, so every mover subscribed to it sees both. The trigger
     # already names the dataset that was actually written (ingest_trigger._bronze_write_dataset: "the
     # trigger tells the mover which lane fired"); a name that is not THIS mover's input belongs to the
@@ -190,15 +190,26 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                 raise UnresolvableProjectError(f"project {project!r} has no active warehouse")
             from_uri = f"{root}/medallion/{settings.from_namespace}"
             to_uri = f"{root}/medallion/{settings.to_namespace}"
-            if settings.gold_warehouse_enabled:
-                # Gold tier (DECISIONS "Medallion tiers"): the chart sets this env ONLY on the terminal
-                # silver→gold mover, whose tenant TARGET root becomes the project's gold SERVING
-                # warehouse (the serving=="gold" registry record) when one exists. The upstream READ
-                # stays in the work warehouse; no gold warehouse → fall through to the work root above,
-                # byte-identically. Lineage/FGA identities are untouched — only the physical root moves.
-                gold_root = await run_in_threadpool(project_gold_root, settings.control_root, settings.storage_options(), project)
-                if gold_root is not None:
-                    to_uri = f"{gold_root}/medallion/{settings.to_namespace}"
+
+        if project and settings.gold_warehouse_enabled:
+            # Gold tier (DECISIONS "Medallion tiers"): the chart sets this env ONLY on the terminal
+            # silver→gold mover, whose tenant TARGET root becomes the project's gold SERVING
+            # warehouse (the serving=="gold" registry record) when one exists. The upstream READ
+            # stays in the work warehouse; no gold warehouse → fall through to the work root above,
+            # byte-identically. Lineage/FGA identities are untouched — only the physical root moves.
+            gold_root = await run_in_threadpool(project_gold_root, settings.control_root, settings.storage_options(), project)
+            if gold_root is not None:
+                to_uri = f"{gold_root}/medallion/{settings.to_namespace}"
+
+        # A trigger that NAMES the upstream wins over any path composed above. The catalog vends a
+        # table's location (`s3://<warehouse>/<hash>_<ns>$<name>`); this composed
+        # `{root}/medallion/{namespace}`, a path no catalog-written table has ever occupied — so the
+        # cascade fired correctly, woke, and found nothing, for every ingest-written table. I2
+        # ("resolve the location through the CATALOG, never compose a path") read from the consuming
+        # end. Only the READ side: the mover still owns where it WRITES.
+        supplied = data.get("from_uri") if isinstance(data, dict) else None
+        if supplied:
+            from_uri = str(supplied)
         # 0. Fake-Ray compute (opt-in): a REAL in-process Lance write of the downstream dataset, so the
         # emitted lineage carries the actual version + measured output statistics (rows + on-disk bytes),
         # and the cascade produces data, not just provenance. Blocking Lance/S3 IO → threadpool. Off →
@@ -465,6 +476,43 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
             "medallion_quality_blocked",
             extra={"transition": transition, "token": token, "to": settings.to_dataset},
         )
+        # A18: a HOLD must be visible IN THE GRAPH, not only in a metric and a log line.
+        #
+        # Without this the only lineage a held batch leaves is the measured-write event emitted just
+        # before the gate ran — which says the hop wrote its output and says nothing about the
+        # promotion being refused. Anyone reading the graph sees a successful hop whose downstream
+        # simply never fired, and the two explanations for that ("the gate held it" and "the trigger
+        # was lost") are the ones an operator most needs told apart: one is data quality, the other
+        # is an outage.
+        #
+        # A separate FAIL run rather than a mutation of the write event, because both facts are true:
+        # the hop DID write, and the promotion WAS refused. Idempotent on the token-derived run id,
+        # so redelivery MERGEs rather than accumulating holds. Suppressed and best-effort for the
+        # same reason every other lineage emit here is (I8): a graph outage must not convert a
+        # correct refusal into a retry storm.
+        with suppress(Exception):
+            held_event = build_run_event(
+                operation=settings.operation,
+                author=settings.author,
+                job_namespace=settings.job_namespace,
+                inputs=[(from_namespace, from_dataset)],
+                output_namespace=to_namespace,
+                output_name=to_dataset,
+                token=f"{token}:quality-hold",
+                project=project or None,
+                event_type="FAIL",
+                error_message=f"quality gate HELD the promotion into {settings.to_dataset} — downstream was not triggered",
+            )
+            await outbox.publish_lineage_with_outbox(
+                dapr,
+                outbox_uri=settings.lineage_outbox_uri,
+                storage_options=settings.storage_options(),
+                run_id=held_event["run"]["runId"],
+                event_json=json.dumps(held_event),
+                pubsub_name=settings.pubsub,
+                topic_name=settings.lineage_topic,
+                timeout_seconds=settings.publish_timeout_seconds,
+            )
         return _QUALITY_BLOCKED
     record_transition(transition)
     log.info("medallion_stage_moved", extra={"transition": transition, "token": token, "to": settings.to_dataset})

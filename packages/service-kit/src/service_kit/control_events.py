@@ -61,6 +61,12 @@ ControlAction = Literal[
     "namespace_unprotected",
     # #75 the drop→undrop path: a recoverable drop and its recovery are both governance events.
     "table_undropped",
+    # § D2 D-R2: the tag is the truth, this event is only the NOTIFICATION. A publication moves the
+    # `published` ref, so it belongs to the same family as the other ref-plane mutations here — and a
+    # consumer that misses it loses nothing, because the tag still answers "what is ready?".
+    # `extra` carries {from_version, to_version}: the RANGE (D-R3) a consumer turns straight into a
+    # row delta via `_row_created_at_version`, holding no bookmark of its own.
+    "table_published",
 ]
 
 #: The kind of governed object the action targets — drives which console view invalidates. `project` is the

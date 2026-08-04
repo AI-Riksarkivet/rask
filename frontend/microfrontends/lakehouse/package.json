@@ -26,6 +26,7 @@
 		"@xyflow/svelte": "^1.6.2",
 		"apache-arrow": "^21.2.0",
 		"d3-scale": "^4.0.2",
+		"dockview": "^7.0.4",
 		"layerchart": "^2.0.2",
 		"mode-watcher": "^1.1.0",
 		"svelte-sonner": "^1.1.1",
@@ -41,6 +42,7 @@
 		"svelte": "^5.56.8",
 		"svelte-adapter-bun": "^1.0.1",
 		"svelte-check": "^4.7.3",
-		"vite": "^8.1.5"
+		"vite": "^8.1.5",
+		"vitest": "^4.1.10"
 	}
 }

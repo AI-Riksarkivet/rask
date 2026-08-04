@@ -2680,7 +2680,8 @@
               "table_unprotected",
               "namespace_protected",
               "namespace_unprotected",
-              "table_undropped"
+              "table_undropped",
+              "table_published"
             ],
             "title": "Action",
             "type": "string"
@@ -7790,6 +7791,90 @@
           "protected"
         ],
         "title": "ProtectionResponse",
+        "type": "object"
+      },
+      "PublishRequest": {
+        "description": "Ask the catalog to gate a committed version and, if it passes, publish it.\n\n`version` is explicit rather than \"whatever is latest\": between a writer's commit and its publish\ncall another writer may have committed, and publishing a version nobody gated is the failure the\ngate exists to prevent. The caller names what it wrote.",
+        "properties": {
+          "key_column": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Key Column",
+            "type": "string"
+          },
+          "required_columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Columns",
+            "type": "array"
+          },
+          "version": {
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "key_column"
+        ],
+        "title": "PublishRequest",
+        "type": "object"
+      },
+      "PublishResult": {
+        "description": "The outcome, and the RANGE a notification should carry (\u00a7 D2 D-R3).\n\n`published=False` is a normal answer, not an error: the gate refused, the pointer did not move,\nand the previously published version keeps serving. `assertions` come back either way so a\nblocked batch is auditable without re-running anything.",
+        "properties": {
+          "assertions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Assertions",
+            "type": "array"
+          },
+          "from_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Version"
+          },
+          "published": {
+            "title": "Published",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          },
+          "to_version": {
+            "title": "To Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "table",
+          "published",
+          "from_version",
+          "to_version"
+        ],
+        "title": "PublishResult",
         "type": "object"
       },
       "QueryTableRequest": {
@@ -15895,6 +15980,64 @@
         "summary": "Set Table Protection",
         "tags": [
           "table"
+        ]
+      }
+    },
+    "/v1/table/{id}/publish": {
+      "post": {
+        "description": "Gate `version` and, if it passes, advance `published` to it.\n\nA refused gate is a 200 with `published=False`, not an error status: the request was well-formed\nand the system did exactly what it should. Errors are reserved for the caller getting it wrong \u2014\nan unknown version (404), a backwards move (409), a malformed one (400) \u2014 all raised as\n`lance_namespace` typed errors so the shared problem-body handler renders them.",
+        "operationId": "publish_table_v1_table__id__publish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Publish Table",
+        "tags": [
+          "publication"
         ]
       }
     },

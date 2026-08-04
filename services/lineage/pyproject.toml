@@ -3,7 +3,7 @@ name = "lineage"
 version = "0.1.0"
 description = "Lineage service — OpenLineage event ingest over Dapr pub/sub into the Apache AGE property graph (datasets, runs, column lineage)."
 requires-python = ">=3.13"
-license = "AGPL-3.0-only"
+license = "Apache-2.0"
 dependencies = [
     "service-kit[governed,lakehouse]",
     "fastapi>=0.115",

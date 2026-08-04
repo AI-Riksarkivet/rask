@@ -41,13 +41,16 @@ RUN pip install --no-cache-dir "opentelemetry-sdk==1.43.0" "opentelemetry-export
 # Bake the jobs so `ray job submit -- python /home/ray/jobs/<job>.py` needs no working-dir upload.
 # EVERY default entrypoint in medallion.core.config must appear here — a job the config names but the
 # image does not carry fails at submit with "no such file", which is how the IIIF head's Ray branch was
-# dead on arrival (R27 audit, 2026-07-28: MEDALLION_IIIF_RAY_ENTRYPOINT pointed at a file this COPY
+# dead on arrival (R27 audit, 2026-07-28: an entrypoint setting pointed at a file this COPY
 # omitted). Pinned by tests/unit/test_ray_job_images.py.
 #   ray_lance_job.py        — the standalone write/index/evolve/compact demo (make ray-demo)
 #   ray_stage_job.py        — the per-stage cascade transform a mover submits (MEDALLION_RAY_ENABLED)
-#   ray_iiif_ingest_job.py  — the P7a IIIF->bronze harvest head (MEDALLION_IIIF_RAY_ENTRYPOINT)
 #   ray_train_job.py        — the TRAINING job the trainer consumer submits (#115b, docs/RAY-TRAIN.md D2–D4)
-COPY scripts/ray_lance_job.py scripts/ray_stage_job.py scripts/ray_iiif_ingest_job.py scripts/ray_train_job.py /home/ray/jobs/
+COPY scripts/ray_lance_job.py scripts/ray_stage_job.py scripts/ray_train_job.py /home/ray/jobs/
+# The DUMMY lane (A11): a sealed runner whose transform is trivial but whose mechanics are real —
+# CDF delta read, merge_insert on the stable id, catalog-registered commit. Baked like any other job
+# so the end-to-end lane is provable with no GPU and no model download.
+COPY scripts/ray_dummy_job.py /home/ray/jobs/
 
 ARG BUILD_DATE
 ARG VCS_REF

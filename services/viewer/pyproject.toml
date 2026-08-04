@@ -3,7 +3,7 @@ name = "viewer"
 version = "0.1.0"
 description = "Media-plane viewer API — documents, blob columns and Range-streamed media over Lance tables."
 requires-python = ">=3.13"
-license = "AGPL-3.0-only"
+license = "Apache-2.0"
 dependencies = [
     "service-kit[lancekit]",
     "storage",
