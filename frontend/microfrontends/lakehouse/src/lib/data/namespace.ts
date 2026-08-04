@@ -63,6 +63,13 @@ export const PolicyResponseSchema = v.object({
 	retain_versions: v.optional(v.nullable(v.number())),
 	retention_days: v.optional(v.nullable(v.number())),
 	target_rows_per_fragment: v.optional(v.nullable(v.number())),
+	// Mirrors PolicyResponse. They were absent here AND on the response model, so a form save wrote
+	// the model's defaults over them; the catalog's set door now MERGES unset fields, and parsing
+	// them means the UI can show what is actually in force rather than a shape it invented.
+	cleanup_enabled: v.optional(v.boolean(), true),
+	optimize_indices_enabled: v.optional(v.boolean(), true),
+	scan_batch_size: v.optional(v.nullable(v.number())),
+	auto_cleanup_interval_commits: v.optional(v.nullable(v.number())),
 });
 export type NamespacePolicy = v.InferOutput<typeof PolicyResponseSchema>;
 

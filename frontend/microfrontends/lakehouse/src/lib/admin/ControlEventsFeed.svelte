@@ -2,6 +2,7 @@
 	import { controlEvents } from '$lib/admin/remote/admin.remote';
 	import type { ControlEvent } from '$lib/admin/control';
 	import { Activity, ShieldAlert } from '@lucide/svelte';
+	import { Subject } from '@rask/ui/identity';
 
 	// A live query (query.live): the server generator owns the cursor + accumulation + event_id dedup and
 	// yields the recent window on change; SvelteKit streams it here and owns reconnect. No arg → the
@@ -74,7 +75,7 @@
 						<li>
 							<span class="action">{label(e)}</span>
 							<span class="obj mono">{e.object_id}</span>
-							<span class="actor">{e.actor ?? 'system'}</span>
+							<Subject value={e.actor} class="actor" />
 							<span class="ts mono">{at(e.occurred_at)}</span>
 						</li>
 					{/each}
@@ -171,7 +172,9 @@
 	.obj {
 		color: var(--mut);
 	}
-	.actor,
+	/* `.actor` moved with the subject into <Subject>: Svelte scopes styles to the component that
+	   declares the markup, so a rule here would never match the child's span. The class is still
+	   passed through for LAYOUT (grid placement); its colour comes from the component. */
 	.ts {
 		color: var(--faint);
 	}

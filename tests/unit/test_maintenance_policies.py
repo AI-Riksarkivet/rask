@@ -302,3 +302,121 @@ def test_retention_policy_prunes_unpinned_old_versions(tmp_path: Path) -> None:
 
     with pytest.raises((ValueError, OSError)):
         lance.dataset(uri, version=1)  # pruned per policy
+
+
+def test_a_partial_policy_update_preserves_fields_it_did_not_mention(tmp_path: Any) -> None:
+    """The destructive round-trip an audit found: `put_policy` overwrites the whole record, so a
+    client that read a policy, changed one knob and sent it back wrote the model's DEFAULTS over
+    every field it never mentioned — silently clearing `scan_batch_size` (the compaction memory
+    bound, ~15 GB/thread without it on bronze page rows) and `auto_cleanup_interval_commits` (which
+    owns version reclamation). The lakehouse form does exactly that, and its own comment states the
+    belief this makes true: an omitted knob means INHERIT."""
+    from catalog.api.v1.endpoints.policies import _record
+    from catalog.schemas import PolicyRequest
+
+    stored = _record("table", "bronze$pages", "bkt/pages", PolicyRequest(scan_batch_size=64, auto_cleanup_interval_commits=10))
+    assert stored["scan_batch_size"] == 64
+
+    # A later save that only flips compaction off — exactly what the form sends.
+    updated = _record("table", "bronze$pages", "bkt/pages", PolicyRequest(compact_enabled=False), stored)
+
+    assert updated["compact_enabled"] is False, "the field the caller DID set must apply"
+    assert updated["scan_batch_size"] == 64, "the memory bound was silently cleared"
+    assert updated["auto_cleanup_interval_commits"] == 10, "version-reclamation ownership was flipped back"
+
+
+def test_a_first_write_still_gets_the_model_defaults(tmp_path: Any) -> None:
+    """The negative twin: with nothing to inherit from, defaults must still land — otherwise a first
+    policy would be missing every field the caller left alone."""
+    from catalog.api.v1.endpoints.policies import _record
+    from catalog.schemas import PolicyRequest
+
+    first = _record("table", "t", "p", PolicyRequest(retention_days=30))
+    assert first["retention_days"] == 30
+    assert first["compact_enabled"] is True and first["cleanup_enabled"] is True
+    assert first["scan_batch_size"] is None
+
+
+# --- #93 the compaction READ bound -----------------------------------------------------------------
+# The knob shipped as a per-tier policy field with no global default, so the UNPOLICIED estate — which
+# is what `helm install` produces — ran `compact_files` at Lance's 8192-ROW batch across a thread per
+# HOST core. Against ~1.8 MB bronze page rows that is ~15 GB per thread, in a pod whose chart tier is
+# a 512Mi limit, on a 120s cron. These drive the real sweep and assert on what reaches Lance, because
+# a silently-dropped kwarg is the failure mode that matters: the pass looks identical while still
+# reading 8192 rows.
+
+
+def _sweep_kwargs(monkeypatch: pytest.MonkeyPatch, settings: MaintenanceSettings, uri: str) -> dict[str, Any]:
+    """Run the real `run_sweep` over one local dataset and return what it handed `compact_files`."""
+    from maintenance.services import sweep as sweep_mod
+
+    seen: dict[str, Any] = {}
+    real = lance.dataset(uri).optimize.__class__.compact_files
+
+    def _spy(self: object, *args: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        return real(self, *args, **kwargs)  # ty: ignore[invalid-argument-type] — a spy is deliberately untyped
+
+    monkeypatch.setattr(sweep_mod, "_s3fs", lambda _s: None)
+    monkeypatch.setattr(sweep_mod, "discover_dataset_uris", lambda _fs, _bucket: [uri])
+    lance.dataset(uri).optimize.__class__.compact_files = _spy  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    try:
+        sweep_mod.run_sweep(settings)
+    finally:
+        lance.dataset(uri).optimize.__class__.compact_files = real  # type: ignore[method-assign]
+    return seen
+
+
+def _small_dataset(tmp_path: Path) -> str:
+    uri = str(tmp_path / "ds")
+    table = pa.table({"n": pa.array([1, 2], pa.int64())})
+    lance.write_dataset(table, uri, mode="overwrite")
+    lance.write_dataset(table, uri, mode="append")
+    return uri
+
+
+def test_an_unpolicied_sweep_is_still_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No policy anywhere — the shipped state — must NOT mean Lance's unbounded default."""
+    settings = _settings(tmp_path)
+    seen = _sweep_kwargs(monkeypatch, settings, _small_dataset(tmp_path))
+    assert seen.get("batch_size") == settings.scan_batch_size, f"unpolicied sweep read unbounded: {seen}"
+    assert seen.get("num_threads") == settings.compact_threads, f"thread count unbounded: {seen}"
+
+
+def test_a_policy_still_overrides_the_global_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The global is a safe floor for the unpolicied estate, not a ceiling on per-tier tuning."""
+    uri = _small_dataset(tmp_path)
+    settings = _settings(tmp_path)
+    mp.put_policy(str(tmp_path), {}, _policy(id_="ds", path=uri, scan_batch_size=512))
+    seen = _sweep_kwargs(monkeypatch, settings, uri)
+    assert seen.get("batch_size") == 512, f"the policy did not override the global default: {seen}"
+
+
+def test_a_malformed_policy_falls_back_to_the_bound_not_to_lances_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The path that matters most, and the one that was wrong.
+
+    The policy-error handler reset every tuning variable to None, which after this change would have
+    made a MALFORMED policy the single path that hands compaction Lance's unbounded 8192-row read.
+    "We could not read the tuning" is the worst possible moment to become unbounded. Caught by `ty`
+    (`None` not assignable to `int`) rather than by any test, which is why this one exists.
+    """
+    uri = _small_dataset(tmp_path)
+    settings = _settings(tmp_path)
+    # `scan_batch_size` non-numeric → int(str(...)) raises inside the policy block, taking the except.
+    mp.put_policy(str(tmp_path), {}, _policy(id_="ds", path=uri, scan_batch_size="not-a-number"))
+    seen = _sweep_kwargs(monkeypatch, settings, uri)
+    assert seen.get("batch_size") == settings.scan_batch_size, f"a malformed policy went unbounded: {seen}"
+
+
+def test_the_shipped_defaults_fit_the_pods_chart_tier(tmp_path: Path) -> None:
+    """The numbers are chosen, not arbitrary — so the arithmetic is the test.
+
+    The maintenance pod names no `resources` key in chart/templates/maintenance.yaml, so it inherits
+    `resources.default`: a 512Mi LIMIT. The compaction read's ceiling is batch x row size x threads,
+    and against the estate's worst row (a ~1.8 MB bronze page image) that product must leave the
+    process room to exist. Raising either default without raising the pod's tier re-opens the OOM.
+    """
+    settings = _settings(tmp_path)
+    worst_case_row_bytes = 1_800_000  # measured, bronze page images
+    ceiling = settings.scan_batch_size * worst_case_row_bytes * settings.compact_threads
+    assert ceiling < 256 * 1024 * 1024, f"the shipped read ceiling is {ceiling / 2**20:.0f} MiB against a 512Mi pod limit"

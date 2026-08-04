@@ -26,7 +26,7 @@
 	import { page } from '$app/state';
 	import { fetchTables } from './remote/catalog.remote';
 	import { dropNamespace } from './remote/namespace.remote';
-	import { fetchWarehouseNamespaces, fetchWarehouses } from './remote/warehouses.remote';
+	import { fetchEstateBindings } from './remote/warehouses.remote';
 	import RowDrawer from './RowDrawer.svelte';
 	import { namespaceOfTable, stageOf, type StageInfo } from './stage';
 	import StageBadge from './StageBadge.svelte';
@@ -39,7 +39,12 @@
 	// #83 the namespaces BOUND in the registry — the same source the drop door consults. Without it
 	// this page lists only namespaces that already hold a table, so a freshly-bound EMPTY namespace is
 	// invisible: exactly the object someone came here to find and drop (the #66 defect, second surface).
-	let bound = $state<string[]>([]);
+	//
+	// `null` means the bindings READ FAILED, and it is a distinct state from "no bindings" (#86). The
+	// first version of this used `string[]` and swallowed a 403/502 into an empty array — which is
+	// #66's exact shape, an invisible namespace with no error, reintroduced by the fix for it. The
+	// warehouse detail page has always modelled it this way; now both agree.
+	let bound = $state<string[] | null>(null);
 	let lastStatus = $state(0);
 	let settled = $state(false);
 	let busy = $state(false);
@@ -52,7 +57,9 @@
 	const offline = $derived(tables === null && settled && lastStatus !== 401);
 
 	async function load(): Promise<void> {
-		const res = await fetchTables();
+		// Independent reads, so they go together: the table registry supplies COUNTS, the estate
+		// bindings supply what EXISTS. One catalog call each — no per-warehouse fan-out (#86).
+		const [res, binds] = await Promise.all([fetchTables(), fetchEstateBindings()]);
 		settled = true;
 		if (res.ok) {
 			tables = [...res.data.tables].sort();
@@ -60,13 +67,7 @@
 		} else {
 			lastStatus = res.status;
 		}
-		// Union the registry's bindings across every readable warehouse. Admin-frequency page, a handful
-		// of warehouses — and it reuses the #66 bindings read rather than inventing an estate-wide one.
-		const whs = await fetchWarehouses();
-		if (whs.ok) {
-			const lists = await Promise.all(whs.data.map((w) => fetchWarehouseNamespaces(w.id)));
-			bound = [...new Set(lists.flatMap((r) => (r.ok ? r.data.namespaces : [])))];
-		}
+		bound = binds.ok ? Object.keys(binds.data.bindings).sort() : null;
 	}
 
 	// Same source as the table registry it groups (this view IS the table list, folded by namespace), so
@@ -77,8 +78,9 @@
 	type Row = { ns: string; count: number; stage: StageInfo | null };
 	const rows = $derived.by((): Row[] => {
 		const m = new Map<string, number>();
-		// Seed with every BOUND namespace at zero, so one holding no tables still gets a row.
-		for (const ns of bound) m.set(ns, 0);
+		// Seed with every BOUND namespace at zero, so one holding no tables still gets a row. `null`
+		// (the read failed) seeds nothing and the banner below says so — never silently "none".
+		for (const ns of bound ?? []) m.set(ns, 0);
 		for (const t of tables ?? []) {
 			const ns = namespaceOfTable(t);
 			m.set(ns, (m.get(ns) ?? 0) + 1);
@@ -254,6 +256,17 @@
 		</a>
 	</header>
 
+	<!-- #86: a failed bindings read is its own state. Collapsing it into "no namespaces" is the #66
+	     defect — an empty namespace invisible with nothing said — and this page reintroduced it once. -->
+	{#if bound === null && settled && !unauthorized && !offline}
+		<!-- Its OWN class, not `.banner.fail`: that one means "the action you just took failed", this
+		     means "a read this page depends on is unavailable". Sharing a selector made a spec's strict
+		     locator match two elements the moment both could appear. -->
+		<div class="banner degraded" data-testid="bindings-unavailable">
+			Namespace bindings unavailable — this list shows only namespaces that already hold a table, so a
+			bound-but-empty one may be missing.
+		</div>
+	{/if}
 	{#if banner}
 		<div class="banner" class:ok={banner.tone === 'ok'} class:fail={banner.tone === 'fail'}>
 			{banner.text}
@@ -382,6 +395,10 @@
 	.banner.ok {
 		border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
 		color: var(--ok);
+	}
+	.banner.degraded {
+		border-color: color-mix(in srgb, var(--warn) 50%, var(--line));
+		background: color-mix(in srgb, var(--warn) 7%, transparent);
 	}
 	.banner.fail {
 		border-color: color-mix(in srgb, var(--fail) 45%, var(--line));

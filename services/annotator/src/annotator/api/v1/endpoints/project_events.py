@@ -31,7 +31,8 @@ from pydantic import BaseModel, Field
 
 from annotator.api.security import CheckerDep, CurrentSubject
 from annotator.projects.machines import FROZEN_PROJECT_STATES, PROJECT_EDGES, IllegalTransition, legal_task_events, project_transition
-from annotator.projects.models import ItemSource, MediaRef, ProjectState, Task, TaskState, new_id
+from annotator.projects.models import ItemSource, MediaRef, ProjectState, Shape, Task, TaskState, new_id
+from annotator.projects.ontology import LabelOntology, ShapeLike, membership_violation
 from annotator.projects.project_actor import AnnotationProjectActorInterface
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
@@ -76,19 +77,59 @@ class ProjectEventRequest(BaseModel):
     target_namespace: str = DEFAULT_TARGET_NAMESPACE
 
 
+class PredictionShape(BaseModel):
+    """One pre-annotation as a SENDER may state it — `Shape` minus its provenance.
+
+    Declared separately rather than reusing `Shape` for the same reason `SendItem` is not a `Task`:
+    `Shape` carries `source`, and `source` is how every later surface tells suggested work from
+    drawn work. A sender able to set it could stamp `human` on five hundred items nobody looked at,
+    and they would read as annotated for the rest of the corpus's life. Omitting the field is
+    stronger than overwriting it — there is no path by which it can arrive.
+
+    Unknown keys are IGNORED (pydantic's default), so a client sending a whole `Shape` is not an
+    error; the fields it may not write simply do not land.
+    """
+
+    shape_type: str = Field(min_length=1, max_length=32)
+    label: str | None = Field(default=None, max_length=128)
+    x: float | None = None
+    y: float | None = None
+    width: float | None = None
+    height: float | None = None
+    rotation: float | None = None
+    polygon: list[float] = Field(default_factory=list)
+    t_start: float | None = None
+    t_end: float | None = None
+    parent_id: str | None = None
+    char_start: int | None = None
+    char_end: int | None = None
+    mask: str | None = None
+    text: str | None = None
+    attributes: dict[str, str] = Field(default_factory=dict)
+    group: str | None = None
+    #: A producer's OWN confidence. Unlike `source` this is the sender's to state — it describes the
+    #: suggestion, not who made it — and the uncertainty selector (`open_browse.md` §4) reads it.
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    model_version: str | None = Field(default=None, max_length=128)
+
+
 class SendItem(BaseModel):
     """One item to send. Deliberately NOT a `Task`.
 
     Accepting a full `Task` would let the sender supply `state`, `submitted_by`, `reviewed_by` and
     `review_action` — fabricating reviewed work with forged provenance, and defeating the entire
     "attribution comes from the task, not the payload" guarantee, because the client would have
-    written the task. Only the two fields that describe WHAT to annotate are accepted; everything
-    about who did what is server-written.
+    written the task. Only the fields that describe WHAT to annotate are accepted; everything about
+    who did what is server-written — including a prediction's `source`, which is why the shapes
+    below are `PredictionShape` and not `Shape`.
     """
 
     task_id: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     source: ItemSource
     media: MediaRef
+    #: PRE-ANNOTATIONS for this item — the bulk-labeling payload. Empty for an ordinary send. Capped
+    #: because a prediction rides the task DOCUMENT: an unbounded list is an unbounded actor state.
+    prediction: list[PredictionShape] = Field(default_factory=list, max_length=200)
 
 
 class SendItemsRequest(BaseModel):
@@ -303,6 +344,44 @@ def _refuse_unknown_datasets(state: Any, payload: SendItemsRequest) -> None:
         raise ConflictError(f"{detail}; known datasets are {known}" if known else detail)
 
 
+#: What `send` stamps onto a pre-annotation's `source`. The `import` precedent (§ `projects.imports`
+#: `IMPORT_SOURCE`): a free-form provenance string written by the SERVER, which `publish` carries
+#: through verbatim (`shape.source or "human"`). "bulk" is the honest word — a human chose the label,
+#: but chose it for a selection rather than for this item.
+BULK_SOURCE: Final[str] = "bulk"
+
+
+def _validated_predictions(project: dict[str, Any], payload: SendItemsRequest) -> list[list[Shape]]:
+    """Every item's pre-annotations, checked against the project's taxonomy and stamped.
+
+    Returns one list per item, positionally aligned with ``payload.items``. Raises before returning
+    if ANY item violates, so the caller can seed knowing the whole send is legal.
+
+    The taxonomy check is `membership_violation` — the same function import and submit use, shared
+    rather than reimplemented so the three stages cannot drift. A bulk action is the worst possible
+    place to leak an invented label: one click is five hundred rows, and the closed-set property is
+    the entire reason a class list is a first-class object.
+    """
+    ontology = LabelOntology()
+    raw = project.get("ontology")
+    if raw:
+        try:
+            ontology = LabelOntology.model_validate(raw)
+        except Exception:  # noqa: BLE001 - an unreadable rule constrains nothing, as everywhere else
+            logger.warning("project %s carries an ontology this service cannot parse", project.get("project_id"))
+
+    out: list[list[Shape]] = []
+    for index, item in enumerate(payload.items):
+        # `source` is set HERE and nowhere else: `PredictionShape` does not declare it, so this is
+        # the only path by which a stored prediction can acquire provenance at all.
+        shapes = [Shape(**shape.model_dump(), source=BULK_SOURCE) for shape in item.prediction]
+        violation = membership_violation(ontology, [ShapeLike.model_validate(s.model_dump()) for s in shapes])
+        if violation is not None:
+            raise ConflictError(f"item {index + 1} of {len(payload.items)}: {violation}")
+        out.append(shapes)
+    return out
+
+
 @router.post("/{project_id}/items", status_code=status.HTTP_201_CREATED)
 async def send_items(project_id: ProjectId, payload: SendItemsRequest, state: StateDep, checker: CheckerDep, subject: CurrentSubject) -> dict[str, Any]:
     """Send items into the project as tasks.
@@ -334,8 +413,14 @@ async def send_items(project_id: ProjectId, payload: SendItemsRequest, state: St
     if len(payload.items) * consensus_n > 1000:
         raise ConflictError(f"{len(payload.items)} items × consensus_n={consensus_n} exceeds the 1000-task send cap — split the send")
 
+    # Every prediction in the send, validated against the project's taxonomy and stamped, BEFORE the
+    # first actor is seeded. Doing it inside the loop would leave the good items queued and the bad
+    # ones not — a half-applied bulk action, which is worse than a refused one because nothing says
+    # which half landed and `seed` is idempotent, so a retry cannot undo the part that did.
+    predictions = _validated_predictions(project, payload)
+
     created: list[str] = []
-    for item in payload.items:
+    for index, item in enumerate(payload.items):
         # Built HERE from the two client-supplied descriptive fields plus the project's own config.
         # Every provenance and state field takes its model default, so a sender cannot pre-set
         # `state=accepted` or name someone else as the annotator.
@@ -349,6 +434,10 @@ async def send_items(project_id: ProjectId, payload: SendItemsRequest, state: St
             # which is precisely why the closed-set label check could not exist: the class list was
             # not in scope where enforcement happens, so `label="asdf"` submitted and published.
             "ontology": project.get("ontology") or {},
+            # Every replica of a group gets the SAME suggestion. Consensus asks several people the
+            # same question; handing some of them a pre-annotation and not others would make their
+            # disagreement an artefact of the send rather than of the images.
+            "prediction": predictions[index],
         }
         replicas = (
             [Task(task_id=group_id, project_id=project_id, source=item.source, media=item.media, **capture)]

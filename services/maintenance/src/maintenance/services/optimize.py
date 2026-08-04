@@ -80,6 +80,7 @@ def compact_one(
     cleanup_enabled: bool = True,
     optimize_indices_enabled: bool = True,
     scan_batch_size: int | None = None,
+    compact_threads: int | None = None,
     auto_cleanup_interval_commits: int | None = None,
 ) -> DatasetResult:
     """One ORDERED maintenance pass over one dataset. Never raises — a per-dataset failure is captured
@@ -90,8 +91,12 @@ def compact_one(
     ``*_enabled`` flags let a policy skip a STEP without reordering them — an operator who wants
     compaction but not version reclamation (a tier under legal hold, say) can have exactly that.
 
-    ``scan_batch_size`` bounds the compaction read. Lance's default batch is 8192 ROWS, and rows are
-    not a unit of memory: against ~1.8 MB bronze page-image rows that is ~15 GB per compute thread.
+    ``scan_batch_size`` and ``compact_threads`` together bound the compaction read, and they only
+    work together: the memory is their PRODUCT. Lance's default batch is 8192 ROWS, and rows are not a
+    unit of memory — against ~1.8 MB bronze page-image rows that is ~15 GB per compute thread, times
+    a thread count that defaults to the HOST's core count rather than the pod's cpu limit. Both
+    default to safe values in ``MaintenanceSettings`` (#93); ``None`` here means "let Lance decide",
+    which is only correct for a caller that has bounded memory some other way.
 
     ``auto_cleanup_interval_commits`` hands version reclamation to the DATASET (#58) — Lance's own
     commit-path auto-cleanup — and, having done so, SKIPS this pass's cleanup step. One owner, never
@@ -114,6 +119,8 @@ def compact_one(
         # because the fallback path reads exactly the same bytes as the deferred one.
         if scan_batch_size is not None:
             size_kw["batch_size"] = scan_batch_size
+        if compact_threads is not None:
+            size_kw["num_threads"] = compact_threads
         try:
             metrics: Any = ds.optimize.compact_files(defer_index_remap=True, **size_kw)
         except Exception as exc:

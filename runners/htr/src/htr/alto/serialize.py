@@ -1,5 +1,6 @@
 """ALTO XML 4.4 serialization from PageWithText."""
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from importlib.resources import files
 from io import BytesIO
@@ -9,6 +10,7 @@ from jinja2 import Environment, FileSystemLoader
 from PIL import Image
 
 from htr.alto.word_segment import segment_words
+from htr.models import PIPELINE_MODELS, ModelRef
 from htr.schemas import PageWithText, TranscribedLine
 
 
@@ -123,12 +125,20 @@ def _build_document_shim(page_with_text: PageWithText, *, emit_words: bool) -> S
     return SimpleNamespace(image_name=image_name, image=image_ns, regions=line_nodes)
 
 
-def serialize_alto(page_with_text: PageWithText, *, emit_words: bool = True) -> str:
+def serialize_alto(page_with_text: PageWithText, *, emit_words: bool = True, models: Sequence[ModelRef] = PIPELINE_MODELS) -> str:
     """Render PageWithText as an ALTO XML 4.4 string.
 
     When emit_words=True, each line is broken into <String> elements via geometric
     word segmentation. When False, each line emits a single <String> covering the
     whole line bbox.
+
+    ``models`` are recorded as one ``<Processing>`` block each, carrying the step and
+    ``model=<repo>@<revision>`` as ``processingStepSettings``. Until this, a published ALTO named the
+    SOFTWARE (`htr` 0.1.0) and no model at all — so a reader holding a machine-generated reading of a
+    historical record could not tell which weights produced it, and two readings from different model
+    revisions were indistinguishable. ALTO 4.4 has the slot; we simply were not filling it. Pass an
+    empty sequence for a run whose models are genuinely unknown — an absent block reads as "not
+    recorded", which is honest; a wrong one does not.
     """
     document = _build_document_shim(page_with_text, emit_words=emit_words)
 
@@ -143,4 +153,5 @@ def serialize_alto(page_with_text: PageWithText, *, emit_words: bool = True) -> 
         metadata=_METADATA,
         timestamp=datetime.now(tz=UTC).isoformat(),
         page_confidence=page_confidence,
+        models=models,
     )

@@ -28,7 +28,10 @@ from search.services.filters import TOPIC_FILTER, extract_filters
 from search.services.fuse import reciprocal_rank_fusion
 from search.services.result_cache import run_cached
 from search.services.service import run_search
+from search.services.similar import SimilarSpec, drop_seed, key_predicate, seed_vector
 from search.services.spec import PostSearchSpec, SearchMode, SearchSpec
+from search.services.target import resolve_target
+from search.services.vector import vector_search
 from service_kit.exceptions import DomainError, ValidationError
 from service_kit.lancekit.registry import DatasetHandle
 from service_kit.media.state import AppState, dataset_handle
@@ -231,3 +234,77 @@ async def search_post(
     # The cache lookup does blocking version reads and run_search makes blocking
     # vLLM (httpx) + Lance calls — offload the whole cached path off the event loop.
     return await run_in_threadpool(_cached_search, state, handle, spec, filters, image_bytes, get_embedder, get_reranker)
+
+
+def _run_similar(state: AppState, spec: SimilarSpec, dataset: str | None, table: str | None) -> list[dict[str, Any]]:
+    """The whole "more like this" path, off the event loop (every call below is blocking Lance IO)."""
+    handle = dataset_handle(state, dataset)
+    target = resolve_target(handle, table)
+
+    # WHICH vector space. A named one must exist — falling back to the default would answer a
+    # different question than the one asked ("visually similar" vs "semantically similar" are not
+    # interchangeable), and the swap would be invisible in the results.
+    if not target.vectors:
+        raise ValidationError(f"corpus {target.dataset_id!r} declares no vector space — there is nothing to be similar in")
+    if spec.space is not None and spec.space not in target.vectors:
+        raise ValidationError(f"unknown vector space {spec.space!r}; this corpus declares {sorted(target.vectors)}")
+    space = spec.space or next(iter(target.vectors))
+    binding = target.vectors[space]
+
+    vec_tbl = target.table_for(binding.table)
+    if vec_tbl is None:
+        # `resolve_target` degrades an unopenable binding table to absent so the OTHER search legs
+        # still rank. Here it is the only leg, so absent means the request cannot be answered.
+        raise ValidationError(f"vector table {binding.table!r} could not be opened")
+
+    where = key_predicate(spec.key, target.key_fields)
+    vec = seed_vector(vec_tbl, where=where, column=binding.column)
+
+    hits = vector_search(
+        vec_tbl,
+        _AsList(vec),
+        binding.column,
+        payload_columns=target.payload_columns,
+        n=spec.fetch_n,
+        where=spec.where,
+    )
+    # The seed is its own nearest neighbour at distance 0. Dropped AFTER the search rather than
+    # excluded in the WHERE, because a prefilter on the key would also cost the index.
+    return drop_seed(hits, spec.key, target.key_fields)[: spec.n]
+
+
+class _AsList:
+    """`vector_search` calls `.tolist()` on its query vector (it is written for numpy). The seed
+    vector arrives as a plain list, so this adapts it rather than making the shared retrieval
+    module care which of the two it was handed."""
+
+    def __init__(self, values: list[float]) -> None:
+        self._values = values
+
+    def tolist(self) -> list[float]:
+        return self._values
+
+
+@router.get("/search/similar")
+async def search_similar(
+    state: StateDep,
+    key: Annotated[str, Query(description="The seed row, its identity fields joined by '/'")],
+    n: Annotated[int, Query(ge=1, le=200, description="How many neighbours")] = 24,
+    space: Annotated[str | None, Query(description="Declared vector space (the corpus's first when omitted)")] = None,
+    where: Annotated[str | None, Query(description="Raw SQL filter, ANDed")] = None,
+    dataset: Annotated[str | None, Query(description="Dataset id (default DB when omitted)")] = None,
+    table: Annotated[str | None, Query(description="Searchable table name (the corpus default when omitted)")] = None,
+) -> list[dict[str, Any]]:
+    """ "More like this" — the k nearest rows to one the caller already has.
+
+    Search answers a query; the query for "another four hundred pages that look like this one" is
+    the page itself. Its embedding is already in the table, and until now nothing could reach it.
+
+    This is `open_browse.md` §3, the bulk surface's example-driven selector: pick one item, get a
+    labelling batch. The atlas lasso is a second CALLER of this, not a second mechanism.
+
+    The seed is excluded from its own results — it ranks first at distance 0, and a "more like this"
+    whose best answer is the thing you clicked reads as broken.
+    """
+    spec = SimilarSpec(key=key, n=n, space=space, where=where)
+    return await run_in_threadpool(_run_similar, state, spec, dataset, table)

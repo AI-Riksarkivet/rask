@@ -24,11 +24,17 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import yaml
 from ray import serve
+
+from htr.models import MODEL_REVISION
 
 
 logger = logging.getLogger(__name__)
@@ -75,6 +81,52 @@ def _shard(items: list, num_shards: int) -> list[list]:
     return [s for s in out if s]
 
 
+def pinned_pipeline_config() -> dict:
+    """The htrflow pipeline config with every model PINNED to ``MODEL_REVISION``.
+
+    A static YAML cannot interpolate an env var, so it could only ever name a repo — and htrflow's
+    loaders default to `main`, the same moving pointer the actor lane had (#89). Both htrflow's YOLO
+    and TrOCR models accept ``revision`` in ``model_settings`` (and record it as ``model_version`` in
+    the step metadata the ALTO template renders), so pinning is a matter of injecting it, not of
+    patching htrflow.
+
+    Injected UNIFORMLY over every ``model_settings`` rather than per step, so the code carries no
+    assumption about the YAML's step ORDER — the one thing a reader editing that file would not think
+    to preserve. The repos themselves stay in the YAML, where htrflow's own config format wants them;
+    `tests/test_models.py::test_htrflow_yaml_declares_the_same_models` is what stops the two lanes
+    drifting onto different weights.
+    """
+    with PIPELINE_YAML.open() as handle:
+        config = yaml.safe_load(handle)
+    for step in config.get("steps", []):
+        settings = step.get("settings", {})
+        if isinstance(settings.get("model_settings"), dict):
+            settings["model_settings"]["revision"] = MODEL_REVISION
+    return config
+
+
+@contextmanager
+def pinned_pipeline_path() -> Iterator[str]:
+    """The pinned config as a temp YAML path, for the whole time the pipeline is being built.
+
+    A tempfile rather than handing the dict straight to `Pipeline.from_config`, because that method
+    takes a PATH and `open()`s it — passing a dict raises `TypeError` and every `/htrflow` replica
+    dies at startup. It is annotated `path: str`, so the mistake is visible to `ty` but not to any
+    test that stops at the dict; this seam is exactly where a config-injection change goes wrong.
+
+    Reaching into htrflow's `PipelineConfig`/`init_step` to skip the file would work too, and was
+    rejected: those are internals `from_config` happens to use, and coupling the pin to them buys
+    nothing but a deleted temp file. The file lives for one `from_config` call at replica startup.
+    """
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as handle:
+        yaml.safe_dump(pinned_pipeline_config(), handle)
+        path = handle.name
+    try:
+        yield path
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
 @serve.deployment(
     name="HTRFlowService",
     num_replicas=SERVE_REPLICAS,
@@ -92,8 +144,9 @@ class HTRFlowDeployment:
         from htrflow.pipeline.pipeline import Pipeline
         from htrflow.serialization.serialization import get_serializer
 
-        logger.info("HTRFlowDeployment: loading pipeline from %s", PIPELINE_YAML)
-        self._pipeline = Pipeline.from_config(str(PIPELINE_YAML))
+        logger.info("HTRFlowDeployment: loading pipeline from %s (models pinned to %s)", PIPELINE_YAML, MODEL_REVISION)
+        with pinned_pipeline_path() as config_path:
+            self._pipeline = Pipeline.from_config(config_path)
         self._serializer = get_serializer("alto", template_dir=str(ALTO_TEMPLATE_DIR), template_name="alto-4-4")
         logger.info("HTRFlowDeployment: ready (%d steps)", len(self._pipeline.steps))
 

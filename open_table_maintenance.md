@@ -9,6 +9,13 @@ Everything below §2 was revised 2026-08-04 after reading the Lance table-format
 (`format/table/*`, the index specs, the performance guide, and the data-evolution guide). Several
 claims this file previously made were wrong, and one shipped detector is wrong — see §3.
 
+**Corrected again 2026-08-04 (#94), after an audit of this file itself.** §2's headline said
+*"nothing reclaims yet"*. That is FALSE — compaction and version cleanup delete bytes on every tick
+of the default chart — and it is the most dangerous kind of wrong, because it reads as "nothing
+here is dangerous". §1's test column, §4's "still unowned", §6 and §7 were stale in the safer
+direction. Corrections are marked in place. `open_lakehouse_diff.md` was corrected in the same
+round (#95).
+
 ## 1. `services/maintenance` — what it is
 
 Renamed from `services/compaction` (06cc757) because it does four things and "compaction" named one.
@@ -18,7 +25,7 @@ dataset (`maintenance.services.optimize.compact_one`):
 
 | Operation | Implementation | Tested |
 | --- | --- | --- |
-| **compaction** | `ds.optimize.compact_files(defer_index_remap=True)`, falling back to plain compaction when the dataset has no `row_addrs` | ✅ unit + a real-dataset sweep |
+| **compaction** | `ds.optimize.compact_files(defer_index_remap=True)`, falling back to plain compaction when the dataset has no `row_addrs` | ✅ unit, over real Lance datasets on a LOCAL dir — not object storage (§6) |
 | **index updates** | `ds.optimize.optimize_indices()`, counting USER indices only (the `__lance_frag_reuse` system index would otherwise report every compacted dataset as "index maintained" forever) | ✅ incl. the defer-remap interplay and the no-index case |
 | **pruning / cleanup** | `ds.cleanup_old_versions(older_than, retain_versions, error_if_tagged_old_versions=False)` — tags are EXEMPT, because the catalog creates long-lived promotion tags and the default `True` would permanently stall GC for that dataset | ✅ retention policy, tag/recent retention |
 
@@ -33,7 +40,28 @@ its unreferenced-FILE pass landed with it (`maintenance/services/orphans.py`, 3d
 `catalog/api/maintenance_mode.py` is a different thing: read-only maintenance MODE (503 +
 Retry-After for a migration window). Renamed in the same commit so the two cannot be confused.
 
-## 2. The reclamation gap — REPORTED (nothing reclaims yet)
+## 2. The reclamation gap — what DELETES today, and what only reports
+
+> **Corrected 2026-08-04 (#94).** This section was headed *"nothing reclaims yet"*, which is false
+> and was the most dangerous sentence in the file: it reads as *"nothing here is dangerous"*, and a
+> recorded stance like that stops people checking. The same failure mode as COVERAGE.md's
+> soft-delete "N/A".
+>
+> **Two operations DELETE BYTES on every tick of the default chart.** `compact_one` calls
+> `ds.optimize.compact_files()` (`optimize.py:118,129`) and `ds.cleanup_old_versions()`
+> (`optimize.py:189`), driven by the `maintenance-cron` Dapr binding, which `chart/values.yaml`
+> ships **enabled at `@every 120s`**. Per-table GC also runs on demand from the UI
+> (`catalog/services/maintenance.py`, `TableDetail.svelte:551`). Compaction rewrites data files and
+> drops the originals; cleanup removes superseded manifests and their unreferenced files.
+>
+> What is genuinely report-only is narrower and worth naming exactly: **the orphan-FILE pass**
+> (`orphans.py`, and it is the one that is KNOWN WRONG — §3) and **trash expiry** (#75). Those two
+> delete nothing and stay that way until #79's gate opens.
+>
+> The protections that make the deleting half safe are real, and they are what this section should
+> have been claiming credit for instead: tags are EXEMPT from cleanup, `delete_unverified` is never
+> passed, `older_than`/`retain_versions` bound what is eligible, and since #93 the read itself is
+> bounded so the sweep cannot OOM the pod mid-pass.
 
 The spec names what can be unreferenced: `.lance` data files in no live manifest; deletion vectors no
 fragment references; `_indices/<uuid>/` absent from every manifest; **`.txn` files from failed or
@@ -106,10 +134,21 @@ sweep, which costs the writer nothing.
 not a unit of memory — against ~1.8 MB bronze page rows that is ~15 GB per compute thread. Safe for
 feature tables, ruinous for a blob tier, so it is per-tier policy rather than a constant.
 
-Still unowned: WHICH operations run, HOW OFTEN, against WHICH warehouses. `discover_dataset_uris`
-walks ONE root; with per-warehouse buckets it must walk every one, untested across more than one.
-And the policy has no PROJECT-scoped view (#65) — the fields exist, the surface to set them per
-project/tier does not.
+**And a global bound (#93, ac16876).** `scan_batch_size` shipped as policy-only with no default,
+so the UNPOLICIED estate — what `helm install` produces — ran at Lance's 8192-row batch across a
+thread per HOST core, in a pod on a 512Mi tier, every 120s. `MAINTENANCE_SCAN_BATCH_SIZE=64` +
+`MAINTENANCE_COMPACT_THREADS=2` now bound it (~230 MB); a policy still overrides per tier. Both had
+to move because the memory is their PRODUCT.
+
+**Corrected 2026-08-04 (#94): "still unowned: WHICH / HOW OFTEN / WHICH warehouses" — all three
+shipped.** WHICH is the per-step `compact_enabled` / `cleanup_enabled` / `optimize_indices_enabled`
+flags; HOW OFTEN is `compact_interval_hours` plus the per-dataset cadence stamp (7ea481c); WHICH
+warehouses is #81 — the sweep reads the warehouse REGISTRY and covers every provisioned bucket, not
+just the configured list.
+
+What is actually left of #65 is narrower than "the fields exist, the surface does not": the
+**project-scoped policy API shipped too** (`policies.py:188-271`, `resolve_policy`'s project branch,
+routes in the generated client). Only the UI to set it per project/tier is missing.
 
 ## 5. What the specs added that we had not considered
 
@@ -171,7 +210,8 @@ dataset** — "a correctness bug rather than a degraded experience." So the pass
 
 ## 6. Still not verified
 
-- **Orphan RECLAMATION** — the report exists; nothing deletes, deliberately.
+- **Orphan RECLAMATION and TRASH PURGE** — reports exist; neither deletes, deliberately (§2).
+  Compaction and version cleanup DO delete, and always have — see §2's correction.
 - **Reindex from scratch** — §5.
 - **The sweep against real object storage** — sweep tests use local dirs; only the skipped e2e
   touches S3. (The reconcile + orphan passes HAVE been run against the live rustfs.)
@@ -183,11 +223,31 @@ dataset** — "a correctness bug rather than a degraded experience." So the pass
 2. ~~Wire the reconciler so it can RUN.~~ Done (04129b6).
 3. ~~The orphan-file detector, report-only.~~ Done (3dd3e13) — **but see §3, it is wrong for
    branches and clones and must be gated before anyone trusts it.**
-4. Policy surface, now including the auto-cleanup decision in §4.
-5. Multi-warehouse sweep coverage.
-6. Only then consider letting anything delete.
+4. ~~Policy surface, including the auto-cleanup decision in §4.~~ Substantially done — per-step
+   flags, cadence, retention, project tier, `scan_batch_size`, `auto_cleanup_interval_commits`. The
+   UI to set them per project/tier is what remains (#65).
+5. ~~Multi-warehouse sweep coverage.~~ Done (#81) — the sweep reads the warehouse REGISTRY, so a
+   bucket provisioned by an API call after the last config edit is swept. **Residual: the orphan
+   scan at `reconcile.py:613` still iterates `settings.sweep_buckets` and did not get the same
+   treatment.**
+6. ~~Global `scan_batch_size` floor.~~ Done (#93, ac16876) — see §4.
 
-Tracked as tasks #51, #55, #57–#64.
+Re-ordered 2026-08-04 (#94) from here, by the audits:
+
+7. **Bytes reclaimed** in `summarize` + a metric + a control event per reclaiming sweep. Today a
+   sweep that deleted a terabyte and one that deleted nothing produce the same shaped report, which
+   is a poor property for the half of this service that DOES delete (§2).
+8. **A per-tick budget + rotated bucket order.** The sweep walks every bucket every tick; at estate
+   scale the last bucket is maintained only if the tick has time left, and nothing says which.
+9. **A chart toggle for the orphan scan** (`MAINTENANCE_ORPHAN_SCAN_ENABLED` is env-only today).
+10. **TRASH PURGE BEFORE ORPHAN RECLAMATION.** If exactly one reclaimer is to earn its delete
+    permission first, it should be this one: a bounded delete of a RECORDED path beats an inference
+    from prefix subtraction, and the sizes agree — the live estate's orphans are 23 `.txn` files
+    (kilobytes), while a dropped table's bytes are ~1.8 MB/row. The orphan pass is also the one that
+    is known wrong (§3).
+11. Only then consider letting the orphan pass delete.
+
+Tracked as tasks #51, #55, #57–#65, #79, #80.
 
 ---
 

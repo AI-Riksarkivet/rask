@@ -69,6 +69,10 @@
 			"types": "./dist/components/field/index.d.ts",
 			"svelte": "./dist/components/field/index.js"
 		},
+		"./identity": {
+			"types": "./dist/components/identity/index.d.ts",
+			"svelte": "./dist/components/identity/index.js"
+		},
 		"./grants-panel": {
 			"types": "./dist/components/grants-panel/index.d.ts",
 			"svelte": "./dist/components/grants-panel/index.js"

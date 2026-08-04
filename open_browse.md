@@ -1,9 +1,33 @@
 # open_browse — `/annotator/browse` as the bulk-labeling surface (#42)
 
-**A PROPOSAL, not a plan of record.** Nothing here is built. It exists to be argued with; the parts
-marked **DECIDE** are the ones I should not settle alone.
-
 Working plan, not settled architecture — hence the repo root rather than `docs/`.
+
+## Status
+
+| | Step | State |
+| --- | --- | --- |
+| 1 | The page, with search/filter selection + preview + "send to project" | **done** |
+| 2 | Apply a LABEL to a selection (the predictions path) | **done** |
+| 3 | k-NN "more like this" endpoint + selector | next |
+| 4 | `scripts/` labelling functions → Arrow → import | deferred — decision parked |
+| 5 | Propagation with visible thresholds | needs 3 |
+| 6 | Uncertainty selector | needs a trained model |
+
+**Step 2 landed as PREDICTIONS, following Label Studio.** A send may carry `prediction: [Shape]`;
+it rides the task document (one write, at send) and is deliberately NOT a draft — a draft is
+submittable, and `save_draft` refuses a task that is not CLAIMED precisely so work drawn by nobody
+cannot walk into review. `PredictionShape` is `Shape` minus `source`, which the server stamps
+(`BULK_SOURCE`), so a sender cannot forge human provenance. The taxonomy closes over the WHOLE send
+before the first actor is seeded, via the same `membership_violation` import and submit use.
+
+The UI offers only classes the taxonomy allows as a whole-item `tag`; a class drawn only as a box is
+withheld rather than sent to a guaranteed 409. The client cap now mirrors the server's
+(`SEND_TASK_CAP = 1000`, divided by `consensus_n`) — it was 5 000, a number of the client's own
+invention, and a 2 000-item selection passed every check and came back 422.
+
+**Owner decisions still open:** #1 (uncertainty scores) is moot until a model exists; #2 is settled
+as LLM-as-labeler → distil rather than Snorkel-style majority vote; #3 (where labelling functions
+live) is parked until step 4; #4 (task granularity) settled as per-item with a cap.
 
 ---
 
@@ -189,22 +213,6 @@ because it changes no model and the cap is honest about the limit rather than hi
 
 Each step is independently useful and independently abandonable.
 
-| | Step | Depends on |
-| --- | --- | --- |
-| 1 | The page, with search/filter selection + preview + "send to project" | nothing new |
-| 2 | Atlas-region selection | the atlas |
-| 3 | k-NN "more like this" endpoint + selector | a small search-service endpoint |
-| 4 | `scripts/` labelling functions → Arrow → import | #39 (done) |
-| 5 | Propagation with visible thresholds | 3 |
-| 6 | Uncertainty selector | a trained model, and the **DECIDE** above |
-
-Steps 1–4 are buildable now. 5 needs 3. 6 needs a model that does not exist yet.
-
-## The four decisions I need from you
-
-1. **Uncertainty scores** — skip in v1 (my recommendation), assist-batched, or a stored column?
-2. **Weak supervision** — majority vote (my recommendation) or a learned label model?
-3. **Labelling functions** — `scripts/`-authored (my recommendation) or in-product?
-4. **Task granularity** — per item with a cap (my lean) or per batch?
-
-Answer those and step 1 can start immediately; the rest sequence behind them.
+See the Status table at the top. Atlas-region selection is folded into step 3 — both are ways of
+ordering the corpus by embedding proximity, and building the k-NN endpoint first makes the lasso a
+second caller rather than a second mechanism.

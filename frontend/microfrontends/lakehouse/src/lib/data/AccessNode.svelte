@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import { Subject } from '@rask/ui/identity';
 	import type { Node, NodeProps } from '@xyflow/svelte';
 
 	export type AccessData = {
@@ -58,7 +59,8 @@
 	<Handle type="target" position={Position.Left} />
 	<Icon size={13} />
 	<div class="body">
-		<div class="label mono">{data.label}</div>
+		<!-- #87: node labels carry raw OIDC subs; Subject keeps the full value on `title`. -->
+		<div class="label"><Subject value={data.label} /></div>
 		<div class="type">{data.fgaType}</div>
 	</div>
 	<Handle type="source" position={Position.Right} />

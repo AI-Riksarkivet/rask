@@ -188,9 +188,14 @@ def test_a_scan_batch_size_reaches_compaction_and_still_compacts(tmp_path: Path)
 
 
 def test_no_batch_size_leaves_lance_defaulting(tmp_path: Path) -> None:
-    """The negative: an unset policy must not pin a batch size at all. Passing `batch_size=None`
-    through to Lance is NOT the same as omitting it, and pinning some invented default here would
-    make every small-row table read in tiny batches for no reason."""
+    """The negative: `compact_one` itself must not pin a batch size. Passing `batch_size=None`
+    through to Lance is NOT the same as omitting it.
+
+    Still true after #93, and the layering is the point: the safe DEFAULT lives in
+    `MaintenanceSettings` and is applied by the SWEEP, so `compact_one` stays a faithful pass-through
+    for callers that have bounded memory some other way. What #93 changed is that nothing in the
+    deployed estate reaches Lance's unbounded default any more — see
+    `test_maintenance_policies.py::test_an_unpolicied_sweep_is_still_bounded`."""
     uri = _fragmented_indexed_dataset(tmp_path)
     seen: dict[str, object] = {}
     real = lance.dataset(uri).optimize.__class__.compact_files

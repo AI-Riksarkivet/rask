@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import { Subject } from '@rask/ui/identity';
 	import type { Node, NodeProps } from '@xyflow/svelte';
 	import type { NodeRole } from './graph';
 
@@ -75,7 +76,8 @@
 	<Handle type="target" position={Position.Left} />
 	<Icon size={13} class="shrink-0" />
 	<div class="min-w-0">
-		<div class="truncate font-mono text-xs font-semibold">{data.label}</div>
+		<!-- #87: same raw OIDC subs as the data-plane graph. -->
+		<div class="truncate text-xs font-semibold"><Subject value={data.label} /></div>
 		<div class="text-[9.5px] uppercase tracking-wider text-muted-foreground">
 			{data.fgaType}{#if data.via}<span class={excluded ? 'text-destructive' : ''}>
 					· {data.via}</span>{/if}

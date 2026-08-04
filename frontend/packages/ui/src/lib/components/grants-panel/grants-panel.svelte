@@ -12,7 +12,7 @@
 	// 401/403/501) cached and transient failures (offline, 5xx) retried on the next open.
 	import { ChevronRight, ShieldCheck } from '@lucide/svelte';
 	import { Select } from '../select/index.js';
-	import { subjectDisplay } from './subject.js';
+	import Subject from '../identity/subject.svelte';
 
 	export type GrantsKind = 'table' | 'namespace';
 	/** Mirrors the zones' status-aware ApiResult (http.ts): 0 = fetch-level failure/offline. */
@@ -217,10 +217,11 @@
 								     what a tuple write or a support ticket needs. -->
 								<td class="whos">
 									{#each grant.users as user (user)}
-										{@const d = subjectDisplay(user)}
-										<span class="who mono" class:wild={user === '*'} title={d.title}
-											>{user === '*' ? 'everyone (*)' : d.label}</span
-										>
+										{#if user === '*'}
+											<span class="who mono wild">everyone (*)</span>
+										{:else}
+											<Subject value={user} class="who" />
+										{/if}
 									{/each}
 								</td>
 							</tr>

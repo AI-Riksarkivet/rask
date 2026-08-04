@@ -9,6 +9,7 @@ import numpy as np
 from PIL import Image
 
 from htr._columns import pack
+from htr.models import MODEL_REVISION, REGION_MODEL
 from htr.schemas import Region
 
 
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class LayoutActor:
-    def __init__(self, model: str = "Riksarkivet/yolov9-regions-1", **_unused) -> None:
+    def __init__(self, model: str = REGION_MODEL.repo, **_unused) -> None:
         self.model_name = model
         self._model = None
 
@@ -28,10 +29,10 @@ class LayoutActor:
 
         # Ultralytics' YOLO() doesn't resolve HF Hub repo IDs — fetch the .pt
         # file ourselves and pass the local path.
-        pt_files = [f for f in list_repo_files(self.model_name) if f.endswith(".pt")]
+        pt_files = [f for f in list_repo_files(self.model_name, revision=MODEL_REVISION) if f.endswith(".pt")]
         if not pt_files:
             raise RuntimeError(f"No .pt file in {self.model_name}")
-        model_file = hf_hub_download(repo_id=self.model_name, filename=pt_files[0])
+        model_file = hf_hub_download(repo_id=self.model_name, filename=pt_files[0], revision=MODEL_REVISION)
         self._model = YOLO(model_file)
         try:
             import torch

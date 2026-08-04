@@ -6,12 +6,14 @@ Region grouping: legacy `LineSegmentationStage` produced region-grouped lines
 (`PageWithLines.region_lines`); the new `LineActor` flattens. We re-group here
 by bbox containment (line center inside region rect)."""
 
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
 
 from htr._columns import unpack
 from htr.alto.serialize import serialize_alto
+from htr.models import PIPELINE_MODELS, ModelRef
 from htr.schemas import PageImage, PageWithText, Region, TranscribedLine
 
 
@@ -32,8 +34,12 @@ def _group_by_region(regions: list[Region], transcribed: list[TranscribedLine]) 
 
 
 class AltoExportActor:
-    def __init__(self, emit_words: bool = True, **_unused: Any) -> None:  # noqa: ANN401
+    def __init__(self, emit_words: bool = True, models: Sequence[ModelRef] = PIPELINE_MODELS, **_unused: Any) -> None:  # noqa: ANN401
         self.emit_words = emit_words
+        # Which models the run loaded, for the ALTO's provenance blocks. Defaulted rather than
+        # threaded from `runner.pipeline` because the pipeline constructs its actors from these same
+        # `htr.models` constants — one declaration, so the record cannot drift from the load.
+        self.models = models
 
     def __call__(self, batch: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         out_keys: list[str] = []
@@ -44,7 +50,7 @@ class AltoExportActor:
             transcribed = unpack(transcribed_blob)
             region_lines = _group_by_region(list(regions), list(transcribed))
             page_with_text = PageWithText(page=page, region_lines=region_lines)
-            xml_str = serialize_alto(page_with_text, emit_words=self.emit_words)
+            xml_str = serialize_alto(page_with_text, emit_words=self.emit_words, models=self.models)
             out_keys.append(key.rsplit(".", 1)[0] + ".xml")
             out_xml.append(xml_str.encode("utf-8"))
         batch["output_key"] = np.array(out_keys, dtype=object)

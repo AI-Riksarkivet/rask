@@ -11,6 +11,7 @@ import numpy as np
 from PIL import Image
 
 from htr._columns import pack, unpack
+from htr.models import LINE_MODEL, MODEL_REVISION
 from htr.preprocessing import crop_region
 from htr.schemas import Line
 
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class LineActor:
-    def __init__(self, model: str = "Riksarkivet/yolov9-lines-within-regions-1", **_unused) -> None:
+    def __init__(self, model: str = LINE_MODEL.repo, **_unused) -> None:
         self.model_name = model
         self._model = None
 
@@ -31,10 +32,10 @@ class LineActor:
 
         # Ultralytics' YOLO() doesn't resolve HF Hub repo IDs — fetch the .pt
         # file ourselves and pass the local path.
-        pt_files = [f for f in list_repo_files(self.model_name) if f.endswith(".pt")]
+        pt_files = [f for f in list_repo_files(self.model_name, revision=MODEL_REVISION) if f.endswith(".pt")]
         if not pt_files:
             raise RuntimeError(f"No .pt file in {self.model_name}")
-        model_file = hf_hub_download(repo_id=self.model_name, filename=pt_files[0])
+        model_file = hf_hub_download(repo_id=self.model_name, filename=pt_files[0], revision=MODEL_REVISION)
         self._model = YOLO(model_file)
         try:
             import torch

@@ -5,7 +5,8 @@
 	// table count from the registry the /namespaces page already derives from), the kind-generalized
 	// GrantsPanel, and a maintenance-policy card mirroring the table policy form. Same stack-mode
 	// states as the registry — governed without a session ⇒ sign-in, unreachable ⇒ retrying.
-	import { GrantsPanel, subjectDisplay, type GrantsClient } from '@rask/ui/grants-panel';
+	import { GrantsPanel, type GrantsClient } from '@rask/ui/grants-panel';
+	import { subjectDisplay } from '@rask/ui/identity';
 	import { Boxes, Network, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';

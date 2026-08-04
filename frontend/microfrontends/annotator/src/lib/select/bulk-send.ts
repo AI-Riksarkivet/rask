@@ -11,19 +11,55 @@
  * opens a task and finds the wrong thing in it.
  */
 
+/** One pre-annotation a bulk action attaches — the sender's half of `PredictionShape`. */
+export interface PredictionShape {
+	shape_type: string;
+	label: string;
+}
+
 /** One item as the send command's schema expects it. */
 export interface SendableItem {
 	source: { kind: string; keys: string[]; where?: string | null; dataset_version?: number | null };
 	media: { kind: string };
+	/** Pre-annotations for this item. Absent for an ordinary send — see `itemsFromSelection`. */
+	prediction?: PredictionShape[];
 }
 
-/** How many items one bulk send may carry.
+/** The server's cap, mirrored — `SendItemsRequest.items` declares `max_length=1000` and `send`
+ *  refuses on `len(items) * consensus_n > 1000`.
  *
- *  A cap, not a page size: every item becomes its own task actor, so an unbounded send is an
- *  unbounded number of actors from one click. 5 000 is an honest ceiling rather than a tuned one —
- *  it is large enough for the workflows this exists for and small enough that the cost is bounded.
- *  Named here so the UI and any future server-side guard can quote the same number. */
-export const MAX_BULK_ITEMS = 5000;
+ *  This used to be 5 000, a number of this file's own invention, and the disagreement was invisible:
+ *  a 2 000-item selection passed every check here and came back 422 from a server that had already
+ *  been asked to do the impossible. A client-side cap that disagrees with the server is not a cap,
+ *  it is a delay before a refusal. Named once so both halves quote the same number. */
+export const SEND_TASK_CAP = 1000;
+
+/** How many ITEMS may be sent into a project with this replica count.
+ *
+ *  The cap is on TASKS, and consensus makes N of them per item — so 400 items into a 3-replica
+ *  project is 1 200 tasks and is refused, however reasonable 400 looks. A nonsensical count is
+ *  treated as one rather than dividing by zero: refusing everything would be a worse answer than
+ *  assuming the default. */
+export function maxItemsFor(consensusN: number): number {
+	return Math.floor(SEND_TASK_CAP / Math.max(1, Math.floor(consensusN) || 1));
+}
+
+/** The class names a bulk label may offer, given a project's taxonomy.
+ *
+ *  A bulk label asserts "this whole item is an X", which is what the `tag` primitive means. A class
+ *  drawn only as a box is not something that assertion can be made with — and the server would
+ *  refuse it, because `membership_violation` checks the label WITH the primitive it was drawn with.
+ *  Offering such a class would be offering a guaranteed 409.
+ *
+ *  An empty `tools` list is UNCONSTRAINED (the same reading `ontologyTools` takes), so those classes
+ *  are offered. */
+export function bulkLabelChoices(
+	ontology: { classes?: { name: string; tools?: string[] }[] } | undefined,
+): string[] {
+	return (ontology?.classes ?? [])
+		.filter((c) => (c.tools?.length ?? 0) === 0 || c.tools!.includes('tag'))
+		.map((c) => c.name);
+}
 
 /**
  * Shape a selection into sendable items.
@@ -41,6 +77,7 @@ export function itemsFromSelection(
 	dataset: string | null,
 	datasetVersion: number | null = null,
 	mediaKind = 'image',
+	label = '',
 ): SendableItem[] {
 	const unique = [...new Set(keys.map((k) => k.trim()).filter(Boolean))];
 	return unique.map((key) => ({
@@ -55,18 +92,35 @@ export function itemsFromSelection(
 			...(datasetVersion !== null ? { dataset_version: datasetVersion } : {}),
 		},
 		media: { kind: mediaKind },
+		// The bulk LABEL, as one whole-item tag. `tag` because bulk classification has no geometry to
+		// draw and a fabricated full-frame box would be a claim about WHERE the thing is.
+		//
+		// ABSENT when no label was picked, rather than an empty array: absent means "queue these
+		// blank, someone will draw them", which is the ordinary send and must stay byte-identical.
+		// The server stamps `source` on whatever arrives here — this end cannot and must not.
+		...(label ? { prediction: [{ shape_type: 'tag', label }] } : {}),
 	}));
 }
 
-/** Why a bulk send cannot proceed, or `null` when it can. */
-export function refuseReason(keys: readonly string[], projectId: string | null): string | null {
+/** Why a bulk send cannot proceed, or `null` when it can.
+ *
+ *  `consensusN` is the chosen project's replica count, because the cap it is measured against is on
+ *  TASKS rather than items — see `maxItemsFor`. */
+export function refuseReason(
+	keys: readonly string[],
+	projectId: string | null,
+	consensusN = 1,
+): string | null {
 	const count = itemsFromSelection(keys, null, null).length;
 	if (count === 0) return 'Select at least one item to send.';
 	if (projectId === null) return 'Choose a labeling task to send into.';
-	if (count > MAX_BULK_ITEMS) {
+	const cap = maxItemsFor(consensusN);
+	if (count > cap) {
 		// Named rather than silently truncated: a send that quietly dropped the tail would leave
-		// someone believing a corpus was queued when most of it was not.
-		return `${count.toLocaleString()} items exceeds the ${MAX_BULK_ITEMS.toLocaleString()} limit for one send — narrow the selection.`;
+		// someone believing a corpus was queued when most of it was not. The replica count is named
+		// too when it is what closed the door — "400 exceeds 333" is baffling without it.
+		const why = consensusN > 1 ? ` (${SEND_TASK_CAP.toLocaleString()} tasks ÷ ${consensusN} replicas)` : '';
+		return `${count.toLocaleString()} items exceeds the ${cap.toLocaleString()} limit for one send${why} — narrow the selection.`;
 	}
 	return null;
 }

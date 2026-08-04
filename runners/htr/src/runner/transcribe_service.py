@@ -29,6 +29,8 @@ import os
 from PIL import Image
 from ray import serve
 
+from htr.models import MODEL_REVISION, TEXT_MODEL
+
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +39,7 @@ logger = logging.getLogger(__name__)
 # old TranscribeActor exactly.
 MAX_BATCH = 64
 PREPROCESS_WORKERS = 4
-DEFAULT_MODEL = "Riksarkivet/trocr-base-handwritten-hist-swe-2"
+DEFAULT_MODEL = TEXT_MODEL.repo
 
 
 # Replica/GPU sizing is env-driven so transcribe + htrflow can co-reside on a
@@ -83,9 +85,10 @@ class TranscribeService:
             torch.backends.cudnn.allow_tf32 = True
         torch.backends.cudnn.benchmark = True
 
-        self.processor = TrOCRProcessor.from_pretrained(self.model_name, use_fast=True)
+        self.processor = TrOCRProcessor.from_pretrained(self.model_name, use_fast=True, revision=MODEL_REVISION)
         self.model = VisionEncoderDecoderModel.from_pretrained(
             self.model_name,
+            revision=MODEL_REVISION,
             dtype=self.dtype,
             device_map="cuda:0" if torch.cuda.is_available() else None,
             attn_implementation={"encoder": "sdpa", "decoder": "eager"},

@@ -153,3 +153,23 @@ test('the shared sidebar marks the Namespaces leaf active', async ({ page }) => 
 		page.locator('[data-active="true"]').filter({ hasText: 'Namespaces' }),
 	).toBeVisible();
 });
+
+test('a failed bindings read says so — it never reads as "no namespaces" (#86)', async ({
+	page,
+}) => {
+	// THE point of #86. This page seeds its rows from the registry's bindings so a bound-but-empty
+	// namespace is visible (#83); the first version swallowed a failed read into an empty array,
+	// which is #66's exact shape — an invisible namespace with nothing said — reintroduced by the
+	// commit that fixed it. A read that could not answer must degrade LOUDLY.
+	await seed(page, {
+		'GET /v1/table': ALL_TABLES,
+		'GET /v1/warehouses/-/bindings': { status: 503, body: { detail: 'down' } },
+	});
+	await page.goto('/lakehouse/catalog/namespaces');
+	await expect(page.getByTestId('bindings-unavailable')).toContainText(
+		'Namespace bindings unavailable',
+	);
+	// …and the table-derived rows still render, because the degrade is PARTIAL, not a blank page:
+	// what is lost is only the bound-but-empty namespaces, which is exactly what the banner says.
+	await expect(page.locator('a.ns-name', { hasText: /^bronze$/ })).toBeVisible();
+});

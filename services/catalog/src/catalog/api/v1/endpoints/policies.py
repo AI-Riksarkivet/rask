@@ -57,8 +57,25 @@ def _canonical(segments: list[str], delimiter: str) -> str:
     return fga.canonical_object_id(segments, delimiter=delimiter)
 
 
-def _record(kind: str, canonical_id: str, path: str, body: PolicyRequest) -> dict[str, object]:
-    return {"kind": kind, "id": canonical_id, "path": path, **body.model_dump()}
+def _record(kind: str, canonical_id: str, path: str, body: PolicyRequest, existing: dict[str, object] | None = None) -> dict[str, object]:
+    """The record to persist. A field the caller did not SET keeps whatever the stored record had.
+
+    `put_policy` overwrites the whole object, so `model_dump()` alone made every set a full replace:
+    a client that read a policy, changed one knob and sent it back wrote the model's DEFAULTS over
+    every field it had not mentioned — silently clearing `scan_batch_size` (the compaction memory
+    bound) and `auto_cleanup_interval_commits` (which owns version reclamation). The lakehouse form
+    does exactly that, and its own comment states the belief this now makes true: "an omitted knob
+    means inherit".
+
+    Only EXPLICITLY set fields are applied (`exclude_unset`), which is also what the request model's
+    empty-body guard already keys on — one notion of "the caller meant this", not two.
+    """
+    merged: dict[str, object] = dict(existing or {})
+    merged.update(body.model_dump(exclude_unset=True))
+    # Defaults still apply on a FIRST write, where there is nothing to inherit from.
+    for field, value in body.model_dump().items():
+        merged.setdefault(field, value)
+    return {**merged, "kind": kind, "id": canonical_id, "path": path}
 
 
 def _response(record: dict[str, object]) -> PolicyResponse:
@@ -87,7 +104,8 @@ async def set_table_policy(
     if described.location is None:
         raise TableNotFoundError(f"table {id!r} has no storage location to police")
     canonical = _canonical(segments, settings.delimiter)
-    record = _record("table", canonical, _sweep_path(described.location), body)
+    prior = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), "table", canonical)
+    record = _record("table", canonical, _sweep_path(described.location), body, prior)
     await run_in_threadpool(policies.put_policy, settings.registry_root, settings.storage_options(), record)
     log.info("maintenance_policy_set", extra={"kind": "table", "id": canonical})
     await emit_control(
@@ -138,7 +156,8 @@ async def set_namespace_policy(id: str, body: PolicyRequest, settings: SettingsD
     canonical = _canonical(segments, settings.delimiter)
     # The dir backend maps a namespace to its directory prefix under the root bucket.
     prefix = _sweep_path(f"{settings.root.rstrip('/')}/{'/'.join(segments)}")
-    record = _record("namespace", canonical, prefix, body)
+    prior = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), "namespace", canonical)
+    record = _record("namespace", canonical, prefix, body, prior)
     await run_in_threadpool(policies.put_policy, settings.registry_root, settings.storage_options(), record)
     log.info("maintenance_policy_set", extra={"kind": "namespace", "id": canonical})
     await emit_control(
@@ -227,7 +246,8 @@ async def set_project_policy(
                 "contested; refusing to set a policy over another tenant's data (fix the warehouse "
                 "records first)"
             )
-    record = {**_record("project", project, "", body), "buckets": buckets}
+    prior = await run_in_threadpool(policies.get_policy, settings.registry_root, so, "project", project)
+    record = {**_record("project", project, "", body, prior), "buckets": buckets}
     await run_in_threadpool(policies.put_policy, settings.registry_root, so, record)
     log.info("maintenance_policy_set", extra={"kind": "project", "id": project})
     await emit_control(
