@@ -10,7 +10,7 @@
 	import { Select } from '@rask/ui/select';
 	import { Database, RefreshCw, ShieldAlert, Trash2, Undo2 } from '@lucide/svelte';
 	import { Button } from '@rask/ui/button';
-	import { subjectDisplay } from '@rask/ui/grants-panel';
+	import { Subject } from '@rask/ui/identity';
 	import { tableFromJSON, tableToIPC } from 'apache-arrow';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
@@ -885,7 +885,7 @@
 					<code class="mono">{recoverable.location}</code>.
 				</p>
 				<p class="mut">
-					Dropped by <span class="mono">{subjectDisplay(recoverable.dropped_by).label}</span>
+					Dropped by <Subject value={recoverable.dropped_by} />
 					on {recoverable.dropped_at.slice(0, 10)} · recoverable until
 					<strong>{recoverable.expires_at.slice(0, 10)}</strong>, after which the maintenance sweep
 					reports it for reclamation.
