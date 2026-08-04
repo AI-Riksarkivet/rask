@@ -18,29 +18,38 @@ the owner's to design.
 
 ---
 
-## #39 — Import (shape DECIDED, not yet scheduled)
+## #39 — Import (shape DECIDED)
 
-**Annotation import**, not media import. Bring EXISTING labels in — COCO / YOLO / Label Studio
-JSON — into an annotation project's tasks and drafts, so work started elsewhere can be continued
-in rask.
+**Annotation import**, not media import: bring EXISTING labels in so work started elsewhere can be
+continued in rask.
 
-Not the other three shapes that were considered: media upload, registering an external path, and
-a UI over the existing IIIF harvest are all separate pieces of work and none of them is what was
-meant here.
+**ONE format — the canonical Arrow schema we already have.** Not a parser zoo.
 
-Notes for whoever picks it up:
-- The landing target is a task's **draft** (`Draft.shapes` + `Draft.links`), not the Lance
-  annotations table — an imported label is unreviewed work, and the draft is where unreviewed work
-  lives. It reaches the table through the ordinary submit/accept/publish path, so imported labels
-  get the same provenance as drawn ones.
-- Imported shapes must be normalised through the canonical vocabulary
-  (`@rask/labeling/shape-types`) exactly like a model's predictions are. COCO says `bbox`,
-  YOLO says a normalised centre-form box, Label Studio says percentages — three dialects, one
-  seam, and the seam already exists.
-- The task's captured **ontology** is the contract: an import carrying a label outside the
-  taxonomy must be refused *at import*, naming the label, not discovered at submit.
-- `status` on an imported shape should be `prediction`, not `accepted` — the same stance as an
-  assist result. Importing is not reviewing.
+The first version of this section proposed accepting COCO, YOLO and Label Studio JSON directly. That
+was wrong, and the owner said so: the estate ALREADY has a canonical annotation format —
+`annotations/schema.py`'s `EMPTY_SCHEMA` — and it is the contract the canvas reads, the draft
+validates and the publish writes. Three parsers inside the service would be three things that rot,
+each with its own edge cases and tests, to produce something the schema already describes.
+
+So the endpoint accepts **Arrow IPC matching the annotations schema**. Converting COCO or YOLO into
+it is a `scripts/` concern — the repo's own convention for one-shot tooling — replaceable without
+touching the service, and testable on its own.
+
+Notes for whoever builds it:
+
+- **Bytes, not a table reference.** The point of this task is data NOT yet in the lakehouse, so the
+  transport is Arrow IPC on a `+server.ts` route, matching the rule the estate already follows for
+  bulk payloads. A governed Lance table is a different (easier) case and needs no import at all.
+- **The landing target is the task's DRAFT** (`Draft.shapes` + `Draft.links`), not the annotations
+  table. An imported label is unreviewed work, and the draft is where unreviewed work lives; it
+  reaches the table through the ordinary submit/accept/publish path, so an imported label earns the
+  same provenance as a drawn one.
+- **`status` is `prediction`, never `accepted`.** Same stance as an assist result: importing is not
+  reviewing.
+- **The task's captured ontology is the contract.** A label outside the taxonomy must be refused AT
+  IMPORT, naming the label — not discovered at submit after someone has reviewed it.
+- **Shape types normalise through `@rask/labeling/shape-types`.** Even one format needs this: rows
+  written by older tooling carry `rectangle`, a name neither side accepts.
 
 ---
 
