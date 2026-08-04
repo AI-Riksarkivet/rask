@@ -43,6 +43,8 @@ function harness() {
 	const ctx = {
 		plugins: {
 			arrow: {
+				// The canvas is told about links on every reload, so every engine double needs this.
+				setLinks: () => {},
 				setDeleted: (i: number) => void hidden.add(i),
 				unsetDeleted: (i: number) => void hidden.delete(i),
 				clearDeleted: () => hidden.clear(),

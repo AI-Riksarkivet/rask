@@ -86,11 +86,19 @@ Notes for whoever picks it up:
 two-click link editor in the annotation inspector (arming adopts the inspected shape; the target is
 picked on the canvas).
 
+**Also landed:** the link is DRAWN on the canvas — `ArrowDataPlugin.setLinks()` takes row indices
+and strokes a line plus a directed arrowhead into a `links` Graphics on the annotations container,
+so it inherits the viewport transform. The drawing MATH is `linkPath()`, extracted so an arrowhead
+pointing the wrong way is catchable without a GPU.
+
 **Remaining:**
-- **Draw the link as an edge ON the canvas.** Today a link is visible in the inspector only. This
-  is `@rask/engine` work — a line between two shape centres, following the viewport transform.
 - **Text-span annotation.** The `text` shape type exists in the vocabulary and nothing produces
   one. Needed for token-classification and for the "value" half of KIE on born-digital text.
+
+**Deliberately not claimed:** that the right PIXELS are lit. A WebGL drawing buffer is not preserved
+after present, so a screenshot of it proves nothing (this zone's delete spec records the same). What
+is pinned is the draw CALL (relations.test.ts) and the draw MATH (link-path.test.ts), each verified
+failing when broken, plus an e2e that fails if the draw path throws in a real browser.
 
 ---
 

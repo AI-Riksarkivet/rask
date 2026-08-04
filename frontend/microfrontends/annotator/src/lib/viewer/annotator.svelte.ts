@@ -564,6 +564,7 @@ export class AnnotatorController {
 		);
 		if (exists) return;
 		this.links = [...this.links, link];
+		this._pushLinksToCanvas();
 		this._pushUndo({ kind: 'link', link, created: true });
 	}
 
@@ -575,12 +576,39 @@ export class AnnotatorController {
 				!(l.name === link.name && l.from_shape === link.from_shape && l.to_shape === link.to_shape),
 		);
 		if (this.links.length === before) return;
+		this._pushLinksToCanvas();
 		this._pushUndo({ kind: 'link', link, created: false });
 	}
 
 	/** The links touching a shape id — what the panel renders beside a selected annotation. */
 	linksFor(id: string): AnnoLink[] {
 		return this.links.filter((l) => l.from_shape === id || l.to_shape === id);
+	}
+
+	/** Push the links to the CANVAS as row indices.
+	 *
+	 *  The model addresses endpoints by shape ID (a draft is replaced whole on every save, so an
+	 *  index would silently re-point at a different shape); the engine knows rows by position and has
+	 *  never known what an annotation is called. This is the one place those two facts meet, and it
+	 *  is re-run whenever either side changes — a reload renumbers rows, which would otherwise leave
+	 *  every edge pointing somewhere arbitrary.
+	 *
+	 *  A link whose endpoint is not in the current table is DROPPED rather than clamped: a link to a
+	 *  row that is not here has no honest position, and drawing it at row 0 would be a lie the
+	 *  annotator could not tell from a real edge.
+	 */
+	private _pushLinksToCanvas(): void {
+		const arrow = this.ctx?.plugins.arrow;
+		if (!arrow) return;
+		const byId = new Map(this.rows.map((r) => [r.id, r.index]));
+		const edges: { from: number; to: number }[] = [];
+		for (const link of this.links) {
+			const from = byId.get(link.from_shape);
+			const to = byId.get(link.to_shape);
+			if (from === undefined || to === undefined) continue;
+			edges.push({ from, to });
+		}
+		arrow.setLinks(edges);
 	}
 
 	deleteSelected(): void {
@@ -985,6 +1013,7 @@ export class AnnotatorController {
 						),
 				);
 				this.links = present ? [...gone, op.link] : gone;
+				this._pushLinksToCanvas();
 				break;
 			}
 			case 'insert': {
@@ -1240,6 +1269,10 @@ export class AnnotatorController {
 		}
 		this.table = table;
 		this.count = table.numRows;
+		// AFTER `this.table` is swapped: the id→index map is built from `rows`, which reads the new
+		// table. Re-pushing here is what stops a reload — which renumbers every row — from leaving
+		// each edge pointing at whatever now happens to sit at its old index.
+		this._pushLinksToCanvas();
 		this.select(null);
 	}
 

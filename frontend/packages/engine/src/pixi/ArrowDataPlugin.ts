@@ -63,6 +63,68 @@ const DEFAULT_STYLE: AnnotationStyle = {
 	strokeAlpha: 0.8,
 };
 
+/** One typed edge to draw, by ROW INDEX. */
+export interface LinkEdge {
+	from: number;
+	to: number;
+}
+
+//: Deliberately not a token from the design system: this is a WebGPU draw call, not CSS, and the
+//: engine is framework-agnostic — it cannot read a Tailwind variable. Amber reads against both the
+//: page image and the shape strokes, and is not any status colour, so an edge is never mistaken for
+//: a state.
+const LINK_COLOR = 0xf59e0b;
+const LINK_WIDTH = 2;
+const LINK_ALPHA = 0.9;
+const ARROW_LEN = 14;
+const ARROW_HALF = 6;
+
+/** The screen-space path of one edge: the line, plus the two base corners of its arrowhead.
+ *
+ *  Separated from the Pixi calls so the MATH is testable without a GPU — an arrowhead pointing the
+ *  wrong way is a correctness bug about a DIRECTED relation (which end is the key and which the
+ *  value is the one fact a KIE reviewer is checking), and it should not take a WebGPU context to
+ *  catch it.
+ *
+ *  `null` for two centres that coincide: there is no direction to point, and normalising a
+ *  zero-length vector yields NaN, which Pixi draws as nothing while reporting nothing.
+ */
+export function linkPath(
+	ax: number,
+	ay: number,
+	bx: number,
+	by: number,
+): {
+	ax: number;
+	ay: number;
+	bx: number;
+	by: number;
+	leftX: number;
+	leftY: number;
+	rightX: number;
+	rightY: number;
+} | null {
+	const dx = bx - ax;
+	const dy = by - ay;
+	const len = Math.hypot(dx, dy);
+	if (len < 1) return null;
+	const ux = dx / len;
+	const uy = dy / len;
+	// The perpendicular, for the arrowhead's width.
+	const px = -uy;
+	const py = ux;
+	return {
+		ax,
+		ay,
+		bx,
+		by,
+		leftX: bx - ux * ARROW_LEN + px * ARROW_HALF,
+		leftY: by - uy * ARROW_LEN + py * ARROW_HALF,
+		rightX: bx - ux * ARROW_LEN - px * ARROW_HALF,
+		rightY: by - uy * ARROW_LEN - py * ARROW_HALF,
+	};
+}
+
 export class ArrowDataPlugin {
 	private app: Application;
 	private container: Container;
@@ -79,6 +141,10 @@ export class ArrowDataPlugin {
 
 	// Highlight layers (always on top)
 	private highlightGraphics: Graphics;
+	private linkGraphics: Graphics;
+	/** Typed edges to draw, as ROW INDICES. The caller owns the id→index mapping: this plugin knows
+	 *  rows by position and has never known what an annotation is called. */
+	private links: LinkEdge[] = [];
 	private hoverGraphics: Graphics;
 
 	// ── Arrow column cache ──
@@ -153,6 +219,14 @@ export class ArrowDataPlugin {
 		this.maskContainer = new Container();
 		this.maskContainer.label = 'masks';
 		this.container.addChild(this.maskContainer);
+
+		// Links sit UNDER hover and highlight: an edge is context for the shapes, and it must never
+		// obscure the selection feedback the annotator is steering by. Same container as the shapes,
+		// so it inherits the viewport transform for free — an edge drawn in screen space would
+		// detach from its endpoints the moment anyone panned.
+		this.linkGraphics = new Graphics();
+		this.linkGraphics.label = 'links';
+		this.container.addChild(this.linkGraphics);
 
 		this.hoverGraphics = new Graphics();
 		this.hoverGraphics.label = 'hover';
@@ -568,7 +642,57 @@ export class ArrowDataPlugin {
 		this.syncMasks();
 
 		this.highlightGraphics.clear();
+		// Redrawn on every sync rather than only when the links change: an endpoint's GEOMETRY moves
+		// under us (a vertex drag, an undo, a reload renumbering rows), and an edge left pointing at
+		// where a shape used to be is worse than no edge at all.
+		this.drawLinks();
 		this.app.render();
+	}
+
+	/** Typed edges between annotations — the canvas half of a relation.
+	 *
+	 *  Until this existed a link was visible only as a row in the inspector, so the one thing a
+	 *  relation IS — a connection between two things you can see — was the one thing you could not
+	 *  see. Indices, not ids, for the reason on the field above.
+	 */
+	setLinks(links: LinkEdge[]): void {
+		this.links = links;
+		this.drawLinks();
+		this.app.render();
+	}
+
+	private drawLinks(): void {
+		this.linkGraphics.clear();
+		if (!this.table || this.links.length === 0) return;
+		const numRows = this.table.numRows;
+		for (const link of this.links) {
+			// A link whose endpoint is gone is not drawn. `hiddenMask` is the same overlay a local
+			// delete writes, so an edge disappears with the shape it pointed at rather than dangling
+			// at its last known position.
+			if (link.from < 0 || link.to < 0 || link.from >= numRows || link.to >= numRows) continue;
+			if (this.hiddenMask[link.from] || this.hiddenMask[link.to]) continue;
+
+			const a = this.getGeometry(link.from);
+			const b = this.getGeometry(link.to);
+			const ax = a.x + a.w / 2;
+			const ay = a.y + a.h / 2;
+			const bx = b.x + b.w / 2;
+			const by = b.y + b.h / 2;
+
+			const path = linkPath(ax, ay, bx, by);
+			if (path === null) continue;
+
+			this.linkGraphics
+				.moveTo(path.ax, path.ay)
+				.lineTo(path.bx, path.by)
+				.stroke({ color: LINK_COLOR, width: LINK_WIDTH, alpha: LINK_ALPHA });
+			this.linkGraphics
+				.moveTo(path.bx, path.by)
+				.lineTo(path.leftX, path.leftY)
+				.lineTo(path.rightX, path.rightY)
+				.lineTo(path.bx, path.by)
+				.fill({ color: LINK_COLOR, alpha: LINK_ALPHA });
+		}
 	}
 
 	/** Draw a single annotation shape into a Graphics object */

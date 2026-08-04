@@ -41,10 +41,14 @@ vi.mock('./remote/jobs.remote', () => ({
 import { AnnotatorController } from './annotator.svelte.js';
 
 /** Minimal engine double — relations touch selection, not geometry. */
+/** Records the edges pushed to the canvas, so "is it DRAWN" is answerable, not just "is it stored". */
+const drawn: { from: number; to: number }[][] = [];
+
 function ctx() {
 	return {
 		plugins: {
 			arrow: {
+				setLinks: (edges: { from: number; to: number }[]) => void drawn.push(edges),
 				setDeleted: () => {},
 				unsetDeleted: () => {},
 				clearDeleted: () => {},
@@ -92,6 +96,7 @@ const TABLE = tableFromArrays({
 });
 
 function attached() {
+	drawn.length = 0;
 	const c = new AnnotatorController();
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural double, not a PixiContext
 	c.attach(ctx() as any, TABLE);
@@ -230,5 +235,56 @@ describe('drawing a relation', () => {
 		expect(c.dirty).toBe(false);
 		c.addLink({ name: 'answers', from_shape: 'k1', to_shape: 'v1' });
 		expect(c.dirty, 'a drawn relation left the canvas looking saved').toBe(true);
+	});
+});
+
+describe('a link is DRAWN on the canvas, not only listed', () => {
+	// Until this existed a relation was visible only as a row in the inspector — so the one thing a
+	// relation IS, a connection between two things you can see, was the one thing you could not see.
+
+	it('drawing a link pushes an EDGE to the engine, as row indices', () => {
+		const c = attached();
+		c.toggleLinkMode('answers');
+		c.select(0);
+		c.select(1);
+
+		const last = drawn.at(-1);
+		expect(last, 'the canvas was never told about the link').toEqual([{ from: 0, to: 1 }]);
+	});
+
+	it('removing a link removes its edge', () => {
+		const c = attached();
+		c.addLink({ name: 'answers', from_shape: 'k1', to_shape: 'v1' });
+		expect(drawn.at(-1)).toHaveLength(1);
+
+		c.removeLink({ name: 'answers', from_shape: 'k1', to_shape: 'v1' });
+		expect(drawn.at(-1), 'the edge outlived the link').toEqual([]);
+	});
+
+	it('UNDO removes the edge too — the canvas cannot disagree with the model', () => {
+		const c = attached();
+		c.addLink({ name: 'answers', from_shape: 'k1', to_shape: 'v1' });
+		c.undo();
+		expect(drawn.at(-1)).toEqual([]);
+
+		c.redo();
+		expect(drawn.at(-1)).toEqual([{ from: 0, to: 1 }]);
+	});
+
+	it('a link to a shape NOT in this table is dropped, never clamped', () => {
+		// A link to a row that is not here has no honest position. Drawing it at row 0 would be a lie
+		// the annotator could not tell from a real edge.
+		const c = attached();
+		c.addLink({ name: 'answers', from_shape: 'k1', to_shape: 'not-in-this-table' });
+
+		expect(drawn.at(-1), 'a link to an absent shape was given a position anyway').toEqual([]);
+	});
+
+	it('IDs are resolved to indices at push time, not stored as indices', () => {
+		const c = attached();
+		c.addLink({ name: 'answers', from_shape: 'v2', to_shape: 'k1' });
+
+		// v2 is row 2, k1 is row 0 — the order in the model is source→target, not table order.
+		expect(drawn.at(-1)).toEqual([{ from: 2, to: 0 }]);
 	});
 });

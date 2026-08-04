@@ -64,6 +64,8 @@ function ctx() {
 	return {
 		plugins: {
 			arrow: {
+				// The canvas is told about links on every reload, so every engine double needs this.
+				setLinks: () => {},
 				setDeleted: noop,
 				unsetDeleted: noop,
 				clearDeleted: noop,

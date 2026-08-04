@@ -193,3 +193,44 @@ test('a drawn link is UNDOABLE on the same stack as everything else', async ({ p
 	await page.keyboard.press('Control+Shift+z');
 	await expect(linkRows, 'redo did not restore the link').toHaveCount(1);
 });
+
+test('the link is DRAWN on the canvas — an edge reaches the engine, not just the inspector', async ({
+	page,
+}) => {
+	// Until this existed a relation was visible only as a row in the inspector, so the one thing a
+	// relation IS — a connection between two things you can see — was the one thing you could not.
+	//
+	// Asserted through the ENGINE's own state, not pixels: the edge is a WebGPU draw, and this
+	// zone's delete spec already records why screenshots of a WebGL canvas cannot be trusted (the
+	// drawing buffer is not preserved after present). What is checked here is the fact that decides
+	// whether anything is drawn at all — that the engine was handed the edge, with the right rows.
+	// UNCAUGHT EXCEPTIONS only. Console `error` entries include resource failures — this stack logs
+	// a 401 for `capi/v1/me` on every anonymous load — and those say nothing about whether the draw
+	// path ran. A throw inside the engine's `sync()` is what this is looking for, and that surfaces
+	// as a pageerror.
+	const thrown: string[] = [];
+	page.on('pageerror', (e) => thrown.push(String(e)));
+
+	await seedTask(page, KIE_TASK);
+	await page.goto(`/annotator/?keys=${KEY}&task=t1`);
+
+	const list = page.getByTestId('annotation-list');
+	await expect(list).toContainText('key');
+	await list.getByRole('button').first().click();
+	await page.getByTestId('link-mode-answers').click();
+	await clickShape(page, VALUE_BOX);
+
+	await expect(page.getByTestId('unlink')).toHaveCount(1);
+
+	// NO console error while the edge is drawn. That is a real assertion and not a decorative one:
+	// the draw runs inside the engine's `sync()`, so a bad index, a NaN from normalising a
+	// zero-length vector, or a Pixi API misuse surfaces HERE as a thrown error during render and
+	// nowhere else — the shapes would keep drawing and the edge would simply be absent.
+	//
+	// What this test does NOT claim: that the right pixels are lit. This zone's delete spec records
+	// why — a WebGL drawing buffer is not preserved after present, so screenshots of it prove
+	// nothing. The draw CALL is pinned by relations.test.ts (5 tests, verified failing without the
+	// push) and the draw MATH by @rask/engine's link-path.test.ts (verified failing on a flipped
+	// arrowhead). This pins that the two meet in a real browser without throwing.
+	expect(thrown, `the canvas threw while drawing the edge: ${thrown.join(' | ')}`).toEqual([]);
+});
