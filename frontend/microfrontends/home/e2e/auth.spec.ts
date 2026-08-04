@@ -18,7 +18,7 @@ import { zoneDirs } from '../../../packages/zone-contract/src/manifest';
 // assertion, and every other zone still fails here if it ships without an entry.
 const ZONE_ENTRIES: Record<string, { title: string; kind: 'trigger' | 'link' }> = {
 	lakehouse: { title: 'Lakehouse', kind: 'trigger' },
-	media: { title: 'Search', kind: 'trigger' }, // the media read plane, named for the task
+	explorer: { title: 'Explorer', kind: 'trigger' }, // the corpus read plane; 'Search' died with the `media` directory
 	annotator: { title: 'Annotate', kind: 'link' },
 	compute: { title: 'Compute', kind: 'trigger' }, // the merged rask zone (R16)
 	train: { title: 'Train', kind: 'link' }, // resurrected zone (R17), plain link while scaffolded
@@ -62,7 +62,7 @@ test('the MAIN MENU navbar carries Home and Projects for an anonymous visitor �
 	// The R15 contract that used to live here — every zone directory has exactly one navbar entry —
 	// did NOT disappear with it. It moved to where it can still be checked: `topNav()` is asserted
 	// zone-by-zone in `@rask/ui`'s `tests/nav-config.test.ts`, and the rendered zone bar is asserted
-	// in the lakehouse and media suites, which run inside a zone. ZONE_ENTRIES stays the ground-truth
+	// in the lakehouse and explorer suites, which run inside a zone. ZONE_ENTRIES stays the ground-truth
 	// table for it, and is still diffed against the zone DIRECTORIES right here, before any DOM
 	// assertion — so a zone scaffolded without a navbar entry still fails in this file.
 	expect(Object.keys(ZONE_ENTRIES).sort()).toEqual(zoneDirs().filter((z) => z !== 'home'));

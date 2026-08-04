@@ -142,6 +142,13 @@ cross-object invariants, high-frequency filtered listings), it is a design decis
   name an event the backend publishes, and `test_openapi_contract` fails. Same for `TupleOrigin`
   (`service_kit/governed/fga.py`) — an origin string not in the Literal is a `ty` error, not a runtime one.
 - `discover_dataset_uris` (maintenance sweep) walks ONE root — multi-warehouse sweeps are untested.
+- **A dataset's files do not necessarily all live under its prefix.** A named BRANCH is a whole
+  parallel dataset under `tree/{branch}/` (its own `_versions`/`_transactions`/`_deletions`/
+  `_indices`; branch names may contain `/`), and `lance.dataset(uri)` opens only the MAIN branch. A
+  SHALLOW CLONE's data resolves through the manifest's `base_paths[]` to another dataset root
+  entirely (feature flag 16). Any "list the prefix, subtract what is referenced" logic reports both
+  as garbage. pylance does not expose `base_paths`, so detect the consequence: a referenced path
+  that is not present locally.
 - **A namespace is a `__manifest` ROW, not a directory** (the `dir` impl the chart runs —
   `LANCE_REST_IMPL=dir`). Only a TABLE materialises a directory. Any scan that enumerates namespaces
   by listing directories silently returns `[]` on every real estate — which reads as "checked and

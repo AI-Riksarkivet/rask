@@ -31,6 +31,23 @@ const WarehouseSchema = v.object({
 	status: v.optional(v.nullable(v.string())),
 });
 
+/** `DeleteWarehouseResponse` — what the delete ACTUALLY did, store by store.
+ *
+ *  Every field is an OBSERVED outcome, never an echo of the request, and that is the whole reason the
+ *  catalog returns a body at all: a warehouse delete touches four independent stores (the native
+ *  namespaces, OpenFGA, the registry, the bucket) and only three of them run by default. `bucket` is
+ *  named even when it was KEPT, so the operator knows what survived; `bucket_purged` is the catalog's
+ *  own statement about the bytes, which is the one field a request-shaped message gets wrong. The
+ *  confirm dialog's toast is built from this and nothing else. */
+const DeleteWarehouseSchema = v.object({
+	id: v.string(),
+	bucket: v.string(),
+	namespaces_dropped: v.array(v.string()),
+	tuples_revoked: v.number(),
+	bucket_purged: v.boolean(),
+	objects_purged: v.number(),
+});
+
 /** `ProjectResponse` — the tenant's warehouses (a narrower record than the registry's) + its
  *  effective admins. */
 const ProjectSchema = v.object({
@@ -147,6 +164,56 @@ export const setWarehouseActive = command(
 				method: 'POST',
 			}),
 			WarehouseSchema,
+		);
+		if (result.ok) {
+			void fetchWarehouses().refresh();
+			void fetchProjects().refresh();
+		}
+		return result;
+	},
+);
+
+/** Delete a warehouse — the bottom-up destroy door (`DELETE /v1/warehouses/{id}`).
+ *
+ *  Three SEPARATE opt-ins that never share a default, sent only when the caller actually asked:
+ *
+ *  - `cascade` drops the namespaces bound to the warehouse. Without it a non-empty warehouse refuses
+ *    409 with a detail that NAMES them — the only authoritative statement of what a cascade would take
+ *    (there is no bindings read API), which is why `WarehouseDeleteDialog` reads it out of the refusal.
+ *  - `purgeBucket` is the ONLY thing that removes bytes, and it is irreversible. A catalog record is
+ *    recoverable and a customer's bucket is not, so the dialog gates it behind typing the bucket name.
+ *  - `force` overrides the `protected` flag and NOTHING else. The FGA gate has already run, identically,
+ *    with or without it — two independent locks, and force turns exactly one.
+ *
+ *  A 404 here is deliberately ambiguous (no existence oracle): "no such warehouse" and "not yours" are
+ *  made indistinguishable at the catalog, so the caller cannot probe which warehouse ids exist. The
+ *  dialog surfaces that as-is rather than guessing which one it was.
+ *
+ *  On success both registry reads refresh in the SAME flight, like every other write in this module —
+ *  the gallery that issued the delete never renders an estate it just changed. */
+export const deleteWarehouse = command(
+	v.object({
+		id: v.string(),
+		cascade: v.optional(v.boolean()),
+		purgeBucket: v.optional(v.boolean()),
+		force: v.optional(v.boolean()),
+	}),
+	async ({
+		id,
+		cascade,
+		purgeBucket,
+		force,
+	}): Promise<ApiResult<v.InferOutput<typeof DeleteWarehouseSchema>>> => {
+		// Omitted, not sent as `false`: the catalog defaults all three to false, and a query string that
+		// spells the falses out is one copy-paste away from spelling one of them true.
+		const q = new URLSearchParams();
+		if (cascade) q.set('cascade', 'true');
+		if (purgeBucket) q.set('purge_bucket', 'true');
+		if (force) q.set('force', 'true');
+		const qs = q.toString();
+		const result = parsed(
+			await catalogJSON(`/v1/warehouses/${enc(id)}${qs ? `?${qs}` : ''}`, { method: 'DELETE' }),
+			DeleteWarehouseSchema,
 		);
 		if (result.ok) {
 			void fetchWarehouses().refresh();

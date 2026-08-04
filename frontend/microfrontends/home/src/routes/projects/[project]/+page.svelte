@@ -6,9 +6,12 @@
 	// once, at the project→warehouse rung.
 	//
 	// Gated by the catalog; every degrade state is named honestly rather than collapsed into "empty".
-	import { FolderKanban, RefreshCw, ShieldAlert } from '@lucide/svelte';
+	import { FolderKanban, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
+	import { Button } from '@rask/ui/button';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import type { ProjectSummary } from '$lib/catalog';
+	import ProjectDeleteDialog from '$lib/ProjectDeleteDialog.svelte';
 	import { fetchProject } from '$lib/remote/warehouses.remote';
 
 	const project = $derived(page.params.project ?? '');
@@ -19,6 +22,7 @@
 	let detail = $state<ProjectSummary | null>(null);
 	let lastStatus = $state(0);
 	let settled = $state(false);
+	let deleting = $state(false);
 
 	const unauthorized = $derived(detail === null && settled && lastStatus === 401);
 	const denied = $derived(detail === null && settled && lastStatus === 403);
@@ -132,6 +136,33 @@
 				</div>
 			{/if}
 		</section>
+
+		<!-- Retiring the tenant. Last on the page and fenced off, because it is the one action here that
+		     cannot be undone by repeating it. The catalog is the gate (project `can_administer`), so this
+		     renders for anyone who can READ the project and the refusal is rendered honestly rather than
+		     the affordance being guessed at from an identity this page does not hold. -->
+		<section class="danger">
+			<h2>Danger zone</h2>
+			<p class="mut">
+				Retiring <code class="mono">{project}</code> revokes every grant on it and drops its registry
+				record. No bytes are touched: there is deliberately no cascade here, so its
+				{detail.warehouses.length === 1 ? 'warehouse' : 'warehouses'} — and the buckets behind
+				{detail.warehouses.length === 1 ? 'it' : 'them'} — have to be retired one rung at a time first.
+			</p>
+			<Button variant="destructive" size="sm" onclick={() => (deleting = true)}>
+				<Trash2 size={14} /> Delete project
+			</Button>
+		</section>
+
+		<ProjectDeleteDialog
+			bind:open={deleting}
+			{project}
+			ondeleted={() => {
+	// The project is gone — this very route's read would 404 on the next tick. Back to the
+	// estate list, re-read from the server so the retired tenant is not still on it.
+	goto('/projects', { invalidateAll: true });
+}}
+		/>
 	{/if}
 </div>
 
@@ -219,5 +250,16 @@
 		gap: 8px;
 		color: var(--mut);
 		padding: 32px 0;
+	}
+	.danger {
+		border-top: 1px solid var(--line);
+		padding-top: 16px;
+	}
+	.danger h2 {
+		color: var(--fail);
+	}
+	.danger p {
+		max-width: 62ch;
+		margin-bottom: 10px;
 	}
 </style>

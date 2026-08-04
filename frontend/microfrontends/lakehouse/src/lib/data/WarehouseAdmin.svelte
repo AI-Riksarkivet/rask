@@ -30,6 +30,7 @@
 		setWarehouseActive,
 	} from './remote/warehouses.remote';
 	import RowDrawer from './RowDrawer.svelte';
+	import WarehouseDeleteDialog from './WarehouseDeleteDialog.svelte';
 	import { controlCursor } from '$lib/live/feeds.remote';
 	import { liveRead } from '$lib/live/tick.svelte';
 
@@ -140,6 +141,18 @@
 		drawerOpen = true;
 	}
 
+	// The destroy door. It gets its own dialog rather than a banner-confirm because its three opt-ins
+	// (cascade / purge_bucket / force) each need to be argued for separately — see
+	// `WarehouseDeleteDialog`. The list re-reads on `ondeleted` for immediacy; the catalog also emits a
+	// `warehouse_deleted` control event, so the `liveRead(controlCursor, …)` above re-reads every OTHER
+	// open warehouse list on the estate too.
+	let deleteOpen = $state(false);
+	let deleteRow = $state<WarehouseRecord | null>(null);
+	function openDelete(row: WarehouseRecord): void {
+		deleteRow = row;
+		deleteOpen = true;
+	}
+
 	const sortableHeader =
 		(label: string) =>
 		({
@@ -186,7 +199,7 @@
 			id: 'actions',
 			header: '',
 			cell: ({ row }) => renderSnippet(actionsCell, row.original),
-			meta: { headerClass: 'w-28', cellClass: 'text-right' },
+			meta: { headerClass: 'w-44', cellClass: 'text-right' },
 		},
 	];
 
@@ -249,7 +262,7 @@
 {#snippet statusCell(w: Warehouse)}
 	<span class="chip mono" class:off={statusOf(w) !== 'active'}>{statusOf(w)}</span>
 {/snippet}
-{#snippet actionsCell(w: Warehouse)}
+{#snippet actionsCell(w: WarehouseRecord)}
 	<button
 		class="btn ghost"
 		disabled={busy}
@@ -259,6 +272,17 @@
 }}
 	>
 		{statusOf(w) === 'active' ? 'deactivate' : 'activate'}
+	</button>
+	<button
+		class="btn ghost destroy"
+		disabled={busy}
+		aria-label={`Delete warehouse ${w.id}`}
+		onclick={(e) => {
+	e.stopPropagation();
+	openDelete(w);
+}}
+	>
+		delete
 	</button>
 {/snippet}
 
@@ -422,6 +446,8 @@
 	{/if}
 </RowDrawer>
 
+<WarehouseDeleteDialog bind:open={deleteOpen} warehouse={deleteRow} ondeleted={() => load()} />
+
 <style>
 	.page {
 		max-width: 860px;
@@ -498,6 +524,9 @@
 	.btn.ghost {
 		background: none;
 		color: var(--mut);
+	}
+	.btn.destroy {
+		color: var(--fail);
 	}
 	.mut {
 		color: var(--faint);

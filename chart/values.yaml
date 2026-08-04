@@ -993,6 +993,18 @@ ingress:
   # Empty host => catch-all: reachable on the node IP or a VS Code / ssh -L
   # forwarded localhost with no Host header or /etc/hosts entry. Set a hostname
   # (e.g. rask.local) for host-based routing in shared/prod environments.
+  #
+  # A HOST-LESS INGRESS IS A CLUSTER-WIDE CLAIM ON `/` AND `/api`, not a namespaced one. Install
+  # this chart a SECOND time anywhere in the cluster with `ingress.enabled` still true and the two
+  # releases become rival host-less claims on the same bare paths; the ingress controller picks
+  # between them arbitrarily and the loser's estate simply stops answering. Observed 2026-08-04: a
+  # lane deploy into its own namespace took `/`, `/projects` and `/settings` away from the real
+  # estate, which then answered the LANE gateway's `{"detail":"Not Found"}` while every pod in both
+  # namespaces was healthy. Nothing looks broken; the routing just moved.
+  #
+  # So: exactly ONE release per cluster may carry a host-less ingress. Any additional install —
+  # a slice, a lane, a preview — must either set a distinct `ingress.host` or, if it is reached
+  # in-cluster and needs no edge at all, `--set ingress.enabled=false`.
   host: ""
   # Keyed defaults, so an operator's own annotations still merge (and can override these).
   #
