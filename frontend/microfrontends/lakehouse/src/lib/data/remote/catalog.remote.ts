@@ -141,6 +141,39 @@ export const fetchTables = query(
 	async (): Promise<ApiResult<TablesList>> => typedAs<TablesList>(await catalogJSON('/v1/table')),
 );
 
+/** `TrashEntry[]` — what is SCHEDULED against one table (#75/§2.4). Today that is exactly one thing:
+ *  a pending undrop deadline. Reader-tier at the catalog, so an owner can see the clock they are
+ *  racing — a deadline nobody can read is not a safety feature. */
+const TrashEntrySchema = v.object({
+	id: v.string(),
+	location: v.string(),
+	dropped_by: v.string(),
+	dropped_at: v.string(),
+	expires_at: v.string(),
+});
+export type TrashEntry = v.InferOutput<typeof TrashEntrySchema>;
+
+export const fetchTableTasks = query(
+	v.string(),
+	async (table): Promise<ApiResult<TrashEntry[]>> =>
+		parsed(await catalogJSON(`/v1/table/${enc(table)}/tasks`), v.array(TrashEntrySchema)),
+);
+
+/** Recover a dropped table from the trash (#75). Owner-gated at the catalog; a 404 means the grace
+ *  period expired or the drop purged its bytes — genuinely unrecoverable, and the UI says so rather
+ *  than pretending. Single-flights the table list so the recovered table reappears. */
+export const undropTable = command(v.string(), async (table): Promise<ApiResult<unknown>> => {
+	const res = await catalogJSON(`/v1/table/${enc(table)}/undrop`, { method: 'POST' });
+	if (res.ok) {
+		// BOTH reads, and the detail one is load-bearing: the page offering Undrop is showing a CACHED
+		// 404 for this very table, so refreshing only the list left the recovered table still rendering
+		// "not a catalog-registered table" until a hard reload — seen in the browser, not reasoned about.
+		void fetchTables().refresh();
+		void fetchTableDetail({ table }).refresh();
+	}
+	return res;
+});
+
 /** One-round-trip detail aggregate for the table page (schema/stats/versions/tags/branches/indexes/
  *  policy). The fan-out stays SERVER-side, exactly as the BFF route ran it — six POST-shaped catalog
  *  reads the browser could never issue through a GET proxy.

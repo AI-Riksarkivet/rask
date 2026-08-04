@@ -71,6 +71,13 @@ class _RecordingNamespace:
         self.calls.append("drop_namespace")
         return type("R", (), {"model_fields_set": set()})()
 
+    def list_namespaces(self, request: Any) -> Any:
+        return type("R", (), {"namespaces": [], "page_token": None})()
+
+    def list_tables(self, request: Any) -> Any:
+        tables = ["pages"] if request.id == ["bronze"] else []
+        return type("R", (), {"tables": tables, "page_token": None})()
+
 
 def _protect(settings: Settings, kind: str, canonical: str) -> None:
     protection.set_protection(
@@ -355,7 +362,7 @@ def test_undrop_re_registers_from_the_trash_record_and_clears_it(tmp_path: Any) 
     ns: Any = _TrashableNamespace()
     _drop_table(settings, ns)
     asyncio.run(t_ep.undrop_table(id="bronze$pages", ns=ns, settings=settings, token=None, client=None, control=NoopControlEmitter()))
-    assert "register_table:s3://bkt/bronze/pages.lance" in ns.calls
+    assert "register_table:pages.lance" in ns.calls, "the RELATIVE form register_table accepts"
     assert trash.get(settings.registry_root, settings.storage_options(), "bronze$pages") is None
 
 
@@ -380,3 +387,113 @@ def test_the_tasks_door_shows_the_pending_expiry(tmp_path: Any) -> None:
     _drop_table(settings, ns)
     tasks = asyncio.run(t_ep.table_tasks(id="bronze$pages", settings=settings, token=None))
     assert len(tasks) == 1 and tasks[0].location == "s3://bkt/bronze/pages.lance" and tasks[0].expires_at
+
+
+def test_a_recoverable_drop_KEEPS_the_owner_grants(tmp_path: Any) -> None:
+    """Found by driving the DEPLOYED catalog, not by a unit test (these run FGA off): the drop revoked
+    the table's tuples unconditionally, so after a recoverable drop the one person who needed to undrop
+    it — its owner — was denied. A recoverable drop leaves an object that still exists; its grants die
+    with the BYTES (at purge, or when expiry reclaims it), not with the pointer."""
+    from unittest.mock import AsyncMock
+
+    from catalog.api import fga_deps as deps
+
+    settings = _settings(tmp_path, grace_days=7)
+    ns: Any = _TrashableNamespace()
+    revoked = AsyncMock()
+    original = deps.revoke_ownership
+    deps.revoke_ownership = revoked  # type: ignore[assignment]
+    try:
+        _drop_table(settings, ns)
+    finally:
+        deps.revoke_ownership = original  # type: ignore[assignment]
+    revoked.assert_not_awaited()
+
+
+def test_a_DESTRUCTIVE_drop_still_revokes(tmp_path: Any) -> None:
+    """The negative twin — the reuse rule still holds where the bytes really are gone."""
+    from unittest.mock import AsyncMock
+
+    from catalog.api import fga_deps as deps
+
+    settings = _settings(tmp_path, grace_days=0)
+    ns: Any = _TrashableNamespace()
+    revoked = AsyncMock()
+    original = deps.revoke_ownership
+    deps.revoke_ownership = revoked  # type: ignore[assignment]
+    try:
+        _drop_table(settings, ns)
+    finally:
+        deps.revoke_ownership = original  # type: ignore[assignment]
+    revoked.assert_awaited_once()
+
+
+def test_the_tasks_suffix_is_reader_tier_not_writer(tmp_path: Any) -> None:
+    """The live audit's other finding: `tasks` was unmapped, so it fell through to WRITER — and after a
+    drop the owner has no write rung, making their own deadline unreadable."""
+    assert "tasks" in fga_deps._META_READ_ACTIONS  # noqa: SLF001
+
+
+def test_undrop_registers_a_RELATIVE_location(tmp_path: Any) -> None:
+    """`register_table` refuses absolute URIs ("Location must be a relative path within the root
+    directory") — undrop 400'd live on the very location describe_table had just reported. The `dir`
+    backend lays table dirs out FLAT under the connection root, so the relative form is the final
+    segment; the record keeps the absolute URI because that is what an operator reading trash needs."""
+    from catalog.api.v1.endpoints import tables as t_ep
+
+    settings = _settings(tmp_path, grace_days=7)
+    ns: Any = _TrashableNamespace()
+    _drop_table(settings, ns)
+    asyncio.run(t_ep.undrop_table(id="bronze$pages", ns=ns, settings=settings, token=None, client=None, control=NoopControlEmitter()))
+    registered = [c for c in ns.calls if c.startswith("register_table:")]
+    assert registered == ["register_table:pages.lance"], registered
+    assert "://" not in registered[0], "an absolute URI reached register_table — the live 400"
+
+
+def test_a_CASCADE_refuses_when_a_descendant_is_protected(tmp_path: Any) -> None:
+    """A cascade destroys children INSIDE one native call — they never reach a door. Before this, a
+    protected table under a cascade-dropped namespace died silently while the docstring claimed
+    otherwise. The refusal must NAME the protected descendant: "something in here is protected" is
+    not an answer anyone can act on."""
+    from catalog.api.v1.endpoints import namespaces as n_ep
+    from lance_namespace import DropNamespaceRequest
+
+    settings = _settings(tmp_path)
+    _protect(settings, "table", "bronze$pages")
+    ns: Any = _RecordingNamespace()
+    with pytest.raises(NamespaceNotEmptyError, match="bronze\\$pages"):
+        asyncio.run(
+            n_ep.drop_namespace(
+                id="bronze",
+                ns=ns,
+                settings=settings,
+                token=None,
+                client=None,
+                control=NoopControlEmitter(),
+                body=DropNamespaceRequest(behavior="Cascade"),
+            )
+        )
+    assert ns.calls == [], "the cascade ran despite a protected descendant"
+
+
+def test_force_lets_a_cascade_through(tmp_path: Any) -> None:
+    """The negative twin — force turns the protection lock on the subtree exactly as at the named rung."""
+    from catalog.api.v1.endpoints import namespaces as n_ep
+    from lance_namespace import DropNamespaceRequest
+
+    settings = _settings(tmp_path)
+    _protect(settings, "table", "bronze$pages")
+    ns: Any = _RecordingNamespace()
+    asyncio.run(
+        n_ep.drop_namespace(
+            id="bronze",
+            ns=ns,
+            settings=settings,
+            token=None,
+            client=None,
+            control=NoopControlEmitter(),
+            body=DropNamespaceRequest(behavior="Cascade"),
+            force=True,
+        )
+    )
+    assert "drop_namespace" in ns.calls

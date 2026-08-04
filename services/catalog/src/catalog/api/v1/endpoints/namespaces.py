@@ -20,13 +20,14 @@ from lance_namespace import (
     ListTablesResponse,
     NamespaceExistsRequest,
 )
-from pydantic import BaseModel
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep
 from catalog.api.security import CurrentToken
+from catalog.core.config import Settings
 from catalog.core.control_emit import emit_control
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
+from catalog.schemas import ProtectionResponse, SetProtectionRequest
 from catalog.services import native
 from service_kit.governed import fga
 from service_kit.lakehouse import protection
@@ -130,6 +131,22 @@ def describe_namespace(id: str, ns: NamespaceDep, settings: SettingsDep) -> Desc
     return native.call(ns, "describe_namespace", req)
 
 
+async def _require_descendants_unprotected(settings: Settings, descendants: list[tuple[str, list[str]]], *, force: bool) -> None:
+    """Refuse a cascade that would destroy a PROTECTED descendant, naming the first one found.
+
+    The guard at the named rung only sees the id in the URL; a cascade's unit of destruction is the
+    whole subtree, and those children are destroyed inside one native call that never reaches a door.
+    So the check belongs here, where the destroyed set is actually enumerated.
+    """
+    if force or not descendants:
+        return
+    so = settings.storage_options()
+    for resource, segments in descendants:
+        canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+        record = await run_in_threadpool(protection.get_protection, settings.registry_root, so, resource, canonical)
+        fga_deps.require_not_protected(record or {}, kind=resource, obj_id=canonical, force=False)
+
+
 @router.post("/{id}/drop", response_model_exclude_none=True)
 async def drop_namespace(
     id: str,
@@ -144,9 +161,10 @@ async def drop_namespace(
     """Drop namespace ``id`` (``drop_namespace``); revoke its FGA tuples — and, for a Cascade drop, every
     dropped child's — so a reused id can't inherit stale grants.
 
-    Deletion protection (#73): a ``protected`` control-root record refuses 409 unless ``force=true``
-    — and it also stops a CASCADE from a parent taking this namespace with it, because the cascade
-    arrives at this same door. ``force`` turns the protection lock only; the FGA gate ran first."""
+    Deletion protection (#73): a ``protected`` control-root record refuses 409 unless ``force=true``.
+    A CASCADE is checked against the whole SUBTREE before the native call — its children are destroyed
+    inside that one call and never reach this door, so a protected table under a cascaded namespace
+    would otherwise die silently. ``force`` turns the protection lock only; the FGA gate ran first."""
     segments = parse_identifier(id, settings.delimiter)
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "namespace", canonical)
@@ -161,11 +179,20 @@ async def drop_namespace(
     # non-empty namespace, so there are never extra tuples to revoke on that path.
     cascade = (req.behavior or "").lower() == "cascade"
     descendants: list[tuple[str, list[str]]] = []
-    if cascade and settings.fga_enabled and client is not None:
+    # Enumerated whenever a CASCADE is asked for — not only when FGA is on, as it used to be. A cascade
+    # destroys children INSIDE the single native call, so they never re-enter this door: without this
+    # list, a protected table under a cascade-dropped namespace died silently while the docstring
+    # claimed protection covered it. The tuple-revoke below consumes the same list when FGA is on.
+    if cascade:
         descendants = await run_in_threadpool(_collect_descendants, ns, segments)
+        # Protection is a property of the SUBTREE, so it is checked against every id about to die, and
+        # the refusal NAMES the protected descendant — "something in here is protected" is not an
+        # answer anyone can act on. `force` turns this lock exactly as it does at the named rung.
+        await _require_descendants_unprotected(settings, descendants, force=force)
     response: DropNamespaceResponse = await run_in_threadpool(native.call, ns, "drop_namespace", req)
     # The record dies with the object — a reused id must not inherit protection nobody set on it.
-    await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "namespace", canonical)
+    if guard:  # only when one existed — see the table doors
+        await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "namespace", canonical)
     # Revoke AFTER the drop commits (so a failed/restricted drop leaves the still-valid grants in place):
     # the namespace's own tuples, then every cascaded descendant's.
     await fga_deps.revoke_ownership(client, settings, resource="namespace", segments=segments, token=token)
@@ -180,17 +207,6 @@ async def drop_namespace(
         extra={"cascade": cascade, "descendants_revoked": len(descendants)},
     )
     return response
-
-
-class SetProtectionRequest(BaseModel):
-    """The one field this door writes. Setting is idempotent; clearing removes the record."""
-
-    protected: bool
-
-
-class ProtectionResponse(BaseModel):
-    id: str
-    protected: bool
 
 
 @router.post("/{id}/protection", response_model_exclude_none=True)

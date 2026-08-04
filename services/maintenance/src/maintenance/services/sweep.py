@@ -134,7 +134,11 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     # that a reclaimer earns its delete permission by first proving its report runs clean, and this is
     # the reclaimer whose false positive costs a table someone was still inside their window to undrop.
     try:
-        due = trash.expired(trash.list_all(settings.resolved_policy_root, options))
+        # The CONTROL root, not the policy root: the catalog writes `_trash/` under its registry root
+        # (LANCE_CONTROL_ROOT). These default to the same bucket, so the mismatch was invisible — and
+        # would have stayed invisible, because list_all uses allow_not_found=True and this whole block
+        # is except-wrapped: a wrong root reports zero due records forever rather than failing.
+        due = trash.expired(trash.list_all(settings.resolved_control_root, options))
         if due:
             log.info(
                 "trash_expiry_due_report_only",

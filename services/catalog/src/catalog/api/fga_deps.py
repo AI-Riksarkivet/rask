@@ -68,7 +68,10 @@ _FGA_TYPE: dict[str, str] = {
 # ``blobs`` (GET /v1/table/{id}/blobs — the credential-less blob serving path) returns raw payload
 # bytes, so it is a DATA read exactly like ``query``.
 _DATA_READ_ACTIONS = frozenset({"query", "count_rows", "credentials", "blobs"})
-_META_READ_ACTIONS = frozenset({"describe", "exists", "list", "stats", "explain_plan", "analyze_plan", "version"})
+# `tasks` (#75) reports what is SCHEDULED against this object — a pending undrop deadline today.
+# Reader tier: it discloses no data and no principals, and an owner must be able to see the
+# deadline they are racing. Unmapped it would fall to WRITER, which is how the live audit found it.
+_META_READ_ACTIONS = frozenset({"describe", "exists", "list", "stats", "explain_plan", "analyze_plan", "version", "tasks"})
 
 # Full route suffixes that create a NEW child -> authorize the parent (create-on-parent).
 _CREATE_ON_PARENT_SUFFIXES: dict[str, frozenset[str]] = {

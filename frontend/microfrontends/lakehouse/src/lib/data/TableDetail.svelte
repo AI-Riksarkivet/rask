@@ -8,7 +8,9 @@
 	import { AlertDialog } from '@rask/ui/alert-dialog';
 	import { GrantsPanel, type GrantsClient } from '@rask/ui/grants-panel';
 	import { Select } from '@rask/ui/select';
-	import { Database, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
+	import { Database, RefreshCw, ShieldAlert, Trash2, Undo2 } from '@lucide/svelte';
+	import { Button } from '@rask/ui/button';
+	import { subjectDisplay } from '@rask/ui/grants-panel';
 	import { tableFromJSON, tableToIPC } from 'apache-arrow';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
@@ -47,13 +49,16 @@
 		dropTable,
 		dropTableIndex,
 		fetchTableDetail,
+		fetchTableTasks,
 		previewMaintenance,
 		renameColumn,
 		renameTable,
 		retypeColumn,
 		runMaintenance,
 		setTablePolicy,
+		undropTable,
 		updateRows,
+		type TrashEntry,
 	} from './remote/catalog.remote';
 	import DetailTabs from './DetailTabs.svelte';
 	import { fmtBytes, fmtEpoch } from './history';
@@ -337,6 +342,44 @@
 
 	const unauthorized = $derived(detail === null && lastStatus === 401);
 	const notInCatalog = $derived(detail === null && lastStatus === 404);
+
+	// #75 recovery. Only asked for on a 404 — the one state where a dropped table's owner lands — so
+	// a live table never pays a round-trip for a question that cannot apply to it.
+	let recoverable = $state<TrashEntry | null>(null);
+	let recovering = $state(false);
+	let recoverError = $state<string | null>(null);
+
+	$effect(() => {
+		if (!notInCatalog) {
+			recoverable = null;
+			recoverError = null; // a failed undrop must not follow the user to the NEXT table's 404
+			return;
+		}
+		const current = table;
+		void fetchTableTasks(current).then((res) => {
+			if (table !== current) return; // latest-wins across navigation
+			recoverable = res.ok ? (res.data[0] ?? null) : null;
+		});
+	});
+
+	async function recover(): Promise<void> {
+		if (recovering) return;
+		recovering = true;
+		recoverError = null;
+		try {
+			const res = await undropTable(table);
+			if (res.ok) {
+				recoverable = null;
+				await load();
+				return;
+			}
+			// VERBATIM, like every other refusal in this estate — the catalog names the reason (an
+			// expired grace period reads differently from a permission denial, and both matter here).
+			recoverError = res.detail;
+		} finally {
+			recovering = false;
+		}
+	}
 	const denied = $derived(detail === null && lastStatus === 403);
 	const offline = $derived(detail === null && ![0, 200, 401, 403, 404].includes(lastStatus));
 
@@ -830,12 +873,37 @@
 			</p>
 		</div>
 	{:else if notInCatalog}
-		<div class="empty">
-			<p>
-				Not a catalog-registered table — storage-managed datasets (medallion zones) have no catalog
-				detail. Its lineage is on the <a href="/lakehouse/lineage" data-sveltekit-reload>explorer</a>.
-			</p>
-		</div>
+		<!-- #75: a 404 here is exactly where someone lands right after dropping a table, so this is
+		     where recovery belongs. `recoverable` is the catalog's own trash record — if one exists the
+		     bytes are still there and the deadline is real; if not, the drop was destructive and the
+		     honest answer is the plain not-registered copy below. -->
+		{#if recoverable}
+			<div class="recover">
+				<h2>This table was dropped — and is still recoverable</h2>
+				<p>
+					Its bytes were never deleted. Recovering re-registers them at
+					<code class="mono">{recoverable.location}</code>.
+				</p>
+				<p class="mut">
+					Dropped by <span class="mono">{subjectDisplay(recoverable.dropped_by).label}</span>
+					on {recoverable.dropped_at.slice(0, 10)} · recoverable until
+					<strong>{recoverable.expires_at.slice(0, 10)}</strong>, after which the maintenance sweep
+					reports it for reclamation.
+				</p>
+				{#if recoverError}<p class="problem" data-testid="undrop-problem">{recoverError}</p>{/if}
+				<Button size="sm" disabled={recovering} onclick={recover}>
+					<Undo2 size={14} />
+					{recovering ? 'Recovering…' : 'Undrop this table'}
+				</Button>
+			</div>
+		{:else}
+			<div class="empty">
+				<p>
+					Not a catalog-registered table — storage-managed datasets (medallion zones) have no catalog
+					detail. Its lineage is on the <a href="/lakehouse/lineage" data-sveltekit-reload>explorer</a>.
+				</p>
+			</div>
+		{/if}
 	{:else if denied}
 		<div class="empty">
 			<ShieldAlert size={16} />
@@ -1458,6 +1526,25 @@
 </AlertDialog.Root>
 
 <style>
+	.recover {
+		border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+		background: color-mix(in srgb, var(--warn) 7%, transparent);
+		border-radius: var(--radius-sm);
+		padding: 16px 18px;
+		margin: 24px 0;
+	}
+	.recover h2 {
+		margin: 0 0 8px;
+		font-size: 15px;
+	}
+	.recover p {
+		margin: 0 0 8px;
+		font-size: 13px;
+	}
+	.recover .problem {
+		color: var(--fail);
+	}
+
 	.page {
 		max-width: 860px;
 		margin: 0 auto;

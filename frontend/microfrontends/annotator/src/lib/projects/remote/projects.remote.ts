@@ -6,6 +6,7 @@ import {
 	MemberListSchema,
 	ProjectDetailSchema,
 	ProjectListSchema,
+	SendItemSchema,
 	ProjectSchema,
 	TaskListingSchema,
 	type MemberList,
@@ -185,18 +186,6 @@ const CreateProjectSchema = v.object({
 });
 
 /** One item sent into a labeling task: where it comes from, and how it is displayed. */
-const SendItemSchema = v.object({
-	source: v.object({
-		kind: v.string(),
-		keys: v.array(v.string()),
-		where: v.optional(v.nullable(v.string())),
-	}),
-	media: v.object({
-		kind: v.string(),
-		image_url: v.optional(v.nullable(v.string())),
-		media_url: v.optional(v.nullable(v.string())),
-	}),
-});
 
 // ── reads ──────────────────────────────────────────────────────────────────────────────────────
 

@@ -33,7 +33,6 @@ from lance_namespace import (
     TableExistsRequest,
     TableNotFoundError,
 )
-from pydantic import BaseModel
 
 from catalog.api import fga_deps, lineage_deps
 from catalog.api.dependencies import (
@@ -58,6 +57,7 @@ from catalog.core.lineage_emit import (
     InputPin,
     emit_write_event,
 )
+from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import dataplane, native
 from service_kit.governed import fga
 from service_kit.lakehouse import protection, trash
@@ -312,7 +312,8 @@ async def drop_table(
         response = DropTableResponse()
     # The record's job ends with the object: clear it so a LATER table reusing this id does not
     # inherit a protection nobody set on it (the same reuse rule as the FGA revoke below).
-    await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", canonical)
+    if guard:  # only when one existed — a clear on nothing is a guaranteed-wasted S3 DELETE per drop
+        await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     # Record the drop as best-effort lineage — provenance of the deletion (the dataset node persists in the
     # graph, named a `drop_table` run). Inline-awaited (NOT BackgroundTasks) → reaches the durable
     # Dapr/JetStream transport before the response; best-effort, so it never fails the drop. Emitted BEFORE
@@ -327,8 +328,13 @@ async def drop_table(
         operation=DROP_TABLE,
         authorization=authorization,
     )
-    # Revoke the table's FGA tuples so a later table reusing this id can't inherit stale grants.
-    await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments, token=token)
+    # Revoke the table's FGA tuples so a later table reusing this id can't inherit stale grants — but
+    # ONLY on a destructive drop. A RECOVERABLE drop (#75) leaves an object that still exists and whose
+    # owner is the one person who needs to undrop it; revoking here made undrop unreachable for exactly
+    # that caller (found by driving the deployed catalog, not by a unit test — the unit tests run FGA
+    # off). The grants die with the bytes instead: at purge, or when the sweep's expiry reclaims it.
+    if not trashed:
+        await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments, token=token)
     await emit_control(
         control,
         action="table_dropped",
@@ -363,7 +369,8 @@ async def deregister_table(
     guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
     response: DeregisterTableResponse = await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
-    await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", canonical)
+    if guard:  # only when one existed — a clear on nothing is a guaranteed-wasted S3 DELETE per drop
+        await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     # Record the detach as best-effort lineage — asymmetric with drop (which deletes data), deregister
     # only detaches, so without this marker the Dataset node looks like a still-live, never-touched table.
     # Versionless (no data was written), inline-awaited so it reaches the durable transport before the
@@ -435,27 +442,6 @@ async def register_table(
     return response
 
 
-class SetProtectionRequest(BaseModel):
-    """The one field this door writes. Setting it is idempotent; clearing removes the record."""
-
-    protected: bool
-
-
-class ProtectionResponse(BaseModel):
-    id: str
-    protected: bool
-
-
-class TrashEntry(BaseModel):
-    """One recoverable drop — what the owner needs to decide whether to undrop before the deadline."""
-
-    id: str
-    location: str
-    dropped_by: str
-    dropped_at: str
-    expires_at: str
-
-
 @router.get("/{id}/tasks", response_model_exclude_none=True)
 async def table_tasks(
     id: str,
@@ -494,7 +480,13 @@ async def undrop_table(
     record = await run_in_threadpool(trash.get, settings.registry_root, so, canonical)
     if record is None:
         raise TableNotFoundError(f"no recoverable drop for table: {canonical}. The grace period may have expired, or the drop purged its bytes.")
-    body = RegisterTableRequest(id=segments, location=str(record["location"]))
+    # `register_table` REFUSES an absolute URI ("Location must be a relative path within the root
+    # directory") — found by driving the deployed catalog, where undrop 400'd on the very location
+    # `describe_table` had just reported. The `dir` backend lays table directories out FLAT under the
+    # connection root (`<uuid>_<table_id>`), so the relative form is the final path segment; the
+    # absolute URI stays on the record because that is what an operator reading the trash needs.
+    location = str(record["location"])
+    body = RegisterTableRequest(id=segments, location=location.rstrip("/").rsplit("/", 1)[-1])
     response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
     # Clear only AFTER the re-register commits — a failed register must leave the table recoverable.
     await run_in_threadpool(trash.clear, settings.registry_root, so, canonical)

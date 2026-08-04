@@ -14,12 +14,16 @@
 		view,
 		doc,
 		onopen,
+		onselect,
 		onback,
 	}: {
 		view: DatasetView;
 		doc: Document;
 		/** Open these key-paths (`doc/speech/chunk`) in the annotate canvas. */
 		onopen: (keys: string[]) => void;
+		/** Offer these keys for a BULK send rather than opening them. Optional: a surface that only
+		 *  views (the canvas hand-off) passes nothing and the control is absent. */
+		onselect?: ((keys: string[]) => void) | undefined;
 		onback: () => void;
 	} = $props();
 
@@ -63,6 +67,19 @@
 			>
 				<ListChecks class="size-4" /> Review all {chunks.length} chunks
 			</Button>
+			<!-- SELECT rather than open. The same keys, offered to the bulk-send bar instead of the
+			     canvas — "review all" is one person reading; this is queueing them for a team. -->
+			{#if onselect}
+				<Button
+					variant="outline"
+					size="sm"
+					class="shrink-0"
+					data-testid="select-all-for-send"
+					onclick={() => onselect?.(chunks!.map(keyOf))}
+				>
+					Select for sending
+				</Button>
+			{/if}
 		{/if}
 	</div>
 

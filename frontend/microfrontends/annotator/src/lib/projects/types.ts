@@ -230,10 +230,31 @@ export type TaskListing = v.InferOutput<typeof TaskListingSchema>;
 
 /** One item sent into a labeling task: where it comes from (chunk keys / a scope) and how it is
  *  displayed. The send command validates the same shape at the wire boundary. */
-export type SendItem = {
-	source: { kind: string; keys: string[]; where?: string | null };
-	media: { kind: string; image_url?: string | null; media_url?: string | null };
-};
+/** One item sent into a labeling task.
+ *
+ *  The SCHEMA lives here rather than beside the command, because a `.remote.ts` may export only
+ *  remote functions — so a schema declared there is untestable, and this one has a field that was
+ *  silently missing for exactly that reason. */
+export const SendItemSchema = v.object({
+	source: v.object({
+		kind: v.string(),
+		keys: v.array(v.string()),
+		where: v.optional(v.nullable(v.string())),
+		/** WHICH VERSION of the dataset the item was taken from.
+		 *
+		 *  Declared because valibot's `v.object` STRIPS unknown keys: without this line the field is
+		 *  dropped at the wire boundary and `publish.py` records `None` for every item sent from this
+		 *  zone — while the explorer, whose own schema declares it, records the real version. Two
+		 *  senders, one contract, and only one of them was honouring it. */
+		dataset_version: v.optional(v.nullable(v.number())),
+	}),
+	media: v.object({
+		kind: v.string(),
+		image_url: v.optional(v.nullable(v.string())),
+		media_url: v.optional(v.nullable(v.string())),
+	}),
+});
+export type SendItem = v.InferOutput<typeof SendItemSchema>;
 
 export const DraftSchema = v.object({
 	task_id: v.string(),

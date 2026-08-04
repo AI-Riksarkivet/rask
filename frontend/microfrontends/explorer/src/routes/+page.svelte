@@ -1231,7 +1231,6 @@
 	bind:open={sendOpen}
 	keys={sendKeys}
 	dataset={ds.id}
-	datasetVersion={ds.descriptor.tables[ds.descriptor.declared.search?.row_table ?? '']?.version ??
-	null}
+	datasetVersion={ds.rowTableVersion}
 	origin={sendOrigin}
 />

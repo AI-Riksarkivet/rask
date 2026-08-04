@@ -43,6 +43,11 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	await seed(page, {
 		'GET /v1/me': ME_ADMIN,
 		'GET /v1/projects': [],
+		// The project registry is the FIRST rung the dialog climbs (ca0c059): a warehouse create no
+		// longer mints its parent, so every one of these flows now POSTs the project before the
+		// warehouse. Seeded here rather than per-test — it is a precondition of the flow, not a
+		// variable of it; the tests that exercise a FAILING create override the step they mean to fail.
+		'POST /v1/projects': { project: 'acme', warehouses: [], admins: [] },
 		// The FGA write door answers OK by default — the real catalog echoes the tuple it wrote, and a
 		// static stand-in only has to PARSE (the wire body that matters is read back from the ledger,
 		// not from this). Left unseeded it 404s, and the flow then honestly reports a partial outcome

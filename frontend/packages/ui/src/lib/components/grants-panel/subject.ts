@@ -17,9 +17,11 @@ export type SubjectDisplay = {
 	title: string;
 };
 
-/** Ellipsize the middle of one opaque token: `CiQwOGE4Njg0…bG9jYWw`. */
+/** Ellipsize the middle of one opaque token: `CiQwOGE4Njg0…bG9jYWw`. Callers gate on OPAQUE_RE
+ *  first, which already requires ≥25 characters — a second length threshold here would only be a
+ *  number a reader has to reconcile with the regex. */
 function shorten(token: string): string {
-	return token.length <= 24 ? token : `${token.slice(0, 12)}…${token.slice(-7)}`;
+	return `${token.slice(0, 12)}…${token.slice(-7)}`;
 }
 
 /** Display form of one FGA subject. `user:<opaque-sub>` keeps its type prefix; a bare opaque
