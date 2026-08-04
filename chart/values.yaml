@@ -185,8 +185,18 @@ services:
 # Image registry/tag shared by every fleet + migration container, PLUS the per-image lance-ns block so
 # Tilt can inject each built image independently (image_keys → image.catalog.repository/tag).
 image:
-  repository: ""          # empty => bare "<component>" name (e.g. gateway)
+  # A REGISTRY, e.g. ghcr.io/<org>/<repo> or localhost:5000. Required — see `rask.image` in
+  # _helpers.tpl for why an empty default was actively harmful: it rendered a BARE `gateway:dev`,
+  # which is `docker.io/library/gateway:dev`, and only ever worked because `make k3s-import` had
+  # side-loaded the tag into the node. A GitOps reconciler has no such side channel.
+  repository: ""
   tag: "dev"
+  # Set to pin the deployed artifact by content rather than by a mutable tag. WINS over `tag`.
+  # This is what an image-automation controller (Argo Image Updater, Flux) writes back into git.
+  digest: ""
+  # Opt-in for side-loaded images (`make k3s-build` + `k3s-import`, `kind load`): renders a bare
+  # `<component>:<tag>` that the node must ALREADY hold. Never set this for a remote cluster.
+  localImages: false
   pullPolicy: IfNotPresent
   # The lakehouse image: catalog (catalog.main:app) + lineage (lineage.main:app) + the medallion
   # movers + compaction + the media services all run from this one image, different entrypoint.

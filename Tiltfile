@@ -378,6 +378,11 @@ k8s_yaml(local(
     + [
         # Without this the synced files land in the pod and uvicorn never re-reads them —
         # live_update looks like it works and changes nothing.
+        # Tilt REPLACES every image ref it manages (image_keys), but the chart still has to RENDER
+        # first — and `rask.image` now refuses a bare name unless this is set. The images Tilt builds
+        # are pushed to the local registry and injected by tag, so from the chart's point of view
+        # this is the side-loaded case.
+        '--set', 'image.localImages=true',
         '--set', 'dev.reload=true',
         # The media trio defaults OFF in the chart, so the annotator/viewer/search had no pods at
         # all under Tilt. They are the services most worth iterating on, so turn them on here.

@@ -68,6 +68,9 @@ def _render(*set_values: str) -> str:
     if not Path(helm).exists():
         pytest.skip("helm not available")
     argv = [helm, "template", "rask", str(CHART)]
+    # Side-loaded images: see `rask.image` in _helpers.tpl — the chart refuses a bare
+    # `<component>:<tag>` unless this is set, because that is docker.io and not a local image.
+    argv += ["--set", "image.localImages=true"]
     for value in set_values:
         argv += ["--set", value]
     proc = subprocess.run(argv, capture_output=True, text=True, timeout=300)

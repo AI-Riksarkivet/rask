@@ -243,6 +243,9 @@ def _helm_template(*set_values: str) -> str:
     if not Path(helm).exists():
         pytest.skip("helm not available")
     argv = [helm, "template", str(CHART)]
+    # Side-loaded images: see `rask.image` in _helpers.tpl — the chart refuses a bare
+    # `<component>:<tag>` unless this is set, because that is docker.io and not a local image.
+    argv += ["--set", "image.localImages=true"]
     for value in set_values:
         argv += ["--set", value]
     return subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
@@ -692,6 +695,9 @@ def _helm_notes(*set_values: str) -> str:
             + 'data:\n  notes: {{ include "notes.body" . | quote }}\n'
         )
         argv = [helm, "template", "rask", str(probe)]
+        # Side-loaded images: see `rask.image` in _helpers.tpl — the chart refuses a bare
+        # `<component>:<tag>` unless this is set, because that is docker.io and not a local image.
+        argv += ["--set", "image.localImages=true"]
         for value in set_values:
             argv += ["--set", value]
         out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603

@@ -405,6 +405,7 @@ k3s-up: k3s-deps ## Vendor deps, then install/upgrade the rask release and wait 
 	if [ -z "$$HF_TOKEN" ]; then echo "WARN: no HF token (env, .env, or 'hf auth login') — htrflow Serve will 401 on the gated TrOCR model"; fi; \
 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m \
 	  --take-ownership \
+	  --set image.localImages=true \
 	  $${HF_TOKEN:+--set-string secrets.hfToken=$$HF_TOKEN} \
 	  $${AWS_ACCESS_KEY_ID:+--set-string rustfs.accessKey=$$AWS_ACCESS_KEY_ID} \
 	  $${AWS_SECRET_ACCESS_KEY:+--set-string rustfs.secretKey=$$AWS_SECRET_ACCESS_KEY}

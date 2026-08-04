@@ -29,7 +29,7 @@ spec:
       serviceAccountName: {{ include "rask.fullname" . }}-controlplane
       containers:
         - name: controlplane
-          image: "{{ .Values.image.repository }}{{ if .Values.image.repository }}/{{ end }}controlplane:{{ .Values.image.tag }}"
+          image: {{ include "rask.image" (list . "controlplane") | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["uvicorn"]
           args:

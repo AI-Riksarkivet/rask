@@ -819,3 +819,46 @@ on its make_service_app factory).
 {{- end }}
 {{- end }}
 {{- end -}}
+
+{{/*
+A FULLY-RESOLVED image reference for a first-party component. Call:
+  include "rask.image" (list $root "gateway")
+
+GITOPS IS THE FIRST-CLASS CONSUMER of this chart, and that decides the two rules below.
+
+1. `image.repository` is REQUIRED. It used to default to "", which rendered a BARE `gateway:dev` —
+   and a bare name is not a local image, it is `docker.io/library/gateway:dev`. That only ever
+   appeared to work because `make k3s-import` had side-loaded the tag into the node's containerd,
+   so the kubelet never had to pull. A reconciler has no such side channel: every pod
+   ImagePullBackOffs, and the error blames Docker Hub rather than the missing setting. Measured
+   here 2026-08-04, on `controlplane:dev` and `compute:dev`, after a `helm upgrade` reset every
+   Deployment to that default.
+
+   Side-loaded images are still supported — but as an EXPLICIT opt-in (`image.localImages: true`),
+   never as the fallback you reach by forgetting.
+
+2. `image.digest` wins over `image.tag` when set. A tag is a mutable pointer; GitOps wants the
+   deployed artifact to be exactly what the commit says, and a digest is the only reference that
+   cannot drift under it. Setting both is not an error — the digest simply wins, so an automation
+   can keep writing a human-readable tag alongside it.
+*/}}
+{{- define "rask.image" -}}
+{{- $root := index . 0 -}}{{- $name := index . 1 -}}
+{{- /* Optional 3rd element: an explicit tag that beats image.tag — the per-zone `tag` on a
+       frontend.apps entry, which is the only thing a zone boundary actually buys (independent
+       deploy). A digest still wins over it, so a pinned reconciler is never overridden by a tag. */ -}}
+{{- $override := "" -}}{{- if gt (len .) 2 -}}{{- $override = index . 2 -}}{{- end -}}
+{{- $i := $root.Values.image -}}
+{{- $digest := $i.digest | default "" -}}
+{{- if $i.localImages -}}
+{{- /* Side-loaded: a bare name the kubelet must already hold. Never valid for a remote cluster. */ -}}
+{{- printf "%s:%s" $name (required "image.tag must be set" ($override | default $i.tag)) -}}
+{{- else -}}
+{{- $repo := required "image.repository must be set to a registry (e.g. ghcr.io/<org>/<repo>) — or set image.localImages=true if the images are side-loaded into the node (make k3s-import). A bare name resolves to Docker Hub and will ImagePullBackOff." $i.repository -}}
+{{- if $digest -}}
+{{- printf "%s/%s@%s" $repo $name $digest -}}
+{{- else -}}
+{{- printf "%s/%s:%s" $repo $name (required "image.tag must be set (a release tag in prod; `dev` locally), or set image.digest" ($override | default $i.tag)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

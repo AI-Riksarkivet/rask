@@ -146,7 +146,7 @@ spec:
         {{- toYaml $fe.podSecurityContext | nindent 8 }}
       containers:
         - name: {{ .name }}
-          image: "{{ $root.Values.image.repository }}{{ if $root.Values.image.repository }}/{{ end }}web-{{ .name }}:{{ required "frontend.image.tag must be set (a release tag in prod; `dev` locally), or a per-zone `tag` on the frontend.apps entry" $tag }}"
+          image: {{ include "rask.image" (list $root (printf "web-%s" .name) $tag) | quote }}
           imagePullPolicy: {{ $fe.image.pullPolicy | default $root.Values.image.pullPolicy }}
           {{- /* dev.reload: make the zone server RESTART ITSELF after a live_update.
 

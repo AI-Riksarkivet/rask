@@ -67,7 +67,7 @@ spec:
       {{- end }}
       containers:
         - name: {{ $name }}
-          image: "{{ $root.Values.image.repository }}{{ if $root.Values.image.repository }}/{{ end }}{{ $name }}:{{ $root.Values.image.tag }}"
+          image: {{ include "rask.image" (list $root $name) | quote }}
           imagePullPolicy: {{ $root.Values.image.pullPolicy }}
           command: ["uvicorn"]
           args:

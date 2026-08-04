@@ -31,10 +31,14 @@ spec:
   policies:
     retries:
       pubsubDeliveryRetry:
+        # ONLY the fields the Resiliency CRD actually declares: policy, duration, matching,
+        # maxInterval, maxRetries. `initialInterval`, `multiplier` and `randomizationFactor` were
+        # sent for months and REJECTED every time — `strict decoding error: unknown field` — so this
+        # CR never applied and the retry it describes never existed. `helm upgrade` swallowed it as
+        # a warning; a GitOps reconciler parks the whole Application OutOfSync on it. `duration` is
+        # the CRD's name for the first backoff step.
         policy: exponential
-        initialInterval: 30s
-        multiplier: 2
-        randomizationFactor: 0
+        duration: 30s
         maxInterval: 300s
         maxRetries: 4
   targets:
