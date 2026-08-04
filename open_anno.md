@@ -20,6 +20,23 @@ Two things remain. ONE is a decision, not a build; the other is the owner's to d
 
 ---
 
+## #45 — Table-level selection — **LANDED**
+
+`search.row_table` was ONE fixed table, so a corpus exposed one searchable table however many it
+held. Now `Declared.searches` is a named list mirroring `atlas`, `?table=` selects one, and the
+picker has a second level. Legacy `search: {...}` still loads and is still served, so no descriptor
+on disk changed.
+
+The half that would have been silent: the picker relabelled and re-gated the sidebar while
+`/api/search` still went to the default table — the client appended `?dataset=` everywhere and
+`table` nowhere. `table` now travels as a module-level selection beside the active view, the same
+route `dataset` already takes.
+
+The Atlas nav gate is table-sensitive (spaces are bound to a table); Tree and Graph are not
+(`capabilities` is per corpus). That asymmetry is a property of the descriptor, recorded in `nav.ts`.
+
+---
+
 ## #28 — Multi-dataset search — **BLOCKED on a ranking decision**
 
 The rest of #28 landed: the dataset **picker** (`dataset-picker.svelte` + the pure
@@ -48,8 +65,9 @@ nothing. The alternatives are materially different products:
 - **True fused ranking** — requires a comparable score (reciprocal-rank fusion is the usual answer)
   and is the only option that needs the full per-hit-view refactor.
 
-**Grouped** is the cheapest by a wide margin and the only one that avoids claiming something false.
-Pick before anyone builds the other two.
+**DECIDED by the owner: true fused ranking (RRF).** The most defensible single list, and the most
+work — it needs the full per-hit `DatasetView` refactor, which is the same refactor #43's second half
+needs (media kind and pane capabilities are resolved per DATASET, not per ROW). Do them together.
 
 ---
 
