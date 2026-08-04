@@ -17,6 +17,7 @@ import { apiUrl } from './base';
 import {
 	activeTable,
 	activeView,
+	fanoutCorpora,
 	AlignmentSchema,
 	type Alignment,
 	type DatasetView,
@@ -26,7 +27,7 @@ import {
 } from './descriptor';
 
 export type { Alignment, Row, SearchMode } from './descriptor';
-export { activeView, registerView, viewForHit } from './descriptor';
+export { activeView, registerView, setFanoutCorpora, viewForHit } from './descriptor';
 export { apiUrl, setApiBase } from './base';
 
 /** Legacy alias — a search/browse result row. Field access goes through the
@@ -241,6 +242,10 @@ function appendCommonSearchParams(
 	// set from the URL. Both halves of one selection therefore travel by the same route.
 	const tbl = spec.table ?? activeTable();
 	if (tbl) out.append('table', tbl);
+	// REPEATED, one per corpus — the service reads `?corpus=a&corpus=b` and fuses by rank. Appending
+	// them here rather than at a call site keeps all three parts of one selection (dataset, table,
+	// fan-out) travelling together; the one that travels alone is the one that gets forgotten.
+	for (const id of fanoutCorpora()) out.append('corpus', id);
 }
 
 /** Run a search. POST + multipart when an image is attached; GET otherwise. The RESPONSE is Arrow IPC

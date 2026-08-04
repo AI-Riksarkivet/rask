@@ -15,8 +15,10 @@ import { describe, expect, it } from 'vitest';
 import {
 	datasetChoices,
 	datasetHref,
+	fanoutCorpora,
 	tableChoices,
 	tableHref,
+	toggleCorpusHref,
 	type DatasetSummaryLike,
 } from './dataset-choice';
 
@@ -201,5 +203,54 @@ describe('switching CORPUS clears the table', () => {
 		expect(
 			datasetHref(at('/explorer/?dataset=a&table=lines'), { id: 'demo', isDefault: true }),
 		).toBe('/explorer/');
+	});
+});
+
+describe('the fan-out corpora', () => {
+	const at = (path: string) => new URL(`http://x${path}`);
+
+	it('reads every ?corpus= value', () => {
+		expect(fanoutCorpora(at('/explorer/?corpus=a&corpus=b'))).toEqual(['a', 'b']);
+	});
+
+	it('de-duplicates, because the service does', () => {
+		// A picker showing a corpus selected twice would describe a request the server never makes.
+		expect(fanoutCorpora(at('/explorer/?corpus=a&corpus=a'))).toEqual(['a']);
+	});
+
+	it('is empty when nothing is fanned out', () => {
+		expect(fanoutCorpora(at('/explorer/'))).toEqual([]);
+	});
+
+	it('TOGGLES a corpus on and back off', () => {
+		// Cumulative by nature: you add a second corpus to the one you are reading, then a third.
+		const on = toggleCorpusHref(at('/explorer/'), 'b', 'a');
+		expect(new URL(`http://x${on}`).searchParams.getAll('corpus')).toEqual(['b']);
+
+		const off = toggleCorpusHref(at(on), 'b', 'a');
+		expect(new URL(`http://x${off}`).searchParams.getAll('corpus')).toEqual([]);
+	});
+
+	it('ADDS to an existing selection rather than replacing it', () => {
+		const href = toggleCorpusHref(at('/explorer/?corpus=b'), 'c', 'a');
+
+		expect(new URL(`http://x${href}`).searchParams.getAll('corpus')).toEqual(['b', 'c']);
+	});
+
+	it('never lists the ACTIVE corpus as a fan-out entry', () => {
+		// It is already being searched. Listing it doubles its rank contribution the moment the
+		// service de-duplicates one and not the other.
+		const href = toggleCorpusHref(at('/explorer/?corpus=a'), 'b', 'a');
+
+		expect(new URL(`http://x${href}`).searchParams.getAll('corpus')).toEqual(['b']);
+	});
+
+	it('preserves the query and the dataset', () => {
+		const href = toggleCorpusHref(at('/explorer/?dataset=smoke&q=vasa'), 'b', 'smoke');
+
+		const params = new URL(`http://x${href}`).searchParams;
+		expect(params.get('dataset')).toBe('smoke');
+		expect(params.get('q')).toBe('vasa');
+		expect(params.getAll('corpus')).toEqual(['b']);
 	});
 });

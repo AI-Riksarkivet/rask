@@ -627,6 +627,23 @@ export function activeTable(): string | null {
 	return _activeTable;
 }
 
+/**
+ * Corpora searched ALONGSIDE the active one, fused by reciprocal rank.
+ *
+ * Same module-level shape as `_activeTable`, and for the same reason: `dataset` already reaches the
+ * request layer this way, so a third selection travelling by a different route is the one that gets
+ * forgotten. Set from the URL by the app's descriptor store.
+ */
+let _fanout: string[] = [];
+
+export function setFanoutCorpora(ids: string[]): void {
+	_fanout = [...ids];
+}
+
+export function fanoutCorpora(): string[] {
+	return _fanout;
+}
+
 /** The active dataset view. Throws if the descriptor hasn't loaded yet — call
  *  sites run after the app-root descriptor fetch resolves. */
 export function activeView(): DatasetView {

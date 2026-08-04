@@ -136,3 +136,32 @@ export function tableHref(current: URL, choice: { name: string; isDefault: boole
 	else next.searchParams.set('table', choice.name);
 	return `${next.pathname}${next.search}`;
 }
+
+/** The `?corpus=` values — the corpora searched ALONGSIDE the active one, fused by RRF. */
+export function fanoutCorpora(url: URL): string[] {
+	// De-duplicated, order preserved: the service does the same, and a picker that showed a corpus
+	// selected twice would be describing a request the server never makes.
+	return [...new Set(url.searchParams.getAll('corpus'))];
+}
+
+/**
+ * The URL that adds or removes one corpus from the fan-out.
+ *
+ * A TOGGLE rather than a set-and-replace, because fanning out is cumulative by nature — you add a
+ * second corpus to the one you are already reading, then a third. Replacing would make each click
+ * discard the previous choice, which is the opposite of what the control is for.
+ *
+ * The ACTIVE corpus is never a fan-out entry: it is already being searched, and listing it would
+ * double its rank contribution the moment the service de-duplicated one and not the other.
+ */
+export function toggleCorpusHref(current: URL, id: string, activeId: string | null): string {
+	const next = new URL(current.href);
+	const chosen = new Set(fanoutCorpora(current));
+	if (chosen.has(id)) chosen.delete(id);
+	else chosen.add(id);
+	chosen.delete(activeId ?? '');
+
+	next.searchParams.delete('corpus');
+	for (const c of chosen) next.searchParams.append('corpus', c);
+	return `${next.pathname}${next.search}`;
+}

@@ -19,8 +19,10 @@
 	import {
 		datasetChoices,
 		datasetHref,
+		fanoutCorpora,
 		tableChoices,
 		tableHref,
+		toggleCorpusHref,
 		type DatasetChoice,
 		type SearchTableLike,
 	} from '$lib/dataset-choice';
@@ -47,6 +49,9 @@
 	const showTables = $derived(tables.length > 1);
 	const activeTable = $derived(tables.find((t) => t.active) ?? null);
 
+	/** Corpora searched ALONGSIDE the active one, read straight from the URL. */
+	const fanned = $derived(new Set(fanoutCorpora(url)));
+
 	let choices = $state<DatasetChoice[]>([]);
 	let error = $state('');
 	let loaded = $state(false);
@@ -68,11 +73,15 @@
 
 	/** Corpus, plus the table when the corpus offers more than one — so the trigger always says
 	 *  exactly what is being searched rather than only half of it. */
-	const label = $derived(
-		showTables && activeTable
-			? `${activeId ?? 'dataset'} · ${activeTable.name}`
-			: (activeId ?? 'dataset'),
-	);
+	const label = $derived.by(() => {
+		const base =
+			showTables && activeTable
+				? `${activeId ?? 'dataset'} · ${activeTable.name}`
+				: (activeId ?? 'dataset');
+		// `+2` rather than the names: a trigger that grew with every corpus would push the search bar
+		// around, and the names are one click away in the menu.
+		return fanned.size > 0 ? `${base} +${fanned.size}` : base;
+	});
 </script>
 
 <Popover.Root onOpenChange={(open) => open && void load()}>
@@ -156,6 +165,22 @@
 									: ''}
 							</span>
 						</a>
+						<!-- ALSO SEARCH this corpus, fused by rank with the active one. A separate link
+						     rather than a mode on the row above, because switching to a corpus and adding
+						     it to the search are different intentions and a single control cannot mean
+						     both. Absent on the ACTIVE row: it is already being searched. -->
+						{#if !choice.active}
+							<a
+								href={toggleCorpusHref(url, choice.id, activeId)}
+								data-sveltekit-reload
+								data-testid="corpus-fanout"
+								data-corpus={choice.id}
+								data-on={fanned.has(choice.id)}
+								class="text-muted-foreground hover:text-foreground block px-2 pb-1.5 text-[11px] no-underline"
+							>
+								{fanned.has(choice.id) ? '✓ also searching' : '+ also search'}
+							</a>
+						{/if}
 					</li>
 				{/each}
 			</ul>
