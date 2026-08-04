@@ -17,9 +17,9 @@
 			"note": "embedding-atlas + d3 + elkjs for the atlas/tree/graph surfaces. The HEAVIEST zone to enter — nearly three times the annotator. 2026-08-03: the per-zone WORKBENCH was removed (global-workbench-only decision, see open_workbench.md) — the dock's ~66 KB left the deferred half and its stylesheet left the static half; ceilings unchanged (they were never raised for the dock here)."
 		},
 		"annotator": {
-			"staticGzipKB": 420,
+			"staticGzipKB": 421,
 			"deferredGzipKB": 120,
-			"note": "Pixi ships in the entry graph (a canvas is the whole point of the zone) and is most of the 365 KB. The deferred ceiling was 4200 while the magnetic tool pulled a vendored OpenCV build; #117 replaced its two calls (cvtColor RGBA→GRAY, cornerMinEigenVal) with ~120 lines in @rask/engine/tools/corners.ts, pinned to OpenCV's recorded output, and the deferred half fell 3854 → 46 KB with the entry graph unchanged. On entry cost this is the second-lightest zone, against media's 929. Measured 365 / 46."
+			"note": "Pixi ships in the entry graph (a canvas is the whole point of the zone) and is most of the 365 KB. The deferred ceiling was 4200 while the magnetic tool pulled a vendored OpenCV build; #117 replaced its two calls (cvtColor RGBA→GRAY, cornerMinEigenVal) with ~120 lines in @rask/engine/tools/corners.ts, pinned to OpenCV's recorded output, and the deferred half fell 3854 → 46 KB with the entry graph unchanged. On entry cost this is the second-lightest zone, against media's 929. Measured 365 / 46. 2026-08-04: +1 KB (420 -> 421) for the RELATIONS editor — the link rail in the annotation inspector plus the controller's link state and undo op. Raised to exactly what it measures, with no headroom, so the next KB is a review again."
 		},
 		"compute": {
 			"staticGzipKB": 260,

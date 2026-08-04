@@ -125,6 +125,13 @@ export const saveDraft = command(
 	v.object({
 		taskId: v.string(),
 		shapes: v.array(v.record(v.string(), v.unknown())),
+		/** Typed edges between those shapes. The service drops an unlisted key SILENTLY (`save_draft`
+		 *  builds the model field by field so a caller cannot set `revision`), so a schema that omits
+		 *  this loses every relation without erroring. */
+		links: v.optional(
+			v.array(v.object({ name: v.string(), from_shape: v.string(), to_shape: v.string() })),
+			[],
+		),
 		base_revision: v.optional(v.nullable(v.number())),
 		origin: v.optional(v.string()),
 	}),

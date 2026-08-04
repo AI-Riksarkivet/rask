@@ -110,7 +110,27 @@ interface GeometryEdit {
  *  UNDOABLE ONLY BY RELOADING — which loses the whole session. With several annotators doing
  *  hundreds of shapes a day that is work lost in week one, and it is why an annotator stops
  *  trusting the canvas. One stack, so Ctrl+Z means the same thing whatever the last action was. */
-type UndoOp = FieldEdit | InsertEdit | DeleteEdit | GeometryEdit;
+/** A link drawn or removed. Reversible on the SAME stack as everything else — a relation is work,
+ *  and work that only Ctrl+Z sometimes reaches is work an annotator stops trusting. */
+interface LinkEdit {
+	kind: 'link';
+	link: AnnoLink;
+	/** true = the link was CREATED (so undo removes it); false = it was deleted. */
+	created: boolean;
+}
+
+type UndoOp = FieldEdit | InsertEdit | DeleteEdit | GeometryEdit | LinkEdit;
+
+/** One typed edge between two shapes, addressed by shape ID.
+ *
+ *  IDs, never row indices: the draft is replaced whole on every save and rows shift when one is
+ *  deleted, so an index would silently re-point at a different shape. Mirrors the service's `Link`.
+ */
+export interface AnnoLink {
+	name: string;
+	from_shape: string;
+	to_shape: string;
+}
 
 const STRING_FIELD_CANDIDATES = ['label', 'status', 'source', 'group', 'reviewer'];
 
@@ -339,6 +359,12 @@ export class AnnotatorController {
 		this.magneticSnapped = false;
 		im.onMagneticSnap = (snapped) => (this.magneticSnapped = snapped);
 		im.onSelect = (index) => {
+			// The CANVAS path, and the one that matters for relations: an annotator picks the target
+			// by clicking the shape, not a sidebar row (selecting a row swaps the list out for the
+			// detail pane, so there is no list left to click). This used to assign `selectedIndex`
+			// directly, which walked straight past the link interception in `select()` — the rail
+			// armed, the click landed, and nothing happened.
+			if (index !== null && this._linkPick(index)) return;
 			this.selectedIndex = index;
 			this._mirrorSelection(im.getSelectedSet());
 		};
@@ -437,6 +463,15 @@ export class AnnotatorController {
 
 	// ── selection ──
 	select(index: number | null): void {
+		// While a relation is armed, a click on a shape is an ENDPOINT, not a selection. Letting it
+		// also change the selection would move the sidebar out from under the annotator mid-link.
+		if (index !== null && this._linkPick(index)) return;
+		this._selectRow(index);
+	}
+
+	/** Selection WITHOUT the link interception. Undo/redo must reach this directly: routing an
+	 *  internal reselect through `select()` would feed the undone row into a half-drawn link. */
+	private _selectRow(index: number | null): void {
 		this.multiSelect = false;
 		this.selectedIndex = index;
 		const im = this.ctx?.plugins.interaction;
@@ -466,6 +501,86 @@ export class AnnotatorController {
 			execution: 'interactive',
 			payload: { fields: { status } },
 		});
+	}
+
+	// ── relations ────────────────────────────────────────────────────────────────────────────────
+	//
+	// The ontology could declare a relation and the actor could validate one, but nothing could DRAW
+	// one — so KIE and DocVQA were expressible in config and unproducible in practice, and a task
+	// declaring a REQUIRED relation could not be submitted at all.
+	//
+	// Two clicks, not a drag: a drag between two small boxes on a zoomed canvas is a precision task,
+	// and it collides with the marquee/pan gestures the same pointer already owns.
+
+	/** The links drawn on this unit. Rides the draft beside `shapes`. */
+	links = $state<AnnoLink[]>([]);
+	/** The relation being drawn, or null. Set from the task's ontology by the shell. */
+	linkMode = $state<string | null>(null);
+	/** The first endpoint picked, waiting for its target. */
+	pendingLinkFrom = $state<string | null>(null);
+	/** Relation names this task declares. Empty ⇒ the unit has no relations to draw. */
+	relationNames = $state<string[]>([]);
+
+	/** Arm link-drawing for `name`, or disarm when it is already armed (a toggle, like the tools).
+	 *
+	 *  Arming ADOPTS the annotation currently being inspected as the source. The rail lives in that
+	 *  annotation's inspector, so "link answers" plainly means "link THIS one", and the sidebar
+	 *  replaces the list with the detail on selection — asking for a source click after arming would
+	 *  be both redundant and, from the sidebar, impossible. The next click is the TARGET.
+	 *
+	 *  A canvas armed with nothing selected still works: the first click becomes the source. */
+	toggleLinkMode(name: string): void {
+		const arming = this.linkMode !== name;
+		this.linkMode = arming ? name : null;
+		this.pendingLinkFrom = arming ? (this.selected?.id ?? null) : null;
+	}
+
+	/** Feed a picked row into the pending link. Returns true when the click was CONSUMED, so the
+	 *  caller does not also treat it as an ordinary selection. */
+	private _linkPick(index: number): boolean {
+		if (!this.linkMode) return false;
+		const id = this.rows.find((r) => r.index === index)?.id;
+		if (!id) return false;
+		if (this.pendingLinkFrom === null) {
+			this.pendingLinkFrom = id;
+			return true;
+		}
+		if (this.pendingLinkFrom === id) {
+			// Clicking the source again CANCELS. A self-link is meaningless for every relation this
+			// model can express, and silently ignoring the click would read as a broken canvas.
+			this.pendingLinkFrom = null;
+			return true;
+		}
+		this.addLink({ name: this.linkMode, from_shape: this.pendingLinkFrom, to_shape: id });
+		this.pendingLinkFrom = null;
+		return true;
+	}
+
+	/** Add a link, undoably. A duplicate is a no-op rather than a second identical edge. */
+	addLink(link: AnnoLink): void {
+		const exists = this.links.some(
+			(l) =>
+				l.name === link.name && l.from_shape === link.from_shape && l.to_shape === link.to_shape,
+		);
+		if (exists) return;
+		this.links = [...this.links, link];
+		this._pushUndo({ kind: 'link', link, created: true });
+	}
+
+	/** Remove a link, undoably. */
+	removeLink(link: AnnoLink): void {
+		const before = this.links.length;
+		this.links = this.links.filter(
+			(l) =>
+				!(l.name === link.name && l.from_shape === link.from_shape && l.to_shape === link.to_shape),
+		);
+		if (this.links.length === before) return;
+		this._pushUndo({ kind: 'link', link, created: false });
+	}
+
+	/** The links touching a shape id — what the panel renders beside a selected annotation. */
+	linksFor(id: string): AnnoLink[] {
+		return this.links.filter((l) => l.from_shape === id || l.to_shape === id);
 	}
 
 	deleteSelected(): void {
@@ -857,6 +972,21 @@ export class AnnotatorController {
 			case 'field':
 				this._setField(op.index, op.field, direction === 'undo' ? op.before : op.after);
 				break;
+			case 'link': {
+				// `created XOR undo` — undoing a creation removes, undoing a deletion restores, and
+				// redo is the mirror. One expression rather than four branches that can disagree.
+				const present = op.created !== (direction === 'undo');
+				const gone = this.links.filter(
+					(l) =>
+						!(
+							l.name === op.link.name &&
+							l.from_shape === op.link.from_shape &&
+							l.to_shape === op.link.to_shape
+						),
+				);
+				this.links = present ? [...gone, op.link] : gone;
+				break;
+			}
 			case 'insert': {
 				// A drawn row cannot be removed from an immutable Arrow table, so undo HIDES it (the
 				// same overlay a delete uses) and drops it from the save payload — the row never
@@ -905,7 +1035,8 @@ export class AnnotatorController {
 				break;
 			}
 		}
-		this.select(op.index);
+		// A link op touches no ROW, so there is nothing to reselect for it.
+		if (op.kind !== 'link') this._selectRow(op.index);
 	}
 
 	/** Apply a field value to BOTH the WebGPU canvas (arrow.setFieldOverride →
@@ -982,7 +1113,7 @@ export class AnnotatorController {
 		const taskId = reviewSelection.taskId;
 		if (!taskId || reviewSelection.total !== 1 || !this.table) return;
 		const { syncTaskDraft } = await import('$lib/projects/draft-sync');
-		const detail = await syncTaskDraft(taskId, this.table);
+		const detail = await syncTaskDraft(taskId, this.table, this.links);
 		if (detail !== null) {
 			toast.error(
 				`Saved to the corpus, but the task draft did not update — the publish will not carry these shapes (${detail})`,

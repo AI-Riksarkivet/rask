@@ -31,6 +31,7 @@
 		const id = reviewSelection.taskId;
 		if (!id) {
 			controller.allowedShapeTypes = [];
+			controller.relationNames = [];
 			return;
 		}
 		let alive = true;
@@ -43,11 +44,19 @@
 				// classes it sat next to — and where one false flag voided every declaration a
 				// manager had explicitly written.
 				controller.allowedShapeTypes = result.ok ? ontologyTools(result.data.ontology) : [];
+				// The relations this task DECLARES. Empty means the inspector offers no link rail at
+				// all — a control that can produce nothing reads as broken rather than inapplicable.
+				controller.relationNames = result.ok
+					? (result.data.ontology?.relations ?? []).map((r) => r.name)
+					: [];
 			})
 			.catch(() => {
 				// A failed read must not silently narrow the rail: unconstrained is the honest
 				// fallback, and the 409 still backstops it.
-				if (alive) controller.allowedShapeTypes = [];
+				if (alive) {
+					controller.allowedShapeTypes = [];
+					controller.relationNames = [];
+				}
 			});
 		return () => {
 			alive = false;
