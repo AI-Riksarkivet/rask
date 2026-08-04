@@ -10,7 +10,7 @@
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
 	import type { Me } from '@rask/api';
 	import { fetchMeViaBff } from '$lib/catalog/remote/catalog.remote';
-	import { EXPLORER_ZONE_NAV } from '$lib/nav';
+	import { explorerZoneNav } from '$lib/nav';
 	import { descriptor } from '$lib/descriptor-store.svelte';
 	import StatusBadge from '$lib/components/status-badge.svelte';
 	import type { LayoutData } from './$types';
@@ -43,6 +43,12 @@
 		me = await fetchMeViaBff();
 		meLoading = false;
 	});
+
+	// The sidebar is DERIVED from the active dataset, not a static list: a corpus that declares no
+	// embedding spaces must not be offered an Atlas, and one with no knowledge graph must not be
+	// offered Graph. `$derived` and not an effect, so switching datasets recomputes the rail rather
+	// than leaving the previous corpus's areas on screen.
+	const zoneNav = $derived(explorerZoneNav(descriptor.view));
 
 	// Load the dataset descriptor once before rendering any route — every
 	// renderer reads the active DatasetView, so it must be set first.
@@ -78,7 +84,7 @@
 	pathname={page.url.pathname}
 	user={data.user}
 	authEnabled={data.authEnabled}
-	zoneNav={EXPLORER_ZONE_NAV}
+	{zoneNav}
 	{me}
 	{meLoading}
 	{notifications}
