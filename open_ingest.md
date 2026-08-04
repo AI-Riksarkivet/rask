@@ -3,9 +3,9 @@
 Working plan for `services/ingest`. Root `open_<topic>.md` is a WORKING plan: it is deleted and what
 is still live folds into `OPEN-WORK.md` when the round lands. `docs/` is settled architecture only.
 
-Round 1 shipped 46 commits on `ingest-plane` (not merged). Round 2 exists because an owner audit
-found the write path wrong on two axes and the platform welded to one source. **Nothing here is
-settled — read § D first.**
+Round 1 shipped 46 commits on `ingest-plane` (not merged). Round 2 fixed the write path and the
+source weld; **§ D is now RULED** (owner, 2026-08-04) — see § D2. Round 3 builds the readiness
+contract that ruling defines.
 
 ---
 
@@ -59,8 +59,8 @@ Everything in § A is settled and round 1 satisfies it, except items 4 and 5 whi
 | B5 | **IIIF welded into the generic fetch path.** `fetch.py:48` routed EVERY `http(s)://` key through `storage.iiif.fetch_image`. Worse than it looked: `fetch_image`'s `client` is a REQUIRED keyword-only arg that was never passed, so the http(s) path had **never worked** — only `file://` and `s3://` were ever exercised. | **FIXED** (`5b28fbd`) |
 | B6 | **`ingestIIIFVolume()` in `@rask/api`**, and a compute-zone form hardcoding `kind:'iiif', project:'default', dataset:'pages'` — a source-shaped wrapper on a source-agnostic door. | **FIXED** (`4883175`) — the registry is readable (`GET /api/ingest/sources`, each kind carrying its own option fields) and the form is built from it; adding a source touches no frontend file. |
 | B7 | **Never run against a real source at scale.** Only 4 checked-in TIFFs (local-dir) and the same 4 on S3. `CHUNK_SIZE=1000`, `FETCH_BATCH=16`, `FETCH_CONCURRENCY=8` are guesses. | **OPEN** |
-| B8 | **The cascade moves no data** and fires on table CREATE only — the movers' tier URIs are unset, so `handle_stage` skips its compute path (`transform.py:210`). | **OPEN** |
-| B9 | **The quality gate is not wired into this lane**, and the mover's own gate is POST-commit — bad rows are already in silver and it merely declines to trigger gold. D3 wants pre-commit. | **OPEN** |
+| B8 | **The cascade moves no data** and fires on table CREATE only — the movers' tier URIs are unset, so `handle_stage` skips its compute path (`transform.py:210`). | **UNBLOCKED by D-R3** — the trigger becomes the tag advance carrying `{from, to}`; whole-table granularity was the defect. |
+| B9 | **The quality gate is not wired into this lane**, and the mover's own gate is POST-commit — bad rows are already in silver and it merely declines to trigger gold. | **UNBLOCKED by D-R1** — post-commit / PRE-PUBLISH. Not pre-commit: the version must exist for CDF to diff it. |
 
 ---
 
@@ -79,7 +79,8 @@ own documentation — and was never opened.
 
 ## § D. THE REAL QUESTION — how does a consumer know a write is ready?
 
-**Owner ruling required. This is the design hole; everything else here is plumbing.**
+**RULED 2026-08-04 — see § D2.** The framing below is kept because it records what was wrong and
+why; the answer is D-R1/D-R2/D-R3.
 
 ### The framing that was wrong for several turns
 
@@ -143,15 +144,52 @@ explicit rather than something each consumer bookmarks for itself.
 writer that commits through the catalog gets it for free. The ingest service becomes one client among
 several and holds no special knowledge — which is the whole point.
 
-### § D2 — What needs deciding
+### § D2 — RULED (owner, 2026-08-04)
 
-| | Question |
+The three questions that needed the owner are answered. What Lance can do was never the open part —
+the docs settle that: a tag creates no version, is exempt from `cleanup_old_versions`, readers pin
+with `checkout_version("published")` / `DescribeTable{tag}`, and the catalog already implements all
+five namespace tag operations. What needed ruling was the CONTRACT.
+
+**D-R1 — "Ready" means THE GATE PASSED.** A committed version is not consumable. The writer commits
+version N, the gate reads N, and only then does the pointer advance. A gate FAILURE leaves the
+pointer at N-1, so consumers keep reading the last good version while the bad one sits above it,
+committed and unreferenced. Bad rows never become consumable — which is the property the current
+design cannot express at all, because a commit is instantly visible to every reader.
+
+This also dissolves the "tension" recorded here for several rounds. A pre-commit gate cannot use the
+change-data-feed because there is no version to diff — true, and irrelevant: **the gate runs AFTER
+the commit**, so the version exists and CDF works normally. There was never a dilemma.
+
+**D-R2 — A TAG IS THE TRUTH; AN EVENT IS THE NOTIFICATION.** `published` on the table is the durable
+answer to "what is ready?" — a consumer can ASK, at any time, including after being down for a week.
+The event is only a wake-up so nobody polls. Durable state plus ephemeral notification: an event
+missed while a consumer was down costs nothing, because the tag still answers. Event-only was
+rejected for exactly that reason, and it is a large part of why the cascade misses a table's second
+arrival today.
+
+**D-R3 — THE SIGNAL NAMES A VERSION RANGE**, `{table, from_version, to_version}`. A consumer turns
+that straight into an exact row delta — `_row_created_at_version > from AND <= to` — holding no
+bookmark of its own. This is the direct fix for B8: a whole-table "something changed" cannot express
+*which rows are new*, so every consumer must rescan or invent its own bookmark, and a second arrival
+therefore wakes nothing useful.
+
+**What follows without further rulings**
+
+| | |
 |---|---|
-| **D2a** | Is `published` the mechanism, or something else (a branch, a manifest property, a separate registry)? |
-| **D2b** | Who advances the tag — the catalog itself on commit-plus-gate, or a separate publisher the writer calls? |
-| **D2c** | Does the gate run pre-commit (the version never exists) or post-commit-pre-publish (the version exists but is unpublished)? D3 says a held batch must never become a version, which argues pre-commit; but a pre-commit gate cannot use Lance's CDF to see the delta, because there is no version yet to diff. **This tension is unresolved and is the crux.** |
-| **D2d** | Does this apply to ALL tier transitions (bronze→silver→gold) or only the bronze entry? The estate today orchestrates ingest with Dapr Workflow but runs the movers as plain pub/sub subscriptions — an inconsistency nobody has ruled on. |
-| **D2e** | Is a partition finer than a version ever needed, or is "version range" the smallest unit downstream ever wants? |
+| B9 (the quality gate) | is post-commit / pre-publish. Implementation, not a decision. |
+| B8 (cascade fires on CREATE only) | is the granularity defect. The trigger becomes the tag advance carrying `{from, to}`. |
+| the runner-picking question | silver reads the range the signal names; it no longer needs to infer what is new. |
+
+**Two hazards that come WITH this shape, and must be handled rather than discovered**
+
+1. **Version N is untagged for the gate's duration**, and `cleanup_old_versions` exempts only TAGGED
+   versions. A slow gate plus a short `older_than` collects the very version being gated.
+2. **A tag move has no format-level atomicity.** `_refs/tags/{name}.json` is a plain JSON file and
+   the format spec requires no CAS for updating it — unlike the manifest commit path. The namespace
+   spec's `UpdateTableTag` *does* return `ConcurrentModification`, so the advance must go through the
+   catalog rather than a direct file write.
 
 ### § D3 — Demoted: the executor
 
