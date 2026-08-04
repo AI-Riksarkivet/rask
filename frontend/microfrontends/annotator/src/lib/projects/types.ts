@@ -253,6 +253,24 @@ export const SendItemSchema = v.object({
 		image_url: v.optional(v.nullable(v.string())),
 		media_url: v.optional(v.nullable(v.string())),
 	}),
+	/** PRE-ANNOTATIONS attached at send — the bulk-labeling payload, mirroring the service's
+	 *  `PredictionShape`.
+	 *
+	 *  Declared for the same reason `dataset_version` above is, and it is worth the second telling:
+	 *  valibot's `v.object` STRIPS what it does not declare, in SILENCE. A stripped prediction means
+	 *  a bulk label posts 200, seeds every task, and carries nothing — the send looks like it worked
+	 *  and every queued item is blank.
+	 *
+	 *  Deliberately NO `source`: the server stamps it (`BULK_SOURCE`), and a sender able to write it
+	 *  could stamp `human` on items nobody looked at. */
+	prediction: v.optional(
+		v.array(
+			v.object({
+				shape_type: v.string(),
+				label: v.string(),
+			}),
+		),
+	),
 });
 export type SendItem = v.InferOutput<typeof SendItemSchema>;
 

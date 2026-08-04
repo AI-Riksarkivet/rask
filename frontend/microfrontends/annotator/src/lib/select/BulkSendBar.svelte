@@ -13,7 +13,7 @@
 	import { Select } from '@rask/ui/select';
 
 	import { listProjects, sendItems } from '$lib/projects/remote/projects.remote';
-	import { itemsFromSelection, refuseReason } from './bulk-send';
+	import { bulkLabelChoices, itemsFromSelection, refuseReason } from './bulk-send';
 
 	let {
 		keys,
@@ -39,6 +39,7 @@
 	// `props_invalid_value` at RENDER time. svelte-check passed (its .d.ts says `string | undefined`);
 	// only opening the page caught it, which is why the bar silently never appeared.
 	let projectId = $state('');
+	let label = $state('');
 	let sending = $state(false);
 	let error = $state('');
 	let sent = $state<number | null>(null);
@@ -49,14 +50,39 @@
 
 	/** Tasks that can still RECEIVE items. A published project refuses the send server-side (§5.2:
 	 *  provenance is frozen with the artifact), so offering it would be offering a guaranteed 409. */
-	const options = $derived(
-		(projects?.current?.ok ? projects.current.data.projects : [])
-			.filter((p) => p.state === 'draft' || p.state === 'labeling')
-			.map((p) => ({ value: p.project_id, label: `${p.title ?? p.slug} · ${p.state}` })),
+	const sendable = $derived(
+		(projects?.current?.ok ? projects.current.data.projects : []).filter(
+			(p) => p.state === 'draft' || p.state === 'labeling',
+		),
 	);
 
-	/** The server's rules, asked BEFORE the click: an empty selection, no project, or over the cap. */
-	const refusal = $derived(refuseReason(keys, projectId || null));
+	const options = $derived(
+		sendable.map((p) => ({ value: p.project_id, label: `${p.title ?? p.slug} · ${p.state}` })),
+	);
+
+	/** The chosen project itself — its taxonomy decides which labels may be applied, and its replica
+	 *  count decides how many items fit in one send. */
+	const project = $derived(sendable.find((p) => p.project_id === projectId));
+
+	/** Classes this project's taxonomy allows as a whole-item tag. A project with no taxonomy offers
+	 *  none: an unconstrained project accepts any label, but inventing one HERE would be this surface
+	 *  guessing at a vocabulary rather than reading one. */
+	const labelOptions = $derived(
+		bulkLabelChoices(project?.ontology).map((name) => ({ value: name, label: name })),
+	);
+
+	/** The label that will actually be sent — the picked one only while THIS project's taxonomy still
+	 *  declares it.
+	 *
+	 *  Derived rather than reset in an `$effect`, which would be a second writer to `label` racing
+	 *  the binding. Switching projects otherwise carries the previous project's class across, and the
+	 *  server refuses it — correctly, but only after someone has waited for a 409 naming a class the
+	 *  picker was still displaying. */
+	const chosenLabel = $derived(labelOptions.some((o) => o.value === label) ? label : '');
+
+	/** The server's rules, asked BEFORE the click: an empty selection, no project, or over the cap —
+	 *  the cap being on TASKS, which consensus multiplies. */
+	const refusal = $derived(refuseReason(keys, projectId || null, project?.consensus_n ?? 1));
 
 	async function send(): Promise<void> {
 		if (sending || refusal !== null || !projectId) return;
@@ -65,7 +91,7 @@
 		sent = null;
 		const result = await sendItems({
 			projectId,
-			items: itemsFromSelection(keys, dataset, datasetVersion),
+			items: itemsFromSelection(keys, dataset, datasetVersion, 'image', chosenLabel),
 		});
 		sending = false;
 		if (result.ok) {
@@ -94,14 +120,35 @@
 
 		<Select bind:value={projectId} ariaLabel="Labeling task" placeholder="Send into…" {options} />
 
+		<!-- The bulk LABEL. Only once a project is chosen, because the classes on offer are ITS
+		     taxonomy — an empty picker beside an unchosen project reads as "this project has no
+		     classes" rather than "pick a project first". -->
+		{#if labelOptions.length > 0}
+			<Select
+				bind:value={label}
+				ariaLabel="Label to apply"
+				placeholder="Queue blank (no label)"
+				options={labelOptions}
+			/>
+		{/if}
+
 		<Button
 			size="sm"
 			disabled={sending || refusal !== null}
-			title={refusal ?? 'send the selected items into this labeling task'}
+			title={refusal ??
+				(chosenLabel
+					? `pre-label the selected items as ${chosenLabel} — a person still reviews each one`
+					: 'queue the selected items into this labeling task, unlabelled')}
 			data-testid="bulk-send"
 			onclick={() => void send()}
 		>
-			{sending ? 'Sending…' : 'Send'}
+			{#if sending}
+				Sending…
+			{:else if chosenLabel}
+				Label as {chosenLabel}
+			{:else}
+				Send
+			{/if}
 		</Button>
 
 		<!-- The refusal is SHOWN, not only used to disable the button. A disabled control with no
