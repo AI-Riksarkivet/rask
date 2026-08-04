@@ -762,13 +762,11 @@ injected daprd sidecar or the busybox wait-age initContainer (which legitimately
 securityContext:
   runAsNonRoot: true
   allowPrivilegeEscalation: false
-  {{/* dev.reload implies Tilt's live_update, which SYNCS FILES INTO THE RUNNING CONTAINER —
-       impossible against a read-only rootfs. Measured before this: `touch` inside the pod
-       returned "Read-only file system", so every sync silently no-opped and hot reload could
-       never work no matter how correct the reload flags were. Relaxed ONLY when dev.reload is
-       set (dev-only, never production), so the hardened default is untouched for real deploys
-       and tests/unit/test_invariants.py still sees readOnlyRootFilesystem true. */}}
-  readOnlyRootFilesystem: {{ if .Values.dev.reload }}false{{ else }}{{ .Values.security.readOnlyRootFilesystem }}{{ end }}
+  {{/* UNCONDITIONAL. This used to be relaxed to false whenever `dev.reload` was set, which existed
+       solely so Tilt's live_update could write into a running container. Tilt is gone (2026-08-04),
+       and with it the only reason this chart could ever be told to unlock a container's filesystem.
+       A chart a reconciler applies should not carry a values flag that weakens it. */}}
+  readOnlyRootFilesystem: {{ .Values.security.readOnlyRootFilesystem }}
   capabilities:
     drop: ["ALL"]
   seccompProfile:
@@ -784,40 +782,6 @@ is on; harmless (an unused tmpfs) when off, so unconditionally included keeps th
 {{- end -}}
 {{- define "lance.tmpVolume" -}}
 - { name: tmp, emptyDir: {} }
-{{- end -}}
-
-{{/*
-lance.devReloadArgs — uvicorn hot-reload flags for the Tilt loop. Call with (list $root $pkg)
-where $pkg is the service's own top-level package.
-
-Emits NOTHING unless dev.reload is set, so production manifests are byte-identical.
-
-The reload dirs are the site-packages the images actually install into. They previously read
-/app/packages and /app/components, which stopped existing at the src-layout rewrite (and
-`components` was renamed away before that) — uvicorn would have watched two non-existent
-directories and reloaded on nothing. Verified in-cluster: `python -c "import gateway"` resolves
-under /opt/venv/lib/python3.13/site-packages.
-
-Watch the service's own package plus dev.reloadKits, NOT all of site-packages: the latter means
-an inotify watch per installed dependency, which is slow and can exhaust the watch limit.
-
-Every --reload-dir MUST exist in EVERY image this renders for: uvicorn does not skip a missing
-one, it refuses to start ("Error: Invalid value for '--reload-dir': Path ... does not exist"),
-so one absent directory crashloops the service. lineage_kit was in this list and is absent from
-the gateway image, which crashlooped the ingress. Hence reloadKits is a value, defaulting to the
-one package every first-party image is guaranteed to carry (service_kit — every service is built
-on its make_service_app factory).
-*/}}
-{{- define "lance.devReloadArgs" -}}
-{{- $root := index . 0 -}}
-{{- $pkg := index . 1 -}}
-{{- if $root.Values.dev.reload }}
-- "--reload"
-- "--reload-dir=/opt/venv/lib/python3.13/site-packages/{{ $pkg }}"
-{{- range $root.Values.dev.reloadKits }}
-- "--reload-dir=/opt/venv/lib/python3.13/site-packages/{{ . }}"
-{{- end }}
-{{- end }}
 {{- end -}}
 
 {{/*

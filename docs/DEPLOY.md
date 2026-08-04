@@ -2,7 +2,7 @@
 
 A Lance lakehouse REST catalog + in-service lineage (OpenLineage → Apache AGE) + governance, running as
 **event-driven microservices on a local kind cluster**, deployed by one umbrella Helm chart and
-iterated with Tilt. Diagram: [`k8s-event-driven-architecture.html`](k8s-event-driven-architecture.html).
+iterated by rebuilding with Dagger and redeploying. Diagram: [`k8s-event-driven-architecture.html`](k8s-event-driven-architecture.html).
 
 ## One command
 
@@ -11,11 +11,10 @@ make up        # bootstrap toolchain + kind cluster + build images + deploy ever
 make verify    # prove the event-driven flow end-to-end
 make dashboards# port-forward the UIs (web / lineage / Perses / GreptimeDB / Dapr dashboard)
 make k9s       # inspect the cluster
-make tilt-up   # dev loop: hot-reload the FastAPI services
 make down      # tear down
 ```
 
-`make up` is idempotent. It needs only **docker** + **helm** on PATH; it downloads kind/kubectl/k9s/tilt
+`make up` is idempotent. It needs only **docker** + **helm** on PATH; it downloads kind/kubectl/k9s
 into `.localbin/` (gitignored).
 
 ## The components (one `helm install`, all gated by `<key>.enabled`)
@@ -225,7 +224,7 @@ catalog/lineage.
 
 ✅ Verified: the event-driven catalog→lineage flow, all components healthy (`helm STATUS: deployed`),
 Dapr sidecar injection, the full 3-signal observability (`make e2e-obs` green — AGE data + PromQL metric
-+ distributed trace + logs in GreptimeDB), `tilt ci` brings the whole stack up green.
++ distributed trace + logs in GreptimeDB), `make k3s-up` brings the whole stack up green.
 ✅ Verified: the event-driven **medallion** cascade — one `lance-ray` `/produce` cascades
 raw→bronze→silver→gold via Dapr pub/sub, building the lineage DAG, as **one distributed trace** across
 all 5 services, with the `medallion_stage_transitions_total` metric in PromQL (`make e2e-medallion`).

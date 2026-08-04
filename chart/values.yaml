@@ -183,7 +183,6 @@ services:
     ageStatementTimeoutSeconds: 30
 
 # Image registry/tag shared by every fleet + migration container, PLUS the per-image lance-ns block so
-# Tilt can inject each built image independently (image_keys → image.catalog.repository/tag).
 image:
   # A REGISTRY, e.g. ghcr.io/<org>/<repo> or localhost:5000. Required — see `rask.image` in
   # _helpers.tpl for why an empty default was actively harmful: it rendered a BARE `gateway:dev`,
@@ -202,22 +201,6 @@ image:
   # movers + compaction + the media services all run from this one image, different entrypoint.
   # `lance.catalogImage` uses required() on the tag, so an empty tag FAILS the render loudly.
   catalog: { repository: lance-rest-catalog, tag: dev }
-
-# Dev-only knobs, driven by the Tilt loop (Tiltfile). Never enable in production.
-dev:
-  # Append `uvicorn --reload` (+ reload-dirs) so Tilt's live_update sync hot-reloads the
-  # Python services in-cluster. Applies to BOTH fleet.yaml and services.yaml (catalog,
-  # lineage) via the shared `lance.devReloadArgs` helper — it used to be wired into
-  # fleet.yaml alone, which silently excluded the very services Tilt syncs. The reload
-  # dirs are site-packages, where the src-layout images install; the old
-  # /app/{packages,components} paths have not existed since that rewrite.
-  # The Tiltfile sets this; never enable it in production.
-  reload: false
-  # Shared packages to hot-reload alongside each service's own. MUST exist in every image the
-  # chart renders for — uvicorn refuses to start on a missing --reload-dir rather than skipping
-  # it. lineage_kit is deliberately NOT here: the gateway image does not ship it, and including
-  # it crashlooped the ingress. Add it only if every deployed image is known to carry it.
-  reloadKits: ["service_kit"]
 
 resources:
   # rask fleet tier (templates/fleet.yaml).

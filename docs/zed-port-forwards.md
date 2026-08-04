@@ -9,7 +9,6 @@ Only `local_port` 8080 differs from its remote: binding :80 locally needs admin 
 ```
 
    localhost:8080  -> remote 80     k3s traefik ingress — THE app UI (catch-all zone routing, as in prod)
-   localhost:10350 -> remote 10350  Tilt UI — build/live-update status
    localhost:3024  -> remote 3024   microfrontends composing proxy (scripts/kind-browse.sh, make dev-frontends)
    localhost:8888  -> remote 8888   gateway API — /api/* (the Vite proxy target)
    localhost:6006  -> remote 6006   Storybook for @rask/ui (make storybook)
@@ -17,7 +16,7 @@ Only `local_port` 8080 differs from its remote: binding :80 locally needs admin 
    localhost:8804  -> remote 8804   compute service — /api/ray, /api/serve
    localhost:8820  -> remote 8820   controlplane — /api/projects
    localhost:8101  -> remote 8101   media viewer
-   localhost:5000  -> remote 5000   tilt image registry
+   localhost:5000  -> remote 5000   dev image registry
    localhost:5173  -> remote 5173   SvelteKit zone dev server
    localhost:5174  -> remote 5174   SvelteKit zone dev server
    localhost:5175  -> remote 5175   SvelteKit zone dev server

@@ -19,7 +19,7 @@ publicIssuer or publicOrigin all fail (frontends.yaml, _helpers.tpl). This is th
 
 Two combinations are deliberately NOT errors:
   * frontend.enabled=false — there is no UI to sign into, so a governed API-only stack is coherent.
-    This is what the Tilt dev loop renders.
+    This is what the local dev render produces.
   * auth.allowHeadless=true — an explicit, named opt-in for an API-only deploy that DOES ship the
     frontend (a machine-facing estate where humans never use the browser). Someone choosing that
     must say so; the point of this guard is that it cannot happen by omission.

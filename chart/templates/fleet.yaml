@@ -77,7 +77,6 @@ spec:
             {{- range $a := ($svc.extraArgs | default list) }}
             - {{ $a | quote }}
             {{- end }}
-            {{- include "lance.devReloadArgs" (list $root (splitList "." (splitList ":" $svc.module | first) | first)) | nindent 12 }}
           # Drain delay before SIGTERM: kube-proxy can still route to a terminating pod, so
           # without it a rolling update drops in-flight requests. Matters most on the gateway,
           # which is the ingress. Pinned by

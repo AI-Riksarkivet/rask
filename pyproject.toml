@@ -160,8 +160,6 @@ exclude = [
     # the root — and reports failures nobody on this branch can fix.
     "**/.claude/worktrees",
     "runners",
-    # Tilt's editor stubs (`tilt dump api-docs`, dropped at the repo root by the Tilt VS Code
-    # extension). Auto-generated Starlark API surface for Tiltfile editing — 130 diagnostics of
     # foreign code, regenerated on upgrade, gitignored for the same reason.
     "api",
 ]

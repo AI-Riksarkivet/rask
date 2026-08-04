@@ -46,7 +46,7 @@ def test_a_bare_image_name_cannot_be_rendered_by_accident() -> None:
 
 
 def test_side_loaded_images_remain_supported_but_only_as_an_explicit_opt_in() -> None:
-    """`make k3s-up`, the Tiltfile and the chart tests all take this path deliberately."""
+    """`make k3s-up` and the chart tests both take this path deliberately."""
     proc = _render("image.localImages=true")
     assert proc.returncode == 0, proc.stderr
     assert 'image: "gateway:dev"' in proc.stdout

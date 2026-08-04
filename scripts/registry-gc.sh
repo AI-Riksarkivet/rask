@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Reclaim the local dev registry: drop every tag but the newest KEEP per repository, then sweep blobs.
 #
-# WHY THIS IS NEEDED. Tilt pushes a uniquely-tagged image on EVERY rebuild (`tilt-build-<epoch>`), and
+# WHY THIS IS NEEDED. Every rebuild pushes a uniquely-tagged image and
 # nothing ever deletes the previous one. Left alone that is unbounded: measured 113 tags of web-home and
 # 62 of lance-rest-catalog, 83.9 GB, on a machine that had also let the Dagger cache reach 1.1 TB.
 #
@@ -14,12 +14,12 @@ REG="${RASK_REGISTRY:-localhost:5000}"
 KEEP="${RASK_REGISTRY_KEEP:-2}"
 NAME="${RASK_REGISTRY_NAME:-rask-registry}"
 
-curl -sf "http://$REG/v2/" >/dev/null || { echo "!! no registry at $REG (make tilt-registry)" >&2; exit 1; }
+curl -sf "http://$REG/v2/" >/dev/null || { echo "!! no registry at $REG (make dev-registry)" >&2; exit 1; }
 
 repos=$(curl -s "http://$REG/v2/_catalog?n=1000" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin).get("repositories") or []))')
 deleted=0
 for repo in $repos; do
-  # Tags sort lexically, and Tilt's are `tilt-build-<epoch>` — same width, so lexical == chronological.
+  # Tags sort lexically; epoch-suffixed tags are same-width, so lexical == chronological.
   tags=$(curl -s "http://$REG/v2/$repo/tags/list" | python3 -c 'import json,sys; print("\n".join(sorted(json.load(sys.stdin).get("tags") or [])))')
   total=$(printf '%s\n' "$tags" | grep -c . || true)
   [[ "$total" -le "$KEEP" ]] && continue

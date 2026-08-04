@@ -54,7 +54,7 @@ def _helm(*set_values: str, check: bool = True) -> subprocess.CompletedProcess[s
     # The chart REQUIRES an image registry unless the images are side-loaded into the node
     # (`rask.image` in _helpers.tpl): a bare `<component>:<tag>` is `docker.io/library/...`
     # and ImagePullBackOffs on any real cluster. These tests render the LOCAL shape, which is
-    # the side-loaded one, so they opt in the same way `make k3s-up` and the Tiltfile do.
+    # the side-loaded one, so they opt in the same way `make k3s-up` does.
     argv += ["--set", "image.localImages=true"]
     for value in set_values:
         argv += ["--set", value]

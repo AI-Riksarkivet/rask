@@ -101,8 +101,6 @@ spec:
           {{- end }}
           # command/args are SPLIT so the dev-only reload flags can be appended — the same shape
           # services.yaml uses. Until 2026-07-29 this template inlined the module and flags into a
-          # single `command:` list, so `lance.devReloadArgs` was never called and `dev.reload=true`
-          # produced no `--reload` here. Tilt would sync a changed file into the pod and uvicorn
           # would never re-read it: hot reload that looks configured and does nothing, on the three
           # services (viewer, search, annotator) most worth iterating on. services.yaml's own comment
           # records that this fix "was only ever wired into fleet.yaml" — it reached services.yaml
@@ -111,7 +109,6 @@ spec:
             - "{{ $name }}.main:app"
             - "--host=0.0.0.0"
             - "--port={{ $svc.port }}"
-            {{- include "lance.devReloadArgs" (list $root $name) | nindent 12 }}
           ports: [{ name: http, containerPort: {{ $svc.port }} }]
           env:
             {{- if include "lance.otelEnabled" $root }}

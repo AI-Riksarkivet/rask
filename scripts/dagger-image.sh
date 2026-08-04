@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Build ONE image with Dagger and put it where the caller needs it.
 #
-# This is the single seam through which every non-Tilt image build in this repo goes — the Makefile
 # (`k3s-build`, `frontend-images`), the e2e stack scripts, and CI (which calls those make targets).
 # Before 2026-07-29 each of those shelled out to `docker buildx build` directly, so "dagger is the build
 # system" was true of the CI gates and false of every artefact. The dockerfile is unchanged and remains
@@ -24,7 +23,7 @@
 # Dagger CLI auto-provision its own — which is correct for --load and would fail only on --push.
 set -euo pipefail
 
-NAME="" ZONE="" TAG="" MODE="load" ADDRESS="" DEV="false"
+NAME="" ZONE="" TAG="" MODE="load" ADDRESS=""
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -33,7 +32,6 @@ while [[ $# -gt 0 ]]; do
     --zone)    ZONE="$2"; shift 2 ;;
     --tag)     TAG="$2"; shift 2 ;;
     --arg)     EXTRA_ARGS+=(--build-arg "$2"); shift 2 ;;
-    --dev)     DEV="true"; shift ;;
     --push)    MODE="push"; ADDRESS="$2"; shift 2 ;;
     *) echo "!! unknown flag: $1" >&2; exit 2 ;;
   esac
@@ -68,7 +66,7 @@ VERSION="${VERSION:-${TAG##*:}}"
 if [[ -n "$ZONE" ]]; then
   fn=(zone-image --zone="$ZONE")
 else
-  fn=(image --name="$NAME" --dev="$DEV")
+  fn=(image --name="$NAME")
 fi
 fn+=(--build-date="$BUILD_DATE" --vcs-ref="$VCS_REF" --version="$VERSION")
 [[ ${#EXTRA_ARGS[@]} -gt 0 ]] && fn+=("${EXTRA_ARGS[@]}")
