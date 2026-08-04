@@ -65,8 +65,16 @@ corpus) stays active.
 
 ---
 
-## #42 — `/annotator/browse` as the bulk-labeling surface
+## #42 — `/annotator/browse` as the bulk-labeling surface — **DESIGNED, awaiting review**
 
-**Owner is designing this.** Intended direction, from the owner: select data by active learning,
-AI-assisted selection, and bulk labelling with weak supervision + embeddings. Do not design it
-speculatively — it stays out of scope until that design exists.
+The proposal is `open_browse.md`. Nothing is built and nothing should be until it is approved.
+
+Its central claim, for anyone skimming: bulk labeling is NOT a new write path. "Produce candidate
+labels for N items, land them as unreviewed predictions, adjudicate" is exactly what the #39 import
+already does for one task — so the bulk surface should be a PRODUCER of that payload. Every ontology,
+provenance and review guarantee then comes for free, and a bug in bulk labeling cannot put unreviewed
+rows into the lakehouse because nothing can.
+
+Four decisions are the owner's and are listed at the end of that file: where uncertainty scores come
+from, how much weak-supervision machinery is warranted, where labelling functions are authored, and
+task granularity.
