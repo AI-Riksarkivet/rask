@@ -12,7 +12,8 @@ on the batch, so a rejected batch never becomes a version at all.
 from __future__ import annotations
 
 import pyarrow as pa
-from medallion.services.quality import (
+
+from service_kit.lakehouse.quality import (
     COLUMN_DECLARED,
     NOT_NULL,
     ROW_COUNT_POSITIVE,
@@ -86,7 +87,8 @@ def test_the_pre_commit_and_post_commit_gates_agree_on_the_same_batch(tmp_path: 
     assertions, or a batch could pass pre-commit and fail post-publish on identical data.
     """
     import lance
-    from medallion.services.quality import assert_quality
+
+    from service_kit.lakehouse.quality import assert_quality
 
     batch = _batch([1, 2, 3])
     uri = str(tmp_path) + "/q.lance"  # type: ignore[operator]

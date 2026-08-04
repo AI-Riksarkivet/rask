@@ -34,7 +34,7 @@ from medallion.schemas.events import build_run_event
 from medallion.services.compute import measure_stage, read_upstream, transform_stage
 from medallion.services.derivers import UnderivableMediaError
 from medallion.services.promotion import promotion_lineage
-from medallion.services.quality import Assertion, assert_quality, passed
+from service_kit.lakehouse.quality import Assertion, assert_quality, passed
 from medallion.services.ray_submit import submit_stage_job
 from service_kit import dapr_publish
 from service_kit.governed import fga

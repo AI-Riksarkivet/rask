@@ -1,4 +1,10 @@
-"""Automated data-quality assertions for the medallion quality gate.
+"""Automated data-quality assertions — the gate every publication runs.
+
+Lives in `service_kit.lakehouse` rather than in one service because § D-R1 makes the gate a property
+of PUBLICATION, not of the medallion: a version becomes consumable only after it passes, whoever
+wrote it. It started in `medallion/services/quality.py` and moved here the moment a second caller
+(the catalog's `publish`) needed it — a gate that only one writer can run is a gate every other
+writer has to reimplement, which is how the estate ends up with two definitions of "good enough".
 
 A medallion stage that produced a real Lance dataset (compute on) can be VALIDATED before it promotes: the
 mover runs cheap, exact assertions on the dataset it just wrote — does it have rows? is the key column free

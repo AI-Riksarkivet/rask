@@ -18,7 +18,8 @@ refuses. A shape mismatch surfaces immediately in the A11 lane.
 from __future__ import annotations
 
 import pyarrow as pa
-from medallion.services.quality import (
+
+from service_kit.lakehouse.quality import (
     COLUMN_DECLARED,
     NOT_NULL,
     ROW_COUNT_POSITIVE,
