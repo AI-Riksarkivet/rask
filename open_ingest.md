@@ -77,58 +77,89 @@ own documentation — and was never opened.
 
 ---
 
-## § D. THE OPEN DECISION — who executes the fetch?
+## § D. THE REAL QUESTION — how does a consumer know a write is ready?
 
-**Owner ruling required. Do not implement either side until it is made.**
+**Owner ruling required. This is the design hole; everything else here is plumbing.**
 
-Round 1 built a bespoke executor: Dapr Workflow fans out child workflows, each publishes units to a
-JetStream WORK_QUEUE, and hand-written Python workers drain it. **The estate already has a pattern
-for "fan out over N keys, do work, write Lance", and this duplicates it.**
+### The framing that was wrong for several turns
 
-`runners/htr/src/runner/pipeline.py:63`:
+I spent them arguing about **who executes the fetch** (hand-rolled workers vs a Ray job). The owner's
+answer: *"where it executes could be python or ray or airflow, I don't care."* Correct — that is an
+implementation detail behind the sink contract, and it is demoted to § D3 below.
 
-```python
-ds = ray.data.from_items([{"key": k} for k in keys], override_num_blocks=...)
-```
+The question that matters: **ingest is a SINK, not a special citizen.** You point it at an S3 bucket
+or a Delta table and it writes into bronze. So must anything else — a Ray job, a backfill script, a
+person with catalog credentials. **Nothing about the propagation of "this data is ready" may live in
+the ingest service**, or every future writer has to re-implement it.
 
-That is the same fan-out, in the estate's own idiom. The medallion movers submit Ray jobs through
-`ray_kit` in response to a Dapr trigger (submit-and-ack, no polling). And Lance's own distributed-write
-guide describes exactly this: workers call `write_fragments`, one worker collects the metadata and
-commits once.
+### What is actually implemented today (and why it is wrong)
 
-### Option 1 — Ray Data, as a sealed runner
+    writer commits ──▶ catalog emits `insert.<table>` lineage ──▶ /bronze-arrival ──▶ medallion.bronze
 
-`runners/ingest`, baked into the ray image, submitted by the ingest service on accept.
-`from_items(keys)` → `map_batches(fetch + validate)` → `write_fragments` per block → one commit
-through the catalog.
+Three problems:
 
-* **For:** the estate's existing pattern; Ray owns fan-out, backpressure, retries and actor pools;
-  block size IS the fragment size, so B1 cannot recur by construction; deletes ~1,500 lines of
-  queue/worker/staging; matches Lance's documented distributed write.
-* **Against:** needs the Ray cluster up; per-unit durable redelivery becomes Ray's task retry rather
-  than a broker's; politeness against a rate-limited HTTP source has to be expressed as actor-pool
-  concurrency instead of `max_ack_pending`.
+1. **Whole-table granularity.** The event says "this table changed". A consumer has no way to know
+   WHICH rows are new, so it either rescans the tier or invents its own bookmark.
+2. **Ungated.** The committed version is visible to every reader the instant it lands. A quality gate
+   that runs afterwards cannot un-publish it — bad rows are already readable.
+3. **No pointer.** A consumer reading the table gets `latest`. There is no "the version you should
+   be reading" and so no way to hold consumers at the last good version while a bad one sits above it.
 
-### Option 2 — keep the queue + workers
+Measured consequence of (1): the cascade fires on table CREATE and not on subsequent INSERTs, so a
+table's second arrival wakes nothing. That is a symptom of having no publication concept, not a bug
+in the trigger.
 
-* **For:** durable per-unit redelivery with a DLQ for poison units; `max_ack_pending` is real
-  backpressure against a rate-limited external API; runs with no Ray cluster.
-* **Against:** re-implements task distribution the estate already has; every property above had to be
-  hand-built and two of them (B1, B3) were built wrong.
+### What A18 already specified, and nobody built
 
-### Option 3 — per source kind
+> *"Gate FAIL → no tag advance, no event, FAIL lineage run, downstream provably never woken; gate
+> PASS → `published` advanced, the emitted event's version equals the commit/tag-update RESPONSE
+> value; a consumer resolving via the tag reads the gated version while `latest` may differ."*
 
-Bulk/local sources (an S3 prefix) go through Ray Data — Lance auto-parallelises a
-`pyarrow.dataset` and estimates partitioning from data size. Rate-limited external APIs keep the
-queue for politeness and per-unit redelivery.
+The catalog already carries the whole tag surface — `tags/create`, `tags/update`, `tags/version`,
+`tags/list`, `tags/delete`. **`published` appears nowhere in the estate.** The mechanism was designed
+and never implemented, which is exactly why "how does that propagate" has no good answer today.
 
-* **Against:** two executors to maintain and reason about.
+### § D1 — The proposal
 
-**Recommendation: Option 1**, unless per-unit durable redelivery against a rate-limited API is a
-requirement you want to keep. The sink contract in § A is identical under all three — only the
-executor changes — so this decision does not invalidate § A.
+**A commit is not a publication.** Two separate acts:
 
----
+    1. WRITE      any writer commits fragments through the catalog     → a new VERSION exists
+                  (ingest, a Ray job, a backfill, a person with creds)   readable only via `latest`
+
+    2. PUBLISH    a gate runs on the delta; on PASS the catalog          → `published` TAG advances
+                  advances the `published` tag and emits ONE event         and the event carries
+                  carrying {table, from_version, to_version}                the tag-update RESPONSE
+
+**Consumers resolve `published`, never `latest`.** The unit of "ready" is then a VERSION RANGE, and
+the range is the answer to "which partition is up for grabs":
+
+    delta = ds.to_table(with_row_id=True,
+                        filter=f"_row_created_at_version > {from_version}")
+
+That is Lance's change-data-feed, it is already proven in `runners/dummy`, and it makes the increment
+explicit rather than something each consumer bookmarks for itself.
+
+**Why this satisfies the sink requirement:** the publication contract belongs to the CATALOG, so any
+writer that commits through the catalog gets it for free. The ingest service becomes one client among
+several and holds no special knowledge — which is the whole point.
+
+### § D2 — What needs deciding
+
+| | Question |
+|---|---|
+| **D2a** | Is `published` the mechanism, or something else (a branch, a manifest property, a separate registry)? |
+| **D2b** | Who advances the tag — the catalog itself on commit-plus-gate, or a separate publisher the writer calls? |
+| **D2c** | Does the gate run pre-commit (the version never exists) or post-commit-pre-publish (the version exists but is unpublished)? D3 says a held batch must never become a version, which argues pre-commit; but a pre-commit gate cannot use Lance's CDF to see the delta, because there is no version yet to diff. **This tension is unresolved and is the crux.** |
+| **D2d** | Does this apply to ALL tier transitions (bronze→silver→gold) or only the bronze entry? The estate today orchestrates ingest with Dapr Workflow but runs the movers as plain pub/sub subscriptions — an inconsistency nobody has ruled on. |
+| **D2e** | Is a partition finer than a version ever needed, or is "version range" the smallest unit downstream ever wants? |
+
+### § D3 — Demoted: the executor
+
+Dapr Workflow orchestrates the run — **owner-ruled 2026-08-03, not in question.** Whether its
+fan-out activity drains a JetStream queue with hand-written workers or submits a Ray job is an
+implementation detail behind the sink contract. Noting only that `runners/htr` already does
+`ray.data.from_items([{"key": k} for k in keys])` — the same fan-out, in the estate's own idiom —
+and DECISIONS #16 says the idempotent batch legs "need only NATS + Ray". Decide it after § D1.
 
 ## § E. Round-2 acceptance conditions
 
