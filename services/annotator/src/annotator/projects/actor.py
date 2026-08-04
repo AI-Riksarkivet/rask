@@ -40,8 +40,8 @@ from annotator.projects.models import (
     Task,
     TaskState,
     Transition,
-    validate_against_template,
 )
+from annotator.projects.ontology import LinkLike, ShapeLike, validate_against_ontology
 from annotator.projects.project_actor import AnnotationProjectActorInterface
 
 
@@ -122,13 +122,25 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
         task = await self._load()
         return task.model_dump(mode="json") if task else None
 
-    async def _template_violation(self, task: Task) -> str | None:
-        """The submit-time template check: the DRAFT's shapes against the task's captured template.
-        No draft submits as an empty shape set — required labels then refuse, which is the honest
-        reading of "this task promised those labels"."""
+    async def _ontology_violation(self, task: Task) -> str | None:
+        """The submit-time contract check: the DRAFT against the task's CAPTURED ontology.
+
+        No draft submits as an empty shape set — a required class then refuses, which is the honest
+        reading of "this task promised those classes".
+
+        Reads the draft's shapes through `ShapeLike` rather than `Shape`: the validator only needs
+        id/type/label/attributes, and parsing the full model here would reject a draft for reasons
+        that have nothing to do with the task's contract — a geometry the canvas is still editing is
+        not a contract violation, and reporting it as one would be a 409 naming the wrong rule.
+        """
         raw = await self.get_draft()
-        shapes = [Shape.model_validate(s) for s in (raw or {}).get("shapes", [])]
-        return validate_against_template(task.template, shapes)
+        raw_shapes = (raw or {}).get("shapes", [])
+        shapes = [ShapeLike.model_validate(s) for s in raw_shapes]
+        # Relations have no editor yet (#41), so a draft carries none. Passing the list explicitly
+        # keeps the required-relation rule live: an ontology that REQUIRES a link refuses a
+        # submission carrying none, which is correct and will stay correct once the editor lands.
+        links = [LinkLike.model_validate(link) for link in (raw or {}).get("links", [])]
+        return validate_against_ontology(task.ontology, shapes, links)
 
     async def fire(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Apply one event from `TASK_EDGES`. The transition table is the spec — an edge absent from
@@ -145,9 +157,9 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
         # caller-supplied `review_required` would let an annotator self-accept.
         if event == "submit":
             target = submit_target(task.review_required)
-            # The template's output contract, enforced where it holds for ANY caller (the same
+            # The ontology's output contract, enforced where it holds for ANY caller (the same
             # placement argument as review_required). The draft this actor holds IS the submission.
-            violation = await self._template_violation(task)
+            violation = await self._ontology_violation(task)
             if violation is not None:
                 raise IllegalTransition("task", task.state, f"submit ({violation})")
 

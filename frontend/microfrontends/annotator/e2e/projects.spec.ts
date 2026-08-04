@@ -698,10 +698,10 @@ test('instructions: the create dialog sends them and the detail page shows them 
 });
 
 // --------------------------------------------------------------------------------------------------
-// Task templates v1 — a preset picked at create travels as an ENFORCED template
+// The task ONTOLOGY — a preset picked at create travels as ONE document, class list included
 // --------------------------------------------------------------------------------------------------
 
-test('template: picking a task type sends an enforced template; the detail page wears the chip', async ({
+test('ontology: picking a task type sends ONE document; the detail page wears it', async ({
 	page,
 }) => {
 	await seed(page, {
@@ -712,13 +712,19 @@ test('template: picking a task type sends an enforced template; the detail page 
 		page,
 		{
 			project: project('labeling', {
-				template: {
+				ontology: {
 					kind: 'reading-order',
 					modality: 'image',
-					tools: ['bbox'],
-					required_labels: ['region'],
-					attributes: [{ name: 'order', type: 'int', required: true }],
-					enforce: true,
+					classes: [
+						{
+							name: 'region',
+							tools: ['bbox'],
+							attributes: [{ name: 'order', type: 'int', required: true }],
+							required: true,
+						},
+					],
+					relations: [],
+					allow_empty: false,
 				},
 			}),
 			legal_events: LEGAL.labeling,
@@ -749,21 +755,156 @@ test('template: picking a task type sends an enforced template; the detail page 
 	await dialog.getByPlaceholder('vasa-portraits').press('Enter');
 
 	const create = await createCall(page);
-	const template = (create.body as { template: Record<string, unknown> }).template;
-	expect(template).toMatchObject({
-		kind: 'reading-order',
-		tools: ['bbox'],
-		required_labels: ['region'],
-		enforce: true,
-	});
-	expect((template.attributes as unknown[])[0]).toMatchObject({
+	const ontology = (create.body as { ontology: Record<string, unknown> }).ontology;
+	// ONE payload. This used to assert a `template` while a SECOND `label_schema` built its own
+	// class list from the same textarea — two objects nothing cross-checked, which is the defect
+	// this model closes. The tools now live ON the class, so they cannot name a shape the taxonomy
+	// does not permit.
+	expect(ontology).toMatchObject({ kind: 'reading-order' });
+	const classes = ontology.classes as Record<string, unknown>[];
+	expect(classes).toHaveLength(1);
+	expect(classes[0]).toMatchObject({ name: 'region', tools: ['bbox'] });
+	expect((classes[0]!.attributes as unknown[])[0]).toMatchObject({
 		name: 'order',
 		type: 'int',
 		required: true,
 	});
+	// NOT required — the create dialog used to derive `required_labels` from every class name, so a
+	// third class silently made all three mandatory on every item. It is now an explicit toggle,
+	// and this test does not tick it.
+	expect(classes[0]).toMatchObject({ required: false });
 
-	// The detail page names the task type and that it is enforced.
+	// The detail page names the task type and the taxonomy, from the same document.
 	await page.goto('/annotator/projects/p1');
-	await expect(page.getByTestId('template-chip')).toContainText('reading-order');
-	await expect(page.getByTestId('template-chip')).toContainText('enforced at submit');
+	await expect(page.getByTestId('task-kind-chip')).toContainText('reading-order');
+	await expect(page.getByTestId('label-taxonomy')).toContainText('region');
+	await expect(page.getByTestId('label-taxonomy')).toContainText('bbox');
+});
+
+test('ontology: "every class is required" is an explicit choice, not a side effect of naming classes', async ({
+	page,
+}) => {
+	// The bug this replaced, pinned from the UI side: the dialog derived a project-level
+	// `required_labels` from EVERY class name, so adding a third class silently made all three
+	// mandatory on every item — a contract nobody wrote, discovered at submit.
+	await seed(page, {
+		'GET /projects': { projects: [], total: 0 },
+		'POST /projects': project('draft'),
+	});
+
+	await page.goto('/annotator/');
+	await page.getByRole('button', { name: 'New labeling task' }).first().click();
+	const dialog = page.getByRole('dialog');
+	await dialog.getByPlaceholder('vasa-portraits').fill('required-classes');
+	await dialog.getByPlaceholder('person, ship, signature').fill('person, ship, signature');
+	await expect(dialog.getByPlaceholder('person, ship, signature')).toHaveValue(
+		'person, ship, signature',
+	);
+	await dialog.getByLabel('Every class is required').check();
+	await dialog.getByPlaceholder('vasa-portraits').press('Enter');
+
+	const create = await createCall(page);
+	const classes = (create.body as { ontology: { classes: Record<string, unknown>[] } }).ontology
+		.classes;
+	expect(classes.map((c) => c.name)).toEqual(['person', 'ship', 'signature']);
+	expect(classes.every((c) => c.required === true)).toBe(true);
+});
+
+test('ontology: a manager edits the taxonomy after create, and the PATCH carries the whole document', async ({
+	page,
+}) => {
+	// There was no way to edit an ontology at all — it was set at create and never again, so a
+	// taxonomy typo meant a new project. A closed set you cannot correct is one people work around.
+	await snapshot(
+		page,
+		{
+			project: project('labeling', {
+				ontology: {
+					kind: 'object-detection',
+					modality: 'image',
+					classes: [{ name: 'shp', tools: ['bbox'], attributes: [], required: false }],
+					relations: [],
+					allow_empty: false,
+				},
+			}),
+			legal_events: LEGAL.labeling,
+		},
+		listing([]),
+	);
+	await seed(page, { 'PATCH /projects/p1/ontology': project('labeling') });
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('edit-ontology-trigger').click();
+
+	// The form opens SEEDED from the stored ontology — an edit surface that starts blank is a
+	// replace surface wearing an edit label, and this is a whole-document PUT underneath.
+	const classes = page.getByTestId('edit-ontology').getByPlaceholder('person, ship, signature');
+	await expect(classes).toHaveValue('shp');
+
+	await classes.fill('ship, person');
+	await expect(classes).toHaveValue('ship, person');
+	await page.getByTestId('edit-ontology').getByRole('button', { name: 'Save' }).click();
+
+	await expect
+		.poll(async () => (await calls(page)).filter((c) => c.method === 'PATCH').length, {
+			timeout: 10_000,
+		})
+		.toBe(1);
+	const patch = (await calls(page)).find((c) => c.method === 'PATCH')!;
+
+	expect(patch.path).toBe('/projects/p1/ontology');
+	const sent = (patch.body as { ontology: { classes: { name: string }[] } }).ontology;
+	expect(sent.classes.map((c) => c.name)).toEqual(['ship', 'person']);
+});
+
+test('ontology: the editor REFUSES to flatten structure it cannot express', async ({ page }) => {
+	// The form offers three fields. An ontology carrying relations or per-class attributes has
+	// structure this form would silently drop on save — so it declines rather than losing it. A
+	// half-editor that quietly flattens a document is worse than no editor.
+	await snapshot(
+		page,
+		{
+			project: project('labeling', {
+				ontology: {
+					kind: 'document-question-answering',
+					modality: 'image',
+					classes: [
+						{ name: 'key', tools: ['bbox'], attributes: [], required: false },
+						{ name: 'value', tools: ['bbox'], attributes: [], required: false },
+					],
+					relations: [
+						{
+							name: 'answers',
+							from_classes: ['key'],
+							to_classes: ['value'],
+							directed: true,
+							required: false,
+						},
+					],
+					allow_empty: false,
+				},
+			}),
+			legal_events: LEGAL.labeling,
+		},
+		listing([]),
+	);
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('edit-ontology-trigger').click();
+
+	await expect(page.getByTestId('ontology-too-rich')).toContainText('relation');
+	await expect(page.getByTestId('edit-ontology').getByRole('button', { name: 'Save' })).toHaveCount(
+		0,
+	);
+});
+
+test('ontology: the edit button is ABSENT once the project is frozen', async ({ page }) => {
+	// Mirrors the server's own gate. Past `frozen` a publish is being prepared against the answer
+	// set, so an edit could only be ignored (every remaining item captured its copy) or misleading —
+	// the run facet would report a taxonomy no task was ever judged against. The route still 409s;
+	// this only stops offering the door.
+	await snapshot(page, { project: project('frozen'), legal_events: LEGAL.labeling }, listing([]));
+
+	await page.goto('/annotator/projects/p1');
+	await expect(page.getByTestId('edit-ontology-trigger')).toHaveCount(0);
 });

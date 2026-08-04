@@ -18,13 +18,19 @@ from annotator.projects.models import (
     TERMINAL_TASK_STATES,
     AnnotationProject,
     Draft,
-    LabelSchema,
     ProjectState,
     PublishRecord,
     Shape,
     Task,
     TaskState,
     new_id,
+)
+from annotator.projects.ontology import (
+    LabelClass,
+    LabelOntology,
+    OutputAttr,
+    RelationClass,
+    validate_against_ontology,
 )
 
 
@@ -36,9 +42,12 @@ __all__ = [
     "AnnotationProject",
     "Draft",
     "IllegalTransition",
-    "LabelSchema",
+    "LabelClass",
+    "LabelOntology",
+    "OutputAttr",
     "ProjectState",
     "PublishRecord",
+    "RelationClass",
     "Shape",
     "Task",
     "TaskState",
@@ -47,4 +56,5 @@ __all__ = [
     "project_transition",
     "submit_target",
     "task_transition",
+    "validate_against_ontology",
 ]

@@ -78,7 +78,7 @@ async def test_compatibility_against_a_task_is_answered_BEFORE_anyone_runs_the_m
     A producer emitting polygons for a bbox-only task is answerable from config alone. Discovering
     it by running the model, reviewing the output and being refused at submit is the long way round.
     """
-    _stub_template(monkeypatch, {"kind": "bbox-detection", "tools": ["bbox"], "enforce": True})
+    _stub_ontology(monkeypatch, {"kind": "object-detection", "classes": [{"name": "region", "tools": ["bbox"]}]})
 
     rows = _by_name(producer_listing(_settings(), await enforced_shape_types("t1")))
 
@@ -93,10 +93,10 @@ async def test_no_task_means_no_compatibility_CLAIM() -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_unenforced_task_makes_no_claim_either(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An unenforced template is a suggestion. Marking a producer "incompatible" against one would
-    warn about a submission the server would have accepted."""
-    _stub_template(monkeypatch, {"kind": "bbox-detection", "tools": ["bbox"], "enforce": False})
+async def test_a_task_that_CONSTRAINS_NOTHING_makes_no_claim_either(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An ontology with no classes declares no rule. Marking a producer "incompatible" against one
+    would warn about a submission the server would have accepted."""
+    _stub_ontology(monkeypatch, {"kind": "object-detection", "classes": []})
 
     for row in (producer_listing(_settings(), await enforced_shape_types("t1"))).producers:
         assert row.compatible is None
@@ -126,10 +126,10 @@ def test_the_returns_table_uses_the_SAME_longest_prefix_rule_as_the_registry() -
     assert returns_for("something-else") == ()
 
 
-def _stub_template(monkeypatch: pytest.MonkeyPatch, template: dict) -> None:
+def _stub_ontology(monkeypatch: pytest.MonkeyPatch, ontology: dict) -> None:
     class _Task:
         async def get(self) -> dict:
-            return {"template": template}
+            return {"ontology": ontology}
 
     import annotator.api.v1.endpoints.tasks as tasks_mod
 

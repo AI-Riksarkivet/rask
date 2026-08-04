@@ -346,7 +346,10 @@ def project_facet(project: AnnotationProject, plan: PublishPlan, *, frozen_at: d
         annotatorCount=len(annotators),
         reviewerCount=len(reviewers),
         reviewRequired=project.review_required,
-        labelClasses=sorted(c.name for c in project.label_schema.classes),
+        # ONE class list. This read `label_schema.classes` while the facet's `template` below came
+        # from a separate object nothing cross-checked, so the run facet could carry a taxonomy the
+        # enforcement had never heard of. Both now project from the same ontology.
+        labelClasses=sorted(c.name for c in project.ontology.classes),
         shapeCount=plan.shape_count,
         sendOrigins=dict(sorted(origins.items())),
         # §7.2's per-dataset `version`, from the SEND capture (`ItemSource.dataset_version`). A
@@ -367,8 +370,9 @@ def project_facet(project: AnnotationProject, plan: PublishPlan, *, frozen_at: d
         # An accepted task with no reviewer is legal (the project can waive review), so it is
         # REPORTED rather than refused — and it is the number a governance reader most wants.
         tasksWithoutReview=sum(1 for a in plan.attributions if a.outcome == "accepted" and not a.reviewed_by),
-        # The declarative template travels whole — the facet is where "what was this task" lives.
-        template=project.template.model_dump(mode="json"),
+        # The task definition travels whole — the facet is where "what was this task" lives, and
+        # `labelClasses` above is now a projection OF this rather than a second opinion about it.
+        ontology=project.ontology.model_dump(mode="json"),
         # Consensus v1 (only when replica groups exist): agreement COUNTS from label multisets per
         # group — every replica's rows still land, and no merged truth is invented here.
         **({"consensus": _consensus_counts(project, plan)} if plan.replica_groups else {}),
@@ -444,7 +448,10 @@ def table_properties(project: AnnotationProject, plan: PublishPlan) -> dict[str,
         "annotation.accepted_count": str(plan.accepted_count),
         "annotation.skipped_count": str(plan.skipped_count),
         "annotation.review_required": str(project.review_required).lower(),
-        "annotation.label_classes": ",".join(sorted(c.name for c in project.label_schema.classes)),
-        # §7.1: a downstream consumer must know what SHAPE of labels this table holds.
-        "annotation.template_kind": project.template.kind,
+        "annotation.label_classes": ",".join(sorted(c.name for c in project.ontology.classes)),
+        # §7.1: a downstream consumer must know what SHAPE of labels this table holds. `kind` is a
+        # free string now (aligned with Hugging Face pipeline ids by convention), so an empty one is
+        # a real answer — an unconstrained project genuinely has no task type, and inventing
+        # "bbox-detection" for it would be a claim nothing made.
+        "annotation.task_kind": project.ontology.kind,
     }

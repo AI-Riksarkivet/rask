@@ -42,6 +42,7 @@ from annotator.projects.models import (
     TaskState,
     new_id,
 )
+from annotator.projects.ontology import LabelOntology
 
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,10 @@ class AnnotationProjectActorInterface(ActorInterface):
     async def note_progress(self, payload: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
 
+    @actormethod(name="SetOntology")
+    async def set_ontology(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
     @actormethod(name="Adjudicate")
     async def adjudicate(self, payload: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
@@ -151,6 +156,20 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface, Remindable)
     async def get(self) -> dict[str, Any] | None:
         project = await self._load()
         return project.model_dump(mode="json") if project else None
+
+    async def set_ontology(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Replace the ontology. The ROUTE owns the authz and state gates; this owns the write.
+
+        Whole-document, and re-validated here rather than trusted from the caller: this actor is
+        reachable by any in-cluster caller holding a proxy, so the model's own cross-checks
+        (undeclared relation endpoints, duplicate class names) must run on THIS side of the boundary
+        too — the same never-trust-the-caller posture as the submit-time contract check.
+        """
+        project = await self._require()
+        project.ontology = LabelOntology.model_validate(payload.get("ontology") or {})
+        project.updated_at = datetime.now(UTC)
+        await self._store(project)
+        return project.model_dump(mode="json")
 
     async def list_tasks(self) -> dict[str, Any]:
         """The index, plus the publish precondition computed from it. Returned together so a caller

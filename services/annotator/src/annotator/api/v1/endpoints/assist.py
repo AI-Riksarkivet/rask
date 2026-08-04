@@ -16,9 +16,10 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
+from annotator.projects.ontology import LabelOntology
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.lancekit.keys import validate_doc_key
 from service_kit.media.deps import DatasetParam, StateDep
@@ -46,8 +47,8 @@ class AssistRequest(BaseModel):
     prompt: str | None = None
     region: Region | None = None
     #: The labeling task this assist is for, when there is one. The SERVER reads that task's
-    #: captured template — the client does not send the rules it is judged by, same posture as
-    #: `review_required` and the submit-time template check.
+    #: captured ontology — the client does not send the rules it is judged by, same posture as
+    #: `review_required` and the submit-time contract check.
     task_id: str | None = None
 
 
@@ -101,8 +102,8 @@ class ProducerInfo(BaseModel):
     #: The shape types it emits; EMPTY means unknown, not "none".
     returns: list[str] = Field(default_factory=list)
     #: Whether those shapes satisfy the task named in `?task_id=`. None when there is no task, when
-    #: the task does not enforce, or when `returns` is unknown — three genuinely different reasons
-    #: not to make a claim, all of which the UI renders as "unknown" rather than as a pass.
+    #: its ontology constrains nothing, or when `returns` is unknown — three genuinely different
+    #: reasons not to make a claim, all of which the UI renders as "unknown" rather than as a pass.
     compatible: bool | None = None
 
 
@@ -164,15 +165,18 @@ async def enforced_shape_types(task_id: str | None) -> set[str] | None:
     """The shape types a task will ACCEPT, canonicalised. `None` = no constraint to speak of.
 
     The three ways to get `None` are deliberately indistinguishable to callers — no task, an
-    unenforced template, or a task that could not be read. All three mean the same thing: there is
-    no rule here that anyone may be judged against, so make no claim.
+    ontology that constrains nothing, or a task that could not be read. All three mean the same
+    thing: there is no rule here that anyone may be judged against, so make no claim.
     """
     if not task_id:
         return None
-    template = await _task_template(task_id)
-    if not template.get("enforce"):
+    ontology = await _task_ontology(task_id)
+    if ontology is None:
         return None
-    return {_CANONICAL_SHAPE.get(t, t) for t in (template.get("tools") or [])} or None
+    # DERIVED from the taxonomy, never declared beside it: `LabelOntology.tools` is the union of
+    # every class's tools, and it is empty when any class is unconstrained. That replaced a flat
+    # `tools` list that could contradict the very classes it sat next to.
+    return {_CANONICAL_SHAPE.get(t, t) for t in ontology.tools} or None
 
 
 def producer_listing(settings: Any, allowed: set[str] | None = None) -> ProducerListing:
@@ -244,10 +248,10 @@ async def _within_contract(shapes: list[AssistShape], task_id: str | None) -> tu
     """
     if not task_id:
         return shapes, []
-    template = await _task_template(task_id)
-    if not template.get("enforce"):
+    ontology = await _task_ontology(task_id)
+    if ontology is None:
         return shapes, []
-    allowed = set(template.get("tools") or [])
+    allowed = {_CANONICAL_SHAPE.get(t, t) for t in ontology.tools}
     if not allowed:
         return shapes, []
     kept, dropped = [], []
@@ -255,17 +259,18 @@ async def _within_contract(shapes: list[AssistShape], task_id: str | None) -> tu
         if shape.shape_type in allowed:
             kept.append(shape)
         else:
-            dropped.append(f"{shape.shape_type} refused — task {template.get('kind') or 'template'} allows {sorted(allowed)}")
+            dropped.append(f"{shape.shape_type} refused — task {ontology.kind or 'ontology'} allows {sorted(allowed)}")
     return kept, dropped
 
 
-async def _task_template(task_id: str) -> dict[str, Any]:
-    """The template CAPTURED onto a task, read server-side. `{}` when it cannot be read.
+async def _task_ontology(task_id: str) -> LabelOntology | None:
+    """The ontology CAPTURED onto a task, read server-side. `None` when it cannot be read.
 
     Read here rather than accepted from the caller on purpose: the client would otherwise be
-    supplying the rules it is judged by. An empty dict means "no claim" everywhere it is used —
-    nothing filters, nothing is reported compatible — so a transport failure degrades to the
-    unconstrained behaviour rather than to a wrong answer.
+    supplying the rules it is judged by. `None` means "no claim" everywhere it is used — nothing
+    filters, nothing is reported compatible — so a transport failure degrades to the unconstrained
+    behaviour rather than to a wrong answer. An ontology that constrains NOTHING reads as `None`
+    too, which is the same statement: there is no rule to judge anyone against.
     """
     try:
         from annotator.api.v1.endpoints.tasks import _proxy  # noqa: PLC0415 - import cycle
@@ -273,8 +278,15 @@ async def _task_template(task_id: str) -> dict[str, Any]:
         task = await _proxy(task_id).get()
     except Exception:  # noqa: BLE001 - an unreadable rule must not lose a prediction; see callers
         logger.warning("assist could not read task %s; proceeding without its contract", task_id)
-        return {}
-    return (task or {}).get("template") or {}
+        return None
+    try:
+        ontology = LabelOntology.model_validate((task or {}).get("ontology") or {})
+    except ValidationError:
+        # A stored ontology that no longer validates is a real possibility across a model change,
+        # and it is not a reason to drop a prediction. Same fail-open stance, same reasoning.
+        logger.warning("task %s carries an ontology this service cannot parse", task_id)
+        return None
+    return ontology if ontology.constrains else None
 
 
 def backend_for(settings: Any, producer: str) -> str | None:

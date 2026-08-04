@@ -7,6 +7,7 @@
 	import type { MediaUnit } from '$lib/viewer/types';
 	import { AnnotatorController } from '$lib/viewer/annotator.svelte';
 	import { reviewSelection } from '$lib/labeling/review-selection.svelte';
+	import { ontologyTools } from '$lib/projects/types';
 	import { fetchTask } from '$lib/projects/remote/tasks.remote';
 	import { ResizableSplit } from '@rask/ui/resizable-split';
 	import { Badge } from '@rask/ui/badge';
@@ -36,10 +37,12 @@
 		void fetchTask({ taskId: id })
 			.then((result) => {
 				if (!alive) return;
-				// An unenforced template is a suggestion, not a contract — restricting the rail on one
-				// would hide tools the server would happily accept.
-				const tpl = result.ok ? result.data.template : undefined;
-				controller.allowedShapeTypes = tpl?.enforce ? tpl.tools : [];
+				// DERIVED from the taxonomy, never read from a list beside it: `ontologyTools` is the
+				// union of every class's tools and is empty when any class is unconstrained. That
+				// replaces `enforce ? tools : []`, where a flat `tools` list could contradict the very
+				// classes it sat next to — and where one false flag voided every declaration a
+				// manager had explicitly written.
+				controller.allowedShapeTypes = result.ok ? ontologyTools(result.data.ontology) : [];
 			})
 			.catch(() => {
 				// A failed read must not silently narrow the rail: unconstrained is the honest

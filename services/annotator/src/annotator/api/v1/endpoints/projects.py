@@ -20,8 +20,9 @@ from pydantic import BaseModel, Field
 
 from annotator.api.security import CheckerDep, CurrentSubject, FgaClientDep
 from annotator.projects.machines import legal_project_events
-from annotator.projects.models import AnnotationProject, LabelSchema, ProjectState, TaskTemplate
-from service_kit.exceptions import ForbiddenError, NotFoundError
+from annotator.projects.models import AnnotationProject, ProjectState
+from annotator.projects.ontology import LabelOntology
+from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
 from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 
@@ -54,15 +55,15 @@ class CreateProjectRequest(BaseModel):
     description: str = ""
     #: Annotator-facing labeling instructions (how to label) — distinct from `description` (what/why).
     instructions: str = Field(default="", max_length=20_000)
-    label_schema: LabelSchema = Field(default_factory=LabelSchema)
     review_required: bool = True
     lease_seconds: int = Field(default=1800, gt=0)
     #: Consensus v1 — create-only by design: `send` derives the replica count from it and the
     #: claim guard enumerates siblings with it, so changing it mid-flight would orphan replicas.
     consensus_n: int = Field(default=1, ge=1, le=5)
-    #: The declarative task template (v1) — validated by its own model; absent means today's
-    #: unconstrained default.
-    template: TaskTemplate = Field(default_factory=TaskTemplate)
+    #: The whole task definition — taxonomy, per-class tools, attributes, relations. Validated by
+    #: its own model (including the cross-checks that the old `label_schema` + `template` pair had
+    #: nothing to run); absent means an unconstrained project, which is the pre-ontology behaviour.
+    ontology: LabelOntology = Field(default_factory=LabelOntology)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=AnnotationProject)
@@ -89,11 +90,10 @@ async def create_annotation_project(payload: CreateProjectRequest, checker: Chec
         title=payload.title,
         description=payload.description,
         instructions=payload.instructions,
-        label_schema=payload.label_schema,
         review_required=payload.review_required,
         lease_seconds=payload.lease_seconds,
         consensus_n=payload.consensus_n,
-        template=payload.template,
+        ontology=payload.ontology,
         state=ProjectState.DRAFT,
         created_at=now,
         updated_at=now,
@@ -171,6 +171,60 @@ async def get_project(project_id: ProjectId, checker: CheckerDep, subject: Curre
         raise NotFoundError(f"annotation project {project_id} does not exist")
     project = AnnotationProject.model_validate(doc)
     return {"project": doc, "legal_events": legal_project_events(project.state)}
+
+
+class UpdateOntologyRequest(BaseModel):
+    """The whole ontology, replaced. Not a partial merge — see the route."""
+
+    ontology: LabelOntology
+
+
+#: Editing the task definition is a MANAGE act, not a labeling one: it changes what every future
+#: item promises downstream. Same relation the `open`/`freeze`/`publish` transitions carry.
+MANAGE_RELATION = "can_manage"
+
+#: The ontology may be edited only while the project can still receive work. Past `frozen` the
+#: answer set is closed and a publish is being prepared against it, so an edit could only either be
+#: ignored (every remaining item already captured its copy) or misleading — the run facet would
+#: report a taxonomy that no task was ever judged against.
+ONTOLOGY_EDITABLE_STATES = frozenset({ProjectState.DRAFT, ProjectState.LABELING})
+
+
+@router.patch("/{project_id}/ontology", response_model=AnnotationProject)
+async def update_project_ontology(
+    project_id: ProjectId,
+    payload: UpdateOntologyRequest,
+    checker: CheckerDep,
+    subject: CurrentSubject,
+) -> AnnotationProject:
+    """Replace a project's ontology. 403 without `can_manage`, 409 once the project is past labeling.
+
+    WHOLE-DOCUMENT replace, deliberately. A partial merge would have to answer "what does an absent
+    `classes` mean" — cleared, or unchanged? — and the two readings differ by an entire taxonomy.
+    The ontology is also cross-checked as a UNIT (relations must reference declared classes), so a
+    merge would have to re-validate the merged result anyway; taking the whole document makes the
+    thing validated and the thing stored the same object.
+
+    Items already sent are UNAFFECTED: each captured its own copy at send, so work in review is
+    judged by the contract it was issued under. That is the point of the capture, and it is what
+    makes editing safe enough to allow during `labeling` at all.
+    """
+    obj = f"annotation_project:{project_id}"
+    if not await checker(user=subject, relation=MANAGE_RELATION, obj=obj):
+        audit("annotation_project.update_ontology", FAILURE, subject=subject, resource=project_id, relation=MANAGE_RELATION)
+        raise ForbiddenError(f"{subject} lacks {MANAGE_RELATION} on {obj}")
+
+    actor = _create_actor(project_id)
+    doc = await actor.get()
+    if doc is None:
+        raise NotFoundError(f"annotation project {project_id} does not exist")
+    state = AnnotationProject.model_validate(doc).state
+    if state not in ONTOLOGY_EDITABLE_STATES:
+        raise ConflictError(f"project {project_id} is {state.value} — the ontology is editable only in {sorted(s.value for s in ONTOLOGY_EDITABLE_STATES)}")
+
+    stored = await actor.set_ontology({"ontology": payload.ontology.model_dump(mode="json")})
+    audit("annotation_project.update_ontology", SUCCESS, subject=subject, resource=project_id, relation=MANAGE_RELATION)
+    return AnnotationProject.model_validate(stored)
 
 
 def _create_actor(project_id: str) -> Any:

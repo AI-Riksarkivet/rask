@@ -18,7 +18,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from annotator.projects.models import AnnotationProject, Draft, LabelClass, LabelSchema, Shape, Task, TaskState
+from annotator.projects.models import AnnotationProject, Draft, Shape, Task, TaskState
+from annotator.projects.ontology import LabelClass, LabelOntology
 from annotator.projects.publish import (
     NO_SHAPE,
     PROJECT_FACET,
@@ -40,7 +41,7 @@ def _project(**kw: Any) -> AnnotationProject:
         "tenant": "acme",
         "slug": "vasa-portraits",
         "review_required": True,
-        "label_schema": LabelSchema(classes=[LabelClass(name="ship"), LabelClass(name="person")]),
+        "ontology": LabelOntology(classes=[LabelClass(name="ship"), LabelClass(name="person")]),
     }
     base.update(kw)
     return AnnotationProject.model_validate(base)
@@ -539,21 +540,45 @@ def test_a_pick_naming_another_groups_member_refuses_the_publish() -> None:
         build_plan(project, pairs, publish_id="tok", published_at=NOW)
 
 
-def test_the_template_is_stamped_into_properties_and_facet() -> None:
+def test_the_ontology_is_stamped_into_properties_and_facet() -> None:
     """§7.1: a downstream consumer must know what SHAPE of labels the table holds."""
-    from annotator.projects.models import TaskTemplate
     from annotator.projects.publish import table_properties
 
     project = AnnotationProject(
         project_id="p1",
         tenant="acme",
         slug="vasa",
-        template=TaskTemplate(kind="reading-order", tools=["bbox"], enforce=True),
+        ontology=LabelOntology(kind="reading-order", classes=[LabelClass(name="line", tools=["bbox"])]),
     )
     pairs = [(_pin_task("t0", "demo", 24), None)]
     plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
 
-    assert table_properties(project, plan)["annotation.template_kind"] == "reading-order"
+    assert table_properties(project, plan)["annotation.task_kind"] == "reading-order"
     facet = project_facet(project, plan)
-    assert facet["template"]["kind"] == "reading-order"
-    assert facet["template"]["enforce"] is True
+    assert facet["ontology"]["kind"] == "reading-order"
+    assert facet["ontology"]["classes"][0]["tools"] == ["bbox"]
+
+
+def test_the_facets_TWO_class_lists_became_ONE_and_cannot_disagree() -> None:
+    """The defect that motivated the merge, pinned so it cannot come back.
+
+    `labelClasses` was projected from `label_schema` while `template` — the enforcement contract —
+    was a separate object beside it. Nothing cross-checked them, so a run facet could advertise a
+    taxonomy that no submission was ever judged against. Both now read from the same ontology, so
+    the facet's summary and its full document are the same fact stated twice.
+    """
+    from annotator.projects.publish import table_properties
+
+    project = AnnotationProject(
+        project_id="p1",
+        tenant="acme",
+        slug="vasa",
+        ontology=LabelOntology(kind="object-detection", classes=[LabelClass(name="ship"), LabelClass(name="person")]),
+    )
+    plan = build_plan(project, [(_pin_task("t0", "demo", 24), None)], publish_id="tok", published_at=NOW)
+    facet = project_facet(project, plan)
+
+    summary = facet["labelClasses"]
+    whole = sorted(c["name"] for c in facet["ontology"]["classes"])
+    assert summary == whole == ["person", "ship"]
+    assert table_properties(project, plan)["annotation.label_classes"] == "person,ship"

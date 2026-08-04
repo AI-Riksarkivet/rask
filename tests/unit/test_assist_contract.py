@@ -11,7 +11,7 @@ Two holes met here, and the owner named the second one: "schemas must align from
    had already looked at it. The mismatch was real; it was just deferred onto the annotator.
 
 A producer is not obliged to know the task's rules; the registry exists so a backend is a config
-entry. So both are resolved once, server-side, where the task's captured template lives.
+entry. So both are resolved once, server-side, where the task's captured ontology lives.
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ async def test_a_prediction_the_task_refuses_is_dropped_and_REPORTED(monkeypatch
     Silently filtering would leave a producer permanently returning work nobody sees, with nothing
     anywhere saying so — the failure mode where a model looks configured and does nothing.
     """
-    _stub_task(monkeypatch, {"kind": "bbox-detection", "tools": ["bbox"], "enforce": True})
+    _stub_task(monkeypatch, {"kind": "object-detection", "classes": [{"name": "region", "tools": ["bbox"]}]})
 
     kept, dropped = await _within_contract([_shape("bbox"), _shape("polygon")], "t1")
 
@@ -67,10 +67,10 @@ async def test_a_prediction_the_task_refuses_is_dropped_and_REPORTED(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_an_unenforced_template_filters_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An unenforced template is a suggestion. Dropping predictions on one would discard work the
-    server would happily have accepted at submit."""
-    _stub_task(monkeypatch, {"kind": "bbox-detection", "tools": ["bbox"], "enforce": False})
+async def test_an_ontology_that_CONSTRAINS_NOTHING_filters_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An ontology with no classes declares no rule, so there is no rule to drop a prediction for.
+    Filtering here would discard work the server would happily have accepted at submit."""
+    _stub_task(monkeypatch, {"kind": "object-detection", "classes": []})
 
     kept, dropped = await _within_contract([_shape("polygon")], "t1")
 
@@ -102,10 +102,10 @@ async def test_an_unreadable_task_returns_the_predictions_unfiltered(monkeypatch
     assert dropped == []
 
 
-def _stub_task(monkeypatch: pytest.MonkeyPatch, template: dict) -> None:
+def _stub_task(monkeypatch: pytest.MonkeyPatch, ontology: dict) -> None:
     class _Task:
         async def get(self) -> dict:
-            return {"template": template}
+            return {"ontology": ontology}
 
     import annotator.api.v1.endpoints.tasks as tasks_mod
 

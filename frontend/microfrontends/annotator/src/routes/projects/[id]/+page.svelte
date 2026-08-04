@@ -8,11 +8,12 @@
 	import { page } from '$app/state';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
-	import { ArrowLeft, Inbox, RefreshCw } from '@lucide/svelte';
+	import { ArrowLeft, Inbox, Pencil, RefreshCw } from '@lucide/svelte';
 
 	import { fetchMeViaBff } from '$lib/http';
 	import AdjudicationPanel from '$lib/projects/AdjudicationPanel.svelte';
 	import PublishPanel from '$lib/projects/PublishPanel.svelte';
+	import EditOntologyDialog from '$lib/projects/EditOntologyDialog.svelte';
 	import SendItemsDialog from '$lib/projects/SendItemsDialog.svelte';
 	import TaskQueue from '$lib/projects/TaskQueue.svelte';
 	import { fetchProject, fireProjectEvent, listTasks } from '$lib/projects/remote/projects.remote';
@@ -28,6 +29,13 @@
 	let statusDetail = $state('');
 	let notice = $state('');
 	let sendOpen = $state(false);
+	let ontologyOpen = $state(false);
+	// Mirrors the SERVER's `ONTOLOGY_EDITABLE_STATES`. Past `frozen` a publish is being prepared
+	// against the answer set, so an edit could only be ignored or misleading. The button is hidden
+	// rather than disabled-with-a-409 — but the gate that matters is still the route's.
+	const ontologyEditable = $derived(
+		detail?.project.state === 'draft' || detail?.project.state === 'labeling',
+	);
 	let inflight = 0;
 
 	async function load(): Promise<void> {
@@ -199,27 +207,54 @@
 				<p class="mt-1 whitespace-pre-line">{project.instructions}</p>
 			</div>
 		{/if}
-		{#if project.template?.enforce}
-			<div class="flex items-center gap-1.5 text-sm" data-testid="template-chip">
+		<!-- ONE block, because there is one document. This used to be two: a "Task type" chip fed by
+		     `template` and a "Labeling" row fed by `label_schema`, which nothing cross-checked — so
+		     the page could show a taxonomy the enforcement had never heard of. -->
+		{#if project.ontology.kind}
+			<div class="flex items-center gap-1.5 text-sm" data-testid="task-kind-chip">
 				<span class="text-muted-foreground text-xs">Task type:</span>
-				<Badge>{project.template.kind}</Badge>
-				<span class="text-muted-foreground text-xs"
-					>tools: {project.template.tools.join(', ')} — enforced at submit</span
-				>
+				<Badge>{project.ontology.kind}</Badge>
 			</div>
 		{/if}
-		{#if project.label_schema.classes.length > 0}
-			<!-- The labeling TASK, visible where the work happens: what is being labelled, with what
-			     geometry. Publish stamps the same list into table properties + the lineage facet. -->
+		{#if project.ontology.classes.length > 0}
 			<div class="flex flex-wrap items-center gap-1.5 text-sm" data-testid="label-taxonomy">
 				<span class="text-muted-foreground text-xs">Labeling:</span>
-				{#each project.label_schema.classes as labelClass (labelClass.name)}
-					<Badge variant="outline">
+				{#each project.ontology.classes as labelClass (labelClass.name)}
+					<Badge variant={labelClass.required ? 'default' : 'outline'}>
 						{labelClass.name}
-						{#if labelClass.shape_types.length > 0}
-							<span class="text-muted-foreground">· {labelClass.shape_types.join('/')}</span>
+						{#if labelClass.tools.length > 0}
+							<span class="text-muted-foreground">· {labelClass.tools.join('/')}</span>
+						{/if}
+						{#if labelClass.required}
+							<!-- Per class, and only where it was actually declared. The create dialog used
+							     to fill a project-level `required_labels` from EVERY class name, so adding a
+							     third class silently made all three mandatory on every item. -->
+							<span class="text-muted-foreground">· required</span>
 						{/if}
 					</Badge>
+				{/each}
+			</div>
+		{/if}
+		{#if ontologyEditable}
+			<div>
+				<Button
+					variant="outline"
+					size="sm"
+					data-testid="edit-ontology-trigger"
+					onclick={() => (ontologyOpen = true)}
+				>
+					<Pencil class="size-3.5" />
+					{project.ontology.classes.length > 0
+						? 'Edit the labeling task'
+						: 'Define the labeling task'}
+				</Button>
+			</div>
+		{/if}
+		{#if project.ontology.relations.length > 0}
+			<div class="flex flex-wrap items-center gap-1.5 text-sm" data-testid="relations">
+				<span class="text-muted-foreground text-xs">Relations:</span>
+				{#each project.ontology.relations as rel (rel.name)}
+					<Badge variant="outline">{rel.name}</Badge>
 				{/each}
 			</div>
 		{/if}
@@ -254,4 +289,12 @@
 	</div>
 
 	<SendItemsDialog {projectId} bind:open={sendOpen} onsent={() => void load()} />
+	{#if detail}
+		<EditOntologyDialog
+			{projectId}
+			ontology={detail.project.ontology}
+			bind:open={ontologyOpen}
+			onsaved={() => void load()}
+		/>
+	{/if}
 {/if}

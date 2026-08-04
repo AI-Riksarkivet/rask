@@ -255,9 +255,12 @@ async def send_items(project_id: ProjectId, payload: SendItemsRequest, checker: 
         capture: dict[str, Any] = {
             "review_required": bool(project.get("review_required", True)),
             "lease_seconds": int(project.get("lease_seconds") or 1800),
-            # The template rides every item, like the two captures above: submit enforcement reads
-            # the ITEM's copy, so a mid-flight template edit cannot retroactively invalidate work.
-            "template": project.get("template") or {},
+            # The ONTOLOGY rides every item, like the two captures above: submit enforcement reads
+            # the ITEM's copy, so a mid-flight ontology edit cannot retroactively invalidate work.
+            # This used to capture the `template` and leave the taxonomy behind on the project —
+            # which is precisely why the closed-set label check could not exist: the class list was
+            # not in scope where enforcement happens, so `label="asdf"` submitted and published.
+            "ontology": project.get("ontology") or {},
         }
         replicas = (
             [Task(task_id=group_id, project_id=project_id, source=item.source, media=item.media, **capture)]

@@ -220,3 +220,42 @@ def test_kind_is_a_free_vocabulary_not_a_closed_enum() -> None:
     vocabulary for routing and filtering, not a contract — only 31 of its 57 ids carry any schema."""
     for kind in ("object-detection", "document-question-answering", "riksarkivet-landskapshandlingar-v2"):
         assert LabelOntology(kind=kind).kind == kind
+
+
+# ── carried over from test_task_templates.py, whose subject this model replaced ────────────────────
+#
+# `TaskTemplate` is gone, but three of its properties are properties of the REPLACEMENT and would
+# have been silently lost with the file. They are re-pinned here against the ontology.
+
+
+def test_a_REQUIRED_attribute_that_is_absent_is_refused() -> None:
+    """`required` is the half of attribute typing the optional-path test cannot reach: an absent
+    optional field is fine, an absent required one is the whole point of declaring it."""
+    ontology = LabelOntology(classes=[LabelClass(name="c", attributes=[OutputAttr(name="note", required=True)])])
+
+    violation = validate_against_ontology(ontology, [_shape(label="c")])
+    assert violation is not None and "note" in violation
+
+    # An empty string is ABSENT, not a value — otherwise a required free-text field is satisfied by
+    # having been touched, which is what "required" is supposed to prevent.
+    assert validate_against_ontology(ontology, [_shape(label="c", note="")]) is not None
+    assert validate_against_ontology(ontology, [_shape(label="c", note="seen")]) is None
+
+
+def test_a_mistyped_key_is_REFUSED_not_dropped() -> None:
+    """The adversarial audit's finding, re-pinned on the object that inherited it.
+
+    Under pydantic's default an unknown key is dropped, so `enforced` (for `enforce`) created a 201
+    with enforcement silently off — a contract advertised and never applied. `enforce` no longer
+    exists, but every enforcement-bearing field here still defaults PERMISSIVE, so the same typo
+    class still costs a constraint. `extra="forbid"` is what makes it an error instead of a shrug,
+    and it is only load-bearing while something checks it.
+    """
+    with pytest.raises(ValueError, match="requird"):
+        LabelClass.model_validate({"name": "stamp", "requird": True})
+    with pytest.raises(ValueError, match="require"):
+        OutputAttr.model_validate({"name": "order", "type": "int", "require": True})
+    with pytest.raises(ValueError, match="klasses"):
+        LabelOntology.model_validate({"kind": "object-detection", "klasses": []})
+    with pytest.raises(ValueError, match="directd"):
+        RelationClass.model_validate({"name": "answers", "directd": False})
