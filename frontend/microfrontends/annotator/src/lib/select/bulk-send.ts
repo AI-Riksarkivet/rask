@@ -13,7 +13,7 @@
 
 /** One item as the send command's schema expects it. */
 export interface SendableItem {
-	source: { kind: string; keys: string[]; where?: string | null };
+	source: { kind: string; keys: string[]; where?: string | null; dataset_version?: number | null };
 	media: { kind: string };
 }
 
@@ -39,18 +39,28 @@ export const MAX_BULK_ITEMS = 5000;
 export function itemsFromSelection(
 	keys: readonly string[],
 	dataset: string | null,
+	datasetVersion: number | null = null,
 	mediaKind = 'image',
 ): SendableItem[] {
 	const unique = [...new Set(keys.map((k) => k.trim()).filter(Boolean))];
 	return unique.map((key) => ({
-		source: { kind: 'chunks', keys: [key], ...(dataset ? { where: dataset } : {}) },
+		source: {
+			kind: 'chunks',
+			keys: [key],
+			...(dataset ? { where: dataset } : {}),
+			// The VERSION the item was taken from. `publish.py` records it into the publish plan's
+			// `dataset_versions`, so an item sent without one makes the published artifact unable to
+			// say which version of the corpus it describes. The explorer's sender has always carried
+			// it; this one did not, and the annotator's wire schema silently stripped it anyway.
+			...(datasetVersion !== null ? { dataset_version: datasetVersion } : {}),
+		},
 		media: { kind: mediaKind },
 	}));
 }
 
 /** Why a bulk send cannot proceed, or `null` when it can. */
 export function refuseReason(keys: readonly string[], projectId: string | null): string | null {
-	const count = itemsFromSelection(keys, null).length;
+	const count = itemsFromSelection(keys, null, null).length;
 	if (count === 0) return 'Select at least one item to send.';
 	if (projectId === null) return 'Choose a labeling task to send into.';
 	if (count > MAX_BULK_ITEMS) {

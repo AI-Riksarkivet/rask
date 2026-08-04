@@ -18,6 +18,7 @@
 	let {
 		keys,
 		dataset = null,
+		datasetVersion = null,
 		tenant = 'default',
 		onsent,
 	}: {
@@ -25,6 +26,9 @@
 		keys: string[];
 		/** The corpus they came from — rides on every item so they resolve against it, not the default. */
 		dataset?: string | null;
+		/** The VERSION of that corpus. `publish.py` records it, so an item sent without one leaves the
+		 *  published artifact unable to say which version of the corpus it describes. */
+		datasetVersion?: number | null;
 		tenant?: string;
 		/** Fired after a successful send, with how many items landed. */
 		onsent?: (sent: number) => void;
@@ -61,7 +65,7 @@
 		sent = null;
 		const result = await sendItems({
 			projectId,
-			items: itemsFromSelection(keys, dataset),
+			items: itemsFromSelection(keys, dataset, datasetVersion),
 		});
 		sending = false;
 		if (result.ok) {

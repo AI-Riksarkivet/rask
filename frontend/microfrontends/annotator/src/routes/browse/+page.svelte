@@ -23,6 +23,7 @@
 	 *  several documents, then send once. */
 	let selected = $state<string[]>([]);
 	let selectedDataset = $state<string | null>(null);
+	let selectedVersion = $state<number | null>(null);
 
 	// A non-default dataset rides the deep link (`?dataset=…&keys=…`) so the canvas — and a reload
 	// of its URL — targets the picked dataset; the default keeps the bare `?keys=` link byte-identical.
@@ -35,12 +36,13 @@
 		});
 	}
 
-	function select(keys: string[], dataset: string | null): void {
+	function select(keys: string[], dataset: string | null, datasetVersion: number | null): void {
 		// Switching corpus REPLACES the selection rather than merging. Keys are namespaced per corpus,
 		// so a mixed list would send items resolving against the wrong one — the stale-item defect #37
 		// refuses that at the write boundary, but only after someone has waited for it.
 		const merged = dataset === selectedDataset ? [...selected, ...keys] : keys;
 		selectedDataset = dataset;
+		selectedVersion = datasetVersion;
 		selected = [...new Set(merged)];
 	}
 </script>
@@ -56,6 +58,7 @@
 	<BulkSendBar
 		keys={selected}
 		dataset={selectedDataset}
+		datasetVersion={selectedVersion}
 		onsent={() => {
 	// Cleared on success: leaving them selected invites a second send of the same items, and
 	// two tasks for one page is two people labelling it.

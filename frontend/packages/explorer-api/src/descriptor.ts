@@ -493,6 +493,21 @@ export class DatasetView {
 		return name in this.declared.capabilities;
 	}
 
+	/**
+	 * The version of the corpus's ROW table — an item's provenance when it is sent for labelling.
+	 *
+	 * `publish.py` records this into the publish plan's `dataset_versions`, so an item sent without
+	 * one leaves the published artifact unable to say which version of the corpus it describes.
+	 *
+	 * An ACCESSOR rather than something each sender computes: it was computed inline in the explorer
+	 * and not at all in the annotator, which is exactly how two senders come to disagree about one
+	 * contract.
+	 */
+	get rowTableVersion(): number | null {
+		const table = this.defaultSearchTable?.row_table;
+		return table ? (this.descriptor.tables[table]?.version ?? null) : null;
+	}
+
 	// ── searchable tables ─────────────────────────────────────────────
 	/**
 	 * Every searchable table this corpus declares, in declaration order.

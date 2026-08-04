@@ -11,6 +11,9 @@
 
 import { describe, expect, it } from 'vitest';
 
+import * as v from 'valibot';
+
+import { SendItemSchema } from '$lib/projects/types';
 import { itemsFromSelection, MAX_BULK_ITEMS, refuseReason } from './bulk-send';
 
 describe('shaping a selection', () => {
@@ -80,5 +83,32 @@ describe('when a send is refused', () => {
 
 	it('allows a valid selection', () => {
 		expect(refuseReason(['a', 'b'], 'p1')).toBeNull();
+	});
+});
+
+
+describe('dataset provenance', () => {
+	it('carries the dataset VERSION on every item', () => {
+		// `publish.py` records it into the publish plan's `dataset_versions`. An item sent without one
+		// leaves the published artifact unable to say which version of the corpus it describes.
+		const items = itemsFromSelection(['a', 'b'], 'vasa', 7);
+
+		expect(items.every((i) => i.source.dataset_version === 7)).toBe(true);
+	});
+
+	it('omits the version when there is none, rather than sending null', () => {
+		expect('dataset_version' in itemsFromSelection(['a'], 'vasa', null)[0]!.source).toBe(false);
+	});
+
+	it('SURVIVES the wire schema — the field was being stripped', () => {
+		// The defect this pins. valibot's `v.object` drops unknown keys, and the annotator's send
+		// schema did not declare `dataset_version` — so every item sent from this zone recorded no
+		// version, while the explorer (whose schema declares it) recorded the real one. Two senders,
+		// one contract, and only one honoured it. Nothing errored; the field simply vanished.
+		const [item] = itemsFromSelection(['a'], 'vasa', 7);
+
+		const parsed = v.parse(SendItemSchema, item);
+
+		expect(parsed.source.dataset_version).toBe(7);
 	});
 });
