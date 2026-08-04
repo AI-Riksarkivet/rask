@@ -69,6 +69,29 @@ tests:
       - user: user:dave
         object: warehouse:lance_catalog
         assertions: { can_observe_events: false }
+  - name: only a ROOT-warehouse (estate) admin can browse the raw object stores
+    check:
+      # #90. The store registry's buckets include the external RAW tier and the observability bucket
+      # — outside the medallion entirely — so this is deliberately the same estate tier as the event
+      # feed, not a per-tenant one. alice owning acme_bucket must NOT reach the raw scans.
+      - user: user:root_admin
+        object: warehouse:lance_catalog
+        assertions: { can_browse_storage: true }
+      - user: user:alice
+        object: warehouse:lance_catalog
+        assertions: { can_browse_storage: false }
+      - user: user:dave
+        object: warehouse:lance_catalog
+        assertions: { can_browse_storage: false }
+      # Recorded because it is the surprising half: the relation resolves on ANY warehouse its owner
+      # owns — alice owns acme_bucket, so it is true THERE. What makes the privilege estate-scoped is
+      # not the model, it is that the app only ever checks it against `fga_root_object`. Exactly the
+      # arrangement `can_observe_events` already has. If a future caller checks it against a tenant
+      # warehouse, the model will happily say yes and the scope silently widens — so the app-side
+      # invariant is pinned separately, in test_viewer_object_authz.py.
+      - user: user:alice
+        object: warehouse:acme_bucket
+        assertions: { can_browse_storage: true }
   - name: team-owned project admins get full warehouse access (and a team owns MANY projects)
     check:
       - user: user:alice

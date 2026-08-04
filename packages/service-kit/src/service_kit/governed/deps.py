@@ -16,8 +16,20 @@ The three-outcome checker is the load-bearing part, and the middle case is why i
   layer into an open one, silently, which is the failure nobody notices until it matters.
 """
 
-from __future__ import annotations
-
+# NO `from __future__ import annotations` IN THIS MODULE, and it must stay that way.
+#
+# `make_auth_deps(settings_dep)` annotates its inner dependencies with `settings_dep` — a LOCAL
+# name. Deferred annotations turn that into the string `"settings_dep"`, which FastAPI resolves via
+# `get_type_hints` against this module's GLOBALS, where no such name exists. The result is not an
+# error: the ForwardRef stays unresolved and FastAPI silently demotes the parameter to a QUERY
+# PARAM. Every gated route then answers `422 {"field": "query.settings", "message": "Field
+# required"}` instead of authorizing, and the checker never runs.
+#
+# It shipped that way. `viewer/api/v1/endpoints/datasets.py` — the corpus-list gate — was affected
+# from the day it landed, and its tests did not catch it because they override
+# `CheckerDep.__metadata__[0].dependency`, which replaces the sub-dependency whose signature is the
+# broken one. Found 2026-08-04 while gating the object routes (#90), by building a bare app with no
+# overrides: `test_auth_deps_resolve.py` now does exactly that, on purpose.
 from typing import Annotated, Any, Protocol
 
 from fastapi import Depends, Request

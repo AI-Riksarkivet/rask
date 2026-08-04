@@ -41,6 +41,14 @@ class GovernedAuthSettings:
     fga_store_id: str | None = Field(default=None, alias="LANCE_FGA_STORE_ID")
     fga_model_id: str | None = Field(default=None, alias="LANCE_FGA_MODEL_ID")
     fga_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LANCE_FGA_TIMEOUT_SECONDS")
+    #: The estate's root FGA object — the one a platform-wide privilege is checked against, as
+    #: opposed to a per-tenant one. Shared here rather than redeclared per service because it is a
+    #: coordinate every governed service must agree on: the catalog gates `GET /v1/events` on it, the
+    #: reconciler excludes it from the ghost report, the chart's bootstrap-admin job seeds the grant
+    #: on it, and the viewer now gates its object browser on it (#90). Three copies of the same
+    #: default in three configs is exactly how one of them ends up naming a different object and
+    #: quietly authorizing against something nobody grants.
+    fga_root_object: str = Field(default="warehouse:lance_catalog", alias="LANCE_FGA_ROOT_OBJECT")
 
     @model_validator(mode="after")
     def _validate_governed_auth(self) -> Self:

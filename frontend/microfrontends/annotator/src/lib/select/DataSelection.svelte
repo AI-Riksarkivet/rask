@@ -23,6 +23,7 @@
 	let {
 		onopen,
 		onselect,
+		selectedKeys = [],
 		initialDataset = null,
 	}: {
 		/** Open these key-paths in the canvas; `dataset` = the picked dataset's selector
@@ -32,6 +33,10 @@
 		onselect?:
 			| ((keys: string[], dataset: string | null, datasetVersion: number | null) => void)
 			| undefined;
+		/** What the browse page currently holds selected. Threaded down so "more like this" can say
+		 *  how many neighbours are NEW rather than how many it found — the two differ sharply, because
+		 *  neighbours-of-A and neighbours-of-B overlap by construction when A and B are similar. */
+		selectedKeys?: string[];
 		/** Dataset to restore on mount (the URL's `?dataset=` — e.g. exiting the canvas). */
 		initialDataset?: string | null;
 	} = $props();
@@ -151,6 +156,7 @@
 			onselect={onselect
 	? (keys) => onselect(keys, view!.datasetParam(), view!.rowTableVersion)
 	: undefined}
+			{selectedKeys}
 			onback={() => (openDoc = null)}
 		/>
 	{:else}

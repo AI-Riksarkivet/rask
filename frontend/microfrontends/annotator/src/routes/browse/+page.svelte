@@ -52,6 +52,7 @@
 		<DataSelection
 			onopen={open}
 			onselect={select}
+			selectedKeys={selected}
 			initialDataset={page.url.searchParams.get('dataset')}
 		/>
 	</div>

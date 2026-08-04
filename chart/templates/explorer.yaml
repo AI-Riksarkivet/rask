@@ -137,11 +137,23 @@ spec:
               valueFrom:
                 secretKeyRef: { name: {{ include "lance.fullname" $root }}-media-catalog-token, key: token }
             {{- end }}
-            {{- if and (eq $name "annotator") $root.Values.auth.enabled }}
-            # The annotation TASK plane is FGA-gated (can_claim/can_review/can_publish on
-            # annotation_project:<id>, §6) — with these unset the checker is deliberately permissive
-            # (dev parity), so an auth-enabled estate that skipped them would ship real doors on the
-            # catalog and an open side-gate here. Mirrors the catalog's block in services.yaml.
+            {{- if $root.Values.auth.enabled }}
+            # Authn/authz for EVERY explorer service, not just the annotator (#90).
+            #
+            # This block was `if and (eq $name "annotator") auth.enabled`, and that scoping was the
+            # deployment half of a real hole: the viewer serves page IMAGE BYTES and an S3 object
+            # browser, its code has the same `CurrentSubject`/checker plumbing the annotator has, and
+            # with these env vars unset the checker is deliberately permissive for dev parity. So on
+            # an auth-enabled estate the catalog shipped real doors while the service that streams
+            # the actual page images ran wide open — and it looked correct, because the gate existed
+            # in code.
+            #
+            # Setting them estate-wide is safe by construction: they change behaviour ONLY where a
+            # route declares an auth dependency. A service with no such route is unaffected, so this
+            # cannot quietly 401 a surface nobody gated.
+            #
+            # The annotation TASK plane is FGA-gated too (can_claim/can_review/can_publish on
+            # annotation_project:<id>, §6). Mirrors the catalog's block in services.yaml.
             - { name: LANCE_OIDC_ENABLED, value: "true" }
             - { name: LANCE_OIDC_ISSUER, value: {{ $root.Values.dex.issuer | quote }} }
             - { name: LANCE_OIDC_DISCOVERY_URL, value: "http://{{ include "lance.dexHost" $root }}:{{ $root.Values.dex.port }}/dex" }
@@ -149,13 +161,17 @@ spec:
             - { name: LANCE_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" $root.Values.dex.issuer) | quote }} }
             - { name: LANCE_FGA_ENABLED, value: "true" }
             - { name: LANCE_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" $root }}:8080" }
-            # The publish saga's identity coordinates. Deliberately NO password here — it is seeded
-            # into OpenBao and fetched via the Dapr secret store, fail-closed (the estate's secrets
-            # rule); a pinned media.catalogToken (above) still wins when set.
+            {{- if eq $name "annotator" }}
+            # ANNOTATOR ONLY, and it stays that way: the publish saga's identity coordinates. This is
+            # a service credential for writing back annotations, which no other explorer service does.
+            # Deliberately NO password here — it is seeded into OpenBao and fetched via the Dapr
+            # secret store, fail-closed (the estate's secrets rule); a pinned media.catalogToken
+            # (above) still wins when set.
             - { name: MEDIA_PUBLISH_TOKEN_URL, value: "http://{{ include "lance.dexHost" $root }}:{{ $root.Values.dex.port }}/dex/token" }
             - { name: MEDIA_PUBLISH_CLIENT_ID, value: {{ $root.Values.dex.clientId | quote }} }
             - { name: MEDIA_PUBLISH_CLIENT_SECRET, value: {{ $root.Values.dex.clientSecret | quote }} }
             - { name: MEDIA_PUBLISH_USERNAME, value: {{ $root.Values.dex.publisher.username | quote }} }
+            {{- end }}
             {{- with $root.Values.auth.fgaStoreId }}
             - { name: LANCE_FGA_STORE_ID, value: {{ . | quote }} }
             {{- end }}

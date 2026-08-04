@@ -597,7 +597,46 @@ def build_report(
 _ORPHAN_SCAN_OFF = "MAINTENANCE_ORPHAN_SCAN_ENABLED is off — the per-dataset file scan is a different order of work from the store comparison"
 
 
-def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings) -> None:
+def _scannable_buckets(report: ReconcileReport, settings: MaintenanceSettings, sources: Sources) -> list[str]:
+    """Every bucket the orphan scan should open: the configured list PLUS every registered warehouse.
+
+    #81's residual, closed here. `run_sweep` learned to read the warehouse REGISTRY — a bucket is
+    created by an API CALL at runtime, so every tenant provisioned since the last config edit was
+    invisible to a static list — but this scan kept iterating `sweep_buckets` alone. Same blindness,
+    worse consequence: the sweep merely failed to MAINTAIN those datasets, while this reports zero
+    orphans for them, and a zero in a drift report is read as "checked and clean".
+
+    Reuses the registry `_read_sources` ALREADY loaded rather than reading it again. Two reads would
+    be two answers — the second could disagree with the one `orphan_buckets` and `dangling_bindings`
+    were computed from, and a report whose categories disagree about which warehouses exist is worse
+    than one that is merely incomplete.
+
+    The FAILURE posture differs from the sweep's deliberately. The sweep logs a warning and degrades
+    to the configured list, which is exactly its old behaviour and costs only a maintenance cycle. A
+    REPORT may not do that: an unreadable registry means buckets nobody looked at, so it is recorded
+    as an IncompleteScan. "A 0 that means 'we did not look' is the one number this report must never
+    print" is this section's own rule, and a silent degrade is precisely how that 0 gets printed.
+    """
+    buckets = list(settings.sweep_buckets)
+    if sources.warehouse_records_error is not None:
+        report.incomplete.append(
+            IncompleteScan(
+                source="registry:warehouses",
+                reason=f"warehouse registry unreadable, so any bucket outside the configured list went UNSCANNED: {sources.warehouse_records_error}",
+            )
+        )
+        return buckets
+    for record in sources.warehouse_records or []:
+        bucket = str(record.get("bucket") or "")
+        # Deactivated warehouses are still SCANNED, unlike the sweep, which skips them. Reporting is
+        # not rewriting: a quarantined tenant's orphans are exactly what an operator wants named
+        # before deciding whether to offboard it, and naming them changes nothing on disk.
+        if bucket and bucket not in buckets:
+            buckets.append(bucket)
+    return buckets
+
+
+def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sources: Sources) -> None:
     """Attach the unreferenced-file findings, or say honestly why they are absent.
 
     Gated separately because it opens EVERY dataset and unions the file references of EVERY live
@@ -610,7 +649,7 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings) -> 
         return
     fs, _ = fs_and_base(f"s3://{settings.s3_bucket}", settings.storage_options())
     datasets: list[tuple[str, str]] = []
-    for bucket in settings.sweep_buckets:
+    for bucket in _scannable_buckets(report, settings, sources):
         try:
             for uri in discover_dataset_uris(fs, bucket):
                 datasets.append((uri, uri.removeprefix("s3://")))
@@ -688,7 +727,7 @@ async def reconcile(
     # The unreferenced-FILE pass runs after the store comparison and is separately gated: it opens
     # every dataset rather than comparing three stores, so it is a different order of work. Blocking
     # Lance/S3 IO, so it goes to the threadpool like every other read here.
-    await run_in_threadpool(_orphan_category, report, settings)
+    await run_in_threadpool(_orphan_category, report, settings, sources)
     log.info(
         "reconcile_report",
         extra={

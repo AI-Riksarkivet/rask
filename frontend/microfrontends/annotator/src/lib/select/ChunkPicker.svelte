@@ -10,11 +10,14 @@
 	import type { DatasetView } from '@rask/explorer-api/descriptor';
 	import { Button } from '@rask/ui/button';
 
+	import SimilarPanel from './SimilarPanel.svelte';
+
 	let {
 		view,
 		doc,
 		onopen,
 		onselect,
+		selectedKeys = [],
 		onback,
 	}: {
 		view: DatasetView;
@@ -24,6 +27,9 @@
 		/** Offer these keys for a BULK send rather than opening them. Optional: a surface that only
 		 *  views (the canvas hand-off) passes nothing and the control is absent. */
 		onselect?: ((keys: string[]) => void) | undefined;
+		/** What is already selected — so "more like this" can report how many neighbours are NEW
+		 *  rather than how many it found. */
+		selectedKeys?: string[];
 		onback: () => void;
 	} = $props();
 
@@ -121,6 +127,19 @@
 						</div>
 						<Pencil class="text-muted-foreground size-4 shrink-0" />
 					</button>
+
+					<!-- Build a batch FROM this chunk. Only where a selection is being built: on the
+					     canvas hand-off (`onselect` absent) there is nothing to add neighbours to, and
+					     an "Add 24 to selection" with no selection is a control that does nothing. -->
+					{#if onselect}
+						<SimilarPanel
+							seedKey={keyOf(chunk)}
+							keyFields={view.keyFields}
+							dataset={view.id}
+							selected={selectedKeys}
+							onadd={(keys) => onselect?.(keys)}
+						/>
+					{/if}
 				</li>
 			{/each}
 		</ul>

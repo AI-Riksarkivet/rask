@@ -264,3 +264,65 @@ def test_s3_sink_empty_prefix_has_no_double_slash() -> None:
     uri = S3Sink(cast(pafs.S3FileSystem, _FakeFs({})), "bucket", "").put("gold.arrow", b"X")
 
     assert uri == "s3://bucket/gold.arrow"
+
+
+# --- #92 fixity: a digest over the bytes AS HARVESTED ----------------------------------------------
+
+
+def test_bronze_records_a_sha256_of_the_harvested_bytes(tmp_path: Path) -> None:
+    """The archival master gets a checksum, and it is over the SOURCE bytes.
+
+    Bronze already COPIES the bytes rather than pointing at them, so the estate survives the source
+    vanishing. What a copy cannot do is let anyone assert LATER that the copy is still what was
+    harvested — bit-rot over the archival master was undetectable because no digest was stored.
+
+    Computed from `obj.data` at ingest, deliberately, not read back from Lance afterwards: a digest
+    taken from the stored copy agrees with that copy however corrupt it is.
+    """
+    import hashlib
+
+    payloads = [b"AAA", b"BBB", b"CCC"]
+    for name, data in zip("abc", payloads, strict=True):
+        (tmp_path / f"{name}.png").write_bytes(data)
+    bronze = str(tmp_path / "bronze.lance")
+
+    ingest_to_bronze(LocalDirSource(tmp_path, "*.png"), bronze, {})
+
+    got = lance.dataset(bronze).to_table(columns=["sha256", "source_uri"])
+    assert got.column("sha256").to_pylist() == [hashlib.sha256(p).hexdigest() for p in payloads]
+    # A hex digest, not raw bytes — greppable in a report and comparable without decoding.
+    assert all(len(d) == 64 and set(d) <= set("0123456789abcdef") for d in got.column("sha256").to_pylist())
+
+
+def test_the_digest_distinguishes_two_payloads_that_differ_by_one_bit(tmp_path: Path) -> None:
+    """The property that makes it fixity rather than decoration."""
+    (tmp_path / "a.png").write_bytes(b"\x00")
+    (tmp_path / "b.png").write_bytes(b"\x01")
+    bronze = str(tmp_path / "bronze.lance")
+
+    ingest_to_bronze(LocalDirSource(tmp_path, "*.png"), bronze, {})
+
+    digests = lance.dataset(bronze).to_table(columns=["sha256"]).column("sha256").to_pylist()
+    assert len(set(digests)) == 2, digests
+
+
+def test_the_digest_carries_forward_into_the_next_tier(tmp_path: Path) -> None:
+    """A gold transcription must be traceable to the exact page bytes it was read from.
+
+    `compute._carry_forward` reads every column generically, so this needs no per-column plumbing —
+    but "needs no plumbing" is exactly the kind of claim that silently stops being true, so it is
+    pinned here rather than assumed from reading the function.
+    """
+    import hashlib
+
+    from medallion.services.compute import transform_stage
+
+    (tmp_path / "a.png").write_bytes(b"AAA")
+    bronze = str(tmp_path / "bronze.lance")
+    silver = str(tmp_path / "silver.lance")
+    ingest_to_bronze(LocalDirSource(tmp_path, "*.png"), bronze, {})
+
+    transform_stage(bronze, silver, {}, stage="silver")
+
+    carried = lance.dataset(silver).to_table(columns=["sha256"]).column("sha256").to_pylist()
+    assert carried == [hashlib.sha256(b"AAA").hexdigest()]

@@ -37,6 +37,27 @@ CheckerDep = Annotated[FgaChecker, Depends(_deps.get_checker)]
 #: gating the list on data access would hide corpora from someone allowed to know they exist.
 READ_METADATA = "can_get_metadata"
 
+#: The relation a read of actual BYTES requires (#90). Separate from `READ_METADATA` because the
+#: model separates them and the difference is the whole point for an archive: knowing a volume of
+#: sealed records exists is not the same permission as reading the pages. `/api/page` returns image
+#: bytes, so it takes this rung; `/api/pages` lists metadata and takes the metadata rung, matching
+#: how `datasets.py` reasons about a corpus listing.
+READ_DATA = "can_read_data"
+
+#: Raw OBJECT-STORE browsing (#90) — the S3 list/HEAD/download routes. An ESTATE-wide privilege,
+#: checked ONLY against `fga_root_object`, exactly like the catalog's `can_observe_events`.
+#:
+#: Not a per-store grant, and that is a decision with a reason. A `store` FGA type would need a
+#: parent tuple per store to be reachable, and the four SHIPPED default stores are never registered
+#: through the API — they come from `DEFAULT_STORES` in code, so nothing would ever write their
+#: tuples. The model would be correct and the gate would deny everyone including the estate owner.
+#: A gate that denies everyone is an outage, not a gate. Per-store granularity lands the day store
+#: registration owns its own tuples.
+#:
+#: Owner tier, because the registry's buckets include the external RAW tier and the observability
+#: bucket — outside the medallion entirely (R23) — so a per-tenant admin must not reach them.
+BROWSE_STORAGE = "can_browse_storage"
+
 
 def corpus_object(settings: ViewerSettings, dataset_id: str, table: str) -> str:
     """The FGA object for one corpus table: `table:<namespace>/<table>`.
@@ -47,3 +68,14 @@ def corpus_object(settings: ViewerSettings, dataset_id: str, table: str) -> str:
     """
     segments = settings.catalog_table_id(dataset_id, table)
     return f"table:{settings.catalog_delimiter.join(segments)}"
+
+
+def table_object(table_id: str) -> str:
+    """The FGA object for a caller-supplied CATALOG TABLE ID (``bronze$pages``) — ``table:<id>``.
+
+    The page routes are addressed by catalog table id directly, not by a media dataset id, so they
+    need no `catalog_table_id` mapping — the identifier the caller passes IS the one the catalog
+    authorizes on. Kept here beside `corpus_object` so both naming rules live in one file: the way
+    this goes wrong is a second module deriving an object string that agrees until it does not.
+    """
+    return f"table:{table_id}"
