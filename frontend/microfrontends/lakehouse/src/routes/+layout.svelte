@@ -74,7 +74,13 @@
 
 	// The lineage area's Graph and Columns canvases set height:100% and must fill a SIZED flex item
 	// rather than scroll inside an auto-height one; every other area wants the plain scroll wrapper.
-	const canvasArea = $derived(area === 'lineage');
+	//
+	// The WORKBENCH is the same shape, and belongs here for a second reason. A dock lays its grid out
+	// in PIXELS, so inside the plain `overflow-y-auto` wrapper it would both size to nothing (its
+	// `flex: 1 1 0` resolving against a block parent — the exact defect that made the explorer's dock
+	// mount three groups and paint none) and hand its scrolling to the PAGE, which would scroll the
+	// whole dock rather than the panel under the cursor. Panels own their own overflow.
+	const canvasArea = $derived(area === 'lineage' || area === 'workbench');
 
 	// Animate soft navs via the View Transitions API; SSR-safe. Since the four lakehouse areas merged
 	// into this one zone, a hop between them (catalog -> lineage -> models -> admin) is a soft nav and
