@@ -122,3 +122,72 @@ def test_every_registered_adapter_actually_implements_iter_objects(tmp_path: Pat
         assert callable(getattr(adapter, "iter_objects", None)), (
             f"{kind} adapter has no iter_objects — it does not satisfy SourceAdapter, and no isinstance check can tell you so"
         )
+
+
+def test_every_adapter_is_DRIVEN_not_merely_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Existence is not enough — the test above passed while `iter_objects` was a guaranteed TypeError.
+
+    `IIIFVolumeSource.iter_objects` called `fetch_image(url)`, whose `client` is a required
+    keyword-only argument, and `iter_keys` passed `iiif_base=` to a function whose parameter is
+    `base_url`. Both are unconditional raises on the FIRST unit, and both survived a suite that only
+    asked whether the method existed. `ty` found them; a test should have.
+
+    So: actually turn the crank, with the network replaced at the seam the adapter reaches through.
+    Every kind that can be driven offline is driven — the point is that a wrong call signature has
+    nowhere left to hide, not that IIIF specifically is covered.
+    """
+    import httpx
+    from ingest.sources import build_source, iter_unit_keys
+
+    manifest = {"items": [{"id": "https://iiif.example/arkis!A0060198_00001/canvas"}]}
+
+    class _FakeResponse:
+        def __init__(self, url: str) -> None:
+            self._url = url
+
+        def raise_for_status(self) -> None: ...
+
+        def json(self) -> dict[str, object]:
+            return manifest
+
+        @property
+        def content(self) -> bytes:
+            return b"\xff\xd8\xff" + self._url.encode()
+
+    class _FakeClient:
+        """Records what it was asked for, so the URL the adapter BUILT is assertable."""
+
+        seen: list[str] = []
+
+        def __init__(self, *args: object, **kwargs: object) -> None: ...
+
+        def __enter__(self) -> _FakeClient:
+            return self
+
+        def __exit__(self, *exc: object) -> None: ...
+
+        def get(self, url: str, *args: object, **kwargs: object) -> _FakeResponse:
+            _FakeClient.seen.append(url)
+            return _FakeResponse(url)
+
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+
+    # local-dir: a real file, so the whole read path runs against the filesystem.
+    (tmp_path / "page.tif").write_bytes(b"II*\x00fixture")
+
+    local = build_source(SourceSpec(kind="local-dir", project="p", dataset="d", options={"root": str(tmp_path)}))
+    assert [obj.uri for obj in local.iter_objects()], "local-dir yielded nothing from a directory holding a file"
+
+    iiif = build_source(SourceSpec(kind="iiif", project="p", dataset="d", options={"volume_id": "A0060198", "iiif_base": "https://iiif.example"}))
+
+    keys = list(iter_unit_keys(iiif))
+    assert keys == ["https://iiif.example/arkis!A0060198_00001/full/max/0/default.jpg"], keys
+
+    objects = list(iiif.iter_objects())
+    assert len(objects) == 1, objects
+    assert objects[0].uri == keys[0]
+    assert objects[0].data.startswith(b"\xff\xd8\xff"), "iter_objects returned no image bytes"
+
+    # The manifest and the image must have gone through ONE client, not one per request: the shared
+    # connection is why `storage.iiif` takes a client at all.
+    assert any(url.endswith("/manifest") for url in _FakeClient.seen), _FakeClient.seen

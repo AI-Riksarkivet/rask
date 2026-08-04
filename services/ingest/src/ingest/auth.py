@@ -47,6 +47,8 @@ from service_kit.governed.settings import GovernedAuthSettings
 
 
 if TYPE_CHECKING:
+    from openfga_sdk import OpenFgaClient
+
     from service_kit.governed.oidc import OIDCVerifier
 
 
@@ -75,7 +77,7 @@ def get_auth_settings() -> IngestAuthSettings:
 AuthSettingsDep = Annotated[IngestAuthSettings, Depends(get_auth_settings)]
 
 
-async def _require_admin(client: object, *, user: str, obj: str) -> None:
+async def _require_admin(client: OpenFgaClient, *, user: str, obj: str) -> None:
     """`can_administer` on the project, audited, 403 on denial and 503 on outage.
 
     The outage case is separated on purpose: reporting an unreachable OpenFGA as a denial tells the

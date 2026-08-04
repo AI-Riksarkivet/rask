@@ -116,6 +116,18 @@ spec:
                  file cannot call the helper because it cannot template at all. Deriving it here means
                  the ingest plane follows the bucket every other tier follows, including a rename. */}}
             - { name: RASK_INGEST_WAREHOUSE, value: "s3://{{ include "lance.stageBucket" (list $root $root.Values.medallion.producer.bronzeNamespace) }}/ingest" }
+            {{- if $root.Values.dapr.sidecars }}
+            {{- /* The SERVICE half of the ingest control door. `authorize_ingest` treats an UNSET
+                 APP_API_TOKEN as dev-open, matching every other door in the estate — which means a
+                 deployment that forgets it runs an unauthenticated write API and looks identical to
+                 one that is protected. Rendered from the same secret the medallion producer and the
+                 movers read, so the whole plane presents one service identity. Gated on
+                 dapr.sidecars because that is what creates the secret (the medallion templates make
+                 the same reference under the same condition, so it can never dangle). */}}
+            - name: APP_API_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ $root.Release.Name }}-dapr-app-token, key: token }
+            {{- end }}
             {{- end }}
             {{- /* Per-service env passthrough. Added 2026-08-03 because this block was a FIXED set of
                  includes: a values key a service needed had nowhere to render, and the first

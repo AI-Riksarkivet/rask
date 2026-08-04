@@ -27,6 +27,8 @@ from ingest.sources import LineageInput, SourceOption, SourceSpec, register
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    import httpx
+
     from service_kit.lakehouse.sources import SourceAdapter, SourceObject
 
 
@@ -42,6 +44,10 @@ if TYPE_CHECKING:
 #: would be the same hole with an extra step, and a source that cannot be pointed anywhere is a
 #: source nobody can abuse.
 LOCAL_ROOT_ENV = "RASK_INGEST_LOCAL_ROOT"
+
+#: Per-request ceiling for the IIIF fetch. Matches `fetch.py`'s HTTP_TIMEOUT: one source kind must
+#: not have a quieter idea of "stuck" than the fetcher that pulls the same bytes for every other.
+_IIIF_TIMEOUT = 60.0
 
 
 def local_root() -> Path | None:
@@ -129,26 +135,47 @@ class IIIFVolumeSource:
         self._query = query_params
 
     def iter_objects(self) -> Iterator[SourceObject]:
+        """Keys AND bytes, over ONE pooled connection for the whole volume.
+
+        `fetch_image`'s `client` is a required keyword-only argument, and this method used to call
+        `fetch_image(url)` — a `TypeError` before the first byte moved. `fetch.py:70` had already hit
+        and fixed exactly that, and fixing it in one of the two callers is how the same defect gets
+        re-shipped; `ty` is what caught the second one.
+
+        The client is opened HERE rather than per page because that is the whole reason
+        `storage.iiif` injects one: a volume is hundreds of requests to a single host, and a
+        per-request client re-runs the TCP and TLS handshake for every page against an endpoint that
+        already hands out RST at ~64 concurrent reads.
+        """
+        import httpx
+
         from service_kit.lakehouse.sources import SourceObject
         from storage.iiif import fetch_image
 
-        for url in self.iter_keys():
-            yield SourceObject(uri=url, data=fetch_image(url))
+        with httpx.Client(timeout=_IIIF_TIMEOUT, follow_redirects=True) as client:
+            for url in self.iter_keys(client=client):
+                yield SourceObject(uri=url, data=fetch_image(url, client=client))
 
-    def iter_keys(self) -> Iterator[str]:
+    def iter_keys(self, client: httpx.Client | None = None) -> Iterator[str]:
         """Every page's URL, from the volume manifest alone — no image bytes transferred.
 
         This is where the keys-without-bytes protocol pays for itself. `get_image_ids` is ONE
         manifest request; building the URLs is string work. Enumerating through `iter_objects`
         instead downloaded the entire volume — multi-MB per page — purely to read back the URL that
         had just been used to fetch it, and then the workers fetched all of it again.
+
+        `client` is optional because `iter_unit_keys` calls this with no arguments — the enumeration
+        path is one manifest request and has nothing to pool. It exists so `iter_objects` can share
+        its connection rather than opening a second one for the manifest.
         """
         from storage.iiif import DEFAULT_IIIF_BASE, DEFAULT_QUERY_PARAMS, build_image_url, get_image_ids
 
         base = self._base or DEFAULT_IIIF_BASE
         query = self._query or DEFAULT_QUERY_PARAMS
-        for image_id in get_image_ids(self._volume):
-            yield build_image_url(image_id, iiif_base=base, query_params=query)
+        # `base_url`, not `iiif_base` — the latter is what this file invented and `ty` refused. The
+        # keyword is the SAME on both calls, which is what makes a single wrong guess break both.
+        for image_id in get_image_ids(self._volume, base_url=base, client=client):
+            yield build_image_url(image_id, base_url=base, query_params=query)
 
 
 def _iiif(spec: SourceSpec) -> SourceAdapter:
