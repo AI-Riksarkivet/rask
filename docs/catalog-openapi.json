@@ -7469,6 +7469,19 @@
       "PolicyRequest": {
         "description": "The maintenance policy for one table, namespace or project \u2014 every field optional-with-defaults.\n\n``retention_days`` / ``retain_versions`` override the sweep's global old-version cleanup (Lance\nkeeps tag-pinned versions regardless); ``compact_enabled=False`` opts the target out of maintenance\nentirely; ``compact_interval_hours`` bounds how often the sweep maintains it.\n\n**Resolution is WINNER-TAKES-ALL, not field-by-field.** An exact table match shadows the namespace\nrecord which shadows the project record \u2014 the winning record supplies EVERY field, and a field the\nwinner leaves unset falls to the sweep's global default rather than to the record it shadowed.\nAny surface that displays an effective policy has to say so: an inherited value rendered\nidentically to a set one is how nobody can tell what is actually governing their data.",
         "properties": {
+          "auto_cleanup_interval_commits": {
+            "anyOf": [
+              {
+                "maximum": 1000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Cleanup Interval Commits"
+          },
           "cleanup_enabled": {
             "default": true,
             "title": "Cleanup Enabled",
@@ -7522,6 +7535,19 @@
               }
             ],
             "title": "Retention Days"
+          },
+          "scan_batch_size": {
+            "anyOf": [
+              {
+                "maximum": 8192.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scan Batch Size"
           },
           "target_rows_per_fragment": {
             "anyOf": [
@@ -9970,6 +9996,23 @@
           "end_version"
         ],
         "title": "VersionRange",
+        "type": "object"
+      },
+      "WarehouseNamespacesResponse": {
+        "description": "The namespaces BOUND to one warehouse \u2014 the registry's answer, same shape as the spec's\nListNamespaces (``{\"namespaces\": [...]}``) so a spec client parses it unchanged.",
+        "properties": {
+          "namespaces": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Namespaces",
+            "type": "array"
+          }
+        },
+        "required": [
+          "namespaces"
+        ],
+        "title": "WarehouseNamespacesResponse",
         "type": "object"
       },
       "WarehouseResponse": {
@@ -17518,6 +17561,52 @@
       }
     },
     "/v1/warehouses/{warehouse_id}/namespaces": {
+      "get": {
+        "description": "The namespaces bound to this warehouse, read from the REGISTRY \u2014 the same source the delete\ndoor consults. This read exists so no surface has to INFER the answer: the lakehouse warehouse\npage used to derive its namespace list by grouping the table registry, which made an EMPTY\nnamespace structurally invisible \u2014 the page said \"no namespaces\" while the delete door refused\n409 naming one (observed live, #66). Reader-gated like the record itself (``can_get_metadata``);\na missing warehouse is the same 404 as everywhere else.",
+        "operationId": "list_warehouse_namespaces_v1_warehouses__warehouse_id__namespaces_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseNamespacesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Warehouse Namespaces",
+        "tags": [
+          "warehouse"
+        ]
+      },
       "post": {
         "description": "Create a top-level namespace INSIDE this warehouse's bucket and bind it, so all its tables route\nthere (#3-A physical isolation). Gated on ``can_create_namespace`` (writer) on ``warehouse:<id>``.\n\nThe namespace is created via the warehouse's bucket-rooted connection (not the default), the binding is\npersisted + cached (so subsequent table ops resolve without a registry read), and FGA is seeded with the\nnamespace's ``parent`` edge pointing at the warehouse \u2014 so the owner's grant cascades into the tables.",
         "operationId": "create_warehouse_namespace_v1_warehouses__warehouse_id__namespaces_post",

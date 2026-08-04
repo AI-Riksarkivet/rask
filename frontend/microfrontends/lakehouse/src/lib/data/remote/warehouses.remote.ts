@@ -120,6 +120,19 @@ export const fetchWarehouse = query(
 		parsed(await catalogJSON(`/v1/warehouses/${enc(id)}`), WarehouseSchema),
 );
 
+/** `WarehouseNamespacesResponse` — the spec's ListNamespaces shape (`{"namespaces": [...]}`). */
+const WarehouseNamespacesSchema = v.object({ namespaces: v.array(v.string()) });
+
+/** The namespaces BOUND to one warehouse, from the REGISTRY — the same source the delete door
+ *  consults (#66). This is the FACT the warehouse page renders; any table-derived view is at best an
+ *  enrichment on top of it, because an empty namespace holds zero tables and is exactly what the
+ *  delete door will refuse on. */
+export const fetchWarehouseNamespaces = query(
+	v.string(),
+	async (id): Promise<ApiResult<{ namespaces: string[] }>> =>
+		parsed(await catalogJSON(`/v1/warehouses/${enc(id)}/namespaces`), WarehouseNamespacesSchema),
+);
+
 /** The estate's tenants (estate-observer gated by the catalog — a member sees 403, handled). */
 export const fetchProjects = query(
 	async (): Promise<ApiResult<ProjectSummary[]>> =>

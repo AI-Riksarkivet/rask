@@ -238,6 +238,36 @@ async def get_warehouse(warehouse_id: str, settings: SettingsDep, token: Current
     return WarehouseResponse(**record)
 
 
+class WarehouseNamespacesResponse(BaseModel):
+    """The namespaces BOUND to one warehouse — the registry's answer, same shape as the spec's
+    ListNamespaces (``{"namespaces": [...]}``) so a spec client parses it unchanged."""
+
+    namespaces: list[str]
+
+
+@router.get("/{warehouse_id}/namespaces", response_model_exclude_none=True)
+async def list_warehouse_namespaces(
+    warehouse_id: str,
+    settings: SettingsDep,
+    token: CurrentToken,
+    client: FgaClientDep,
+) -> WarehouseNamespacesResponse:
+    """The namespaces bound to this warehouse, read from the REGISTRY — the same source the delete
+    door consults. This read exists so no surface has to INFER the answer: the lakehouse warehouse
+    page used to derive its namespace list by grouping the table registry, which made an EMPTY
+    namespace structurally invisible — the page said "no namespaces" while the delete door refused
+    409 naming one (observed live, #66). Reader-gated like the record itself (``can_get_metadata``);
+    a missing warehouse is the same 404 as everywhere else."""
+    _require_enabled(settings)
+    await fga_deps.require_relation(client, settings, token, relation="can_get_metadata", obj=f"warehouse:{warehouse_id}")
+    so = settings.storage_options()
+    record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
+    if record is None:
+        raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
+    bound = await run_in_threadpool(warehouses.namespaces_bound_to, settings.registry_root, so, warehouse_id)
+    return WarehouseNamespacesResponse(namespaces=bound)
+
+
 async def _set_warehouse_status(
     warehouse_id: str,
     status: str,
