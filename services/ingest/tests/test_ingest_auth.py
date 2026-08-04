@@ -56,8 +56,9 @@ def _app(*, oidc: object = None, fga: object = None, service_project: str = "dem
         settings: AuthSettingsDep,
         dapr_api_token: Annotated[str | None, Header()] = None,
         authorization: Annotated[str | None, Header()] = None,
+        dapr_caller_app_id: Annotated[str | None, Header()] = None,
     ):
-        await authorize_ingest(request, settings, body.get("project"), dapr_api_token, authorization)
+        await authorize_ingest(request, settings, body.get("project"), dapr_api_token, authorization, dapr_caller_app_id)
         return {"ok": True}
 
     return app
@@ -206,3 +207,70 @@ def test_OIDC_on_with_NO_fga_client_fails_CLOSED(_oidc_on: None) -> None:
     a verified-but-unchecked principal."""
     with TestClient(_app(oidc=_Verifier("alice"), fga=None), raise_server_exceptions=False) as client:
         assert client.post("/ingests", json={"project": "demo"}, headers={"authorization": "Bearer t"}).status_code == 503
+
+
+# ── the gateway must not launder anonymous traffic into a service-authenticated write ──
+
+
+def test_a_VALID_service_token_from_the_PUBLIC_DOOR_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The measured bypass: 403 straight to the pod, 202 through the gateway, with NO credential.
+
+    `dapr.io/app-token-secret` makes daprd stamp `dapr-api-token` on every request it hands the app,
+    and the gateway forwards through Dapr service invocation, so an anonymous public request arrives
+    here already holding a valid service token. A browser with no login started a real ingest run
+    that way. The token proves the request came through Dapr; it says nothing about who sent it.
+    """
+    monkeypatch.setenv("APP_API_TOKEN", SERVICE_TOKEN)
+
+    with TestClient(_app(), raise_server_exceptions=False) as client:
+        response = client.post(
+            "/ingests",
+            json={"project": "demo"},
+            headers={"dapr-api-token": SERVICE_TOKEN, "dapr-caller-app-id": "gateway"},
+        )
+
+    assert response.status_code == 403, "a token stamped by daprd on behalf of an anonymous caller authorized a write"
+    assert "public front door" in response.json()["detail"]
+
+
+def test_the_SAME_token_from_a_SERVICE_caller_still_works(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The guard must not sever service-to-service ingest, which is the token's actual job.
+
+    Without this, the fix would be indistinguishable from deleting the service-token path — and every
+    cascade head that legitimately drives an ingest would start failing.
+    """
+    monkeypatch.setenv("APP_API_TOKEN", SERVICE_TOKEN)
+
+    with TestClient(_app()) as client:
+        response = client.post(
+            "/ingests",
+            json={"project": "demo"},
+            headers={"dapr-api-token": SERVICE_TOKEN, "dapr-caller-app-id": "medallion"},
+        )
+
+    assert response.status_code == 200
+
+
+def test_a_DIRECT_caller_with_no_dapr_hop_still_works(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No caller app-id means nothing invoked through Dapr — the caller PRESENTED the token itself.
+
+    That is the conformance lane's path (it reads APP_API_TOKEN from the pod's own env), and holding
+    the shared secret is the credential there. Refusing it would break the lane while closing
+    nothing: a party with the secret AND network reach to the pod never needed the gateway.
+    """
+    monkeypatch.setenv("APP_API_TOKEN", SERVICE_TOKEN)
+
+    with TestClient(_app()) as client:
+        assert client.post("/ingests", json={"project": "demo"}, headers={"dapr-api-token": SERVICE_TOKEN}).status_code == 200
+
+
+def test_the_public_caller_list_is_configurable_and_case_insensitive() -> None:
+    """Deployments name their own front doors, and a header's case is not something to bet on."""
+    settings = IngestAuthSettings()
+    settings.public_callers = "gateway, Edge-Proxy"
+
+    assert settings.is_public_caller("gateway")
+    assert settings.is_public_caller("GATEWAY")
+    assert settings.is_public_caller("edge-proxy")
+    assert not settings.is_public_caller("medallion")
+    assert not settings.is_public_caller(None)

@@ -58,7 +58,7 @@ def main(packages: list[str]) -> int:
     for name in modules:
         try:
             importlib.import_module(name)
-        except Exception as exc:  # noqa: BLE001 — ANY import failure is the thing being caught
+        except Exception as exc:  # ANY import failure is the thing being caught, not just ImportError
             failures.append(f"{name}: {type(exc).__name__}: {exc}")
 
     if failures:

@@ -222,6 +222,25 @@ for path, body, fatal in (
         sys.exit('   provisioning failed: %s %s' % (status, detail))
 " || die "could not provision $PROJECT"
 	ok "$PROJECT provisioned"
+
+	# Creating the tenant is only half of standing one up: the service token is project-BLIND and may
+	# write into exactly ONE configured project, so a freshly provisioned tenant that nothing is
+	# authorized for gets a correct 403 on its first ingest. That is the door working, and it cost a
+	# lane run to see — the chart pins `demo` (the estate's nominal tenant) and the lane provisions its
+	# own, because `demo` predates warehouse enforcement and cannot be adopted.
+	#
+	# Authorizing the service for the tenant it just created is what an operator does, so the lane does
+	# it too rather than reaching for a project the deployment happens to already allow.
+	log "authorizing the ingest service token for $PROJECT"
+	# …and enable the fixture source, pointed at the ONE directory the lane seeds. Unset (the chart
+	# default) means local-dir is refused outright, which is what a production ingest wants and
+	# what made the first run after the confinement fail every unit with "local-dir is not
+	# enabled here". Both settings in one call so there is one rollout, not two.
+	kubectl set env -n "$NS" deploy/"$RELEASE"-ingest \
+		"RASK_INGEST_SERVICE_PROJECT=$PROJECT" "RASK_INGEST_LOCAL_ROOT=$POD_FIXTURE_DIR" >/dev/null
+	kubectl rollout status -n "$NS" deploy/"$RELEASE"-ingest --timeout=240s >/dev/null ||
+		die "ingest did not come back after the service-project change"
+	ok "service token scoped to project:$PROJECT"
 }
 
 cmd_fixtures() {

@@ -114,6 +114,24 @@ services:
       # reporting success — exactly the hole A8 exists to catch. RASK_LINEAGE_URL is the read side,
       # which the status endpoint joins against so A8's verdict comes from the graph rather than from
       # a flag nothing sets. Both point at the release's lineage Service.
+      # The ONE project this deployment's service token may ingest into. The Dapr app-api-token
+      # authenticates a SERVICE, not a tenant — honouring an arbitrary requested project would let
+      # any token holder write into every tenant — so it is pinned here and crossing tenants takes a
+      # user bearer with can_administer on the target. Mirrors MEDALLION_PRODUCE_ADMIN_PROJECT.
+      # Stated explicitly rather than left to the code default: which tenant a shared credential can
+      # write into is not a fact anyone should have to read Python to discover.
+      RASK_INGEST_SERVICE_PROJECT: demo
+      # The ONE directory tree the `local-dir` source may read. EMPTY means the kind is REFUSED,
+      # which is the right default: `options.root` is caller-supplied and reaches a recursive reader,
+      # so an unconfined local-dir is an arbitrary-file-read primitive aimed at this pod's own
+      # filesystem — {"root":"/proc/self","pattern":"environ"} would land the S3 credential as rows
+      # in a governed table the explorer then serves.
+      #
+      # Present-but-empty rather than absent, so the knob is discoverable: the first in-cluster run
+      # after the confinement landed failed every unit with "local-dir is not enabled here", and
+      # nothing in the chart hinted that such a setting existed. local-dir is a fixture source;
+      # s3-prefix and iiif are the production ones and need nothing here.
+      RASK_INGEST_LOCAL_ROOT: ""
       RASK_LINEAGE_ENDPOINT: http://rask-lineage:8000
       RASK_LINEAGE_URL: http://rask-lineage:8000
       # Route creation and commits through the CATALOG rather than writing the object store

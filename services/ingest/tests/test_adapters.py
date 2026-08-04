@@ -8,6 +8,7 @@ replaces it.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from ingest.adapters import register_builtin_sources
@@ -157,7 +158,7 @@ def test_every_adapter_is_DRIVEN_not_merely_present(tmp_path: Path, monkeypatch:
     class _FakeClient:
         """Records what it was asked for, so the URL the adapter BUILT is assertable."""
 
-        seen: list[str] = []
+        seen: ClassVar[list[str]] = []
 
         def __init__(self, *args: object, **kwargs: object) -> None: ...
 

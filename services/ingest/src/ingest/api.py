@@ -102,11 +102,14 @@ async def create_ingest(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     dapr_api_token: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
+    # The INVOKING Dapr app-id. Without it the door cannot tell a service from the public front
+    # door invoking on a stranger's behalf — see `auth.public_callers`.
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
 ) -> IngestAccepted:
     # BEFORE anything else. The body names the project this write lands in, so the admin check targets
     # that project rather than a configured one — authorization scope must equal write scope, or an
     # admin of project A passes the gate while the rows land in project B.
-    await authorize_ingest(request, settings, body.project, dapr_api_token, authorization)
+    await authorize_ingest(request, settings, body.project, dapr_api_token, authorization, dapr_caller_app_id)
 
     if body.kind not in registered_kinds():
         raise HTTPException(
@@ -183,6 +186,9 @@ async def get_ingest(
     settings: AuthSettingsDep,
     dapr_api_token: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
+    # The INVOKING Dapr app-id. Without it the door cannot tell a service from the public front
+    # door invoking on a stranger's behalf — see `auth.public_callers`.
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
 ) -> RunStatusResponse:
     record = await store.get(run_id)
     engine_state = await asyncio.to_thread(reader.state, run_id) if reader is not None else None
@@ -200,7 +206,7 @@ async def get_ingest(
     # Authorized against the run's OWN project, which is only knowable after the record is resolved —
     # a run id names a tenant, and a status body carries that tenant's project, dataset, source keys
     # and error detail. Reading it is not public.
-    await authorize_ingest(request, settings, record.project, dapr_api_token, authorization)
+    await authorize_ingest(request, settings, record.project, dapr_api_token, authorization, dapr_caller_app_id)
 
     # The store holds only what the caller asked for; everything that MOVES is read from the engine.
     # Without this a completed run reported ACCEPTED forever — nothing writes the record a second
