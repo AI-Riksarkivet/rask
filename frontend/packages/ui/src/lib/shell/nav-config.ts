@@ -288,8 +288,23 @@ const GOVERNANCE_ITEMS: TopNavItem[] = [
 /** COMPUTE's panel rows — the Ray/job plane. The old overview zone folded in here (R16), so the
  *  zone root IS the overview and rides the panel as its first row (matching exactly, like Media's
  *  Search at /explorer). */
+const WORKSPACE_ITEMS: TopNavItem[] = [
+	{
+		title: 'Workbench',
+		href: '/lakehouse/workbench',
+		description: 'Lineage, runs, events, tables and storage in one arrangeable dock.',
+	},
+];
+
 const COMPUTE_ITEMS: TopNavItem[] = [
 	{ title: 'Overview', href: '/compute/', description: 'The Ray plane at a glance.' },
+	{
+		// The zone's own dock — panels are this zone's components over its own remotes, so it is a row
+		// of this panel like every other area of the zone.
+		title: 'Workbench',
+		href: '/compute/workbench',
+		description: 'Jobs, capacity, actors and Serve in one arrangeable dock.',
+	},
 	{ title: 'Jobs', href: '/compute/jobs', description: 'Submitted Ray jobs and their lifecycle.' },
 	{ title: 'Cluster', href: '/compute/cluster', description: 'Nodes and their resource load.' },
 	{ title: 'Actors', href: '/compute/actors', description: 'Live actors across the cluster.' },
@@ -396,6 +411,10 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 	// only a new ZONE earns a new entry (R15). The project switcher sits at the head of the bar on
 	// every zone (global context belongs in global chrome).
 	const lakehouse: TopNavGroup[] = [
+		// WORKSPACE first, and its own column rather than a row of Lineage. The dock composes the whole
+		// zone (lineage graph + runs + events + the catalog's tables and object browser), so filing it
+		// under one area is what made it invisible from the others — the placement that was reverted.
+		{ label: 'Workspace', items: WORKSPACE_ITEMS },
 		{ label: 'Catalog', items: DATA_ITEMS },
 		{ label: 'Models', items: MODEL_ITEMS },
 		// Lineage is an AREA of this zone (/lakehouse/lineage), exactly like Models
