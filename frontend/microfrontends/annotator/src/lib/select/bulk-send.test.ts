@@ -14,7 +14,13 @@ import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 
 import { SendItemSchema } from '$lib/projects/types';
-import { bulkLabelChoices, itemsFromSelection, maxItemsFor, refuseReason, SEND_TASK_CAP } from './bulk-send';
+import {
+	bulkLabelChoices,
+	itemsFromSelection,
+	maxItemsFor,
+	refuseReason,
+	SEND_TASK_CAP,
+} from './bulk-send';
 
 describe('shaping a selection', () => {
 	it('makes ONE item per key', () => {

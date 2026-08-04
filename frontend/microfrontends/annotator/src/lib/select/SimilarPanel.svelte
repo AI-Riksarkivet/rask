@@ -44,9 +44,7 @@
 		open && seedKey ? findSimilar({ key: seedKey, dataset, table, n: 24 }) : null,
 	);
 
-	const hits = $derived(
-		(neighbours?.current?.ok ? neighbours.current.data : []) as SimilarHit[],
-	);
+	const hits = $derived((neighbours?.current?.ok ? neighbours.current.data : []) as SimilarHit[]);
 
 	/** The neighbour keys, minus the seed — the service already drops it, but this panel is also the
 	 *  place a stale result would show up, and adding the thing you clicked to your own batch is the
@@ -66,9 +64,9 @@
 		data-testid="similar-open"
 		title="find items whose embedding is nearest to this one"
 		onclick={() => {
-			open = !open;
-			added = null;
-		}}
+	open = !open;
+	added = null;
+}}
 	>
 		<Sparkles class="size-4" />
 		{open ? 'Hide similar' : 'More like this'}
