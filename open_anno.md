@@ -1,94 +1,20 @@
-# open_anno — the annotation plane's remaining work
+# open_anno — the annotation plane's REMAINING work
 
-Working plan, not settled architecture. Delete this file when the work lands; it does not belong
-in `docs/`, which asserts "settled" by location regardless of what the contents say.
+Working plan, not settled architecture. It does not belong in `docs/`, which asserts "settled" by
+location regardless of contents. **Delete this file when the last section below lands.**
 
-**MVP first.** Every item below is ordered simplest-first within itself. The rule for the whole
-file: make the core loop *work* before making any part of it rich.
+## What this file is NOT
 
----
+Everything the 2026-08-04 wave delivered has been REMOVED from here, because git history is the
+record and a plan file that also describes finished work cannot be read as a to-do list. Landed and
+gone from this file: **#37** (send refuses an unresolvable dataset; item removal; the read path
+reporting the server's real reason), **#41** (relations end to end — ontology, storage, submit-time
+validation, the two-click editor, the drawn canvas edge — and text spans: the textual facet,
+validation, and the selection editor), and **#40a–40d** (queue filter, bulk assign, per-annotator
+metrics, membership).
 
-## #40 — Campaign operations
-
-All four are wanted. Ordered by cost, cheapest first, because each earlier one makes the next
-easier to judge.
-
-### 40a · Queue filter — **LANDED**
-Filter the task queue by **state**, **assignee** and **label**. Pure client work over data the
-listing already returns (`TaskListing.details`); no new route, no new permission.
-
-Why first: a 1000-item project is unnavigable today, which makes every other campaign feature hard
-to even demonstrate. Cheapest thing that makes the rest testable.
-
-Done: state + assignee compose (AND), the state dropdown carries COUNTS so it summarises where the
-work is sitting without applying a filter, the empty result says "No items match this filter" rather
-than the "no items yet" that would be a lie, and changing a filter CLEARS the selection — TanStack
-keys `rowSelection` by id and it survives a row leaving the visible set, so without that a manager
-could bulk-accept rows they never saw.
-
-Filtered at the INPUT array rather than through TanStack's column filters: `assignee` is not an
-accessor column, and adding a hidden one would be plumbing for the framework rather than the problem.
-Pagination, sorting and selection all follow from the filtered set for free.
-
-Side effect worth keeping: `@rask/ui`'s `Select` now passes `onValueChange` through to Bits UI's
-`Select.Root`, which always had it. Without it a consumer had to watch `value` from an `$effect` and
-assign state there — the Svelte 5 anti-pattern.
-
-### 40b · Bulk assign — **LANDED**
-Select N queued items → assign all to one annotator in one action. Extends the existing per-row
-assign dialog (`TaskQueue.svelte`, `canAssign`).
-
-Settled as predicted: ONE gated event per item, reported per item — the bulk-accept precedent, and
-the only shape the actor model can honour. There is no transaction across task actors, so a rollback
-would be a second best-effort loop that can itself half-fail; claiming an atomicity we cannot deliver
-is worse than reporting the truth.
-
-Done: the button offers only rows whose OWN `legal_events` carry an `assign` edge (not a second guess
-at the machine here), a partial failure reads "1 of 2 assigned to gina — <the server's words>", and a
-separate dialog from the per-row one because the two differ in what they act on, what they say and
-what they do on submit.
-
-### 40c · Per-annotator metrics — **LANDED**
-Throughput and accept-rate per person. Read-only, derived from the `Transition` list already
-recorded on each task — **no new state**, and that constraint is the point: a metric stored
-separately from the transitions it summarises is a metric that can disagree with them.
-
-Done: a pure `annotatorMetrics()` over the task list the queue already reads — no endpoint, no
-stored counters, nothing that can drift. A reconciliation test asserts the per-person totals add up
-against the raw rows.
-
-Three judgements worth keeping. Credit goes to whoever SUBMITTED, not whoever holds it now, or a
-task sent back for changes and reassigned credits the wrong person. A person with nothing submitted
-has NO rate rather than 0% — 0% reads as "everything they did was rejected", the opposite of the
-truth. And reviewers appear even with no submissions of their own, or the panel silently omits the
-people doing the reviewing.
-
-### 40d · Membership UI — **LANDED**
-See and edit who is member / reviewer / manager on a project. This writes **FGA tuples**, so it
-touches the authorization model — use the `openfga` skill, and the write path is the lakehouse's
-existing tuple write (`access.remote.ts`), which is the estate's reference for gated mutations.
-
-Heaviest and last because it is the only one that can lock someone out of their own project.
-
-Done, and the model needed NO change — the rungs were already concentric and directly assignable.
-What was missing was any way to grant one, so a creator got `owner` at create and nobody else could
-be added; every collaborative project needed someone with direct store access.
-
-`GET/PUT/DELETE /projects/{id}/members` in the ANNOTATOR service (service-kit's `read_object_tuples`
-/ `write_tuples` / `delete_tuples` — no catalog dependency). READS are `can_manage`-gated too: who
-has access names the people worth phishing.
-
-The refusal is stronger than "your own last grant": the LAST owner-or-manager on the project cannot
-be revoked at all, because that leaves it administrable only by a tenant admin — on a tenant whose
-admin has moved on, nobody. Named in the 409, not discovered later.
-
-A grant reads before writing, which is not an optimisation: an OpenFGA Write is transactional and
-rejects the whole batch if one tuple exists, so without the read a repeated grant is a 400 instead
-of a no-op.
-
-Bug the e2e caught: one `error` state gated both the list and the refusal, so a refused revoke HID
-the list — and "grant another owner first" is impossible if you cannot see who there is. Load errors
-and action errors are now separate.
+What is below is what is genuinely NOT built. Two of the three have their design decided; one is
+the owner's to design.
 
 ---
 
@@ -118,84 +44,6 @@ Notes for whoever picks it up:
 
 ---
 
-## #41 — Relations + text-span (partly landed)
-
-**Landed:** `RelationClass` in the ontology, `Draft.links` storage, submit-time validation, and the
-two-click link editor in the annotation inspector (arming adopts the inspected shape; the target is
-picked on the canvas).
-
-**Also landed:** the link is DRAWN on the canvas — `ArrowDataPlugin.setLinks()` takes row indices
-and strokes a line plus a directed arrowhead into a `links` Graphics on the annotations container,
-so it inherits the viewport transform. The drawing MATH is `linkPath()`, extracted so an arrowhead
-pointing the wrong way is catchable without a GPU.
-
-**Also landed: text-span annotation.** A `text` shape may be a range INTO another annotation's
-text — `parent_id` + `char_start` + `char_end`, a third facet beside the spatial and temporal ones.
-Editable by selecting in the inspector's text field, which is the field the text is already in.
-
-Two things worth keeping. Span-ness is DECLARED, not assumed: a `text` shape carrying neither a
-parent nor a range is an ordinary text annotation (a DocVQA question someone typed IS the text), and
-the pre-existing DocVQA test is what caught the first rule demanding a parent from every one. And a
-span's class comes from the ONTOLOGY, not from labels already on the page — observed live labelling
-a span `line`, its parent's class, which is meaningless.
-
-The earlier claim that this needed a risky migration was WRONG and is corrected above.
-
---- | --- |
-| A surface to select text on | `viewerFor()` has Image, Audio, Video. There is no text viewer. |
-| A source of text for a unit | The annotator serves `chunk-frame` (image) and `annotations` (Arrow). No endpoint returns a unit's transcription. |
-| Offsets on a shape | `Shape` carries x/y/w/h/rotation/polygon/t_start/t_end. No character range. |
-| Offsets in the Arrow schema | `annotations/schema.py` has a `text` STRING column, no start/end. |
-
-**The decision, taken rather than left open.** Two models were possible:
-
-* **(a) A span INTO an annotation's own `text`.** Every row already carries the transcription of its
-  own line or region, so the text is present client-side already. A span is a child annotation with
-  a character range into its parent's text. No new endpoint, no new viewer — the inspector already
-  renders that text field.
-* **(b) A span over a whole-unit transcription.** Needs a text endpoint, a text viewer, and a
-  document-level coordinate space that nothing else in this plane has.
-
-**Take (a).** It is the one the codebase already supports: the Arrow table is per-unit annotation
-rows each carrying `text`, and (b) would invent a second coordinate space beside the pixel one for a
-capability the medallion's HTR output does not currently produce in document order.
-
-**The work (a) implies**, in order:
-1. `Shape.char_start` / `char_end: int | None`, and a `parent_id` naming the row the span is inside.
-2. The same three columns in `annotations/schema.py` — a THIRD facet beside the spatial and temporal
-   ones the schema already comments as such.
-3. Validation: a span's range must lie inside its parent's `text`; a span whose parent is gone is
-   the same class of orphan as a link to a deleted shape and must be refused the same way.
-4. Selection UI on the inspector's existing text field, committing through the same undo stack.
-
-**CORRECTION — the earlier reason for not building this was WRONG.** It said step 2 was "a migration
-with a real blast radius" because it changes the published table's schema. That is false for Lance:
-adding a NULLABLE column is a **metadata-only** operation. Field IDs are assigned incrementally, so
-fragments written before the change keep their original field structure and are never rewritten, and
-a reader returns null for rows that predate the column
-(https://lance.org/format/table/schema/). Heterogeneous fragments are the normal case, not a hazard.
-
-So there is no migration to fear here, and the four steps above are ordinary work. The honest reason
-it is not yet built is simply that it had not been reached — not that it was risky.
-
-**Deliberately not claimed:** that the right PIXELS are lit. A WebGL drawing buffer is not preserved
-after present, so a screenshot of it proves nothing (this zone's delete spec records the same). What
-is pinned is the draw CALL (relations.test.ts) and the draw MATH (link-path.test.ts), each verified
-failing when broken, plus an e2e that fails if the draw path throws in a real browser.
-
----
-
-## #37 — Stale items (partly landed)
-
-**Landed:** removal (`DELETE /projects/{id}/tasks/{task_id}`, `can_manage`, refused past
-`labeling`), and the read path now reports the server's actual reason — `<img>.onerror` carries
-neither status nor body, so a clear `404 dataset 'demo' not found` used to reach the user as
-"Failed to load image: <url>".
-
-**Remaining:** the WRITE half. `POST /projects/{id}/items` does not verify that each item's dataset
-resolves, so a stale item can still be created. Refusing at send is what stops the trap being set
-in the first place; removal is only the escape hatch.
-
 ---
 
 ## #27 — Canvas tool placement (shape DECIDED, not yet scheduled)
@@ -205,6 +53,8 @@ already is one. What is wrong is **what is in it and in what order**: the tools 
 separators and a deliberate order (navigate · draw · assist), rather than one flat list.
 
 Not: floating it over the canvas, and not moving it to the right.
+
+---
 
 ---
 
