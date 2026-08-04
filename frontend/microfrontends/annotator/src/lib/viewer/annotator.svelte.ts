@@ -1064,7 +1064,66 @@ export class AnnotatorController {
 
 	/** Flush the accumulated field-edit overlay to Lance as ONE atomic version, then
 	 *  reload so the display reflects the persisted (merge-reordered) rows. */
-	async save(): Promise<void> {
+	// ── autosave ─────────────────────────────────────────────────────────────────────────────────
+	//
+	// Deferred until now because it needed a real answer to ONE question: what happens when the save
+	// conflicts. A manual save reloads and drops the pending edits — defensible, because the user
+	// pressed Save and is told to their face. Doing that on a TIMER would discard work nobody asked
+	// to discard, in the background, while they were still typing. So autosave HALTS on a conflict
+	// and leaves the edits alone; resolving it is a decision, and decisions belong to the annotator.
+
+	/** Milliseconds of quiet after the last edit before an autosave fires. */
+	static readonly AUTOSAVE_IDLE_MS = 4000;
+
+	/** Off until a caller starts it — the ad-hoc canvas and the tests must not get a background
+	 *  writer they never asked for. */
+	autosaveOn = $state(false);
+	/** Set when autosave stops itself. Non-null means it will NOT retry until the user saves. */
+	autosaveHalted = $state<string | null>(null);
+	/** Epoch ms of the last successful save, for the status line. */
+	lastSavedAt = $state<number | null>(null);
+	private _autosaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+	/** What the status line says. One string, so the canvas can never show two answers at once. */
+	readonly saveStatus = $derived.by<string>(() => {
+		if (this.saving) return 'saving…';
+		if (this.autosaveHalted) return this.autosaveHalted;
+		if (this.dirty) return this.autosaveOn ? 'unsaved — autosaving' : 'unsaved';
+		if (this.lastSavedAt !== null) return 'saved';
+		return '';
+	});
+
+	/** Begin autosaving. Idempotent; the caller owns the stop. */
+	startAutosave(): void {
+		this.autosaveOn = true;
+	}
+
+	stopAutosave(): void {
+		this.autosaveOn = false;
+		this._clearAutosaveTimer();
+	}
+
+	private _clearAutosaveTimer(): void {
+		if (this._autosaveTimer !== null) {
+			clearTimeout(this._autosaveTimer);
+			this._autosaveTimer = null;
+		}
+	}
+
+	/** Called by the shell whenever the dirty state changes. DEBOUNCED on purpose: saving on every
+	 *  keystroke would put a write behind each character of a label, and the transport is a
+	 *  whole-payload PUT guarded by a version — a burst of those is a conflict generator. */
+	scheduleAutosave(): void {
+		this._clearAutosaveTimer();
+		if (!this.autosaveOn || this.autosaveHalted !== null) return;
+		if (!this.canSave) return;
+		this._autosaveTimer = setTimeout(() => {
+			this._autosaveTimer = null;
+			void this.save({ auto: true });
+		}, AnnotatorController.AUTOSAVE_IDLE_MS);
+	}
+
+	async save(opts: { auto?: boolean } = {}): Promise<void> {
 		const t = this.table;
 		const url = this._saveUrl;
 		if (!t || !url || this.saving) return;
@@ -1085,18 +1144,37 @@ export class AnnotatorController {
 		try {
 			const { status } = await postSave(url, payload);
 			if (status === 'conflict') {
+				if (opts.auto) {
+					// HALT rather than reload. The manual path below drops the pending edits, which is
+					// fine when a person pressed Save and is told — but a background timer discarding
+					// someone's work while they type is not a tradeoff, it is data loss. Stop, say so,
+					// and leave the edits exactly where they are.
+					this.autosaveHalted = 'conflict — autosave paused, save manually to resolve';
+					this.saveError =
+						'Annotations changed on the server. Your edits are still here — press Save to review the conflict.';
+					toast.error(this.saveError);
+					return;
+				}
 				// The table advanced under us (another reviewer / a deriver). Reload to the
 				// server state; the user's pending edits are dropped — they re-apply on fresh data.
 				this.saveError = 'Annotations changed on the server — reloaded. Re-apply your edits.';
 				toast.error(this.saveError);
-			} else {
+			} else if (!opts.auto) {
+				// An autosave is SILENT on success. A toast every four idle seconds is noise that
+				// trains people to ignore toasts, including the ones that matter.
 				toast.success('Annotations saved');
 			}
 			await this._reload();
 			this._resetOverlays();
 			await this._syncTaskDraft();
+			this.lastSavedAt = Date.now();
+			// A successful manual save is what clears a halt: the conflict has been looked at.
+			if (!opts.auto) this.autosaveHalted = null;
 		} catch (e) {
 			this.saveError = e instanceof Error ? e.message : String(e);
+			// A transport failure halts autosave too. Retrying a broken connection every four seconds
+			// buries the real error under a hundred identical toasts.
+			if (opts.auto) this.autosaveHalted = `autosave paused — ${this.saveError}`;
 			toast.error(`Save failed: ${this.saveError}`);
 		} finally {
 			this.saving = false;

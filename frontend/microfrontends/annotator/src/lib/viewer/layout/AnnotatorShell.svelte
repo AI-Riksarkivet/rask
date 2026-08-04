@@ -62,6 +62,25 @@
 			alive = false;
 		};
 	});
+	// AUTOSAVE. Started only for a canvas opened FROM A TASK: that is the surface where losing work
+	// costs someone their afternoon, and it is the one with a draft to reconcile against. The ad-hoc
+	// `?keys=` canvas keeps the explicit-save behaviour it has always had.
+	//
+	// The debounce is driven from HERE rather than inside the controller because a component has a
+	// lifecycle and a class does not — this is what guarantees the timer dies with the canvas
+	// instead of firing a write into a unit nobody is looking at any more.
+	$effect(() => {
+		if (reviewSelection.taskId) controller.startAutosave();
+		else controller.stopAutosave();
+		return () => controller.stopAutosave();
+	});
+	$effect(() => {
+		// Reading `dirty` is the subscription: every edit re-runs this and pushes the timer out, so a
+		// burst of typing produces ONE write rather than one per keystroke.
+		void controller.dirty;
+		controller.scheduleAutosave();
+	});
+
 	let status = $state('loading…');
 	// True when the unit's media/annotations failed to load — the status chip turns
 	// destructive and carries the reason (never a silent, eternal "loading…").
@@ -178,7 +197,7 @@
 						class="absolute bottom-2 left-2 z-10 font-mono shadow-sm backdrop-blur"
 						data-testid="annotate-status"
 					>
-						annotate · {unit.kind} · {status}
+						annotate · {unit.kind} · {status}{controller.saveStatus ? ` · ${controller.saveStatus}` : ''}
 					</Badge>
 					<Viewer
 						{unit}
