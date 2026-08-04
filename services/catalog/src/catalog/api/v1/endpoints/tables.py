@@ -33,7 +33,6 @@ from lance_namespace import (
     TableExistsRequest,
     TableNotFoundError,
 )
-from pydantic import BaseModel
 
 from catalog.api import fga_deps, lineage_deps
 from catalog.api.dependencies import (
@@ -58,6 +57,7 @@ from catalog.core.lineage_emit import (
     InputPin,
     emit_write_event,
 )
+from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import dataplane, native
 from service_kit.governed import fga
 from service_kit.lakehouse import protection, trash
@@ -312,7 +312,8 @@ async def drop_table(
         response = DropTableResponse()
     # The record's job ends with the object: clear it so a LATER table reusing this id does not
     # inherit a protection nobody set on it (the same reuse rule as the FGA revoke below).
-    await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", canonical)
+    if guard:  # only when one existed — a clear on nothing is a guaranteed-wasted S3 DELETE per drop
+        await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     # Record the drop as best-effort lineage — provenance of the deletion (the dataset node persists in the
     # graph, named a `drop_table` run). Inline-awaited (NOT BackgroundTasks) → reaches the durable
     # Dapr/JetStream transport before the response; best-effort, so it never fails the drop. Emitted BEFORE
@@ -368,7 +369,8 @@ async def deregister_table(
     guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
     response: DeregisterTableResponse = await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
-    await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", canonical)
+    if guard:  # only when one existed — a clear on nothing is a guaranteed-wasted S3 DELETE per drop
+        await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     # Record the detach as best-effort lineage — asymmetric with drop (which deletes data), deregister
     # only detaches, so without this marker the Dataset node looks like a still-live, never-touched table.
     # Versionless (no data was written), inline-awaited so it reaches the durable transport before the
@@ -438,27 +440,6 @@ async def register_table(
         extra={"location": response.location},
     )
     return response
-
-
-class SetProtectionRequest(BaseModel):
-    """The one field this door writes. Setting it is idempotent; clearing removes the record."""
-
-    protected: bool
-
-
-class ProtectionResponse(BaseModel):
-    id: str
-    protected: bool
-
-
-class TrashEntry(BaseModel):
-    """One recoverable drop — what the owner needs to decide whether to undrop before the deadline."""
-
-    id: str
-    location: str
-    dropped_by: str
-    dropped_at: str
-    expires_at: str
 
 
 @router.get("/{id}/tasks", response_model_exclude_none=True)

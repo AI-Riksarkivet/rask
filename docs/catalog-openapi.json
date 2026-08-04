@@ -9048,6 +9048,20 @@
         "title": "SerializedDock",
         "type": "object"
       },
+      "SetProtectionRequest": {
+        "description": "The one field the protection doors write. Setting is idempotent; clearing removes the record.\n\nONE definition for both the table and namespace doors: two identically-shaped copies in the two\nendpoint modules made FastAPI mangle the schema names into\n``catalog__api__v1__endpoints__{tables,namespaces}__SetProtectionRequest`` \u2014 module paths leaking\ninto the public contract and into every generated client.",
+        "properties": {
+          "protected": {
+            "title": "Protected",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "protected"
+        ],
+        "title": "SetProtectionRequest",
+        "type": "object"
+      },
       "StorageRole": {
         "description": "What a store is FOR.\n\nThe three governed tiers are exactly bronze/silver/gold (R23): the medallion is\nbronze->silver->gold, and RAW is deliberately outside it \u2014 raw is the external world (a IIIF\nendpoint, a drop bucket), never a governed tier. DERIVED covers artefacts produced from a tier\nbut not themselves governed as one (exported ALTO, thumbnails); OBSERVABILITY covers the\ntelemetry store, which is operational rather than archival.",
         "enum": [
@@ -10494,34 +10508,6 @@
         ],
         "title": "WorkflowSearchMode",
         "type": "string"
-      },
-      "catalog__api__v1__endpoints__namespaces__SetProtectionRequest": {
-        "description": "The one field this door writes. Setting is idempotent; clearing removes the record.",
-        "properties": {
-          "protected": {
-            "title": "Protected",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "protected"
-        ],
-        "title": "SetProtectionRequest",
-        "type": "object"
-      },
-      "catalog__api__v1__endpoints__tables__SetProtectionRequest": {
-        "description": "The one field this door writes. Setting it is idempotent; clearing removes the record.",
-        "properties": {
-          "protected": {
-            "title": "Protected",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "protected"
-        ],
-        "title": "SetProtectionRequest",
-        "type": "object"
       }
     },
     "securitySchemes": {
@@ -11840,7 +11826,7 @@
     },
     "/v1/namespace/{id}/drop": {
       "post": {
-        "description": "Drop namespace ``id`` (``drop_namespace``); revoke its FGA tuples \u2014 and, for a Cascade drop, every\ndropped child's \u2014 so a reused id can't inherit stale grants.\n\nDeletion protection (#73): a ``protected`` control-root record refuses 409 unless ``force=true``\n\u2014 and it also stops a CASCADE from a parent taking this namespace with it, because the cascade\narrives at this same door. ``force`` turns the protection lock only; the FGA gate ran first.",
+        "description": "Drop namespace ``id`` (``drop_namespace``); revoke its FGA tuples \u2014 and, for a Cascade drop, every\ndropped child's \u2014 so a reused id can't inherit stale grants.\n\nDeletion protection (#73): a ``protected`` control-root record refuses 409 unless ``force=true``.\nA CASCADE is checked against the whole SUBTREE before the native call \u2014 its children are destroyed\ninside that one call and never reach this door, so a protected table under a cascaded namespace\nwould otherwise die silently. ``force`` turns the protection lock only; the FGA gate ran first.",
         "operationId": "drop_namespace_v1_namespace__id__drop_post",
         "parameters": [
           {
@@ -12212,7 +12198,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/catalog__api__v1__endpoints__namespaces__SetProtectionRequest"
+                "$ref": "#/components/schemas/SetProtectionRequest"
               }
             }
           },
@@ -15944,7 +15930,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/catalog__api__v1__endpoints__tables__SetProtectionRequest"
+                "$ref": "#/components/schemas/SetProtectionRequest"
               }
             }
           },

@@ -352,6 +352,7 @@
 	$effect(() => {
 		if (!notInCatalog) {
 			recoverable = null;
+			recoverError = null; // a failed undrop must not follow the user to the NEXT table's 404
 			return;
 		}
 		const current = table;

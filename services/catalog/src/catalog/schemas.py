@@ -605,3 +605,35 @@ class PublishResult(BaseModel):
     to_version: int
     assertions: list[dict[str, object]] = Field(default_factory=list)
     reason: str | None = None
+
+
+# --------------------------------------------------------------------------- #
+# Deletion protection + recoverable drops (#73 / #75)
+# --------------------------------------------------------------------------- #
+
+
+class SetProtectionRequest(BaseModel):
+    """The one field the protection doors write. Setting is idempotent; clearing removes the record.
+
+    ONE definition for both the table and namespace doors: two identically-shaped copies in the two
+    endpoint modules made FastAPI mangle the schema names into
+    ``catalog__api__v1__endpoints__{tables,namespaces}__SetProtectionRequest`` — module paths leaking
+    into the public contract and into every generated client.
+    """
+
+    protected: bool
+
+
+class ProtectionResponse(BaseModel):
+    id: str
+    protected: bool
+
+
+class TrashEntry(BaseModel):
+    """One recoverable drop — what the owner needs to decide whether to undrop before the deadline."""
+
+    id: str
+    location: str
+    dropped_by: str
+    dropped_at: str
+    expires_at: str

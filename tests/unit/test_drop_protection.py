@@ -71,6 +71,13 @@ class _RecordingNamespace:
         self.calls.append("drop_namespace")
         return type("R", (), {"model_fields_set": set()})()
 
+    def list_namespaces(self, request: Any) -> Any:
+        return type("R", (), {"namespaces": [], "page_token": None})()
+
+    def list_tables(self, request: Any) -> Any:
+        tables = ["pages"] if request.id == ["bronze"] else []
+        return type("R", (), {"tables": tables, "page_token": None})()
+
 
 def _protect(settings: Settings, kind: str, canonical: str) -> None:
     protection.set_protection(
@@ -441,3 +448,52 @@ def test_undrop_registers_a_RELATIVE_location(tmp_path: Any) -> None:
     registered = [c for c in ns.calls if c.startswith("register_table:")]
     assert registered == ["register_table:pages.lance"], registered
     assert "://" not in registered[0], "an absolute URI reached register_table — the live 400"
+
+
+def test_a_CASCADE_refuses_when_a_descendant_is_protected(tmp_path: Any) -> None:
+    """A cascade destroys children INSIDE one native call — they never reach a door. Before this, a
+    protected table under a cascade-dropped namespace died silently while the docstring claimed
+    otherwise. The refusal must NAME the protected descendant: "something in here is protected" is
+    not an answer anyone can act on."""
+    from catalog.api.v1.endpoints import namespaces as n_ep
+    from lance_namespace import DropNamespaceRequest
+
+    settings = _settings(tmp_path)
+    _protect(settings, "table", "bronze$pages")
+    ns: Any = _RecordingNamespace()
+    with pytest.raises(NamespaceNotEmptyError, match="bronze\\$pages"):
+        asyncio.run(
+            n_ep.drop_namespace(
+                id="bronze",
+                ns=ns,
+                settings=settings,
+                token=None,
+                client=None,
+                control=NoopControlEmitter(),
+                body=DropNamespaceRequest(behavior="Cascade"),
+            )
+        )
+    assert ns.calls == [], "the cascade ran despite a protected descendant"
+
+
+def test_force_lets_a_cascade_through(tmp_path: Any) -> None:
+    """The negative twin — force turns the protection lock on the subtree exactly as at the named rung."""
+    from catalog.api.v1.endpoints import namespaces as n_ep
+    from lance_namespace import DropNamespaceRequest
+
+    settings = _settings(tmp_path)
+    _protect(settings, "table", "bronze$pages")
+    ns: Any = _RecordingNamespace()
+    asyncio.run(
+        n_ep.drop_namespace(
+            id="bronze",
+            ns=ns,
+            settings=settings,
+            token=None,
+            client=None,
+            control=NoopControlEmitter(),
+            body=DropNamespaceRequest(behavior="Cascade"),
+            force=True,
+        )
+    )
+    assert "drop_namespace" in ns.calls
