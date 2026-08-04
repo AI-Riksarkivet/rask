@@ -31,10 +31,25 @@ from ingest.runs import (
     record_from_workflow_state,
     run_id_for,
 )
-from ingest.sources import SourceSpec, registered_kinds
+from ingest.sources import SourceDescriptor, SourceSpec, describe_sources, registered_kinds
 
 
 router = APIRouter(tags=["ingest"])
+
+
+@router.get("/sources", response_model=list[SourceDescriptor])
+async def list_sources() -> list[SourceDescriptor]:
+    """The registered source kinds and the options each takes.
+
+    Exists so a caller can OFFER the kinds that are actually registered instead of a list someone
+    typed. Without it the registry is readable only from inside the process, and every client
+    restates the adapters — which is how the compute zone's form came to hardcode `kind: 'iiif'`
+    directly under a comment explaining that the door is source-agnostic, and how `S3PrefixSource`
+    stayed unreachable for months while being written and tested.
+
+    A registry nothing can read drifts by construction.
+    """
+    return describe_sources()
 
 
 class IngestRequest(BaseModel):

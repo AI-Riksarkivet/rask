@@ -31,6 +31,12 @@
 	);
 	const errorEntries = $derived(Object.entries(run?.errors ?? {}));
 
+	// POLL REASON: a run's progress is a COUNTER climbing inside a workflow — `units_done` moves once
+	// per fetched unit — and nothing publishes it. The estate's cursors carry committed facts: the
+	// lineage cursor moves when a run COMMITS, which for an ingest is the last thing that happens, so
+	// a `query.live` on it would sit silent through the whole harvest and then fire once at the end.
+	// That is the opposite of what this page is for. Bounded rather than ambient: the effect returns
+	// early once the run is settled, so the timer exists only while there is something to watch.
 	$effect(() => {
 		if (settled) return;
 		const timer = setInterval(() => {

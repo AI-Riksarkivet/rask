@@ -96,25 +96,40 @@ export async function getIngestRun(
 	return parse(IngestRunSchema, await res.json());
 }
 
-/** Harvest one IIIF volume — a thin wrapper over {@link startIngest}, kept so the compute zone's
- *  existing form keeps working. IIIF is just a registered kind now; this convenience exists for the
- *  caller's readability, NOT because the door knows anything about IIIF. */
-export async function ingestIIIFVolume(
-	volumeId: string,
-	options: { maxPages?: number; project?: string; idempotencyKey?: string } = {},
+/** One field a source kind needs in `options`, described well enough to render. Presentational
+ *  minimum on purpose: the adapter validates, and a second copy of its rules here goes stale. */
+export const SourceOptionSchema = v.object({
+	name: v.string(),
+	label: v.string(),
+	required: v.optional(v.boolean(), false),
+	numeric: v.optional(v.boolean(), false),
+	placeholder: v.nullable(v.optional(v.string()), null),
+	help: v.nullable(v.optional(v.string()), null),
+});
+export type SourceOption = v.InferOutput<typeof SourceOptionSchema>;
+
+/** A registered source kind as the door describes it. */
+export const SourceDescriptorSchema = v.object({
+	kind: v.string(),
+	label: v.string(),
+	description: v.nullable(v.optional(v.string()), null),
+	options: v.array(SourceOptionSchema),
+});
+export type SourceDescriptor = v.InferOutput<typeof SourceDescriptorSchema>;
+
+/** The source kinds this deployment actually has, and what each one needs.
+ *
+ *  Replaces `ingestIIIFVolume()`, which hardcoded `kind: 'iiif'` with `project: 'default'` and
+ *  `dataset: 'pages'` — the same weld I1 removed from the backend, re-formed one layer out. A
+ *  convenience wrapper per kind does not scale to a registry, and worse, it makes the frontend the
+ *  place that decides which kinds exist: `S3PrefixSource` was written, tested and unreachable for
+ *  months for exactly that reason.
+ *
+ *  Ask the registry instead. Adding a source then never touches this file, which is gate A9. */
+export async function listIngestSources(
 	fetchFn: typeof fetch = fetch,
-): Promise<IngestAccepted> {
-	return startIngest(
-		{
-			kind: 'iiif',
-			project: options.project ?? 'default',
-			dataset: 'pages',
-			options: {
-				volume_id: volumeId,
-				...(options.maxPages !== undefined ? { max_pages: options.maxPages } : {}),
-			},
-			...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
-		},
-		fetchFn,
-	);
+): Promise<SourceDescriptor[]> {
+	const res = await fetchFn('/api/ingest/sources');
+	if (!res.ok) return refuse(res, 'listIngestSources');
+	return parse(v.array(SourceDescriptorSchema), await res.json());
 }

@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Iterator, Sequence
 
     from service_kit.lakehouse.sources import SourceAdapter, SourceObject
 
@@ -43,6 +43,37 @@ class LineageInput(BaseModel):
     name: str
 
 
+class SourceOption(BaseModel):
+    """One field a kind needs in `options`, described well enough for a UI to render it.
+
+    The adapter owns `options`, so the adapter is the only place that can say what belongs in it.
+    Without this the registry knows the kinds but not what any of them wants, and a form has to
+    restate every adapter's fields in TypeScript — which re-welds the sources into the frontend after
+    I1 pulled them out of the backend. Adding a kind would then mean editing a zone, and the whole
+    point of the registry is that it does not.
+
+    Deliberately presentational-minimum: a name, a label, whether it is required, and a hint. Not a
+    validation schema — the adapter already validates (`local-dir source requires options.root`), and
+    a second copy of those rules in a different language is a copy that goes stale.
+    """
+
+    name: str
+    label: str
+    required: bool = False
+    numeric: bool = False
+    placeholder: str | None = None
+    help: str | None = None
+
+
+class SourceDescriptor(BaseModel):
+    """A registered kind as the outside world sees it: its key and what it needs."""
+
+    kind: str
+    label: str
+    description: str | None = None
+    options: list[SourceOption] = Field(default_factory=list)
+
+
 class SourceFactory(Protocol):
     def __call__(self, spec: SourceSpec) -> SourceAdapter: ...
 
@@ -57,16 +88,36 @@ class _Registration(BaseModel):
     kind: str
     build: object
     lineage_input: object
+    descriptor: SourceDescriptor
 
 
 _REGISTRY: dict[str, _Registration] = {}
 
 
-def register(kind: str, build: SourceFactory, lineage_input: LineageTwin) -> None:
-    """Register a source kind. Called at import time by the adapter modules themselves."""
+def register(
+    kind: str,
+    build: SourceFactory,
+    lineage_input: LineageTwin,
+    *,
+    label: str | None = None,
+    description: str | None = None,
+    options: Sequence[SourceOption] = (),
+) -> None:
+    """Register a source kind. Called at import time by the adapter modules themselves.
+
+    `options` is what a caller must put in `SourceSpec.options` for this kind. It is declared here,
+    beside the adapter that reads it, because that is the only place the two can be kept in step —
+    see `SourceOption`. Omitting it registers a kind with no described fields, which is honest for an
+    adapter that takes none and merely unhelpful for one that does.
+    """
     if kind in _REGISTRY:
         raise ValueError(f"source kind {kind!r} is already registered")
-    _REGISTRY[kind] = _Registration(kind=kind, build=build, lineage_input=lineage_input)
+    _REGISTRY[kind] = _Registration(
+        kind=kind,
+        build=build,
+        lineage_input=lineage_input,
+        descriptor=SourceDescriptor(kind=kind, label=label or kind, description=description, options=list(options)),
+    )
 
 
 def build_source(spec: SourceSpec) -> SourceAdapter:
@@ -94,6 +145,17 @@ def lineage_input_for(spec: SourceSpec) -> LineageInput:
 
 def registered_kinds() -> list[str]:
     return sorted(_REGISTRY)
+
+
+def describe_sources() -> list[SourceDescriptor]:
+    """Every registered kind and the options it takes — the registry, readable from outside.
+
+    This is what lets a UI offer the kinds that actually exist rather than a list someone typed. The
+    compute zone's ingest form hardcoded `kind: 'iiif'` while its own comment said the door was
+    source-agnostic; `S3PrefixSource` had been written, tested and unreachable for months for exactly
+    that class of reason. A registry nothing can read is a registry that drifts.
+    """
+    return [_REGISTRY[kind].descriptor for kind in sorted(_REGISTRY)]
 
 
 def iter_units(adapter: SourceAdapter) -> Iterator[SourceObject]:

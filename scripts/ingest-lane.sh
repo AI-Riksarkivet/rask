@@ -368,6 +368,11 @@ with urllib.request.urlopen('http://127.0.0.1:8830/api/ingests/$run_id', timeout
 		die "A5: expected COMPLETE_WITH_ERRORS, got $status — a corrupt page must be REPORTED, not silently dropped or fatal"
 	ok "A5 — run reported COMPLETE_WITH_ERRORS"
 
+	# Recorded the way `run` records its own, so A20's error-reporting test can EXECUTE rather than
+	# skip. A gate that has only ever been seen to skip is indistinguishable from one that would
+	# fail — the same argument A10 makes for seeding each grep gate with a real violation.
+	echo "$run_id" >"$ROOT/.a5-run-id"
+
 	local errors named
 	errors="$(jq -r '.errors | length' <<<"$body")"
 	[ "$errors" = "1" ] || die "A5: expected exactly 1 tracked error, got $errors"

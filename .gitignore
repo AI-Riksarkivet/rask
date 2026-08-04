@@ -51,3 +51,9 @@ chart/charts/
 
 # Tilt editor stubs (`tilt dump api-docs`) — dropped at the repo root by the Tilt VS Code extension
 /api/
+
+# Local ingest-lane run ids — written by scripts/ingest-lane.sh, consumed by the A20 e2e.
+# A run id from one operator's cluster means nothing in anyone else's, and it changes on
+# every lane run, so tracking it makes every verification show up as a source change.
+.a11-run-id
+.a5-run-id

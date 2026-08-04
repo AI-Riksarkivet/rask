@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import { query, getRequestEvent } from '$app/server';
-import { getIngestRun, type IngestRun } from '@rask/api';
+import { getIngestRun, listIngestSources, type IngestRun, type SourceDescriptor } from '@rask/api';
 
 // The ingest plane's READ surface for the compute zone (open_ingest.md A20).
 //
@@ -30,4 +30,20 @@ const RunId = v.pipe(v.string(), v.trim(), v.minLength(1));
  */
 export const getIngestRunStatus = query(RunId, async (runId): Promise<IngestRun> => {
 	return getIngestRun(runId, getRequestEvent().fetch);
+});
+
+/**
+ * The source kinds this deployment has registered, and the options each one takes.
+ *
+ * The ingest form is BUILT from this rather than restating it. It previously called
+ * `ingestIIIFVolume()` with `kind: 'iiif'`, `project: 'default'` and `dataset: 'pages'` baked in —
+ * beneath its own comment explaining that the door is source-agnostic. That is invariant I1's weld
+ * re-formed one layer out, and it is why `S3PrefixSource` was reachable by curl but not by anyone
+ * using the product.
+ *
+ * No-arg, so the cache key is the function identity: the registry is populated once at app start
+ * and cannot change under a running pod.
+ */
+export const getIngestSources = query(async (): Promise<SourceDescriptor[]> => {
+	return listIngestSources(getRequestEvent().fetch);
 });

@@ -72,6 +72,40 @@ test.describe('A20 — the deployed ingest lane, seen from the UI', () => {
 		await expect(page.getByText('Loading run')).toHaveCount(0);
 	});
 
+	test('the ingest form offers every REGISTERED kind, not just IIIF', async ({ page }) => {
+		// I1 at the UI boundary. The form used to call `ingestIIIFVolume()` with kind 'iiif', project
+		// 'default' and dataset 'pages' baked in — under its own comment saying the door was
+		// source-agnostic. So `S3PrefixSource` was reachable by curl and by nobody using the product,
+		// which is the same "written, tested, unreachable" state it sat in for months inside the
+		// medallion.
+		//
+		// Asserted against a DEPLOYED registry rather than a fixture: the point is that the page renders
+		// what this deployment actually registered, and a mock would assert only that the mock was read.
+		await page.goto('/compute/new');
+
+		const kinds = page.getByTestId('source-kind');
+		await expect(kinds).toBeVisible();
+
+		const offered = await kinds.locator('option').allTextContents();
+		expect(offered.length).toBeGreaterThan(1);
+		expect(offered.join('|')).toContain('S3 prefix');
+	});
+
+	test('choosing a kind renders THAT kind s fields', async ({ page }) => {
+		// The half that proves the fields come from the registry rather than from a hardcoded form:
+		// switching kinds must change which inputs exist. `bucket` belongs to s3-prefix alone, and
+		// `volume_id` to iiif alone, so each is absent under the other.
+		await page.goto('/compute/new');
+
+		await page.getByTestId('source-kind').selectOption('s3-prefix');
+		await expect(page.getByTestId('source-option-bucket')).toBeVisible();
+		await expect(page.getByTestId('source-option-volume_id')).toHaveCount(0);
+
+		await page.getByTestId('source-kind').selectOption('iiif');
+		await expect(page.getByTestId('source-option-volume_id')).toBeVisible();
+		await expect(page.getByTestId('source-option-bucket')).toHaveCount(0);
+	});
+
 	test('a run with a corrupt unit NAMES the unit that refused to land', async ({ page }) => {
 		// A5 seen from the UI. "3 units failed" tells an operator a number; the unit keys tell them
 		// which pages to look at, which is the only form of the answer they can act on.

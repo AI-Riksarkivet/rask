@@ -20,7 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ingest.sources import LineageInput, SourceSpec, register
+from ingest.sources import LineageInput, SourceOption, SourceSpec, register
 
 
 if TYPE_CHECKING:
@@ -129,17 +129,75 @@ def _iiif_lineage(spec: SourceSpec) -> LineageInput:
 
 
 def register_builtin_sources() -> None:
-    """Idempotent: safe to call from the app factory and from a test."""
+    """Idempotent: safe to call from the app factory and from a test.
+
+    Each kind declares the `options` it takes right here, beside the factory that reads them — the
+    two drift the moment they are apart. `describe_sources()` serves these, so a UI renders the
+    fields a kind actually has and nothing in the frontend restates them. That is what keeps adding
+    a source a backend-only diff (gate A9): the compute zone's form gained S3-prefix and local-dir
+    without a line of Svelte, because it asks.
+    """
     from ingest.sources import registered_kinds
 
     known = set(registered_kinds())
-    for kind, build, lineage in (
-        ("local-dir", _local_dir, _local_dir_lineage),
-        ("s3-prefix", _s3_prefix, _s3_prefix_lineage),
-        ("iiif", _iiif, _iiif_lineage),
-    ):
-        if kind not in known:
-            register(kind, build=build, lineage_input=lineage)
+
+    if "local-dir" not in known:
+        register(
+            "local-dir",
+            build=_local_dir,
+            lineage_input=_local_dir_lineage,
+            label="Local directory",
+            description="A directory tree on the worker. Deterministic and offline — the lane's fixture source.",
+            options=[
+                SourceOption(name="root", label="Directory", required=True, placeholder="/data/pages", help="Absolute path, readable by the ingest pod."),
+                SourceOption(name="pattern", label="Filename pattern", placeholder="*", help="Glob applied within the directory. Defaults to every file."),
+            ],
+        )
+
+    if "s3-prefix" not in known:
+        register(
+            "s3-prefix",
+            build=_s3_prefix,
+            lineage_input=_s3_prefix_lineage,
+            label="S3 prefix",
+            description="Every object under a bucket prefix, through the estate's provider-agnostic client — RustFS, MinIO, HCP or AWS.",
+            options=[
+                SourceOption(name="bucket", label="Bucket", required=True, placeholder="lance-catalog"),
+                SourceOption(name="prefix", label="Prefix", placeholder="volumes/A0068688/", help="Leave empty to take the whole bucket."),
+                SourceOption(
+                    name="endpoint",
+                    label="Endpoint URL",
+                    placeholder="(the configured default)",
+                    help="Override only when the bucket is not on the estate's own endpoint.",
+                ),
+            ],
+        )
+
+    if "iiif" not in known:
+        register(
+            "iiif",
+            build=_iiif,
+            lineage_input=_iiif_lineage,
+            label="IIIF volume",
+            description="Every page of a volume from a IIIF Image API. External raw (R23) — the lineage input is the iiif:// source, never a governed tier.",
+            options=[
+                SourceOption(name="volume_id", label="Volume id", required=True, placeholder="A0068688"),
+                SourceOption(
+                    name="max_pages",
+                    label="Max pages",
+                    numeric=True,
+                    placeholder="all",
+                    help="Stop after this many pages. Leave empty to harvest the whole volume.",
+                ),
+                SourceOption(name="iiif_base", label="IIIF base URL", placeholder="(the configured default)"),
+                SourceOption(
+                    name="query_params",
+                    label="Image query",
+                    placeholder="full/max/0/default.jpg",
+                    help="The IIIF Image API parameters appended to each page request.",
+                ),
+            ],
+        )
 
 
 register_builtin_sources()
