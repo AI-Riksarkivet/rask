@@ -11,6 +11,7 @@ then flows the blob forward (``compute._carry_forward``) and derives the silver 
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Iterator, Mapping
 from itertools import chain
 
@@ -28,7 +29,27 @@ from service_kit.lakehouse.sources import SourceAdapter, SourceObject
 _STAGE_COLUMN = "stage"
 _BRONZE_STAGE = "bronze"
 
-_INGEST_SCHEMA = pa.schema([pa.field("id", pa.int64()), blob_field("payload"), pa.field("source_uri", pa.string())])
+#: The FIXITY column (#92). A hex SHA-256 over the bytes AS HARVESTED, computed once at ingest and
+#: never recomputed — a digest recomputed from the stored copy would agree with itself no matter how
+#: corrupt the copy is, which is the one thing fixity must not do.
+#:
+#: Bronze COPIES the bytes rather than pointing at them, which already makes the estate immune to the
+#: source vanishing. What a copy does not solve is asserting, later, that the copy is still the bytes
+#: that were harvested — bit-rot detection over the archival master is baseline OAIS practice, and
+#: with no stored digest the estate had no way to make that assertion at all.
+#:
+#: `_carry_forward` reads every column generically, so this travels with the row into silver and gold
+#: for free: a gold transcription can be traced to the exact page bytes it was read from.
+_SHA256_COLUMN = "sha256"
+
+_INGEST_SCHEMA = pa.schema(
+    [
+        pa.field("id", pa.int64()),
+        blob_field("payload"),
+        pa.field("source_uri", pa.string()),
+        pa.field(_SHA256_COLUMN, pa.string()),
+    ]
+)
 
 #: Extra STRING columns appended after the core ingest triple — ``{column_name: extractor(obj)}``,
 #: applied in mapping order. A page lane uses this for grouping columns such as volume/page keys; the
@@ -64,6 +85,10 @@ def _chunk_batch(chunk: list[SourceObject], first_id: int, extra_columns: ExtraC
         "id": pa.array(range(first_id, first_id + len(chunk)), pa.int64()),
         "payload": blob_array([obj.data for obj in chunk]),
         "source_uri": pa.array([obj.uri for obj in chunk], pa.string()),
+        # Over `obj.data` — the bytes as they arrived from the source, hashed BEFORE the write, not
+        # read back from Lance afterwards. A digest taken from the stored copy would agree with that
+        # copy however corrupt it is, which is precisely the failure fixity exists to catch.
+        _SHA256_COLUMN: pa.array([hashlib.sha256(obj.data).hexdigest() for obj in chunk], pa.string()),
     }
     for name, extract in (extra_columns or {}).items():
         columns[name] = pa.array([extract(obj) for obj in chunk], pa.string())
