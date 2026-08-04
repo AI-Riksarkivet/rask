@@ -16,6 +16,14 @@ import { serviceHealth } from '$lib/service-health.svelte';
 class DescriptorStore {
 	view = $state<DatasetView | null>(null);
 	error = $state<string | null>(null);
+	/** The backend's DEFAULT corpus id, derived from the health endpoint's db path.
+	 *
+	 *  Published because the picker needs it and cannot re-derive it: the default corpus is reached
+	 *  by having NO `?dataset=` at all, so an entry that does not know it is the default would link
+	 *  to `?dataset=<its own id>` — which works, but makes the plain URL and the explicit one two
+	 *  different strings for one place. Set even when `?dataset=` selected something else, so the
+	 *  picker can always offer the way back. */
+	defaultId = $state<string | null>(null);
 
 	/** The dataset id from `?dataset=`, or null for the default DB. */
 	private paramId(): string | null {
@@ -54,6 +62,7 @@ class DescriptorStore {
 						.pop() ?? '';
 				isDefault = true;
 			}
+			if (isDefault) this.defaultId = id;
 			const view = await getDatasetView(id, isDefault);
 			setActiveView(view);
 			this.view = view;
