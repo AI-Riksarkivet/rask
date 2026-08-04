@@ -142,6 +142,13 @@ cross-object invariants, high-frequency filtered listings), it is a design decis
   name an event the backend publishes, and `test_openapi_contract` fails. Same for `TupleOrigin`
   (`service_kit/governed/fga.py`) — an origin string not in the Literal is a `ty` error, not a runtime one.
 - `discover_dataset_uris` (maintenance sweep) walks ONE root — multi-warehouse sweeps are untested.
+- **Five things live in a Lance dataset that a manifest scan does not reach.** Branches (`tree/`),
+  multi-base files (`base_paths`), MemWAL shards (`_mem_wal/` — WAL + SSTable datasets, and the spec
+  warns that GC'ing WAL files WEAKENS writer fencing, since fencing detects a stalled writer by a
+  put-if-not-exists COLLISION), data overlays (`data/overlay-*.lance`, referenced from
+  `DataFragment.overlays` not `data_files()`), and blob sidecars (`data/<stem>/*.blob`). The first
+  four are REFUSED by `maintenance/services/orphans.py`; refusing overlays is what feature flag 64
+  requires, not a shortcut.
 - **A dataset's files do not necessarily all live under its prefix.** A named BRANCH is a whole
   parallel dataset under `tree/{branch}/` (its own `_versions`/`_transactions`/`_deletions`/
   `_indices`; branch names may contain `/`), and `lance.dataset(uri)` opens only the MAIN branch. A

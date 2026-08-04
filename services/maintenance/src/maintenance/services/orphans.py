@@ -44,6 +44,19 @@ from pydantic import BaseModel, Field
 
 log = logging.getLogger(__name__)
 
+
+class _OverlaysPresent(Exception):
+    """A fragment carries data overlay files (feature flag 64), which this pass does not understand."""
+
+    def __init__(self, dataset_uri: str) -> None:
+        super().__init__(
+            f"{dataset_uri}: uses data overlay files (feature flag 64). The spec requires a reader that "
+            "does not understand overlays to REFUSE the dataset — an overlay lives in `data/` and is "
+            "referenced from DataFragment.overlays, not data_files(), so scanning would report live "
+            "cell values as reclaimable."
+        )
+
+
 #: Directories Lance owns inside a dataset. Anything here is structural, not user data.
 _DATA_DIR = "data"
 _DELETIONS_DIR = "_deletions"
@@ -61,6 +74,11 @@ _REFS_DIR = "_refs"
 #: `_versions/`, `_transactions/`, `_deletions/`, `_indices/`). Branch names may contain `/`, so this
 #: is a path prefix, not one segment.
 _TREE_DIR = "tree"
+
+#: MemWAL shards — an LSM tree beside the base table. Each `_mem_wal/{shard}/` holds `manifest/`,
+#: `wal/`, and `{random8}_gen_{i}/` SSTable directories, every SSTable itself a full Lance dataset.
+#: None of it is reachable from the base table's manifest.
+_MEM_WAL_DIR = "_mem_wal"
 
 #: A zero-byte marker Lance writes at the dataset root. Structural, never referenced by a manifest,
 #: so a naive scan reports it once per dataset forever.
@@ -163,6 +181,15 @@ def referenced_paths(dataset_uri: str, storage_options: dict[str, str] | None = 
                 # and legitimately so: Lance's own `cleanup_old_versions` reclaims the `.lance` and
                 # leaves the sidecar, which is precisely the reclamation gap this pass exists to name.
                 referenced_dirs.add(f"{_DATA_DIR}/{data_file.path.removesuffix('.lance')}")
+            # OVERLAY FILES (feature flag 64). An overlay writes new values for a subset of cells to
+            # `data/overlay-<uuid>.lance` — inside `data/`, where a false positive deletes real
+            # values — and is referenced from `DataFragment.overlays`, not `data_files()`. They are
+            # experimental and unwritable by this pylance, so any handling here would be untestable;
+            # the spec settles it: "a reader or writer that does not understand overlay files must
+            # REFUSE a dataset that uses them", because ignoring one returns stale base values, "a
+            # correctness bug rather than a degraded experience". Refusing is the conforming answer.
+            if getattr(fragment.metadata, "overlays", None):
+                raise _OverlaysPresent(dataset_uri)
             deletion = fragment.metadata.deletion_file
             if deletion is not None:
                 # `path()` renders the on-disk name from (fragment id, read version, unique id); the
@@ -195,15 +222,24 @@ def _unscannable_reason(fs: pafs.FileSystem, prefix: str, referenced: set[str]) 
     mirror hazard is worse and invisible from here — the SOURCE of a clone holds files that only the
     CLONE's manifest still references, so scanning the source alone would name them garbage.
     """
-    tree = f"{prefix}/{_TREE_DIR}"
-    try:
-        if fs.get_file_info(tree).type == pafs.FileType.Directory:
-            return (
-                f"{prefix}: has branches (`{_TREE_DIR}/`), whose files are unreferenced by the main branch "
-                "BY CONSTRUCTION — scanning would report every branch as garbage"
-            )
-    except Exception:  # noqa: S110 — an unstattable path is not evidence of branches
-        pass
+    for directory, why in (
+        (
+            _TREE_DIR,
+            "has branches (`tree/`), whose files are unreferenced by the main branch BY CONSTRUCTION — scanning would report every branch as garbage",
+        ),
+        (
+            _MEM_WAL_DIR,
+            "has MemWAL shards (`_mem_wal/`) — WAL entries and SSTable datasets that no base-table "
+            "manifest references. Reclaiming there needs the shard manifests, and the spec warns that "
+            "deleting WAL files WEAKENS writer fencing (fencing detects a stalled writer by a "
+            "put-if-not-exists COLLISION, which GC removes)",
+        ),
+    ):
+        try:
+            if fs.get_file_info(f"{prefix}/{directory}").type == pafs.FileType.Directory:
+                return f"{prefix}: {why}"
+        except Exception:  # noqa: S110 — an unstattable path is not evidence of the layout
+            continue
 
     # A referenced path that is not here means the dataset spans roots (base_paths / shallow clone).
     # Checked against the exact-match entries only; the trailing-slash entries are sidecar DIRECTORIES.
