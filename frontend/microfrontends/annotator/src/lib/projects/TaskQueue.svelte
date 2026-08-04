@@ -24,20 +24,24 @@
 	import { Dialog } from '@rask/ui/dialog';
 	import { Input } from '@rask/ui/input';
 	import { Textarea } from '@rask/ui/textarea';
-	import { ExternalLink } from '@lucide/svelte';
+	import { ExternalLink, Trash2 } from '@lucide/svelte';
 
 	import LeaseChip from './LeaseChip.svelte';
+	import { dropTask } from './remote/projects.remote';
 	import { fireTaskEvent } from './remote/tasks.remote';
 	import { EVENT_LABELS, taskStateVariant } from './presentation.js';
 	import type { Adjudication, TaskDetail } from './types.js';
 
 	let {
+		projectId,
 		tasks,
 		me,
 		consensusN = 1,
 		adjudications = {},
+		droppable = false,
 		onchanged,
 	}: {
+		projectId: string;
 		tasks: TaskDetail[];
 		me: string | null;
 		/** The labeling task's `consensus_n` — labels the replica chip ("replica k/N"). */
@@ -46,6 +50,9 @@
 		adjudications?: Record<string, Adjudication>;
 		/** Fired after any successful task event so the page refetches ONE snapshot. */
 		onchanged: () => void;
+		/** Whether this project can still have items removed (draft/labeling). The SERVER re-checks
+		 *  both the permission and the state; hiding the button is presentation, not authorization. */
+		droppable?: boolean;
 	} = $props();
 
 	let busy = $state<string | null>(null); // `${task_id}:${event}` in flight
@@ -126,6 +133,23 @@
 		return task.legal_events
 			.map((e) => e.event)
 			.filter((e) => e !== 'assign' && e !== 'save_draft');
+	}
+
+	/** Remove an item that can never be completed. Confirmed, because it discards queued work and
+	 *  there is no undo — the task's own document survives, but nothing lists it any more. */
+	async function remove(task: TaskDetail): Promise<void> {
+		if (busy !== null) return;
+		if (!confirm(`Remove this item from the project? Its queued work is discarded.`)) return;
+		busy = `${task.task_id}:drop`;
+		notice = null;
+		const result = await dropTask({ projectId, taskId: task.task_id });
+		busy = null;
+		// The SERVER's words — a 409 past `labeling`, a 403, or its own report. "Remove failed" would
+		// tell the manager nothing about which of those happened.
+		notice = result.ok
+			? { ok: true, text: result.data.removed ? 'Item removed.' : 'That item was already gone.' }
+			: { ok: false, text: result.detail };
+		if (result.ok) onchanged();
 	}
 
 	function canAssign(task: TaskDetail): boolean {
@@ -270,6 +294,21 @@
 	<!-- flex-wrap: an in_review row carries three review buttons and the cell must stack them
 	     rather than clip at the card edge (found by looking at the A2/A3 screenshots). -->
 	<div class="flex flex-wrap items-center justify-end gap-1">
+		{#if droppable}
+			<!-- The exit an unfinishable item had none of. An item naming a media dataset that was
+			     renamed or removed cannot be opened, so it can never reach a terminal state — and the
+			     publish requires EVERY task terminal, so one of them wedges the project forever. -->
+			<Button
+				variant="ghost"
+				size="icon-sm"
+				disabled={busy !== null}
+				data-testid="drop-task"
+				title="remove this item from the project (it cannot be completed)"
+				onclick={() => void remove(task)}
+			>
+				<Trash2 class="size-3.5" />
+			</Button>
+		{/if}
 		{#if task.state === 'claimed'}
 			<Button
 				variant="outline"

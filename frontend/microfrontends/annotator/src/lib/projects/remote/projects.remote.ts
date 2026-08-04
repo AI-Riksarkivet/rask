@@ -305,6 +305,27 @@ export const adjudicate = command(
 
 /** Withdraw a group's pick. Exists because the publish refuses a stale pick — without removal one
  *  wrong pick would wedge the publish permanently. Body-less, exactly as the DELETE proxy forwarded. */
+/**
+ * Remove one item from a project.
+ *
+ * The exit an unfinishable item had none of: an item naming a media dataset that was renamed or
+ * removed cannot be opened, so it cannot be claimed, submitted or skipped — and the publish
+ * precondition requires every task terminal, so one of them wedges the project permanently.
+ *
+ * Returns the actor's own report rather than the Project, because removal touches the task INDEX,
+ * not the project document, and reporting a project here would invite reading a count off it that
+ * this call did not change.
+ */
+export const dropTask = command(
+	v.object({ projectId: v.string(), taskId: v.string() }),
+	async ({ projectId, taskId }): Promise<ApiResult<{ task_id: string; removed: boolean }>> => {
+		const result = await write('DELETE', `/projects/${projectId}/tasks/${enc(taskId)}`);
+		// Single-flight the listing this invalidates, like every other mutation here.
+		if (result.ok) void listTasks({ projectId }).refresh();
+		return result as ApiResult<{ task_id: string; removed: boolean }>;
+	},
+);
+
 export const clearAdjudication = command(
 	v.object({ projectId: v.string(), groupId: v.string() }),
 	async ({ projectId, groupId }): Promise<ApiResult<Project>> =>

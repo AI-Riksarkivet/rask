@@ -107,6 +107,10 @@ class AnnotationProjectActorInterface(ActorInterface):
     async def set_ontology(self, payload: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
 
+    @actormethod(name="DropTask")
+    async def drop_task(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
     @actormethod(name="Adjudicate")
     async def adjudicate(self, payload: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
@@ -296,6 +300,36 @@ class AnnotationProjectActor(Actor, AnnotationProjectActorInterface, Remindable)
                 del project.adjudications[group]
         await self._store(project, index=index)
         return {"task_id": task_id, "state": str(state), "counts": project.counts}
+
+    async def drop_task(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Remove a task from the index. The ROUTE owns authz and the state gate; this owns the write.
+
+        Removal exists because a send can put items into a project that can never be completed — an
+        item naming a dataset that was renamed or removed is the one we hit, and before this the only
+        way past it was to abandon the project. The publish precondition requires EVERY task terminal,
+        so one unfinishable item blocks the whole thing forever.
+
+        The task's own actor is left alone deliberately. This index is what the precondition reads and
+        what the publish enumerates; an orphaned task document is inert, whereas reaching across to
+        delete it would be a second write that can half-fail and leave the index disagreeing with
+        reality. Dropping the INDEX entry is the whole of what "removed" means here.
+
+        An adjudication pointing at the dropped task goes with it — the same reasoning as
+        `task_state_changed`: a pick whose target no longer exists would canonicalize nothing.
+        """
+        task_id = str(payload["task_id"])
+        project = await self._require()
+        index = await self._load_index()
+        if task_id not in index:
+            # Idempotent: a retried removal must not 404 a project that is already in the state the
+            # caller asked for.
+            return {"task_id": task_id, "removed": False, "total": len(index)}
+        del index[task_id]
+        for group, adjudication in list(project.adjudications.items()):
+            if adjudication.task_id == task_id:
+                del project.adjudications[group]
+        await self._store(project, index=index)
+        return {"task_id": task_id, "removed": True, "total": len(index)}
 
     async def record_publish(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Write the publish record. Set ONCE (§4.1): a second call is a no-op returning the first.

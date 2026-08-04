@@ -908,3 +908,45 @@ test('ontology: the edit button is ABSENT once the project is frozen', async ({ 
 	await page.goto('/annotator/projects/p1');
 	await expect(page.getByTestId('edit-ontology-trigger')).toHaveCount(0);
 });
+
+test('an unfinishable item can be REMOVED — otherwise one of them wedges the publish forever', async ({
+	page,
+}) => {
+	// The publish precondition requires EVERY task terminal. An item naming a media dataset that was
+	// renamed or removed cannot be opened, so it can never be claimed, submitted or skipped — and
+	// before this the only way past it was to abandon the project and re-send everything.
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([task('t1', 'unassigned')]),
+	);
+	await seed(page, {
+		'DELETE /projects/p1/tasks/t1': { task_id: 't1', removed: true, total: 0 },
+	});
+	page.on('dialog', (d) => void d.accept());
+
+	await page.goto('/annotator/projects/p1');
+	await page.getByTestId('drop-task').first().click();
+
+	await expect
+		.poll(async () => (await calls(page)).filter((c) => c.method === 'DELETE').length, {
+			timeout: 10_000,
+		})
+		.toBe(1);
+	const del = (await calls(page)).find((c) => c.method === 'DELETE')!;
+	expect(del.path).toBe('/projects/p1/tasks/t1');
+});
+
+test('the remove control is ABSENT once the project is frozen', async ({ page }) => {
+	// Mirrors the server's own `DROPPABLE_STATES`. Past `frozen` a publish is being prepared against
+	// the answer set, so removing an item would change what the run facet describes after the
+	// description was fixed. The route still 409s; this only stops offering the door.
+	await snapshot(
+		page,
+		{ project: project('frozen'), legal_events: LEGAL.labeling },
+		listing([task('t1', 'accepted')]),
+	);
+
+	await page.goto('/annotator/projects/p1');
+	await expect(page.getByTestId('drop-task')).toHaveCount(0);
+});

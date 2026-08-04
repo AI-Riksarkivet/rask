@@ -30,10 +30,14 @@
 	let notice = $state('');
 	let sendOpen = $state(false);
 	let ontologyOpen = $state(false);
-	// Mirrors the SERVER's `ONTOLOGY_EDITABLE_STATES`. Past `frozen` a publish is being prepared
-	// against the answer set, so an edit could only be ignored or misleading. The button is hidden
-	// rather than disabled-with-a-409 — but the gate that matters is still the route's.
-	const ontologyEditable = $derived(
+	// ONE rule, named for what it means rather than for either of the two controls it gates: past
+	// `frozen` a publish is being prepared against the answer set, so nothing may still change what
+	// this project will publish. Editing the ontology and removing an item are both that.
+	//
+	// The server enforces each INDEPENDENTLY (`ONTOLOGY_EDITABLE_STATES`, `DROPPABLE_STATES`) — if
+	// those two ever diverge, this splits with them. Hiding a control is presentation; the gate that
+	// matters is the route's.
+	const stillMutable = $derived(
 		detail?.project.state === 'draft' || detail?.project.state === 'labeling',
 	);
 	let inflight = 0;
@@ -235,7 +239,7 @@
 				{/each}
 			</div>
 		{/if}
-		{#if ontologyEditable}
+		{#if stillMutable}
 			<div>
 				<Button
 					variant="outline"
@@ -264,6 +268,8 @@
 
 		<div class="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
 			<TaskQueue
+				{projectId}
+				droppable={stillMutable}
 				tasks={listing?.details ?? []}
 				{me}
 				consensusN={project?.consensus_n ?? 1}

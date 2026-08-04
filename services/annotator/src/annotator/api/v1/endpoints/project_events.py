@@ -32,7 +32,7 @@ from annotator.api.security import CheckerDep, CurrentSubject
 from annotator.projects.machines import FROZEN_PROJECT_STATES, PROJECT_EDGES, IllegalTransition, legal_task_events, project_transition
 from annotator.projects.models import ItemSource, MediaRef, ProjectState, Task, TaskState, new_id
 from annotator.projects.project_actor import AnnotationProjectActorInterface
-from service_kit.exceptions import ConflictError, ForbiddenError
+from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 
 
@@ -218,6 +218,44 @@ async def clear_adjudication(
         raise ConflictError(str(exc)) from exc
     audit("project.adjudicate", SUCCESS, subject=subject, resource=project_id)
     return updated
+
+
+#: A task may be dropped only while the project can still change what it will publish. Past
+#: `frozen` the answer set is closed and a publish is being prepared against it — removing an item
+#: then would change what the run facet describes after the description was fixed.
+DROPPABLE_STATES = frozenset({ProjectState.DRAFT, ProjectState.LABELING})
+
+
+@router.delete("/{project_id}/tasks/{task_id}", status_code=status.HTTP_200_OK)
+async def drop_task(
+    project_id: ProjectId,
+    task_id: Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")],
+    checker: CheckerDep,
+    subject: CurrentSubject,
+) -> dict[str, Any]:
+    """Remove one item from a project.
+
+    Exists because a send can put items into a project that can NEVER be completed. The case we hit
+    is an item naming a media dataset that has since been renamed or removed: the canvas cannot open
+    it, so it cannot be claimed, submitted or skipped — and the publish precondition requires every
+    task terminal. One unfinishable item wedges the project permanently, and before this the only way
+    past it was to abandon the project and re-send everything.
+
+    `can_manage`, not the annotator's own permission: discarding work is a manager act. Idempotent —
+    dropping an absent task is a no-op, so a retry cannot 404 a project that is already how the
+    caller wants it.
+    """
+    await _check(checker, subject, "can_manage", f"annotation_project:{project_id}", "project.drop_task")
+    proxy = _project_proxy(project_id)
+    doc = await proxy.get()
+    if doc is None:
+        raise NotFoundError(f"annotation project {project_id} does not exist")
+    state = ProjectState(doc["state"])
+    if state not in DROPPABLE_STATES:
+        raise ConflictError(f"project {project_id} is {state.value} — items can be dropped only in {sorted(s.value for s in DROPPABLE_STATES)}")
+    result = await proxy.drop_task({"task_id": task_id, "actor": subject})
+    audit("project.drop_task", SUCCESS, subject=subject, resource=project_id)
+    return result
 
 
 @router.post("/{project_id}/items", status_code=status.HTTP_201_CREATED)

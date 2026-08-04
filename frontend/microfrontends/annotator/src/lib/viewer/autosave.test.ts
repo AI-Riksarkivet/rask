@@ -108,7 +108,7 @@ function ctx() {
 function dirtyCanvas() {
 	const c = new AnnotatorController();
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural double, not a PixiContext
-	c.attach(ctx() as any, TABLE, { saveUrl: '/save', version: 1 });
+	c.attach(ctx() as any, TABLE, '/save', 1);
 	c.startAutosave();
 	c.updateField(0, 'label', 'edited');
 	return c;
@@ -135,7 +135,7 @@ describe('autosave', () => {
 		// a feature — it writes to units people are only LOOKING at.
 		const c = new AnnotatorController();
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural double
-		c.attach(ctx() as any, TABLE, { saveUrl: '/save', version: 1 });
+		c.attach(ctx() as any, TABLE, '/save', 1);
 		c.updateField(0, 'label', 'edited');
 		c.scheduleAutosave();
 
@@ -230,7 +230,7 @@ describe('autosave', () => {
 	it('the status line says ONE thing at a time', async () => {
 		const c = new AnnotatorController();
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural double
-		c.attach(ctx() as any, TABLE, { saveUrl: '/save', version: 1 });
+		c.attach(ctx() as any, TABLE, '/save', 1);
 		expect(c.saveStatus).toBe('');
 
 		c.updateField(0, 'label', 'edited');
