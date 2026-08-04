@@ -327,8 +327,13 @@ async def drop_table(
         operation=DROP_TABLE,
         authorization=authorization,
     )
-    # Revoke the table's FGA tuples so a later table reusing this id can't inherit stale grants.
-    await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments, token=token)
+    # Revoke the table's FGA tuples so a later table reusing this id can't inherit stale grants — but
+    # ONLY on a destructive drop. A RECOVERABLE drop (#75) leaves an object that still exists and whose
+    # owner is the one person who needs to undrop it; revoking here made undrop unreachable for exactly
+    # that caller (found by driving the deployed catalog, not by a unit test — the unit tests run FGA
+    # off). The grants die with the bytes instead: at purge, or when the sweep's expiry reclaims it.
+    if not trashed:
+        await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments, token=token)
     await emit_control(
         control,
         action="table_dropped",

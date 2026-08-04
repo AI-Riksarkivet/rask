@@ -380,3 +380,48 @@ def test_the_tasks_door_shows_the_pending_expiry(tmp_path: Any) -> None:
     _drop_table(settings, ns)
     tasks = asyncio.run(t_ep.table_tasks(id="bronze$pages", settings=settings, token=None))
     assert len(tasks) == 1 and tasks[0].location == "s3://bkt/bronze/pages.lance" and tasks[0].expires_at
+
+
+def test_a_recoverable_drop_KEEPS_the_owner_grants(tmp_path: Any) -> None:
+    """Found by driving the DEPLOYED catalog, not by a unit test (these run FGA off): the drop revoked
+    the table's tuples unconditionally, so after a recoverable drop the one person who needed to undrop
+    it — its owner — was denied. A recoverable drop leaves an object that still exists; its grants die
+    with the BYTES (at purge, or when expiry reclaims it), not with the pointer."""
+    from unittest.mock import AsyncMock
+
+    from catalog.api import fga_deps as deps
+
+    settings = _settings(tmp_path, grace_days=7)
+    ns: Any = _TrashableNamespace()
+    revoked = AsyncMock()
+    original = deps.revoke_ownership
+    deps.revoke_ownership = revoked  # type: ignore[assignment]
+    try:
+        _drop_table(settings, ns)
+    finally:
+        deps.revoke_ownership = original  # type: ignore[assignment]
+    revoked.assert_not_awaited()
+
+
+def test_a_DESTRUCTIVE_drop_still_revokes(tmp_path: Any) -> None:
+    """The negative twin — the reuse rule still holds where the bytes really are gone."""
+    from unittest.mock import AsyncMock
+
+    from catalog.api import fga_deps as deps
+
+    settings = _settings(tmp_path, grace_days=0)
+    ns: Any = _TrashableNamespace()
+    revoked = AsyncMock()
+    original = deps.revoke_ownership
+    deps.revoke_ownership = revoked  # type: ignore[assignment]
+    try:
+        _drop_table(settings, ns)
+    finally:
+        deps.revoke_ownership = original  # type: ignore[assignment]
+    revoked.assert_awaited_once()
+
+
+def test_the_tasks_suffix_is_reader_tier_not_writer(tmp_path: Any) -> None:
+    """The live audit's other finding: `tasks` was unmapped, so it fell through to WRITER — and after a
+    drop the owner has no write rung, making their own deadline unreadable."""
+    assert "tasks" in fga_deps._META_READ_ACTIONS  # noqa: SLF001
