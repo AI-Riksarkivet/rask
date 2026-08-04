@@ -125,3 +125,22 @@ async def test_a_publish_OUTAGE_retries() -> None:
     dapr = _Dapr(fail=True)
 
     assert await handle_publication(dapr, _Settings(), _event(from_version=1, to_version=2)) == {"status": "RETRY"}
+
+
+@pytest.mark.asyncio
+async def test_the_trigger_carries_the_CATALOG_VENDED_location() -> None:
+    """I2 from the consuming end, and the reason the cascade moved nothing.
+
+    The catalog vends a table at `s3://<warehouse>/<hash>_<ns>$<name>`; the mover composed
+    `{project_root}/medallion/{namespace}` and read a path no catalog-written table has ever occupied.
+    So the cascade fired correctly, woke the mover, and found an empty location — for every
+    ingest-written table, silently.
+
+    The fix is not for the mover to guess better. The catalog already HAS the location, so it puts it
+    on the event and the trigger carries it; nothing downstream composes anything.
+    """
+    dapr = _Dapr()
+
+    await handle_publication(dapr, _Settings(), _event(from_version=1, to_version=2, location="s3://lane-wh/abc123_lane$pages"))
+
+    assert dapr.published[0]["from_uri"] == "s3://lane-wh/abc123_lane$pages"

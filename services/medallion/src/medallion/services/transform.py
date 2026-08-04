@@ -190,15 +190,26 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                 raise UnresolvableProjectError(f"project {project!r} has no active warehouse")
             from_uri = f"{root}/medallion/{settings.from_namespace}"
             to_uri = f"{root}/medallion/{settings.to_namespace}"
-            if settings.gold_warehouse_enabled:
-                # Gold tier (DECISIONS "Medallion tiers"): the chart sets this env ONLY on the terminal
-                # silver→gold mover, whose tenant TARGET root becomes the project's gold SERVING
-                # warehouse (the serving=="gold" registry record) when one exists. The upstream READ
-                # stays in the work warehouse; no gold warehouse → fall through to the work root above,
-                # byte-identically. Lineage/FGA identities are untouched — only the physical root moves.
-                gold_root = await run_in_threadpool(project_gold_root, settings.control_root, settings.storage_options(), project)
-                if gold_root is not None:
-                    to_uri = f"{gold_root}/medallion/{settings.to_namespace}"
+
+        if project and settings.gold_warehouse_enabled:
+            # Gold tier (DECISIONS "Medallion tiers"): the chart sets this env ONLY on the terminal
+            # silver→gold mover, whose tenant TARGET root becomes the project's gold SERVING
+            # warehouse (the serving=="gold" registry record) when one exists. The upstream READ
+            # stays in the work warehouse; no gold warehouse → fall through to the work root above,
+            # byte-identically. Lineage/FGA identities are untouched — only the physical root moves.
+            gold_root = await run_in_threadpool(project_gold_root, settings.control_root, settings.storage_options(), project)
+            if gold_root is not None:
+                to_uri = f"{gold_root}/medallion/{settings.to_namespace}"
+
+        # A trigger that NAMES the upstream wins over any path composed above. The catalog vends a
+        # table's location (`s3://<warehouse>/<hash>_<ns>$<name>`); this composed
+        # `{root}/medallion/{namespace}`, a path no catalog-written table has ever occupied — so the
+        # cascade fired correctly, woke, and found nothing, for every ingest-written table. I2
+        # ("resolve the location through the CATALOG, never compose a path") read from the consuming
+        # end. Only the READ side: the mover still owns where it WRITES.
+        supplied = data.get("from_uri") if isinstance(data, dict) else None
+        if supplied:
+            from_uri = str(supplied)
         # 0. Fake-Ray compute (opt-in): a REAL in-process Lance write of the downstream dataset, so the
         # emitted lineage carries the actual version + measured output statistics (rows + on-disk bytes),
         # and the cascade produces data, not just provenance. Blocking Lance/S3 IO → threadpool. Off →

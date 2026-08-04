@@ -81,7 +81,16 @@ async def publish_table(
             object_type="table",
             object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
             actor=f"user:{token.sub}" if token is not None else None,
-            extra={"from_version": result.from_version, "to_version": result.to_version},
+            extra={
+                "from_version": result.from_version,
+                "to_version": result.to_version,
+                # The RESOLVED location. I2 says a caller names {project, dataset} and the CATALOG
+                # vends the URI — so the catalog, which already has it, hands it over rather than
+                # letting every consumer rebuild it. The movers composed
+                # `{project_root}/medallion/{namespace}` and looked at a path no table has ever been
+                # written to; that is the same rule broken from the other end.
+                "location": result.table,
+            },
         )
 
     return PublishResult(

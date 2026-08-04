@@ -94,6 +94,9 @@ async def handle_publication(dapr: Any, settings: Any, event: dict[str, Any]) ->
         # publication" and "published from version 0" are different claims.
         "from_version": extra.get("from_version"),
         "to_version": extra.get("to_version"),
+        # The catalog's VENDED location for the published table. Carried so the mover reads the table
+        # that was actually written instead of composing a path of its own (I2).
+        "from_uri": extra.get("location"),
     }
     # The tenant, without which the mover cannot resolve its tier roots and silently skips compute.
     # The namespace IS the project in this estate's hierarchy (project > warehouse > namespace).
