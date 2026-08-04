@@ -39,19 +39,20 @@ project admin creates warehouses. The implicit minting path is removed — one w
 Every create validates, in this order, with these codes:
 
     401  no identity
-    422  the identifier cannot satisfy the hierarchy   (shape — before anything else)
+    400  the identifier cannot satisfy the hierarchy   (shape — the spec's InvalidInput, code 13,
+         RFC 9457 problem body; the spec has NO 422 and clients dispatch on the numeric code)
     404  the parent does not exist                     (existence — from the registry)
-    403  the caller may not do this                    (authz — FGA can_*)
-    409  the name is taken / would collide
+    403  the caller may not do this                    (authz — FGA can_*; spec code 15)
+    409  the name is taken / not empty / would collide (spec codes 2/3/5/14)
     ───  only then the native write, then tuples, then events
 
 | Create | Parent that must exist | FGA gate (on the parent) |
 | --- | --- | --- |
 | project | — (root) | estate admin |
 | warehouse | project (registry record) | `project#can_create_warehouse` |
-| namespace (top-level) | warehouse — via `POST /v1/warehouses/{id}/namespaces` ONLY (done: `require_warehouse_scoped`, 422 otherwise) | `warehouse#can_create_namespace` |
+| namespace (top-level) | warehouse — via `POST /v1/warehouses/{id}/namespaces` ONLY (done: `require_warehouse_scoped`, InvalidInput otherwise) | `warehouse#can_create_namespace` |
 | namespace (nested) | parent namespace | parent `namespace#can_create_namespace` |
-| table | namespace (done: `require_parent`, 422; rename destination guarded too) | `namespace#can_create_table` |
+| table | namespace (done: `require_parent`, InvalidInput; rename destination guarded too) | `namespace#can_create_table` |
 
 New guard: **`require_project_exists(project_id)`** in the same module as the other two — reads the
 registry, raises 404 with "create the project first: POST /v1/projects". Wired into
@@ -97,6 +98,22 @@ REAL APIs in order: create projects → warehouses → namespaces → tables →
 estate is then one a user could have built, every guard above has run against it, and a state that
 cannot exist through the UI cannot be seeded either. (The FGA fixture file stays for CI model tests
 — that is its job; populating a live estate is not.)
+
+## Spec compliance (audited 2026-08-04 against lance.org)
+
+- **Operations 47/47** of the spec's named list implemented, verified mechanically.
+- **All 22 error codes** mapped in `service_kit/lakehouse/ns_errors.py` as RFC 9457 problem bodies;
+  `NamespaceNotEmpty → 409` is the spec's own "container refuses while full" error — the deletion
+  design uses it rather than minting one.
+- The only off-spec surface found was the day-old guards' 422; fixed to `InvalidInput` (95ae4cb).
+- Full contract captured in the project skill: `.claude/skills/rask-lance-catalog`.
+
+## Storage decision — no new database
+
+FGA (Postgres) answers WHO; the control-root registries (CAS'd JSON, same pattern as the warehouse
+registry) answer WHAT EXISTS; Lance on object storage holds the data. Registry writes are
+admin-frequency and single-object — deletes are bottom-up by design, so there is no multi-object
+transaction that would justify a relational store. Revisit only if that changes.
 
 ## Order of work
 
