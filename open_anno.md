@@ -129,13 +129,19 @@ and strokes a line plus a directed arrowhead into a `links` Graphics on the anno
 so it inherits the viewport transform. The drawing MATH is `linkPath()`, extracted so an arrowhead
 pointing the wrong way is catchable without a GPU.
 
-**Remaining: text-span annotation — DESIGN DECIDED, NOT BUILT.**
+**Also landed: text-span annotation.** A `text` shape may be a range INTO another annotation's
+text — `parent_id` + `char_start` + `char_end`, a third facet beside the spatial and temporal ones.
+Editable by selecting in the inspector's text field, which is the field the text is already in.
 
-`text` is in the shape vocabulary and nothing can produce one. Four things are missing, and I
-checked each rather than assuming:
+Two things worth keeping. Span-ness is DECLARED, not assumed: a `text` shape carrying neither a
+parent nor a range is an ordinary text annotation (a DocVQA question someone typed IS the text), and
+the pre-existing DocVQA test is what caught the first rule demanding a parent from every one. And a
+span's class comes from the ONTOLOGY, not from labels already on the page — observed live labelling
+a span `line`, its parent's class, which is meaningless.
 
-| Needed | State today |
-| --- | --- |
+The earlier claim that this needed a risky migration was WRONG and is corrected above.
+
+--- | --- |
 | A surface to select text on | `viewerFor()` has Image, Audio, Video. There is no text viewer. |
 | A source of text for a unit | The annotator serves `chunk-frame` (image) and `annotations` (Arrow). No endpoint returns a unit's transcription. |
 | Offsets on a shape | `Shape` carries x/y/w/h/rotation/polygon/t_start/t_end. No character range. |

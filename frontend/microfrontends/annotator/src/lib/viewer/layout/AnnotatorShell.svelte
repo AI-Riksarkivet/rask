@@ -32,6 +32,7 @@
 		if (!id) {
 			controller.allowedShapeTypes = [];
 			controller.relationNames = [];
+			controller.textSpanClasses = [];
 			return;
 		}
 		let alive = true;
@@ -48,6 +49,13 @@
 				// all — a control that can produce nothing reads as broken rather than inapplicable.
 				controller.relationNames = result.ok
 					? (result.data.ontology?.relations ?? []).map((r) => r.name)
+					: [];
+				// The classes a TEXT SPAN may be labelled with, from the ontology rather than from
+				// whatever labels happen to be on the page already.
+				controller.textSpanClasses = result.ok
+					? (result.data.ontology?.classes ?? [])
+							.filter((c) => c.tools.includes('text'))
+							.map((c) => c.name)
 					: [];
 			})
 			.catch(() => {

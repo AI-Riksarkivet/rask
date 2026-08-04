@@ -530,6 +530,14 @@ export class AnnotatorController {
 	pendingLinkFrom = $state<string | null>(null);
 	/** Relation names this task declares. Empty ⇒ the unit has no relations to draw. */
 	relationNames = $state<string[]>([]);
+	/** Classes the TASK declares as drawable with `text` — the only legitimate labels for a span.
+	 *
+	 *  NOT `labelClasses`, which is derived from labels already present in the table: on a page whose
+	 *  only rows are `line`, that offers `line` as the class for a span, and a span labelled with its
+	 *  parent's class is meaningless. Observed live before this existed.
+	 *
+	 *  Empty on an unconstrained canvas, where the caller falls back to a plain name. */
+	textSpanClasses = $state<string[]>([]);
 
 	/** Arm link-drawing for `name`, or disarm when it is already armed (a toggle, like the tools).
 	 *

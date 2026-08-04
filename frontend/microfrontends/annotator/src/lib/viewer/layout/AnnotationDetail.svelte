@@ -26,7 +26,7 @@
 	let spanEnd = $state(-1);
 	const hasSelection = $derived(spanStart >= 0 && spanEnd > spanStart);
 	/** The classes a span may be labelled with — the same taxonomy everything else is judged against. */
-	const spanClasses = $derived(controller.labelClasses);
+	const spanClasses = $derived(controller.textSpanClasses);
 	let spanLabel = $state('');
 
 	/** Read the browser's selection off the text input. Called on select/keyup/mouseup rather than
