@@ -109,16 +109,22 @@ def test_a_blob_payload_round_trips_through_read_blobs(tmp_path: Path) -> None:
     assert [blob for _, blob in got] == payloads
 
 
-def test_the_MEASURED_landmine_read_blobs_drops_nulls(tmp_path: Path) -> None:
-    """`read_blobs` / `take_blobs` SILENTLY DROP null rows in pylance 9.0.0.
+def test_bronze_CANNOT_EXPRESS_the_null_that_makes_readers_lie(tmp_path: Path) -> None:
+    """The null-drop landmine, now closed at the schema instead of documented.
 
-    The documentation states they "preserve logical result cardinality" and return None for a null.
-    `docs/architecture/lance-blob-v2-findings.md` measured otherwise, and this pins the real
-    behaviour so nobody zips their output positionally against the rows they selected — which would
-    silently attach page N's bytes to page N+1's metadata.
+    This used to write a null through `BRONZE_SCHEMA` and assert `read_blobs` returned 2 rows for 3
+    selected — pinning the trap so callers would not zip results positionally. Testing all three read
+    APIs (`test_blob_read_apis.py`) showed the trap is worse than that: `take_blobs` returns a BARE
+    LIST with no row identity on the handle, so `handles[i]` silently becomes a different row's
+    bytes, and `read_blob_ranges` answers `[]` for a null with no error.
 
-    If a pylance upgrade ever makes the documentation true, this test fails and the calling code can
-    be simplified — which is the right way round for a landmine.
+    A trap that three APIs fall into differently is not one to document — it is one to make
+    unreachable. `payload` is non-nullable, so Lance refuses the write, and the plane could not
+    produce such a row anyway (the worker parks an empty payload rather than writing it).
+
+    The behaviour of the READ APIs against a null is still pinned, against a deliberately nullable
+    schema, in `test_blob_read_apis.py::test_ALL_THREE_apis_silently_drop_a_null_row` — so a pylance
+    upgrade that fixes it upstream still fails a test and gets noticed.
     """
     uri = str(tmp_path / "nulls.lance")
     from lance import blob_array
@@ -131,11 +137,9 @@ def test_the_MEASURED_landmine_read_blobs_drops_nulls(tmp_path: Path) -> None:
         },
         schema=BRONZE_SCHEMA,
     )
-    lance.write_dataset(table, uri, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
 
-    got = lance.dataset(uri).read_blobs("payload", indices=[0, 1, 2])
-
-    assert len(got) == 2, f"pylance now returns {len(got)} for 3 selected rows — re-read the findings doc"
+    with pytest.raises(OSError, match="non-nullable"):
+        lance.write_dataset(table, uri, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
 
 
 # ── permanent vs transient fetch failures ─────────────────────────────────────────────

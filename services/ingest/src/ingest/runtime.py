@@ -45,14 +45,35 @@ if TYPE_CHECKING:
 # `dedicated`, a thumbnail or a born-digital text page lands in `packed` or `inline`, which is the
 # behaviour we want and did not have to invent.
 #
-# Placement is transparent to readers — all four shapes round-trip identically through `read_blobs`,
-# `take_blobs`, `read_blob_ranges` and a blob-handling scanner — so this is a pure write-side choice
-# that can be retuned for new datasets without touching a reader.
+# Placement is transparent to readers — the shapes round-trip identically through `read_blobs`,
+# `take_blobs` and `read_blob_ranges` — so this is a pure write-side choice that can be retuned for
+# new datasets without touching a reader. MEASURED against a real dataset on RustFS, not assumed:
+# `tests/test_blob_read_apis.py` exercises all three, including a `BlobFile` seek + partial read.
+#
+# `payload` is NON-NULLABLE, and that is a correctness guard rather than a schema opinion.
+#
+# All three read APIs SILENTLY DROP a null row — measured on pylance 9.0.0 against this schema:
+#
+#   read_blobs(indices=[0,1,2])       -> 2 tuples. Survivable: each carries its id.
+#   take_blobs(indices=[0,1,2])       -> 2 handles in a BARE LIST with NO row identity at all.
+#   read_blob_ranges(idx=1, ...)      -> [] for a null row. No error.
+#
+# `take_blobs` is the dangerous one. A reader doing the obvious `handles[i]` for row `i` silently
+# gets a DIFFERENT row's bytes the moment one null exists earlier in the request — a page displayed
+# under the wrong page's identity, with nothing raised anywhere. Declaring the column non-nullable
+# makes that state unreachable at the source: Lance refuses the write outright
+# (`Column 'payload' is declared as non-nullable but contains null values`), so a bug that would
+# have surfaced as quietly-wrong data surfaces as a failed ingest instead.
+#
+# Nothing is lost by it — the plane cannot produce a null payload anyway. `AcceptAll.check` refuses
+# an empty payload ("empty payload") and the worker parks it, so a unit either lands with bytes or is
+# recorded in `errors`. The old `nullable=True` advertised a state this plane never creates, and it
+# was exactly the state that makes every read API lie.
 BRONZE_SCHEMA = pa.schema(
     [
         pa.field("id", pa.int64()),
         pa.field("source_uri", pa.string()),
-        blob_field("payload", nullable=True),
+        blob_field("payload", nullable=False),
     ]
 )
 
