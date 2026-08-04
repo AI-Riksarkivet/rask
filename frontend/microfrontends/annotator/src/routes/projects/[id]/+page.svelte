@@ -12,6 +12,7 @@
 
 	import { fetchMeViaBff } from '$lib/http';
 	import AdjudicationPanel from '$lib/projects/AdjudicationPanel.svelte';
+	import AnnotatorMetrics from '$lib/projects/AnnotatorMetrics.svelte';
 	import PublishPanel from '$lib/projects/PublishPanel.svelte';
 	import EditOntologyDialog from '$lib/projects/EditOntologyDialog.svelte';
 	import SendItemsDialog from '$lib/projects/SendItemsDialog.svelte';
@@ -267,6 +268,7 @@
 		{/if}
 
 		<div class="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+			<AnnotatorMetrics tasks={listing?.details ?? []} />
 			<TaskQueue
 				{projectId}
 				droppable={stillMutable}

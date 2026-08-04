@@ -48,13 +48,20 @@ at the machine here), a partial failure reads "1 of 2 assigned to gina — <the 
 separate dialog from the per-row one because the two differ in what they act on, what they say and
 what they do on submit.
 
-### 40c · Per-annotator metrics
+### 40c · Per-annotator metrics — **LANDED**
 Throughput and accept-rate per person. Read-only, derived from the `Transition` list already
 recorded on each task — **no new state**, and that constraint is the point: a metric stored
 separately from the transitions it summarises is a metric that can disagree with them.
 
-Done when: the numbers reconcile against the raw transitions for a seeded project, and a person
-with zero items shows as zero rather than being absent (absence reads as a bug).
+Done: a pure `annotatorMetrics()` over the task list the queue already reads — no endpoint, no
+stored counters, nothing that can drift. A reconciliation test asserts the per-person totals add up
+against the raw rows.
+
+Three judgements worth keeping. Credit goes to whoever SUBMITTED, not whoever holds it now, or a
+task sent back for changes and reassigned credits the wrong person. A person with nothing submitted
+has NO rate rather than 0% — 0% reads as "everything they did was rejected", the opposite of the
+truth. And reviewers appear even with no submissions of their own, or the panel silently omits the
+people doing the reviewing.
 
 ### 40d · Membership UI — *do last*
 See and edit who is member / reviewer / manager on a project. This writes **FGA tuples**, so it

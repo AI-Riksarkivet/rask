@@ -1141,3 +1141,51 @@ test('bulk assign is not offered when nothing selected can take it', async ({ pa
 
 	await expect(page.getByTestId('bulk-assign')).toBeDisabled();
 });
+
+// --------------------------------------------------------------------------------------------------
+// 40c — per-annotator metrics. Derived from the queue, so they cannot disagree with it.
+// --------------------------------------------------------------------------------------------------
+
+test('the metrics panel reports throughput and accept-rate, and includes a person with none', async ({
+	page,
+}) => {
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([
+			task('t1', 'accepted', { submitted_by: 'gina' }),
+			task('t2', 'accepted', { submitted_by: 'gina' }),
+			task('t3', 'in_review', { submitted_by: 'gina' }),
+			task('t4', 'changes_requested', { submitted_by: 'gina', review_action: 'request_changes' }),
+			// omar holds work and has submitted nothing — exactly who a manager is looking for, and
+			// exactly who a "drop the empty rows" panel would hide.
+			task('t5', 'claimed', { assignee: 'omar' }),
+		]),
+	);
+
+	await page.goto('/annotator/projects/p1');
+	const panel = page.getByTestId('annotator-metrics');
+	await expect(panel).toBeVisible();
+	await expect(panel.getByTestId('metrics-row')).toHaveCount(2);
+
+	const gina = panel.getByTestId('metrics-row').filter({ hasText: 'gina' });
+	// 4 submitted, 2 accepted → 50%.
+	await expect(gina.getByTestId('accept-rate')).toHaveText('50%');
+
+	const omar = panel.getByTestId('metrics-row').filter({ hasText: 'omar' });
+	await expect(omar, 'a person holding work but submitting none was hidden').toHaveCount(1);
+	// A rate is a rate. 0% would read as "everything they did was rejected" — the opposite of true.
+	await expect(omar.getByTestId('accept-rate')).toHaveText('—');
+});
+
+test('the metrics panel is ABSENT on a project nobody has touched', async ({ page }) => {
+	// No people, no panel. A table of zero rows is furniture that implies data was expected.
+	await snapshot(
+		page,
+		{ project: project('labeling'), legal_events: LEGAL.labeling },
+		listing([task('t1', 'unassigned')]),
+	);
+
+	await page.goto('/annotator/projects/p1');
+	await expect(page.getByTestId('annotator-metrics')).toHaveCount(0);
+});
