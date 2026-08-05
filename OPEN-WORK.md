@@ -1129,10 +1129,14 @@ work).
 
 **Open, ranked:**
 
-1. **#88 GOVERN THE HTR OUTPUT** — the archive's product is raw ALTO on plain S3 keys: no Lance
-   table, no catalog, no lineage, no FGA. Every rail above protects THUMBNAILS. Carries #89's
-   lineage-facet half (no HTR mover exists to attach a model facet to) and #96's rule when it
-   builds its cascade. `medallion/schemas/htr.py` is imported by nothing in production.
+1. ~~**#88 GOVERN THE HTR OUTPUT**~~ **CLOSED 2026-08-05**, witnessed live end-to-end (real IIIF
+   page → GPU /htrflow → `gold$htr` registered in the catalog → the lakehouse UI renders the row;
+   the run's lineage carries the models at RESOLVED shas + the build commit). Residuals folded from
+   `open_htr_governance.md` at its retirement: the **P7b re-cut** (the owner's direction — the
+   runner's stage job reads bronze Lance and emits gold rows directly, reusing the lane's
+   parser/register/facet seams); the bronze→silver **geometry movers**; the raw **ALTO S3 sink
+   stays** as P7c's export format; the in-dataset `lineage` column rides when the mover supplies
+   the LineageDoc.
 2. **#96 cascade files NO trash records** — the only `trash.put` is the single-table drop, so a
    fat-fingered cascade's children are unrecoverable even with trash ON; undrop is also single-id
    where Lakekeeper's is plural. Two halves, only work together.
@@ -1147,6 +1151,16 @@ work).
    `lance.dataset()` — confirmed live, see §H1) · **#60** reindex-from-scratch · **#61** fragment
    sizing · **#63** data-evolution ops · **#64** flags 16/64 refusal beyond the orphan pass ·
    **#65** project-scoped policy UI (the API shipped) · **#56** exercise multi-base.
+   *(Folded from `open_table_maintenance.md` §7.7–7.10 at its retirement, so they keep an id here:)*
+   **bytes-reclaimed** in `summarize` + a metric + a control event per reclaiming sweep (a sweep
+   that deleted a terabyte and one that deleted nothing produce the same-shaped report) · a
+   **per-tick budget + rotated bucket order** (at estate scale the last bucket is maintained only
+   if the tick has time left, and nothing says which) · a **chart toggle for the orphan scan**
+   (`MAINTENANCE_ORPHAN_SCAN_ENABLED` is env-only). The load-bearing REFUSAL knowledge that file
+   carried (tags pin versions; blob sidecars; `.lance-reserved`; branches under `tree/`;
+   `base_paths` by consequence; `_mem_wal` fencing — deleting WAL files WEAKENS writer fencing;
+   overlays/flag 64) lives in `maintenance/services/orphans.py` + `test_orphan_files.py` + the
+   `rask-lance-catalog` skill.
 6. Platform: **#43** separate rustfs instances inexpressible · **#48** partial-failure honesty in
    the warehouse delete response · **#54** legacy no-warehouse data migration · **#67** ghost
    projects migration · **#85** collapse the four control-root JSON stores.
