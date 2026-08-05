@@ -86,6 +86,18 @@ def _local_dir_lineage(spec: SourceSpec) -> LineageInput:
     return LineageInput(namespace="file", name=str(spec.options.get("root") or ""))
 
 
+def _local_dir_partition(spec: SourceSpec, key: str) -> str | None:
+    """The containing DIRECTORY — the local twin of the S3 folder rule.
+
+    `LocalDirSource` rglobs, so a nested tree really does produce several directories under one root;
+    partitioning on the root instead would give every unit the same value.
+    """
+    head, sep, _ = key.rpartition("/")
+    if not sep:
+        return None
+    return head or None
+
+
 def _s3_prefix(spec: SourceSpec) -> SourceAdapter:
     """An S3 prefix over the estate's provider-agnostic client.
 
@@ -213,6 +225,42 @@ def _iiif_lineage(spec: SourceSpec) -> LineageInput:
     return LineageInput(namespace="iiif", name=str(spec.options.get("volume_id") or ""))
 
 
+# ── partition keys: how each kind GROUPS its units (the bronze `partition_key` column) ────────
+#
+# One function per kind, registered beside the factory, because only the adapter knows what a unit
+# key means. The worker resolves units by URI SCHEME and must stay that way.
+#
+# Read `runtime.BRONZE_SCHEMA` for why this is a COLUMN and not a fragment boundary: Lance has no
+# table partitioning, and key-pure fragments are merged back together by the very first maintenance
+# compaction (measured, 5 fragments → 1).
+
+
+def _iiif_partition(spec: SourceSpec, key: str) -> str | None:
+    """The VOLUME — constant for the whole run, because `_iiif` refuses a spec without exactly one.
+
+    Worth stating plainly: for IIIF this column is uniform within a dataset written by one run, so
+    it earns its keep only where several volumes share a dataset. If physical separation per volume
+    is what is wanted, one dataset per volume is both simpler and closer to Lance's own model
+    (separate tables federated by the catalog) — this column does not replace that choice.
+    """
+    return str(spec.options.get("volume_id") or "") or None
+
+
+def _s3_prefix_partition(spec: SourceSpec, key: str) -> str | None:
+    """The containing FOLDER of the object — the owner's "partition on folder level".
+
+    Derived from the key rather than from `options.prefix`, because the prefix is the run's ROOT and
+    every object under it would then share one value; the folder is what actually varies. `s3://b/a/
+    b/c.tif` -> `s3://b/a/b`. An object at the bucket root has no folder, which is a null rather
+    than an invented one.
+    """
+    head, sep, _ = key.rpartition("/")
+    if not sep:
+        return None
+    # A bare `s3://bucket` head means the object sat at the root — no folder to name.
+    return head or None
+
+
 def register_builtin_sources() -> None:
     """Idempotent: safe to call from the app factory and from a test.
 
@@ -231,6 +279,8 @@ def register_builtin_sources() -> None:
             "local-dir",
             build=_local_dir,
             lineage_input=_local_dir_lineage,
+            # The containing directory — the local twin of the S3 folder rule.
+            partition_of=_local_dir_partition,
             label="Local directory",
             description="A directory tree on the worker. Deterministic and offline — the lane's fixture source.",
             options=[
@@ -244,6 +294,7 @@ def register_builtin_sources() -> None:
             "s3-prefix",
             build=_s3_prefix,
             lineage_input=_s3_prefix_lineage,
+            partition_of=_s3_prefix_partition,
             label="S3 prefix",
             description="Every object under a bucket prefix, through the estate's provider-agnostic client — RustFS, MinIO, HCP or AWS.",
             options=[
@@ -263,6 +314,7 @@ def register_builtin_sources() -> None:
             "iiif",
             build=_iiif,
             lineage_input=_iiif_lineage,
+            partition_of=_iiif_partition,
             label="IIIF volume",
             description="Every page of a volume from a IIIF Image API. External raw (R23) — the lineage input is the iiif:// source, never a governed tier.",
             options=[

@@ -139,7 +139,7 @@ class AcceptAll:
         return None if payload else "empty payload"
 
 
-def units_to_table(units: Sequence[tuple[str, bytes]]) -> pa.Table:
+def units_to_table(units: Sequence[tuple[str, bytes]], partitions: Sequence[str | None] | None = None) -> pa.Table:
     """Build the bronze batch: the data AS RECEIVED plus the acquisition facts.
 
     Bronze is faithful to source (§3.5) — no decoding, no conversion. `id` is a stable hash of the
@@ -152,6 +152,11 @@ def units_to_table(units: Sequence[tuple[str, bytes]]) -> pa.Table:
     no packed tier (nothing protecting against small-file explosion), and no `read_blobs` /
     `take_blobs` / `read_blob_ranges` for readers, so the viewer could only ever load whole rows.
     The code this plane replaced already got this right (`medallion/services/ingest.py:31`).
+
+    `partitions` is positional-parallel to `units` and OPTIONAL: omitted (or None entries) writes
+    nulls, which is what a source with no meaningful grouping should produce. The values are the
+    ADAPTER's — see `sources.partition_key_for` — and this function deliberately does not derive them
+    from the key, because that would put source knowledge in the worker.
     """
     import hashlib
 
@@ -160,6 +165,11 @@ def units_to_table(units: Sequence[tuple[str, bytes]]) -> pa.Table:
     from ingest.runtime import BRONZE_SCHEMA, BRONZE_STAGE
 
     ids = [int.from_bytes(hashlib.sha256(k.encode()).digest()[:8], "big", signed=True) for k, _ in units]
+    keys = list(partitions) if partitions is not None else [None] * len(units)
+    if len(keys) != len(units):
+        # Positional parallelism is the contract; a length mismatch would silently misattribute rows
+        # to the wrong partition, which is worse than writing none.
+        raise ValueError(f"partitions has {len(keys)} entries for {len(units)} units")
     return pa.table(
         {
             "id": pa.array(ids, pa.int64()),
@@ -173,6 +183,9 @@ def units_to_table(units: Sequence[tuple[str, bytes]]) -> pa.Table:
             # Not decoration: the media viewer PROJECTS it, so a bronze table without it is one no
             # reader in the estate can open — see the schema comment.
             "stage": pa.array([BRONZE_STAGE] * len(units), pa.string()),
+            # How this row GROUPS — a column, not a fragment boundary. See BRONZE_SCHEMA for the
+            # measurement that decided that (compaction merges key-pure fragments; a column survives).
+            "partition_key": pa.array(keys, pa.string()),
         },
         schema=BRONZE_SCHEMA,
     )
@@ -296,6 +309,10 @@ class Worker:
 
         # The open batch: fetched units and the messages still owed an ack for them.
         pending: list[tuple[str, bytes]] = []
+        # Positional-parallel to `pending`: the ADAPTER's grouping label for each held unit, taken
+        # off the task rather than derived here — the worker resolves units by URI scheme and does
+        # not know what a volume or a folder is.
+        pending_parts: list[str | None] = []
         pending_msgs: list[Any] = []
         pending_bytes = 0
 
@@ -308,13 +325,13 @@ class Worker:
 
         async def flush() -> None:
             """One fragment for everything accumulated, then ack the whole batch."""
-            nonlocal pending, pending_msgs, pending_bytes
+            nonlocal pending, pending_msgs, pending_bytes, pending_parts
             if not pending:
                 return
-            units, msgs_to_ack = pending, pending_msgs
-            pending, pending_msgs, pending_bytes = [], [], 0
+            units, msgs_to_ack, parts = pending, pending_msgs, pending_parts
+            pending, pending_msgs, pending_bytes, pending_parts = [], [], 0, []
 
-            written = write_unit_fragments(dataset_uri, units_to_table(units))
+            written = write_unit_fragments(dataset_uri, units_to_table(units, parts))
             # EVERY unit in the batch, not `units[0][0]`. The manifest is the finalizer's only record
             # of which rows a fragment holds, so naming one member left the other N-1 invisible and a
             # partially-acked batch committed its units TWICE
@@ -353,6 +370,7 @@ class Worker:
                             return
                         # Held, NOT acked — the ack is owed until this unit's fragment is on the store.
                         pending.append((key, result))
+                        pending_parts.append(task.partition_key)
                         pending_msgs.append(msg)
                         held[id(msg)] = msg
                         pending_bytes += len(result)

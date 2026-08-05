@@ -178,6 +178,9 @@ def test_bronze_CANNOT_EXPRESS_the_null_that_makes_readers_lie(tmp_path: Path) -
             "payload": blob_array([b"aaa", None, b"ccc"]),
             "sha256": pa.array(["x", "y", "z"], pa.string()),
             "stage": pa.array(["bronze"] * 3, pa.string()),
+            # Irrelevant to the null-payload trap under test, but the schema declares it — omitting a
+            # declared column raises a pyarrow KeyError, which would mask the OSError this asserts.
+            "partition_key": pa.array([None] * 3, pa.string()),
         },
         schema=BRONZE_SCHEMA,
     )

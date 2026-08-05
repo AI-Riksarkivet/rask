@@ -83,6 +83,15 @@ class ChunkSpec(BaseModel):
     #: required so a chunk enqueued by an older build still validates.
     sizing: ResolvedSizing = Field(default_factory=resolve)
 
+    #: The SOURCE identity, carried so `publish_chunk_units` can ask the adapter for each unit's
+    #: `partition_key`. Only the adapter knows what a unit key means (a IIIF volume, an S3 folder),
+    #: and the worker deliberately does not — it resolves by URI scheme. Defaulted so a chunk
+    #: enqueued by an older build still validates; an empty `kind` simply yields a null partition.
+    kind: str = ""
+    project: str = ""
+    dataset: str = ""
+    options: dict[str, Any] = Field(default_factory=dict)
+
 
 class ChunkResult(BaseModel):
     """What a drained chunk reports back — the fragments to commit, and what refused to land."""
@@ -260,6 +269,10 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> l
                 dataset_uri=uri,
                 # Carried, not re-resolved — same reason as `dataset_uri` above.
                 sizing=spec.sizing,
+                kind=spec.kind,
+                project=spec.project,
+                dataset=spec.dataset,
+                options=spec.options,
             ).model_dump()
         )
     return chunks

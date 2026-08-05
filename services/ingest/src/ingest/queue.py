@@ -77,6 +77,11 @@ class UnitTask(BaseModel):
     key: str = Field(description="the unit's stable key — the source URI")
     dataset_uri: str
     traceparent: str | None = Field(default=None, description="W3C trace context, so one run's trace spans api -> workers -> lander")
+    #: How this unit GROUPS — the bronze `partition_key` column. Computed by the ADAPTER at
+    #: enumeration (`sources.partition_key_for`) and carried, because the worker resolves units by
+    #: URI scheme and must not learn what a volume or a prefix is. Optional: a kind that registers no
+    #: `partition_of` sends nothing and the column is written null.
+    partition_key: str | None = None
 
 
 def unit_subject(run_id: str) -> str:

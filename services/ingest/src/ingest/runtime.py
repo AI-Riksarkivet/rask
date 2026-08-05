@@ -93,6 +93,32 @@ if TYPE_CHECKING:
 # the medallion writer's, so the movers' generic carry-forward keeps gold rows traceable to the
 # exact page bytes they were read from whichever head landed them (pinned by
 # tests/unit/test_bronze_writers_compat.py).
+#
+# `partition_key` is how this plane answers "partition at volume level / at folder level". It is a
+# COLUMN, not a fragment boundary, and that choice is measured rather than preferred:
+#
+#   * Lance has no table-level partitioning. `lance_docs/ns_catalog/partitioning-spec.md:4` —
+#     "Lance tables do not natively support partitioning, instead promoting clustering to achieve
+#     similar performance benefits." `write_fragments` takes no partition key; its only splitting
+#     levers are size-based.
+#   * Grouping units into key-pure FRAGMENTS does not survive. Measured against pylance 9.0.0: five
+#     fragments each holding one distinct key, committed, then `services/maintenance`'s default
+#     `compact_files()` → ONE fragment holding all five. Compaction is opt-OUT and sweeps every
+#     discovered dataset, so the merge is the default, not an edge case.
+#   * A column plus a scalar index DOES survive: after that same compaction, a BITMAP index on the
+#     column made `partition_key = 'x'` answer as an index-served `ScalarIndexQuery` rather than a
+#     scan.
+#
+# NULLABLE on purpose. A source that has no meaningful grouping writes nulls rather than inventing
+# one, and a run predating this column is not retroactively wrong. The value comes from the ADAPTER
+# (`sources.partition_of`), never from parsing the URI in the worker — the worker resolves units by
+# scheme and knows nothing about volumes or prefixes, and teaching it would re-weld the source into
+# the worker, which is precisely what I1 removed.
+#
+# NOTE FOR EXISTING DATASETS: appending a fragment carrying this column into a dataset created
+# WITHOUT it raises `OSError: Append with different schema` (measured). Bronze is reproducible from
+# source by design, but an existing dataset needs an `add_columns` alter before this plane can write
+# to it again.
 BRONZE_SCHEMA = pa.schema(
     [
         pa.field("id", pa.int64()),
@@ -100,6 +126,7 @@ BRONZE_SCHEMA = pa.schema(
         blob_field("payload", nullable=False),
         pa.field("sha256", pa.string()),
         pa.field("stage", pa.string()),
+        pa.field("partition_key", pa.string(), nullable=True),
     ]
 )
 
@@ -163,7 +190,21 @@ async def publish_chunk_units(chunk: ChunkSpec) -> int:
     queue = await WorkQueue.connect(nats_url())
     try:
         await queue.ensure_stream()
-        tasks = [UnitTask(run_id=chunk.run_id, chunk_id=chunk.chunk_id, key=key, dataset_uri=chunk.dataset_uri) for key in chunk.keys]
+        # The partition label is computed HERE, at publish, where the run's SourceSpec is still in
+        # hand — the worker only ever sees a URI and a scheme.
+        from ingest.sources import SourceSpec, partition_key_for
+
+        spec = SourceSpec(kind=chunk.kind, project=chunk.project, dataset=chunk.dataset, options=chunk.options)
+        tasks = [
+            UnitTask(
+                run_id=chunk.run_id,
+                chunk_id=chunk.chunk_id,
+                key=key,
+                dataset_uri=chunk.dataset_uri,
+                partition_key=partition_key_for(spec, key),
+            )
+            for key in chunk.keys
+        ]
         return await queue.publish_units(tasks)
     finally:
         await queue.close()
