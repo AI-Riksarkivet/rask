@@ -232,8 +232,9 @@ describe('topNav', () => {
 		expect(search.match('/annotator')).toBe(false);
 		expect(annotate.match('/annotator')).toBe(true);
 		expect(annotate.match('/explorer')).toBe(false);
-		// Annotate is a single surface — a plain link, not a one-row dropdown.
-		expect(annotate.items).toBeUndefined();
+		// Annotate PANELS since #113: Canvas + Browse are two real destinations, and the estate rule
+		// is that every multi-surface zone panels (Studio is the one remaining plain link).
+		expect(annotate.items?.map((i) => i.title)).toEqual(['Canvas', 'Browse']);
 		expect(annotate.groups).toBeUndefined();
 		// …and Annotate is no longer buried inside Search's panel.
 		expect(search.items?.some((i) => i.href === '/annotator')).toBe(false);

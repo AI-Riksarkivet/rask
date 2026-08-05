@@ -258,6 +258,11 @@ const LINEAGE_ITEMS: TopNavItem[] = [
 	},
 ];
 
+const ANNOTATE_ITEMS: TopNavItem[] = [
+	{ title: 'Canvas', href: '/annotator/', description: 'Label pages on the annotation canvas.' },
+	{ title: 'Browse', href: '/annotator/browse', description: 'The corpus, filtered to what needs labeling.' },
+];
+
 const EXPLORER_ITEMS: TopNavItem[] = [
 	{ title: 'Search', href: '/explorer/', description: 'Semantic search over the corpus.' },
 	{ title: 'Atlas', href: '/explorer/atlas', description: 'The embedding map of the corpus.' },
@@ -533,11 +538,14 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			// ANNOTATE is its own microfrontend (/annotator) and its own job: the write plane over the
 			// same corpus Search reads. One trigger per zone is the rule, so it is a trigger — it was
 			// briefly a row inside Search's panel, which broke that rule and buried the labeling
-			// workflow one hover deep. A single surface, so a plain link rather than a panel.
+			// workflow one hover deep. It carries a PANEL since #113: the "single surface" premise
+			// expired when /browse landed — Canvas and Browse are two real destinations, and the
+			// consistency rule is that every multi-surface zone panels (only Studio remains a link).
 			title: 'Annotate',
 			href: '/annotator/',
 			icon: PenLine,
 			match: under('/annotator'),
+			items: [...ANNOTATE_ITEMS],
 		},
 		{
 			// MODELS — the model-lifecycle zone. It began as R17's `train` (submit / runs / monitoring /
