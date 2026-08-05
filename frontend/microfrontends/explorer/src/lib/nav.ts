@@ -100,26 +100,26 @@ export function explorerZoneNav(
 		title: 'Explorer',
 		groups: [
 			{ label: 'Explore', items: explore },
-			{
-				label: 'Workspace',
-				items: [
-					{
-						title: 'Workflow',
-						href: '/explorer/workflow',
-						match: seg('/explorer/workflow'),
-						icon: Workflow,
-					},
-				],
-			},
-			// The "Help" group and its single `Guide` row are GONE. A sidebar is where a zone's areas
-			// live, and documentation is not an area of the corpus — it sat beside Search and Atlas
-			// implying it was another way to look at the data.
+			// The "Help" group and its single `Guide` row are GONE, and so is the route behind it. A
+			// sidebar is where a zone's AREAS live, and documentation is not an area of the corpus — it
+			// sat beside Search and Atlas implying it was another way to look at the data.
 		],
-		// PINNED to the rail's bottom. The dock is not one of this zone's AREAS — it is where you go to
-		// work across them — so it sits below the areas rather than scrolling among them.
+		// PINNED to the rail's bottom, and there is exactly ONE of these.
+		//
+		// "Workspace" used to be declared TWICE — once here and once as a scrolling group above
+		// carrying Workflow — so the rail rendered the same heading in two places with one row under
+		// each, which reads as a rendering bug rather than a deliberate split. Both belong here by the
+		// footer's own argument: neither the workflow editor nor the dock is an AREA of the corpus,
+		// they are where you go to work ACROSS the areas.
 		footer: {
 			label: 'Workspace',
 			items: [
+				{
+					title: 'Workflow',
+					href: '/explorer/workflow',
+					match: seg('/explorer/workflow'),
+					icon: Workflow,
+				},
 				{
 					title: 'Workbench',
 					href: '/explorer/workbench',

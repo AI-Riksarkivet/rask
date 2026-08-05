@@ -1,11 +1,15 @@
 <script lang="ts">
 	// The search-bar `?` — a small popover with click-to-run examples + tips that
-	// make search easier. The deep "how it works" walk-through now lives on the
-	// Guide page (linked at the bottom), so this stays compact.
+	// make search easier.
+	//
+	// It used to end with a link to a /guide page: 2 091 lines of prose about how search works.
+	// That page was already gone from the SIDEBAR (nav.ts: "documentation is not an area of the
+	// corpus"), leaving this popover as its only entrance, and the whole route was deleted with it.
+	// What survives is what earned its place — examples you can CLICK TO RUN, next to the box you
+	// would type them into.
 	import { Popover } from 'bits-ui';
-	import { HelpCircle, ArrowRight, Image as ImageIcon } from '@lucide/svelte';
+	import { HelpCircle, Image as ImageIcon } from '@lucide/svelte';
 	import { buttonVariants } from '@rask/ui';
-	import { base } from '$app/paths';
 
 	type Example = { label: string; example: string; explain: string };
 	type Props = {
@@ -65,15 +69,6 @@
 					><strong class="text-foreground">Attach an image</strong> (📎 or drag in) to add a visual pass.</span
 				>
 			</div>
-
-			<a
-				href="{base}/guide"
-				onclick={() => (open = false)}
-				class="text-primary hover:bg-muted mt-2 flex items-center gap-1.5 rounded-md px-2 py-1.5 font-medium transition-colors"
-			>
-				Full guide: how search works
-				<ArrowRight class="size-3.5" />
-			</a>
 		</Popover.Content>
 	</Popover.Portal>
 </Popover.Root>
