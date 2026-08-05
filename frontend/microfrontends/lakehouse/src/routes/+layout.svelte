@@ -9,7 +9,6 @@
 	import { base } from '$app/paths';
 	import { onMount, type Snippet } from 'svelte';
 	import type { Me } from '@rask/api';
-	import { fetchMeViaBff } from '$lib/http';
 	import { areaOf, lakehouseSidebar } from '$lib/nav';
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
 	import type { LayoutData } from './$types';
@@ -19,12 +18,10 @@
 	// The frozen /v1/me identity for the navbar, fetched browser-side through this zone's
 	// bearer-forwarding BFF (skeleton pills while in flight; null = signed out / unreachable →
 	// base entries only, fail-closed on the admin surfaces).
-	let me = $state<Me | null>(null);
-	let meLoading = $state(true);
-	onMount(async () => {
-		me = await fetchMeViaBff();
-		meLoading = false;
-	});
+	// `me` arrives RESOLVED from the server layout (#107): the navbar's final entry set is in
+	// the first paint — no skeleton pills, no per-hop entry swap (that swap WAS the shell flash).
+	const me = $derived(data.me);
+	const meLoading = false;
 
 	const area = $derived(areaOf(page.url.pathname));
 	// The area behind the estate-admin door. `governance` was the other one until #105 moved Access and
