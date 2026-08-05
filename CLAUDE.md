@@ -50,6 +50,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Filter by name               | `uv run pytest -k <pattern>`                                             |
 | Skip slow tests              | `uv run pytest -m "not slow"`                                            |
 | Format + lint + typecheck    | `make check` (= `make fmt` + `make lint` + `make typecheck` + `make knip`) |
+| Scan dependencies for CVEs   | `make audit` (osv-scanner over all six lockfiles + `.dagger/go.mod`)     |
+| Scan dockerfiles + chart     | `make scan-config` (trivy misconfig + secret detection)                  |
+| Scan a built image           | `make scan-image NAME=gateway` / `make scan-zone-image ZONE=home`        |
 | Frontend type-check only     | `bun --cwd=frontend run check` (one zone: `bunx turbo --cwd=frontend run check --filter=home`) |
 | Storybook for `@rask/ui`     | `make storybook` (→ `:6006`)                                             |
 | Bootstrap Claude Code config | `make claude-bootstrap`                                                  |

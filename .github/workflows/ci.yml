@@ -3,6 +3,11 @@ name: CI
 on:
   push:
   pull_request:
+  # Nightly, for the supply-chain legs ONLY (see `supply-chain-images` below). Advisory databases move
+  # without anyone touching this repo, so a scan that runs only on push answers "was it safe when we
+  # last edited it", not "is it safe now" — and the image legs are far too slow to hang off a PR.
+  schedule:
+    - cron: '0 3 * * *'
 
 # Three pushes inside five minutes each start a full ~29-runner-minute workflow, so two of them were
 # already superseded before they finished (measured: runs at 13:43:33, 13:44:35 and 13:48:47 on
@@ -84,6 +89,78 @@ jobs:
         env:
           DAGGER_NO_NAG: "1"
         run: dagger call ${{ matrix.gate }}
+
+  # ── SUPPLY CHAIN ──────────────────────────────────────────────────────────────────────────────
+  # The gates above judge code WE wrote. These judge what we pull in — the ~1100 third-party packages
+  # across six lockfiles, and the base layers the images sit on. Both legs are `dagger call` against
+  # .dagger/scan.go, so `make audit` locally and this job are the same code (the ms-gates contract).
+  #
+  # NEITHER NEEDS A SECRET. osv-scanner and trivy read public advisory data over HTTPS; there is no API
+  # key, no token, and nothing to add to repository secrets to make this work.
+  #
+  # ── continue-on-error IS DELIBERATE, AND IT IS TEMPORARY ──
+  # The first run found 38 vulnerabilities (0 Critical, 24 High) and 4 dockerfile misconfigurations.
+  # osv-scanner has NO severity threshold — no --fail-on-severity, only `--config` — so ANY finding at
+  # ANY severity exits 1. Wired blocking, this job would have been red the hour it landed, on a backlog
+  # nobody had triaged, and the only available fix would have been to delete it.
+  #
+  # Report-only is therefore the honest first state, NOT the intended one. The exit condition is
+  # concrete and does not depend on anyone remembering this comment:
+  #   1. regenerate runners/assist/uv.lock — it alone carried 23 of the 38 (certifi 2022.12.7,
+  #      idna 3.4, setuptools 78.1.0, pillow 12.2.0);
+  #   2. baseline whatever genuinely cannot move in `osv-scanner.toml`, each entry with a reason and a
+  #      review date, and the two DS-0031 false positives in `.trivyignore`
+  #      (HF_HUB_DISABLE_IMPLICIT_TOKEN=1 is a DISABLE flag — trivy matches on the name "TOKEN");
+  #   3. delete the `continue-on-error` line on THIS job (supply-chain-images keeps its own until the
+  #      base-image backlog gets the same treatment). The gate then blocks on the 39th finding, which
+  #      is the only version of this job worth having.
+  supply-chain:
+    name: supply-chain-${{ matrix.leg }} (report-only)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [audit, scan-config]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Dagger CLI (pinned to the module's engineVersion)
+        run: |
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      - name: dagger call ${{ matrix.leg }}
+        env:
+          DAGGER_NO_NAG: "1"
+        run: dagger call ${{ matrix.leg }}
+
+  # Nightly only — scanning an image means BUILDING it, and the build dwarfs the scan (a zone ~90 s,
+  # ray-cluster 238 s). On the PR path that cost buys nothing the `audit` leg did not already report,
+  # because the language dependencies inside the image are the same ones the lockfiles pinned. What it
+  # DOES add is the layer no lockfile describes: Debian CVEs in the trixie/bun base images.
+  #
+  # A SUBSET, said plainly: the three deployables (gateway, compute, runner) plus one representative
+  # zone. The other six dockerfiles and six zones are NOT scanned by this job. Widening it is a matter
+  # of adding matrix rows and paying the build minutes.
+  supply-chain-images:
+    name: supply-chain-image-${{ matrix.image }}
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [gateway, compute, runner]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Dagger CLI (pinned to the module's engineVersion)
+        run: |
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+      - name: dagger call scan-image --name=${{ matrix.image }}
+        env:
+          DAGGER_NO_NAG: "1"
+        run: dagger call scan-image --name=${{ matrix.image }}
 
   # NOT daggerized — it needs the `fga` CLI + jq rather than the uv/helm/promtool toolchain the Dagger
   # functions carry, so it stays a native step. The OpenFGA authorization model is source-of-truth for
