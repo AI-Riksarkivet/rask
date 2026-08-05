@@ -48,7 +48,7 @@ def proxied(gw):
         yield client, captured
 
 
-@pytest.mark.parametrize("header", ["dapr-caller-app-id", "dapr-api-token", "dapr-app-id"])
+@pytest.mark.parametrize("header", ["dapr-caller-app-id", "dapr-api-token", "dapr-app-id", "x-lance-service-identity"])
 def test_a_client_supplied_trust_header_never_reaches_the_upstream(proxied, header: str) -> None:
     """The load-bearing assertion, per header the estate treats as proof of identity.
 

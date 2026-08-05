@@ -23,6 +23,7 @@ from lance_namespace import PermissionDeniedError, ServiceUnavailableError, Unau
 
 from lineage.api.dependencies import SettingsDep
 from service_kit.governed.oidc import IDToken, OIDCVerifier
+from service_kit.governed.dapr_auth import is_public_caller
 
 
 # auto_error=False: we raise UnauthenticatedError ourselves so 401s render as problem+json.
@@ -93,6 +94,9 @@ def authenticate(
     credentials: _CredentialsDep,
     dapr_api_token: Annotated[str | None, Header()] = None,
     x_lance_service_identity: Annotated[str | None, Header()] = None,
+    # The INVOKING Dapr app-id — what separates a service from the public front door invoking on a
+    # stranger's behalf. See `service_kit.governed.dapr_auth.is_public_caller`.
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
 ) -> Principal | None:
     """Authenticate the caller: an OIDC bearer (human/external) OR the service door (in-cluster producer).
 
@@ -106,6 +110,17 @@ def authenticate(
     # service-invoked request carrying a valid user bearer would be diverted into the service door and
     # 403 on the missing identity (audit 2026-07-15). A token-only request now falls through to OIDC,
     # which still requires a valid bearer — the door itself stays exactly as strict (app token + allowlist).
+    # THE LAUNDERING PATH. The gateway forwards through Dapr service invocation and the callee's daprd
+    # stamps a valid `dapr-api-token` on the way in, so an ANONYMOUS public request arrives here
+    # already holding the estate's service credential — and `x-lance-service-identity` is
+    # caller-supplied, so it can name an allowlisted subject itself. Together that is a forged,
+    # author-stamped write into the authoritative lineage graph. The gateway strips both headers at
+    # the edge; this refuses the door even if one ever gets through, because a service principal is
+    # never something the public front door should be able to mint.
+    if is_public_caller(dapr_caller_app_id):
+        raise PermissionDeniedError(
+            f"{dapr_caller_app_id!r} is a public front door: the service door authenticates a service, not a caller — sign in and retry"
+        )
     if dapr_api_token is not None and x_lance_service_identity is not None:
         return _service_principal(settings, dapr_api_token, x_lance_service_identity)
     verifier: OIDCVerifier | None = getattr(request.app.state, "oidc", None)

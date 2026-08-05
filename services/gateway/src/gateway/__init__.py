@@ -63,7 +63,18 @@ _HOP_BY_HOP = frozenset(
 #: the gateway knows for a fact that anything arriving on its public listener came from a client.
 #: `dapr-api-token` is included for the same reason — a caller must never be able to present the
 #: estate's service credential just by copying it into a header.
-_CLIENT_SPOOFABLE = frozenset({b"dapr-caller-app-id", b"dapr-api-token", b"dapr-app-id"})
+_CLIENT_SPOOFABLE = frozenset(
+    {
+        b"dapr-caller-app-id",
+        b"dapr-api-token",
+        b"dapr-app-id",
+        # The lineage service door reads this as the caller's IDENTITY and checks it against an
+        # allowlist (`lineage.api.security._service_principal`). Combined with the token daprd
+        # stamps on the way in, a client that sets it names itself an allowlisted service — the
+        # same laundering as the caller-app-id, one header along.
+        b"x-lance-service-identity",
+    }
+)
 
 
 def _rewrite_location(location: str) -> str:
