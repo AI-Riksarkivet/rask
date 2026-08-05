@@ -15,10 +15,20 @@
 	import AnnotationSidebar from './AnnotationSidebar.svelte';
 	import ZoomControls from './ZoomControls.svelte';
 	import PageNav from './PageNav.svelte';
+	import TaskStreamNav from './TaskStreamNav.svelte';
+	import type { StreamPosition } from '../task-stream';
 	import AiAssistBar from './AiAssistBar.svelte';
 	import { TOOL_KEYS, isCvTool } from '../tool-defs';
 
-	let { unit, onexit }: { unit: MediaUnit; onexit?: () => void } = $props();
+	// `stream` is the LABEL STREAM position, computed by the route (which owns the queue read — the
+	// shell is re-mounted per key and would otherwise re-fetch the task list on every page turn).
+	// Optional so a canvas opened outside a queue, and every existing test that mounts this shell,
+	// keeps working with no stream control at all.
+	let {
+		unit,
+		onexit,
+		stream = { position: 0, total: 0, prevHref: null, nextHref: null, active: false },
+	}: { unit: MediaUnit; onexit?: () => void; stream?: StreamPosition } = $props();
 
 	const Viewer = $derived(viewerFor(unit.kind));
 	const controller = new AnnotatorController();
@@ -222,6 +232,7 @@
 					{#if spatial && controller.canDraw}
 						<AiAssistBar {controller} taskId={reviewSelection.taskId} />
 					{/if}
+					<TaskStreamNav {stream} />
 					<PageNav {pages} current={pageIndex} onNavigate={navigate} />
 					{#if spatial}
 						<ZoomControls {controller} />
