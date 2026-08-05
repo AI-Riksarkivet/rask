@@ -68,6 +68,32 @@ FETCH_CONCURRENCY = int(os.getenv("RASK_INGEST_FETCH_CONCURRENCY", "8"))
 #: staging overlap.
 HEARTBEAT_SECONDS = ACK_WAIT_SECONDS / 5
 
+
+async def _renew_held(held: set[Any]) -> None:
+    """Tell JetStream the held messages are still being worked, until cancelled.
+
+    `msg.in_progress()` was called NOWHERE in this plane, and a batch holds its messages unacked from
+    first fetch until the fragment is on the store. Against a slow or rate-limited source that window
+    exceeds `ACK_WAIT_SECONDS` (300) and JetStream redelivers units a LIVE worker is still holding —
+    so the same bytes are fetched twice against the very endpoint the concurrency limit exists to
+    protect, and the two workers' fragments overlap in a way `discover_staged` may not resolve.
+
+    No crash required, which is what made this worse than the documented overlap: an ordinary slow
+    run reaches it.
+
+    Takes the held SET rather than closing over the batch list, because `flush` REBINDS
+    `pending_msgs` to a fresh list — a heartbeat closing over that name would keep renewing the
+    previous batch while the current one expired.
+    """
+    while True:
+        await asyncio.sleep(HEARTBEAT_SECONDS)
+        for msg in list(held):
+            with contextlib.suppress(Exception):
+                # Best-effort per message: one already-acked or expired message must not stop the
+                # others being renewed.
+                await msg.in_progress()
+
+
 # Rows accumulated before ONE fragment is written. Capped well under the queue's `max_ack_pending`
 # because the batch is held UNACKED while it fills — see the ack contract in `drain_chunk`.
 FRAGMENT_TARGET_ROWS = int(os.getenv("RASK_INGEST_FRAGMENT_ROWS", "1024"))
@@ -253,27 +279,6 @@ class Worker:
         # renewing the previous batch while the current one expires.
         held: set[Any] = set()
 
-        async def heartbeat() -> None:
-            """Tell JetStream the held messages are still being worked.
-
-            `msg.in_progress()` was called NOWHERE in this plane, and the batch holds its messages
-            unacked from first fetch until the fragment is on the store. Against a slow or
-            rate-limited source that window exceeds `ACK_WAIT_SECONDS` (300) and JetStream redelivers
-            units a LIVE worker is still holding — so the same bytes are fetched twice against the
-            very endpoint the concurrency limit exists to protect, and the two workers' fragments
-            overlap in a way `discover_staged` may not be able to resolve.
-
-            No crash required, which is what made this worse than the documented overlap: an ordinary
-            slow run reaches it.
-            """
-            while True:
-                await asyncio.sleep(HEARTBEAT_SECONDS)
-                for msg in list(held):
-                    with contextlib.suppress(Exception):
-                        # Best-effort per message: one already-acked or expired message must not stop
-                        # the others being renewed.
-                        await msg.in_progress()
-
         async def flush() -> None:
             """One fragment for everything accumulated, then ack the whole batch."""
             nonlocal pending, pending_msgs, pending_bytes
@@ -295,7 +300,7 @@ class Worker:
                 held.discard(msg)
             logger.info("fragment: %d units, %d bytes -> %d fragment(s)", len(units), sum(len(p) for _, p in units), len(written))
 
-        beat = asyncio.create_task(heartbeat())
+        beat = asyncio.create_task(_renew_held(held))
         try:
             while outcome.units_done + len(pending) + len(outcome.errors) < expected:
                 try:
@@ -338,8 +343,29 @@ class Worker:
                     await asyncio.gather(*(handle(m) for m in fresh))
                 if again:
                     await flush()  # close the fresh batch before the redelivered units join it
-                    await asyncio.gather(*(handle(m) for m in again))
-                    await flush()
+                    # ONE FRAGMENT PER REDELIVERED UNIT — what makes the overlap state STRUCTURALLY
+                    # unreachable rather than merely reported.
+                    #
+                    # Splitting fresh from redelivered (above) stops a redelivery merging with fresh
+                    # work, but left redeliveries batching with EACH OTHER — and they do not
+                    # necessarily come from the same original batch. Two crashed batches whose
+                    # remainders arrive in one fetch produced a single fragment overlapping both and
+                    # contained by neither: F={u0..u3} against H={u2,u3,u4,u5}, which no selection
+                    # resolves, so `discover_staged` could only raise and strand the run.
+                    #
+                    # A SINGLETON is contained by any fragment holding it, so the staged family stays
+                    # LAMINAR — every pair nested or disjoint — and an exact cover always exists.
+                    #
+                    # Deliberately NOT "batch all uncovered redeliveries together", which looks
+                    # equivalent and is not race-proof: worker A holds {u0..u5}, ack_wait expires on
+                    # u0..u3, worker B batches {u0,u1,u2,u3,u9} — F\\H={u4,u5} and H\\F={u9}, neither
+                    # contained, and the state is back.
+                    #
+                    # The cost is one fragment per redelivered unit, paid only on recovery; the
+                    # heartbeat above is what keeps that population small in the first place.
+                    for msg in again:
+                        await handle(msg)
+                        await flush()
                 elif len(pending) >= FRAGMENT_TARGET_ROWS or pending_bytes >= FRAGMENT_TARGET_BYTES:
                     await flush()
 
