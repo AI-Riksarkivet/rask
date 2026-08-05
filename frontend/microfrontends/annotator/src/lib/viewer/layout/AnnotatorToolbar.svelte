@@ -71,7 +71,7 @@
 		<Button
 			variant="ghost"
 			size="icon-sm"
-			title="Back to document selection"
+			title="Leave the canvas — back to the queue you came from, or the corpus browser"
 			data-testid="exit-annotate"
 			onclick={onexit}
 		>

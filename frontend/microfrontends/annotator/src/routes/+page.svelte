@@ -7,11 +7,13 @@
 	// of truth, so a canvas reload restores the same unit.
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
+	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import type { MediaKind } from '$lib/viewer/types';
 	import { reviewSelection } from '$lib/labeling/review-selection.svelte';
 	import ProjectsLanding from '$lib/projects/ProjectsLanding.svelte';
 	import AnnotatorShell from '$lib/viewer/layout/AnnotatorShell.svelte';
+	import { exitHref } from '$lib/viewer/exit-target';
 
 	function openFromParams(params: URLSearchParams): void {
 		const keys = params.get('keys');
@@ -54,11 +56,14 @@
 
 	const unit = $derived(reviewSelection.active);
 
-	// Exit keeps the dataset (the canvas's own contract); a task-opened canvas exits back
-	// to wherever the annotator came from — the landing serves both.
+	// Exit returns to WHERE YOU CAME FROM, which the URL has been carrying all along.
+	//
+	// This used to always go to `?dataset=…` — the corpus browser — with a comment claiming a
+	// task-opened canvas "exits back to wherever the annotator came from". It did not: finish an
+	// item from your labeling queue, press exit, and you land in a document gallery with the queue
+	// you were working through nowhere in sight. Reported from the running app.
 	function exit(): void {
-		const ds = reviewSelection.dataset;
-		void goto(ds ? `?dataset=${encodeURIComponent(ds)}` : '?', { keepFocus: true, noScroll: true });
+		void goto(exitHref(page.url.searchParams, base), { keepFocus: true, noScroll: true });
 	}
 </script>
 

@@ -339,7 +339,10 @@
 	function canvasHref(task: TaskDetail): string {
 		const keys = task.source.keys.join(',');
 		const dataset = task.source.where ? `dataset=${encodeURIComponent(task.source.where)}&` : '';
-		return `${base}/?${dataset}keys=${encodeURIComponent(keys)}&task=${task.task_id}`;
+		// `project` rides along beside `task`: the canvas's exit needs to address the QUEUE PAGE, and
+		// a task id alone cannot — building /projects/<task_id> from it would 404. Without this the
+		// exit fell back to the corpus browser and the queue you were working through vanished.
+		return `${base}/?${dataset}keys=${encodeURIComponent(keys)}&task=${task.task_id}&project=${encodeURIComponent(projectId)}`;
 	}
 
 	/** The task's own legal events, minus `save_draft` (that belongs to the canvas). `assign`
