@@ -18,7 +18,12 @@
 	import { Button } from '@rask/ui/button';
 	import { Select } from '@rask/ui/select';
 	import DocTile from './DocTile.svelte';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
+
 	import ChunkPicker from './ChunkPicker.svelte';
+	import DocTable from './DocTable.svelte';
+	import { LayoutGrid, Table2 } from '@lucide/svelte';
 
 	let {
 		onopen,
@@ -50,6 +55,27 @@
 
 	let datasets = $state<DatasetEntry[]>([]);
 	let view = $state<DatasetView | null>(null);
+
+	/** TABLE or gallery — and table is the DEFAULT (#70).
+	 *
+	 *  Reported: "why does browse corpus looks so fucking wierd? why does it show like gallery view
+	 *  initally?". This surface is the rail's "Bulk labeling" row and #42's bulk-labeling entry, so
+	 *  its first paint has to be the shape that answers "find five hundred pages": columns you can
+	 *  sort and a filter you can type in. The gallery stays one click away — looking at pages is the
+	 *  right view when you are choosing between two similar documents, it was only wrong as the
+	 *  default.
+	 *
+	 *  Held in the URL rather than in a store, so the choice survives a reload and can be sent to
+	 *  someone: `?docs=gallery`. Absent means table, which keeps the default spelled in exactly one
+	 *  place. */
+	const docsView = $derived(page.url.searchParams.get('docs') === 'gallery' ? 'gallery' : 'table');
+
+	function setDocsView(next: 'table' | 'gallery'): void {
+		const url = new URL(page.url);
+		if (next === 'gallery') url.searchParams.set('docs', 'gallery');
+		else url.searchParams.delete('docs');
+		void goto(url, { replaceState: true, keepFocus: true, noScroll: true });
+	}
 	let error = $state<string | null>(null);
 	let docsPage = $state<DocumentsResponse | null>(null);
 	let loadingDocs = $state(false);
@@ -166,11 +192,35 @@
 			<div>
 				<h1 class="text-lg font-semibold">Annotate</h1>
 				<p class="text-muted-foreground text-sm">
-					Pick a document, then a chunk — or review a whole document.
+					Filter or sort to the documents you want, then pick chunks to send for labeling.
 				</p>
 			</div>
+			<!-- TABLE | GALLERY. Segmented rather than a dropdown: two options, both always legal, and
+			     the current one should be readable without opening anything. -->
+			<div class="border-border ml-auto flex overflow-hidden rounded-lg border p-0.5">
+				<Button
+					variant={docsView === 'table' ? 'secondary' : 'ghost'}
+					size="sm"
+					class="h-7 gap-1.5 px-2"
+					onclick={() => setDocsView('table')}
+					title="Table — filter and sort to find what to send"
+					data-testid="docs-view-table"
+				>
+					<Table2 class="size-3.5" /> Table
+				</Button>
+				<Button
+					variant={docsView === 'gallery' ? 'secondary' : 'ghost'}
+					size="sm"
+					class="h-7 gap-1.5 px-2"
+					onclick={() => setDocsView('gallery')}
+					title="Gallery — look at the pages"
+					data-testid="docs-view-gallery"
+				>
+					<LayoutGrid class="size-3.5" /> Gallery
+				</Button>
+			</div>
 			{#if datasets.length > 1 && view}
-				<div class="ml-auto w-56">
+				<div class="w-56">
 					<Select
 						options={datasets.map((d) => ({
 	value: d.id,
@@ -202,13 +252,17 @@
 		{:else if docsPage === null}
 			<p class="text-muted-foreground text-sm">Loading datasets…</p>
 		{:else}
-			<div
-				class="grid min-h-0 flex-1 auto-rows-min grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-3 overflow-y-auto pr-1"
-			>
-				{#each docsPage.docs as doc (view!.docId(doc))}
-					<DocTile view={view!} {doc} onclick={() => (openDoc = doc)} />
-				{/each}
-			</div>
+			{#if docsView === 'gallery'}
+				<div
+					class="grid min-h-0 flex-1 auto-rows-min grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-3 overflow-y-auto pr-1"
+				>
+					{#each docsPage.docs as doc (view!.docId(doc))}
+						<DocTile view={view!} {doc} onclick={() => (openDoc = doc)} />
+					{/each}
+				</div>
+			{:else}
+				<DocTable view={view!} docs={docsPage.docs} onopen={(doc) => (openDoc = doc)} />
+			{/if}
 			<!-- Pagination reads like the estate's DataTable footer: outline prev/next flanking a
 			     muted, tabular page counter. -->
 			<div class="flex shrink-0 items-center justify-center gap-3">
