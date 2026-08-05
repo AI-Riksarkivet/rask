@@ -10,6 +10,7 @@
 		"preview": "vite preview",
 		"start": "bun ./build/index.js",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"test:e2e": "playwright test",
 		"lint": "oxlint .",
 		"fmt": "rsvelte-fmt .",
 		"fmt:check": "rsvelte-fmt --check ."
@@ -29,11 +30,13 @@
 		"valibot": "^1.4.2"
 	},
 	"devDependencies": {
-		"@sveltejs/vite-plugin-svelte": "^7.1.2",
+		"@playwright/test": "^1.62.0",
+		"@sveltejs/vite-plugin-svelte": "^7.2.0",
 		"@types/bun": "^1.3.14",
 		"@types/d3-scale": "^4.0.9",
-		"svelte": "^5.56.3",
+		"svelte": "^5.56.8",
 		"svelte-adapter-bun": "^1.0.1",
-		"vite": "^8.0.16"
+		"svelte-check": "^4.7.3",
+		"vite": "^8.1.5"
 	}
 }
