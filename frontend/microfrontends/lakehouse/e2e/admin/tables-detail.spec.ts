@@ -358,10 +358,10 @@ test('re-type-column via the row ⇄ posts an alter path→data_type (#74 tail)'
 		.toEqual({ alterations: [{ path: 'id', data_type: { type: 'float32' } }] });
 });
 
-test('save table properties posts the full metadata map (#74 tail)', async ({ page }) => {
+test('save table properties posts every live key (#74 tail)', async ({ page }) => {
 	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Properties' });
-	// the seed row is describe.metadata { owner: "data-eng" }; add a second key, then save the whole map
+	// the seed row is describe.metadata { owner: "data-eng" }; add a second key, then save
 	await section.getByRole('button', { name: '+ add row' }).click();
 	await section.getByLabel('Property key 2').fill('tier');
 	await section.getByLabel('Property value 2').fill('gold');
@@ -370,6 +370,43 @@ test('save table properties posts the full metadata map (#74 tail)', async ({ pa
 		.poll(() => bodyOf(page, `/v1/table/${TABLE}/schema_metadata/update`))
 		.toEqual({ metadata: { owner: 'data-eng', tier: 'gold' } });
 	await expect(section.getByText('Saved.')).toBeVisible();
+});
+
+test('removing a property row posts a null-valued key (#78)', async ({ page }) => {
+	// The × used to just drop the row from the local map — and since the write MERGES, the key stayed on
+	// the table while the UI said "Saved." Removal has to be SAID, not implied by omission.
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
+	const section = page.locator('section', { hasText: 'Properties' });
+	await section.getByRole('button', { name: 'Remove property 1' }).click();
+	await section.getByRole('button', { name: 'Save properties' }).click();
+	await expect
+		.poll(() => bodyOf(page, `/v1/table/${TABLE}/schema_metadata/update`))
+		.toEqual({ metadata: { owner: null } });
+});
+
+test('the description is a first-class field and renders under the table name (#78)', async ({
+	page,
+}) => {
+	await page.goto('/lakehouse/catalog/tables/db1%24t');
+	const section = page.locator('section', { hasText: 'Properties' });
+	await section.getByLabel('Table description').fill('Page images, one row per scan.');
+	await section.getByRole('button', { name: 'Save properties' }).click();
+	// ONE post carries the description alongside the untouched rows — a separate call would be a second
+	// Lance version for a single edit.
+	await expect
+		.poll(() => bodyOf(page, `/v1/table/${TABLE}/schema_metadata/update`))
+		.toEqual({ metadata: { owner: 'data-eng', description: 'Page images, one row per scan.' } });
+
+	// and the detail header reads it back (read-only there — the editor is the one door). `seed` merges
+	// per key, so overriding `describe` alone leaves the rest of the fixture standing.
+	await seed(page, {
+		[`POST /v1/table/${TABLE}/describe`]: {
+			...DESCRIBE,
+			metadata: { owner: 'data-eng', description: 'Page images, one row per scan.' },
+		},
+	});
+	await page.reload();
+	await expect(page.locator('p.tdesc')).toHaveText('Page images, one row per scan.');
 });
 
 test('set a column property merges one key (#74 tail)', async ({ page }) => {

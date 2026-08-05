@@ -27,7 +27,7 @@ in-process `dataplane` (pylance, always 200) — see `services/catalog/services/
 | Namespaces (5) | all 5 | — |
 | Tables lifecycle (10) | all 10 (`rename_table` via dataplane, #5b) | — |
 | Data CRUD (9) | all 9 (`update`/`delete` via dataplane) | — |
-| Columns (6) | 5 (add/alter/drop/update-field-metadata/schema-metadata via dataplane) | `backfill_columns` |
+| Columns (6) | 5 (add/alter/drop/update-field-metadata via dataplane; schema-metadata NATIVE, dataplane only for the null-delete extension) | `backfill_columns` |
 | Indices (5) | all 5 | — |
 | Tags (5) | all 5 (dataplane) | — |
 | Versions (6) | 4 (`list` / `describe` / `create` / `delete`, native + dict marshalling) | `batch-create` / `batch-commit` |

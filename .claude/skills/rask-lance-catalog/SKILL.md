@@ -178,6 +178,17 @@ changing anything the sweep, the reconciler or the orphan scan touches.
 
 ## Gotchas
 
+- **`update_table_schema_metadata` MERGES — the spec text ("Replace schema metadata") is wrong about
+  every backend.** Probed against a real `dir` backend: posting `{owner}` over `{owner, tier}` leaves
+  `tier` standing. So omitting a key cannot remove it, and the spec's request model types `metadata` as
+  a strict `{str: str}` that cannot carry a null — which left table properties with no delete at all,
+  and `str(None)` writing the literal string `"None"` onto the table. Since #78 a `null` value DELETES
+  the key: no-null bodies stay on the native spec op, a body with any null routes to
+  `dataplane.update_schema_metadata` (pylance's `update_schema_metadata`, the same dialect
+  `update_field_metadata` already speaks). **Never `replace=True`** — the map a caller holds came from
+  `read_schema_metadata`, which excludes `lineage.*`, so a replace silently destroys the #21
+  self-describing coordinates. `description` is the one RESERVED key (the lakehouse renders it under the
+  table name); everything else in that map is opaque user data.
 - `deregister` keeps bytes ON PURPOSE (external data); `drop` removes them. Neither leaves Lance
   orphans — but partially-failed writes and unpurged buckets do, and nothing reclaims those yet.
   `services/maintenance`'s orphan pass REPORTS them (`MAINTENANCE_ORPHAN_SCAN_ENABLED`, off by
@@ -213,14 +224,35 @@ changing anything the sweep, the reconciler or the orphan scan touches.
   put-if-not-exists COLLISION), data overlays (`data/overlay-*.lance`, referenced from
   `DataFragment.overlays` not `data_files()`), and blob sidecars (`data/<stem>/*.blob`). The first
   four are REFUSED by `maintenance/services/orphans.py`; refusing overlays is what feature flag 64
-  requires, not a shortcut.
+  requires, not a shortcut. Overlays ARE writable on pylance 9.0.0 via `LanceOperation.DataOverlay`
+  (the older "experimental and unwritable" note was stale) — pylance just refuses to reopen the
+  result, which is why the refusal is driven by the feature flags rather than by that seam.
 - **A dataset's files do not necessarily all live under its prefix.** A named BRANCH is a whole
   parallel dataset under `tree/{branch}/` (its own `_versions`/`_transactions`/`_deletions`/
   `_indices`; branch names may contain `/`), and `lance.dataset(uri)` opens only the MAIN branch. A
   SHALLOW CLONE's data resolves through the manifest's `base_paths[]` to another dataset root
   entirely (feature flag 16). Any "list the prefix, subtract what is referenced" logic reports both
-  as garbage. pylance does not expose `base_paths`, so detect the consequence: a referenced path
-  that is not present locally.
+  as garbage. Branches are caught by the `tree/` directory probe; base_paths by TWO checks, and both
+  are needed — the consequence (a referenced path not present locally) plus the MANIFEST FLAG.
+- **The manifest's feature flags ARE reachable, and they are the refusal gate (#64).**
+  `maintenance/core/features.py` reads `reader_feature_flags`/`writer_feature_flags` as varints at
+  protobuf fields 9/10 of `LanceDataset._ds.serialized_manifest()` — pylance exposes neither field
+  but its own pickle path uses that blob. Measured on pylance 9.0.0: plain `(0,0)`, `delete()`
+  `(1,1)`, `enable_stable_row_ids` `(2,2)`, `add_bases`/`shallow_clone` set 16, a committed
+  `LanceOperation.DataOverlay` sets 64. Both `compact_one` (BEFORE any rewrite) and the orphan scan
+  refuse anything outside `SUPPORTED` (= 1|2|4|8), and the sweep reports refusals as their own
+  `summarize()` line + `compaction.datasets.refused` counter — never inside `errors` or `skipped`.
+  Two reasons the flags rather than the consequence: **flag 16 compaction was genuinely destroying
+  the feature** (`compact_one` on a shallow clone returned `fragments_removed=8, error=None` and
+  left the clone holding a full local copy of data it had only referenced), and **`add_bases`
+  registers a base no `DataFile` resolves through yet** — every `base_id` stays `None`, so the
+  consequence check passed it as `checked=True` with orphans named. Flag 64 was only ACCIDENTALLY
+  safe: pylance refuses that open itself, and the untyped `open:` error it produced is exactly what
+  the sweep's lineage layer drops as noise. Widening `SUPPORTED` is a deliberate edit — it is a
+  whitelist, so a pylance upgrade adding a legitimate flag silently stops maintaining every dataset
+  that sets it, which is why the refusal counter has to be loud. **Residual: the source-side mirror
+  hazard is NOT closed** — compacting a clone's SOURCE deletes files only the clone references
+  (reproduced), and the source's own manifest carries no flag, so no per-dataset check can see it.
 - **A namespace is a `__manifest` ROW, not a directory** (the `dir` impl the chart runs —
   `LANCE_REST_IMPL=dir`). Only a TABLE materialises a directory. Any scan that enumerates namespaces
   by listing directories silently returns `[]` on every real estate — which reads as "checked and

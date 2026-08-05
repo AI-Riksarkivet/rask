@@ -1,8 +1,12 @@
 <script lang="ts">
-	// #74 tail — table + per-column property editor. Table-level metadata is SET as a whole map
-	// (schema_metadata/update replaces it), so we edit a full local copy and PUT it; per-column metadata is
-	// MERGED per key (update_field_metadata), a `null` value deleting a key. Both are writer-gated at the
-	// catalog and reach it only through the session-only /capi columns BFF (the signed-in user's bearer).
+	// #74 tail / #78 — table + per-column property editor. BOTH levels speak the same dialect: the write
+	// MERGES by key and a `null` value DELETES one (schema_metadata/update at the table level,
+	// update_field_metadata per column). So a removed row must be SENT as null — omitting it leaves the key
+	// on the table, which is what the × button used to do while reporting "Saved." Both are writer-gated at
+	// the catalog and reach it only through the session-only /capi columns BFF (the signed-in user's bearer).
+	//
+	// `description` is RESERVED: it is the table's own prose, rendered on the detail header, so it gets a
+	// dedicated multi-line field here and is filtered out of the raw key/value grid. One editor, one door.
 	import { Select } from '@rask/ui/select';
 	import { untrack } from 'svelte';
 	import type { CatalogResult } from './catalog';
@@ -21,7 +25,13 @@
 		onchange: () => void;
 	} = $props();
 
+	const DESCRIPTION = 'description';
+
 	let rows = $state<{ key: string; value: string }[]>([]);
+	let description = $state('');
+	/** The keys the editor was seeded with — a seeded key that is gone at save time is a DELETE, and the
+	 *  only way to say so on the wire is an explicit null. Without this snapshot removal is unexpressible. */
+	let seeded = $state<{ keys: string[]; description: string }>({ keys: [], description: '' });
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 	let savedMsg = $state<string | null>(null);
@@ -38,7 +48,11 @@
 	$effect(() => {
 		void table;
 		untrack(() => {
-			rows = Object.entries(tableMeta).map(([key, value]) => ({ key, value }));
+			rows = Object.entries(tableMeta)
+				.filter(([key]) => key !== DESCRIPTION)
+				.map(([key, value]) => ({ key, value }));
+			description = tableMeta[DESCRIPTION] ?? '';
+			seeded = { keys: Object.keys(tableMeta), description };
 			error = null;
 			savedMsg = null;
 			selectedCol = '';
@@ -74,13 +88,21 @@
 	}
 
 	function saveTableProps(): void {
-		// The full desired map (schema_metadata/update replaces the whole map). Blank keys dropped; the last
-		// occurrence of a duplicated key wins.
-		const map: Record<string, string> = {};
+		// The write MERGES, so this is the set of CHANGES: every live row upserts, every seeded key that is
+		// no longer here is sent as null to delete it. Blank keys dropped; the last occurrence of a
+		// duplicated key wins. The description rides the SAME post — a second call would be a second Lance
+		// version for one edit — and is applied last, so the dedicated field wins over a hand-typed row.
+		const map: Record<string, string | null> = {};
 		for (const r of rows) {
 			const k = r.key.trim();
-			if (k) map[k] = r.value;
+			if (k && k !== DESCRIPTION) map[k] = r.value;
 		}
+		for (const k of seeded.keys) {
+			if (k !== DESCRIPTION && !(k in map)) map[k] = null;
+		}
+		const desc = description.trim();
+		if (desc) map[DESCRIPTION] = description;
+		else if (seeded.description) map[DESCRIPTION] = null;
 		run(
 			() => setTableProperties({ table, metadata: map }),
 			() => (savedMsg = 'Saved.'),
@@ -109,8 +131,21 @@
 <section>
 	<h2>Properties</h2>
 
+	<h3>Description</h3>
+	<p class="mut">
+		What this table is. Stored as the reserved <code class="mono">description</code> property and shown
+		under the table's name.
+	</p>
+	<textarea
+		bind:value={description}
+		rows="3"
+		placeholder="What this table holds, where it comes from, what to watch out for…"
+		aria-label="Table description"></textarea>
+
 	<h3>Table properties</h3>
-	<p class="mut">Schema-level key/value metadata. Saving replaces the whole map.</p>
+	<p class="mut">
+		Schema-level key/value metadata. Saving merges these keys; removing a row deletes it.
+	</p>
 	<div class="rows">
 		{#each rows as row, i (i)}
 			<div class="kv">
@@ -235,6 +270,20 @@
 		padding: 4px 8px;
 		flex: 1 1 140px;
 		min-width: 100px;
+	}
+	/* Deliberately NOT @rask/ui's Textarea: this section is on the legacy --ink/--line bridge at 12px, and
+	   the Tailwind component would land a 16px rounded-lg field among 12px radius-sm ones. */
+	textarea {
+		background: var(--panel-2);
+		border: 1px solid var(--line);
+		border-radius: var(--radius-sm);
+		color: var(--ink);
+		font: inherit;
+		font-size: 12px;
+		line-height: 1.5;
+		padding: 6px 8px;
+		width: 100%;
+		resize: vertical;
 	}
 	.btn {
 		background: var(--panel-2);

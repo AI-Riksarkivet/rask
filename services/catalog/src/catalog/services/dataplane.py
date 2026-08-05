@@ -1058,6 +1058,26 @@ def read_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[
     return out
 
 
+def update_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[str], values: dict[str, str | None]) -> dict[str, str]:
+    """Upsert the table's schema-level metadata; a ``None`` value DELETES that key.
+
+    The table-level twin of :func:`update_field_metadata`'s dialect, and the only way to REMOVE a table
+    property: the spec's ``update_table_schema_metadata`` merges (probed against a real ``dir`` backend —
+    ``{owner}`` over ``{owner, tier}`` leaves ``tier`` standing, despite the spec text saying "Replace"),
+    and its wire model types ``metadata`` as a strict ``{str: str}``, so a null cannot ride the native op
+    at all. Omitting a key is therefore a no-op, which made the properties editor's remove button a silent
+    lie until this existed.
+
+    NEVER ``replace=True``. The map a caller holds came from :func:`read_schema_metadata`, which EXCLUDES
+    the internal ``lineage.*`` keys — so replacing would silently drop the #21 coordinates that make the
+    Lance file self-describing. Merge + explicit null-delete is the only shape that can't destroy them.
+
+    Returns the table's new full map with ``lineage.*`` filtered out, matching what the read twin reports.
+    """
+    result = open_dataset(ns, so, table_id).update_schema_metadata(values)
+    return {k: v for k, v in result.items() if not k.startswith("lineage.")}
+
+
 def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[str], data: bytes) -> bytes:
     """Align Arrow-IPC insert rows to the table's schema before the native append.
 

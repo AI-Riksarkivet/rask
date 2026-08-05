@@ -199,8 +199,16 @@ async def update_table_schema_metadata(
     emitter: LineageEmitterDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> UpdateTableSchemaMetadataResponse:
-    """Set the table's schema-level metadata map — wraps ``update_table_schema_metadata``; emits an
-    UPDATE_SCHEMA_METADATA event (the response omits the version, so it is read back best-effort)."""
+    """Upsert the table's schema-level metadata map — a ``null`` value DELETES that key; emits an
+    UPDATE_SCHEMA_METADATA event (the response omits the version, so it is read back best-effort).
+
+    The op MERGES, whatever the spec's "Replace" wording says (probed against a real ``dir`` backend:
+    posting ``{owner}`` over ``{owner, tier}`` leaves ``tier`` standing). Omitting a key therefore cannot
+    remove it, and the spec's request model types ``metadata`` as a strict ``{str: str}`` that cannot carry
+    a null — so ``{"key": null}`` is a rask EXTENSION, routed to the dataplane's pylance
+    ``update_schema_metadata`` (the same ``None``-deletes dialect ``update_field_metadata`` already speaks).
+    A body with no nulls stays on the native spec op, transaction id and all.
+    """
     # REST-only: the spec sends the metadata map directly, or wrapped as {"metadata": {...}}.
     segments = parse_identifier(id, settings.delimiter)
     nested = body.get("metadata")
@@ -214,9 +222,15 @@ async def update_table_schema_metadata(
         raw = nested
     else:
         raw = body
-    metadata: dict[str, str] = {str(k): str(v) for k, v in raw.items()}
-    req = UpdateTableSchemaMetadataRequest(id=segments, metadata=metadata)
-    response: UpdateTableSchemaMetadataResponse = await run_in_threadpool(native.call, ns, "update_table_schema_metadata", req)
+    # `str(v)` on a null would write the literal string "None" — the deletion signal must survive intact.
+    values: dict[str, str | None] = {str(k): None if v is None else str(v) for k, v in raw.items()}
+    response: UpdateTableSchemaMetadataResponse
+    if any(v is None for v in values.values()):
+        updated = await run_in_threadpool(dataplane.update_schema_metadata, ns, so, segments, values)
+        response = UpdateTableSchemaMetadataResponse(metadata=updated)
+    else:
+        req = UpdateTableSchemaMetadataRequest(id=segments, metadata={k: v for k, v in values.items() if v is not None})
+        response = await run_in_threadpool(native.call, ns, "update_table_schema_metadata", req)
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
