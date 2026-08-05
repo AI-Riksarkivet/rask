@@ -175,20 +175,34 @@ describe('the chart hands a zone only the upstreams its routes use', () => {
 		]);
 	});
 
-	it('annotator routes to the annotator service and the viewer — never search', () => {
+	it('annotator routes to the annotator service, the viewer AND search', () => {
+		// It used to assert `never search`, and that was true until /annotator/browse gained "more
+		// like this" — a k-NN query over the corpus's declared vector binding, which is
+		// `GET /api/search/similar` on the SEARCH service and cannot be answered by the viewer.
+		//
+		// The assertion was correct when written and this is a deliberate widening, not a relaxation:
+		// what it protects is that a zone's declared upstreams match the routes it actually makes,
+		// in BOTH directions. The companion case below still fails if the chart stops injecting it.
+		// VIEWER_API is deliberately NOT asserted: the zone reaches the viewer through
+		// `makeViewerProxy(env)`, so the `env.VIEWER_API` read lives in @rask/api and this grep
+		// cannot see it — the same blind spot the media case above documents for CATALOG_API.
 		const used = upstreamsUsed('annotator');
 		expect(used.has('ANNOTATOR_API')).toBe(true);
-		expect(used.has('SEARCH_API'), 'the annotator has no search route; drop SEARCH_API').toBe(
-			false,
+		expect(used.has('SEARCH_API'), 'the annotator searches now — see similar.remote.ts').toBe(
+			true,
 		);
 	});
 
-	it('SEARCH_API is gated to the media zone in the chart', () => {
-		// The env block must not hand it to every media-plane zone unconditionally.
-		const searchLine = chart.split('\n').findIndex((l) => l.includes('name: SEARCH_API'));
-		expect(searchLine).toBeGreaterThan(-1);
-		const guard = chart.split('\n')[searchLine - 1] ?? '';
-		expect(guard, 'SEARCH_API must sit behind an `eq .name "explorer"` guard').toContain(
+	it('the chart injects SEARCH_API for every zone that searches', () => {
+		// The failure this catches is silent and only in-cluster: an uninjected upstream leaves the
+		// zone's remote function on its localhost dev default, so every call fails with nothing in
+		// the browser saying the URL was never set. Both searching zones must be inside the media
+		// block, and that block is already gated on `explorer.enabled`.
+		const lines = chart.split('\n');
+		const searchLine = lines.findIndex((l) => l.includes('name: SEARCH_API'));
+		expect(searchLine, 'the chart never injects SEARCH_API').toBeGreaterThan(-1);
+		// Not behind a single-zone guard any more — the line above it must not narrow it to one.
+		expect(lines[searchLine - 1] ?? '', 'SEARCH_API is gated to one zone again').not.toContain(
 			'eq .name "explorer"',
 		);
 	});

@@ -226,19 +226,25 @@ spec:
             {{- end }}
             {{- if and $root.Values.explorer.enabled (or (eq .name "explorer") (eq .name "annotator")) }}
             # --- the media plane's upstreams for these two zones' BFF proxy routes -------
-            # (/<zone>/api/* -> the media Services). Scoped PER ZONE, not handed to both: a
-            # zone should not hold a service URL it never routes to. media searches and
-            # reads the viewer, and reaches the annotator only for the workflow's tag write
-            # + batch-job submit; the annotator reads the viewer for the media it draws on
-            # the canvas and never searches.
+            # (/<zone>/api/* -> the media Services). Scoped PER ZONE, not handed to every
+            # zone: one should not hold a service URL it never routes to. explorer searches
+            # and reads the viewer, and reaches the annotator only for the workflow's tag
+            # write + batch-job submit; the annotator reads the viewer for the media it
+            # draws on the canvas.
+            #
+            # SEARCH_API used to sit behind an `eq .name "explorer"` guard, on the claim that
+            # "the annotator never searches". That stopped being true when /annotator/browse
+            # gained "more like this" — a k-NN query over the corpus's declared vector
+            # binding, which is `GET /api/search/similar` on the SEARCH service and cannot be
+            # answered by the viewer. Without this the zone's `findSimilar` remote falls back
+            # to its localhost dev default and every neighbour lookup fails in-cluster, with
+            # nothing in the browser to say the URL was never injected.
             - name: VIEWER_API
               value: {{ printf "http://%s-viewer:%v" (include "rask.fullname" $root) $root.Values.explorer.services.viewer.port | quote }}
             - name: ANNOTATOR_API
               value: {{ printf "http://%s-annotator:%v" (include "rask.fullname" $root) $root.Values.explorer.services.annotator.port | quote }}
-            {{- if eq .name "explorer" }}
             - name: SEARCH_API
               value: {{ printf "http://%s-search:%v" (include "rask.fullname" $root) $root.Values.explorer.services.search.port | quote }}
-            {{- end }}
             {{- if and (eq .name "annotator") $root.Values.runners.enabled }}
             # Mirror of the annotator SERVICE's runner seams (media.yaml) onto the zone's
             # web pod: its /api/config endpoint reads these to render the honest
