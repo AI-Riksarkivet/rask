@@ -1,6 +1,13 @@
 import * as v from 'valibot';
-import { query, getRequestEvent } from '$app/server';
-import { getIngestRun, listIngestSources, type IngestRun, type SourceDescriptor } from '@rask/api';
+import { command, query, getRequestEvent } from '$app/server';
+import {
+	getIngestRun,
+	listIngestSources,
+	startIngest as postIngest,
+	type IngestAccepted,
+	type IngestRun,
+	type SourceDescriptor,
+} from '@rask/api';
 
 // The ingest plane's READ surface for the compute zone (open_ingest.md A20).
 //
@@ -46,4 +53,42 @@ export const getIngestRunStatus = query(RunId, async (runId): Promise<IngestRun>
  */
 export const getIngestSources = query(async (): Promise<SourceDescriptor[]> => {
 	return listIngestSources(getRequestEvent().fetch);
+});
+
+/** What the form sends. Parsed at the boundary, so a malformed request is refused here rather than
+ *  becoming a 422 from FastAPI that the UI has to interpret. */
+const IngestInput = v.object({
+	kind: v.pipe(v.string(), v.trim(), v.minLength(1)),
+	project: v.pipe(v.string(), v.trim(), v.minLength(1)),
+	dataset: v.pipe(v.string(), v.trim(), v.minLength(1)),
+	options: v.optional(v.record(v.string(), v.unknown()), {}),
+	// Per-run write partitioning. Every field optional — unset means the deployment default. The
+	// DOOR is what refuses an out-of-range value (a `fragment_rows` at or above the queue's
+	// max_ack_pending would hang the drain), so this only checks shape, never policy: duplicating
+	// the ceiling here would be a second copy of a rule that can drift.
+	sizing: v.optional(v.record(v.string(), v.pipe(v.number(), v.integer(), v.minValue(1))), {}),
+	idempotencyKey: v.optional(v.string()),
+});
+
+/**
+ * Accept an ingest run — a `command()`, and it has to be one.
+ *
+ * This was called CLIENT-side, straight from the form, against the relative `/api/ingest/ingests`
+ * URL. That request carries cookies but no `Authorization` header, so on an auth-enabled estate it
+ * reached the door as the GATEWAY's own identity with no user behind it — and the door correctly
+ * refused it:
+ *
+ *     'gateway' is a public front door: its Dapr app-token authenticates the proxy, not the caller
+ *
+ * Found by pressing the button in a browser; every unit test passed throughout, because none of them
+ * has a session. The gateway's Dapr app-token proves the PROXY, never the human, which is the whole
+ * point of the public-caller rule — so the fix is not to loosen the door but to call it from
+ * somewhere that holds the user's bearer.
+ *
+ * A remote command runs on the ZONE SERVER, where `getRequestEvent().fetch` carries the session
+ * established by the OIDC BFF. Same seam the read queries above already use, and the estate's stated
+ * direction for every JSON value surface.
+ */
+export const startIngest = command(IngestInput, async (input): Promise<IngestAccepted> => {
+	return postIngest(input, getRequestEvent().fetch);
 });

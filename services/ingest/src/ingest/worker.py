@@ -104,6 +104,13 @@ async def _renew_held(held: dict[int, Any]) -> None:
     caught it on the first run. Identity is the right key anyway (two messages are never "equal"),
     and `id()` cannot be recycled while the mapping holds the reference.
     """
+    # POLL REASON: KEEPALIVE, not a poll — this loop TELLS and never asks. It reports "still working"
+    # to JetStream for messages this process is holding, and reads no state, so there is nothing an
+    # event could deliver instead: the fact being reported is our own liveness, and only we have it.
+    # A13 forbids polling loops (a loop asking "is it done yet"); an ack keepalive is the opposite,
+    # and without it `ack_wait` expires and the queue redelivers work a LIVE worker is mid-fetch on.
+    # BOUNDED by the drain: created in `drain_chunk` and cancelled in its `finally`, so it cannot
+    # outlive the work it accompanies.
     while True:
         await asyncio.sleep(HEARTBEAT_SECONDS)
         for msg in list(held.values()):

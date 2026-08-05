@@ -1,7 +1,11 @@
 <script lang="ts">
 	import { base } from '$app/paths';
-	import { startIngest, type IngestAccepted } from '@rask/api';
-	import { getIngestSources } from '$lib/remote/ingest.remote';
+	import type { IngestAccepted } from '@rask/api';
+	// `startIngest` comes from the REMOTE module, not from `@rask/api` directly. Calling the client
+	// helper from here posted with cookies but no bearer, so the door saw the gateway's own identity
+	// and refused it ("'gateway' is a public front door"). The remote command runs on the zone server,
+	// where the session bearer exists. Found by pressing the button, not by a test.
+	import { getIngestSources, startIngest } from '$lib/remote/ingest.remote';
 	import { Card } from '@rask/ui/card';
 	import { Button } from '@rask/ui/button';
 	import { CloudDownload } from '@lucide/svelte';

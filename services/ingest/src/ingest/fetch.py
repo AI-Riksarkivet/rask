@@ -92,6 +92,11 @@ def _fetch_http(url: str) -> bytes:
                     if 400 <= code < 500 and code not in _RETRYABLE_4XX:
                         raise
                 last = exc
+                # POLL REASON: BACKOFF, not a poll — this waits between BOUNDED retry attempts of one
+                # request (`attempt < HTTP_ATTEMPTS - 1`) and asks for no state on a schedule. It ends
+                # by exhausting attempts, never by an answer arriving, which is what makes it
+                # categorically different from the loop A13 forbids. Exponential so a rate-limited
+                # endpoint gets increasing room instead of a fixed drumbeat.
                 if attempt < HTTP_ATTEMPTS - 1:
                     time.sleep(HTTP_BASE_DELAY * (2**attempt))
     assert last is not None
