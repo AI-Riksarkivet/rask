@@ -188,9 +188,7 @@ describe('the chart hands a zone only the upstreams its routes use', () => {
 		// cannot see it — the same blind spot the media case above documents for CATALOG_API.
 		const used = upstreamsUsed('annotator');
 		expect(used.has('ANNOTATOR_API')).toBe(true);
-		expect(used.has('SEARCH_API'), 'the annotator searches now — see similar.remote.ts').toBe(
-			true,
-		);
+		expect(used.has('SEARCH_API'), 'the annotator searches now — see similar.remote.ts').toBe(true);
 	});
 
 	it('the chart injects SEARCH_API for every zone that searches', () => {

@@ -85,9 +85,9 @@ describe('the prediction must SURVIVE the wire schema', () => {
 
 describe('the label column', () => {
 	it('reads the labels off the prediction', () => {
-		expect(predictedLabels(task({ prediction: [{ shape_type: 'tag', label: 'letter' }] }))).toEqual([
-			'letter',
-		]);
+		expect(predictedLabels(task({ prediction: [{ shape_type: 'tag', label: 'letter' }] }))).toEqual(
+			['letter'],
+		);
 	});
 
 	it('shows EVERY distinct label, not just the first', () => {
@@ -131,7 +131,9 @@ describe('the label column', () => {
 
 describe('the corpus and modality columns', () => {
 	it('reads the corpus off source.where', () => {
-		expect(corpusText(task({ source: { kind: 'chunks', keys: ['k'], where: 'vasa' } }))).toBe('vasa');
+		expect(corpusText(task({ source: { kind: 'chunks', keys: ['k'], where: 'vasa' } }))).toBe(
+			'vasa',
+		);
 	});
 
 	it('renders the DEFAULT corpus as empty, not as the word "default"', () => {
@@ -182,21 +184,21 @@ describe('free-text search across the item columns', () => {
 	});
 
 	it('matches the label', () => {
-		expect(matchesText(task({ prediction: [{ shape_type: 'tag', label: 'letter' }] }), 'lett')).toBe(
-			true,
-		);
+		expect(
+			matchesText(task({ prediction: [{ shape_type: 'tag', label: 'letter' }] }), 'lett'),
+		).toBe(true);
 	});
 
 	it('matches the corpus', () => {
-		expect(matchesText(task({ source: { kind: 'chunks', keys: ['k'], where: 'vasa' } }), 'vas')).toBe(
-			true,
-		);
+		expect(
+			matchesText(task({ source: { kind: 'chunks', keys: ['k'], where: 'vasa' } }), 'vas'),
+		).toBe(true);
 	});
 
 	it('is case-insensitive', () => {
-		expect(matchesText(task({ prediction: [{ shape_type: 'tag', label: 'Letter' }] }), 'lETT')).toBe(
-			true,
-		);
+		expect(
+			matchesText(task({ prediction: [{ shape_type: 'tag', label: 'Letter' }] }), 'lETT'),
+		).toBe(true);
 	});
 
 	it('an empty query matches everything, rather than nothing', () => {

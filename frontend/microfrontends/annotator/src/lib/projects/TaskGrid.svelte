@@ -93,7 +93,11 @@
 			</button>
 
 			<div class="absolute top-1.5 left-1.5">
-				<Checkbox checked={picked} onCheckedChange={() => toggle(task.task_id)} aria-label="Select" />
+				<Checkbox
+					checked={picked}
+					onCheckedChange={() => toggle(task.task_id)}
+					aria-label="Select"
+				/>
 			</div>
 
 			<div class="flex flex-col gap-1 p-2">

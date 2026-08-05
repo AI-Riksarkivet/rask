@@ -53,7 +53,12 @@
 <!-- The shared AppShell (one grouped sidebar) from @rask/ui — identical to every
      other microfrontend, zero drift. `base` (=/train) frames the breadcrumb;
      `zoneNav` renders THIS zone's five areas as the sidebar leaves. -->
-<AppShell pathname={page.url.pathname} project={data.activeProject ? { name: data.activeProject } : undefined} zoneNav={TRAIN_ZONE_NAV} {notifications}>
+<AppShell
+	pathname={page.url.pathname}
+	project={data.activeProject ? { name: data.activeProject } : undefined}
+	zoneNav={TRAIN_ZONE_NAV}
+	{notifications}
+>
 	<div class="min-h-0 flex-1 overflow-y-auto">
 		{@render children()}
 	</div>

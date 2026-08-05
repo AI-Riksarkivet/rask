@@ -49,6 +49,11 @@
 
 <!-- Shared shell from @rask/ui — identical chrome across every microfrontend.
      Ray health is a live signal at the top of the compute overview, not in the shell. -->
-<AppShell pathname={page.url.pathname} project={data.activeProject ? { name: data.activeProject } : undefined} zoneNav={COMPUTE_ZONE_NAV} {notifications}>
+<AppShell
+	pathname={page.url.pathname}
+	project={data.activeProject ? { name: data.activeProject } : undefined}
+	zoneNav={COMPUTE_ZONE_NAV}
+	{notifications}
+>
 	{@render children()}
 </AppShell>

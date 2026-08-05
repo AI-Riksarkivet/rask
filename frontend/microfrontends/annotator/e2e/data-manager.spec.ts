@@ -172,9 +172,13 @@ test('a selection made in the GRID is the same selection in the LIST', async ({ 
 test('the bulk vocabulary is DERIVED from the rows, with honest counts', async ({ page }) => {
 	// It used to be two hardcoded buttons (accept, assign) while every per-row button came from the
 	// task machine — so claiming twenty items was twenty clicks.
-	await openQueue(page, [task(1), task(2, { state: 'claimed', legal_events: [
-		{ event: 'release', to: 'unassigned', permission: 'can_annotate' },
-	] })]);
+	await openQueue(page, [
+		task(1),
+		task(2, {
+			state: 'claimed',
+			legal_events: [{ event: 'release', to: 'unassigned', permission: 'can_annotate' }],
+		}),
+	]);
 
 	await page.locator('table thead button[role=checkbox]').click();
 

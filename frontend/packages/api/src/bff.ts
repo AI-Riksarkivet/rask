@@ -259,7 +259,13 @@ type CookieReader = { get(name: string): string | undefined };
  * shell must know it on the SERVER render — a client-side read paints "Default" first and the real
  * project after hydration, which is the flash-and-lie this replaced.
  */
-export const zoneLayoutLoad = ({ locals, cookies }: { locals: AuthLocals; cookies?: CookieReader }) => ({
+export const zoneLayoutLoad = ({
+	locals,
+	cookies,
+}: {
+	locals: AuthLocals;
+	cookies?: CookieReader;
+}) => ({
 	user: sessionToUser(locals.session),
 	authEnabled: locals.authEnabled,
 	activeProject: cookies?.get(ACTIVE_PROJECT_COOKIE) ?? '',

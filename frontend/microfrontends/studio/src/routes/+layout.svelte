@@ -52,6 +52,11 @@
 
 <!-- The shared AppShell (one grouped sidebar) from @rask/ui — identical to every
      other microfrontend, zero drift. `base` (=/studio) frames the breadcrumb. -->
-<AppShell pathname={page.url.pathname} project={data.activeProject ? { name: data.activeProject } : undefined} zoneNav={STUDIO_ZONE_NAV} {notifications}>
+<AppShell
+	pathname={page.url.pathname}
+	project={data.activeProject ? { name: data.activeProject } : undefined}
+	zoneNav={STUDIO_ZONE_NAV}
+	{notifications}
+>
 	{@render children()}
 </AppShell>

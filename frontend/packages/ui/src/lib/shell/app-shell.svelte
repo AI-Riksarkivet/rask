@@ -260,8 +260,11 @@
 									<DropdownMenu.Content class="min-w-40 rounded-lg" side="bottom" align="start">
 										{#each trail.hidden as crumb (crumb.id)}
 											<DropdownMenu.Item class="p-0">
-												<a href={crumb.href}
-									data-sveltekit-reload={crumb.id === '__project' ? '' : undefined} class="w-full truncate px-2 py-1.5 capitalize">{crumb.label}</a>
+												<a
+													href={crumb.href}
+													data-sveltekit-reload={crumb.id === '__project' ? '' : undefined}
+													class="w-full truncate px-2 py-1.5 capitalize">{crumb.label}</a
+												>
 											</DropdownMenu.Item>
 										{/each}
 									</DropdownMenu.Content>

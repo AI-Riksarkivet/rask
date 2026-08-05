@@ -157,7 +157,9 @@
 <Dialog.Root bind:open>
 	<Dialog.Content class="sm:max-w-md">
 		<Dialog.Title
-			>{label ? `Label ${keys.length} item${keys.length === 1 ? '' : 's'} as ${label}` : `Send ${keys.length} item${keys.length === 1 ? '' : 's'} to a labeling task`}</Dialog.Title
+			>{label
+				? `Label ${keys.length} item${keys.length === 1 ? '' : 's'} as ${label}`
+				: `Send ${keys.length} item${keys.length === 1 ? '' : 's'} to a labeling task`}</Dialog.Title
 		>
 		<Dialog.Description>
 			From {origin === 'atlas' ? 'the atlas selection' : 'the search results'}
