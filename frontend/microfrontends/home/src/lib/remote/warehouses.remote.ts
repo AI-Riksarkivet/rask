@@ -217,3 +217,21 @@ export const deleteProject = command(
 			DeleteProjectSchema,
 		),
 );
+
+/** The namespaces BOUND to one warehouse — the warehouse→namespace rung of the hierarchy view
+ *  (#104). Same catalog door the bind flow uses, read side. */
+const WarehouseNamespacesSchema = v.object({ namespaces: v.array(v.string()) });
+export const warehouseNamespaces = query(
+	v.string(),
+	async (warehouseId): Promise<ApiResult<{ namespaces: string[] }>> =>
+		parsed(await catalogJSON(`/v1/warehouses/${enc(warehouseId)}/namespaces`), WarehouseNamespacesSchema),
+);
+
+/** The tables under one namespace — the namespace→table rung (#104). The spec's list_tables via
+ *  the catalog's GET route; the view caps what it draws and SAYS so, this returns the page. */
+const NamespaceTablesSchema = v.object({ tables: v.array(v.string()) });
+export const namespaceTables = query(
+	v.string(),
+	async (namespaceId): Promise<ApiResult<{ tables: string[] }>> =>
+		parsed(await catalogJSON(`/v1/namespace/${enc(namespaceId)}/table/list`), NamespaceTablesSchema),
+);

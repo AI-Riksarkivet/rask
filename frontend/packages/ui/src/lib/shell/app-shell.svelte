@@ -129,12 +129,7 @@
 		name: projectName || 'Select project',
 		subtitle: projectName ? (project.subtitle ?? 'Project') : 'No active project',
 	});
-	const projectCrumb = $derived<Crumb[]>(
-		!estateLevel && projectName
-			? [{ id: '__project', label: projectName, href: `/projects/${projectName}` }]
-			: [],
-	);
-	const crumbs = $derived([...projectCrumb, ...pathCrumbs(pathname), ...extraCrumbs]);
+	const crumbs = $derived([...pathCrumbs(pathname), ...extraCrumbs]);
 	// A deep path (project → domain → collection → a long resource id) does not fit a narrow row, so
 	// the MIDDLE of the trail folds behind an ellipsis menu rather than squeezing every crumb into
 	// illegibility — and the current page, the one crumb worth keeping, is never the thing that
@@ -226,13 +221,23 @@
 					class="border-border/60 bg-muted/20 flex h-9 min-w-0 shrink-0 items-center overflow-hidden border-y px-4 text-sm"
 				>
 					<ol class="flex min-w-0 items-center gap-1.5">
-						<li class="text-muted-foreground shrink-0 capitalize">{projectName}</li>
+						{#if !estateLevel && projectName}
+							<!-- The project ROOT of every in-project trail, and the way BACK to it (#103):
+							     cross-zone from every zone (home owns /projects), so it hard-navigates. -->
+							<li class="shrink-0 capitalize">
+								<a
+									href={`/projects/${projectName}`}
+									data-sveltekit-reload
+									class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm font-medium transition-colors outline-none focus-visible:ring-3"
+									>{projectName}</a
+								>
+							</li>
+						{/if}
 						{#each trail.lead as crumb (crumb.id)}
 							<li class="flex min-w-0 shrink-0 items-center gap-1.5">
 								<ChevronRight class="text-muted-foreground/40 size-3.5 shrink-0" />
 								<a
 									href={crumb.href}
-									data-sveltekit-reload={crumb.id === '__project' ? true : undefined}
 									class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm capitalize transition-colors outline-none focus-visible:ring-3"
 									>{crumb.label}</a
 								>
@@ -260,8 +265,7 @@
 									<DropdownMenu.Content class="min-w-40 rounded-lg" side="bottom" align="start">
 										{#each trail.hidden as crumb (crumb.id)}
 											<DropdownMenu.Item class="p-0">
-												<a href={crumb.href}
-									data-sveltekit-reload={crumb.id === '__project' ? true : undefined} class="w-full truncate px-2 py-1.5 capitalize">{crumb.label}</a>
+												<a href={crumb.href} class="w-full truncate px-2 py-1.5 capitalize">{crumb.label}</a>
 											</DropdownMenu.Item>
 										{/each}
 									</DropdownMenu.Content>
@@ -278,12 +282,8 @@
 										data-slot="breadcrumb-page">{crumb.label}</span
 									>
 								{:else}
-									<!-- The project ROOT crumb is cross-zone from every zone (home owns /projects):
-									     without the reload attribute the zone soft-navigates into a route it does
-									     not own and 404s. In-zone crumbs keep soft navigation. -->
 									<a
 										href={crumb.href}
-										data-sveltekit-reload={crumb.id === '__project' ? true : undefined}
 										class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm capitalize transition-colors outline-none focus-visible:ring-3"
 										>{crumb.label}</a
 									>

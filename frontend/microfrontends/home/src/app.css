@@ -5,3 +5,7 @@
 /* Scan the shared @rask/ui component library so its Tailwind classes are generated —
    Tailwind 4 ignores node_modules by default. */
 @source '../../../packages/ui/dist';
+/* The hierarchy view (#104): the vendor sheet, then @rask/flow's token mapping — skip the second
+   and the light-mode hex defaults survive as white blobs on dark surfaces. */
+@import '@xyflow/svelte/dist/style.css' layer(base);
+@import '@rask/flow/styles.css' layer(base);

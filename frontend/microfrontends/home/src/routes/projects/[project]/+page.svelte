@@ -12,6 +12,7 @@
 	import { page } from '$app/state';
 	import type { ProjectSummary } from '$lib/catalog';
 	import ProjectDeleteDialog from '$lib/ProjectDeleteDialog.svelte';
+	import ProjectHierarchy from '$lib/ProjectHierarchy.svelte';
 	import { fetchProject, projectEvents, type ProjectEvent } from '$lib/remote/warehouses.remote';
 
 	const project = $derived(page.params.project ?? '');
@@ -106,6 +107,12 @@
 	{:else if detail === null}
 		<div class="empty"><p>Loading…</p></div>
 	{:else}
+		<!-- The hierarchy FIRST (#104's ruling): the relationship the estate is built on —
+		     project › warehouse › namespace › table — shown the moment the page opens. -->
+		<section>
+			<h2>Hierarchy</h2>
+			<ProjectHierarchy {project} warehouses={detail.warehouses} />
+		</section>
 		<section>
 			<h2>Warehouses</h2>
 			{#if detail.warehouses.length === 0}

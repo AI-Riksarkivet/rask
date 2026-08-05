@@ -18,9 +18,11 @@
 	"dependencies": {
 		"@lucide/svelte": "^1.26.0",
 		"@rask/api": "workspace:*",
+		"@rask/flow": "workspace:*",
 		"@rask/ui": "workspace:*",
 		"@sveltejs/kit": "^2.70.1",
 		"@tailwindcss/vite": "^4.3.3",
+		"@xyflow/svelte": "^1.6.2",
 		"mode-watcher": "^1.1.0",
 		"svelte-sonner": "^1.1.1",
 		"tailwindcss": "^4.3.3",
