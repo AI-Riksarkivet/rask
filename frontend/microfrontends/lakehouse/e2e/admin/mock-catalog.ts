@@ -143,10 +143,13 @@ Bun.serve({
 				seeded.get(`${req.method} ${url.pathname}${url.search}`) ??
 				seeded.get(`${req.method} ${url.pathname}`);
 			if (hit !== undefined) {
-				if (req.method !== 'GET') {
-					const body = (await req.json().catch(() => null)) as Body | null;
-					callsOf(bearer).push({ method: req.method, path: url.pathname + url.search, body });
-				}
+				// GETs are recorded too, with a null body. They used to be skipped, which quietly made
+				// every `expect(await callTo(…)).toBeUndefined()` on a read UNFALSIFIABLE — the ledger
+				// could not have shown the call even if it fired. Reads are half the contract here
+				// (the #75 recovery probe must NOT run for a live table), so they have to be visible.
+				const body =
+					req.method === 'GET' ? null : ((await req.json().catch(() => null)) as Body | null);
+				callsOf(bearer).push({ method: req.method, path: url.pathname + url.search, body });
 				const h = hit as { status?: unknown; body?: unknown };
 				// NUMERIC status only — upstream payloads may carry their own `status` field (Prometheus
 				// answers `status: "success"`) and must pass through as plain bodies.
