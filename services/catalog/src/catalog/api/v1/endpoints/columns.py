@@ -6,6 +6,10 @@ The shared ``lineage_deps.emit_measured_write`` trailer reads version + schema o
 pinned to the response's version when it carries one — and never fails the already-committed mutation.
 ``backfill_column`` is the one exception: it returns a ``job_id`` (the backfill runs asynchronously), so the
 resulting version isn't known synchronously — emitting here would assert a version that hasn't been produced.
+
+The spec's optional ``branch`` on all four data-plane ops is HONORED, not decorative: it selects the ref the
+schema evolution commits to, and it rides through to the response's version and the lineage read-back so a
+branch write is never reported — or recorded — against main (#100).
 """
 
 from __future__ import annotations
@@ -72,6 +76,7 @@ async def add_columns(
         operation=ADD_COLUMNS,
         authorization=authorization,
         pin_version=response.version,
+        branch=body.branch,
     )
     return response
 
@@ -102,6 +107,7 @@ async def alter_columns(
         operation=ALTER_COLUMNS,
         authorization=authorization,
         pin_version=response.version,
+        branch=body.branch,
     )
     return response
 
@@ -132,6 +138,7 @@ async def drop_columns(
         operation=DROP_COLUMNS,
         authorization=authorization,
         pin_version=response.version,
+        branch=body.branch,
     )
     return response
 
@@ -165,7 +172,7 @@ async def update_field_metadata(
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
     updates = [u.model_dump() for u in (body.updates or [])]
-    response = await run_in_threadpool(dataplane.update_field_metadata, ns, so, segments, updates)
+    response = await run_in_threadpool(dataplane.update_field_metadata, ns, so, segments, updates, body.branch)
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -176,6 +183,7 @@ async def update_field_metadata(
         operation=UPDATE_FIELD_METADATA,
         authorization=authorization,
         pin_version=response.version,
+        branch=body.branch,
     )
     return response
 

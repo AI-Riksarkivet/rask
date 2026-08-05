@@ -77,15 +77,25 @@ def as_unsupported_if_stub(exc: Exception) -> Exception:
     return exc
 
 
+#: 5xx statuses whose message is a CAPABILITY STATEMENT, not a fault report, and so is not redacted.
+#:
+#: 501 is the whole set. "alter_table_backfill_columns not implemented" names an operation the caller asked
+#: for and nothing else — no path, no DSN, no driver internals — and it is the only thing that tells them to
+#: stop asking. Under the blanket ``>= 500`` rule it was replaced with "Internal Server Error", so a user who
+#: pressed a button the UI ships (backfill) read that the server had broken rather than that the backend does
+#: not implement the op (#101). Every other 5xx stays redacted: those ARE faults, and their text leaks.
+_UNREDACTED_5XX = frozenset({501})
+
+
 def problem_detail(exc: LanceNamespaceError) -> tuple[int, dict[str, object]]:
     """Build (status, RFC 9457 problem+json body) for a domain error.
 
     A 5xx-mapped error uses a GENERIC ``detail`` — never ``str(exc)`` — so internals (paths, DSNs, driver
     messages) leak via logs only, not the response body. Client (4xx) errors keep their message: it is
-    actionable and self-authored, not an internal leak.
+    actionable and self-authored, not an internal leak. The one 5xx exception is ``_UNREDACTED_5XX``.
     """
     status = status_for(int(exc.code))
-    detail = "Internal Server Error" if status >= 500 else str(exc)
+    detail = str(exc) if status < 500 or status in _UNREDACTED_5XX else "Internal Server Error"
     body: dict[str, object] = {
         "type": f"https://lance.org/problems/{exc.__class__.__name__.lower()}",
         "title": exc.__class__.__name__,
@@ -113,7 +123,12 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
     @app.exception_handler(LanceNamespaceError)
     async def handle_domain_error(request: Request, exc: LanceNamespaceError) -> JSONResponse:
         status, body = problem_detail(exc)
-        if status >= 500:
+        # Same split as the redaction: a 501 is the backend answering "I don't do that", so it gets a plain
+        # info line. A traceback at ERROR is for faults — spending one on a capability answer is what makes
+        # an unsupported op look like an outage on the dashboard.
+        if status in _UNREDACTED_5XX:
+            log.info("unsupported_operation", extra={"method": request.method, "path": request.url.path, "status": status})
+        elif status >= 500:
             log.exception("domain_error", extra={"method": request.method, "path": request.url.path, "status": status})
         return JSONResponse(status_code=status, content=body, media_type=PROBLEM_JSON)
 

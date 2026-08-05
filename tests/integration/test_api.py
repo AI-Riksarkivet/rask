@@ -377,8 +377,9 @@ def test_add_columns_emits_pinned_schema_evolution_lineage(client: TestClient, f
     monkeypatch.setattr("catalog.services.dataplane.add_columns", lambda *a, **k: AlterTableAddColumnsResponse(version=4))
     seen: dict[str, object] = {}
 
-    def _readback(_ns: object, _so: object, _segments: object, pin_version: object = None) -> object:
+    def _readback(_ns: object, _so: object, _segments: object, pin_version: object = None, branch: object = None) -> object:
         seen["pin"] = pin_version
+        seen["branch"] = branch
         return pin_version, [{"name": "x", "type": "int64"}]
 
     monkeypatch.setattr("catalog.services.dataplane.read_version_and_schema", _readback)
@@ -387,6 +388,7 @@ def test_add_columns_emits_pinned_schema_evolution_lineage(client: TestClient, f
     resp = client.post("/v1/table/db$t/add_columns", json={"new_columns": [{"name": "x", "expression": "1"}]})
     assert resp.status_code == 200
     assert seen["pin"] == 4  # the read-back opened the dataset AT the version the response reported
+    assert seen["branch"] is None  # no branch on the request → the read-back stays on main
     assert captured["operation"] == "add_columns"
     assert captured["version"] == 4
     assert captured["schema_fields"] == [{"name": "x", "type": "int64"}]  # post-evolution schema rides along
