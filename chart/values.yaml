@@ -106,6 +106,11 @@ services:
     # Writes Lance to the warehouse, so it needs the S3 endpoint injected (see fleet.yaml). Values
     # files cannot carry Helm templates — a `{{ include ... }}` here renders as a LITERAL string — so
     # the endpoint is a template concern and this is only the flag that asks for it.
+    # This service has a governed door (`ingest.auth.authorize_ingest`) with a USER path, so it
+    # needs the OIDC/FGA env. Declared per-service rather than derived from `frontDoor`: being
+    # routed by the gateway and having an auth door are different facts, and conflating them put
+    # seven inert variables on the gateway and compute.
+    governedAuth: true
     lanceWriter: true
     env:
       # Lineage is both WRITTEN and READ here, and the two need different halves of one service.

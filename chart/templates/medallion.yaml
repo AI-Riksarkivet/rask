@@ -131,12 +131,7 @@ spec:
             # /produce or /train WITHOUT the service token. The web BFF forwards the user's bearer here; the
             # service-to-service app-token path (APP_API_TOKEN, above) is unchanged. Same OIDC construction
             # shape as catalog/lineage; the admin gate resolves against project:<produceAdminProject>.
-            - { name: MEDALLION_OIDC_ENABLED, value: "true" }
-            - { name: MEDALLION_OIDC_ISSUER, value: {{ .Values.dex.issuer | quote }} }
-            # Split-horizon: the issuer is the PUBLIC URL tokens carry; discovery/JWKS are fetched in-cluster.
-            - { name: MEDALLION_OIDC_DISCOVERY_URL, value: "http://{{ include "lance.dexHost" . }}:{{ .Values.dex.port }}/dex" }
-            - { name: MEDALLION_OIDC_AUDIENCE, value: {{ .Values.dex.clientId | quote }} }
-            - { name: MEDALLION_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" .Values.dex.issuer) | quote }} }
+            {{- include "lance.governedOidcEnv" (list . "MEDALLION") | nindent 12 }}
             - { name: MEDALLION_PRODUCE_ADMIN_PROJECT, value: {{ .Values.medallion.produceAdminProject | quote }} }
             {{- end }}
             {{- if .Values.dapr.resiliency.enabled }}

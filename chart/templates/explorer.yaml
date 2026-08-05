@@ -154,13 +154,8 @@ spec:
             #
             # The annotation TASK plane is FGA-gated too (can_claim/can_review/can_publish on
             # annotation_project:<id>, §6). Mirrors the catalog's block in services.yaml.
-            - { name: LANCE_OIDC_ENABLED, value: "true" }
-            - { name: LANCE_OIDC_ISSUER, value: {{ $root.Values.dex.issuer | quote }} }
-            - { name: LANCE_OIDC_DISCOVERY_URL, value: "http://{{ include "lance.dexHost" $root }}:{{ $root.Values.dex.port }}/dex" }
-            - { name: LANCE_OIDC_AUDIENCE, value: {{ $root.Values.dex.clientId | quote }} }
-            - { name: LANCE_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" $root.Values.dex.issuer) | quote }} }
-            - { name: LANCE_FGA_ENABLED, value: "true" }
-            - { name: LANCE_FGA_API_URL, value: "http://{{ include "lance.openfgaHost" $root }}:8080" }
+            {{- include "lance.governedOidcEnv" (list $root "LANCE") | nindent 12 }}
+            {{- include "lance.governedFgaEnv" (list $root "LANCE") | nindent 12 }}
             {{- if eq $name "annotator" }}
             # ANNOTATOR ONLY, and it stays that way: the publish saga's identity coordinates. This is
             # a service credential for writing back annotations, which no other explorer service does.
@@ -172,12 +167,7 @@ spec:
             - { name: MEDIA_PUBLISH_CLIENT_SECRET, value: {{ $root.Values.dex.clientSecret | quote }} }
             - { name: MEDIA_PUBLISH_USERNAME, value: {{ $root.Values.dex.publisher.username | quote }} }
             {{- end }}
-            {{- with $root.Values.auth.fgaStoreId }}
-            - { name: LANCE_FGA_STORE_ID, value: {{ . | quote }} }
-            {{- end }}
-            {{- with $root.Values.auth.fgaModelId }}
-            - { name: LANCE_FGA_MODEL_ID, value: {{ . | quote }} }
-            {{- end }}
+            {{- with include "lance.governedFgaPins" (list $root "LANCE") }}{{- . | nindent 12 }}{{- end }}
             {{- end }}
             {{- if eq $name "viewer" }}
             # The S3 object browser (ported from the retired volumes-api, R6/R20): the viewer's
