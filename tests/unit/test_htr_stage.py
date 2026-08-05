@@ -131,3 +131,55 @@ def test_the_dispatch_constant_matches_the_charts_operation() -> None:
     # Comma-terminated so a PREFIX of the real value cannot pass — "transcribe_page" is a substring
     # of "transcribe_pages", and the bare `in` check accepted exactly that mutation.
     assert f"operation: {HTR_OPERATION}," in chart, "the chart's mover entry and HTR_OPERATION disagree"
+
+
+@respx.mock
+def test_the_stage_registers_its_gold_table_in_the_catalog(tmp_path: Path) -> None:
+    """#88 step 5, wired INSIDE the stage: an unregistered write must not report success. The
+    register call rides the same run as the write — 409 tolerated (idempotent redelivery)."""
+    bronze = _bronze_pages(tmp_path, ["iiif://v/1.jpg"])
+    gold = str(tmp_path / "root" / "medallion" / "gold-htr")
+    respx.post(f"{SERVE}/").mock(side_effect=lambda request: httpx.Response(200, text=_alto_for(request.url.params["name"], "x")))
+    register = respx.post("http://catalog.test/v1/table/gold$htr/register").mock(return_value=httpx.Response(200, json={}))
+
+    result = transcribe_stage(
+        bronze,
+        gold,
+        {},
+        stage="gold-htr",
+        htrflow_url=SERVE,
+        catalog_url="http://catalog.test",
+        catalog_root=str(tmp_path / "root"),
+        table_id="gold$htr",
+    )
+
+    assert register.call_count == 1
+    body = register.calls.last.request.read()
+    assert b"medallion/gold-htr" in body  # RELATIVE to the catalog root, per the #75 lesson
+    # Step 6's channel: the run's own provenance, parsed from the ALTO, rides the result to the emit.
+    assert result.models == ["org/m@v1"]
+    assert result.commit_sha == "cafe01"
+
+
+@respx.mock
+def test_a_catalog_refusal_fails_the_stage_after_the_write(tmp_path: Path) -> None:
+    """A gold table the catalog cannot govern is #88's defect intact — the stage must RETRY, not
+    report a success the estate cannot see."""
+    from medallion.services.htr_register import RegisterError
+
+    bronze = _bronze_pages(tmp_path, ["iiif://v/1.jpg"])
+    gold = str(tmp_path / "root" / "medallion" / "gold-htr")
+    respx.post(f"{SERVE}/").mock(side_effect=lambda request: httpx.Response(200, text=_alto_for(request.url.params["name"], "x")))
+    respx.post("http://catalog.test/v1/table/gold$htr/register").mock(return_value=httpx.Response(503, text="down"))
+
+    with pytest.raises(RegisterError):
+        transcribe_stage(
+            bronze,
+            gold,
+            {},
+            stage="gold-htr",
+            htrflow_url=SERVE,
+            catalog_url="http://catalog.test",
+            catalog_root=str(tmp_path / "root"),
+            table_id="gold$htr",
+        )

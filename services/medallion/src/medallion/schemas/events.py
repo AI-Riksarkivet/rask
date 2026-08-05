@@ -169,6 +169,8 @@ def build_run_event(
     error_message: str | None = None,
     event_time: str | None = None,
     synthetic: bool = False,
+    models: list[str] | None = None,
+    commit_sha: str | None = None,
 ) -> dict[str, Any]:
     """Build the OpenLineage ``RunEvent`` (wire JSON) for one medallion transform — via ``lineage_kit``.
 
@@ -214,6 +216,15 @@ def build_run_event(
         # inferring it from a missing version facet (which is also what a merely old event looks like).
         lance_fields["synthetic"] = True
     run_facets: dict[str, Any] = {"lance": custom_facet(_PRODUCER, **lance_fields)}
+    if models:
+        # #88 step 6 — model identity on the RUN, parsed from the run's own artefact (the ALTO),
+        # never from a mover's config: a config states a request, the artefact states what loaded.
+        # Absent models render NO facet (the FAIL/synthetic byte-parity below stays intact), and an
+        # absent sha is omitted rather than nulled — the serializers' silence-is-honest rule.
+        model_fields: dict[str, Any] = {"models": models}
+        if commit_sha:
+            model_fields["commit"] = commit_sha
+        run_facets["model"] = custom_facet(_PRODUCER, **model_fields)
     if author:
         run_facets["author"] = custom_facet(_PRODUCER, name=author, sub=author)
     if error_message:

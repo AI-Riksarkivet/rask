@@ -249,3 +249,50 @@ def test_lineage_kit_run_id_namespace_is_aligned() -> None:
     run id already in the graph keeps MERGEing after emitters swap onto lineage-kit."""
     for seed in ("lance_ray_ingest-tok1", "acme-embed_features-tok4", "iiif-ingest-x"):
         assert lineage_kit.run_id_for(seed) == service_kit_ol.run_id_for(seed)
+
+
+def test_the_model_facet_carries_the_runs_own_provenance() -> None:
+    """#88 step 6: models + build sha on the RUN, from the artefact — and only when present."""
+    from medallion.schemas.events import build_run_event
+
+    event = build_run_event(
+        operation="transcribe_pages",
+        author="htr",
+        job_namespace="medallion",
+        inputs=[("bronze", "bronze$pages")],
+        output_namespace="gold-htr",
+        output_name="gold$htr",
+        token="t1",
+        models=["org/m@v1", "org/n@v2"],
+        commit_sha="cafe01",
+    )
+
+    facet = event["run"]["facets"]["model"]
+    assert facet["models"] == ["org/m@v1", "org/n@v2"]
+    assert facet["commit"] == "cafe01"
+    assert facet["_producer"]  # a spec-legal custom facet, not a bare dict
+
+
+def test_no_models_renders_no_model_facet() -> None:
+    """The byte-parity guarantee: every existing lane passes nothing and must emit EXACTLY what it
+    emitted before this kwarg existed — and an absent sha is OMITTED, never nulled."""
+    from medallion.schemas.events import build_run_event
+
+    kwargs: dict = {
+        "operation": "embed_features",
+        "author": "data_eng",
+        "job_namespace": "medallion",
+        "inputs": [("bronze", "bronze$events")],
+        "output_namespace": "silver",
+        "output_name": "silver$features",
+        "token": "t1",
+        "event_time": "2026-08-04T20:00:00+00:00",  # pinned — two now() calls would differ by microseconds
+    }
+    before = build_run_event(**kwargs)
+    with_kwargs = build_run_event(**kwargs, models=None, commit_sha=None)
+
+    assert "model" not in before["run"]["facets"]
+    assert before == with_kwargs
+
+    sha_only = build_run_event(**kwargs, models=["org/m@v1"], commit_sha=None)
+    assert "commit" not in sha_only["run"]["facets"]["model"]

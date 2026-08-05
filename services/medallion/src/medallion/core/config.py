@@ -167,6 +167,19 @@ class MedallionSettings(BaseSettings):
     # One PAGE of blocking GPU/CPU inference, not a metadata call — sized like the runner's own
     # expectations (minutes on CPU-only Serve), nothing like ray_request_timeout_seconds above.
     htrflow_timeout_seconds: float = Field(default=600.0, gt=0, alias="MEDALLION_HTRFLOW_TIMEOUT_SECONDS")
+    # Where the HTR lane REGISTERS its gold table (#88 step 5) — the catalog service, and the
+    # catalog's own connection root so the location can be expressed RELATIVELY (the dir backend
+    # refuses absolute URIs — the #75 lesson). Both empty by default: the lane fails at the
+    # register seam naming the env var, never guessing — a gold table the catalog cannot govern
+    # must not report success.
+    catalog_url: str = Field(default="", alias="MEDALLION_CATALOG_URL")
+    catalog_root: str = Field(default="", alias="MEDALLION_CATALOG_ROOT")
+    # Optional bearer for auth-enabled catalogs (mirrors the annotator's MEDIA_CATALOG_TOKEN
+    # pattern; the OpenBao/Dapr secret flow is the production source — this is the pinned override).
+    catalog_token: str | None = Field(default=None, alias="MEDALLION_CATALOG_TOKEN")
+    # The catalog id delimiter (`gold$htr`) — matches LANCE_DELIMITER's default, same rationale as
+    # MAINTENANCE_DELIMITER: a mismatch addresses a DIFFERENT table rather than failing.
+    delimiter: str = Field(default="$", alias="MEDALLION_DELIMITER")
     ray_request_timeout_seconds: float = Field(default=10.0, ge=0.1, alias="MEDALLION_RAY_REQUEST_TIMEOUT_SECONDS")
     ray_poll_interval_seconds: float = Field(default=2.0, gt=0, alias="MEDALLION_RAY_POLL_INTERVAL_SECONDS")
     # The mover BLOCKS its Dapr handler until the job finishes. Redelivery is safe (the submission id is

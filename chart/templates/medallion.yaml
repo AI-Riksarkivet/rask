@@ -335,6 +335,12 @@ spec:
             # per-mover (only the transcribe_pages lane needs it); empty = the lane fails loudly at the
             # seam naming MEDALLION_HTRFLOW_URL rather than guessing a host.
             - { name: MEDALLION_HTRFLOW_URL, value: {{ .htrflowUrl | quote }} }
+            # #88 step 5: where the lane REGISTERS gold$htr — the catalog service, and the catalog's
+            # own connection root so the location is expressible RELATIVELY (the dir backend refuses
+            # absolute URIs). Set beside htrflowUrl because the lane is all-or-nothing: transcribing
+            # without registering would be #88's defect with extra steps.
+            - { name: MEDALLION_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
+            - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" $root.Values.rustfs.bucket | quote }} }
             {{- end }}
             {{- end }}
             {{- end }}

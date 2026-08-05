@@ -262,6 +262,11 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                             lineage=lineage_doc,
                             htrflow_url=settings.htrflow_url,
                             timeout_seconds=settings.htrflow_timeout_seconds,
+                            catalog_url=settings.catalog_url,
+                            catalog_root=settings.catalog_root,
+                            table_id=to_dataset,
+                            catalog_token=settings.catalog_token,
+                            delimiter=settings.delimiter,
                         )
                     elif use_ray:
                         # EVENT-DRIVEN real-Ray: submit the stage transform to the Ray cluster IN RESPONSE
@@ -329,6 +334,10 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
             assertions=[a.model_dump(exclude_none=True) for a in assertions] or None,
             token=token,
             project=project or None,
+            # #88 step 6: the run's model identity + build sha, parsed from the ALTO by the HTR
+            # lane; empty/None for every other lane, which renders NO facet (byte-parity holds).
+            models=(result.models if result else None) or None,
+            commit_sha=result.commit_sha if result else None,
             event_time=event_time,  # the same instant the in-dataset `lineage` document names (R26)
             # No compute ran (the chart's DEFAULT — `compute.enabled: false`), so nothing was written and
             # the event must not describe a dataset: bare output + an explicit mark. The run is still

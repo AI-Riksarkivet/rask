@@ -23,7 +23,7 @@ import lance
 import pyarrow as pa
 from lineage_kit.consume import LineageDoc
 
-from medallion.services import htr_parse, htr_transcribe
+from medallion.services import htr_parse, htr_register, htr_transcribe
 from medallion.services.compute import _LINEAGE_COLUMN, WriteResult, _index_lineage, _lineage_column, measure
 from service_kit.lakehouse import blobs
 
@@ -56,6 +56,11 @@ def transcribe_stage(
     lineage: LineageDoc | None = None,
     htrflow_url: str,
     timeout_seconds: float = 600.0,
+    catalog_url: str = "",
+    catalog_root: str = "",
+    table_id: str = "",
+    catalog_token: str | None = None,
+    delimiter: str = "$",
 ) -> WriteResult:
     """Transcribe every bronze page into one gold row; ONE overwrite commit, lineage included.
 
@@ -117,6 +122,21 @@ def transcribe_stage(
     if lineage is not None:
         _index_lineage(to_uri, storage_options)
 
+    # REGISTRATION IS PART OF THE STAGE (#88 step 5): a gold table the catalog never heard of is
+    # the defect this lane exists to close, so an unregistered write must not report success. Runs
+    # AFTER the write (register_table describes what exists) and BEFORE the emit; 409 = already
+    # governed (idempotent redelivery). table_id empty = the caller opted out (tests of the pure
+    # transform); the MOVER always passes it.
+    if table_id:
+        htr_register.register_gold_table(
+            catalog_url=catalog_url,
+            catalog_root=catalog_root,
+            table_id=table_id,
+            to_uri=to_uri,
+            delimiter=delimiter,
+            token=catalog_token,
+        )
+
     result = measure(to_uri, storage_options)
     # Every payload column is a TRANSFORMATION of the page bytes; identity columns derive from
     # source_uri; source_rowid is the bronze row's own id (IDENTITY). stage/lineage are this run's
@@ -130,6 +150,12 @@ def transcribe_stage(
         ("page_key", "source_uri", "TRANSFORMATION"),
         ("source_rowid", "source_uri", "IDENTITY"),
     ]
+    # The run's own provenance rides the RESULT to the emit (#88 step 6) — parsed from the ALTO,
+    # de-duplicated preserving order across pages; one build produced the batch, so the first sha
+    # is the sha (a mixed-sha batch would mean Serve redeployed MID-STAGE — worth surfacing, not
+    # averaging away, hence taking first + logging the set below).
+    result.models = list(dict.fromkeys(m for p in pages for m in p.models))
+    result.commit_sha = next((p.commit_sha for p in pages if p.commit_sha), None)
     log.info(
         "htr_stage_written",
         extra={"to_uri": to_uri, "pages": len(pages), "models": sorted({m for p in pages for m in p.models})},
