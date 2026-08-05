@@ -232,7 +232,7 @@
 								<ChevronRight class="text-muted-foreground/40 size-3.5 shrink-0" />
 								<a
 									href={crumb.href}
-									data-sveltekit-reload={crumb.id === '__project' ? '' : undefined}
+									data-sveltekit-reload={crumb.id === '__project' ? true : undefined}
 									class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm capitalize transition-colors outline-none focus-visible:ring-3"
 									>{crumb.label}</a
 								>
@@ -261,7 +261,7 @@
 										{#each trail.hidden as crumb (crumb.id)}
 											<DropdownMenu.Item class="p-0">
 												<a href={crumb.href}
-									data-sveltekit-reload={crumb.id === '__project' ? '' : undefined} class="w-full truncate px-2 py-1.5 capitalize">{crumb.label}</a>
+									data-sveltekit-reload={crumb.id === '__project' ? true : undefined} class="w-full truncate px-2 py-1.5 capitalize">{crumb.label}</a>
 											</DropdownMenu.Item>
 										{/each}
 									</DropdownMenu.Content>
@@ -283,7 +283,7 @@
 									     not own and 404s. In-zone crumbs keep soft navigation. -->
 									<a
 										href={crumb.href}
-										data-sveltekit-reload={crumb.id === '__project' ? '' : undefined}
+										data-sveltekit-reload={crumb.id === '__project' ? true : undefined}
 										class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm capitalize transition-colors outline-none focus-visible:ring-3"
 										>{crumb.label}</a
 									>
