@@ -160,3 +160,70 @@ def test_an_ENGINE_failure_still_wins_over_a_partial_output() -> None:
 
     assert crashed.status == "FAILED"
     assert killed.status == "FAILED"
+
+
+# ── the unit ceiling ─────────────────────────────────────────────────────────
+
+
+def test_the_unit_ceiling_DEFAULTS_TO_UNBOUNDED(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same rule as the hour ceiling: the deployment opts in.
+
+    A live default would refuse the million-unit harvests this plane exists for, which is the
+    opposite of protecting them.
+    """
+    monkeypatch.delenv("RASK_INGEST_MAX_UNITS", raising=False)
+    workflow = _reload_workflow(monkeypatch, None)
+
+    assert workflow.MAX_UNITS == 0
+
+
+def test_the_unit_ceiling_is_read_from_its_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RASK_INGEST_MAX_UNITS", "500")
+    workflow = _reload_workflow(monkeypatch, None)
+
+    assert workflow.MAX_UNITS == 500
+
+
+def test_the_ceiling_refuses_BEFORE_any_unit_is_published() -> None:
+    """WHERE the refusal sits is the whole value of it.
+
+    The case is a mis-pointed source: `s3-prefix` with an empty prefix lists a whole bucket, which
+    the registry explicitly invites. Refusing after the fan-out would already have published millions
+    of queue messages and spawned thousands of child workflows — the exact cost the ceiling exists to
+    avoid. So the check must precede `call_child_workflow` in the parent's body.
+    """
+    import ast
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "src" / "ingest" / "workflow.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "ingest_run")
+
+    def _line_of(pred) -> int | None:
+        return next((n.lineno for n in ast.walk(fn) if pred(n)), None)
+
+    ceiling = _line_of(lambda n: isinstance(n, ast.Name) and n.id == "MAX_UNITS")
+    fanout = _line_of(lambda n: isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "call_child_workflow")
+
+    assert ceiling is not None, "MAX_UNITS is never consulted in the parent workflow"
+    assert fanout is not None
+    assert ceiling < fanout, "the unit ceiling is checked AFTER the fan-out — by then the units are already published"
+
+
+def test_the_refusal_is_a_POLICY_failure_not_a_raise() -> None:
+    """Raising inside `enumerate_chunks` would burn four activity retries RE-LISTING the source
+    before failing, and the operator would read a crash rather than a limit. Returning a FAILED
+    outcome reports the reason once — and only reaches the door because the status merge now carries
+    a returned FAILED through (`runs.merge_workflow_state`)."""
+    from ingest.runs import RunRecord, merge_workflow_state
+
+    record = RunRecord(run_id="r", project="p", dataset="d", kind="s3-prefix")
+    state = {
+        "runtime_status": "COMPLETED",
+        "serialized_output": {"status": "FAILED", "errors": {"run": "source enumerated 900000 units, over the 1000 ceiling (RASK_INGEST_MAX_UNITS)."}},
+    }
+
+    merged = merge_workflow_state(record, state)
+
+    assert merged.status == "FAILED"
+    assert "ceiling" in merged.errors["run"]

@@ -66,6 +66,21 @@ CHUNK_SIZE = 1000
 #: with only one side implemented.
 MAX_RUN_HOURS = float(os.getenv("RASK_INGEST_MAX_RUN_HOURS", "0") or 0)
 
+#: The most units one run may enumerate before it is refused. ZERO (the code default) means
+#: UNBOUNDED, for the same reason as the hour ceiling: this plane advertises million-unit harvests.
+#:
+#: WHAT THIS DOES AND DOES NOT PROTECT, stated because the honest scope is narrower than it looks.
+#: It refuses the RUN — the queue publish, the fan-out, the state-store churn of a fan-out nobody
+#: intended. It does NOT prevent the source LISTING, because all three adapters materialize their
+#: listing below this seam (`S3Source` does a full recursive LIST when `prefix` is empty, which the
+#: registry explicitly invites). An `islice` here would look like a bound and stop nothing: the walk
+#: has already happened by the time a key reaches us.
+#:
+#: So there is deliberately NO "stops pulling at the limit" test. Such a test passes against a lazy
+#: fake and is false for every production source — a green assertion about a property the code does
+#: not have is worse than no assertion.
+MAX_UNITS = int(os.getenv("RASK_INGEST_MAX_UNITS", "0") or 0)
+
 # Retries are the activity's, not a hand-rolled loop: Dapr owns the backoff and the replay.
 ACTIVITY_RETRY = wf.RetryPolicy(
     first_retry_interval=timedelta(seconds=5),
@@ -164,6 +179,35 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, A
     # a pod death like every other run fact and needs no second writable copy.
     units_total = sum(len(chunk.get("keys") or ()) for chunk in chunks)
     ctx.set_custom_status(json.dumps({"units_total": units_total, "chunks": len(chunks)}))
+
+    # THE UNIT CEILING — refused HERE, before a single task is published.
+    #
+    # A mis-pointed source is the case: `s3-prefix` with an empty `prefix` lists a whole bucket, and
+    # the registry invites exactly that ("Leave empty to take the whole bucket"). Without a ceiling
+    # that becomes millions of queue messages, a fan-out of thousands of child workflows, and the
+    # state-store churn of both — for a run nobody meant to start.
+    #
+    # It refuses by POLICY (a returned FAILED outcome), not by raising: raising inside the activity
+    # would burn four retries re-LISTING the source before failing, and the operator would read a
+    # crash rather than a limit. That path only reports honestly because the status merge now carries
+    # a returned FAILED through to the door — see `runs.merge_workflow_state`.
+    #
+    # Placed after `enumerate_chunks` rather than inside it because the ceiling is a property of the
+    # RUN, and this is where the run's decisions live. It cannot prevent the listing itself (see
+    # MAX_UNITS) — what it prevents is acting on it.
+    if MAX_UNITS > 0 and units_total > MAX_UNITS:
+        refused: dict[str, Any] = RunOutcome(
+            status="FAILED",
+            errors={
+                "run": (
+                    f"source enumerated {units_total} units, over the {MAX_UNITS} ceiling "
+                    f"(RASK_INGEST_MAX_UNITS). Narrow the source — an empty s3-prefix lists the whole "
+                    f"bucket — or raise the ceiling for this deployment."
+                )
+            },
+        ).model_dump()
+        yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": refused}, retry_policy=ACTIVITY_RETRY)
+        return refused
 
     # Fan out. when_all is fan-in: the parent suspends until every child has drained, and survives
     # its own pod dying because the history replays. This is the durable-orchestration property that
