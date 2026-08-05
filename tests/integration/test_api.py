@@ -894,6 +894,134 @@ def test_project_policy_rejects_a_malformed_project_id(client: TestClient, tmp_p
     assert resp.status_code == 400
 
 
+# --- GET /v1/projects/{id}/policies — the #65 project-scoped VIEW -------------------------- #
+#
+# Real stores throughout (a local-FS control root through pyarrow.fs): real warehouse records, real
+# namespace bindings, real policy records written by the same `put_policy` the catalog uses. The one
+# thing these must prove is that scoping is BINDING-derived and not bucket-derived, because
+# `set_namespace_policy` stores the DEFAULT root on every record (see the policies.py module docstring).
+
+
+def _list_policies_for(client: TestClient, project: str) -> dict[str, object]:
+    """The listing, asserted 200 — the settings override is already in place at every call site."""
+    resp = client.get(f"/v1/projects/{project}/policies")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert isinstance(body, dict)
+    return body
+
+
+def test_project_policies_list_scopes_to_the_projects_own_buckets(client: TestClient, tmp_path: object) -> None:
+    # CONTRACT (#65): a tenant's policy view carries the tenant's records and NOTHING else. Two
+    # warehouses, two table policies, one bucket each — the rival's record must never cross.
+    from catalog.core.config import get_settings
+    from catalog.services import warehouses as wh_svc
+
+    from service_kit.lakehouse import maintenance_policies as pol_svc
+
+    s = _project_policy_settings(tmp_path)
+    client.app.dependency_overrides[get_settings] = lambda: s
+    so = s.storage_options()
+    wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
+    wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-z", "bucket": "other-wh", "project": "other", "status": "active"})
+    pol_svc.put_policy(s.registry_root, so, {"kind": "table", "id": "db$t", "path": "acme-wh/u1_db$t", "retention_days": 7})
+    pol_svc.put_policy(s.registry_root, so, {"kind": "table", "id": "rival$t", "path": "other-wh/u2_rival$t", "retention_days": 1})
+
+    body = _list_policies_for(client, "acme")
+    assert [p["id"] for p in body["policies"]] == ["db$t"]
+    assert body["buckets"] == ["acme-wh"] and body["incomplete"] is False
+
+
+def test_project_policies_list_finds_a_warehouse_bound_namespace_policy(client: TestClient, tmp_path: object) -> None:
+    # THE decisive one. `set_namespace_policy` builds its path from the DEFAULT root (it takes no
+    # NamespaceDep, so it never resolves the namespace's warehouse root) — so a bound namespace's record
+    # carries `lance-catalog/gold` even though its data lives in `acme-wh`. Scoping by the record's bucket
+    # would miss it AND hand it to whoever owns the default bucket; scoping by the BINDING finds it.
+    from catalog.core.config import get_settings
+    from catalog.services import warehouses as wh_svc
+
+    from service_kit.lakehouse import maintenance_policies as pol_svc
+
+    s = _project_policy_settings(tmp_path)
+    client.app.dependency_overrides[get_settings] = lambda: s
+    so = s.storage_options()
+    wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
+    wh_svc.bind_namespace(s.registry_root, so, "gold", "wh-a", "s3://acme-wh")
+    # Byte-for-byte what set_namespace_policy writes: the id is logical, the path is the DEFAULT root.
+    pol_svc.put_policy(s.registry_root, so, {"kind": "namespace", "id": "gold", "path": "lance-catalog/gold", "retention_days": 30})
+
+    body = _list_policies_for(client, "acme")
+    assert [p["id"] for p in body["policies"]] == ["gold"]
+    assert body["namespaces"] == ["gold"]  # the scope the listing was computed from, reported
+
+
+def test_project_policies_list_includes_a_deactivated_warehouses_bucket(client: TestClient, tmp_path: object) -> None:
+    # Reading coverage is not writing it: `set_project_policy` filters to ACTIVE warehouses because a
+    # policy over a dead bucket could never match, but a deactivated warehouse's data — and any policy
+    # still governing it — is still the tenant's. Narrowing here would hide the retention record an
+    # operator is looking for at exactly the moment they are offboarding.
+    from catalog.core.config import get_settings
+    from catalog.services import warehouses as wh_svc
+
+    from service_kit.lakehouse import maintenance_policies as pol_svc
+
+    s = _project_policy_settings(tmp_path)
+    client.app.dependency_overrides[get_settings] = lambda: s
+    so = s.storage_options()
+    wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-old", "bucket": "acme-old", "project": "acme", "status": "deactivated"})
+    pol_svc.put_policy(s.registry_root, so, {"kind": "table", "id": "arch$t", "path": "acme-old/u9_arch$t", "compact_enabled": False})
+
+    body = _list_policies_for(client, "acme")
+    assert [p["id"] for p in body["policies"]] == ["arch$t"]
+    assert body["buckets"] == ["acme-old"]
+
+
+def test_project_policies_list_returns_only_its_own_project_record(client: TestClient, tmp_path: object) -> None:
+    # A project record matches by ID and by nothing else. The rival record here claims acme's own bucket —
+    # the contested-registry state `set_project_policy` refuses at write time — so a bucket match would
+    # surface another tenant's project policy inside acme's view.
+    from catalog.core.config import get_settings
+    from catalog.services import warehouses as wh_svc
+
+    from service_kit.lakehouse import maintenance_policies as pol_svc
+
+    s = _project_policy_settings(tmp_path)
+    client.app.dependency_overrides[get_settings] = lambda: s
+    so = s.storage_options()
+    wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
+    pol_svc.put_policy(s.registry_root, so, {"kind": "project", "id": "acme", "path": "", "buckets": ["acme-wh"], "retention_days": 90})
+    pol_svc.put_policy(s.registry_root, so, {"kind": "project", "id": "other", "path": "", "buckets": ["acme-wh"], "retention_days": 1})
+
+    body = _list_policies_for(client, "acme")
+    assert [(p["kind"], p["id"]) for p in body["policies"]] == [("project", "acme")]
+
+
+def test_project_policies_list_reports_an_unreadable_binding_instead_of_narrowing(client: TestClient, tmp_path: object) -> None:
+    # A binding you cannot read is a namespace you cannot see. The listing still answers 200 (it is a read,
+    # not the destructive door `namespaces_bound_to` guards) but SAYS it may be short — a silently
+    # narrowed list would read as checked-and-clean, the `unbound_namespaces` bug class.
+    from pathlib import Path
+
+    from catalog.core.config import get_settings
+    from catalog.services import warehouses as wh_svc
+
+    s = _project_policy_settings(tmp_path)
+    client.app.dependency_overrides[get_settings] = lambda: s
+    wh_svc.put_warehouse(s.registry_root, s.storage_options(), {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
+    bindings = Path(str(tmp_path)) / "_warehouses" / "bindings"
+    bindings.mkdir(parents=True, exist_ok=True)
+    (bindings / "zzz.json").write_text("{truncated")
+
+    body = _list_policies_for(client, "acme")
+    assert body["incomplete"] is True
+    assert [str(p).endswith("zzz.json") for p in body["skipped_bindings"]] == [True]
+
+
+# The listing's own 403 lives with the other three project-policy gates, in `test_authz.py`
+# (`test_project_policies_list_requires_project_admin`) — one file owns the authz contract, and a
+# fourth door asserted somewhere else is how a tier splits without anyone noticing.
+
+
 def test_access_list_is_unsupported_without_fga(client: TestClient) -> None:
     # CONTRACT (#51): an auth-off stack has no grants to review — answer 501 honestly instead of an
     # empty grant list that would read as "nobody has access".

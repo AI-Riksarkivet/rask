@@ -1052,6 +1052,28 @@ def test_project_policy_describe_and_delete_require_project_admin(client: TestCl
         assert captured[-1] == {"user": "alice", "relation": "can_administer", "obj": "project:acme"}
 
 
+def test_project_policies_list_requires_project_admin(client: TestClient, monkeypatch) -> None:
+    """CONTRACT (#65): the project-scoped policy LISTING gates on the SAME bar as the set/describe/delete
+    trio — ``can_administer`` on ``project:<id>``, checked explicitly (``/v1/projects`` is not a
+    router-guarded resource prefix). A second, estate-observer door for the same information would split
+    the tier: a tenant admin could be shown one of their records and denied the list of all of them.
+
+    Fail-closed ORDER is pinned the same way ``policy/set`` pins it: on a deny the registry is never read,
+    so the door cannot disclose a tenant's warehouse or binding shape to a caller it just refused."""
+    _wire(client)
+    captured: list[dict] = []
+    monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
+    registry_reads: list[str] = []
+    from catalog.services import warehouses as wh_svc
+
+    monkeypatch.setattr(wh_svc, "list_warehouses", lambda *a, **k: registry_reads.append("read") or [])
+
+    resp = client.get("/v1/projects/acme/policies", headers={"Authorization": "Bearer t"})
+    assert resp.status_code == 403
+    assert captured[-1] == {"user": "alice", "relation": "can_administer", "obj": "project:acme"}
+    assert registry_reads == []  # gate first, registry read only after an allow
+
+
 def test_table_access_list_requires_owner_via_can_drop(client: TestClient, monkeypatch) -> None:
     """CONTRACT (#51): enumerating who holds access reveals principals — owner tier via ``can_drop``;
     403 for a non-owner, and no ListUsers query is ever issued on a deny."""

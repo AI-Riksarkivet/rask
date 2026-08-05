@@ -461,6 +461,37 @@ class PolicyDeleteResponse(BaseModel):
     id: str
 
 
+class ProjectPoliciesResponse(BaseModel):
+    """Every maintenance policy record governing data inside ONE project (#65) — the tenant-scoped VIEW.
+
+    ``set``/``describe``/``delete`` answer for a single object each; nothing could ever enumerate what is
+    actually in force across a tenant, so a project admin could not tell which of their namespaces or
+    tables carries a retention override without already knowing its id. This is that read.
+
+    ``buckets`` and ``namespaces`` are the SCOPE the listing was computed from — the project's warehouse
+    buckets and the top-level namespaces bound to those warehouses — reported so a surprising list can be
+    explained without a second call.
+
+    ``incomplete`` / ``skipped_bindings`` are load-bearing, not diagnostics. The namespace half of the
+    scope is derived from the namespace→warehouse bindings, so a binding record that cannot be read is a
+    namespace whose policies cannot be seen: a silently-narrowed list would read as "checked and clean",
+    which is the ``unbound_namespaces`` bug class. The listing still answers 200 (it is a read, not a
+    destructive door — see ``warehouses.namespaces_bound_to`` for the opposite posture) and SAYS it may
+    be short.
+
+    **Resolution is winner-takes-all** (``PolicyRequest``): a table record shadows a namespace record
+    shadows the project record, and the winner supplies EVERY field. These records are what EXISTS, not
+    what governs any one dataset — a surface that renders them as an effective, merged policy is lying.
+    """
+
+    project: str
+    buckets: list[str]
+    namespaces: list[str]
+    policies: list[PolicyResponse]
+    incomplete: bool = False
+    skipped_bindings: list[str] = Field(default_factory=list)
+
+
 # --------------------------------------------------------------------------- #
 # Model registry — candidate→blessed promotion (#17)
 # --------------------------------------------------------------------------- #

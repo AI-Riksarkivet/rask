@@ -260,7 +260,11 @@ const LINEAGE_ITEMS: TopNavItem[] = [
 
 const ANNOTATE_ITEMS: TopNavItem[] = [
 	{ title: 'Canvas', href: '/annotator/', description: 'Label pages on the annotation canvas.' },
-	{ title: 'Browse', href: '/annotator/browse', description: 'The corpus, filtered to what needs labeling.' },
+	{
+		title: 'Browse',
+		href: '/annotator/browse',
+		description: 'The corpus, filtered to what needs labeling.',
+	},
 ];
 
 const EXPLORER_ITEMS: TopNavItem[] = [
@@ -305,6 +309,15 @@ const MODEL_ITEMS: TopNavItem[] = [
 		title: 'Training runs',
 		href: '/models/runs',
 		description: 'Every submitted run, live state first.',
+	},
+];
+
+const STUDIO_ITEMS: TopNavItem[] = [
+	{ title: 'Apps', href: '/studio/', description: 'The mini-app launcher.' },
+	{
+		title: 'Flows',
+		href: '/studio/flows',
+		description: 'Node-based sandbox over live Ray Serve endpoints.',
 	},
 ];
 
@@ -540,7 +553,7 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			// briefly a row inside Search's panel, which broke that rule and buried the labeling
 			// workflow one hover deep. It carries a PANEL since #113: the "single surface" premise
 			// expired when /browse landed — Canvas and Browse are two real destinations, and the
-			// consistency rule is that every multi-surface zone panels (only Studio remains a link).
+			// consistency rule is that every multi-surface zone panels (Studio joined when Flows landed).
 			title: 'Annotate',
 			href: '/annotator/',
 			icon: PenLine,
@@ -564,11 +577,14 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			items: [...MODEL_ITEMS],
 		},
 		{
-			// STUDIO stays the sandbox/PoC zone (R17) — one experimental surface, so a plain link.
+			// STUDIO stays the sandbox/PoC zone (R17). It was a PLAIN LINK while it had one
+			// experimental surface; the Flows sandbox is a second real destination, and the
+			// consistency rule (see Annotate above) is that every multi-surface zone panels.
 			title: 'Studio',
 			href: '/studio/',
 			icon: FlaskConical,
 			match: under('/studio'),
+			items: [...STUDIO_ITEMS],
 		},
 	];
 }

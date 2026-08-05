@@ -1,8 +1,8 @@
 import { command, getRequestEvent, query } from '$app/server';
-import { env } from '$env/dynamic/private';
 import * as v from 'valibot';
-import { fetchMe, parse, type Me } from '@rask/api';
+import { fetchMe, type Me } from '@rask/api';
 import type { ApiResult } from '@rask/api/client';
+import { CATALOG_API, catalogJSON, parsed } from '$lib/server/catalog-fetch';
 import {
 	AccessModelSchema,
 	CheckVerdictSchema,
@@ -39,59 +39,10 @@ import {
 //
 // A remote file may export only remote functions, so the wire contracts stay in `../access`.
 
-const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
-
 /** Whole-store page ceiling, moved here from the Explorer with the loop itself: 40 × 100 = 4000 tuples
  *  on the canvas — past that the graph is unreadable and the honest answer is `truncated: true`, never
  *  silent clipping. Server-side the loop is one browser round trip instead of forty. */
 const MAX_GRAPH_PAGES = 40;
-
-function bearerHeaders(): Record<string, string> {
-	const { locals } = getRequestEvent();
-	const bearer = locals.session?.accessToken;
-	return bearer ? { authorization: `Bearer ${bearer}` } : {};
-}
-
-/** One catalog call → `ApiResult<unknown>`; FastAPI's `{detail}` is surfaced as the failure detail. */
-async function catalogJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {
-	const { fetch } = getRequestEvent();
-	// An UNREACHABLE catalog is `{ok:false, status:0}`, exactly like the browser client this replaced —
-	// a rejected fetch here would throw across the remote boundary and skip every consumer's honest
-	// offline/status-0 branch.
-	let res: Response;
-	try {
-		res = await fetch(`${CATALOG_API}${path}`, {
-			...init,
-			headers: {
-				...bearerHeaders(),
-				...(init?.body ? { 'content-type': 'application/json' } : {}),
-			},
-		});
-	} catch (err) {
-		return { ok: false, status: 0, detail: String(err) };
-	}
-	if (!res.ok) {
-		let detail = `catalog answered ${res.status}`;
-		try {
-			const body: unknown = await res.json();
-			if (body && typeof body === 'object' && 'detail' in body) detail = String(body.detail);
-		} catch {
-			/* a non-JSON error body keeps the status-line detail */
-		}
-		return { ok: false, status: res.status, detail };
-	}
-	return { ok: true, data: await res.json() };
-}
-
-/** Parse a successful wire payload; a shape drift is a 502-flavoured failure, never a cast. */
-function parsed<T>(result: ApiResult<unknown>, schema: v.GenericSchema<unknown, T>): ApiResult<T> {
-	if (!result.ok) return result;
-	try {
-		return { ok: true, data: parse(schema, result.data) };
-	} catch (err) {
-		return { ok: false, status: 502, detail: `catalog contract drift: ${String(err)}` };
-	}
-}
 
 /** What a CALLER supplies to write/delete/simulate.
  *
