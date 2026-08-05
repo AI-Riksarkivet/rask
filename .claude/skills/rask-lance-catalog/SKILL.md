@@ -15,9 +15,14 @@ Two contracts stack here, and confusing them is how bugs happen:
 
 ## The spec surface (verified 2026-08-04 against lance.org)
 
-- **Operations: 47/47 implemented** in `services/catalog` (checked mechanically — snake_case diff of
-  the spec's operation list over `catalog/api`). The spec's *minimum* is 8 metadata ops; we carry the
-  whole list including versioning, tags, indices, transactions, `RefreshMaterializedView`.
+- **Operations: 54/54 ROUTED, 47 backend-backed.** `tests/integration/test_spec_conformance.py`
+  asserts both halves — every spec op has a served route, and the vendored
+  `lance_docs/ns_catalog/spec.yaml` still carries 54 ops (a shrunken spec would silently weaken the
+  check). The other **7 answer a spec-correct 501** because the native `dir` backend stubs them:
+  `rename_table`, `backfill_columns`, `alter_transaction`, `batch_create_table_versions`,
+  `batch_commit_tables`, and BOTH materialized-view ops (`docs/COVERAGE.md`). The spec's *minimum*
+  is 8 metadata ops; we carry the whole list including versioning, tags, branches, indices and
+  transactions.
 - **Route grammar:** `POST /v1/<object>/{id}/<action>` — everything a reverse proxy needs (authN/Z,
   routing) is in the PATH, never only in the body. Path/body id conflict → 400. List ops are GET with
   query-param pagination; data ops (create/insert/query) are **Arrow IPC**, not JSON; count/explain
@@ -25,19 +30,27 @@ Two contracts stack here, and confusing them is how bugs happen:
 - **Identifier:** segments joined by the configured delimiter (`$` default) — `["a","b","t"]` ↔
   `a$b$t`. The root namespace is the delimiter itself.
 - **Identity headers:** `api_key` → `x-api-key`, `auth_token` → `Authorization: Bearer`; arbitrary
-  context rides `x-lance-ctx-<key>`. Headers beat body fields.
+  context maps BOTH WAYS through a `header.<name>` context KEY — `{"header.x-trace-id": "abc"}` is
+  sent as `x-trace-id: abc` (prefix stripped) and every response header returns as `header.<name>`
+  (`spec.yaml:2471`). The old `x-lance-ctx-<key>` form is superseded and survives only in the
+  generated per-model docs. Headers beat body fields.
 
 ## The error contract — NEVER invent a status
 
-The spec defines **22 numeric error codes (0–21)**, identical across Python/Java/Rust/REST; clients
-dispatch on the **code**, not the HTTP status. On the wire they are **RFC 9457 problem bodies**
-(`application/problem+json`).
+The spec defines **24 numeric error codes (0–23)** — 22/23 are `TableBranchNotFound` /
+`TableBranchAlreadyExists`, added with the branch ops — identical across Python/Java/Rust/REST;
+clients dispatch on the **code**, not the HTTP status. On the wire they are **RFC 9457 problem
+bodies** (`application/problem+json`).
 
 **The one rule:** an endpoint raises `lance_namespace` typed errors
 (`InvalidInputError`, `NamespaceNotFoundError`, …) and lets
-`service_kit/lakehouse/ns_errors.py::install_problem_handlers` translate — it maps all 22 codes
+`service_kit/lakehouse/ns_errors.py::install_problem_handlers` translate — it maps all 24 codes
 (not-founds → 404, already-exists/not-empty/concurrent → 409, `InvalidInput` → 400,
 `PermissionDenied` → 403, `Unauthenticated` → 401, `Unsupported` → 501, `Throttling` → 429).
+The branch codes were MISSING until 2026-08-04 — a missing branch answered 500 on endpoints rask
+ships, and this skill claimed "22 codes, all mapped" while the SDK had 24, both wrong together.
+`tests/unit/test_ns_errors_contract.py` now pins the map against the ENUM, so the next spec-added
+code fails a test instead of a client.
 **Never `HTTPException` with a hand-picked status** for domain errors — a 422 was shipped once
 (the hierarchy guards, same day they were written) and no generated client understood it; fixed to
 `InvalidInputError` (95ae4cb). `NamespaceNotEmpty → 409` is the spec's own error for "container
@@ -94,9 +107,15 @@ cross-object invariants, high-frequency filtered listings), it is a design decis
 - **Recoverable drops are OPT-IN (#75).** With `LANCE_TRASH_GRACE_DAYS` > 0 (default 0/OFF, because a
   grace period changes what `drop_table` means for every caller) a drop DEREGISTERS and files a
   `_trash/` record; `POST /v1/table/{id}/undrop` re-registers from it; `GET /v1/table/{id}/tasks`
-  shows the pending deadline (§2.4 per-object task visibility). The sweep REPORTS expired trash and
-  deletes nothing. COVERAGE.md's old "soft-delete is N/A, time-travel replaces it" entry was WRONG and
-  is corrected: time-travel does not survive `drop_table`.
+  shows the pending deadline (§2.4 per-object task visibility). `purge=true` is the explicit
+  opt-out — a caller who means "destroy the bytes now" says so. A recoverable drop **does not revoke
+  the table's FGA tuples**: the owner is the one person who needs to undrop it, and revoking made
+  undrop unreachable for exactly that caller (found by driving the deployed catalog — the unit tests
+  run FGA off); the grants die with the bytes, at purge or expiry. `undrop` re-registers with a
+  **RELATIVE** location (the final path segment): `register_table` refuses the absolute URI
+  `describe_table` had just reported, and the `dir` backend lays tables out flat. The sweep REPORTS
+  expired trash and deletes nothing. COVERAGE.md's old "soft-delete is N/A, time-travel replaces it"
+  entry was WRONG and is corrected: time-travel does not survive `drop_table`.
 - **Protection covers EVERY rung since #73** (2026-08-04): warehouses/projects carry `protected` on
   their registry records; tables/namespaces carry it as a **control-root `_protection/` record**
   (`service_kit.lakehouse.protection`) gating drop/deregister/rename (table) and drop (namespace) —
@@ -105,6 +124,12 @@ cross-object invariants, high-frequency filtered listings), it is a design decis
   via `POST /v1/table/{id}/protection` / `/v1/namespace/{id}/protection`, owner-gated (`protection`
   maps to `can_drop`/`can_delete` in `_OWNER_SUFFIX_RELATION` — an unmapped suffix falls to writer
   tier). The record dies with the object: drop/deregister clear it so a reused id can't inherit it.
+  A CASCADE destroys its children INSIDE one native call, so they never re-enter this door —
+  `drop_namespace` therefore enumerates `_collect_descendants` whenever `behavior=cascade` (no
+  longer gated on `fga_enabled`) and protection-checks EVERY enumerated id before the native call,
+  refusing 409 and NAMING the protected descendant; `force` turns the subtree lock exactly as at
+  the named rung. Until that landed the docstring promised cascade coverage the code did not have.
+  (What cascade still does NOT do is file trash records for the children — #96.)
 - **NO EXISTENCE ORACLE on destructive doors (audit #4).** `delete_warehouse`, `delete_project` and
   `_set_warehouse_status` all collapse `PermissionDenied → TableNotFound`, so "not yours" and "does
   not exist" are byte-identical and the door cannot enumerate ids. CREATE doors deliberately do the
@@ -121,8 +146,12 @@ cross-object invariants, high-frequency filtered listings), it is a design decis
 - Maintenance (compaction + `optimize_indices` + `cleanup_old_versions` with tags EXEMPT) lives in
   **`services/maintenance`** (renamed from `compaction` — it does four things, not one) —
   `catalog/api/maintenance_mode.py` is read-only maintenance MODE (503 + Retry-After), not this. The
-  operations are ONE ordered pass per dataset (compact obsoletes files → cleanup → then indices),
-  which is why they are modules in one service rather than four services each rescanning every bucket.
+  operations are ONE ordered pass per dataset — **compact → optimize_indices → cleanup**
+  (`maintenance/services/optimize.py:119-199`): compaction obsoletes files, the index optimize folds
+  the new fragments back in, and version reclamation runs last. Read the body, not `compact_one`'s
+  docstring, which states the order wrongly. A policy may skip a STEP
+  (`cleanup_enabled`/`optimize_indices_enabled`), never reorder them — which is why they are modules
+  in one service rather than four services each rescanning every bucket.
 - The reconciler reports cross-store drift and deletes nothing until its report runs clean. It runs on
   its OWN Dapr cron binding (`maintenance-reconcile-cron`), separate from the sweep's — a read-only
   drift report must not inherit the data-rewriting sweep's cadence.
@@ -147,15 +176,23 @@ cross-object invariants, high-frequency filtered listings), it is a design decis
   name — the first live run called 29 MB of real page images reclaimable. Conversely `_transactions/
   *.txn` genuinely accumulate forever (the spec keeps one per commit attempt) and nothing prunes them.
 - The FGA-only live seed (`fga_seed_demo.py`) writes projects no registry knows — the origin of
-  "ghost projects". The replacement (`seed_estate.py`, planned) drives the real APIs in hierarchy
-  order so seeded state is always constructible state.
+  "ghost projects". The replacement SHIPPED: `scripts/seed_estate.py` drives the real doors in
+  hierarchy order — `POST /v1/projects` → `POST /v1/warehouses` → `POST /v1/warehouses/{id}/namespaces`
+  → `/declare` → `POST /v1/access/tuples` LAST — so every guard runs and a state that cannot be
+  reached through the UI cannot be seeded either. A grant whose create failed is SKIPPED rather than
+  written; writing it is exactly how a ghost is made.
 - **The control-event vocabulary is a wire contract in three files.** `ControlAction` /
   `ControlObjectType` (`service_kit/control_events.py`) reach the frontend through
   `docs/catalog-openapi.json` → `frontend/packages/api/src/generated/catalog.ts`. Adding an action
   without `make openapi` + `bun --cwd=frontend run gen:types:catalog` leaves the TS client unable to
   name an event the backend publishes, and `test_openapi_contract` fails. Same for `TupleOrigin`
   (`service_kit/governed/fga.py`) — an origin string not in the Literal is a `ty` error, not a runtime one.
-- `discover_dataset_uris` (maintenance sweep) walks ONE root — multi-warehouse sweeps are untested.
+- The sweep covers EVERY warehouse bucket, not a static list (#81): `run_sweep` unions `s3_bucket`
+  + `MAINTENANCE_S3_EXTRA_BUCKETS` with `warehouse_records.maintainable_buckets(registry)` and calls
+  `discover_dataset_uris` once per bucket — a bucket is created by an API CALL at runtime, so a
+  config-time list goes stale by construction. The orphan scan reads the same registry
+  (`_scannable_buckets`), reporting an `IncompleteScan` rather than silently narrowing when it is
+  unreadable. Residual: no multi-warehouse run against REAL object storage yet (#80).
 - **Five things live in a Lance dataset that a manifest scan does not reach.** Branches (`tree/`),
   multi-base files (`base_paths`), MemWAL shards (`_mem_wal/` — WAL + SSTable datasets, and the spec
   warns that GC'ing WAL files WEAKENS writer fencing, since fencing detects a stalled writer by a
@@ -177,11 +214,18 @@ cross-object invariants, high-frequency filtered listings), it is a design decis
 - **The `warehouse_binding_cache` eviction on delete is PER-PROCESS.** `_resolve_warehouse_root`
   caches bindings positively and forever on the premise that a binding is immutable; the warehouse
   delete is the first thing that breaks that premise. Other replicas keep routing a dropped
-  namespace at the deleted warehouse's bucket. Latent only because `chart/values.yaml` pins the
-  catalog to `replicas=1` — a second replica needs the control event wired to invalidation first.
+  namespace at the deleted warehouse's bucket. `chart/values.yaml` pins the catalog to `replicas=1`,
+  but **`chart/values-prod.yaml` sets `services.catalog.replicas: 2`** — so this is LIVE in the
+  documented prod overlay, not latent (#46). (`GET /v1/events`' ring buffer is per-replica for the
+  same reason; `values.yaml` says so at its definition.) A second replica needs the control event
+  wired to invalidation first.
 - The `\Z`-anchored `CONTROL_ID_RE` (`catalog/core/identifiers.py`) is the ONE id-shape rule. It was
   three copies that had already drifted: Python's `$` also matches before a trailing newline, so
   `"acme\n"` was refused by one door and accepted by another.
-- Credential-level tenant isolation (tenant B's creds refused on bucket A) is untested; only
-  byte-placement isolation is proven (`test_warehouse_routing.py` locally,
-  `test_warehouses_e2e.py` against real buckets, env-gated).
+- Credential-level tenant isolation IS attacked since #74: `tests/unit/test_vending.py` evaluates
+  the cross-tenant read/write against the session-policy document the vendor really builds (IAM
+  semantics, per tier, with two negative twins — B still reaches B's own table, and a read-tier
+  credential cannot write its own), and `tests/e2e-py/test_credential_isolation_e2e.py` drives the
+  real attack with vended credentials (LIST/GET/PUT, env-gated — the CI half is #84). The offline
+  half deliberately mocks no store: moto does not enforce inline session policies. Byte-placement
+  isolation stays proven by `test_warehouse_routing.py` / `test_warehouses_e2e.py`.
