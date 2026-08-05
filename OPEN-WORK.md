@@ -3111,17 +3111,30 @@ What is still open, most consequential first:
 
 ### The movers COMPOSE a dataset path; the catalog VENDS one
 
-`transform.py:191` builds `{project_root}/medallion/{namespace}`, while the catalog vends tables at
-`s3://<warehouse>/<hash>_<ns>$<name>`. The two never meet, so no configuration of names can make an
-ingest-written table visible to a mover — the cascade fires correctly and then finds nothing to move.
+**The READ half is FIXED.** The trigger carries the catalog-vended `from_uri`, and the whole cascade
+was proven end to end for a tenant that shares no name with any tier:
 
-This is I2 ("resolve the location through the CATALOG, never compose a path") violated on the mover
-side, and it predates the ingest plane. The fix is to make the movers catalog-resolved. It is a
-change to a service outside the ingest plane and wants its own review.
+    BRONZE  s3://acme-wh/3196ee6c_acme$events   v2  rows=4  tags={'published': 2}
+    SILVER  s3://acme-wh/medallion/silver       v2  rows=4  + source_rowid/thumbnail/embedding
+    GOLD    s3://acme-wh/medallion/gold         v2  rows=4
 
-Everything else in the cascade now works: the publication head is subscribed
-(`catalog.control.v1 -> /publication-arrival`), receives deliveries, carries `{from, to, project}`,
-and the mover wakes and correctly identifies another lane.
+all inside the tenant's own warehouse, with the lineage graph carrying both naming systems side by
+side (`acme$events` for the catalog, `acme-bronze$events` / `acme-silver$features` /
+`acme-gold$catalog` for the medallion lanes).
+
+**The WRITE half is not.** `transform.py` composes `{project_root}/medallion/{namespace}` for its
+TARGET and never registers it, so what the cascade produces is invisible to the catalog. Measured
+while the silver and gold datasets above held real rows:
+
+    catalog namespace acme   : ['events']
+    catalog namespace silver : []
+    catalog namespace gold   : []
+
+Nothing downstream can discover a silver or gold table through the catalog — no governance, no
+grants, no `published` tag, and no vended location for the NEXT consumer, which is the same problem
+this section was originally written about, one tier further down. I2 ("resolve the location through
+the CATALOG, never compose a path") on the other side of the mover. It is a change to a service
+outside the ingest plane and wants its own review.
 
 ### `/bronze-arrival` still exists alongside `/publication-arrival`
 
