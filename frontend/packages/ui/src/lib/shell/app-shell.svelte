@@ -125,6 +125,10 @@
 	// switcher shows a neutral prompt. Inside a zone the project is the breadcrumb ROOT and links
 	// back to its overview page — the way back the trail never offered.
 	const estateLevel = $derived(isMainMenu(pathname));
+	// On /projects/<id> the PATH already ends at the project — prepending the project root would
+	// read "bind86 › Projects › bind86". The root crumb is for ZONES, where the path alone cannot
+	// say which project you are inside.
+	const onProjectsPath = $derived(pathname === '/projects' || pathname.startsWith('/projects/'));
 	const shellProject = $derived({
 		name: projectName || 'Select project',
 		subtitle: projectName ? (project.subtitle ?? 'Project') : 'No active project',
@@ -161,6 +165,7 @@
 			{pathname}
 			{zoneNav}
 			project={shellProject}
+			projects={me?.projects ?? []}
 			footer={sidebarFooter}
 			content={sidebarContent}
 		/>
@@ -221,7 +226,7 @@
 					class="border-border/60 bg-muted/20 flex h-9 min-w-0 shrink-0 items-center overflow-hidden border-y px-4 text-sm"
 				>
 					<ol class="flex min-w-0 items-center gap-1.5">
-						{#if !estateLevel && projectName}
+						{#if !estateLevel && !onProjectsPath && projectName}
 							<!-- The project ROOT of every in-project trail, and the way BACK to it (#103):
 							     cross-zone from every zone (home owns /projects), so it hard-navigates. -->
 							<li class="shrink-0 capitalize">

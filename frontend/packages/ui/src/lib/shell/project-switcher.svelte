@@ -3,7 +3,7 @@
 	import * as DropdownMenu from '../components/dropdown-menu/index.js';
 	import { Button } from '../components/button/index.js';
 	import { ChevronsUpDown, Boxes, House, Check } from '@lucide/svelte';
-	import type { Project } from './nav-config.js';
+	import type { MeProject, Project } from './nav-config.js';
 	import { projectFromHost } from './breadcrumb.js';
 
 	// sidebar-07's TeamSwitcher, adapted into a PROJECT switcher and relocated to the navbar row:
@@ -14,7 +14,10 @@
 	// the platform picker on the FRONT-DOOR host — derived by stripping the project's subdomain
 	// label (demo.localhost -> localhost). That's how you leave a project; the picker (not this
 	// switcher) lists/creates projects.
-	let { project = { name: '', subtitle: 'Project' } }: { project?: Project } = $props();
+	let {
+		project = { name: '', subtitle: 'Project' },
+		projects = [],
+	}: { project?: Project; projects?: MeProject[] } = $props();
 
 	// Computed client-side from the current host (SSR has no window; these links are only
 	// followed in the browser). homeUrl = platform front-door (host minus the project
@@ -68,19 +71,31 @@
 	</DropdownMenu.Trigger>
 	<DropdownMenu.Content class="min-w-56 rounded-lg" align="start" side="bottom" sideOffset={4}>
 		<DropdownMenu.Label class="text-muted-foreground text-xs">Projects</DropdownMenu.Label>
+		<!-- YOUR projects, from /v1/me — the memberships every zone already holds. Picking one opens
+		     its overview (/projects/<id> stamps the active-project cookie, #103). The active one is
+		     checked. An empty list degrades to one Browse row rather than a dropdown that says
+		     "select" while offering nothing to select. -->
+		{#each projects as m (m.project)}
+			<DropdownMenu.Item class="p-0">
+				<a
+					href={`/projects/${m.project}`}
+					data-sveltekit-reload
+					class="flex w-full items-center gap-2 px-2 py-1.5"
+				>
+					<div class="flex size-6 items-center justify-center rounded-md border">
+						<Boxes class="size-3.5 shrink-0" />
+					</div>
+					<span class="truncate capitalize">{m.project}</span>
+					{#if m.project === activeSlug}<Check class="ml-auto size-4" />{/if}
+				</a>
+			</DropdownMenu.Item>
+		{/each}
 		<DropdownMenu.Item class="p-0">
-			<!-- The ACTIVE project's row opens ITS overview (#103) — /projects/<id> is where the
-			     project is described and managed; /lakehouse/catalog was a zone, not the project. -->
-			<a
-				href={activeSlug ? `/projects/${activeSlug}` : '/projects'}
-				data-sveltekit-reload
-				class="flex w-full items-center gap-2 px-2 py-1.5"
-			>
+			<a href="/projects" data-sveltekit-reload class="flex w-full items-center gap-2 px-2 py-1.5">
 				<div class="flex size-6 items-center justify-center rounded-md border">
 					<Boxes class="size-3.5 shrink-0" />
 				</div>
-				<span class="truncate capitalize">{displayName}</span>
-				<Check class="ml-auto size-4" />
+				<span class="text-muted-foreground truncate">Browse all projects</span>
 			</a>
 		</DropdownMenu.Item>
 		<DropdownMenu.Separator />

@@ -3,7 +3,7 @@
 	import * as Sidebar from '../components/sidebar/index.js';
 	import ProjectSwitcher from './project-switcher.svelte';
 	import ZoneNav from './zone-nav.svelte';
-	import type { Project, ZoneNav as ZoneNavConfig } from './nav-config.js';
+	import type { MeProject, Project, ZoneNav as ZoneNavConfig } from './nav-config.js';
 
 	// The zone-scoped sidebar: collapsible-to-icon, carrying ONLY the CURRENT zone's own routes
 	// (from the `zoneNav` prop each zone passes). Everything estate-wide moved up into the shell
@@ -14,12 +14,15 @@
 		pathname = '',
 		zoneNav = null,
 		project,
+		projects = [],
 		footer,
 		content,
 	}: {
 		pathname?: string;
 		zoneNav?: ZoneNavConfig | null;
 		project?: Project;
+		/** The caller's project memberships (/v1/me) — the switcher's dropdown list. */
+		projects?: MeProject[];
 		footer?: Snippet;
 		/** Zone-owned rail content rendered UNDER the zone nav — e.g. the workbench's saved-views
 		 *  list. A snippet rather than a nav shape because such content is page chrome (it changes
@@ -38,7 +41,7 @@
 	<Sidebar.Header>
 		<Sidebar.Menu>
 			<Sidebar.MenuItem>
-				<ProjectSwitcher {project} />
+				<ProjectSwitcher {project} {projects} />
 			</Sidebar.MenuItem>
 		</Sidebar.Menu>
 	</Sidebar.Header>
