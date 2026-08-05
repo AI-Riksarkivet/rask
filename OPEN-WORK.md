@@ -1149,9 +1149,12 @@ work).
    subtree shallowest-first, resumable. `GET /v1/namespace/{id}/tasks` shows the deadline;
    `purge=true` stays the explicit destroy-now. Tuples are KEPT on the recoverable path (#75's
    rule at subtree scale). Residual: no UI reaches undrop on either rung yet (the #42 class).
-3. **#46 binding-cache eviction is per-process — ARMED, not latent**: `values-prod.yaml:36` already
-   runs the catalog at `replicas: 2`. Mitigated to the mid-cascade window + id reuse by the live
-   status read; the fix is control-event-driven cross-replica invalidation.
+3. ~~**#46 binding-cache eviction is per-process**~~ **CLOSED 2026-08-05**: eviction now rides the
+   broadcast control-event subscription every replica already holds (`on_control_event` →
+   `evict_stale_bindings`: warehouse_deleted = named list + warehouse-id scan; warehouse_bound;
+   namespace_dropped → top segment; deactivation stays live-read by design), and the chart REFUSES
+   to render `services.catalog.replicas > 1` with `catalog.controlEmit` off — scale-into-staleness
+   is now a render error, not a runtime surprise.
 4. **#91** column-level classification (sekretess/GDPR — the lever the estate cannot express) ·
    **#84** credential attack in CI (needs web-identity vending + a second tenant admin).
 5. Maintenance: **#79** reclamation live (gated on a clean drift report; trash purge FIRST — a

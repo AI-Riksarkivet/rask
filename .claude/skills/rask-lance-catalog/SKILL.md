@@ -225,14 +225,19 @@ changing anything the sweep, the reconciler or the orphan scan touches.
   `LANCE_REST_IMPL=dir`). Only a TABLE materialises a directory. Any scan that enumerates namespaces
   by listing directories silently returns `[]` on every real estate — which reads as "checked and
   clean". The reconciler's `unbound_namespaces` detector shipped with exactly that bug.
-- **The `warehouse_binding_cache` eviction on delete is PER-PROCESS.** `_resolve_warehouse_root`
-  caches bindings positively and forever on the premise that a binding is immutable; the warehouse
-  delete is the first thing that breaks that premise. Other replicas keep routing a dropped
-  namespace at the deleted warehouse's bucket. `chart/values.yaml` pins the catalog to `replicas=1`,
-  but **`chart/values-prod.yaml` sets `services.catalog.replicas: 2`** — so this is LIVE in the
-  documented prod overlay, not latent (#46). (`GET /v1/events`' ring buffer is per-replica for the
-  same reason; `values.yaml` says so at its definition.) A second replica needs the control event
-  wired to invalidation first.
+- **The `warehouse_binding_cache` is invalidated ACROSS replicas by the control-event broadcast
+  (#46, 2026-08-05).** `_resolve_warehouse_root` caches bindings positively and forever on the
+  premise that a binding is immutable; the warehouse delete breaks that premise, and the local
+  `pop` only fixed the deleting replica. Now `on_control_event` (`catalog/api/dapr.py`) — the same
+  broadcast subscription that feeds the ring buffer, no queueGroup so EVERY replica hears every
+  event — calls `warehouses.evict_stale_bindings`: `warehouse_deleted` evicts the event's
+  `namespaces_dropped` PLUS a warehouse-id scan (a Decision-3 partial delete can unbind more than
+  the event recorded); `warehouse_bound` evicts the re-bound namespace; `namespace_dropped` evicts
+  the id's top segment. Deactivation is deliberately absent — warehouse STATUS is read live per
+  request. The chart couples the two: `services.catalog.replicas > 1` with `catalog.controlEmit`
+  off FAILS the render (`chart/templates/services.yaml`), so an overlay cannot scale into
+  staleness. (`GET /v1/events`' ring buffer stays per-replica by design — the poll endpoint serves
+  each replica's own buffer.)
 - The `\Z`-anchored `CONTROL_ID_RE` (`catalog/core/identifiers.py`) is the ONE id-shape rule. It was
   three copies that had already drifted: Python's `$` also matches before a trailing newline, so
   `"acme\n"` was refused by one door and accepted by another.

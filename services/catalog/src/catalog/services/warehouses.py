@@ -265,6 +265,52 @@ def unbind_namespace(control_root: str, storage_options: StorageOptions, top_ns:
         return
 
 
+def evict_stale_bindings(cache: dict[str, dict[str, str]], *, action: str, object_id: str, extra: dict[str, Any], delimiter: str) -> list[str]:
+    """Evict every binding-cache entry a control event just invalidated; return the evicted keys (#46).
+
+    The cache's premise — a binding is immutable, cache positives forever — is broken by exactly
+    three mutations, and each replica hears about all of them on the broadcast control-event
+    subscription (no queueGroup: every replica, including the publisher, receives every event):
+
+    - ``warehouse_deleted``: the event's ``namespaces_dropped`` names the unbound namespaces, and a
+      warehouse-id SCAN backs it up — a partial delete (the door's Decision-3 path) can unbind more
+      than the event managed to record, and a stale entry here routes a tenant's table at a deleted
+      (possibly purged) bucket.
+    - ``warehouse_bound``: a top-level namespace was just bound. The only way this replica holds a
+      cached entry for it is a re-bind after a delete it never processed — evict so the next request
+      reads the authoritative record.
+    - ``namespace_dropped``: the cache is keyed by TOP-LEVEL namespace, so evict the id's first
+      segment (dropping a nested namespace does not move its warehouse).
+
+    Deactivation needs no entry here: warehouse STATUS is read live on every request by design.
+    Mutates ``cache`` in place — it is the live ``app.state.warehouse_binding_cache`` dict; per-key
+    ``pop`` keeps concurrent resolvers safe (dict ops are atomic under the GIL; a racing resolver
+    re-reads the registry, which is the correct outcome).
+    """
+    evicted: list[str] = []
+
+    def _pop(key: str) -> None:
+        if cache.pop(key, None) is not None:
+            evicted.append(key)
+
+    if action == "warehouse_deleted":
+        warehouse_id = object_id.removeprefix("warehouse:")
+        dropped = extra.get("namespaces_dropped")
+        for top_ns in dropped if isinstance(dropped, list) else []:
+            _pop(str(top_ns))
+        for top_ns in [k for k, b in cache.items() if b.get("warehouse_id") == warehouse_id]:
+            _pop(top_ns)
+    elif action == "warehouse_bound":
+        namespace = extra.get("namespace")
+        if isinstance(namespace, str) and namespace:
+            _pop(namespace)
+    elif action == "namespace_dropped":
+        top_ns = object_id.removeprefix("namespace:").split(delimiter)[0]
+        if top_ns:
+            _pop(top_ns)
+    return evicted
+
+
 def delete_warehouse_record(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> None:
     """Remove the registry record. Idempotent for the same retry reason as :func:`unbind_namespace`.
 
