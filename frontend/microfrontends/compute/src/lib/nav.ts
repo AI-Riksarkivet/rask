@@ -1,4 +1,5 @@
 import {
+	CircuitBoard,
 	Boxes,
 	FileText,
 	Gauge,
@@ -31,6 +32,8 @@ export const COMPUTE_ZONE_NAV: ZoneNav = {
 			items: [
 				{ title: 'Nodes', href: '/compute/cluster', match: seg('/compute/cluster'), icon: Server },
 				{ title: 'Actors', href: '/compute/actors', match: seg('/compute/actors'), icon: Boxes },
+				// DCGM (2026-08-05): the GPU metrics surface — a dummy until the exporter is wired.
+				{ title: 'GPU', href: '/compute/gpu', match: seg('/compute/gpu'), icon: CircuitBoard },
 			],
 		},
 		{
