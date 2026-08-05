@@ -14,8 +14,12 @@ spinning. A timer that creeps in silently undoes that, and nothing else would no
 WHAT THIS GATE ACTUALLY ENFORCES — narrower than "no timers", because two kinds are legitimate:
 
   POLLING          a loop that repeatedly ASKS for state ("is it done yet"). This is what A13
-                   outlaws. It is what `ray_kit.await_success`'s `while True: sleep()` did inside an
-                   HTTP request, and it does not survive into this plane in any form.
+                   outlaws. It is what ray-kit's job-completion waiter did inside an HTTP request,
+                   and it does not survive into this plane in any form. (That function's NAME is
+                   deliberately not written here: `tests/unit/test_ingest_invariants.py` bans the
+                   literal across the whole repository, so spelling it out would make this file the
+                   gate's only offender. `_BANNED_POLL` below assembles it from parts, exactly as
+                   that test assembles its own.)
   KEEPALIVE        a loop that TELLS, on a schedule, and asks nothing — the ack heartbeat. Bounded
                    by the work it accompanies, not by an answer it is waiting for.
   BACKOFF          a sleep between bounded retry attempts. Not a loop waiting on state at all.
@@ -125,13 +129,16 @@ def test_the_marker_must_be_the_TOKEN_not_a_passing_mention(tmp_path: Path) -> N
     assert not _has_marker_above(offender, found[0][0]), "prose about polling satisfied the marker check"
 
 
-@pytest.mark.parametrize(
-    "forbidden",
-    [
-        "ray_kit.await_success",
-        "await_success",
-    ],
-)
+#: A13's named anti-pattern, ASSEMBLED FROM PARTS rather than written out.
+#:
+#: `tests/unit/test_ingest_invariants.py::test_a13_no_completion_polling_survives` bans this literal
+#: across the WHOLE repository — and it assembles its own token the same way, for the same reason:
+#: a gate whose test file contains the banned string is its own only offender. Writing it plainly
+#: here made that older gate fail on THIS file, which is the self-reference both are avoiding.
+_BANNED_POLL = "await" + "_success"
+
+
+@pytest.mark.parametrize("forbidden", [_BANNED_POLL, f"ray_kit.{_BANNED_POLL}"])
 def test_the_named_ANTI_PATTERN_did_not_survive_the_move(forbidden: str) -> None:
     """A13 names one function outright: today's only production `while True: sleep()`, held inside an
     HTTP request (`ray_kit/submit.py`). It "does not survive the move in any form" — so this asserts

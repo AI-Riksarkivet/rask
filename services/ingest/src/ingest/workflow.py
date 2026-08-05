@@ -38,6 +38,7 @@ ack across a job's runtime, which is the specific thing A13 outlaws.
 from __future__ import annotations
 
 import json
+import os
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -54,6 +55,16 @@ if TYPE_CHECKING:
 # state store, large enough that a million-unit run does not spawn a million children. The plan's
 # own figure (open_ingest.md: "child workflow per ~1-10k keys").
 CHUNK_SIZE = 1000
+
+#: How long a run may take before it is failed. ZERO (the code default) means UNBOUNDED — the chart
+#: opts in with `RASK_INGEST_MAX_RUN_HOURS`, because this plane's own docstrings advertise
+#: million-unit harvests and a live default would kill the legitimate long run it exists to protect.
+#:
+#: It is the enforcement half of gate A15, which asserts `maintenance.olderThanDays * 24 >=
+#: RASK_INGEST_MAX_RUN_HOURS` so version GC cannot delete the version a live run is committing
+#: against. That assertion was passing while NOTHING read the value — a gate certifying a relation
+#: with only one side implemented.
+MAX_RUN_HOURS = float(os.getenv("RASK_INGEST_MAX_RUN_HOURS", "0") or 0)
 
 # Retries are the activity's, not a hand-rolled loop: Dapr owns the backoff and the replay.
 ACTIVITY_RETRY = wf.RetryPolicy(
@@ -157,7 +168,41 @@ def ingest_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, A
     # Fan out. when_all is fan-in: the parent suspends until every child has drained, and survives
     # its own pod dying because the history replays. This is the durable-orchestration property that
     # a hand-rolled counter had to imitate.
-    results = yield wf.when_all([ctx.call_child_workflow(chunk_run, input=c) for c in chunks])
+    fanout = wf.when_all([ctx.call_child_workflow(chunk_run, input=c) for c in chunks])
+
+    # THE RUN DEADLINE — A15's other half, which nothing enforced.
+    #
+    # `RASK_INGEST_MAX_RUN_HOURS` was declared in `chart/values.yaml` and read by NO code, while the
+    # A15 gate asserted `maintenance.olderThanDays * 24 >= max_run_hours` and passed. That gate
+    # certifies "version GC keeps more history than a run can take" — a guarantee that is fiction
+    # while nothing bounds how long a run takes. A green gate over an unenforced relation is worse
+    # than no gate: it is a promise with nothing behind it, and the failure it exists to prevent
+    # (GC deleting the version a live run is committing against) is silent data loss.
+    #
+    # `ctx.create_timer` is a DURABLE Dapr timer — runtime-managed, replay-safe, and explicitly NOT
+    # counted against A13's in-process timer budget (the condition names Dapr workflow timers as the
+    # carve-out). It is not a poll: the workflow suspends and the runtime wakes it once.
+    #
+    # ZERO MEANS UNBOUNDED, and that is the default in code. The plane's own docstrings advertise
+    # million-unit runs, so a live default would break the legitimate long harvest this is meant to
+    # protect — the deployment opts in, exactly like the other ceilings.
+    if MAX_RUN_HOURS > 0:
+        deadline = ctx.create_timer(timedelta(hours=MAX_RUN_HOURS))
+        winner = yield wf.when_any([fanout, deadline])
+        if winner is deadline:
+            # Terminal, and it does NOT fall through to `finalize`: committing a partial harvest under
+            # a deadline would publish a dataset nobody asked for and mark it complete. The run is
+            # recorded as failed WITH its reason, and the staged fragments stay staged — recoverable
+            # by a re-run, which converges on the same rows because the unit ids are content-derived.
+            timed_out: dict[str, Any] = RunOutcome(
+                status="FAILED",
+                errors={"run": f"exceeded the {MAX_RUN_HOURS}h ceiling (RASK_INGEST_MAX_RUN_HOURS) with {units_total} units enumerated"},
+            ).model_dump()
+            yield ctx.call_activity(emit_terminal, input={"spec": spec.model_dump(), "outcome": timed_out}, retry_policy=ACTIVITY_RETRY)
+            return timed_out
+        results = fanout.get_result()
+    else:
+        results = yield fanout
 
     parsed = [ChunkResult.model_validate(r) for r in results]
     fragments = [f for r in parsed for f in r.fragments]
