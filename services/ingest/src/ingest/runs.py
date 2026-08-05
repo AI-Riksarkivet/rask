@@ -180,8 +180,19 @@ def merge_workflow_state(record: RunRecord, state: dict[str, object] | None) -> 
     # The workflow's own terminal state is finer-grained than the engine's: a run that landed 9,997
     # of 10,000 pages is COMPLETED as far as Dapr is concerned, and only the outcome knows it did so
     # with errors. Prefer the outcome's status wherever it produced one.
+    #
+    # THE ALLOWED SET INCLUDES "FAILED", and leaving it out was a latent defect that the run DEADLINE
+    # made reachable. A workflow can fail BY POLICY — return a FAILED outcome rather than raising —
+    # and the timeout path does exactly that: it refuses to commit a partial harvest, records the
+    # reason, and returns. To Dapr that is a workflow which RETURNED, so `runtime_status` is
+    # COMPLETED; with FAILED excluded here the door then reported a run that deliberately failed as
+    # COMPLETE, which is the worst possible direction for this error to point.
+    #
+    # Gated on `status == "COMPLETE"` still, so this can only ever REFINE a normal return. An engine
+    # FAILED or TERMINATED — the workflow crashed, or an operator killed it — stays authoritative and
+    # cannot be overwritten by whatever happens to be in a partial output payload.
     outcome_status = output.get("status")
-    if status == "COMPLETE" and outcome_status in ("COMPLETE", "COMPLETE_WITH_ERRORS"):
+    if status == "COMPLETE" and outcome_status in ("COMPLETE", "COMPLETE_WITH_ERRORS", "FAILED"):
         status = outcome_status  # type: ignore[assignment]
 
     errors = output.get("errors")

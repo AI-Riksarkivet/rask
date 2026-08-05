@@ -115,3 +115,48 @@ def test_a_timed_out_run_does_NOT_fall_through_to_finalize() -> None:
     names = {n.id for n in ast.walk(branch) if isinstance(n, ast.Name)}
     assert any(isinstance(n, ast.Return) for n in ast.walk(branch)), "the timeout branch does not return — it falls through to finalize"
     assert "finalize" not in names, "the timeout branch calls finalize — that commits a PARTIAL harvest as if it were whole"
+
+
+# ── the status must actually REACH the door ──────────────────────────────────
+
+
+def test_a_workflow_that_FAILS_BY_POLICY_is_not_reported_COMPLETE() -> None:
+    """The latent defect the deadline made reachable.
+
+    A workflow can fail by POLICY — return a FAILED outcome rather than raising. The timeout path
+    does exactly that: it refuses to commit a partial harvest, records the reason, and returns. To
+    Dapr that is a workflow which RETURNED, so `runtime_status` is COMPLETED.
+
+    `merge_workflow_state` promoted the outcome's status only when it was COMPLETE or
+    COMPLETE_WITH_ERRORS, so FAILED was silently dropped and the door answered COMPLETE — a run that
+    deliberately failed reported as success, which is the worst direction for this error to point.
+    """
+    from ingest.runs import RunRecord, merge_workflow_state
+
+    record = RunRecord(run_id="r", project="p", dataset="d", kind="local-dir")
+    state = {
+        "runtime_status": "COMPLETED",  # the workflow RETURNED — it did not crash
+        "serialized_output": {"status": "FAILED", "errors": {"run": "exceeded the 24.0h ceiling"}, "committed_version": None},
+    }
+
+    merged = merge_workflow_state(record, state)
+
+    assert merged.status == "FAILED"
+    assert "ceiling" in merged.errors.get("run", "")
+
+
+def test_an_ENGINE_failure_still_wins_over_a_partial_output() -> None:
+    """The refinement must only ever run on a NORMAL return.
+
+    A crashed or operator-terminated instance is authoritative: whatever happens to sit in a partial
+    output payload must not be able to talk the status back up to COMPLETE.
+    """
+    from ingest.runs import RunRecord, merge_workflow_state
+
+    record = RunRecord(run_id="r", project="p", dataset="d", kind="local-dir")
+
+    crashed = merge_workflow_state(record, {"runtime_status": "FAILED", "serialized_output": {"status": "COMPLETE"}})
+    killed = merge_workflow_state(record, {"runtime_status": "TERMINATED", "serialized_output": {"status": "COMPLETE"}})
+
+    assert crashed.status == "FAILED"
+    assert killed.status == "FAILED"
