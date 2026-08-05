@@ -179,3 +179,32 @@ def test_the_object_store_does_not_inherit_the_generic_APP_memory_ceiling() -> N
         for pool in tenant["spec"]["pools"]:
             limit = pool["resources"]["limits"]["memory"]
             assert _mib(limit) >= 2048, f"the object store is capped at {limit} — it OOMKills under real load"
+
+
+def test_the_recoverable_drop_plane_is_actually_WIRED_into_the_catalog() -> None:
+    """#122. The trash/undrop/purge plane — ~500 lines, 42 tests, an undrop UI — was inert in every
+    chart deployment: `LANCE_TRASH_GRACE_DAYS` was rendered NOWHERE, while two chart comments
+    discussed it as an operator knob. Every drop destroyed bytes immediately, `undrop` had nothing to
+    restore, and `maintenance.trashPurge` shipped as a toggle whose input could never exist.
+    """
+    rendered = _render("image.localImages=true")
+    assert rendered.returncode == 0, rendered.stderr
+
+    for doc in yaml.safe_load_all(rendered.stdout):
+        if not doc or doc.get("kind") != "Deployment":
+            continue
+        for container in doc["spec"]["template"]["spec"]["containers"]:
+            if container["name"] != "catalog":
+                continue
+            env = {e["name"]: e.get("value") for e in container.get("env", [])}
+            assert env.get("LANCE_TRASH_GRACE_DAYS") == "7", "the grace period never reaches the catalog"
+            return
+    raise AssertionError("no catalog container rendered — this test would pass vacuously")
+
+
+def test_grace_days_ZERO_survives_the_render() -> None:
+    """0 is the meaningful destroy-immediately opt-out — Sprig's default() would eat it (the
+    LANCE_MAX_CONCURRENT_WRITES lesson, third occurrence)."""
+    rendered = _render("image.localImages=true", "catalog.trashGraceDays=0")
+    assert rendered.returncode == 0, rendered.stderr
+    assert '{ name: LANCE_TRASH_GRACE_DAYS, value: "0" }' in rendered.stdout.replace("'", '"')

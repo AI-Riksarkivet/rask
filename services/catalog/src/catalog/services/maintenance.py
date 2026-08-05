@@ -13,6 +13,27 @@ import contextlib
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from lance_namespace import UnsupportedOperationError
+
+from service_kit.lakehouse.features import unsupported_features
+
+
+def require_maintainable(ds: Any) -> None:
+    """#121: refuse a dataset whose manifest feature flags this pass cannot correctly rewrite.
+
+    The SWEEP got this gate at #64 — measured then: compacting a shallow clone (flag 16) returned
+    ``fragments_removed=8, error=None`` and silently materialised a full local copy of data the clone
+    had only referenced. These on-demand doors are the SAME operations wired to a button in the table
+    UI, and they shipped with no gate at all — the "actively destructive" defect stayed one click
+    away after the sweep was fixed. Checked BEFORE any rewrite; the refusal names the flags, because
+    an operator needs to know they are looking at a shallow clone, not a broken dataset.
+    """
+    reason = unsupported_features(ds)
+    if reason is not None:
+        raise UnsupportedOperationError(
+            f"maintenance refused: {reason}. This dataset's layout carries features the rewrite would corrupt (the sweep refuses it for the same reason)."
+        )
+
 
 def _as_utc(ts: Any) -> datetime:
     """Coerce a version timestamp to an aware UTC datetime; an unknown shape is treated as 'now' so it is
@@ -69,6 +90,7 @@ def preview_gc(ds: Any, *, retention_days: int | None, retain_versions: int | No
 
 def run_gc(ds: Any, *, retention_days: int | None, retain_versions: int | None) -> dict[str, Any]:
     """Reclaim old versions (DESTRUCTIVE). Tagged versions are exempt, exactly like the compaction sweep."""
+    require_maintainable(ds)
     older_than = timedelta(days=retention_days) if retention_days else timedelta(0)
     stats: Any = ds.cleanup_old_versions(older_than=older_than, retain_versions=retain_versions, error_if_tagged_old_versions=False)
     return {
@@ -84,7 +106,13 @@ def compact_now(ds: Any, *, target_rows_per_fragment: int | None) -> dict[str, A
     concurrent index build, so it needs no defer_index_remap. Then keep the indices covering the new
     fragments (best-effort — a no-index dataset must not fail the compaction). Non-destructive: it writes a
     new version, never removes one."""
-    size_kw = {"target_rows_per_fragment": target_rows_per_fragment} if target_rows_per_fragment else {}
+    require_maintainable(ds)
+    size_kw: dict[str, Any] = {"target_rows_per_fragment": target_rows_per_fragment} if target_rows_per_fragment else {}
+    # #93's floor, applied to this door too: rows are not a unit of memory, and the default batch
+    # size on a blob tier read ~15 GB/thread — the OOM measured on the maintenance pod is just as
+    # available to the catalog pod through this button.
+    size_kw["batch_size"] = 64
+    size_kw["num_threads"] = 2
     metrics: Any = ds.optimize.compact_files(**size_kw)
     # a no-index dataset / unindexed column must not fail the compaction
     with contextlib.suppress(Exception):

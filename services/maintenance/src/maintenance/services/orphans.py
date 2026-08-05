@@ -42,7 +42,7 @@ import pyarrow.fs as pafs
 from pydantic import BaseModel, Field
 
 from maintenance.core.config import shared_lance_session
-from maintenance.core.features import unsupported_features, unsupported_features_from_open_error
+from service_kit.lakehouse.features import unsupported_features, unsupported_features_from_open_error
 
 
 log = logging.getLogger(__name__)
@@ -210,7 +210,7 @@ def referenced_paths_of(ds: lance.LanceDataset, dataset_uri: str) -> tuple[set[s
             # Overlays ARE writable on pylance 9.0.0 (`LanceOperation.DataOverlay`, verified by
             # committing one), but pylance then REFUSES to open the result — so on today's pylance
             # this branch is unreachable and the refusal arrives via the manifest feature-flag gate
-            # instead (`_unscannable_reason`, `maintenance.core.features`). Kept as the second line
+            # instead (`_unscannable_reason`, `service_kit.lakehouse.features`). Kept as the second line
             # of defence for the pylance that gains overlay READ support: that build opens the
             # dataset, and this is the seam the walk would otherwise scan straight past.
             if getattr(fragment.metadata, "overlays", None):
@@ -235,7 +235,7 @@ def _unscannable_reason(fs: pafs.FileSystem, prefix: str, referenced: set[str], 
 
     **Unsupported manifest feature flags (#64) — checked FIRST.** The flags are the format's own
     answer to "is this a layout you understand", and the spec requires a reader that does not know a
-    flag to refuse the dataset outright. Reading them (`maintenance.core.features`) catches the whole
+    flag to refuse the dataset outright. Reading them (`service_kit.lakehouse.features`) catches the whole
     class at once, including shapes with no observable consequence yet: `add_bases` registers a base
     path that no DataFile resolves through, so the consequence check below sees nothing wrong and
     this scan previously returned `checked=True` with orphans named on a multi-base dataset

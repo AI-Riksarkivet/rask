@@ -21,7 +21,8 @@ import lance
 import pyarrow as pa
 import pytest
 from lance.dataset import DatasetBasePath
-from maintenance.core import features
+
+from service_kit.lakehouse import features
 
 
 def _table(n: int = 20) -> pa.Table:

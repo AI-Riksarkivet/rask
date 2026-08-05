@@ -36,8 +36,20 @@ answer that rewrote a shallow clone.
 from __future__ import annotations
 
 import re
+from typing import Protocol
 
-import lance
+
+class _SerializedManifestHandle(Protocol):
+    def serialized_manifest(self) -> bytes: ...
+
+
+class ManifestCarrier(Protocol):
+    """The one seam this module needs from a ``lance.LanceDataset`` — kept structural so this stays in
+    dependency-light service-kit (both the maintenance sweep AND the catalog's on-demand doors gate on
+    it, and neither can import the other)."""
+
+    @property
+    def _ds(self) -> _SerializedManifestHandle: ...
 
 
 #: The documented flags (``lance_docs/file_format.md``, "Current Feature Flags"). Named rather than
@@ -81,7 +93,7 @@ _OPEN_REFUSAL_MARKERS = ("cannot be read by this version of Lance", "Flags:")
 _OPEN_REFUSAL_FLAGS = re.compile(r"Flags:\s*(\d+)")
 
 
-def manifest_feature_flags(ds: lance.LanceDataset) -> tuple[int, int]:
+def manifest_feature_flags(ds: ManifestCarrier) -> tuple[int, int]:
     """``(reader_feature_flags, writer_feature_flags)`` from the dataset's own manifest.
 
     Both default to 0 — proto3 omits a zero varint, so an ABSENT field is genuinely "no flags set"
@@ -127,7 +139,7 @@ def _varint(blob: bytes, i: int) -> tuple[int, int]:
     return value, i
 
 
-def unsupported_features(ds: lance.LanceDataset) -> str | None:
+def unsupported_features(ds: ManifestCarrier) -> str | None:
     """Why this dataset must be REFUSED, or ``None`` when every flag it sets is understood.
 
     The reason NAMES the offending bits, because "unsupported" alone is not actionable: an operator

@@ -15,7 +15,7 @@ import pyarrow.fs as pafs
 from pydantic import BaseModel
 
 from maintenance.core.config import shared_lance_session
-from maintenance.core.features import describe_unsupported_flags, manifest_feature_flags, unsupported_features_from_open_error
+from service_kit.lakehouse.features import describe_unsupported_flags, manifest_feature_flags, unsupported_features_from_open_error
 
 
 log = logging.getLogger(__name__)
@@ -112,7 +112,7 @@ def compact_one(
     two: both running is not additive, it is two processes racing to delete the same manifests.
 
     A dataset whose manifest sets a feature flag this pass cannot correctly rewrite is REFUSED before
-    any rewrite (#64, :mod:`maintenance.core.features`) — see :attr:`DatasetResult.refused`.
+    any rewrite (#64, :mod:`service_kit.lakehouse.features`) — see :attr:`DatasetResult.refused`.
     """
     try:
         # The shared bounded session (#102): per-tick reopens are correct for a mutating pass, but

@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from catalog.services import maintenance
 
 
@@ -18,6 +19,31 @@ class _Tags:
         return self._tags
 
 
+class _Manifest:
+    """Manifest blob for the #121 feature gate — proto3 varints at fields 9/10, empty = no flags."""
+
+    def __init__(self, reader: int = 0, writer: int = 0) -> None:
+        blob = b""
+        if reader:
+            blob += bytes([9 << 3]) + _varint(reader)
+        if writer:
+            blob += bytes([10 << 3]) + _varint(writer)
+        self._blob = blob
+
+    def serialized_manifest(self) -> bytes:
+        return self._blob
+
+
+def _varint(value: int) -> bytes:
+    out = bytearray()
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        out.append(byte | (0x80 if value else 0))
+        if not value:
+            return bytes(out)
+
+
 class _FakeDs:
     def __init__(
         self,
@@ -25,6 +51,7 @@ class _FakeDs:
         versions: list[dict[str, Any]],
         tags: dict[str, dict[str, int]],
         stats: Any = None,
+        feature_flags: tuple[int, int] = (0, 0),
     ) -> None:
         self.version = version
         self._versions = versions
@@ -32,6 +59,7 @@ class _FakeDs:
         self._stats = stats
         self.cleaned: dict[str, Any] | None = None
         self.optimize = _Optimize()
+        self._ds = _Manifest(*feature_flags)
 
     def versions(self) -> list[dict[str, Any]]:
         return self._versions
@@ -94,11 +122,48 @@ def test_compact_now_passes_target_and_optimizes_indices() -> None:
     ds = _FakeDs(version=1, versions=_versions(1), tags={})
     out = maintenance.compact_now(ds, target_rows_per_fragment=1_000_000)
     assert out == {"ok": True, "fragments_removed": 4, "fragments_added": 1}
-    assert ds.optimize.compact_kw == {"target_rows_per_fragment": 1_000_000}
+    assert ds.optimize.compact_kw == {"target_rows_per_fragment": 1_000_000, "batch_size": 64, "num_threads": 2}
     assert ds.optimize.indices_optimized is True  # indices kept covering the new fragments
 
 
 def test_compact_now_omits_target_when_unset() -> None:
     ds = _FakeDs(version=1, versions=_versions(1), tags={})
     maintenance.compact_now(ds, target_rows_per_fragment=None)
-    assert ds.optimize.compact_kw == {}  # None → Lance's default sizing (no kwarg forced)
+    # None → Lance's default FRAGMENT sizing; the #93 memory floor is forced regardless — rows are
+    # not a unit of memory, and this door runs on the catalog pod.
+    assert ds.optimize.compact_kw == {"batch_size": 64, "num_threads": 2}
+
+
+# ---------------------------------------------------------------- #121 the on-demand doors REFUSE what the sweep refuses
+
+
+def test_compact_now_REFUSES_a_shallow_clone_before_any_rewrite() -> None:
+    """The sweep got this gate at #64; these doors are the SAME operations wired to a UI button and
+    shipped with no gate at all. Measured then: compacting a flag-16 clone reported success and
+    silently materialised a full local copy of data it had only referenced."""
+    from lance_namespace import UnsupportedOperationError
+
+    ds = _FakeDs(version=1, versions=[], tags={}, feature_flags=(16, 16))
+    with pytest.raises(UnsupportedOperationError, match="base_paths .shallow clone"):
+        maintenance.compact_now(ds, target_rows_per_fragment=None)
+    assert ds.optimize.compact_kw is None, "the rewrite ran anyway — the refusal came too late"
+
+
+def test_run_gc_REFUSES_the_same_flags() -> None:
+    from lance_namespace import UnsupportedOperationError
+
+    ds = _FakeDs(version=1, versions=[], tags={}, feature_flags=(64, 64))
+    with pytest.raises(UnsupportedOperationError, match="data overlays"):
+        maintenance.run_gc(ds, retention_days=7, retain_versions=2)
+    assert ds.cleaned is None, "the delete ran anyway — the refusal came too late"
+
+
+def test_a_plain_dataset_still_compacts_with_the_93_memory_floor() -> None:
+    """The gate must not refuse healthy datasets — and the compact now carries #93's bounds, because
+    the default batch size read ~15 GB/thread on a blob tier and this door runs on the CATALOG pod."""
+    ds = _FakeDs(version=1, versions=[], tags={})
+    result = maintenance.compact_now(ds, target_rows_per_fragment=None)
+    assert result["ok"] is True
+    assert ds.optimize.compact_kw is not None
+    assert ds.optimize.compact_kw["batch_size"] == 64
+    assert ds.optimize.compact_kw["num_threads"] == 2

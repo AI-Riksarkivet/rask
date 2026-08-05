@@ -535,6 +535,14 @@ catalog:
   # Retry-After, shed before a body byte is buffered. 16 matches the code default; prod lowers it to fit
   # the catalog memory tier — values-prod.yaml states the sizing formula. 0 disables shedding.
   maxConcurrentWrites: 16
+  # #75/#96 RECOVERABLE DROPS — days a dropped table/namespace stays undroppable before the purge may
+  # reclaim it. The CODE default is 0 (off: a grace period changes what `drop_table` means for every
+  # caller, so the library never assumes it) — but the CHART defaults it ON, because the chart also
+  # ships `maintenance.trashPurge` and an undrop UI, and until 2026-08-05 it rendered this env var
+  # NOWHERE: ~500 lines of shipped, tested recovery code (undrop, /tasks, the recoverable cascade,
+  # the purge's whole input) were inert in every chart deployment while two chart comments discussed
+  # the knob as if it worked. 0 restores the old destroy-immediately behaviour.
+  trashGraceDays: 7
   # #3-A per-warehouse physical multi-tenancy (admin control plane). On → POST /v1/warehouses provisions a
   # physically separate bucket per warehouse (Lakekeeper parity) and binds top-level namespaces to it, so a
   # table under a bound namespace lands in that warehouse's bucket. Additive + backward-compatible: an
