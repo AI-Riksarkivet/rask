@@ -26,6 +26,14 @@
 	import { Select } from '@rask/ui/select';
 
 	import { bulkActions, targetsFor } from './bulk-events';
+	import {
+		corpusText,
+		distinctValues,
+		labelText,
+		matchesText,
+		mediaText,
+		predictedLabels,
+	} from './item-columns';
 	import { Textarea } from '@rask/ui/textarea';
 	import { ExternalLink, Trash2 } from '@lucide/svelte';
 
@@ -68,16 +76,32 @@
 	// selection model all follow for free.
 	let filterState = $state('');
 	let filterAssignee = $state('');
+	//: The ITEM filters. `filterText` is one box searching the key, corpus, label and modality
+	//: together, because a person typing into one field means "find this anywhere" — asking which
+	//: column it lives in is asking them to know the schema.
+	let filterText = $state('');
+	let filterLabel = $state('');
 
 	const visible = $derived(
 		tasks.filter(
 			(t) =>
 				(filterState === '' || t.state === filterState) &&
 				(filterAssignee === '' ||
-					(t.assignee ?? '').toLowerCase().includes(filterAssignee.trim().toLowerCase())),
+					(t.assignee ?? '').toLowerCase().includes(filterAssignee.trim().toLowerCase())) &&
+				(filterLabel === '' || labelText(t).split(',').some((l) => l.trim() === filterLabel)) &&
+				matchesText(t, filterText),
 		),
 	);
-	const filtering = $derived(filterState !== '' || filterAssignee.trim() !== '');
+	const filtering = $derived(
+		filterState !== '' ||
+			filterAssignee.trim() !== '' ||
+			filterLabel !== '' ||
+			filterText.trim() !== '',
+	);
+
+	/** The labels actually PRESENT, so the dropdown never offers a filter that yields nothing —
+	 *  the same rule `statesPresent` already follows. */
+	const labelsPresent = $derived(distinctValues(tasks, labelText));
 
 	/** The states actually PRESENT, so the dropdown never offers a filter that yields nothing. */
 	const statesPresent = $derived([...new Set(tasks.map((t) => t.state))].sort());
@@ -328,6 +352,26 @@
 			cell: ({ row }) => renderSnippet(itemCell, row.original),
 			meta: { cellClass: 'whitespace-nowrap' },
 		},
+		// ── the ITEM's own columns. Everything above and below this block is task ADMINISTRATION;
+		//    these describe the thing being labelled, which is what decides what to work on next.
+		{
+			id: 'label',
+			accessorFn: labelText,
+			header: sortableHeader('label'),
+			cell: ({ row }) => renderSnippet(labelCell, row.original),
+		},
+		{
+			id: 'corpus',
+			accessorFn: corpusText,
+			header: sortableHeader('corpus'),
+			meta: { cellClass: 'font-mono text-xs whitespace-nowrap' },
+		},
+		{
+			id: 'media',
+			accessorFn: mediaText,
+			header: sortableHeader('media'),
+			meta: { cellClass: 'text-xs' },
+		},
 		{
 			id: 'state',
 			accessorKey: 'state',
@@ -424,6 +468,23 @@
 			</span>
 		{/if}
 	</span>
+{/snippet}
+
+{#snippet labelCell(task: TaskDetail)}
+	<!-- The SUGGESTED label, not an accepted one. `secondary` rather than the default variant is the
+	     whole point: a prediction must not look like work somebody did. The title names where it came
+	     from — the server stamps `source` (`bulk` / `import` / `model:<name>`) and it is the only
+	     thing distinguishing a machine's guess from an annotator's answer. -->
+	<div class="flex flex-wrap gap-1">
+		{#each predictedLabels(task) as label (label)}
+			<Badge
+				variant="secondary"
+				title="suggested{task.prediction?.[0]?.source ? ` (${task.prediction[0].source})` : ''} — not reviewed"
+			>
+				{label}
+			</Badge>
+		{/each}
+	</div>
 {/snippet}
 
 {#snippet actionsCell(task: TaskDetail)}
@@ -575,6 +636,31 @@
 	     over a thousand it is the only way to work. -->
 	{#if tasks.length > 1}
 		<div class="flex flex-wrap items-center gap-2" data-testid="queue-filter">
+			<!-- ONE box across the item's columns — key, corpus, label, modality. A person typing here
+			     means "find this anywhere"; asking which column it lives in is asking them to know the
+			     schema. -->
+			<Input
+				bind:value={filterText}
+				placeholder="Search items…"
+				aria-label="Search items"
+				class="h-8 w-56"
+				data-testid="filter-text"
+				oninput={onFilterChanged}
+			/>
+			{#if labelsPresent.length > 0}
+				<Select
+					bind:value={filterLabel}
+					ariaLabel="Filter by label"
+					onValueChange={onFilterChanged}
+					options={[
+	{ value: '', label: `All labels (${tasks.length})` },
+	...labelsPresent.map((name) => ({
+		value: name,
+		label: `${name} (${tasks.filter((t) => labelText(t).split(',').some((l) => l.trim() === name)).length})`,
+	})),
+]}
+				/>
+			{/if}
 			<Select
 				bind:value={filterState}
 				ariaLabel="Filter by state"
@@ -607,6 +693,8 @@
 					onclick={() => {
 	filterState = '';
 	filterAssignee = '';
+	filterText = '';
+	filterLabel = '';
 	onFilterChanged();
 }}
 				>

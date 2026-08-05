@@ -273,19 +273,32 @@
 			<p class="text-destructive text-sm">{notice}</p>
 		{/if}
 
-		<div class="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
-			<AnnotatorMetrics tasks={listing?.details ?? []} />
-			<MembersPanel {projectId} />
-			<TaskQueue
-				{projectId}
-				droppable={stillMutable}
-				tasks={listing?.details ?? []}
-				{me}
-				consensusN={project?.consensus_n ?? 1}
-				adjudications={project?.adjudications ?? {}}
-				onchanged={() => void load()}
-			/>
+		<!-- TWO EXPLICIT COLUMNS, not four auto-placed children.
+		     The grid had `AnnotatorMetrics · MembersPanel · TaskQueue · <side stack>` as siblings and
+		     let CSS auto-placement sort them. `AnnotatorMetrics` renders nothing when it has nothing to
+		     say, so everything shifted by one: the members panel took the 1536px main column and THE
+		     TASK QUEUE — the surface the whole page exists for — landed in the 20rem sidebar. Measured
+		     at 1920px: main child 1536px, queue 320px. That is the "squashed table", and no amount of
+		     `w-full` on the table could fix it, because its column was 320px.
+		     Wrapping each column makes a child that renders nothing unable to move its siblings. -->
+		<div class="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+			<!-- The WORK. `min-w-0` so a wide table scrolls inside its own container instead of forcing
+			     the grid column wider than its track (the default `min-width:auto` on a grid item). -->
+			<div class="flex min-w-0 flex-col gap-4">
+				<AnnotatorMetrics tasks={listing?.details ?? []} />
+				<TaskQueue
+					{projectId}
+					droppable={stillMutable}
+					tasks={listing?.details ?? []}
+					{me}
+					consensusN={project?.consensus_n ?? 1}
+					adjudications={project?.adjudications ?? {}}
+					onchanged={() => void load()}
+				/>
+			</div>
+			<!-- ABOUT the project rather than the work in it: who has access, publishing, adjudication. -->
 			<div class="flex flex-col gap-3">
+				<MembersPanel {projectId} />
 				<PublishPanel {project} {listing} {canPublish} onchanged={() => void load()} />
 				<AdjudicationPanel
 					{projectId}
