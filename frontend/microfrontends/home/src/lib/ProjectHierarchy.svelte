@@ -9,8 +9,9 @@
 	// view that looks complete is how a hierarchy lies. A rung whose read failed renders an
 	// "unreadable" node rather than disappearing (a binding you cannot read is a namespace you
 	// cannot see — the estate's own listing rule).
-	import type { Edge, Node } from '@xyflow/svelte';
+	import type { Edge, Node, NodeTypes } from '@xyflow/svelte';
 	import { StaticFlow } from '@rask/flow';
+	import HierarchyNode, { type HierarchyData } from '$lib/HierarchyNode.svelte';
 	import type { ProjectSummary } from '$lib/catalog';
 	import { namespaceTables, warehouseNamespaces } from '$lib/remote/warehouses.remote';
 
@@ -18,8 +19,11 @@
 		$props();
 
 	const MAX_TABLES = 8;
-	const TIER_H = 120;
-	const SLOT_W = 190;
+	const TIER_H = 130;
+	const SLOT_W = 210;
+
+	// Registered ONCE at module-ish scope (the five rules): keys match node.type exactly.
+	const nodeTypes: NodeTypes = { rung: HierarchyNode };
 
 	type Tree = {
 		// warehouse id -> namespaces (null = the read failed)
@@ -69,12 +73,13 @@
 		const nodes: Node[] = [];
 		const edges: Edge[] = [];
 		let slot = 0;
-		const node = (id: string, label: string, tier: number, x: number, cls = ''): number => {
+		const TIERS = ['project', 'warehouse', 'namespace', 'table'] as const;
+		const node = (id: string, label: string, tier: 0 | 1 | 2 | 3, x: number, extra: Partial<HierarchyData> = {}): number => {
 			nodes.push({
 				id,
+				type: 'rung',
 				position: { x, y: tier * TIER_H },
-				data: { label },
-				class: cls,
+				data: { label, tier: TIERS[tier], ...extra } satisfies HierarchyData,
 				// StaticFlow is a VIEWER: connections/dragging are off, these just silence handles.
 				draggable: false,
 				connectable: false,
@@ -94,7 +99,7 @@
 				const entry = t.tables.get(ns);
 				const tableXs: number[] = [];
 				if (entry === null) {
-					tableXs.push(node(`${nid}:err`, 'tables unreadable', 3, slot++ * SLOT_W, 'err'));
+					tableXs.push(node(`${nid}:err`, 'tables unreadable', 3, slot++ * SLOT_W, { err: true }));
 					edges.push({ id: `${nid}-err`, source: nid, target: `${nid}:err` });
 				} else if (entry) {
 					for (const tb of entry.tables) {
@@ -102,7 +107,7 @@
 						edges.push({ id: `${nid}-${tb}`, source: nid, target: `t:${ns}$${tb}` });
 					}
 					if (entry.more > 0) {
-						tableXs.push(node(`${nid}:more`, `+${entry.more} more`, 3, slot++ * SLOT_W, 'more'));
+						tableXs.push(node(`${nid}:more`, `+${entry.more} more`, 3, slot++ * SLOT_W, { more: true }));
 						edges.push({ id: `${nid}-more`, source: nid, target: `${nid}:more` });
 					}
 				}
@@ -111,13 +116,13 @@
 			}
 			if (namespaces === null) {
 				const eid = `${wid}:err`;
-				nsXs.push(node(eid, 'namespaces unreadable', 2, slot++ * SLOT_W, 'err'));
+				nsXs.push(node(eid, 'namespaces unreadable', 2, slot++ * SLOT_W, { err: true }));
 				edges.push({ id: `${wid}-err`, source: wid, target: eid });
 			}
-			warehouseXs.push(node(wid, `${w.id} · ${w.bucket}`, 1, centre(nsXs)));
+			warehouseXs.push(node(wid, w.id, 1, centre(nsXs), { detail: `s3://${w.bucket}` }));
 			edges.push({ id: `p-${w.id}`, source: 'p', target: wid });
 		}
-		node('p', project, 0, centre(warehouseXs), 'root');
+		node('p', project, 0, centre(warehouseXs));
 		return { nodes, edges, width: Math.max(slot, 1) * SLOT_W };
 	}
 
@@ -132,21 +137,7 @@
 	<p class="text-muted-foreground text-sm">Loading the hierarchy…</p>
 {:else}
 	<div class="hierarchy h-105 w-full min-w-0 overflow-hidden rounded-lg border">
-		<StaticFlow nodes={graph.nodes} edges={graph.edges} />
+		<StaticFlow nodes={graph.nodes} edges={graph.edges} {nodeTypes} />
 	</div>
 {/if}
 
-<style>
-	/* Tier styling rides node classes; everything else is the shared @rask/flow theme. */
-	.hierarchy :global(.svelte-flow__node.root) {
-		font-weight: 600;
-	}
-	.hierarchy :global(.svelte-flow__node.err) {
-		color: var(--destructive);
-		border-color: var(--destructive);
-	}
-	.hierarchy :global(.svelte-flow__node.more) {
-		color: var(--muted-foreground);
-		border-style: dashed;
-	}
-</style>
