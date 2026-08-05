@@ -18,6 +18,12 @@
  *
  * What does NOT belong here: domain graphs. `LineageGraph` is a lineage panel (lakehouse's own lib), the FGA
  * builders are lakehouse access logic, the workflow EDITOR is media's. The binding stays domain-free.
+ *
+ * One domain graph is not in a zone either, and it is not an exception to that rule: `@rask/ui/hierarchy`
+ * (project › warehouse › namespace › table) draws on `StaticFlow` from the DESIGN SYSTEM, because two zones
+ * render it and zones may not import each other. The direction is what matters — @rask/ui depends on this
+ * package, never the reverse — so the binding is still domain-free and the stylesheet still ships from here.
+ * That subpath is @rask/ui's only vendor-canvas consumer; nothing else there pulls @xyflow/svelte.
  */
 export { default as GraphCanvas } from './GraphCanvas.svelte';
 export { default as StaticFlow } from './StaticFlow.svelte';

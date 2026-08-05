@@ -5,6 +5,7 @@ import {
 	Columns3,
 	Cpu,
 	Database,
+	Gauge,
 	HardDrive,
 	LayoutDashboard,
 	Inbox,
@@ -35,6 +36,23 @@ import { exact, seg, type ZoneNav } from '@rask/ui/shell';
  * is also a different LEVEL: those surfaces read across every project and take none, so #105 re-based
  * them under the home zone's `/settings/`. A zone rail names the zone's own routes.
  */
+/** The zone ROOT row — first leaf in the rail, above and outside every group (#109).
+ *
+ *  `/lakehouse` used to 307 into the catalog, so the rail's first entry was an AREA and the zone had
+ *  no landing at all. It has one now: the active project's overview — its hierarchy and the
+ *  warehouses claiming it. That is not a member of Catalog, Lineage, Models or Operations; it
+ *  summarises what all of them hang beneath, which is exactly what `ZoneNav.root` exists for (the
+ *  compute zone's Overview is the precedent, and it was moved out of "Cluster" for the same reason).
+ *
+ *  `exact`, not `seg`: `seg('/lakehouse')` matches every route in the zone and would light the
+ *  landing up from inside every area. */
+const LAKEHOUSE_ROOT: ZoneNav['root'] = {
+	title: 'Overview',
+	href: '/lakehouse',
+	match: exact('/lakehouse'),
+	icon: Gauge,
+};
+
 const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 	{
 		label: 'Catalog',
@@ -211,6 +229,7 @@ export function areaOf(pathname: string): string {
 export function lakehouseSidebar(estateAdmin: boolean): ZoneNav {
 	return {
 		title: 'Lakehouse',
+		root: LAKEHOUSE_ROOT,
 		groups: estateAdmin
 			? LAKEHOUSE_GROUPS
 			: LAKEHOUSE_GROUPS.filter((g) => !PRIVILEGED_GROUPS.has(g.label)),

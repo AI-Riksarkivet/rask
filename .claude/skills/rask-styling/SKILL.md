@@ -146,5 +146,5 @@ Shipping it: create the directory + `<name>.svelte` + `index.ts` + a story, then
 ## Where to go deeper
 
 - `references/tokens-and-theming.md` — the full token table, the `@theme inline` mapping, per-zone `@source` variance, the bridge migration, **reading the mode from JS (`useColorMode()` getters + the annotator's `app.html` boot-script exception), the view-transition decision, and why `components.json` is stale scaffolding**.
-- `references/component-catalog.md` — all 40 export subpaths, the three barrel conventions, **the `<Subject>` rule for printing an OIDC `sub`**, the data-table stack, Storybook, **the `vite.config.ts` two-homes test config**, and the known rough edges.
+- `references/component-catalog.md` — all 41 export subpaths, the three barrel conventions, **the `<Subject>` rule for printing an OIDC `sub`**, the data-table stack, Storybook, **the `vite.config.ts` two-homes test config**, and the known rough edges.
 - `rask-frontend` — zones, routing, data fetching, and the gates that grade this work.

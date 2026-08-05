@@ -21,7 +21,7 @@
 	// graph says WHAT each box is, token-utility chrome only (themes in both modes).
 	import { Handle, Position } from '@xyflow/svelte';
 	import { Boxes, Database, Folder, Warehouse } from '@lucide/svelte';
-	import { cn } from '@rask/ui/utils';
+	import { cn } from '../../utils/cn.js';
 
 	let { data }: NodeProps<HierarchyNodeType> = $props();
 
@@ -37,6 +37,7 @@
 </script>
 
 <div
+	data-slot="hierarchy-node"
 	class={cn(
 	'flex min-w-32 items-center gap-2 rounded-lg border px-3 py-2 text-left shadow-sm',
 	TIER_CLASS[data.tier],

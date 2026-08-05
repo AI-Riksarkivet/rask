@@ -107,7 +107,9 @@ test('no settings row leaves the estate — every one is served by this app', as
 	// sections: the navbar carries a "Projects" link too now (it is a main-menu entry AND a settings
 	// row), so an unscoped lookup matches two elements — and this file's claim is about the page.
 	for (const name of ['Users & roles', 'Projects', 'Audit']) {
-		await expect(section(page).getByRole('link', { name: new RegExp(`^${name}\\b`) })).toBeVisible();
+		await expect(
+			section(page).getByRole('link', { name: new RegExp(`^${name}\\b`) }),
+		).toBeVisible();
 	}
 });
 
