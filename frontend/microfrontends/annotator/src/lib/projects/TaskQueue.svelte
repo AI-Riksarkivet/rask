@@ -42,6 +42,7 @@
 	import ImportButton from './ImportButton.svelte';
 	import TaskGrid from './TaskGrid.svelte';
 	import { parseView, QUEUE_VIEW_KEY, type QueueView } from './queue-view';
+	import { selectAllPrompt, selectionOf } from './select-all';
 	import LeaseChip from './LeaseChip.svelte';
 	import { dropTask } from './remote/projects.remote';
 	import { fireTaskEvent } from './remote/tasks.remote';
@@ -457,6 +458,21 @@
 	 *  items you are looking at, and a thousand-item queue does not become a thousand tiles. Declared
 	 *  here because it reads `table`, which is built just above. */
 	const pageRows = $derived(table.getRowModel().rows.map((r) => r.original));
+
+	/** Whether to offer the rest of the filter, and what to say.
+	 *
+	 *  The header checkbox is TanStack's `toggleAllPageRowsSelected` — it takes the visible page and
+	 *  nothing else. Filtering to 347 items and wanting all of them meant ticking 20, acting, paging,
+	 *  eighteen times: the filter did the hard part and the selection threw the answer away. */
+	const allPrompt = $derived(
+		selectAllPrompt({
+			pageCount: pageRows.length,
+			pageSelectedCount: pageRows.filter((t) => rowSelection[t.task_id]).length,
+			selectedCount: selectedIds.length,
+			// Every row the FILTER matched, across pages — not the page, and not the project.
+			matchingCount: visible.length,
+		}),
+	);
 </script>
 
 {#snippet itemCell(task: TaskDetail)}
@@ -662,6 +678,34 @@
 			</div>
 		</div>
 	{/if}
+	<!-- SELECT THE REST. An OFFER, never automatic: silently extending a selection past what someone
+	     can see is how a bulk action lands on rows nobody looked at. -->
+	{#if allPrompt.kind === 'offer'}
+		<p class="text-muted-foreground text-xs" data-testid="select-all-offer">
+			All {allPrompt.pageCount} on this page are selected.
+			<button
+				type="button"
+				class="text-foreground underline underline-offset-2"
+				data-testid="select-all-matching"
+				onclick={() => (rowSelection = selectionOf(visible))}
+			>
+				Select all {allPrompt.matchingCount.toLocaleString()} matching this filter
+			</button>
+		</p>
+	{:else if allPrompt.kind === 'all'}
+		<p class="text-muted-foreground text-xs" data-testid="select-all-held">
+			All {allPrompt.matchingCount.toLocaleString()} matching items are selected.
+			<button
+				type="button"
+				class="text-foreground underline underline-offset-2"
+				data-testid="select-all-clear"
+				onclick={() => (rowSelection = {})}
+			>
+				Clear selection
+			</button>
+		</p>
+	{/if}
+
 	{#if notice}
 		<p class={notice.ok ? 'text-success text-sm' : 'text-destructive text-sm'}>{notice.text}</p>
 	{/if}
