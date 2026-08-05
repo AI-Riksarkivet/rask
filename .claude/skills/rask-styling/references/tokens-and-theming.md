@@ -58,7 +58,7 @@ All seven zones import the same three stylesheets and point `@source` at `../../
 | Zone | Extra |
 |---|---|
 | `explorer`, `annotator` | also `@source './lib' './routes' './app.html'` |
-| `lakehouse`, `explorer` | also `@import '@xyflow/svelte/dist/style.css' layer(base)` |
+| `lakehouse`, `explorer` | also `@import '@xyflow/svelte/dist/style.css' layer(base)`, then `@import '@rask/flow/styles.css' layer(base)` — the vendor sheet alone leaves the Controls widget and edge labels in light-mode hex |
 | `home`, `compute`, `studio`, `train` | rely on Tailwind's default scan |
 
 The five zones without explicit `./lib`/`./routes` sources depend on Tailwind 4 auto-detecting the SvelteKit source tree. Adding an explicit `@source` is safe; removing one is not.
@@ -67,11 +67,11 @@ The five zones without explicit `./lib`/`./routes` sources depend on Tailwind 4 
 
 `useColorMode()` — `@rask/ui/color-mode`, backed by `hooks/color-mode.svelte.ts`. A `MutationObserver` on `<html>`'s `class` attribute, returning `{ current: 'dark' | 'light', isDark }` as **getters** (so destructuring loses reactivity — hold the object). Framework-agnostic on purpose: Svelte Flow's `colorMode` prop, the WebGPU atlas, and the canvas charts all need the same answer without a Svelte context.
 
-Writing the mode is `mode-watcher`'s `toggleMode` (`navbar-user.svelte:5,65`). `@rask/ui` does not re-export the `ModeWatcher` component — each zone mounts it in its own root layout, alongside the no-flash script in `app.html` that sets the class before first paint.
+Writing the mode is `mode-watcher`'s `toggleMode` (`navbar-user.svelte:5,65`). `@rask/ui` does not re-export the `ModeWatcher` component — each zone mounts `<ModeWatcher defaultMode="dark" />` in its own root layout, and mode-watcher's SSR-injected head script sets the class before first paint. **One exception:** the annotator inlines an equivalent boot script in `app.html` (`annotator/src/app.html:8-45`), because its canvas route is `ssr = false` — no component head is rendered, so nothing gets injected. Keep it in lockstep with mode-watcher's `setInitialMode`, and note its fallback is `'dark'`, not `'system'`.
 
 ## View transitions
 
-`tokens.css:3-11` records the decision: cross-document view transitions stay off. Each zone is a separate document with its own shell instance, so opting a cross-zone nav into a transition crossfades the whole viewport — identical sidebar included — and reads as a flicker. The browser's paint-held document swap looks static instead. Same-document navs animate via `onNavigate → startViewTransition` in each zone's root layout, which is independent of the at-rule.
+`tokens.css:3-11` records the decision: cross-document view transitions stay off. Each zone is a separate document with its own shell instance, so opting a cross-zone nav into a transition crossfades the whole viewport — identical sidebar included — and reads as a flicker. The browser's paint-held document swap looks static instead. Same-document navs animate via `onNavigate → startViewTransition` where a zone opts in — five of seven today (not `home`, not `annotator`) — which is independent of the at-rule.
 
 ## `components.json` is stale scaffolding
 

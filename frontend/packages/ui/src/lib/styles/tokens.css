@@ -7,8 +7,9 @@
    every nav, which reads as a flicker. We let the browser do an instant, paint-held
    document swap instead: the new doc paints (dark, via the app.html no-flash script)
    before the old is removed, so the identical sidebar looks static. Soft IN-APP navs
-   still animate via the onNavigate → startViewTransition hook in each root layout
-   (the same-document VT API, independent of this at-rule). Don't re-add this. */
+   still animate via the onNavigate → startViewTransition hook where a zone opts in —
+   five of seven today (not home, not annotator) — the same-document VT API, independent
+   of this at-rule. Don't re-add this. */
 
 :root {
 	--radius: 0.625rem;

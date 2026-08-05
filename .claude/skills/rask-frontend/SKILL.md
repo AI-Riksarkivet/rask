@@ -5,7 +5,7 @@ description: The rask `frontend/` plane — seven SvelteKit 2 + Svelte 5 zones c
 
 # rask frontend
 
-Every JS/TS file lives under `frontend/`, its own bun 1.3.14 + Turborepo 2.9.18 workspace root (`package.json`, `bun.lock`, `turbo.json`, `knip.json`, `.oxlintrc.json`, `.oxfmtrc.json`, `patches/`, `assets/`). Invoke everything scoped: `bun --cwd=frontend run <task>`. The `--cwd=` form matters — `bun --cwd <path>` with a space silently no-ops.
+Every JS/TS file lives under `frontend/`, its own bun 1.3.14 + Turborepo 2.10.7 workspace root (`package.json`, `bun.lock`, `turbo.json`, `knip.json`, `.oxlintrc.json`, `.oxfmtrc.json`, `patches/`, `assets/`). Invoke everything scoped: `bun --cwd=frontend run <task>`. The `--cwd=` form matters — `bun --cwd <path>` with a space silently no-ops.
 
 Workspace membership is **globbed** (`microfrontends/*`, `packages/*`), so a directory carrying a `package.json` is enrolled automatically and one without it is **silently skipped** — bun prints "Done!" and the package is never installed, built, or linted.
 
@@ -18,14 +18,14 @@ Package name equals directory name for all seven (`manifest.test.ts:53`). Base i
 | zone | base | dev port | nav label | what it is |
 |---|---|---|---|---|
 | `home` | `''` catch-all | 5273 | Home | The ESTATE LEVEL: `/` (an insights landing, scaffold-badged), `/projects` (+ `/projects/<id>`, the gallery/table list, create, and one project's overview) and `/settings` (estate config, admin-gated SERVER-side) — plus the **OIDC BFF** (`/auth/{login,callback,logout}`) |
-| `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one (dock at `/lakehouse/workbench`) — `catalog`, `lineage`, `models`, `admin`, `governance`, `storage`; 49 route files, **8 `+server.ts` routes** — 4 keep-bytes (Arrow preview/insert, blob bytes, media downloads), 1 keep-flow (`capi/v1/me`), 2 catch-alls (17 element reads — the cross-zone blocker) + the thin `/api/audit` shim for the workbench element; every JSON value surface rides one of the zone's 15 `.remote.ts` modules and `requestJSON` has ZERO call sites left |
+| `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one (dock at `/lakehouse/workbench`) — areas `catalog`, `lineage`, `models`, `admin`, `governance`, `workbench`; **storage is not an area**, it is `/lakehouse/catalog/storage`. 47 route files, **7 `+server.ts` routes** — 4 keep-bytes (Arrow query/insert, blob bytes + the #113 commit log, the `/api/explorer/**` storage-browser seam), 1 keep-flow (`capi/v1/me`), 2 catch-alls; 15 `.remote.ts` modules carry the rest. `requestJSON` is **not** at zero here — 4 call sites: the object browser (`lib/storage/storage.ts:69,73`), the #113 commit log and the row insert (`lib/data/catalog.ts:119,126`) |
 | `explorer` | `/explorer` | 5173 | **Explorer** | Corpus search workbench (with a dock at `/explorer/workbench`): FTS/vector/hybrid, WebGPU atlas, Cypher KG, Svelte-Flow editor; **6 `+server.ts` routes** (was 13) — 4 keep-bytes + `api/search`/`api/atlas/chunks`, which keep their route (multipart / rowid-list POST) but answer **Arrow IPC**; every JSON value surface rides one of 5 `.remote.ts` modules (the transport ruling area 3) |
-| `annotator` | `/annotator` | 5177 | **Annotate** | PixiJS/WebGPU canvas over Arrow-backed rows; **3 `+server.ts` routes** (was 9) — the Arrow annotations transport, `capi/v1/me`, the viewer catch-all; every JSON value surface rides one of 6 `.remote.ts` modules |
-| `compute` | `/compute` | 5175 | Compute | Ray/Serve observability, 9 pages + a dock at `/compute/workbench` |
+| `annotator` | `/annotator` | 5177 | **Annotate** | PixiJS/WebGPU canvas over Arrow-backed rows, plus a `/browse` corpus surface; **4 `+server.ts` routes** (was 9) — the Arrow annotations transport, the Arrow annotation-IMPORT proxy (`api/tasks/[task_id]/import`, `requireSession`), `capi/v1/me`, the viewer catch-all; every JSON value surface rides one of 6 `.remote.ts` modules |
+| `compute` | `/compute` | 5175 | Compute | Ray/Serve observability, 10 pages + a dock at `/compute/workbench` |
 | `train` | `/train` | 5178 | Train | **Placeholder data only** — every page badges it |
 | `studio` | `/studio` | 5176 | Studio | Mini-app launcher, one tenant |
 
-Nav labels decouple from directory names on purpose — "named for what it is FOR, not the directory it lives in" (`nav-config.ts:301-303`).
+Nav labels name the JOB, not the directory — but they agree with it wherever they can: `explorer` was relabelled from Search once the directory itself was renamed (`nav-config.ts:480-491`). `annotator` → **Annotate** is the one deliberate split left.
 
 ## The nine packages
 
@@ -40,8 +40,8 @@ Only `@rask/ui` has a build (`svelte-package` → `dist/`); the rest are consume
 | `@rask/explorer-api` | Arrow-backed explorer/viewer client (media bytes, Arrow batches) |
 | `@rask/engine` | Framework-agnostic PixiJS/WebGPU annotation canvas (ra-anno lineage) |
 | `@rask/labeling` | The `LabelOp` model + annotator Arrow-IPC transport |
-| `@rask/zone-contract` | **Test-only** — 16 files / ~830 tests gating the estate's shape |
-| `@rask/config` | One shared `tsconfig.base.json`, extended by 6 of 15 packages |
+| `@rask/zone-contract` | **Test-only** — 16 files / 853 tests gating the estate's shape (2 are RED at HEAD — see § Gates) |
+| `@rask/config` | One shared `tsconfig.base.json`, extended by 8 of the 16 workspace packages — six of which inherit its weaker settings unchanged |
 
 **A `frontend/packages/*` entry is a LIBRARY, never a domain slice.** A zone's panels, stores and
 graphs are the zone — moving them into a shared package hollows the zone, couples releases, and
@@ -177,13 +177,15 @@ cross-window drag*, which is exactly what popout needs; resolve that trade befor
 
 Both halves are idiomatic SvelteKit — `+server.ts` is the framework's own tool for non-HTML resources, not a legacy dialect. The reason bytes never ride remote functions is **measured, not categorical**: devalue (5.8.1, verified in-tree) *does* carry `ArrayBuffer`/TypedArrays — as base64 inside the payload string (`stringify.js:308`) — which costs +33% on the wire, triple-buffers the whole payload (bytes → base64 string → bytes, no streaming), and loses HTTP semantics (content-type, ETags, ranges). Same reason nobody serves images inside JSON. The rule cuts both ways: a JSON route carrying big tabular rows is the mirrored mistake — **promote it to Arrow**, don't convert it to a remote function (known candidate: lakehouse's table-detail row query returns JSON rows while the explorer reads the same class of data as Arrow). When you touch a JSON *value* surface still on `createBffClient`, converge it; do not add new BFF JSON routes. Also permanently `+server.ts`: the OIDC endpoints (redirect flows, not function calls).
 
-**(a) Remote `query()`/`command()` — every zone's JSON value plane** (the the transport ruling convergence, landed 2026-08-03). A `.remote.ts` function runs on the zone server and reaches its upstream with the session bearer via `getRequestEvent()`. On every polled refresh, `.refresh().catch(() => {})` is **mandatory**: one uncaught rejection evicts the query from cache and silently kills the poll loop (`compute/src/lib/remote/compute.remote.ts:25-40`). The FGA workbench (`lakehouse/src/lib/admin/remote/access.remote.ts`) is the reference migration: queries + the estate's only two `command()`s (write/delete tuple, with a single-flight `fetchStore().refresh()`), `ApiResult<T>` union returns on the dock-layout precedent (status-driven UI states, not exception flow), valibot parsing at the wire boundary, contracts kept in a sibling non-remote module (a `.remote.ts` may export only remote functions).
+**(a) Remote `query()`/`command()` — every zone's JSON value plane** (the the transport ruling convergence, landed 2026-08-03). A `.remote.ts` function runs on the zone server and reaches its upstream with the session bearer via `getRequestEvent()`. On every polled refresh, `.refresh().catch(() => {})` is **mandatory**: one uncaught rejection evicts the query from cache and silently kills the poll loop (`compute/src/lib/remote/compute.remote.ts:25-40`). The FGA workbench (`lakehouse/src/lib/admin/remote/access.remote.ts`) is the reference migration: queries + a write/delete-tuple `command()` pair with a single-flight `fetchStore().refresh()`, `ApiResult<T>` union returns on the dock-layout precedent (status-driven UI states, not exception flow), valibot parsing at the wire boundary, contracts kept in a sibling non-remote module (a `.remote.ts` may export only remote functions).
 
-**(b) Same-origin BFF — permanently the binary/Arrow planes and the OIDC flow.** The JSON convergence is DONE: `requestJSON` has zero call sites in every zone; `createBffClient` survives only where the payload is bytes (Arrow, blobs, multipart) or where a custom-element bundle cannot import a `.remote.ts` (the lakehouse catch-alls + the `/api/audit` shim).
+**(b) Same-origin BFF — permanently the binary/Arrow planes and the OIDC flow.** The JSON convergence is done in **six** zones: `requestJSON` has zero call sites in `home`, `explorer`, `annotator`, `compute`, `train`, `studio`. The **lakehouse is the residual** — four `requestJSON` call sites: the object browser's `listObjects`/`headObject` (`lib/storage/storage.ts:69,73`, over the `/api/explorer/**` seam), `fetchTableHistory` (`lib/data/catalog.ts:119`, the #113 commit log over the `capi/v1/table/[id]/[...rest]` proxy), and `insertRows` (`:126`, which POSTs an Arrow body and only reads a JSON ack — a keep-bytes route spelled with the JSON helper). Converge the first three when you touch them; do not add new BFF JSON routes. Elsewhere `createBffClient` survives only where the payload is bytes (Arrow, blobs, multipart).
 
-**(c) None — `studio`, `train`.** Hardcoded arrays.
+**(c) Bell only — `studio`, `train`.** Page data is hardcoded arrays; the single `.remote.ts` each is `lib/live/feeds.remote.ts`, the estate-wide `query.live` bell.
 
-Estate-wide: `command()` 59 across 17 remote modules (mutations single-flight their reads: `void query().refresh()` in the handler), `form()` 0, `query.batch()` 0, `{#await}` 0. `query.live` is the LIVENESS spine, not just the bell: every zone's `feeds.remote.ts` (the bell), lakehouse's `controlEvents`/`controlCursor`/`jetstreamCursor` and the explorer's service-health. Consume cursors through `$lib/live/tick.svelte.ts` (`liveRead` + `lineageTick`/`controlTick`) — it replaced thirteen hand-rolled `$effect`+`setInterval` pollers, and its rules (open on mount, cursor arrival is not a change) each exist because breaking them broke a test. Data mutations move the LINEAGE cursor; governance mutations (grants, warehouses, tenants — including raw `/v1/access/tuples` writes, which emit `grant_added`) move the CONTROL cursor.
+**The media-plane BFF reads are AUTHORIZED now, not just proxied (2026-08-04).** `makeViewerProxy` — the `api/[...path]` catch-all that explorer and annotator both mount — carries `requireSession: true` (`packages/api/src/bff.ts:307-322`), so a bearer-less page-image or atlas read 401s at the BFF on an auth-enabled stack. The bearer path is sealed cookie → the zone's session handle → `makeBackendProxy` (`authorization: Bearer …`) → gateway → viewer, where `/api/page` checks `can_read_data` and `/api/pages` `can_get_metadata` on `table:<catalog id>`, and the S3 object routes behind `/api/explorer/**` check `can_browse_storage`. The lakehouse's `/api/explorer/[...rest]` forwards the caller's bearer but does **not** `requireSession`, so an empty `/lakehouse/catalog/storage` on a governed stack is an authz answer, not an outage.
+
+Estate-wide: `command()` 71 across 21 remote modules (mutations single-flight their reads: `void query().refresh()` in the handler), `form()` 0, `query.batch()` 0, `{#await}` 0. `query.live` is the LIVENESS spine, not just the bell: every zone's `feeds.remote.ts` (the bell) and lakehouse's `controlEvents`/`controlCursor`/`jetstreamCursor`. (The explorer's service-health is NOT one — it is a single deduped poll in `lib/service-health.svelte.ts`, whose own comment rejects a cursor because liveness has no event.) Consume cursors through `$lib/live/tick.svelte.ts` (`liveRead` + `lineageTick`/`controlTick`) — it replaced thirteen hand-rolled `$effect`+`setInterval` pollers, and its rules (open on mount, cursor arrival is not a change) each exist because breaking them broke a test. Data mutations move the LINEAGE cursor; governance mutations (grants, warehouses, tenants — including raw `/v1/access/tuples` writes, which emit `grant_added`) move the CONTROL cursor.
 
 ### The SSR hairpin
 
@@ -201,7 +203,7 @@ out. That costs minutes, not seconds, and it is the deliberate trade — the in-
 
 **Dev.** `make dev-frontends` builds `@rask/ui` + `@rask/api` first, then runs `turbo run dev --filter='./microfrontends/*'`. That filter is load-bearing: an unfiltered `turbo run dev` also starts `@rask/ui`'s `svelte-package -w`, which rewrites `dist/` while zones read it, and turbo tears the run down.
 
-Turborepo 2.9.18 has a **built-in** microfrontends proxy. It reads `microfrontends/home/microfrontends.json` and binds `:3024`. `@vercel/microfrontends` is not installed and is not needed. Flow: `browser → :3024 → longest-prefix match → 127.0.0.1:517x (vite, strictPort) → SvelteKit with paths.base=/<zone>`. No path stripping.
+Turborepo 2.10.7 has a **built-in** microfrontends proxy. It reads `microfrontends/home/microfrontends.json` and binds `:3024`. `@vercel/microfrontends` is not installed and is not needed. Flow: `browser → :3024 → longest-prefix match → 127.0.0.1:517x (vite, strictPort) → SvelteKit with paths.base=/<zone>`. No path stripping.
 
 > A second, hand-rolled proxy sits at `packages/zone-contract/src/proxy.ts` (`PROXY_PORT ?? 5200`). Its `dev:proxy` turbo task is invoked by no root script and no Makefile target, and its claim that `bun run dev` starts it is false. `:3024` is the live dev origin; `:5200` survives only because `explorer`'s e2e defaults to it.
 
@@ -217,7 +219,7 @@ are different functions, not one filtered list:
 | Level | Where | Bar |
 |---|---|---|
 | **estate** | `/`, `/projects`, `/settings` | `mainMenuNav()` → Home · Projects · Settings |
-| **inside a project** | every zone route, and `/projects/<id>` | `topNav()` → Lakehouse · Compute ⟵gap⟶ Search · Annotate · Train · Studio |
+| **inside a project** | every zone route, and `/projects/<id>` | `topNav()` → Lakehouse · Compute ⟵gap⟶ Explorer · Annotate · Train · Studio |
 
 The boundary that trips people: **`/projects` is the estate level, `/projects/<id>` is not** — opening
 a project is what puts you inside one, so its page gets the zone bar. Scoping is by CONTEXT, never
@@ -243,9 +245,9 @@ express what the switcher already carries. `projectFromHost` still parses a host
 
 A link is cross-zone when `zoneOf(href) !== zoneOf(pathname)`. `zoneOf` is the first path segment — **except for `HOME_ROUTES` (`projects`, `settings`), which map to the home zone**, because `home` is the catch-all and its own routes would otherwise read as zones of their own (`/projects` looked like a `projects` zone, so the navbar's own link to it cost a document load from `/`). Cross-zone anchors carry **`data-sveltekit-reload`** — without it SvelteKit soft-navigates into a route the zone does not own and 404s. The shell applies this itself (`top-navbar.svelte`); `ZoneNavLeaf.reload` is the sidebar equivalent. `@rask/zone-contract`'s gate keeps its own copy of `HOME_ROUTES` (it cannot import the shell) and takes the OWNING zone from each component's path, so a lakehouse link into `/projects` without the attribute now fails the suite instead of 404-ing at runtime.
 
-Hrefs are **flat and absolute** (`/lakehouse/data`, `/explorer/`, `/compute/`) — there is no project prefix. The project comes from the **request host**: `projectFromHost` maps `demo.localhost` → `demo` (`shell/breadcrumb.ts:5-8`).
+Hrefs are **flat and absolute** (`/lakehouse/catalog`, `/explorer/`, `/compute/`) — there is no project prefix. The project comes from the **request host**: `projectFromHost` maps `demo.localhost` → `demo` (`shell/breadcrumb.ts:5-8`).
 
-**Trailing slashes on zone-root hrefs are load-bearing.** Each zone's `paths.base` serves the trailing form, so a bare `/compute` costs a 308 per hop (`tests/nav-config.test.ts:26-29`).
+**Trailing slashes on zone-root hrefs are load-bearing.** Each zone's `paths.base` serves the trailing form, so a bare `/compute` costs a 308 per hop (`packages/ui/tests/nav-config.test.ts:49-60`).
 
 ## Adding a zone — five places
 
@@ -263,7 +265,7 @@ Globbed membership means there is no list to append to, but five files must agre
 
 ## TypeScript strictness is split
 
-`strict` is on everywhere. `noUncheckedIndexedAccess` is on for the five rask-origin zones + `@rask/ui` + `@rask/api` (hand-inlined), and **off** for `annotator`, `explorer`, `engine`, `labeling`, `explorer-api`, `zone-contract` — all six extend `@rask/config/tsconfig.base.json`, which sets neither flag. The shared base is weaker than the inlined copy, so the two lance-imported zones are the least strictly typed in the estate. That is a defect, not a design.
+`strict` is on everywhere. `noUncheckedIndexedAccess` is on for the five rask-origin zones + `@rask/ui` + `@rask/api` (hand-inlined) and for `@rask/dockview` + `@rask/flow` (which extend the shared base and then re-inline it), and **off** for `annotator`, `explorer`, `engine`, `labeling`, `explorer-api`, `zone-contract` — those six extend `@rask/config/tsconfig.base.json` alone, and it sets neither flag. The shared base is weaker than the inlined copy, so the two lance-imported zones are the least strictly typed in the estate. That is a defect, not a design.
 
 `exactOptionalPropertyTypes` is on only for `@rask/api`; it stays off on Svelte packages for a real upstream reason (Bits UI "union too complex"). Leave that one alone. Validation is **valibot**.
 
@@ -278,8 +280,10 @@ ESLint and Prettier are **deleted**. `toolchain.test.ts` enforces three things a
 | Command | Runs |
 |---|---|
 | `make check` | `fmt` (mutating) + `lint` + Python `uvx ty` + `knip` |
-| `bun --cwd=frontend run check test` | svelte-check + the vitest suites (zone-contract alone is 717) |
+| `bun --cwd=frontend run check test` | svelte-check + the vitest suites (zone-contract alone is 853, across 16 files) |
 | CI (`.dagger/frontend.go:53`) | `bunx turbo run check check:tsgo test lint fmt:check` |
+
+⚠ **The zone-contract suite is RED at HEAD — 2 of 853.** `bff-routes.test.ts:181` asserts *"the annotator has no search route; drop SEARCH_API"*, but the annotator's `select/remote/similar.remote.ts` now calls `SEARCH_API` for its k-NN "more like this" — the gate and the chart's per-zone upstream list are what need updating, not the code. `nav-truth.test.ts:96`'s own scanner guard (`ALL.length > 30`) sits at exactly 30 after a nav leaf moved. Fix both before adding to either file: a red gate hides the next regression.
 
 **There are two separate e2e layers — `make e2e` is not the frontend one.**
 
@@ -288,7 +292,7 @@ ESLint and Prettier are **deleted**. `toolchain.test.ts` enforces three things a
 | Per-zone Playwright | `home`, `lakehouse`, `explorer`, `annotator` each ship `e2e/` + `"test:e2e": "playwright test"`. **Hermetic**, in TWO stand-in styles now: a read the BROWSER makes is mocked with `page.route`; a read the ZONE SERVER makes (every remote function, and a route that builds its own Arrow body) cannot be — those get a **mock upstream**, a tiny seed/ledger Bun server started as a second `webServer` with the dev server's `*_API` pointed at it (`lakehouse/e2e/admin/mock-catalog.ts`, `explorer/e2e/mock-media-services.ts`). Ports are declared once per zone in `e2e/ports.ts` and gated for collisions by `@rask/zone-contract` | `bun --cwd=frontend run test:e2e`, and in CI as *"Playwright e2e — all zones"* with `--concurrency=1` (each zone spins a dev server + chromium; parallel first-compiles blow the startup window, and `lakehouse` runs **two** servers — auth-off and auth-on) |
 | `tests/e2e` | A standalone Playwright project with its **own lockfile**, driving a **running deploy** | `make e2e` (`RASK_E2E_BASE_URL`, default `http://localhost`) |
 
-So `make e2e` never touches the zone suites, and the zone suites never touch a real backend. Verified 2026-07-28 by running `bunx turbo run test:e2e --filter=home`: 5 tests pass in ~28 s, including `auth.spec.ts`'s cross-zone contract (every zone in the navbar, `data-sveltekit-reload` on each). A fresh worktree needs `bun install` first — `svelte-package` is not on `PATH` otherwise and `@rask/ui#build` fails with exit 127 before any test runs.
+So `make e2e` never touches the zone suites, and the zone suites never touch a real backend. `home`'s `auth.spec.ts` (4 tests) is the MAIN-MENU contract now — Home + Projects and no zone, no Settings, for an anonymous visitor. The cross-zone `data-sveltekit-reload` contract it used to carry moved to the lakehouse and explorer suites, which run INSIDE a zone where the bar exists; `@rask/zone-contract`'s `cross-zone-reload.test.ts` is the static half. A fresh worktree needs `bun install` first — `svelte-package` is not on `PATH` otherwise and `@rask/ui#build` fails with exit 127 before any test runs.
 
 `make check` reaches **neither** svelte-check nor the frontend tests, so run the second row before declaring a change done. `knip` is the inverse — local only, absent from CI.
 

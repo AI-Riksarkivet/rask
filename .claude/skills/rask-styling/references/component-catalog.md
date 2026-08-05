@@ -8,15 +8,17 @@
 
 `tsconfig.json`: `strict` + `noUncheckedIndexedAccess`, **no** `exactOptionalPropertyTypes` (the Bits UI "union too complex" incompatibility — leave it off), `target: ES2022` (`run-status.ts:121-123` avoids `toSorted` for this reason), `verbatimModuleSyntax`.
 
-`vite.config.ts` exists only for Storybook + vitest and carries no `test` block; vitest picks up `tests/*.test.ts` by default glob.
+`vite.config.ts` serves Storybook + vitest, and its `test` block is load-bearing (`vite.config.ts:8-19`): `include` names **both** homes — `tests/**` and `src/**` — and `exclude` drops `dist/**` and `.svelte-kit/**`. `svelte-package` copies test files into both build trees, so vitest's default discovery ran every suite three times against regenerated output; narrowing to `src` alone silently dropped 117 tests to 10. Change neither half without checking the other.
 
-## The 39 export subpaths
+## The 40 export subpaths
 
 **Components** — `dist/components/<name>/index.js`, conditions `svelte` + `types` only:
 
-`alert-dialog · avatar · badge · button · card · checkbox · chip · collapsible · data-table · dialog · dropdown-menu · field · grants-panel · input · navigation-menu · popover · progress · radio-group · resizable-split · search-bar · select · separator · sheet · sidebar · skeleton · slider · sort-header · status-board · switch · table · tooltip`
+`alert-dialog · avatar · badge · button · card · checkbox · chip · collapsible · data-table · dialog · dropdown-menu · field · grants-panel · identity · input · navigation-menu · popover · progress · radio-group · resizable-split · search-bar · select · separator · sheet · sidebar · skeleton · slider · sort-header · status-board · switch · table · textarea · tooltip`
 
-**Non-components** (these carry a `default` condition):
+**`./identity`** — `Subject` + `subjectDisplay` (#87). An OIDC `sub` is an opaque base64 blob; the helper keeps readable identifiers verbatim and ellipsizes opaque ones in the middle, and the FULL subject always rides `title` so hover/copy still yields the value a tuple write needs. Render it with `<Subject value={…} />`, never `subjectDisplay(...).label` — the component is what makes the title invariant structural, after a call site dropped it within days of the helper shipping. Its own subpath, not under `grants-panel`: the concern is any surface that prints a sub (FGA subjects, control-event actors, audit stamps).
+
+**Non-components** (`./utils`, `./motion`, `./runs`, `./color-mode` carry a `default` condition; `./shell` does not — it is `types` + `svelte` like a component, and shares rough edge 3; `./styles/tokens.css` is a bare path):
 
 | Subpath | Contents |
 |---|---|
@@ -43,7 +45,7 @@ Re-exporting a Bits UI primitive unchanged needs an explicit `typeof` annotation
 
 ## The `child` escape hatch
 
-`sidebar-menu-button.svelte:68-77` declares a local `{#snippet Button({ props })}`, merges with `mergeProps(buttonProps, props)` from `bits-ui`, and forwards to a caller-supplied `child?: Snippet<[{ props: Record<string, unknown> }]>`. `zone-nav.svelte:22-34` uses it to render an `<a>` where the component would otherwise emit a `<button>`. Reach for this instead of forking a component to change its tag.
+`sidebar-menu-button.svelte:68-77` declares a local `{#snippet Button({ props })}`, merges with `mergeProps(buttonProps, props)` from `bits-ui`, and forwards to a caller-supplied `child?: Snippet<[{ props: Record<string, unknown> }]>`. `zone-nav.svelte` uses it at four call sites (`:66, :83, :99, :112`), each rendering the `leafLink` snippet at `:40-52`, to emit an `<a>` where the component would otherwise emit a `<button>`. Reach for this instead of forking a component to change its tag.
 
 ## Data-table stack
 
@@ -64,7 +66,7 @@ Containment is deliberate: `Card` and the DataTable card both carry `min-w-0 max
 
 Coverage is thin: **4 story files for ~35 exported components** — `button.stories.svelte` (CSF via `defineMeta` + `{#snippet template(args)}`), `card.stories.ts` (CSF3 `Meta/StoryObj`), `dialog.stories.svelte`, `Welcome.stories.svelte`. A new component should ship a story.
 
-`tests/` — 7 vitest files, 86 tests, all pure-function or SSR-string. No jsdom and no `@testing-library/svelte` (adding either changes the workspace lockfile). `run-status.test.ts` pins field names against the committed `docs/lineage-openapi.json`, so a backend rename fails the test rather than rendering blanks.
+8 vitest suites, 103 tests, all pure-function or SSR-string. Seven live in `tests/`; a suite may also sit beside its source (`src/lib/components/identity/subject.test.ts`) — `vite.config.ts:17` includes both homes. No jsdom and no `@testing-library/svelte` (adding either changes the workspace lockfile). `run-status.test.ts` pins field names against the committed `docs/lineage-openapi.json`, so a backend rename fails the test rather than rendering blanks.
 
 `harness/` is a standalone Vite page that mounts `NotificationCenter` in a real browser, because the popover is **portalled** and `svelte/server`'s `render()` emits nothing for a portal — SSR tests can assert the bell and the rows but never the open panel, focus trap, or dismiss click. Run manually: `bunx vite --config vite.config.ts harness --port 5411`, then `bun harness/drive.mjs`.
 
@@ -76,7 +78,7 @@ Do not treat these as patterns to copy.
 2. Three extensionless relative imports violate the package's own `.js` convention and survive into `dist`: `motion.ts:10` → `'./gsap'`, `status-board.svelte:9` → `'../../motion'`, and `search-bar.svelte:8` → `'../chip'` (a bare **directory** import, resolvable only by a bundler's implicit `/index` lookup).
 3. Component subpaths declare no `default` condition — a tool resolving without the `svelte` condition gets an unresolvable specifier. Conversely `./color-mode` promises a `default` while shipping raw `$state`/`$derived`.
 4. `seenOnClose` is exported from `runs/run-status.ts:152` and consumed by `notification-center.svelte:73` but omitted from `runs/index.ts` — invisible on the public surface.
-5. Eleven exported subpaths have zero consumers outside the package (`avatar, checkbox, collapsible, dropdown-menu, navigation-menu, popover, sidebar, skeleton, tooltip, runs, status-board`); they exist to serve `shell/`.
+5. Eight exported subpaths have zero consumers outside the package (`avatar, collapsible, dropdown-menu, navigation-menu, sidebar, tooltip, runs, status-board`); they exist to serve `shell/`.
 6. Two near-duplicate sort headers: `SortHeader` (renders its own `<th>`, takes `sortKey/sortDir/onsort`) and `DataTableHeaderButton` (tanstack-driven, renders a bare `<button>`).
 7. `GrantsPanel` (423 lines) is the largest component and is arguably domain logic — it hardcodes the FGA relation ladder `['reader','writer','validator','owner']`. It was hoisted here only after the data and lineage copies had silently drifted apart.
 8. `ResizableSplit` defaults `storageKey = 'lance-media-split'` — a zone-specific localStorage key baked into a shared default.

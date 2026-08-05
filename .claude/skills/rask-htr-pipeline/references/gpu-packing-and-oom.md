@@ -8,8 +8,9 @@ Deep reference for the load-bearing rules in SKILL.md. Every number here is from
 Each physical GPU has a `1.0` budget in Ray's resource accounting. The HTR
 pipeline splits its GPU consumers into two classes:
 
-1. **Token slots** — the Layout (`Riksarkivet/yolov9-regions-1`) and Lines
-   (`Riksarkivet/yolov9-lines-within-regions-1`) actors each request
+1. **Token slots** — the Layout (`REGION_MODEL`, `Riksarkivet/yolov9-regions-1`)
+   and Lines (`LINE_MODEL`, `Riksarkivet/yolov9-lines-within-regions-1`) actors —
+   both repos declared once in `htr/models.py`, never re-inlined — each request
    `num_gpus=0.001`. This does **not** reserve meaningful VRAM; it exists only
    to make the Ray scheduler place those actors **on the GPU node** (the YOLO
    models are small enough to share a card). Two stages × 0.001 = 0.002.
@@ -45,9 +46,15 @@ schedule a fractional request it can't satisfy).
 batches (one preprocessing on CPU while the previous decodes on GPU);
 `HTRFlowDeployment` uses `max_ongoing_requests=4`.
 
-### Retargeting to a 3-GPU node — edit ALL THREE files
+### Retargeting the GPU pool — edit ALL THREE files
 
-GPU sizing is hardcoded for a 3-GPU node. To retarget hardware you touch:
+The live target is a **2-GPU** pool: `make ray-up-htr` starts the head with
+`--num-gpus=2` on `CUDA_VISIBLE_DEVICES=0,1` (GPU 2 is reserved for
+`qwen-serve`), and the Serve defaults pack 1.96 onto it. Only the actor-pool
+`size=` literals are truly hardcoded — the Serve fractions are env-driven.
+`pipeline.py`'s `htr_pipeline` docstring still says "sized for a 3-GPU node"
+with 4 × 0.499 Transcribe actors: that is the pre-Serve shape and is dead text,
+`0.499` exists nowhere outside it. To retarget hardware you touch:
 
 - `transcribe_service.py` — `RASK_SERVE_REPLICAS` / `RASK_SERVE_GPU_FRAC` defaults (env-overridable).
 - `htrflow_service.py` — same two knobs (it deliberately shares them) + the optional `RASK_SERVE_GPU_RESOURCE` tier pin.

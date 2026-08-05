@@ -12,8 +12,9 @@ The tree is language-first:
 
 - **Reusable Python library, no entrypoint** → `packages/<name>`. If it grows an
   `app` or a CLI, it's in the wrong layer.
-- **Runnable Python** (an HTTP service, the runner CLI, the `core` domain
-  package) → `services/<name>`.
+- **Runnable Python** (an HTTP service, or a Dapr-workflow plane like `ingest`) →
+  `services/<name>`. A model runtime does **not** go here — it goes in the sealed
+  `runners/<name>`, outside every workspace glob, where the runner CLI lives.
 - **A SvelteKit zone** → `frontend/microfrontends/<zone>`.
 - **A reusable TS/Svelte library** → `frontend/packages/<name>`.
 - **A one-shot setup/debug script**, shell or python → `scripts/<name>` (flat;
@@ -83,7 +84,9 @@ tracker, validate`).
 Add the test path to `[tool.pytest.ini_options] testpaths` — tests are **not**
 auto-discovered (explicit `testpaths`, `--import-mode=importlib`). A test dir
 not listed there simply never runs. Current entries look like
-`services/core/tests`, `packages/storage/tests`. (The sealed `runners/htr` has its OWN
+`services/ingest/tests`, `packages/storage/tests`. (The seven lance-plane services carry
+no `tests/` dir of their own — their coverage lives in the root `tests/unit` +
+`tests/integration` entries, which ARE listed. The sealed `runners/htr` has its OWN
 testpaths in its own pyproject — the root pytest cannot see it, so `make test` runs it
 separately.)
 

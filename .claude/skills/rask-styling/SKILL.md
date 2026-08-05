@@ -23,12 +23,12 @@ Every zone's `src/app.css` is exactly this, and the `@source` depth is **three**
 A zone that mounts a **dock** adds one more line — see § *Third-party stylesheets*:
 
 ```css
-@import '@rask/dockview/styles.css' layer(base);   /* lakehouse, media, compute */
+@import '@rask/dockview/styles.css' layer(base);   /* lakehouse, explorer, compute */
 ```
 
 Tailwind 4 skips `node_modules`, so without `@source` every `@rask/ui` class is silently dropped — no error, no warning, just an unstyled page. It points at **`dist`**, so a component edit reaches a zone's CSS only after `svelte-package` reruns (`bun --cwd=frontend/packages/ui run build`, or the `dev` watcher).
 
-> `docs/architecture/frontend-conventions.md:319,347` ships this line with **four** `../`. That copy is wrong; three is correct — verified at `frontend/microfrontends/home/src/app.css:7`.
+> `frontend/packages/ui/README.md:49` ships this line with **four** `../` — the package's own "In the app's CSS" snippet, so it is the copy a reader is most likely to paste. That copy is wrong; three is correct — verified at `frontend/microfrontends/home/src/app.css:7`. (`docs/architecture/frontend-conventions.md:341` had the same defect and was corrected 2026-07-28.)
 
 ## Colour comes from tokens
 
@@ -45,9 +45,17 @@ A vendor sheet ships unlayered CSS whose selectors out-specify Tailwind utilitie
 it, permanently. Two zones already do this and a third pattern-matched it:
 
 ```css
-@import '@xyflow/svelte/dist/style.css' layer(base);   /* lakehouse, media */
-@import '@rask/dockview/styles.css'      layer(base);   /* lakehouse, media, compute */
+@import '@xyflow/svelte/dist/style.css' layer(base);   /* lakehouse, explorer */
+@import '@rask/flow/styles.css'         layer(base);   /* …immediately after it, same two zones */
+@import '@rask/dockview/styles.css'     layer(base);   /* lakehouse, explorer, compute */
 ```
+
+The xyflow sheet needs **two** lines, in that order: the vendor sheet, then `@rask/flow/styles.css`,
+which maps `--xy-*` onto the OKLCH tokens. Skip the second and the vendor's light-mode hex defaults
+(`#fefefe` controls, `#f7f9fb` edge labels, `#b1b1b7` edges) survive — the Controls widget and every
+edge label render as a white blob on rask's dark surfaces. Same shape as the `--dv-*` block below and
+for the same reason: every `--xy-*` resolves through a token that is itself re-declared under `.dark`,
+so `colorMode` on `<SvelteFlow>` is left unset.
 
 `@rask/dockview/styles.css` is **one import, not two** — it pulls dockview's own 124 KB sheet and then
 the rask theme block. There is no `@source` to add for it: the package ships no Tailwind utility
@@ -87,7 +95,7 @@ same property is a second writer and reads as jank. Animate *inside* a panel if 
 
 ## View transitions
 
-Cross-document view transitions stay **off** on purpose (`tokens.css:3-11`). Each zone is a separate document with its own shell, so a cross-zone nav would crossfade an identical sidebar and read as a flicker. In-app navs animate through `onNavigate → startViewTransition` in each zone's root layout. Leave the at-rule out.
+Cross-document view transitions stay **off** on purpose (`tokens.css:3-11`). Each zone is a separate document with its own shell, so a cross-zone nav would crossfade an identical sidebar and read as a flicker. In-app navs animate through `onNavigate → startViewTransition` in the root layout of five zones (compute, explorer, lakehouse, studio, train); `home` and `annotator` wire it nowhere. Leave the at-rule out either way.
 
 ## Authoring a component
 
@@ -118,7 +126,7 @@ The canonical shape — `button.svelte`, `badge.svelte`, `table-cell.svelte`, `s
 
 Six rules carry that snippet:
 
-1. **`tv()` lives in the module script and is exported.** Variants use `tailwind-variants`, not cva. Exporting the `tv` call lets a caller put the same **chrome** on a plain element — `top-navbar.svelte:86` applies `navigationMenuTriggerStyle()` to bare links so triggers and links stay dimensionally identical.
+1. **`tv()` lives in the module script and is exported.** Variants use `tailwind-variants`, not cva. Exporting the `tv` call lets a caller put the same **chrome** on a plain element — `top-navbar.svelte:101` applies `navigationMenuTriggerStyle()` to bare links so triggers and links stay dimensionally identical.
 2. **`className` is the last argument to `cn()`**, so the consumer wins. `cn = twMerge(clsx(…))`.
 3. **`ref = $bindable(null)` + `bind:this={ref}`** is the ref-forwarding contract, typed by `WithElementRef<T, El>`.
 4. **`data-slot="<name>"`** on the root element — CSS descendant selectors and the e2e harness both locate by it.
@@ -141,5 +149,5 @@ Shipping it: create the directory + `<name>.svelte` + `index.ts` + a story, then
 ## Where to go deeper
 
 - `references/tokens-and-theming.md` — the full token table, the `@theme inline` mapping, per-zone `@source` variance, and the bridge migration.
-- `references/component-catalog.md` — all 39 export subpaths, the three barrel conventions, the data-table stack, Storybook, and the known rough edges.
+- `references/component-catalog.md` — all 40 export subpaths, the three barrel conventions, the data-table stack, Storybook, and the known rough edges.
 - `rask-frontend` — zones, routing, data fetching, and the gates that grade this work.
