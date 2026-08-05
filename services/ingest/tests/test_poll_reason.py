@@ -98,10 +98,12 @@ def test_the_gate_FAILS_on_a_seeded_violation(tmp_path: Path) -> None:
     assert found, "the sleep detector matched nothing — the gate is checking nothing"
     assert not _has_marker_above(offender, found[0][0]), "an unmarked timer was reported as marked"
 
-    offender.write_text(
-        "import asyncio\n\n\nasync def spin():\n    # POLL REASON: keepalive, not a poll — see the heartbeat.\n    while True:\n        await asyncio.sleep(5)\n",
-        encoding="utf-8",
+    marked = (
+        "import asyncio\n\n\nasync def spin():\n"
+        "    # POLL REASON: keepalive, not a poll — see the heartbeat.\n"
+        "    while True:\n        await asyncio.sleep(5)\n"
     )
+    offender.write_text(marked, encoding="utf-8")
     found = _sleeps_in(offender)
     assert _has_marker_above(offender, found[0][0]), "a marked timer was still reported as unmarked"
 
