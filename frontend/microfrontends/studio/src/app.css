@@ -1,6 +1,13 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import '@rask/ui/styles/tokens.css';
+/* Svelte Flow's stylesheet, ONCE for the zone and under `base` so Tailwind utilities still win over
+   it (importing it per component lands it in that component's layer instead). */
+@import '@xyflow/svelte/dist/style.css' layer(base);
+/* …and the rask theme for it, immediately after the vendor sheet so its `--xy-*` defaults are what
+   gets overridden. Without this the Controls widget and every edge label render in the library's
+   light-mode hex on a dark canvas — a white blob. */
+@import '@rask/flow/styles.css' layer(base);
 
 /* Scan the shared @rask/ui component library so its Tailwind classes (badge, etc.)
    are generated — Tailwind 4 ignores node_modules by default. */

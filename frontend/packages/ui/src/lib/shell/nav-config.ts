@@ -312,14 +312,9 @@ const MODEL_ITEMS: TopNavItem[] = [
 	},
 ];
 
-const STUDIO_ITEMS: TopNavItem[] = [
-	{ title: 'Apps', href: '/studio/', description: 'The mini-app launcher.' },
-	{
-		title: 'Flows',
-		href: '/studio/flows',
-		description: 'Node-based sandbox over live Ray Serve endpoints.',
-	},
-];
+// NO `STUDIO_ITEMS`. Studio briefly panelled (Apps + Flows) and is a plain link again, because the
+// launcher and the animation demo were deleted: the zone is ONE surface — the flow canvas at its
+// root — and a dropdown with one row in it is noise. Same rule, opposite direction.
 
 /** The PLATFORM panel — the Settings entry's rows. Each reads across every project and takes none,
  *  which is why they are settings rather than a zone's feature, and why they are SERVED by the home
@@ -553,7 +548,7 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			// briefly a row inside Search's panel, which broke that rule and buried the labeling
 			// workflow one hover deep. It carries a PANEL since #113: the "single surface" premise
 			// expired when /browse landed — Canvas and Browse are two real destinations, and the
-			// consistency rule is that every multi-surface zone panels (Studio joined when Flows landed).
+			// consistency rule is that every multi-surface zone panels (only Studio remains a link).
 			title: 'Annotate',
 			href: '/annotator/',
 			icon: PenLine,
@@ -577,14 +572,12 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			items: [...MODEL_ITEMS],
 		},
 		{
-			// STUDIO stays the sandbox/PoC zone (R17). It was a PLAIN LINK while it had one
-			// experimental surface; the Flows sandbox is a second real destination, and the
-			// consistency rule (see Annotate above) is that every multi-surface zone panels.
+			// STUDIO is the sandbox zone (R17) and a PLAIN LINK — one surface, the node-based flow
+			// canvas at the zone root, so there is nothing for a dropdown to list.
 			title: 'Studio',
 			href: '/studio/',
 			icon: FlaskConical,
 			match: under('/studio'),
-			items: [...STUDIO_ITEMS],
 		},
 	];
 }

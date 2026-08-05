@@ -303,7 +303,9 @@ describe('topNav', () => {
 		// a one-row dropdown is noise. That was true while the zone was four placeholder training
 		// pages. R17's migration then actually landed — the lakehouse's registry, experiments and
 		// pipeline moved in and the playground joined them — so the zone has real destinations and
-		// earns rows. Studio is still the sandbox and still a plain link.
+		// earns rows. Studio panelled briefly too (Apps + Flows) and is a plain link AGAIN: the
+		// launcher and the animation demo were deleted, leaving one surface — the flow canvas at the
+		// zone root — and a one-row dropdown is noise. Both directions of the same rule.
 		expect(models.items!.map((i) => i.title)).toEqual([
 			'Registry',
 			'Experiments',
@@ -322,7 +324,8 @@ describe('topNav', () => {
 		expect(models.match('/models/playground')).toBe(true);
 		expect(models.match('/studio')).toBe(false);
 		expect(studio.match('/studio')).toBe(true);
-		expect(studio.match('/studio/animation')).toBe(true);
+		// `under`, so the trigger stays lit on any future studio route even though it has one today.
+		expect(studio.match('/studio/anything')).toBe(true);
 		expect(studio.match('/models')).toBe(false);
 		// The routes left the lakehouse, so the lakehouse trigger must NOT claim them and the models
 		// trigger must. Both directions, because a half-done rename lights up two triggers at once.

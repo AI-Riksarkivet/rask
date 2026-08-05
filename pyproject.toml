@@ -140,7 +140,17 @@ indent-style = "space"
 
 [tool.ruff.lint.isort]
 lines-after-imports = 2
-known-first-party = ["storage", "gateway", "service_kit", "compute", "ray_kit", "tracker", "validate"]
+# `flows` added with the member (adding-a-package.md step 4). The list is STILL short by eleven —
+# annotator, catalog, controlplane, ingest, lineage, lineage_kit, maintenance, medallion, ratch,
+# search, viewer — and that gap is deliberately left for its own commit, because it is not metadata:
+# a name here changes which BLOCK ruff sorts that module into, so adding the eleven turns 1 I001 into
+# 206 across 172 files (measured: `uvx ruff check --output-format concise | grep -c I001`, one name at
+# a time — every one of the eleven cascades, so there is no clean subset). The fix is mechanical and
+# one command — `uvx ruff check --select I --fix` — but it is a 172-file import re-sort that belongs
+# in a commit of its own rather than buried in a new service's diff, and landing it here would red
+# `make lint` (and therefore the pre-commit hook, which passes no filenames) for every other branch in
+# flight. Do it as a pass; do not extend the list one name at a time.
+known-first-party = ["storage", "gateway", "service_kit", "compute", "flows", "ray_kit", "tracker", "validate"]
 
 [tool.ty.terminal]
 error-on-warning = true
@@ -176,7 +186,7 @@ exclude = [
 # excluded from offline runs via `-m "not e2e"` (make test / test-slow), the same way `slow` is.
 # tests/e2e-py/conftest.py force-applies the e2e marker to every item collected under it.
 testpaths = ["packages/lineage-kit/tests", "packages/ray-kit/tests", "packages/service-kit/tests", "packages/storage/tests", "packages/tracker/tests", "packages/validate/tests", "services/gateway/tests",
-    "services/ingest/tests", "services/compute/tests", "services/controlplane/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
+    "services/ingest/tests", "services/compute/tests", "services/controlplane/tests", "services/flows/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
 addopts = "--cov --cov-report=term-missing:skip-covered --import-mode=importlib"
 markers = [
     "slow: marks tests requiring real models or long runtimes (deselect with '-m \"not slow\"')",
