@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from ingest.api import router as ingest_router
 from ingest.health import router as health_router
 from ingest.provenance import LineageProvenanceReader
+from ingest.queue_health import router as queue_health_router
 from ingest.runs import SCHEDULE_TIMEOUT_SECONDS, InMemoryRunStore
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
@@ -43,7 +44,7 @@ def create_app() -> FastAPI:
 
     register_builtin_sources()
 
-    app = make_service_app(title="ingest", routers=[health_router, ingest_router], lifespan=_lifespan)
+    app = make_service_app(title="ingest", routers=[health_router, queue_health_router, ingest_router], lifespan=_lifespan)
     app.state.run_store = InMemoryRunStore()
     app.state.workflow_starter = _DaprWorkflowStarter()
     app.state.workflow_reader = _DaprWorkflowReader()
