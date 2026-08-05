@@ -3168,48 +3168,64 @@ than in the head they came from, because enumeration is a discrete phase.
 The IIIF read-through cache belongs to the ADAPTER, not the platform — a per-source `Fetcher` is
 already the designed seam.
 
-### The Dapr app-token bypass — fixed in ingest, still open in the medallion
+### The Dapr app-token bypass — CLOSED estate-wide
 
 `dapr.io/app-token-secret` makes daprd stamp `dapr-api-token` on **every** request it hands the app,
-and the gateway forwards through Dapr service invocation (`gateway/__init__.py:174`). So the
-app-token proves *"this arrived through Dapr"*, never *"the caller is a trusted service"* — and the
-gateway is a trusted service invoking on behalf of the anonymous public.
+and the gateway forwards `/api/*` through Dapr service invocation. So the app-token proves *"this
+arrived through Dapr"*, never *"the caller is a trusted service"* — and the gateway is a trusted
+service invoking on behalf of the anonymous public. Measured 2026-08-04 against the ingest door:
+403 direct to the pod, 403 via Service DNS, **202 through the gateway**, and a browser with no login
+started a real data-writing run.
 
-Measured 2026-08-04 against the ingest door, which was written in the estate's shape on purpose:
+Closed at three layers, after an adversarial audit of 49 candidate doors (35 confirmed, 14 refuted):
+
+* **the doors** — `ingest.auth`, `medallion.api.produce_auth` (both `authorize_produce` and
+  `authorize_train`, the latter by FORWARDING the caller rather than re-deriving it), and
+  `service_kit.governed.dapr_auth.require_dapr_token`, which is consumed only as `Depends(...)` and
+  therefore fixed twelve sidecar-only routes across catalog / lineage / medallion / maintenance
+  without touching one endpoint signature;
+* **the lineage service door** — `_service_principal` opens on the app token PLUS a CALLER-SUPPLIED
+  `x-lance-service-identity`, so a client could name itself an allowlisted service. It now refuses a
+  public front door outright;
+* **the edge** — the gateway strips `dapr-caller-app-id`, `dapr-api-token`, `dapr-app-id` and
+  `x-lance-service-identity` from every inbound request. This is load-bearing, not belt-and-braces:
+  daprd APPENDS its stamp rather than replacing a client's, and FastAPI binds the FIRST occurrence,
+  so a forged `dapr-caller-app-id: medallion` got a **202** out of the already-fixed ingest door.
+  Without the strip every caller check in the estate is decorative.
+
+The public-front-door list lives ONCE, in `service_kit.governed.dapr_auth`.
+
+Measured after deploying by digest, with lineage's user door armed:
 
 ```
-anonymous -> 127.0.0.1:8830/api/ingests    403
-anonymous -> rask-ingest:8830/api/ingests  403
-anonymous -> rask-gateway:8888/api/ingest  202 ACCEPTED
+anonymous POST /api/lineage/api/v1/lineage                        -> 403 "'gateway' is a public front door…"
+  + forged x-lance-service-identity: service-trainer              -> 403 (same)
+  + forged dapr-caller-app-id: medallion AND the identity         -> 403 (same)
+emitter shape (Service DNS, token + allowlisted identity, no hop) -> reaches the FGA authz gate
+BFF read shape (service-web)                                      -> 200
 ```
 
-A browser with no login started a real ingest run through the compute zone's form.
+### The governed-auth env is shared, and only ingest was missing a user door
 
-**CLOSED 2026-08-04**, estate-wide, after an adversarial audit (49 candidate doors, 35 confirmed,
-14 refuted) established that ingest was the smallest instance of the class:
+`_helpers.tpl` defines `lance.governedOidcEnv` / `governedFgaEnv` / `governedFgaPins` ONCE, each
+taking `(list $root $prefix)`. **The prefix is a parameter because the estate does not share one**:
+service-kit's `GovernedAuthSettings` reads `LANCE_*`, lineage's own config reads `LINEAGE_*`,
+medallion's reads `MEDALLION_*`. A helper with `LANCE_` hardcoded emitted, onto lineage, seven
+variables lineage does not read — wired-looking and completely inert. Caught before it shipped, and
+the clearest argument there is for one definition over three copies.
 
-* `service_kit.governed.dapr_auth` owns the ONE public-front-door list and `require_dapr_token`
-  refuses public callers — that dependency guards twelve sidecar-only routes across catalog,
-  lineage, medallion and maintenance, and is consumed only as `Depends(...)`, so all twelve were
-  fixed without touching an endpoint signature.
-* `medallion/api/produce_auth.py` — both `authorize_produce` and `authorize_train`, the latter by
-  FORWARDING the caller rather than re-deriving it (it delegates its whole decision, so an
-  unforwarded id would leave `/train` open while `/produce` looked fixed).
-* The gateway strips `dapr-caller-app-id` / `dapr-api-token` / `dapr-app-id` from every inbound
-  request. This was load-bearing, not belt-and-braces: daprd APPENDS its stamp rather than replacing
-  a client's and FastAPI binds the FIRST occurrence, so a forged `dapr-caller-app-id: medallion` got
-  a **202** out of the already-fixed ingest door. Without the strip every caller check in the estate
-  is decorative.
+A rendered chart with `auth.enabled=true` already gave SIX deployments a user door (catalog, viewer,
+search, annotator, lineage, the medallion producer). The genuine gap was **ingest alone**, now 7 of 7.
+The movers and maintenance correctly have none: every one of their routes is sidecar-delivered and
+guarded by `require_dapr_token`, so a user door there would gate nothing.
 
-Measured after deploying six services by digest: anonymous `POST /api/produce` → 403, `POST
-/api/train` → 403, and the same with a forged caller id → 403.
+Keyed on a per-service `governedAuth` flag, NOT `frontDoor` — being routed by the gateway and having
+an auth door are different facts, and conflating them put seven inert variables on the gateway and on
+compute, neither of which reads any auth setting.
 
-**Still open:** only the CATALOG renders `LANCE_OIDC_ENABLED`/`LANCE_FGA_ENABLED`. Ingest, the
-medallion producer, all three movers, lineage and maintenance get `APP_API_TOKEN` and nothing else,
-so their user-bearer fallback cannot fire — a signed-in project admin currently has no way through
-those doors, and the UI paths that need one are dead until the governed-auth env block is shared
-(it is duplicated between `services.yaml` and `explorer.yaml` today, which is why a third copy is
-the wrong fix).
+**Still open:** this dev cluster runs `auth.enabled=false`, so every door is in its documented
+dev-open state until the estate turns auth on. That is a deployment posture, not a chart gap — the
+in-cluster proofs above were taken with lineage's door armed by hand from the chart's own values.
 
 ### Circuit breakers cannot see the difference between "refused" and "down"
 
