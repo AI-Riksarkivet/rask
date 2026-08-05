@@ -132,6 +132,32 @@ jobs:
           DAGGER_NO_NAG: "1"
         run: dagger call ${{ matrix.leg }}
 
+  # The one supply-chain leg that BLOCKS, and it blocks because it can afford to.
+  #
+  # trufflehog verifies: it calls the provider to ask whether a credential actually works. Measured on
+  # this repo's history — 36 pattern matches across trufflehog and gitleaks, ZERO verified. So gating on
+  # `--results=verified` is green today with nothing baselined and nothing suppressed, and the day it
+  # goes red someone has pushed a key that genuinely authenticates. That is worth blocking a merge for;
+  # a pattern match is not, which is why the other two legs are report-only.
+  #
+  # fetch-depth: 0 IS THE WHOLE JOB. This scans GIT HISTORY, and actions/checkout defaults to a depth-1
+  # shallow clone — with the default this gate would scan exactly one commit, pass instantly, and report
+  # green while seeing none of the history it exists to read. A silently-blind security gate is worse
+  # than no gate, because the green check is evidence to everyone who looks at it.
+  supply-chain-secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Dagger CLI (pinned to the module's engineVersion)
+        run: |
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      - name: dagger call scan-secrets — trufflehog over the full git history
+        env:
+          DAGGER_NO_NAG: "1"
+        run: dagger call scan-secrets
+
   # Nightly only — scanning an image means BUILDING it, and the build dwarfs the scan (a zone ~90 s,
   # ray-cluster 238 s). On the PR path that cost buys nothing the `audit` leg did not already report,
   # because the language dependencies inside the image are the same ones the lockfiles pinned. What it

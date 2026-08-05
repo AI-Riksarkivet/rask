@@ -32,7 +32,8 @@
 		/** The zone's API-path builder — passed in so the tile URL is built by the caller's own
 		 *  convention rather than a second copy of it here. */
 		apiUrl: (path: string) => string;
-		/** Open one item on the canvas. */
+		/** Open one item for REVIEW beside the queue. Named for what it does: the caller opens a
+		 *  drawer, not the drawing canvas — the canvas has its own link inside it. */
 		onopen?: (task: TaskDetail) => void;
 	} = $props();
 
@@ -56,8 +57,8 @@
 		{@const src = taskImageUrl(task, apiUrl)}
 		{@const picked = Boolean(selection[task.task_id])}
 		<!-- The whole tile is the SELECT target, not just the checkbox: at this size the checkbox is a
-		     16px hit area, and selecting is the action this mode exists for. Opening on the canvas is
-		     the secondary action and takes the explicit button below. -->
+		     16px hit area, and selecting is the action this mode exists for. Reviewing one item is the
+		     secondary action and takes the explicit button below. -->
 		<div
 			class="border-border bg-card relative flex flex-col overflow-hidden rounded-lg border shadow-sm transition-colors {picked
 				? 'border-primary ring-primary/40 ring-2'
@@ -125,7 +126,7 @@
 						class="text-muted-foreground hover:text-foreground self-start text-xs underline underline-offset-2"
 						onclick={() => onopen?.(task)}
 					>
-						Annotate →
+						Review →
 					</button>
 				{/if}
 			</div>

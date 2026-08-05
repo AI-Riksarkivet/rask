@@ -1120,6 +1120,11 @@ scan's `_scannable_buckets` · #89 model revision pinned across BOTH HTR lanes +
 gated route 422'd; `datasets.py`'s corpus gate had shipped broken) · #92 sha256 fixity at bronze
 ingest · #93 compaction read bounded (`MAINTENANCE_SCAN_BATCH_SIZE=64` × `COMPACT_THREADS=2`) ·
 #94/#95/#97 both plan docs corrected twice — five claims went stale the same day they were written.
+**Landed 2026-08-05:** #99 — the ingest PLANE's bronze gains the same `sha256` fixity column #92
+gave the medallion head (hash-at-arrival over the fetched bytes, never recomputed from storage;
+the plane had superseded that head without inheriting the column, so the archival-master checksum
+story only held for the deprecated path). `tests/unit/test_bronze_writers_compat.py` now pins the
+two writers' shared columns to one shape — the `stage`-postmortem class, made unrepeatable.
 
 **Closed by verification, not by work** (the register said open; the code said done): #51 (dup of
 #65 — per-step flags/cadence/registry-buckets all shipped) · #59 (FRI self-prunes in pylance 9.0.0
@@ -1129,16 +1134,27 @@ work).
 
 **Open, ranked:**
 
-1. **#88 GOVERN THE HTR OUTPUT** — the archive's product is raw ALTO on plain S3 keys: no Lance
-   table, no catalog, no lineage, no FGA. Every rail above protects THUMBNAILS. Carries #89's
-   lineage-facet half (no HTR mover exists to attach a model facet to) and #96's rule when it
-   builds its cascade. `medallion/schemas/htr.py` is imported by nothing in production.
-2. **#96 cascade files NO trash records** — the only `trash.put` is the single-table drop, so a
-   fat-fingered cascade's children are unrecoverable even with trash ON; undrop is also single-id
-   where Lakekeeper's is plural. Two halves, only work together.
-3. **#46 binding-cache eviction is per-process — ARMED, not latent**: `values-prod.yaml:36` already
-   runs the catalog at `replicas: 2`. Mitigated to the mid-cascade window + id reuse by the live
-   status read; the fix is control-event-driven cross-replica invalidation.
+1. ~~**#88 GOVERN THE HTR OUTPUT**~~ **CLOSED 2026-08-05**, witnessed live end-to-end (real IIIF
+   page → GPU /htrflow → `gold$htr` registered in the catalog → the lakehouse UI renders the row;
+   the run's lineage carries the models at RESOLVED shas + the build commit). Residuals folded from
+   `open_htr_governance.md` at its retirement: the **P7b re-cut** (the owner's direction — the
+   runner's stage job reads bronze Lance and emits gold rows directly, reusing the lane's
+   parser/register/facet seams); the bronze→silver **geometry movers**; the raw **ALTO S3 sink
+   stays** as P7c's export format; the in-dataset `lineage` column rides when the mover supplies
+   the LineageDoc.
+2. ~~**#96 cascade files NO trash records**~~ **CLOSED 2026-08-05**, driven live over HTTP: with a
+   grace period a CASCADE now DETACHES the subtree (tables deregistered — bytes stay — namespaces
+   emptied then dropped, a trash record per destroyed object) instead of destroying it inside the
+   one native call, and `POST /v1/namespace/{id}/undrop` is the plural undrop — rebuilds the whole
+   subtree shallowest-first, resumable. `GET /v1/namespace/{id}/tasks` shows the deadline;
+   `purge=true` stays the explicit destroy-now. Tuples are KEPT on the recoverable path (#75's
+   rule at subtree scale). Residual: no UI reaches undrop on either rung yet (the #42 class).
+3. ~~**#46 binding-cache eviction is per-process**~~ **CLOSED 2026-08-05**: eviction now rides the
+   broadcast control-event subscription every replica already holds (`on_control_event` →
+   `evict_stale_bindings`: warehouse_deleted = named list + warehouse-id scan; warehouse_bound;
+   namespace_dropped → top segment; deactivation stays live-read by design), and the chart REFUSES
+   to render `services.catalog.replicas > 1` with `catalog.controlEmit` off — scale-into-staleness
+   is now a render error, not a runtime surprise.
 4. **#91** column-level classification (sekretess/GDPR — the lever the estate cannot express) ·
    **#84** credential attack in CI (needs web-identity vending + a second tenant admin).
 5. Maintenance: **#79** reclamation live (gated on a clean drift report; trash purge FIRST — a
@@ -1147,6 +1163,16 @@ work).
    `lance.dataset()` — confirmed live, see §H1) · **#60** reindex-from-scratch · **#61** fragment
    sizing · **#63** data-evolution ops · **#64** flags 16/64 refusal beyond the orphan pass ·
    **#65** project-scoped policy UI (the API shipped) · **#56** exercise multi-base.
+   *(Folded from `open_table_maintenance.md` §7.7–7.10 at its retirement, so they keep an id here:)*
+   **bytes-reclaimed** in `summarize` + a metric + a control event per reclaiming sweep (a sweep
+   that deleted a terabyte and one that deleted nothing produce the same-shaped report) · a
+   **per-tick budget + rotated bucket order** (at estate scale the last bucket is maintained only
+   if the tick has time left, and nothing says which) · a **chart toggle for the orphan scan**
+   (`MAINTENANCE_ORPHAN_SCAN_ENABLED` is env-only). The load-bearing REFUSAL knowledge that file
+   carried (tags pin versions; blob sidecars; `.lance-reserved`; branches under `tree/`;
+   `base_paths` by consequence; `_mem_wal` fencing — deleting WAL files WEAKENS writer fencing;
+   overlays/flag 64) lives in `maintenance/services/orphans.py` + `test_orphan_files.py` + the
+   `rask-lance-catalog` skill.
 6. Platform: **#43** separate rustfs instances inexpressible · **#48** partial-failure honesty in
    the warehouse delete response · **#54** legacy no-warehouse data migration · **#67** ghost
    projects migration · **#85** collapse the four control-root JSON stores.

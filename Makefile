@@ -1,4 +1,4 @@
-.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check audit scan-config scan-image scan-zone-image
+.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check audit scan-config scan-secrets scan-image scan-zone-image
 
 help:
 	@echo "Targets:"
@@ -151,6 +151,12 @@ audit:
 
 scan-config:
 	dagger call scan-config
+
+# scan-secrets reads the full GIT HISTORY, not the working tree — a credential committed and later
+# deleted is still public on a public repo. Gates on VERIFIED results only (trufflehog asks the
+# provider whether the key works), so it blocks in CI where the other two legs are report-only.
+scan-secrets:
+	dagger call scan-secrets
 
 scan-image:
 	@test -n "$(NAME)" || { echo "  !! usage: make scan-image NAME=gateway"; exit 1; }

@@ -2681,6 +2681,7 @@
               "namespace_protected",
               "namespace_unprotected",
               "table_undropped",
+              "namespace_undropped",
               "table_published"
             ],
             "title": "Action",
@@ -11875,7 +11876,7 @@
     },
     "/v1/namespace/{id}/drop": {
       "post": {
-        "description": "Drop namespace ``id`` (``drop_namespace``); revoke its FGA tuples \u2014 and, for a Cascade drop, every\ndropped child's \u2014 so a reused id can't inherit stale grants.\n\nDeletion protection (#73): a ``protected`` control-root record refuses 409 unless ``force=true``.\nA CASCADE is checked against the whole SUBTREE before the native call \u2014 its children are destroyed\ninside that one call and never reach this door, so a protected table under a cascaded namespace\nwould otherwise die silently. ``force`` turns the protection lock only; the FGA gate ran first.",
+        "description": "Drop namespace ``id`` (``drop_namespace``); revoke its FGA tuples \u2014 and, for a Cascade drop, every\ndropped child's \u2014 so a reused id can't inherit stale grants.\n\nDeletion protection (#73): a ``protected`` control-root record refuses 409 unless ``force=true``.\nA CASCADE is checked against the whole SUBTREE before the native call \u2014 its children are destroyed\ninside that one call and never reach this door, so a protected table under a cascaded namespace\nwould otherwise die silently. ``force`` turns the protection lock only; the FGA gate ran first.\n\nWith a grace period configured (#96), a CASCADE becomes RECOVERABLE: the subtree is detached \u2014\ntables deregistered, namespaces emptied then dropped \u2014 with a trash record per destroyed object,\nand ``POST /v1/namespace/{id}/undrop`` rebuilds the whole subtree. ``purge=true`` is the same\nexplicit opt-out the table door has. A plain RESTRICT drop stays destructive-but-cheap: the\nnamespace it removes is empty by definition, and re-creating an empty namespace needs no trash.",
         "operationId": "drop_namespace_v1_namespace__id__drop_post",
         "parameters": [
           {
@@ -11894,6 +11895,16 @@
             "schema": {
               "default": false,
               "title": "Force",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "purge",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Purge",
               "type": "boolean"
             }
           }
@@ -12371,6 +12382,106 @@
           }
         ],
         "summary": "List Tables",
+        "tags": [
+          "namespace"
+        ]
+      }
+    },
+    "/v1/namespace/{id}/tasks": {
+      "get": {
+        "description": "What is queued for THIS namespace \u2014 a pending trash expiry after a recoverable cascade (#96).\nSame contract as the table door: an undrop deadline the owner cannot see is not a safety\nfeature. Reader-gated by the router (``tasks`` is a metadata read).",
+        "operationId": "namespace_tasks_v1_namespace__id__tasks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TrashEntry"
+                  },
+                  "title": "Response Namespace Tasks V1 Namespace  Id  Tasks Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Namespace Tasks",
+        "tags": [
+          "namespace"
+        ]
+      }
+    },
+    "/v1/namespace/{id}/undrop": {
+      "post": {
+        "description": "Recover a cascade-dropped SUBTREE from the trash (#96) \u2014 the plural undrop.\n\nThe unit of a cascade is the subtree, so the unit of its recovery is too: every trashed\nnamespace under (and including) ``id`` is re-created shallowest-first, then every trashed table\nis re-registered at its old id from its still-present bytes, and each record is cleared as its\nobject recovers. Owner-gated like the table door (``undrop`` maps to the delete rung).\n\nResumable, not atomic: namespace creates run ``exist_ok`` and an already-registered table is\ntreated as recovered, so a rerun after a mid-recovery failure finishes the job instead of\n409-ing on what the first attempt already rebuilt. 404 when there is no trash record: an expired\nor never-trashed drop is genuinely unrecoverable, and saying so beats a 200 that recovers\nnothing. A declared-only table (empty recorded location) is skipped with a warning \u2014 there were\nno bytes to lose.",
+        "operationId": "undrop_namespace_v1_namespace__id__undrop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateNamespaceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Undrop Namespace",
         "tags": [
           "namespace"
         ]

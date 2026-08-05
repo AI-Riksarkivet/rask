@@ -3,6 +3,9 @@
 {{- if and .Values.catalog.controlEmit (not .Values.dapr.sidecars) }}
 {{- fail "catalog.controlEmit=true requires dapr.sidecars=true: the /control-events broadcast ingest publishes + receives via the Dapr sidecar and is authenticated by the sidecar-injected APP_API_TOKEN — without it the catalog fails closed at boot. Enable dapr.sidecars, or set catalog.controlEmit=false." }}
 {{- end }}
+{{- if and (gt (int ((hasKey .Values.services.catalog "replicas") | ternary .Values.services.catalog.replicas 1)) 1) (not .Values.catalog.controlEmit) }}
+{{- fail "services.catalog.replicas > 1 requires catalog.controlEmit=true: the warehouse-binding cache is invalidated across replicas by the broadcast control-event subscription (#46) — without it a second replica keeps routing dropped namespaces at deleted warehouses' buckets. Enable catalog.controlEmit, or run one replica." }}
+{{- end }}
 # Catalog (producer) — creates Lance tables on S3 and PUBLISHES OpenLineage events to the Dapr
 # pubsub.jetstream component. The daprd sidecar (injected by the annotations) carries the publish to NATS.
 apiVersion: apps/v1

@@ -37,11 +37,14 @@
 		predictedLabels,
 	} from './item-columns';
 	import { Textarea } from '@rask/ui/textarea';
-	import { ExternalLink, LayoutGrid, Rows3, Trash2 } from '@lucide/svelte';
+	import { Eye, ExternalLink, LayoutGrid, Rows3, Trash2 } from '@lucide/svelte';
 
 	import ImportButton from './ImportButton.svelte';
 	import TaskGrid from './TaskGrid.svelte';
 	import { parseView, QUEUE_VIEW_KEY, type QueueView } from './queue-view';
+	import { selectAllPrompt, selectionOf } from './select-all';
+	import QuickView from './QuickView.svelte';
+	import { afterVerdict } from './quick-view';
 	import LeaseChip from './LeaseChip.svelte';
 	import { dropTask } from './remote/projects.remote';
 	import { fireTaskEvent } from './remote/tasks.remote';
@@ -143,6 +146,31 @@
 		try {
 			localStorage.setItem(QUEUE_VIEW_KEY, next);
 		} catch {}
+	}
+
+	/** QUICK VIEW — which item is open beside the queue, if any.
+	 *
+	 *  A pre-labelled queue is REVIEWED rather than drawn on, and doing that through the canvas route
+	 *  costs the filter, the page and the selection on every round trip. */
+	let quickId = $state<string | null>(null);
+	let quickOpen = $state(false);
+
+	function openQuick(task: TaskDetail): void {
+		quickId = task.task_id;
+		quickOpen = true;
+	}
+
+	/** Fire an event from the drawer, then ADVANCE — the point of a review pass is the next item.
+	 *
+	 *  Snapshotted BEFORE the call: `onchanged()` refetches, so computing the successor afterwards
+	 *  would read a list in which this task may have moved or left. At the end of the page the
+	 *  successor is null and the drawer closes, rather than looping. */
+	async function fireFromQuick(task: TaskDetail, event: string): Promise<void> {
+		const next = afterVerdict(pageRows, task.task_id);
+		await fire(task, event);
+		if (notice?.ok === false) return; // refused — stay on the item so the reason is readable
+		quickId = next;
+		quickOpen = next !== null;
 	}
 
 	let busy = $state<string | null>(null); // `${task_id}:${event}` in flight
@@ -457,6 +485,21 @@
 	 *  items you are looking at, and a thousand-item queue does not become a thousand tiles. Declared
 	 *  here because it reads `table`, which is built just above. */
 	const pageRows = $derived(table.getRowModel().rows.map((r) => r.original));
+
+	/** Whether to offer the rest of the filter, and what to say.
+	 *
+	 *  The header checkbox is TanStack's `toggleAllPageRowsSelected` — it takes the visible page and
+	 *  nothing else. Filtering to 347 items and wanting all of them meant ticking 20, acting, paging,
+	 *  eighteen times: the filter did the hard part and the selection threw the answer away. */
+	const allPrompt = $derived(
+		selectAllPrompt({
+			pageCount: pageRows.length,
+			pageSelectedCount: pageRows.filter((t) => rowSelection[t.task_id]).length,
+			selectedCount: selectedIds.length,
+			// Every row the FILTER matched, across pages — not the page, and not the project.
+			matchingCount: visible.length,
+		}),
+	);
 </script>
 
 {#snippet itemCell(task: TaskDetail)}
@@ -540,6 +583,17 @@
 				<Trash2 class="size-3.5" />
 			</Button>
 		{/if}
+		<!-- REVIEW beside the queue. First, because on a pre-labelled queue it is the common act:
+		     look, judge, next — without losing the filter or the page. -->
+		<Button
+			variant="ghost"
+			size="sm"
+			data-testid="row-quick-view"
+			title="review this item beside the queue"
+			onclick={() => openQuick(task)}
+		>
+			<Eye class="size-3.5" />
+		</Button>
 		{#if task.state === 'claimed'}
 			<Button
 				variant="outline"
@@ -662,6 +716,34 @@
 			</div>
 		</div>
 	{/if}
+	<!-- SELECT THE REST. An OFFER, never automatic: silently extending a selection past what someone
+	     can see is how a bulk action lands on rows nobody looked at. -->
+	{#if allPrompt.kind === 'offer'}
+		<p class="text-muted-foreground text-xs" data-testid="select-all-offer">
+			All {allPrompt.pageCount} on this page are selected.
+			<button
+				type="button"
+				class="text-foreground underline underline-offset-2"
+				data-testid="select-all-matching"
+				onclick={() => (rowSelection = selectionOf(visible))}
+			>
+				Select all {allPrompt.matchingCount.toLocaleString()} matching this filter
+			</button>
+		</p>
+	{:else if allPrompt.kind === 'all'}
+		<p class="text-muted-foreground text-xs" data-testid="select-all-held">
+			All {allPrompt.matchingCount.toLocaleString()} matching items are selected.
+			<button
+				type="button"
+				class="text-foreground underline underline-offset-2"
+				data-testid="select-all-clear"
+				onclick={() => (rowSelection = {})}
+			>
+				Clear selection
+			</button>
+		</p>
+	{/if}
+
 	{#if notice}
 		<p class={notice.ok ? 'text-success text-sm' : 'text-destructive text-sm'}>{notice.text}</p>
 	{/if}
@@ -773,7 +855,7 @@
 			tasks={pageRows}
 			bind:selection={rowSelection}
 			apiUrl={(path) => `${base}${path}`}
-			onopen={(task) => goto(canvasHref(task))}
+			onopen={openQuick}
 		/>
 	{:else}
 		<DataTable
@@ -784,6 +866,18 @@
 		/>
 	{/if}
 </div>
+
+<!-- Review one item BESIDE the queue. Not the drawing canvas — an item needing shapes still goes
+     there, and the drawer links to it. -->
+<QuickView
+	bind:open={quickOpen}
+	bind:taskId={quickId}
+	tasks={pageRows}
+	apiUrl={(path) => `${base}${path}`}
+	{canvasHref}
+	busy={busy !== null}
+	onfire={(task, event) => void fireFromQuick(task, event)}
+/>
 
 <!-- BULK assign. A separate dialog from the per-row one rather than a mode flag on it: the two
      differ in what they act on, what they say, and what they do on submit, and a shared dialog

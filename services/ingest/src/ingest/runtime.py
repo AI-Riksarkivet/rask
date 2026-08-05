@@ -86,11 +86,19 @@ if TYPE_CHECKING:
 # Every dataset this plane produced was unreadable by the only reader the estate has, and the ingest
 # lane's own gates could not see it because they read the dataset directly. A dropped column is only
 # cheap until something projects it.
+# `sha256` is the FIXITY column (#99 — #92's rule extended to THIS plane, which had superseded the
+# medallion head without inheriting it): a hex SHA-256 over the bytes AS FETCHED, computed before
+# the write and never recomputed — a digest taken from the stored copy would agree with that copy
+# however corrupt it is, which is precisely the failure fixity exists to catch. Same column name as
+# the medallion writer's, so the movers' generic carry-forward keeps gold rows traceable to the
+# exact page bytes they were read from whichever head landed them (pinned by
+# tests/unit/test_bronze_writers_compat.py).
 BRONZE_SCHEMA = pa.schema(
     [
         pa.field("id", pa.int64()),
         pa.field("source_uri", pa.string()),
         blob_field("payload", nullable=False),
+        pa.field("sha256", pa.string()),
         pa.field("stage", pa.string()),
     ]
 )

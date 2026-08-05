@@ -9,7 +9,7 @@
 	import { onMount, type Snippet } from 'svelte';
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
 	import { COMPUTE_ZONE_NAV } from '$lib/nav';
-	let { children }: { children: Snippet } = $props();
+	let { children, data }: { children: Snippet; data: { activeProject: string } } = $props();
 
 	// The navbar's notification bell (@rask/ui's NotificationCenter, mounted by AppShell). The shell owns
 	// the surface and never fetches — the zone owns the transport — and the transport is the shared
@@ -49,6 +49,6 @@
 
 <!-- Shared shell from @rask/ui — identical chrome across every microfrontend.
      Ray health is a live signal at the top of the compute overview, not in the shell. -->
-<AppShell pathname={page.url.pathname} zoneNav={COMPUTE_ZONE_NAV} {notifications}>
+<AppShell pathname={page.url.pathname} project={data.activeProject ? { name: data.activeProject } : undefined} zoneNav={COMPUTE_ZONE_NAV} {notifications}>
 	{@render children()}
 </AppShell>

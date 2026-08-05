@@ -139,6 +139,9 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
     },
     "namespace": {
         "drop": "can_delete",
+        # #96 undrop RESTORES the subtree into the estate — the same authority as removing it (the
+        # table door's #75 rule at the namespace rung; unmapped it would fall to writer tier).
+        "undrop": "can_delete",
         "protection": "can_delete",
         "policy/set": "can_delete",
         "policy/delete": "can_delete",

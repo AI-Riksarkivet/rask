@@ -6,6 +6,8 @@
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
 	import { AppShell } from '@rask/ui/shell';
+
+	import { ANNOTATOR_ZONE_NAV } from '$lib/nav';
 	import { base } from '$app/paths';
 	import { reviewSelection } from '$lib/labeling/review-selection.svelte';
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
@@ -81,14 +83,21 @@
      it had no breadcrumb at all. The zone knows the two things the path cannot: the task it was
      opened from, and which unit of the selection is showing. The task crumb links back to its
      detail page, so the breadcrumb is also the way OUT of the canvas. -->
-<!-- The SHARED estate shell, WITHOUT a zone rail — `zoneNav={null}` is deliberate, not an
-     oversight, and zone-shell.test.ts holds it to being declared rather than forgotten.
+<!-- The SHARED estate shell, WITH its rail.
 
-     This zone's rail only ever held two rows (Labeling tasks, Browse corpus), and next to the
-     annotate view's OWN annotation panel that read as two sidebars competing for the same job. The
-     zone root is already reachable from the top navbar's Annotate entry, and /browse is linked
-     twice from the landing copy, so nothing here becomes unreachable — the rail was cost without
-     destination. The canvas gets the width back, which is the surface that actually needs it.
+     This passed `zoneNav={null}` for a while, on the argument that two rows (Labeling tasks, Browse
+     corpus) beside the annotate view's OWN annotation panel read as two sidebars competing. That
+     argument was about the CANVAS, and the mechanism cost far more than it claimed: `AppShell`
+     gates the WHOLE `<AppSidebar>` on `zoneNavLeaves(zoneNav).length > 1`, and the sidebar HEADER
+     is where the PROJECT SWITCHER lives. So null did not remove two rows — it removed the project
+     dropdown, the estate zone links and the collapse trigger, and landing in Annotate from anywhere
+     else silently stripped away the navigation every other zone provides. `app-shell.svelte`
+     describes having already fixed exactly that failure for `canvas` mode; the null path
+     reintroduced it by another door.
+
+     The canvas concern is handled where it belongs: a `canvas` zone starts the rail
+     ICON-COLLAPSED (see `sidebarOpen` there), so the drawing surface keeps its width and the rail
+     is one click away rather than absent.
 
      `canvas` mode (no breadcrumb, full-height children) still applies ONLY while the drawing canvas
      is showing (`?keys=`): the projects landing and detail pages keep the ordinary chrome, because
@@ -99,7 +108,8 @@
 	{meLoading}
 	user={data.user}
 	authEnabled={data.authEnabled}
-	zoneNav={null}
+	project={data.activeProject ? { name: data.activeProject } : undefined}
+	zoneNav={ANNOTATOR_ZONE_NAV}
 	canvas={page.url.searchParams.has('keys')}
 	{crumbs}
 	{notifications}

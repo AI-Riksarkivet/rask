@@ -90,6 +90,7 @@
 	pathname={page.url.pathname}
 	user={data.user}
 	authEnabled={data.authEnabled}
+	project={data.activeProject ? { name: data.activeProject } : undefined}
 	{zoneNav}
 	{me}
 	{meLoading}

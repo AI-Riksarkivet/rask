@@ -163,6 +163,10 @@ def units_to_table(units: Sequence[tuple[str, bytes]]) -> pa.Table:
             "id": pa.array(ids, pa.int64()),
             "source_uri": pa.array([k for k, _ in units], pa.string()),
             "payload": blob_array([p for _, p in units]),
+            # Fixity (#99): over the PAYLOAD as fetched — hashed here, before the write, never read
+            # back from Lance afterwards. Distinct from `id`, which hashes the KEY: one names the
+            # row, the other asserts the bytes. See the schema comment in runtime.py.
+            "sha256": pa.array([hashlib.sha256(p).hexdigest() for _, p in units], pa.string()),
             # The tier stamp, written at ingest because bronze is the first GOVERNED tier (R23).
             # Not decoration: the media viewer PROJECTS it, so a bronze table without it is one no
             # reader in the estate can open — see the schema comment.

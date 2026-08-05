@@ -1,0 +1,29 @@
+{
+	"$schema": "https://turborepo.dev/schema.json",
+	"extends": ["//"],
+	"tasks": {
+		// UNCACHEABLE, deliberately — this is the one suite whose inputs turbo cannot infer.
+		//
+		// Every other package's `test` reads its own `src/`, which turbo hashes, so caching is
+		// correct. This one is the estate's STRUCTURAL gate: it reads other packages' files at
+		// runtime — every zone's `src/`, `+layout.svelte` and `nav.ts`, plus `chart/templates/*.yaml`,
+		// the `Makefile` and `.docker/frontend.dockerfile`. None of that is a declared input, so
+		// changing a zone or the chart does not invalidate the cache, and the gate reports the last
+		// run's verdict about a tree that no longer exists.
+		//
+		// That is not hypothetical. A zone gained a `SEARCH_API` read the chart did not inject;
+		// `bff-routes.test.ts` caught it immediately, and `turbo run check lint test` reported 48/48
+		// anyway — the violation shipped and only surfaced on a `--force` run.
+		//
+		// `inputs` cannot fix it. The suite reads `chart/`, the `Makefile` and `.docker/` at the REPO
+		// root, and the turbo root is `frontend/` — `$TURBO_ROOT$` cannot reach above itself, and
+		// turbo hashes nothing outside its root. A glob list would also have to track every path the
+		// suite ever reads, and a missed one restores the bug silently, which is the failure mode
+		// this whole file is about.
+		//
+		// The cost is ~2 s for ~860 assertions, every run. A gate that can be stale is not a gate.
+		"test": {
+			"cache": false
+		}
+	}
+}

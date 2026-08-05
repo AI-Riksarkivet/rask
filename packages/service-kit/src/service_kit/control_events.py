@@ -61,6 +61,8 @@ ControlAction = Literal[
     "namespace_unprotected",
     # #75 the drop→undrop path: a recoverable drop and its recovery are both governance events.
     "table_undropped",
+    # #96 the recoverable CASCADE: recovering a whole subtree is one governance event on its root.
+    "namespace_undropped",
     # § D2 D-R2: the tag is the truth, this event is only the NOTIFICATION. A publication moves the
     # `published` ref, so it belongs to the same family as the other ref-plane mutations here — and a
     # consumer that misses it loses nothing, because the tag still answers "what is ready?".

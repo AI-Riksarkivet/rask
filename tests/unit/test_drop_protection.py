@@ -497,3 +497,190 @@ def test_force_lets_a_cascade_through(tmp_path: Any) -> None:
         )
     )
     assert "drop_namespace" in ns.calls
+
+
+# ---------------------------------------------------------------- #96 the recoverable cascade
+
+
+class _CascadableNamespace(_TrashableNamespace):
+    """A two-level subtree — bronze → [pages, inner → [t2]] — enough shape to prove ordering.
+
+    Every mutating call is recorded WITH its id (and drop_namespace with its behavior), because the
+    defect under test is precisely WHICH native calls a cascade makes: the destructive one destroys
+    children inside one `drop_namespace(cascade)`, the recoverable one must never issue it.
+    """
+
+    def list_tables(self, request: Any) -> Any:
+        tables = {("bronze",): ["pages"], ("bronze", "inner"): ["t2"]}.get(tuple(request.id), [])
+        return type("R", (), {"tables": tables, "page_token": None})()
+
+    def list_namespaces(self, request: Any) -> Any:
+        children = ["inner"] if request.id == ["bronze"] else []
+        return type("R", (), {"namespaces": children, "page_token": None})()
+
+    def describe_table(self, request: Any) -> Any:
+        self.calls.append(f"describe_table:{'$'.join(request.id)}")
+        return type("R", (), {"location": f"s3://bkt/{'_'.join(request.id)}.lance", "model_fields_set": set()})()
+
+    def deregister_table(self, request: Any) -> Any:
+        self.calls.append(f"deregister_table:{'$'.join(request.id)}")
+        return type("R", (), {"model_fields_set": set()})()
+
+    def drop_namespace(self, request: Any) -> Any:
+        self.calls.append(f"drop_namespace:{'$'.join(request.id)}:{(request.behavior or 'restrict').lower()}")
+        return type("R", (), {"model_fields_set": set()})()
+
+    def create_namespace(self, request: Any) -> Any:
+        self.calls.append(f"create_namespace:{'$'.join(request.id)}:{(request.mode or 'create').lower()}")
+        return type("R", (), {"model_fields_set": set()})()
+
+
+def _drop_namespace_cascade(settings: Settings, ns: Any, *, force: bool = False, purge: bool = False) -> Any:
+    from catalog.api.v1.endpoints import namespaces as n_ep
+    from lance_namespace import DropNamespaceRequest
+
+    return asyncio.run(
+        n_ep.drop_namespace(
+            id="bronze",
+            ns=ns,
+            settings=settings,
+            token=None,
+            client=None,
+            control=NoopControlEmitter(),
+            body=DropNamespaceRequest(behavior="Cascade"),
+            force=force,
+            purge=purge,
+        )
+    )
+
+
+def test_a_recoverable_cascade_DETACHES_the_subtree_and_files_a_record_per_child(tmp_path: Any) -> None:
+    """#96's whole content. A trash record pointing at bytes the native cascade deleted would be a
+    lie, so with a grace period the cascade must never issue the destructive native call: tables are
+    DEREGISTERED (bytes stay), namespaces emptied then dropped plainly, and every destroyed object —
+    both tables, both namespaces — has a trash record undrop can act on."""
+    from service_kit.lakehouse import trash
+
+    settings = _settings(tmp_path, grace_days=7)
+    ns: Any = _CascadableNamespace()
+    _drop_namespace_cascade(settings, ns)
+
+    assert not any(c.endswith(":cascade") for c in ns.calls), "the destructive native cascade ran despite a grace period"
+    assert "deregister_table:bronze$pages" in ns.calls
+    assert "deregister_table:bronze$inner$t2" in ns.calls
+    # Namespaces fall deepest-first, and only after every table is detached — each drop hits an
+    # already-empty namespace (restrict semantics hold without relying on them).
+    drops = [c for c in ns.calls if c.startswith("drop_namespace:")]
+    assert drops == ["drop_namespace:bronze$inner:restrict", "drop_namespace:bronze:restrict"]
+    assert ns.calls.index("deregister_table:bronze$inner$t2") < ns.calls.index(drops[0])
+
+    so = settings.storage_options()
+    pages = trash.get(settings.registry_root, so, "bronze$pages")
+    assert pages is not None and pages["location"] == "s3://bkt/bronze_pages.lance"
+    assert trash.get(settings.registry_root, so, "bronze$inner$t2") is not None
+    assert trash.get(settings.registry_root, so, "bronze", kind="namespace") is not None
+    assert trash.get(settings.registry_root, so, "bronze$inner", kind="namespace") is not None
+
+
+def test_cascade_purge_true_still_destroys_natively_and_files_nothing(tmp_path: Any) -> None:
+    """The explicit opt-out, same word as the table door: purge means destroy the bytes now."""
+    from service_kit.lakehouse import trash
+
+    settings = _settings(tmp_path, grace_days=7)
+    ns: Any = _CascadableNamespace()
+    _drop_namespace_cascade(settings, ns, purge=True)
+    assert "drop_namespace:bronze:cascade" in ns.calls
+    assert not any(c.startswith("deregister_table:") for c in ns.calls)
+    assert trash.list_all(settings.registry_root, settings.storage_options()) == []
+
+
+def test_cascade_with_grace_zero_is_the_shipped_default_and_unchanged(tmp_path: Any) -> None:
+    """Recoverable drops are opt-in (#75): without a grace period the cascade is exactly what it
+    always was — one destructive native call, no records."""
+    from service_kit.lakehouse import trash
+
+    settings = _settings(tmp_path, grace_days=0)
+    ns: Any = _CascadableNamespace()
+    _drop_namespace_cascade(settings, ns)
+    assert "drop_namespace:bronze:cascade" in ns.calls
+    assert trash.list_all(settings.registry_root, settings.storage_options()) == []
+
+
+def test_a_recoverable_cascade_KEEPS_the_fga_tuples(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The #75 rule at the subtree scale: the owner is the one person who needs to undrop it, so the
+    grants die with the bytes (purge/expiry), never with a recoverable drop."""
+    revoked: list[str] = []
+
+    async def _recording_revoke(client: Any, settings: Any, *, resource: str, segments: list[str], token: Any) -> None:
+        revoked.append(f"{resource}:{'$'.join(segments)}")
+
+    monkeypatch.setattr(fga_deps, "revoke_ownership", _recording_revoke)
+
+    settings = _settings(tmp_path, grace_days=7)
+    _drop_namespace_cascade(settings, _CascadableNamespace())
+    assert revoked == [], "a recoverable cascade revoked tuples its own undrop needs"
+
+    _drop_namespace_cascade(settings, _CascadableNamespace(), purge=True)
+    assert "namespace:bronze" in revoked and "table:bronze$inner$t2" in revoked, "the destructive path must still revoke"
+
+
+def test_namespace_undrop_rebuilds_the_whole_subtree(tmp_path: Any) -> None:
+    """The plural undrop: namespaces shallowest-first, then every table re-registered at its old id
+    from the RELATIVE location form (#75's dir-backend lesson), and the records cleared."""
+    from catalog.api.v1.endpoints import namespaces as n_ep
+
+    from service_kit.lakehouse import trash
+
+    settings = _settings(tmp_path, grace_days=7)
+    ns: Any = _CascadableNamespace()
+    _drop_namespace_cascade(settings, ns)
+    ns.calls.clear()
+
+    asyncio.run(n_ep.undrop_namespace(id="bronze", ns=ns, settings=settings, token=None, client=None, control=NoopControlEmitter()))
+
+    creates = [c for c in ns.calls if c.startswith("create_namespace:")]
+    assert creates == ["create_namespace:bronze:exist_ok", "create_namespace:bronze$inner:exist_ok"], "parents must exist before children"
+    assert "register_table:bronze_pages.lance" in ns.calls
+    assert "register_table:bronze_inner_t2.lance" in ns.calls
+    assert ns.calls.index(creates[1]) < ns.calls.index("register_table:bronze_inner_t2.lance")
+    assert trash.list_all(settings.registry_root, settings.storage_options()) == [], "a recovered record must be cleared"
+
+
+def test_namespace_undrop_without_a_record_is_an_honest_404(tmp_path: Any) -> None:
+    from catalog.api.v1.endpoints import namespaces as n_ep
+    from lance_namespace import NamespaceNotFoundError
+
+    settings = _settings(tmp_path, grace_days=7)
+    ns: Any = _CascadableNamespace()  # structural stand-in, same as every door test here
+    with pytest.raises(NamespaceNotFoundError, match="no recoverable drop"):
+        asyncio.run(n_ep.undrop_namespace(id="bronze", ns=ns, settings=settings, token=None, client=None, control=NoopControlEmitter()))
+
+
+def test_namespace_tasks_reports_the_pending_expiry(tmp_path: Any) -> None:
+    """The deadline the owner is racing must be visible on the namespace rung too."""
+    from catalog.api.v1.endpoints import namespaces as n_ep
+
+    settings = _settings(tmp_path, grace_days=7)
+    assert asyncio.run(n_ep.namespace_tasks(id="bronze", settings=settings, token=None)) == []
+    _drop_namespace_cascade(settings, _CascadableNamespace())
+    entries = asyncio.run(n_ep.namespace_tasks(id="bronze", settings=settings, token=None))
+    assert len(entries) == 1 and entries[0].expires_at, "the undrop deadline is invisible"
+
+
+def test_trash_kinds_do_not_collide(tmp_path: Any) -> None:
+    """A namespace and a table sharing a canonical id are separate trash records — same rule the
+    protection store already pins."""
+    from service_kit.lakehouse import trash
+
+    settings = _settings(tmp_path)
+    so = settings.storage_options()
+    trash.put(settings.registry_root, so, trash.make_record("bronze", location="s3://b/t", dropped_by="u", grace_days=7))
+    assert trash.get(settings.registry_root, so, "bronze", kind="namespace") is None
+    assert trash.get(settings.registry_root, so, "bronze") is not None
+
+
+def test_the_undrop_suffixes_are_owner_gated_not_writer(tmp_path: Any) -> None:
+    """The authz map is where a forgotten entry silently falls to WRITER tier — pin both kinds (#96
+    extends #75's table rule to the namespace rung)."""
+    assert fga_deps._OWNER_SUFFIX_RELATION["table"]["undrop"] == "can_drop"  # noqa: SLF001
+    assert fga_deps._OWNER_SUFFIX_RELATION["namespace"]["undrop"] == "can_delete"  # noqa: SLF001

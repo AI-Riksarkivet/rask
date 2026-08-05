@@ -14,7 +14,7 @@
 	// the platform picker on the FRONT-DOOR host — derived by stripping the project's subdomain
 	// label (demo.localhost -> localhost). That's how you leave a project; the picker (not this
 	// switcher) lists/creates projects.
-	let { project = { name: 'Default', subtitle: 'Project' } }: { project?: Project } = $props();
+	let { project = { name: '', subtitle: 'Project' } }: { project?: Project } = $props();
 
 	// Computed client-side from the current host (SSR has no window; these links are only
 	// followed in the browser). homeUrl = platform front-door (host minus the project
@@ -32,7 +32,10 @@
 			homeUrl = `${protocol}//${host.split('.').slice(1).join('.')}/`;
 		}
 	});
-	const displayName = $derived(currentSlug || project.name);
+	// The active project (host slug wins, else the cookie-fed prop). Empty = none active — say
+	// so, never 'Default' (#103).
+	const activeSlug = $derived(currentSlug || project.name);
+	const displayName = $derived(activeSlug || 'Select project');
 </script>
 
 <DropdownMenu.Root>
@@ -66,8 +69,10 @@
 	<DropdownMenu.Content class="min-w-56 rounded-lg" align="start" side="bottom" sideOffset={4}>
 		<DropdownMenu.Label class="text-muted-foreground text-xs">Projects</DropdownMenu.Label>
 		<DropdownMenu.Item class="p-0">
+			<!-- The ACTIVE project's row opens ITS overview (#103) — /projects/<id> is where the
+			     project is described and managed; /lakehouse/catalog was a zone, not the project. -->
 			<a
-				href="/lakehouse/catalog"
+				href={activeSlug ? `/projects/${activeSlug}` : '/projects'}
 				data-sveltekit-reload
 				class="flex w-full items-center gap-2 px-2 py-1.5"
 			>
