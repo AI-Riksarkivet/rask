@@ -3,6 +3,8 @@
 	// roles. Every action button here renders from the task's OWN `legal_events` (supplied by the
 	// backend from the machine tables) — the UI holds no second copy of the state machine. A
 	// denial is the SERVER's 403 surfaced with its reason; a disabled button is never the gate.
+	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import {
 		createSvelteTable,
@@ -35,9 +37,11 @@
 		predictedLabels,
 	} from './item-columns';
 	import { Textarea } from '@rask/ui/textarea';
-	import { ExternalLink, Trash2 } from '@lucide/svelte';
+	import { ExternalLink, LayoutGrid, Rows3, Trash2 } from '@lucide/svelte';
 
 	import ImportButton from './ImportButton.svelte';
+	import TaskGrid from './TaskGrid.svelte';
+	import { parseView, QUEUE_VIEW_KEY, type QueueView } from './queue-view';
 	import LeaseChip from './LeaseChip.svelte';
 	import { dropTask } from './remote/projects.remote';
 	import { fireTaskEvent } from './remote/tasks.remote';
@@ -116,6 +120,29 @@
 	 */
 	function onFilterChanged(): void {
 		rowSelection = {};
+	}
+
+	/** LIST or GRID. A list is how you audit a queue; a grid is how you scan one — and for page
+	 *  images the grid answers "which of these are letters" in a glance. Both read the SAME filtered,
+	 *  sorted rows and the SAME selection, so they can never disagree about what is in view.
+	 *
+	 *  Seeded to `list` and restored on mount: `localStorage` does not exist during SSR, so reading it
+	 *  at initialisation would crash the server render. */
+	let view = $state<QueueView>('list');
+	onMount(() => {
+		try {
+			view = parseView(localStorage.getItem(QUEUE_VIEW_KEY));
+		} catch {
+			// A browser refusing storage (private mode, blocked cookies) is not a reason to fail the
+			// queue — it just means the preference does not persist.
+		}
+	});
+
+	function setView(next: QueueView): void {
+		view = next;
+		try {
+			localStorage.setItem(QUEUE_VIEW_KEY, next);
+		} catch {}
 	}
 
 	let busy = $state<string | null>(null); // `${task_id}:${event}` in flight
@@ -423,6 +450,13 @@
 		getSortedRowModel: getSortedRowModel(),
 		getPaginationRowModel: getPaginationRowModel(),
 	});
+
+	/** The rows the table is CURRENTLY showing — filtered, sorted AND paginated by TanStack.
+	 *
+	 *  The grid renders these rather than `visible`, so switching mode never silently changes which
+	 *  items you are looking at, and a thousand-item queue does not become a thousand tiles. Declared
+	 *  here because it reads `table`, which is built just above. */
+	const pageRows = $derived(table.getRowModel().rows.map((r) => r.original));
 </script>
 
 {#snippet itemCell(task: TaskDetail)}
@@ -682,6 +716,33 @@
 				class="h-8 w-48"
 				oninput={onFilterChanged}
 			/>
+			<!-- LIST or GRID. Pinned right so it reads as a property of the whole view rather than one
+			     more filter. -->
+			<div class="ml-auto flex items-center gap-1" data-testid="queue-view-toggle">
+				<Button
+					variant={view === 'list' ? 'secondary' : 'ghost'}
+					size="icon-sm"
+					aria-label="List view"
+					aria-pressed={view === 'list'}
+					data-testid="view-list"
+					title="list — audit the queue"
+					onclick={() => setView('list')}
+				>
+					<Rows3 class="size-4" />
+				</Button>
+				<Button
+					variant={view === 'grid' ? 'secondary' : 'ghost'}
+					size="icon-sm"
+					aria-label="Grid view"
+					aria-pressed={view === 'grid'}
+					data-testid="view-grid"
+					title="grid — scan the images"
+					onclick={() => setView('grid')}
+				>
+					<LayoutGrid class="size-4" />
+				</Button>
+			</div>
+
 			{#if filtering}
 				<span class="text-muted-foreground text-xs" data-testid="filter-count">
 					{visible.length} of {tasks.length}
@@ -704,12 +765,24 @@
 		</div>
 	{/if}
 
-	<DataTable
-		{table}
-		emptyMessage={filtering
+	{#if view === 'grid' && pageRows.length > 0}
+		<!-- The grid renders the TABLE's current page, so filters, sorting and pagination all still
+		     apply and the two modes cannot disagree about what is in view. Selection is the same
+		     object, so every bulk action above works identically from either. -->
+		<TaskGrid
+			tasks={pageRows}
+			bind:selection={rowSelection}
+			apiUrl={(path) => `${base}${path}`}
+			onopen={(task) => goto(canvasHref(task))}
+		/>
+	{:else}
+		<DataTable
+			{table}
+			emptyMessage={filtering
 	? 'No items match this filter.'
 	: 'No items yet — send data points in from Search or the Atlas.'}
-	/>
+		/>
+	{/if}
 </div>
 
 <!-- BULK assign. A separate dialog from the per-row one rather than a mode flag on it: the two
