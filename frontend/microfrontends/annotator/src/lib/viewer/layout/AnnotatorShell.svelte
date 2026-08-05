@@ -16,6 +16,7 @@
 	import ZoomControls from './ZoomControls.svelte';
 	import PageNav from './PageNav.svelte';
 	import TaskStreamNav from './TaskStreamNav.svelte';
+	import Filmstrip from './Filmstrip.svelte';
 	import type { StreamPosition } from '../task-stream';
 	import AiAssistBar from './AiAssistBar.svelte';
 	import { TOOL_KEYS, isCvTool } from '../tool-defs';
@@ -27,7 +28,16 @@
 	let {
 		unit,
 		onexit,
-		stream = { position: 0, total: 0, prevHref: null, nextHref: null, active: false },
+		stream = {
+			position: 0,
+			total: 0,
+			prevHref: null,
+			nextHref: null,
+			active: false,
+			items: [],
+			taskId: null,
+			projectId: null,
+		},
 	}: { unit: MediaUnit; onexit?: () => void; stream?: StreamPosition } = $props();
 
 	const Viewer = $derived(viewerFor(unit.kind));
@@ -195,11 +205,25 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<!-- h-full/w-full (not h-screen): the shell now sits under the estate navbar in the zone layout. -->
-<div class="flex h-full w-full">
-	<AnnotatorToolbar {controller} {spatial} {onexit} />
+<!-- COLUMN, not row (#68). The toolbar is a top bar now, so the three vertical things below it —
+     filmstrip, canvas, annotation sidebar — get the full height beneath it. Reported: "gallery of
+     itmes / bandroll on the left side in labeling canvas view and the sidebar toolbar horizonally
+     over the canvas".
+     h-full/w-full (not h-screen): the shell sits under the estate navbar in the zone layout. -->
+<div class="flex h-full w-full flex-col">
+	<AnnotatorToolbar {controller} {spatial} {onexit}>
+		{#snippet assist()}
+			{#if spatial && controller.canDraw}
+				<AiAssistBar {controller} taskId={reviewSelection.taskId} />
+			{/if}
+		{/snippet}
+	</AnnotatorToolbar>
 
-	<div class="min-w-0 flex-1">
+	<div class="flex min-h-0 flex-1">
+		<!-- The items live on the LEFT edge, which is why the toolbar had to leave it. -->
+		<Filmstrip items={stream.items} activeTaskId={stream.taskId} projectId={stream.projectId ?? ''} />
+
+		<div class="min-w-0 flex-1">
 		<ResizableSplit storageKey="lance-media-annotate" initial={0.72} minLeft={420} minRight={320}>
 			{#snippet left()}
 				<div class="relative h-full w-full">
@@ -229,9 +253,6 @@
 	loadFailed = true;
 }}
 					/>
-					{#if spatial && controller.canDraw}
-						<AiAssistBar {controller} taskId={reviewSelection.taskId} />
-					{/if}
 					<TaskStreamNav {stream} />
 					<PageNav {pages} current={pageIndex} onNavigate={navigate} />
 					{#if spatial}
@@ -243,5 +264,6 @@
 				<AnnotationSidebar {controller} />
 			{/snippet}
 		</ResizableSplit>
+		</div>
 	</div>
 </div>

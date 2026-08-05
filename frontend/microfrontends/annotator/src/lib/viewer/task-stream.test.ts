@@ -134,7 +134,12 @@ describe('the URL a stream hop navigates to', () => {
 		// Items in one project can come from different corpora, so the hop cannot inherit the URL it
 		// came from — it must be rebuilt from the destination task.
 		const href = taskCanvasHref(
-			{ task_id: 'q', state: 'claimed', assignee: 'me', source: { keys: ['k/1/1', 'k/1/2'], where: 'other_corpus' } },
+			{
+				task_id: 'q',
+				state: 'claimed',
+				assignee: 'me',
+				source: { keys: ['k/1/1', 'k/1/2'], where: 'other_corpus' },
+			},
 			'p1',
 		);
 
@@ -196,5 +201,41 @@ describe('what the canvas renders', () => {
 
 		expect(at.prevHref?.startsWith('/annotator/?')).toBe(true);
 		expect(at.nextHref?.startsWith('/annotator/?')).toBe(true);
+	});
+});
+
+describe('the FILMSTRIP renders the very list the arrows step through', () => {
+	const stream = claimedStream(QUEUE, 'me'); // a, c, e
+
+	it('carries the items, so the strip does not compute its own', () => {
+		// The design rule this exists to hold. Two computations of "your claimed items, in queue
+		// order" would eventually disagree about what "next" is, and a person would have two answers
+		// on one screen with no way to tell which was right.
+		const at = streamPosition(stream, 'c', 'bind86');
+
+		expect(at.items.map((t) => t.task_id)).toEqual(['a', 'c', 'e']);
+	});
+
+	it('shows the strip even from an item OUTSIDE the stream, where the arrows cannot', () => {
+		// A lapsed lease, or a canvas opened from the corpus browser while you still hold items.
+		// `active` gates the ARROWS — they cannot step from a position that does not exist — but the
+		// strip has no such problem, and hiding it would remove the only way back to your queue.
+		const at = streamPosition(stream, 'b', 'bind86');
+
+		expect(at.active).toBe(false);
+		expect(at.items.map((t) => t.task_id)).toEqual(['a', 'c', 'e']);
+	});
+
+	it('renders NO strip when there is no queue behind this canvas', () => {
+		// No project → the corpus browser opened it. A filmstrip of someone's claimed items would be
+		// unrelated to what is on screen.
+		expect(streamPosition(stream, 'c', null).items).toEqual([]);
+	});
+
+	it('names the open item and its queue, so a tile can mark itself active and build its href', () => {
+		const at = streamPosition(stream, 'c', 'bind86');
+
+		expect(at.taskId).toBe('c');
+		expect(at.projectId).toBe('bind86');
 	});
 });

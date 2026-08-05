@@ -1,4 +1,5 @@
 <script lang="ts">
+	import MediaThumb from '$lib/viewer/layout/MediaThumb.svelte';
 	// QUICK VIEW — review one item beside the queue, without leaving it.
 	//
 	// A pre-labelled queue is REVIEWED, not drawn on: look at the image, check the suggested class is
@@ -76,20 +77,17 @@
 
 			{#key task.task_id}
 				{@const src = taskImageUrl(task, apiUrl)}
-				{#if src}
-					<img
-						{src}
-						alt=""
-						class="bg-muted max-h-[45vh] w-full rounded-md object-contain"
-						onerror={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = 'hidden')}
-					/>
-				{:else}
-					<div
-						class="bg-muted text-muted-foreground flex h-40 items-center justify-center rounded-md text-xs"
-					>
-						no preview
-					</div>
-				{/if}
+				<!-- Same component as the grid and the filmstrip (#69): a media-type glyph, never the
+				     words "no preview", and a broken image falls back rather than hiding itself into a
+				     blank rectangle. `object-contain` here — quick view is for READING the item, so it
+				     must not crop; the grid crops because a tile is an index entry, not the thing. -->
+				<MediaThumb
+					{src}
+					kind={task.media?.kind ?? 'image'}
+					alt=""
+					ratio="max-h-[45vh] rounded-md"
+					fit="contain"
+				/>
 			{/key}
 
 			<!-- The SUGGESTED label. `secondary`, never the default variant: the entire job of this

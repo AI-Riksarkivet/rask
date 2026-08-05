@@ -16,6 +16,7 @@
 	import { taskStateVariant } from './presentation.js';
 	import { cardCaption, taskImageUrl } from './queue-view';
 	import type { TaskDetail } from './types.js';
+	import MediaThumb from '$lib/viewer/layout/MediaThumb.svelte';
 
 	let {
 		tasks,
@@ -73,27 +74,19 @@
 				aria-pressed={picked}
 				onclick={() => toggle(task.task_id)}
 			>
-				{#if src}
-					<img
-						{src}
-						alt=""
-						loading="lazy"
-						class="bg-muted aspect-[4/3] w-full object-cover"
-						onerror={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = 'hidden')}
-					/>
-				{:else}
-					<!-- No preview is not a failure. An empty, LABELLED tile says so; a broken <img> would
-					     read as the item itself being broken. -->
-					<div
-						class="bg-muted text-muted-foreground flex aspect-[4/3] w-full items-center justify-center text-xs"
-					>
-						no preview
-					</div>
-				{/if}
+				<!-- One component for every preview in the zone (#69). It used to render the WORDS "no
+				     preview", which at tile size is indistinguishable from an error message, and it hid
+				     a broken <img> — leaving the blank rectangle the text existed to avoid, reached by
+				     another route. `MediaThumb` answers both with the media type's own glyph. -->
+				<MediaThumb {src} kind={task.media?.kind ?? 'image'} alt="" />
 			</button>
 
 			<div class="absolute top-1.5 left-1.5">
-				<Checkbox checked={picked} onCheckedChange={() => toggle(task.task_id)} aria-label="Select" />
+				<Checkbox
+					checked={picked}
+					onCheckedChange={() => toggle(task.task_id)}
+					aria-label="Select"
+				/>
 			</div>
 
 			<div class="flex flex-col gap-1 p-2">

@@ -27,6 +27,10 @@ export interface StreamTask {
 	state: string;
 	assignee?: string | null;
 	source: { keys?: string[]; where?: string | null };
+	/** Optional, and only the filmstrip reads it: the declared media kind picks the fallback glyph
+	 *  when an item has no frame. Optional so a fixture that only exercises ORDERING does not have to
+	 *  carry a media block it never looks at. */
+	media?: { kind?: string } | null;
 }
 
 /**
@@ -114,6 +118,16 @@ export interface StreamPosition {
 	nextHref: string | null;
 	/** True when the canvas is walking a queue at all — false hides the control entirely. */
 	active: boolean;
+	/** The stream itself, so the FILMSTRIP renders the very list the arrows step through.
+	 *
+	 *  Carried here rather than computed again beside the strip: two computations of "your claimed
+	 *  items, in queue order" would eventually disagree about what "next" is, and the person would
+	 *  have two answers on one screen with no way to tell which was right. One call, both surfaces. */
+	items: StreamTask[];
+	/** Which item is open, and which queue it belongs to — the strip needs both to mark the active
+	 *  tile and to build each tile's href. */
+	taskId: string | null;
+	projectId: string | null;
 }
 
 export function streamPosition(
@@ -134,5 +148,12 @@ export function streamPosition(
 		prevHref: prev && projectId ? taskCanvasHref(prev, projectId, base) : null,
 		nextHref: next && projectId ? taskCanvasHref(next, projectId, base) : null,
 		active,
+		// The strip renders whenever there IS a queue, even standing on an item outside it (a lapsed
+		// lease, or a canvas opened from the browser while you hold other items). `active` gates the
+		// ARROWS, which cannot step from a position that does not exist; the strip has no such
+		// problem and hiding it would remove the only way back to your queue.
+		items: projectId ? stream : [],
+		taskId,
+		projectId,
 	};
 }
