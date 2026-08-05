@@ -71,15 +71,6 @@ def _delimiter() -> str:
     return os.getenv("RASK_CATALOG_DELIMITER", "$")
 
 
-def bronze_namespace() -> str:
-    """The bronze TIER's namespace name, read from the same env the medallion reads.
-
-    Not a constant: `MEDALLION_BRONZE_NAMESPACE` is a chart value, and a tier the writer and the
-    cascade head disagree about is a write nothing downstream ever sees.
-    """
-    return os.getenv("MEDALLION_BRONZE_NAMESPACE", "bronze")
-
-
 def _output_datasets(project: str, dataset: str, version: int | None, rows: int) -> list[Any]:
     """The table this run wrote, STAMPED with what it wrote — the `version` and `outputStatistics` facets.
 
@@ -116,23 +107,16 @@ def _output_datasets(project: str, dataset: str, version: int | None, rows: int)
     """
     from lineage_kit.schemas import DatasetFacets, DatasetVersionFacet, OutputDataset, OutputDatasetFacets, OutputStatisticsFacet
 
-    from service_kit.lakehouse.warehouse_registry import is_safe_project, project_namespace
+    from ingest.naming import bronze_namespace_for, bronze_table_id
 
     if not dataset:
         return []
 
-    # An UNSAFE project is dropped to the single-tenant pair rather than carried, matching the head's
-    # own `_cascade_project`: a value outside the path-safe shape must never become an S3 prefix or a
-    # lineage-name qualifier. Both sides degrade the same way, so a garbage project cannot produce a
-    # write that fires the head for a tenant — nor one the head silently ignores for a different reason.
-    tenant = project if is_safe_project(project) else ""
-    namespace = project_namespace(tenant, bronze_namespace())
-
     facets = DatasetFacets(version=DatasetVersionFacet(datasetVersion=str(version))) if version is not None else DatasetFacets()
     return [
         OutputDataset(
-            namespace=namespace,
-            name=f"{namespace}{_delimiter()}{dataset}",
+            namespace=bronze_namespace_for(project),
+            name=bronze_table_id(project, dataset),
             facets=facets,
             outputFacets=OutputDatasetFacets(outputStatistics=OutputStatisticsFacet(rowCount=rows)),
         )
@@ -211,11 +195,10 @@ def _tenant_facet(project: str) -> dict[str, Any]:
     from lineage_kit.consume import LANCE_RUN_FACET
     from lineage_kit.schemas import custom_facet
 
-    from service_kit.lakehouse.warehouse_registry import is_safe_project
+    from ingest.naming import tenant
 
-    if not is_safe_project(project):
-        return {}
-    return {LANCE_RUN_FACET: custom_facet(project=project)}
+    safe = tenant(project)
+    return {LANCE_RUN_FACET: custom_facet(project=safe)} if safe else {}
 
 
 class LineageRecorder:

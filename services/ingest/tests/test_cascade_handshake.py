@@ -131,3 +131,34 @@ def test_the_head_only_fires_for_its_CONFIGURED_lane_table() -> None:
     assert _head_verdict(_ingest_event("bind86", "some-other-table")) is None, (
         "an unconfigured table fired the head — the lane constraint has changed and #34 should be revisited"
     )
+
+
+def test_the_CATALOG_and_the_GRAPH_name_the_SAME_TABLE() -> None:
+    """The invariant the whole plane rests on, and the one that had no gate.
+
+    Two consumers name this table and they must agree: the catalog keys on `table_id` (and OpenFGA
+    authorizes against exactly that object), while the lineage output is what the cascade head
+    matches. A graph naming `bind86-bronze$pages` while the catalog holds `bind86$pages` describes a
+    table that does not exist — and NOTHING reports it. The write succeeds, the lineage record is
+    well-formed, every consumer resolving the name gets nothing back.
+
+    That is not hypothetical: fixing only the lineage side produced exactly this state mid-change.
+    Both now compose through `ingest.naming`, and this fails if either grows its own copy again.
+    """
+    from ingest.catalog_service import CatalogServiceClient
+    from ingest.lineage import _output_datasets
+    from ingest.naming import bronze_namespace_for
+
+    client = object.__new__(CatalogServiceClient)
+
+    for project, dataset in [("bind86", "pages"), ("", "pages"), ("acme", "e2ewin")]:
+        # Through the BOUNDARY, exactly as `runtime` calls it: the catalog is handed `spec.namespace`,
+        # never `spec.project`. Passing the project here instead is the original defect in miniature,
+        # and writing this test the lazy way reproduced it — the assertion fired on `bind86$pages`.
+        catalog_name = CatalogServiceClient.table_id(client, bronze_namespace_for(project), dataset)
+        graph = Serde.to_dict(_output_datasets(project, dataset, 1, 1)[0].to_openlineage_output())
+
+        assert catalog_name == graph["name"], (
+            f"the catalog calls it {catalog_name!r} and the graph calls it {graph['name']!r} — one of them names a table nothing else can resolve"
+        )
+        assert graph["name"].startswith(graph["namespace"]), "the table id must live under the namespace it declares"

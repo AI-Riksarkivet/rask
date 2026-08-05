@@ -180,7 +180,7 @@ def ensure_dataset_at(spec: RunSpec) -> str:
     "no hardcoded dataset paths", which exists because two callers composing the same logical table
     from different env is how volume B overwrote volume A.
     """
-    return _catalog().ensure(spec.project, spec.dataset)
+    return _catalog().ensure(spec.namespace, spec.dataset)
 
 
 async def publish_chunk_units(chunk: ChunkSpec) -> int:
@@ -275,7 +275,7 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str]) ->
     from ingest.staging import discover_staged, purge_staged
 
     catalog = _catalog()
-    uri = catalog.ensure(spec.project, spec.dataset)
+    uri = catalog.ensure(spec.namespace, spec.dataset)
     # STORAGE TRUTH, and it is the ONLY truth. Fragments staged by a drain attempt that died before
     # returning are still on the store and still uncommitted — invisible to `fragments`, which holds
     # only what the surviving attempts handed back. Reading the staging prefix is what turns a mid-run
@@ -357,10 +357,10 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str]) ->
         # ride: the event that wakes a mover is the catalog's publication of a new version, so a
         # locally-recorded commit lands the data and tells nothing downstream it happened.
         version, tier_rows = catalog.commit(
-            spec.project,
+            spec.namespace,
             spec.dataset,
             all_fragments,
-            read_version=catalog.describe_version(spec.project, spec.dataset),
+            read_version=catalog.describe_version(spec.namespace, spec.dataset),
             run_id=spec.run_id,
         )
         # `row_count` from the catalog is the DATASET's total after the commit, not this run's work —
@@ -413,7 +413,7 @@ def _publish(catalog: Any, spec: RunSpec, version: int) -> dict[str, Any]:  # no
     if publish is None:
         return {"published": False, "publish_error": "catalog has no publish operation"}
     try:
-        body = publish(spec.project, spec.dataset, version)
+        body = publish(spec.namespace, spec.dataset, version)
     except Exception as exc:
         _log.warning("publish failed for run %s at version %s: %s", spec.run_id, version, exc)
         return {"published": False, "publish_error": str(exc)}

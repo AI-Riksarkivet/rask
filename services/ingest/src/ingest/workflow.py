@@ -139,6 +139,26 @@ class RunSpec(BaseModel):
     #: and so the whole fan-out shares one set of numbers.
     sizing: ResolvedSizing = Field(default_factory=resolve)
 
+    @property
+    def namespace(self) -> str:
+        """The catalog NAMESPACE this run writes into — `bind86-bronze`, or `bronze` untenanted.
+
+        THE ONE PLACE a project becomes a namespace, and the interface this plane was missing. The
+        two are different levels — a project selects the storage root, a namespace is the medallion
+        tier — and every consumer that needed a namespace was handed `spec.project` instead. The
+        catalog client's parameter was even NAMED `project`, so the mistake type-checked and read
+        correctly at every site while composing `bind86$e2ewin`: the 403's object, which nobody had
+        granted anything on because `namespace:bind86` does not exist.
+
+        Resolving it here is what makes the plane's names agree BY CONSTRUCTION rather than by four
+        call sites each remembering to qualify. The catalog keys on it, OpenFGA authorizes against
+        exactly the object it composes, and the lineage output the cascade head matches derives from
+        the same function — so the graph and the catalog cannot name different tables.
+        """
+        from ingest.naming import bronze_namespace_for
+
+        return bronze_namespace_for(self.project)
+
 
 class RunOutcome(BaseModel):
     committed_version: int | None = None
