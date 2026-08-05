@@ -24,8 +24,8 @@ HTRFLOW_ALTO = f"""<?xml version="1.0" encoding="UTF-8"?>
     <sourceImageInformation><fileName>00012.jpg</fileName></sourceImageInformation>
     <Processing ID="processing">
       <processingDateTime>2026-08-04T20:00:00</processingDateTime>
-      <processingStepDescription>Segmentation(model=yolo, model_settings={{'model': 'Riksarkivet/yolov9-regions-1', 'revision': 'abc123'}})</processingStepDescription>
-      <processingStepDescription>TextRecognition(model=trocr, model_settings={{'model': 'Riksarkivet/trocr-base-handwritten-hist-swe-2', 'revision': 'abc123'}}, generation_settings={{'batch_size': 8}})</processingStepDescription>
+      <processingStepDescription>Segmentation(model_class=YOLO, model=Riksarkivet/yolov9-regions-1, model_version=6fb01d223f39ac325280d99e4a2d1804694e5e99)</processingStepDescription>
+      <processingStepDescription>TextRecognition(model_class=TrOCR, model=Riksarkivet/trocr-base-handwritten-hist-swe-2, model_version=aa79fcb1850bf3155ebc442570d6c6bfc0ac8100, processor=Riksarkivet/trocr-base-handwritten-hist-swe-2, processor_version=aa79fcb1850bf3155ebc442570d6c6bfc0ac8100)</processingStepDescription>
       <processingSoftware><softwareName>htrflow</softwareName></processingSoftware>
     </Processing>
     <Processing ID="build"><processingStepDescription>runner-build</processingStepDescription><processingStepSettings>commit=deadbeef</processingStepSettings></Processing>
@@ -91,9 +91,13 @@ def test_provenance_is_read_from_the_document_itself() -> None:
     """Models AND build commit come from the run's artefact — a config could lie, this cannot."""
     page = parse_alto(HTRFLOW_ALTO)
 
+    # The LIVE shape resolves `main` to concrete commits — strictly better provenance than the
+    # requested revision, because it is what the load actually pinned to. The fixture lines are
+    # VERBATIM from the deployed Serve's output (R0002231_00001, 2026-08-05); the first parser
+    # guessed a repr-style format and returned models=[] against the real document.
     assert page.models == [
-        "Riksarkivet/yolov9-regions-1@abc123",
-        "Riksarkivet/trocr-base-handwritten-hist-swe-2@abc123",
+        "Riksarkivet/yolov9-regions-1@6fb01d223f39ac325280d99e4a2d1804694e5e99",
+        "Riksarkivet/trocr-base-handwritten-hist-swe-2@aa79fcb1850bf3155ebc442570d6c6bfc0ac8100",
     ]
     assert page.commit_sha == "deadbeef"
 

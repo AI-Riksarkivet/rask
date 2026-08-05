@@ -70,6 +70,18 @@ def register_gold_table(
     segments = table_id.split(delimiter)
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     with httpx.Client(base_url=catalog_url.rstrip("/"), timeout=timeout_seconds) as client:
+        # Creates are top-down (the catalog's require_parent guard, live-verified: registering into
+        # an absent namespace answers NamespaceNotFound 404) — and the cascade OWNS its tier
+        # namespaces, so the lane ensures its parent exists rather than demanding a manual
+        # provisioning step nobody documented. 409 = already there, the steady state.
+        parent = delimiter.join(segments[:-1])
+        if parent:
+            try:
+                ns = client.post(f"/v1/namespace/{parent}/create", json={"id": segments[:-1]}, headers=headers)
+            except httpx.HTTPError as exc:
+                raise RegisterError(f"catalog unreachable creating parent namespace {parent!r}: {exc}") from exc
+            if ns.status_code not in (200, 201, 409):
+                raise RegisterError(f"catalog refused parent namespace {parent!r}: HTTP {ns.status_code} — {ns.text[:200]}")
         try:
             response = client.post(f"/v1/table/{table_id}/register", json={"id": segments, "location": location}, headers=headers)
         except httpx.HTTPError as exc:

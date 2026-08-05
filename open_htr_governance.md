@@ -70,8 +70,42 @@ Why not the alternatives:
    its lineage and grants. If CPU Serve cannot come up on this host, that bound is DECLARED and
    the e2e gate is env-gated like `test_maintenance_e2e.py` — never silently skipped.
 
-## Bounds stated up front
+## LANDED 2026-08-05 — all seven steps
 
-- Bronze→silver geometry movers (the other P7b half) are OUT — same seam, later work.
-- The raw ALTO S3 sink stays (export format, #P7c's exporter reads gold later) — this adds the
-  governed home, it does not delete the export.
+Steps 1–6 each shipped as their own pushed commit. Step 7 ran the WHOLE lane live and caught THREE
+bugs no unit test could:
+
+1. **The uniform revision injection killed every Serve replica at init** — `model_settings.revision`
+   fell through TrOCR's `**kwargs` to htrflow's BaseModel (`TypeError`). The pin is now per model
+   TYPE (yolo: direct; trocr: `model_kwargs`/`processor_kwargs`), which is htrflow's own documented
+   shape.
+2. **The parser's htrflow provenance regexes matched a GUESSED format** — the real deployed document
+   renders flat `model=<repo>, model_version=<resolved-sha>` (strictly better: the RESOLVED commit,
+   not the requested revision). Against the real shape the parser silently returned `models=[]`.
+   The fixture is now VERBATIM from the live document (R0002231_00001, 2026-08-05).
+3. **Registering into an absent namespace 404s** (`require_parent`, working as designed) — the lane
+   now ensures its tier namespace first (409-tolerated), because the cascade owns its tiers.
+
+Also live-found: two Ray clusters coexisted on the dev host and `serve.start`'s hardcoded :8000 let
+the OLD cluster's proxy answer for the new deploy — `RASK_SERVE_HTTP_PORT` added to the deploy seam.
+
+**Witnessed end-to-end**: a real Svea Hovrätt page (IIIF `R0002231_00001`) → the live GPU `/htrflow`
+ingress (2.8 s) → parsed → `gold$htr` written with the full contract schema → **the catalog
+describes it** (`namespace [gold], table htr`) → the lakehouse UI lists it and renders the row in
+Preview (screenshot delivered). Provenance in the run: all three models at their RESOLVED shas +
+`commit=3f80d0f6efee`.
+
+## Residuals (tracked, not silent)
+
+- **The owner's direction note (2026-08-05):** the runner/stage-job itself should read bronze Lance
+  and emit gold rows directly — that is the P7b distributed re-cut, and this lane's seams (parser,
+  register, facet) are exactly what it will reuse. The medallion-side lane is the governed shape
+  until then.
+- Bronze→silver geometry movers (the other P7b half) — same seam, later work.
+- The raw ALTO S3 sink stays (P7c's export format) — this added the governed home, not deleted the
+  export.
+- The in-dataset `lineage` column rides only when the mover supplies the LineageDoc (shared helper,
+  same as every stage); the e2e driver passed None. FGA read-gating keys off registration + the
+  #90 doors; grant seeding beyond the register door's ownership is estate provisioning.
+- The lane runs in-process even with ray on (stated in the dispatch); distributing it IS the re-cut
+  above.

@@ -112,13 +112,17 @@ def _line_text_and_confidence(line: ET.Element) -> tuple[str, float]:
     return text, confidence
 
 
-#: The two provenance shapes our serializers write (#89/#88): the actor lane's
-#: ``model=<repo>@<revision>`` / ``commit=<sha>`` settings, and htrflow's step-description
-#: ``model_settings={'model': '<repo>', ... 'revision': '<rev>'}`` repr.
+#: The provenance shapes our serializers write (#89/#88). THREE, and the third was live-caught:
+#: the fixture GUESSED htrflow rendered a repr-style ``{'model': ..., 'revision': ...}`` — the real
+#: deployed document (2026-08-05, R0002231_00001) renders FLAT ``model=<repo>,
+#: model_version=<resolved-sha>`` — and the resolved sha is strictly better provenance than the
+#: requested revision, because it is what the load actually pinned to. Against that real shape the
+#: first parser returned models=[] — silently, which is exactly the failure class #89 exists for.
 _MODEL_SETTING_RE = re.compile(r"\bmodel=(\S+@\S+)")
-_COMMIT_SETTING_RE = re.compile(r"\bcommit=(\S+)")
-_HTRFLOW_MODEL_RE = re.compile(r"'model':\s*'([^']+)'")
-_HTRFLOW_REVISION_RE = re.compile(r"'revision':\s*'([^']+)'")
+_COMMIT_SETTING_RE = re.compile(r"\bcommit=([0-9a-fA-F]+)")
+_HTRFLOW_LIVE_RE = re.compile(r"\bmodel=([^,\s)@]+), model_version=([0-9a-fA-F]+)")
+_HTRFLOW_REPR_MODEL_RE = re.compile(r"'model':\s*'([^']+)'")
+_HTRFLOW_REPR_REVISION_RE = re.compile(r"'revision':\s*'([^']+)'")
 
 
 def _provenance(root: ET.Element) -> tuple[list[str], str | None]:
@@ -131,11 +135,14 @@ def _provenance(root: ET.Element) -> tuple[list[str], str | None]:
                 models.extend(_MODEL_SETTING_RE.findall(content))
                 if (m := _COMMIT_SETTING_RE.search(content)) is not None:
                     commit = m.group(1)
-                # htrflow's repr-style step settings: pair repo with revision WITHIN one step
-                # description, so two steps cannot cross-contaminate each other's revisions.
-                repo = _HTRFLOW_MODEL_RE.search(content)
+                # The LIVE htrflow shape: flat `model=<repo>, model_version=<resolved-sha>` — the
+                # adjacency pairs them, so two steps cannot cross-contaminate.
+                models.extend(f"{repo}@{sha}" for repo, sha in _HTRFLOW_LIVE_RE.findall(content))
+                # The repr-style shape (a config echoed verbatim renders this way) — kept, paired
+                # WITHIN one description for the same no-cross-contamination reason.
+                repo = _HTRFLOW_REPR_MODEL_RE.search(content)
                 if repo is not None and "@" not in repo.group(1):
-                    rev = _HTRFLOW_REVISION_RE.search(content)
+                    rev = _HTRFLOW_REPR_REVISION_RE.search(content)
                     models.append(f"{repo.group(1)}@{rev.group(1) if rev else 'main'}")
     # De-duplicated preserving order: htrflow renders one step description per PIPELINE step, and
     # the two segmentation steps share nothing, but a re-serialized document may repeat blocks.

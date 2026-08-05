@@ -68,7 +68,10 @@ def cmd_up(app_name: str) -> int:
     _connect()
     # Bind the Serve HTTP proxy to 0.0.0.0 so the endpoint is reachable from
     # outside the container (Docker port-forward / k8s), not just loopback.
-    serve.start(http_options={"host": "0.0.0.0", "port": 8000})
+    # Env-driven so a second Ray cluster on the same host (a real state on dev boxes — measured
+    # 2026-08-05: an Aug-03 cluster still owned :8000, so this deploy's routes probe and POSTs were
+    # silently answered by THAT cluster's stale app) can be avoided without editing code.
+    serve.start(http_options={"host": "0.0.0.0", "port": int(os.environ.get("RASK_SERVE_HTTP_PORT", "8000"))})
     build, route = APPS[app_name]
     handle = serve.run(build(), name=app_name, route_prefix=route, blocking=False)
     print(f"Deployed app {app_name!r} at route {route}.")

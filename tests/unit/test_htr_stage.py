@@ -140,6 +140,7 @@ def test_the_stage_registers_its_gold_table_in_the_catalog(tmp_path: Path) -> No
     bronze = _bronze_pages(tmp_path, ["iiif://v/1.jpg"])
     gold = str(tmp_path / "root" / "medallion" / "gold-htr")
     respx.post(f"{SERVE}/").mock(side_effect=lambda request: httpx.Response(200, text=_alto_for(request.url.params["name"], "x")))
+    respx.post("http://catalog.test/v1/namespace/gold/create").mock(return_value=httpx.Response(409, text="exists"))
     register = respx.post("http://catalog.test/v1/table/gold$htr/register").mock(return_value=httpx.Response(200, json={}))
 
     result = transcribe_stage(
@@ -170,6 +171,7 @@ def test_a_catalog_refusal_fails_the_stage_after_the_write(tmp_path: Path) -> No
     bronze = _bronze_pages(tmp_path, ["iiif://v/1.jpg"])
     gold = str(tmp_path / "root" / "medallion" / "gold-htr")
     respx.post(f"{SERVE}/").mock(side_effect=lambda request: httpx.Response(200, text=_alto_for(request.url.params["name"], "x")))
+    respx.post("http://catalog.test/v1/namespace/gold/create").mock(return_value=httpx.Response(409, text="exists"))
     respx.post("http://catalog.test/v1/table/gold$htr/register").mock(return_value=httpx.Response(503, text="down"))
 
     with pytest.raises(RegisterError):
