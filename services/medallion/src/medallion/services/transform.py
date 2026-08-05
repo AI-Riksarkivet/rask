@@ -31,6 +31,7 @@ from opentelemetry import trace
 from medallion.core.config import MedallionSettings, project_namespace
 from medallion.core.metrics import record_denied, record_other_lane, record_quality_blocked, record_transition
 from medallion.schemas.events import build_run_event
+from medallion.services import htr_stage
 from medallion.services.compute import measure_stage, read_upstream, transform_stage
 from medallion.services.derivers import UnderivableMediaError
 from medallion.services.promotion import promotion_lineage
@@ -245,7 +246,24 @@ async def handle_stage(dapr: DaprClient, settings: MedallionSettings, event: Any
                     span.set_attribute("lance.lineage.run_id", lineage_doc.run_id)
                     span.set_attribute("lance.lineage.chain_depth", len(lineage_doc.derived_from))
                     use_ray = settings.ray_enabled
-                    if use_ray:
+                    if settings.operation == htr_stage.HTR_OPERATION:
+                        # The governed HTR lane (#88 step 4) — dispatched FIRST, before the ray
+                        # branch, deliberately: the generic Ray stage job derives thumbnails and
+                        # knows nothing of Serve or ALTO, so with ray_enabled on it would run
+                        # silently wrong rather than distributed. The P7b re-cut moves this
+                        # transform onto the cluster; until then the span names which compute ran.
+                        span.set_attribute("lance.medallion.compute", "htr_in_process")
+                        result = await run_in_threadpool(
+                            htr_stage.transcribe_stage,
+                            from_uri,
+                            to_uri,
+                            settings.storage_options(),
+                            stage=settings.to_namespace,
+                            lineage=lineage_doc,
+                            htrflow_url=settings.htrflow_url,
+                            timeout_seconds=settings.htrflow_timeout_seconds,
+                        )
+                    elif use_ray:
                         # EVENT-DRIVEN real-Ray: submit the stage transform to the Ray cluster IN RESPONSE
                         # TO this trigger (`ray job submit` via the Ray Jobs REST API), then measure the
                         # written dataset so the lineage emit matches the in-process path. A job

@@ -330,6 +330,12 @@ spec:
             # the layout/lines + transcribe jobs on the unified cluster; unset = ray_stage_job.py default.
             - { name: MEDALLION_RAY_ENTRYPOINT, value: {{ .stageJob | quote }} }
             {{- end }}
+            {{- if .htrflowUrl }}
+            # #88: the governed HTR lane's transcribe endpoint — the Serve /htrflow HTTP ingress. Set
+            # per-mover (only the transcribe_pages lane needs it); empty = the lane fails loudly at the
+            # seam naming MEDALLION_HTRFLOW_URL rather than guessing a host.
+            - { name: MEDALLION_HTRFLOW_URL, value: {{ .htrflowUrl | quote }} }
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- if $root.Values.medallion.quality }}
