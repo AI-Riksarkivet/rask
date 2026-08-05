@@ -432,9 +432,12 @@ test('bulk accept fires one gated event per selected reviewable task', async ({ 
 
 	await page.goto('/annotator/projects/p1');
 	await page.getByRole('checkbox', { name: 'Select all' }).check();
-	await expect(page.getByTestId('bulk-bar')).toContainText('3 selected · 2 reviewable');
-	await page.getByRole('button', { name: 'Accept 2 reviewed' }).click();
-	await expect(page.getByText('Accepted 2 items.')).toBeVisible();
+	// The bar's summary is just the count now: the per-action counts moved onto the buttons, because
+	// the vocabulary is DERIVED from the rows' own `legal_events` rather than being the two hardcoded
+	// buttons ("accept", "assign") it used to be. Same guarantee, stated per action.
+	await expect(page.getByTestId('bulk-bar')).toContainText('3 selected');
+	await page.getByTestId('bulk-accept').click();
+	await expect(page.getByText('Accept: 2 items.')).toBeVisible();
 
 	// Exactly the two in_review tasks were accepted — the unassigned one was never fired at.
 	const accepted = (await calls(page)).filter(
@@ -1045,7 +1048,8 @@ test('changing a filter CLEARS the selection — a hidden row must never stay se
 
 	await page.goto('/annotator/projects/p1');
 	await page.getByRole('checkbox', { name: 'Select all' }).check();
-	await expect(page.getByRole('button', { name: /Accept 2 reviewed/ })).toBeVisible();
+	// "Accept 2", not "Accept 2 reviewed": each bulk action now names its own count.
+	await expect(page.getByTestId('bulk-accept')).toContainText('2');
 
 	await page.getByLabel('Filter by assignee').fill('gina');
 	await expect(
@@ -1139,7 +1143,9 @@ test('bulk assign is not offered when nothing selected can take it', async ({ pa
 	await page.goto('/annotator/projects/p1');
 	await page.getByRole('checkbox', { name: 'Select all' }).check();
 
-	await expect(page.getByTestId('bulk-assign')).toBeDisabled();
+	// WITHHELD, not disabled. The bar renders only actions the selection can actually take, so "not
+	// offered" is now literal — a stronger form of this spec's own claim than a greyed-out button.
+	await expect(page.getByTestId('bulk-assign')).toHaveCount(0);
 });
 
 // --------------------------------------------------------------------------------------------------
