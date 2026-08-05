@@ -1102,6 +1102,62 @@ execution events surfaced without app-log noise. An opportunity, not a defect.
 
 ---
 
+## I. The governance/maintenance session register *(synced 2026-08-04)*
+
+One session's task state, synced here because the session tool it lived in dies with the session —
+which is exactly the failure this file exists to prevent. Numbers are that session's ids, kept so
+its commit messages (`#73`, `#89`, …) stay traceable. Two verification workflows ran the same day
+— ten doc claims and the six `rask-*` skills, each still-open verdict adversarially re-checked —
+and the statuses below are POST-verification: several items a straight reading called open turned
+out to have landed, and one "safe" turned out to be armed.
+
+**Landed 2026-08-04** (each its own pushed commit; proof standards: mutation-checked tests, ruff +
+ty clean, own-paths commits): #73 protection on table+namespace doors · #74 tenant-isolation attack
+test · #75 trash/undrop + `GET /v1/table/{id}/tasks` · #81 multi-warehouse sweep AND the orphan
+scan's `_scannable_buckets` · #89 model revision pinned across BOTH HTR lanes + ALTO carries
+`model=repo@revision` · #90 page/object routes FGA-gated + the caller's bearer forwarded + **the
+`make_auth_deps` deferred-annotations bug** (auth deps silently demoted to query params — every
+gated route 422'd; `datasets.py`'s corpus gate had shipped broken) · #92 sha256 fixity at bronze
+ingest · #93 compaction read bounded (`MAINTENANCE_SCAN_BATCH_SIZE=64` × `COMPACT_THREADS=2`) ·
+#94/#95/#97 both plan docs corrected twice — five claims went stale the same day they were written.
+
+**Closed by verification, not by work** (the register said open; the code said done): #51 (dup of
+#65 — per-step flags/cadence/registry-buckets all shipped) · #59 (FRI self-prunes in pylance 9.0.0
+as index remap catches up; "nothing trims it" was spec-prose, not the installed implementation) ·
+#76 (the audit viewer at `/governance/audit`, resource-filtered, e2e-pinned — another session's
+work).
+
+**Open, ranked:**
+
+1. **#88 GOVERN THE HTR OUTPUT** — the archive's product is raw ALTO on plain S3 keys: no Lance
+   table, no catalog, no lineage, no FGA. Every rail above protects THUMBNAILS. Carries #89's
+   lineage-facet half (no HTR mover exists to attach a model facet to) and #96's rule when it
+   builds its cascade. `medallion/schemas/htr.py` is imported by nothing in production.
+2. **#96 cascade files NO trash records** — the only `trash.put` is the single-table drop, so a
+   fat-fingered cascade's children are unrecoverable even with trash ON; undrop is also single-id
+   where Lakekeeper's is plural. Two halves, only work together.
+3. **#46 binding-cache eviction is per-process — ARMED, not latent**: `values-prod.yaml:36` already
+   runs the catalog at `replicas: 2`. Mitigated to the mid-cascade window + id reuse by the live
+   status read; the fix is control-event-driven cross-replica invalidation.
+4. **#91** column-level classification (sekretess/GDPR — the lever the estate cannot express) ·
+   **#84** credential attack in CI (needs web-identity vending + a second tenant admin).
+5. Maintenance: **#79** reclamation live (gated on a clean drift report; trash purge FIRST — a
+   bounded delete of a recorded path beats prefix subtraction) · **#80** sweep vs real S3 (e2e is
+   env-gated, confirmed open twice) · **#62** Lance events → OTLP + the H1 cache defect (per-request
+   `lance.dataset()` — confirmed live, see §H1) · **#60** reindex-from-scratch · **#61** fragment
+   sizing · **#63** data-evolution ops · **#64** flags 16/64 refusal beyond the orphan pass ·
+   **#65** project-scoped policy UI (the API shipped) · **#56** exercise multi-base.
+6. Platform: **#43** separate rustfs instances inexpressible · **#48** partial-failure honesty in
+   the warehouse delete response · **#54** legacy no-warehouse data migration · **#67** ghost
+   projects migration · **#85** collapse the four control-root JSON stores.
+7. IA (need an owner ruling, not code): **#52** Estate Settings zone · **#53/#69** what
+   `/projects/<id>` is FOR + the hierarchy graph · **#78** description placement (NARROWED:
+   properties write endpoint exists; deregister does NOT lose the description — the only question
+   left is whether catalog-object binding is wanted at all) · **#77** roles/identities managed
+   surfaces (CONDITIONAL on going long-lived shared).
+8. **#82** TRIPWIRE — deliberately nothing until interactive-frequency listings force a
+   query-store design round.
+
 ## How this survives
 
 1. **P0** of `docs/architecture/lance-ns-merge.md` copies this file to `rask/docs/OPEN-WORK.md`.

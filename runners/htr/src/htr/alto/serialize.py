@@ -10,7 +10,7 @@ from jinja2 import Environment, FileSystemLoader
 from PIL import Image
 
 from htr.alto.word_segment import segment_words
-from htr.models import PIPELINE_MODELS, ModelRef
+from htr.models import COMMIT_SHA, PIPELINE_MODELS, ModelRef
 from htr.schemas import PageWithText, TranscribedLine
 
 
@@ -154,4 +154,5 @@ def serialize_alto(page_with_text: PageWithText, *, emit_words: bool = True, mod
         timestamp=datetime.now(tz=UTC).isoformat(),
         page_confidence=page_confidence,
         models=models,
+        commit_sha=COMMIT_SHA,
     )

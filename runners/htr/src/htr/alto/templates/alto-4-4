@@ -21,6 +21,13 @@
             <processingStepSettings>model={{ model }}</processingStepSettings>
         </Processing>
         {%- endfor %}
+        {%- if commit_sha %}
+        <Processing ID="build">
+            <processingDateTime>{{ timestamp }}</processingDateTime>
+            <processingStepDescription>runner-build</processingStepDescription>
+            <processingStepSettings>commit={{ commit_sha }}</processingStepSettings>
+        </Processing>
+        {%- endif %}
     </Description>
     {%- if document.regions %}
     <ReadingOrder>

@@ -34,7 +34,7 @@ import numpy as np
 import yaml
 from ray import serve
 
-from htr.models import MODEL_REVISION
+from htr.models import COMMIT_SHA, MODEL_REVISION
 
 
 logger = logging.getLogger(__name__)
@@ -127,6 +127,28 @@ def pinned_pipeline_path() -> Iterator[str]:
         Path(path).unlink(missing_ok=True)
 
 
+def _stamp_build(alto_xml: str) -> str:
+    """Insert the runner-build provenance block into an htrflow-produced ALTO (#88).
+
+    The actor lane renders this from OUR template; this lane's ALTO is rendered by htrflow's own
+    serializer, whose Jinja context we do not control — its `metadata` is htrflow's package
+    metadata, and a template cannot read env. So the block is spliced into the finished document
+    instead, before `</Description>`, which every ALTO this deployment produces contains exactly
+    once (our template guarantees a Description block). An empty COMMIT_SHA splices NOTHING —
+    silence is honest, a placeholder is not — and a document with no `</Description>` is returned
+    unchanged rather than corrupted.
+    """
+    if not COMMIT_SHA or "</Description>" not in alto_xml:
+        return alto_xml
+    block = (
+        '<Processing ID="build">'
+        "<processingStepDescription>runner-build</processingStepDescription>"
+        f"<processingStepSettings>commit={COMMIT_SHA}</processingStepSettings>"
+        "</Processing>"
+    )
+    return alto_xml.replace("</Description>", block + "</Description>", 1)
+
+
 @serve.deployment(
     name="HTRFlowService",
     num_replicas=SERVE_REPLICAS,
@@ -161,7 +183,7 @@ class HTRFlowDeployment:
         from htrflow.document import Document
 
         doc = self._pipeline.run(Document(image_path))
-        return self._serializer.serialize(doc) or ""
+        return _stamp_build(self._serializer.serialize(doc) or "")
 
     def transcribe_bytes(self, data: bytes, name: str = "page") -> str:
         """In-memory variant — bytes -> PIL.Image -> Pipeline, no tempfile.
@@ -173,7 +195,7 @@ class HTRFlowDeployment:
         from S3 as bytes and never touch local disk.
         """
         doc = self._pipeline.run(_build_in_memory_document(data, name=name))
-        return self._serializer.serialize(doc) or ""
+        return _stamp_build(self._serializer.serialize(doc) or "")
 
 
 def _build_in_memory_document(image_bytes: bytes, name: str = "page") -> object:

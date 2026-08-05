@@ -85,21 +85,31 @@ estate; the fourth by reading the spec. Each would drive a reclaimer into live d
 
 **Report-only first, always.**
 
-## 3. KNOWN WRONG — the orphan pass on branches, clones and multi-base
+## 3. ~~KNOWN WRONG~~ FIXED — the orphan pass refuses what it cannot correctly scan
 
-`referenced_paths()` opens only the MAIN branch of a dataset. The spec makes two cases fatal:
+> **Corrected 2026-08-04 (#97, verified against HEAD by the wf_6582576b round).** The "KNOWN WRONG"
+> label was stale: the "until fixed, MUST skip" instruction below is IMPLEMENTED, for all four
+> layouts, each with a dedicated passing test. `_unscannable_reason`
+> (`maintenance/services/orphans.py:225-252`) refuses `tree/` branches (:226-229) and `_mem_wal`
+> shards (:230-236) by directory probe, and base_paths/flag-16 datasets BY CONSEQUENCE (:244-251 —
+> a referenced file absent under the prefix; pylance does not expose `base_paths`, so the detector
+> keys on what multi-base *does* rather than what the manifest *says*). Overlays/flag-64 are refused
+> via `_OverlaysPresent` raised inside `referenced_paths` (:48-57, :191-192, :266-269). Every
+> refusal returns `checked=False` with a named reason and is aggregated as
+> `datasets_unreadable`/incomplete — never as "clean". Pinned by
+> `tests/unit/test_orphan_files.py:294-417` (tree/, base_paths, `_mem_wal`, overlays) and :342-353
+> (refusal ≠ clean).
+
+The original finding, kept for the record — `referenced_paths()` opens only the MAIN branch, and the
+spec makes two cases fatal:
 
 - **Branches.** A branch is a shallow clone whose `_versions/`, `_transactions/`, `_deletions/` and
   `_indices/` live under `tree/{branch_name}/`. None of that is reachable from the main branch, so
-  **every file in every branch is unreferenced by construction** and would be reported. Branch names
-  may contain `/`, so `tree/bugfix/issue-123/` is a nested path, not one segment.
+  every file in every branch is unreferenced by construction. Branch names may contain `/`, so
+  `tree/bugfix/issue-123/` is a nested path, not one segment.
 - **Shallow clones / multi-base.** A manifest carries `base_paths[]`; any DataFile, DeletionFile or
-  index with `base_id` set resolves under ANOTHER dataset root. So (a) a clone appears to be missing
-  files it never held, and (b) the SOURCE's files are referenced by clones we never open — scanning
-  the source alone calls them garbage.
-
-Until fixed, the pass MUST skip (unavailable-with-reason) any dataset whose manifest declares
-`base_paths` or whose root contains `tree/`. Feature flag 16 (`FLAG_BASE_PATHS`) is the signal.
+  index with `base_id` set resolves under ANOTHER dataset root — so a clone appears to be missing
+  files it never held, and the SOURCE's files are referenced by clones we never open.
 
 ## 4. Policy — ours to define, but NOT all of it
 
@@ -155,9 +165,16 @@ routes in the generated client). Only the UI to set it per project/tier is missi
 - **Compaction vs indices.** Rewriting files invalidates row addresses, so by default compaction
   remaps EVERY index — which makes compaction and index-building conflict, and "typically the
   compaction would fail, resulting in table layout degrading over time". `defer_index_remap=True` +
-  the **Fragment Reuse Index** is the fix, and our sweep already passes it. But the FRI GROWS per
-  compaction and must be trimmed once indices are rebuilt past a reuse version, or index LOAD cost
-  climbs forever. Nothing trims it.
+  the **Fragment Reuse Index** is the fix, and our sweep already passes it.
+
+  > **Corrected 2026-08-04 (#97): "the FRI grows forever and nothing trims it" was WRONG — and it
+  > was the #95 failure mode again**: sourced from the SPEC's prose
+  > (`lance_docs/file_format.md:2232-2239`, "users should schedule a periodic process to trim"),
+  > not from the installed implementation. pylance 9.0.0's own `remap_row_addrs` docstring
+  > (`lance/dataset.py:1050-1058`): the FRI *"retains only recent rounds (older ones are pruned as
+  > index remap catches up)"* — pruning is automatic once indices catch up, and our sweep's FIXED
+  > `compact → optimize_indices` order (`optimize.py:125,149-150`) drives that catch-up on every
+  > pass. No trim API exists in pylance 9.0.0 and none is needed. #59 is closed on this basis.
 - **Reindex-from-scratch is not expressible.** `optimize_indices()` folds new fragments into EXISTING
   indices. A changed index type or parameter, or an `alter_columns` cast (which **silently drops the
   column's index**), needs a full rebuild. FTS partition count is fixed at build time.
@@ -213,9 +230,14 @@ dataset** — "a correctness bug rather than a degraded experience." So the pass
 - **Orphan RECLAMATION and TRASH PURGE** — reports exist; neither deletes, deliberately (§2).
   Compaction and version cleanup DO delete, and always have — see §2's correction.
 - **Reindex from scratch** — §5.
-- **The sweep against real object storage** — sweep tests use local dirs; only the skipped e2e
-  touches S3. (The reconcile + orphan passes HAVE been run against the live rustfs.)
-- **Multi-warehouse maintenance** — §4.
+- **The sweep against real object storage** — sweep tests use local dirs; only the env-gated e2e
+  (`tests/e2e-py/test_maintenance_e2e.py`, skips unless `LANCE_E2E_MAINTENANCE_URL` +
+  `LANCE_E2E_GREPTIME_URL` are set and reachable) touches S3. Re-verified still open 2026-08-04,
+  twice (#80). (The reconcile + orphan passes HAVE been run against the live rustfs.)
+- ~~**Multi-warehouse maintenance** — §4.~~ Un-deleted leftover, struck 2026-08-04 (#97): #81
+  landed on BOTH surfaces (the sweep at `sweep.py:123-138`, the orphan scan via
+  `_scannable_buckets` at `reconcile.py:600-636`) — §4 and §7.5 of this same file already said so.
+  The residual (no multi-warehouse run against real S3) is the previous bullet's, not this one's.
 
 ## 7. Order of work
 

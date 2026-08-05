@@ -209,3 +209,86 @@ def test_htrflow_deployment_is_still_a_serve_deployment():
 
     assert isinstance(HTRFlowDeployment, Deployment)
     assert callable(pinned_pipeline_config) and not isinstance(pinned_pipeline_config, Deployment)
+
+
+# --- the build commit (#88 step 1) -----------------------------------------------------------------
+# MODEL_REVISION said WHICH weights; COMMIT_SHA says WHICH CODE ran them. Both lanes must carry it,
+# and an UNSET sha must render nothing — the same silence-is-honest rule as `models=[]`.
+
+
+def test_the_actor_lane_alto_carries_the_build_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    import htr.alto.serialize as ser
+    from htr.schemas import PageImage, PageWithText
+
+    monkeypatch.setattr(ser, "COMMIT_SHA", "abc1234")
+    buf = io.BytesIO()
+    Image.new("RGB", (200, 100), color=(255, 255, 255)).save(buf, format="JPEG")
+    page = PageWithText(page=PageImage(key="x/1.jpg", image_bytes=buf.getvalue()), region_lines=[])
+
+    xml = ser.serialize_alto(page)
+
+    assert '<Processing ID="build">' in xml
+    assert "<processingStepSettings>commit=abc1234</processingStepSettings>" in xml
+
+
+def test_an_unset_sha_renders_no_build_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Silence is honest; `commit=` with nothing after it is a record that lies about existing."""
+    import htr.alto.serialize as ser
+    from htr.schemas import PageImage, PageWithText
+
+    monkeypatch.setattr(ser, "COMMIT_SHA", "")
+    buf = io.BytesIO()
+    Image.new("RGB", (200, 100), color=(255, 255, 255)).save(buf, format="JPEG")
+    page = PageWithText(page=PageImage(key="x/1.jpg", image_bytes=buf.getvalue()), region_lines=[])
+
+    xml = ser.serialize_alto(page)
+
+    assert '<Processing ID="build">' not in xml
+    assert "commit=" not in xml
+
+
+def test_the_htrflow_lane_splices_the_build_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This lane's ALTO comes from htrflow's own serializer, so the block is SPLICED, not rendered.
+
+    Exactly once, before `</Description>`, and only when a sha exists. A document with no
+    Description is returned unchanged — a provenance stamp must never corrupt the document it
+    stamps.
+    """
+    from runner import htrflow_service as hf
+
+    doc = "<alto><Description><MeasurementUnit>pixel</MeasurementUnit></Description><Layout/></alto>"
+
+    monkeypatch.setattr(hf, "COMMIT_SHA", "abc1234")
+    stamped = hf._stamp_build(doc)
+    assert stamped.count('<Processing ID="build">') == 1
+    assert stamped.index("commit=abc1234") < stamped.index("</Description>")
+
+    monkeypatch.setattr(hf, "COMMIT_SHA", "")
+    assert hf._stamp_build(doc) == doc
+
+    monkeypatch.setattr(hf, "COMMIT_SHA", "abc1234")
+    assert hf._stamp_build("<alto><Layout/></alto>") == "<alto><Layout/></alto>"
+
+
+def test_the_gitless_fallback_sha_stamps_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`unknown` is dagger-image.sh's git-less VCS_REF fallback, not a commit.
+
+    Without this, a hand-built image would publish ALTO stamped `commit=unknown` — a record that
+    lies about existing, which is worse than the absence it papers over. Normalised at the ONE
+    place the env enters (htr.models), so neither lane can stamp it.
+    """
+    import importlib
+
+    import htr.models as models
+
+    monkeypatch.setenv("RASK_GIT_SHA", "unknown")
+    importlib.reload(models)
+    assert models.COMMIT_SHA == ""
+
+    monkeypatch.setenv("RASK_GIT_SHA", "abc1234")
+    importlib.reload(models)
+    assert models.COMMIT_SHA == "abc1234"
+
+    monkeypatch.delenv("RASK_GIT_SHA")
+    importlib.reload(models)  # leave the module as the rest of the suite expects it
+    assert models.COMMIT_SHA == ""

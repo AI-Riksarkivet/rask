@@ -134,13 +134,23 @@ stays spin-up-per-workload. That conditional is the same one as 1.2's — the tw
 They surface `/identities` + `/user-profile` while explicitly being "no Identity Provider" (IdP
 stays external — same stance as our OIDC BFF).
 
-### 2.3 Audit trail — PARTIAL, ours is event-shaped
+### 2.3 Audit trail — CLOSED (the queryable surface landed)
+
+> **Corrected 2026-08-04 (#97).** "What we lack is the queryable surface" is STALE — it landed (a
+> concurrent session's work, verified against HEAD by the wf_6582576b round). `audit-core.ts`
+> (`frontend/microfrontends/lakehouse/src/lib/server/audit-core.ts:116-169`) queries GreptimeDB's
+> `opentelemetry_logs` for `body='audit'` records filtered by **action / outcome / subject /
+> resource**, estate-admin gated; `AuditViewer.svelte` serves it at `/governance/audit` with a
+> `?resource=` deep link and a related-events pivot; `e2e/admin/audit.spec.ts:136-140` pins exactly
+> the "every credential issued for table X" view (`resource=table:db1$t`). Caveat that keeps this
+> honest: the store is GreptimeDB, so the surface exists only where `observability.enabled` is on —
+> an estate that turns observability off has audit records in nothing but the pod logs.
 
 We already audit the decisions that matter (write-tier credential issuance and denial,
 `credentials.py`; control events for every lifecycle transition; OpenLineage provenance on every
-table op including terminal drop/deregister markers — richer than anything their docs claim). What
-we lack is the *queryable surface*: audit lands in logs and the event stream, not in an
-"show me every credential issued for table X" view. Governance is only as good as its retrieval.
+table op including terminal drop/deregister markers — richer than anything their docs claim), and
+the retrieval now exists. Governance is only as good as its retrieval — and its retrieval is only
+as good as the observability stack being deployed.
 
 ### 2.4 Per-object task visibility — SHIPPED (#75), read-only and single-id
 
@@ -158,6 +168,14 @@ exists: an undrop deadline the owner cannot see is not a safety feature.
 > Also worth copying: **their undrop is PLURAL** (`undrop_tabulars` takes a set). Ours takes one id.
 > The situation that needs undrop is a fat-fingered CASCADE, which by definition dropped many
 > things — so the one shape rask cannot express is exactly the one the feature exists for.
+>
+> **Sharpened 2026-08-04 (#97 → filed as #96): it is worse than a missing plural form.** The only
+> `trash.put` site is the SINGLE-table drop (`tables.py:301-307`). A namespace CASCADE destroys its
+> children inside one native call (`namespaces.py:174-192`) and files NO trash records for them —
+> 27dfc086 added the protection PRE-check for descendants, not recovery. So with
+> `LANCE_TRASH_GRACE_DAYS > 0` a cascade's children are unrecoverable regardless of undrop's
+> shape: there is nothing on file to undrop FROM. The fix is two halves that only work together —
+> cascade files a trash record per destroyed child, and undrop grows the plural form.
 
 ## 3. Security hardening — recorded open items, promoted to this list
 
@@ -170,10 +188,17 @@ bar this file audits against:
   bucket A. That test now exists and drives real buckets, both tiers — a mocked S3 proves nothing
   about a session policy. **Residual (#84):** the live half needs web-identity vending plus a second
   tenant admin to run in CI, so today it is a local-only proof.
-- **`warehouse_binding_cache` eviction is per-process.** Safe only because `replicas=1`. Scaling
-  the catalog without wiring the control event to invalidation routes dropped namespaces at a
-  deleted warehouse's bucket — a correctness hole that becomes a cross-tenant one the day buckets
-  are recycled.
+- **`warehouse_binding_cache` eviction is per-process — and the "safe because `replicas=1`" cover
+  is GONE (#97, escalated 2026-08-04).** `chart/values-prod.yaml:36` already runs the catalog at
+  `replicas: 2`, so the hazard this bullet called latent is ARMED in the prod profile. The cache is
+  still a per-process dict (`main.py:87`) evicted only by a local `.pop` in the drop cascade
+  (`warehouses.py:671`); the Dapr control-event subscriber only appends to the ring buffer and
+  never evicts (`dapr.py:35-56`); an all-branch pickaxe finds no invalidation commit. What narrows
+  (not closes) the window: the per-request live warehouse-status read
+  (`dependencies.py:75-98`) fail-closes a stale binding whose record was deleted — a 403, not a
+  misroute — so the practical exposure is the mid-cascade window (unbind at :670 before record
+  delete at :675) and id/bucket reuse. Fix (#46): wire the warehouse-deleted control event to
+  cross-replica invalidation, or drop the positive-forever cache.
 - **Kept, as designed (listed so nobody "fixes" them):** the no-existence-oracle rule on
   destructive doors (PermissionDenied ≡ NotFound — the door cannot enumerate ids); purge proving
   sole bucket ownership before cascade; identity→shape→parent→authz→conflict check order with
@@ -190,23 +215,22 @@ sneaked in as a patch.
 
 ## 5. Deliberately small gaps (ergonomics, not governance)
 
-> **Corrected 2026-08-04 (#95): the `doc`/description entry's "no equivalent" was STALE.**
-> Dataset-level description + curated tags ship in `lineage/api/v1/endpoints/governance.py`. Two
-> real gaps replace that claim, and both are sharper than the one it made:
+> **Corrected 2026-08-04 (#95), then corrected AGAIN the same day (#97)** — the #95 correction
+> itself carried two errors, both caught by verifying against HEAD:
 >
-> 1. They live on the **LINEAGE node, not the catalog object** — so a `deregister` + `register`
->    round-trip silently loses them. For a field whose purpose is to survive as documentation, being
->    attached to the wrong object is the whole bug.
-> 2. There is nothing at **COLUMN** level. For a Swedish public archive that is the sekretess/GDPR
->    lever the estate has no way to express (#91) — governance, not ergonomics, so it does not
->    belong in this section at all.
-
-- **Table description** — the write path exists on the lineage node; what is missing is binding it
-  to the catalog object so it survives a re-register.
-- **Properties write path** — properties ARE schema metadata (correct for a format-native catalog:
-  they travel with the table, `deregister` included), but there is no update endpoint and reads
-  need the describe backfill (`tables.py:241`, the #74 pylance find). An
-  `update_schema_metadata`-backed endpoint closes it; decide reserved-key policy first.
+> 1. **"a `deregister` + `register` round-trip silently loses them" is WRONG.** The lineage
+>    Dataset node is keyed by NAME, and `deregister` never deletes it — so a re-register under the
+>    same identifier KEEPS the description and tags. The placement (lineage node rather than
+>    catalog object) is a design question, not a data-loss bug, and #78 is narrowed accordingly:
+>    decide whether catalog-object binding is even wanted before building it.
+> 2. **"there is no update endpoint" for properties is STALE.** `POST
+>    /v1/table/{id}/schema_metadata/update` exists (`catalog/api/v1/endpoints/columns.py:183-222`),
+>    is wired into the Table Properties UI, and is pinned by unit, integration and e2e tests. The
+>    describe backfill at `tables.py:241` is the deliberate, tested READ-side fix for pylance 8.0.0
+>    returning empty metadata — not an open gap.
+>
+> What actually remains of this section: **column-level** classification (#91) — which is
+> governance, not ergonomics, and does not belong here at all.
 
 ## 6. Where we are already ahead of the checklist
 
