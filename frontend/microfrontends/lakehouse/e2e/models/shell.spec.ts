@@ -120,7 +120,11 @@ test('Access is reachable only from the Settings panel, never as its own navbar 
 	for (const row of ['/lakehouse/admin/streams', '/lakehouse/admin/dlq']) {
 		await expect(panel.locator(`a[href="${row}"]`)).toBeVisible();
 	}
+	// Both addresses: the old one because a resurrected row must fail here, and the new one because
+	// #105 moved the page to the home zone and a Lakehouse panel that grew a `/settings/*` row would be
+	// the same defect at a new address.
 	await expect(panel.locator('a[href="/lakehouse/governance/access"]')).toHaveCount(0);
+	await expect(panel.locator('a[href="/settings/access"]')).toHaveCount(0);
 	// …and with the panel closed again the navbar row itself carries no Access entry of any kind.
 	await page.keyboard.press('Escape');
 	await expect(panel).toBeHidden();

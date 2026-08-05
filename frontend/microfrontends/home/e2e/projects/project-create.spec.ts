@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
-import { ME_ADMIN, ME_MEMBER, signIn, TOKEN } from './session';
-import { postsTo, seed as seedFor } from './mock-client';
+import { ME_ADMIN, ME_MEMBER, signIn, TOKEN } from '../session';
+import { postsTo, seed as seedFor } from '../mock-client';
 
 // Hermetic project-creation coverage, moved here with the surface (2026-08-03 ruling — a project is the
 // TOP of the hierarchy, so the page that MINTS one lives beside the estate's project list in the main

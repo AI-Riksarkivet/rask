@@ -2,7 +2,6 @@ import { base } from '$app/paths';
 import {
 	Activity,
 	Boxes,
-	Building2,
 	Columns3,
 	Cpu,
 	Database,
@@ -14,8 +13,6 @@ import {
 	Network,
 	Package,
 	Radio,
-	ScrollText,
-	ShieldCheck,
 	Warehouse,
 	Workflow,
 } from '@lucide/svelte';
@@ -36,9 +33,10 @@ import { exact, seg, type ZoneNav } from '@rask/ui/shell';
  * exactly what the shadcn sidebar primitives (Group / GroupLabel / MenuSub) exist for, and they were
  * already vendored in @rask/ui — merely never used for structure.
  *
- * Governance is split out of admin deliberately: who-may-do-what (access, audit) is a different
- * question from operating the estate (tenants, streams, events, DLQ). Merging the two is what turned
- * "Admin" into a junk drawer.
+ * Governance is NOT here. Who-may-do-what (access, audit) is a different question from operating the
+ * estate (streams, events, DLQ) — merging the two is what turned "Admin" into a junk drawer — and it
+ * is also a different LEVEL: those surfaces read across every project and take none, so #105 re-based
+ * them under the home zone's `/settings/`. A zone rail names the zone's own routes.
  */
 const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 	{
@@ -145,35 +143,18 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 		],
 	},
 	{
-		label: 'Governance',
-		items: [
-			{
-				title: 'Access',
-				href: '/lakehouse/governance/access',
-				match: seg('/lakehouse/governance/access'),
-				icon: ShieldCheck,
-			},
-			{
-				title: 'Tenants',
-				href: '/lakehouse/admin/tenants',
-				match: seg('/lakehouse/admin/tenants'),
-				icon: Building2,
-			},
-			{
-				title: 'Audit',
-				href: '/lakehouse/governance/audit',
-				match: seg('/lakehouse/governance/audit'),
-				icon: ScrollText,
-			},
-		],
-	},
-	{
 		// OPERATIONS, not "Admin", and without Tenants — by ruling (2026-08-03). The shared navbar's
 		// panel has said Governance = [Access, Tenants, Audit] and Operations = [Events, Streams, DLQ]
 		// for some time; this sidebar still said "Admin" and kept Tenants inside it, so the same estate
 		// answered the same question two different ways depending on which control you opened. Who may
 		// do what — access, TENANTS, audit — is governance; running the estate — events, streams, dead
 		// letters — is operations. The navbar was right, so the sidebar moves to it.
+		//
+		// The GOVERNANCE group that sat above this one is GONE (#105): Access and Audit are estate
+		// surfaces, not lakehouse ones — they read across every project and neither takes one — so they
+		// were re-based under the home zone's `/settings/`, and Tenants was retired outright because
+		// `/projects` already IS the estate's project list. This rail is a ZONE rail: a leaf pointing
+		// into another zone would be the sidebar advertising a hop the top navbar owns.
 		label: 'Operations',
 		// The operational drawer — real, but not what anyone opens the lakehouse for. Collapsed until
 		// you are actually inside it (the shell auto-expands whichever group holds the active route).
@@ -218,8 +199,15 @@ const LAKEHOUSE_FOOTER: ZoneNav['footer'] = {
 	],
 };
 
-/** Groups behind the estate-admin door — the ones `/lakehouse/admin/*` serves. */
-const PRIVILEGED_GROUPS = new Set(['Governance', 'Admin']);
+/** Groups behind the estate-admin door — the ones `/lakehouse/admin/*` serves.
+ *
+ *  The label has to MATCH the group's own `label`, and it did not: the set said `'Admin'` while the
+ *  group renamed itself to `'Operations'`, so the filter matched nothing on that side and the
+ *  operational drawer leaked to every identity in the sidebar (the navbar half was always correct —
+ *  `nav-config.ts` gates its Operations column on `estateAdmin`). It was masked while `'Governance'`
+ *  still matched something; #105 took that group away, which would have left this set filtering
+ *  literally nothing. Fixed with the group it belongs to. */
+const PRIVILEGED_GROUPS = new Set(['Operations']);
 
 /** The area segment right after this zone's base — `''` on the zone root. Still load-bearing: the
  *  root layout gates the admin door on it and sizes the lineage canvas with it. */

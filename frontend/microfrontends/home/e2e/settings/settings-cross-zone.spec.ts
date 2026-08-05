@@ -1,28 +1,25 @@
 import { test, expect, type Page } from '@playwright/test';
-import { ME_ADMIN, signIn, TOKEN } from './session';
-import { seed as seedFor } from './mock-client';
+import { ME_ADMIN, signIn, TOKEN } from '../session';
+import { seed as seedFor } from '../mock-client';
 
-// `/settings` is an ESTATE page — the third place in the main menu — but three of its rows open
-// surfaces the LAKEHOUSE app still serves. That is a hop between two SvelteKit apps, and it has two
-// failure modes that look nothing alike:
+// `/settings` used to be an ESTATE page whose three rows opened surfaces the LAKEHOUSE app served —
+// a hop between two SvelteKit apps, with two failure modes that look nothing alike (a soft nav into a
+// route this zone's manifest does not contain, and a navbar that swaps apps mid-task without saying
+// so). This file was the browser half of that contract.
 //
-//   1. SILENT. A soft client-side navigation into `/lakehouse/...` targets a route the home zone's
-//      manifest does not contain. `data-sveltekit-reload` is the fix, and the STATIC gate is what
-//      enforces it — `@rask/zone-contract`'s cross-zone-reload walks Svelte's AST, and it was blind
-//      here until the page stopped rendering the hrefs from a loop (a `{…}` href reads as an opaque
-//      expression, so those rows were invisible to it and the attribute was correct only because a
-//      human remembered). The first test below is the same assertion against the rendered DOM.
+// #105 removed the hop instead of documenting it. `/settings/access` and `/settings/audit` are routes
+// of THIS app now, and `/projects` always was, so the contract inverts: NO row of the settings page
+// leaves the estate, every one of them is a soft navigation, and none of them carries
+// `data-sveltekit-reload`.
 //
-//      A browser CANNOT stand in for that gate, and the honest version of this file says so: without
-//      the attribute SvelteKit still ends up doing a full navigation (`server_fallback` →
-//      `native_navigation`), so "the document reloaded" is true either way. The measurable cost of
-//      the missing attribute is a phantom client-side 404 attributed to this zone — see the second
-//      test, which asserts exactly that and nothing more.
-//   2. DISORIENTING. Even when the hop works, the navbar swaps from the main menu to the lakehouse's
-//      own bar mid-task, and the user never asked to change apps. So the row must SAY where it goes
-//      before it is clicked, in the accessible name and not only in pixels.
+// The file stays, as the INVERSE assertion, and that is deliberate. `@rask/zone-contract`'s
+// cross-zone-reload gate only ever flags a MISSING attribute — it cannot flag a row that quietly
+// starts pointing at another app again, because such a row would simply need the attribute and would
+// have it. The claim worth holding is that the platform surfaces are served here; the day one of them
+// moves back out, this fails and someone has to argue for it rather than discover it in a navbar that
+// changed shape mid-click.
 //
-// The unwired half gets the mirror-image assertion: those rows must read as decisions, not as
+// The unwired half keeps the mirror-image assertion: those rows must read as decisions, not as
 // controls that stopped working.
 
 let token: string;
@@ -30,39 +27,54 @@ let token: string;
 const seed = (page: Page, routes: Record<string, unknown>): Promise<void> =>
 	seedFor(page, token, routes);
 
-/** Links inside the settings page's own sections — never the shell's navbar or sidebar, which other
- *  specs own and whose links are not this page's claim. */
-const rows = (page: Page) => page.locator('section[aria-labelledby^="settings-"] a[href]');
+/** The settings page's own sections — never the shell's navbar or sidebar, which other specs own and
+ *  whose links are not this page's claim. */
+const section = (page: Page) => page.locator('section[aria-labelledby^="settings-"]');
+/** Every link inside them. */
+const rows = (page: Page) => section(page).locator('a[href]');
 
-/** The zone base prefixes, and the APP NAME each one is called in the UI. Mirrors `ZONES` in
- *  `@rask/zone-contract` and the zone labels in `@rask/ui`'s nav-config (`explorer` is "Explorer",
- *  `annotator` is "Annotate"); a link whose first segment is one of these leaves the home app.
+/**
+ * Wait until the client router has taken over.
  *
- *  A map rather than a list because the badge assertion below is DERIVED from it. Hardcoding
- *  "Opens in Lakehouse" for every cross-zone link read fine while all three rows happened to go to
- *  the lakehouse, and was a trap: it would have failed a correctly-labelled `/explorer` row and
- *  passed a mislabelled one, i.e. rewarded exactly the wrong answer. */
-const ZONE_APP: Record<string, string> = {
-	lakehouse: 'Lakehouse',
-	explorer: 'Explorer',
-	annotator: 'Annotate',
-	compute: 'Compute',
-	studio: 'Studio',
-	train: 'Train',
-};
+ * Load-bearing for the soft-navigation test below, and ONLY since the port: before hydration an `<a>`
+ * click is a plain browser navigation, so the document reloads and the sentinel dies — which is what
+ * this test used to ASSERT, so the race was invisible. Now that the correct answer is "the document
+ * survives", an un-hydrated click fails, and it failed intermittently until this gate landed.
+ *
+ * The navbar's panel is client-only markup — the SSR HTML contains no
+ * `navigation-menu-viewport` at all — so its appearance is proof the app is live. Retried, because the
+ * click itself is what races (the estate's existing idiom: lakehouse's `openPanel`).
+ */
+async function hydrated(page: Page): Promise<void> {
+	const trigger = page
+		.getByRole('navigation', { name: 'Zones' })
+		.getByRole('button', { name: 'Settings' });
+	const panel = page.locator('[data-slot="navigation-menu-viewport"]');
+	await expect(async () => {
+		await trigger.click();
+		await expect(panel).toHaveCount(1, { timeout: 1000 });
+	}).toPass({ timeout: 20_000 });
+	await page.keyboard.press('Escape');
+	await expect(panel).toHaveCount(0);
+}
+
+/** The zone base prefixes — a link whose first segment is one of these leaves the home app. Mirrors
+ *  `ZONES` in `@rask/zone-contract`. `projects` and `settings` are deliberately NOT here: they are
+ *  home's own routes (the shell's `HOME_ROUTES`), which is exactly what makes these rows same-zone. */
+const ZONE_BASES = ['lakehouse', 'explorer', 'annotator', 'compute', 'studio', 'train'];
 
 test.beforeEach(async ({ context }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
 	await signIn(context, { token });
 });
 
-test('every settings link that leaves the estate hard-navigates AND says so', async ({ page }) => {
+test('no settings row leaves the estate — every one is served by this app', async ({ page }) => {
 	await seed(page, { 'GET /v1/me': ME_ADMIN, 'GET /v1/projects': [] });
 	await page.goto('/settings');
 	await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
 
-	// Read EVERY link on the page rather than the three we expect: the assertion that matters is about
-	// the class of link, so a fourth row added later without the attribute must fail here.
+	// Read EVERY link on the page rather than the three we expect: the assertion is about the CLASS of
+	// link, so a fourth row added later that points into another app must fail here.
 	const links = await rows(page).evaluateAll((els) =>
 		els.map((el) => ({
 			href: el.getAttribute('href') ?? '',
@@ -72,60 +84,52 @@ test('every settings link that leaves the estate hard-navigates AND says so', as
 	);
 	expect(links.length).toBeGreaterThan(0);
 
-	const crossZone = links.filter((l) => (l.href.split('/')[1] ?? '') in ZONE_APP);
-	expect(crossZone.map((l) => l.href).sort()).toEqual([
-		'/lakehouse/admin/tenants',
-		'/lakehouse/governance/access',
-		'/lakehouse/governance/audit',
+	// The exact set, in full: pinning the hrefs is what stops "no cross-zone links" from passing
+	// vacuously on a page that lost its rows.
+	expect(links.map((l) => l.href).sort()).toEqual([
+		'/projects',
+		'/settings/access',
+		'/settings/audit',
 	]);
+	expect(links.filter((l) => ZONE_BASES.includes(l.href.split('/')[1] ?? ''))).toEqual([]);
 
-	for (const link of crossZone) {
-		// The attribute, on every one of them. This is the assertion that actually GATES the attribute
-		// — see the note on the next test for why the browser cannot.
-		expect(link.reload, `${link.href} must carry data-sveltekit-reload`).toBe(true);
-		// …and the DESTINATION named inside the link, so it lands in the accessible name and is
-		// announced, not merely drawn as a badge someone might not read. Derived from the href, so the
-		// row and the label it makes cannot disagree.
-		const app = ZONE_APP[link.href.split('/')[1] ?? ''];
-		expect(link.text, `${link.href} must name the app it opens`).toContain(`Opens in ${app}`);
+	// …and no row carries the hard-nav attribute, because none of them needs it. It is not free: the
+	// attribute forces a document load, which is precisely the cost the port removed.
+	for (const link of links) {
+		expect(link.reload, `${link.href} is same-zone and must NOT hard-navigate`).toBe(false);
+		// Nor may a row announce another app. The badge said "Opens in Lakehouse" and landed in the
+		// link's accessible name; a row that keeps saying so after the page moved here is a lie a
+		// screen reader delivers first.
+		expect(link.text, `${link.href} must not announce another app`).not.toMatch(/Opens in /);
 	}
 
-	// The rows are still identifiable by name, and the estate-scoped three are exactly these.
-	for (const name of ['Access', 'Tenants', 'Audit']) {
-		await expect(page.getByRole('link', { name: new RegExp(`^${name}\\b`) })).toBeVisible();
+	// The rows are still identifiable by name, and the platform three are exactly these. Scoped to the
+	// sections: the navbar carries a "Projects" link too now (it is a main-menu entry AND a settings
+	// row), so an unscoped lookup matches two elements — and this file's claim is about the page.
+	for (const name of ['Users & roles', 'Projects', 'Audit']) {
+		await expect(section(page).getByRole('link', { name: new RegExp(`^${name}\\b`) })).toBeVisible();
 	}
 });
 
-test('the Access row leaves the app as a document load, and reports no phantom 404 on the way out', async ({
-	page,
-}) => {
-	await seed(page, { 'GET /v1/me': ME_ADMIN, 'GET /v1/projects': [] });
+test('the Users & roles row is a SOFT navigation — the document survives it', async ({ page }) => {
+	await seed(page, {
+		'GET /v1/me': ME_ADMIN,
+		'GET /v1/projects': [],
+		'GET /v1/access/model': { dsl: 'type user\n', authorization_model_id: '01MODEL' },
+		'GET /v1/access/tuples': { tuples: [], continuation: null },
+		'GET /v1/table': { tables: [] },
+	});
 	await page.goto('/settings');
+	await hydrated(page);
 
-	// TWO assertions, and only the second one discriminates. That is worth stating, because the obvious
-	// version of this test does not work and looks like it does.
+	// The sentinel is a window property: it survives a client-side (soft) navigation and cannot survive
+	// a document load. That polarity is the whole test. It used to run the other way round — this row
+	// left the app, and the honest assertion then was that the sentinel was GONE. The port is what
+	// flipped it, and a regression to a cross-app row flips it back.
 	//
-	// The sentinel below is a window property: it survives a client-side (soft) navigation and cannot
-	// survive a document load. It is NOT evidence that `data-sveltekit-reload` is present. Removing the
-	// attribute and re-running proved it — the test still passed. SvelteKit's client router intercepts
-	// the click, finds no route for `/lakehouse/…` in home's manifest, and ends `navigate()` in
-	// `server_fallback` → `native_navigation`, i.e. `location.href = url`
-	// (`@sveltejs/kit@2.70.1`, src/runtime/client/client.js: the "reload the page we are already on"
-	// guard does not apply, so the 404 branch falls straight through to a real navigation). The document
-	// reloads either way. So does the URL, and so does the server hit.
-	//
-	// What actually differs is the route the browser takes to get there: without the attribute the
-	// router first raises a 404 through `hooks.client.ts`, and this zone's `handleError` logs it as a
-	// `[zone-error]` line — a fault attributed to `home`, in the estate's error telemetry, for a link
-	// that works. Silence on that channel is the observable difference, and it is what this asserts.
-	//
-	// Captured into sessionStorage rather than off `page.on('console')`, and that is load-bearing too.
-	// The console version RACES: `handleError` logs and then the very next statement replaces the
-	// document, so CDP sometimes tears the context down before delivering the event — measured as a
-	// playwright "flaky" (fail, then pass on retry), which with `retries: 1` is a GREEN run. A gate that
-	// reports a real regression half the time is not a gate. The wrapper below writes synchronously,
-	// inside the same call, and sessionStorage survives a same-origin document load — so by the time the
-	// destination has rendered the evidence is already stored.
+	// It also catches the cheap mistake the port could have made: leaving `data-sveltekit-reload` on a
+	// row that no longer needs it. The attribute would keep the page working and cost a full document
+	// load on every click, and nothing else in the estate would notice.
 	await page.evaluate(() => {
 		sessionStorage.removeItem('__zoneErrors');
 		const original = console.error.bind(console);
@@ -143,16 +147,15 @@ test('the Access row leaves the app as a document load, and reports no phantom 4
 	});
 
 	await Promise.all([
-		page.waitForURL('**/lakehouse/governance/access'),
-		page.getByRole('link', { name: /^Access\b/ }).click(),
+		page.waitForURL('**/settings/access'),
+		page.getByRole('link', { name: /^Users & roles\b/ }).click(),
 	]);
 
-	// The hop is a real document navigation — in the deployed estate that is what reaches the ingress,
-	// which is the only party that can hand the path to the lakehouse app.
-	expect(await page.evaluate(() => '__sameDocument' in window)).toBe(false);
-	// …and the home zone did not blame itself for it on the way.
+	expect(await page.evaluate(() => '__sameDocument' in window)).toBe(true);
+	// …and the router raised nothing on the way: a soft nav into a route the manifest DOES contain has
+	// no 404 branch to fall through, so this zone never blames itself for its own page.
 	const zoneErrors = await page.evaluate(() => sessionStorage.getItem('__zoneErrors'));
-	expect(zoneErrors, 'the hop must not raise a client-side error in the home zone').toBeNull();
+	expect(zoneErrors, 'an in-app navigation must not raise a client-side error').toBeNull();
 });
 
 test('the unwired rows read as decisions, not as broken controls', async ({ page }) => {

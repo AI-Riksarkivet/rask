@@ -1,8 +1,13 @@
 import { expect, test } from '@playwright/test';
-import { mockMe, signIn, TOKEN } from './session';
+import { ME_ADMIN, signIn, TOKEN } from '../session';
+import { seed as seedFor } from '../mock-client';
 import { MOCK_CATALOG } from '../ports';
 
-// `/lakehouse/governance/access` — the ONE query-driven FGA explorer.
+// `/settings/access` — the ONE query-driven FGA explorer, in the HOME zone since #105.
+//
+// It is PLATFORM configuration, not a lakehouse feature: it reads the whole tuple store across every
+// project and takes none. (The lakehouse keeps its PER-OBJECT grants plane — the access tab on one
+// table or namespace — which is a different question at a different level and has its own specs.)
 //
 // This replaced four tabs (Graph / Tuples / Check / Model) that shared no state and no URL, and the
 // spec replaced with it: what is exercised now is the WORKFLOW those tabs made impossible — ask a
@@ -10,9 +15,9 @@ import { MOCK_CATALOG } from '../ports';
 // the selected node beside it rather than instead of it.
 //
 // Hermetic via the MOCK CATALOG, not page.route: the surface reads through remote functions
-// (`access.remote.ts`), so every request happens on the zone SERVER, where page.route cannot reach —
-// the same boundary the control-events feed crossed first. The fixtures live in `access-fixtures.ts`
-// (shared with `mock-catalog.ts`), and the REQUEST shapes — still the frozen /v1/access contract — are
+// (`remote/access.remote.ts`), so every request happens on the zone SERVER, where page.route cannot
+// reach. The fixtures live in `access-fixtures.ts`
+// (shared with `../mock-catalog.ts`), and the REQUEST shapes — still the frozen /v1/access contract — are
 // recorded by the mock per bearer and asserted through `/__mock/access`. Each test signs in with a
 // per-test bearer so its ledger on the fullyParallel suite's one shared mock is its own.
 
@@ -34,7 +39,10 @@ let token: string;
 test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
 	await signIn(context, { token });
-	await mockMe(page); // estate-admin identity: the governance layout door opens
+	// The estate-admin identity the `/settings` layout door reads. SEEDED on the mock catalog rather
+	// than page.route'd: this zone's layout calls `fetchMe` against CATALOG_API directly, so there is no
+	// browser hop to intercept.
+	await seedFor(page, token, { 'GET /v1/me': ME_ADMIN });
 });
 
 /** What the mock catalog recorded for THIS test's bearer — the replacement for the capture variables
@@ -47,7 +55,7 @@ const accessState = async (page: import('@playwright/test').Page): Promise<Acces
 };
 
 const open = async (page: import('@playwright/test').Page) => {
-	await page.goto('/lakehouse/governance/access');
+	await page.goto('/settings/access');
 	// 20s, not the 5s `expect` default: this route pulls in Svelte Flow and its first paint on a dev
 	// server costs a full cold compile, which the per-test budget (30s) allows for and the per-assertion
 	// default does not.
@@ -58,10 +66,27 @@ const open = async (page: import('@playwright/test').Page) => {
 	// .svelte-kit/generated/client/nodes/*.js`. That is the page node being rewritten underneath the
 	// browser mid-fetch, i.e. something else rebuilding this tree concurrently (measured: 137 writes
 	// into .svelte-kit in two minutes, 10 vite processes). No timeout fixes a module that 404s.
-	// The suite runs 11/11 on a quiet tree. See `reference-lakehouse-e2e-port-squat`.
+	// The suite runs green on a quiet tree; a concurrent `turbo run check`/build is what breaks it.
 	await expect(page.getByRole('heading', { name: 'Access', level: 1 })).toBeVisible({
 		timeout: 20_000,
 	});
+};
+
+/**
+ * Flip the Data/Model toggle, retried against the PRE-HYDRATION race.
+ *
+ * The heading `open()` waits for is server-rendered, so it can be visible while the client has not yet
+ * attached its listeners — and a click on an un-hydrated `<button>` does nothing at all, silently. Every
+ * other interaction in this file is followed by an auto-retrying `expect`, which absorbs the race; the
+ * view toggle is the one whose ONLY evidence is the click itself, so it retries here instead. The idiom
+ * is the estate's (`lakehouse/e2e/lineage/shell.spec.ts`'s `openPanel`, same race, same shape).
+ */
+const pressView = async (page: import('@playwright/test').Page, label: string) => {
+	const button = page.getByRole('button', { name: label });
+	await expect(async () => {
+		await button.click();
+		await expect(button).toHaveAttribute('aria-pressed', 'true', { timeout: 1000 });
+	}).toPass({ timeout: 20_000 });
 };
 
 const ask = async (
@@ -382,7 +407,7 @@ test('a conditional grant is visually distinct on the canvas', async ({ page }) 
 
 test('the model view draws the schema, not the tuples', async ({ page }) => {
 	await open(page);
-	await page.getByRole('button', { name: 'Model schema' }).click();
+	await pressView(page, 'Model schema');
 
 	// Types and their relations, straight from the DSL. `user:alice` is a TUPLE and must not appear —
 	// this view is true before a single tuple exists.
@@ -396,7 +421,7 @@ test('the model view draws the schema, not the tuples', async ({ page }) => {
 
 test('the model view renders `X from Y`, which the official previewer omits', async ({ page }) => {
 	await open(page);
-	await page.getByRole('button', { name: 'Model schema' }).click();
+	await pressView(page, 'Model schema');
 	// `define owner: [...] or owner from parent` — the cascade. Its absence is the documented defect in
 	// the reference implementation, so its PRESENCE is the reason this view exists.
 	await expect(page.getByText('from', { exact: true }).first()).toBeVisible();
@@ -404,7 +429,7 @@ test('the model view renders `X from Y`, which the official previewer omits', as
 
 test('the model view is URL-addressable and survives a reload', async ({ page }) => {
 	await open(page);
-	await page.getByRole('button', { name: 'Model schema' }).click();
+	await pressView(page, 'Model schema');
 	await expect.poll(() => new URL(page.url()).searchParams.get('view')).toBe('model');
 
 	await page.goto(page.url());

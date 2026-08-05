@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
-import { ME_ADMIN, signIn, TOKEN } from './session';
-import { calls, seed as seedFor } from './mock-client';
+import { ME_ADMIN, signIn, TOKEN } from '../session';
+import { calls, seed as seedFor } from '../mock-client';
 
 // THE PROJECTS VIEW TOGGLE — gallery or table, remembered per user.
 //

@@ -27,9 +27,10 @@
 	});
 
 	const area = $derived(areaOf(page.url.pathname));
-	// Both areas behind the estate-admin door. Governance (access, audit) split out of admin so the
-	// breadcrumb would stop contradicting the rail — it must NOT split out of the door with it.
-	const PRIVILEGED_AREAS = new Set(['admin', 'governance']);
+	// The area behind the estate-admin door. `governance` was the other one until #105 moved Access and
+	// Audit to the home zone's `/settings/` — this zone no longer serves that segment at all, so listing
+	// it here would gate a path that cannot be reached.
+	const PRIVILEGED_AREAS = new Set(['admin']);
 
 	// The navbar's notification bell (@rask/ui's NotificationCenter, mounted by AppShell). The shell owns
 	// the surface and never fetches — the zone owns the transport — so this is the transport: the ONE

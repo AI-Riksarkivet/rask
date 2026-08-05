@@ -1,5 +1,5 @@
 import { test, expect, type Route } from '@playwright/test';
-import { STORES } from '../admin/access-fixtures';
+import { STORES } from '../admin/store-fixtures';
 
 // Hermetic coverage for the R18 storage area: /lakehouse/catalog/storage is the S3 object browser over
 // the estate's registered STORES, served through this zone's /api/explorer BFF route onto the rask gateway,

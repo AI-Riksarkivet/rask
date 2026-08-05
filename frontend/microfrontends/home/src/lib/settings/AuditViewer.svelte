@@ -1,9 +1,13 @@
 <script lang="ts">
-	import { base } from '$app/paths';
-	// `/audit` — the #77 admin audit-log viewer over the #41 compliance trail. Events land on the dedicated
-	// `lance.audit` logger → OTLP → GreptimeDB (`opentelemetry_logs`); the /api/audit BFF queries them
-	// server-side and returns parsed {timestamp, action, outcome, subject, resource}. No credential reaches
-	// the browser. Governed without a session → 401; no observability stack → 501; auth-off dev → open.
+	// `/settings/audit` — the #77 audit-log viewer over the #41 compliance trail. Events land on the
+	// dedicated `lance.audit` logger → OTLP → GreptimeDB (`opentelemetry_logs`); `$lib/server/audit-core.ts`
+	// queries them server-side behind the zone's remote function and returns parsed
+	// {timestamp, action, outcome, subject, resource}. No credential reaches the browser. Governed without
+	// a session → 401; no observability stack → 501; auth-off dev → open.
+	//
+	// An ESTATE surface, so it lives in the home zone (#105): the trail spans every tenant and takes no
+	// project, which is exactly why it never belonged inside a project-scoped zone. NOTE that this zone's
+	// `paths.base` is `''` — every link out of here into the lakehouse is written LITERALLY and hard-navs.
 	import {
 		createSvelteTable,
 		DataTable,
@@ -24,11 +28,14 @@
 	import { formatAbsolute, formatTimestamp } from '@rask/ui/utils';
 	import { ExternalLink, Filter, RefreshCw, ScrollText, ShieldAlert } from '@lucide/svelte';
 	import { page } from '$app/state';
-	import { fetchAuditTrail } from './remote/audit.remote';
+	import { fetchAuditTrail } from '$lib/remote/audit.remote';
 	import { controlCursor } from '$lib/live/feeds.remote';
 	import { liveRead } from '$lib/live/tick.svelte';
 
-	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte).
+	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte). `/auth/*`
+	// is THIS zone's own BFF now, but it is still a server route rather than a client one, so the anchor
+	// below keeps `data-sveltekit-reload` — a soft nav into a `+server.ts` is not a navigation SvelteKit
+	// can make.
 	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
 
 	type AuditEvent = {
@@ -45,8 +52,8 @@
 	let inflight = 0;
 
 	// Filters (applied server-side by the BFF over the returned columns). Initialized once from the
-	// URL query so cross-page "related events" links (`/governance/audit?resource=…`, e.g. from the
-	// tenants drawer) land pre-filtered — after that the state is the user's.
+	// URL query so cross-page "related events" links (`/settings/audit?resource=…`) land pre-filtered —
+	// after that the state is the user's.
 	const initial = page.url.searchParams;
 	let outcome = $state(initial.get('outcome') ?? '');
 	// The TIME WINDOW. Server-side, unlike the text filters: it changes the SQL, because the trail is
@@ -184,14 +191,17 @@
 	// ── the row drawer (goal cond 8): click an event → the full record + linked context. ──
 	let drawerEvent = $state<AuditEvent | null>(null);
 
-	/** Map an audit resource id to its estate page, when one exists. These target the catalog AREA of
-	 *  this same zone, so they are base-relative soft navigations rather than cross-zone hard navs. */
+	/** Map an audit resource id to its estate page, when one exists. These target the LAKEHOUSE zone's
+	 *  catalog area, so they are written absolutely and hard-navigate — this zone's base is `''`, and a
+	 *  `${base}`-relative href would have silently produced `/catalog/tables/…`, which the catch-all
+	 *  serves as a 404. That is exactly the shape this file got wrong once already, so it is spelled out
+	 *  rather than derived. */
 	function resourceHref(res: string): string | null {
 		if (res.startsWith('table:'))
-			return `${base}/catalog/tables/${encodeURIComponent(res.slice('table:'.length))}`;
+			return `/lakehouse/catalog/tables/${encodeURIComponent(res.slice('table:'.length))}`;
 		if (res.startsWith('namespace:'))
-			return `${base}/catalog/namespaces/${encodeURIComponent(res.slice('namespace:'.length))}`;
-		if (res.startsWith('warehouse:')) return `${base}/catalog/warehouses`;
+			return `/lakehouse/catalog/namespaces/${encodeURIComponent(res.slice('namespace:'.length))}`;
+		if (res.startsWith('warehouse:')) return '/lakehouse/catalog/warehouses';
 		return null;
 	}
 

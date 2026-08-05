@@ -3,7 +3,7 @@ import { env } from '$env/dynamic/private';
 import * as v from 'valibot';
 import { parse } from '@rask/api';
 import type { ApiResult } from '@rask/api/client';
-import type { CreateWarehouseBody, ProjectSummary, WarehouseRecord } from '../catalog';
+import type { CreateWarehouseBody, WarehouseRecord } from '../catalog';
 
 // The warehouse + project registry, in the zone's remote-function dialect — same
 // names, same `ApiResult` shapes as the /capi client this replaces, transport only. The three narrow
@@ -46,21 +46,6 @@ const DeleteWarehouseSchema = v.object({
 	tuples_revoked: v.number(),
 	bucket_purged: v.boolean(),
 	objects_purged: v.number(),
-});
-
-/** `ProjectResponse` — the tenant's warehouses (a narrower record than the registry's) + its
- *  effective admins. */
-const ProjectSchema = v.object({
-	project: v.string(),
-	warehouses: v.array(
-		v.object({
-			id: v.string(),
-			bucket: v.string(),
-			serving: v.optional(v.nullable(v.string())),
-			status: v.string(),
-		}),
-	),
-	admins: v.array(v.string()),
 });
 
 function bearerHeaders(): Record<string, string> {
@@ -145,17 +130,13 @@ export const fetchWarehouseNamespaces = query(
 		parsed(await catalogJSON(`/v1/warehouses/${enc(id)}/namespaces`), WarehouseNamespacesSchema),
 );
 
-/** The estate's tenants (estate-observer gated by the catalog — a member sees 403, handled). */
-export const fetchProjects = query(
-	async (): Promise<ApiResult<ProjectSummary[]>> =>
-		parsed(await catalogJSON('/v1/projects'), v.array(ProjectSchema)),
-);
-
-// `fetchProject` (one tenant: its warehouses + effective admins) is GONE from this zone. Its only
-// consumer was `catalog/projects/[project]`, and the per-project overview moved to the home zone with
-// the rest of the projects surface (2026-08-03 ruling — a project is the TOP of the hierarchy). Home
-// carries its own copy; a second, unreachable one here would be the drift this round exists to end.
-// `fetchProjects` (plural) stays — TenantsPanel reads it.
+// The PROJECT reads are GONE from this zone, both of them. `fetchProject` (one tenant) went with
+// `catalog/projects/[project]` when the per-project overview moved to the home zone; the estate's
+// tenant LIST went with the Tenants panel, which the #105 estate-settings port retired outright —
+// `/projects` in the home zone IS the estate's project list, and a second one under a project-scoped
+// zone's catalog was the duplication the 2026-08-03 ruling deletes. Nothing here renders a project
+// any more, so the warehouse commands below refresh only the warehouse registry: a single-flight
+// refresh of a query no surface holds is bytes for nobody.
 
 /** Provision a warehouse — the create that MINTS a project when its `project` is new. Project-admin
  *  gated by the catalog (can_create_warehouse); on success both registry reads refresh in the same
@@ -174,7 +155,6 @@ export const createWarehouse = command(
 		);
 		if (result.ok) {
 			void fetchWarehouses().refresh();
-			void fetchProjects().refresh();
 		}
 		return result;
 	},
@@ -192,7 +172,6 @@ export const setWarehouseActive = command(
 		);
 		if (result.ok) {
 			void fetchWarehouses().refresh();
-			void fetchProjects().refresh();
 		}
 		return result;
 	},
@@ -242,7 +221,6 @@ export const deleteWarehouse = command(
 		);
 		if (result.ok) {
 			void fetchWarehouses().refresh();
-			void fetchProjects().refresh();
 		}
 		return result;
 	},

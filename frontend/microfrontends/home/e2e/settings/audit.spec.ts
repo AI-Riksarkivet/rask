@@ -1,8 +1,11 @@
 import { test, expect, type Page } from '@playwright/test';
-import { mockMe, signIn, TOKEN } from './session';
+import { ME_ADMIN, signIn, TOKEN } from '../session';
+import { seed as seedFor } from '../mock-client';
 import { MOCK_OBS } from '../ports';
 
-// Hermetic /audit coverage (#77). The viewer reads through the remote function now
+// Hermetic `/settings/audit` coverage (#77), in the HOME zone since #105 — the trail is PLATFORM-wide
+// (it spans every tenant and takes no project), so it is settings rather than a zone's feature. The
+// viewer reads through a remote function
 // (`audit.remote.ts` over `$lib/server/audit-core.ts`), so the mock serves GreptimeDB's RAW /v1/sql
 // response per bearer — which upgrades these tests: the rows are seeded in the NESTED
 // `log_attributes` JSON-string shape, so the flattening that the 2026-07-21 "every field renders —"
@@ -64,7 +67,10 @@ let token: string;
 test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
 	await signIn(context, { token });
-	await mockMe(page); // estate-admin identity: the governance layout door opens
+	// The estate-admin identity the `/settings` layout door reads. SEEDED on the mock catalog rather
+	// than page.route'd: this zone's layout calls `fetchMe` against CATALOG_API directly, so there is no
+	// browser hop to intercept.
+	await seedFor(page, token, { 'GET /v1/me': ME_ADMIN });
 	await page.request.post(`${MOCK_OBS}/__mock/seed`, {
 		data: { bearer: token, routes: { [SQL_KEY]: sqlResponse(EVENTS) } },
 	});
@@ -82,7 +88,7 @@ test('a raw GreptimeDB nanosecond timestamp renders as a time, not as an integer
 	// `new Date(...)` cannot parse it, so the viewer used to print the integer at the operator.
 	const nanos = `${Date.now() - 5 * 60_000}000000`;
 	await reseed(page, [{ ...EVENTS[1], timestamp: nanos }]);
-	await page.goto('/lakehouse/governance/audit');
+	await page.goto('/settings/audit');
 	const cell = page.locator('tbody tr').first().locator('td').first();
 	await expect(cell).not.toContainText(nanos);
 	await expect(cell).toContainText('5m ago');
@@ -96,7 +102,7 @@ test('a raw GreptimeDB nanosecond timestamp renders as a time, not as an integer
 test('renders the audit trail rows (through the real log_attributes flattening)', async ({
 	page,
 }) => {
-	await page.goto('/lakehouse/governance/audit');
+	await page.goto('/settings/audit');
 	await expect(page.getByRole('heading', { name: 'Audit log' })).toBeVisible();
 	const table = page.locator('table');
 	await expect(table).toContainText('can_drop');
@@ -105,7 +111,7 @@ test('renders the audit trail rows (through the real log_attributes flattening)'
 });
 
 test('the outcome filter re-queries and narrows the trail', async ({ page }) => {
-	await page.goto('/lakehouse/governance/audit');
+	await page.goto('/settings/audit');
 	await expect(page.locator('table')).toContainText('can_read_data');
 	// the outcome picker is the @rask/ui Select (bits-ui). The filter runs SERVER-side now (the
 	// core's post-filter over the seeded rows) — the narrowed render proves the round trip.
@@ -116,14 +122,17 @@ test('the outcome filter re-queries and narrows the trail', async ({ page }) => 
 });
 
 test('a row click opens the drawer with the full record and linked context', async ({ page }) => {
-	await page.goto('/lakehouse/governance/audit');
+	await page.goto('/settings/audit');
 	await page.locator('tbody tr', { hasText: 'can_drop' }).click();
 	// The drawer carries the full record…
 	const drawer = page.locator('[data-slot="sheet-content"]');
 	await expect(drawer).toContainText('user:bob');
 	await expect(drawer).toContainText('table:db1$t');
 	await expect(drawer).toContainText('DENY');
-	// …a cross-zone jump link to the resource page (hard nav)…
+	// …a cross-zone jump link to the resource page (hard nav), written ABSOLUTELY. This is the assertion
+	// that catches the port's one silent trap: the viewer built these from `${base}`, and home's base is
+	// `''`, so a verbatim move would have produced `/catalog/tables/db1%24t` — a 404 the catch-all serves
+	// with a straight face, which compiles, type-checks and lints clean…
 	const jump = drawer.getByRole('link', { name: /Open resource/ });
 	await expect(jump).toHaveAttribute('href', '/lakehouse/catalog/tables/db1%24t');
 	await expect(jump).toHaveAttribute('data-sveltekit-reload', '');
@@ -134,12 +143,23 @@ test('a row click opens the drawer with the full record and linked context', asy
 });
 
 test('a ?resource= deep link lands pre-filtered (the drawers link into this)', async ({ page }) => {
-	await page.goto('/lakehouse/governance/audit?resource=table%3Adb1%24t');
+	await page.goto('/settings/audit?resource=table%3Adb1%24t');
 	await expect(page.getByLabel('Resource filter')).toHaveValue('table:db1$t');
 	await expect(page.locator('table')).toContainText('can_drop'); // the filtered read landed
 });
 
-test('the shared sidebar marks the Audit leaf active', async ({ page }) => {
-	await page.goto('/lakehouse/governance/audit');
-	await expect(page.locator('[data-active="true"]').filter({ hasText: 'Audit' })).toBeVisible();
+test('the MAIN MENU stays on, and Settings is the entry that lights', async ({ page }) => {
+	// The lakehouse version of this test asserted a SIDEBAR leaf. There is no rail here and that is
+	// deliberate — home has exactly one nav leaf so the shell suppresses the sidebar entirely
+	// (`zone-shell.test.ts` pins the count), and a rail whose rows duplicate the page you are on costs
+	// width for nothing. What must hold instead is that `/settings/audit` is still the ESTATE level:
+	// `isMainMenu` returns true for `/settings/*`, so the bar is Home · Projects · Settings rather than
+	// a zone bar, and `SETTINGS_ENTRY.match` lights on the child route, not only on `/settings`.
+	await page.goto('/settings/audit');
+	const nav = page.getByRole('navigation', { name: 'Zones' });
+	await expect(nav.getByRole('link', { name: 'Home', exact: true })).toBeVisible();
+	await expect(nav.getByRole('link', { name: 'Projects', exact: true })).toBeVisible();
+	await expect(nav.getByRole('button', { name: 'Settings' })).toHaveAttribute('data-active', '');
+	// …and no zone entry leaked into it: the two-level ruling is what this page's address buys.
+	await expect(nav.getByRole('button', { name: 'Lakehouse' })).toHaveCount(0);
 });

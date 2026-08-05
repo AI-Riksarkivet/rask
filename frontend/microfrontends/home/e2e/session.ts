@@ -1,5 +1,5 @@
 import type { BrowserContext } from '@playwright/test';
-import { AUTH_ON } from '../ports';
+import { AUTH_ON } from './ports';
 
 // Sign the e2e browser context in. The projects dev server runs auth-ON (OIDC env in
 // playwright.config.ts) because the whole surface keys off `/v1/me`: the estate-admin create door, the

@@ -224,7 +224,10 @@ const WarehouseNamespacesSchema = v.object({ namespaces: v.array(v.string()) });
 export const warehouseNamespaces = query(
 	v.string(),
 	async (warehouseId): Promise<ApiResult<{ namespaces: string[] }>> =>
-		parsed(await catalogJSON(`/v1/warehouses/${enc(warehouseId)}/namespaces`), WarehouseNamespacesSchema),
+		parsed(
+			await catalogJSON(`/v1/warehouses/${enc(warehouseId)}/namespaces`),
+			WarehouseNamespacesSchema,
+		),
 );
 
 /** The tables under one namespace — the namespace→table rung (#104). The spec's list_tables via
@@ -233,5 +236,8 @@ const NamespaceTablesSchema = v.object({ tables: v.array(v.string()) });
 export const namespaceTables = query(
 	v.string(),
 	async (namespaceId): Promise<ApiResult<{ tables: string[] }>> =>
-		parsed(await catalogJSON(`/v1/namespace/${enc(namespaceId)}/table/list`), NamespaceTablesSchema),
+		parsed(
+			await catalogJSON(`/v1/namespace/${enc(namespaceId)}/table/list`),
+			NamespaceTablesSchema,
+		),
 );

@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
-import { ME_ADMIN, signIn, TOKEN } from './session';
-import { seed as seedFor } from './mock-client';
+import { ME_ADMIN, signIn, TOKEN } from '../session';
+import { seed as seedFor } from '../mock-client';
 
 // `/projects/<p>` — ONE project's metadata and overview, moved here from the lakehouse zone with the
 // list (2026-08-03 ruling: a project is the TOP of the hierarchy, so the page describing one is a

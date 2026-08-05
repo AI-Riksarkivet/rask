@@ -1,5 +1,10 @@
 <script lang="ts">
-	// `/lakehouse/governance/access` — ONE query-driven FGA explorer.
+	// `/settings/access` — ONE query-driven FGA explorer.
+	//
+	// An ESTATE surface, and that is why it is HERE (#105): the workbench reads the whole tuple store
+	// across every project and takes none, so it belongs to estate settings rather than inside a
+	// project-scoped zone. It served from `/lakehouse/governance/access` until this port; the shell's
+	// Settings entry already lit on both while the move was pending.
 	//
 	// This replaced four tabs (Graph / Tuples / Check / Model) that shared no state, no URL and no
 	// question. Each was a one-to-one wrapper around one catalog endpoint, so the view could only ask
@@ -11,10 +16,10 @@
 	// already on screen (no refetch), and the inspector sits beside it. The state lives in the URL, so
 	// an access question is a link you can paste into an incident channel.
 	import { ShieldCheck } from '@lucide/svelte';
-	import Explorer from '$lib/admin/access/Explorer.svelte';
+	import Explorer from '$lib/access/Explorer.svelte';
 </script>
 
-<svelte:head><title>Access · lakehouse</title></svelte:head>
+<svelte:head><title>Access · lance</title></svelte:head>
 
 <div class="mx-auto flex max-w-[1600px] flex-col gap-3 px-5 pb-6 pt-8">
 	<header class="flex items-baseline gap-2.5">

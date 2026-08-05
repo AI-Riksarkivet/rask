@@ -1,10 +1,13 @@
 // A tiny in-memory stand-in for the catalog endpoints the admin area reaches SERVER-SIDE, where
 // page.route cannot reach: `GET /v1/events` (the control-events feed's query.live poll), `GET /v1/me`
-// (the estate-admin door in admin/+layout.server.ts), and — since the remote-function migration — the
-// whole `/v1/access` surface plus `/v1/table` (the FGA workbench's reads and writes run on the zone
-// server through `access.remote.ts`). Runs as a second Playwright `webServer`; the dev server's
-// CATALOG_API points here. Test-control endpoints (`__mock/*`) seed events, simulate a governance
-// mutation, toggle 403, and expose what the access surface received.
+// (the estate-admin door in admin/+layout.server.ts), the stores registry and `/v1/table`. Runs as a
+// second Playwright `webServer`; the dev server's CATALOG_API points here. Test-control endpoints
+// (`__mock/*`) seed events, simulate a governance mutation, toggle 403, and expose what the store
+// writes received.
+//
+// The whole `/v1/access` surface LEFT with #105 — the FGA workbench is the home zone's
+// `/settings/access` now, and its mock lives beside its spec there. What stayed is the store half of
+// the same per-bearer ledger, because `attach-store.spec.ts` reads it.
 //
 // EVERYTHING mutable is keyed by the BEARER, never by shared server state: the suite is fullyParallel,
 // so a spec that flipped a shared "current identity" — or read a shared request log — would race every
@@ -12,14 +15,7 @@
 // suffix), so each test carries its own identity and nothing is shared.
 
 import { ME_ADMIN, ME_MEMBER, TOKEN } from './session';
-import {
-	DSL,
-	EXPAND_TREE,
-	MODEL_CONDITIONS,
-	STORES,
-	TUPLES,
-	type FixtureTuple,
-} from './access-fixtures';
+import { STORES } from './store-fixtures';
 import { MOCK_CATALOG_PORT } from '../ports';
 
 type ControlEvent = {
@@ -66,20 +62,13 @@ const identityOf = (bearer: string): unknown => {
 
 type Body = Record<string, unknown>;
 
-/** What one test's access surface did — request shapes recorded per bearer, replacing the page.route
- *  capture variables the spec held while the transport was still browser-side. */
+/** What one test's WRITES did — request shapes recorded per bearer, replacing the page.route capture
+ *  variables the spec held while the transport was still browser-side. */
 type AccessState = {
-	extraTuples: FixtureTuple[];
-	written: Body[];
-	deleted: FixtureTuple[];
-	expandBody: Body | null;
-	listUsersBodies: Body[];
-	listObjectsBody: Body | null;
-	simulateBodies: Body[];
 	/** Store drafts POSTed to /v1/stores by this bearer (the attach-store flow). */
 	attachedStores: Body[];
-	/** Set via `__mock/access/config`: the next WRITES (tuples, stores) 403 — the partial-outcome /
-	 *  denied-form lever (a failed write must be NAMED, never rolled into a fake success). */
+	/** Set via `__mock/access/config`: the next store WRITE 403s — the partial-outcome / denied-form
+	 *  lever (a failed write must be NAMED, never rolled into a fake success). */
 	failWrites: boolean;
 };
 
@@ -110,24 +99,11 @@ const accessStates = new Map<string, AccessState>();
 const accessStateOf = (bearer: string): AccessState => {
 	let state = accessStates.get(bearer);
 	if (!state) {
-		state = {
-			extraTuples: [],
-			written: [],
-			deleted: [],
-			expandBody: null,
-			listUsersBodies: [],
-			listObjectsBody: null,
-			simulateBodies: [],
-			attachedStores: [],
-			failWrites: false,
-		};
+		state = { attachedStores: [], failWrites: false };
 		accessStates.set(bearer, state);
 	}
 	return state;
 };
-
-const sameTuple = (a: FixtureTuple, b: FixtureTuple): boolean =>
-	a.user === b.user && a.relation === b.relation && a.object === b.object;
 
 const json = (data: unknown, status = 200): Response =>
 	new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
@@ -180,7 +156,7 @@ Bun.serve({
 			}
 		}
 
-		// ── the /v1/access surface + the registry (the FGA workbench's remote functions land here) ──
+		// ── the registry defaults (a spec that cares seeds its own; this keeps an unseeded read sane) ──
 		if (url.pathname === '/v1/table') return json({ tables: ['db1$t'] });
 		// #86 the estate-wide bindings read the namespaces page loads alongside the table list. Served
 		// here because the page reaches it SERVER-side through a remote function, where page.route
@@ -212,79 +188,11 @@ Bun.serve({
 			};
 			return json({ stores: [...STORES, attached] });
 		}
-		if (url.pathname === '/v1/access/model') {
-			return json({ dsl: DSL, authorization_model_id: '01MODEL', conditions: MODEL_CONDITIONS });
-		}
-		if (url.pathname === '/v1/access/tuples') {
-			const state = accessStateOf(bearer);
-			if (req.method === 'GET') {
-				const object = url.searchParams.get('object');
-				let tuples = [...TUPLES, ...state.extraTuples].filter(
-					(t) => !state.deleted.some((d) => sameTuple(d, t)),
-				);
-				if (object) tuples = tuples.filter((t) => t.object === object);
-				return json({ tuples, continuation: null });
-			}
-			if (state.failWrites) return json({ detail: 'forbidden' }, 403);
-			const body = (await req.json()) as FixtureTuple;
-			if (req.method === 'POST') state.written.push(body as unknown as Body);
-			if (req.method === 'DELETE') state.deleted.push(body);
-			return json(body);
-		}
-		if (url.pathname === '/v1/access/check' && req.method === 'POST') {
-			const body = (await req.json()) as Body;
-			const user = String(body.user ?? '');
-			return json({
-				allowed: true,
-				checked: {
-					user: user.includes(':') ? user : `user:${user}`,
-					relation: body.relation,
-					object: body.object,
-				},
-			});
-		}
-		if (url.pathname === '/v1/access/expand' && req.method === 'POST') {
-			accessStateOf(bearer).expandBody = (await req.json()) as Body;
-			return json({
-				tree: EXPAND_TREE,
-				object: 'table:db1$t',
-				relation: 'can_read_data',
-				depth: 3,
-			});
-		}
-		if (url.pathname === '/v1/access/list-users' && req.method === 'POST') {
-			accessStateOf(bearer).listUsersBodies.push((await req.json()) as Body);
-			return json({
-				users: ['user:alice', 'user:bob', 'role:validators#assignee'],
-				object: 'table:db1$t',
-				relation: 'reader',
-				user_type: 'user',
-				user_relation: null,
-				truncated: false,
-			});
-		}
-		if (url.pathname === '/v1/access/list-objects' && req.method === 'POST') {
-			accessStateOf(bearer).listObjectsBody = (await req.json()) as Body;
-			return json({
-				objects: ['table:db1$t', 'table:db1$u'],
-				user: 'user:alice',
-				relation: 'can_read_data',
-				type: 'table',
-			});
-		}
-		if (url.pathname === '/v1/access/simulate' && req.method === 'POST') {
-			accessStateOf(bearer).simulateBodies.push((await req.json()) as Body);
-			return json({
-				allowed: true,
-				baseline: false,
-				checked: { user: 'user:carol', relation: 'reader', object: 'table:db1$t' },
-				hypothetical: [{ user: 'user:carol', relation: 'reader', object: 'table:db1$t' }],
-			});
-		}
-
 		// ── test control plane ──
-		// What the access surface RECEIVED, keyed by the caller's own bearer — the spec's replacement for
-		// the capture variables page.route used to fill while the transport was browser-side.
+		// What the store writes RECEIVED, keyed by the caller's own bearer — the spec's replacement for
+		// the capture variables page.route used to fill while the transport was browser-side. The name
+		// is `__mock/access` for the same reason `AccessState` is: the failWrites lever is an
+		// AUTHORIZATION lever, and attach-store is the one flow left that pulls it.
 		if (url.pathname === '/__mock/access' && req.method === 'GET') {
 			return json({ ...accessStateOf(bearer), eventProbes: probesByBearer.get(bearer) ?? 0 });
 		}
@@ -304,11 +212,6 @@ Bun.serve({
 		if (url.pathname === '/__mock/access/config' && req.method === 'POST') {
 			const body = (await req.json()) as { bearer: string; failWrites?: boolean };
 			accessStateOf(body.bearer).failWrites = body.failWrites ?? false;
-			return json({ ok: true });
-		}
-		if (url.pathname === '/__mock/access/tuple' && req.method === 'POST') {
-			const body = (await req.json()) as { bearer: string; tuple: FixtureTuple };
-			accessStateOf(body.bearer).extraTuples.push(body.tuple);
 			return json({ ok: true });
 		}
 		if (url.pathname === '/__mock/add' && req.method === 'POST') {

@@ -74,7 +74,13 @@
 		const edges: Edge[] = [];
 		let slot = 0;
 		const TIERS = ['project', 'warehouse', 'namespace', 'table'] as const;
-		const node = (id: string, label: string, tier: 0 | 1 | 2 | 3, x: number, extra: Partial<HierarchyData> = {}): number => {
+		const node = (
+			id: string,
+			label: string,
+			tier: 0 | 1 | 2 | 3,
+			x: number,
+			extra: Partial<HierarchyData> = {},
+		): number => {
 			nodes.push({
 				id,
 				type: 'rung',
@@ -107,7 +113,9 @@
 						edges.push({ id: `${nid}-${tb}`, source: nid, target: `t:${ns}$${tb}` });
 					}
 					if (entry.more > 0) {
-						tableXs.push(node(`${nid}:more`, `+${entry.more} more`, 3, slot++ * SLOT_W, { more: true }));
+						tableXs.push(
+							node(`${nid}:more`, `+${entry.more} more`, 3, slot++ * SLOT_W, { more: true }),
+						);
 						edges.push({ id: `${nid}-more`, source: nid, target: `${nid}:more` });
 					}
 				}
@@ -140,4 +148,3 @@
 		<StaticFlow nodes={graph.nodes} edges={graph.edges} {nodeTypes} />
 	</div>
 {/if}
-

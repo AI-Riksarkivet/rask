@@ -1,5 +1,5 @@
 import { onMount, untrack } from 'svelte';
-import { lineageFeed } from './feeds.remote';
+import { controlCursor } from './feeds.remote';
 
 /** The shape of a `query.live` instance this zone consumes as a cursor — see `feeds.remote.ts`. */
 export interface LiveCursor {
@@ -10,7 +10,7 @@ export interface LiveCursor {
 /**
  * Read once, then re-read on every advance of a live cursor. This is the replacement for the
  * `$effect(() => { load(); const t = setInterval(load, POLL_MS); return () => clearInterval(t) })`
- * that thirteen files in this zone carried.
+ * that the estate carried before the live cursors landed.
  *
  * Four rules, and the last two are each here because getting them wrong broke a test:
  *
@@ -23,15 +23,12 @@ export interface LiveCursor {
  *  - The cursor's ARRIVAL is not a change. `.current` is undefined until the stream delivers its first
  *    value, and treating `undefined → 137` as an advance makes every page load read twice — once eagerly
  *    and once when the stream lands, for no new information. Only a cursor that moves after that means
- *    the estate did something. (Caught by `e2e/lineage/live-refresh.spec.ts`, which counts reads: it
- *    expected 1 and got 2.)
+ *    the estate did something.
  *  - The stream is OPENED ON MOUNT, never at component init, so it does not exist during SSR. A live
  *    query touched while rendering makes the server hold the render until the generator's first value —
- *    which for these cursors is a round trip to the lineage plane on the critical path of every page.
- *    A page whose HTML waits on a *liveness probe* is strictly worse than the timers this replaced, and
- *    it is measurable: opening at init took this zone's e2e suite from 2 failures to 9–18, nearly all of
- *    them shell elements simply absent, and moving it here put the count back. A live feed is a client
- *    concern; the server's job is to render the page.
+ *    which for these cursors is a round trip to the catalog on the critical path of every page. A page
+ *    whose HTML waits on a *liveness probe* is strictly worse than the timers this replaced. A live feed
+ *    is a client concern; the server's job is to render the page.
  *
  * The read is `untrack`ed (the AuditViewer convention): a loader assigns the `$state` it also reads, so
  * tracking it would re-enter.
@@ -69,24 +66,21 @@ export function liveRead<K = void>(
 }
 
 /**
- * The lineage cursor, taken from the ONE shared `lineageFeed` stream — the feed the shell's notification
- * bell also renders. SvelteKit dedupes identical live-query instances onto a single connection, so every
- * lineage-backed surface on a page and the bell above it ride the same stream, advance on the same number,
- * and cannot disagree about when the estate changed.
+ * The CONTROL-plane cursor — for the surfaces whose changes are governance mutations (grants,
+ * warehouses, tenants, promotions) rather than data movement. Those never touch a dataset, so they never
+ * move the lineage cursor; `/settings/access` re-reads on this one instead. SvelteKit dedupes identical
+ * live-query instances onto a single connection, so every control-backed surface on a page rides the
+ * same stream and they cannot disagree about when the estate changed.
  *
  * Pass it (not a call of it) to `liveRead`, which opens it on mount:
  *
- *     liveRead(lineageTick, () => load());
- *
- * There is no `controlTick` wrapper any more: its one consumer was the FGA workbench, which #105 moved
- * to the home zone (`/settings/access`). `controlCursor` itself STAYS — `WarehouseAdmin` passes it to
- * `liveRead` directly, which is all a cursor with no `.current` unwrapping needs.
+ *     liveRead(controlTick, () => load());
  */
-export function lineageTick(): LiveCursor {
-	const feed = lineageFeed();
+export function controlTick(): LiveCursor {
+	const feed = controlCursor();
 	return {
 		get current() {
-			return feed.current?.cursor;
+			return feed.current;
 		},
 		get connected() {
 			return feed.connected;

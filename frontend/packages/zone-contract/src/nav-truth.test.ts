@@ -33,7 +33,15 @@ function leavesOf(zone: string): Leaf[] {
 	const src = readFileSync(path, 'utf8');
 	const out: Leaf[] = [];
 	// Each leaf carries exactly one `title:` and one `href:`; take them pairwise in source order.
-	const re = /title:\s*'([^']+)'[\s\S]{0,200}?href:\s*'([^']+)'([\s\S]{0,200}?)(?=title:\s*'|$)/g;
+	//
+	// The window was 200 chars and that SILENTLY dropped leaves: this estate comments its nav heavily,
+	// and any leaf whose trailing comment ran past 200 chars fell out of the scan along with the NEXT
+	// leaf's pairing. Measured at #105 — seven leaves were invisible (lakehouse's Warehouses, Storage,
+	// DLQ; explorer's Search, Atlas, Tree; compute's API docs), i.e. the gate silently did not check the
+	// object browser it was written to protect. 900 catches every leaf in the estate today; the lazy
+	// quantifier plus the `(?=title:)` lookahead keep the pairing to the FIRST href after each title, so
+	// a wider window cannot mis-pair, only stop missing.
+	const re = /title:\s*'([^']+)'[\s\S]{0,900}?href:\s*'([^']+)'([\s\S]{0,900}?)(?=title:\s*'|$)/g;
 	for (const m of src.matchAll(re)) {
 		out.push({
 			zone,

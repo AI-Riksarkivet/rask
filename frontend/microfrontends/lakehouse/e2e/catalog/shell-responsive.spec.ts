@@ -186,7 +186,8 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 		'/explorer/',
 		'/annotator/',
 		// GOVERNANCE is not in this bar at either width any more — it moved to the main menu's Settings
-		// entry with the two-level ruling, so `/lakehouse/governance/access` is unreachable from inside
+		// entry with the two-level ruling, and #105 moved the page itself to `/settings/access` in the
+		// home zone — so the access workbench is unreachable from inside
 		// a zone by design. Operations DID stay (running the estate is an operation on the lakehouse),
 		// which is why its DLQ row is still expected right below.
 		'/lakehouse/admin/dlq',

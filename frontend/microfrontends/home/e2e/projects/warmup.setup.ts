@@ -1,5 +1,5 @@
 import { test } from '@playwright/test';
-import { signIn } from './session';
+import { signIn } from '../session';
 
 // Compile-warm the AUTH-ON dev server before the parallel projects suite. That is a SECOND dev server
 // and a second Vite compile, so it gets nothing from the auth-off warmup — without this the first spec

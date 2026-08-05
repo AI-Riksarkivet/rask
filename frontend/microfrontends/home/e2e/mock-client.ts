@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import { MOCK_CATALOG } from '../ports';
+import { MOCK_CATALOG } from './ports';
 
 // The test-side half of `mock-catalog.ts`: seed exact catalog answers for ONE bearer, and read back
 // what that bearer's app server actually sent. Shared by all three project specs because all three

@@ -38,11 +38,11 @@
 
 <div
 	class={cn(
-		'flex min-w-32 items-center gap-2 rounded-lg border px-3 py-2 text-left shadow-sm',
-		TIER_CLASS[data.tier],
-		data.more && 'border-dashed opacity-70',
-		data.err && 'border-destructive text-destructive',
-	)}
+	'flex min-w-32 items-center gap-2 rounded-lg border px-3 py-2 text-left shadow-sm',
+	TIER_CLASS[data.tier],
+	data.more && 'border-dashed opacity-70',
+	data.err && 'border-destructive text-destructive',
+)}
 >
 	<Icon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
 	<div class="min-w-0 leading-tight">

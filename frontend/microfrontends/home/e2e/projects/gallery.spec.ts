@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
-import { ME_ADMIN, ME_MEMBER, signIn, TOKEN } from './session';
-import { seed as seedFor } from './mock-client';
+import { ME_ADMIN, ME_MEMBER, signIn, TOKEN } from '../session';
+import { seed as seedFor } from '../mock-client';
 
 // The gallery's DEGRADE contract — the behaviour `$lib/gallery.ts` exists for and that nothing tested
 // anywhere before this file. Memberships come from the frozen `/v1/me`; an estate admin ALSO gets the

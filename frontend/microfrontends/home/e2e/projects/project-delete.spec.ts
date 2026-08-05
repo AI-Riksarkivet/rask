@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
-import { ME_ADMIN, signIn, TOKEN } from './session';
-import { calls, seed as seedFor } from './mock-client';
+import { ME_ADMIN, signIn, TOKEN } from '../session';
+import { calls, seed as seedFor } from '../mock-client';
 
 // Retiring a tenant — `DELETE /v1/projects/{id}` from `/projects/<p>`'s danger zone.
 //

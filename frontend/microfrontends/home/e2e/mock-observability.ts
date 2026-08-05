@@ -1,8 +1,10 @@
-// One mock for the three NON-catalog upstreams the admin/models remote functions reach server-side:
-// GreptimeDB (`/v1/sql?...`, `/v1/promql*` — the audit trail + experiment metrics), the NATS monitor
-// (`/jsz` — the streams panel) and the medallion head (`/produce`, `/train`). Their paths never
-// collide, so GREPTIME_API, NATS_MONITOR_API and MEDALLION_API all point at this one port
-// (playwright.config.ts, the auth-ON server).
+// The mock GREPTIMEDB the audit trail reads through: `$lib/server/audit-core.ts` POSTs `/v1/sql?db=public`
+// from the ZONE SERVER (behind `audit.remote.ts`), where `page.route` cannot reach, so the upstream
+// itself is stubbed. GREPTIME_API on the auth-ON dev server points at this port (playwright.config.ts).
+//
+// A copy of the lakehouse suite's mock rather than a shared module: the two suites are separate
+// playwright projects in separate packages, and this one serves exactly one upstream where that one
+// multiplexes three (NATS and the medallion head are lakehouse concerns).
 //
 // PURELY seed-driven — no baked-in fixtures: a spec seeds exactly the upstream response its old
 // page.route served, keyed per bearer like mock-catalog's generic mechanism (same shape: `__mock/seed`
@@ -10,7 +12,7 @@
 // seeded hits are recorded and served back from `__mock/calls` under the caller's bearer). Unseeded
 // paths 404, which every ported surface renders as its honest "unavailable" state.
 
-import { MOCK_OBS_PORT } from '../ports';
+import { MOCK_OBS_PORT } from './ports';
 
 type Body = Record<string, unknown>;
 
