@@ -8,6 +8,8 @@
 	import { Button } from '@rask/ui/button';
 	import { Dialog } from '@rask/ui/dialog';
 	import { Input } from '@rask/ui/input';
+	import { Select } from '@rask/ui/select';
+	import { predictionFor } from '$lib/atlas/atlas-send';
 	import { projectFromHost } from '@rask/ui/shell';
 	import type { ProjectRow, SendItem } from '$lib/projects/projects';
 	import {
@@ -22,6 +24,7 @@
 		dataset,
 		origin = 'search',
 		datasetVersion = null,
+		labelChoices = [],
 	}: {
 		open?: boolean;
 		/** Descriptor key-paths (`doc/speech/chunk`) — what the selection IS. */
@@ -34,7 +37,14 @@
 		datasetVersion?: number | null;
 		/** Which surface sent — search results or an atlas selection (provenance only). */
 		origin?: 'search' | 'atlas';
+		/** Class names this selection may be labelled with — the chosen project's taxonomy. Empty
+		 *  means "no taxonomy to offer", and the picker is then absent rather than empty. */
+		labelChoices?: string[];
 	} = $props();
+
+	// EMPTY STRING is "no label", because `Select` declares `value = $bindable('')` — a bindable with
+	// a fallback cannot be bound to `undefined`, and doing so throws `props_invalid_value` at RENDER.
+	let label = $state('');
 
 	let projects = $state<ProjectRow[]>([]);
 	let loadState = $state<'loading' | 'ready' | 'error'>('loading');
@@ -86,6 +96,9 @@
 	});
 
 	function items(): SendItem[] {
+		// The bulk LABEL, as one whole-item tag. Absent when nothing was picked — that is the ordinary
+		// send ("queue these for someone to draw on") and must stay byte-identical.
+		const prediction = predictionFor(label);
 		return keys.map((key) => ({
 			source: {
 				kind: 'chunks' as const,
@@ -94,6 +107,7 @@
 				dataset_version: datasetVersion,
 			},
 			media: { kind: 'image' as const },
+			...(prediction ? { prediction } : {}),
 		}));
 	}
 
@@ -143,7 +157,7 @@
 <Dialog.Root bind:open>
 	<Dialog.Content class="sm:max-w-md">
 		<Dialog.Title
-			>Send {keys.length} item{keys.length === 1 ? '' : 's'} to a labeling task</Dialog.Title
+			>{label ? `Label ${keys.length} item${keys.length === 1 ? '' : 's'} as ${label}` : `Send ${keys.length} item${keys.length === 1 ? '' : 's'} to a labeling task`}</Dialog.Title
 		>
 		<Dialog.Description>
 			From {origin === 'atlas' ? 'the atlas selection' : 'the search results'}
@@ -165,6 +179,23 @@
 			</div>
 		{:else}
 			<div class="flex flex-col gap-3 text-sm">
+				<!-- LABEL the selection, optionally. A region of an embedding projection is usually a
+				     semantic cluster, so one lasso is very often one class — but sending unlabelled
+				     ("queue these for someone to draw on") is the ordinary case and stays the default.
+				     Rendered only when a taxonomy was supplied: an empty picker reads as "this project
+				     has no classes" rather than "nothing to choose from". -->
+				{#if labelChoices.length > 0}
+					<label class="flex flex-col gap-1">
+						<span class="text-muted-foreground text-xs">Label every item as…</span>
+						<Select
+							bind:value={label}
+							ariaLabel="Label to apply"
+							placeholder="Send unlabelled"
+							options={labelChoices.map((name) => ({ value: name, label: name }))}
+						/>
+					</label>
+				{/if}
+
 				{#if loadState === 'loading'}
 					<p class="text-muted-foreground">Loading projects…</p>
 				{:else if loadState === 'error'}
