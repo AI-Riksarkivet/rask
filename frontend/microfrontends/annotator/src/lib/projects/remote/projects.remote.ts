@@ -346,8 +346,20 @@ export const dropTask = command(
 	v.object({ projectId: v.string(), taskId: v.string() }),
 	async ({ projectId, taskId }): Promise<ApiResult<{ task_id: string; removed: boolean }>> => {
 		const result = await write('DELETE', `/projects/${projectId}/tasks/${enc(taskId)}`);
-		// Single-flight the listing this invalidates, like every other mutation here.
-		if (result.ok) void listTasks({ projectId }).refresh();
+		// Single-flight the listing this invalidates — with the arguments the RENDER SITES use.
+		//
+		// This said `listTasks({ projectId })` and had therefore never refreshed anything. Queries are
+		// keyed by their serialized argument, and both surfaces that render this listing ask for
+		// `{ projectId, details: true }` (the queue page, and the canvas's label stream) — the bare
+		// form is a cache key nothing holds, so the refresh resolved against no instance and returned
+		// silently. The queue still appeared to update, because its caller re-loads the page data
+		// itself; the single-flight was decoration.
+		//
+		// The SvelteKit docs name this exact failure: "if `getPosts({ filter: 'author:santa' })` is
+		// rendered on the client, calling `getPosts().refresh()` in the server handler won't update
+		// it." A refresh that misses is indistinguishable from one that lands until you remove the
+		// thing that was covering for it.
+		if (result.ok) void listTasks({ projectId, details: true }).refresh();
 		return result as ApiResult<{ task_id: string; removed: boolean }>;
 	},
 );

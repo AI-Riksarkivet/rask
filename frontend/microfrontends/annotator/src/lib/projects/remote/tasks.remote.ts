@@ -3,6 +3,7 @@ import { env } from '$env/dynamic/private';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
 import { DraftSchema, TaskDetailSchema, type Draft, type TaskDetail } from '../types.js';
+import { listTasks } from './projects.remote';
 
 // The TASK half of the projects plane (the transport ruling, area 4) — task reads, task events
 // (claim / assign / submit / release / skip / accept / fix_and_accept / request_changes / …) and the
@@ -112,9 +113,30 @@ export const fireTaskEvent = command(
 		message: v.optional(v.string()),
 		shape_ids: v.optional(v.array(v.string())),
 		lease_seconds: v.optional(v.number()),
+		/** The project whose LISTING this transition invalidates — refresh-only, never sent upstream.
+		 *
+		 *  A task event changes what the queue shows (a claim moves a row out of `unassigned`, a
+		 *  submit moves it to `in_review`), but the endpoint is addressed by task alone, so this
+		 *  command could not name the query to refresh and refreshed nothing. Its callers compensated
+		 *  by re-reading the whole page afterwards — the two round-trips single-flight mutations exist
+		 *  to collapse into one.
+		 *
+		 *  Optional because a caller that has no project context (the canvas saving a draft) must
+		 *  still be able to fire an event; it simply gets no listing refresh, which is correct — there
+		 *  is no listing on screen to update. */
+		projectId: v.optional(v.string()),
 	}),
-	async ({ taskId, ...body }): Promise<ApiResult<TaskDetail>> =>
-		parsed(TaskDetailSchema, await write('POST', `/tasks/${taskId}/events`, body)),
+	async ({ taskId, projectId, ...body }): Promise<ApiResult<TaskDetail>> => {
+		const result = parsed(TaskDetailSchema, await write('POST', `/tasks/${taskId}/events`, body));
+		// `{ projectId, details: true }` — the arguments the render sites use. The bare form is a
+		// different cache key and would refresh nothing (the defect `dropTask` carried).
+		//
+		// One refresh serves BOTH surfaces, because both hold that same key: the queue page and the
+		// canvas's label stream. So claiming an item from the queue also corrects the canvas's
+		// prev/next set, with no second request and no poll.
+		if (result.ok && projectId) void listTasks({ projectId, details: true }).refresh();
+		return result;
+	},
 );
 
 /** Snapshot the canvas's shapes into the task draft (the S10 canvas→draft sync). Revision-guarded

@@ -95,7 +95,10 @@
 				(filterState === '' || t.state === filterState) &&
 				(filterAssignee === '' ||
 					(t.assignee ?? '').toLowerCase().includes(filterAssignee.trim().toLowerCase())) &&
-				(filterLabel === '' || labelText(t).split(',').some((l) => l.trim() === filterLabel)) &&
+				(filterLabel === '' ||
+					labelText(t)
+						.split(',')
+						.some((l) => l.trim() === filterLabel)) &&
 				matchesText(t, filterText),
 		),
 	);
@@ -194,7 +197,7 @@
 		if (busy) return;
 		busy = `${task.task_id}:${event}`;
 		notice = null;
-		const result = await fireTaskEvent({ taskId: task.task_id, event, ...opts });
+		const result = await fireTaskEvent({ taskId: task.task_id, event, projectId, ...opts });
 		busy = null;
 		if (result.ok) {
 			onchanged();
@@ -244,7 +247,7 @@
 		notice = null;
 		const failures: string[] = [];
 		for (const task of items) {
-			const result = await fireTaskEvent({ taskId: task.task_id, event: 'assign', assignee: to });
+			const result = await fireTaskEvent({ taskId: task.task_id, event: 'assign', assignee: to, projectId });
 			if (!result.ok) failures.push(`${task.source.keys[0] ?? task.task_id}: ${result.detail}`);
 		}
 		bulkBusy = false;
@@ -283,12 +286,13 @@
 		// notice computed after that reports "0 items" for real work (the bulk e2e caught exactly that).
 		const targets = targetsFor(tasks, selectedIds, event);
 		if (bulkBusy || targets.length === 0) return;
-		if (event === 'skip' && !confirm(`Skip ${targets.length} item(s)? They leave the queue.`)) return;
+		if (event === 'skip' && !confirm(`Skip ${targets.length} item(s)? They leave the queue.`))
+			return;
 		bulkBusy = true;
 		notice = null;
 		const failures: string[] = [];
 		for (const task of targets) {
-			const result = await fireTaskEvent({ taskId: task.task_id, event });
+			const result = await fireTaskEvent({ taskId: task.task_id, event, projectId });
 			if (!result.ok) failures.push(`${task.source.keys[0] ?? task.task_id}: ${result.detail}`);
 		}
 		bulkBusy = false;
@@ -315,7 +319,9 @@
 	async function bulkRemove(): Promise<void> {
 		const targets = tasks.filter((t) => selectedIds.includes(t.task_id));
 		if (bulkBusy || targets.length === 0) return;
-		if (!confirm(`Remove ${targets.length} item(s) from the project? Their queued work is discarded.`))
+		if (
+			!confirm(`Remove ${targets.length} item(s) from the project? Their queued work is discarded.`)
+		)
 			return;
 		bulkBusy = true;
 		notice = null;
@@ -559,7 +565,9 @@
 		{#each predictedLabels(task) as label (label)}
 			<Badge
 				variant="secondary"
-				title="suggested{task.prediction?.[0]?.source ? ` (${task.prediction[0].source})` : ''} — not reviewed"
+				title="suggested{task.prediction?.[0]?.source
+					? ` (${task.prediction[0].source})`
+					: ''} — not reviewed"
 			>
 				{label}
 			</Badge>
@@ -775,7 +783,13 @@
 	{ value: '', label: `All labels (${tasks.length})` },
 	...labelsPresent.map((name) => ({
 		value: name,
-		label: `${name} (${tasks.filter((t) => labelText(t).split(',').some((l) => l.trim() === name)).length})`,
+		label: `${name} (${
+			tasks.filter((t) =>
+				labelText(t)
+					.split(',')
+					.some((l) => l.trim() === name),
+			).length
+		})`,
 	})),
 ]}
 				/>
