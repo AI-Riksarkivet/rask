@@ -2,6 +2,7 @@ import {
 	Boxes,
 	FileText,
 	Gauge,
+	Import,
 	LayoutDashboard,
 	ListTree,
 	ScrollText,
@@ -31,6 +32,34 @@ export const COMPUTE_ZONE_NAV: ZoneNav = {
 			items: [
 				{ title: 'Nodes', href: '/compute/cluster', match: seg('/compute/cluster'), icon: Server },
 				{ title: 'Actors', href: '/compute/actors', match: seg('/compute/actors'), icon: Boxes },
+			],
+		},
+		{
+			// INGEST is its own group, not a row of Workloads. Workloads answers "what is running on
+			// the Ray cluster"; ingest answers "how does data get INTO the estate" — it never touches
+			// Ray, it drives the ingest plane's control API. Filing it under Workloads is what made it
+			// read as a Ray job, and the run view alongside it is the ETL run, not a Ray job.
+			label: 'Ingest',
+			items: [
+				{
+					// ETL — the estate's name for this plane, so the ROW says it and not a verb. The
+					// route was `/compute/new` ("new" names the action, not the thing) and sat in no
+					// sidebar group at all, reachable only by typing the URL; renaming the route to
+					// `/compute/etl` then labelling the row "New run" just moved the same mistake up a
+					// layer. The row is the noun; "Runs" beside it is the same noun's history.
+					title: 'ETL',
+					href: '/compute/etl',
+					match: seg('/compute/etl'),
+					icon: Import,
+				},
+				{
+					// The run view. `seg` not `exact`: this lights up for /compute/ingest/<run_id>,
+					// which is the only way the page is ever reached.
+					title: 'Runs',
+					href: '/compute/ingest',
+					match: seg('/compute/ingest'),
+					icon: ListTree,
+				},
 			],
 		},
 		{

@@ -25,7 +25,7 @@ that reaches this module.
 
 **Blocking calls run in a thread.** Every fetch below is synchronous, and the worker is async with
 bounded concurrency. Calling them inline would block the event loop and serialise the fetches that
-`FETCH_CONCURRENCY` exists to overlap, turning the concurrency ceiling into a lie that shows up only
+The fetch-concurrency ceiling exists to overlap, turning the concurrency ceiling into a lie that shows up only
 as an unexplained throughput cliff.
 """
 

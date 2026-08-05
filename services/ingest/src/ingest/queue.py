@@ -51,7 +51,7 @@ ACK_WAIT_SECONDS = 300
 
 # Bounded in-flight work per worker — backpressure, not a performance knob.
 #
-# MUST exceed `worker.FRAGMENT_TARGET_ROWS`. The worker holds a whole fragment's worth of messages
+# MUST exceed the run's `sizing.fragment_rows`. The worker holds a whole fragment's worth of messages
 # UNACKED while it accumulates them, so a ceiling below the batch size makes JetStream stop
 # delivering at the ceiling and the drain waits forever for units it will never be sent — a deadlock
 # that looks exactly like a slow source. At 32 (the old value) against a 1024-row batch it would have

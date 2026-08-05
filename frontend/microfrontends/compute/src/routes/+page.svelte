@@ -203,7 +203,12 @@
 			<div class="bg-card inline-flex items-center rounded-full border px-3 py-1.5">
 				<RayStatus />
 			</div>
-			<Button size="sm" onclick={() => goto(`${base}/new`)}>Ingest volume</Button>
+			<!-- `/etl`, not `/new`. The route was renamed and this button was not, so the landing page's
+			     only path into the ingest plane 404'd. Invisible because nothing gates a dead INTERNAL
+			     link — the cross-zone gate only checks that cross-zone anchors carry `data-sveltekit-reload`.
+			     "a source", not "volume": a volume is one source kind's unit, and the door takes any
+			     registered kind. -->
+			<Button size="sm" onclick={() => goto(`${base}/etl`)}>Ingest a source</Button>
 		</div>
 
 		<!-- Live cluster counts — each card soft-navs into its view -->

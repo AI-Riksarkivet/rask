@@ -31,6 +31,18 @@
 	);
 	const errorEntries = $derived(Object.entries(run?.errors ?? {}));
 
+	// PROGRESS. `units_total` was fetched and never rendered, so the page could say "4 done" and never
+	// "4 of 500" — no progress bar was possible for exactly the long harvest where one matters. The
+	// workflow publishes the enumerated total as CUSTOM STATUS specifically so this is answerable
+	// while the run is still going; dropping it here wasted that.
+	//
+	// Zero means NOT YET KNOWN, not "no units": enumeration is an activity that runs after the run is
+	// accepted, so there is a real window where the run exists and its total does not. Showing 0% then
+	// would be a lie about a run that is working.
+	const total = $derived(run?.units_total ?? 0);
+	const totalKnown = $derived(total > 0);
+	const percent = $derived(totalKnown ? Math.min(100, Math.round(((run?.units_done ?? 0) / total) * 100)) : 0);
+
 	// POLL REASON: a run's progress is a COUNTER climbing inside a workflow — `units_done` moves once
 	// per fetched unit — and nothing publishes it. The estate's cursors carry committed facts: the
 	// lineage cursor moves when a run COMMITS, which for an ingest is the last thing that happens, so
@@ -103,15 +115,60 @@
 				</p>
 			{/if}
 
-			<dl class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-				<dt class="text-muted-foreground">Units done</dt>
-				<dd class="font-mono" data-testid="units-done">{run.units_done}</dd>
+			<!-- PROGRESS, not just a counter. -->
+			<div class="space-y-1" data-testid="run-progress">
+				<div class="flex items-baseline justify-between text-sm">
+					<span class="text-muted-foreground">Units</span>
+					<span class="font-mono" data-testid="units-done">
+						{run.units_done}{#if totalKnown}<span class="text-muted-foreground"> of {total}</span>{/if}
+					</span>
+				</div>
+				{#if totalKnown}
+					<div class="bg-muted h-2 w-full overflow-hidden rounded-full">
+						<div
+							class="h-full rounded-full bg-emerald-600 transition-[width] duration-500"
+							style:width="{percent}%"
+						></div>
+					</div>
+				{:else}
+					<!-- Honest about the window between accept and enumeration: the run exists, its total
+					     does not yet. A 0% bar here would misreport a working run as a stalled one. -->
+					<p class="text-muted-foreground text-xs">Enumerating the source — the total is not known yet.</p>
+				{/if}
+			</div>
 
+			<dl class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
 				<dt class="text-muted-foreground">Committed version</dt>
 				<dd class="font-mono" data-testid="committed-version">
 					{run.committed_version ?? '—'}
 				</dd>
+
+				<!-- The PUBLICATION half (§D2). A commit makes rows readable; only a publication makes
+				     them ready, so a committed-but-unpublished run is a distinct state and not a
+				     success. These fields were on the wire all along and stripped by the client schema. -->
+				{#if run.published !== undefined && run.published !== null}
+					<dt class="text-muted-foreground">Published</dt>
+					<dd class="font-mono" data-testid="run-published">
+						{run.published ? 'yes' : 'no'}
+						{#if run.from_version != null && run.to_version != null}
+							<span class="text-muted-foreground">(v{run.from_version} → v{run.to_version})</span>
+						{/if}
+					</dd>
+				{/if}
 			</dl>
+
+			{#if run.publish_error}
+				<!-- A publish failure is deliberately NOT a failed run — the commit landed. But it must
+				     be loud, or the rows sit readable-and-not-ready with nothing saying so. -->
+				<p class="rounded border border-amber-600 p-3 text-sm text-amber-700" data-testid="publish-error">
+					<strong>Committed, but not published.</strong>
+					{run.publish_error}
+				</p>
+			{:else if run.published === false && run.publish_reason}
+				<p class="text-muted-foreground rounded border p-3 text-sm" data-testid="publish-reason">
+					Not published — {run.publish_reason}
+				</p>
+			{/if}
 
 			{#if errorEntries.length > 0}
 				<!-- Named, not counted. "3 units failed" tells an operator a number; the unit keys tell

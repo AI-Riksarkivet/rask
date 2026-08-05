@@ -81,7 +81,7 @@ test.describe('A20 — the deployed ingest lane, seen from the UI', () => {
 		//
 		// Asserted against a DEPLOYED registry rather than a fixture: the point is that the page renders
 		// what this deployment actually registered, and a mock would assert only that the mock was read.
-		await page.goto('/compute/new');
+		await page.goto('/compute/etl');
 
 		const kinds = page.getByTestId('source-kind');
 		await expect(kinds).toBeVisible();
@@ -95,7 +95,7 @@ test.describe('A20 — the deployed ingest lane, seen from the UI', () => {
 		// The half that proves the fields come from the registry rather than from a hardcoded form:
 		// switching kinds must change which inputs exist. `bucket` belongs to s3-prefix alone, and
 		// `volume_id` to iiif alone, so each is absent under the other.
-		await page.goto('/compute/new');
+		await page.goto('/compute/etl');
 
 		await page.getByTestId('source-kind').selectOption('s3-prefix');
 		await expect(page.getByTestId('source-option-bucket')).toBeVisible();

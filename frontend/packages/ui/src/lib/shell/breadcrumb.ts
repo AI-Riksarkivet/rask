@@ -15,6 +15,18 @@ export type Crumb = {
 	href: string;
 };
 
+/** Route words that are INITIALISMS, so sentence-casing does not turn them into words.
+ *
+ *  `/compute/etl` rendered as "Etl", which reads as a misspelling rather than a name — the estate
+ *  calls that plane ETL, and a crumb that renames the thing it points at is worse than an ugly one.
+ *  Same for `api-docs`, which sentence-cased to "Api docs".
+ *
+ *  Deliberately a CLOSED list, not a heuristic (a "≤4 letters ⇒ acronym" rule would shout at `jobs`,
+ *  `logs`, `home`). Every entry is a name this estate actually routes on; adding one is a decision,
+ *  which is the point. Matched per WORD after the dash-split, so `api-docs` and a future `htr-runs`
+ *  both work without listing the whole segment. */
+const INITIALISMS = new Set(['etl', 'api', 'ui', 'iiif', 'htr', 'alto', 'ocr', 's3', 'fga', 'gpu', 'sql']);
+
 /** Percent-decode a path segment for display, falling back to the raw text on a malformed
  *  escape (`decodeURIComponent` throws on a lone `%`). Ids like `silver$features` reach the
  *  URL encoded (`silver%24features`), and the raw form is unreadable in a breadcrumb. */
@@ -26,15 +38,20 @@ function humanise(seg: string): string {
 		// keep the raw segment
 	}
 	const spaced = decoded.replace(/-/g, ' ');
-	// Sentence-case the label, so a trail reads "Lakehouse > Catalog > Storage" instead of shouting
-	// lowercase. Only the FIRST character, and only when it is a lowercase ASCII letter:
-	//   - per-word title case would render "api docs" as "Api Docs", which is worse than either;
-	//   - a segment starting with anything else is an IDENTIFIER — `silver$features`, `A0060198`, a
-	//     uuid, a table name — and is left EXACTLY as it is. Capitalising a dataset id would
-	//     misreport the data the page is about, which is a worse failure than an ugly crumb.
-	// The guard tests the WHOLE label, not just its first character: `gold$catalog` starts with a
-	// lowercase letter but is an identifier, and a first-char-only check rendered it `Gold$catalog`.
-	return /^[a-z][a-z ]*$/.test(spaced) ? spaced[0]!.toUpperCase() + spaced.slice(1) : spaced;
+	// A segment that is not plain lowercase words is an IDENTIFIER — `silver$features`, `A0060198`, a
+	// uuid, a table name — and is left EXACTLY as it is. Capitalising a dataset id would misreport
+	// the data the page is about, which is a worse failure than an ugly crumb. The guard tests the
+	// WHOLE label, not just its first character: `gold$catalog` starts with a lowercase letter but is
+	// an identifier, and a first-char-only check rendered it `Gold$catalog`.
+	if (!/^[a-z][a-z ]*$/.test(spaced)) return spaced;
+
+	// Uppercase the initialisms, then sentence-case the rest. Per-word TITLE case is still refused —
+	// it would render "api docs" as "Api Docs" — so only the first word is capitalised, and only when
+	// it is not already an initialism carrying its own casing.
+	const words = spaced.split(' ').map((w) => (INITIALISMS.has(w) ? w.toUpperCase() : w));
+	const first = words[0]!;
+	if (!INITIALISMS.has(first)) words[0] = first[0]!.toUpperCase() + first.slice(1);
+	return words.join(' ');
 }
 
 /**

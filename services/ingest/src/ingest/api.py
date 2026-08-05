@@ -32,6 +32,7 @@ from ingest.runs import (
     record_from_workflow_state,
     run_id_for,
 )
+from ingest.sizing import IngestSizing, SizingRefused, resolve
 from ingest.sources import SourceDescriptor, SourceSpec, describe_sources, registered_kinds
 
 
@@ -54,12 +55,21 @@ async def list_sources() -> list[SourceDescriptor]:
 
 
 class IngestRequest(BaseModel):
-    """A source-agnostic request — I1/I2: no source-specific route, no dataset path."""
+    """A source-agnostic request — I1/I2: no source-specific route, no dataset path.
+
+    `project` + `dataset` are this plane's TWO-level addressing and they do NOT mirror the catalog's
+    four-level hierarchy (`project > warehouse > namespace > table`). What `catalog_service.ensure`
+    actually does: creates a NAMESPACE named after the project, then a table id `{project}${dataset}`.
+    So `project` names a namespace, `dataset` is a table, the warehouse is never chosen, and a nested
+    namespace is unreachable. Named here so nobody reads these two fields as the hierarchy; the
+    conflation itself is open work.
+    """
 
     kind: str = Field(description="registered source kind, e.g. 'iiif' | 's3-prefix' | 'local-dir'")
     project: str
     dataset: str
     options: dict[str, object] = Field(default_factory=dict)
+    sizing: IngestSizing = Field(default_factory=IngestSizing, description="per-run write partitioning; unset fields use the deployment default")
 
 
 class IngestAccepted(BaseModel):
@@ -117,6 +127,17 @@ async def create_ingest(
             detail=f"unknown source kind {body.kind!r} — registered: {registered_kinds() or '<none>'}",
         )
 
+    # HERE, at accept, not inside the drain. A `fragment_rows` at or above the queue's
+    # `max_ack_pending` does not write bigger fragments — it stops JetStream delivering and the drain
+    # waits forever, silently, hours in. Resolving at the door turns that into a 400 naming the
+    # ceiling, which is a fix the caller can act on; the resolved numbers then ride the spec so every
+    # worker in the fan-out runs the values THIS run was accepted with, rather than re-reading env
+    # that may have moved under a rolling restart.
+    try:
+        sizing = resolve(body.sizing)
+    except SizingRefused as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
     # A token-less call gets a fresh run: without a caller key there is nothing to converge ON, and
     # inventing one would make every retry a new run while pretending otherwise.
     key = idempotency_key or uuid.uuid4().hex
@@ -134,7 +155,7 @@ async def create_ingest(
 
     spec = SourceSpec(kind=body.kind, project=body.project, dataset=body.dataset, options=body.options)
     try:
-        await starter.start(run_id, {"run_id": run_id, **spec.model_dump()})
+        await starter.start(run_id, {"run_id": run_id, **spec.model_dump(), "sizing": sizing.model_dump()})
     except TimeoutError as exc:
         # 503, not 500. A1 bounds the schedule call so a slow sidecar cannot hold the POST past its
         # one-second contract — but the bound turned a BUSY sidecar into an unretryable server error,

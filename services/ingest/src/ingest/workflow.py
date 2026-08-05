@@ -44,6 +44,8 @@ from typing import TYPE_CHECKING, Any
 import dapr.ext.workflow as wf
 from pydantic import BaseModel, Field
 
+from ingest.sizing import ResolvedSizing, resolve
+
 
 if TYPE_CHECKING:
     from dapr.ext.workflow import DaprWorkflowContext, WorkflowActivityContext
@@ -75,6 +77,12 @@ class ChunkSpec(BaseModel):
     #: derivations of one location is the bug; carrying the resolved value is the fix.
     dataset_uri: str = ""
 
+    #: The run's write partitioning, RESOLVED at accept and carried — same reason as `dataset_uri`.
+    #: Re-reading env inside the drain would let a rolling restart change a live run's fragment size
+    #: mid-fan-out, so two chunks of one run could write to different layouts. Defaulted rather than
+    #: required so a chunk enqueued by an older build still validates.
+    sizing: ResolvedSizing = Field(default_factory=resolve)
+
 
 class ChunkResult(BaseModel):
     """What a drained chunk reports back — the fragments to commit, and what refused to land."""
@@ -92,6 +100,9 @@ class RunSpec(BaseModel):
     project: str
     dataset: str
     options: dict[str, Any] = Field(default_factory=dict)
+    #: Resolved at ACCEPT (`api.create_ingest`) so a refusal is a 400 rather than a drain that hangs,
+    #: and so the whole fan-out shares one set of numbers.
+    sizing: ResolvedSizing = Field(default_factory=resolve)
 
 
 class RunOutcome(BaseModel):
@@ -170,7 +181,7 @@ def chunk_run(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> dict[str, An
     the activity's result and replays the activity — not the workflow's decisions — if the pod dies,
     while JetStream still owns redelivery, poison parking and `max_ack_pending` backpressure within
     the chunk. Fan-out is across CHUNKS (Dapr distributes child workflows over the pod fleet) and,
-    within a chunk, across `worker.FETCH_CONCURRENCY`.
+    within a chunk, across `sizing.fetch_concurrency`.
 
     Nothing here polls (A13): the activity blocks on JetStream's server-fulfilled pull fetch.
     """
@@ -241,7 +252,16 @@ def enumerate_chunks(ctx: WorkflowActivityContext, payload: dict[str, Any]) -> l
     chunks: list[dict[str, Any]] = []
     for index in range(0, len(keys), CHUNK_SIZE):
         window = keys[index : index + CHUNK_SIZE]
-        chunks.append(ChunkSpec(run_id=spec.run_id, chunk_id=f"{spec.run_id}-c{index // CHUNK_SIZE}", keys=window, dataset_uri=uri).model_dump())
+        chunks.append(
+            ChunkSpec(
+                run_id=spec.run_id,
+                chunk_id=f"{spec.run_id}-c{index // CHUNK_SIZE}",
+                keys=window,
+                dataset_uri=uri,
+                # Carried, not re-resolved — same reason as `dataset_uri` above.
+                sizing=spec.sizing,
+            ).model_dump()
+        )
     return chunks
 
 

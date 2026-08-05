@@ -1,5 +1,22 @@
 """The unit worker — fetch, validate, write a fragment, ack.
 
+**NOT AN ORCHESTRATOR, and not a deployment.** Dapr Workflow owns the run: `workflow.ingest_run`
+fans out child workflows, `when_all` fans them in, and Dapr persists and replays the history. This
+class is what runs INSIDE the `drain_chunk` ACTIVITY — the JetStream consumer that does the fetching.
+The division is deliberate and each half is doing the thing it is good at:
+
+    Dapr Workflow   DURABLE DECISIONS — enumerate, fan out, fan in, commit once, emit lineage. It
+                    survives a pod death because the history replays. There is no counter to
+                    hand-roll and no ledger to keep.
+    JetStream       IN-CHUNK DELIVERY — one unit to exactly one consumer, redelivery on a lost ack,
+                    poison parking, and `max_ack_pending` backpressure. Dapr has no equivalent, and
+                    an activity per page would be a million activity results in the state store.
+
+The first version of this file DID try to be an orchestrator — the drain waited on an external Dapr
+workflow event that the worker signalled over a NATS subject, with nothing bridging the two, and no
+Deployment ran a `Worker` at all. Every chunk would have published its units, waited the full
+ten-minute fallback, and reported zero fragments. Draining inside an activity is what fixed it.
+
 One worker is one competing consumer on the run's queue-group subscription. Scaling is adding pods;
 there is no partitioning to get wrong, because JetStream hands each unit to exactly one consumer.
 
@@ -18,7 +35,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 from typing import TYPE_CHECKING, Any, Protocol
 
 import pyarrow as pa
@@ -26,6 +42,7 @@ from pydantic import BaseModel, Field
 
 from ingest.lander import write_unit_fragments
 from ingest.queue import ACK_WAIT_SECONDS, UnitTask, WorkQueue
+from ingest.sizing import ResolvedSizing, resolve
 from ingest.staging import stage_fragments
 
 
@@ -38,12 +55,12 @@ logger = logging.getLogger(__name__)
 #
 # They answer to three different systems and there is no reason for them to agree:
 #
-#   workflow fan-out   `workflow.CHUNK_SIZE`  — keys per CHILD WORKFLOW. A DAPR concern: a million
-#                                               activity results would melt the state store. Nothing
-#                                               to do with Lance.
-#   source politeness  FETCH_* below          — in-flight requests against the SOURCE. A IIIF/HCP
-#                                               concern: rate limits, not throughput.
-#   storage layout     FRAGMENT_TARGET_*      — rows per LANCE FRAGMENT. A Lance concern.
+#   workflow fan-out   `workflow.CHUNK_SIZE`   — keys per CHILD WORKFLOW. A DAPR concern: a million
+#                                                activity results would melt the state store. Nothing
+#                                                to do with Lance.
+#   source politeness  `sizing.fetch_*`        — in-flight requests against the SOURCE. A IIIF/HCP
+#                                                concern: rate limits, not throughput.
+#   storage layout     `sizing.fragment_*`     — rows per LANCE FRAGMENT. A Lance concern.
 #
 # The third one did not exist. Every unit was written as its own fragment
 # (`units_to_table([(key, result)])` — a list of ONE), so a 10k-page volume produced 10k fragments in
@@ -51,15 +68,10 @@ logger = logging.getLogger(__name__)
 # Lance's own guidance is ~1M rows per fragment, and its ingestion notes name the per-row write as
 # the anti-pattern: "each call commits a new version and a new fragment".
 #
-# All three are env-overridable, because the right value is a property of the deployment (source
-# rate limit, page size, object-store latency) and not of this file.
-
-# How many units one fetch() pulls from the queue. One round trip per batch instead of per unit.
-FETCH_BATCH = int(os.getenv("RASK_INGEST_FETCH_BATCH", "16"))
-
-# Bounded parallel fetching. The expensive resource is the SOURCE, not us: IIIF and HCP are
-# rate-limited external systems, so this is a politeness ceiling as much as a throughput one.
-FETCH_CONCURRENCY = int(os.getenv("RASK_INGEST_FETCH_CONCURRENCY", "8"))
+# The last two are NOT module constants any more — they live on the run, resolved at accept from the
+# request and defaulted from env (`ingest.sizing`). They were deployment-wide, which is one value for
+# every source the plane would ever ingest; a rate-limited IIIF endpoint and an S3 bucket in the same
+# datacentre want different numbers, and only the caller knows which they are hitting.
 
 #: How often a HELD message tells JetStream it is still being worked. A fifth of the queue's
 #: `ACK_WAIT_SECONDS`, so several consecutive misses still do not expire the ack — derived from that
@@ -99,16 +111,6 @@ async def _renew_held(held: dict[int, Any]) -> None:
                 # Best-effort per message: one already-acked or expired message must not stop the
                 # others being renewed.
                 await msg.in_progress()
-
-
-# Rows accumulated before ONE fragment is written. Capped well under the queue's `max_ack_pending`
-# because the batch is held UNACKED while it fills — see the ack contract in `drain_chunk`.
-FRAGMENT_TARGET_ROWS = int(os.getenv("RASK_INGEST_FRAGMENT_ROWS", "1024"))
-
-# …or this many payload bytes, whichever comes first. Page images are megabytes: a row-only trigger
-# would let one fragment reach tens of gigabytes on a large-format volume, and Lance's sizing note
-# puts the sane upper range at 10-100 GB per fragment with 1 TB a hard ceiling.
-FRAGMENT_TARGET_BYTES = int(os.getenv("RASK_INGEST_FRAGMENT_BYTES", str(256 * 1024 * 1024)))
 
 
 class ChunkOutcome(BaseModel):
@@ -217,11 +219,22 @@ def _is_redelivery(msg: object) -> bool:
 class Worker:
     """Consumes one run's units until the chunk drains."""
 
-    def __init__(self, queue: WorkQueue, fetcher: Fetcher, validator: Validator | None = None, name: str = "w0") -> None:
+    def __init__(
+        self,
+        queue: WorkQueue,
+        fetcher: Fetcher,
+        validator: Validator | None = None,
+        name: str = "w0",
+        sizing: ResolvedSizing | None = None,
+    ) -> None:
         self._q = queue
         self._fetch = fetcher
         self._validate = validator or AcceptAll()
         self._name = name
+        # The RUN's numbers, resolved at accept and carried down through the chunk spec. Falling back
+        # to `resolve()` here (deployment defaults) rather than requiring them keeps every existing
+        # caller — and every test that builds a bare Worker — working unchanged.
+        self._sizing = sizing or resolve()
 
     async def _refuse(self, msg: Any, task: UnitTask, exc: Exception, outcome: ChunkOutcome) -> None:  # noqa: ANN401 — a nats Msg, typed only under TYPE_CHECKING
         """A fetch failed. Redeliver it, or park it — the two are NOT the same failure.
@@ -271,14 +284,15 @@ class Worker:
         version and a new fragment".
 
         Holding messages unacked is what makes this safe AND what bounds the batch: the queue's
-        `max_ack_pending` is the ceiling on in-flight unacked work, so `FRAGMENT_TARGET_ROWS` must
+        `max_ack_pending` is the ceiling on in-flight unacked work, so the run's `fragment_rows` must
         stay under it or JetStream simply stops delivering and the drain deadlocks. The ack contract
         itself is unchanged in meaning — bytes on the store, identity staged beside them, and only
         then the ack — it now just applies to a batch instead of a row.
         """
         sub = await self._q.subscribe(run_id)
         outcome = ChunkOutcome(chunk_id=chunk_id)
-        sem = asyncio.Semaphore(FETCH_CONCURRENCY)
+        sizing = self._sizing
+        sem = asyncio.Semaphore(sizing.fetch_concurrency)
 
         # The open batch: fetched units and the messages still owed an ack for them.
         pending: list[tuple[str, bytes]] = []
@@ -317,7 +331,7 @@ class Worker:
         try:
             while outcome.units_done + len(pending) + len(outcome.errors) < expected:
                 try:
-                    msgs = await sub.fetch(min(FETCH_BATCH, expected), timeout=30)
+                    msgs = await sub.fetch(min(sizing.fetch_batch, expected), timeout=30)
                 except TimeoutError:
                     # No units available right now. Not an error — another worker may hold them.
                     break
@@ -379,7 +393,7 @@ class Worker:
                     for msg in again:
                         await handle(msg)
                         await flush()
-                elif len(pending) >= FRAGMENT_TARGET_ROWS or pending_bytes >= FRAGMENT_TARGET_BYTES:
+                elif len(pending) >= sizing.fragment_rows or pending_bytes >= sizing.fragment_bytes:
                     await flush()
 
         finally:

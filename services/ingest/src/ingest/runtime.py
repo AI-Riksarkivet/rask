@@ -189,7 +189,11 @@ async def drain_chunk_units(chunk: ChunkSpec) -> dict[str, Any]:
     queue = await WorkQueue.connect(nats_url())
     try:
         await queue.ensure_stream()
-        worker = Worker(queue, UriFetcher(), PayloadValidator(), name=chunk.chunk_id)
+        # The RUN's sizing, resolved at accept and carried on the chunk — never re-read from env here.
+        # Re-reading would let a rolling restart change fragment size under a live fan-out, so two
+        # chunks of one run could write different layouts and the operator would have no record of
+        # which numbers the run actually used.
+        worker = Worker(queue, UriFetcher(), PayloadValidator(), name=chunk.chunk_id, sizing=chunk.sizing)
         outcome = await worker.drain_chunk(chunk.run_id, chunk.chunk_id, len(chunk.keys), chunk.dataset_uri)
         return outcome.model_dump()
     finally:

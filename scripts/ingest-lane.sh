@@ -19,7 +19,7 @@
 #   scripts/ingest-lane.sh all        # all three
 set -euo pipefail
 
-NS="${NS:-rask}"
+NS="${NS:-default}"
 RELEASE="${RELEASE:-rask}"
 TAG="${TAG:-dev}"
 REGISTRY="${REGISTRY:-localhost:5000}"

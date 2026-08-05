@@ -56,18 +56,19 @@ class _CatalogWithCommit:
 
 
 def _bronze_batch() -> pa.Table:
-    """One valid bronze row in the real BRONZE_SCHEMA, blob column included."""
-    from lance import blob_array
+    """One valid bronze row, built by the PLANE'S OWN row builder.
 
-    return pa.table(
-        {
-            "id": pa.array([1], pa.int64()),
-            "source_uri": pa.array(["file:///a.tif"], pa.string()),
-            "payload": blob_array([b"II*\x00fixture"]),
-            "stage": pa.array(["bronze"], pa.string()),
-        },
-        schema=BRONZE_SCHEMA,
-    )
+    This was a hand-rolled `pa.table({...}, schema=BRONZE_SCHEMA)` listing four columns, and it broke
+    the moment the schema gained a fifth: #99 added `sha256` (payload fixity) and this copy did not
+    follow, so the test failed with `KeyError: 'sha256'` from inside pyarrow — a test bug that reads
+    exactly like a product failure, on a test whose whole subject is the commit path.
+
+    Delegating to `units_to_table` means the fixture cannot drift from the schema again: whatever the
+    plane writes in production is what this writes here, and a new column arrives in both at once.
+    """
+    from ingest.worker import units_to_table
+
+    return units_to_table([("file:///a.tif", b"II*\x00fixture")])
 
 
 @pytest.fixture
