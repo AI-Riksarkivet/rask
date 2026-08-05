@@ -2,5 +2,5 @@
 	import Experiments from '$lib/models/Experiments.svelte';
 </script>
 
-<svelte:head><title>Experiments · lance</title></svelte:head>
+<svelte:head><title>Experiments — RASK</title></svelte:head>
 <Experiments />

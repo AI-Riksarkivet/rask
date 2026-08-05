@@ -6,18 +6,15 @@ import {
 	Columns3,
 	Cpu,
 	Database,
-	FlaskConical,
 	HardDrive,
 	LayoutDashboard,
 	Inbox,
 	Layers,
 	Network,
-	Package,
 	Radio,
 	ScrollText,
 	ShieldCheck,
 	Warehouse,
-	Workflow,
 } from '@lucide/svelte';
 import { exact, seg, type ZoneNav } from '@rask/ui/shell';
 
@@ -121,29 +118,14 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 			},
 		],
 	},
-	{
-		label: 'Models',
-		items: [
-			{
-				title: 'Registry',
-				href: '/lakehouse/models',
-				match: exact('/lakehouse/models'),
-				icon: Package,
-			},
-			{
-				title: 'Pipeline',
-				href: '/lakehouse/models/pipeline',
-				match: seg('/lakehouse/models/pipeline'),
-				icon: Workflow,
-			},
-			{
-				title: 'Experiments',
-				href: '/lakehouse/models/experiments',
-				match: seg('/lakehouse/models/experiments'),
-				icon: FlaskConical,
-			},
-		],
-	},
+	// NO 'Models' GROUP. The registry, its experiments and its pipeline were `/lakehouse/models/*`
+	// until they moved to the MODELS zone, which now owns a model end to end — training, registry,
+	// blessing, inference. What stays here is model LINEAGE: which run wrote which version, and off
+	// which datasets. That is a lineage question about a graph this zone owns, so it is answered by
+	// the Lineage group above and not by a second models rail that would only ever be half the story.
+	// A cross-zone leaf pointing at /models was considered and rejected — the top navbar owns
+	// cross-zone hops (it is the one surface that applies `data-sveltekit-reload` itself), and the
+	// sidebar has been kept zone-local for exactly that reason.
 	{
 		label: 'Governance',
 		items: [

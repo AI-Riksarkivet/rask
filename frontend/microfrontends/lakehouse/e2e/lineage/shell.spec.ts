@@ -195,16 +195,14 @@ test('a domain trigger opens a panel of its rows — pointer and keyboard, same-
 
 	// Pointer half: a click on the trigger opens it (retried only against the pre-hydration race).
 	await openPanel(page, 'Lakehouse');
-	// The rows link where they claim — the Catalog column over the data area, the Models column over
-	// the models area, both under the one trigger and both inside THIS zone.
+	// The rows link where they claim — the Catalog column over the catalog area, under the one trigger
+	// and inside THIS zone. The Models column used to be asserted here too; its routes moved to the
+	// MODELS zone, so the lakehouse panel no longer carries them and this list must not either.
 	for (const [row, href] of [
 		['Tables', '/lakehouse/catalog/tables'],
 		['Namespaces', '/lakehouse/catalog/namespaces'],
 		['Warehouses', '/lakehouse/catalog/warehouses'],
 		['Storage', '/lakehouse/catalog/storage/'],
-		['Registry', '/lakehouse/models'],
-		['Experiments', '/lakehouse/models/experiments'],
-		['Pipeline', '/lakehouse/models/pipeline'],
 	] as const) {
 		await expect(panel.getByRole('link', { name: new RegExp(`^${row}`) })).toHaveAttribute(
 			'href',
