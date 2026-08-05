@@ -158,10 +158,17 @@
 		{@render assist()}
 	{/if}
 
-	{#if !controller.attached}
+	{#if spatial && !controller.attached}
 		<!-- Say it WHERE THE TOOLS ARE. The status chip sits bottom-left and reads "load failed",
 		     which a person parses as "the picture didn't load" — not as "everything you draw here is
-		     discarded". This sits in the bar you just tried to use. -->
+		     discarded". This sits in the bar you just tried to use.
+
+		     `spatial &&` is not decoration. A TEMPORAL unit (audio) never attaches a PixiContext at
+		     all — the controller's own contract says spatial viewers attach one and a temporal viewer
+		     brings its own surface — so `attached` is legitimately false there. Without this guard the
+		     first cut of this notice cried "read-only — annotations unavailable" over a perfectly
+		     healthy waveform that had just reported "1 annotations from Lance". Caught by driving the
+		     AUDIO modality, which nothing else in this session had exercised. -->
 		<span
 			class="text-destructive ml-2 shrink-0 text-xs font-medium"
 			data-testid="canvas-readonly"
