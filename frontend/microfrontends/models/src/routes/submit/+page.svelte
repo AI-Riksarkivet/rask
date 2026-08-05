@@ -11,6 +11,32 @@
 	// SUBMIT TRAINING — a form scaffold (R17). Honest dummy: the fields are the real
 	// submission surface's shape, but nothing is wired to a backend yet — the submit
 	// button says so instead of pretending.
+	// The training-stack CANDIDATES (owner's shortlist, 2026-08-05): the submission surface will
+	// drive one — or several — of these. Linked at the top of the page so evaluating them is one
+	// click from where training will actually be submitted.
+	const TRAINING_STACKS = [
+		{
+			name: 'transformers',
+			href: 'https://github.com/huggingface/transformers',
+			blurb: 'The HF baseline — Trainer + TrOCR/YOLO ecosystems we already ship.',
+		},
+		{
+			name: 'Unsloth',
+			href: 'https://github.com/unslothai/unsloth',
+			blurb: 'Fast single-GPU LoRA/QLoRA fine-tuning.',
+		},
+		{
+			name: 'ms-swift',
+			href: 'https://github.com/modelscope/ms-swift',
+			blurb: "ModelScope's multi-modal fine-tuning stack (500+ LLM/MLLM recipes).",
+		},
+		{
+			name: 'Axolotl',
+			href: 'https://github.com/axolotl-ai-cloud/axolotl',
+			blurb: 'YAML-config post-training: full FT, LoRA, DPO/RL.',
+		},
+	];
+
 	const BASE_MODELS: SelectOption[] = [
 		{ value: 'trocr-base-handwritten', label: 'TrOCR base (handwritten)' },
 		{ value: 'yolov9-lines', label: 'YOLOv9 line detector' },
@@ -56,6 +82,27 @@
 		</div>
 		<Badge variant="outline">Scaffold — not wired</Badge>
 	</header>
+
+	<!-- Owner's ask (2026-08-05): the four candidate stacks, at the TOP of submit. -->
+	<Card class="flex flex-col gap-3 p-5">
+		<div class="flex items-center gap-2">
+			<h2 class="font-medium">Training stacks under evaluation</h2>
+			<Badge variant="outline">we adopt one — or all four</Badge>
+		</div>
+		<div class="grid gap-2 sm:grid-cols-2">
+			{#each TRAINING_STACKS as stack (stack.name)}
+				<a
+					href={stack.href}
+					target="_blank"
+					rel="noopener noreferrer"
+					class="hover:bg-accent/40 focus-visible:ring-ring flex flex-col gap-0.5 rounded-lg border p-3 transition-colors focus-visible:outline-none focus-visible:ring-2"
+				>
+					<span class="font-medium">{stack.name} ↗</span>
+					<span class="text-muted-foreground text-xs">{stack.blurb}</span>
+				</a>
+			{/each}
+		</div>
+	</Card>
 
 	<Card class="flex flex-col gap-4 p-5">
 		<Field label="Run name" description="A human-readable handle for the run.">
