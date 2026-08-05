@@ -59,6 +59,28 @@ class LineageSettings(BaseSettings):
     # FGA-checked as the named subject, so each service is bounded by its own rung (D5).
     service_subjects: str = Field(default="", alias="LINEAGE_SERVICE_SUBJECTS")
 
+    # Subjects that may NOT be claimed with the estate's SHARED app token — each needs its own
+    # dedicated credential, resolved from the Dapr secret store.
+    #
+    # THE HOLE THIS CLOSES, measured: `service_subjects` was `service-trainer,service-web` and ONE
+    # token opened both, with the CALLER choosing which to be via the `x-lance-service-identity`
+    # header. The two are not peers — `service-web` is a reader on the warehouse, while
+    # `service-trainer` holds `writer` on `namespace:models` (`scripts/seed_medallion_fga.sh:80-82`).
+    # And `service-web`'s token is the shared `{release}-dapr-app-token`, which sits in the env of
+    # seven internet-facing web pods that have no Dapr sidecar. So anyone with env read in any of
+    # them could present that token, claim `service-trainer`, and forge author-stamped WRITES into
+    # the authoritative lineage graph — strictly more than the credential was scoped for.
+    #
+    # An allowlist cannot fix that on its own: it answers "may this subject use the door", never "may
+    # THIS CALLER be that subject". Binding a privileged identity to its own credential is what turns
+    # the header into a claim the door VERIFIES rather than one it believes.
+    #
+    # EMPTY BY DEFAULT — byte-identical to today's behaviour — because populating it is a deployment
+    # decision: each listed subject must have its secret provisioned first, or it stops being able to
+    # authenticate at all. That is a fail-closed outage, which is the right direction, but it must be
+    # chosen rather than inherited.
+    privileged_subjects: str = Field(default="", alias="LINEAGE_PRIVILEGED_SUBJECTS")
+
     # --- Dapr pub/sub durable ingest (opt-in) — the catalog publishes to the Dapr pubsub.jetstream
     # component and the sidecar delivers each event to this service's subscription handler over HTTP, so
     # a lineage outage never loses provenance (the sidecar persists to NATS + redelivers per backOff).
