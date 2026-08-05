@@ -116,8 +116,26 @@ spec:
                  file cannot call the helper because it cannot template at all. Deriving it here means
                  the ingest plane follows the bucket every other tier follows, including a rename. */}}
             - { name: RASK_INGEST_WAREHOUSE, value: "s3://{{ include "lance.stageBucket" (list $root $root.Values.medallion.producer.bronzeNamespace) }}/ingest" }
-            {{- if $root.Values.dapr.sidecars }}
-            {{- /* The SERVICE half of the ingest control door. `authorize_ingest` treats an UNSET
+            {{- if and $root.Values.dapr.sidecars (or (not $svc.governedAuth) $root.Values.auth.enabled) }}
+            {{- /* ARMED ONLY IF THERE IS ALSO A KEY. The two halves of this door used to render under
+                 unrelated conditions — this one on `dapr.sidecars`, the USER half below on
+                 `auth.enabled` — and the shipped combination is sidecars ON, auth OFF. That arms the
+                 lock and renders no key: `authorize_ingest` finds APP_API_TOKEN set (so not dev-open),
+                 finds `oidc_enabled` false (so no user path), and falls through to
+                 `PermissionDeniedError`. Measured on the live release: every `POST /api/ingests`
+                 answered 403, from the UI and from a shell alike, with no human able to start a run.
+
+                 The comment on the USER half below PREDICTED this outcome in as many words — "left a
+                 signed-in project admin with NO way in and the UI path dead rather than merely
+                 ungoverned" — which is worth noting: the reasoning was right and written down, and
+                 the two conditions still drifted apart, because nothing rendered them together.
+
+                 For a `governedAuth` service the token is therefore left UNSET when the user door is
+                 not wired. That is the estate's dev-open default, the same one every other door
+                 takes, and it keeps the UI path alive instead of dead. A service that does NOT
+                 declare governedAuth is unaffected — it has no user half to be inconsistent with.
+
+                 The SERVICE half of the ingest control door. `authorize_ingest` treats an UNSET
                  APP_API_TOKEN as dev-open, matching every other door in the estate — which means a
                  deployment that forgets it runs an unauthenticated write API and looks identical to
                  one that is protected. Rendered from the same secret the medallion producer and the
