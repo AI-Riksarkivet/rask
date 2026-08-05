@@ -108,6 +108,7 @@
 	{meLoading}
 	user={data.user}
 	authEnabled={data.authEnabled}
+	project={data.activeProject ? { name: data.activeProject } : undefined}
 	zoneNav={ANNOTATOR_ZONE_NAV}
 	canvas={page.url.searchParams.has('keys')}
 	{crumbs}

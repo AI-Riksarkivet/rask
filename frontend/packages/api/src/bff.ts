@@ -240,15 +240,29 @@ const DEFAULT_LINEAGE_API = 'http://localhost:8001';
 const DEFAULT_VIEWER_API = 'http://localhost:8101';
 const DEFAULT_GATEWAY_URL = 'http://localhost:8001';
 
+/** The cookie that carries the ACTIVE PROJECT across zones (#103). Set by the home zone when a
+ *  project is opened (`/projects/[project]`), read by EVERY zone's layout so the shared shell can
+ *  name the project you are inside and route back to it. Host-wide (`path=/`) on purpose: the
+ *  zones are separate documents on one host, and a per-zone cookie would forget the project at
+ *  every cross-zone hop — the exact defect this exists to fix. */
+export const ACTIVE_PROJECT_COOKIE = 'rask_active_project';
+
+type CookieReader = { get(name: string): string | undefined };
+
 /**
  * The `load` every zone's `+layout.server.ts` re-exports: surface the signed-in identity + the
  * auth-enabled flag to the shared AppShell/TopNavbar (nav-user renders Sign in / Sign out). Derived
  * through `sessionToUser` so every zone produces the SAME user — "auth is identical in every MFE".
  * No-op shape on an auth-off stack: `user` null, `authEnabled` false.
+ *
+ * Also surfaces `activeProject` (#103): every zone visit happens INSIDE the active project, so the
+ * shell must know it on the SERVER render — a client-side read paints "Default" first and the real
+ * project after hydration, which is the flash-and-lie this replaced.
  */
-export const zoneLayoutLoad = ({ locals }: { locals: AuthLocals }) => ({
+export const zoneLayoutLoad = ({ locals, cookies }: { locals: AuthLocals; cookies?: CookieReader }) => ({
 	user: sessionToUser(locals.session),
 	authEnabled: locals.authEnabled,
+	activeProject: cookies?.get(ACTIVE_PROJECT_COOKIE) ?? '',
 });
 
 /**

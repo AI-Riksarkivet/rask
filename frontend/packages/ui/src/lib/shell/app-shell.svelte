@@ -12,6 +12,7 @@
 	import { zoneNavLeaves } from './nav-config.js';
 	import type { Me, NotificationFeed, Project, NavUser, ZoneNav } from './nav-config.js';
 	import { collapseCrumbs, pathCrumbs, projectFromHost, type Crumb } from './breadcrumb.js';
+	import { isMainMenu } from './nav-config.js';
 
 	// Subtle content settle-in. Runs once when the shell MOUNTS — i.e. on a fresh
 	// document load, which is every cross-zone microfrontend landing — so the page gently
@@ -45,7 +46,7 @@
 	// nav; `me`/`meLoading` come from the zone's fetchMe() and gate the navbar's admin entries.
 	let {
 		pathname = '',
-		project = { name: 'Default', subtitle: 'Project' },
+		project = { name: '', subtitle: 'Project' },
 		user = { name: 'rask', email: 'local', initials: 'RA' },
 		authEnabled = false,
 		zoneNav = null,
@@ -117,9 +118,23 @@
 	onMount(() => {
 		projectSlug = projectFromHost(window.location.host) ?? '';
 	});
+	// The ACTIVE project: host slug wins (host-scoped deploys), else the cookie-fed prop (#103).
+	// Empty means NO project is active — the shell must say so honestly, never invent "Default".
 	const projectName = $derived(projectSlug || project.name);
-	const shellProject = $derived({ name: projectName, subtitle: project.subtitle ?? 'Project' });
-	const crumbs = $derived([...pathCrumbs(pathname), ...extraCrumbs]);
+	// Estate level (/, /projects, /settings) is OUTSIDE any project: no project crumb, and the
+	// switcher shows a neutral prompt. Inside a zone the project is the breadcrumb ROOT and links
+	// back to its overview page — the way back the trail never offered.
+	const estateLevel = $derived(isMainMenu(pathname));
+	const shellProject = $derived({
+		name: projectName || 'Select project',
+		subtitle: projectName ? (project.subtitle ?? 'Project') : 'No active project',
+	});
+	const projectCrumb = $derived<Crumb[]>(
+		!estateLevel && projectName
+			? [{ id: '__project', label: projectName, href: `/projects/${projectName}` }]
+			: [],
+	);
+	const crumbs = $derived([...projectCrumb, ...pathCrumbs(pathname), ...extraCrumbs]);
 	// A deep path (project → domain → collection → a long resource id) does not fit a narrow row, so
 	// the MIDDLE of the trail folds behind an ellipsis menu rather than squeezing every crumb into
 	// illegibility — and the current page, the one crumb worth keeping, is never the thing that
@@ -217,6 +232,7 @@
 								<ChevronRight class="text-muted-foreground/40 size-3.5 shrink-0" />
 								<a
 									href={crumb.href}
+									data-sveltekit-reload={crumb.id === '__project' ? '' : undefined}
 									class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm capitalize transition-colors outline-none focus-visible:ring-3"
 									>{crumb.label}</a
 								>
@@ -244,7 +260,8 @@
 									<DropdownMenu.Content class="min-w-40 rounded-lg" side="bottom" align="start">
 										{#each trail.hidden as crumb (crumb.id)}
 											<DropdownMenu.Item class="p-0">
-												<a href={crumb.href} class="w-full truncate px-2 py-1.5 capitalize">{crumb.label}</a>
+												<a href={crumb.href}
+									data-sveltekit-reload={crumb.id === '__project' ? '' : undefined} class="w-full truncate px-2 py-1.5 capitalize">{crumb.label}</a>
 											</DropdownMenu.Item>
 										{/each}
 									</DropdownMenu.Content>

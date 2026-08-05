@@ -9,7 +9,7 @@
 	import { STUDIO_ZONE_NAV } from '$lib/nav';
 	import { onMount, type Snippet } from 'svelte';
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
-	let { children }: { children: Snippet } = $props();
+	let { children, data }: { children: Snippet; data: { activeProject: string } } = $props();
 
 	// The navbar's notification bell (@rask/ui's NotificationCenter, mounted by AppShell). The shell owns
 	// the surface and never fetches — the zone owns the transport — and the transport is the shared
@@ -52,6 +52,6 @@
 
 <!-- The shared AppShell (one grouped sidebar) from @rask/ui — identical to every
      other microfrontend, zero drift. `base` (=/studio) frames the breadcrumb. -->
-<AppShell pathname={page.url.pathname} zoneNav={STUDIO_ZONE_NAV} {notifications}>
+<AppShell pathname={page.url.pathname} project={data.activeProject ? { name: data.activeProject } : undefined} zoneNav={STUDIO_ZONE_NAV} {notifications}>
 	{@render children()}
 </AppShell>
