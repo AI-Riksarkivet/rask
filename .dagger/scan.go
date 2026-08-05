@@ -7,6 +7,7 @@
 //
 //	dagger call audit                       osv-scanner over EVERY lockfile in the workspace
 //	dagger call scan-config                 trivy misconfig + secrets over .docker/ and chart/
+//	dagger call scan-secrets                trufflehog over the full GIT HISTORY
 //	dagger call scan-image --name=gateway   trivy over the image dagger call image just built
 //	dagger call scan-zone-image --zone=home  … the same, for a micro-frontend
 //
@@ -63,6 +64,7 @@ import (
 const (
 	OsvScannerImage = "ghcr.io/google/osv-scanner:v2.4.0"
 	TrivyImage      = "ghcr.io/aquasecurity/trivy:0.73.0"
+	TruffleHogImage = "ghcr.io/trufflesecurity/trufflehog:3.96.0"
 )
 
 // The `+ignore` set repeated on the source-scanning functions below is images.go's, and it is
@@ -187,6 +189,76 @@ func (m *Rask) ScanConfig(
 				"trivy fs --scanners secret --exit-code 1 --severity %[1]s /src || rc=1; "+
 				"exit $rc",
 			severity,
+		)}).
+		Stdout(ctx)
+}
+
+// ScanSecrets runs trufflehog over the repository's FULL GIT HISTORY.
+//
+// ── Why this exists when ScanConfig already detects secrets ──
+// Trivy's secret scanner reads the WORKING TREE. A credential that was committed and later deleted is
+// invisible to it — and that is precisely the leak that matters, because rask is a public repo: once a
+// secret is in a pushed object it is public whether or not a later commit removed the file. Every gate
+// in this file was blind to that until this function existed.
+//
+// ── Why trufflehog and not gitleaks ──
+// Both were run over this repo's history on 2026-08-05, and the comparison is the argument:
+//
+//	gitleaks 8.30.1    17 findings   no verification   → all 17 triaged BY HAND
+//	trufflehog 3.96.0  19 findings   0 VERIFIED        → triaged automatically
+//
+// They overlap on almost nothing — gitleaks matched generic-api-key/curl-auth-user patterns, trufflehog
+// matched 17 Postgres DSNs and 2 Stripe keys. Neither is a superset, so this is not "the better tool",
+// it is the tool with the property that makes a secrets gate survivable: trufflehog CALLS THE PROVIDER
+// to ask whether the credential actually works. `sk_live_abc123secret456def789` in a deleted test
+// harness looks alarming in a grep and is confirmed dead by an API call.
+//
+// ── Why the gate is --results=verified ──
+// 36 pattern matches across both tools, ZERO live credentials. A gate that failed on pattern matches
+// would have been red on arrival with a 100% false-positive rate, which is how the audit and
+// scan-config legs ended up report-only. Verified-only inverts that: it stays green until someone
+// commits a key that genuinely works, and then it is not a suggestion. Nothing to baseline, nothing to
+// suppress, no continue-on-error — so unlike the other two legs this one lands BLOCKING.
+//
+// The unverified findings are still PRINTED (the first pass below) so a reviewer can see them; they
+// just do not fail the build. Pass --fail-on-unverified=true to gate on those too.
+//
+// NOTE the +ignore list here deliberately KEEPS `.git` — the other functions strip it, and with it
+// stripped this function has nothing to scan.
+func (m *Rask) ScanSecrets(
+	ctx context.Context,
+	// +ignore=["**/.venv", "**/node_modules", "**/.svelte-kit", "**/.turbo", ".localbin",
+	//          "**/test-results", "**/playwright-report", "**/coverage", "**/storybook-static",
+	//          "**/build"]
+	// +defaultPath="/"
+	// +optional
+	src *dagger.Directory,
+	// Also fail on UNVERIFIED pattern matches. Measured at 36 findings / 0 live, so expect noise.
+	// +optional
+	// +default=false
+	failOnUnverified bool,
+) (string, error) {
+	gate := "verified"
+	if failOnUnverified {
+		gate = "verified,unknown,unverified"
+	}
+	return dag.Container().
+		From(TruffleHogImage).
+		WithMountedDirectory("/src", src).
+		WithWorkdir("/src").
+		// Two passes, and the `|| true` on the first is the point: it REPORTS (including unverified,
+		// for a human) without deciding anything. The second pass is the only one that can fail the
+		// build. One pass with --fail could not do both — it would either hide the unverified findings
+		// or gate on them.
+		//
+		// `--no-update` because a scanner that phones home for a new version mid-gate can fail the
+		// build for a reason that has nothing to do with the repo.
+		WithExec([]string{"sh", "-c", fmt.Sprintf(
+			"echo '=== all findings (verified + unverified) — REPORT ONLY ==='; "+
+				"trufflehog git file:///src --no-update --results=verified,unknown,unverified || true; "+
+				"echo '=== gate: %s — a hit here FAILS the build ==='; "+
+				"trufflehog git file:///src --no-update --results=%[1]s --fail",
+			gate,
 		)}).
 		Stdout(ctx)
 }
