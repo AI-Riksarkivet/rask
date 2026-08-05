@@ -28,7 +28,7 @@ import contextlib
 import json
 import logging
 import os
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, TypedDict
 
 
 logger = logging.getLogger(__name__)
@@ -228,7 +228,23 @@ class WorkQueue:
         await self._nc.close()
 
 
-async def inspect_queue(url: str, timeout: float = 3.0) -> dict[str, object]:
+class QueueSnapshot(TypedDict):
+    """The probe's result, typed PER KEY so the health endpoint can splat it and stay checkable.
+
+    `dict[str, object]` made `QueueHealth(**snapshot)` unverifiable: every field arrived as `object`,
+    so ty reported one error per field — and, far worse, would have reported nothing at all if the
+    probe started returning `messages` as a string. The endpoint's entire contract is that these five
+    values mean what they say, and an untyped bag is exactly how that stops being checked.
+    """
+
+    reachable: bool
+    stream_present: bool
+    messages: int | None
+    consumers: int | None
+    dlq_present: bool
+
+
+async def inspect_queue(url: str, timeout: float = 3.0) -> QueueSnapshot:
     """What the work queue looks like right now — reachability, stream presence, depth.
 
     LIVES HERE, not in the health endpoint, because invariant I3 confines the broker client to this
@@ -246,7 +262,7 @@ async def inspect_queue(url: str, timeout: float = 3.0) -> dict[str, object]:
     try:
         nc = await nats.connect(url, connect_timeout=timeout, allow_reconnect=False, max_reconnect_attempts=0)
         js = nc.jetstream()
-        out: dict[str, object] = {"reachable": True, "stream_present": False, "messages": None, "consumers": None}
+        out = QueueSnapshot(reachable=True, stream_present=False, messages=None, consumers=None, dlq_present=False)
         try:
             info = await js.stream_info(STREAM)
             out.update(stream_present=True, messages=info.state.messages, consumers=info.state.consumer_count)

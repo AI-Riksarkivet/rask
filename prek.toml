@@ -36,7 +36,16 @@ repo = "local"
 [[repos.hooks]]
 id = "ty-check"
 name = "ty type check"
-entry = "uvx ty check"
+# `env -u VIRTUAL_ENV` is load-bearing in a WORKTREE, and its absence made this gate check the wrong
+# source tree. `uvx` honours an inherited VIRTUAL_ENV, and a shell activated in the main checkout
+# keeps pointing there after `cd` into a worktree — so ty resolved every workspace package from the
+# MAIN checkout's editable installs while reading the worktree's own files. Measured 2026-08-05: a
+# commit in `rask-ingest` failed with `Module service_kit.governed.dapr_auth has no member
+# is_public_caller`, citing `/home/blackwell/Desktop/rask/packages/...` — a symbol that exists in the
+# worktree and not in main. Both failure directions are real: phantom errors for anything added in
+# the worktree, and silence for anything it broke. uv itself warns about the mismatch and ignores the
+# variable; uvx does not, so the gate has to drop it explicitly.
+entry = "env -u VIRTUAL_ENV uvx ty check"
 language = "system"
 pass_filenames = false
 

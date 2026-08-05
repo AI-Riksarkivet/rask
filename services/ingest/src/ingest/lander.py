@@ -28,7 +28,7 @@ every dataset's first run, which is what the single-step design would have quiet
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, TypedDict
 
 import lance
 import pyarrow as pa
@@ -39,10 +39,24 @@ from pydantic import BaseModel
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+class CreationFlags(TypedDict):
+    """The creation-time flags, typed PER KEY so `**CREATION_FLAGS` stays checkable.
+
+    A plain dict literal infers as `dict[str, str | bool]`, and splatting that into `write_dataset`
+    hands `str | bool` to every keyword it has — which ty reports once per parameter. That was 23 of
+    this branch's diagnostics from two call sites, and the noise is the real cost: a genuinely wrong
+    argument to the bronze writer would have arrived in the same pile and been read as more of the
+    same. A TypedDict keeps the constant DRY and restores per-key types at the splat.
+    """
+
+    data_storage_version: str
+    enable_stable_row_ids: bool
+
+
 # Creation-time-only, and silent no-ops if set later (file_format.md:4011-4013 + guide.md:228-229) — which is
 # why gate A14 makes the catalog refuse a governed dataset created without them. CDF (D1) and every
 # `source_rowid` reference in silver/gold (D2) depend on stable row ids existing from version 1.
-CREATION_FLAGS = {"data_storage_version": "2.2", "enable_stable_row_ids": True}
+CREATION_FLAGS: CreationFlags = {"data_storage_version": "2.2", "enable_stable_row_ids": True}
 
 
 class CommitResult(BaseModel):

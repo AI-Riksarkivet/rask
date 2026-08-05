@@ -71,6 +71,41 @@ def _delimiter() -> str:
     return os.getenv("RASK_CATALOG_DELIMITER", "$")
 
 
+def _output_datasets(project: str, dataset: str, version: int | None, rows: int) -> list[Any]:
+    """The table this run wrote, STAMPED with what it wrote — the `version` and `outputStatistics` facets.
+
+    The name is the catalog's own identifier (`bronze$pages`, not `pages`); the graph and the cascade
+    head both key on it, so composing it differently here would make the run's output name a table
+    nothing else recognises.
+
+    The FACETS are A6, and their absence was a quiet hole rather than a visible one. `terminal()` has
+    always been PASSED the committed version and the row count — it recorded them on its own in-memory
+    `LineageEvent` and then emitted an output carrying neither, so the graph could say a run wrote
+    `bronze$pages` and could not say WHICH VERSION or HOW MUCH. That is the difference between a
+    provenance record and a note that something happened: asked "where did version 7 come from", the
+    graph could only answer with every run that ever touched the table.
+
+    Both are stamped whenever they exist, on FAIL as well as COMPLETE. A failed run that committed
+    fragments before dying still moved the dataset forward, and the version it left behind is exactly
+    what an operator reconstructing the damage needs. `version=None` means nothing was committed, and
+    then no version facet is written at all — a facet claiming version 0 would be a fact we do not have.
+    """
+    from lineage_kit.schemas import DatasetFacets, DatasetVersionFacet, OutputDataset, OutputDatasetFacets, OutputStatisticsFacet
+
+    if not (project and dataset):
+        return []
+
+    facets = DatasetFacets(version=DatasetVersionFacet(datasetVersion=str(version))) if version is not None else DatasetFacets()
+    return [
+        OutputDataset(
+            namespace=project,
+            name=f"{project}{_delimiter()}{dataset}",
+            facets=facets,
+            outputFacets=OutputDatasetFacets(outputStatistics=OutputStatisticsFacet(rowCount=rows)),
+        )
+    ]
+
+
 def lineage_run_id(run_id: str) -> str:
     """The graph run id for an ingest run — stable, so two activities agree without sharing state."""
     from lineage_kit import run_id_for
@@ -159,10 +194,7 @@ class LineageRecorder:
         event_type = "FAIL" if status == "FAILED" else "COMPLETE"
         self._record(LineageEvent(run_id=run_id, event_type=event_type, project=project, dataset=dataset, version=version, rows=rows, errors=errors))
 
-        # The catalog's own identifier for the table — `bronze$pages`, not `pages`. The graph and the
-        # cascade head both key on it, so composing it differently here would make the run's output
-        # name a table nothing else recognises.
-        outputs = [(project, f"{project}{_delimiter()}{dataset}")] if project and dataset else []
+        outputs = _output_datasets(project, dataset, version, rows)
 
         def emit() -> None:
             run = _run(run_id)
