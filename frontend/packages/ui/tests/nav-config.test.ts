@@ -259,6 +259,12 @@ describe('topNav', () => {
 			// appear in this panel, because the navbar is how someone standing in another zone learns
 			// the dock exists at all.
 			'Workbench',
+			// ETL, third — the ingest plane, and the one row here that never touches Ray. It was
+			// MISSING while the compute zone's own sidebar carried it, so the two nav surfaces
+			// disagreed: a user navigating by the NAVBAR could not reach the plane at all, while one
+			// using the rail could. Ordered before the Ray surfaces because it is how data ARRIVES —
+			// jobs, cluster and actors are all work running on data that ingest put there.
+			'ETL',
 			'Jobs',
 			'Cluster',
 			'Actors',

@@ -315,6 +315,16 @@ const COMPUTE_ITEMS: TopNavItem[] = [
 		href: '/compute/workbench',
 		description: 'Jobs, capacity, actors and Serve in one arrangeable dock.',
 	},
+	{
+		// ETL — how data gets INTO the estate, and the one row here that never touches Ray. It was
+		// absent while the zone's own sidebar carried it, so the two nav surfaces disagreed: a user
+		// navigating by the NAVBAR could not reach the ingest plane at all, while one using the RAIL
+		// could. Every other compute area appears in both, and that asymmetry is a large part of why
+		// the plane was hard to find.
+		title: 'ETL',
+		href: '/compute/etl',
+		description: 'Harvest a source into bronze — IIIF, an S3 prefix, or a local directory.',
+	},
 	{ title: 'Jobs', href: '/compute/jobs', description: 'Submitted Ray jobs and their lifecycle.' },
 	{ title: 'Cluster', href: '/compute/cluster', description: 'Nodes and their resource load.' },
 	{ title: 'Actors', href: '/compute/actors', description: 'Live actors across the cluster.' },
