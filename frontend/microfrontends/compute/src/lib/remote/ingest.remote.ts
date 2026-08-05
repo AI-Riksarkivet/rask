@@ -1,5 +1,7 @@
 import * as v from 'valibot';
 import { command, query, getRequestEvent } from '$app/server';
+import { env } from '$env/dynamic/private';
+import { lineageAuthHeaders } from '@rask/api/runs-feed';
 import {
 	getIngestRun,
 	listIngestSources,
@@ -37,6 +39,9 @@ function bearerHeaders(): Record<string, string> {
 
 /** A run id. Parsed at the boundary so a malformed id is refused before it reaches the gateway. */
 const RunId = v.pipe(v.string(), v.trim(), v.minLength(1));
+
+/** Same default as this zone's notification feed — one zone, one lineage endpoint. */
+const LINEAGE_API = env.LINEAGE_API ?? 'http://localhost:8001';
 
 /**
  * One ingest run's live status.
@@ -119,4 +124,76 @@ const IngestInput = v.object({
  */
 export const startIngest = command(IngestInput, async (input): Promise<IngestAccepted> => {
 	return postIngest(input, getRequestEvent().fetch, bearerHeaders());
+});
+
+/** One ingest run as the LIST renders it — deliberately fewer fields than the detail page. */
+export interface IngestRunRow {
+	run_id: string;
+	state: string | null;
+	progress_done: number | null;
+	progress_total: number | null;
+	error_message: string | null;
+	started_at: string | null;
+	updated_at: string | null;
+}
+
+/** The lineage job name every ingest run shares (`ingest.lineage.JOB_NAME`). Correlation is by run
+ *  id; the NAME is what groups the lane, and it is the only server-side handle for "runs of this
+ *  plane" — the lineage board is estate-wide and carries catalog drops, movers and training runs. */
+const INGEST_JOB = 'ingest.run';
+
+/** How many rows the list shows. Trimmed on the SERVER, and that is not a nicety: `/runs` measured
+ *  330_103 bytes for 875 runs on the live estate (`@rask/api/runs-feed:156`). Shipping that to a
+ *  browser to filter it there would send a third of a megabyte to render twenty rows. */
+const WINDOW = 50;
+
+/**
+ * The ingest plane's RUN LIST.
+ *
+ * It reads LINEAGE, not the ingest service, and that is the whole reason this exists at all: the
+ * ingest service cannot list its own runs. It has three routes (`/sources`, `POST /ingests`,
+ * `GET /ingests/{run_id}`) and its `RunStore` has only `get`/`put` — and the production store is
+ * `InMemoryRunStore`, a per-pod dict that is DELIBERATELY not durable ("run truth is the workflow's,
+ * not this cache"). So there is no index to add a `list()` to; the durable record of which runs
+ * exist is the lineage graph, which every ingest run writes to at START and again at COMPLETE/FAIL.
+ *
+ * The trade is worth naming: lineage rows are generic runs, so this list carries state and progress
+ * but NOT the ingest-specific half (committed version, the §D2 publication fields, per-unit errors).
+ * Those live on the detail page, which reads the ingest door directly. A list that lies about having
+ * them would be worse than one that links to where they are.
+ *
+ * Auth prefers the USER's bearer and falls back to the zone's read-only service identity, exactly
+ * like the notification feed — so a signed-in operator sees what they are entitled to and an
+ * anonymous page load still renders the read-only board.
+ */
+export const listIngestRuns = query(async (): Promise<IngestRunRow[]> => {
+	const { fetch, locals } = getRequestEvent();
+	const res = await fetch(`${LINEAGE_API}/runs`, {
+		headers: lineageAuthHeaders({
+			accessToken: locals.session?.accessToken,
+			serviceToken: env.LINEAGE_SERVICE_TOKEN,
+			serviceId: env.LINEAGE_SERVICE_ID,
+		}),
+	});
+	// A governed refusal and an outage are both "no board" to this page, and neither is worth
+	// throwing across the remote boundary — the caller renders an empty list with its own honest
+	// message rather than a boundary error over a feed that is merely unavailable.
+	if (!res.ok) return [];
+
+	const body: unknown = await res.json();
+	const rows = (body as { runs?: unknown[] })?.runs ?? [];
+	return rows
+		.filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null)
+		.filter((r) => r.job === INGEST_JOB)
+		.slice(0, WINDOW)
+		.map((r) => ({
+			run_id: String(r.run_id ?? ''),
+			state: (r.state as string) ?? null,
+			progress_done: (r.progress_done as number) ?? null,
+			progress_total: (r.progress_total as number) ?? null,
+			error_message: (r.error_message as string) ?? null,
+			started_at: (r.started_at as string) ?? null,
+			updated_at: (r.updated_at as string) ?? null,
+		}))
+		.filter((r) => r.run_id);
 });

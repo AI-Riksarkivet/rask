@@ -52,18 +52,25 @@ export const COMPUTE_ZONE_NAV: ZoneNav = {
 					match: seg('/compute/etl'),
 					icon: Import,
 				},
-				// NO "Runs" ROW YET, deliberately. One was added here pointing at `/compute/ingest`
-				// and it 404s: `routes/ingest/` holds only `[run_id]/`, so there is no index page —
-				// and there cannot be one yet, because the BACKEND cannot list runs. The ingest
-				// service has four routes (`/sources`, `POST /ingests`, `GET /ingests/{run_id}`) and
-				// `RunStore` has only `get`/`put`. "Show me the runs" is unanswerable at every layer.
-				//
-				// `@rask/zone-contract`'s `nav-truth.test.ts` ("every sidebar href resolves to a real
-				// route") is what caught it — so the gate DOES exist, and an earlier commit message of
-				// mine claiming dead internal links are ungated was wrong.
-				//
-				// A row linking to a 404 is worse than no row: it advertises a capability the estate
-				// does not have. It returns when the list endpoint does.
+				{
+					// The run board. It was REMOVED for a while, because this row pointed at a route
+					// that did not exist and `nav-truth.test.ts` ("every sidebar href resolves to a
+					// real route") caught it — a row linking to a 404 advertises a capability the
+					// estate does not have.
+					//
+					// It is back because the page is back, and the page reads LINEAGE rather than the
+					// ingest service: that service still cannot list its own runs (three routes; a
+					// `RunStore` with only get/put, backed by a per-pod dict that is deliberately not
+					// durable). The graph every run writes to at START and COMPLETE/FAIL is the
+					// durable record of which runs exist.
+					//
+					// `seg` not `exact`: it lights up for `/compute/ingest/<run_id>` too, which is the
+					// detail page this list links into.
+					title: 'Runs',
+					href: '/compute/ingest',
+					match: seg('/compute/ingest'),
+					icon: ListTree,
+				},
 			],
 		},
 		{
