@@ -85,6 +85,29 @@ def _zone_env(rendered: str, zone: str) -> set[str]:
     return set()
 
 
+def test_the_CATALOG_FAMILY_honours_the_estate_image_contract_too() -> None:
+    """Eleven containers run the catalog image with different entrypoints (catalog, lineage, the
+    medallion movers, maintenance, explorer, the bootstrap job), and `lance.catalogImage` used to
+    render `repository:tag` on its OWN — honouring neither the registry prefix, nor the digest, nor
+    localImages. So a chart configured with a registry still emitted the bare `lance-rest-catalog:dev`
+    (i.e. Docker Hub) for all eleven, which is why every deploy needed `kubectl set image` fix-ups and
+    why no GitOps reconciler could own this release. The helper now delegates to `rask.image`; this
+    pins that it stays delegated."""
+    proc = _render(
+        "image.repository=ghcr.io/example/rask",
+        "image.digest=sha256:abc123",
+        "explorer.enabled=true",
+        "medallion.enabled=true",
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "ghcr.io/example/rask/lance-rest-catalog@sha256:abc123" in proc.stdout
+    # The bare form is the defect itself — it must not survive anywhere in a configured render.
+    assert 'image: "lance-rest-catalog:' not in proc.stdout, (
+        "a catalog-family container rendered a REGISTRY-LESS image — lance.catalogImage stopped "
+        "delegating to rask.image"
+    )
+
+
 def test_the_media_zones_deploy_with_NO_upstreams_when_the_plane_is_off() -> None:
     """The render that produced a live 502, pinned so the deploy path has something to be right about.
 
