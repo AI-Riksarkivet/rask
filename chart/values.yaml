@@ -259,6 +259,16 @@ resources:
   default:
     requests: { cpu: 50m, memory: 128Mi }
     limits: { cpu: "1", memory: 512Mi }
+  # RUSTFS — the object store under the whole lakehouse, and the one component for which the app
+  # default was actively wrong. It named no tier, so it inherited `default`'s 512Mi and was
+  # OOMKilled 33 times on a dev estate while sitting at 370Mi IDLE (~72% of its ceiling doing
+  # nothing): any real listing, blob-tier scan or ingest burst tipped it. An OOM mid-write is
+  # exactly the partially-failed write the orphan scan exists to report, so this is a data-integrity
+  # setting, not a comfort one. 2Gi gives real headroom over the measured idle floor; raise it with
+  # the estate (values-prod should size it against actual object count, not this dev figure).
+  rustfs:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { cpu: "2", memory: 2Gi }
   # The assist model runner holds two warm torch models (~1.1 GB weights) and burns real CPU per
   # inference (multi-threaded GEMMs) — the request-pod default would OOM-kill it at load.
   assist:

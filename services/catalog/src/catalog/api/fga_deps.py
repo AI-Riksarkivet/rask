@@ -29,11 +29,15 @@ from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     InvalidInputError,
+    LanceNamespace,
+    NamespaceExistsRequest,
     NamespaceNotEmptyError,
+    NamespaceNotFoundError,
     PermissionDeniedError,
     ServiceUnavailableError,
     TableNotFoundError,
     UnauthenticatedError,
+    UnsupportedOperationError,
 )
 from openfga_sdk import OpenFgaClient
 
@@ -41,6 +45,7 @@ from catalog.api.dependencies import SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
+from catalog.services import native
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
 from service_kit.governed.oidc import IDToken
@@ -477,6 +482,46 @@ def require_parent(resource: str, segments: list[str], *, delimiter: str) -> Non
         f"namespace segment before the table name — e.g. '<namespace>{delimiter}{ident}'. "
         "Create the namespace first if it does not exist."
     )
+
+
+async def require_parent_exists(ns: LanceNamespace, resource: str, segments: list[str], *, delimiter: str) -> None:
+    """`require_parent`, plus the half it never did: the parent must actually EXIST (#118).
+
+    `require_parent` counts SEGMENTS — it proves the identifier names a parent, not that the parent
+    is real. So `POST /v1/table/ghostns$t9/create` wrote a real Lance dataset into a namespace that
+    does not exist, seeded an owner grant, and left no `parent` edge: the cascade-invisible orphan
+    the guard's own docstring exists to prevent. Only `register_table` refused, and only because the
+    `dir` backend itself checks — an accident of the backend, not a guard.
+
+    Costs one `namespace_exists` round trip per create. That is the price of the rule the Lifecycle
+    states ("Creates are top-down: parent must EXIST"), and it is paid BEFORE the native write so a
+    refusal leaves nothing half-made.
+
+    Subsumes `require_parent` rather than sitting beside it, so a door cannot acquire half the rule:
+    the segment check is the cheap half and runs first, before any round trip.
+
+    A backend that does not implement `namespace_exists` (an optional op — the spec has 54 and every
+    backend implements a subset) cannot be interrogated, and refusing every create against such a
+    backend would break far more than it protects. That case falls through to the segment rule alone,
+    deliberately and narrowly: `UnsupportedOperationError` only, never a transport failure.
+    """
+    require_parent(resource, segments, delimiter=delimiter)
+    parent = segments[:-1]
+    if not parent:
+        return
+    try:
+        await run_in_threadpool(native.call, ns, "namespace_exists", NamespaceExistsRequest(id=parent))
+    except UnsupportedOperationError:
+        return
+    except NamespaceNotFoundError as exc:
+        ident = fga.canonical_object_id(segments, delimiter=delimiter)
+        parent_id = fga.canonical_object_id(parent, delimiter=delimiter)
+        raise NamespaceNotFoundError(
+            f"cannot create '{ident}': its parent namespace '{parent_id}' does not exist. "
+            f"Create it first (POST /v1/namespace/{parent_id}/create, or the warehouse-scoped door "
+            "for a top-level namespace) — a table whose namespace is absent is invisible to every "
+            "cascade and to every parent-scoped grant."
+        ) from exc
 
 
 def require_warehouse_scoped(segments: list[str], *, delimiter: str, warehouses_enabled: bool) -> None:

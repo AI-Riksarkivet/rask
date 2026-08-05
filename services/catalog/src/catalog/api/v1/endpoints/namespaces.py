@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import suppress
 
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
@@ -16,6 +17,7 @@ from lance_namespace import (
     DescribeTableResponse,
     DropNamespaceRequest,
     DropNamespaceResponse,
+    DropTableRequest,
     LanceNamespace,
     ListNamespacesRequest,
     ListNamespacesResponse,
@@ -25,6 +27,7 @@ from lance_namespace import (
     NamespaceNotFoundError,
     RegisterTableRequest,
     TableAlreadyExistsError,
+    TableNotFoundError,
 )
 
 from catalog.api import fga_deps
@@ -182,6 +185,35 @@ async def _trash_subtree(ns: LanceNamespace, settings: Settings, token: CurrentT
         await run_in_threadpool(trash.put, settings.registry_root, so, record)
 
 
+async def _destroy_subtree(ns: LanceNamespace, segments: list[str], descendants: list[tuple[str, list[str]]]) -> None:
+    """Destroy the subtree BOTTOM-UP, ourselves (#117).
+
+    `drop_namespace(behavior=Cascade)` is not implemented by the `dir` backend the chart runs — it
+    answers `NamespaceNotEmpty` for EVERY casing (probed directly against the library). So the
+    destructive cascade this door has always documented never happened: with the shipped default
+    (`LANCE_TRASH_GRACE_DAYS=0`) a non-empty namespace could not be dropped at all, forced or not,
+    and `purge=true` — the documented destroy-now opt-out — was equally dead. Three guarded loops
+    below it (the force-path protection clear, the descendant revoke, the descendant protection
+    sweep) were unreachable code on that backend.
+
+    The fix is the same shape as `_trash_subtree`'s, minus the trash records: tables first (each
+    `drop_table` DELETES its bytes — this is the destructive path by definition), then namespaces
+    deepest-first so each is empty when its own drop runs, then the cascaded root. Not atomic, and
+    deliberately so: a mid-loop failure leaves a SMALLER subtree that the same call can finish on a
+    retry, which is strictly better than the all-or-nothing native call it replaces (that one simply
+    refused). An already-absent child is tolerated — drift, not an error, exactly as the warehouse
+    cascade treats a binding that outlived its namespace.
+    """
+    tables = [child for resource, child in descendants if resource == "table"]
+    child_namespaces = sorted((child for resource, child in descendants if resource == "namespace"), key=len, reverse=True)
+    for child in tables:
+        with suppress(TableNotFoundError):
+            await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=child))
+    for child in [*child_namespaces, segments]:
+        with suppress(NamespaceNotFoundError):
+            await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=child))
+
+
 async def _require_descendants_unprotected(settings: Settings, descendants: list[tuple[str, list[str]]], *, force: bool) -> None:
     """Refuse a cascade that would destroy a PROTECTED descendant, naming the first one found.
 
@@ -253,6 +285,10 @@ async def drop_namespace(
     recoverable = cascade and settings.trash_grace_days > 0 and not purge
     if recoverable:
         await _trash_subtree(ns, settings, token, segments, descendants)
+        response = DropNamespaceResponse()
+    elif cascade:
+        # The dir backend cannot cascade (#117) — we enumerate and destroy bottom-up ourselves.
+        await _destroy_subtree(ns, segments, descendants)
         response = DropNamespaceResponse()
     else:
         response = await run_in_threadpool(native.call, ns, "drop_namespace", req)

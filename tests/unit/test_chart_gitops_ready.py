@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -103,8 +104,7 @@ def test_the_CATALOG_FAMILY_honours_the_estate_image_contract_too() -> None:
     assert "ghcr.io/example/rask/lance-rest-catalog@sha256:abc123" in proc.stdout
     # The bare form is the defect itself — it must not survive anywhere in a configured render.
     assert 'image: "lance-rest-catalog:' not in proc.stdout, (
-        "a catalog-family container rendered a REGISTRY-LESS image — lance.catalogImage stopped "
-        "delegating to rask.image"
+        "a catalog-family container rendered a REGISTRY-LESS image — lance.catalogImage stopped delegating to rask.image"
     )
 
 
@@ -126,9 +126,7 @@ def test_the_media_zones_deploy_with_NO_upstreams_when_the_plane_is_off() -> Non
     assert proc.returncode == 0, proc.stderr
 
     for zone in ("annotator", "explorer"):
-        assert "VIEWER_API" not in _zone_env(proc.stdout, zone), (
-            f"{zone} gained VIEWER_API with the plane off — then this test is stale, not the chart"
-        )
+        assert "VIEWER_API" not in _zone_env(proc.stdout, zone), f"{zone} gained VIEWER_API with the plane off — then this test is stale, not the chart"
 
 
 def test_make_k3s_up_enables_the_media_plane_by_DEFAULT() -> None:
@@ -140,9 +138,7 @@ def test_make_k3s_up_enables_the_media_plane_by_DEFAULT() -> None:
     makefile = (REPO / "Makefile").read_text()
 
     assert "EXPLORER ?= true" in makefile, "make k3s-up must default the media plane ON"
-    assert "--set explorer.enabled=$(EXPLORER)" in makefile, (
-        "k3s-up must PASS the flag — defining it and not using it is the same 502"
-    )
+    assert "--set explorer.enabled=$(EXPLORER)" in makefile, "k3s-up must PASS the flag — defining it and not using it is the same 502"
 
 
 def test_enabling_explorer_gives_BOTH_media_zones_every_upstream_they_route_to() -> None:
@@ -160,3 +156,26 @@ def test_enabling_explorer_gives_BOTH_media_zones_every_upstream_they_route_to()
         env = _zone_env(proc.stdout, zone)
         for upstream in ("VIEWER_API", "ANNOTATOR_API", "SEARCH_API"):
             assert upstream in env, f"{zone} renders without {upstream} — its BFF proxy would 502"
+
+
+def test_the_object_store_does_not_inherit_the_generic_APP_memory_ceiling() -> None:
+    """RustFS sits under the whole lakehouse and named no `resources` tier, so it inherited
+    `default` — 512Mi, sized for a stateless FastAPI shell. Measured 2026-08-05 on the dev estate:
+    370Mi at IDLE and **33 OOMKills**, each one taking every Lance read and write in the cluster
+    down with it. The failure is invisible in review (the values file simply lacks a key) and reads
+    in the cluster as "the lakehouse is flaky".
+    """
+    rendered = _render("image.localImages=true", "rustfs.enabled=true")
+    assert rendered.returncode == 0, rendered.stderr
+
+    tenants = [doc for doc in yaml.safe_load_all(rendered.stdout) if doc and doc.get("kind") == "Tenant"]
+    assert tenants, "the RustFS Tenant did not render — this test would pass vacuously"
+
+    def _mib(quantity: str) -> int:
+        text = str(quantity)
+        return int(text.removesuffix("Gi")) * 1024 if text.endswith("Gi") else int(text.removesuffix("Mi"))
+
+    for tenant in tenants:
+        for pool in tenant["spec"]["pools"]:
+            limit = pool["resources"]["limits"]["memory"]
+            assert _mib(limit) >= 2048, f"the object store is capped at {limit} — it OOMKills under real load"

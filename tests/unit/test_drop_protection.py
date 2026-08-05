@@ -583,26 +583,36 @@ def test_a_recoverable_cascade_DETACHES_the_subtree_and_files_a_record_per_child
 
 
 def test_cascade_purge_true_still_destroys_natively_and_files_nothing(tmp_path: Any) -> None:
-    """The explicit opt-out, same word as the table door: purge means destroy the bytes now."""
+    """The explicit opt-out, same word as the table door: purge means destroy the bytes now.
+
+    It destroys BOTTOM-UP rather than forwarding `behavior=Cascade`: the `dir` backend the chart runs
+    does not implement the native cascade at all (#117), so this assertion used to pin a call that
+    answered NamespaceNotEmpty in production while the test passed against a fake that honoured it.
+    """
     from service_kit.lakehouse import trash
 
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _CascadableNamespace()
     _drop_namespace_cascade(settings, ns, purge=True)
-    assert "drop_namespace:bronze:cascade" in ns.calls
+    assert "drop_namespace:bronze:restrict" in ns.calls  # the root, once every child is gone
+    assert not any(c.endswith(":cascade") for c in ns.calls)
     assert not any(c.startswith("deregister_table:") for c in ns.calls)
     assert trash.list_all(settings.registry_root, settings.storage_options()) == []
 
 
 def test_cascade_with_grace_zero_is_the_shipped_default_and_unchanged(tmp_path: Any) -> None:
-    """Recoverable drops are opt-in (#75): without a grace period the cascade is exactly what it
-    always was — one destructive native call, no records."""
+    """Recoverable drops are opt-in (#75): without a grace period the cascade destroys, no records.
+
+    "Exactly what it always was" was the wrong bar — what it always was is a native cascade the
+    shipped `dir` backend refuses (#117). The destruction is now ours, bottom-up.
+    """
     from service_kit.lakehouse import trash
 
     settings = _settings(tmp_path, grace_days=0)
     ns: Any = _CascadableNamespace()
     _drop_namespace_cascade(settings, ns)
-    assert "drop_namespace:bronze:cascade" in ns.calls
+    assert "drop_namespace:bronze:restrict" in ns.calls
+    assert not any(c.endswith(":cascade") for c in ns.calls)
     assert trash.list_all(settings.registry_root, settings.storage_options()) == []
 
 
