@@ -8,25 +8,43 @@
 #
 #   ./scripts/kind-browse.sh          → http://localhost:3024
 #
-# Ctrl-C tears every forward down. Ports are the 92xx range so they cannot collide with
-# `make dev-frontends` (5173-5273) or a local fleet (:8888).
+# Ctrl-C tears every forward down. Zone forwards live in the 92xx range so they cannot collide
+# with `make dev-frontends` (5173-5273) or a local fleet (:8888).
+#
+# THE PROXY PORT IS 3124, NOT 3024. It used to be 3024 — which is exactly the port
+# `make dev-frontends` binds for the Turborepo composition proxy. Two different tools claimed one
+# port, and the failure was silent in the worst direction: whichever started second either died or
+# was adopted, so you could believe you were browsing the CLUSTER while looking at local dev
+# servers, or the reverse. The comment above used to say the ports "cannot collide" — true of the
+# zone forwards, false of the proxy, which is the one you actually open. Override with PORT=.
 set -euo pipefail
 
 CLUSTER="${KIND_CLUSTER:-rask}"
 CTX="kind-${CLUSTER}"
 KUBECTL="${KUBECTL:-$(dirname "$0")/../.localbin/kubectl}"
 [ -x "$KUBECTL" ] || KUBECTL=kubectl
-PORT="${PORT:-3024}"
+PORT="${PORT:-3124}"
+
+# Refuse a busy port rather than racing for it. `bun` would otherwise either fail with a stack
+# trace or, worse, silently serve nothing while an unrelated process answers on that port.
+if command -v ss >/dev/null && ss -ltn 2>/dev/null | grep -q ":${PORT} "; then
+  echo "!! port ${PORT} is already in use — refusing to start."
+  echo "   Something else is bound there (\`make dev-frontends\` uses :3024). Free it, or: PORT=3125 $0"
+  exit 1
+fi
 
 command -v bun >/dev/null || { echo "!! bun not on PATH (needed for the composing proxy)"; exit 1; }
 "$KUBECTL" --context "$CTX" get ns >/dev/null 2>&1 || {
   echo "!! cluster '$CTX' unreachable. Bring it up with: make kind-up kind-preload kind-images kind-load kind-deploy"; exit 1; }
 
 # zone → local port. home is the catch-all and owns '/'.
+# Must match `git ls-files frontend/microfrontends | cut -d/ -f3 | sort -u`. It did NOT: this list
+# carried `media` and `train` — neither of which has a single tracked file — and omitted `explorer`
+# and `models`, which are real. So the browser port-forwarded two services that do not exist and
+# offered no way to reach two that do. Same roster drift #71 found in CLAUDE.md and the skill.
 declare -A ZONE_PORT=(
-  [home]=9273 [lakehouse]=9274 [media]=9273 [annotator]=9277 [compute]=9275 [studio]=9276 [train]=9278
+  [home]=9273 [lakehouse]=9274 [explorer]=9279 [annotator]=9277 [compute]=9275 [studio]=9276 [models]=9278
 )
-ZONE_PORT[media]=9279
 
 PIDS=()
 cleanup() { echo; echo "==> tearing down port-forwards"; for p in "${PIDS[@]:-}"; do kill -- "-$p" 2>/dev/null || kill "$p" 2>/dev/null || true; done; pkill -P $$ 2>/dev/null || true; }

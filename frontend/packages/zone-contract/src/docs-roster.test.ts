@@ -72,13 +72,37 @@ describe('the zone roster the DOCS teach', () => {
 		expect(named).toEqual(zones);
 	});
 
+	it('kind-browse.sh forwards exactly the zones that exist', () => {
+		// The THIRD place the roster drifted, after CLAUDE.md and the skill. This script carried
+		// `media` and `train` — neither has a single tracked file — and omitted `explorer` and
+		// `models`, which are real. So browsing the cluster port-forwarded two services that do not
+		// exist and offered no route to two that do. A script is not prose: it FAILS at runtime, on
+		// someone's machine, while looking like a config typo.
+		const text = read('scripts/kind-browse.sh');
+		const line = text.split('\n').find((l) => l.includes('[home]=')) ?? '';
+		const named = [...line.matchAll(/\[(\w+)\]=/g)].map((m) => m[1] as string).sort();
+
+		expect(named).toEqual(trackedZones());
+	});
+
+	it('kind-browse.sh does NOT bind the dev proxy port', () => {
+		// `make dev-frontends` binds :3024 for the Turborepo composition proxy. This script used to
+		// default to the same port, so whichever started second either died or was silently adopted —
+		// and you could believe you were browsing the CLUSTER while looking at local dev servers.
+		const text = read('scripts/kind-browse.sh');
+
+		expect(text).not.toMatch(/PORT:-3024/);
+	});
+
 	it('neither document still presents `train` as a zone', () => {
 		// `train` survives legitimately as the gateway's `/api/train` row and the `ray_train_job`
 		// script, so this asserts the ZONE spellings are gone rather than the word.
 		for (const doc of ['CLAUDE.md', '.claude/skills/rask-frontend/SKILL.md']) {
 			const text = read(doc);
 			expect(text, `${doc} still lists a /train ZONE`).not.toMatch(/\|\s*`train`\s*\|/);
-			expect(text, `${doc} still routes frontend-train`).not.toMatch(/frontend-<zone>[^)]*\btrain\b/);
+			expect(text, `${doc} still routes frontend-train`).not.toMatch(
+				/frontend-<zone>[^)]*\btrain\b/,
+			);
 		}
 	});
 });
