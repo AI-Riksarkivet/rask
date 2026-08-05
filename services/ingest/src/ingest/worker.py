@@ -69,7 +69,7 @@ FETCH_CONCURRENCY = int(os.getenv("RASK_INGEST_FETCH_CONCURRENCY", "8"))
 HEARTBEAT_SECONDS = ACK_WAIT_SECONDS / 5
 
 
-async def _renew_held(held: set[Any]) -> None:
+async def _renew_held(held: dict[int, Any]) -> None:
     """Tell JetStream the held messages are still being worked, until cancelled.
 
     `msg.in_progress()` was called NOWHERE in this plane, and a batch holds its messages unacked from
@@ -81,13 +81,20 @@ async def _renew_held(held: set[Any]) -> None:
     No crash required, which is what made this worse than the documented overlap: an ordinary slow
     run reaches it.
 
-    Takes the held SET rather than closing over the batch list, because `flush` REBINDS
+    Takes the held MAPPING rather than closing over the batch list, because `flush` REBINDS
     `pending_msgs` to a fresh list — a heartbeat closing over that name would keep renewing the
     previous batch while the current one expired.
+
+    Keyed by `id(msg)` and NOT a set: a nats-py `Msg` is UNHASHABLE, so `held.add(msg)` raised
+    `TypeError: unhashable type: 'Msg'` inside the drain activity — which Dapr reported as a failed
+    activity, leaving the run COMPLETE with `units_done: 0` and nothing committed. The unit test
+    missed it because its fake message was a plain object, which IS hashable; the in-cluster lane
+    caught it on the first run. Identity is the right key anyway (two messages are never "equal"),
+    and `id()` cannot be recycled while the mapping holds the reference.
     """
     while True:
         await asyncio.sleep(HEARTBEAT_SECONDS)
-        for msg in list(held):
+        for msg in list(held.values()):
             with contextlib.suppress(Exception):
                 # Best-effort per message: one already-acked or expired message must not stop the
                 # others being renewed.
@@ -277,7 +284,9 @@ class Worker:
         # EVERY message currently held unacked, in a container that is never REASSIGNED — `flush`
         # rebinds `pending_msgs` to a fresh list, so a heartbeat closing over that name would keep
         # renewing the previous batch while the current one expires.
-        held: set[Any] = set()
+        #
+        # A DICT KEYED BY `id`, not a set: a nats-py `Msg` is unhashable.
+        held: dict[int, Any] = {}
 
         async def flush() -> None:
             """One fragment for everything accumulated, then ack the whole batch."""
@@ -297,7 +306,7 @@ class Worker:
             outcome.units_done += len(units)
             for msg in msgs_to_ack:
                 await msg.ack()
-                held.discard(msg)
+                held.pop(id(msg), None)
             logger.info("fragment: %d units, %d bytes -> %d fragment(s)", len(units), sum(len(p) for _, p in units), len(written))
 
         beat = asyncio.create_task(_renew_held(held))
@@ -327,7 +336,7 @@ class Worker:
                         # Held, NOT acked — the ack is owed until this unit's fragment is on the store.
                         pending.append((key, result))
                         pending_msgs.append(msg)
-                        held.add(msg)
+                        held[id(msg)] = msg
                         pending_bytes += len(result)
 
                 # A REDELIVERED unit never shares a fragment with a fresh one, and that isolation is what

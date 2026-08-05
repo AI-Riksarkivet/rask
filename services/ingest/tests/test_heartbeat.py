@@ -37,6 +37,17 @@ async def test_HELD_messages_are_heartbeat_so_the_queue_does_not_redeliver_live_
     renewed: list[str] = []
 
     class _Msg:
+        """UNHASHABLE, exactly like nats-py's `Msg`.
+
+        The first version of this test used a plain object, which IS hashable — so it passed against
+        a worker that stored held messages in a `set()`, while the real `Msg` raised
+        `TypeError: unhashable type: 'Msg'` inside the drain activity on the first in-cluster run.
+        Dapr reported that as a failed activity, and the run finished COMPLETE with `units_done: 0`
+        and nothing committed. A fake that is easier than the real thing tests the fake.
+        """
+
+        __hash__ = None  # type: ignore[assignment]
+
         def __init__(self, name: str) -> None:
             self.name = name
 
@@ -45,16 +56,12 @@ async def test_HELD_messages_are_heartbeat_so_the_queue_does_not_redeliver_live_
 
     monkeypatch.setattr(worker_mod, "HEARTBEAT_SECONDS", 0.01)
 
-    held: set[Any] = {_Msg("u0"), _Msg("u1")}
+    # Drives the PRODUCTION function, not a copy of its loop. The first version of this test
+    # reimplemented the loop inline, so it asserted that a heartbeat written in the test worked —
+    # which stayed green while the real one raised on an unhashable message.
+    held: dict[int, Any] = {id(m): m for m in (_Msg("u0"), _Msg("u1"))}
 
-    async def heartbeat() -> None:
-        while True:
-            await asyncio.sleep(worker_mod.HEARTBEAT_SECONDS)
-            for msg in held:
-                with contextlib.suppress(Exception):
-                    await msg.in_progress()
-
-    beat = asyncio.create_task(heartbeat())
+    beat = asyncio.create_task(worker_mod._renew_held(held))
     await asyncio.sleep(0.05)
     beat.cancel()
     with contextlib.suppress(asyncio.CancelledError):
