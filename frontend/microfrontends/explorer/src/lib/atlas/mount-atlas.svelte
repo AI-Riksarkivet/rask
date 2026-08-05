@@ -16,7 +16,10 @@
 	import PlayerPane from '$lib/components/player-pane.svelte';
 	import HitTable, { TABLE_COLUMNS } from '$lib/components/hit-table.svelte';
 	import { activeView, type Hit } from '@rask/explorer-api';
-	import { Columns3, Check } from '@lucide/svelte';
+	import { Columns3, Check, Tags } from '@lucide/svelte';
+	import { Button } from '@rask/ui/button';
+	import SendToProjectDialog from '$lib/components/SendToProjectDialog.svelte';
+	import { selectionKeys, sendRefusal } from './atlas-send';
 
 	let active = $state<Hit | null>(null);
 	let tableHits = $state<Hit[]>([]);
@@ -70,6 +73,22 @@
 		tableHits = hits;
 		selectionTotal = total;
 	}
+
+	// ── LABEL THE REGION ──────────────────────────────────────────────────────────────────────
+	// The atlas could always lasso and the selection dead-ended in this table. A region of an
+	// embedding projection is usually a SEMANTIC cluster, so one lasso is very often one label —
+	// which makes this the cheapest high-volume labelling gesture in the product, and it produced
+	// nothing. `SendToProjectDialog` has declared `origin: 'atlas'` all along; nothing passed it.
+	let sendOpen = $state(false);
+
+	/** The keys the selection would send — built with the DESCRIPTOR's own `keyPath`, so they are
+	 *  byte-identical to every other key in the estate (percent-encoded per part). */
+	const sendKeys = $derived(selectionKeys(tableHits, (hit) => activeView().keyPath(hit)));
+
+	/** Why this selection cannot be sent, or null. The load-bearing case is a lasso bigger than the
+	 *  fetch: hits are capped while `selectionTotal` is the TRUE size, so sending the fetched subset
+	 *  would queue a fraction of the region and report success. */
+	const refusal = $derived(sendRefusal({ fetched: tableHits.length, total: selectionTotal }));
 </script>
 
 <div class="h-full min-h-0">
@@ -115,6 +134,26 @@
 						<span class="text-muted-foreground"
 							>lasso a region, or click a legend, to list its chunks</span
 						>
+					{/if}
+
+					<!-- The action the selection never had. Disabled with its reason SHOWN rather than
+					     silently unavailable — a dead control with no explanation is the shape people
+					     file bugs about. -->
+					{#if selectionTotal > 0}
+						<Button
+							size="sm"
+							variant="outline"
+							class="h-6"
+							data-testid="atlas-label-selection"
+							disabled={refusal !== null}
+							title={refusal ?? 'send this region into a labeling task, optionally pre-labelled'}
+							onclick={() => (sendOpen = true)}
+						>
+							<Tags class="size-3.5" /> Label selection
+						</Button>
+						{#if refusal}
+							<span class="text-muted-foreground/70" data-testid="atlas-send-refusal">{refusal}</span>
+						{/if}
 					{/if}
 
 					<!-- column picker -->
@@ -175,4 +214,16 @@
 			</div>
 		{/snippet}
 	</ResizableSplit>
+
+	<!-- `origin="atlas"` is the value this dialog has always accepted and never been given. The label
+	     choices are LEFT EMPTY here: they belong to the chosen PROJECT's taxonomy, and the project is
+	     picked inside the dialog. Offering the corpus's own vocabulary instead would be this surface
+	     guessing at a taxonomy the server would then refuse. See the note in atlas-send.ts. -->
+	<SendToProjectDialog
+		bind:open={sendOpen}
+		keys={sendKeys}
+		dataset={activeView().datasetParam()}
+		datasetVersion={activeView().rowTableVersion}
+		origin="atlas"
+	/>
 </div>

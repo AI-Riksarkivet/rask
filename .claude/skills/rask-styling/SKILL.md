@@ -1,6 +1,6 @@
 ---
 name: rask-styling
-description: Styling and component authoring in rask's `@rask/ui` design system — OKLCH tokens, Tailwind 4 `@source`, `tv()` variants, `data-slot`, dark mode, the legacy palette bridge, and theming third-party stylesheets (dockview's `--dv-*`, Svelte Flow) through `layer(base)`. Use when a zone renders unstyled, when picking a colour or writing `class=`, when adding or skinning a `@rask/ui` component, when a vendor stylesheet out-specifies Tailwind utilities, when theming or animating a dock, or when touching `tokens.css` / `app.css` / a `*.stories.svelte`.
+description: Styling, theming and design-system work in the rask frontend — OKLCH tokens, Tailwind 4 `@source`, `tv()` + `cn()`, `data-slot`, dark mode, the legacy `--ink/--line` bridge, export subpaths, Storybook, and vendor stylesheets themed through `layer(base)`. Use when a zone renders unstyled, when picking a colour or writing `class=`, when adding or skinning a `@rask/ui` component (its subpath export, its story), when a vendor sheet out-specifies Tailwind utilities or a dock needs theming (dockview `--dv-*`, Svelte Flow), or when touching `tokens.css` / `app.css` / a `*.stories.svelte`.
 ---
 
 # rask styling (`@rask/ui`)
@@ -20,21 +20,17 @@ Every zone's `src/app.css` is exactly this, and the `@source` depth is **three**
 @source '../../../packages/ui/dist';
 ```
 
-A zone that mounts a **dock** adds one more line — see § *Third-party stylesheets*:
-
-```css
-@import '@rask/dockview/styles.css' layer(base);   /* lakehouse, media, compute */
-```
+A zone that mounts a **dock** adds one more line — `@import '@rask/dockview/styles.css' layer(base);` (lakehouse, explorer, compute); the why is § *Third-party stylesheets*.
 
 Tailwind 4 skips `node_modules`, so without `@source` every `@rask/ui` class is silently dropped — no error, no warning, just an unstyled page. It points at **`dist`**, so a component edit reaches a zone's CSS only after `svelte-package` reruns (`bun --cwd=frontend/packages/ui run build`, or the `dev` watcher).
 
-> `docs/architecture/frontend-conventions.md:319,347` ships this line with **four** `../`. That copy is wrong; three is correct — verified at `frontend/microfrontends/home/src/app.css:7`.
+> `frontend/packages/ui/README.md:49` ships this line with **four** `../` — the package's own "In the app's CSS" snippet, so it is the copy a reader is most likely to paste. That copy is wrong; three is correct — verified at `frontend/microfrontends/home/src/app.css:7`.
 
 ## Colour comes from tokens
 
 `frontend/packages/ui/src/lib/styles/tokens.css` declares raw OKLCH under `:root` and `.dark`, then `@theme inline` maps each to a `--color-*` utility. Reach for the utility (`bg-card`, `text-muted-foreground`, `border-border`), which themes both modes at once.
 
-Beyond the shadcn set, rask defines **`success` / `warning`** pairs — consumed by `badgeVariants` (`badge.svelte:14-15`). Radius derives from `--radius: 0.625rem` via `calc()`. Fonts are Inter and JetBrains Mono.
+Beyond the shadcn set, rask defines **`success` / `warning`** pairs — consumed by `badgeVariants` (`badge.svelte:14-15`).
 
 **The legacy bridge** (`tokens.css:48-68`) aliases `--ink/--mut/--faint/--line/--panel/--panel-2/--ok/--fail/--warn/--amber` onto the real tokens. Those names were referenced by ~800 sites across 45 components while being **undefined** — so `border-color: var(--line)` fell back to `currentColor` and painted every hairline in full text colour. That was the estate's long-standing "why does this look weird". When you touch a component still on the bridge, migrate it to the token name; the block retires when `grep -r "var(--ink" frontend/` comes back empty.
 
@@ -42,12 +38,20 @@ Beyond the shadcn set, rask defines **`success` / `warning`** pairs — consumed
 
 A vendor sheet ships unlayered CSS whose selectors out-specify Tailwind utilities, so a zone's own
 `class=` on that library's content silently loses. Import it into `base` and every utility sits above
-it, permanently. Two zones already do this and a third pattern-matched it:
+it, permanently. Three zones import vendor sheets this way:
 
 ```css
-@import '@xyflow/svelte/dist/style.css' layer(base);   /* lakehouse, media */
-@import '@rask/dockview/styles.css'      layer(base);   /* lakehouse, media, compute */
+@import '@xyflow/svelte/dist/style.css' layer(base);   /* lakehouse, explorer */
+@import '@rask/flow/styles.css'         layer(base);   /* …immediately after it, same two zones */
+@import '@rask/dockview/styles.css'     layer(base);   /* lakehouse, explorer, compute */
 ```
+
+The xyflow sheet needs **two** lines, in that order: the vendor sheet, then `@rask/flow/styles.css`,
+which maps `--xy-*` onto the OKLCH tokens. Skip the second and the vendor's light-mode hex defaults
+(`#fefefe` controls, `#f7f9fb` edge labels, `#b1b1b7` edges) survive — the Controls widget and every
+edge label render as a white blob on rask's dark surfaces. Same shape as the `--dv-*` block below and
+for the same reason: every `--xy-*` resolves through a token that is itself re-declared under `.dark`,
+so `colorMode` on `<SvelteFlow>` is left unset.
 
 `@rask/dockview/styles.css` is **one import, not two** — it pulls dockview's own 124 KB sheet and then
 the rask theme block. There is no `@source` to add for it: the package ships no Tailwind utility
@@ -65,16 +69,17 @@ through a rask token that is itself re-declared under `.dark`, so mode-watcher t
 re-themes the dock underneath. `DockviewTheme.colorScheme` is therefore **deliberately unset** — it is
 a static field on a theme object and would be a second source of truth that could only go stale.
 
-Three groups are **deliberately unmapped**, and re-mapping them is a regression:
+**Two** groups are deliberately unmapped, and re-mapping them is a regression:
 
 - `--dv-color-{abyss,gh,mocha,monokai,nord,sol}-*` — the other shipped themes' private palettes. Read
   only by their own theme classes; dead weight here.
 - `--dv-tab-group-color-*` — the nine user-pickable tab-group accents. A user's semantic choice per
   group, not a theme surface. Overriding them collapses nine distinguishable colours onto one.
-- ~~`--dv-overlay-z-index`~~ — **this one IS mapped now (999)**: it is not themed by default at all —
-  only the built-in theme classes define it, so a custom theme that skips it leaves the PopupService
-  wrapper (the tab-overflow dropdown) at `z-index: auto`, painted UNDER the dock it is prepended to.
-  The dropdown opened invisibly for as long as the assumption stood (fixed 2026-08-03).
+
+`--dv-overlay-z-index` is the opposite case — **map it (rask uses 999)**. dockview does not theme it
+at all: only the built-in theme classes define it, so a custom theme that skips it leaves the
+PopupService wrapper (the tab-overflow dropdown) at `z-index: auto`, painted UNDER the dock it is
+prepended to. The dropdown opened invisibly for as long as that assumption stood (fixed 2026-08-03).
 
 The non-CSS half lives in `theme.ts` (`gap`, `dndTabIndicator`, `tabAnimation`, `dndOverlayMounting`,
 `tabGroupIndicator`) — behavioural fields CSS cannot express. **Do not add GSAP to the dock chrome:**
@@ -87,7 +92,7 @@ same property is a second writer and reads as jank. Animate *inside* a panel if 
 
 ## View transitions
 
-Cross-document view transitions stay **off** on purpose (`tokens.css:3-11`). Each zone is a separate document with its own shell, so a cross-zone nav would crossfade an identical sidebar and read as a flicker. In-app navs animate through `onNavigate → startViewTransition` in each zone's root layout. Leave the at-rule out.
+Cross-document view transitions stay **off** on purpose (`tokens.css:3-11`). Each zone is a separate document with its own shell, so a cross-zone nav would crossfade an identical sidebar and read as a flicker. In-app navs animate through `onNavigate → startViewTransition` in the root layout of five zones (compute, explorer, lakehouse, studio, train); `home` and `annotator` wire it nowhere. Leave the at-rule out either way.
 
 ## Authoring a component
 
@@ -118,7 +123,7 @@ The canonical shape — `button.svelte`, `badge.svelte`, `table-cell.svelte`, `s
 
 Six rules carry that snippet:
 
-1. **`tv()` lives in the module script and is exported.** Variants use `tailwind-variants`, not cva. Exporting the `tv` call lets a caller put the same **chrome** on a plain element — `top-navbar.svelte:86` applies `navigationMenuTriggerStyle()` to bare links so triggers and links stay dimensionally identical.
+1. **`tv()` lives in the module script and is exported.** Variants use `tailwind-variants`, not cva. Exporting the `tv` call lets a caller put the same **chrome** on a plain element — `top-navbar.svelte:101` applies `navigationMenuTriggerStyle()` to bare links so triggers and links stay dimensionally identical.
 2. **`className` is the last argument to `cn()`**, so the consumer wins. `cn = twMerge(clsx(…))`.
 3. **`ref = $bindable(null)` + `bind:this={ref}`** is the ref-forwarding contract, typed by `WithElementRef<T, El>`.
 4. **`data-slot="<name>"`** on the root element — CSS descendant selectors and the e2e harness both locate by it.
@@ -140,6 +145,6 @@ Shipping it: create the directory + `<name>.svelte` + `index.ts` + a story, then
 
 ## Where to go deeper
 
-- `references/tokens-and-theming.md` — the full token table, the `@theme inline` mapping, per-zone `@source` variance, and the bridge migration.
-- `references/component-catalog.md` — all 39 export subpaths, the three barrel conventions, the data-table stack, Storybook, and the known rough edges.
+- `references/tokens-and-theming.md` — the full token table, the `@theme inline` mapping, per-zone `@source` variance, the bridge migration, **reading the mode from JS (`useColorMode()` getters + the annotator's `app.html` boot-script exception), the view-transition decision, and why `components.json` is stale scaffolding**.
+- `references/component-catalog.md` — all 40 export subpaths, the three barrel conventions, **the `<Subject>` rule for printing an OIDC `sub`**, the data-table stack, Storybook, **the `vite.config.ts` two-homes test config**, and the known rough edges.
 - `rask-frontend` — zones, routing, data fetching, and the gates that grade this work.

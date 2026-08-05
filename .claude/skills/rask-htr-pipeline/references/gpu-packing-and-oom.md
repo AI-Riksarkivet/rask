@@ -8,8 +8,9 @@ Deep reference for the load-bearing rules in SKILL.md. Every number here is from
 Each physical GPU has a `1.0` budget in Ray's resource accounting. The HTR
 pipeline splits its GPU consumers into two classes:
 
-1. **Token slots** — the Layout (`Riksarkivet/yolov9-regions-1`) and Lines
-   (`Riksarkivet/yolov9-lines-within-regions-1`) actors each request
+1. **Token slots** — the Layout (`REGION_MODEL`, `Riksarkivet/yolov9-regions-1`)
+   and Lines (`LINE_MODEL`, `Riksarkivet/yolov9-lines-within-regions-1`) actors —
+   both repos declared once in `htr/models.py`, never re-inlined — each request
    `num_gpus=0.001`. This does **not** reserve meaningful VRAM; it exists only
    to make the Ray scheduler place those actors **on the GPU node** (the YOLO
    models are small enough to share a card). Two stages × 0.001 = 0.002.
@@ -45,9 +46,15 @@ schedule a fractional request it can't satisfy).
 batches (one preprocessing on CPU while the previous decodes on GPU);
 `HTRFlowDeployment` uses `max_ongoing_requests=4`.
 
-### Retargeting to a 3-GPU node — edit ALL THREE files
+### Retargeting the GPU pool — edit ALL THREE files
 
-GPU sizing is hardcoded for a 3-GPU node. To retarget hardware you touch:
+The live target is a **2-GPU** pool: `make ray-up-htr` starts the head with
+`--num-gpus=2` on `CUDA_VISIBLE_DEVICES=0,1` (GPU 2 is reserved for
+`qwen-serve`), and the Serve defaults pack 1.96 onto it. Only the actor-pool
+`size=` literals are truly hardcoded — the Serve fractions are env-driven.
+`pipeline.py`'s `htr_pipeline` docstring still says "sized for a 3-GPU node"
+with 4 × 0.499 Transcribe actors: that is the pre-Serve shape and is dead text,
+`0.499` exists nowhere outside it. To retarget hardware you touch:
 
 - `transcribe_service.py` — `RASK_SERVE_REPLICAS` / `RASK_SERVE_GPU_FRAC` defaults (env-overridable).
 - `htrflow_service.py` — same two knobs (it deliberately shares them) + the optional `RASK_SERVE_GPU_RESOURCE` tier pin.
@@ -68,15 +75,9 @@ of Ray Data into Ray Serve entirely; the Serve default is now **2 replicas**.
 Lessons that survive into any future edit:
 
 - **Host RAM, not VRAM, is the binding constraint when scaling GPU workers.**
-  Each worker that loads TrOCR costs ~4 GB resident before any inference. The
-  OOM killer doesn't pick your worker — it picks Ray's `dashboard_agent`, and
-  losing that kills the raylet.
-- **Don't size by VRAM headroom alone.** `0.49 × 2` looks like it fits 2 cards
-  trivially; the failure mode was system memory pressure, invisible in
-  `nvidia-smi`.
-- A leftover `transcribe_concurrency = 3` in `pipeline.py` is **vestigial** —
-  used only for `from_items(..., override_num_blocks=max(transcribe_concurrency, len(keys)))`.
-  It is **not** the GPU actor count. The GPU parallelism is `RASK_SERVE_REPLICAS`.
+  Each TrOCR-loaded worker costs ~4 GB resident before any inference, and the
+  pressure is invisible in `nvidia-smi`; the OOM killer does not pick your
+  worker — it picks Ray's `dashboard_agent`, and losing that kills the raylet.
 
 ## `transcribe_batch = 64` gates ALTO latency
 
@@ -106,7 +107,7 @@ Ray Data's streaming executor (`select_operator_to_run` in
 `streaming_executor_state.py`) ranks operators by **smallest out-queue** and
 schedules whichever is smallest — deliberately keeping queues short. In a tight
 6-stage pipeline that pins every queue at ~1 block, so **only ~1 actor per stage
-ever has work** and 2/3 GPUs sit idle. Three independent levers beat this:
+ever has work** and 2/3 GPUs sit idle. Four independent levers beat this — locality, block size, fixed pool, shards:
 
 1. **`ctx.execution_options.actor_locality_enabled = False`** — stop biasing
    dispatch toward the actor that produced the most recent block (the
@@ -143,6 +144,6 @@ ever has work** and 2/3 GPUs sit idle. Three independent levers beat this:
 |---|---|---|
 | Raylet dies mid-job, `dashboard_agent` gone from logs | Host-RAM OOM from too many TrOCR-loaded replicas | Lower `RASK_SERVE_REPLICAS`; check RSS, not VRAM |
 | Serve replicas stuck `PENDING` | Fractional GPU sum > physical GPUs | Re-do the budget arithmetic; lower `RASK_SERVE_GPU_FRAC` or replica count |
-| Only 1 GPU busy, others idle | Streaming-executor queue/locality bias, or PageLoader head too narrow | Confirm the 3 fan-out levers; widen PageLoader `size=` |
+| Only 1 GPU busy, others idle | Streaming-executor queue/locality bias, or PageLoader head too narrow | Confirm all four fan-out levers (locality, block size, fixed pool, shards); widen PageLoader `size=` |
 | First ALTO lands very late in S3 | `transcribe_batch` too large / derived from chunk size | Keep it fixed at 64 |
 | `CudnnModule` / pickling error on deploy | torch imported at module scope in a Serve file | Move all torch/transformers imports inside method bodies |

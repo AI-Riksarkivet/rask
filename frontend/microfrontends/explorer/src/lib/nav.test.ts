@@ -131,12 +131,23 @@ describe('the rest of the rail', () => {
 		expect(nav.groups.flatMap((g) => g.items.map((i) => i.title))).not.toContain('Guide');
 	});
 
-	it('keeps Workflow and the pinned Workbench regardless of the corpus', () => {
-		// Neither is a VIEW of the data, so neither depends on what the data declares.
+	it('keeps Workflow and Workbench regardless of the corpus, in ONE pinned group', () => {
+		// Neither is a VIEW of the data, so neither depends on what the data declares — and by that
+		// same argument neither is an AREA, so both are pinned rather than scrolling among the areas.
 		const bare = explorerZoneNav(view());
 
-		expect(bare.groups.flatMap((g) => g.items.map((i) => i.title))).toContain('Workflow');
-		expect(bare.footer?.items.map((i) => i.title)).toEqual(['Workbench']);
+		expect(bare.footer?.items.map((i) => i.title)).toEqual(['Workflow', 'Workbench']);
+	});
+
+	it('never renders the same group LABEL twice', () => {
+		// The defect this exists for. "Workspace" was declared twice — once as a scrolling group
+		// holding Workflow, once as the pinned footer holding Workbench — so the rail drew the same
+		// heading in two places with a single row under each, which reads as a rendering bug rather
+		// than a deliberate split. Nothing asserted label uniqueness, which is how it shipped.
+		const nav = explorerZoneNav(view());
+		const labels = [...nav.groups.map((g) => g.label), ...(nav.footer ? [nav.footer.label] : [])];
+
+		expect(labels).toEqual([...new Set(labels)]);
 	});
 });
 

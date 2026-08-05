@@ -44,6 +44,13 @@ _STATUS: dict[ErrorCode, int] = {
     ErrorCode.INVALID_TABLE_STATE: 409,
     ErrorCode.TABLE_SCHEMA_VALIDATION_ERROR: 400,
     ErrorCode.THROTTLING: 429,
+    # Codes 22/23 landed with the branch ops and were MISSING here, so a missing branch answered
+    # 500 ("Internal Server Error") instead of 404 — on endpoints rask actually ships
+    # (`catalog/api/v1/endpoints/branches.py`). Found by the 2026-08-04 skills audit, which caught
+    # the skill claiming "22 codes, all mapped" while the SDK's ErrorCode has 24. The completeness
+    # test now pins the whole enum, so the NEXT spec-added code fails a test instead of a client.
+    ErrorCode.TABLE_BRANCH_NOT_FOUND: 404,
+    ErrorCode.TABLE_BRANCH_ALREADY_EXISTS: 409,
 }
 
 # The native dir backend raises plain (untyped) errors when an op is a genuine stub. We deliberately do

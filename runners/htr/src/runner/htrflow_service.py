@@ -28,13 +28,18 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import yaml
 from ray import serve
 
 from htr.models import COMMIT_SHA, MODEL_REVISION
+
+
+if TYPE_CHECKING:
+    from starlette.requests import Request
+    from starlette.responses import PlainTextResponse
 
 
 logger = logging.getLogger(__name__)
@@ -85,23 +90,39 @@ def pinned_pipeline_config() -> dict:
     """The htrflow pipeline config with every model PINNED to ``MODEL_REVISION``.
 
     A static YAML cannot interpolate an env var, so it could only ever name a repo — and htrflow's
-    loaders default to `main`, the same moving pointer the actor lane had (#89). Both htrflow's YOLO
-    and TrOCR models accept ``revision`` in ``model_settings`` (and record it as ``model_version`` in
-    the step metadata the ALTO template renders), so pinning is a matter of injecting it, not of
-    patching htrflow.
+    loaders default to `main`, the same moving pointer the actor lane had (#89).
 
-    Injected UNIFORMLY over every ``model_settings`` rather than per step, so the code carries no
-    assumption about the YAML's step ORDER — the one thing a reader editing that file would not think
-    to preserve. The repos themselves stay in the YAML, where htrflow's own config format wants them;
-    `tests/test_models.py::test_htrflow_yaml_declares_the_same_models` is what stops the two lanes
-    drifting onto different weights.
+    THE INJECTION IS PER MODEL TYPE, because htrflow's constructors disagree — a fact the first cut
+    got wrong and only a LIVE deploy caught (2026-08-05: the uniform `model_settings.revision`
+    reached TrOCR's `**kwargs`, fell through to htrflow's BaseModel, and every replica died at init
+    with `TypeError: unexpected keyword argument 'revision'` — invisible to any test that stops at
+    the config dict):
+
+    - ``model: yolo`` takes ``revision`` DIRECTLY (`yolo.py: __init__(self, model, revision=None)`).
+    - ``model: trocr`` forwards ``model_kwargs`` to `VisionEncoderDecoderModel.from_pretrained` and
+      ``processor_kwargs`` to `TrOCRProcessor.from_pretrained` — htrflow's own docstring shows
+      `model_kwargs: {revision: <sha>}` as the sanctioned shape. Both are pinned, or the processor
+      would float while the weights held.
+
+    An UNRECOGNISED model type is left unpinned and logged rather than guessed at: a wrong kwarg
+    kills the replica, which is strictly worse than a moving revision on a model we did not expect.
+    `tests/test_models.py` pins both shapes and the same-models cross-check.
     """
     with PIPELINE_YAML.open() as handle:
         config = yaml.safe_load(handle)
     for step in config.get("steps", []):
         settings = step.get("settings", {})
-        if isinstance(settings.get("model_settings"), dict):
-            settings["model_settings"]["revision"] = MODEL_REVISION
+        model_settings = settings.get("model_settings")
+        if not isinstance(model_settings, dict):
+            continue
+        kind = settings.get("model")
+        if kind == "yolo":
+            model_settings["revision"] = MODEL_REVISION
+        elif kind == "trocr":
+            model_settings.setdefault("model_kwargs", {})["revision"] = MODEL_REVISION
+            model_settings.setdefault("processor_kwargs", {})["revision"] = MODEL_REVISION
+        else:
+            logger.warning("pinned_pipeline_config: unknown model type %r left UNPINNED", kind)
     return config
 
 
@@ -196,6 +217,35 @@ class HTRFlowDeployment:
         """
         doc = self._pipeline.run(_build_in_memory_document(data, name=name))
         return _stamp_build(self._serializer.serialize(doc) or "")
+
+    async def __call__(self, request: Request) -> PlainTextResponse:
+        """HTTP ingress (#88 step 3): POST raw image bytes → the page's ALTO XML.
+
+        Until this, /htrflow was reachable ONLY through a Serve DeploymentHandle — a Ray-client
+        API — so the medallion's governed HTR lane, which deliberately imports no Ray, could not
+        call the warm weights at all. The route existed (`route_prefix=/htrflow`) but an HTTP POST
+        answered Serve's default 405: a door with no handler behind it.
+
+        The body is the image, bare — no JSON envelope, no multipart. The caller has exactly one
+        thing to send and bytes are what it has; an envelope would only add a decode step on a
+        hot path. `?name=` labels the page (the ALTO's fileName); it defaults like
+        `transcribe_bytes` does.
+
+        The transcode itself runs in a worker thread: this method is async (the body read needs
+        the event loop), but the pipeline is minutes of blocking GPU/CPU work, and running it
+        inline would freeze the replica's loop — every OTHER request on this replica, handle
+        calls included, would stall behind it. `max_ongoing_requests=4` bounds the thread count.
+        """
+        import asyncio
+
+        from starlette.responses import PlainTextResponse
+
+        data = await request.body()
+        if not data:
+            return PlainTextResponse("empty body — POST the raw image bytes", status_code=400)
+        name = request.query_params.get("name", "page")
+        alto = await asyncio.to_thread(self.transcribe_bytes, data, name)
+        return PlainTextResponse(alto, media_type="application/xml")
 
 
 def _build_in_memory_document(image_bytes: bytes, name: str = "page") -> object:

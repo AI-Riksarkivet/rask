@@ -1,4 +1,4 @@
-.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check
+.PHONY: registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip check ci dev-micro dev-frontends dev-frontends-k3s home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check audit scan-config scan-image scan-zone-image
 
 help:
 	@echo "Targets:"
@@ -136,6 +136,29 @@ knip:
 check: fmt lint typecheck knip
 
 ci: check test
+
+# ---- supply chain (.dagger/scan.go) ----------------------------------------
+# Same contract as every other gate here: `make audit` == `dagger call audit`, one definition, no
+# second description of it. Deliberately NOT folded into `check` — check is offline and fast, these
+# reach osv.dev and ghcr for advisory data, and a laptop on a train should not fail `make check`.
+#
+# audit       osv-scanner over all SIX lockfiles + .dagger/go.mod. No build, seconds.
+# scan-config trivy misconfig over .docker/ + chart/, and secret detection repo-wide. No build.
+# scan-image  trivy over an image DAGGER BUILT — needs the build first, so it is minutes, not seconds.
+#             NAME is the .docker/<stem>.dockerfile stem; ZONE is a frontend/microfrontends/ dir.
+audit:
+	dagger call audit
+
+scan-config:
+	dagger call scan-config
+
+scan-image:
+	@test -n "$(NAME)" || { echo "  !! usage: make scan-image NAME=gateway"; exit 1; }
+	dagger call scan-image --name=$(NAME)
+
+scan-zone-image:
+	@test -n "$(ZONE)" || { echo "  !! usage: make scan-zone-image ZONE=home"; exit 1; }
+	dagger call scan-zone-image --zone=$(ZONE)
 
 # ---- claude code -----------------------------------------------------------
 claude-bootstrap:

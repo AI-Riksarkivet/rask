@@ -78,6 +78,10 @@ const SendItemSchema: v.GenericSchema<SendItem> = v.object({
 		dataset_version: v.nullable(v.number()),
 	}),
 	media: v.object({ kind: v.literal('image') }),
+	// DECLARED, because valibot's `v.object` strips what it does not — in silence. Undeclared, a
+	// bulk label posts 200, seeds every task, and carries nothing: the send looks like it worked and
+	// every queued item is blank. That defect has now been shipped twice in the annotator zone.
+	prediction: v.optional(v.array(v.object({ shape_type: v.string(), label: v.string() }))),
 });
 
 /** The projects of one tenant. Only draft/labeling ones can take items; that filter stays where it was

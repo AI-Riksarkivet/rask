@@ -2,7 +2,7 @@
 
 The concrete shape of the pipeline + the two Serve apps, with exact symbols,
 ports, and commands. Source: `runners/htr/src/runner/` and
-`scripts/deploy_serve.py`.
+`runners/htr/scripts/deploy_serve.py`.
 
 ## The two pipeline shapes
 
@@ -25,12 +25,25 @@ All literals, autoscaler off (`ActorPoolStrategy(size=N)`):
 | Region detect | `LayoutActor` (`yolov9-regions-1`) | 2 | 8 | `num_gpus=0.001` |
 | Line detect | `LineActor` (`yolov9-lines-within-regions-1`) | 2 | 8 | `num_gpus=0.001` |
 | Transcribe | `TranscribeViaServe` (CPU; blocks on Serve handle) | 8 (`transcribe_concurrency_serve`) | 64 (`transcribe_batch`) | — (GPU in Serve) |
-| ALTO build | `AltoExportActor` (`emit_words=True`) | 2 | 32 | — |
+| ALTO build | `AltoExportActor` (`emit_words=True`, `models=PIPELINE_MODELS`) | 2 | 32 | — |
 | ALTO write | `AltoWriterActor` (`sink=...`) | 2 | 32 | — |
 
 PageLoader is sized 6 because at `concurrency=2` it capped the pipeline at
 ~60 pages/min — slow enough that Transcribe never fanned out to GPUs 1/2. A wide
 head lets the Transcribe buffer fill so the Serve fan-out kicks in.
+
+### The ALTO records which weights read the page
+
+`serialize_alto(page_with_text, *, emit_words=…, models=PIPELINE_MODELS)` emits one
+`<Processing ID="model_<step>">` block per model — `<processingStepDescription>` is
+the step (`region-segmentation` / `line-segmentation` / `text-recognition`),
+`<processingStepSettings>` is `model=<repo>@<revision>` — alongside the
+pre-existing `ID="general"` software block. `AltoExportActor` **defaults**
+`models=PIPELINE_MODELS`; it is deliberately NOT threaded from `pipeline.py`,
+because the pipeline builds its actors from those same `htr.models` constants —
+one declaration, so the record cannot drift from the load. `models=[]` emits no
+block at all (silence is honest; a guess is not). `step` is spliced into an
+xsd:ID — keep it an NCName-safe slug.
 
 ### `/htrflow` collapse (`htrflow_pipeline`) — pool sizes
 
@@ -47,7 +60,7 @@ per-step actor fan-out isn't worth it for the batch.
 
 ## The two Serve apps
 
-Deployed by `scripts/deploy_serve.py` (`APPS` dict):
+Deployed by `runners/htr/scripts/deploy_serve.py` (`APPS` dict):
 
 | App name | Route prefix | Deployment class | Build |
 |---|---|---|---|
@@ -56,7 +69,9 @@ Deployed by `scripts/deploy_serve.py` (`APPS` dict):
 
 Both are reached from the pipeline by `serve.get_app_handle("transcribe" | "htrflow")`
 (raises if not deployed — run `make serve-up` first). `TranscribeService`'s
-default model is `Riksarkivet/trocr-base-handwritten-hist-swe-2` (`dtype="bf16"`,
+`DEFAULT_MODEL` is **not** a literal here — it is `TEXT_MODEL.repo`
+(`Riksarkivet/trocr-base-handwritten-hist-swe-2`), declared once in
+`htr/models.py` (`dtype="bf16"`,
 `attn_implementation={"encoder": "sdpa", "decoder": "eager"}`); the
 `TranscribeViaServe._handle.transcribe.remote(...)` entrypoint returns
 `list[(text, confidence)]` where confidence is `exp(mean log-prob)` over emitted
@@ -74,6 +89,7 @@ the actors one at a time (see `references/gpu-packing-and-oom.md` § fan-out).
 | `RASK_SERVE_REPLICAS` | `2` | `num_replicas` for **both** Serve apps |
 | `RASK_SERVE_GPU_FRAC` | `0.49` | `num_gpus` per replica for **both** Serve apps |
 | `RASK_SERVE_GPU_RESOURCE` | unset | Optional custom Ray resource tag to pin `htrflow` replicas to a GPU tier (e.g. `gpu_ada` on dev-kuberay); reserved as a `0.001` placement tag, not the real GPU budget |
+| `RASK_HTR_MODEL_REVISION` | `main` | The Hugging Face revision **every** weight load pins. Read once at import into `htr.models.MODEL_REVISION`, so one run cannot straddle two revisions — and the value is written into the published ALTO. `main` is a moving pointer: unpinned, identical pages yielded different transcriptions. |
 | `RAY_ADDRESS` | `auto` | Cluster to attach to (`deploy_serve._connect`) |
 
 `deploy_serve._connect` pins `runtime_env={"py_executable": sys.executable}` so
@@ -94,13 +110,16 @@ and `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --no-sync` (same runtime-env
 avoidance as `_connect`). Defaults in the Makefile: `RASK_SERVE_REPLICAS ?= 2`,
 `RASK_SERVE_GPU_FRAC ?= 0.49`.
 
-Direct invocation (repo root, local Ray up):
+Direct invocation (repo root, local Ray up). The script sits inside the sealed
+runner, which no workspace glob matches, so it only resolves under
+`--project runners/htr` — its own module docstring still says
+`scripts/deploy_serve.py` and is wrong:
 
 ```bash
-uv run python scripts/deploy_serve.py up                # default: transcribe
-uv run python scripts/deploy_serve.py up --app htrflow
-uv run python scripts/deploy_serve.py down --app htrflow
-uv run python scripts/deploy_serve.py status
+uv run --project runners/htr python runners/htr/scripts/deploy_serve.py up                # default: transcribe
+uv run --project runners/htr python runners/htr/scripts/deploy_serve.py up --app htrflow
+uv run --project runners/htr python runners/htr/scripts/deploy_serve.py down --app htrflow
+uv run --project runners/htr python runners/htr/scripts/deploy_serve.py status
 ```
 
 Submit work through the `runner` CLI (`runners/htr`), which builds one

@@ -208,6 +208,27 @@ export const TaskDetailSchema = v.object({
 	reviewed_by: v.nullish(v.string()),
 	reviewed_at: v.nullish(v.string()),
 	review_action: v.nullish(v.string()),
+	/** PRE-ANNOTATIONS attached at send — what a bulk label, an import, or a model suggested for this
+	 *  item, before anyone opened it.
+	 *
+	 *  Declared because valibot's `v.object` STRIPS what it does not declare, in silence. The server
+	 *  returns the whole task document (`list_project_tasks` spreads `**doc`), so this was always on
+	 *  the wire and always thrown away — which made the label a bulk send applied invisible in the
+	 *  very queue you review it from. Third time this class of defect has bitten this zone.
+	 *
+	 *  `source` is read but never WRITTEN by any client: the service stamps it (`BULK_SOURCE`), and it
+	 *  is how every surface tells suggested work from drawn work. */
+	prediction: v.optional(
+		v.array(
+			v.object({
+				shape_type: v.string(),
+				label: v.nullish(v.string()),
+				source: v.nullish(v.string()),
+				confidence: v.nullish(v.number()),
+			}),
+		),
+		[],
+	),
 	review_notes: v.optional(v.array(ReviewNoteSchema), []),
 	legal_events: v.optional(v.array(LegalEventSchema), []),
 	// The ontology CAPTURED onto this item at send. The server has always sent the capture —

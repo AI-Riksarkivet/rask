@@ -162,14 +162,30 @@ def test_htrflow_yaml_declares_the_same_models():
 
 
 def test_htrflow_pipeline_config_pins_every_model():
-    """The YAML cannot interpolate an env var, so the pin is injected at load — verify it lands."""
+    """The pin lands in the SHAPE each constructor accepts — uniform injection killed the replica.
+
+    Live-caught 2026-08-05: `model_settings.revision` on the trocr step fell through **kwargs to
+    htrflow's BaseModel and every replica died at init. yolo takes `revision` directly; trocr takes
+    it inside `model_kwargs`/`processor_kwargs` (htrflow's own documented shape). A config-level
+    test cannot construct the real models, so it pins the documented shapes exactly.
+    """
     from runner.htrflow_service import pinned_pipeline_config
 
-    settings = [s["settings"]["model_settings"] for s in pinned_pipeline_config()["steps"] if "model_settings" in s.get("settings", {})]
-    assert settings, "no model_settings found — the YAML shape changed and the pin now injects nothing"
-    assert all(s.get("revision") == MODEL_REVISION for s in settings), settings
+    steps = [s["settings"] for s in pinned_pipeline_config()["steps"] if "model_settings" in s.get("settings", {})]
+    assert steps, "no model_settings found — the YAML shape changed and the pin now injects nothing"
+    for settings in steps:
+        ms = settings["model_settings"]
+        if settings["model"] == "yolo":
+            assert ms.get("revision") == MODEL_REVISION, ms
+            assert "model_kwargs" not in ms  # yolo takes it directly; a stray dict would be ignored silently
+        elif settings["model"] == "trocr":
+            assert "revision" not in ms, "trocr must NOT get a bare revision — it falls through to BaseModel and kills the replica"
+            assert ms["model_kwargs"]["revision"] == MODEL_REVISION
+            assert ms["processor_kwargs"]["revision"] == MODEL_REVISION
+        else:
+            raise AssertionError(f"unexpected model type {settings['model']!r} in the YAML")
     # And the on-disk YAML is untouched: the pin is a load-time overlay, not a file rewrite.
-    assert all("revision" not in s for s in _yaml_model_settings())
+    assert all("revision" not in s and "model_kwargs" not in s for s in _yaml_model_settings())
 
 
 def test_pinned_config_reaches_htrflow_in_the_form_it_accepts():
@@ -190,7 +206,11 @@ def test_pinned_config_reaches_htrflow_in_the_form_it_accepts():
             reloaded = yaml.safe_load(handle)
         written = pathlib.Path(config_path)
         assert written.exists()
-    revisions = {s["settings"]["model_settings"].get("revision") for s in reloaded["steps"] if "model_settings" in s.get("settings", {})}
+    revisions = {
+        (s["settings"]["model_settings"].get("revision") or s["settings"]["model_settings"].get("model_kwargs", {}).get("revision"))
+        for s in reloaded["steps"]
+        if "model_settings" in s.get("settings", {})
+    }  # shape-aware: yolo pins at top level, trocr inside model_kwargs — the live-caught split
     assert revisions == {MODEL_REVISION}
     assert not written.exists(), "the temp config outlived the context manager"
 

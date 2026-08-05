@@ -51,4 +51,11 @@ export interface SendItem {
 		dataset_version: number | null;
 	};
 	media: { kind: 'image' };
+	/** PRE-ANNOTATIONS attached at send — the bulk-label payload, mirroring the service's
+	 *  `PredictionShape`. Absent for an ordinary send.
+	 *
+	 *  No `source`: the service stamps it (`BULK_SOURCE`), and it is how every later surface tells
+	 *  suggested work from drawn work. A sender able to write it could mark items nobody looked at
+	 *  as human work. */
+	prediction?: { shape_type: string; label: string }[];
 }

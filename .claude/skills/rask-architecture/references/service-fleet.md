@@ -1,20 +1,28 @@
 # The service fleet: ports, entrypoints, and which package each composes
 
-The fleet (`make dev-micro`, driven by `scripts/dev-micro.sh`):
-gateway `:8888` + ray `:8804` + controlplane `:8820` + the explorer viewer `:8101`.
-The frontend's Vite proxy targets `:8888` (the gateway). The orchestrator
-process (`:8810`) died at P7a; core-api/search-api/volumes-api died in the
-R6/R20 media wave (lance-ns-merge.md P7).
+The fleet (`make dev-micro`, driven by `scripts/dev-micro.sh`) is SIX processes:
+gateway `:8888` + compute `:8804` + controlplane `:8820` + the explorer trio —
+viewer `:8101`, search `:8102`, annotator `:8103`. (`PORT_OFFSET=<n>` shifts all six
+so a second fleet can share a host.) The orchestrator process (`:8810`) died at P7a;
+core-api/search-api/volumes-api died in the R6/R20 media wave (lance-ns-merge.md P7).
 
-## Every HTTP entrypoint is a thin shell over `make_service_app`
+The frontend's Vite proxy targets `:8888` (the gateway) for `compute`/`studio`/`train`
+**only**; `home`/`lakehouse` proxy `/api` to `LANCE_BACKEND` (`:8001`, which this fleet
+does NOT start) and `explorer`/`annotator` have no `/api` proxy at all — they reach
+`:8101`/`:8102`/`:8103` through their own BFF. See `rask-frontend`.
 
-Each `services/<svc>/src/<svc>/__init__.py` imports routers (+ maybe a
-lifespan) from a domain package and calls `service_kit.make_service_app`. No business
-logic in the entrypoint.
+## Three HTTP entrypoints are thin shells over `make_service_app`
+
+`compute`, `controlplane` and `ingest` import routers (+ maybe a lifespan) from a domain
+package and call `service_kit.make_service_app` — no business logic in the entrypoint.
+`gateway` builds `FastAPI(...)` itself (it is a proxy, not a router host), and the seven
+lance-plane services (`catalog`, `lineage`, `medallion` ×2 apps, `maintenance`, `viewer`,
+`search`, `annotator`) build `FastAPI(...)` in `main.py`/`service.py`/`producer.py`/`mover.py`
+over their own `core/config.py` settings. See rask-architecture's "Two layouts are sanctioned".
 
 | Service | Port | Composes package(s) | Lifespan | DB? | Notes |
 |---|---|---|---|---|---|
-| `gateway` | 8888 | none (httpx proxy) | own asynccontextmanager | no | path-routes `/api/*` longest-prefix-first, **no catch-all**; upstreams env-overridable (`RASK_COMPUTE_URL`, `RASK_CONTROLPLANE_URL`, `RASK_MEDIA_*_URL`, …). |
+| `gateway` | 8888 | none (httpx proxy) | own asynccontextmanager | no | path-routes `/api/*` longest-prefix-first, **no catch-all**; upstreams env-overridable (`RASK_COMPUTE_URL`, `RASK_CONTROLPLANE_URL`, `RASK_CATALOG_API_URL`, `RASK_LINEAGE_API_URL`, `RASK_MEDALLION_API_URL`, `RASK_INGEST_URL`, `RASK_EXPLORER_{VIEWER,SEARCH,ANNOTATOR}_URL`). There is **no** `RASK_MEDIA_*_URL` — the media→explorer rename took those names with it. |
 | `compute` | 8804 | `ray-kit` | `compute.lifespan.make_lifespan` | no | Ray dashboard introspection; `proxy_router` mounts at root so `/api/serve/*` reaches Serve status API |
 | `viewer` (explorer plane) | 8101 | `service-kit[lancekit]` + `storage` | own (lazy registry) | no | `/api/explorer/*` incl. the S3 objects browser ported from volumes-api |
 
@@ -22,23 +30,30 @@ logic in the entrypoint.
 
 The reconcile→derive→submit loop, the two-lane prefetch/htr slot model, the
 `batches` table and S3-sync were deleted at the compute-plane cutover
-(lance-ns-merge.md P7a). The pipeline head is the medallion producer's
-`POST /ingest-iiif` (IIIF → BRONZE page-image Lance dataset, ONE bronze-write
-OpenLineage event with the external `iiif://…` input — R23: raw is the external
-world, bronze the first governed tier); `/bronze-arrival` fires the
-`medallion.bronze` cascade, and the
-HTR stages run as event-triggered movers on the unified Ray cluster (P7b).
+(lance-ns-merge.md P7a). The pipeline head is now the **ingest plane**
+(`services/ingest`, `:8830`, `.docker/ingest.dockerfile`): `POST /api/ingests` takes a
+source-agnostic `SourceSpec` — `iiif`, `s3-prefix`, `local-dir`, registered in
+`ingest/adapters.py`, each declaring its own external lineage input (R23: raw is the
+external world, bronze the first governed tier) — a Dapr Workflow fans units onto a NATS
+JetStream work queue, and the lander commits ONE Lance version through the **catalog**
+(`bronze$pages`). It is the CATALOG's own COMPLETE event, not an ingest-side emit, that
+announces the write and that `/bronze-arrival` filters on. The medallion producer keeps the events lane
+(`POST /produce` → `bronze$events`) and the cascade head `/bronze-arrival`; **its
+`POST /ingest-iiif` is deleted** — the gateway's surviving `/api/ingest-iiif` row is a
+deprecation shim, so a call routed there today reaches a route that 404s. HTR stages run
+as event-triggered movers on the unified Ray cluster (P7b).
 
-**Both ingest lanes share one topic, so movers must discriminate.** The events
-lane (`bronze$events`) and the IIIF page lane (`bronze$pages`) both publish
-`medallion.bronze`, so every mover subscribed to it sees both arrivals. The
-trigger carries the `dataset` that was actually written
-(`ingest_trigger._bronze_write_dataset`) and `handle_stage` DROPs a name that is
-not its own `from_dataset` — compared against the RAW setting, never the
-project-qualified one, since the trigger is unqualified for every tenant. An
-ABSENT `dataset` makes no claim and proceeds. Without that check a page arrival
-drove the events mover to completion: a real write plus a COMPLETE attributed to
-the other lane's token.
+**Both bronze lanes converge on one topic, so movers must discriminate.** The events
+lane (the producer's `/produce` → `bronze$events`) and the page lane (the ingest
+plane's lander → `bronze$pages`, committed through the catalog) both end in a lineage
+COMPLETE that `/bronze-arrival` turns into `medallion.bronze`, so every mover
+subscribed to it sees both arrivals. The trigger carries the `dataset` that was
+actually written (`ingest_trigger._bronze_write_dataset`) and `handle_stage` DROPs a
+name that is not its own `from_dataset` — compared against the RAW setting, never the
+project-qualified one, since the trigger is unqualified for every tenant. An ABSENT
+`dataset` makes no claim and proceeds. Without that check a page arrival drove the
+events mover to completion: a real write plus a COMPLETE attributed to the other lane's
+token.
 
 ## Why the fleet services never grow heavy deps
 

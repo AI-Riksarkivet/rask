@@ -3,6 +3,8 @@
 	// roles. Every action button here renders from the task's OWN `legal_events` (supplied by the
 	// backend from the machine tables) — the UI holds no second copy of the state machine. A
 	// denial is the SERVER's 403 surfaced with its reason; a disabled button is never the gate.
+	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import {
 		createSvelteTable,
@@ -24,10 +26,22 @@
 	import { Dialog } from '@rask/ui/dialog';
 	import { Input } from '@rask/ui/input';
 	import { Select } from '@rask/ui/select';
+
+	import { bulkActions, targetsFor } from './bulk-events';
+	import {
+		corpusText,
+		distinctValues,
+		labelText,
+		matchesText,
+		mediaText,
+		predictedLabels,
+	} from './item-columns';
 	import { Textarea } from '@rask/ui/textarea';
-	import { ExternalLink, Trash2 } from '@lucide/svelte';
+	import { ExternalLink, LayoutGrid, Rows3, Trash2 } from '@lucide/svelte';
 
 	import ImportButton from './ImportButton.svelte';
+	import TaskGrid from './TaskGrid.svelte';
+	import { parseView, QUEUE_VIEW_KEY, type QueueView } from './queue-view';
 	import LeaseChip from './LeaseChip.svelte';
 	import { dropTask } from './remote/projects.remote';
 	import { fireTaskEvent } from './remote/tasks.remote';
@@ -66,16 +80,32 @@
 	// selection model all follow for free.
 	let filterState = $state('');
 	let filterAssignee = $state('');
+	//: The ITEM filters. `filterText` is one box searching the key, corpus, label and modality
+	//: together, because a person typing into one field means "find this anywhere" — asking which
+	//: column it lives in is asking them to know the schema.
+	let filterText = $state('');
+	let filterLabel = $state('');
 
 	const visible = $derived(
 		tasks.filter(
 			(t) =>
 				(filterState === '' || t.state === filterState) &&
 				(filterAssignee === '' ||
-					(t.assignee ?? '').toLowerCase().includes(filterAssignee.trim().toLowerCase())),
+					(t.assignee ?? '').toLowerCase().includes(filterAssignee.trim().toLowerCase())) &&
+				(filterLabel === '' || labelText(t).split(',').some((l) => l.trim() === filterLabel)) &&
+				matchesText(t, filterText),
 		),
 	);
-	const filtering = $derived(filterState !== '' || filterAssignee.trim() !== '');
+	const filtering = $derived(
+		filterState !== '' ||
+			filterAssignee.trim() !== '' ||
+			filterLabel !== '' ||
+			filterText.trim() !== '',
+	);
+
+	/** The labels actually PRESENT, so the dropdown never offers a filter that yields nothing —
+	 *  the same rule `statesPresent` already follows. */
+	const labelsPresent = $derived(distinctValues(tasks, labelText));
 
 	/** The states actually PRESENT, so the dropdown never offers a filter that yields nothing. */
 	const statesPresent = $derived([...new Set(tasks.map((t) => t.state))].sort());
@@ -90,6 +120,29 @@
 	 */
 	function onFilterChanged(): void {
 		rowSelection = {};
+	}
+
+	/** LIST or GRID. A list is how you audit a queue; a grid is how you scan one — and for page
+	 *  images the grid answers "which of these are letters" in a glance. Both read the SAME filtered,
+	 *  sorted rows and the SAME selection, so they can never disagree about what is in view.
+	 *
+	 *  Seeded to `list` and restored on mount: `localStorage` does not exist during SSR, so reading it
+	 *  at initialisation would crash the server render. */
+	let view = $state<QueueView>('list');
+	onMount(() => {
+		try {
+			view = parseView(localStorage.getItem(QUEUE_VIEW_KEY));
+		} catch {
+			// A browser refusing storage (private mode, blocked cookies) is not a reason to fail the
+			// queue — it just means the preference does not persist.
+		}
+	});
+
+	function setView(next: QueueView): void {
+		view = next;
+		try {
+			localStorage.setItem(QUEUE_VIEW_KEY, next);
+		} catch {}
 	}
 
 	let busy = $state<string | null>(null); // `${task_id}:${event}` in flight
@@ -183,25 +236,75 @@
 		onchanged();
 	}
 
-	async function bulkAccept(): Promise<void> {
-		// SNAPSHOT the derived at entry: clearing the selection below re-derives it to [], and a
-		// completion notice computed from the post-clear value reports "Accepted 0" for real work
-		// (the bulk e2e caught exactly that).
-		const targets = [...selectedReviewable];
+	/** Every action this SELECTION can perform, derived from the rows' own `legal_events`.
+	 *
+	 *  The queue used to offer exactly two — `accept` and `assign`, hand-picked — while every per-row
+	 *  button came from the task machine. So the row menu could claim, submit, skip, release, requeue
+	 *  and reopen, and the selection could not; claiming twenty items meant twenty clicks, which is
+	 *  what made this read as "pick a row, do a thing" however good the selection model was. */
+	const available = $derived(bulkActions(tasks, selectedIds));
+
+	/** Fire one event across every selected row that declares it legal.
+	 *
+	 *  ONE gated call per item, reported per item — the shape the actor model forces. There is no
+	 *  transaction across task actors, so a rollback would be a second best-effort loop that can
+	 *  itself half-fail; claiming an atomicity we cannot deliver would be worse than reporting the
+	 *  truth. Generalised from the old `bulkAccept`, which was this loop with `accept` baked in. */
+	async function bulkFire(event: string): Promise<void> {
+		// SNAPSHOT at entry: clearing the selection below re-derives the source to [], and a completion
+		// notice computed after that reports "0 items" for real work (the bulk e2e caught exactly that).
+		const targets = targetsFor(tasks, selectedIds, event);
 		if (bulkBusy || targets.length === 0) return;
+		if (event === 'skip' && !confirm(`Skip ${targets.length} item(s)? They leave the queue.`)) return;
 		bulkBusy = true;
 		notice = null;
 		const failures: string[] = [];
 		for (const task of targets) {
-			const result = await fireTaskEvent({ taskId: task.task_id, event: 'accept' });
+			const result = await fireTaskEvent({ taskId: task.task_id, event });
+			if (!result.ok) failures.push(`${task.source.keys[0] ?? task.task_id}: ${result.detail}`);
+		}
+		bulkBusy = false;
+		rowSelection = {};
+		const label = (EVENT_LABELS[event] ?? event).replace('…', '');
+		// Names WHICH failed and how many landed. A bare "failed" leaves a manager unable to tell a
+		// permission problem from a race on one row.
+		notice =
+			failures.length === 0
+				? { ok: true, text: `${label}: ${targets.length} item${targets.length === 1 ? '' : 's'}.` }
+				: {
+						ok: false,
+						text: `${targets.length - failures.length} of ${targets.length} — ${failures[0]}`,
+					};
+		onchanged();
+	}
+
+	/** Remove every selected item. Confirmed ONCE for the batch — a per-item confirm on forty rows is
+	 *  a dialog nobody reads by the fourth one, which is worse than no confirm at all.
+	 *
+	 *  `dropTask` rather than `fireTaskEvent`: removing an item is a PROJECT operation (it leaves the
+	 *  index), not an edge in the task's own machine, which is why it never appeared in `legal_events`
+	 *  and so cannot come from `bulkActions`. */
+	async function bulkRemove(): Promise<void> {
+		const targets = tasks.filter((t) => selectedIds.includes(t.task_id));
+		if (bulkBusy || targets.length === 0) return;
+		if (!confirm(`Remove ${targets.length} item(s) from the project? Their queued work is discarded.`))
+			return;
+		bulkBusy = true;
+		notice = null;
+		const failures: string[] = [];
+		for (const task of targets) {
+			const result = await dropTask({ projectId, taskId: task.task_id });
 			if (!result.ok) failures.push(`${task.source.keys[0] ?? task.task_id}: ${result.detail}`);
 		}
 		bulkBusy = false;
 		rowSelection = {};
 		notice =
 			failures.length === 0
-				? { ok: true, text: `Accepted ${targets.length} item${targets.length === 1 ? '' : 's'}.` }
-				: { ok: false, text: `${failures.length} of ${targets.length} refused — ${failures[0]}` };
+				? { ok: true, text: `Removed ${targets.length} item${targets.length === 1 ? '' : 's'}.` }
+				: {
+						ok: false,
+						text: `${targets.length - failures.length} of ${targets.length} removed — ${failures[0]}`,
+					};
 		onchanged();
 	}
 
@@ -276,6 +379,26 @@
 			cell: ({ row }) => renderSnippet(itemCell, row.original),
 			meta: { cellClass: 'whitespace-nowrap' },
 		},
+		// ── the ITEM's own columns. Everything above and below this block is task ADMINISTRATION;
+		//    these describe the thing being labelled, which is what decides what to work on next.
+		{
+			id: 'label',
+			accessorFn: labelText,
+			header: sortableHeader('label'),
+			cell: ({ row }) => renderSnippet(labelCell, row.original),
+		},
+		{
+			id: 'corpus',
+			accessorFn: corpusText,
+			header: sortableHeader('corpus'),
+			meta: { cellClass: 'font-mono text-xs whitespace-nowrap' },
+		},
+		{
+			id: 'media',
+			accessorFn: mediaText,
+			header: sortableHeader('media'),
+			meta: { cellClass: 'text-xs' },
+		},
 		{
 			id: 'state',
 			accessorKey: 'state',
@@ -327,6 +450,13 @@
 		getSortedRowModel: getSortedRowModel(),
 		getPaginationRowModel: getPaginationRowModel(),
 	});
+
+	/** The rows the table is CURRENTLY showing — filtered, sorted AND paginated by TanStack.
+	 *
+	 *  The grid renders these rather than `visible`, so switching mode never silently changes which
+	 *  items you are looking at, and a thousand-item queue does not become a thousand tiles. Declared
+	 *  here because it reads `table`, which is built just above. */
+	const pageRows = $derived(table.getRowModel().rows.map((r) => r.original));
 </script>
 
 {#snippet itemCell(task: TaskDetail)}
@@ -372,6 +502,23 @@
 			</span>
 		{/if}
 	</span>
+{/snippet}
+
+{#snippet labelCell(task: TaskDetail)}
+	<!-- The SUGGESTED label, not an accepted one. `secondary` rather than the default variant is the
+	     whole point: a prediction must not look like work somebody did. The title names where it came
+	     from — the server stamps `source` (`bulk` / `import` / `model:<name>`) and it is the only
+	     thing distinguishing a machine's guess from an annotator's answer. -->
+	<div class="flex flex-wrap gap-1">
+		{#each predictedLabels(task) as label (label)}
+			<Badge
+				variant="secondary"
+				title="suggested{task.prediction?.[0]?.source ? ` (${task.prediction[0].source})` : ''} — not reviewed"
+			>
+				{label}
+			</Badge>
+		{/each}
+	</div>
 {/snippet}
 
 {#snippet actionsCell(task: TaskDetail)}
@@ -462,30 +609,57 @@
 			class="bg-muted/50 flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm"
 			data-testid="bulk-bar"
 		>
-			<span class="text-muted-foreground">
-				{selectedIds.length} selected · {selectedReviewable.length} reviewable · {selectedAssignable.length}
-				assignable
-			</span>
-			<Button
-				variant="outline"
-				size="sm"
-				class="ml-auto"
-				data-testid="bulk-assign"
-				disabled={bulkBusy || selectedAssignable.length === 0}
-				onclick={() => {
+			<span class="text-muted-foreground shrink-0">{selectedIds.length} selected</span>
+
+			<!-- Every action the SELECTION can take, derived from the rows' own legal events and in a
+			     fixed order — a control that reorders itself between two clicks is how someone accepts a
+			     batch they meant to skip. Each names its own count, so a mixed selection is honest about
+			     the rows it will not touch instead of acting on a subset silently. -->
+			<div class="ml-auto flex flex-wrap items-center justify-end gap-1">
+				{#each available as action (action.event)}
+					<Button
+						variant={action.event === 'accept' ? 'default' : 'outline'}
+						size="sm"
+						data-testid="bulk-{action.event}"
+						disabled={bulkBusy}
+						onclick={() => void bulkFire(action.event)}
+					>
+						{(EVENT_LABELS[action.event] ?? action.event).replace('…', '')}
+						{action.count}
+					</Button>
+				{/each}
+
+				<!-- Stays separate: `assign` needs a RECIPIENT, so it opens a dialog rather than firing. -->
+				{#if selectedAssignable.length > 0}
+					<Button
+						variant="outline"
+						size="sm"
+						data-testid="bulk-assign"
+						disabled={bulkBusy}
+						onclick={() => {
 	bulkAssignFor = [...selectedAssignable];
 	assignee = '';
 }}
-			>
-				{`Assign ${selectedAssignable.length}`}
-			</Button>
-			<Button
-				size="sm"
-				disabled={bulkBusy || selectedReviewable.length === 0}
-				onclick={() => void bulkAccept()}
-			>
-				{bulkBusy ? 'Accepting…' : `Accept ${selectedReviewable.length} reviewed`}
-			</Button>
+					>
+						{`Assign ${selectedAssignable.length}`}
+					</Button>
+				{/if}
+
+				<!-- Removing queued work has no undo, so it confirms — and it is last, away from the
+				     actions someone clicks repeatedly. -->
+				{#if droppable && selectedIds.length > 0}
+					<Button
+						variant="ghost"
+						size="sm"
+						data-testid="bulk-remove"
+						disabled={bulkBusy}
+						title="remove the selected items from the project"
+						onclick={() => void bulkRemove()}
+					>
+						<Trash2 class="size-3.5" /> Remove {selectedIds.length}
+					</Button>
+				{/if}
+			</div>
 		</div>
 	{/if}
 	{#if notice}
@@ -496,6 +670,31 @@
 	     over a thousand it is the only way to work. -->
 	{#if tasks.length > 1}
 		<div class="flex flex-wrap items-center gap-2" data-testid="queue-filter">
+			<!-- ONE box across the item's columns — key, corpus, label, modality. A person typing here
+			     means "find this anywhere"; asking which column it lives in is asking them to know the
+			     schema. -->
+			<Input
+				bind:value={filterText}
+				placeholder="Search items…"
+				aria-label="Search items"
+				class="h-8 w-56"
+				data-testid="filter-text"
+				oninput={onFilterChanged}
+			/>
+			{#if labelsPresent.length > 0}
+				<Select
+					bind:value={filterLabel}
+					ariaLabel="Filter by label"
+					onValueChange={onFilterChanged}
+					options={[
+	{ value: '', label: `All labels (${tasks.length})` },
+	...labelsPresent.map((name) => ({
+		value: name,
+		label: `${name} (${tasks.filter((t) => labelText(t).split(',').some((l) => l.trim() === name)).length})`,
+	})),
+]}
+				/>
+			{/if}
 			<Select
 				bind:value={filterState}
 				ariaLabel="Filter by state"
@@ -517,6 +716,33 @@
 				class="h-8 w-48"
 				oninput={onFilterChanged}
 			/>
+			<!-- LIST or GRID. Pinned right so it reads as a property of the whole view rather than one
+			     more filter. -->
+			<div class="ml-auto flex items-center gap-1" data-testid="queue-view-toggle">
+				<Button
+					variant={view === 'list' ? 'secondary' : 'ghost'}
+					size="icon-sm"
+					aria-label="List view"
+					aria-pressed={view === 'list'}
+					data-testid="view-list"
+					title="list — audit the queue"
+					onclick={() => setView('list')}
+				>
+					<Rows3 class="size-4" />
+				</Button>
+				<Button
+					variant={view === 'grid' ? 'secondary' : 'ghost'}
+					size="icon-sm"
+					aria-label="Grid view"
+					aria-pressed={view === 'grid'}
+					data-testid="view-grid"
+					title="grid — scan the images"
+					onclick={() => setView('grid')}
+				>
+					<LayoutGrid class="size-4" />
+				</Button>
+			</div>
+
 			{#if filtering}
 				<span class="text-muted-foreground text-xs" data-testid="filter-count">
 					{visible.length} of {tasks.length}
@@ -528,6 +754,8 @@
 					onclick={() => {
 	filterState = '';
 	filterAssignee = '';
+	filterText = '';
+	filterLabel = '';
 	onFilterChanged();
 }}
 				>
@@ -537,12 +765,24 @@
 		</div>
 	{/if}
 
-	<DataTable
-		{table}
-		emptyMessage={filtering
+	{#if view === 'grid' && pageRows.length > 0}
+		<!-- The grid renders the TABLE's current page, so filters, sorting and pagination all still
+		     apply and the two modes cannot disagree about what is in view. Selection is the same
+		     object, so every bulk action above works identically from either. -->
+		<TaskGrid
+			tasks={pageRows}
+			bind:selection={rowSelection}
+			apiUrl={(path) => `${base}${path}`}
+			onopen={(task) => goto(canvasHref(task))}
+		/>
+	{:else}
+		<DataTable
+			{table}
+			emptyMessage={filtering
 	? 'No items match this filter.'
 	: 'No items yet — send data points in from Search or the Atlas.'}
-	/>
+		/>
+	{/if}
 </div>
 
 <!-- BULK assign. A separate dialog from the per-row one rather than a mode flag on it: the two
