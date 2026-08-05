@@ -123,6 +123,35 @@ class MaintenanceSettings(BaseSettings):
     # reader to skip the category. Must match the catalog's LANCE_FGA_ROOT_OBJECT.
     fga_root_object: str = Field(default="warehouse:lance_catalog", alias="MAINTENANCE_FGA_ROOT_OBJECT")
 
+    # --- #79 expired-trash purge (RECLAMATION — the only mutation this service makes outside a dataset).
+    #
+    # OFF by default, and report-only stays the SHIPPED default. The estate's rule is that a reclaimer
+    # earns its delete permission by first proving its report runs clean, and turning this on is what
+    # spends that permission: from here the tick DELETES the bytes a `_trash/` record names and REVOKES
+    # that object's FGA tuples. What it costs to turn on, stated plainly:
+    #
+    #   * a `drop_table` past `LANCE_TRASH_GRACE_DAYS` becomes UNRECOVERABLE — `undrop` does not check
+    #     expiry today, so a record that survives is a recovery that still works; a purged one is not;
+    #   * the purge only runs on a tick whose drift report is CLEAN (`purge.report_is_clean`), so a
+    #     permanently-drifting or permanently-unavailable estate never reclaims anything — that is the
+    #     designed failure direction, not a bug to route around;
+    #   * a false positive costs a table someone was inside their window to undrop, which is why the
+    #     purge re-checks liveness against `__manifest` and refuses anything outside the maintained
+    #     estate rather than trusting the record's `location` field.
+    trash_purge_enabled: bool = Field(default=False, alias="MAINTENANCE_TRASH_PURGE_ENABLED")
+    # Per-tick ceiling on records purged. The remainder is REPORTED (`TrashPurgeReport.capped`), never
+    # silently dropped: a backlog is drained oldest-first over several ticks rather than turning one
+    # cron fire into an unbounded delete storm against object storage.
+    trash_purge_max_per_tick: int = Field(default=25, ge=1, le=1000, alias="MAINTENANCE_TRASH_PURGE_MAX_PER_TICK")
+
+    # --- Control-plane change-events (#79). The purge is a governance mutation, so it announces itself
+    # on the SAME broadcast topic the catalog publishes to (`catalog.control.v1`). Off by default and
+    # best-effort when on: a bus outage must never fail — or half-fail — a reclamation. The component
+    # must list this app-id in its `scopes` (chart/templates/dapr-component.yaml) or the sidecar refuses
+    # the publish, and "best-effort" means it would refuse SILENTLY.
+    control_emit_enabled: bool = Field(default=False, alias="MAINTENANCE_CONTROL_EMIT_ENABLED")
+    control_pubsub: str = Field(default="catalog-control-pubsub", alias="MAINTENANCE_CONTROL_PUBSUB")
+
     # The orphan-FILE pass is separately gated because it is a different ORDER of work from the rest
     # of the drift report: the others compare three stores (O(stores)), this opens every dataset and
     # unions the file references of every live version (O(datasets x versions x fragments)) across the

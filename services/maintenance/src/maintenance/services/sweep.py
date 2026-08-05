@@ -23,9 +23,10 @@ from opentelemetry.trace import StatusCode
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter, table_id_from_uri
 from maintenance.core.metrics import record_reclaimed, record_run
+from maintenance.services import purge
 from maintenance.services.optimize import DatasetResult, compact_one, discover_dataset_uris
 from service_kit.governed import fga
-from service_kit.lakehouse import maintenance_policies, trash, warehouse_records
+from service_kit.lakehouse import maintenance_policies, warehouse_records
 from service_kit.lakehouse.objectfs import s3_filesystem
 
 
@@ -145,16 +146,19 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
             continue
         log.info("compaction_bucket_discovered", extra={"bucket": bucket, "datasets": len(found)})
         uris.extend(found)
-    # #75 trash expiry — REPORT ONLY, and staying that way until #79's gate opens. The sweep names
-    # which recoverable drops are past their grace deadline and deletes NOTHING: the estate's rule is
-    # that a reclaimer earns its delete permission by first proving its report runs clean, and this is
-    # the reclaimer whose false positive costs a table someone was still inside their window to undrop.
+    # #75 trash expiry — REPORT ONLY **in the sweep**, permanently. #79's purge lives on the RECONCILE
+    # tick instead, because its gate is that tick's drift report: a reclaimer earns its delete permission
+    # by first proving the report runs clean, and the sweep does not produce that report. So the sweep
+    # keeps naming which recoverable drops are past their deadline and keeps deleting NOTHING.
     try:
         # The CONTROL root, not the policy root: the catalog writes `_trash/` under its registry root
         # (LANCE_CONTROL_ROOT). These default to the same bucket, so the mismatch was invisible — and
         # would have stayed invisible, because list_all uses allow_not_found=True and this whole block
         # is except-wrapped: a wrong root reports zero due records forever rather than failing.
-        due = trash.expired(trash.list_all(settings.resolved_control_root, options))
+        #
+        # Selection goes through `purge.due_records` so ONE rule decides what "expired" means: the set
+        # this logs and the set the purge deletes cannot be two different answers.
+        due = purge.due_records(settings.resolved_control_root, options)
         if due:
             log.info(
                 "trash_expiry_due_report_only",

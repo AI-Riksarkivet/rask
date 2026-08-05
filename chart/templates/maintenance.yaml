@@ -97,6 +97,19 @@ spec:
             - { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ .Values.pubsub.name | quote }} }
             - { name: MAINTENANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
             {{- end }}
+            {{- /* #79 reclamation. OFF unless explicitly asked for: with it on, a drop past
+                   LANCE_TRASH_GRACE_DAYS becomes permanently unrecoverable, and the purge is gated on
+                   the reconcile tick's drift report running clean — so an estate that never reports
+                   clean never reclaims, which is the designed direction, not a bug to route around. */}}
+            - { name: MAINTENANCE_TRASH_PURGE_ENABLED, value: {{ hasKey .Values.maintenance "trashPurge" | ternary .Values.maintenance.trashPurge false | quote }} }
+            - { name: MAINTENANCE_TRASH_PURGE_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "trashPurgeMaxPerTick") | ternary .Values.maintenance.trashPurgeMaxPerTick 25 | quote }} }
+            {{- if .Values.maintenance.controlEmit }}
+            {{- /* The purge announces each reclamation on the catalog's control topic. The broadcast
+                   component must scope this app-id (dapr-component.yaml) or the sidecar refuses the
+                   publish — and because emission is best-effort, it refuses SILENTLY. */}}
+            - { name: MAINTENANCE_CONTROL_EMIT_ENABLED, value: "true" }
+            - { name: MAINTENANCE_CONTROL_PUBSUB, value: {{ .Values.pubsub.controlName | default "catalog-control-pubsub" | quote }} }
+            {{- end }}
             - { name: MAINTENANCE_BINDING_NAME, value: {{ .Values.maintenance.bindingName | quote }} }
             - { name: MAINTENANCE_OLDER_THAN_DAYS, value: {{ .Values.maintenance.olderThanDays | quote }} }
             - { name: MAINTENANCE_SCAN_BATCH_SIZE, value: {{ .Values.maintenance.scanBatchSize | quote }} }

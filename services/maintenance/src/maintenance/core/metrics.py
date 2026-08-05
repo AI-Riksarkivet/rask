@@ -29,8 +29,44 @@ _indices_optimized = _meter.create_counter(
 )
 
 
+#: #79 reclamation. Separate series from the compaction counters above because they answer a different
+#: question: those say how much history was folded away, these say how many DROPPED objects had their
+#: bytes destroyed — the only irreversible thing this service does.
+_trash_purged = _meter.create_counter(
+    "maintenance.trash.purged",
+    unit="{record}",
+    description="Expired trash records whose bytes were deleted and whose grants were revoked.",
+)
+_trash_refused = _meter.create_counter(
+    "maintenance.trash.purge_refused",
+    unit="{record}",
+    description="Expired trash records the purge REFUSED (still registered, outside the maintained estate, "
+    "a control prefix, or a failed revoke) — a rising refusal rate is drift, not noise.",
+)
+_trash_bytes = _meter.create_counter(
+    "maintenance.trash.bytes_reclaimed",
+    unit="By",
+    description="Bytes reclaimed by the expired-trash purge.",
+)
+
+#: The record kinds a purge can see (#96 — a recoverable cascade trashes namespaces too). Both series are
+#: created on EVERY run so a dashboard has data from the first tick rather than reading "no data" until
+#: the first namespace record happens to expire.
+_KINDS = ("table", "namespace")
+
+
 def record_run() -> None:
     _runs.add(1)
+
+
+def record_trash_purge(purged_by_kind: dict[str, int], refused_by_kind: dict[str, int], bytes_reclaimed: int) -> None:
+    """Record one tick's reclamation. Always emits — adding 0 is a valid no-op that still CREATES the
+    series (the :func:`record_reclaimed` rule), and for a reclaimer the zero is the interesting number:
+    "nothing was purged this tick" and "the purge never ran" must not look identical on a dashboard."""
+    for kind in _KINDS:
+        _trash_purged.add(purged_by_kind.get(kind, 0), {"lance.maintenance.kind": kind})
+        _trash_refused.add(refused_by_kind.get(kind, 0), {"lance.maintenance.kind": kind})
+    _trash_bytes.add(bytes_reclaimed)
 
 
 def record_reclaimed(fragments_removed: int, versions_removed: int, indices_optimized: int = 0) -> None:

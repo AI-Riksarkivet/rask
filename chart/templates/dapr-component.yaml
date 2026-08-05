@@ -43,6 +43,13 @@ spec:
     - { name: deliverPolicy, value: "new" }
 scopes:
   - {{ .Values.services.catalog.daprAppId }}
+{{- if and .Values.maintenance.enabled .Values.maintenance.controlEmit }}
+  # #79: the expired-trash purge PUBLISHES here (a reclamation is a governance change). A scope the
+  # publisher is missing from is rejected by the sidecar, and the emit is best-effort — so the failure
+  # would be silent, exactly like the secret-store scoping class. It publishes only; it runs no
+  # subscription, so the broadcast/ephemeral semantics above are unaffected.
+  - {{ .Values.maintenance.daprAppId }}
+{{- end }}
 {{- if .Values.medallion.enabled }}
 ---
 # The CASCADE's view of the same control stream (§ D2 B8). A SEPARATE component, not another scope on

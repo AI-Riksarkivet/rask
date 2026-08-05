@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from maintenance.api import routes
 from maintenance.core.config import MaintenanceSettings
+from maintenance.core.control_emit import NoopControlEmitter
 from pydantic import SecretStr
 
 
@@ -109,9 +110,11 @@ def test_the_route_hands_the_app_state_clients_to_the_reconciler(monkeypatch: py
 
     monkeypatch.setattr(routes, "reconcile", fake_reconcile)
     settings = _settings(warehouses_enabled=True, fga_root_object="warehouse:custom")
-    out = asyncio.run(routes.on_reconcile_cron(settings, "FGA-SENTINEL", "S3-SENTINEL"))
+    out = asyncio.run(routes.on_reconcile_cron(settings, "FGA-SENTINEL", "S3-SENTINEL", NoopControlEmitter()))
 
-    assert out == {"total": 0}
+    # The #79 purge key rides along on every tick; the reconcile half is unchanged.
+    assert out["total"] == 0
+    assert out["trash_purge"]["enabled"] is False and out["trash_purge"]["ran"] is False
     assert seen["client"] == "FGA-SENTINEL"
     assert seen["bucket_client"] == "S3-SENTINEL"
     # These mirror CATALOG settings and are passed IN, never inferred: a divergent fga_root_object
@@ -133,7 +136,7 @@ def test_an_overlapping_tick_skips_rather_than_stacking(monkeypatch: pytest.Monk
     async def drive() -> dict[str, Any]:
         async with routes._reconcile_lock:
             monkeypatch.setattr(routes, "reconcile", never_called)
-            return await routes.on_reconcile_cron(_settings(), None, None)
+            return await routes.on_reconcile_cron(_settings(), None, None, NoopControlEmitter())
 
     out = asyncio.run(drive())
     assert out["status"] == "skipped"
@@ -156,8 +159,14 @@ def test_the_service_never_provisions_an_fga_store() -> None:
 
 
 def test_the_reconcile_client_is_read_only_by_construction() -> None:
-    """The service holds no tuple-WRITE path: the reconciler is report-only, and the cheapest way to
-    keep it that way is for the write verbs to be absent from the module entirely."""
+    """The RECONCILER holds no tuple-write path, and the cheapest way to keep it that way is for the
+    write verbs to be absent from the module entirely.
+
+    Scoped to `reconcile.py`, not the service: since #79 the sibling `purge.py` DOES revoke (that is the
+    first step of destroying an expired trash record — grants must never outlive the bytes). The claim
+    that survives is narrower and more useful: the module that decides whether the estate is clean
+    cannot itself change the estate.
+    """
     from pathlib import Path
 
     from maintenance.services import reconcile as mod
@@ -165,6 +174,74 @@ def test_the_reconcile_client_is_read_only_by_construction() -> None:
     src = Path(mod.__file__).read_text()
     for verb in ("write_tuples", "delete_tuples", "revoke_object_tuples", "grant_on_create"):
         assert verb not in src, f"the reconciler references {verb} — it must only READ"
+
+
+def test_the_service_can_never_GRANT_a_tuple() -> None:
+    """The purge revokes; nothing in this service grants.
+
+    A maintenance job that could write a grant would be an unaudited privilege door on a component whose
+    whole justification is that it only cleans up. Asserted across the WHOLE service package rather than
+    one module, because the risk is someone adding the capability somewhere convenient.
+
+    Matched against the AST's CALLED names, never the source text: the docstrings here necessarily name
+    these verbs to explain which ones are off-limits, and a substring gate that fires on its own
+    explanation is a gate people delete.
+    """
+    import ast
+    from pathlib import Path
+
+    from maintenance import service as svc
+
+    forbidden = {"write_tuples", "grant_on_create", "seed_ownership", "provision"}
+    for path in sorted(Path(svc.__file__).parent.rglob("*.py")):
+        called = {
+            node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+            for node in ast.walk(ast.parse(path.read_text()))
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name | ast.Attribute)
+        }
+        offenders = sorted(called & forbidden)
+        assert offenders == [], f"{path.name} calls {offenders} — maintenance may revoke, never grant"
+
+
+def test_the_purge_consumes_THIS_ticks_report_inside_the_same_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The gate is "the drift report ran clean", so the object it reads must be the one just produced.
+
+    A purge fed a stored or previous report certifies a state that no longer exists — the estate could
+    have drifted in between, and the whole permission model rests on the two being the same tick. Pinned
+    by identity, which is the only way to state it that a later refactor cannot quietly weaken.
+    """
+    produced: dict[str, Any] = {}
+    seen: dict[str, Any] = {}
+
+    async def fake_reconcile(*_a: Any, **_kw: Any) -> Any:
+        from maintenance.services.reconcile import ReconcileReport
+
+        produced["report"] = ReconcileReport(checked_at="t")
+        return produced["report"]
+
+    async def fake_purge(_settings: Any, **kw: Any) -> Any:
+        seen["report"] = kw["report"]
+        seen["fga_client"] = kw["fga_client"]
+        seen["locked"] = routes._reconcile_lock.locked()
+
+        class _P:
+            def model_dump(self, **_k: Any) -> dict[str, Any]:
+                return {"ran": False}
+
+            purged: list[Any] = []
+            refused: list[Any] = []
+            capped = 0
+
+        return _P()
+
+    monkeypatch.setattr(routes, "reconcile", fake_reconcile)
+    monkeypatch.setattr(routes, "purge_expired_trash", fake_purge)
+    out = asyncio.run(routes.on_reconcile_cron(_settings(), "FGA-SENTINEL", None, NoopControlEmitter()))
+
+    assert seen["report"] is produced["report"], "the purge read a report this tick did not produce"
+    assert seen["fga_client"] == "FGA-SENTINEL", "the purge got no FGA client — it could not revoke"
+    assert seen["locked"] is True, "the purge ran outside the single-flight lock"
+    assert out["trash_purge"] == {"ran": False}
 
 
 def test_the_app_registers_both_bindings_together() -> None:
@@ -206,6 +283,9 @@ def test_the_reconcile_route_is_reachable_over_http() -> None:
         with TestClient(app) as client:
             response = client.post(f"/{_settings().reconcile_binding_name}")
         assert response.status_code == 200, response.text
-        assert response.json() == {"total": 0, "counts": {}}
+        body = response.json()
+        assert {"total": body["total"], "counts": body["counts"]} == {"total": 0, "counts": {}}
+        # The #79 purge answers on the same tick, and OFF is what the shipped configuration reports.
+        assert body["trash_purge"]["ran"] is False
     finally:
         routes.reconcile = cast(Any, original)
