@@ -12,8 +12,12 @@ const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
 // earlier paint, and a resolved `me` lets the navbar SSR its final entry set with zero
 // skeleton→resolved swap. Degrade, never hang: fetchMe times out internally and answers null
 // (signed out / catalog unreachable → base entries only, fail-closed on the admin surfaces).
-export const load: LayoutServerLoad = async ({ locals, cookies }) => ({
+export const load: LayoutServerLoad = async ({ locals, cookies, params }) => ({
 	...zoneLayoutLoad({ locals, cookies }),
+	// First-visit fix (#103): the layout load runs BEFORE the project page's load stamps the
+	// cookie, so on the very first open the cookie is one request behind — the route param is the
+	// truth on that request and wins.
+	...(params.project ? { activeProject: params.project } : {}),
 	me: await fetchMe({ catalogUrl: CATALOG_API, accessToken: locals.session?.accessToken }),
 	// Whether a SESSION exists, separate from whether the catalog could confirm the identity.
 	// `me` is null for BOTH "signed out" and "signed in but /v1/me was unreachable / 401 / drifted",

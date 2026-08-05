@@ -278,8 +278,12 @@
 										data-slot="breadcrumb-page">{crumb.label}</span
 									>
 								{:else}
+									<!-- The project ROOT crumb is cross-zone from every zone (home owns /projects):
+									     without the reload attribute the zone soft-navigates into a route it does
+									     not own and 404s. In-zone crumbs keep soft navigation. -->
 									<a
 										href={crumb.href}
+										data-sveltekit-reload={crumb.id === '__project' ? '' : undefined}
 										class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm capitalize transition-colors outline-none focus-visible:ring-3"
 										>{crumb.label}</a
 									>
