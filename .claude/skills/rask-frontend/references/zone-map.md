@@ -1,6 +1,6 @@
 # Zone map
 
-Per-zone routes, data sources, and local libs. Ground truth as of `feat/lance-ns-merge`.
+Per-zone routes, data sources, and local libs.
 
 The composition manifest is `microfrontends/home/microfrontends.json`, owned by `home` as the default app. Home has no `routing` block, so anything not matching the six zone prefixes falls through to it.
 
@@ -23,7 +23,7 @@ Data: `+layout.server.ts` awaits `fetchMe({catalogUrl: CATALOG_API})` — `env.C
 
 `lib/nav.ts` declares **one** leaf, so `AppShell` renders no sidebar (`hasNav = leaves.length > 1`) — deliberate. `lib/remote/home.remote.ts`'s `getProjects` is **dead code**; `knip.json:13` ignores `src/**/*.remote.ts`, so the gate cannot see it.
 
-`home/e2e/auth.spec.ts` (4 tests) is the MAIN-MENU contract and still the most current source of truth on the estate's shape: `ZONE_ENTRIES` maps the **six non-home dirs** → navbar title/kind (home is deliberately absent — its reachability is the brand header's), `:68` asserts the key set equals `zoneDirs().filter((z) => z !== 'home')`, and `:83-90` pins every zone entry as an **ABSENCE** at `/`, because the estate root renders `mainMenuNav()`. So a zone scaffolded without an entry still fails here, and a zone panel reappearing at the root fails too. The cross-zone `data-sveltekit-reload` contract moved to the lakehouse and explorer suites, which run inside a zone where the bar exists; `@rask/zone-contract`'s `cross-zone-reload.test.ts` is the static half. Its `networkidle` wait was replaced with a click-retry `toPass` because **every zone now holds a live query open for the bell**, so networkidle can never fire.
+`home/e2e/auth.spec.ts` (4 tests) is the MAIN-MENU contract and still the most current source of truth on the estate's shape: `ZONE_ENTRIES` maps the **six non-home dirs** → navbar title/kind (home is deliberately absent — its reachability is the brand header's), `:68` asserts the key set equals `zoneDirs().filter((z) => z !== 'home')`, and `:83-90` pins every zone entry as an **ABSENCE** at `/`, because the estate root renders `mainMenuNav()`. So a zone scaffolded without an entry still fails here, and a zone panel reappearing at the root fails too. Its `networkidle` wait was replaced with a click-retry `toPass` because **every zone now holds a live query open for the bell**, so networkidle can never fire.
 
 ## `lakehouse` — base `/lakehouse`, port 5174
 
@@ -41,7 +41,7 @@ Six areas that used to be separate apps, merged under one router: `catalog`, `li
 
 7 `+server.ts` routes — 4 keep-bytes (`capi/v1/table/[id]/query` + `/insert` Arrow, `capi/v1/table/[id]/[...rest]` for blob bytes and the #113 commit log, and `api/explorer/[...rest]`, the R18 storage-browser seam that rides to the GATEWAY with its path unchanged), 1 keep-flow (`capi/v1/me`), 2 catch-alls (`api/[...path]` → lineage, `capi/[...path]` → catalog). The `/api/audit` shim is **gone**; its logic survives in `lib/server/audit-core.ts`, consumed only by `admin/remote/audit.remote.ts`.
 
-15 `.remote.ts` modules — but **`requestJSON` is not at zero here**, and this zone is the estate's only residual: `lib/storage/storage.ts:69,73` (`listObjects`/`headObject`, over `/api/explorer/**`), `lib/data/catalog.ts:119` (`fetchTableHistory`, the #113 commit log) and `:126` (`insertRows`, which POSTs an Arrow body and reads only a JSON ack — bytes wearing the JSON helper). Converge the first three when you touch them.
+15 `.remote.ts` modules — and the estate's only `requestJSON` residual; the four sites and the convergence rule are in SKILL § Fetching data (b).
 
 ## `explorer` — base `/explorer`, port 5173, labelled **Explorer**
 

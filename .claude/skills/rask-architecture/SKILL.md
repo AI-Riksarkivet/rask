@@ -1,6 +1,6 @@
 ---
 name: rask-architecture
-description: The rask workspace planes (the Python `packages/` + `services/` dirs, the JS `frontend/` root) and the entrypoint-over-package composition contract — service-kit's make_service_app + injectable lifespan. Use when adding/moving a workspace member or service, editing a pyproject.toml or the uv/bun workspace globs, wiring a new entrypoint, debugging "module not found"/uv-resolution after adding code, or deciding where new code belongs (lib vs runnable vs deployable).
+description: "Where new code belongs in the rask workspace: the language-pure planes (Python `packages/` + `services/`, the `frontend/` bun+turbo root, sealed `runners/`) and the entrypoint contract (`make_service_app` + injectable lifespan). Use when adding, moving or deleting a workspace member, service, zone or deployable; editing a `pyproject.toml`, the root `uv.lock`, or a uv/bun workspace glob; wiring a service entrypoint; or when newly added code won't resolve — ModuleNotFoundError, a `uv sync` workspace error, or a package `bun install` silently skipped."
 ---
 
 # rask architecture (workspace planes + composition)
@@ -17,7 +17,7 @@ The single most rask-specific thing to get right: **which plane a package lives 
 - "ModuleNotFoundError" / uv won't resolve a first-party import after you added code.
 - Deciding where new code belongs: reusable lib, runnable component, or deployable.
 
-## The planes — don't blur them
+## The planes — one language per plane
 
 The tree is split by **language first**, then by layer. Each globbed directory is single-language; that is what makes the globs safe (see the invariants).
 
@@ -76,7 +76,7 @@ app = make_service_app(
 
 | Need                                                                        | Read                             |
 | --------------------------------------------------------------------------- | -------------------------------- |
-| Step-by-step: add a new member or deployable without breaking resolution    | `references/adding-a-package.md` |
+| Adding, moving or deleting a member or deployable — **run its checklist to the end**; step 4 (`known-first-party`) is the one that gets skipped | `references/adding-a-package.md` |
 | The full service fleet, ports, and which package each entrypoint composes   | `references/service-fleet.md`    |
 
 ## Sibling skills

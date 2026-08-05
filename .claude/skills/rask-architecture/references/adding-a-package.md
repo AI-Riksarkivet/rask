@@ -6,7 +6,7 @@ the **wrong-language plane** and uv errors hard while bun says nothing at all.
 Everything else (sources, first-party naming, testpaths, dockerfile) is still a
 manual edit. Do every step that applies.
 
-## 1. Pick the plane (don't blur them)
+## 1. Pick the plane (language first, then layer)
 
 The tree is language-first:
 

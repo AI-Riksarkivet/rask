@@ -1,6 +1,6 @@
 ---
 name: rask-lance-catalog
-description: The catalog's contract — the Lance Namespace spec (operations, error model, REST route grammar) and rask's own hierarchy layer (project > warehouse > namespace > table) on top of it. Use when adding/changing a catalog endpoint, raising an error from the catalog, touching the hierarchy guards or seed_ownership, designing create/delete/lifecycle semantics, or answering "is this spec-conformant".
+description: "The Lance catalog and the governance layer above it — the Lance Namespace spec (54 ops, the 24-code problem+json error model, the `POST /v1/<object>/{id}/<action>` route grammar) and rask's own `project > warehouse > namespace > table` hierarchy: the guards, the registries, protection/trash, and `services/maintenance`. Use when adding or changing a catalog endpoint; raising an error from the catalog; touching the hierarchy guards, the project/warehouse registries or `seed_ownership`; designing create/drop/undrop/cascade or protection semantics; working on compaction, the sweep, the orphan scan or the reconciler; or answering \"is this spec-conformant\"."
 ---
 
 # rask lance catalog — the spec and the estate's layer above it
@@ -48,13 +48,11 @@ bodies** (`application/problem+json`).
 (not-founds → 404, already-exists/not-empty/concurrent → 409, `InvalidInput` → 400,
 `PermissionDenied` → 403, `Unauthenticated` → 401, `Unsupported` → 501, `Throttling` → 429).
 The branch codes were MISSING until 2026-08-04 — a missing branch answered 500 on endpoints rask
-ships, and this skill claimed "22 codes, all mapped" while the SDK had 24, both wrong together.
-`tests/unit/test_ns_errors_contract.py` now pins the map against the ENUM, so the next spec-added
-code fails a test instead of a client.
-**Never `HTTPException` with a hand-picked status** for domain errors — a 422 was shipped once
-(the hierarchy guards, same day they were written) and no generated client understood it; fixed to
-`InvalidInputError` (95ae4cb). `NamespaceNotEmpty → 409` is the spec's own error for "container
-refuses while full" — use it, don't mint one.
+ships. `tests/unit/test_ns_errors_contract.py` now pins the map against the ENUM, so the next
+spec-added code fails a test instead of a client.
+**Never `HTTPException` with a hand-picked status** for domain errors — a 422 was shipped once and
+no generated client understood it; fixed to `InvalidInputError` (95ae4cb). `NamespaceNotEmpty → 409`
+is the spec's own error for "container refuses while full" — use it, don't mint one.
 
 ## rask's hierarchy layer
 
@@ -64,7 +62,7 @@ Three layers, each owned in ONE place:
 
 | Layer | Owner |
 | --- | --- |
-| shape (what can exist) | the guards in `catalog/api/fga_deps.py` — `require_parent` (a table must have a namespace; rename destinations too), `require_warehouse_scoped` (a top-level namespace only via `POST /v1/warehouses/{id}/namespaces`; **no-op when `warehouses_enabled` is off** — single-bucket deployments have no warehouse to demand), `require_project_exists` (a warehouse's project must have a registry record — 404 naming `POST /v1/projects`), `require_not_protected` (deletion protection; `force=true` overrides the flag and **nothing else**) |
+| shape (what can exist) | the guards in `catalog/api/fga_deps.py` — `require_parent` (a table must have a namespace; rename destinations too), `require_warehouse_scoped` (a top-level namespace only via `POST /v1/warehouses/{id}/namespaces`; **no-op when `warehouses_enabled` is off** — single-bucket deployments have no warehouse to demand), `require_project_exists` (a warehouse's project must have a registry record — 404 naming `POST /v1/projects`), `require_not_protected` (deletion protection — the `force` rule is under Lifecycle) |
 | who | the FGA model's `can_*` relations (`service_kit/governed/auth/model.fga`) — the app never invents policy |
 | what is possible NOW | the registries, checked BEFORE the native write: **project records** (`catalog/services/projects.py`, `_projects/<id>.json`), warehouse records + `top_ns → warehouse_id → root_uri` bindings (`catalog/services/warehouses.py`) |
 
@@ -96,7 +94,10 @@ admin-frequency, CAS handles their concurrency, and deletes are bottom-up single
 by design — there is no multi-object transaction to need one. The moment that changes (atomic
 cross-object invariants, high-frequency filtered listings), it is a design decision, not a default.
 
-## Lifecycle (design: `open_hierarchy_lifecycle.md`; GC/maintenance: `open_table_maintenance.md`)
+## Lifecycle
+
+Reclamation, scheduling and the GC design live in `open_table_maintenance.md` — read it before
+changing anything the sweep, the reconciler or the orphan scan touches.
 
 - Creates are top-down: parent must EXIST (registry), gated on the parent's `can_*`.
 - Deletes are bottom-up: a container refuses **409, naming its contents**; `cascade` is explicit;

@@ -2,7 +2,7 @@
 
 Source: `frontend/packages/ui/src/lib/styles/tokens.css` (154 lines). Tailwind 4 CSS-first — there is no `tailwind.config.js`.
 
-## The four blocks
+## The five blocks
 
 1. `@custom-variant dark (&:is(.dark *))` — line 1. Class-based dark mode.
 2. `:root` (13-69) — light OKLCH values + the legacy bridge.

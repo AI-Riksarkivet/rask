@@ -1,6 +1,6 @@
 ---
 name: rask-htr-pipeline
-description: The rask HTR image→ALTO pipeline — Ray Data actor fan-out + Ray Serve TrOCR/HTRflow GPU packing, the hard-won OOM and concurrency lessons. Use when editing runners/htr/src/runner/pipeline.py, transcribe_service.py, or htrflow_service.py; tuning GPU fractions / replica counts / actor pool sizes / transcribe batch; retargeting to different GPU hardware; or debugging a raylet-killing OOM, idle GPUs, or ALTO that lands late in S3.
+description: 'runners/htr — the HTR image→ALTO pipeline: Ray Data actor fan-out, Ray Serve TrOCR/HTRflow GPU packing, HF model-revision pinning. Use when editing pipeline.py / transcribe_service.py / htrflow_service.py / deploy_serve.py / htr/models.py; deploying or submitting a run (`make serve-up`, the `runner` CLI, KubeRay `--address ray://`); sizing GPU fractions, Serve replicas, actor-pool sizes or transcribe batch — including for new GPU hardware; changing an HTR model repo or `RASK_HTR_MODEL_REVISION`; or debugging a raylet-killing OOM, Serve replicas stuck PENDING, idle GPUs, ALTO landing late in S3, or a `CudnnModule` pickling failure on deploy.'
 ---
 
 # rask HTR pipeline (Ray Data + Ray Serve)
@@ -22,7 +22,7 @@ Two pipeline shapes, both starting at `PageLoaderActor` (S3 read-through cache, 
 
 **The GPU work is NOT a Ray Data actor.** It lives in Ray Serve (`TranscribeService` / `HTRFlowDeployment`), deployed independently by `make serve-up` (= `runners/htr/scripts/deploy_serve.py up` — the script lives **inside the sealed runner**, so every invocation carries `uv run --project runners/htr`; app names `transcribe`→`/transcribe`, `htrflow`→`/htrflow`). `TranscribeViaServe` and `HTRFlowViaServe*` are **CPU-only** `map_batches` steps that block on a `serve.get_app_handle(...)`. Serve replicas keep TrOCR weights warm, so each `runner` invocation skips the ~30 s cold-start.
 
-## Load-bearing rules (do not break)
+## Invariants (every row holds — check all of them before shipping a GPU-math edit)
 
 | Rule | Where | Why |
 |---|---|---|
@@ -40,8 +40,8 @@ Two pipeline shapes, both starting at `PageLoaderActor` (S3 read-through cache, 
 ## Gotchas
 
 - **`import torch` at module scope breaks Serve.** `@serve.deployment` pickles the class + its module globals; torch's `CudnnModule` isn't picklable. **All torch/transformers imports go inside method bodies** (both Serve files do this; `TrOCRSinusoidalPositionalEmbedding` even needs a meta-tensor materialize workaround).
-- **Idle GPUs ≠ undersized pool.** Almost always the streaming-executor queue/locality bias or a too-narrow PageLoader head starving Transcribe — check the three fan-out levers above before adding replicas.
-- **`transcribe_concurrency = 3` in `pipeline.py` is a vestigial local** (used only for `override_num_blocks`); the real GPU parallelism is `RASK_SERVE_REPLICAS`. Don't read it as the GPU actor count.
+- **Idle GPUs ≠ undersized pool.** Almost always the streaming-executor queue/locality bias or a too-narrow PageLoader head starving Transcribe — check all four fan-out levers (locality, block size, fixed pool, shards) before adding replicas.
+- **`transcribe_concurrency = 3` in `pipeline.py` is a vestigial local** — it only feeds `from_items(..., override_num_blocks=max(transcribe_concurrency, len(keys)))`. GPU parallelism is `RASK_SERVE_REPLICAS`.
 - **Co-residence is the *Serve* default, sized for 2 GPUs.** `0.49 × 2 replicas` per app lets `/transcribe` and `/htrflow` share a 2-GPU pool (1.96 ≤ 2.0). A larger node can run more — but raise `RASK_SERVE_REPLICAS`/`RASK_SERVE_GPU_FRAC` deliberately and re-check both the fractional-sum ≤ physical-GPUs invariant and host-RAM headroom (the 6→4→2 OOM postmortem is in `references/gpu-packing-and-oom.md`).
 - **`pipeline.py:42`'s docstring says `MAX_BATCH=256`; the live constant is `64`** (`transcribe_service.py:38`). Trust the Serve module — and fix the docstring when you next touch that file.
 
@@ -49,8 +49,8 @@ Two pipeline shapes, both starting at `PageLoaderActor` (S3 read-through cache, 
 
 | If you need to… | Read |
 |---|---|
-| The full GPU-packing math, the 6→4→2 OOM-cascade postmortem, and the streaming-executor fan-out workaround in detail | `references/gpu-packing-and-oom.md` |
-| The exact actor/Serve topology, env knobs, deploy commands, and the two-shape decision | `references/topology-and-deploy.md` |
+| The full GPU-packing math, the 6→4→2 host-RAM OOM postmortem, the four fan-out levers, **and the symptom→cause cheat sheet** (raylet died / replicas stuck PENDING / one GPU busy / late ALTO / pickling error on deploy) | `references/gpu-packing-and-oom.md` |
+| The exact actor/Serve topology and pool sizes, every `RASK_*` env knob, the `make serve-up*` commands, **and the ALTO `<Processing>` provenance contract** (`serialize_alto(..., models=PIPELINE_MODELS)`) | `references/topology-and-deploy.md` |
 
 ## Sibling runners
 

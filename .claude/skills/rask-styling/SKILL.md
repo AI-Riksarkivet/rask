@@ -1,6 +1,6 @@
 ---
 name: rask-styling
-description: Styling and component authoring in rask's `@rask/ui` design system — OKLCH tokens, Tailwind 4 `@source`, `tv()` variants, `data-slot`, dark mode, the legacy palette bridge, and theming third-party stylesheets (dockview's `--dv-*`, Svelte Flow) through `layer(base)`. Use when a zone renders unstyled, when picking a colour or writing `class=`, when adding or skinning a `@rask/ui` component, when a vendor stylesheet out-specifies Tailwind utilities, when theming or animating a dock, or when touching `tokens.css` / `app.css` / a `*.stories.svelte`.
+description: Styling, theming and design-system work in the rask frontend — OKLCH tokens, Tailwind 4 `@source`, `tv()` + `cn()`, `data-slot`, dark mode, the legacy `--ink/--line` bridge, export subpaths, Storybook, and vendor stylesheets themed through `layer(base)`. Use when a zone renders unstyled, when picking a colour or writing `class=`, when adding or skinning a `@rask/ui` component (its subpath export, its story), when a vendor sheet out-specifies Tailwind utilities or a dock needs theming (dockview `--dv-*`, Svelte Flow), or when touching `tokens.css` / `app.css` / a `*.stories.svelte`.
 ---
 
 # rask styling (`@rask/ui`)
@@ -20,21 +20,17 @@ Every zone's `src/app.css` is exactly this, and the `@source` depth is **three**
 @source '../../../packages/ui/dist';
 ```
 
-A zone that mounts a **dock** adds one more line — see § *Third-party stylesheets*:
-
-```css
-@import '@rask/dockview/styles.css' layer(base);   /* lakehouse, explorer, compute */
-```
+A zone that mounts a **dock** adds one more line — `@import '@rask/dockview/styles.css' layer(base);` (lakehouse, explorer, compute); the why is § *Third-party stylesheets*.
 
 Tailwind 4 skips `node_modules`, so without `@source` every `@rask/ui` class is silently dropped — no error, no warning, just an unstyled page. It points at **`dist`**, so a component edit reaches a zone's CSS only after `svelte-package` reruns (`bun --cwd=frontend/packages/ui run build`, or the `dev` watcher).
 
-> `frontend/packages/ui/README.md:49` ships this line with **four** `../` — the package's own "In the app's CSS" snippet, so it is the copy a reader is most likely to paste. That copy is wrong; three is correct — verified at `frontend/microfrontends/home/src/app.css:7`. (`docs/architecture/frontend-conventions.md:341` had the same defect and was corrected 2026-07-28.)
+> `frontend/packages/ui/README.md:49` ships this line with **four** `../` — the package's own "In the app's CSS" snippet, so it is the copy a reader is most likely to paste. That copy is wrong; three is correct — verified at `frontend/microfrontends/home/src/app.css:7`.
 
 ## Colour comes from tokens
 
 `frontend/packages/ui/src/lib/styles/tokens.css` declares raw OKLCH under `:root` and `.dark`, then `@theme inline` maps each to a `--color-*` utility. Reach for the utility (`bg-card`, `text-muted-foreground`, `border-border`), which themes both modes at once.
 
-Beyond the shadcn set, rask defines **`success` / `warning`** pairs — consumed by `badgeVariants` (`badge.svelte:14-15`). Radius derives from `--radius: 0.625rem` via `calc()`. Fonts are Inter and JetBrains Mono.
+Beyond the shadcn set, rask defines **`success` / `warning`** pairs — consumed by `badgeVariants` (`badge.svelte:14-15`).
 
 **The legacy bridge** (`tokens.css:48-68`) aliases `--ink/--mut/--faint/--line/--panel/--panel-2/--ok/--fail/--warn/--amber` onto the real tokens. Those names were referenced by ~800 sites across 45 components while being **undefined** — so `border-color: var(--line)` fell back to `currentColor` and painted every hairline in full text colour. That was the estate's long-standing "why does this look weird". When you touch a component still on the bridge, migrate it to the token name; the block retires when `grep -r "var(--ink" frontend/` comes back empty.
 
@@ -42,7 +38,7 @@ Beyond the shadcn set, rask defines **`success` / `warning`** pairs — consumed
 
 A vendor sheet ships unlayered CSS whose selectors out-specify Tailwind utilities, so a zone's own
 `class=` on that library's content silently loses. Import it into `base` and every utility sits above
-it, permanently. Two zones already do this and a third pattern-matched it:
+it, permanently. Three zones import vendor sheets this way:
 
 ```css
 @import '@xyflow/svelte/dist/style.css' layer(base);   /* lakehouse, explorer */
@@ -73,16 +69,17 @@ through a rask token that is itself re-declared under `.dark`, so mode-watcher t
 re-themes the dock underneath. `DockviewTheme.colorScheme` is therefore **deliberately unset** — it is
 a static field on a theme object and would be a second source of truth that could only go stale.
 
-Three groups are **deliberately unmapped**, and re-mapping them is a regression:
+**Two** groups are deliberately unmapped, and re-mapping them is a regression:
 
 - `--dv-color-{abyss,gh,mocha,monokai,nord,sol}-*` — the other shipped themes' private palettes. Read
   only by their own theme classes; dead weight here.
 - `--dv-tab-group-color-*` — the nine user-pickable tab-group accents. A user's semantic choice per
   group, not a theme surface. Overriding them collapses nine distinguishable colours onto one.
-- ~~`--dv-overlay-z-index`~~ — **this one IS mapped now (999)**: it is not themed by default at all —
-  only the built-in theme classes define it, so a custom theme that skips it leaves the PopupService
-  wrapper (the tab-overflow dropdown) at `z-index: auto`, painted UNDER the dock it is prepended to.
-  The dropdown opened invisibly for as long as the assumption stood (fixed 2026-08-03).
+
+`--dv-overlay-z-index` is the opposite case — **map it (rask uses 999)**. dockview does not theme it
+at all: only the built-in theme classes define it, so a custom theme that skips it leaves the
+PopupService wrapper (the tab-overflow dropdown) at `z-index: auto`, painted UNDER the dock it is
+prepended to. The dropdown opened invisibly for as long as that assumption stood (fixed 2026-08-03).
 
 The non-CSS half lives in `theme.ts` (`gap`, `dndTabIndicator`, `tabAnimation`, `dndOverlayMounting`,
 `tabGroupIndicator`) — behavioural fields CSS cannot express. **Do not add GSAP to the dock chrome:**
@@ -148,6 +145,6 @@ Shipping it: create the directory + `<name>.svelte` + `index.ts` + a story, then
 
 ## Where to go deeper
 
-- `references/tokens-and-theming.md` — the full token table, the `@theme inline` mapping, per-zone `@source` variance, and the bridge migration.
-- `references/component-catalog.md` — all 40 export subpaths, the three barrel conventions, the data-table stack, Storybook, and the known rough edges.
+- `references/tokens-and-theming.md` — the full token table, the `@theme inline` mapping, per-zone `@source` variance, the bridge migration, **reading the mode from JS (`useColorMode()` getters + the annotator's `app.html` boot-script exception), the view-transition decision, and why `components.json` is stale scaffolding**.
+- `references/component-catalog.md` — all 40 export subpaths, the three barrel conventions, **the `<Subject>` rule for printing an OIDC `sub`**, the data-table stack, Storybook, **the `vite.config.ts` two-homes test config**, and the known rough edges.
 - `rask-frontend` — zones, routing, data fetching, and the gates that grade this work.

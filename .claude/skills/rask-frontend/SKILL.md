@@ -1,6 +1,6 @@
 ---
 name: rask-frontend
-description: The rask `frontend/` plane — seven SvelteKit 2 + Svelte 5 zones composed by Turborepo's microfrontend proxy, the remote-function data plane (BFF only for binary/Arrow payloads), the `@rask/dockview` workbenches, and the oxlint/oxfmt/zone-contract gates. Use when touching a zone, `@rask/api`, `@rask/dockview`, `@rask/zone-contract`, `microfrontends.json`, or any `.svelte`; when adding a route or fetching data; when working on a dock, panel, workbench or saved layout; when a panel loses its state on drag or a cross-zone link 404s or an SSR fetch hairpins; or when adding a zone or a frontend dependency.
+description: Zones, routes, navbars, data-fetching and gates in rask's `frontend/` plane — seven SvelteKit 2 + Svelte 5 microfrontends on a Turborepo proxy, remote functions vs the Arrow/binary BFF, `@rask/dockview` workbenches, oxlint/oxfmt/zone-contract/Playwright. Use when touching any `.svelte`, a zone, `@rask/api`, `@rask/dockview`, `@rask/zone-contract` or `microfrontends.json`; when adding a route, a zone or a frontend dependency; when writing a `.remote.ts` or choosing a transport; when wiring nav, sidebar or cross-zone links; when building a dock, panel or workbench; or when a panel loses state on drag, a cross-zone link 404s, an SSR fetch hairpins, or a zone e2e/vitest gate fails.
 ---
 
 # rask frontend
@@ -18,7 +18,7 @@ Package name equals directory name for all seven (`manifest.test.ts:53`). Base i
 | zone | base | dev port | nav label | what it is |
 |---|---|---|---|---|
 | `home` | `''` catch-all | 5273 | Home | The ESTATE LEVEL: `/` (an insights landing, scaffold-badged), `/projects` (+ `/projects/<id>`, the gallery/table list, create, and one project's overview) and `/settings` (estate config, admin-gated SERVER-side) — plus the **OIDC BFF** (`/auth/{login,callback,logout}`) |
-| `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one (dock at `/lakehouse/workbench`) — areas `catalog`, `lineage`, `models`, `admin`, `governance`, `workbench`; **storage is not an area**, it is `/lakehouse/catalog/storage`. 47 route files, **7 `+server.ts` routes** — 4 keep-bytes (Arrow query/insert, blob bytes + the #113 commit log, the `/api/explorer/**` storage-browser seam), 1 keep-flow (`capi/v1/me`), 2 catch-alls; 15 `.remote.ts` modules carry the rest. `requestJSON` is **not** at zero here — 4 call sites: the object browser (`lib/storage/storage.ts:69,73`), the #113 commit log and the row insert (`lib/data/catalog.ts:119,126`) |
+| `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one (dock at `/lakehouse/workbench`) — areas `catalog`, `lineage`, `models`, `admin`, `governance`, `workbench`; **storage is not an area**, it is `/lakehouse/catalog/storage`. 47 route files, **7 `+server.ts` routes** — 4 keep-bytes (Arrow query/insert, blob bytes + the #113 commit log, the `/api/explorer/**` storage-browser seam), 1 keep-flow (`capi/v1/me`), 2 catch-alls; 15 `.remote.ts` modules carry the rest; the estate's only `requestJSON` residual — see § Fetching data (b) |
 | `explorer` | `/explorer` | 5173 | **Explorer** | Corpus search workbench (with a dock at `/explorer/workbench`): FTS/vector/hybrid, WebGPU atlas, Cypher KG, Svelte-Flow editor; **6 `+server.ts` routes** (was 13) — 4 keep-bytes + `api/search`/`api/atlas/chunks`, which keep their route (multipart / rowid-list POST) but answer **Arrow IPC**; every JSON value surface rides one of 5 `.remote.ts` modules (the transport ruling area 3) |
 | `annotator` | `/annotator` | 5177 | **Annotate** | PixiJS/WebGPU canvas over Arrow-backed rows, plus a `/browse` corpus surface; **4 `+server.ts` routes** (was 9) — the Arrow annotations transport, the Arrow annotation-IMPORT proxy (`api/tasks/[task_id]/import`, `requireSession`), `capi/v1/me`, the viewer catch-all; every JSON value surface rides one of 6 `.remote.ts` modules |
 | `compute` | `/compute` | 5175 | Compute | Ray/Serve observability, 10 pages + a dock at `/compute/workbench` |
@@ -40,8 +40,8 @@ Only `@rask/ui` has a build (`svelte-package` → `dist/`); the rest are consume
 | `@rask/explorer-api` | Arrow-backed explorer/viewer client (media bytes, Arrow batches) |
 | `@rask/engine` | Framework-agnostic PixiJS/WebGPU annotation canvas (ra-anno lineage) |
 | `@rask/labeling` | The `LabelOp` model + annotator Arrow-IPC transport |
-| `@rask/zone-contract` | **Test-only** — 16 files / 853 tests gating the estate's shape (2 are RED at HEAD — see § Gates) |
-| `@rask/config` | One shared `tsconfig.base.json`, extended by 8 of the 16 workspace packages — six of which inherit its weaker settings unchanged |
+| `@rask/zone-contract` | **Test-only** — the vitest gates on the estate's shape (counts, and the 2 RED at HEAD, in § Gates) |
+| `@rask/config` | One shared `tsconfig.base.json` — weaker than the inlined copy; see § TypeScript strictness is split |
 
 **A `frontend/packages/*` entry is a LIBRARY, never a domain slice.** A zone's panels, stores and
 graphs are the zone — moving them into a shared package hollows the zone, couples releases, and
@@ -71,7 +71,8 @@ simply not in the list. A dock is still EARNED by a real multi-panel workflow, n
 symmetry: train and studio carry placeholder data, home is the catch-all, the annotator is already
 a canvas.
 
-**A PANEL RENDERS THE PAGE'S COMPONENT. It is not a smaller re-implementation.**
+**A PANEL RENDERS THE PAGE'S COMPONENT — the panel-is-the-page rule.** It is not a smaller
+re-implementation.
 
 This is the rule the estate has broken twice, in opposite directions, and the second time from inside
 a zone where nothing was watching. The compositor was retired because an element *could not* import a
@@ -177,7 +178,7 @@ cross-window drag*, which is exactly what popout needs; resolve that trade befor
 
 Both halves are idiomatic SvelteKit — `+server.ts` is the framework's own tool for non-HTML resources, not a legacy dialect. The reason bytes never ride remote functions is **measured, not categorical**: devalue (5.8.1, verified in-tree) *does* carry `ArrayBuffer`/TypedArrays — as base64 inside the payload string (`stringify.js:308`) — which costs +33% on the wire, triple-buffers the whole payload (bytes → base64 string → bytes, no streaming), and loses HTTP semantics (content-type, ETags, ranges). Same reason nobody serves images inside JSON. The rule cuts both ways: a JSON route carrying big tabular rows is the mirrored mistake — **promote it to Arrow**, don't convert it to a remote function (known candidate: lakehouse's table-detail row query returns JSON rows while the explorer reads the same class of data as Arrow). When you touch a JSON *value* surface still on `createBffClient`, converge it; do not add new BFF JSON routes. Also permanently `+server.ts`: the OIDC endpoints (redirect flows, not function calls).
 
-**(a) Remote `query()`/`command()` — every zone's JSON value plane** (the the transport ruling convergence, landed 2026-08-03). A `.remote.ts` function runs on the zone server and reaches its upstream with the session bearer via `getRequestEvent()`. On every polled refresh, `.refresh().catch(() => {})` is **mandatory**: one uncaught rejection evicts the query from cache and silently kills the poll loop (`compute/src/lib/remote/compute.remote.ts:25-40`). The FGA workbench (`lakehouse/src/lib/admin/remote/access.remote.ts`) is the reference migration: queries + a write/delete-tuple `command()` pair with a single-flight `fetchStore().refresh()`, `ApiResult<T>` union returns on the dock-layout precedent (status-driven UI states, not exception flow), valibot parsing at the wire boundary, contracts kept in a sibling non-remote module (a `.remote.ts` may export only remote functions).
+**(a) Remote `query()`/`command()` — every zone's JSON value plane** (the transport-ruling convergence, landed 2026-08-03). A `.remote.ts` function runs on the zone server and reaches its upstream with the session bearer via `getRequestEvent()`. On every polled refresh, `.refresh().catch(() => {})` is **mandatory**: one uncaught rejection evicts the query from cache and silently kills the poll loop (`compute/src/lib/remote/compute.remote.ts:25-40`). The FGA workbench (`lakehouse/src/lib/admin/remote/access.remote.ts`) is the reference migration: queries + a write/delete-tuple `command()` pair with a single-flight `fetchStore().refresh()`, `ApiResult<T>` union returns on the dock-layout precedent (status-driven UI states, not exception flow), valibot parsing at the wire boundary, contracts kept in a sibling non-remote module (a `.remote.ts` may export only remote functions).
 
 **(b) Same-origin BFF — permanently the binary/Arrow planes and the OIDC flow.** The JSON convergence is done in **six** zones: `requestJSON` has zero call sites in `home`, `explorer`, `annotator`, `compute`, `train`, `studio`. The **lakehouse is the residual** — four `requestJSON` call sites: the object browser's `listObjects`/`headObject` (`lib/storage/storage.ts:69,73`, over the `/api/explorer/**` seam), `fetchTableHistory` (`lib/data/catalog.ts:119`, the #113 commit log over the `capi/v1/table/[id]/[...rest]` proxy), and `insertRows` (`:126`, which POSTs an Arrow body and only reads a JSON ack — a keep-bytes route spelled with the JSON helper). Converge the first three when you touch them; do not add new BFF JSON routes. Elsewhere `createBffClient` survives only where the payload is bytes (Arrow, blobs, multipart).
 
@@ -255,7 +256,7 @@ Globbed membership means there is no list to append to, but five files must agre
 
 1. `microfrontends/home/microfrontends.json` — port + routing key
 2. `svelte.config.js` — `paths.base`
-3. `vite.config.ts` — port + `strictPort: true` (and the `dev` script must not also pass `--port`; that race made `annotator` drift onto another zone's port)
+3. `vite.config.ts` — port + `strictPort: true`. **The port is declared here and nowhere else**; a `--port` in the zone's `dev` script races this one, which is how `annotator` drifted onto another zone's port.
 4. `chart/values.yaml` `frontend.apps`
 5. `Makefile` `ZONES`
 
@@ -298,7 +299,7 @@ So `make e2e` never touches the zone suites, and the zone suites never touch a r
 
 Lint is **oxlint** (`svelte/require-each-key: error`, `svelte/no-reactive-reassign: error`, via `@rsvelte/oxlint-plugin`); format is **oxfmt** with tabs, single quotes, `printWidth: 100`. The cross-zone link rule is a **vitest test**, not a lint rule — oxlint reads a `.svelte` `<script>` block, not its markup, so an anchor-attribute rule cannot live there.
 
-Validate `.svelte` edits with the `svelte` MCP autofixer. The standing rule that gives it teeth: **a Svelte defect class found twice becomes an oxlint `error` or a zone-contract test.** Three warnings sit unfixed in `compute` today, which is what an unenforced convention looks like.
+Run the `svelte` MCP autofixer on **every** `.svelte` file you touched, and re-run it after each fix until it reports clean. The standing rule that gives it teeth: **a Svelte defect class found twice becomes an oxlint `error` or a zone-contract test.** Three warnings sit unfixed in `compute` today, which is what an unenforced convention looks like.
 
 ## Staying on-stack
 

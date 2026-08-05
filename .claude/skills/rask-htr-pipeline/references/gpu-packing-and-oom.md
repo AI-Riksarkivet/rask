@@ -75,15 +75,9 @@ of Ray Data into Ray Serve entirely; the Serve default is now **2 replicas**.
 Lessons that survive into any future edit:
 
 - **Host RAM, not VRAM, is the binding constraint when scaling GPU workers.**
-  Each worker that loads TrOCR costs ~4 GB resident before any inference. The
-  OOM killer doesn't pick your worker — it picks Ray's `dashboard_agent`, and
-  losing that kills the raylet.
-- **Don't size by VRAM headroom alone.** `0.49 × 2` looks like it fits 2 cards
-  trivially; the failure mode was system memory pressure, invisible in
-  `nvidia-smi`.
-- A leftover `transcribe_concurrency = 3` in `pipeline.py` is **vestigial** —
-  used only for `from_items(..., override_num_blocks=max(transcribe_concurrency, len(keys)))`.
-  It is **not** the GPU actor count. The GPU parallelism is `RASK_SERVE_REPLICAS`.
+  Each TrOCR-loaded worker costs ~4 GB resident before any inference, and the
+  pressure is invisible in `nvidia-smi`; the OOM killer does not pick your
+  worker — it picks Ray's `dashboard_agent`, and losing that kills the raylet.
 
 ## `transcribe_batch = 64` gates ALTO latency
 
@@ -113,7 +107,7 @@ Ray Data's streaming executor (`select_operator_to_run` in
 `streaming_executor_state.py`) ranks operators by **smallest out-queue** and
 schedules whichever is smallest — deliberately keeping queues short. In a tight
 6-stage pipeline that pins every queue at ~1 block, so **only ~1 actor per stage
-ever has work** and 2/3 GPUs sit idle. Three independent levers beat this:
+ever has work** and 2/3 GPUs sit idle. Four independent levers beat this — locality, block size, fixed pool, shards:
 
 1. **`ctx.execution_options.actor_locality_enabled = False`** — stop biasing
    dispatch toward the actor that produced the most recent block (the
@@ -150,6 +144,6 @@ ever has work** and 2/3 GPUs sit idle. Three independent levers beat this:
 |---|---|---|
 | Raylet dies mid-job, `dashboard_agent` gone from logs | Host-RAM OOM from too many TrOCR-loaded replicas | Lower `RASK_SERVE_REPLICAS`; check RSS, not VRAM |
 | Serve replicas stuck `PENDING` | Fractional GPU sum > physical GPUs | Re-do the budget arithmetic; lower `RASK_SERVE_GPU_FRAC` or replica count |
-| Only 1 GPU busy, others idle | Streaming-executor queue/locality bias, or PageLoader head too narrow | Confirm the 3 fan-out levers; widen PageLoader `size=` |
+| Only 1 GPU busy, others idle | Streaming-executor queue/locality bias, or PageLoader head too narrow | Confirm all four fan-out levers (locality, block size, fixed pool, shards); widen PageLoader `size=` |
 | First ALTO lands very late in S3 | `transcribe_batch` too large / derived from chunk size | Keep it fixed at 64 |
 | `CudnnModule` / pickling error on deploy | torch imported at module scope in a Serve file | Move all torch/transformers imports inside method bodies |
