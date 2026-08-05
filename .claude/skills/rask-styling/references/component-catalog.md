@@ -10,11 +10,13 @@
 
 `vite.config.ts` serves Storybook + vitest, and its `test` block is load-bearing (`vite.config.ts:8-19`): `include` names **both** homes — `tests/**` and `src/**` — and `exclude` drops `dist/**` and `.svelte-kit/**`. `svelte-package` copies test files into both build trees, so vitest's default discovery ran every suite three times against regenerated output; narrowing to `src` alone silently dropped 117 tests to 10. Change neither half without checking the other.
 
-## The 40 export subpaths
+## The 41 export subpaths
 
 **Components** — `dist/components/<name>/index.js`, conditions `svelte` + `types` only:
 
-`alert-dialog · avatar · badge · button · card · checkbox · chip · collapsible · data-table · dialog · dropdown-menu · field · grants-panel · identity · input · navigation-menu · popover · progress · radio-group · resizable-split · search-bar · select · separator · sheet · sidebar · skeleton · slider · sort-header · status-board · switch · table · textarea · tooltip`
+`alert-dialog · avatar · badge · button · card · checkbox · chip · collapsible · data-table · dialog · dropdown-menu · field · grants-panel · hierarchy · identity · input · navigation-menu · popover · progress · radio-group · resizable-split · search-bar · select · separator · sheet · sidebar · skeleton · slider · sort-header · status-board · switch · table · textarea · tooltip`
+
+**`./hierarchy`** — `ProjectHierarchy` + `HierarchyNode` (#109): project › warehouse › namespace › table as a vertical graph. **The one subpath with a vendor-canvas dependency** — it draws on `@rask/flow`'s `StaticFlow`, so `@rask/flow` and `@xyflow/svelte` are `@rask/ui` dependencies for this component alone, and a zone mounting it must declare both itself AND import their two stylesheets `layer(base)` in its `app.css` (vendor sheet first, then `@rask/flow/styles.css`) or the canvas paints in the library's light-mode hex. Home's `/projects/<id>` and the lakehouse's Overview both render it; it lives here rather than in either zone because zones may not import each other, and transport-agnostic (the GrantsPanel precedent) because the library owns no API client — the two rung reads arrive as async props and each zone passes its own remote functions.
 
 **`./identity`** — `Subject` + `subjectDisplay` (#87). An OIDC `sub` is an opaque base64 blob; the helper keeps readable identifiers verbatim and ellipsizes opaque ones in the middle, and the FULL subject always rides `title` so hover/copy still yields the value a tuple write needs. Render it with `<Subject value={…} />`, never `subjectDisplay(...).label` — the component is what makes the title invariant structural, after a call site dropped it within days of the helper shipping. Its own subpath, not under `grants-panel`: the concern is any surface that prints a sub (FGA subjects, control-event actors, audit stamps).
 

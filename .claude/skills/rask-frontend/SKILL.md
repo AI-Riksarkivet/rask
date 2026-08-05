@@ -18,7 +18,7 @@ Package name equals directory name for all seven (`manifest.test.ts:53`). Base i
 | zone | base | dev port | nav label | what it is |
 |---|---|---|---|---|
 | `home` | `''` catch-all | 5273 | Home | The ESTATE LEVEL: `/` (an insights landing, scaffold-badged), `/projects` (+ `/projects/<id>`, the gallery/table list, create, and one project's overview) and `/settings` (estate config, admin-gated SERVER-side) — plus the **OIDC BFF** (`/auth/{login,callback,logout}`) |
-| `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one (dock at `/lakehouse/workbench`) — areas `catalog`, `lineage`, `models`, `admin`, `governance`, `workbench`; **storage is not an area**, it is `/lakehouse/catalog/storage`. 47 route files, **7 `+server.ts` routes** — 4 keep-bytes (Arrow query/insert, blob bytes + the #113 commit log, the `/api/explorer/**` storage-browser seam), 1 keep-flow (`capi/v1/me`), 2 catch-alls; 15 `.remote.ts` modules carry the rest; the estate's only `requestJSON` residual — see § Fetching data (b) |
+| `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one (dock at `/lakehouse/workbench`) — areas `catalog`, `lineage`, `models`, `admin`, `workbench` (`governance` went to home's `/settings/` at #105); **storage is not an area**, it is `/lakehouse/catalog/storage`. The zone ROOT is an **Overview of the active project** (#109 — hierarchy + its warehouses, `ZoneNav.root`, the compute precedent), not the 307 into `/lakehouse/catalog` it used to be. 47 route files, **7 `+server.ts` routes** — 4 keep-bytes (Arrow query/insert, blob bytes + the #113 commit log, the `/api/explorer/**` storage-browser seam), 1 keep-flow (`capi/v1/me`), 2 catch-alls; 15 `.remote.ts` modules carry the rest; the estate's only `requestJSON` residual — see § Fetching data (b) |
 | `explorer` | `/explorer` | 5173 | **Explorer** | Corpus search workbench (with a dock at `/explorer/workbench`): FTS/vector/hybrid, WebGPU atlas, Cypher KG, Svelte-Flow editor; **6 `+server.ts` routes** (was 13) — 4 keep-bytes + `api/search`/`api/atlas/chunks`, which keep their route (multipart / rowid-list POST) but answer **Arrow IPC**; every JSON value surface rides one of 5 `.remote.ts` modules (the transport ruling area 3) |
 | `annotator` | `/annotator` | 5177 | **Annotate** | PixiJS/WebGPU canvas over Arrow-backed rows, plus a `/browse` corpus surface; **4 `+server.ts` routes** (was 9) — the Arrow annotations transport, the Arrow annotation-IMPORT proxy (`api/tasks/[task_id]/import`, `requireSession`), `capi/v1/me`, the viewer catch-all; every JSON value surface rides one of 6 `.remote.ts` modules |
 | `compute` | `/compute` | 5175 | Compute | Ray/Serve observability, 10 pages + a dock at `/compute/workbench` |
@@ -40,7 +40,7 @@ Only `@rask/ui` has a build (`svelte-package` → `dist/`); the rest are consume
 | `@rask/explorer-api` | Arrow-backed explorer/viewer client (media bytes, Arrow batches) |
 | `@rask/engine` | Framework-agnostic PixiJS/WebGPU annotation canvas (ra-anno lineage) |
 | `@rask/labeling` | The `LabelOp` model + annotator Arrow-IPC transport |
-| `@rask/zone-contract` | **Test-only** — the vitest gates on the estate's shape (counts, and the 2 RED at HEAD, in § Gates) |
+| `@rask/zone-contract` | **Test-only** — the vitest gates on the estate's shape (counts and the near-floor scanner guards in § Gates) |
 | `@rask/config` | One shared `tsconfig.base.json` — weaker than the inlined copy; see § TypeScript strictness is split |
 
 **A `frontend/packages/*` entry is a LIBRARY, never a domain slice.** A zone's panels, stores and
@@ -281,10 +281,16 @@ ESLint and Prettier are **deleted**. `toolchain.test.ts` enforces three things a
 | Command | Runs |
 |---|---|
 | `make check` | `fmt` (mutating) + `lint` + Python `uvx ty` + `knip` |
-| `bun --cwd=frontend run check test` | svelte-check + the vitest suites (zone-contract alone is 853, across 16 files) |
+| `bun --cwd=frontend run check test` | svelte-check + the vitest suites (zone-contract alone is 866, across 16 files) |
 | CI (`.dagger/frontend.go:53`) | `bunx turbo run check check:tsgo test lint fmt:check` |
 
-⚠ **The zone-contract suite is RED at HEAD — 2 of 853.** `bff-routes.test.ts:181` asserts *"the annotator has no search route; drop SEARCH_API"*, but the annotator's `select/remote/similar.remote.ts` now calls `SEARCH_API` for its k-NN "more like this" — the gate and the chart's per-zone upstream list are what need updating, not the code. `nav-truth.test.ts:96`'s own scanner guard (`ALL.length > 30`) sits at exactly 30 after a nav leaf moved. Fix both before adding to either file: a red gate hides the next regression.
+The zone-contract suite is **GREEN — 866 of 866 across 16 files** (measured at #109; both reds this
+paragraph used to name are closed). Two of its guards are counters that sit close to their floor, so
+read them before adding to either file: `nav-truth.test.ts`'s scanner guard is `ALL.length > 30` (31
+leaves today — #109's lakehouse Overview root is the one that took it off the boundary), and
+`redirect-truth.test.ts`'s is `ALL.length > 0` (4 redirects, all in the lakehouse, after that same
+change retired the zone-root 307). A guard that reaches its floor makes every assertion below it
+vacuous while staying green — the opposite failure to a red gate, and quieter.
 
 **There are two separate e2e layers — `make e2e` is not the frontend one.**
 

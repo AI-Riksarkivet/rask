@@ -8,12 +8,18 @@
 	// Gated by the catalog; every degrade state is named honestly rather than collapsed into "empty".
 	import { FolderKanban, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
 	import { Button } from '@rask/ui/button';
+	import { ProjectHierarchy } from '@rask/ui/hierarchy';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import type { ProjectSummary } from '$lib/catalog';
 	import ProjectDeleteDialog from '$lib/ProjectDeleteDialog.svelte';
-	import ProjectHierarchy from '$lib/ProjectHierarchy.svelte';
-	import { fetchProject, projectEvents, type ProjectEvent } from '$lib/remote/warehouses.remote';
+	import {
+		fetchProject,
+		namespaceTables,
+		projectEvents,
+		warehouseNamespaces,
+		type ProjectEvent,
+	} from '$lib/remote/warehouses.remote';
 
 	const project = $derived(page.params.project ?? '');
 
@@ -108,10 +114,20 @@
 		<div class="empty"><p>Loading…</p></div>
 	{:else}
 		<!-- The hierarchy FIRST (#104's ruling): the relationship the estate is built on —
-		     project › warehouse › namespace › table — shown the moment the page opens. -->
+		     project › warehouse › namespace › table — shown the moment the page opens.
+
+		     The VIEW is @rask/ui's (#109 hoisted it out of this zone's $lib when the lakehouse Overview
+		     needed the same picture and zones may not import each other); the TRANSPORT stays here —
+		     the library takes the two rung reads as async props and this zone hands it its own remote
+		     functions, so the catalog's gate is still enforced against this user's bearer. -->
 		<section>
 			<h2>Hierarchy</h2>
-			<ProjectHierarchy {project} warehouses={detail.warehouses} />
+			<ProjectHierarchy
+				{project}
+				warehouses={detail.warehouses}
+				fetchNamespaces={warehouseNamespaces}
+				fetchTables={namespaceTables}
+			/>
 		</section>
 		<section>
 			<h2>Warehouses</h2>

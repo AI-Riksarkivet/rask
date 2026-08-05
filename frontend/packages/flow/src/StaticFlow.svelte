@@ -12,8 +12,13 @@
 		width = 900,
 		height = 320,
 		nodeTypes = undefined,
-	}: { nodes: Node[]; edges: Edge[]; width?: number; height?: number; nodeTypes?: NodeTypes } =
-		$props();
+	}: {
+		nodes: Node[];
+		edges: Edge[];
+		width?: number;
+		height?: number;
+		nodeTypes?: NodeTypes;
+	} = $props();
 </script>
 
 <SvelteFlow {nodes} {edges} {width} {height} {nodeTypes} fitView minZoom={0.1} maxZoom={2}>
