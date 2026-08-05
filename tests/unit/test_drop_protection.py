@@ -694,3 +694,32 @@ def test_the_undrop_suffixes_are_owner_gated_not_writer(tmp_path: Any) -> None:
     extends #75's table rule to the namespace rung)."""
     assert fga_deps._OWNER_SUFFIX_RELATION["table"]["undrop"] == "can_drop"  # noqa: SLF001
     assert fga_deps._OWNER_SUFFIX_RELATION["namespace"]["undrop"] == "can_delete"  # noqa: SLF001
+
+
+def test_a_destructive_drop_of_a_top_level_namespace_removes_its_WAREHOUSE_BINDING(tmp_path: Any) -> None:
+    """`unbind_namespace` existed and only the warehouse-delete door called it, so a direct drop of a
+    top-level namespace leaked its binding — and the UI derives its namespace list from bindings, so
+    the dropped namespace kept LISTING forever. Seen on the deployed estate: `casc9` survived its own
+    successful cascade as a phantom row."""
+    from catalog.services import warehouses
+
+    settings = _settings(tmp_path, grace_days=0)
+    so = settings.storage_options()
+    warehouses.bind_namespace(settings.registry_root, so, "bronze", "wh1", "s3://wh1-bucket")
+    assert warehouses.binding_for_namespace(settings.registry_root, so, "bronze") is not None
+
+    _drop_namespace_cascade(settings, _CascadableNamespace())
+    assert warehouses.binding_for_namespace(settings.registry_root, so, "bronze") is None, "the binding outlived the namespace"
+
+
+def test_a_RECOVERABLE_cascade_keeps_the_binding_for_the_undrop(tmp_path: Any) -> None:
+    """Same rule as the grants (#75): undrop rebuilds the subtree, and the binding must still be
+    there to route it — a recoverable drop that unbinds would undrop into an unroutable namespace."""
+    from catalog.services import warehouses
+
+    settings = _settings(tmp_path, grace_days=7)
+    so = settings.storage_options()
+    warehouses.bind_namespace(settings.registry_root, so, "bronze", "wh1", "s3://wh1-bucket")
+
+    _drop_namespace_cascade(settings, _CascadableNamespace())
+    assert warehouses.binding_for_namespace(settings.registry_root, so, "bronze") is not None, "the undrop's route died with the drop"

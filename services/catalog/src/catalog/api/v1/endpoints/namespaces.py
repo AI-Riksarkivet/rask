@@ -37,7 +37,7 @@ from catalog.core.config import Settings
 from catalog.core.control_emit import emit_control
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import native
+from catalog.services import native, warehouses
 from service_kit.governed import fga
 from service_kit.lakehouse import protection, trash
 
@@ -301,6 +301,14 @@ async def drop_namespace(
         for resource, child_segments in descendants:
             child_id = fga.canonical_object_id(child_segments, delimiter=settings.delimiter)
             await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), resource, child_id)
+    # The warehouse BINDING dies with a destroyed top-level namespace. `unbind_namespace` existed and
+    # only the warehouse-delete door called it, so every direct drop of a top-level namespace leaked
+    # its binding record — and the UI derives its namespace list from bindings, so the dropped
+    # namespace kept LISTING forever, indistinguishable from a live empty one (seen on the deployed
+    # estate: `casc9` survived its own successful cascade). Kept on a RECOVERABLE drop, exactly as the
+    # grants are: undrop rebuilds the subtree and the binding must still be there to route it.
+    if not recoverable and len(segments) == 1:
+        await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, settings.storage_options(), segments[0])
     # Revoke AFTER the drop commits (so a failed/restricted drop leaves the still-valid grants in place):
     # the namespace's own tuples, then every cascaded descendant's. NOT on a recoverable cascade (#96,
     # the #75 rule): the owner is the one person who needs to undrop it, and the grants die with the
