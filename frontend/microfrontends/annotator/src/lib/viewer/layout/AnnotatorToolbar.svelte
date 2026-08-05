@@ -130,6 +130,7 @@
 					size="icon-sm"
 					title={`${t.label} (${t.key})${cvLoading ? ' — detecting corners…' : ''}`}
 					aria-pressed={controller.activeTool === t.tool}
+					disabled={!controller.canDraw && COMMITS_SHAPE.has(t.tool)}
 					data-cvready={t.cv ? controller.cvReady.has(t.tool) : undefined}
 					data-snapped={t.tool === 'magnetic' ? controller.magneticSnapped : undefined}
 					onclick={() => controller.setTool(t.tool)}
@@ -155,6 +156,19 @@
 	{#if assist}
 		<div class="bg-sidebar-border mx-1 h-6 w-px shrink-0"></div>
 		{@render assist()}
+	{/if}
+
+	{#if !controller.attached}
+		<!-- Say it WHERE THE TOOLS ARE. The status chip sits bottom-left and reads "load failed",
+		     which a person parses as "the picture didn't load" — not as "everything you draw here is
+		     discarded". This sits in the bar you just tried to use. -->
+		<span
+			class="text-destructive ml-2 shrink-0 text-xs font-medium"
+			data-testid="canvas-readonly"
+			title="The annotations for this item could not be read, so editing is disabled — saving would overwrite work that was never loaded."
+		>
+			read-only — annotations unavailable
+		</span>
 	{/if}
 
 	<div class="bg-sidebar-border mx-1 h-6 w-px shrink-0"></div>
