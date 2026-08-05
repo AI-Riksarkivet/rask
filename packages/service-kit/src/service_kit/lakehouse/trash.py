@@ -40,17 +40,24 @@ log = logging.getLogger(__name__)
 _TRASH_PREFIX = "_trash"
 
 
-def _key(canonical_id: str) -> str:
-    digest = hashlib.sha256(f"table:{canonical_id}".encode()).hexdigest()[:24]
-    return f"{_TRASH_PREFIX}/table-{digest}.json"
+def _key(canonical_id: str, kind: str = "table") -> str:
+    digest = hashlib.sha256(f"{kind}:{canonical_id}".encode()).hexdigest()[:24]
+    return f"{_TRASH_PREFIX}/{kind}-{digest}.json"
 
 
-def make_record(canonical_id: str, *, location: str, dropped_by: str | None, grace_days: int, now: datetime | None = None) -> dict[str, Any]:
+def make_record(
+    canonical_id: str, *, location: str, dropped_by: str | None, grace_days: int, now: datetime | None = None, kind: str = "table"
+) -> dict[str, Any]:
     """The trash record. ``expires_at`` is stamped HERE — at drop time — so a later change to the
-    estate's grace period cannot retroactively shorten a window someone is still inside."""
+    estate's grace period cannot retroactively shorten a window someone is still inside.
+
+    ``kind`` distinguishes tables from namespaces (#96 — a recoverable CASCADE trashes both). A
+    namespace is a ``__manifest`` row with no bytes of its own, so its ``location`` is ``""``; the
+    record's job is to let undrop know the row (and which subtree) to rebuild.
+    """
     at = now or datetime.now(UTC)
     return {
-        "kind": "table",
+        "kind": kind,
         "id": canonical_id,
         "location": location,
         "dropped_by": dropped_by or "anonymous",
@@ -62,14 +69,14 @@ def make_record(canonical_id: str, *, location: str, dropped_by: str | None, gra
 def put(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:
     fs, base = fs_and_base(control_root, storage_options)
     fs.create_dir(f"{base}/{_TRASH_PREFIX}", recursive=True)
-    with fs.open_output_stream(f"{base}/{_key(str(record['id']))}") as stream:
+    with fs.open_output_stream(f"{base}/{_key(str(record['id']), str(record.get('kind', 'table')))}") as stream:
         stream.write(json.dumps(record).encode())
 
 
-def get(control_root: str, storage_options: StorageOptions, canonical_id: str) -> dict[str, Any] | None:
+def get(control_root: str, storage_options: StorageOptions, canonical_id: str, *, kind: str = "table") -> dict[str, Any] | None:
     fs, base = fs_and_base(control_root, storage_options)
     try:
-        with fs.open_input_stream(f"{base}/{_key(canonical_id)}") as stream:
+        with fs.open_input_stream(f"{base}/{_key(canonical_id, kind)}") as stream:
             loaded: Any = json.loads(stream.read().decode())
     except FileNotFoundError:
         return None
@@ -79,10 +86,10 @@ def get(control_root: str, storage_options: StorageOptions, canonical_id: str) -
     return loaded
 
 
-def clear(control_root: str, storage_options: StorageOptions, canonical_id: str) -> bool:
+def clear(control_root: str, storage_options: StorageOptions, canonical_id: str, *, kind: str = "table") -> bool:
     fs, base = fs_and_base(control_root, storage_options)
     try:
-        fs.delete_file(f"{base}/{_key(canonical_id)}")
+        fs.delete_file(f"{base}/{_key(canonical_id, kind)}")
     except FileNotFoundError:
         return False
     return True

@@ -117,6 +117,17 @@ changing anything the sweep, the reconciler or the orphan scan touches.
   `describe_table` had just reported, and the `dir` backend lays tables out flat. The sweep REPORTS
   expired trash and deletes nothing. COVERAGE.md's old "soft-delete is N/A, time-travel replaces it"
   entry was WRONG and is corrected: time-travel does not survive `drop_table`.
+  **The CASCADE is recoverable too (#96)**: with a grace period, `drop_namespace(cascade)` never
+  issues the destructive native call — a trash record pointing at bytes that call deleted would be
+  a lie — and instead DETACHES the subtree (every table deregistered, namespaces emptied
+  deepest-first then dropped, one `kind`-tagged record each, shared drop-time `expires_at`; tuples
+  KEPT, the same #75 rule). `POST /v1/namespace/{id}/undrop` is the PLURAL undrop: rebuilds every
+  trashed namespace under the id shallowest-first, re-registers every trashed table
+  (relative-location form), resumable (`exist_ok` creates; already-registered = recovered);
+  `GET /v1/namespace/{id}/tasks` shows the subtree's deadline; `purge=true` is the same explicit
+  opt-out. A RESTRICT drop stays unrecorded on purpose — it only ever removes an empty manifest
+  row. Declared-only tables (no recorded location) are skipped by undrop with a warning: no bytes
+  were lost.
 - **Protection covers EVERY rung since #73** (2026-08-04): warehouses/projects carry `protected` on
   their registry records; tables/namespaces carry it as a **control-root `_protection/` record**
   (`service_kit.lakehouse.protection`) gating drop/deregister/rename (table) and drop (namespace) —
@@ -125,12 +136,14 @@ changing anything the sweep, the reconciler or the orphan scan touches.
   via `POST /v1/table/{id}/protection` / `/v1/namespace/{id}/protection`, owner-gated (`protection`
   maps to `can_drop`/`can_delete` in `_OWNER_SUFFIX_RELATION` — an unmapped suffix falls to writer
   tier). The record dies with the object: drop/deregister clear it so a reused id can't inherit it.
-  A CASCADE destroys its children INSIDE one native call, so they never re-enter this door —
-  `drop_namespace` therefore enumerates `_collect_descendants` whenever `behavior=cascade` (no
-  longer gated on `fga_enabled`) and protection-checks EVERY enumerated id before the native call,
-  refusing 409 and NAMING the protected descendant; `force` turns the subtree lock exactly as at
-  the named rung. Until that landed the docstring promised cascade coverage the code did not have.
-  (What cascade still does NOT do is file trash records for the children — #96.)
+  A destructive CASCADE destroys its children INSIDE one native call, so they never re-enter this
+  door — `drop_namespace` therefore enumerates `_collect_descendants` whenever `behavior=cascade`
+  (no longer gated on `fga_enabled`) and protection-checks EVERY enumerated id before anything
+  drops, refusing 409 and NAMING the protected descendant; `force` turns the subtree lock exactly
+  as at the named rung, and on the force path the descendants' protection records are cleared after
+  the drop (the same reuse rule as the named rung). Until that landed the docstring promised
+  cascade coverage the code did not have. Trash records for the children landed with #96 — see the
+  recoverable-drops bullet.
 - **NO EXISTENCE ORACLE on destructive doors (audit #4).** `delete_warehouse`, `delete_project` and
   `_set_warehouse_status` all collapse `PermissionDenied → TableNotFound`, so "not yours" and "does
   not exist" are byte-identical and the door cannot enumerate ids. CREATE doors deliberately do the

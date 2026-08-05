@@ -1137,9 +1137,13 @@ work).
    parser/register/facet seams); the bronze→silver **geometry movers**; the raw **ALTO S3 sink
    stays** as P7c's export format; the in-dataset `lineage` column rides when the mover supplies
    the LineageDoc.
-2. **#96 cascade files NO trash records** — the only `trash.put` is the single-table drop, so a
-   fat-fingered cascade's children are unrecoverable even with trash ON; undrop is also single-id
-   where Lakekeeper's is plural. Two halves, only work together.
+2. ~~**#96 cascade files NO trash records**~~ **CLOSED 2026-08-05**, driven live over HTTP: with a
+   grace period a CASCADE now DETACHES the subtree (tables deregistered — bytes stay — namespaces
+   emptied then dropped, a trash record per destroyed object) instead of destroying it inside the
+   one native call, and `POST /v1/namespace/{id}/undrop` is the plural undrop — rebuilds the whole
+   subtree shallowest-first, resumable. `GET /v1/namespace/{id}/tasks` shows the deadline;
+   `purge=true` stays the explicit destroy-now. Tuples are KEPT on the recoverable path (#75's
+   rule at subtree scale). Residual: no UI reaches undrop on either rung yet (the #42 class).
 3. **#46 binding-cache eviction is per-process — ARMED, not latent**: `values-prod.yaml:36` already
    runs the catalog at `replicas: 2`. Mitigated to the mid-cascade window + id reuse by the live
    status read; the fix is control-event-driven cross-replica invalidation.

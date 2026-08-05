@@ -596,9 +596,16 @@ export interface paths {
          * @description Drop namespace ``id`` (``drop_namespace``); revoke its FGA tuples — and, for a Cascade drop, every
          *     dropped child's — so a reused id can't inherit stale grants.
          *
-         *     Deletion protection (#73): a ``protected`` control-root record refuses 409 unless ``force=true``
-         *     — and it also stops a CASCADE from a parent taking this namespace with it, because the cascade
-         *     arrives at this same door. ``force`` turns the protection lock only; the FGA gate ran first.
+         *     Deletion protection (#73): a ``protected`` control-root record refuses 409 unless ``force=true``.
+         *     A CASCADE is checked against the whole SUBTREE before the native call — its children are destroyed
+         *     inside that one call and never reach this door, so a protected table under a cascaded namespace
+         *     would otherwise die silently. ``force`` turns the protection lock only; the FGA gate ran first.
+         *
+         *     With a grace period configured (#96), a CASCADE becomes RECOVERABLE: the subtree is detached —
+         *     tables deregistered, namespaces emptied then dropped — with a trash record per destroyed object,
+         *     and ``POST /v1/namespace/{id}/undrop`` rebuilds the whole subtree. ``purge=true`` is the same
+         *     explicit opt-out the table door has. A plain RESTRICT drop stays destructive-but-cheap: the
+         *     namespace it removes is empty by definition, and re-creating an empty namespace needs no trash.
          */
         post: operations["drop_namespace_v1_namespace__id__drop_post"];
         delete?: never;
@@ -745,6 +752,60 @@ export interface paths {
         get: operations["list_tables_v1_namespace__id__table_list_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespace/{id}/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Namespace Tasks
+         * @description What is queued for THIS namespace — a pending trash expiry after a recoverable cascade (#96).
+         *     Same contract as the table door: an undrop deadline the owner cannot see is not a safety
+         *     feature. Reader-gated by the router (``tasks`` is a metadata read).
+         */
+        get: operations["namespace_tasks_v1_namespace__id__tasks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespace/{id}/undrop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Undrop Namespace
+         * @description Recover a cascade-dropped SUBTREE from the trash (#96) — the plural undrop.
+         *
+         *     The unit of a cascade is the subtree, so the unit of its recovery is too: every trashed
+         *     namespace under (and including) ``id`` is re-created shallowest-first, then every trashed table
+         *     is re-registered at its old id from its still-present bytes, and each record is cleared as its
+         *     object recovers. Owner-gated like the table door (``undrop`` maps to the delete rung).
+         *
+         *     Resumable, not atomic: namespace creates run ``exist_ok`` and an already-registered table is
+         *     treated as recovered, so a rerun after a mid-recovery failure finishes the job instead of
+         *     409-ing on what the first attempt already rebuilt. 404 when there is no trash record: an expired
+         *     or never-trashed drop is genuinely unrecoverable, and saying so beats a 200 that recovers
+         *     nothing. A declared-only table (empty recorded location) is skipped with a warning — there were
+         *     no bytes to lose.
+         */
+        post: operations["undrop_namespace_v1_namespace__id__undrop_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2583,6 +2644,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/warehouses/-/bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Estate Bindings
+         * @description Every binding the caller may see, from ONE ``list_bindings`` pass (#86).
+         *
+         *     ``/-/`` rather than a bare ``/bindings``: the sibling routes are ``/{warehouse_id}/…`` and
+         *     ``bindings`` is a VALID warehouse id, so a literal segment there would shadow a real tenant's
+         *     warehouse. ``-`` can never be an id (``CONTROL_ID_RE`` requires ≥3 chars with alphanumeric ends),
+         *     which makes the collision impossible rather than merely unlikely. This is the FIRST ``/-/`` route
+         *     in the estate and it is our own convention, borrowed from GitLab — the Lance spec's own root
+         *     placeholder is the delimiter, which is not available here.
+         *
+         *     Governed exactly like the warehouse listing it complements: with FGA on, filtered to the
+         *     warehouses the caller can ``can_get_metadata`` — a binding names a namespace AND the tenant
+         *     bucket it lives in, so leaking one leaks another tenant's shape.
+         */
+        get: operations["list_estate_bindings_v1_warehouses___bindings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/warehouses/{warehouse_id}": {
         parameters: {
             query?: never;
@@ -3919,7 +4011,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "table_published";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_published";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -5224,6 +5316,21 @@ export interface components {
             transaction_id?: string | null;
         };
         /**
+         * EstateBindingsResponse
+         * @description Every namespace→warehouse binding the caller can see, in ONE read (#86).
+         *
+         *     The per-warehouse sibling below answers for one id; a page listing the estate's namespaces was
+         *     calling it once per warehouse, and each of those calls re-LISTs and re-GETs every binding in the
+         *     estate before filtering in Python — O(warehouses × bindings) for a union the underlying
+         *     ``list_bindings`` already produces in a single pass.
+         */
+        EstateBindingsResponse: {
+            /** Bindings */
+            bindings: {
+                [key: string]: string;
+            };
+        };
+        /**
          * EventsResponse
          * @description A poll response: control events strictly after the caller's cursor, the new head cursor, and a reset
          *     flag (``True`` when the client's cursor fell off the bounded buffer → the console should re-read all).
@@ -6066,8 +6173,15 @@ export interface components {
         };
         /** PolicyResponse */
         PolicyResponse: {
+            /** Auto Cleanup Interval Commits */
+            auto_cleanup_interval_commits?: number | null;
             /** Buckets */
             buckets?: string[] | null;
+            /**
+             * Cleanup Enabled
+             * @default true
+             */
+            cleanup_enabled: boolean;
             /**
              * Compact Enabled
              * @default true
@@ -6079,12 +6193,19 @@ export interface components {
             id: string;
             /** Kind */
             kind: string;
+            /**
+             * Optimize Indices Enabled
+             * @default true
+             */
+            optimize_indices_enabled: boolean;
             /** Path */
             path: string;
             /** Retain Versions */
             retain_versions?: number | null;
             /** Retention Days */
             retention_days?: number | null;
+            /** Scan Batch Size */
+            scan_batch_size?: number | null;
             /** Target Rows Per Fragment */
             target_rows_per_fragment?: number | null;
         };
@@ -6643,6 +6764,19 @@ export interface components {
             };
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * SetProtectionRequest
+         * @description The one field the protection doors write. Setting is idempotent; clearing removes the record.
+         *
+         *     ONE definition for both the table and namespace doors: two identically-shaped copies in the two
+         *     endpoint modules made FastAPI mangle the schema names into
+         *     ``catalog__api__v1__endpoints__{tables,namespaces}__SetProtectionRequest`` — module paths leaking
+         *     into the public contract and into every generated client.
+         */
+        SetProtectionRequest: {
+            /** Protected */
+            protected: boolean;
         };
         /**
          * StorageRole
@@ -7338,22 +7472,6 @@ export interface components {
          * @enum {string}
          */
         WorkflowSearchMode: "fts" | "semantic" | "visual" | "scene" | "scene_fts" | "hybrid" | "all";
-        /**
-         * SetProtectionRequest
-         * @description The one field this door writes. Setting is idempotent; clearing removes the record.
-         */
-        catalog__api__v1__endpoints__namespaces__SetProtectionRequest: {
-            /** Protected */
-            protected: boolean;
-        };
-        /**
-         * SetProtectionRequest
-         * @description The one field this door writes. Setting it is idempotent; clearing removes the record.
-         */
-        catalog__api__v1__endpoints__tables__SetProtectionRequest: {
-            /** Protected */
-            protected: boolean;
-        };
     };
     responses: never;
     parameters: never;
@@ -8171,6 +8289,7 @@ export interface operations {
         parameters: {
             query?: {
                 force?: boolean;
+                purge?: boolean;
             };
             header?: never;
             path: {
@@ -8377,7 +8496,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["catalog__api__v1__endpoints__namespaces__SetProtectionRequest"];
+                "application/json": components["schemas"]["SetProtectionRequest"];
             };
         };
         responses: {
@@ -8423,6 +8542,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListTablesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    namespace_tasks_v1_namespace__id__tasks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrashEntry"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    undrop_namespace_v1_namespace__id__undrop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateNamespaceResponse"];
                 };
             };
             /** @description Validation Error */
@@ -10224,7 +10405,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["catalog__api__v1__endpoints__tables__SetProtectionRequest"];
+                "application/json": components["schemas"]["SetProtectionRequest"];
             };
         };
         responses: {
@@ -11350,6 +11531,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_estate_bindings_v1_warehouses___bindings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstateBindingsResponse"];
                 };
             };
         };
