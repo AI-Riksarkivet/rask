@@ -103,8 +103,20 @@ async function refuse(res: Response, what: string): Promise<never> {
 export async function startIngest(
 	request: IngestRequest,
 	fetchFn: typeof fetch = fetch,
+	extraHeaders: Record<string, string> = {},
 ): Promise<IngestAccepted> {
-	const headers: Record<string, string> = { 'content-type': 'application/json' };
+	// `extraHeaders` exists for the CALLER'S BEARER, and it is not optional in practice on a governed
+	// estate. SvelteKit's request-scoped `fetch` forwards cookies but attaches NO `Authorization`
+	// header — that is normally the BFF proxy's job — so a server-side call made without this arrives
+	// at the door carrying only the gateway's own Dapr app-token, and the door refuses it:
+	//
+	//     'gateway' is a public front door: its Dapr app-token authenticates the proxy, not the caller
+	//
+	// which is correct (an app-token proves the proxy, never the human). Measured twice: first from
+	// the browser, then again from inside a remote function that assumed request-scoped fetch was
+	// enough. The estate's pattern is `locals.session?.accessToken` -> `authorization: Bearer …`
+	// (`lakehouse/src/lib/admin/remote/access.remote.ts:47-50`).
+	const headers: Record<string, string> = { 'content-type': 'application/json', ...extraHeaders };
 	if (request.idempotencyKey) headers['Idempotency-Key'] = request.idempotencyKey;
 	const res = await fetchFn('/api/ingest/ingests', {
 		method: 'POST',
@@ -125,8 +137,11 @@ export async function startIngest(
 export async function getIngestRun(
 	runId: string,
 	fetchFn: typeof fetch = fetch,
+	extraHeaders: Record<string, string> = {},
 ): Promise<IngestRun> {
-	const res = await fetchFn(`/api/ingest/ingests/${encodeURIComponent(runId)}`);
+	// Same bearer seam as `startIngest` — the READ door is governed too, so a server-side call with
+	// no `Authorization` is refused as the gateway rather than served as the user.
+	const res = await fetchFn(`/api/ingest/ingests/${encodeURIComponent(runId)}`, { headers: extraHeaders });
 	if (!res.ok) return refuse(res, 'getIngestRun');
 	return parse(IngestRunSchema, await res.json());
 }
@@ -163,8 +178,9 @@ export type SourceDescriptor = v.InferOutput<typeof SourceDescriptorSchema>;
  *  Ask the registry instead. Adding a source then never touches this file, which is gate A9. */
 export async function listIngestSources(
 	fetchFn: typeof fetch = fetch,
+	extraHeaders: Record<string, string> = {},
 ): Promise<SourceDescriptor[]> {
-	const res = await fetchFn('/api/ingest/sources');
+	const res = await fetchFn('/api/ingest/sources', { headers: extraHeaders });
 	if (!res.ok) return refuse(res, 'listIngestSources');
 	return parse(v.array(SourceDescriptorSchema), await res.json());
 }

@@ -21,6 +21,20 @@ import {
 // during SSR (a bare global `fetch` has no origin on the server) and inlines the response into the
 // SSR payload, so the first frame is rendered rather than fetched after mount.
 
+
+/** The signed-in caller's bearer, for the governed doors.
+ *
+ *  SvelteKit's request-scoped `fetch` forwards COOKIES but attaches no `Authorization` header — that
+ *  is the BFF proxy's job on the client path, and there is no proxy in front of a remote function. So
+ *  without this every call here arrives at the ingest door carrying only the gateway's own Dapr
+ *  app-token, and the door correctly refuses it ("'gateway' is a public front door"). The estate's
+ *  reference for this is `lakehouse/src/lib/admin/remote/access.remote.ts:47-50`. */
+function bearerHeaders(): Record<string, string> {
+	const { locals } = getRequestEvent();
+	const bearer = locals.session?.accessToken;
+	return bearer ? { authorization: `Bearer ${bearer}` } : {};
+}
+
 /** A run id. Parsed at the boundary so a malformed id is refused before it reaches the gateway. */
 const RunId = v.pipe(v.string(), v.trim(), v.minLength(1));
 
@@ -36,7 +50,7 @@ const RunId = v.pipe(v.string(), v.trim(), v.minLength(1));
  * the first run's cached answer for every id.
  */
 export const getIngestRunStatus = query(RunId, async (runId): Promise<IngestRun> => {
-	return getIngestRun(runId, getRequestEvent().fetch);
+	return getIngestRun(runId, getRequestEvent().fetch, bearerHeaders());
 });
 
 /**
@@ -52,7 +66,7 @@ export const getIngestRunStatus = query(RunId, async (runId): Promise<IngestRun>
  * and cannot change under a running pod.
  */
 export const getIngestSources = query(async (): Promise<SourceDescriptor[]> => {
-	return listIngestSources(getRequestEvent().fetch);
+	return listIngestSources(getRequestEvent().fetch, bearerHeaders());
 });
 
 /** What the form sends. Parsed at the boundary, so a malformed request is refused here rather than
@@ -104,5 +118,5 @@ const IngestInput = v.object({
  * a runs LIST lands, that is the query this command should refresh.
  */
 export const startIngest = command(IngestInput, async (input): Promise<IngestAccepted> => {
-	return postIngest(input, getRequestEvent().fetch);
+	return postIngest(input, getRequestEvent().fetch, bearerHeaders());
 });
