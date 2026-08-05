@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import secrets
+from collections.abc import Callable
 from typing import Annotated
 
 from fastapi import Header, HTTPException
@@ -109,3 +110,80 @@ def assert_app_token_configured(*, dapr_enabled: bool) -> None:
             "APP_API_TOKEN must be set when Dapr ingest is enabled — the delivery route would otherwise be "
             "unauthenticated. Wire dapr.io/app-token-secret + the APP_API_TOKEN env, or disable Dapr ingest."
         )
+
+
+# ── the SERVICE DOOR: an in-cluster caller authenticating AS a named service ──────────
+
+
+class ServiceIdentity:
+    """A service principal — an in-cluster caller that is not a human.
+
+    `sub` is the bare FGA subject, so every authorization decision downstream reads the same way for
+    a service as for a person. That symmetry is the point: a service is bounded by its own rung, not
+    exempt from the model.
+    """
+
+    __slots__ = ("_sub",)
+
+    def __init__(self, sub: str) -> None:
+        self._sub = sub
+
+    @property
+    def sub(self) -> str:
+        return self._sub
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"ServiceIdentity({self._sub!r})"
+
+
+class ServiceDoorClosed(Exception):
+    """The service door is not configured here — the caller should fall through to OIDC."""
+
+
+def service_principal(
+    *,
+    token: str | None,
+    identity: str | None,
+    allowed_subjects: str,
+    privileged_subjects: str = "",
+    dedicated_token: Callable[[str], str | None] | None = None,
+) -> ServiceIdentity:
+    """Authenticate an in-cluster service: a valid credential + an ALLOWLISTED subject.
+
+    EXTRACTED from `services/lineage` when the catalog needed the same door — the moment a mechanism
+    stops being local. The lessons it carries were each paid for once and must not be re-learned per
+    service:
+
+      * TWO questions, not one. The allowlist answers "may this SUBJECT use the door"; the credential
+        answers "may THIS CALLER be that subject". Without the second, the identity is a claim the
+        door BELIEVES — and with one shared token across an allowlist, any holder can pick the
+        highest-privileged name on it.
+      * PRIVILEGED subjects need their own credential, and a missing one FAILS CLOSED rather than
+        falling back to the shared token. A quiet fallback restores the escalation while looking
+        configured, which is worse than not having the control.
+      * The allowlist is checked FIRST, so an unknown caller-supplied subject never reaches the
+        credential store — a door that looks up arbitrary names is an enumeration oracle.
+
+    Raises `ServiceDoorClosed` when no `APP_API_TOKEN` is configured: without it there is nothing to
+    verify, and a caller must not be able to open the door by merely naming a subject.
+    """
+    expected = os.environ.get("APP_API_TOKEN")
+    if not expected:
+        raise ServiceDoorClosed("the service door needs APP_API_TOKEN")
+
+    allowed = {s.strip() for s in allowed_subjects.split(",") if s.strip()}
+    if not identity or identity not in allowed:
+        raise HTTPException(status_code=403, detail=f"service identity not allowed: {identity or '<missing>'}")
+
+    privileged = {s.strip() for s in privileged_subjects.split(",") if s.strip()}
+    if identity in privileged:
+        dedicated = dedicated_token(identity) if dedicated_token else None
+        if not dedicated:
+            raise HTTPException(status_code=401, detail=f"service identity {identity!r} is privileged but has no dedicated credential provisioned")
+        if not secrets.compare_digest((token or "").encode(), dedicated.encode()):
+            raise HTTPException(status_code=401, detail=f"the presented credential may not claim {identity!r}")
+        return ServiceIdentity(identity)
+
+    if not secrets.compare_digest((token or "").encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="invalid service token")
+    return ServiceIdentity(identity)

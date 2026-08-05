@@ -59,65 +59,20 @@ class QueueHealth(BaseModel):
 async def queue_health() -> QueueHealth:
     """Report the queue's state. Always 200 — this is a diagnostic, not a gate.
 
-    A non-200 here would make the endpoint unusable for its own purpose: an operator checking WHY the
-    queue is broken would get a failure instead of the diagnosis.
+    A non-200 would make the endpoint useless for its own purpose: the operator asking WHY the queue
+    is broken would get a failure instead of the diagnosis.
 
-    The whole probe is wrapped in `asyncio.wait_for`, and that is the SECOND attempt at bounding it.
-    The first passed `connect_timeout` (plus `allow_reconnect=False`, `max_reconnect_attempts=0`) to
-    the nats client and assumed that bounded the call. It does not: MEASURED against a dead address,
-    a connect with all three set still had not returned after 60 seconds, and the test suite went
-    from 21s to 362s. Do not trust a client's own timeout to bound an operation you must answer
-    within — bound it here, where the deadline is the contract.
+    The probe itself lives in `ingest.queue` because invariant I3 confines the broker client to that
+    seam — an earlier version imported `nats` here and the I3 gate caught it. The DEADLINE is applied
+    here, where the endpoint's contract is: measured, a nats connect to a dead address does NOT honour
+    its own `connect_timeout` (still unreturned after 60s, and the suite went 21s -> 362s), so the
+    only reliable bound is `asyncio.wait_for` around the whole thing.
     """
-    from ingest.queue import DLQ_SUBJECT, STREAM
+    from ingest.queue import inspect_queue
     from ingest.runtime import nats_url
 
     try:
-        import nats
-    except Exception as exc:  # pragma: no cover - import guard
-        return QueueHealth(reachable=False, detail=f"nats client unavailable: {exc}")
-
-    async def _probe() -> QueueHealth:
-        nc = None
-        try:
-            nc = await nats.connect(
-                nats_url(),
-                connect_timeout=PROBE_TIMEOUT_SECONDS,
-                allow_reconnect=False,
-                max_reconnect_attempts=0,
-            )
-            js = nc.jetstream()
-
-            present, messages, consumers = False, None, None
-            try:
-                info = await js.stream_info(STREAM)
-                present, messages, consumers = True, info.state.messages, info.state.consumer_count
-            except Exception:
-                # NOT an error path: an absent stream is the ANSWER, and it is the answer that was
-                # missing for four and a half hours. Reported as `stream_present: false`.
-                logger.warning("the %s stream does not exist — publishes will fail until it is provisioned", STREAM)
-
-            # The DLQ is checked separately because its absence is the quietest failure in the plane:
-            # `park_poison` publishes and moves on, so with no stream a corrupt unit is DROPPED
-            # rather than parked, and the run still reports the error. Nothing else would notice.
-            dlq_stream = DLQ_SUBJECT.split(".")[0].upper()
-            try:
-                await js.stream_info(dlq_stream)
-                dlq_present = True
-            except Exception:
-                dlq_present = False
-                logger.warning("the %s stream does not exist — parked poison units are DROPPED, not parked", dlq_stream)
-
-            return QueueHealth(reachable=True, stream_present=present, messages=messages, consumers=consumers, dlq_present=dlq_present)
-        finally:
-            if nc is not None:
-                try:
-                    await nc.close()
-                except Exception:
-                    logger.debug("closing the probe connection failed", exc_info=True)
-
-    try:
-        return await asyncio.wait_for(_probe(), timeout=PROBE_TIMEOUT_SECONDS)
+        return QueueHealth(**await asyncio.wait_for(inspect_queue(nats_url(), PROBE_TIMEOUT_SECONDS), timeout=PROBE_TIMEOUT_SECONDS))
     except TimeoutError:
         return QueueHealth(reachable=False, detail=f"the queue did not answer within {PROBE_TIMEOUT_SECONDS}s")
     except Exception as exc:

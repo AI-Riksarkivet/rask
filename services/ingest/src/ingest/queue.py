@@ -24,9 +24,14 @@ redeliver forever — hence `max_deliver` and the dlq.ingest.tasks parking subje
 
 from __future__ import annotations
 
+import contextlib
 import json
+import logging
 import os
 from typing import TYPE_CHECKING, Any, Self
+
+
+logger = logging.getLogger(__name__)
 
 import nats
 from nats.js import api as jsapi
@@ -221,3 +226,42 @@ class WorkQueue:
 
     async def close(self) -> None:
         await self._nc.close()
+
+
+async def inspect_queue(url: str, timeout: float = 3.0) -> dict[str, object]:
+    """What the work queue looks like right now — reachability, stream presence, depth.
+
+    LIVES HERE, not in the health endpoint, because invariant I3 confines the broker client to this
+    seam: "only the work queue may hold the broker client, or the bus stops being swappable by chart
+    values." A diagnostic that imported `nats` directly would put a second nats-py dependency outside
+    the seam — and the I3 gate caught exactly that.
+
+    Wrapped in `asyncio.wait_for` by the CALLER's deadline rather than trusting the client: measured,
+    a connect to a dead address with `connect_timeout`, `allow_reconnect=False` and
+    `max_reconnect_attempts=0` all set had still not returned after 60 seconds.
+    """
+    import nats
+
+    nc = None
+    try:
+        nc = await nats.connect(url, connect_timeout=timeout, allow_reconnect=False, max_reconnect_attempts=0)
+        js = nc.jetstream()
+        out: dict[str, object] = {"reachable": True, "stream_present": False, "messages": None, "consumers": None}
+        try:
+            info = await js.stream_info(STREAM)
+            out.update(stream_present=True, messages=info.state.messages, consumers=info.state.consumer_count)
+        except Exception:
+            # An absent stream is the ANSWER, not an error — and it is the answer that hid for four
+            # and a half hours while every liveness probe stayed green.
+            logger.warning("the %s stream does not exist — publishes will fail until it is provisioned", STREAM)
+        try:
+            await js.stream_info(DLQ_SUBJECT.split(".")[0].upper())
+            out["dlq_present"] = True
+        except Exception:
+            out["dlq_present"] = False
+            logger.warning("the DLQ stream does not exist — parked poison units are DROPPED, not parked")
+        return out
+    finally:
+        if nc is not None:
+            with contextlib.suppress(Exception):
+                await nc.close()

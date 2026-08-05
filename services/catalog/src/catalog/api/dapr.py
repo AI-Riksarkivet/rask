@@ -63,9 +63,7 @@ async def on_control_event(body: dict[str, Any], request: Request, _: Annotated[
         buffer.append(event)
     cache = getattr(request.app.state, "warehouse_binding_cache", None)
     if cache is not None:
-        evicted = warehouses.evict_stale_bindings(
-            cache, action=event.action, object_id=event.object_id, extra=event.extra, delimiter=get_settings().delimiter
-        )
+        evicted = warehouses.evict_stale_bindings(cache, action=event.action, object_id=event.object_id, extra=event.extra, delimiter=get_settings().delimiter)
         if evicted:
             log.info("binding_cache_evicted", extra={"action": event.action, "object_id": event.object_id, "evicted": evicted})
     return {"status": "SUCCESS"}
