@@ -344,7 +344,14 @@ spec:
             # micro-frontend zones (frontend.serviceIdentity) — the zones read lineage as a SERVICE on the
             # no-login governed path, so their identity MUST be allowlisted or every zone's read fails closed
             # (403). (The retired web pod's identity was here too; frontend.serviceIdentity carries it now.)
-            - { name: LINEAGE_SERVICE_SUBJECTS, value: "{{ .Values.medallion.train.trainerIdentity }},{{ .Values.frontend.serviceIdentity }}" }
+            # …and the INGEST plane, which was MISSING and cost it every provenance record on an
+            # auth-enabled estate. Its emitter sent no identity, lineage answered 401, and the emitter
+            # swallows that by design (a landed commit must not become a failed run) — so the data
+            # landed and the graph never heard about it, silently. Exactly the failure recorded above
+            # for the trainer in 2026-07, repeated on a second lane two months later.
+            # Read from the ingest service's OWN `RASK_LINEAGE_SERVICE_IDENTITY` so the two halves
+            # cannot drift: the door's allowlist and the caller's claim come from ONE value.
+            - { name: LINEAGE_SERVICE_SUBJECTS, value: "{{ .Values.medallion.train.trainerIdentity }},{{ .Values.frontend.serviceIdentity }},{{ .Values.services.ingest.env.RASK_LINEAGE_SERVICE_IDENTITY }}" }
             {{- end }}
           {{- include "lance.appProbes" . | nindent 10 }}
           resources: {{- include "lance.resources" (dict "root" . "comp" "lineage") | nindent 12 }}

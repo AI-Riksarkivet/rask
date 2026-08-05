@@ -246,3 +246,72 @@ def test_the_lineage_subscriber_is_actually_subscribing() -> None:
     assert set(enabled) == {"true"}, (
         f"the lineage subscriber is rendered disabled ({enabled}) — the graph would stay empty while every producer reports success"
     )
+
+
+# ── the INGEST plane's lineage identity — the second lane to lose all provenance ─────
+
+
+#: The values a governed render needs. `auth.enabled` alone is refused by the chart's own
+#: consistency gate (a backend that demands identity with a UI that has no sign-in flow).
+_GOVERNED = (
+    "auth.enabled=true",
+    "frontend.oidc.enabled=true",
+    "frontend.oidc.sessionSecret=0123456789012345678901234567890123",
+    "frontend.oidc.publicIssuer=http://idp.example/dex",
+    "frontend.oidc.publicOrigin=http://example",
+)
+
+
+def test_the_ingest_plane_CLAIMS_a_lineage_identity() -> None:
+    """Without it, an auth-enabled estate loses EVERY ingest provenance record — silently.
+
+    The emitter sends no identity, lineage answers 401, and the emitter swallows the failure BY
+    DESIGN (a landed commit must not become a failed run). So the data lands and the graph never
+    hears about it. Measured: four `401 Unauthorized` in five minutes while the same run reported
+    `{"status":"COMPLETE","defect":null}`.
+
+    The emitter warns about precisely this — "lineage_service_door_half_configured … sending
+    neither, so an authenticated ingest will 401" — and the chart was ignoring its own warning.
+    """
+    rendered = _render(*_GOVERNED)
+
+    claimed = _env_values(rendered, "RASK_LINEAGE_SERVICE_IDENTITY")
+
+    assert claimed, "the ingest Deployment claims no lineage identity — every emit will 401 and be swallowed"
+
+
+def test_the_lineage_door_ALLOWS_the_identity_ingest_claims() -> None:
+    """The two halves must agree, and this is what makes them one fact rather than two.
+
+    An identity the caller claims but the door does not allowlist is refused exactly as hard as no
+    identity at all — and just as silently. `service-trainer` and `service-web` were on the list;
+    ingest was on neither.
+    """
+    rendered = _render(*_GOVERNED)
+
+    claimed = set(_env_values(rendered, "RASK_LINEAGE_SERVICE_IDENTITY"))
+    allowed: set[str] = set()
+    for value in _env_values(rendered, "LINEAGE_SERVICE_SUBJECTS"):
+        allowed |= {s.strip() for s in value.split(",") if s.strip()}
+
+    assert claimed, "nothing claims a lineage identity — the other half of this gate is vacuous"
+    missing = claimed - allowed
+    assert not missing, f"claimed but NOT allowlisted in LINEAGE_SERVICE_SUBJECTS: {sorted(missing)} (allowed: {sorted(allowed)})"
+
+
+def test_the_TOKEN_half_is_present_wherever_an_identity_is_claimed() -> None:
+    """The lineage door needs BOTH, and half is worth nothing.
+
+    The emitter accepts `RASK_LINEAGE_APP_TOKEN` or `APP_API_TOKEN`; the fleet template injects the
+    latter. A pod that claims an identity without a token produces a request refused for a reason
+    invisible from the caller — which is the half-configured state the emitter names outright.
+    """
+    rendered = _render(*_GOVERNED)
+
+    assert _env_values(rendered, "RASK_LINEAGE_SERVICE_IDENTITY"), "no identity claimed"
+    # Searched as an env NAME, not a value pair: the app token arrives by `valueFrom.secretKeyRef`
+    # (it is a credential — the estate's rule keeps it out of plaintext env), so a value-pair scan
+    # sees nothing and would fail on a correctly-wired chart.
+    assert "name: RASK_LINEAGE_APP_TOKEN" in rendered or "name: APP_API_TOKEN" in rendered, (
+        "an identity is claimed but no app token is injected anywhere — every emit 401s"
+    )

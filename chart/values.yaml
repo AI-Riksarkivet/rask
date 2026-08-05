@@ -139,6 +139,20 @@ services:
       RASK_INGEST_LOCAL_ROOT: ""
       RASK_LINEAGE_ENDPOINT: http://rask-lineage:8000
       RASK_LINEAGE_URL: http://rask-lineage:8000
+      # WHO this plane is at the lineage door. Without it, on an auth-enabled estate, the ingest
+      # plane loses ALL provenance SILENTLY: the emitter sends no identity, lineage answers 401, and
+      # the emitter swallows the failure by design (a landed commit must not become a failed run).
+      # Measured — four `401 Unauthorized` in five minutes while the same run reported
+      # `{"status":"COMPLETE","defect":null}` and the lane printed "OK  A8 — no provenance defect".
+      #
+      # The emitter warns about exactly this and was being ignored by the chart:
+      #   "lineage_service_door_half_configured — need BOTH RASK_LINEAGE_APP_TOKEN (or APP_API_TOKEN)
+      #    and RASK_LINEAGE_SERVICE_IDENTITY; sending neither, so an authenticated ingest will 401"
+      #
+      # The TOKEN half is already present: the fleet template injects `APP_API_TOKEN`, which both the
+      # emitter and the provenance reader accept under that name. This supplies the missing half, and
+      # `services.yaml` adds the same subject to `LINEAGE_SERVICE_SUBJECTS` so the door admits it.
+      RASK_LINEAGE_SERVICE_IDENTITY: service-ingest
       # Route creation and commits through the CATALOG rather than writing the object store
       # directly. Opt-in by an explicit flag, never inferred from a reachable URL: a catalog that is
       # merely down must fail the run loudly, not silently downgrade to a local write that produces

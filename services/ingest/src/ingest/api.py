@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from ingest.auth import AuthSettingsDep, authorize_ingest
+from ingest.provenance import ProvenanceRefused
 from ingest.runs import (
     SCHEDULE_TIMEOUT_SECONDS,
     RunRecord,
@@ -244,8 +245,23 @@ async def get_ingest(
     # which reads as "no reader configured" and would have reported a provenance defect on every
     # completed run, i.e. the exact bug this join exists to fix.
     provenance = getattr(request.app.state, "provenance_reader", None)
+    # A REFUSED read is its own answer, and reporting it is the point. Before this, the credential-less
+    # read got a 401, the reader swallowed it as "unreachable", and the endpoint answered
+    # `defect: null` — so A8 certified provenance as sound while every lineage event was being
+    # rejected. Silence about an unverifiable claim is the same failure the defect field exists to
+    # prevent, pointed at the checker instead of the data.
+    refused: str | None = None
     if provenance is not None and record.status in ("COMPLETE", "COMPLETE_WITH_ERRORS"):
-        present = await asyncio.to_thread(provenance.has_run, run_id)
+        try:
+            present = await asyncio.to_thread(provenance.has_run, run_id)
+        except ProvenanceRefused:
+            present = None
+            refused = (
+                "provenance could NOT be verified: the lineage graph refused this service's read. "
+                "The run may or may not have a provenance record — this service has no valid lineage "
+                "credential, so its A8 verdict cannot be trusted. Check RASK_LINEAGE_APP_TOKEN and "
+                "RASK_LINEAGE_SERVICE_IDENTITY, and that the identity is in LINEAGE_SERVICE_SUBJECTS."
+            )
         record = record.model_copy(update={"lineage_run_present": present is not False})
 
     return RunStatusResponse(
@@ -255,7 +271,9 @@ async def get_ingest(
         units_done=record.units_done,
         errors=record.errors,
         committed_version=record.committed_version,
-        defect=("run reports success but no lineage run exists for it — the data landed with no provenance record" if record.is_defective else None),
+        # The refusal OUTRANKS the ordinary defect string: "we could not check" must never be
+        # rendered as "we checked and it was fine".
+        defect=refused or ("run reports success but no lineage run exists for it — the data landed with no provenance record" if record.is_defective else None),
         published=record.published,
         from_version=record.from_version,
         to_version=record.to_version,
