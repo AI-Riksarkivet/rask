@@ -16,6 +16,7 @@ poisoned dataset that fails months later at read time.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from typing import TYPE_CHECKING, Any, Protocol
@@ -24,7 +25,7 @@ import pyarrow as pa
 from pydantic import BaseModel, Field
 
 from ingest.lander import write_unit_fragments
-from ingest.queue import UnitTask, WorkQueue
+from ingest.queue import ACK_WAIT_SECONDS, UnitTask, WorkQueue
 from ingest.staging import stage_fragments
 
 
@@ -59,6 +60,13 @@ FETCH_BATCH = int(os.getenv("RASK_INGEST_FETCH_BATCH", "16"))
 # Bounded parallel fetching. The expensive resource is the SOURCE, not us: IIIF and HCP are
 # rate-limited external systems, so this is a politeness ceiling as much as a throughput one.
 FETCH_CONCURRENCY = int(os.getenv("RASK_INGEST_FETCH_CONCURRENCY", "8"))
+
+#: How often a HELD message tells JetStream it is still being worked. A fifth of the queue's
+#: `ACK_WAIT_SECONDS`, so several consecutive misses still do not expire the ack — derived from that
+#: constant rather than written as a literal, because the two drifting apart is invisible: the only
+#: symptom is the queue quietly redelivering LIVE work, which reads as a slow source and lands as a
+#: staging overlap.
+HEARTBEAT_SECONDS = ACK_WAIT_SECONDS / 5
 
 # Rows accumulated before ONE fragment is written. Capped well under the queue's `max_ack_pending`
 # because the batch is held UNACKED while it fills — see the ack contract in `drain_chunk`.
@@ -240,6 +248,32 @@ class Worker:
         pending_msgs: list[Any] = []
         pending_bytes = 0
 
+        # EVERY message currently held unacked, in a container that is never REASSIGNED — `flush`
+        # rebinds `pending_msgs` to a fresh list, so a heartbeat closing over that name would keep
+        # renewing the previous batch while the current one expires.
+        held: set[Any] = set()
+
+        async def heartbeat() -> None:
+            """Tell JetStream the held messages are still being worked.
+
+            `msg.in_progress()` was called NOWHERE in this plane, and the batch holds its messages
+            unacked from first fetch until the fragment is on the store. Against a slow or
+            rate-limited source that window exceeds `ACK_WAIT_SECONDS` (300) and JetStream redelivers
+            units a LIVE worker is still holding — so the same bytes are fetched twice against the
+            very endpoint the concurrency limit exists to protect, and the two workers' fragments
+            overlap in a way `discover_staged` may not be able to resolve.
+
+            No crash required, which is what made this worse than the documented overlap: an ordinary
+            slow run reaches it.
+            """
+            while True:
+                await asyncio.sleep(HEARTBEAT_SECONDS)
+                for msg in list(held):
+                    with contextlib.suppress(Exception):
+                        # Best-effort per message: one already-acked or expired message must not stop
+                        # the others being renewed.
+                        await msg.in_progress()
+
         async def flush() -> None:
             """One fragment for everything accumulated, then ack the whole batch."""
             nonlocal pending, pending_msgs, pending_bytes
@@ -258,52 +292,63 @@ class Worker:
             outcome.units_done += len(units)
             for msg in msgs_to_ack:
                 await msg.ack()
+                held.discard(msg)
             logger.info("fragment: %d units, %d bytes -> %d fragment(s)", len(units), sum(len(p) for _, p in units), len(written))
 
-        while outcome.units_done + len(pending) + len(outcome.errors) < expected:
-            try:
-                msgs = await sub.fetch(min(FETCH_BATCH, expected), timeout=30)
-            except TimeoutError:
-                # No units available right now. Not an error — another worker may hold them.
-                break
+        beat = asyncio.create_task(heartbeat())
+        try:
+            while outcome.units_done + len(pending) + len(outcome.errors) < expected:
+                try:
+                    msgs = await sub.fetch(min(FETCH_BATCH, expected), timeout=30)
+                except TimeoutError:
+                    # No units available right now. Not an error — another worker may hold them.
+                    break
 
-            async def handle(msg: object) -> None:
-                nonlocal pending_bytes
-                task = UnitTask.model_validate_json(msg.data)  # type: ignore[attr-defined]
-                async with sem:
-                    try:
-                        key, result = await self._one(task)
-                    except Exception as exc:
-                        await self._refuse(msg, task, exc, outcome)
-                        return
-                    if key is None:
-                        # Validation refused it: park and ACK. Redelivering corrupt bytes cannot help.
-                        outcome.errors[task.key] = str(result)
-                        await self._q.park_poison(task, str(result))
-                        await msg.ack()  # type: ignore[attr-defined]
-                        return
-                    # Held, NOT acked — the ack is owed until this unit's fragment is on the store.
-                    pending.append((key, result))
-                    pending_msgs.append(msg)
-                    pending_bytes += len(result)
+                async def handle(msg: object) -> None:
+                    nonlocal pending_bytes
+                    task = UnitTask.model_validate_json(msg.data)  # type: ignore[attr-defined]
+                    async with sem:
+                        try:
+                            key, result = await self._one(task)
+                        except Exception as exc:
+                            await self._refuse(msg, task, exc, outcome)
+                            return
+                        if key is None:
+                            # Validation refused it: park and ACK. Redelivering corrupt bytes cannot help.
+                            outcome.errors[task.key] = str(result)
+                            await self._q.park_poison(task, str(result))
+                            await msg.ack()  # type: ignore[attr-defined]
+                            return
+                        # Held, NOT acked — the ack is owed until this unit's fragment is on the store.
+                        pending.append((key, result))
+                        pending_msgs.append(msg)
+                        held.add(msg)
+                        pending_bytes += len(result)
 
-            # A REDELIVERED unit never shares a fragment with a fresh one, and that isolation is what
-            # keeps recovery decidable. `discover_staged` resolves an overlap by dropping the
-            # fragment whose units another already covers — which only works while overlaps are
-            # containments. Let a redelivery batch with fresh units and you get F={u0..u3} against
-            # H={u2,u3,u4,u5}: neither contains the other, so committing either is wrong and
-            # `discover_staged` can only raise. Splitting the fetch is what makes that unreachable.
-            fresh = [m for m in msgs if not _is_redelivery(m)]
-            again = [m for m in msgs if _is_redelivery(m)]
+                # A REDELIVERED unit never shares a fragment with a fresh one, and that isolation is what
+                # keeps recovery decidable. `discover_staged` resolves an overlap by dropping the
+                # fragment whose units another already covers — which only works while overlaps are
+                # containments. Let a redelivery batch with fresh units and you get F={u0..u3} against
+                # H={u2,u3,u4,u5}: neither contains the other, so committing either is wrong and
+                # `discover_staged` can only raise. Splitting the fetch is what makes that unreachable.
+                fresh = [m for m in msgs if not _is_redelivery(m)]
+                again = [m for m in msgs if _is_redelivery(m)]
 
-            if fresh:
-                await asyncio.gather(*(handle(m) for m in fresh))
-            if again:
-                await flush()  # close the fresh batch before the redelivered units join it
-                await asyncio.gather(*(handle(m) for m in again))
-                await flush()
-            elif len(pending) >= FRAGMENT_TARGET_ROWS or pending_bytes >= FRAGMENT_TARGET_BYTES:
-                await flush()
+                if fresh:
+                    await asyncio.gather(*(handle(m) for m in fresh))
+                if again:
+                    await flush()  # close the fresh batch before the redelivered units join it
+                    await asyncio.gather(*(handle(m) for m in again))
+                    await flush()
+                elif len(pending) >= FRAGMENT_TARGET_ROWS or pending_bytes >= FRAGMENT_TARGET_BYTES:
+                    await flush()
+
+        finally:
+            # ALWAYS. A heartbeat that outlives its drain keeps renewing messages nobody is working,
+            # which is the same redelivery-starvation this exists to prevent, pointed the other way.
+            beat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await beat
 
         # The remainder. A chunk is almost never an exact multiple of the target, so without this the
         # tail of every run would be fetched, held, and then silently redelivered on ack_wait.
