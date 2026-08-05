@@ -220,7 +220,7 @@
 			     have covered for that is gone. A canvas zone contributes its own `crumbs` (its state is
 			     a query, not a path), so the trail says which task and which page rather than just
 			     naming the zone. One slim row is a cheap price for not being lost. -->
-			{#if !canvas || crumbs.length > 0}
+			{#if crumbs.length > 0 || (!canvas && !estateLevel)}
 				<nav
 					aria-label="Breadcrumb"
 					class="border-border/60 bg-muted/20 flex h-9 min-w-0 shrink-0 items-center overflow-hidden border-y px-4 text-sm"
