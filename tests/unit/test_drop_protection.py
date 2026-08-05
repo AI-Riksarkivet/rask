@@ -723,3 +723,23 @@ def test_a_RECOVERABLE_cascade_keeps_the_binding_for_the_undrop(tmp_path: Any) -
 
     _drop_namespace_cascade(settings, _CascadableNamespace())
     assert warehouses.binding_for_namespace(settings.registry_root, so, "bronze") is not None, "the undrop's route died with the drop"
+
+
+def test_the_protection_flag_is_READABLE_on_both_rungs(tmp_path: Any) -> None:
+    """#123. The SET door shipped with no read at all — an operator could not arm-check, disarm-check,
+    or audit protection; they discovered it by eating a 409. The GET returns the flag AND who armed it."""
+    from catalog.api.v1.endpoints import namespaces as n_ep
+    from catalog.api.v1.endpoints import tables as t_ep
+
+    settings = _settings(tmp_path)
+    so = settings.storage_options()
+    protection.set_protection(settings.registry_root, so, {"kind": "table", "id": "db1$t", "protected": "true", "set_by": "user:alice"})
+
+    read = asyncio.run(t_ep.get_table_protection("db1$t", settings=settings))
+    assert (read.protected, read.set_by) == (True, "user:alice")
+    unarmed = asyncio.run(t_ep.get_table_protection("db1$other", settings=settings))
+    assert (unarmed.protected, unarmed.set_by) == (False, None)
+
+    protection.set_protection(settings.registry_root, so, {"kind": "namespace", "id": "bronze", "protected": "true", "set_by": "user:bob"})
+    ns_read = asyncio.run(n_ep.get_namespace_protection("bronze", settings=settings))
+    assert (ns_read.protected, ns_read.set_by) == (True, "user:bob")

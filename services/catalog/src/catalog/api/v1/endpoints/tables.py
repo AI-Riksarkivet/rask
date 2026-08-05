@@ -442,6 +442,18 @@ async def register_table(
     return response
 
 
+@router.get("/{id}/protection", response_model_exclude_none=True)
+async def get_table_protection(id: str, settings: SettingsDep) -> ProtectionResponse:
+    """Read the deletion-protection flag (#123). The SET door shipped a year of writes with NO read:
+    an operator could not arm, disarm-check, or audit protection — they discovered it by eating a
+    409. Owner-gated like the set door (the observer of a safety is whoever might trip it), and the
+    record's `set_by` comes back so a refused drop can name who armed it."""
+    segments = parse_identifier(id, settings.delimiter)
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    record = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
+    return ProtectionResponse(id=canonical, protected=bool(record), set_by=(record or {}).get("set_by"))
+
+
 @router.get("/{id}/tasks", response_model_exclude_none=True)
 async def table_tasks(
     id: str,

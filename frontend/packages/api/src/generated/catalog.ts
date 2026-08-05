@@ -722,7 +722,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Get Namespace Protection
+         * @description Read the namespace's deletion-protection flag (#123) — the table door's read, one rung up.
+         */
+        get: operations["get_namespace_protection_v1_namespace__id__protection_get"];
         put?: never;
         /**
          * Set Namespace Protection
@@ -2048,7 +2052,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Get Table Protection
+         * @description Read the deletion-protection flag (#123). The SET door shipped a year of writes with NO read:
+         *     an operator could not arm, disarm-check, or audit protection — they discovered it by eating a
+         *     409. Owner-gated like the set door (the observer of a safety is whoever might trip it), and the
+         *     record's `set_by` comes back so a refused drop can name who armed it.
+         */
+        get: operations["get_table_protection_v1_table__id__protection_get"];
         put?: never;
         /**
          * Set Table Protection
@@ -4693,6 +4704,11 @@ export interface components {
             id: string;
             /** Project */
             project: string;
+            /**
+             * Protected
+             * @default false
+             */
+            protected: boolean;
             /** Serving */
             serving?: string | null;
         };
@@ -6354,6 +6370,8 @@ export interface components {
             id: string;
             /** Protected */
             protected: boolean;
+            /** Set By */
+            set_by?: string | null;
         };
         /**
          * PublishRequest
@@ -7400,6 +7418,8 @@ export interface components {
             id: string;
             /** Project */
             project: string;
+            /** Protected */
+            protected?: boolean | null;
             /** Root Uri */
             root_uri: string;
             /** Serving */
@@ -8557,6 +8577,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PolicyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_namespace_protection_v1_namespace__id__protection_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -10497,6 +10548,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PolicyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_table_protection_v1_table__id__protection_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectionResponse"];
                 };
             };
             /** @description Validation Error */

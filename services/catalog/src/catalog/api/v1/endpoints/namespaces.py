@@ -418,6 +418,15 @@ async def undrop_namespace(
     return response
 
 
+@router.get("/{id}/protection", response_model_exclude_none=True)
+async def get_namespace_protection(id: str, settings: SettingsDep) -> ProtectionResponse:
+    """Read the namespace's deletion-protection flag (#123) — the table door's read, one rung up."""
+    segments = parse_identifier(id, settings.delimiter)
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    record = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "namespace", canonical)
+    return ProtectionResponse(id=canonical, protected=bool(record), set_by=(record or {}).get("set_by"))
+
+
 @router.post("/{id}/protection", response_model_exclude_none=True)
 async def set_namespace_protection(
     id: str,

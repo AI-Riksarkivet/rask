@@ -562,6 +562,12 @@ class CreateWarehouseRequest(BaseModel):
     # project's gold SERVING warehouse — the silver→gold mover's tenant target root when the chart's
     # medallion.goldWarehouse is on. Absent (default) = a WORK warehouse. Only "gold" is accepted for now.
     serving: str | None = None
+    # #123 deletion protection, ARMABLE at last. The guard (`require_not_protected` at the delete
+    # door) shipped a year before any API could set this flag — the only armed warehouses were ones
+    # whose registry JSON someone edited by hand, while both delete dialogs shipped an "Override
+    # deletion protection" checkbox for a 409 production could not produce. Absent (default) keeps
+    # pre-protection records byte-identical; a re-POST still carries an existing flag forward.
+    protected: bool = False
 
 
 class WarehouseResponse(BaseModel):
@@ -571,6 +577,9 @@ class WarehouseResponse(BaseModel):
     project: str
     status: str | None = None  # "active" / "deactivated" (P2.3 lifecycle); absent on pre-lifecycle records
     serving: str | None = None  # "gold" = the project's serving warehouse; absent = a work warehouse
+    # #123: the delete-door safety, finally OBSERVABLE — records carry "true" (string), coerced here.
+    # None on unprotected/pre-protection records (exclude_none keeps them byte-identical on the wire).
+    protected: bool | None = None
     created_at: str | None = None
 
 
@@ -667,6 +676,9 @@ class SetProtectionRequest(BaseModel):
 class ProtectionResponse(BaseModel):
     id: str
     protected: bool
+    # Who armed it (`user:<sub>`), from the record — None on an unprotected object and on the SET
+    # response (the caller knows who they are). A refused drop can then NAME the armer (#123).
+    set_by: str | None = None
 
 
 class TrashEntry(BaseModel):

@@ -4156,6 +4156,11 @@
             "title": "Project",
             "type": "string"
           },
+          "protected": {
+            "default": false,
+            "title": "Protected",
+            "type": "boolean"
+          },
           "serving": {
             "anyOf": [
               {
@@ -7884,6 +7889,17 @@
           "protected": {
             "title": "Protected",
             "type": "boolean"
+          },
+          "set_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Set By"
           }
         },
         "required": [
@@ -10296,6 +10312,17 @@
             "title": "Project",
             "type": "string"
           },
+          "protected": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protected"
+          },
           "root_uri": {
             "title": "Root Uri",
             "type": "string"
@@ -12290,6 +12317,52 @@
       }
     },
     "/v1/namespace/{id}/protection": {
+      "get": {
+        "description": "Read the namespace's deletion-protection flag (#123) \u2014 the table door's read, one rung up.",
+        "operationId": "get_namespace_protection_v1_namespace__id__protection_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Namespace Protection",
+        "tags": [
+          "namespace"
+        ]
+      },
       "post": {
         "description": "Set or clear deletion protection on namespace ``id`` (#73). Owner-gated by the router\n(``protection`` maps to ``can_delete`` \u2014 whoever may delete the namespace decides whether\ndeleting it needs a second thought). Same control-root record contract as the table door.",
         "operationId": "set_namespace_protection_v1_namespace__id__protection_post",
@@ -16170,6 +16243,52 @@
       }
     },
     "/v1/table/{id}/protection": {
+      "get": {
+        "description": "Read the deletion-protection flag (#123). The SET door shipped a year of writes with NO read:\nan operator could not arm, disarm-check, or audit protection \u2014 they discovered it by eating a\n409. Owner-gated like the set door (the observer of a safety is whoever might trip it), and the\nrecord's `set_by` comes back so a refused drop can name who armed it.",
+        "operationId": "get_table_protection_v1_table__id__protection_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Table Protection",
+        "tags": [
+          "table"
+        ]
+      },
       "post": {
         "description": "Set or clear deletion protection on the table at ``id`` (#73 \u2014 the warehouse contract on the\nrung where a drop deletes bytes). Owner-gated by the router (``protection`` maps to ``can_drop``:\nwhoever may destroy the table decides whether destroying it needs a second thought). The flag is\na CONTROL-ROOT record, deliberately not schema metadata \u2014 control-plane state that emits a\ncontrol event and never creates a table version, readable even when the dataset is corrupted,\nand unreachable from the future properties write door (#78).",
         "operationId": "set_table_protection_v1_table__id__protection_post",
