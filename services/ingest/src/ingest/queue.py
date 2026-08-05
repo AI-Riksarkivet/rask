@@ -28,14 +28,14 @@ import contextlib
 import json
 import logging
 import os
-from typing import TYPE_CHECKING, Any, Self, TypedDict
-
-
-logger = logging.getLogger(__name__)
+from typing import TYPE_CHECKING, Any, Protocol, Self, TypedDict, runtime_checkable
 
 import nats
 from nats.js import api as jsapi
 from pydantic import BaseModel, Field
+
+
+logger = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:
@@ -226,6 +226,35 @@ class WorkQueue:
 
     async def close(self) -> None:
         await self._nc.close()
+
+
+@runtime_checkable
+class QueueMessage(Protocol):
+    """One delivered unit, as everything OUTSIDE this seam is allowed to see it.
+
+    I3 confines the broker client to this module, which left the worker annotating its messages
+    `msg: object` and then reaching for `.data`, `.ack()`, `.metadata` behind a suppression each — so
+    the one place the plane touches broker semantics was the one place with no types at all. A
+    `TYPE_CHECKING` import of `nats.aio.msg` is not the way out: the I3 gate is a regex over import
+    lines and would refuse it, correctly, because the point of the rule is that the bus stays
+    swappable by chart values rather than by a code change.
+
+    A structural Protocol is the honest shape of that rule. The seam publishes the CONTRACT, the
+    worker depends on the contract, and a different broker satisfies it or is caught at the boundary
+    instead of at the fifth attribute access.
+    """
+
+    @property
+    def data(self) -> bytes: ...
+
+    @property
+    def metadata(self) -> Any: ...  # noqa: ANN401 — broker-specific; only `num_delivered` is read, defensively
+
+    async def ack(self) -> None: ...
+
+    async def nak(self, delay: float | None = None) -> None: ...
+
+    async def in_progress(self) -> None: ...
 
 
 class QueueSnapshot(TypedDict):

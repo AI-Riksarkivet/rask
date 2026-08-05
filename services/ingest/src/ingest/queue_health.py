@@ -50,7 +50,10 @@ class QueueHealth(BaseModel):
     consumers: int | None = Field(default=None, description="durable consumers bound to it")
     dlq_present: bool | None = Field(
         default=None,
-        description="the DLQ stream exists. Its absence is INVISIBLE in normal operation — a parking publish with no stream fails silently, so a poison unit is dropped rather than parked.",
+        description=(
+            "the DLQ stream exists. Its absence is INVISIBLE in normal operation — a parking publish "
+            "with no stream fails silently, so a poison unit is dropped rather than parked."
+        ),
     )
     detail: str | None = Field(default=None, description="what went wrong, when something did")
 

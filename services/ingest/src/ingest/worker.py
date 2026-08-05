@@ -41,7 +41,7 @@ import pyarrow as pa
 from pydantic import BaseModel, Field
 
 from ingest.lander import write_unit_fragments
-from ingest.queue import ACK_WAIT_SECONDS, UnitTask, WorkQueue
+from ingest.queue import ACK_WAIT_SECONDS, QueueMessage, UnitTask, WorkQueue
 from ingest.sizing import ResolvedSizing, resolve
 from ingest.staging import stage_fragments
 
@@ -218,7 +218,7 @@ def _is_permanent(exc: BaseException) -> bool:
     return isinstance(status, int) and status in PERMANENT_STATUSES
 
 
-def _is_redelivery(msg: object) -> bool:
+def _is_redelivery(msg: QueueMessage) -> bool:
     """Has JetStream handed us this unit before?
 
     `num_delivered` is 1 on a first delivery and climbs on every redelivery, so >1 means some earlier
@@ -231,7 +231,7 @@ def _is_redelivery(msg: object) -> bool:
     overlap rather than duplicating rows.
     """
     try:
-        return int(msg.metadata.num_delivered) > 1  # type: ignore[attr-defined]
+        return int(msg.metadata.num_delivered) > 1
     except (AttributeError, TypeError, ValueError):
         return False
 
@@ -360,7 +360,7 @@ class Worker:
                     # No units available right now. Not an error — another worker may hold them.
                     break
 
-                async def handle(msg: object) -> None:
+                async def handle(msg: QueueMessage) -> None:
                     nonlocal pending_bytes
                     task = UnitTask.model_validate_json(msg.data)  # type: ignore[attr-defined]
                     async with sem:
@@ -373,7 +373,7 @@ class Worker:
                             # Validation refused it: park and ACK. Redelivering corrupt bytes cannot help.
                             outcome.errors[task.key] = str(result)
                             await self._q.park_poison(task, str(result))
-                            await msg.ack()  # type: ignore[attr-defined]
+                            await msg.ack()
                             return
                         # Held, NOT acked — the ack is owed until this unit's fragment is on the store.
                         pending.append((key, result))

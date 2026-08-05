@@ -39,6 +39,7 @@ from pydantic import BaseModel
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+
 class CreationFlags(TypedDict):
     """The creation-time flags, typed PER KEY so `**CREATION_FLAGS` stays checkable.
 
