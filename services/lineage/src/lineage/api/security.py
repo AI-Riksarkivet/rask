@@ -22,8 +22,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
 
 from lineage.api.dependencies import SettingsDep
-from service_kit.governed.oidc import IDToken, OIDCVerifier
 from service_kit.governed.dapr_auth import is_public_caller
+from service_kit.governed.oidc import IDToken, OIDCVerifier
 
 
 # auto_error=False: we raise UnauthenticatedError ourselves so 401s render as problem+json.
