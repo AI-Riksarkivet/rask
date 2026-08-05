@@ -32,6 +32,12 @@ export interface WaveSurfaceCallbacks {
 	onReady?: (duration: number) => void;
 	/** Playback started/stopped — drives a play/pause button. */
 	onPlayStateChange?: (playing: boolean) => void;
+	/** The playhead moved — drives the transport's time readout.
+	 *
+	 *  Needed because the surface owned the only knowledge of WHERE playback was: the audio
+	 *  annotator's entire control set was one play/pause button, with no way to see or say what
+	 *  moment a segment boundary sat at. */
+	onTimeUpdate?: (seconds: number) => void;
 	onError?: (err: unknown) => void;
 }
 
@@ -83,6 +89,7 @@ export class WaveSurface {
 		this.ws.on('pause', () => this.cb.onPlayStateChange?.(false));
 		this.ws.on('finish', () => this.cb.onPlayStateChange?.(false));
 		this.ws.on('error', (err) => this.cb.onError?.(err));
+		this.ws.on('timeupdate', (t) => this.cb.onTimeUpdate?.(t));
 
 		this.regions.on('region-created', (region) => {
 			if (this.syncing) return; // our own addRegion — not a user gesture
@@ -142,6 +149,29 @@ export class WaveSurface {
 	focusSegment(id: string): void {
 		const r = this.regions.getRegions().find((x) => x.id === id);
 		if (r) this.ws.setTime(r.start);
+	}
+
+	/** Horizontal zoom, in pixels per second.
+	 *
+	 *  The control a waveform is USELESS for annotation without: at fit-to-width, a three-minute
+	 *  recording gives roughly four pixels per second, so a word is sub-pixel and a boundary cannot
+	 *  be placed, let alone nudged. wavesurfer has supported this all along — it was simply never
+	 *  exposed past this wrapper. */
+	zoom(pxPerSec: number): void {
+		this.ws.zoom(Math.max(1, pxPerSec));
+	}
+
+	/** Playback speed. Transcription work lives at 0.75x and review at 1.5x-2x. */
+	setPlaybackRate(rate: number): void {
+		this.ws.setPlaybackRate(rate);
+	}
+
+	get currentTime(): number {
+		return this.ws.getCurrentTime();
+	}
+
+	get duration(): number {
+		return this.ws.getDuration();
 	}
 
 	seekTo(seconds: number): void {

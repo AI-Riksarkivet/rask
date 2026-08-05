@@ -221,49 +221,53 @@
 
 	<div class="flex min-h-0 flex-1">
 		<!-- The items live on the LEFT edge, which is why the toolbar had to leave it. -->
-		<Filmstrip items={stream.items} activeTaskId={stream.taskId} projectId={stream.projectId ?? ''} />
+		<Filmstrip
+			items={stream.items}
+			activeTaskId={stream.taskId}
+			projectId={stream.projectId ?? ''}
+		/>
 
 		<div class="min-w-0 flex-1">
-		<ResizableSplit storageKey="lance-media-annotate" initial={0.72} minLeft={420} minRight={320}>
-			{#snippet left()}
-				<div class="relative h-full w-full">
-					<!-- The load/status chip is a real Badge — secondary while healthy, destructive when
+			<ResizableSplit storageKey="lance-media-annotate" initial={0.72} minLeft={420} minRight={320}>
+				{#snippet left()}
+					<div class="relative h-full w-full">
+						<!-- The load/status chip is a real Badge — secondary while healthy, destructive when
 					     the unit failed to load — instead of a hand-rolled black pill that ignored the
 					     theme entirely (it stayed dark-on-white in light mode). It also moves off the
 					     TOP-left, where the centred assist bar painted over the tail of any message
 					     longer than a few words (a load failure, always, exactly when you need to read
 					     it); bottom-left is the one free corner — page nav is bottom-centre, zoom is
 					     bottom-right — so it can render its full text. -->
-					<Badge
-						variant={loadFailed ? 'destructive' : 'secondary'}
-						class="absolute bottom-2 left-2 z-10 font-mono shadow-sm backdrop-blur"
-						data-testid="annotate-status"
-					>
-						annotate · {unit.kind} · {status}{controller.saveStatus ? ` · ${controller.saveStatus}` : ''}
-					</Badge>
-					<Viewer
-						{unit}
-						{controller}
-						onload={(n) => {
+						<Badge
+							variant={loadFailed ? 'destructive' : 'secondary'}
+							class="pointer-events-none absolute bottom-2 left-2 z-10 font-mono shadow-sm backdrop-blur"
+							data-testid="annotate-status"
+						>
+							annotate · {unit.kind} · {status}{controller.saveStatus ? ` · ${controller.saveStatus}` : ''}
+						</Badge>
+						<Viewer
+							{unit}
+							{controller}
+							onload={(n) => {
 	status = `${n} annotations from Lance`;
 	loadFailed = false;
 }}
-						onerror={(message) => {
+							onerror={(message) => {
 	status = `load failed — ${message}`;
 	loadFailed = true;
 }}
-					/>
-					<TaskStreamNav {stream} />
-					<PageNav {pages} current={pageIndex} onNavigate={navigate} />
-					{#if spatial}
-						<ZoomControls {controller} />
-					{/if}
-				</div>
-			{/snippet}
-			{#snippet right()}
-				<AnnotationSidebar {controller} />
-			{/snippet}
-		</ResizableSplit>
+						/>
+						<TaskStreamNav {stream} />
+						<PageNav {pages} current={pageIndex} onNavigate={navigate} />
+						{#if spatial}
+							<ZoomControls {controller} />
+						{/if}
+					</div>
+				{/snippet}
+				{#snippet right()}
+					<AnnotationSidebar {controller} />
+				{/snippet}
+			</ResizableSplit>
 		</div>
 	</div>
 </div>
