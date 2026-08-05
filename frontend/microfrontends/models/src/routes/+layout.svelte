@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { LayoutServerData } from './$types';
 	import '../app.css';
 	import { browser } from '$app/environment';
 	import { onNavigate } from '$app/navigation';
@@ -9,7 +10,7 @@
 	import { onMount, type Snippet } from 'svelte';
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
 	import { MODELS_ZONE_NAV } from '$lib/nav';
-	let { children, data }: { children: Snippet; data: { activeProject: string } } = $props();
+	let { children, data }: { children: Snippet; data: LayoutServerData } = $props();
 
 	// The navbar's notification bell (@rask/ui's NotificationCenter, mounted by AppShell). The shell owns
 	// the surface and never fetches — the zone owns the transport — and the transport is the shared
@@ -55,6 +56,10 @@
      `zoneNav` renders THIS zone's areas as the sidebar leaves. -->
 <AppShell
 	pathname={page.url.pathname}
+	user={data.user}
+	authEnabled={data.authEnabled}
+	me={data.me}
+	meLoading={false}
 	project={data.activeProject ? { name: data.activeProject } : undefined}
 	zoneNav={MODELS_ZONE_NAV}
 	{notifications}

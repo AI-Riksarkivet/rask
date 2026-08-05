@@ -3,6 +3,7 @@
 // backend services' shared auth). Imports @sveltejs/kit TYPES only, so it lives in server bundles.
 import type { Handle, RequestHandler } from '@sveltejs/kit';
 import { makeGatewayHandleFetch } from './gateway';
+import { fetchMe } from './me';
 import {
 	SESSION_COOKIE,
 	decodeSession,
@@ -259,11 +260,53 @@ type CookieReader = { get(name: string): string | undefined };
  * shell must know it on the SERVER render — a client-side read paints "Default" first and the real
  * project after hydration, which is the flash-and-lie this replaced.
  */
-export const zoneLayoutLoad = ({ locals, cookies }: { locals: AuthLocals; cookies?: CookieReader }) => ({
+export const zoneLayoutLoad = ({
+	locals,
+	cookies,
+}: {
+	locals: AuthLocals;
+	cookies?: CookieReader;
+}) => ({
 	user: sessionToUser(locals.session),
 	authEnabled: locals.authEnabled,
 	activeProject: cookies?.get(ACTIVE_PROJECT_COOKIE) ?? '',
 });
+
+/**
+ * The WHOLE zone layout contract, as a factory — identity, auth flag, active project AND the
+ * RESOLVED `me` — owned here so all seven zones render one shell BY CONSTRUCTION.
+ *
+ * `zoneLayoutLoad` above carries no `me`, so every zone that wanted a truthful navbar bolted on its
+ * own byte-identical `CATALOG_API` + `fetchMe` block — and the three that did not (compute, models,
+ * studio) shipped a placeholder identity, no Settings entry, and a project switcher whose dropdown
+ * listed nothing. A shared contract that each zone must remember to extend is not a contract.
+ *
+ * Resolved, never streamed (home's own precedent): the navbar SSRs its final entry set, so a
+ * cross-zone landing paints the finished bar instead of skeleton pills that swap on hydration.
+ * `fetchMe` times out internally and answers null — a slow catalog degrades the chrome, never the
+ * page. Env stays zone-supplied (this module is env-free), mirroring `makeZoneHooks`.
+ *
+ * `params.project` wins over the cookie for ONE request: the layout load runs before the project
+ * page's load stamps the cookie, so on the very first open of a project the route param is the
+ * truth. Owning that precedence here keeps "what is the active project" a single rule.
+ */
+export function makeZoneLayoutLoad(env: Env) {
+	const catalogUrl = env.CATALOG_API ?? DEFAULT_CATALOG_API;
+	return async ({
+		locals,
+		cookies,
+		params,
+	}: {
+		locals: AuthLocals;
+		cookies: CookieReader;
+		params: Partial<Record<string, string>>;
+	}) => ({
+		user: sessionToUser(locals.session),
+		authEnabled: locals.authEnabled,
+		activeProject: params.project ?? cookies.get(ACTIVE_PROJECT_COOKIE) ?? '',
+		me: await fetchMe({ catalogUrl, accessToken: locals.session?.accessToken }),
+	});
+}
 
 /**
  * The server hooks every zone re-exports.
