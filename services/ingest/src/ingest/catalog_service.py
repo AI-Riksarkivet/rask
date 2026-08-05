@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 
@@ -68,6 +69,46 @@ def catalog_enabled() -> bool:
     return os.getenv("RASK_INGEST_USE_CATALOG", "").lower() in ("1", "true", "yes")
 
 
+#: The Dapr secret store and key holding the catalog bearer, and the field inside the bundle. Same
+#: store the rest of the governed fleet reads (`lance-secrets` -> OpenBao), so there is one place a
+#: credential lives and one place it rotates.
+SECRET_STORE = os.getenv("RASK_SECRET_STORE", "lance-secrets")
+SECRET_KEY = os.getenv("RASK_SECRET_KEY", "lance")
+CATALOG_TOKEN_FIELD = os.getenv("RASK_CATALOG_TOKEN_FIELD", "catalog-token")
+
+
+@lru_cache(maxsize=1)
+def catalog_token() -> str | None:
+    """The catalog bearer, from the SECRET STORE — never from process env.
+
+    This was `os.getenv("RASK_CATALOG_TOKEN")`, and the consequence was measured in-cluster rather
+    than reasoned about: on a governed estate the variable is unset (the chart ships no plaintext env
+    for a credential, which is the rule working), so every call went out with NO Authorization header
+    and the catalog answered
+
+        401 {"detail": "Missing bearer token"}
+
+    on `describe`. That is `ensure_dataset` — the FIRST activity of every run — so no ingest could
+    create its bronze dataset and every run ended FAILED with `units 0/0`. A door refusing an
+    unauthenticated caller is correct; the caller having no way to be authenticated is the defect.
+
+    FAIL-CLOSED, via the estate's one helper (`fetch_required_secrets`), which catalog / lineage /
+    maintenance already use — so a missing secret raises here rather than booting a service that will
+    401 on its first real call. Deliberately NO env fallback: a fallback makes the store optional, and
+    an optional secret store is the "wired but never read" state an audit already found once.
+
+    Returns None only when the catalog is not in use at all (`catalog_enabled()` false — the local/dev
+    path, which has no catalog to authenticate to). Cached because a token fetch per HTTP call would
+    put the secret store on the hot path of every unit.
+    """
+    if not catalog_enabled():
+        return None
+    from service_kit.governed.secrets import fetch_required_secrets
+
+    bundle = fetch_required_secrets(SECRET_STORE, SECRET_KEY, require=CATALOG_TOKEN_FIELD)
+    return bundle[CATALOG_TOKEN_FIELD]
+
+
 class CatalogError(RuntimeError):
     """The catalog refused, or could not be reached."""
 
@@ -78,7 +119,7 @@ class CatalogServiceClient:
     def __init__(self, schema: pa.Schema, base_url: str | None = None, token: str | None = None) -> None:
         self._schema = schema
         self._base = (base_url or catalog_base_url()).rstrip("/")
-        self._token = token or os.getenv("RASK_CATALOG_TOKEN")
+        self._token = token if token is not None else catalog_token()
         self.registered: list[tuple[str, int, str]] = []
 
     # ── identity ──────────────────────────────────────────────────────────────────────
