@@ -88,10 +88,6 @@ def unit_subject(run_id: str) -> str:
     return f"{SUBJECT_ROOT}.tasks.{run_id}"
 
 
-def drained_subject(run_id: str) -> str:
-    return f"{SUBJECT_ROOT}.run.{run_id}.drained"
-
-
 #: How long JetStream remembers a `Nats-Msg-Id` and refuses a duplicate. Matches the chart's
 #: `--dupe-window=2m` on the INGEST stream — the two must agree, because whichever creates the stream
 #: first wins and the other silently accepts the difference.
@@ -208,16 +204,20 @@ class WorkQueue:
             json.dumps({"task": task.model_dump(), "reason": reason}).encode(),
         )
 
-    async def signal_drained(self, run_id: str, chunk_id: str, payload: dict[str, Any]) -> None:
-        """Tell the waiting chunk workflow its units are done.
-
-        The workflow suspends on an external event rather than polling — A13. This is the signal
-        that wakes it; the workflow's own timer is the fallback if this is ever lost.
-        """
-        await self._js.publish(
-            drained_subject(run_id),
-            json.dumps({"chunk_id": chunk_id, **payload}).encode(),
-        )
+    # `signal_drained` was here, and it LEAKED. It published to `ingest.run.{run}.drained` to wake a
+    # chunk workflow that suspended on an external event — the design `worker.py`'s module docstring
+    # records as already replaced, because nothing in the estate ever raised that event and no
+    # Deployment ran a `Worker` at all. Moving the drain INTO the activity made the signal redundant:
+    # the activity's RETURN VALUE is how the workflow learns its chunk is done, and Dapr persists it.
+    #
+    # Deleting it rather than leaving it dead, because it was not merely unused — it was accumulating.
+    # `ingest.run.*.drained` matches this stream's own `ingest.>` filter, and the stream is WORK_QUEUE
+    # retention, where a message is removed only when it is ACKED. `grep signal_drained services/`
+    # found no consumer anywhere, so every chunk of every run published one message that nothing would
+    # ever ack, and they piled up on the stream forever.
+    #
+    # An unread message on a work queue is not a feature, and a "signal" nobody listens for is worse
+    # than no signal: it reads as a working mechanism.
 
     async def close(self) -> None:
         await self._nc.close()

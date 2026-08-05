@@ -432,5 +432,9 @@ class Worker:
         # tail of every run would be fetched, held, and then silently redelivered on ack_wait.
         await flush()
 
-        await self._q.signal_drained(run_id, chunk_id, outcome.model_dump())
+        # RETURNING the outcome is the signal. There was a `signal_drained` publish here, left over
+        # from the design where a chunk workflow suspended on an external NATS event — which nothing
+        # in the estate ever raised. Draining inside the activity replaced it: Dapr persists this
+        # return value and replays the activity if the pod dies, so a second, unacked notification on
+        # a WORK_QUEUE stream bought nothing and accumulated forever.
         return outcome
