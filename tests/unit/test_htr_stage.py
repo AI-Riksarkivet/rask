@@ -40,15 +40,27 @@ def _alto_for(name: str, text: str) -> str:
 
 def _bronze_pages(tmp_path: Path, uris: list[str]) -> str:
     """The ingest plane's real bronze page shape, written the way the lander writes it."""
+    import hashlib
+
     uri = str(tmp_path / "bronze_pages")
+    payloads = [f"IMG-{u}".encode() for u in uris]
     table = pa.table(
         {
             "id": pa.array(range(len(uris)), pa.int64()),
             "source_uri": pa.array(uris, pa.string()),
-            "payload": blob_array([f"IMG-{u}".encode() for u in uris]),
+            "payload": blob_array(payloads),
+            "sha256": pa.array([hashlib.sha256(p).hexdigest() for p in payloads], pa.string()),  # fixity, #99
             "stage": pa.array(["bronze"] * len(uris), pa.string()),
         },
-        schema=pa.schema([pa.field("id", pa.int64()), pa.field("source_uri", pa.string()), blob_field("payload"), pa.field("stage", pa.string())]),
+        schema=pa.schema(
+            [
+                pa.field("id", pa.int64()),
+                pa.field("source_uri", pa.string()),
+                blob_field("payload"),
+                pa.field("sha256", pa.string()),
+                pa.field("stage", pa.string()),
+            ]
+        ),
     )
     lance.write_dataset(table, uri, mode="overwrite", data_storage_version="2.2", enable_stable_row_ids=True)
     return uri

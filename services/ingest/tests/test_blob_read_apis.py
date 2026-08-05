@@ -19,6 +19,7 @@ to a local test. Where the two differ, the in-cluster behaviour is the truth and
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import lance
@@ -43,8 +44,10 @@ def _dataset(tmp_path: Path, payloads: list[bytes | None], schema: pa.Schema = B
         "payload": blob_array(payloads),
     }
     # Driven off the schema under test, so one helper serves both the real BRONZE_SCHEMA and the
-    # deliberately-nullable variant below (which omits `stage` — it exists only to demonstrate the
-    # null trap, and adding columns to it would obscure what it is for).
+    # deliberately-nullable variant below (which omits `stage`/`sha256` — it exists only to
+    # demonstrate the null trap, and adding columns to it would obscure what it is for).
+    if "sha256" in schema.names:
+        columns["sha256"] = pa.array([hashlib.sha256(p or b"").hexdigest() for p in payloads], pa.string())
     if "stage" in schema.names:
         columns["stage"] = pa.array(["bronze"] * len(payloads), pa.string())
     table = pa.table(columns, schema=schema)

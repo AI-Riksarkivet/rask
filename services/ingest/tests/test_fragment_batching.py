@@ -134,6 +134,7 @@ def test_bronze_CANNOT_EXPRESS_the_null_that_makes_readers_lie(tmp_path: Path) -
             "id": pa.array([1, 2, 3], pa.int64()),
             "source_uri": pa.array(["a", "b", "c"], pa.string()),
             "payload": blob_array([b"aaa", None, b"ccc"]),
+            "sha256": pa.array(["x", "y", "z"], pa.string()),
             "stage": pa.array(["bronze"] * 3, pa.string()),
         },
         schema=BRONZE_SCHEMA,
@@ -185,3 +186,21 @@ def test_an_UNRECOGNISED_failure_is_treated_as_transient() -> None:
     """
     assert _is_permanent(TimeoutError("read timed out")) is False
     assert _is_permanent(ConnectionResetError()) is False
+
+
+# ── fixity (#99) ──────────────────────────────────────────────────────────────────────
+
+
+def test_the_sha256_column_digests_the_PAYLOAD_not_the_key() -> None:
+    """#99: the fixity digest is over the bytes AS FETCHED. `id` already hashes the KEY — a
+    plausible wrong implementation hashes it twice, which would make every fixity check vacuously
+    green (the key never rots). Distinct inputs, distinct digests, asserted against hashlib
+    directly."""
+    import hashlib
+
+    units = [("file:///pages/00001.tif", b"PAGE-ONE-BYTES"), ("file:///pages/00002.tif", b"PAGE-TWO-BYTES")]
+    table = units_to_table(units)
+
+    digests = table.column("sha256").to_pylist()
+    assert digests == [hashlib.sha256(p).hexdigest() for _, p in units]
+    assert digests != [hashlib.sha256(k.encode()).hexdigest() for k, _ in units], "the digest hashed the KEY — fixity over a filename detects nothing"

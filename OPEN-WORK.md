@@ -1120,6 +1120,11 @@ scan's `_scannable_buckets` · #89 model revision pinned across BOTH HTR lanes +
 gated route 422'd; `datasets.py`'s corpus gate had shipped broken) · #92 sha256 fixity at bronze
 ingest · #93 compaction read bounded (`MAINTENANCE_SCAN_BATCH_SIZE=64` × `COMPACT_THREADS=2`) ·
 #94/#95/#97 both plan docs corrected twice — five claims went stale the same day they were written.
+**Landed 2026-08-05:** #99 — the ingest PLANE's bronze gains the same `sha256` fixity column #92
+gave the medallion head (hash-at-arrival over the fetched bytes, never recomputed from storage;
+the plane had superseded that head without inheriting the column, so the archival-master checksum
+story only held for the deprecated path). `tests/unit/test_bronze_writers_compat.py` now pins the
+two writers' shared columns to one shape — the `stage`-postmortem class, made unrepeatable.
 
 **Closed by verification, not by work** (the register said open; the code said done): #51 (dup of
 #65 — per-step flags/cadence/registry-buckets all shipped) · #59 (FRI self-prunes in pylance 9.0.0
