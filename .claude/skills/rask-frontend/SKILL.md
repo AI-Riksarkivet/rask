@@ -13,6 +13,10 @@ Styling and component authoring live in **`rask-styling`**. Svelte 5 and SvelteK
 
 ## The seven zones
 
+> The roster DRIFTED once and cost a wrong estate-wide audit: this table listed `train` and omitted
+> `models` after the swap. It is now checkable in one line — `git ls-files frontend/microfrontends | cut -d/ -f3 | sort -u` —
+> and must agree with `Makefile` `ZONES`, `home/microfrontends.json` and `chart/values.yaml` `frontend.apps`.
+
 Package name equals directory name for all seven (`manifest.test.ts:53`). Base is a bare `/<zone>` — **no `/default/` segment exists**, and `cross-zone-reload.test.ts:38` asserts `/default/lakehouse` is not a zone path.
 
 | zone | base | dev port | nav label | what it is |
@@ -22,8 +26,8 @@ Package name equals directory name for all seven (`manifest.test.ts:53`). Base i
 | `explorer` | `/explorer` | 5173 | **Explorer** | Corpus search workbench (with a dock at `/explorer/workbench`): FTS/vector/hybrid, WebGPU atlas, Cypher KG, Svelte-Flow editor; **6 `+server.ts` routes** (was 13) — 4 keep-bytes + `api/search`/`api/atlas/chunks`, which keep their route (multipart / rowid-list POST) but answer **Arrow IPC**; every JSON value surface rides one of 5 `.remote.ts` modules (the transport ruling area 3) |
 | `annotator` | `/annotator` | 5177 | **Annotate** | PixiJS/WebGPU canvas over Arrow-backed rows, plus a `/browse` corpus surface; **4 `+server.ts` routes** (was 9) — the Arrow annotations transport, the Arrow annotation-IMPORT proxy (`api/tasks/[task_id]/import`, `requireSession`), `capi/v1/me`, the viewer catch-all; every JSON value surface rides one of 6 `.remote.ts` modules |
 | `compute` | `/compute` | 5175 | Compute | Ray/Serve observability, 10 pages + a dock at `/compute/workbench` |
-| `train` | `/train` | 5178 | Train | **Placeholder data only** — every page badges it |
-| `studio` | `/studio` | 5176 | Studio | Mini-app launcher, one tenant |
+| `models` | `/models` | 5178 | Models | The model plane: `submit`, `runs`, `experiments`, `analysis`, `monitoring`, `pipeline`, `playground` (8 pages). **It replaced `train`, on train's own port** — `train` has zero tracked files and is gone from `ZONES`, `microfrontends.json` and the chart. A stale untracked `microfrontends/train/` (and `microfrontends/media/`) may still sit on a dev host as `build/` + `node_modules/` residue; neither is a workspace member (no `package.json`, so bun skips them SILENTLY) and neither reaches an image (`frontend.dockerfile` copies one named zone). `git clean` them, do not read them as zones |
+| `studio` | `/studio` | 5176 | Studio | The sandbox zone: a mini-app launcher, the animation A/B, and **`/studio/flows`** — a node-based online flow builder over live Ray Serve endpoints (`$lib/flows`, `ssr = false`, one `+server.ts` keep-bytes inference route over `@rask/api/serve-proxy`, two `.remote.ts` for Serve/engine discovery). Its navbar entry earned an `items:` panel when Flows landed, so **no plain-link zone is left** |
 
 Nav labels name the JOB, not the directory — but they agree with it wherever they can: `explorer` was relabelled from Search once the directory itself was renamed (`nav-config.ts:480-491`). `annotator` → **Annotate** is the one deliberate split left.
 
@@ -68,7 +72,7 @@ its own stores and remotes:
 buried a zone surface inside one AREA and hid it from anyone standing in catalog or models — it was
 reverted for exactly that. `dock-reachability.test.ts` pins the set EXACTLY, so a nested path is
 simply not in the list. A dock is still EARNED by a real multi-panel workflow, never granted by
-symmetry: train and studio carry placeholder data, home is the catch-all, the annotator is already
+symmetry: studio is a sandbox, home is the catch-all, the annotator is already
 a canvas.
 
 **A PANEL RENDERS THE PAGE'S COMPONENT — the panel-is-the-page rule.** It is not a smaller
@@ -180,9 +184,9 @@ Both halves are idiomatic SvelteKit — `+server.ts` is the framework's own tool
 
 **(a) Remote `query()`/`command()` — every zone's JSON value plane** (the transport-ruling convergence, landed 2026-08-03). A `.remote.ts` function runs on the zone server and reaches its upstream with the session bearer via `getRequestEvent()`. On every polled refresh, `.refresh().catch(() => {})` is **mandatory**: one uncaught rejection evicts the query from cache and silently kills the poll loop (`compute/src/lib/remote/compute.remote.ts:25-40`). The FGA workbench (`lakehouse/src/lib/admin/remote/access.remote.ts`) is the reference migration: queries + a write/delete-tuple `command()` pair with a single-flight `fetchStore().refresh()`, `ApiResult<T>` union returns on the dock-layout precedent (status-driven UI states, not exception flow), valibot parsing at the wire boundary, contracts kept in a sibling non-remote module (a `.remote.ts` may export only remote functions).
 
-**(b) Same-origin BFF — permanently the binary/Arrow planes and the OIDC flow.** The JSON convergence is done in **six** zones: `requestJSON` has zero call sites in `home`, `explorer`, `annotator`, `compute`, `train`, `studio`. The **lakehouse is the residual** — four `requestJSON` call sites: the object browser's `listObjects`/`headObject` (`lib/storage/storage.ts:69,73`, over the `/api/explorer/**` seam), `fetchTableHistory` (`lib/data/catalog.ts:119`, the #113 commit log over the `capi/v1/table/[id]/[...rest]` proxy), and `insertRows` (`:126`, which POSTs an Arrow body and only reads a JSON ack — a keep-bytes route spelled with the JSON helper). Converge the first three when you touch them; do not add new BFF JSON routes. Elsewhere `createBffClient` survives only where the payload is bytes (Arrow, blobs, multipart).
+**(b) Same-origin BFF — permanently the binary/Arrow planes and the OIDC flow.** The JSON convergence is done in **six** zones: `requestJSON` has zero call sites in `home`, `explorer`, `annotator`, `compute`, `models`, `studio`. The **lakehouse is the residual** — four `requestJSON` call sites: the object browser's `listObjects`/`headObject` (`lib/storage/storage.ts:69,73`, over the `/api/explorer/**` seam), `fetchTableHistory` (`lib/data/catalog.ts:119`, the #113 commit log over the `capi/v1/table/[id]/[...rest]` proxy), and `insertRows` (`:126`, which POSTs an Arrow body and only reads a JSON ack — a keep-bytes route spelled with the JSON helper). Converge the first three when you touch them; do not add new BFF JSON routes. Elsewhere `createBffClient` survives only where the payload is bytes (Arrow, blobs, multipart).
 
-**(c) Bell only — `studio`, `train`.** Page data is hardcoded arrays; the single `.remote.ts` each is `lib/live/feeds.remote.ts`, the estate-wide `query.live` bell.
+**(c) Bell only — none left.** `train` held this row and no longer exists; `models` carries real remotes. The shape it described was: `lib/live/feeds.remote.ts`, the estate-wide `query.live` bell. **`studio` left this row when Flows landed**: it now carries the bell plus `lib/flows/remote/{serve,engine}.remote.ts` (Serve-app discovery over `/api/serve`, the flows engine's catalog) and ONE keep-bytes `+server.ts` (`api/infer`, raw image bytes → ALTO XML through `@rask/api/serve-proxy`), so it is a normal two-transport zone — and it grew the `hooks.server.ts` it had been the only zone without, because that BFF's 401 guard reads `locals` the hook populates.
 
 **The media-plane BFF reads are AUTHORIZED now, not just proxied (2026-08-04).** `makeViewerProxy` — the `api/[...path]` catch-all that explorer and annotator both mount — carries `requireSession: true` (`packages/api/src/bff.ts:307-322`), so a bearer-less page-image or atlas read 401s at the BFF on an auth-enabled stack. The bearer path is sealed cookie → the zone's session handle → `makeBackendProxy` (`authorization: Bearer …`) → gateway → viewer, where `/api/page` checks `can_read_data` and `/api/pages` `can_get_metadata` on `table:<catalog id>`, and the S3 object routes behind `/api/explorer/**` check `can_browse_storage`. The lakehouse's `/api/explorer/[...rest]` forwards the caller's bearer but does **not** `requireSession`, so an empty `/lakehouse/catalog/storage` on a governed stack is an authz answer, not an outage.
 
