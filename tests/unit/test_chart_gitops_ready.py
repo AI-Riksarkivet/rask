@@ -65,3 +65,75 @@ def test_a_digest_pins_every_first_party_image_and_beats_the_tag() -> None:
     assert "ghcr.io/example/rask/web-home@sha256:abc123" in proc.stdout
     # …and the tag it would otherwise have used is gone from every first-party ref.
     assert "ghcr.io/example/rask/gateway:dev" not in proc.stdout
+
+
+# --------------------------------------------------------------------------------------------------
+# A zone must never be deployed without the upstreams its routes need
+# --------------------------------------------------------------------------------------------------
+
+
+def _zone_env(rendered: str, zone: str) -> set[str]:
+    """Every env NAME on one web zone's Deployment."""
+    import re
+
+    for doc in re.split(r"(?m)^---\s*$", rendered):
+        if "kind: Deployment" not in doc:
+            continue
+        if not re.search(rf"(?m)^\s{{0,2}}name:\s*rask-web-{zone}\s*$", doc):
+            continue
+        return set(re.findall(r"-\s*name:\s*([A-Z_]+_API)\b", doc))
+    return set()
+
+
+def test_the_media_zones_deploy_with_NO_upstreams_when_the_plane_is_off() -> None:
+    """The render that produced a live 502, pinned so the deploy path has something to be right about.
+
+    `frontend.apps` always includes `explorer` and `annotator`, and both proxy /<zone>/api/* to
+    VIEWER_API — env the chart injects only when `explorer.enabled`, which DEFAULTS TO FALSE. So the
+    zones render happily with no upstream at all, their BFF falls back to a localhost dev default
+    that does not exist in-cluster, and /annotator/api/datasets answers 502. Observed on release
+    revision 25, where `explorer` had simply never been set.
+
+    The chart is NOT made to refuse this: a fleet that does not want the corpus volume mounted is
+    legitimate, and forcing the plane on every install would be a worse answer. The guarantee lives
+    in the deploy path instead — `make k3s-up` defaults EXPLORER=true — and this test states plainly
+    what the other setting costs.
+    """
+    proc = _render("image.localImages=true", "explorer.enabled=false")
+    assert proc.returncode == 0, proc.stderr
+
+    for zone in ("annotator", "explorer"):
+        assert "VIEWER_API" not in _zone_env(proc.stdout, zone), (
+            f"{zone} gained VIEWER_API with the plane off — then this test is stale, not the chart"
+        )
+
+
+def test_make_k3s_up_enables_the_media_plane_by_DEFAULT() -> None:
+    """The bug was never in the chart; it was that the documented deploy path never passed the flag.
+
+    Asserted against the Makefile rather than a comment, because the 502 came back the moment the
+    default was absent — and a default nobody sets is indistinguishable from one that is wrong.
+    """
+    makefile = (REPO / "Makefile").read_text()
+
+    assert "EXPLORER ?= true" in makefile, "make k3s-up must default the media plane ON"
+    assert "--set explorer.enabled=$(EXPLORER)" in makefile, (
+        "k3s-up must PASS the flag — defining it and not using it is the same 502"
+    )
+
+
+def test_enabling_explorer_gives_BOTH_media_zones_every_upstream_they_route_to() -> None:
+    """The deploy path `make k3s-up` must take.
+
+    `zone-contract`'s bff-routes suite asserts the other half — that each zone's declared upstreams
+    match the routes it actually makes. This asserts the chart can satisfy it: both zones read the
+    viewer, both search (the annotator gained `/api/search/similar` with "more like this"), and both
+    reach the annotator service.
+    """
+    proc = _render("image.localImages=true", "explorer.enabled=true")
+    assert proc.returncode == 0, proc.stderr
+
+    for zone in ("annotator", "explorer"):
+        env = _zone_env(proc.stdout, zone)
+        for upstream in ("VIEWER_API", "ANNOTATOR_API", "SEARCH_API"):
+            assert upstream in env, f"{zone} renders without {upstream} — its BFF proxy would 502"
