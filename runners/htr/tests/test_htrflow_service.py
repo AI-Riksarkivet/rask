@@ -8,6 +8,8 @@ and triggers the real `get_app_handle` lookup; tests pass a fake.
 
 from __future__ import annotations
 
+import typing
+
 import numpy as np
 import pytest
 
@@ -137,3 +139,58 @@ def test_default_constructor_calls_serve_get_app_handle(monkeypatch: pytest.Monk
     actor = htrflow_service.HTRFlowViaServeBytes()
     assert captured == {"name": "htrflow"}
     assert isinstance(actor._handle, _FakeHandle)
+
+
+def test_the_http_ingress_transcribes_the_posted_bytes() -> None:
+    """#88 step 3: POST raw bytes → ALTO. Before this the route existed and answered Serve's
+    default 405 — a door with no handler — so the medallion's Ray-free lane could not reach the
+    warm weights at all. The heavy pipeline is faked; the ingress CONTRACT is what's under test."""
+    import asyncio
+
+    from runner.htrflow_service import HTRFlowDeployment
+
+    cls = HTRFlowDeployment.func_or_class
+    deployment = cls.__new__(cls)  # skip __init__ — no model load in a unit test
+    seen: dict[str, object] = {}
+
+    def fake_transcribe(data: bytes, name: str = "page") -> str:
+        seen.update(data=data, name=name)
+        return "<alto/>"
+
+    deployment.transcribe_bytes = fake_transcribe  # type: ignore[method-assign]
+
+    class _Request:
+        query_params: typing.ClassVar[dict[str, str]] = {"name": "vol/00012.jpg"}
+
+        @staticmethod
+        async def body() -> bytes:
+            return b"JPEGBYTES"
+
+    response = asyncio.run(deployment(_Request()))
+
+    assert response.status_code == 200
+    assert response.body == b"<alto/>"
+    assert response.media_type == "application/xml"
+    assert seen == {"data": b"JPEGBYTES", "name": "vol/00012.jpg"}
+
+
+def test_the_http_ingress_refuses_an_empty_body() -> None:
+    """An empty POST is a caller bug, answered 400 BEFORE the thread hop — never a minutes-long
+    pipeline run over zero bytes that fails somewhere deep in PIL."""
+    import asyncio
+
+    from runner.htrflow_service import HTRFlowDeployment
+
+    cls = HTRFlowDeployment.func_or_class
+    deployment = cls.__new__(cls)
+
+    class _Request:
+        query_params: typing.ClassVar[dict[str, str]] = {}
+
+        @staticmethod
+        async def body() -> bytes:
+            return b""
+
+    response = asyncio.run(deployment(_Request()))
+
+    assert response.status_code == 400

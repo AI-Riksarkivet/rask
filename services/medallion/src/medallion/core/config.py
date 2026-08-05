@@ -158,6 +158,15 @@ class MedallionSettings(BaseSettings):
     ray_enabled: bool = Field(default=False, alias="MEDALLION_RAY_ENABLED")
     ray_address: str = Field(default="http://ray-lance-head:8265", alias="MEDALLION_RAY_ADDRESS")
     ray_entrypoint: str = Field(default="python /home/ray/jobs/ray_stage_job.py", alias="MEDALLION_RAY_ENTRYPOINT")
+    # The HTR lane's transcribe endpoint (#88 step 3) — the deployed Ray Serve /htrflow route, whose
+    # warm weights the governed lane calls over PLAIN HTTP (the medallion deliberately imports no
+    # Ray). Empty = the lane is not configured; the lane fails loudly rather than guessing a host,
+    # because a guessed default that happens to resolve is how a staging mover transcribes against
+    # the wrong cluster.
+    htrflow_url: str = Field(default="", alias="MEDALLION_HTRFLOW_URL")
+    # One PAGE of blocking GPU/CPU inference, not a metadata call — sized like the runner's own
+    # expectations (minutes on CPU-only Serve), nothing like ray_request_timeout_seconds above.
+    htrflow_timeout_seconds: float = Field(default=600.0, gt=0, alias="MEDALLION_HTRFLOW_TIMEOUT_SECONDS")
     ray_request_timeout_seconds: float = Field(default=10.0, ge=0.1, alias="MEDALLION_RAY_REQUEST_TIMEOUT_SECONDS")
     ray_poll_interval_seconds: float = Field(default=2.0, gt=0, alias="MEDALLION_RAY_POLL_INTERVAL_SECONDS")
     # The mover BLOCKS its Dapr handler until the job finishes. Redelivery is safe (the submission id is

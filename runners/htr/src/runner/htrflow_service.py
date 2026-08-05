@@ -28,13 +28,18 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import yaml
 from ray import serve
 
 from htr.models import COMMIT_SHA, MODEL_REVISION
+
+
+if TYPE_CHECKING:
+    from starlette.requests import Request
+    from starlette.responses import PlainTextResponse
 
 
 logger = logging.getLogger(__name__)
@@ -196,6 +201,35 @@ class HTRFlowDeployment:
         """
         doc = self._pipeline.run(_build_in_memory_document(data, name=name))
         return _stamp_build(self._serializer.serialize(doc) or "")
+
+    async def __call__(self, request: Request) -> PlainTextResponse:
+        """HTTP ingress (#88 step 3): POST raw image bytes → the page's ALTO XML.
+
+        Until this, /htrflow was reachable ONLY through a Serve DeploymentHandle — a Ray-client
+        API — so the medallion's governed HTR lane, which deliberately imports no Ray, could not
+        call the warm weights at all. The route existed (`route_prefix=/htrflow`) but an HTTP POST
+        answered Serve's default 405: a door with no handler behind it.
+
+        The body is the image, bare — no JSON envelope, no multipart. The caller has exactly one
+        thing to send and bytes are what it has; an envelope would only add a decode step on a
+        hot path. `?name=` labels the page (the ALTO's fileName); it defaults like
+        `transcribe_bytes` does.
+
+        The transcode itself runs in a worker thread: this method is async (the body read needs
+        the event loop), but the pipeline is minutes of blocking GPU/CPU work, and running it
+        inline would freeze the replica's loop — every OTHER request on this replica, handle
+        calls included, would stall behind it. `max_ongoing_requests=4` bounds the thread count.
+        """
+        import asyncio
+
+        from starlette.responses import PlainTextResponse
+
+        data = await request.body()
+        if not data:
+            return PlainTextResponse("empty body — POST the raw image bytes", status_code=400)
+        name = request.query_params.get("name", "page")
+        alto = await asyncio.to_thread(self.transcribe_bytes, data, name)
+        return PlainTextResponse(alto, media_type="application/xml")
 
 
 def _build_in_memory_document(image_bytes: bytes, name: str = "page") -> object:
