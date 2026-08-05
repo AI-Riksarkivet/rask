@@ -21,6 +21,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.lakehouse.objectfs import lance_storage_options
 
+# Re-exported, NOT redefined. The bronze naming convention is shared with the ingest plane, so its one
+# definition lives in service-kit beside `is_safe_project`; every existing `from medallion.core.config
+# import project_namespace` keeps working.
+from service_kit.lakehouse.warehouse_registry import project_namespace as project_namespace
+
 
 class MedallionSettings(BaseSettings):
     """Config for one medallion service (a mover stage, or the lance-ray producer)."""
@@ -313,18 +318,6 @@ class MedallionSettings(BaseSettings):
 
     # The Ray branch (requires ray_enabled): the self-contained harvest job baked into the unified ray
     # image, submitted via the Ray Jobs REST API exactly like the stage transforms.
-
-
-def project_namespace(project: str, name: str) -> str:
-    """Project-qualify a lineage namespace or dataset name — ``("acme", "bronze")`` → ``"acme-bronze"``.
-
-    Empty ``project`` → ``name`` unchanged (the single-tenant default, byte-identical). Qualification
-    keeps per-project lineage on DISTINCT graph nodes — the lineage repository MERGEs ``Dataset`` nodes
-    on name alone, so two tenants both emitting ``bronze$events`` would otherwise collide onto one node
-    (#84 risk 1) — and the ``-`` join keeps the result inside the established ``[A-Za-z0-9_-]`` segment
-    shape (``acme-bronze$events`` is still a valid ``stage$name`` dataset id).
-    """
-    return f"{project}-{name}" if project else name
 
 
 @lru_cache

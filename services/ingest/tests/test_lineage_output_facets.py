@@ -108,17 +108,42 @@ def test_a_FAILED_run_still_stamps_what_it_MANAGED_to_write() -> None:
     assert out["outputFacets"]["outputStatistics"]["rowCount"] == 88
 
 
-def test_the_output_NAME_is_the_catalog_table_id_not_the_bare_dataset() -> None:
-    """The cascade's trigger, unchanged by the facet work.
+def test_the_output_pair_is_the_TIER_QUALIFIED_one_the_cascade_head_matches() -> None:
+    """#52 — and the bug this replaces is the reason the whole plane could look healthy and be inert.
 
-    The medallion's `/bronze-arrival` head fires on an event whose outputs contain its configured
-    `{namespace, name}` pair. A bare `pages` here would be a bronze write that wakes nothing
-    downstream — and it would still look like a perfectly good lineage record.
+    The head fires on an event whose outputs contain `project_namespace(project, bronze_namespace)`
+    and the matching name (`ingest_trigger.py:52-57`). This used to emit the PROJECT as the namespace
+    — `bind86` / `bind86$pages` — which never intersects `bind86-bronze` / `bind86-bronze$pages`. No
+    ingest write could fire the cascade, and nothing failed while that was true: the data landed,
+    lineage recorded it, A8 passed, silver was simply never woken.
+
+    A project selects the storage ROOT; the namespace is the TIER; the table is the dataset.
     """
     out = _output()
 
-    assert out["namespace"] == "bind86"
-    assert out["name"] == "bind86$pages"
+    assert out["namespace"] == "bind86-bronze"
+    assert out["name"] == "bind86-bronze$pages"
+
+
+def test_NO_project_degrades_to_the_single_tenant_pair() -> None:
+    """`project_namespace("", "bronze")` is `bronze` — byte-identical to the pre-#84 single-tenant
+    estate, which is what the head falls back to when an event carries no `lance.project` facet. The
+    two sides have to degrade the same way or the fallback misses in exactly the case it exists for."""
+    out = _output(project="")
+
+    assert out["namespace"] == "bronze"
+    assert out["name"] == "bronze$pages"
+
+
+def test_an_UNSAFE_project_degrades_rather_than_becoming_a_path_segment() -> None:
+    """The head refuses a project outside the path-safe shape (`_cascade_project` -> `is_safe_project`)
+    because it would otherwise become an S3 prefix or a lineage-name qualifier. The writer applies the
+    SAME guard: a garbage project must not produce a write that fires the head for a tenant, and must
+    not produce one the head ignores for a reason invisible from here."""
+    out = _output(project="../etc")
+
+    assert out["namespace"] == "bronze", "an unsafe project must not reach the namespace"
+    assert ".." not in out["name"]
 
 
 def test_a_FAIL_carries_an_errorMessage_facet() -> None:
@@ -143,7 +168,7 @@ def test_a_FAIL_carries_an_errorMessage_facet() -> None:
 
     recorder = _Capture()
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("ingest.lineage._run", lambda _rid: _Run())
+        mp.setattr("ingest.lineage._run", lambda _rid, _project="": _Run())
         recorder.terminal(run_id="run-42", status="FAILED", version=None, rows=0, errors={"unit-9": "corrupt tiff"}, project="bind86", dataset="pages")
 
     assert recorder.emitted, "a FAILED run emitted no terminal at all — the run leaves a record whichever way it ends"
@@ -176,11 +201,13 @@ def test_the_terminal_emit_is_a_checkpointed_ACTIVITY_not_an_inline_call() -> No
     )
 
 
-@pytest.mark.parametrize("project,dataset", [("", "pages"), ("bind86", ""), ("", "")])
-def test_an_UNNAMEABLE_output_is_omitted_rather_than_half_written(project: str, dataset: str) -> None:
-    """A run with no table to name emits no output edge — not an edge with an empty name.
+@pytest.mark.parametrize("project", ["", "bind86"])
+def test_an_UNNAMEABLE_output_is_omitted_rather_than_half_written(project: str) -> None:
+    """A run with no DATASET to name emits no output edge — not an edge with an empty name.
 
-    `bind86$` or `$pages` would be a table id nothing in the estate resolves, and it would sit in the
-    graph looking like a real one.
+    `bind86-bronze$` would be a table id nothing in the estate resolves, and it would sit in the graph
+    looking like a real one. Only the dataset is load-bearing here: an absent PROJECT is a legitimate
+    single-tenant write (`bronze$<dataset>`), not an unnameable one, which is why it is no longer
+    grounds for omitting the edge.
     """
-    assert _output_datasets(project, dataset, 1, 1) == []
+    assert _output_datasets(project, "", 1, 1) == []
