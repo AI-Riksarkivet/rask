@@ -4,6 +4,8 @@
 	// controller; every child is dumb + controlled. The /annotator route re-mounts this
 	// per unit (via {#key}) so navigating a review selection loads each unit fresh.
 	import { viewerFor } from '$lib/viewer/registry';
+	import { lineageTick, liveRead } from '$lib/live/tick.svelte';
+	import { onRemoteChange } from '../remote-change';
 	import type { MediaUnit } from '$lib/viewer/types';
 	import { AnnotatorController } from '$lib/viewer/annotator.svelte';
 	import { reviewSelection } from '$lib/labeling/review-selection.svelte';
@@ -11,6 +13,7 @@
 	import { fetchTask } from '$lib/projects/remote/tasks.remote';
 	import { ResizableSplit } from '@rask/ui/resizable-split';
 	import { Badge } from '@rask/ui/badge';
+	import { Button } from '@rask/ui/button';
 	import AnnotatorToolbar from './AnnotatorToolbar.svelte';
 	import AnnotationSidebar from './AnnotationSidebar.svelte';
 	import ZoomControls from './ZoomControls.svelte';
@@ -107,6 +110,41 @@
 		// burst of typing produces ONE write rather than one per keystroke.
 		void controller.dirty;
 		controller.scheduleAutosave();
+	});
+
+	/** #73 — the estate's FIRST cursor-driven Arrow read.
+	 *
+	 *  The annotations table was read once, at mount. Two annotators on the same page never saw each
+	 *  other's work, and neither did one person with the item open in two tabs — the second save then
+	 *  went out against a `base_version` from before the first, which is exactly the conflict OCC
+	 *  refuses, so their work was rejected AFTER they did it.
+	 *
+	 *  The CURSOR is a value and rides `query.live`; the BYTES stay on their own route and are simply
+	 *  re-fetched. That is the transport rule followed, not bent: Arrow never travels through a
+	 *  remote function, only the number that says it changed.
+	 *
+	 *  Remounting the viewer is the reload — `onready` re-runs `loadAnnotations` and re-attaches with
+	 *  the new version — so there is no second load path to keep in agreement with the first. */
+	let reloadNonce = $state(0);
+	let remoteNotice = $state<string | null>(null);
+
+	// `liveRead`'s FIRST read is unconditional by design (a surface must render without waiting for a
+	// stream). Here that first call would bump the nonce, remount the viewer, re-register liveRead,
+	// and fire again — an infinite remount. `primed` makes the first call mean "I have arrived",
+	// which is what it actually is; only a LATER advance is a change someone else made.
+	let primed = false;
+	liveRead(lineageTick, () => {
+		if (!primed) {
+			primed = true;
+			return;
+		}
+		const decision = onRemoteChange({
+			dirty: controller.dirty,
+			saving: controller.saving,
+			attached: controller.attached,
+		});
+		if (decision.action === 'reload') reloadNonce += 1;
+		else if (decision.action === 'warn') remoteNotice = decision.reason;
 	});
 
 	let status = $state('loading…');
@@ -245,7 +283,8 @@
 						>
 							annotate · {unit.kind} · {status}{controller.saveStatus ? ` · ${controller.saveStatus}` : ''}
 						</Badge>
-						<Viewer
+						{#key reloadNonce}
+					<Viewer
 							{unit}
 							{controller}
 							onload={(n) => {
@@ -257,7 +296,31 @@
 	loadFailed = true;
 }}
 						/>
-						<TaskStreamNav {stream} />
+					{/key}
+						{#if remoteNotice}
+						<!-- A change someone else made, on a canvas that has unsaved work. NEVER reloaded
+						     over — the shapes on screen are theirs and cannot be got back. It names the
+						     consequence (the save will be refused) because "changed" alone leaves a person
+						     unable to decide. -->
+						<div
+							class="border-destructive/50 bg-card/95 text-card-foreground pointer-events-auto absolute top-2 left-1/2 z-20 flex max-w-md -translate-x-1/2 items-start gap-2 rounded-lg border p-2 shadow-sm backdrop-blur"
+							data-testid="remote-change-notice"
+						>
+							<p class="text-xs">{remoteNotice}</p>
+							<Button
+								variant="outline"
+								size="sm"
+								class="h-6 shrink-0 px-2 text-xs"
+								onclick={() => {
+	remoteNotice = null;
+	reloadNonce += 1;
+}}
+							>
+								Reload
+							</Button>
+						</div>
+					{/if}
+					<TaskStreamNav {stream} />
 						<PageNav {pages} current={pageIndex} onNavigate={navigate} />
 						{#if spatial}
 							<ZoomControls {controller} />
