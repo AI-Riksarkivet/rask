@@ -13,12 +13,14 @@ NEGATIVE — that nothing live is ever named.
 from __future__ import annotations
 
 import pathlib
+from collections.abc import Callable
 from typing import Any
 
 import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
 import pytest
+from lance.dataset import DatasetBasePath
 from maintenance.services import orphans
 
 
@@ -408,7 +410,7 @@ def test_a_dataset_using_overlays_is_refused(monkeypatch: pytest.MonkeyPatch, tm
         def get_fragments(self) -> list:
             return [_FragmentWithOverlay(f) for f in self._inner.get_fragments()]
 
-        def checkout_version(self, _version: int) -> "_DatasetWithOverlay":
+        def checkout_version(self, _version: int) -> _DatasetWithOverlay:
             # The #102 walk checks out versions on the HEAD handle; every version of this stand-in
             # carries the overlay, so the refusal must fire regardless of which one is inspected.
             return self
@@ -420,3 +422,69 @@ def test_a_dataset_using_overlays_is_refused(monkeypatch: pytest.MonkeyPatch, tm
     assert result.orphans == []
     assert "overlay" in (result.reason or "").lower()
     assert "64" in (result.reason or "")
+
+
+# --------------------------------------------------------------------------- #
+# #64 — the manifest feature-flag gate. Complements the consequence checks above:
+# it names the class the format itself names, and catches shapes that have no
+# observable consequence YET.
+# --------------------------------------------------------------------------- #
+
+
+def test_a_registered_but_unused_base_is_refused_by_the_flag(tmp_path: pathlib.Path) -> None:
+    """The proven hole in the consequence check, closed.
+
+    `add_bases` registers an alternative base path (feature flag 16) that no DataFile resolves
+    through yet — every `base_id` stays `None`, `tracked_files()` reports one base_uri, and every
+    referenced path IS present under the prefix. So the "a referenced file is not here" check sees
+    nothing, and this scan measurably returned `checked=True` with orphans named on a multi-base
+    dataset. The manifest says plainly what the files do not, and the very next write can place one
+    under that base.
+    """
+    uri = str(tmp_path / "based.lance")
+    lance.write_dataset(_table(), uri)
+    lance.write_dataset(_table(), uri, mode="append")
+    alt = tmp_path / "altbase"
+    alt.mkdir()
+    lance.dataset(uri).add_bases([DatasetBasePath(path=str(alt), name="alt")])
+    # The consequence detector genuinely has nothing to go on: every referenced path is local.
+    referenced, _versions, _note = orphans.referenced_paths(uri)
+    assert all((tmp_path / "based.lance" / rel).exists() for rel in referenced if not rel.endswith("/"))
+
+    result = orphans.scan_dataset(_fs(), uri, uri)
+
+    assert result.checked is False, "a multi-base dataset must be refused — a prefix listing cannot be subtracted"
+    assert result.orphans == []
+    assert "16" in (result.reason or "") and "base_paths" in (result.reason or "")
+
+
+def test_a_REAL_overlay_dataset_is_refused_with_the_flag_named(tmp_path: pathlib.Path, overlay_dataset: Callable[[pathlib.Path], str]) -> None:
+    """The real-dataset twin of the monkeypatched test above.
+
+    On pylance 9.0.0 a committed overlay is WRITABLE but not readable — the open raises
+    `Not supported: … Flags: 64` — so the `fragment.metadata.overlays` seam is unreachable and the
+    scan's refusal has to come from classifying that open error. Unclassified it read as
+    `ValueError: Not supported: … /home/runner/work/lance/lance/rust/lance/src/dataset.rs:725:24`,
+    which tells the report's reader nothing at all.
+    """
+    uri = overlay_dataset(tmp_path)
+
+    result = orphans.scan_dataset(_fs(), uri, uri)
+
+    assert result.checked is False, "an overlay dataset must be refused, not scanned"
+    assert result.orphans == []
+    assert "64" in (result.reason or "") and "overlay" in (result.reason or "").lower(), result.reason
+
+
+def test_an_ordinary_dataset_is_not_refused_by_the_flag_gate(tmp_path: pathlib.Path) -> None:
+    """The negative for the flag gate specifically: deletion files + stable row ids are supported
+    flags, and a dataset carrying both must still be scanned. A gate keyed on "any flag at all"
+    would refuse most of a real estate."""
+    uri = str(tmp_path / "flagged.lance")
+    lance.write_dataset(_table(), uri, enable_stable_row_ids=True)
+    lance.dataset(uri).delete("id = 1")
+
+    result = orphans.scan_dataset(_fs(), uri, uri)
+
+    assert result.checked is True, result.reason
+    assert result.reason is None

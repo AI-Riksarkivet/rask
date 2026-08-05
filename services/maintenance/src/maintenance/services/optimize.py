@@ -15,6 +15,7 @@ import pyarrow.fs as pafs
 from pydantic import BaseModel
 
 from maintenance.core.config import shared_lance_session
+from maintenance.core.features import describe_unsupported_flags, manifest_feature_flags, unsupported_features_from_open_error
 
 
 log = logging.getLogger(__name__)
@@ -27,6 +28,12 @@ class DatasetResult(BaseModel):
     #: Why the policy layer skipped this dataset this tick (``policy_disabled`` / ``policy_interval``);
     #: ``None`` when maintenance ran.
     skipped: str | None = None
+    #: Why this dataset was REFUSED: its manifest sets a feature flag this pass cannot correctly
+    #: rewrite (#64). Deliberately NOT ``skipped`` and deliberately NOT ``error`` — a skip is "not
+    #: this tick" (the cadence count would be inflated by something permanent), and an error is
+    #: "something failed" (nothing failed; we declined, before touching a byte). Folding a refusal
+    #: into either is what made a shallow clone's silent full materialization invisible.
+    refused: str | None = None
     fragments_removed: int = 0
     fragments_added: int = 0
     indices_optimized: int = 0
@@ -103,13 +110,32 @@ def compact_one(
     ``auto_cleanup_interval_commits`` hands version reclamation to the DATASET (#58) — Lance's own
     commit-path auto-cleanup — and, having done so, SKIPS this pass's cleanup step. One owner, never
     two: both running is not additive, it is two processes racing to delete the same manifests.
+
+    A dataset whose manifest sets a feature flag this pass cannot correctly rewrite is REFUSED before
+    any rewrite (#64, :mod:`maintenance.core.features`) — see :attr:`DatasetResult.refused`.
     """
     try:
         # The shared bounded session (#102): per-tick reopens are correct for a mutating pass, but
         # each must not mint-and-discard gigabyte-scale default caches.
         ds = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session())  # ty: ignore[invalid-argument-type] — stub lacks session=, runtime verified
+        # Read the flags inside the same guard: a manifest we cannot PARSE is a dataset we could not
+        # read, which is exactly what `open:` means. Refusing on it would be a lie (we know nothing
+        # about its layout), and maintaining it would be the shallow-clone mistake again.
+        reader_flags, writer_flags = manifest_feature_flags(ds)
     except Exception as exc:
+        # pylance refuses a manifest whose flags IT does not know before we can read them ourselves
+        # (measured: a committed data overlay, flag 64). That is a REFUSAL, not an unopenable
+        # directory — reported as `open:` it reads as transient noise and the lineage layer drops it.
+        if (refusal := unsupported_features_from_open_error(exc)) is not None:
+            log.warning("maintenance_refused_unsupported_features", extra={"uri": uri, "reason": refusal})
+            return DatasetResult(uri=uri, refused=refusal)
         return DatasetResult(uri=uri, error=f"open: {exc}", error_type=type(exc).__name__)
+    # BEFORE compact_files / cleanup_old_versions / optimize_indices — the whole point. A shallow
+    # clone (flag 16) opens fine and compacts "successfully" while silently materializing a full copy
+    # of data it only referenced, and then has its versions GC'd. Measured on pylance 9.0.0.
+    if (refusal := describe_unsupported_flags(reader_flags, writer_flags)) is not None:
+        log.warning("maintenance_refused_unsupported_features", extra={"uri": uri, "reason": refusal})
+        return DatasetResult(uri=uri, refused=refusal)
     result = DatasetResult(uri=uri)
     try:
         # defer_index_remap: with the Fragment Reuse Index the row-id remap is deferred, so compaction and

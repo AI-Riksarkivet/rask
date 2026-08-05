@@ -27,6 +27,16 @@ _indices_optimized = _meter.create_counter(
     unit="{index}",
     description="Secondary indices (vector/scalar/FTS) re-optimized to cover new fragments.",
 )
+#: #64 — datasets the pass REFUSED because their manifest sets a feature flag it cannot correctly
+#: rewrite (base_paths / shallow clone, data overlays, anything unknown). Its own series, not a
+#: sub-case of an error counter: nothing failed, and the number that matters is the TREND. The
+#: supported-flag set is a whitelist, so a pylance upgrade that adds a legitimate flag shows up here
+#: as a step change — and nowhere else — while the sweep otherwise still reports a clean run.
+_refused = _meter.create_counter(
+    "compaction.datasets.refused",
+    unit="{dataset}",
+    description="Datasets refused by the maintenance pass because of an unsupported manifest feature flag.",
+)
 
 
 #: #79 reclamation. Separate series from the compaction counters above because they answer a different
@@ -77,3 +87,12 @@ def record_reclaimed(fragments_removed: int, versions_removed: int, indices_opti
     _fragments_removed.add(fragments_removed)
     _versions_removed.add(versions_removed)
     _indices_optimized.add(indices_optimized)
+
+
+def record_refused(datasets: int) -> None:
+    """Record how many datasets this tick REFUSED on an unsupported manifest feature flag (#64).
+
+    Always emits, for the :func:`record_reclaimed` reason and one sharper one: a whitelist that
+    silently starts refusing the whole estate must be visible from the FIRST tick after the upgrade
+    that caused it, not from whenever someone reads a cron response body."""
+    _refused.add(datasets)

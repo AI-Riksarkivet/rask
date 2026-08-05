@@ -22,7 +22,7 @@ from opentelemetry.trace import StatusCode
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter, table_id_from_uri
-from maintenance.core.metrics import record_reclaimed, record_run
+from maintenance.core.metrics import record_reclaimed, record_refused, record_run
 from maintenance.services import purge
 from maintenance.services.optimize import DatasetResult, compact_one, discover_dataset_uris
 from service_kit.governed import fga
@@ -235,6 +235,9 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
                         extra={"policy": policy.get("id"), "uri": uri, "error": str(exc)},
                     )
             results.append(result)
+            # #64 — a refusal is not an error, so it would otherwise be invisible in the trace too.
+            if result.refused is not None:
+                span.set_attribute("lance.refused", result.refused)
             # compact_one never raises (it captures the per-dataset error), so reflect a failure on the
             # span explicitly — else a failed dataset looks identical to a clean one in the trace.
             if result.error is not None:
@@ -247,6 +250,10 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
         versions_removed=sum(r.old_versions_removed for r in results),
         indices_optimized=sum(r.indices_optimized for r in results),
     )
+    # Always recorded, including 0 — the `record_reclaimed` rule. Here the zero carries the most
+    # weight of any counter in this service: `SUPPORTED` is a whitelist, so a rising refusal count
+    # after a pylance upgrade is the ONLY signal that maintenance quietly stopped covering the estate.
+    record_refused(sum(1 for r in results if r.refused))
     return results
 
 
@@ -269,6 +276,11 @@ async def emit_sweep_lineage(emitter: MaintenanceEmitter, results: list[DatasetR
       this tick; before this, a persistently failing dataset surfaced only in OTel spans + a cron response
       body nobody reads).
     * ``open:``-errored → **no event** (unreadable / declared-only dir — transient non-dataset noise).
+    * **REFUSED** (#64, an unsupported manifest feature flag) → **no event**, by construction: a
+      refusal carries ``error=None`` and did no material work, so it falls through both branches
+      below. Deliberate — nothing FAILED, we declined before touching a byte, and a FAIL event would
+      claim a maintenance run went wrong. Its visibility is the WARNING log, the ``lance.refused``
+      span attribute, the ``compaction.datasets.refused`` counter and ``summarize``'s own line.
     * no error + material work → the **COMPLETE** event (unchanged); no-op ticks skipped.
     * URI not the catalog's ``<uuid>_<table_id>`` layout → skipped either way (no id to key on). This is
       the DOCUMENTED blind spot for the medallion-nested datasets (``s3://<bucket>/medallion/<ns>`` has no
@@ -325,6 +337,13 @@ def summarize(results: list[DatasetResult]) -> dict[str, Any]:
     return {
         "datasets": len(results),
         "skipped": sum(1 for r in results if r.skipped),
+        # #64 — a REFUSAL is its own line, never folded into `errors` or `skipped`. It is neither: a
+        # skip is "not this tick" and an error is "something failed", while a refusal is permanent and
+        # nothing failed. It also has to be LOUD, because `SUPPORTED` is a whitelist: a pylance
+        # upgrade that adds a legitimate flag would otherwise stop maintaining every dataset that
+        # sets it while this summary still reported a clean sweep.
+        "refused": sum(1 for r in results if r.refused),
+        "refusals": {r.uri: r.refused for r in results if r.refused},
         "fragments_removed": sum(r.fragments_removed for r in results),
         "indices_optimized": sum(r.indices_optimized for r in results),
         "versions_removed": sum(r.old_versions_removed for r in results),

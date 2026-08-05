@@ -90,6 +90,33 @@ def test_summarize_aggregates_reclaimed_and_errors() -> None:
     assert summary["errors"] == {"s3://b/c": "open: not a dataset"}
 
 
+def test_summarize_reports_refusals_as_their_own_category() -> None:
+    """#64 — a REFUSED dataset must be its own line, never folded into `errors` or `skipped`.
+
+    It is neither: a skip means "not this tick" (folding a permanent refusal in inflates the cadence
+    count), and an error means "something failed" (nothing did — the pass declined before touching a
+    byte, and the lineage layer treats errors as noise it can drop). Burying it is precisely what
+    made a shallow clone's silent full materialization invisible in the cron response.
+    """
+    results = [
+        DatasetResult(uri="s3://b/ok", fragments_removed=3, old_versions_removed=2),
+        DatasetResult(uri="s3://b/clone", refused="unsupported manifest feature flags: 16 (base_paths (shallow clone / multi-base))"),
+        DatasetResult(uri="s3://b/skipped", skipped="policy_interval"),
+        DatasetResult(uri="s3://b/broken", error="maintain: boom"),
+    ]
+
+    summary = summarize(results)
+
+    assert summary["refused"] == 1
+    # …and it kept the WHY, keyed by URI — a count alone cannot tell an operator which flag stopped
+    # maintenance or on which dataset.
+    assert summary["refusals"] == {"s3://b/clone": results[1].refused}
+    # Crucially, it did NOT land anywhere else.
+    assert summary["errors"] == {"s3://b/broken": "maintain: boom"}, "a refusal was reported as an error"
+    assert summary["skipped"] == 1, "a refusal was counted as a policy skip"
+    assert summary["datasets"] == 4
+
+
 def test_on_cron_single_flight_skips_an_overlapping_sweep(monkeypatch: Any) -> None:
     """A cron tick that finds a prior sweep still in flight SKIPS instead of starting a SECOND concurrent
     sweep — two sweeps would race compact_files()/cleanup_old_versions() on the same datasets. The sweep is

@@ -10,6 +10,7 @@ selection keys on (``open:`` vs ``maintain:``).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 
@@ -236,3 +237,120 @@ def test_without_the_interval_our_sweep_still_owns_cleanup(tmp_path: Path) -> No
     assert result.error is None, result.error
     assert result.auto_cleanup_configured is False
     assert result.old_versions_removed > 0, "nobody reclaimed old versions"
+
+
+# --------------------------------------------------------------------------- #
+# #64 — the feature-flag refusal, BEFORE any rewrite.
+#
+# Every fixture below is a REAL dataset carrying a REAL manifest flag. The defect these pin was
+# reproduced, not theorized: `compact_one` on a shallow clone returned fragments_removed=8,
+# old_versions_removed=2, error=None — and left the clone holding its own full copy of data it had
+# only referenced. "Success" that silently defeats the feature and GCs the evidence.
+# --------------------------------------------------------------------------- #
+
+
+def test_compaction_refuses_a_shallow_clone_without_materializing_it(tmp_path: Path) -> None:
+    """The reproduced defect, and the assertion that fails without the pre-rewrite gate.
+
+    A shallow clone has NO `data/` directory: every file resolves through the manifest's `base_paths`
+    to the source root (feature flag 16). Compacting it rewrites those foreign files into local ones
+    — storage amplification that defeats the entire point of a metadata-only clone — and then runs
+    version GC on the result.
+
+    The load-bearing assertions are the two NEGATIVE ones: the version is unchanged and no `data/`
+    exists. `refused is not None` alone would pass a gate that refused AFTER compacting.
+    """
+    source = str(tmp_path / "src.lance")
+    lance.write_dataset(pa.table({"id": pa.array(range(50), pa.int64())}), source)
+    for i in range(4):
+        lance.write_dataset(pa.table({"id": pa.array(range(50 + i * 10, 60 + i * 10), pa.int64())}), source, mode="append")
+    ds = lance.dataset(source)
+    clone = str(tmp_path / "clone.lance")
+    ds.shallow_clone(clone, reference=ds.version)
+    assert not (tmp_path / "clone.lance" / "data").exists(), "fixture must really be metadata-only"
+    version_before = lance.dataset(clone).version
+
+    result = compact_one(clone, {}, older_than=timedelta(0))
+
+    assert result.refused is not None, "a shallow clone must be REFUSED, not compacted"
+    assert "16" in result.refused and "base_paths" in result.refused, f"the refusal must name the flag: {result.refused}"
+    # Not an error and not a policy skip: nothing failed, and this is permanent rather than "not this
+    # tick". Inflating either count is what kept this invisible.
+    assert result.error is None and result.error_type is None
+    assert result.skipped is None
+    # NOTHING WAS REWRITTEN — the whole point of checking before the pass rather than after it.
+    assert result.fragments_removed == 0 and result.fragments_added == 0
+    assert result.old_versions_removed == 0
+    assert lance.dataset(clone).version == version_before, "the clone was committed to — a rewrite happened"
+    assert not (tmp_path / "clone.lance" / "data").exists(), "the clone was MATERIALIZED: metadata-only data got copied in"
+
+
+def test_compaction_refuses_a_registered_but_unused_base(tmp_path: Path) -> None:
+    """`add_bases` sets flag 16 while every `DataFile.base_id` stays `None` — nothing about the
+    files looks different yet, and the very next write can land under that base.
+
+    This is the shape a consequence-based detector cannot see, which is why the gate reads the
+    manifest FLAGS rather than inspecting file paths.
+    """
+    from lance.dataset import DatasetBasePath
+
+    uri = str(tmp_path / "based.lance")
+    lance.write_dataset(pa.table({"id": pa.array(range(20), pa.int64())}), uri)
+    for i in range(3):
+        lance.write_dataset(pa.table({"id": pa.array(range(20 + i * 5, 25 + i * 5), pa.int64())}), uri, mode="append")
+    alt = tmp_path / "altbase"
+    alt.mkdir()
+    lance.dataset(uri).add_bases([DatasetBasePath(path=str(alt), name="alt")])
+    version_before = lance.dataset(uri).version
+
+    result = compact_one(uri, {}, older_than=timedelta(0))
+
+    assert result.refused is not None and "16" in result.refused
+    assert result.error is None
+    assert lance.dataset(uri).version == version_before, "a multi-base dataset was rewritten anyway"
+
+
+def test_compaction_refuses_a_dataset_that_uses_data_overlays(tmp_path: Path, overlay_dataset: Callable[[Path], str]) -> None:
+    """Flag 64. An overlay supersedes individual CELL values from `data/overlay-<uuid>.lance`;
+    a rewrite that does not understand them would fold stale base values back in.
+
+    Today pylance refuses the open itself, so this asserts the CLASSIFICATION: a typed refusal that
+    names the flag, not an untyped `open:` error carrying a Rust source path — which is what the
+    sweep's lineage layer drops as transient non-dataset noise and `summarize` buried in `errors`.
+    """
+    uri = overlay_dataset(tmp_path)
+    data_dir = Path(uri) / "data"
+    files_before = {p.name for p in data_dir.iterdir()}
+
+    result = compact_one(uri, {}, older_than=timedelta(0))
+
+    assert result.refused is not None, "an overlay dataset must be REFUSED"
+    assert "64" in result.refused and "overlay" in result.refused.lower(), f"the refusal must name the flag: {result.refused}"
+    assert result.error is None, "a refusal is not an error — the lineage layer drops errors as noise"
+    assert result.error_type is None
+    assert {p.name for p in data_dir.iterdir()} == files_before, "the overlay dataset's files were rewritten"
+
+
+def test_an_ordinary_dataset_is_still_compacted(tmp_path: Path) -> None:
+    """The negative that keeps the gate honest. A refusal that fired on everything would satisfy
+    every test above while silently stopping all maintenance — the exact failure mode a whitelist
+    invites."""
+    uri = _fragmented_indexed_dataset(tmp_path)
+
+    result = compact_one(uri, {}, older_than=timedelta(0))
+
+    assert result.refused is None, f"an ordinary dataset was refused: {result.refused}"
+    assert result.error is None, result.error
+    assert result.fragments_removed >= 4, "the gate blocked a compaction it should have allowed"
+
+
+def test_a_missing_dataset_is_an_open_error_not_a_feature_refusal(tmp_path: Path) -> None:
+    """The other half of `test_compact_one_open_error_prefix_for_a_missing_dataset`.
+
+    Declared-only prefixes that never open are ordinary estate noise. Classifying them as refusals
+    would make the refusal counter permanently non-zero — and that counter is the ONLY signal that a
+    pylance upgrade silently stopped this pass maintaining part of the estate.
+    """
+    result = compact_one(str(tmp_path / "nope.lance"), {}, older_than=timedelta(7))
+    assert result.refused is None
+    assert result.error is not None and result.error.startswith("open:")
