@@ -77,6 +77,14 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.title="rask-ray-cluster" \
       org.opencontainers.image.description="rask ray head + htrflow Serve"
 
+# The runner's own provenance channel (#88): every ALTO this image produces stamps the commit that
+# built it (htr.models.COMMIT_SHA -> the `build` Processing block). VCS_REF is already threaded by
+# scripts/dagger-image.sh (git rev-parse HEAD) for the OCI label above — this reuses the same value
+# rather than inventing a second build arg that could disagree with it. `unknown` or empty stamps
+# NOTHING (the serializer's silence-is-honest rule), so a hand-built image without git degrades to
+# an unstamped ALTO instead of a lying one.
+ENV RASK_GIT_SHA=${VCS_REF}
+
 ENV DEBIAN_FRONTEND=noninteractive
 # base is an unpinned arm64 CUDA-13 tag; pin a digest once a known-good one is chosen.
 # Reason: apt version-pinning these transitives would require chasing rolling updates.

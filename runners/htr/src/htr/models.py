@@ -32,6 +32,17 @@ from dataclasses import dataclass
 #: value the ALTO records is by construction the value every actor in that run loaded with.
 MODEL_REVISION = os.environ.get("RASK_HTR_MODEL_REVISION", "main")
 
+#: The runner build's git commit, baked into the image env at build time (#88). Empty when unset —
+#: and an empty sha renders NO provenance block rather than a placeholder, for the same reason
+#: ``serialize_alto(models=[])`` renders none: silence is honest, a guess is not. Together with
+#: ``MODEL_REVISION`` this closes the "from the run" story: the ALTO names the weights it loaded
+#: AND the code that ran them, so a published transcription is reproducible from its own record.
+#: `unknown` is scripts/dagger-image.sh's git-less fallback for VCS_REF — treating it as a sha
+#: would stamp `commit=unknown` into published ALTO, the exact placeholder lie the empty case
+#: refuses. Normalised here, at the ONE place the value enters, so neither lane can stamp it.
+_RAW_SHA = os.environ.get("RASK_GIT_SHA", "")
+COMMIT_SHA = "" if _RAW_SHA == "unknown" else _RAW_SHA
+
 
 @dataclass(frozen=True, slots=True)
 class ModelRef:
