@@ -103,6 +103,12 @@ def catalog_token() -> str | None:
     """
     if not catalog_enabled():
         return None
+    # The SERVICE DOOR makes the bearer unnecessary, so do not demand a secret that is not needed.
+    # This fail-closed fetch was written before the catalog had an identity door, and it turned a
+    # missing-and-unneeded `catalog-token` into a failed run at the first activity. A service that
+    # can authenticate as itself has nothing to look up.
+    if os.getenv("RASK_CATALOG_SERVICE_IDENTITY") and (os.getenv("RASK_CATALOG_APP_TOKEN") or os.getenv("APP_API_TOKEN")):
+        return None
     from service_kit.governed.secrets import fetch_required_secrets
 
     bundle = fetch_required_secrets(SECRET_STORE, SECRET_KEY, require=CATALOG_TOKEN_FIELD)
@@ -128,8 +134,29 @@ class CatalogServiceClient:
         return f"{project}{DELIMITER}{dataset}"
 
     def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
+        """The credential this plane presents to the catalog.
+
+        THE SERVICE IDENTITY IS PREFERRED, and that ordering is the fix. The catalog now runs the
+        same identity door lineage does (`service_kit.governed.dapr_auth.service_principal`), so a
+        service authenticates the way a service should — with the app token daprd already injects
+        plus the subject it claims — and needs no bearer at all.
+
+        The bearer path came first and was the wrong shape for the problem: the catalog verifies OIDC
+        JWTs, a JWT EXPIRES, and a static string in a secret store cannot be one. Chasing it produced
+        a fail-closed run on a `catalog-token` secret that never needed to exist. Kept below only for
+        a caller that genuinely holds a user's bearer — forwarding a human's token is a real case, and
+        it takes precedence over nothing here because a service call has no human to forward.
+
+        Both halves, never one: the door requires the token AND the identity, and sending one is a
+        request refused for a reason invisible from this side.
+        """
         headers = dict(extra or {})
-        if self._token:
+        token = os.getenv("RASK_CATALOG_APP_TOKEN") or os.getenv("APP_API_TOKEN")
+        identity = os.getenv("RASK_CATALOG_SERVICE_IDENTITY")
+        if token and identity:
+            headers["dapr-api-token"] = token
+            headers["x-lance-service-identity"] = identity
+        elif self._token:
             headers["Authorization"] = f"Bearer {self._token}"
         return headers
 

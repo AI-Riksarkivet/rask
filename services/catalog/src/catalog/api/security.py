@@ -12,6 +12,7 @@ through. A configured-but-broken auth layer must never degrade to open access.
 
 from __future__ import annotations
 
+import time
 from typing import Annotated
 
 from fastapi import Depends, Header, Request
@@ -83,7 +84,24 @@ def authenticate(
             pass
         else:
             audit("authn", SUCCESS, subject=principal.sub)
-            return IDToken(sub=principal.sub, claims={"service": True})
+            # A SYNTHETIC token, and every field is deliberate. `IDToken` requires the conformant
+            # OIDC core claims (iss/sub/aud/exp/iat) — supplying only `sub` raised a pydantic
+            # ValidationError that surfaced to the caller as a bare catalog 500, which reads as a
+            # broken catalog rather than a malformed principal.
+            #
+            # `iss` names the SERVICE DOOR rather than the IdP, so an audit line can never be
+            # mistaken for a human login; `exp` is short because nothing re-verifies this object —
+            # it is already authenticated and exists only to carry `sub` into the authz layer, where
+            # a service is bounded by its own FGA rung exactly like a person.
+            now = int(time.time())
+            return IDToken(
+                iss="rask://service-door",
+                sub=principal.sub,
+                aud=settings.oidc_audience or "rask",
+                iat=now,
+                exp=now + 60,
+                service=True,
+            )
 
     verifier: OIDCVerifier | None = getattr(request.app.state, "oidc", None)
     if verifier is None:
