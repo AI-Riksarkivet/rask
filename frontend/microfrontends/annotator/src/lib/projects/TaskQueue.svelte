@@ -24,6 +24,8 @@
 	import { Dialog } from '@rask/ui/dialog';
 	import { Input } from '@rask/ui/input';
 	import { Select } from '@rask/ui/select';
+
+	import { bulkActions, targetsFor } from './bulk-events';
 	import { Textarea } from '@rask/ui/textarea';
 	import { ExternalLink, Trash2 } from '@lucide/svelte';
 
@@ -183,25 +185,75 @@
 		onchanged();
 	}
 
-	async function bulkAccept(): Promise<void> {
-		// SNAPSHOT the derived at entry: clearing the selection below re-derives it to [], and a
-		// completion notice computed from the post-clear value reports "Accepted 0" for real work
-		// (the bulk e2e caught exactly that).
-		const targets = [...selectedReviewable];
+	/** Every action this SELECTION can perform, derived from the rows' own `legal_events`.
+	 *
+	 *  The queue used to offer exactly two — `accept` and `assign`, hand-picked — while every per-row
+	 *  button came from the task machine. So the row menu could claim, submit, skip, release, requeue
+	 *  and reopen, and the selection could not; claiming twenty items meant twenty clicks, which is
+	 *  what made this read as "pick a row, do a thing" however good the selection model was. */
+	const available = $derived(bulkActions(tasks, selectedIds));
+
+	/** Fire one event across every selected row that declares it legal.
+	 *
+	 *  ONE gated call per item, reported per item — the shape the actor model forces. There is no
+	 *  transaction across task actors, so a rollback would be a second best-effort loop that can
+	 *  itself half-fail; claiming an atomicity we cannot deliver would be worse than reporting the
+	 *  truth. Generalised from the old `bulkAccept`, which was this loop with `accept` baked in. */
+	async function bulkFire(event: string): Promise<void> {
+		// SNAPSHOT at entry: clearing the selection below re-derives the source to [], and a completion
+		// notice computed after that reports "0 items" for real work (the bulk e2e caught exactly that).
+		const targets = targetsFor(tasks, selectedIds, event);
 		if (bulkBusy || targets.length === 0) return;
+		if (event === 'skip' && !confirm(`Skip ${targets.length} item(s)? They leave the queue.`)) return;
 		bulkBusy = true;
 		notice = null;
 		const failures: string[] = [];
 		for (const task of targets) {
-			const result = await fireTaskEvent({ taskId: task.task_id, event: 'accept' });
+			const result = await fireTaskEvent({ taskId: task.task_id, event });
+			if (!result.ok) failures.push(`${task.source.keys[0] ?? task.task_id}: ${result.detail}`);
+		}
+		bulkBusy = false;
+		rowSelection = {};
+		const label = (EVENT_LABELS[event] ?? event).replace('…', '');
+		// Names WHICH failed and how many landed. A bare "failed" leaves a manager unable to tell a
+		// permission problem from a race on one row.
+		notice =
+			failures.length === 0
+				? { ok: true, text: `${label}: ${targets.length} item${targets.length === 1 ? '' : 's'}.` }
+				: {
+						ok: false,
+						text: `${targets.length - failures.length} of ${targets.length} — ${failures[0]}`,
+					};
+		onchanged();
+	}
+
+	/** Remove every selected item. Confirmed ONCE for the batch — a per-item confirm on forty rows is
+	 *  a dialog nobody reads by the fourth one, which is worse than no confirm at all.
+	 *
+	 *  `dropTask` rather than `fireTaskEvent`: removing an item is a PROJECT operation (it leaves the
+	 *  index), not an edge in the task's own machine, which is why it never appeared in `legal_events`
+	 *  and so cannot come from `bulkActions`. */
+	async function bulkRemove(): Promise<void> {
+		const targets = tasks.filter((t) => selectedIds.includes(t.task_id));
+		if (bulkBusy || targets.length === 0) return;
+		if (!confirm(`Remove ${targets.length} item(s) from the project? Their queued work is discarded.`))
+			return;
+		bulkBusy = true;
+		notice = null;
+		const failures: string[] = [];
+		for (const task of targets) {
+			const result = await dropTask({ projectId, taskId: task.task_id });
 			if (!result.ok) failures.push(`${task.source.keys[0] ?? task.task_id}: ${result.detail}`);
 		}
 		bulkBusy = false;
 		rowSelection = {};
 		notice =
 			failures.length === 0
-				? { ok: true, text: `Accepted ${targets.length} item${targets.length === 1 ? '' : 's'}.` }
-				: { ok: false, text: `${failures.length} of ${targets.length} refused — ${failures[0]}` };
+				? { ok: true, text: `Removed ${targets.length} item${targets.length === 1 ? '' : 's'}.` }
+				: {
+						ok: false,
+						text: `${targets.length - failures.length} of ${targets.length} removed — ${failures[0]}`,
+					};
 		onchanged();
 	}
 
@@ -462,30 +514,57 @@
 			class="bg-muted/50 flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm"
 			data-testid="bulk-bar"
 		>
-			<span class="text-muted-foreground">
-				{selectedIds.length} selected · {selectedReviewable.length} reviewable · {selectedAssignable.length}
-				assignable
-			</span>
-			<Button
-				variant="outline"
-				size="sm"
-				class="ml-auto"
-				data-testid="bulk-assign"
-				disabled={bulkBusy || selectedAssignable.length === 0}
-				onclick={() => {
+			<span class="text-muted-foreground shrink-0">{selectedIds.length} selected</span>
+
+			<!-- Every action the SELECTION can take, derived from the rows' own legal events and in a
+			     fixed order — a control that reorders itself between two clicks is how someone accepts a
+			     batch they meant to skip. Each names its own count, so a mixed selection is honest about
+			     the rows it will not touch instead of acting on a subset silently. -->
+			<div class="ml-auto flex flex-wrap items-center justify-end gap-1">
+				{#each available as action (action.event)}
+					<Button
+						variant={action.event === 'accept' ? 'default' : 'outline'}
+						size="sm"
+						data-testid="bulk-{action.event}"
+						disabled={bulkBusy}
+						onclick={() => void bulkFire(action.event)}
+					>
+						{(EVENT_LABELS[action.event] ?? action.event).replace('…', '')}
+						{action.count}
+					</Button>
+				{/each}
+
+				<!-- Stays separate: `assign` needs a RECIPIENT, so it opens a dialog rather than firing. -->
+				{#if selectedAssignable.length > 0}
+					<Button
+						variant="outline"
+						size="sm"
+						data-testid="bulk-assign"
+						disabled={bulkBusy}
+						onclick={() => {
 	bulkAssignFor = [...selectedAssignable];
 	assignee = '';
 }}
-			>
-				{`Assign ${selectedAssignable.length}`}
-			</Button>
-			<Button
-				size="sm"
-				disabled={bulkBusy || selectedReviewable.length === 0}
-				onclick={() => void bulkAccept()}
-			>
-				{bulkBusy ? 'Accepting…' : `Accept ${selectedReviewable.length} reviewed`}
-			</Button>
+					>
+						{`Assign ${selectedAssignable.length}`}
+					</Button>
+				{/if}
+
+				<!-- Removing queued work has no undo, so it confirms — and it is last, away from the
+				     actions someone clicks repeatedly. -->
+				{#if droppable && selectedIds.length > 0}
+					<Button
+						variant="ghost"
+						size="sm"
+						data-testid="bulk-remove"
+						disabled={bulkBusy}
+						title="remove the selected items from the project"
+						onclick={() => void bulkRemove()}
+					>
+						<Trash2 class="size-3.5" /> Remove {selectedIds.length}
+					</Button>
+				{/if}
+			</div>
 		</div>
 	{/if}
 	{#if notice}

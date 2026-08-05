@@ -162,7 +162,12 @@
 	</div>
 {:else if detail}
 	{@const project = detail.project}
-	<div class="mx-auto flex w-full max-w-6xl flex-col gap-4 p-6">
+	<!-- FULL WIDTH. This was `mx-auto max-w-6xl` — a 1152px cap with dead margin either side, and the
+	     ONLY width-capped route in the estate (every other table page runs full-bleed). The queue is
+	     a data table that has to carry the item's own columns; capping the page is what made it read
+	     as squashed while the panels around it were fine. Prose blocks below keep their own
+	     `max-w-3xl`, because a measure limit is right for TEXT and wrong for a table. -->
+	<div class="flex w-full flex-col gap-4 p-6">
 		<div class="flex flex-wrap items-center justify-between gap-3">
 			<div class="flex items-center gap-3">
 				<Button variant="ghost" size="sm" href="{base}/" aria-label="back to labeling tasks">
