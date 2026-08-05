@@ -29,7 +29,7 @@
 
 	// The compute landing — the Ray-plane summary merged with the PIPELINE RUNS feed. The
 	// batches/HTR dashboard died at P7a (the batches table + orchestrator plane are gone):
-	// ingestion is `POST /api/ingest-iiif` (the /new page) and the cascade's progress is the
+	// ingestion is `POST /api/ingest` (the /new page) and the cascade's progress is the
 	// lineage runs feed — the same `query.live` pulse that backs the shell's bell, so the
 	// landing and the bell can never disagree about the estate.
 	//

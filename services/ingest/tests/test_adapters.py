@@ -192,3 +192,46 @@ def test_every_adapter_is_DRIVEN_not_merely_present(tmp_path: Path, monkeypatch:
     # The manifest and the image must have gone through ONE client, not one per request: the shared
     # connection is why `storage.iiif` takes a client at all.
     assert any(url.endswith("/manifest") for url in _FakeClient.seen), _FakeClient.seen
+
+
+def test_max_pages_is_READ_not_merely_offered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The option was registered, rendered, numeric-validated and posted — and read by nothing.
+
+    It worked before A12 (`iiif_produce.py` sliced `image_ids[: self._max_pages]`); the rewrite kept
+    the interface and dropped the behaviour. That is worse than never offering it: a user who caps a
+    harvest at 3 pages and receives the whole volume has been actively misled by their own UI.
+
+    Driven through `build_source` from the same `options` dict the control API posts, because the
+    coercion is half the defect — the browser sends `"3"`, a script sends `3`, and a blank field
+    sends `""` meaning "all".
+    """
+    import httpx
+    from ingest.sources import build_source, iter_unit_keys
+
+    manifest = {"items": [{"id": f"https://iiif.example/arkis!A0060198_{i:05d}/canvas"} for i in range(1, 11)]}
+
+    class _Resp:
+        def raise_for_status(self) -> None: ...
+        def json(self) -> dict[str, object]:
+            return manifest
+
+    class _Client:
+        def __init__(self, *a: object, **k: object) -> None: ...
+        def __enter__(self) -> _Client:
+            return self
+
+        def __exit__(self, *e: object) -> None: ...
+        def get(self, url: str, *a: object, **k: object) -> _Resp:
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+
+    def keys(options: dict[str, object]) -> list[str]:
+        spec = SourceSpec(kind="iiif", project="p", dataset="d", options={"volume_id": "A0060198", **options})
+        return list(iter_unit_keys(build_source(spec)))
+
+    assert len(keys({})) == 10, "no cap must still harvest the whole volume"
+    assert len(keys({"max_pages": 3})) == 3, "an int cap must be honoured"
+    assert len(keys({"max_pages": "3"})) == 3, "the form posts JSON — a numeric field arrives as a STRING"
+    assert len(keys({"max_pages": ""})) == 10, "a blank field means 'all', not 'none'"
+    assert len(keys({"max_pages": 0})) == 10, "0 is 'unbounded', matching the estate's other ceilings"

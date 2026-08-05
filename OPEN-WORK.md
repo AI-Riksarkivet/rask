@@ -3192,11 +3192,27 @@ this section was originally written about, one tier further down. I2 ("resolve t
 the CATALOG, never compose a path") on the other side of the mover. It is a change to a service
 outside the ingest plane and wants its own review.
 
+### `/api/ingest-iiif` — RETIRED
+
+The row was dead, but not because nobody called it: **A12 deleted the medallion route it pointed
+at**, so it resolved to a live backend that answered 502 rather than to no route at all — naming a
+backend as broken instead of a path as absent, which is the worse failure. Removed; the
+sibling-prefix ORDERING property it demonstrated (`_pick_route` requires `path == prefix or
+startswith(prefix + "/")`, so a `-` suffix cannot fall into `/api/ingest`) is kept and still tested,
+with the assertion inverted to the direction the bug now runs.
+
 ### `/bronze-arrival` still exists alongside `/publication-arrival`
 
 Both publish the same `medallion.bronze` trigger, and the movers' token de-duplication is what stops
-a table emitting both signals from cascading twice. Retiring the lineage head is a follow-up once
-every writer publishes — doing it before then would strand any writer that has not adopted publish.
+a table emitting both signals from cascading twice.
+
+**The stated retirement condition is not reachable as written.** "Once every writer publishes"
+requires writers that CAN publish, and none of the remaining ones can: the movers compose their
+targets and never register them, so they have no catalog table to publish; `/produce` and
+`/ingest-media` write bronze with no catalog involvement at all. Prerequisite order is therefore:
+movers register (the write-half residual above) → `/produce` and `/ingest-media` become
+catalog-mediated → only then is the lineage head genuinely redundant. Disabling either head today
+strands a real lane in each direction.
 
 ### `StagingOverlapError` is reachable
 
@@ -3214,15 +3230,57 @@ is opt-in through field metadata (`lance-schema:unenforced-primary-key`) which t
 nowhere, so `id` is an ordinary column the estate agrees to merge on and Lance validates no
 uniqueness. Declaring it properly is open.
 
-### Dropped from the medallion head, still not restored
+### Dropped from the medallion head — partially restored
 
-The empty-source refusal (a mis-set prefix currently commits nothing, reports COMPLETE, and emits a
-WROTE edge for a table it did not write) and the ingest ceilings (`s3-prefix` at a bucket root
-enumerates the whole bucket). Both are guards against a mis-pointed source; both are cheaper here
-than in the head they came from, because enumeration is a discrete phase.
+**RESTORED.** The `iiif` adapter's `max_pages` was registered, rendered by the compute zone,
+numeric-validated on the user's behalf, posted in `options` — and **read by nothing**. It worked
+before A12 (`iiif_produce.py` sliced `image_ids[: self._max_pages]`); the rewrite kept the interface
+and dropped the behaviour, which is worse than never offering it: a user who caps a harvest at 10
+pages and receives the whole volume has been misled by their own UI. Now applied to the IDS, before
+any URL is built or byte fetched, with the string/int/blank/zero coercions pinned by a test.
 
-The IIIF read-through cache belongs to the ADAPTER, not the platform — a per-source `Fetcher` is
-already the designed seam.
+**STILL OPEN — the empty-source refusal.** OPEN-WORK previously described only the LOCAL catalog
+path. The accurate statement, both configurations:
+
+* **local catalog (default, and what every test uses)** — the run commits nothing, reports COMPLETE
+  with a `committed_version` it did not produce, and emits a COMPLETE lineage event naming the
+  bronze table: a WROTE edge for a table it did not write.
+* **catalog service (`RASK_INGEST_USE_CATALOG=true`, the CHART DEFAULT)** — the run dies in
+  `finalize`, because the catalog refuses an empty commit with 400 "no fragments to commit".
+
+The second half is FIXED: `finalize_run` now treats an empty fragment list as the no-op
+`Lander.commit_fragments` always did, reports `committed_version: None` rather than the version the
+dataset already had, and publishes nothing. That branch was **structurally invisible to the suite** —
+it runs only when the catalog has `commit`, and `LocalCatalog` does not — so `test_empty_commit.py`
+drives it through a stub that has one. Before the guard, the 400 burned the activity's four retries
+and killed the workflow BEFORE `emit_terminal`, leaving a permanent orphan START in the graph and a
+FAILED run with an empty `errors` dict and no operator-readable reason. The same 400 swallowed the
+FAIL lineage of any run whose units all failed validation.
+
+What remains is the REFUSAL itself: a source enumerating zero units is still not refused at the
+enumeration seam, and `ensure_dataset` runs before enumeration, so a mis-pointed source still leaves
+a registered empty bronze table behind. Note a latent blocker for that fix: `runs.py`'s
+`_RUNTIME_STATUS` merge only promotes an outcome status when it is `COMPLETE` or
+`COMPLETE_WITH_ERRORS`, so a workflow that RETURNS `status: "FAILED"` has it silently dropped and the
+door still answers COMPLETE.
+
+**STILL OPEN — the ingest ceilings.** Enumeration is unbounded for every source kind: no unit, byte
+or time ceiling. `S3Source` does a full recursive LIST when `prefix` is empty, which the registry
+explicitly invites ("Leave empty to take the whole bucket"). Separately, `chart/values.yaml` declares
+`RASK_INGEST_MAX_RUN_HOURS: "24"` that **no code in `services/ingest` reads**, while gate A15 asserts
+`olderThanDays * 24 >= max_run_hours` and passes — a green gate certifying a relation whose other
+side nothing enforces. Either the workflow gains a real deadline or the gate is weakened to what it
+can prove; leaving it is worse than having no gate.
+
+**`id` is NOT a primary key, and should NOT be declared one.** Investigated and REFUTED. Lance's
+`lance-schema:unenforced-primary-key` is real, but its only capability is enabling `merge_insert`
+with no explicit key — which this estate forbids (every merge site passes `on=`) — while the
+enforcement it appears to buy (`id` unwritable as null) comes from `nullable=False` alone, measured.
+Declaring it is an irreversible create-time trap for no gain. If the enforcement is wanted, that is
+`pa.field("id", pa.int64(), nullable=False)` plus a nullability check in `assert_creation_contract`.
+The larger defect that investigation surfaced: `CatalogServiceClient.ensure` never runs
+`assert_creation_contract` on either its short-circuit return or after `_create_empty`, so the
+creation gate exists on the path tests take and not on the path production takes.
 
 ### The Dapr app-token bypass — CLOSED estate-wide
 

@@ -232,6 +232,54 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str]) ->
     seen: set[str] = set()
     all_fragments = [f for f in [*staged, *fragments] if not (f in seen or seen.add(f))]
 
+    if not all_fragments:
+        # NOTHING TO COMMIT IS A NO-OP, NOT A COMMIT OF NOTHING — and this guard exists because the
+        # catalog branch below skipped the one `Lander.commit_fragments` has always had
+        # (`lander.py:95-100`: "a run whose every unit failed should leave no version behind to
+        # explain"). It POSTed `{"fragments": []}`, which the catalog refuses with 400 "no fragments
+        # to commit" (`catalog/services/dataplane.py:598`).
+        #
+        # DEPLOYED, that 400 is a crash, not a message: `RASK_INGEST_USE_CATALOG: "true"`
+        # (chart/values.yaml), so the 400 raises out of the `finalize` ACTIVITY, burns its four
+        # ACTIVITY_RETRY attempts against a permanently-failing input, and kills the workflow BEFORE
+        # `emit_terminal` (workflow.py) — so the run's own FAIL never reaches the lineage graph and
+        # the START emitted at accept is orphaned forever. The run reports FAILED with an empty
+        # `errors` dict and no operator-readable reason.
+        #
+        # STRUCTURALLY INVISIBLE TO THE SUITE: this branch runs only when the catalog has `commit`,
+        # and `LocalCatalog` — the default with `RASK_INGEST_USE_CATALOG` unset, which is what every
+        # test uses — does not. No local test could take it. That is the argument for the guard
+        # sitting here rather than inside either catalog implementation.
+        #
+        # TWO ordinary paths reach it: a source that enumerated zero units, and a run whose every
+        # unit failed validation.
+        result = Lander(catalog).commit_fragments(uri, all_fragments, run_id=spec.run_id)
+        # STILL PURGED. A run whose staged manifests were all truncated (`staging.py` skips those)
+        # arrives here with an empty list and would strand its staged bytes with nothing left to
+        # collect them.
+        purge_staged(uri, spec.run_id)
+        return {
+            # NOT `result.version`. That is the version the dataset ALREADY had — the previous run's,
+            # or the empty v1 `ensure_dataset` created — and reporting it is the "committed_version
+            # it did not produce" half of this defect.
+            "committed_version": None,
+            "rows": 0,
+            "dataset_rows": result.rows,
+            "errors": errors,
+            # UNCHANGED derivation, deliberately: `test_run_chain.py` drives exactly
+            # `finalize_run(spec, [], {...})` and pins COMPLETE_WITH_ERRORS under "a run that
+            # delivered 9,997 of 10,000 pages did not FAIL". Refusing a genuinely EMPTY SOURCE is a
+            # different decision at a different seam (enumeration), not this one.
+            "status": "COMPLETE_WITH_ERRORS" if errors else "COMPLETE",
+            # No publication: there is no version to gate, and `_publish` would move `published`
+            # onto a version this run did not write.
+            "published": None,
+            "from_version": None,
+            "to_version": None,
+            "publish_reason": "nothing to commit",
+            "publish_error": None,
+        }
+
     if hasattr(catalog, "commit"):
         # THE CATALOG COMMITS. A commit registered only in this process is one the cascade cannot
         # ride: the event that wakes a mover is the catalog's publication of a new version, so a

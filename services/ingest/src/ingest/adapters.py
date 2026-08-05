@@ -129,10 +129,22 @@ class IIIFVolumeSource:
     the latter would only lose hard-won behaviour against a rate-limited endpoint.
     """
 
-    def __init__(self, volume_id: str, iiif_base: str | None = None, query_params: str | None = None) -> None:
+    def __init__(
+        self,
+        volume_id: str,
+        iiif_base: str | None = None,
+        query_params: str | None = None,
+        max_pages: int | None = None,
+    ) -> None:
         self._volume = volume_id
         self._base = iiif_base
         self._query = query_params
+        #: Stop after this many pages. The option was REGISTERED, rendered by the compute zone,
+        #: numeric-validated on the user's behalf and posted in `options` — and read by nothing. It
+        #: worked before A12 (`iiif_produce.py` sliced `image_ids[: self._max_pages]`); the rewrite
+        #: kept the interface and dropped the behaviour, which is worse than never offering it: a
+        #: user who caps a harvest at 10 pages and gets the whole volume has been actively misled.
+        self._max_pages = max_pages
 
     def iter_objects(self) -> Iterator[SourceObject]:
         """Keys AND bytes, over ONE pooled connection for the whole volume.
@@ -174,7 +186,12 @@ class IIIFVolumeSource:
         query = self._query or DEFAULT_QUERY_PARAMS
         # `base_url`, not `iiif_base` — the latter is what this file invented and `ty` refused. The
         # keyword is the SAME on both calls, which is what makes a single wrong guess break both.
-        for image_id in get_image_ids(self._volume, base_url=base, client=client):
+        image_ids = get_image_ids(self._volume, base_url=base, client=client)
+        # Applied to the IDS, before any URL is built or any byte is fetched. `get_image_ids` is one
+        # manifest request regardless, so the cap costs nothing here and saves the whole download.
+        if self._max_pages is not None and self._max_pages > 0:
+            image_ids = image_ids[: self._max_pages]
+        for image_id in image_ids:
             yield build_image_url(image_id, base_url=base, query_params=query)
 
 
@@ -184,7 +201,11 @@ def _iiif(spec: SourceSpec) -> SourceAdapter:
         raise ValueError("iiif source requires options.volume_id")
     base = spec.options.get("iiif_base")
     query = spec.options.get("query_params")
-    return IIIFVolumeSource(volume, str(base) if base else None, str(query) if query else None)
+    # Coerced, not trusted: the form posts JSON, so a numeric field arrives as a string ("10") from
+    # the browser and as an int from a script. A blank field arrives as "" — falsy, meaning "all".
+    raw_max = spec.options.get("max_pages")
+    max_pages = int(raw_max) if str(raw_max or "").strip().isdigit() else None
+    return IIIFVolumeSource(volume, str(base) if base else None, str(query) if query else None, max_pages=max_pages)
 
 
 def _iiif_lineage(spec: SourceSpec) -> LineageInput:
