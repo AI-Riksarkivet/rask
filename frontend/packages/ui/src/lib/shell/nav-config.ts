@@ -273,17 +273,33 @@ const EXPLORER_ITEMS: TopNavItem[] = [
 	{ title: 'Workflow', href: '/explorer/workflow', description: 'The derivation pipeline.' },
 ];
 
+/** The MODELS zone's panel rows — one model's whole life.
+ *
+ *  These three were a COLUMN OF THE LAKEHOUSE PANEL (`/lakehouse/models/*`) until the surface itself
+ *  moved. They now name the zone's own routes, and the last two rows are what the move was for: the
+ *  registry that training produces and the playground that spends it finally sit in the same place as
+ *  the training that fills it, instead of one zone away from it. */
 const MODEL_ITEMS: TopNavItem[] = [
-	{ title: 'Registry', href: '/lakehouse/models', description: 'Candidate → blessed, per model.' },
+	{ title: 'Registry', href: '/models/', description: 'Candidate → blessed, per model.' },
 	{
 		title: 'Experiments',
-		href: '/lakehouse/models/experiments',
+		href: '/models/experiments',
 		description: 'Training runs and their metrics.',
 	},
 	{
 		title: 'Pipeline',
-		href: '/lakehouse/models/pipeline',
+		href: '/models/pipeline',
 		description: 'Train, validate, promote.',
+	},
+	{
+		title: 'Playground',
+		href: '/models/playground',
+		description: 'Run a page through HTR and read the ALTO.',
+	},
+	{
+		title: 'Training runs',
+		href: '/models/runs',
+		description: 'Every submitted run, live state first.',
 	},
 ];
 
@@ -360,7 +376,7 @@ const OPERATIONS_ITEMS: TopNavItem[] = [
 ];
 
 /**
- * The top-navbar IA. Seven zones — home, lakehouse, explorer, annotator, compute, train, studio — and
+ * The top-navbar IA. Seven zones — home, lakehouse, explorer, annotator, compute, models, studio — and
  * the bar carries an entry for EVERY one of them (R15: a zone missing from the shared navbar is a
  * defect, regardless of scaffold status). Lakehouse and Lineage stay two views of the ONE merged
  * estate zone rather than two apps — a hop from the catalog to the lineage graph, or to the DLQ,
@@ -431,10 +447,12 @@ export function isMainMenu(pathname: string): boolean {
 
 export function topNav(estateAdmin: boolean): TopNavEntry[] {
 	// LAKEHOUSE gathers everything that describes or governs the one governed estate: the catalog
-	// (projects → warehouses → namespaces → tables), the model registry (models are catalog objects
-	// too — models$<model> carries the same rungs; R17 migrates this surface to the train zone,
-	// which owns the column once the routes physically move), and, for an estate admin, the
-	// operational surfaces over it. Grouping by DOMAIN rather than by zone is what
+	// (projects → warehouses → namespaces → tables), the lineage over it, and, for an estate admin,
+	// the operational surfaces on top. The model registry used to be a column here — models ARE
+	// catalog objects (models$<model> carries the same rungs), which is why it sat here at all — but
+	// R17's migration has now happened: the routes physically moved, so the column moved with them and
+	// the MODELS zone owns it. A trigger claims a ZONE; it must not keep advertising another one's
+	// routes. Grouping by DOMAIN rather than by zone is what
 	// keeps a growing product from growing the bar: a new ROUTE becomes a row in a panel column —
 	// only a new ZONE earns a new entry (R15). The project switcher sits at the head of the bar on
 	// every zone (global context belongs in global chrome).
@@ -444,9 +462,12 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 		// under one area is what made it invisible from the others — the placement that was reverted.
 		{ label: 'Workspace', items: WORKSPACE_ITEMS },
 		{ label: 'Catalog', items: DATA_ITEMS },
-		{ label: 'Models', items: MODEL_ITEMS },
-		// Lineage is an AREA of this zone (/lakehouse/lineage), exactly like Models
-		// (/lakehouse/models) — so it is a column, not a trigger of its own. It used to be top-level,
+		// NO 'Models' COLUMN — the area left this zone for the MODELS zone, which is its own trigger
+		// below. What the lakehouse keeps is model LINEAGE (which run wrote which version), and that is
+		// already a Lineage row.
+		//
+		// Lineage is an AREA of this zone (/lakehouse/lineage) — so it is a column, not a trigger of
+		// its own. It used to be top-level,
 		// which forced the Lakehouse trigger to carve lineage out of its own match to stop both
 		// lighting up, and left a bar where one entry was a zone and another was an area inside it
 		// with no way for a reader to tell why. Trigger = zone, column = area; the bar is now
@@ -519,14 +540,20 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			match: under('/annotator'),
 		},
 		{
-			// TRAIN is its own zone again (R17): submit, watch, monitor and analyse training, plus the
-			// model registry that migrates over from Lakehouse. The zone is being scaffolded — the
-			// entry rides the bar NOW (R15: a zone missing from the navbar is a defect regardless of
-			// scaffold status); a plain link until its areas are real enough to panel.
-			title: 'Train',
-			href: '/train/',
+			// MODELS — the model-lifecycle zone. It began as R17's `train` (submit / runs / monitoring /
+			// analysis, all scaffold) and was a PLAIN LINK on the reasoning that a one-row dropdown is
+			// noise. It earns a panel now, because the migration R17 promised actually happened: the
+			// registry, experiments and pipeline moved out of the lakehouse, and the playground joined
+			// them, so the zone has five real destinations rather than four placeholders.
+			//
+			// The label is the JOB, not the directory — and here they agree. "Train" named one AREA of
+			// this zone and would now under-describe it: you come here to see what a model IS, not only
+			// to make one.
+			title: 'Models',
+			href: '/models/',
 			icon: Brain,
-			match: under('/train'),
+			match: under('/models'),
+			items: [...MODEL_ITEMS],
 		},
 		{
 			// STUDIO stays the sandbox/PoC zone (R17) — one experimental surface, so a plain link.

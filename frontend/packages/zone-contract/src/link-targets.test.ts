@@ -7,14 +7,18 @@ import { FRONTEND_ROOT } from './manifest';
 describe('the served set is derived from the zones, not hardcoded', () => {
 	it('contains every zone prefix and the catch-all zone routes', () => {
 		const served = servedSegments();
-		for (const zone of ['lakehouse', 'explorer', 'annotator']) {
+		// `models` is in this list deliberately: it was a pre-merge zone root, then an AREA of the
+		// lakehouse, and is now a zone again (the model-lifecycle zone). A segment can come back, and
+		// the served set must track the zone directories rather than a memory of one migration.
+		for (const zone of ['lakehouse', 'explorer', 'annotator', 'models']) {
 			expect(served, `${zone} serves /${zone}`).toContain(zone);
 		}
 		// home owns no prefix, so its own route dirs are reachable at the root.
 		expect(served).toContain('auth');
 		expect(served).toContain('capi');
-		// And the merged-away pre-merge zone paths are NOT served — the whole point.
-		for (const gone of ['data', 'lineage', 'models', 'admin']) {
+		// And the merged-away pre-merge zone paths are NOT served — the whole point. (`models` left
+		// this list when it became a zone again; the other three are still lakehouse areas.)
+		for (const gone of ['data', 'lineage', 'admin']) {
 			expect(
 				served,
 				`/${gone} was a pre-merge zone root; it is under /lakehouse now`,
@@ -94,8 +98,9 @@ describe('every domain-relative link in the estate lands somewhere', () => {
 				.map(
 					(v) =>
 						`${rel}:${v.line} links to "${v.href}" but no zone serves "/${v.segment}" — a hard ` +
-						`navigation straight to a 404. Zone paths are /lakehouse, /explorer, /annotator; the ` +
-						`pre-merge roots (/data, /lineage, /models, /admin) are areas of the lakehouse zone now.`,
+						`navigation straight to a 404. Zone paths are /lakehouse, /explorer, /annotator, ` +
+						`/models; the pre-merge roots (/data, /lineage, /admin) are areas of the lakehouse ` +
+						`zone now.`,
 				)
 				.join('\n'),
 		).toEqual([]);

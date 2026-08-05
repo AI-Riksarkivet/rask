@@ -262,10 +262,17 @@ jobs:
         run: bunx playwright install --with-deps chromium
 
       # e2e for the FOUR zones that define `test:e2e` — home, lakehouse, media, annotator — fanned by
-      # turbo, which discovers the task rather than reading a list here. `compute`, `studio` and `train`
-      # ship no e2e at all, so this leg is 4-of-7 coverage, not full coverage — a real gap, not a naming
-      # leftover (the "four zone" counts elsewhere in this workflow WERE leftovers; there are seven zone
-      # images, and they have been corrected).
+      # turbo, which discovers the task rather than reading a list here. `compute`, `studio` and
+      # `models` ship no e2e at all, so this leg is 4-of-7 coverage, not full coverage — a real gap, not
+      # a naming leftover (the "four zone" counts elsewhere in this workflow WERE leftovers; there are
+      # seven zone images, and they have been corrected).
+      #
+      # `models` is the newest hole and the most deliberate one: the registry/experiments/pipeline
+      # specs that covered those surfaces are still in `lakehouse/e2e` (admin/models-*.spec.ts,
+      # models/), pointing at `/lakehouse/models` routes that moved to this zone. They need the
+      # lakehouse harness ported with them — ports.ts, admin/session.ts, mock-catalog.ts,
+      # mock-observability.ts, lineage/mock-lineage.ts and a two-server playwright.config — and they
+      # FAIL until that lands.
       #
       # Run SERIALLY (--concurrency=1): each zone spins its own vite SSR dev server + a chromium
       # instance, and running every first-compile at once blows the per-server startup window on a

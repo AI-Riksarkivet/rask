@@ -19,13 +19,28 @@ describe('isCrossZonePath', () => {
 	});
 
 	it('does NOT match a hop BETWEEN areas of the merged lakehouse zone', () => {
-		// data / lineage / models / admin used to be four zones, so a link between them had to
+		// data / lineage / admin used to be separate zones, so a link between them had to
 		// hard-navigate. They are one zone now: these are same-zone soft navs, and flagging them would
 		// force a full document reload where the router can handle it.
 		expect(isCrossZonePath('/data/tables')).toBe(false);
 		expect(isCrossZonePath('/lineage')).toBe(false);
-		expect(isCrossZonePath('/models/experiments')).toBe(false);
 		expect(isCrossZonePath('/admin/dlq')).toBe(false);
+	});
+
+	it('DOES match /models again — it is a zone once more, not a lakehouse area', () => {
+		// `/models/experiments` was asserted above as a same-zone hop, on the reading that models was
+		// one of the four pre-merge roots folded under /lakehouse. That reading expired: the model
+		// surfaces moved OUT of the lakehouse into a zone of their own, so these are separate
+		// SvelteKit apps again and a link between them must hard-navigate or it 404s.
+		//
+		// This is the exact bug class the gate exists for, arriving from the opposite direction — a
+		// segment that stopped being an area and became a zone. The old assertion would have told a
+		// lakehouse → models link that it needed no reload.
+		expect(isCrossZonePath('/models')).toBe(true);
+		expect(isCrossZonePath('/models/experiments')).toBe(true);
+		// …and from INSIDE the models zone its own routes stay soft.
+		expect(isCrossZonePath('/models/experiments', 'models')).toBe(false);
+		expect(isCrossZonePath('/lakehouse/lineage', 'models')).toBe(true);
 	});
 
 	it('ignores same-zone / non-zone and opaque-expression hrefs', () => {

@@ -11,8 +11,9 @@ import {
 	MOCK_OBS_PORT,
 } from './e2e/ports';
 
-// Hermetic e2e for the whole lakehouse zone — all four areas (e2e/data, e2e/lineage, e2e/models,
-// e2e/admin), which used to be four separate zones each running their own dev server and browser.
+// Hermetic e2e for the whole lakehouse zone — its areas (e2e/catalog, e2e/lineage, e2e/admin), which
+// used to be separate zones each running their own dev server and browser. (`e2e/models` left with
+// the models area itself; see microfrontends/models/e2e.)
 // Every `/capi/**` + `/api/**` response is mocked via page.route, so no live backend is needed: the dev
 // server runs the real SSR + client hydration under this zone's `/lakehouse` base path, and the
 // browser's backend calls are the only thing stubbed. Specs `goto` the base-prefixed routes
@@ -118,7 +119,7 @@ export default defineConfig({
 		// starve behind the initial compile and time out at 30s in a bundle — flaky counts per run.
 		{
 			name: 'warmup',
-			testMatch: /e2e\/(data|lineage|models|storage)\/warmup\.setup\.ts/,
+			testMatch: /e2e\/(data|lineage|storage)\/warmup\.setup\.ts/,
 			use: { baseURL: AUTH_OFF },
 		},
 		{

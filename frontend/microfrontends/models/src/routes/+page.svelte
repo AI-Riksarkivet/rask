@@ -2,5 +2,5 @@
 	import ModelRegistry from '$lib/models/ModelRegistry.svelte';
 </script>
 
-<svelte:head><title>Models · lance</title></svelte:head>
+<svelte:head><title>Model registry — RASK</title></svelte:head>
 <ModelRegistry />

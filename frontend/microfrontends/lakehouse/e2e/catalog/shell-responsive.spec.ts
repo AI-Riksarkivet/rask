@@ -177,10 +177,12 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 		'/lakehouse/catalog',
 		'/lakehouse/catalog/tables',
 		'/lakehouse/catalog/warehouses',
-		'/lakehouse/models',
 		'/lakehouse/lineage',
 		'/lakehouse/lineage/runs',
 		'/lakehouse/lineage/columns',
+		// The MODELS zone's root — a zone entry in this bar now, not a `/lakehouse/models` row. Zone
+		// roots carry the trailing slash for the same 308 reason as the two below.
+		'/models/',
 		// Zone-root hrefs carry the TRAILING SLASH — load-bearing (a bare /explorer costs a 308 per hop;
 		// nav-config.test pins it). The old bare forms predated that convention landing here.
 		'/explorer/',
@@ -244,7 +246,6 @@ test('the wide Lakehouse panel carries NO filler self-row — its sub-area rows 
 		'/lakehouse/catalog/tables',
 		'/lakehouse/catalog/namespaces',
 		'/lakehouse/catalog/warehouses',
-		'/lakehouse/models',
 		'/lakehouse/lineage',
 	]) {
 		await expect(panel.locator(`a[href="${href}"]`)).toHaveCount(1);

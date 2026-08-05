@@ -224,6 +224,20 @@ spec:
               value: {{ printf "http://%s:5556/dex" (include "lance.dexHost" $root) | quote }}
             {{- end }}
             {{- end }}
+            {{- if and $root.Values.ray.enabled (eq .name "models") }}
+            # --- the models zone's inference upstream ------------------------------------------
+            # The playground (/models/playground) posts page bytes to the Ray SERVE HTTP INGRESS,
+            # NOT through the gateway. That is not a shortcut: /api/serve reaches Ray's DASHBOARD
+            # api (:8265) via the compute service, which registers it GET/HEAD-only on purpose
+            # (services/compute/src/compute/proxy.py:16-22 — the same surface can PUT a deployment,
+            # i.e. run arbitrary code). Inference lives on :8000 behind the Serve route prefix, and
+            # nothing in the fleet routes there. The medallion's own HTR stage reaches it the same
+            # way (MEDALLION_HTRFLOW_URL), so this is the established seam, not a new one.
+            #
+            # Scoped PER ZONE like the media block below: no other zone routes to Serve.
+            - name: MODELS_SERVE_URL
+              value: {{ printf "http://%s-ray-head-svc:%v%s" (include "rask.fullname" $root) $root.Values.ray.servePort $root.Values.ray.serveRoutePrefix | quote }}
+            {{- end }}
             {{- if and $root.Values.explorer.enabled (or (eq .name "explorer") (eq .name "annotator")) }}
             # --- the media plane's upstreams for these two zones' BFF proxy routes -------
             # (/<zone>/api/* -> the media Services). Scoped PER ZONE, not handed to every

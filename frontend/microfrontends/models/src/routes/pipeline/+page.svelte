@@ -2,5 +2,5 @@
 	import PipelineControl from '$lib/models/PipelineControl.svelte';
 </script>
 
-<svelte:head><title>Pipeline · lance</title></svelte:head>
+<svelte:head><title>Pipeline — RASK</title></svelte:head>
 <PipelineControl />

@@ -422,9 +422,12 @@ frontend:
     # storage folded into lakehouse, overview into compute (R16); discover retires at P7.
     - {name: compute, path: /compute}
     - {name: studio, path: /studio}
-    # R17: train RETURNS as its own zone (supersedes R8's train→lakehouse fold) —
-    # submit/runs/monitoring/analysis/models; lakehouse's models area migrates there.
-    - {name: train, path: /train}
+    # The MODEL-LIFECYCLE zone. It began as R17's `train` (submit/runs/monitoring/
+    # analysis) and became `models` once lakehouse's models area physically migrated
+    # into it: registry + experiments + pipeline now sit beside training and the
+    # inference playground, so one zone answers everything about a model and the
+    # lakehouse keeps only its LINEAGE.
+    - {name: models, path: /models}
     # lance-ns zones. `lakehouse` is the MERGED estate zone: catalog + lineage + models + admin were
     # four separate zones on four Deployments, all reading the same catalog/lineage planes and all
     # shipped from one shared image tag — four SSR servers and a full document reload between them,
