@@ -28,12 +28,19 @@ const ZONES = zoneDirs();
  * Zones that deliberately render NO zone rail, with the reason. Adding one here is a design
  * decision that should be argued in review, which is the point of making it a list.
  *
- * `annotator` — its rail held two rows (Labeling tasks, Browse corpus) beside the annotate view's
- * own annotation panel, which read as two sidebars competing. The zone root is reachable from the
- * top navbar and /browse is linked from the landing copy, so the rail was cost without destination,
- * and the canvas wants the width.
+ * `annotator` was here, and came OUT — the entry was reasoning about the wrong cost. It argued that
+ * the zone's two rows read as a second sidebar beside the annotate view's annotation panel, which
+ * is a fair point about the CANVAS. But `zoneNav={null}` does not remove two rows: `AppShell` gates
+ * the WHOLE `<AppSidebar>` on `zoneNavLeaves(zoneNav).length > 1`, and the sidebar HEADER is where
+ * the project switcher lives. So the opt-out removed the project dropdown, the estate zone links
+ * and the collapse trigger — landing in Annotate stripped away navigation every other zone gives
+ * you, which is precisely the failure this file exists to prevent and the one `app-shell.svelte`
+ * documents having already fixed for canvas mode. The canvas concern is handled there instead: a
+ * canvas zone starts the rail icon-collapsed.
+ *
+ * The list is empty on purpose. An entry costs a whole sidebar, not a row — weigh it that way.
  */
-const NAVLESS = new Set(['annotator']);
+const NAVLESS = new Set<string>();
 
 const zoneDir = (zone: string) => resolve(FRONTEND_ROOT, 'microfrontends', zone);
 const navPath = (zone: string) => resolve(zoneDir(zone), 'src', 'lib', 'nav.ts');
