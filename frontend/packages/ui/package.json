@@ -69,17 +69,22 @@
 			"types": "./dist/components/field/index.d.ts",
 			"svelte": "./dist/components/field/index.js"
 		},
-		"./identity": {
-			"types": "./dist/components/identity/index.d.ts",
-			"svelte": "./dist/components/identity/index.js"
-		},
 		"./grants-panel": {
 			"types": "./dist/components/grants-panel/index.d.ts",
 			"svelte": "./dist/components/grants-panel/index.js"
 		},
+		"./identity": {
+			"types": "./dist/components/identity/index.d.ts",
+			"svelte": "./dist/components/identity/index.js"
+		},
 		"./input": {
 			"types": "./dist/components/input/index.d.ts",
 			"svelte": "./dist/components/input/index.js"
+		},
+		"./live-read": {
+			"types": "./dist/hooks/live-read.svelte.d.ts",
+			"svelte": "./dist/hooks/live-read.svelte.js",
+			"default": "./dist/hooks/live-read.svelte.js"
 		},
 		"./motion": {
 			"types": "./dist/motion.d.ts",

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { getIngestRunStatus } from '$lib/remote/ingest.remote';
+	import { liveRead, lineageTick } from '$lib/live/tick.svelte';
 	import { Card } from '@rask/ui/card';
 	import { CircleAlert, CircleCheck, CircleX, Loader } from '@lucide/svelte';
 
@@ -43,18 +44,36 @@
 	const totalKnown = $derived(total > 0);
 	const percent = $derived(totalKnown ? Math.min(100, Math.round(((run?.units_done ?? 0) / total) * 100)) : 0);
 
-	// POLL REASON: a run's progress is a COUNTER climbing inside a workflow — `units_done` moves once
-	// per fetched unit — and nothing publishes it. The estate's cursors carry committed facts: the
-	// lineage cursor moves when a run COMMITS, which for an ingest is the last thing that happens, so
-	// a `query.live` on it would sit silent through the whole harvest and then fire once at the end.
-	// That is the opposite of what this page is for. Bounded rather than ambient: the effect returns
-	// early once the run is settled, so the timer exists only while there is something to watch.
+	// TWO SIGNALS, because a run has two kinds of news and only one of them is on a cursor.
+	//
+	// 1. THE CURSOR — the estate's idiom (`liveRead` + `lineageTick`, the helper that replaced
+	//    thirteen hand-rolled pollers in the lakehouse). An ingest emits lineage at START and again
+	//    at COMPLETE/FAIL, so the cursor moves at both ENDS of a run: the page learns that a run
+	//    finished the moment it finishes, instead of up to a full tick later. Keyed on `runId`, so
+	//    navigating between runs re-reads at once rather than showing the previous run's cache.
+	liveRead(
+		lineageTick,
+		() => {
+			// `.catch(() => {})` is MANDATORY on any refresh a loop can repeat: one uncaught rejection
+			// evicts the query from cache and silently kills further updates, leaving the page frozen
+			// on a stale frame with no error shown.
+			runQuery.refresh().catch(() => {});
+		},
+		() => runId,
+	);
+
+	// 2. POLL REASON: PROGRESS, and it is the one thing no cursor carries. `units_done` climbs once
+	//    per fetched unit INSIDE the workflow and publishes nothing — the estate's cursors carry
+	//    committed facts, and a harvest commits once, at the end. So a cursor-only page would show
+	//    "0 units" for the entire run and then jump to the total, which is precisely the long harvest
+	//    a progress bar exists for.
+	//    BOUNDED, not ambient: the effect returns early once the run is settled, so the timer exists
+	//    only while there is something to watch, and a finished run issues no requests at all. This
+	//    is the single marked survivor on this page — the terminal transition above is the cursor's
+	//    job, not this timer's.
 	$effect(() => {
 		if (settled) return;
 		const timer = setInterval(() => {
-			// `.catch(() => {})` is MANDATORY on a polled refresh: one uncaught rejection evicts the
-			// query from cache and silently kills the loop, so a transient blip would leave the page
-			// frozen on a stale frame with no error and no further updates.
 			runQuery.refresh().catch(() => {});
 		}, 2000);
 		return () => clearInterval(timer);

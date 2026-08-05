@@ -88,6 +88,20 @@ const IngestInput = v.object({
  * A remote command runs on the ZONE SERVER, where `getRequestEvent().fetch` carries the session
  * established by the OIDC BFF. Same seam the read queries above already use, and the estate's stated
  * direction for every JSON value surface.
+ *
+ * WHY `command` AND NOT `form`, since SvelteKit's docs prefer `form` for its graceful degradation:
+ * this form's FIELDS ARE NOT STATIC. They are rendered from `GET /v1/ingests/sources` at runtime —
+ * `local-dir` asks for a directory and a glob, `iiif` for a volume and a page cap, and a source kind
+ * added tomorrow brings its own — which is invariant I1's whole point, and precisely what keeps
+ * adding a source a backend-only diff. `form()` derives its fields from a schema declared at build
+ * time, so expressing a registry-driven form through it would mean restating every adapter's options
+ * in TypeScript: the exact weld this page was rewritten to remove. The no-JS fallback is not worth
+ * re-welding the sources into the frontend to buy.
+ *
+ * No single-flight refresh is attached: the two queries beside this one are the source REGISTRY
+ * (immutable for the life of the pod) and a per-RUN status keyed by an id that does not exist until
+ * this call returns. There is nothing on screen that this mutation staleness-invalidates — and when
+ * a runs LIST lands, that is the query this command should refresh.
  */
 export const startIngest = command(IngestInput, async (input): Promise<IngestAccepted> => {
 	return postIngest(input, getRequestEvent().fetch);
