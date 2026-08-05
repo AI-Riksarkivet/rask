@@ -8,7 +8,6 @@
 	import { Toaster } from 'svelte-sonner';
 	import { AppShell } from '@rask/ui/shell';
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
-	import type { Me } from '@rask/api';
 	import { explorerZoneNav } from '$lib/nav';
 	import { descriptor } from '$lib/descriptor-store.svelte';
 	import StatusBadge from '$lib/components/status-badge.svelte';
@@ -19,8 +18,6 @@
 	// The navbar's notification bell (@rask/ui's NotificationCenter, mounted by AppShell). The shell owns
 	// the surface and never fetches — the zone owns the transport — and the transport is now shared
 	// (`@rask/api/runs-feed`), so a run that started, finished or FAILED reaches whoever is in this zone
-	// rather than only whoever happens to be on the run board. Opened ON MOUNT, never at init: a live
-	// query touched during render makes the SERVER hold the page until the feed's first value.
 	let feed = $state<{ current: LineagePulse | undefined } | null>(null);
 	onMount(() => {
 		feed = lineageFeed();
@@ -39,7 +36,6 @@
 	// `me` arrives RESOLVED from the server layout (#107): the navbar's final entry set is in
 	// the first paint — no skeleton pills, no per-hop entry swap (that swap WAS the shell flash).
 	const me = $derived(data.me);
-	const meLoading = false;
 
 	// The sidebar is DERIVED from the active dataset, not a static list: a corpus that declares no
 	// embedding spaces must not be offered an Atlas, and one with no knowledge graph must not be
@@ -90,7 +86,6 @@
 	project={data.activeProject ? { name: data.activeProject } : undefined}
 	{zoneNav}
 	{me}
-	{meLoading}
 	{notifications}
 >
 	{#snippet sidebarFooter()}

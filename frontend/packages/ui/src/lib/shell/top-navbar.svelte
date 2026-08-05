@@ -35,7 +35,7 @@
 	// `me` is the RESOLVED identity (null = signed out / lookup failed); `meLoading` renders the BASE
 	// entry titles as invisible text under skeleton pills instead — the same chrome classes and the
 	// same chevron reservation as the resolved entries, so loading and resolved states have IDENTICAL
-	// dimensions (no layout shift when /v1/me lands) and a zone streaming `fetchMe()` never flashes
+	// dimensions (no layout shift when /v1/me lands) and a zone whose `me` is server-resolved never flashes
 	// the non-admin entry set pretending to be the truth.
 	let {
 		pathname = '',

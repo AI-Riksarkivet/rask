@@ -11,7 +11,6 @@
 	import { base } from '$app/paths';
 	import { reviewSelection } from '$lib/labeling/review-selection.svelte';
 	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
-	import type { Me } from '@rask/api';
 	import type { LayoutData } from './$types';
 
 	let { children, data }: { children: Snippet; data: LayoutData } = $props();
@@ -19,8 +18,6 @@
 	// The navbar's notification bell (@rask/ui's NotificationCenter, mounted by AppShell). The shell owns
 	// the surface and never fetches — the zone owns the transport — and the transport is now shared
 	// (`@rask/api/runs-feed`), so a run that started, finished or FAILED reaches whoever is in this zone
-	// rather than only whoever happens to be on the run board. Opened ON MOUNT, never at init: a live
-	// query touched during render makes the SERVER hold the page until the feed's first value.
 	let feed = $state<{ current: LineagePulse | undefined } | null>(null);
 	onMount(() => {
 		feed = lineageFeed();

@@ -43,7 +43,7 @@
 	// overlapped on a narrow viewport; giving each its own row is what makes the header hold up at
 	// any width. Every microfrontend wraps its routes in this so they share identical chrome (no
 	// drift). `pathname` comes from the consuming app's $app/state and drives the breadcrumb + active
-	// nav; `me`/`meLoading` come from the zone's fetchMe() and gate the navbar's admin entries.
+	// nav; `me` is RESOLVED by the zone contract (`makeZoneLayoutLoad`) and gates the navbar's admin entries.
 	let {
 		pathname = '',
 		project = { name: '', subtitle: 'Project' },
