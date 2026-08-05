@@ -408,6 +408,11 @@ def test_a_dataset_using_overlays_is_refused(monkeypatch: pytest.MonkeyPatch, tm
         def get_fragments(self) -> list:
             return [_FragmentWithOverlay(f) for f in self._inner.get_fragments()]
 
+        def checkout_version(self, _version: int) -> "_DatasetWithOverlay":
+            # The #102 walk checks out versions on the HEAD handle; every version of this stand-in
+            # carries the overlay, so the refusal must fire regardless of which one is inspected.
+            return self
+
     monkeypatch.setattr(orphans.lance, "dataset", lambda *a, **k: _DatasetWithOverlay(real))
 
     result = orphans.scan_dataset(_fs(), uri, prefix)

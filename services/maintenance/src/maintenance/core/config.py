@@ -15,6 +15,11 @@ class MaintenanceSettings(BaseSettings):
 
     model_config = SettingsConfigDict(populate_by_name=True, extra="ignore")
 
+    # #102: the shared Lance session's cache caps. Defaults sized for the pod tier (512Mi limit —
+    # Lance's own defaults are 1 GiB metadata + 6 GiB index PER OPEN, which is the defect).
+    lance_metadata_cache_mb: int = Field(default=128, ge=8, alias="MAINTENANCE_LANCE_METADATA_CACHE_MB")
+    lance_index_cache_mb: int = Field(default=256, ge=8, alias="MAINTENANCE_LANCE_INDEX_CACHE_MB")
+
     # The Dapr cron binding name == the POST route the sidecar delivers ticks to (must match the
     # bindings.cron Component's metadata.name). Default matches the chart.
     binding_name: str = Field(default="maintenance-cron", alias="MAINTENANCE_BINDING_NAME")
@@ -162,6 +167,18 @@ class MaintenanceSettings(BaseSettings):
             self.s3_secret_access_key.get_secret_value(),
             self.s3_region,
         )
+
+
+def shared_lance_session() -> object:
+    """The process-wide bounded Lance session (#102). Every maintenance open threads this, so a
+    tick's second dataset (and the orphan scan's 500 version checkouts) HIT the cache instead of
+    minting and discarding Lance's default 1 GiB + 6 GiB ceilings per open — ceilings that dwarf
+    the pod's own 512Mi limit. Caps are LRU soft bounds; session keys carry (uri, version, etag),
+    so a compaction bumping a version writes new keys and freshness needs no design."""
+    from service_kit.lakehouse.lance_session import lance_session
+
+    settings = get_settings()
+    return lance_session(settings.lance_metadata_cache_mb << 20, settings.lance_index_cache_mb << 20)
 
 
 @lru_cache

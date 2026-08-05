@@ -41,6 +41,8 @@ import lance
 import pyarrow.fs as pafs
 from pydantic import BaseModel, Field
 
+from maintenance.core.config import shared_lance_session
+
 
 log = logging.getLogger(__name__)
 
@@ -158,7 +160,7 @@ def referenced_paths(dataset_uri: str, storage_options: dict[str, str] | None = 
     """
     referenced: set[str] = set()
     referenced_dirs: set[str] = set()
-    ds = lance.dataset(dataset_uri, storage_options=storage_options)
+    ds = lance.dataset(dataset_uri, storage_options=storage_options, session=shared_lance_session())  # ty: ignore[invalid-argument-type] — stub lacks session=, runtime verified
     versions = [v["version"] for v in ds.versions()]
     note = None
     if len(versions) > _MAX_VERSIONS:
@@ -166,7 +168,10 @@ def referenced_paths(dataset_uri: str, storage_options: dict[str, str] | None = 
         versions = versions[-_MAX_VERSIONS:]
 
     for version in versions:
-        at = lance.dataset(dataset_uri, version=version, storage_options=storage_options)
+        # checkout_version, NOT a fresh lance.dataset(): the constructor mints a new cache pair per
+        # call — up to _MAX_VERSIONS times per dataset, the scan's real N+1 (#102) — while checkout
+        # reuses the open dataset's session (its documented contract, verified empirically).
+        at = ds.checkout_version(version)
         for fragment in at.get_fragments():
             for data_file in fragment.data_files():
                 referenced.add(f"{_DATA_DIR}/{data_file.path}")

@@ -14,6 +14,8 @@ import lance
 import pyarrow.fs as pafs
 from pydantic import BaseModel
 
+from maintenance.core.config import shared_lance_session
+
 
 log = logging.getLogger(__name__)
 
@@ -103,7 +105,9 @@ def compact_one(
     two: both running is not additive, it is two processes racing to delete the same manifests.
     """
     try:
-        ds = lance.dataset(uri, storage_options=storage_options)
+        # The shared bounded session (#102): per-tick reopens are correct for a mutating pass, but
+        # each must not mint-and-discard gigabyte-scale default caches.
+        ds = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session())  # ty: ignore[invalid-argument-type] — stub lacks session=, runtime verified
     except Exception as exc:
         return DatasetResult(uri=uri, error=f"open: {exc}", error_type=type(exc).__name__)
     result = DatasetResult(uri=uri)

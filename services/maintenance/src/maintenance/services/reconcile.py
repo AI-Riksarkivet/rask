@@ -43,7 +43,7 @@ import pyarrow.fs as pafs
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from maintenance.core.config import MaintenanceSettings
+from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.services.optimize import discover_dataset_uris
 from maintenance.services.orphans import OrphanFile, scan_datasets
 from service_kit.governed import fga
@@ -274,7 +274,7 @@ def _top_level_namespaces(root: str, storage_options: StorageOptions, delimiter:
     if fs.get_file_info(f"{base}/{_MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
         return []
     manifest_uri = f"s3://{base}/{_MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{_MANIFEST_DIR}"
-    dataset = lance.dataset(manifest_uri, storage_options=storage_options)
+    dataset = lance.dataset(manifest_uri, storage_options=storage_options, session=shared_lance_session())  # ty: ignore[invalid-argument-type] — stub lacks session=, runtime verified
     table = dataset.to_table(columns=["object_id", "object_type"])
     return sorted(
         {
