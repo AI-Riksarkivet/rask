@@ -87,6 +87,29 @@ def drained_subject(run_id: str) -> str:
     return f"{SUBJECT_ROOT}.run.{run_id}.drained"
 
 
+#: How long JetStream remembers a `Nats-Msg-Id` and refuses a duplicate. Matches the chart's
+#: `--dupe-window=2m` on the INGEST stream — the two must agree, because whichever creates the stream
+#: first wins and the other silently accepts the difference.
+DUPLICATE_WINDOW = 120.0
+
+
+def _dedupe_id(task: UnitTask) -> str:
+    """A stable message id for one unit of one run — `sha256(run_id \\x00 key)`, hex.
+
+    HASHED rather than `f"{run_id}:{key}"` for two reasons that both bite in practice: a source key
+    is a URI and can be long, while a NATS header value must not contain CR or LF — a key carrying
+    either would corrupt the header frame rather than fail loudly. The hash is deterministic, which
+    is the whole requirement: the SAME unit replayed by the SAME run must produce the SAME id.
+
+    `chunk_id` is deliberately NOT in the id. It is the enumeration chunk, and a replay re-derives it
+    identically today — but including it would make the id depend on how enumeration happened to
+    batch, which is not part of a unit's identity.
+    """
+    import hashlib
+
+    return hashlib.sha256(f"{task.run_id}\\x00{task.key}".encode()).hexdigest()
+
+
 class WorkQueue:
     """Publish and consume unit tasks over JetStream."""
 
@@ -110,6 +133,11 @@ class WorkQueue:
             name=STREAM,
             subjects=[f"{SUBJECT_ROOT}.>"],
             retention=jsapi.RetentionPolicy.WORK_QUEUE,
+            # Explicit, because `publish_units` DEPENDS on it. NATS defaults this to 2 minutes and
+            # the chart's Job asks for the same, but a default that a correctness property rests on
+            # should be stated where the property is — otherwise a future stream tweak silently turns
+            # the dedupe off and the only symptom is duplicate rows under crash recovery.
+            duplicate_window=DUPLICATE_WINDOW,
         )
         try:
             await self._js.add_stream(config)
@@ -117,10 +145,29 @@ class WorkQueue:
             return
 
     async def publish_units(self, tasks: Sequence[UnitTask]) -> int:
-        """Publish a chunk's units. Returns the count actually accepted by the broker."""
+        """Publish a chunk's units, DEDUPED on a deterministic message id. Returns the count accepted.
+
+        `workflow.publish_units` has always documented this — "JetStream dedupes on the message id
+        within the stream's duplicate window, and a unit's id is derived from (run, key) — both
+        stable" — and it was never implemented: no header was set here, and `Nats-Msg-Id` appeared
+        nowhere in the repo. A replayed activity therefore re-queued its ENTIRE chunk as brand-new
+        messages, which `_is_redelivery` cannot see (they are first deliveries of new messages), so
+        the same unit was fetched and staged twice under two different fragments. Dapr replays an
+        activity whose result was not durably recorded before the pod died, so this is an ordinary
+        crash-recovery path, not an exotic one.
+
+        The stream's dedupe window is what bounds it — `--dupe-window=2m` in the chart's
+        nats-stream-job, and `DUPLICATE_WINDOW` below for a locally-created stream. Beyond that
+        window a replay does re-queue, and the staging layer's exact-cover selection is what absorbs
+        it; this shrinks that surface rather than removing it.
+        """
         published = 0
         for task in tasks:
-            await self._js.publish(unit_subject(task.run_id), task.model_dump_json().encode())
+            await self._js.publish(
+                unit_subject(task.run_id),
+                task.model_dump_json().encode(),
+                headers={"Nats-Msg-Id": _dedupe_id(task)},
+            )
             published += 1
         return published
 

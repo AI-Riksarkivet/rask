@@ -223,14 +223,33 @@ def finalize_run(spec: RunSpec, fragments: list[str], errors: dict[str, str]) ->
 
     catalog = _catalog()
     uri = catalog.ensure(spec.project, spec.dataset)
-    # STORAGE TRUTH, not the workflow's carried value. Fragments staged by a drain attempt that died
-    # before returning are still on the store and still uncommitted — invisible to `fragments`, which
-    # only holds what the surviving attempts handed back. Reading the staging prefix is what turns a
-    # mid-run pod death from silent row loss into a slower run (A3). The union is order-preserving
-    # and deduplicated, so a fragment reported through both paths commits exactly once.
-    staged = discover_staged(uri, spec.run_id)
-    seen: set[str] = set()
-    all_fragments = [f for f in [*staged, *fragments] if not (f in seen or seen.add(f))]
+    # STORAGE TRUTH, and it is the ONLY truth. Fragments staged by a drain attempt that died before
+    # returning are still on the store and still uncommitted — invisible to `fragments`, which holds
+    # only what the surviving attempts handed back. Reading the staging prefix is what turns a mid-run
+    # pod death from silent row loss into a slower run (A3).
+    #
+    # `discover_staged` does not merely LIST: it searches for an EXACT COVER of the run's units and
+    # deliberately DESELECTS a fragment whose rows another fragment already covers. This used to be
+    # unioned with the workflow's carried list — `[*staged, *fragments]`, deduplicated by string —
+    # and that silently overruled the selection. Every carried fragment was staged first
+    # (`worker.py`: `stage_fragments(...)` is the line immediately before `outcome.fragments.extend`),
+    # so the carried list can contribute exactly one thing the selection does not already account
+    # for: a fragment the selection SUPERSEDED. Adding it back commits both, which is the "four units
+    # in, six rows out" duplication `tests/test_partial_ack_duplication.py` closed — reintroduced one
+    # layer above the layer that closed it.
+    all_fragments = discover_staged(uri, spec.run_id)
+    if not all_fragments and fragments:
+        # Staging returned nothing while the workflow is holding fragments. That is not the ordinary
+        # empty case (no work), it means the staging prefix was unreadable or its manifests were all
+        # truncated — the run's own record of what it wrote is gone. Committing the carried list is
+        # the loss-avoiding choice, but it is NOT the exact cover, so say so loudly rather than let a
+        # silent fallback look like the normal path.
+        _log.warning(
+            "ingest_staging_unreadable_using_carried_fragments",
+            extra={"run_id": spec.run_id, "dataset_uri": uri, "carried": len(fragments)},
+        )
+        seen: set[str] = set()
+        all_fragments = [f for f in fragments if not (f in seen or seen.add(f))]
 
     if not all_fragments:
         # NOTHING TO COMMIT IS A NO-OP, NOT A COMMIT OF NOTHING — and this guard exists because the

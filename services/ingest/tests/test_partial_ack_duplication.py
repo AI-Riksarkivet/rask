@@ -241,3 +241,57 @@ def test_a_TRULY_unresolvable_overlap_still_raises(tmp_path: Path) -> None:
 
     with pytest.raises(StagingOverlapError, match="u4"):
         discover_staged(dataset, RUN)
+
+
+# ── the same defect, one layer up ─────────────────────────────────────────────
+
+
+def test_finalize_does_not_OVERRULE_the_exact_cover(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`discover_staged` selects; `finalize_run` used to un-select.
+
+    The selection above is only half the fix. `finalize_run` computed
+    `[*discover_staged(...), *fragments]` — the exact cover UNIONED with the fragment list the
+    workflow carried — deduplicated by string identity. Every carried fragment was staged first
+    (`worker.py` calls `stage_fragments` on the line immediately before `outcome.fragments.extend`),
+    so the carried list can contribute exactly one thing the cover does not already account for: a
+    fragment the cover deliberately SUPERSEDED.
+
+    Re-adding it commits both, which is precisely the "four units in, six rows out" arithmetic the
+    tests above close — reintroduced one layer above the layer that closed it. The scenario is the
+    ordinary partial-ack one: batch F covers u0..u3, the pod dies mid-ack, u2/u3 come back and are
+    written as G, and the workflow's outcome still carries G from the attempt that produced it.
+    """
+    from ingest import runtime
+
+    dataset = str(tmp_path / "bronze")
+    stage_fragments(dataset, RUN, ["u0", "u1", "u2", "u3"], [FRAGMENT_F])
+    stage_fragments(dataset, RUN, ["u2", "u3"], [FRAGMENT_G])
+
+    # What the finalizer is handed: the cover picks F alone, but the workflow still carries G.
+    assert discover_staged(dataset, RUN) == [FRAGMENT_F]
+
+    committed: list[list[str]] = []
+
+    class _Catalog:
+        def ensure(self, project: str, dataset_name: str) -> str:
+            return dataset
+
+    class _Lander:
+        def __init__(self, catalog: object) -> None: ...
+        def commit_fragments(self, uri: str, frags: list[str], *, run_id: str) -> object:
+            committed.append(list(frags))
+            from ingest.lander import CommitResult
+
+            return CommitResult(dataset_uri=uri, version=2, rows=_rows(frags), rows_added=_rows(frags), fragments_committed=len(frags))
+
+    monkeypatch.setattr(runtime, "_catalog", lambda: _Catalog())
+    monkeypatch.setattr("ingest.lander.Lander", _Lander)
+    monkeypatch.setattr(runtime, "purge_staged", lambda *a, **k: None, raising=False)
+
+    from ingest.workflow import RunSpec
+
+    runtime.finalize_run(RunSpec(run_id=RUN, kind="local-dir", project="p", dataset="d"), [FRAGMENT_G], {})
+
+    assert committed, "finalize never reached the commit"
+    assert _rows(committed[0]) == 4, f"four units were fetched but {_rows(committed[0])} rows would commit from {committed[0]}"
+    assert committed[0] == [FRAGMENT_F], "the carried, superseded fragment was re-added over the exact cover"
