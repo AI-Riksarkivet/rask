@@ -162,6 +162,10 @@
 			"types": "./dist/components/table/index.d.ts",
 			"svelte": "./dist/components/table/index.js"
 		},
+		"./tabs": {
+			"types": "./dist/components/tabs/index.d.ts",
+			"svelte": "./dist/components/tabs/index.js"
+		},
 		"./textarea": {
 			"types": "./dist/components/textarea/index.d.ts",
 			"svelte": "./dist/components/textarea/index.js"

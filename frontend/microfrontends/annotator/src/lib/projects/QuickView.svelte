@@ -13,11 +13,7 @@
 	// drawer is a PixiJS surface would be a worse lie than not offering one.
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
-	// NAMESPACE import, the estate's convention for this component (TenantsPanel, DlqPanel). The
-	// package also exports `Root as Sheet`, so `import { Sheet }` compiles and then renders a bare
-	// Root where `Sheet.Content` was meant — a dialog with no content and no error.
-	import * as Sheet from '@rask/ui/sheet';
-	import { ChevronLeft, ChevronRight, ExternalLink } from '@lucide/svelte';
+	import { ChevronLeft, ChevronRight, ExternalLink, X } from '@lucide/svelte';
 
 	import { predictedLabels } from './item-columns';
 	import { EVENT_LABELS, taskStateVariant } from './presentation.js';
@@ -61,108 +57,139 @@
 	);
 </script>
 
-<Sheet.Root bind:open>
-	<Sheet.Content side="right" class="flex w-full flex-col gap-3 sm:max-w-lg">
-		{#if task}
-			<Sheet.Header>
-				<Sheet.Title class="flex items-center gap-2">
-					<span class="truncate font-mono text-sm">{task.source.keys.join(', ')}</span>
-					<Badge variant={taskStateVariant(task.state)}>{task.state.replace('_', ' ')}</Badge>
-				</Sheet.Title>
-				<Sheet.Description>
-					{nav.position} of {nav.total} in view
-					{#if task.source.where}· <span class="font-mono">{task.source.where}</span>{/if}
-				</Sheet.Description>
-			</Sheet.Header>
+<!-- A PANE, not a dialog. `role="complementary"` (implicit on <aside>) rather than `dialog`: nothing
+     here is modal any more — the queue stays interactive beside it, which is the entire point of the
+     change — and announcing a non-modal region as a dialog tells a screen-reader user focus is
+     trapped when it is not. `overflow-y-auto` + `min-h-0` so a long item scrolls INSIDE the pane
+     instead of stretching the split. -->
+<aside
+	class="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-4"
+	data-testid="quick-view"
+	aria-label="Item review"
+>
+	{#if task}
+		<div class="flex flex-col gap-1">
+			<div class="flex items-center gap-2">
+				<span class="truncate font-mono text-sm">{task.source.keys.join(', ')}</span>
+				<Badge variant={taskStateVariant(task.state)}>{task.state.replace('_', ' ')}</Badge>
+				<!-- A pane has no backdrop to click and no Escape handler of its own, so it needs an
+				     explicit way out — a Sheet got both for free. -->
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					class="ml-auto shrink-0"
+					data-testid="quick-close"
+					title="Close the review pane"
+					onclick={() => (open = false)}
+				>
+					<X class="size-4" />
+				</Button>
+			</div>
+			<p class="text-muted-foreground text-sm">
+				{nav.position} of {nav.total} in view
+				{#if task.source.where}· <span class="font-mono">{task.source.where}</span>{/if}
+			</p>
+		</div>
 
-			{#key task.task_id}
-				{@const src = taskImageUrl(task, apiUrl)}
-				<!-- Same component as the grid and the filmstrip (#69): a media-type glyph, never the
+		{#key task.task_id}
+			{@const src = taskImageUrl(task, apiUrl)}
+			<!-- Same component as the grid and the filmstrip (#69): a media-type glyph, never the
 				     words "no preview", and a broken image falls back rather than hiding itself into a
 				     blank rectangle. `object-contain` here — quick view is for READING the item, so it
 				     must not crop; the grid crops because a tile is an index entry, not the thing. -->
-				<MediaThumb
-					{src}
-					kind={task.media?.kind ?? 'image'}
-					alt=""
-					ratio="max-h-[45vh] rounded-md"
-					fit="contain"
-				/>
-			{/key}
+			<MediaThumb
+				{src}
+				kind={task.media?.kind ?? 'image'}
+				alt=""
+				ratio="max-h-[45vh] rounded-md"
+				fit="contain"
+			/>
+		{/key}
 
-			<!-- The SUGGESTED label. `secondary`, never the default variant: the entire job of this
+		<!-- The SUGGESTED label. `secondary`, never the default variant: the entire job of this
 			     drawer is deciding whether the suggestion is right, so it must not already look
 			     accepted. -->
-			{#if predictedLabels(task).length > 0}
-				<div class="flex flex-wrap items-center gap-1 text-xs">
-					<span class="text-muted-foreground">suggested:</span>
-					{#each predictedLabels(task) as label (label)}
-						<Badge variant="secondary">{label}</Badge>
-					{/each}
-				</div>
-			{/if}
-
-			{#if task.review_notes.length > 0}
-				<ul class="text-muted-foreground flex flex-col gap-1 text-xs">
-					{#each task.review_notes as note, i (i)}
-						<li><span class="font-medium">{note.by}:</span> {note.message}</li>
-					{/each}
-				</ul>
-			{/if}
-
-			<!-- The item's own legal events, from the task machine — the same source the row buttons
-			     read, so the drawer can never offer an action the row would refuse. -->
-			<div class="flex flex-wrap gap-1">
-				{#each events as event (event)}
-					<Button
-						size="sm"
-						variant={event === 'accept' ? 'default' : 'outline'}
-						disabled={busy}
-						data-testid="quick-{event}"
-						onclick={() => onfire?.(task, event)}
-					>
-						{EVENT_LABELS[event] ?? event}
-					</Button>
+		{#if predictedLabels(task).length > 0}
+			<div class="flex flex-wrap items-center gap-1 text-xs">
+				<span class="text-muted-foreground">suggested:</span>
+				{#each predictedLabels(task) as label (label)}
+					<Badge variant="secondary">{label}</Badge>
 				{/each}
-				<Button size="sm" variant="ghost" href={canvasHref(task)}>
-					<ExternalLink class="size-3.5" /> Canvas
-				</Button>
 			</div>
+		{/if}
 
-			<div class="mt-auto flex items-center justify-between gap-2 border-t pt-3">
+		{#if task.review_notes.length > 0}
+			<ul class="text-muted-foreground flex flex-col gap-1 text-xs">
+				{#each task.review_notes as note, i (i)}
+					<li><span class="font-medium">{note.by}:</span> {note.message}</li>
+				{/each}
+			</ul>
+		{/if}
+
+		<!-- The item's own legal events, from the task machine — the same source the row buttons
+			     read, so the drawer can never offer an action the row would refuse. -->
+		<div class="flex flex-wrap gap-1">
+			{#each events as event (event)}
 				<Button
 					size="sm"
-					variant="outline"
-					disabled={!nav.prev}
-					data-testid="quick-prev"
-					onclick={() => (taskId = nav.prev?.task_id ?? taskId)}
+					variant={event === 'accept' ? 'default' : 'outline'}
+					disabled={busy}
+					data-testid="quick-{event}"
+					onclick={() => onfire?.(task, event)}
 				>
-					<ChevronLeft class="size-4" /> Prev
+					{EVENT_LABELS[event] ?? event}
 				</Button>
-				<Button
-					size="sm"
-					variant="outline"
-					disabled={!nav.next}
-					data-testid="quick-next"
-					onclick={() => (taskId = nav.next?.task_id ?? taskId)}
-				>
-					Next <ChevronRight class="size-4" />
-				</Button>
-			</div>
-		{:else}
-			<!-- Reported: "when pressing the preview button we dont see anything… its an empty drawer".
+			{/each}
+			<Button size="sm" variant="ghost" href={canvasHref(task)}>
+				<ExternalLink class="size-3.5" /> Canvas
+			</Button>
+		</div>
+
+		<div class="mt-auto flex items-center justify-between gap-2 border-t pt-3">
+			<Button
+				size="sm"
+				variant="outline"
+				disabled={!nav.prev}
+				data-testid="quick-prev"
+				onclick={() => (taskId = nav.prev?.task_id ?? taskId)}
+			>
+				<ChevronLeft class="size-4" /> Prev
+			</Button>
+			<Button
+				size="sm"
+				variant="outline"
+				disabled={!nav.next}
+				data-testid="quick-next"
+				onclick={() => (taskId = nav.next?.task_id ?? taskId)}
+			>
+				Next <ChevronRight class="size-4" />
+			</Button>
+		</div>
+	{:else}
+		<!-- Reported: "when pressing the preview button we dont see anything… its an empty drawer".
 			     There was no `{:else}`, so whenever the lookup missed, the sheet opened and rendered
 			     NOTHING — no title, no message, no way to tell a broken drawer from an empty item.
 			     The lookup can legitimately miss: `tasks` is the CURRENT PAGE's rows, and a filter,
 			     a sort or a page change between opening and rendering leaves the id pointing at a row
 			     that is no longer in view. That is recoverable and must say so. -->
-			<Sheet.Header>
-				<Sheet.Title>Item not in view</Sheet.Title>
-				<Sheet.Description>
-					This item is no longer on the current page — a filter, sort or page change moved it.
-					Clear the filter or turn back to its page to preview it.
-				</Sheet.Description>
-			</Sheet.Header>
-		{/if}
-	</Sheet.Content>
-</Sheet.Root>
+		<div class="flex flex-col gap-1">
+			<div class="flex items-center gap-2">
+				<h2 class="text-sm font-medium">Item not in view</h2>
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					class="ml-auto shrink-0"
+					data-testid="quick-close"
+					title="Close the review pane"
+					onclick={() => (open = false)}
+				>
+					<X class="size-4" />
+				</Button>
+			</div>
+			<p class="text-muted-foreground text-sm">
+				This item is no longer on the current page — a filter, sort or page change moved it. Clear the
+				filter or turn back to its page to preview it.
+			</p>
+		</div>
+	{/if}
+</aside>
