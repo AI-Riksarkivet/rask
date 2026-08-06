@@ -23,6 +23,11 @@ def _render(**sets: str) -> list[dict]:
     if not shutil.which("helm"):  # pragma: no cover - CI installs helm
         pytest.skip("helm not on PATH")
     cmd = ["helm", "template", "rask", str(REPO / "chart")]
+    # Since auth defaults ON (2026-08-06) every render needs identity values; the chart refuses OIDC
+    # without a session secret ON PURPOSE, and that refusal has its own test in test_invariants.py.
+    cmd += ["--set-string", "frontend.oidc.sessionSecret=test-session-secret-32-chars-minimum"]
+    cmd += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
+    cmd += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     # The chart REQUIRES an image registry unless the images are side-loaded into the node
     # (`rask.image` in _helpers.tpl): a bare `<component>:<tag>` is `docker.io/library/...`
     # and ImagePullBackOffs on any real cluster. These tests render the LOCAL shape, which is
@@ -56,7 +61,10 @@ def test_auth_enabled_wires_fga_and_oidc_onto_the_annotator() -> None:
 
 
 def test_auth_off_leaves_the_annotator_permissive_dev_parity() -> None:
-    env = _annotator_env(_render(explorer__enabled="true"))
+    """auth.enabled=false is now an EXPLICIT ask, not the default (2026-08-06): the chart defaults it
+    ON so a forgotten values file cannot silently install an ungoverned estate. This test still pins
+    the ungoverned shape — it just has to request it, which is the whole point of the change."""
+    env = _annotator_env(_render(explorer__enabled="true", auth__enabled="false", frontend__oidc__enabled="false"))
     assert "LANCE_FGA_ENABLED" not in env
     assert "LANCE_OIDC_ENABLED" not in env
 

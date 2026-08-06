@@ -477,7 +477,9 @@ frontend:
   # publicIssuer, publicOrigin (forms the home zone's /auth/callback redirect URI). The confidential Dex
   # client secret rides dex.clientSecret.
   oidc:
-    enabled: false
+    # ON BY DEFAULT, in lockstep with auth.enabled — the chart REFUSES the half-governed pair
+    # (templates/auth-consistency.yaml), so these two must move together or the render fails.
+    enabled: true
     publicIssuer: "" # browser-reachable IdP issuer, e.g. https://auth.example.com/dex
     publicOrigin: "" # browser-reachable origin, e.g. https://app.example.com (forms the redirect URI)
     sessionSecret: "" # >=32 random chars; seals the session cookie (AES-256-GCM). REQUIRED when enabled.
@@ -490,7 +492,17 @@ frontend:
 
 # --- Governance (Dex OIDC + OpenFGA). Off → open dev mode; on → the full governed demo. ------------
 auth:
-  enabled: false
+  # ON BY DEFAULT (2026-08-06). It was `false`, and values-prod.yaml flipped it — which meant every
+  # install that forgot to pass a values file came up UNGOVERNED, silently and green. That is exactly
+  # how it kept happening: a `helm upgrade` without `-f values-prod.yaml` reverts a governed estate to
+  # an open one, the session Secret stops rendering, and pods that still reference it fail to start
+  # (observed on rask-web-models, 2026-08-06). A security default must fail CLOSED, not open.
+  #
+  # This makes a bare `helm install` REFUSE rather than install: frontend.oidc.enabled is on too, and
+  # the chart already fails the render without a sessionSecret. That refusal is the point — an
+  # ungoverned estate should require someone to ask for it (`--set auth.enabled=false`), never to
+  # forget something.
+  enabled: true
   # Permit auth.enabled=true WITHOUT a frontend sign-in flow. Off by default, and the chart REFUSES
   # that combination (templates/auth-consistency.yaml): it installs green and then shows every user
   # a governed UI with no way in, while the catalog 401s each read. Set this only for an estate that

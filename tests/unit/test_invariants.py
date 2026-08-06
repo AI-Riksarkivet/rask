@@ -24,6 +24,7 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -246,6 +247,14 @@ def _helm_template(*set_values: str) -> str:
     # Side-loaded images: see `rask.image` in _helpers.tpl — the chart refuses a bare
     # `<component>:<tag>` unless this is set, because that is docker.io and not a local image.
     argv += ["--set", "image.localImages=true"]
+    # The identity values every render needs since auth defaults ON (2026-08-06). The chart refuses
+    # OIDC without a session secret ON PURPOSE — that refusal is what stops a forgotten values file
+    # installing an ungoverned estate, and it is asserted directly by
+    # `test_the_chart_REFUSES_to_render_oidc_without_a_session_secret`. Supplying dev values HERE
+    # keeps every other render test testing its own subject rather than re-testing the guard.
+    argv += ["--set-string", "frontend.oidc.sessionSecret=test-session-secret-32-chars-minimum"]
+    argv += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
+    argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     for value in set_values:
         argv += ["--set", value]
     return subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
@@ -1070,3 +1079,44 @@ def test_the_ingress_admits_a_real_page_image() -> None:
     assert m, "the Ingress carries no nginx.ingress.kubernetes.io/proxy-body-size — nginx's 1 MB default 413s every page image before it reaches a zone"
     megabytes = int(m.group(1)) * (1024 if m.group(2).lower() == "g" else 1)
     assert megabytes >= 25, f"proxy-body-size is {m.group(0)} — below the zones' own 25 MB inference guard, so the edge is the tighter limit"
+
+
+def test_auth_is_ON_by_default_and_an_open_estate_must_be_ASKED_for() -> None:
+    """A security default has to fail CLOSED.
+
+    `auth.enabled` and `frontend.oidc.enabled` were both `false` in values.yaml, with
+    values-prod.yaml flipping them — so every install that forgot `-f values-prod.yaml` came up
+    UNGOVERNED, green, and indistinguishable from a governed one. Measured 2026-08-06: helm revision
+    29 landed exactly that way, which also stopped rendering the session Secret and left
+    `rask-web-models` unable to start a pod against a spec that still referenced it.
+
+    Both must be ON in the base values, and they must move TOGETHER — the chart refuses the
+    half-governed pair (templates/auth-consistency.yaml), so a default that enabled one and not the
+    other would fail every render instead of protecting anything.
+    """
+    values = yaml.safe_load((REPO / "chart/values.yaml").read_text())
+    assert values["auth"]["enabled"] is True, "auth defaults OFF — a forgotten values file silently un-governs the estate"
+    assert values["frontend"]["oidc"]["enabled"] is True, "the UI's sign-in flow defaults OFF while auth defaults ON — the chart refuses that pair"
+
+
+def test_the_chart_REFUSES_to_render_oidc_without_a_session_secret() -> None:
+    """The other half of failing closed: enabling the flow is not enough if the cookie is unsealed.
+
+    Deliberately asserted as a RENDER FAILURE rather than a defaulted value. Shipping a plausible
+    session secret in values.yaml is how a dev key reaches production — the local loop supplies its
+    own in the Makefile, in the open, where it is obviously a dev value.
+    """
+    # subprocess directly: `_helm_template` raises on a non-zero exit, and the non-zero exit IS the
+    # assertion here.
+    import shutil
+    import subprocess
+
+    helm = shutil.which("helm") or str(REPO / ".localbin/helm")
+    result = subprocess.run(
+        [helm, "template", "rask", str(REPO / "chart"), "--set", "image.localImages=true"],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode != 0, "a bare render succeeded — it must refuse without a sessionSecret"
+    assert "sessionSecret" in result.stderr, f"it refused for the wrong reason: {result.stderr[-300:]}"
