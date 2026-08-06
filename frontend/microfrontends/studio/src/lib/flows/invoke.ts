@@ -17,6 +17,21 @@ function failureMessage(
 	reason: string | undefined,
 	detail: string | undefined,
 ): string {
+	// 413 has TWO possible authors and only one of them is ours. The BFF's guard answers JSON naming
+	// the 25 MB ceiling; the Bun server's own `BODY_SIZE_LIMIT` answers an anonymous 413 BEFORE the
+	// route runs, which is what a 512K default produced for a 2.25 MB scan. Say which, so the reader
+	// is not left with a bare status: an upload past the SERVER limit is an env fix, not a smaller file.
+	if (status === 413 && !detail) {
+		return 'The upload is too large for the zone server (BODY_SIZE_LIMIT — 512K unless the deploy raises it). Rejected before the inference route ran.';
+	}
+	// A Serve app that EXISTS but exposes no HTTP ingress. Ray answers 500 with this exact text, not
+	// the 405 the `wrong_serve_app` branch was written for — measured 2026-08-06 against the deployed
+	// /htrflow, whose image predates the `__call__(Request)` handler and so offers only its
+	// handle-only methods. Named because the fix is a Serve redeploy, and nothing about the message
+	// otherwise points away from the browser.
+	if (detail?.includes('does not exist. Available methods')) {
+		return `That Serve app has no HTTP handler — its deployed image predates the ingress (${detail.slice(detail.indexOf('Available methods'), 120)}). Redeploy Serve.`;
+	}
 	switch (reason) {
 		case 'upstream_unreachable':
 			return 'Ray Serve is unreachable — is `make serve-up-htrflow` running?';
